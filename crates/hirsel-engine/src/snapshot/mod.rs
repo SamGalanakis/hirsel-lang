@@ -233,14 +233,15 @@ impl SignatureSnapshot {
         hirsel_validate::Validation,
         Option<hirsel_validate::AcceptedArtifact>,
     ) {
-        let views = self.validation_with(&definition.path.path().0.package, signature);
+        let views = self.validation_with(&definition.path.path().0.package, signature.clone());
         if let Some(cache) = &self.verifier {
             let artifact =
                 hirsel_validate::Artifact::new(definition, self.types.clone(), |anchor| {
                     origin
                         .filter(|(expected, _, _)| *expected == anchor)
                         .map(|(_, path, occurrence)| (path.clone(), *occurrence))
-                });
+                })
+                .with_overlay(signature);
             let (report, ran, acceptance) = hirsel_validate::validate_with_receipt(
                 &artifact,
                 &views,
@@ -397,6 +398,26 @@ impl SignatureSnapshot {
                 Some(&state.validated),
             ),
         }
+    }
+}
+
+impl hirsel_validate::ReplayEnvironment for SignatureSnapshot {
+    fn base_digest(&self, package: &PackageId) -> Option<ContentHash> {
+        self.signatures
+            .iter()
+            .any(|(id, _)| id.path().0.package == *package)
+            .then(|| self.validation_input_digest(package))
+    }
+    fn views(
+        &self,
+        package: &PackageId,
+        overlay: Option<SignatureRef>,
+    ) -> Option<Box<dyn SignatureLookup + '_>> {
+        self.base_digest(package)?;
+        Some(match overlay {
+            Some(signature) => Box::new(self.validation_with(package, signature)),
+            None => Box::new(self.validation(package)),
+        })
     }
 }
 

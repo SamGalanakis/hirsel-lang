@@ -36,20 +36,42 @@ pub struct Artifact<'a> {
     definition: &'a Definition,
     types: Arc<TypeInterner>,
     identity: Option<ContentHash>,
+    owners: std::collections::BTreeMap<Anchor, (DefPath, u32)>,
+    overlay: Option<hirsel_types::SignatureRef>,
 }
 impl<'a> Artifact<'a> {
     pub fn new(
         definition: &'a Definition,
         types: Arc<TypeInterner>,
-        owner: impl FnMut(Anchor) -> Option<(DefPath, u32)>,
+        mut owner: impl FnMut(Anchor) -> Option<(DefPath, u32)>,
     ) -> Self {
-        let identity = hirsel_product_codec::canonical_bytes(types.clone(), definition, owner)
-            .map(|bytes| ContentHash::of_parts("hirsel.validate.artifact.v1", [bytes.as_slice()]));
+        let mut owners = std::collections::BTreeMap::new();
+        let identity = hirsel_product_codec::canonical_bytes(types.clone(), definition, |anchor| {
+            let value = owner(anchor)?;
+            owners.insert(anchor, value.clone());
+            Some(value)
+        })
+        .map(|bytes| ContentHash::of_parts("hirsel.validate.artifact.v1", [bytes.as_slice()]));
         Self {
             definition,
             types,
             identity,
+            owners,
+            overlay: None,
         }
+    }
+    /// Bind private validation to the exact replacement signature too.
+    pub fn with_overlay(mut self, signature: hirsel_types::SignatureRef) -> Self {
+        self.overlay = Some(signature);
+        self.identity = hirsel_product_codec::canonical_bytes(
+            self.types.clone(),
+            &(self.definition, &self.overlay),
+            |anchor| self.owners.get(&anchor).cloned(),
+        )
+        .map(|bytes| {
+            ContentHash::of_parts("hirsel.validate.private-artifact.v2", [bytes.as_slice()])
+        });
+        self
     }
 }
 
@@ -66,14 +88,20 @@ struct ViewReceipt {
     reads: Vec<VRead>,
 }
 enum Backend {
-    Memory(Mutex<HashMap<ContentHash, hirsel_artifact_store::Bytes>>),
+    Memory(
+        Mutex<HashMap<ContentHash, hirsel_artifact_store::Bytes>>,
+        Arc<hirsel_artifact_store::Memory>,
+    ),
     Directory(Store),
 }
 /// Only `validate` can issue a receipt. There is no producer/import/seed method.
 /// Directory associations are trusted local state; exchanging output bytes
 /// never exchanges these associations. Arbitrary filesystem writers are outside
 /// this local-cache authority, as with the compiler's existing trusted cache.
-pub struct VerifierCache(Backend);
+pub struct VerifierCache(
+    Backend,
+    Mutex<Option<Arc<hirsel_product_codec::TypeRecords>>>,
+);
 impl std::fmt::Debug for VerifierCache {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("VerifierCache")
@@ -81,19 +109,22 @@ impl std::fmt::Debug for VerifierCache {
 }
 impl Default for VerifierCache {
     fn default() -> Self {
-        Self(Backend::Memory(Mutex::default()))
+        Self(
+            Backend::Memory(Mutex::default(), Arc::default()),
+            Mutex::default(),
+        )
     }
 }
 impl VerifierCache {
     /// Use the same immutable output containers as ordinary query products.
     /// The verifier's domain and address associations remain separately owned.
     pub fn directory(root: PathBuf) -> Self {
-        Self(Backend::Directory(Store::new(root)))
+        Self(Backend::Directory(Store::new(root)), Mutex::default())
     }
 
     fn load<T: serde::de::DeserializeOwned>(&self, key: ContentHash, domain: Domain) -> Option<T> {
         let bytes = match &self.0 {
-            Backend::Memory(rows) => rows
+            Backend::Memory(rows, _) => rows
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .get(&key)
@@ -123,7 +154,7 @@ impl VerifierCache {
             return;
         }
         match &self.0 {
-            Backend::Memory(rows) => {
+            Backend::Memory(rows, _) => {
                 rows.lock()
                     .unwrap_or_else(|e| e.into_inner())
                     .insert(key, bytes.into());
@@ -177,6 +208,194 @@ impl VerifierCache {
         }
         Arc::new(verdict)
     }
+    fn contents(&self) -> Arc<dyn hirsel_artifact_store::Contents> {
+        match &self.0 {
+            Backend::Memory(_, contents) => contents.clone(),
+            Backend::Directory(store) => Arc::new(Store::new(store.root().to_path_buf())),
+        }
+    }
+    fn records(&self, types: Arc<TypeInterner>) -> Arc<hirsel_product_codec::TypeRecords> {
+        let mut current = self.1.lock().unwrap_or_else(|error| error.into_inner());
+        if let Some(records) = &*current
+            && Arc::ptr_eq(&records.types, &types)
+        {
+            return records.clone();
+        }
+        let records = hirsel_product_codec::TypeRecords::new(types, self.contents());
+        *current = Some(records.clone());
+        records
+    }
+    fn retain_artifact(&self, artifact: &Artifact<'_>, policy: ContentHash) {
+        let Some(identity) = artifact.identity else {
+            return;
+        };
+        if self
+            .load::<ReplayRecord>(replay_key(identity, policy), REPLAY_DOMAIN)
+            .is_some_and(|record| record.artifact == identity && record.policy == policy)
+        {
+            return;
+        }
+        let records = self.records(artifact.types.clone());
+        let Some(bytes) = records
+            .encode_record(&(artifact.definition, &artifact.overlay), |anchor| {
+                artifact.owners.get(&anchor).cloned()
+            })
+        else {
+            return;
+        };
+        self.publish(
+            replay_key(identity, policy),
+            REPLAY_DOMAIN,
+            &ReplayRecord {
+                artifact: identity,
+                policy,
+                bytes,
+            },
+        );
+    }
+    /// Read only replay data associated by this verifier after terminal V.
+    /// Recompute identity after portable type/anchor decoding before exposing it.
+    fn replay_artifact(
+        &self,
+        accepted: &AcceptedArtifact,
+        types: Arc<TypeInterner>,
+        mut anchor: impl FnMut(&DefPath, u32) -> Option<Anchor>,
+    ) -> Option<ReplayArtifact> {
+        let record: ReplayRecord = self.load(
+            replay_key(accepted.artifact, accepted.policy),
+            REPLAY_DOMAIN,
+        )?;
+        if record.artifact != accepted.artifact || record.policy != accepted.policy {
+            return None;
+        }
+        let records = self.records(types.clone());
+        let mut owners = std::collections::BTreeMap::new();
+        let (definition, overlay): (
+            hirsel_tir::DefinitionRef,
+            Option<hirsel_types::SignatureRef>,
+        ) = records.decode_record(&record.bytes, |path, occurrence| {
+            let site = anchor(path, occurrence)?;
+            owners.insert(site, (path.clone(), occurrence));
+            Some(site)
+        })?;
+        let mut artifact = Artifact::new(&definition, types, |anchor| owners.get(&anchor).cloned());
+        if let Some(signature) = &overlay {
+            if signature.definition != definition.path {
+                return None;
+            }
+            artifact = artifact.with_overlay(signature.clone());
+        }
+        if artifact.identity != Some(accepted.artifact) {
+            return None;
+        }
+        Some(ReplayArtifact {
+            definition,
+            overlay,
+            policy: accepted.policy,
+            owners,
+        })
+    }
+    /// Refresh only a local association, running V here against independently
+    /// supplied current views. A caller cannot refresh it with cloned evidence.
+    pub fn execution_revalidated(
+        &self,
+        subject: ContentHash,
+        types: Arc<TypeInterner>,
+        mut anchor: impl FnMut(&DefPath, u32) -> Option<Anchor>,
+        environment: &dyn ReplayEnvironment,
+    ) -> Option<ExecutionReceipt> {
+        let record: ExecutionRecord = self.load(execution_key(subject), EXECUTION_DOMAIN)?;
+        if record.subject != subject
+            || record.artifacts.is_empty()
+            || record.contexts.is_empty()
+            || !record.contexts.windows(2).all(|w| w[0].0 < w[1].0)
+        {
+            return None;
+        }
+        let contexts: Vec<_> = record
+            .contexts
+            .iter()
+            .map(|(package, _)| Some((package.clone(), environment.base_digest(package)?)))
+            .collect::<Option<_>>()?;
+        let changed = contexts != record.contexts;
+        let mut artifacts = Vec::new();
+        let mut covered = std::collections::BTreeSet::new();
+        for (artifact, policy) in record.artifacts {
+            let accepted = AcceptedArtifact { artifact, policy };
+            if changed {
+                let replay = self.replay_artifact(&accepted, types.clone(), &mut anchor)?;
+                let package = replay.definition.path.path().0.package.clone();
+                if !contexts.iter().any(|(p, _)| *p == package) {
+                    return None;
+                }
+                covered.insert(package.clone());
+                let views = environment.views(&package, replay.overlay.clone())?;
+                let verdict_key = ContentHash::of_parts(
+                    "hirsel.validate.receipt.v1",
+                    [accepted.artifact.0.as_slice(), accepted.policy.0.as_slice()],
+                );
+                let original: Receipt = self.load(verdict_key, DOMAIN)?;
+                if original.artifact != accepted.artifact
+                    || original.policy != accepted.policy
+                    || !original.reads.iter().all(|read| {
+                        if read_holds(read, &*views) {
+                            return true;
+                        }
+                        // A new earlier declaration may carry the exact same
+                        // nominal heap role. The original provider view is
+                        // still guarded by its independent VRead::View. Full V
+                        // below must check the new provider and current world.
+                        match read {
+                            VRead::FirstHeap(Some(previous)) => {
+                                let old = views
+                                    .view(*previous)
+                                    .and_then(|(s, _)| s.metadata.roles.heap.as_ref());
+                                let current = views.first_heap().map(|(_, role)| role);
+                                old.is_some() && old == current.as_ref()
+                            }
+                            _ => false,
+                        }
+                    })
+                {
+                    return None;
+                }
+
+                let mut exact = Artifact::new(&replay.definition, types.clone(), |a| {
+                    replay.owners.get(&a).cloned()
+                });
+                if let Some(overlay) = replay.overlay {
+                    exact = exact.with_overlay(overlay);
+                }
+                if exact.identity != Some(accepted.artifact) {
+                    return None;
+                }
+                let (report, _, refreshed) =
+                    validate_with_receipt(&exact, &*views, replay.policy, Some(self), &mut vec![]);
+                if !report.violations.is_empty() || refreshed.as_ref() != Some(&accepted) {
+                    return None;
+                }
+            }
+            artifacts.push(accepted);
+        }
+        if changed && contexts.iter().any(|(p, _)| !covered.contains(p)) {
+            return None;
+        }
+        // The independently observed environment must remain the same through V.
+        if contexts
+            .iter()
+            .any(|(p, d)| environment.base_digest(p) != Some(*d))
+        {
+            return None;
+        }
+        let receipt = ExecutionReceipt {
+            contexts: contexts.into(),
+            artifacts: artifacts.into(),
+        };
+        if changed {
+            self.publish_execution(subject, &receipt);
+        }
+        Some(receipt)
+    }
     /// Bind an ordinary evaluation output to evidence minted by V. The opaque
     /// receipt cannot be constructed or decoded by an ordinary producer.
     pub fn publish_execution(&self, subject: ContentHash, receipt: &ExecutionReceipt) {
@@ -226,6 +445,41 @@ impl VerifierCache {
     }
 }
 
+/// Immutable independent signature input for replay. Implementations supply
+/// views, never verdicts. Overlay bytes come only from the verifier's exact
+/// locally retained artifact, and are independently checked again by V.
+pub trait ReplayEnvironment {
+    fn base_digest(&self, package: &PackageId) -> Option<ContentHash>;
+    fn views(
+        &self,
+        package: &PackageId,
+        overlay: Option<hirsel_types::SignatureRef>,
+    ) -> Option<Box<dyn SignatureLookup + '_>>;
+}
+
+const REPLAY_DOMAIN: Domain = Domain {
+    kind: 0x5600_0004,
+    schema: 1,
+};
+fn replay_key(artifact: ContentHash, policy: ContentHash) -> ContentHash {
+    ContentHash::of_parts(
+        "hirsel.validate.replay.v1",
+        [artifact.0.as_slice(), policy.0.as_slice()],
+    )
+}
+#[derive(Serialize, Deserialize)]
+struct ReplayRecord {
+    artifact: ContentHash,
+    policy: ContentHash,
+    bytes: Vec<u8>,
+}
+/// Construction is verifier-private. These bytes alone are not acceptance.
+struct ReplayArtifact {
+    definition: hirsel_tir::DefinitionRef,
+    overlay: Option<hirsel_types::SignatureRef>,
+    policy: ContentHash,
+    owners: std::collections::BTreeMap<Anchor, (DefPath, u32)>,
+}
 const EXECUTION_DOMAIN: Domain = Domain {
     kind: 0x5600_0002,
     schema: 1,
@@ -315,6 +569,7 @@ pub fn validate_with_receipt(
             .iter()
             .all(|read| read_holds(read, signatures))
     {
+        cache.retain_artifact(artifact, policy);
         reads.extend(receipt.reads);
         return (
             Validation::default(),
@@ -330,6 +585,7 @@ pub fn validate_with_receipt(
     if report.violations.is_empty()
         && let (Some(cache), Some(key), Some(identity)) = (cache, key, artifact.identity)
     {
+        cache.retain_artifact(artifact, policy);
         cache.publish(
             key,
             DOMAIN,
@@ -590,6 +846,287 @@ mod tests {
         assert!(
             VerifierCache::directory(imported.0.clone())
                 .execution(subject, |_| contexts[0].1)
+                .is_none()
+        );
+    }
+
+    struct ReplayViews<'a> {
+        signatures: Option<&'a dyn SignatureLookup>,
+        package: PackageId,
+        digest: ContentHash,
+        calls: std::cell::Cell<usize>,
+    }
+    impl ReplayEnvironment for ReplayViews<'_> {
+        fn base_digest(&self, package: &PackageId) -> Option<ContentHash> {
+            (package == &self.package).then_some(self.digest)
+        }
+        fn views(
+            &self,
+            package: &PackageId,
+            _: Option<hirsel_types::SignatureRef>,
+        ) -> Option<Box<dyn SignatureLookup + '_>> {
+            self.calls.set(self.calls.get() + 1);
+            self.base_digest(package)?;
+            Some(Box::new(self.signatures?))
+        }
+    }
+
+    #[test]
+    fn execution_replay_runs_v_and_refuses_missing_wrong_or_uncovered_contexts() {
+        let mut f = Fixture::unit();
+        owner_sig(&mut f, &[]);
+        f.body().blocks[0].span.anchor = Anchor::fresh();
+        let cache = VerifierCache::default();
+        let policy = ContentHash::default();
+        let (_, _, accepted) = validate_with_receipt(
+            &artifact(&f),
+            &f.signatures,
+            policy,
+            Some(&cache),
+            &mut vec![],
+        );
+        let accepted = accepted.unwrap();
+        let package = path("main").0.package;
+        let old = ContentHash::of_bytes(b"old universe");
+        let new = ContentHash::of_bytes(b"new universe");
+        let receipt =
+            ExecutionReceipt::compose(&[(package.clone(), old)], &[accepted.clone()]).unwrap();
+        let subject = ContentHash::of_bytes(b"replay subject");
+        cache.publish_execution(subject, &receipt);
+        let mut environment = ReplayViews {
+            signatures: None,
+            package: package.clone(),
+            digest: new,
+            calls: std::cell::Cell::new(0),
+        };
+        let anchor = f.definition.bodies[0].blocks[0].span.anchor;
+        let replay = |environment: &ReplayViews<'_>| {
+            cache.execution_revalidated(
+                subject,
+                session(),
+                |p, n| (*p == path("main") && n == 0).then_some(anchor),
+                environment,
+            )
+        };
+        // A retained clone cannot refresh context: V must receive current views.
+        assert!(replay(&environment).is_none());
+        assert!(cache.execution(subject, |_| new).is_none());
+        environment.package.name = "wrong-package".into();
+        assert!(replay(&environment).is_none());
+        environment.package = package.clone();
+        let empty = crate::SignatureMap::new(session());
+        environment.signatures = Some(&empty);
+        assert!(replay(&environment).is_none());
+        assert!(cache.execution(subject, |_| new).is_none());
+        environment.signatures = Some(&f.signatures);
+        assert!(replay(&environment).is_some());
+        assert!(environment.calls.get() >= 2);
+        assert!(cache.execution(subject, |_| new).is_some());
+        let mut other = package.clone();
+        other.name = "uncovered".into();
+        let mut contexts = vec![(package, old), (other, old)];
+        contexts.sort();
+        cache.publish_execution(
+            subject,
+            &ExecutionReceipt::compose(&contexts, &[accepted]).unwrap(),
+        );
+        assert!(replay(&environment).is_none());
+    }
+
+    #[test]
+    fn execution_replay_refuses_a_supplied_but_uncovered_universe() {
+        let mut f = Fixture::unit();
+        owner_sig(&mut f, &[]);
+        let cache = VerifierCache::default();
+        let (_, _, accepted) = validate_with_receipt(
+            &artifact(&f),
+            &f.signatures,
+            ContentHash::default(),
+            Some(&cache),
+            &mut vec![],
+        );
+        let old = ContentHash::of_bytes(b"old");
+        let mut other = path("main").0.package;
+        other.name = "other".into();
+        let mut contexts = vec![(path("main").0.package, old), (other, old)];
+        contexts.sort();
+        let subject = ContentHash::of_bytes(b"uncovered subject");
+        cache.publish_execution(
+            subject,
+            &ExecutionReceipt::compose(&contexts, &[accepted.unwrap()]).unwrap(),
+        );
+        struct Supplied<'a>(&'a dyn SignatureLookup);
+        impl ReplayEnvironment for Supplied<'_> {
+            fn base_digest(&self, _: &PackageId) -> Option<ContentHash> {
+                Some(ContentHash::of_bytes(b"new"))
+            }
+            fn views(
+                &self,
+                _: &PackageId,
+                _: Option<hirsel_types::SignatureRef>,
+            ) -> Option<Box<dyn SignatureLookup + '_>> {
+                Some(Box::new(self.0))
+            }
+        }
+        assert!(
+            cache
+                .execution_revalidated(
+                    subject,
+                    session(),
+                    |_, _| Some(Anchor::default()),
+                    &Supplied(&f.signatures)
+                )
+                .is_none()
+        );
+        assert!(
+            cache
+                .execution(subject, |_| ContentHash::of_bytes(b"new"))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn execution_replay_heap_provider_equivalence_requires_all_old_views_and_complete_role() {
+        use crate::support::{arena_slot, function_signature};
+        let mut f = Fixture::call();
+        arena_slot(&mut f, hirsel_tir::Storage::Temporary);
+        owner_sig(&mut f, &[]);
+        let cache = VerifierCache::default();
+        let policy = ContentHash::default();
+        let mut reads = vec![];
+        let (report, _, accepted) = validate_with_receipt(
+            &artifact(&f),
+            &f.signatures,
+            policy,
+            Some(&cache),
+            &mut reads,
+        );
+        assert!(report.violations.is_empty(), "{report:?}");
+        assert!(
+            reads.contains(&VRead::FirstHeap(Some(hirsel_syntax::DefId::intern(
+                &path("Arena")
+            ))))
+        );
+        let accepted = accepted.unwrap();
+        let package = path("main").0.package;
+        let old = ContentHash::of_bytes(b"original heap universe");
+        let new = ContentHash::of_bytes(b"earlier equal provider universe");
+        let subject = ContentHash::of_bytes(b"heap replay subject");
+        let receipt = ExecutionReceipt::compose(&[(package.clone(), old)], &[accepted]).unwrap();
+        let mut current = f.signatures.clone();
+        let mut earlier = function_signature(
+            "0provider",
+            vec![],
+            hirsel_types::TypeKind::Tuple(vec![].into()),
+        );
+        earlier.metadata.roles = current.get(path("Arena")).unwrap().metadata.roles.clone();
+        current.insert(earlier.definition, earlier);
+        struct MissingHeap<'a>(&'a dyn SignatureLookup);
+        impl SignatureLookup for MissingHeap<'_> {
+            fn view(
+                &self,
+                d: hirsel_syntax::DefId,
+            ) -> Option<(&hirsel_types::Signature, crate::ValidationDigest)> {
+                self.0.view(d)
+            }
+            fn first_heap(&self) -> Option<(hirsel_syntax::DefId, hirsel_types::HeapRole)> {
+                None
+            }
+            fn universe_errors(&self) -> (ContentHash, &[crate::Violation]) {
+                self.0.universe_errors()
+            }
+        }
+        let attempt = |signatures: &dyn SignatureLookup| {
+            cache.publish_execution(subject, &receipt);
+            cache.execution_revalidated(
+                subject,
+                session(),
+                |_, _| Some(Anchor::default()),
+                &ReplayViews {
+                    signatures: Some(signatures),
+                    package: package.clone(),
+                    digest: new,
+                    calls: std::cell::Cell::new(0),
+                },
+            )
+        };
+        // The ordinary read guard stays exact. Only verifier replay compares
+        // the complete role and validates the retained artifact again.
+        let old_heap = VRead::FirstHeap(Some(hirsel_syntax::DefId::intern(&path("Arena"))));
+        assert!(!read_holds(&old_heap, &current));
+        assert!(attempt(&MissingHeap(&current)).is_none());
+        for field in ["arena", "operation"] {
+            let mut changed = current.clone();
+            let role = changed
+                .get_mut(path("0provider"))
+                .unwrap()
+                .metadata
+                .roles
+                .heap
+                .as_mut()
+                .unwrap();
+            if field == "arena" {
+                role.arena = path("DifferentArena");
+            } else {
+                role.operation = path("different_operation");
+            }
+            assert!(attempt(&changed).is_none(), "changed {field}");
+        }
+        let mut missing = current.clone();
+        missing.remove(path("Arena"));
+        assert!(attempt(&missing).is_none());
+        let mut stale = current.clone();
+        stale.get_mut(path("Arena")).unwrap().metadata.visibility =
+            hirsel_syntax::Visibility::Public;
+        assert!(attempt(&stale).is_none());
+        assert!(attempt(&current).is_some());
+        assert!(cache.execution(subject, |_| new).is_some());
+    }
+
+    #[test]
+    fn private_overlay_identity_and_replay_associations_are_verifier_owned() {
+        let mut f = Fixture::unit();
+        owner_sig(&mut f, &[]);
+        f.body().blocks[0].span.anchor = Anchor::fresh();
+        let directory = Directory::new();
+        let cache = VerifierCache::directory(directory.0.clone());
+        let signature = std::sync::Arc::new(f.signatures.get(f.definition.path).unwrap().clone());
+        let exact = artifact(&f).with_overlay(signature.clone());
+        let mut changed = (*signature).clone();
+        changed.metadata.visibility = hirsel_syntax::Visibility::Public;
+        assert_ne!(
+            exact.identity,
+            artifact(&f)
+                .with_overlay(std::sync::Arc::new(changed))
+                .identity
+        );
+        let policy = ContentHash::default();
+        let (_, _, accepted) =
+            validate_with_receipt(&exact, &f.signatures, policy, Some(&cache), &mut vec![]);
+        let accepted = accepted.unwrap();
+        let anchor = f.definition.bodies[0].blocks[0].span.anchor;
+        assert!(
+            cache
+                .replay_artifact(&accepted, session(), |_, _| Some(anchor))
+                .is_some()
+        );
+        assert!(
+            cache
+                .replay_artifact(&accepted, session(), |_, _| None)
+                .is_none()
+        );
+        let source = Store::new(directory.0.clone());
+        let association = source
+            .lookup(Address(replay_key(accepted.artifact, accepted.policy)))
+            .unwrap();
+        let bytes = source.get(association.reference).unwrap();
+        let imported = Directory::new();
+        Store::new(imported.0.clone())
+            .put(REPLAY_DOMAIN, &bytes)
+            .unwrap();
+        assert!(
+            VerifierCache::directory(imported.0.clone())
+                .replay_artifact(&accepted, session(), |_, _| Some(anchor))
                 .is_none()
         );
     }

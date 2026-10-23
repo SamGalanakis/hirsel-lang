@@ -46,6 +46,18 @@ pub trait SignatureLookup: Sync {
     fn universe_errors(&self) -> (ContentHash, &[Violation]);
 }
 
+impl<T: SignatureLookup + ?Sized> SignatureLookup for &T {
+    fn view(&self, d: DefId) -> Option<(&Signature, ValidationDigest)> {
+        (**self).view(d)
+    }
+    fn first_heap(&self) -> Option<(DefId, HeapRole)> {
+        (**self).first_heap()
+    }
+    fn universe_errors(&self) -> (ContentHash, &[Violation]) {
+        (**self).universe_errors()
+    }
+}
+
 /// V's digest of a view. Every field is encoded, including private shape,
 /// malformed rows and metadata a producer could leave out of its fingerprint.
 ///

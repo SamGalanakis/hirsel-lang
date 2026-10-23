@@ -28,6 +28,117 @@ impl Fixture {
 mod canonical_debug;
 use canonical_debug::{canonical_ids, placed};
 
+#[test]
+fn ordinary_std_precomputation_completes_through_the_query_store() {
+    with_compiler_stack(|| {
+        let f = Fixture::new();
+        let products = f.0.join("ordinary-std-precompute");
+        let compiler = COMPILER.clone().with_config(CompileConfig {
+            jobs: hirsel_intern::jobs::Jobs::new(1),
+            ..CompileConfig::for_memory_cap(None)
+        });
+        let started = std::time::Instant::now();
+        compiler.precompute_package(&std_manifest(), &products).unwrap();
+        eprintln!("[ca40-cost] std-precompute elapsed={:?}", started.elapsed());
+        let shared = compiler.with_config(CompileConfig {
+            store: Arc::new(store::DirStore::new(products)),
+            jobs: hirsel_intern::jobs::Jobs::new(1),
+            ..CompileConfig::for_memory_cap(None)
+        });
+        let mut reader = shared.load_check_package(&std_manifest()).unwrap();
+        assert_eq!(reader.engine.work_stats().parsed_bytes, 0);
+        let definitions = reader.engine.indexed_definitions();
+        assert!(definitions.len() > 100);
+        let started = std::time::Instant::now();
+        let checked = reader.check(hirsel_engine::LoweringPolicy::Reachable).unwrap();
+        assert_eq!(checked.completion, hirsel_engine::CheckCompletion::Complete);
+        assert!(!checked.diagnostics.iter().any(|d| d.severity == hirsel_diag::Severity::Error));
+        for path in definitions {
+            assert_eq!(reader.engine.recompute_count(&path, QueryKind::Check), 0, "{path}");
+            assert_eq!(reader.engine.recompute_count(&path, QueryKind::Modes), 0, "{path}");
+        }
+        eprintln!("[ca40-cost] std-reopened-check elapsed={:?}", started.elapsed());
+    });
+}
+
+// This constituent covers the selected std client closure and native import.
+// The original all-definition equality test remains separate and unproved.
+#[test]
+fn ordinary_std_client_semantic_and_native_products_equal_fresh_ones() {
+    with_compiler_stack(|| {
+        let f = Fixture::new();
+        let products = f.0.join("std-products");
+        let compiler = COMPILER.clone().with_config(CompileConfig {
+            jobs: hirsel_intern::jobs::Jobs::new(1),
+            ..CompileConfig::for_memory_cap(None)
+        });
+        compiler.precompute_package(&std_manifest(), &products).unwrap();
+        let shared = compiler.clone().with_config(CompileConfig {
+            store: Arc::new(store::DirStore::new(products)),
+            jobs: hirsel_intern::jobs::Jobs::new(1),
+            ..CompileConfig::for_memory_cap(None)
+        });
+        // `aaa` places std after the program's own sources, exercising FileId rebasing.
+        let client = f.program("aaa", STD_PROGRAM, &std_manifest(), "std");
+        let mut imaged = shared.load_program_source_with_images(&client, None, &StdImages::none()).unwrap();
+        let definitions: Vec<_> = imaged.engine.indexed_definitions().into_iter().filter(|path| path.0.package == package("std")).map(|path| DefId::intern(&path)).collect();
+        assert!(definitions.len() > 100);
+        let mut reference = compiler.load_program_source_with_images(&client, None, &StdImages::none()).unwrap();
+        let checked = |p: &mut LoadedProgram| {
+            let output = p.check(hirsel_engine::LoweringPolicy::Reachable).unwrap();
+            let rendered: Vec<_> = output
+                .diagnostics
+                .iter()
+                .map(|d| d.render_human(&output.sources))
+                .collect();
+            (output.completion, rendered)
+        };
+        assert_eq!(checked(&mut imaged), checked(&mut reference));
+        let entry = imaged.entry.clone();
+        assert_eq!(
+            imaged.engine.semantic_program_revision(&entry).unwrap(),
+            reference.engine.semantic_program_revision(&entry).unwrap()
+        );
+        let actual = imaged.engine.export_native_input().unwrap();
+        let expected = reference.engine.export_native_input().unwrap();
+        assert_eq!(actual.audits, expected.audits);
+        assert_eq!(
+            canonical_ids(
+                &actual.types,
+                || serde_json::to_vec(&actual.materialized.values().collect::<Vec<_>>()).unwrap(),
+                format!("{:?}", actual.materialized)
+            ),
+            canonical_ids(
+                &expected.types,
+                || serde_json::to_vec(&expected.materialized.values().collect::<Vec<_>>()).unwrap(),
+                format!("{:?}", expected.materialized)
+            )
+        );
+        assert_eq!(
+            canonical_ids(
+                &actual.types,
+                || serde_json::to_vec(&actual.constants.values().collect::<Vec<_>>()).unwrap(),
+                format!("{:?}", actual.constants)
+            ),
+            canonical_ids(
+                &expected.types,
+                || serde_json::to_vec(&expected.constants.values().collect::<Vec<_>>()).unwrap(),
+                format!("{:?}", expected.constants)
+            )
+        );
+        imaged.engine.import_native_input(actual).unwrap();
+        for path in definitions.iter().copied().map(DefId::path) {
+            for phase in [QueryKind::Check, QueryKind::Modes] {
+                assert_eq!(
+                    imaged.engine.recompute_count(path, phase),
+                    0,
+                    "{path}: {phase:?}"
+                );
+            }
+        }
+    });
+}
+
 /// Every std definition in the image lowers to the same TIR and has the same revision
 /// node as in a fresh check, in a program that places std's sources at other
 /// FileIds than the program the image was written in.
@@ -35,16 +146,23 @@ use canonical_debug::{canonical_ids, placed};
 fn imaged_std_products_equal_fresh_ones() {
     with_compiler_stack(|| {
         let f = Fixture::new();
-        let image = std_image();
+        let products = f.0.join("std-products");
+        let compiler = COMPILER.clone().with_config(CompileConfig {
+            jobs: hirsel_intern::jobs::Jobs::new(1),
+            ..CompileConfig::for_memory_cap(None)
+        });
+        compiler.precompute_package(&std_manifest(), &products).unwrap();
+        let shared = compiler.clone().with_config(CompileConfig {
+            store: Arc::new(store::DirStore::new(products)),
+            jobs: hirsel_intern::jobs::Jobs::new(1),
+            ..CompileConfig::for_memory_cap(None)
+        });
         // `aaa` places std after the program's own sources, exercising FileId rebasing.
         let client = f.program("aaa", STD_PROGRAM, &std_manifest(), "std");
-        let mut imaged = load(&client, &StdImages::of(vec![image.clone()]));
-        assert!(
-            imaged.engine.imaged(&package("std")),
-            "{:?}",
-            imaged.image_notes
-        );
-        let mut reference = load(&client, &StdImages::none());
+        let mut imaged = shared.load_program_source_with_images(&client, None, &StdImages::none()).unwrap();
+        let definitions: Vec<_> = imaged.engine.indexed_definitions().into_iter().filter(|path| path.0.package == package("std")).map(|path| DefId::intern(&path)).collect();
+        assert!(definitions.len() > 100);
+        let mut reference = compiler.load_program_source_with_images(&client, None, &StdImages::none()).unwrap();
         let checked = |p: &mut LoadedProgram| {
             let output = p.check(hirsel_engine::LoweringPolicy::Reachable).unwrap();
             let rendered: Vec<_> = output
@@ -61,7 +179,7 @@ fn imaged_std_products_equal_fresh_ones() {
             reference.engine.semantic_program_revision(&entry).unwrap()
         );
         let mut lowered = 0;
-        for path in image.definitions().into_iter().map(DefId::path) {
+        for path in definitions.iter().copied().map(DefId::path) {
             assert_eq!(
                 imaged.engine.semantic_program_revision(path).unwrap(),
                 reference.engine.semantic_program_revision(path).unwrap(),
@@ -128,7 +246,7 @@ fn imaged_std_products_equal_fresh_ones() {
             )
         );
         imaged.engine.import_native_input(actual).unwrap();
-        for path in image.definitions().into_iter().map(DefId::path) {
+        for path in definitions.iter().copied().map(DefId::path) {
             for phase in [QueryKind::Check, QueryKind::Modes] {
                 assert_eq!(
                     imaged.engine.recompute_count(path, phase),

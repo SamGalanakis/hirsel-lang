@@ -128,6 +128,23 @@ impl QueryEngine {
         self.publish_mode_summary(definition, &completed)
     }
 
+    /// Complete retained front diagnostics, without demanding an analyzed body
+    /// when the ordinary summary and all of its reads remain current.
+    pub(crate) fn definition_diagnostics(
+        &mut self,
+        path: &DefPath,
+    ) -> Result<Vec<hirsel_diag::Diagnostic>, QueryError> {
+        let id = DefId::intern(path);
+        self.definition_summary(id)?;
+        Ok(self
+            .summaries
+            .get(&id)
+            .ok_or(QueryError::NotImplemented)?
+            .result()?
+            .diagnostics
+            .clone())
+    }
+
     /// Publish from the already completed phase result; P does not demand the
     /// body a second time just to retain its compact products.
     pub(super) fn publish_mode_summary(
