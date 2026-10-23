@@ -35,7 +35,7 @@ impl Entry<hirsel_tir::DefinitionRef> {
             covered: self.covered.clone(),
             depth: self.depth.clone(),
             acceptance: self.acceptance.clone(),
-            staged: self.staged.clone(),
+            selections: self.selections.clone(),
             consistent: self.consistent,
         }
     }
@@ -215,7 +215,7 @@ impl QueryEngine {
                     covered: vec![],
                     depth: outcome.depth.clone(),
                     acceptance: None,
-                    staged: vec![],
+                    selections: vec![],
                     consistent: true,
                 },
                 verdict: None,

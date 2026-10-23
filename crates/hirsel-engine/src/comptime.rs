@@ -13,6 +13,14 @@ use hirsel_types::{
 };
 use std::sync::Arc;
 
+/// Exact demand order across staged values and generated source selections.
+/// This is replay metadata, never verification authority.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub(crate) enum Selection {
+    Staged(DefId, Vec<u64>),
+    Generated(DefId),
+}
+
 /// A constant evaluation and the substitutions used to lower its source initializer.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub(crate) struct EvaluatedConstant {
@@ -23,7 +31,7 @@ pub(crate) struct EvaluatedConstant {
     /// Its dependency height and overflow table under the comptime limits.
     pub depth: DepthEvidence<Span>,
     /// Exact ordered staged selections, including transitive value hits.
-    pub staged: Vec<(DefId, Vec<u64>)>,
+    pub selections: Vec<crate::comptime::Selection>,
     /// Memory-only acceptance contexts, recorded while private/source V ran.
     /// Producer serialization cannot carry this authority. Workers instead
     /// retain their existing explicit ValidationUniverse witnesses.
@@ -696,7 +704,7 @@ impl QueryEngine {
     ) -> (
         Option<Arc<[(hirsel_syntax::PackageId, ContentHash)]>>,
         Option<hirsel_validate::ExecutionReceipt>,
-        Vec<(DefId, Vec<u64>)>,
+        Vec<Selection>,
     ) {
         let validation = self
             .evaluation_validation
@@ -721,11 +729,11 @@ impl QueryEngine {
         (validation, receipt, staged)
     }
     fn finish_evaluation_validation(&mut self, result: &mut Result<EvaluatedConstant, QueryError>) {
-        let (validation, acceptance, staged) = self.end_evaluation_validation();
+        let (validation, acceptance, selections) = self.end_evaluation_validation();
         if let Ok(value) = result {
             value.validation = validation;
             value.acceptance = acceptance;
-            value.staged = staged;
+            value.selections = selections;
         }
     }
     pub(crate) fn lower_acceptance_holds(
@@ -776,9 +784,7 @@ impl QueryEngine {
             .any(|(key, _)| matches!(key, crate::ReadKey::ValidationUniverse(_)))
     }
     fn merge_evaluation_validation(&mut self, value: &EvaluatedConstant) {
-        for (path, arguments) in &value.staged {
-            self.record_staged_selection(*path, arguments);
-        }
+        self.record_selections(&value.selections);
         if let Some(receipt) = &value.acceptance {
             for artifact in receipt.artifacts() {
                 self.record_evaluation_acceptance(Some(artifact.clone()));
@@ -805,7 +811,17 @@ impl QueryEngine {
     }
     pub(crate) fn record_staged_selection(&mut self, path: DefId, arguments: &[u64]) {
         for frame in &mut self.evaluation_selections {
-            frame.push((path, arguments.to_vec()));
+            frame.push(Selection::Staged(path, arguments.to_vec()));
+        }
+    }
+    pub(crate) fn record_generated_selection(&mut self, path: DefId) {
+        for frame in &mut self.evaluation_selections {
+            frame.push(Selection::Generated(path));
+        }
+    }
+    pub(crate) fn record_selections(&mut self, selections: &[Selection]) {
+        for frame in &mut self.evaluation_selections {
+            frame.extend_from_slice(selections);
         }
     }
     /// Complete execution evidence of a retained constant materialization.
@@ -861,7 +877,7 @@ impl QueryEngine {
                 substitutions: vec![],
                 executed: Default::default(),
                 depth: DepthEvidence::leaf(self.depth_limit()),
-                staged: vec![],
+                selections: vec![],
                 validation: None,
                 acceptance: None,
             });
@@ -896,7 +912,7 @@ impl QueryEngine {
                 substitutions: vec![],
                 executed: Default::default(),
                 depth: DepthEvidence::leaf(self.depth_limit()),
-                staged: vec![],
+                selections: vec![],
                 validation: None,
                 acceptance: None,
             });
@@ -1000,7 +1016,7 @@ impl QueryEngine {
                 substitutions: constants,
                 executed,
                 depth: self.depth_composed(true),
-                staged: vec![],
+                selections: vec![],
                 validation: None,
                 acceptance: None,
             })
@@ -1414,7 +1430,7 @@ impl QueryEngine {
                     .finish()
                     .map_err(|_| QueryError::NotImplemented)?,
                 depth: self.depth_composed(true),
-                staged: vec![],
+                selections: vec![],
                 validation: None,
                 acceptance: None,
             })

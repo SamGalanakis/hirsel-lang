@@ -85,6 +85,7 @@ impl RootOutcome {
 pub(crate) struct FrozenSource<'a> {
     pub(crate) inputs: TaskInputs,
     pub(crate) items: &'a BTreeMap<DefPath, Vec<Arc<ItemSyntax>>>,
+    pub(crate) generated: &'a BTreeMap<DefPath, generation::GeneratedSource>,
     pub(crate) signatures: &'a Table<hirsel_types::SignatureRef>,
     pub(crate) modes: &'a Table<AnalyzedBody>,
     pub(crate) checked: &'a Table<TypedBody>,
@@ -291,7 +292,12 @@ impl TirSource for FrozenSource<'_> {
         &self.inputs
     }
     fn anchor_owner(&self, anchor: hirsel_span::Anchor) -> Option<(DefPath, u32)> {
-        super::super::persistent::anchor_owner(self.items, anchor)
+        super::super::persistent::artifact_anchor_owner(
+            self.items,
+            &self.inputs.sources,
+            self.generated,
+            anchor,
+        )
     }
     fn implementation(&self, path: &DefPath) -> Option<ContentHash> {
         self.items
@@ -327,6 +333,18 @@ impl TirSource for FrozenSource<'_> {
         worker: &mut TaskWorker<'_, Self>,
         path: &DefPath,
     ) -> DependencyProduct<Arc<TaskBody>> {
+        if self
+            .items
+            .get(path)
+            .and_then(|items| items.first())
+            .is_some_and(|syntax| {
+                generation::generator(syntax).is_some() && !generation::instance_bodied(syntax)
+            })
+        {
+            worker
+                .selections
+                .push(SelectionEvent::Generated(DefId::intern(path)));
+        }
         // A generic generated declaration has no executable body. Its closed
         // instance must be registered before a worker checks the generator;
         // never treat its open type parameters as a private constant.
@@ -348,6 +366,13 @@ impl TirSource for FrozenSource<'_> {
             .get(&id)
             .filter(|entry| self.current(path, entry))
         {
+            if let Some(generated) = self
+                .checked
+                .get(&id)
+                .filter(|entry| self.current(path, entry))
+            {
+                worker.replay_selections(&generated.selections);
+            }
             if let Some(generated) = self
                 .checked
                 .get(&id)
@@ -393,6 +418,7 @@ impl TirSource for FrozenSource<'_> {
                 .get(&id)
                 .filter(|entry| self.current(path, entry))
             {
+                worker.replay_selections(&entry.selections);
                 if let Some(depth) = &entry.depth
                     && let Err(error) = worker
                         .replay_generator(depth, self.generator_site(path).unwrap_or_default())
@@ -693,6 +719,7 @@ impl QueryEngine {
                 lower_budget,
             },
             items: &self.items,
+            generated: &self.generated,
             signatures: &self.signatures,
             modes: &self.modes,
             checked: &self.checked,
@@ -1292,7 +1319,7 @@ impl QueryEngine {
                             error = Some(failure.clone());
                         }
                     }
-                    SelectionEvent::LowerComputed(_) => {}
+                    SelectionEvent::LowerComputed(_) | SelectionEvent::Generated(_) => {}
                     SelectionEvent::Failed(mut product) => {
                         let definition = product.definition.clone();
                         let cached = self.checked.get(&DefId::intern(&definition)).cloned();
