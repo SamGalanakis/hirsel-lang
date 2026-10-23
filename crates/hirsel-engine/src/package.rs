@@ -569,6 +569,11 @@ pub(crate) fn load_program_inputs(
         })
         .collect();
     let mut engine = compiler.engine(environment);
+    let publication = engine
+        .result_store
+        .as_ref()
+        .and_then(|store| store.local_product_store())
+        .map(|store| store.request());
     engine.comptime_limits = limits;
     engine.package_manifests = manifests;
     {
@@ -652,6 +657,9 @@ pub(crate) fn load_program_inputs(
                 }
             }
         }
+    }
+    if let Some(publication) = publication {
+        let _ = publication.finish();
     }
     Ok(program)
 }

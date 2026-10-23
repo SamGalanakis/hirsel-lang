@@ -57,7 +57,7 @@ def program(family, n):
 
 def environment():
     env = {key: value for key, value in os.environ.items() if key in (
-        'PATH', 'LLVM_SYS_231_PREFIX', 'HIRSEL_IMAGE', 'HIRSEL_VALGRIND', 'VALGRIND_LIB',
+        'PATH', 'LLVM_SYS_231_PREFIX', 'HIRSEL_PRODUCTS', 'HIRSEL_VALGRIND', 'VALGRIND_LIB',
         'HIRSEL_VALGRIND_RUNTIME', 'LD_LIBRARY_PATH')}
     env.update(LC_ALL='C', HIRSEL_JOBS='1', HIRSEL_MEMORY_LIMIT=str(DATA_CAP))
     return env

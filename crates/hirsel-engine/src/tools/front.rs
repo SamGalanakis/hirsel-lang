@@ -183,7 +183,7 @@ impl QueryEngine {
     /// prefix settles before staged/generic roots can publish declarations;
     /// consecutive dynamic roots still share the compact worker schedule.
     pub(crate) fn static_constant_frontier(&mut self, root: &DefPath) -> bool {
-        if self.adapters.phases.is_none() || self.portable_products {
+        if self.adapters.phases.is_none() {
             return false;
         }
         self.invalidate_front_products();
@@ -275,7 +275,7 @@ impl QueryEngine {
     ) -> Result<(), QueryError> {
         // Image writers still need closure-local scalar evidence. Fake phase
         // adapters keep the scalar contract without a complete frozen source.
-        if self.portable_products || self.adapters.phases.is_none() {
+        if self.adapters.phases.is_none() {
             for definition in definitions {
                 diagnostics.extend(self.front_lower(&definition)?);
             }

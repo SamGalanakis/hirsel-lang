@@ -50,7 +50,7 @@ def main(args):
     selected_ids={row['id'] for row in rows}
     rows += [row['case'] for row in twins if row['full_id'] in selected_ids]
     host = Batch(root, root / 'hirsel.json', env, 'verify')
-    toolpaths=[args.hirsel,Path(env['PACKTREE_29_HOST_REPLAYER']),Path(env['HIRSEL_IMAGE']),Path(env['LLVM_SYS_231_PREFIX'])/'bin/clang',Path(env['LLVM_SYS_231_PREFIX'])/'bin/ld.lld']
+    toolpaths=[args.hirsel,Path(env['PACKTREE_29_HOST_REPLAYER']),*sorted(p for p in Path(env['HIRSEL_PRODUCTS']).rglob('*') if p.is_file()),Path(env['LLVM_SYS_231_PREFIX'])/'bin/clang',Path(env['LLVM_SYS_231_PREFIX'])/'bin/ld.lld']
     toolpaths += list(Path(env['HIRSEL_RUNTIME_ARCHIVES']).rglob('*.a'))
     toolpaths += list(Path(env['HIRSEL_LINK_KIT']).rglob('manifest.json'))
     (out/('resume-tools.json' if args.resume else 'prebuild-tools.json')).write_text(json.dumps({str(p):digest(p) for p in toolpaths},indent=2))

@@ -969,6 +969,11 @@ impl QueryEngine {
                     worker_recomputed: false,
                 });
             } else {
+                // Frozen workers borrow body tables and cannot restore durable
+                // products themselves. Restore only this demanded root's ordinary
+                // checked body before freezing; execution and V still run under
+                // this reader's authority when their own receipt is absent.
+                self.restore_execution_mode(definition);
                 tasks.push((index, definition.clone()));
             }
         }

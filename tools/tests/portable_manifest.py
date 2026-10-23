@@ -296,7 +296,7 @@ class Integration(unittest.TestCase):
     def test_moved_workspace_checks_tests_and_dependency_cards(self):
         self.assertIsNotNone(COMPILER, 'integration requires --hirsel PATH')
         env = os.environ | {'HIRSEL_DAEMON': 'off', 'HIRSEL_RESULTS': 'none@1',
-                            'HIRSEL_VALIDATE_STAGES': '1', 'HIRSEL_STD_OBJECTS': 'none'}
+                            'HIRSEL_VALIDATE_STAGES': '1'}
         with tempfile.TemporaryDirectory(prefix='portable-manifest-8-moved-') as temporary:
             original = Path(temporary) / 'original'
             manifest = original / 'app/hirsel.json'

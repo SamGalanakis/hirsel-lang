@@ -565,7 +565,7 @@ pub fn store_by_name(
         "none@1" => Arc::new(NoneStore),
         "mem@1" => MemStore::shared(),
         "dir@1" => Arc::new(match root {
-            Some(root) => DirStore::new(root),
+            Some(root) => DirStore::new(root).with_installed_products(),
             None => DirStore::default_location()
                 .ok_or("dir@1: no cache directory (set an absolute XDG_CACHE_HOME or HOME, or select none@1)")?,
         }),

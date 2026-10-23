@@ -66,7 +66,7 @@ pub fn load(path: &Path, products: Option<&Path>) -> LoadedProgram {
     let store: std::sync::Arc<dyn store::ResultStore> = match products {
         Some(products) => {
             static NEXT: AtomicU64 = AtomicU64::new(0);
-            let local = products
+            let local = path
                 .parent()
                 .unwrap()
                 .join(format!("reader-{}", NEXT.fetch_add(1, Ordering::Relaxed)));

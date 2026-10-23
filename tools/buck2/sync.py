@@ -196,7 +196,7 @@ NATIVE_TESTS = {"hirsel-cranelift", "hirsel-cli", "hirsel-conformance", "hirsel-
 RUNTIME_ARCHIVES = "//:hirsel-rt-archives"
 
 # Ordinary std products: precomputed once by the built CLI,
-# then loaded by the tests and campaigns that run std programs (HIRSEL_IMAGE).
+# then loaded by the tests and campaigns that run std programs (HIRSEL_PRODUCTS).
 PRODUCTS = "//:hirsel-std-products"
 PRODUCT_TESTS = {"hirsel-cli", "hirsel-conformance", "hirsel-driver", "hirsel-pipeline-tests"}
 

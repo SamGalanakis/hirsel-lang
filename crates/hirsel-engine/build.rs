@@ -76,13 +76,18 @@ fn core_products(out: &Path) {
     let mut source = String::from("hirsel_artifact_store::Embedded(&[\n");
     for (reference, bytes) in entries {
         assert_eq!(store.put(reference.domain, &bytes).unwrap(), reference);
-        let relative = store
-            .output_path(reference)
-            .strip_prefix(out)
-            .unwrap()
-            .to_str()
-            .unwrap()
-            .to_owned();
+        let relative = format!(
+            "core-containers/{}",
+            reference
+                .output
+                .0
+                .0
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        );
+        fs::create_dir_all(out.join("core-containers")).unwrap();
+        fs::write(out.join(&relative), &*store.container(reference).unwrap()).unwrap();
         source.push_str(&format!(
             "(hirsel_artifact_store::Reference {{ output: hirsel_artifact_store::Output(hirsel_syntax::ContentHash({:?})), domain: hirsel_artifact_store::Domain {{ kind: {}, schema: {} }}, len: {} }}, include_bytes!(concat!(env!(\"OUT_DIR\"), \"/{}\"))),\n",
             reference.output.0.0, reference.domain.kind, reference.domain.schema, reference.len, relative

@@ -691,6 +691,7 @@ pub(super) struct EncodedWriter {
 }
 impl EncodedWriter {
     pub(super) fn write(&self, reads: &Reads, payload: Vec<u8>) -> Result<(), QueryError> {
+        let _batch = self.store.local_product_store().map(|store| store.batch());
         if let Some(expected) = &self.expected {
             let matches = expected.matches(reads, &payload);
             if !matches.as_ref().is_ok_and(|same| *same) {
@@ -1174,6 +1175,14 @@ impl QueryEngine {
             && let Some(entry) = self.load_mode(path)
         {
             self.modes.insert(DefId::intern(path), entry);
+        }
+    }
+
+    fn restore_execution_dependencies(&mut self, reads: &Reads) {
+        for (read, _) in reads.iter() {
+            if let ReadKey::ExecutedBody(id) = read {
+                self.restore_execution_mode(id.path());
+            }
         }
     }
 
@@ -2036,7 +2045,15 @@ impl QueryEngine {
         let acceptance =
             if self.verify == Verify::On && self.lower_requires_execution(path, &variant.reads) {
                 let key = self.store_key(path, QueryKind::Lower)?;
-                Some(self.load_execution_receipt(evaluation_subject(&key, &variant.payload))?)
+                let Some(receipt) =
+                    self.load_execution_receipt(evaluation_subject(&key, &variant.payload))
+                else {
+                    // A body product does not supply private execution authority.
+                    // Retain only existing mode inputs for the required replay.
+                    self.restore_execution_dependencies(&variant.reads);
+                    return None;
+                };
+                Some(receipt)
             } else {
                 None
             };
@@ -2104,20 +2121,7 @@ impl QueryEngine {
                 // Restore only existing ordinary mode bodies of those executed
                 // dependencies before S1 starts. Missing products stay misses;
                 // no helper is evaluated or granted execution authority here.
-                let dependencies = value
-                    .executed
-                    .iter()
-                    .filter_map(|(read, _)| {
-                        if let ReadKey::ExecutedBody(id) = read {
-                            Some(id.path().clone())
-                        } else {
-                            None
-                        }
-                    })
-                    .collect::<Vec<_>>();
-                for dependency in dependencies {
-                    self.restore_execution_mode(&dependency);
-                }
+                self.restore_execution_dependencies(&value.executed);
                 return None;
             };
             value.validation = Some(receipt.contexts().to_vec().into());
@@ -2468,6 +2472,40 @@ impl QueryEngine {
         };
         self.depth_replay_requests(&depth)?;
         Ok(Some(output))
+    }
+    /// Complete the ordinary Lower demand and return its actual V-owned output
+    /// when locally available. This also works after a forced recomputation;
+    /// unlike a cutoff lookup it never replays the completed demand's depth.
+    pub fn lower_to_tir_with_verified_output(
+        &mut self,
+        path: &DefPath,
+    ) -> Result<
+        (
+            QueryOutput<hirsel_tir::DefinitionRef>,
+            Option<hirsel_validate::VerifiedDefinitionOutput>,
+        ),
+        QueryError,
+    > {
+        let lowered = self.lower_to_tir(path)?;
+        let output = if self.verify == Verify::On
+            && let Some(cache) = self
+                .result_store
+                .as_ref()
+                .and_then(|store| store.verifier())
+            && let Some(evidence) = self.ensure_lowered_verdict(&lowered.value)?
+        {
+            let snapshot = self.signature_snapshot();
+            cache.definition_output_from_evidence(
+                &lowered.value,
+                self.types.clone(),
+                self.source_verification_policy(),
+                snapshot.validation(&path.0.package),
+                &evidence,
+            )
+        } else {
+            None
+        };
+        Ok((lowered, output))
     }
     /// Materialize this verifier-owned source envelope only after a native
     /// consumer has decided it needs the body. Native validators stay separate.

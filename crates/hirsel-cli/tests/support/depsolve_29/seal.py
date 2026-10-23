@@ -51,7 +51,7 @@ for arg in argv:
                 for mount in config.get('io',{}).get('dirs',[]):tree(mount['host'])
 
 env={name:value for name,value in os.environ.items() if name.startswith(('HIRSEL_','LLVM_')) or name in ['PATH','LD_LIBRARY_PATH']}
-for name in ['HIRSEL_IMAGE','HIRSEL_RUNTIME_ARCHIVES','HIRSEL_LINK_KIT','HIRSEL_GLIBC_FLOOR','LLVM_SYS_231_PREFIX']:
+for name in ['HIRSEL_PRODUCTS','HIRSEL_RUNTIME_ARCHIVES','HIRSEL_LINK_KIT','HIRSEL_GLIBC_FLOOR','LLVM_SYS_231_PREFIX']:
     if name in os.environ:tree(os.environ[name],immutable=True)
 cache_file.write_text(json.dumps(cache))
 destination.write_text(json.dumps(dict(immutable_digest_reuse=reused,cache_contract='prior full byte digest reused only with equal dev/ino/size/mtime_ns/ctime_ns; directory memberships re-evaluated',argv=argv,cwd=os.getcwd(),env=env,files=files,directories=directories,timing='before consumer'),indent=2))

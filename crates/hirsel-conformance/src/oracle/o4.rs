@@ -11,8 +11,8 @@
 //! Conformance and agreement campaigns select `VerifyStore::Recompute`
 //! explicitly in their compiler wiring.
 use super::{
-    Config, Report, Verdict, difference, o1::produce_in_child, produce,
-    produce_with_store, switches,
+    Config, Report, Verdict, difference, o1::produce_in_child, produce, produce_with_store,
+    switches,
 };
 use hirsel_engine::store::MemStore;
 use std::path::{Path, PathBuf};
@@ -93,7 +93,6 @@ fn cli_verification(program: &Path, work: &Path) -> Result<(), String> {
                 .env("HIRSEL_RESULTS", store)
                 .env("HIRSEL_RESULTS_DIR", work.join("results"))
                 .env("HIRSEL_OBJECTS", "none@1")
-                .env("HIRSEL_STD_OBJECTS", "none")
                 .env_remove("HIRSEL_VERIFY_CACHE")
                 .arg(command);
             if verify {

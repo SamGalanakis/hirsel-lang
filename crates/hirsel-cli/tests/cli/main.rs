@@ -74,8 +74,7 @@ fn help_spellings_print_usage_to_stdout_and_exit_zero() {
     }
 }
 
-/// A missing or mismatched image costs only time: the run's output is
-/// unchanged, and only `--verbose` says why a dependency was checked from source.
+/// Missing ordinary products preserve output and emit no diagnostics.
 #[test]
 fn missing_products_preserve_output_with_verbose() {
     let lib = file("pub fn value() -> u64 {\n  1\n}\n");
@@ -85,7 +84,7 @@ fn missing_products_preserve_output_with_verbose() {
         "pub fn main() -> Result[(), ()] {\n  failure.check(lib.value() == 1, Arithmetic())\n  Ok(())\n}\n",
     );
     std::fs::write(path.with_extension("hir.json"), serde_json::json!({"schema":1,"package":{"name":"app","version":"1"},"sources":[{"path":path.file_name().unwrap().to_str().unwrap(),"module":[]}],"dependencies":[{"manifest":lib_manifest,"package":{"name":"lib","version":"1"},"expose":[]}],"entry":{"module":[],"name":"main"}}).to_string()).unwrap();
-    for (verbose, expected) in [(false, 0), (true, 1)] {
+    for verbose in [false, true] {
         let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
         if verbose {
             command.arg("--verbose");
@@ -93,23 +92,16 @@ fn missing_products_preserve_output_with_verbose() {
         let output = command
             .arg("run")
             .arg(&path)
-            .env("HIRSEL_PRODUCTS", "/nonexistent/hirsel-std.image")
+            .env("HIRSEL_PRODUCTS", "/nonexistent/hirsel-std.products")
             .output()
             .unwrap();
         assert_eq!(output.status.code(), Some(0), "{output:?}");
         assert!(output.stdout.is_empty(), "{output:?}");
-        let stderr = String::from_utf8(output.stderr).unwrap();
-        assert_eq!(stderr.lines().count(), expected, "{stderr}");
-        assert!(
-            stderr
-                .lines()
-                .all(|line| line.starts_with("hirsel: ") && line.ends_with("; checking lib@1")),
-            "{stderr}"
-        );
+        assert!(output.stderr.is_empty(), "{output:?}");
     }
 }
 
-/// The toolchain image supplies declarations and signatures as well as TIR.
+/// The toolchain products supply declarations and signatures as well as TIR.
 /// Counting parses catches accidentally routing an ordinary std call through
 /// source even when its final checked products still agree.
 #[test]
@@ -128,7 +120,7 @@ fn checking_hello_parses_no_std_sources() {
     assert_eq!(
         lines.len(),
         1,
-        "a matching image emits no fallback note: {stderr}"
+        "matching products emit no diagnostic: {stderr}"
     );
     let report: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
     assert_eq!(report["counts"]["dependency parses"], 0, "{report}");

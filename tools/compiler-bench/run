@@ -9,7 +9,7 @@ interleaved rounds of check, debug, release and native startup, including the
 540-second active-work budget. Toolchain preparation and capped queue time
 are outside that budget. Legacy clif/llvm-o0/llvm-o2 and edit modes remain
 selectable. Cold removes only this runner's program/native caches; std's
-published image and Rust dependency artifacts are retained on both sides.
+published products and Rust dependency artifacts are retained on both sides.
 """
 import argparse
 from contextlib import nullcontext
@@ -42,11 +42,11 @@ EDITS = ('edit-body', 'edit-private-sig', 'edit-public-sig')
 # The Rust mode a Hirsel mode is compared with in the scoreboard.
 PAIRED = {'debug': 'debug', 'release': 'release', 'native': 'release', 'check': 'check', 'clif': 'debug', 'llvm-o0': 'debug', **{e: e for e in EDITS}}
 NATIVE = ('debug', 'release', 'native', 'clif', 'llvm-o0', 'llvm-o2')
-HIRSEL_CACHE = 'none retained: fresh process, std image read, query cache process-local'
+HIRSEL_CACHE = 'none retained: fresh process, std product read, query cache process-local'
 RUST_COLD = 'cold: dependencies built, package artifacts and incremental state removed'
 RUST_WARM = 'warm: incremental cache of the unedited program retained'
 # Environment that would change what a run reads or caches.
-UNSET = ('HIRSEL_IMAGE', 'HIRSEL_RESULTS', 'CARGO_TARGET_DIR', 'CARGO_INCREMENTAL', 'HIRSEL_NATIVE_CACHE')
+UNSET = ('HIRSEL_PRODUCTS', 'HIRSEL_RESULTS', 'CARGO_TARGET_DIR', 'CARGO_INCREMENTAL', 'HIRSEL_NATIVE_CACHE')
 
 
 def say(text):
@@ -177,9 +177,9 @@ class Runner:
 
     def hirsel_command(self, path, mode):
         hirsel = str(self.hirsel)
-        if mode == 'image':
-            # image has no phase report; perf still counts it.
-            return [hirsel, 'image', str(path), '-o', str(self.scratch / 'std.image')]
+        if mode == 'precompute':
+            # Precomputation has no phase report; perf still counts it.
+            return [hirsel, 'precompute', str(path), '-o', str(self.scratch / 'std.products')]
         if mode == 'native':
             return [hirsel, 'run', *self.timings, '--native', str(path)]
         if mode == 'check' or mode in EDITS:
@@ -440,14 +440,14 @@ def quick_program(program):
 
 def modes(program, wanted, quick=False):
     if program.name == 'std@1':
-        own = ('image',)
+        own = ('precompute',)
     elif program.language == 'hirsel' and program.check_only:
         own = ('check',)
     elif program.language == 'hirsel':
         own = (*HIRSEL_MODES, 'clif', 'llvm-o0', 'llvm-o2')
     else:
         own = RUST_MODES
-    return [m for m in own if wanted is None or m in wanted or (m == 'image' and 'check' in wanted)
+    return [m for m in own if wanted is None or m in wanted or (m == 'precompute' and 'check' in wanted)
             or (program.language == 'rust' and m in {PAIRED.get(h) for h in wanted})]
 
 
@@ -488,7 +488,7 @@ def pairs(cells):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('--toolchain', required=True, help='directory with hirsel and hirsel-std.image')
+    parser.add_argument('--toolchain', required=True, help='directory with hirsel and hirsel-std.products')
     parser.add_argument('--output', required=True, help='result file to write')
     parser.add_argument('--work', default=None, help='corpus and scratch directory (default: a temporary one)')
     parser.add_argument('--groups', help='comma-separated: examples, pairs, conformance, tour, std, stress, scale, edit')
@@ -542,7 +542,7 @@ def main():
         'host': {'machine': platform.machine(), 'cpus': os.cpu_count(), 'load1': os.getloadavg()[0]},
         'toolchain': {'hirsel': str(Path(args.toolchain).resolve() / 'hirsel'), 'rustc': rustc,
                       'hirsel_sha256': file_hash(Path(args.toolchain) / 'hirsel'),
-                      'std_image_sha256': file_hash(Path(args.toolchain) / 'hirsel-std.image')},
+                      'std_products_sha256': hashlib.sha256(json.dumps({str(p.relative_to(Path(args.toolchain) / 'hirsel-std.products')): file_hash(p) for p in sorted((Path(args.toolchain) / 'hirsel-std.products').rglob('*')) if p.is_file()},sort_keys=True).encode()).hexdigest()},
         'selection': {'quick': args.quick, 'groups': args.groups, 'select': args.select, 'modes': args.modes, 'jobs': args.jobs},
         'lock_scope': args.lock_scope, 'resumed_from': args.resume,
         'wall_ratio_valid': args.lock_scope == 'session' and args.repeat >= 10 and not args.resume,

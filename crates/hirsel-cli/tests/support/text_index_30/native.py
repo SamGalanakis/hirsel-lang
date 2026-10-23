@@ -57,7 +57,7 @@ def main(a):
         receipt.update(state='completed',status=result.returncode)
         save();return result,receipt
     tool_files=[cli,root/'capped',root/'capture.py',Path(sys.executable).resolve()]
-    for key in ['HIRSEL_IMAGE','HIRSEL_RUNTIME_ARCHIVES','HIRSEL_LINK_KIT','LLVM_SYS_231_PREFIX']:
+    for key in ['HIRSEL_PRODUCTS','HIRSEL_RUNTIME_ARCHIVES','HIRSEL_LINK_KIT','LLVM_SYS_231_PREFIX']:
         if not env.get(key):continue
         path=Path(env[key]).resolve()
         tool_files.extend(p for p in path.rglob('*') if p.is_file()) if path.is_dir() else tool_files.append(path)

@@ -146,7 +146,6 @@ impl Fixture {
                 .arg("-o")
                 .arg(&binary)
                 .env("HIRSEL_DAEMON", "off")
-                .env("HIRSEL_STD_OBJECTS", "none")
                 .output()
                 .unwrap();
             assert!(

@@ -13,11 +13,11 @@ its own `tools/capped` slot, released between commands. Never wrap the runner in
 another capped call. Do not run your own compiler builds during a measurement.
 
 ```sh
-# Distribution measurements: fat LTO, one codegen unit, PGO and std image.
+# Distribution measurements: fat LTO, one codegen unit, PGO and std products.
 tools/toolchain-dist/build --pgo --output /tmp/hirsel-dist
 # Developer release bundle (keeps its existing profile):
 .buck2/bin/buck2 build --target-platforms //tools/buck2:release //:hirsel-toolchain --show-full-output
-# The bundle contains hirsel and its sibling hirsel-std.image.
+# The bundle contains hirsel and its sibling hirsel-std.products.
 tools/compiler-bench/run --quick --toolchain <bundle> --output quick.json
 tools/compiler-bench/report quick.json --scoreboard > scoreboard.md
 ```
@@ -49,7 +49,7 @@ multiplex percentages remain in the raw JSON.
 | debug | `build --debug --timings=json` | `cargo build --offline` |
 | release | `build --release --timings=json` | `cargo build --release --offline` |
 | native | `run --native --timings=json` until first output/listening | `cargo build --release --offline` (compile only) |
-| image | `image stdlib/std@1/hirsel.json` | none |
+| precompute | `precompute stdlib/std@1/hirsel.json -o <directory>` | none |
 
 The older explicit modes `clif`, `llvm-o0`, `llvm-o2` and the `edit-*` selectors
 remain accepted. `--groups`, `--select`, `--modes`, `--jobs`, `--repeat` and
@@ -60,7 +60,7 @@ resident engine; unchanged warm is not an edit benchmark.
 
 Cold deletes the runner-owned native/cache directory and removes the Rust
 package's own artifacts and incremental state. It retains the published std
-image and builds Rust dependencies beforehand (the pinned Cargo manifest and
+products and builds Rust dependencies beforehand (the pinned Cargo manifest and
 lockfile under `rust/`, offline). Warm runs the exact command again without
 cleaning. Neither flushes the host page cache or deletes shared host caches.
 The existing `HIRSEL_PROGRAM_CACHE=off` policy is retained so compiler work is
@@ -76,7 +76,7 @@ sizes explicitly. Every scale module is reachable. Tasks reuses the existing `be
 compiling only its app binary (not its load-generator binaries). Hello-web, std,
 tour and conformance have no paired Rust port; their ratios are unavailable.
 Tour/conformance programs without an executable entry run check only; std has no
-native entry, so it runs image only. `image` accepts no timing flag.
+native entry, so it runs precompute only. `precompute` accepts no timing flag.
 
 The stress group includes `inline-constant-{1024,2048,4096}` (a homogeneous
 `Inline[u64, N]` constant indexed once) and `record-flow-{4,8,16}` (that many
@@ -185,7 +185,7 @@ tools/compiler-bench/resident measure \
 ```
 
 Each program holds one capped slot for its resident session and releases it
-before the next program. Scale sizes stop at a resource limit. The std image
+before the next program. Scale sizes stop at a resource limit. The std products
 command is outside the resident protocol and is reported as excluded.
 
 `measure --native` runs ten seeded interleaved rounds on tasks and syn10k.
