@@ -700,9 +700,18 @@ impl Library {
             "task.scope" | "task.scope_until" => {
                 self.simulation.id(arg(a, 0)?, "Tasks")?;
                 let until = name == "task.scope_until";
-                // `scope_until` returns `Bounded[R]`: the error exit reads R.
-                let mut body_type = call.result_type;
-                if until {
+                // CONC-2: only a nominal Result error cancels on scope exit. A
+                // generic caller's destination can still be its parameter R;
+                // invocation actuals have already been closed by the evaluator.
+                // Read that actual rather than guessing from the value's tag.
+                let mut body_type = match call.generics.first() {
+                    Some(hirsel_types::GenericArgument::Type(ty)) => *ty,
+                    Some(_) => return Err(invalid("scope result generic must be a type")),
+                    None => call.result_type,
+                };
+                // Calls without explicit actuals supply their concrete result
+                // row; `scope_until`'s row is Bounded[R], so unwrap it then.
+                if until && call.generics.is_empty() {
                     match &call
                         .types
                         .get(body_type)

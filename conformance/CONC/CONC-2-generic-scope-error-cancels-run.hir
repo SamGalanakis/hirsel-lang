@@ -1,0 +1,40 @@
+// rule: CONC-2
+// expect: run
+// A generic scope must identify nominal Result errors before canceling and joining.
+fn scoped[R](tasks: Tasks, take body: once fn(Scope) -> R) -> R {
+  task.scope(tasks, take body)
+}
+
+type Other = First | Second
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let (sender, receiver): (Sender[u8], Receiver[u8]) = channel.open(tasks)
+  let status: Result[(), u8] = scoped(
+    tasks,
+    fn(s: Scope) -> Result[(), u8] {
+      let h = task.async(
+        s,
+        fn() {
+          let mut rx = take receiver
+          failure.check(
+            channel.receive(tasks, mut rx) == Error(Canceled(Parent())),
+            Arithmetic()
+          )
+        }
+      )
+      task.detach(s, take h)
+      Error(7u8)
+    }
+  )
+  failure.check(status == Error(7u8), Arithmetic())
+  // Variant 1 of a different nominal is a normal exit, even through erased R.
+  let other = scoped(
+    tasks,
+    fn(s: Scope) -> Other {
+      Second()
+    }
+  )
+  failure.check(other == Second(), Arithmetic())
+  Ok(())
+}

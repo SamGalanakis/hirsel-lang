@@ -615,6 +615,7 @@ conformance/CONC/CONC-2-detach-joins-before-exit.hir
 conformance/CONC/CONC-2-detach.hir
 conformance/CONC/CONC-2-detached-result-cleanup-run.hir
 conformance/CONC/CONC-2-error-result-cancels-run.hir
+conformance/CONC/CONC-2-generic-scope-error-cancels-run.hir
 conformance/CONC/CONC-2-handle-parameter-bad.hir
 conformance/CONC/CONC-2-handle-parameter-ok.hir
 conformance/CONC/CONC-2-nested-handle-capture-bad.hir
@@ -696,6 +697,7 @@ conformance/CONC/CONC-3-clock-sleep-duration-run.hir
 conformance/CONC/CONC-3-clock-sleep-order-run.hir
 conformance/CONC/CONC-3-clock-tied-timers-run.hir
 conformance/CONC/CONC-3-explicit-cancellation-check.hir
+conformance/CONC/CONC-3-generic-deadline-scope-error-run.hir
 conformance/CONC/CONC-3-http-client-deadline-run.hir
 conformance/CONC/CONC-3-prefetch-canceled-run.hir
 conformance/CONC/CONC-3-process-pipeline-canceled-run.hir

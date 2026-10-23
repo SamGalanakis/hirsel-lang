@@ -1,0 +1,41 @@
+// rule: CONC-3
+// expect: run
+// grant: clock
+// scope_until must read its closed R, rather than an erased Bounded[R] row.
+fn scoped_until[R](tasks: Tasks, deadline: Deadline, take body: once fn(Scope) -> R) -> Bounded[
+  R
+] {
+  task.scope_until(tasks, deadline, take body)
+}
+
+type Other = First | Second
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let clock = io.monotonic_clock(rt)?
+  let now = match clock.monotonic(clock) {
+    Ok(now) => now,
+    Error(_) => return Ok(()),
+  }
+  let Some(at) = instant.checked_add(clock, now, 1000000000u64) else {
+    return Ok(())
+  }
+  let deadline = Deadline(clock: clock, at: at)
+  let status = scoped_until(
+    tasks,
+    deadline,
+    fn(s: Scope) -> Result[(), u8] {
+      Error(9u8)
+    }
+  )
+  failure.check(status == Finished(Error(9u8)), Arithmetic())
+  let other = scoped_until(
+    tasks,
+    deadline,
+    fn(s: Scope) -> Other {
+      Second()
+    }
+  )
+  failure.check(other == Finished(Second()), Arithmetic())
+  Ok(())
+}
