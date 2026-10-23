@@ -111,3 +111,4 @@ mod utf8_stream_histories_26;
 mod text_view_bounds_26;
 mod regex_subject_borrow_25;
 mod byte_append_fastpath_28;
+mod regex_backtrack_25;

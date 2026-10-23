@@ -108,3 +108,11 @@ The per-row exclusions and upstream test counts are recorded in
 [regex-captures-vectors.md](../reports/regex-captures-vectors.md). The older
 [regex-vectors.md](../reports/regex-vectors.md) describes the baseline import;
 its captures/flags exclusions are historical and superseded here.
+
+Capture recovery for a confirmed span uses a one-pass plan when the pattern is
+unambiguous. Otherwise, a bounded backtracker visits each instruction/position
+pair once and restores captures through explicit stack frames; larger spans use
+the ordered PikeVM. The backtracker decodes its numeric instructions and ASCII
+acceptance masks once per scan, retaining the scalar range/folding evaluator for
+non-ASCII input. Its reused capture row and stack preserve leftmost-first
+capture histories, including empty and unmatched groups.

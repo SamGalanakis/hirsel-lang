@@ -7,10 +7,11 @@ type CaptureScratch {
   data: unique List[u64],
   plan: unique List[u64],
   prepared: bool,
+  backtrack_code: unique List[u64],
 }
 
 fn capture_scratch() -> CaptureScratch uses {} {
-  CaptureScratch(data: [], plan: [], prepared: false)
+  CaptureScratch(data: [], plan: [], prepared: false, backtrack_code: [])
 }
 
 // Two ordered banks, a current restore row, a winning row, generation marks,
@@ -426,24 +427,93 @@ fn capture_onepass(re: Regex, subject: Subject, span: Span, mut scratch: Capture
 // Bounded DFS uses one mutable capture row plus RestoreCapture frames. Every
 // (PC, byte position) is visited once. A split/capture can push at most one
 // frame per newly visited pair, so <=pairs+1 frames suffice, including empty
-// matches. 8192 pairs + slots + bitset + three-cell frames fit the same 256 KiB
+// matches. 8192 pairs + slots + bitset + two-cell frames fit the same 256 KiB
 // scratch slab as PikeVM. Arithmetic is checked before multiplying.
 fn capture_backtrack_fits(re: Regex, length: u64) -> bool uses {} {
   let m = core@1/list.len(re.code)
   m != 0 && m <= 512 && length < 8192 && m <= 8192 / (length + 1)
 }
 
-fn capture_backtrack(re: Regex, subject: Subject, span: Span, mut scratch: CaptureScratch) -> Captures uses {} {
+// The bounded NFA's transitions are decoded once per scan, like upstream's
+// ByteRange/Sparse/Dense states (backtrack.rs:1495-1524), not copied with their
+// range lists on every Step. The original states remain the Unicode fallback.
+// Three numeric cells per state: kind/x/y and two exact ASCII acceptance masks.
+// m <= 512 bounds both PCs and capture slot numbers to nine bits. At most
+// 12288 payload bytes, separate from the existing 256 KiB capture scratch slab.
+fn capture_backtrack_code(re: Regex) -> unique List[u64] uses {} {
+  let mut code: unique List[u64] = []
+  for inst in re.code {
+    core@1/list.push(mut code, core@1/int.widen(inst.kind) | inst.x << 5 | inst.y << 14)
+    for half in 0u64..2 {
+      let mut mask = 0u64
+      if inst.kind == 2 || inst.kind == 14 {
+        mask = 18446744073709551615
+        if inst.kind == 2 && half == 0 {
+          mask ^= 1u64 << 10
+        }
+      } else if inst.kind == 1 {
+        for (lo, hi) in inst.ranges {
+          let a: u64 = core@1/int.widen(lo)
+          let b: u64 = core@1/int.widen(hi)
+          let base = half * 64
+          if a <= base + 63 && b >= base {
+            let first = if a > base {
+              a - base
+            } else {
+              0u64
+            }
+            let last = if b < base + 63 {
+              b - base
+            } else {
+              63u64
+            }
+            mask |= 18446744073709551615u64 >> 63 - (last - first) << first
+          }
+        }
+        if inst.negated {
+          mask ^= 18446744073709551615
+        }
+      } else if inst.kind == 13 {
+        for bit in 0u64..64 {
+          let Some(c) = core@1/char.from_u32(core@1/int.narrow(half * 64 + bit)) else {
+            core@1/failure.check(false, Bounds())
+            return []
+          }
+          let mut work = 18446744073709551615u64
+          let Ok(accepted) = accepts(inst, c, mut work) else {
+            core@1/failure.check(false, Bounds())
+            return []
+          }
+          if accepted {
+            mask |= 1u64 << bit
+          }
+        }
+      }
+      core@1/list.push(mut code, mask)
+    }
+  }
+  take code
+}
+
+fn capture_backtrack(
+  re: Regex,
+  subject: Subject,
+  span: Span,
+  mut scratch: CaptureScratch
+) -> Captures uses {} {
   let start = capture_scalar(subject, span.start)
   let end = capture_scalar(subject, span.end)
   let length = end - start
   core@1/failure.check(capture_backtrack_fits(re, length), Bounds())
+  if core@1/list.len(scratch.backtrack_code) == 0 {
+    scratch.backtrack_code = capture_backtrack_code(re)
+  }
   let m = core@1/list.len(re.code)
   let slots = core@1/list.len(re.names) * 2
   let pairs = m * (length + 1)
   let words = (pairs + 63) / 64
   let stack = slots + words
-  capture_ensure(mut scratch, stack + 3 * (pairs + 1))
+  capture_ensure(mut scratch, stack + 2 * (pairs + 1))
   for cell in 0u64..stack {
     scratch.data[cell] = 0
   }
@@ -452,8 +522,8 @@ fn capture_backtrack(re: Regex, subject: Subject, span: Span, mut scratch: Captu
   scratch.data[stack + 1] = start
   while depth != 0 {
     depth -= 1
-    let mut pc = scratch.data[stack + 3 * depth]
-    let mut cursor = scratch.data[stack + 3 * depth + 1]
+    let mut pc = scratch.data[stack + 2 * depth]
+    let mut cursor = scratch.data[stack + 2 * depth + 1]
     if pc >= m {
       scratch.data[pc - m] = cursor
       continue
@@ -466,34 +536,42 @@ fn capture_backtrack(re: Regex, subject: Subject, span: Span, mut scratch: Captu
         break
       }
       scratch.data[cell] |= bit
-      let inst = re.code[pc]
-      if inst.kind == 11 {
+      let inst = scratch.backtrack_code[3 * pc]
+      let kind: u8 = core@1/int.narrow(inst & 31)
+      if kind == 11 {
         if cursor == end {
           return capture_result(re, span, scratch)
         }
         break
       }
-      if dfa_consumes(inst.kind) {
+      if dfa_consumes(kind) {
         if cursor == end {
           break
         }
-        let mut work = 18446744073709551615u64
-        let Ok(accepted) = accepts(inst, subject_scalar(subject, cursor), mut work) else {
-          core@1/failure.check(false, Bounds())
-          break
+        let scalar = subject_scalar(subject, cursor)
+        let cp: u64 = core@1/int.widen(core@1/char.to_u32(scalar))
+        let accepted = if cp < 128 {
+          scratch.backtrack_code[3 * pc + 1 + cp / 64] & 1u64 << cp % 64 != 0
+        } else {
+          let mut work = 18446744073709551615u64
+          let Ok(value) = accepts(re.code[pc], scalar, mut work) else {
+            core@1/failure.check(false, Bounds())
+            break
+          }
+          value
         }
         if !accepted {
           break
         }
         cursor = subject_next(subject, cursor)
-      } else if inst.kind == 10 || inst.kind == 12 {
-        if inst.kind == 10 {
-          scratch.data[stack + 3 * depth] = inst.y
-          scratch.data[stack + 3 * depth + 1] = cursor
+      } else if kind == 10 || kind == 12 {
+        if kind == 10 {
+          scratch.data[stack + 2 * depth] = inst >> 14 & 511
+          scratch.data[stack + 2 * depth + 1] = cursor
         } else {
-          scratch.data[stack + 3 * depth] = m + inst.y
-          scratch.data[stack + 3 * depth + 1] = scratch.data[inst.y]
-          scratch.data[inst.y] = cursor + 1
+          scratch.data[stack + 2 * depth] = m + (inst >> 14 & 511)
+          scratch.data[stack + 2 * depth + 1] = scratch.data[inst >> 14 & 511]
+          scratch.data[inst >> 14 & 511] = cursor + 1
         }
         depth += 1
       } else {
@@ -503,11 +581,11 @@ fn capture_backtrack(re: Regex, subject: Subject, span: Span, mut scratch: Captu
           dfa_category(dfa_byte(subject, subject_before(subject, cursor)))
         }
         let right = dfa_category(dfa_byte(subject, cursor))
-        if !dfa_allowed(inst.kind, left, right) {
+        if !dfa_allowed(kind, left, right) {
           break
         }
       }
-      pc = inst.x
+      pc = inst >> 5 & 511
     }
   }
   core@1/failure.check(false, Bounds())

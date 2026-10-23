@@ -1,0 +1,296 @@
+// Differential against the predecoded-table predecessor, with upstream's
+// bounded Step/RestoreCapture/visited structure kept intact in the oracle.
+// rust-lang/regex 80b9d14e4be9f0b703a742d11c064abce05f210b,
+// regex-automata/src/nfa/thompson/backtrack.rs:1425-1586,1837-1871.
+// Copyright 2014 The Rust Project Developers. MIT; third-party/NOTICES.md.
+fn original_backtrack(
+  re: Regex,
+  subject: Subject,
+  span: Span,
+  mut scratch: CaptureScratch
+) -> Captures uses {} {
+  let start = capture_scalar(subject, span.start)
+  let end = capture_scalar(subject, span.end)
+  let length = end - start
+  core@1/failure.check(capture_backtrack_fits(re, length), Bounds())
+  let m = core@1/list.len(re.code)
+  let slots = core@1/list.len(re.names) * 2
+  let pairs = m * (length + 1)
+  let words = (pairs + 63) / 64
+  let stack = slots + words
+  capture_ensure(mut scratch, stack + 3 * (pairs + 1))
+  for cell in 0u64..stack {
+    scratch.data[cell] = 0
+  }
+  let mut depth = 1u64
+  scratch.data[stack] = re.entry
+  scratch.data[stack + 1] = start
+  while depth != 0 {
+    depth -= 1
+    let mut pc = scratch.data[stack + 3 * depth]
+    let mut cursor = scratch.data[stack + 3 * depth + 1]
+    if pc >= m {
+      scratch.data[pc - m] = cursor
+      continue
+    }
+    while true {
+      let pair = (cursor - start) * m + pc
+      let cell = slots + pair / 64
+      let bit = 1u64 << pair % 64
+      if scratch.data[cell] & bit != 0 {
+        break
+      }
+      scratch.data[cell] |= bit
+      let inst = re.code[pc]
+      if inst.kind == 11 {
+        if cursor == end {
+          return capture_result(re, span, scratch)
+        }
+        break
+      }
+      if dfa_consumes(inst.kind) {
+        if cursor == end {
+          break
+        }
+        let mut work = 18446744073709551615u64
+        let Ok(accepted) = accepts(inst, subject_scalar(subject, cursor), mut work) else {
+          core@1/failure.check(false, Bounds())
+          break
+        }
+        if !accepted {
+          break
+        }
+        cursor = subject_next(subject, cursor)
+      } else if inst.kind == 10 || inst.kind == 12 {
+        if inst.kind == 10 {
+          scratch.data[stack + 3 * depth] = inst.y
+          scratch.data[stack + 3 * depth + 1] = cursor
+        } else {
+          scratch.data[stack + 3 * depth] = m + inst.y
+          scratch.data[stack + 3 * depth + 1] = scratch.data[inst.y]
+          scratch.data[inst.y] = cursor + 1
+        }
+        depth += 1
+      } else {
+        let left = if cursor == 0 {
+          0u64
+        } else {
+          dfa_category(dfa_byte(subject, subject_before(subject, cursor)))
+        }
+        let right = dfa_category(dfa_byte(subject, cursor))
+        if !dfa_allowed(inst.kind, left, right) {
+          break
+        }
+      }
+      pc = inst.x
+    }
+  }
+  core@1/failure.check(false, Bounds())
+  Captures(spans: [])
+}
+
+fn backtrack25_case(pattern: String, src: String) -> () uses {} {
+  let Ok(re) = compile(pattern, 10000) else {
+    core@1/failure.check(false, Bounds())
+    return
+  }
+  let mut work = 18446744073709551615u64
+  let Ok(subject) = make_subject(src, mut work) else {
+    core@1/failure.check(false, Bounds())
+    return
+  }
+  let mut scratch = capture_scratch()
+  let mut old_scratch = capture_scratch()
+  let mut start = 0u64
+  while start <= core@1/bytes.len(subject.bytes) {
+    let Ok((matched, expected)) = pike_find_from(re, subject, start, true, mut work) else {
+      core@1/failure.check(false, Bounds())
+      return
+    }
+    if let Some(span) = matched {
+      if capture_backtrack_fits(re, span.end - span.start) {
+        let old = original_backtrack(re, subject, span, mut old_scratch)
+        let actual = capture_backtrack(re, subject, span, mut scratch)
+        core@1/failure.check(old == expected && actual == old, Bounds())
+        let code = capture_backtrack_code(re)
+        core@1/failure.check(code == scratch.backtrack_code, Bounds())
+      }
+    }
+    if start == core@1/bytes.len(subject.bytes) {
+      break
+    }
+    start = subject_next(subject, start)
+  }
+}
+
+fn backtrack25_edges_inner() -> () uses {} {
+  for pattern in [
+    "",
+    "()",
+    "((a)|(b))*",
+    "(a|aa)+",
+    "(a*?)(a*)",
+    "(a?)*",
+    "(a+)(b?)",
+    "(?s)(.*?)(b)",
+    "(?i)(k+)",
+    "([é-😀]+)",
+    "([^a]+)(a?)",
+    "\\b(a+)\\b",
+    "(?m)^(a*)$",
+    "\\{\\{(.*?)\\}\\}"
+  ] {
+    for src in ["", "aba", "aaab", "aéKk😀b", "\na\nb\n", "{{}} {{a}b}}"] {
+      backtrack25_case(pattern, src)
+    }
+  }
+  for pattern in ["(", "[", "a{3,2}", "(?=a)"] {
+    core@1/failure.check(
+      match compile(pattern, 10000) {
+        Error(_) => true,
+        Ok(_) => false,
+      },
+      Bounds()
+    )
+  }
+}
+
+fn backtrack25_ascii_inner() -> () uses {} {
+  let mut source: List[u8] = []
+  for byte in 0u16..128 {
+    core@1/list.push(mut source, core@1/int.narrow(byte))
+  }
+  let src = text.finish_valid(take source)
+  // Exercise masks crossing each word edge, full/empty intersections,
+  // complements, dot/newline, and Unicode simple-fold equivalence classes.
+  for pattern in [
+    "([?-a])",
+    "([^?-a])",
+    "([\u{0}-\u{7f}])",
+    "([é-😀])",
+    "(.)",
+    "(?s)(.)",
+    "(?i)([k-s])"
+  ] {
+    let Ok(re) = compile(pattern, 10000) else {
+      core@1/failure.check(false, Bounds())
+      return
+    }
+    let code = capture_backtrack_code(re)
+    core@1/failure.check(
+      core@1/list.len(code) == 3 * core@1/list.len(re.code),
+      Bounds()
+    )
+    let mut pc = 0u64
+    for inst in re.code {
+      if dfa_consumes(inst.kind) {
+        for byte in 0u64..128 {
+          let Some(c) = core@1/char.from_u32(core@1/int.narrow(byte)) else {
+            core@1/failure.check(false, Bounds())
+            return
+          }
+          let mut work = 18446744073709551615u64
+          let Ok(expected) = accepts(inst, c, mut work) else {
+            core@1/failure.check(false, Bounds())
+            return
+          }
+          let actual = code[3 * pc + 1 + byte / 64] & 1u64 << byte % 64 != 0
+          core@1/failure.check(actual == expected, Bounds())
+        }
+      }
+      pc += 1
+    }
+  }
+  backtrack25_case("(?s)(.)", src)
+}
+
+fn backtrack25_random_inner() -> () uses {} {
+  let atoms: List[String] = ["a", "b", "[ab]", "[^a]", ".", "é", "😀", ""]
+  let text: List[String] = ["a", "b", "é", "😀", "\n", "_", "1", ""]
+  let mut seed = 20261025u64
+  for case in 0u64..32 {
+    seed = (seed * 1664525 + 1013904223) % 4294967296
+    let a = atoms[seed / 256 % 8]
+    seed = (seed * 1664525 + 1013904223) % 4294967296
+    let b = atoms[seed / 256 % 8]
+    let pattern = match case % 4 {
+      0 => f"(({a})?({b}))*",
+      1 => f"(({a})|({b}))*?",
+      2 => f"({a})?(({b})?)",
+      _ => f"(({a})*?)(({b})*)",
+    }
+    let mut source: List[u8] = []
+    for i in 0u64..5 {
+      seed = (seed * 1664525 + 1013904223) % 4294967296
+      text.append(mut source, text[seed / 256 % 8])
+    }
+    backtrack25_case(pattern, text.finish_valid(take source))
+  }
+}
+
+fn backtrack25_limits_inner() -> () uses {} {
+  // The last PC and capture slots fit their packed fields at the 512-state cap.
+  let mut pattern: List[u8] = []
+  for i in 0u64..255 {
+    text.append(mut pattern, "(")
+  }
+  for i in 0u64..255 {
+    text.append(mut pattern, ")")
+  }
+  let src = text.finish_valid(take pattern)
+  let Ok(re) = compile(src, 10000) else {
+    core@1/failure.check(false, Bounds())
+    return
+  }
+  core@1/failure.check(core@1/list.len(re.code) == 512, Bounds())
+  backtrack25_case(src, "")
+  let Ok(small) = compile("(a|aa)+", 10000) else {
+    core@1/failure.check(false, Bounds())
+    return
+  }
+  let limit = 8192u64 / core@1/list.len(small.code) - 1
+  core@1/failure.check(capture_backtrack_fits(small, limit), Bounds())
+  core@1/failure.check(!capture_backtrack_fits(small, limit + 1), Bounds())
+  let mut source: List[u8] = []
+  for i in 0u64..limit {
+    core@1/list.push(mut source, b'a')
+  }
+  let input = text.finish_valid(take source)
+  let mut work = 18446744073709551615u64
+  let Ok(subject) = make_subject(input, mut work) else {
+    core@1/failure.check(false, Bounds())
+    return
+  }
+  let span = Span(start: 0, end: limit)
+  let mut scratch = capture_scratch()
+  let mut old = capture_scratch()
+  core@1/failure.check(
+    capture_backtrack(small, subject, span, mut scratch) == original_backtrack(
+      small,
+      subject,
+      span,
+      mut old
+    ),
+    Bounds()
+  )
+}
+
+pub fn backtrack25_edges() -> Result[(), MatchError] uses {} {
+  backtrack25_edges_inner()
+  Ok(())
+}
+
+pub fn backtrack25_ascii() -> Result[(), MatchError] uses {} {
+  backtrack25_ascii_inner()
+  Ok(())
+}
+
+pub fn backtrack25_random() -> Result[(), MatchError] uses {} {
+  backtrack25_random_inner()
+  Ok(())
+}
+
+pub fn backtrack25_limits() -> Result[(), MatchError] uses {} {
+  backtrack25_limits_inner()
+  Ok(())
+}
