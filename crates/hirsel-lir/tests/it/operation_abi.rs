@@ -549,3 +549,77 @@ fn canonical_and_typed_scalar_children_share_the_declared_operation_abi() {
     }
     assert_eq!(check(&unit, &table, &registry), []);
 }
+
+#[test]
+fn native_products_19_rechecks_independent_operation_declarations() {
+    use hirsel_lir::stage::StageKind;
+    use hirsel_lir::validate::{NativeCache, NativeEnvironment};
+    let signature = scalar_signature("fixture", &[], None);
+    let operation = id(&signature);
+    let registry = OperationRegistry {
+        types: support::session(),
+        signatures: [(operation.clone(), signature.clone())].into(),
+        owners: Owners::default(),
+    };
+    let (unit, table) = fixture(&registry, &operation, vec![]);
+    let target = TargetSpec::x86_64_unknown_linux_gnu();
+    let manifest = Manifest::skeleton([operation.clone()]);
+    let inputs = Inputs {
+        memo: Default::default(),
+        discharge: None,
+        target: &target,
+        layouts: &table,
+        manifest: &manifest,
+        operations: &registry,
+    };
+    let environment = NativeEnvironment {
+        target: &target,
+        manifest: &manifest,
+        operations: &registry,
+        discharge: None,
+    };
+    let cache = NativeCache::new(Arc::new(hirsel_artifact_store::Memory::default()), None);
+    let subject = ContentHash::of_bytes(b"operation action");
+    let policy = ContentHash::of_bytes(b"operation policy");
+    let (_, accepted) = cache
+        .validate_and_publish(subject, policy, unit, &inputs, &[], &[])
+        .unwrap();
+    assert!(accepted.is_some());
+    assert!(
+        cache
+            .lookup(subject, policy, StageKind::Value, &environment)
+            .is_some()
+    );
+    let mut changed = registry.clone();
+    let mut altered = (*signature).clone();
+    let SignatureKind::Function(function) = &mut altered.kind else {
+        panic!()
+    };
+    function.result = changed
+        .types
+        .intern(Type::with_kind(TypeKind::Primitive(Primitive::U64)));
+    changed
+        .signatures
+        .insert(operation.clone(), Arc::new(altered));
+    let environment = NativeEnvironment {
+        operations: &changed,
+        ..environment
+    };
+    assert!(
+        cache
+            .lookup(subject, policy, StageKind::Value, &environment)
+            .is_none()
+    );
+    changed.signatures.clear();
+    let environment = NativeEnvironment {
+        target: &target,
+        manifest: &manifest,
+        operations: &changed,
+        discharge: None,
+    };
+    assert!(
+        cache
+            .lookup(subject, policy, StageKind::Value, &environment)
+            .is_none()
+    );
+}

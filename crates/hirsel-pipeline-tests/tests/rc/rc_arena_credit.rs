@@ -141,3 +141,26 @@ fn a_summary_selects_the_actual_arena_parameter() {
         &[("make", true)],
     );
 }
+
+/// Exact ce-native-recipes-16 recursive-before/after witness. Both mutually
+/// recursive allocators and the unchanged wrapper lose their arena result
+/// claim when only the base allocation changes to heap.
+#[test]
+fn mandatory_recursive_fixture_arena_edit_propagates_both_summary_strata() {
+    const BEFORE: &str = "type Item { n: u64 }\nfn first(a: Arena, n: u64) -> (box Item) in a {\n  if n == 0u64 { box Item(n:6u64) }\n  else { second(a,n-1u64) }\n}\nfn second(a: Arena, n: u64) -> (box Item) in a { first(a,n) }\nfn wrapper(a: Arena) -> (box Item) in a { second(a,2u64) }\nfn main() { arena.with(fn(a: Arena) { let item = wrapper(a); }); }\n";
+    const AFTER: &str = "type Item { n: u64 }\nfn first(a: Arena, n: u64) -> (box Item) in a {\n  if n == 0u64 { let h: (box Item) in heap = box Item(n:6u64); h }\n  else { second(a,n-1u64) }\n}\nfn second(a: Arena, n: u64) -> (box Item) in a { first(a,n) }\nfn wrapper(a: Arena) -> (box Item) in a { second(a,2u64) }\nfn main() { arena.with(fn(a: Arena) { let item = wrapper(a); }); }\n";
+    check(
+        BEFORE,
+        &[
+            ("first", Some(0)),
+            ("second", Some(0)),
+            ("wrapper", Some(0)),
+        ],
+        &[("first", true)],
+    );
+    check(
+        AFTER,
+        &[("first", None), ("second", None), ("wrapper", None)],
+        &[],
+    );
+}

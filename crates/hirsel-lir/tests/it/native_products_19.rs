@@ -196,3 +196,85 @@ fn native_products_19_manifest_discharge_and_target_are_independent_reads() {
             .is_none()
     );
 }
+
+#[test]
+fn native_products_19_directory_reopen_copy_and_corruption() {
+    use hirsel_artifact_store::Store;
+    let mut fixture = Lir::<Value>::new(&[], None);
+    fixture.builder.ret(ENTRY, None);
+    let (unit, table, manifest) = fixture.finish();
+    let target = hirsel_lir::TargetSpec::x86_64_unknown_linux_gnu();
+    let operations = support::registry();
+    let inputs = Inputs {
+        memo: Default::default(),
+        target: &target,
+        layouts: &table,
+        manifest: &manifest,
+        operations: &operations,
+        discharge: None,
+    };
+    let environment = NativeEnvironment {
+        target: &target,
+        manifest: &manifest,
+        operations: &operations,
+        discharge: None,
+    };
+    let root = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("native-output-19-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let local = Store::new(root.join("local"));
+    let subject = hash("directory native action");
+    let policy = hash("directory native policy");
+    let cache = NativeCache::new(Arc::new(local.clone()), Some(local.clone()));
+    let (_, output) = cache
+        .validate_and_publish(subject, policy, unit, &inputs, &[], b"metadata")
+        .unwrap();
+    let output = output.unwrap();
+    drop(cache);
+    let reopened = NativeCache::new(Arc::new(local.clone()), Some(local.clone()));
+    let current = reopened
+        .lookup(subject, policy, StageKind::Value, &environment)
+        .unwrap();
+    assert_eq!(current.body(), output.body());
+    assert_eq!(current.metadata(), output.metadata());
+    let copied = Store::new(root.join("copied"));
+    for reference in [output.body(), output.layouts()] {
+        assert_eq!(
+            copied
+                .put(reference.domain, &local.get(reference).unwrap())
+                .unwrap(),
+            reference
+        );
+    }
+    // Copy receipt content too, with no local receipt association. It remains ordinary bytes.
+    fn copy_outputs(from: &std::path::Path, into: &std::path::Path) {
+        std::fs::create_dir_all(into).unwrap();
+        for entry in std::fs::read_dir(from).unwrap() {
+            let entry = entry.unwrap();
+            if entry.file_type().unwrap().is_dir() {
+                copy_outputs(&entry.path(), &into.join(entry.file_name()));
+            } else {
+                std::fs::copy(entry.path(), into.join(entry.file_name())).unwrap();
+            }
+        }
+    }
+    copy_outputs(
+        &local.root().join("outputs"),
+        &copied.root().join("outputs"),
+    );
+    let foreign = NativeCache::new(Arc::new(copied.clone()), Some(copied));
+    assert!(
+        foreign
+            .lookup(subject, policy, StageKind::Value, &environment)
+            .is_none()
+    );
+    // Body corruption must invalidate even an output minted in this process.
+    std::fs::write(local.output_path(output.body()), b"truncated").unwrap();
+    assert!(
+        reopened
+            .lookup(subject, policy, StageKind::Value, &environment)
+            .is_none()
+    );
+    assert!(reopened.read(&output, &target).is_err());
+    let _ = std::fs::remove_dir_all(root);
+}
