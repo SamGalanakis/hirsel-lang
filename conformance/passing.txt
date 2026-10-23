@@ -634,6 +634,7 @@ conformance/CONC/CONC-2-task-set-scope-body-capture-run.hir
 conformance/CONC/CONC-2-task-set-unconsumed-bad.hir
 conformance/CONC/CONC-2-task-set-unconsumed-ok.hir
 conformance/CONC/CONC-2-task-take-capture-freeze-run.hir
+conformance/CONC/CONC-2-taskset-await-mode-27-run.hir
 conformance/CONC/CONC-2-tour-11-concurrency-run.hir
 conformance/CONC/CONC-2-tour-11-task-all-run.hir
 conformance/CONC/CONC-2-unconsumed-handle-bad.hir

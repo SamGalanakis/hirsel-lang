@@ -5774,7 +5774,16 @@ impl Checker<'_, '_> {
                             // A part is typed as its field is, like a field
                             // read. Physical declaration modes remain on the
                             // pattern; receiving evidence follows the owned graph.
-                            let field = &self.t.get(ty).unwrap().modes;
+                            // J's receiving binding may inherit uniqueness from
+                            // the initially instantiated owner. Use the actual
+                            // declaration's field promise after call-result
+                            // weakening; only the current owner can strengthen it.
+                            let declared = self
+                                .pattern_declarations
+                                .get(&pattern)
+                                .copied()
+                                .unwrap_or(ty);
+                            let field = &self.t.get(declared).unwrap().modes;
                             part.modes.multiplicity = field.multiplicity;
                             // MODE-2 is deep: a taken part of the current
                             // unique whole receives that stronger evidence.

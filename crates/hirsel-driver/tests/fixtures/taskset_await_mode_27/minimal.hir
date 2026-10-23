@@ -1,0 +1,21 @@
+type Row { name: String }
+type E = Bad(String)
+fn work() -> Result[Row, E] { Ok(Row(name: "a")) }
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let _ = task.scope(tasks, fn(s: Scope) -> Result[List[Row], E] {
+    let mut pending: TaskSet[unique Result[Row, E]] of s = task.set(s)
+    task.add(s, mut pending, task.async(s, fn() -> unique Result[Row, E] { unique work() }))
+    while let Some(slot) = task.await_any(s, pending) {
+      let joined = task.await_at(s, mut pending, slot)
+      match take joined {
+        Ok(row) => {},
+        Error(problem) => { task.cancel_all(s, take pending); return Error(take problem) },
+      }
+    }
+    task.cancel_all(s, take pending)
+    let mut rows: List[Row] = []
+    Ok(take rows)
+  })
+  Ok(())
+}

@@ -1,0 +1,11 @@
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  task.scope(tasks, fn(s: Scope) {
+    let mut pending: TaskSet[Result[unique String, unique String]] of s = task.set(s)
+    task.add(s, mut pending, task.async(s, fn() -> Result[unique String, unique String] { Ok(unique "a") }))
+    let joined = task.await_at(s, mut pending, 0u64)
+    match take joined { Ok(row) => {}, Error(problem) => {} }
+    task.cancel_all(s, take pending)
+  })
+  Ok(())
+}

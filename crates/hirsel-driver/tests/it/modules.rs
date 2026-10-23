@@ -126,3 +126,4 @@ mod result_injection_typing_26;
 mod stored_callable_authority_26;
 mod scope_closure_origin_27;
 mod own_param_selector_27;
+mod taskset_await_mode_27;

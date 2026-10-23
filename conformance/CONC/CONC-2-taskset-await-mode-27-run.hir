@@ -1,0 +1,273 @@
+// rule: CONC-2
+// expect: run
+// Owning matches receive TaskSet results without stale uniqueness claims.
+
+fn at_ok(s: Scope) -> u64 {
+  let mut pending: TaskSet[unique Result[String, String]] of s = task.set(s)
+  task.add(
+    s,
+    mut pending,
+    task.async(
+      s,
+      fn() -> unique Result[String, String] {
+        unique Ok("a")
+      }
+    )
+  )
+  let slot = 0u64
+  let joined = task.await_at(s, mut pending, slot)
+  let length = match take joined {
+    Ok(row) => string.byte_len(row),
+    Error(problem) => string.byte_len(problem),
+  }
+  task.cancel_all(s, take pending)
+  length
+}
+
+fn at_error(s: Scope) -> u64 {
+  let mut pending: TaskSet[unique Result[String, String]] of s = task.set(s)
+  task.add(
+    s,
+    mut pending,
+    task.async(
+      s,
+      fn() -> unique Result[String, String] {
+        unique Error("bad")
+      }
+    )
+  )
+  let slot = 0u64
+  let joined = task.await_at(s, mut pending, slot)
+  let length = match take joined {
+    Ok(row) => string.byte_len(row),
+    Error(problem) => string.byte_len(problem),
+  }
+  task.cancel_all(s, take pending)
+  length
+}
+
+fn any_ok(s: Scope) -> u64 {
+  let mut pending: TaskSet[unique Result[String, String]] of s = task.set(s)
+  task.add(
+    s,
+    mut pending,
+    task.async(
+      s,
+      fn() -> unique Result[String, String] {
+        unique Ok("a")
+      }
+    )
+  )
+  let slot = match task.await_any(s, pending) {
+    Some(i) => i,
+    None => {
+      task.cancel_all(s, take pending)
+      return 99u64
+    },
+  }
+  let joined = task.await_at(s, mut pending, slot)
+  let length = match take joined {
+    Ok(row) => string.byte_len(row),
+    Error(problem) => string.byte_len(problem),
+  }
+  task.cancel_all(s, take pending)
+  length
+}
+
+fn any_error(s: Scope) -> u64 {
+  let mut pending: TaskSet[unique Result[String, String]] of s = task.set(s)
+  task.add(
+    s,
+    mut pending,
+    task.async(
+      s,
+      fn() -> unique Result[String, String] {
+        unique Error("bad")
+      }
+    )
+  )
+  let slot = match task.await_any(s, pending) {
+    Some(i) => i,
+    None => {
+      task.cancel_all(s, take pending)
+      return 99u64
+    },
+  }
+  let joined = task.await_at(s, mut pending, slot)
+  let length = match take joined {
+    Ok(row) => string.byte_len(row),
+    Error(problem) => string.byte_len(problem),
+  }
+  task.cancel_all(s, take pending)
+  length
+}
+
+fn plain_at(s: Scope) -> u64 {
+  let mut pending: TaskSet[Result[String, String]] of s = task.set(s)
+  task.add(
+    s,
+    mut pending,
+    task.async(
+      s,
+      fn() -> Result[String, String] {
+        Ok("a")
+      }
+    )
+  )
+  let slot = 0u64
+  let joined = task.await_at(s, mut pending, slot)
+  let length = match take joined {
+    Ok(row) => string.byte_len(row),
+    Error(problem) => string.byte_len(problem),
+  }
+  task.cancel_all(s, take pending)
+  length
+}
+
+fn plain_any(s: Scope) -> u64 {
+  let mut pending: TaskSet[Result[String, String]] of s = task.set(s)
+  task.add(
+    s,
+    mut pending,
+    task.async(
+      s,
+      fn() -> Result[String, String] {
+        Error("bad")
+      }
+    )
+  )
+  let slot = match task.await_any(s, pending) {
+    Some(i) => i,
+    None => {
+      task.cancel_all(s, take pending)
+      return 99u64
+    },
+  }
+  let joined = task.await_at(s, mut pending, slot)
+  let length = match take joined {
+    Ok(row) => string.byte_len(row),
+    Error(problem) => string.byte_len(problem),
+  }
+  task.cancel_all(s, take pending)
+  length
+}
+
+fn borrowed(s: Scope) -> u64 {
+  let mut pending: TaskSet[unique Result[String, String]] of s = task.set(s)
+  task.add(
+    s,
+    mut pending,
+    task.async(
+      s,
+      fn() -> unique Result[String, String] {
+        unique Ok("a")
+      }
+    )
+  )
+  let slot = 0u64
+  let joined = task.await_at(s, mut pending, slot)
+  let length = match joined {
+    Ok(row) => string.byte_len(row),
+    Error(problem) => string.byte_len(problem),
+  }
+  task.cancel_all(s, take pending)
+  length
+}
+
+fn typed_payload(s: Scope) -> u64 {
+  let mut pending: TaskSet[Result[unique String, unique String]] of s = task.set(s)
+  task.add(
+    s,
+    mut pending,
+    task.async(
+      s,
+      fn() -> Result[unique String, unique String] {
+        Ok(unique "a")
+      }
+    )
+  )
+  let slot = 0u64
+  let joined = task.await_at(s, mut pending, slot)
+  let length = match take joined {
+    Ok(row) => string.byte_len(row),
+    Error(problem) => string.byte_len(problem),
+  }
+  task.cancel_all(s, take pending)
+  length
+}
+
+fn direct(s: Scope) -> u64 {
+  let child = task.async(
+    s,
+    fn() -> unique Result[String, String] {
+      unique Ok("a")
+    }
+  )
+  let joined = task.await(s, take child)
+  match take joined {
+    Ok(row) => string.byte_len(row),
+    Error(problem) => string.byte_len(problem),
+  }
+}
+
+fn option(s: Scope) -> u64 {
+  let mut pending: TaskSet[unique Option[String]] of s = task.set(s)
+  task.add(
+    s,
+    mut pending,
+    task.async(
+      s,
+      fn() -> unique Option[String] {
+        unique Some("a")
+      }
+    )
+  )
+  let joined = task.await_at(s, mut pending, 0u64)
+  let length = match take joined {
+    Some(row) => string.byte_len(row),
+    None => 99u64,
+  }
+  task.cancel_all(s, take pending)
+  length
+}
+
+fn inline(s: Scope) -> u64 {
+  let mut pending: TaskSet[unique Result[String, String]] of s = task.set(s)
+  task.add(
+    s,
+    mut pending,
+    task.async(
+      s,
+      fn() -> unique Result[String, String] {
+        unique Ok("a")
+      }
+    )
+  )
+  let length = match take task.await_at(s, mut pending, 0u64) {
+    Ok(row) => string.byte_len(row),
+    Error(problem) => string.byte_len(problem),
+  }
+  task.cancel_all(s, take pending)
+  length
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let tasks = test.tasks(t)
+  task.scope(
+    tasks,
+    fn(s: Scope) {
+      test.check(t, at_ok(s) == 1u64)
+      test.check(t, at_error(s) == 3u64)
+      test.check(t, any_ok(s) == 1u64)
+      test.check(t, any_error(s) == 3u64)
+      test.check(t, plain_at(s) == 1u64)
+      test.check(t, plain_any(s) == 3u64)
+      test.check(t, borrowed(s) == 1u64)
+      test.check(t, typed_payload(s) == 1u64)
+      test.check(t, direct(s) == 1u64)
+      test.check(t, option(s) == 1u64)
+      test.check(t, inline(s) == 1u64)
+    }
+  )
+  Ok(())
+}

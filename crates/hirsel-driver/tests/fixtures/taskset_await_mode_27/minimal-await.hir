@@ -1,0 +1,9 @@
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  task.scope(tasks, fn(s: Scope) {
+    let child = task.async(s, fn() -> unique Result[String, String] { unique Ok("a") })
+    let joined = task.await(s, take child)
+    match take joined { Ok(row) => {}, Error(problem) => {} }
+  })
+  Ok(())
+}
