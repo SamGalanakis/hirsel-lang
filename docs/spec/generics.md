@@ -105,6 +105,24 @@ still shares storage, an explicit `unique value` copy may be necessary before
 storing it. The copy retains placement and requires permitted allocation
 ([MODE-2](ownership.md#mode-2-uniqueness)). No later use revises prefix inference.
 
+A whole-value deep copy preserves the source's fixed nested element type. For
+example, `unique source` of a `List[List[String]]` owns its copied blocks alone,
+but does not supply a `List[unique List[String]]` element contract. Construct the
+receiving list element-by-element when that contract is required:
+
+```hirsel
+fn relay[T](take source: unique List[unique T]) -> unique List[unique T] { take source }
+fn copied_rows(source: List[List[String]]) -> unique List[unique List[String]] {
+  let mut owned: unique List[unique List[String]] = []
+  for row in source { list.push(mut owned, unique row) }
+  relay(take owned)
+}
+```
+
+Each inserted copy satisfies the receiving element contract. A fresh literal
+under the complete nested annotation is also legal; an annotation on a
+whole-value copy cannot add that contract.
+
 Failed generic bounds are prerequisites of the parameter defaults that depend on them
 ([diagnostics](diagnostics.md#expression-obligations)): a `sendable` bound failure reports
 MODE-4, `inert` CAP-2, and every other bound GEN-1.

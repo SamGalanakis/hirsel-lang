@@ -116,3 +116,4 @@ mod generic_kind_22;
 mod match_missing_case_22;
 mod generic_element_context_21;
 mod noalloc_cleanup_repairs_21;
+mod nested_unique_result_24;

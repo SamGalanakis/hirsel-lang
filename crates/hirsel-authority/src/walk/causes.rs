@@ -61,6 +61,7 @@ impl Checker<'_> {
         let element = self.diagnostic_type(contract);
         let value = self.received_span(span);
         let receiver = self.receiving.as_ref().map_or(span, |r| r.span);
+        let copied = self.nested_contract_copy();
         // The argument block preserves evaluation order. Restrict edits to
         // fresh literal trees; a named or copied supplier may actually share.
         let repair = self
@@ -78,7 +79,16 @@ impl Checker<'_> {
             });
         let before = self.out.diagnostics.len();
         let rule = const { RuleId::of("MODE-2") };
-        self.error(rule.clone(), span, &format!("the supplier does not prove the nested element contract `{element}` required by `{required}`"));
+        let message = if copied.is_some() {
+            format!(
+                "`unique` copies the value but cannot add the nested `unique` element contract `{element}` required by `{required}`"
+            )
+        } else {
+            format!(
+                "the supplier does not prove the nested element contract `{element}` required by `{required}`"
+            )
+        };
+        self.error(rule.clone(), span, &message);
         if self.out.diagnostics.len() > before {
             let d = self.out.diagnostics.last_mut().unwrap();
             if d.rule != rule {
@@ -92,7 +102,22 @@ impl Checker<'_> {
                 span: receiver,
                 message: format!("required: nested element contract `{element}` in `{required}`"),
             });
-            if let Some(replacement) = repair {
+            if let Some((copy, annotation)) = copied {
+                d.secondary.push(Label {
+                    span: copy,
+                    message: "this unique copy preserves the source's fixed nested element type"
+                        .into(),
+                });
+                if let Some(annotation) = annotation {
+                    d.secondary.push(Label {
+                        span: annotation,
+                        message:
+                            "binding annotation: this does not change the copy's fixed nested element type"
+                                .into(),
+                    });
+                }
+                d.notes.push(format!("help: Construct the list element-by-element under the complete type, for example `let mut owned: {required} = []; for element in source {{ list.push(mut owned, unique element) }}`, or use a fresh literal under that type. A whole-value `unique source` copy changes ownership, not the fixed element contract (GEN-1, LANG-2, MODE-2)."));
+            } else if let Some(replacement) = repair {
                 d.notes.push(format!("help: Give this fresh literal a complete type before passing it to the consumer: `{replacement}`. The element annotation is necessary; an annotation on the outer List alone is insufficient."));
                 d.fix = Some(hirsel_diag::Fix {
                     span,
@@ -105,6 +130,57 @@ impl Checker<'_> {
             }
         }
         true
+    }
+
+    /// Explain only an actual unique-copy producer, directly or through an
+    /// immutable binding's still-retained receipt. A write or nonpreserving
+    /// hand-back must not turn stale declaration syntax into a current cause.
+    fn nested_contract_copy(&self) -> Option<(Span, Option<Span>)> {
+        let value = self.transparent_value(self.received_value()?);
+        if matches!(
+            self.tree.expressions[value.0 as usize].kind,
+            ExprKind::Unary {
+                op: UnaryOp::Unique,
+                ..
+            }
+        ) {
+            return Some((self.span(value), None));
+        }
+        let place = self.source_place(value);
+        if !place.projections.is_empty() || place.access == SourceAccess::Copy {
+            return None;
+        }
+        let SourceRoot::Binding { owner, binding } = &place.root else {
+            return None;
+        };
+        let binding = self.root_binding(*owner, binding)?;
+        let NameSite::Pattern(pattern) = binding.site else {
+            return None;
+        };
+        let (_, _, initializer) = self.derivations.get(&binding_key(binding))?;
+        let initializer = self.transparent_value(*initializer);
+        if !matches!(
+            self.tree.expressions[initializer.0 as usize].kind,
+            ExprKind::Unary {
+                op: UnaryOp::Unique,
+                ..
+            }
+        ) {
+            return None;
+        }
+        let annotation = self
+            .tree
+            .statements
+            .iter()
+            .find_map(|stmt| match stmt.kind {
+                StmtKind::Let {
+                    pattern: p,
+                    ty: Some(ty),
+                    ..
+                } if p == pattern => Some(self.tree.types[ty.0 as usize].origin.span),
+                _ => None,
+            });
+        Some((self.span(initializer), annotation))
     }
 
     /// Spell only small, fresh, heap String/List trees. Their explicit
