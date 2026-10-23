@@ -22,6 +22,8 @@ pub(crate) struct EvaluatedConstant {
     pub executed: crate::memo::Reads,
     /// Its dependency height and overflow table under the comptime limits.
     pub depth: DepthEvidence<Span>,
+    /// Exact ordered staged selections, including transitive value hits.
+    pub staged: Vec<(DefId, Vec<u64>)>,
     /// Memory-only acceptance contexts, recorded while private/source V ran.
     /// Producer serialization cannot carry this authority. Workers instead
     /// retain their existing explicit ValidationUniverse witnesses.
@@ -683,6 +685,7 @@ impl QueryEngine {
         }
     }
     pub(crate) fn begin_evaluation_validation(&mut self) {
+        self.evaluation_selections.push(vec![]);
         self.evaluation_validation
             .push((self.verify == Verify::On).then(Default::default));
         self.evaluation_acceptance
@@ -693,6 +696,7 @@ impl QueryEngine {
     ) -> (
         Option<Arc<[(hirsel_syntax::PackageId, ContentHash)]>>,
         Option<hirsel_validate::ExecutionReceipt>,
+        Vec<(DefId, Vec<u64>)>,
     ) {
         let validation = self
             .evaluation_validation
@@ -710,13 +714,18 @@ impl QueryEngine {
                 .and_then(|(contexts, artifacts)| {
                     hirsel_validate::ExecutionReceipt::compose(contexts, artifacts)
                 });
-        (validation, receipt)
+        let staged = self
+            .evaluation_selections
+            .pop()
+            .expect("evaluation selection frame");
+        (validation, receipt, staged)
     }
     fn finish_evaluation_validation(&mut self, result: &mut Result<EvaluatedConstant, QueryError>) {
-        let (validation, acceptance) = self.end_evaluation_validation();
+        let (validation, acceptance, staged) = self.end_evaluation_validation();
         if let Ok(value) = result {
             value.validation = validation;
             value.acceptance = acceptance;
+            value.staged = staged;
         }
     }
     pub(crate) fn lower_acceptance_holds(
@@ -767,6 +776,9 @@ impl QueryEngine {
             .any(|(key, _)| matches!(key, crate::ReadKey::ValidationUniverse(_)))
     }
     fn merge_evaluation_validation(&mut self, value: &EvaluatedConstant) {
+        for (path, arguments) in &value.staged {
+            self.record_staged_selection(*path, arguments);
+        }
         if let Some(receipt) = &value.acceptance {
             for artifact in receipt.artifacts() {
                 self.record_evaluation_acceptance(Some(artifact.clone()));
@@ -789,6 +801,11 @@ impl QueryEngine {
             if !witnessed {
                 self.evaluation_validation.fill(None);
             }
+        }
+    }
+    pub(crate) fn record_staged_selection(&mut self, path: DefId, arguments: &[u64]) {
+        for frame in &mut self.evaluation_selections {
+            frame.push((path, arguments.to_vec()));
         }
     }
     /// Complete execution evidence of a retained constant materialization.
@@ -844,6 +861,7 @@ impl QueryEngine {
                 substitutions: vec![],
                 executed: Default::default(),
                 depth: DepthEvidence::leaf(self.depth_limit()),
+                staged: vec![],
                 validation: None,
                 acceptance: None,
             });
@@ -878,6 +896,7 @@ impl QueryEngine {
                 substitutions: vec![],
                 executed: Default::default(),
                 depth: DepthEvidence::leaf(self.depth_limit()),
+                staged: vec![],
                 validation: None,
                 acceptance: None,
             });
@@ -981,6 +1000,7 @@ impl QueryEngine {
                 substitutions: constants,
                 executed,
                 depth: self.depth_composed(true),
+                staged: vec![],
                 validation: None,
                 acceptance: None,
             })
@@ -1309,6 +1329,7 @@ impl QueryEngine {
             .expressions[constant.expression.0 as usize]
             .origin
             .span;
+        self.record_staged_selection(DefId::intern(path), arguments);
         if let Some(value) = cached {
             if self.evaluation_validation_holds(&value)
                 && self.execution_valid(&constant.owner, &value.executed)
@@ -1393,6 +1414,7 @@ impl QueryEngine {
                     .finish()
                     .map_err(|_| QueryError::NotImplemented)?,
                 depth: self.depth_composed(true),
+                staged: vec![],
                 validation: None,
                 acceptance: None,
             })

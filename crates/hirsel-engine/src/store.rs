@@ -97,7 +97,7 @@ fn content_key(reference: Reference) -> EntryKey {
 pub(crate) fn product_domain(kind: QueryKind) -> Domain {
     Domain {
         kind: kind as u32 + 16,
-        schema: 4,
+        schema: 5,
     }
 }
 
