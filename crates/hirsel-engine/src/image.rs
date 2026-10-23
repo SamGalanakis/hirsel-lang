@@ -94,6 +94,10 @@ pub(crate) struct ImageNode {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct ImageLowering {
     pub definition: hirsel_tir::DefinitionRef,
+    /// Local V evidence belongs to these immutable bytes, never to the image
+    /// encoding. Deserialization starts without authority in every session.
+    #[serde(skip)]
+    pub verification: Arc<std::sync::Mutex<Option<Arc<hirsel_validate::VerifiedDefinition>>>>,
     pub dependencies: Vec<SignatureDependency>,
     pub execution: crate::memo::Reads,
     /// Requests made by lowering, replayed without an additional S1 frame.

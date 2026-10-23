@@ -32,6 +32,7 @@ mod tests {
     // Skipping V would accept it, so these tests exercise evidence admission.
     fn invalid_lowering() -> ImageLowering {
         ImageLowering {
+            verification: Default::default(),
             definition: Arc::new(hirsel_tir::Definition {
                 caller_bodies: vec![],
                 protocol_associations: vec![],
@@ -46,6 +47,91 @@ mod tests {
             execution: Reads::empty(),
             depth: crate::memo::DepthEvidence::leaf(32),
         }
+    }
+
+    #[test]
+    fn repeated_image_admission_reuses_only_local_immutable_evidence() {
+        crate::with_compiler_stack(|| {
+            use hirsel_tir::*;
+            let mut engine = QueryEngine::new(default_environment(), PhaseAdapters::default());
+            let mut lowering = invalid_lowering();
+            let ty = engine.types.intern(hirsel_types::Type::unit());
+            let definition = Arc::make_mut(&mut lowering.definition);
+            definition.types = vec![ty].into();
+            definition.bodies = vec![Body {
+                parameter_scope: hirsel_syntax::LexicalOwner::first(definition.path.path())
+                    .site(hirsel_types::NameSite::Item),
+                scoped_parameters: vec![],
+                locals: vec![Local {
+                    ty,
+                    storage: Storage::ReturnSlot,
+                    scope: ScopeId(0),
+                    span: Span::default(),
+                }],
+                places: vec![Place {
+                    loan: None,
+                    binding: None,
+                    root: LocalId(0),
+                    projection: vec![].into(),
+                    ty,
+                }],
+                scopes: vec![Scope {
+                    parent: None,
+                    span: Span::default(),
+                }],
+                blocks: vec![Block {
+                    instructions: vec![Instruction {
+                        kind: InstructionKind::Assign {
+                            destination: PlaceId(0),
+                            value: RvalueId(0),
+                        },
+                        span: Span::default(),
+                        on_failure: CleanupId(0),
+                    }],
+                    terminator: Terminator::Return {
+                        value: Operand {
+                            place: PlaceId(0),
+                            usage: hirsel_types::UseKind::Take,
+                        },
+                        cleanup: CleanupId(0),
+                    },
+                    span: Span::default(),
+                }],
+                rvalues: vec![Rvalue::Constant(Constant::Unit)],
+                cleanups: vec![Cleanup::default()],
+                cleanup_nodes: vec![],
+                entry: BlockId(0),
+                parameters: vec![],
+                result: ty,
+                borrow_cursors: vec![],
+                tail_sites: vec![],
+                matches: vec![],
+            }];
+            let id = lowering.definition.path;
+            engine.admit_image_lowering(&lowering).unwrap();
+            assert_eq!(engine.scalar_validation_runs[&id], 1);
+            engine.admit_image_lowering(&lowering).unwrap();
+            assert_eq!(
+                engine.scalar_validation_runs[&id], 1,
+                "same immutable artifact must not run V twice"
+            );
+            let bytes = hirsel_types::with_table_encoding(&engine.types, &[ty], || {
+                bincode::serialize(&lowering).unwrap()
+            });
+            let decoded: ImageLowering =
+                hirsel_types::with_table_decoding(&[ty], || bincode::deserialize(&bytes).unwrap());
+            engine.admit_image_lowering(&decoded).unwrap();
+            assert_eq!(
+                engine.scalar_validation_runs[&id], 2,
+                "serialized bytes never transfer local evidence"
+            );
+            let mut changed = lowering.clone();
+            Arc::make_mut(&mut changed.definition).entry = BodyId(u32::MAX);
+            assert!(
+                engine.admit_image_lowering(&changed).is_err(),
+                "cloned evidence cannot certify replaced bytes"
+            );
+        });
     }
 
     #[test]
@@ -357,7 +443,19 @@ impl QueryEngine {
         if self.verify == Verify::On {
             // The image key binds its producer and sources, but acceptance also
             // depends on the importing snapshot's independently checked views.
-            self.ensure_lowered_verdict(&lowering.definition)?;
+            let evidence = lowering.verification.lock().unwrap().clone();
+            let snapshot = self.signature_snapshot();
+            if !evidence.as_ref().is_some_and(|evidence| {
+                evidence.holds(
+                    &lowering.definition,
+                    &self.types,
+                    self.source_verification_policy(),
+                    snapshot.validation(&lowering.definition.path.path().0.package),
+                )
+            }) {
+                *lowering.verification.lock().unwrap() =
+                    self.ensure_lowered_verdict(&lowering.definition)?;
+            }
         }
         self.depth_replay_requests(&lowering.depth)?;
         self.merge_execution(&lowering.execution);
@@ -409,6 +507,7 @@ impl QueryEngine {
                 return Ok(None);
             }
             Some(ImageLowering {
+                verification: Default::default(),
                 definition: lowered.value,
                 dependencies: lowered.dependencies,
                 execution,
