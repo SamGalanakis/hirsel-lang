@@ -1,0 +1,186 @@
+const HELP: String = "Usage: depsolve resolve ROOT.json JOBS [CATALOG.json ...]\n       depsolve verify-lock LOCK.json ROOT.json JOBS [CATALOG.json ...]\nJOBS: 1..4. Read-only input grant; offline stable-semver minimum version selection.\nExit: 0 success/help, 1 stale lock, 2 invalid input, resource refusal or I/O.\n"
+
+pub type Command {
+  verify: bool,
+  lock_file: String,
+  root_file: String,
+  catalogs: List[String],
+  jobs: u64,
+}
+
+fn command(args: Args) -> Result[unique Command, explain.Fault] {
+  let count = arg.len(args)
+  if count < 3 || count > model.MAX_FILES + 4 {
+    return Error(Usage())
+  }
+  let Ok(mode) = arg.text(args, 0) else {
+    return Error(Usage())
+  }
+  let verify = mode == "verify-lock"
+  if mode != "resolve" && !verify {
+    return Error(Usage())
+  }
+  let offset = if verify {
+    2u64
+  } else {
+    1u64
+  }
+  if count < offset + 2 || count - offset - 2 > model.MAX_FILES {
+    return Error(Limit("catalogs"))
+  }
+  let mut lock_file: String = ""
+  if verify {
+    let Ok(name) = arg.text(args, 1) else {
+      return Error(Usage())
+    }
+    if !model.filename(name) {
+      return Error(Path())
+    }
+    lock_file = unique name
+  }
+  let Ok(root_file) = arg.text(args, offset) else {
+    return Error(Usage())
+  }
+  if !model.filename(root_file) {
+    return Error(Path())
+  }
+  let Ok(width) = arg.text(args, offset + 1) else {
+    return Error(Usage())
+  }
+  let jobs = match width {
+    "1" => 1u64,
+    "2" => 2u64,
+    "3" => 3u64,
+    "4" => 4u64,
+    _ => return Error(Limit("jobs")),
+  }
+  let mut files: List[String] = []
+  for i in offset + 2..count {
+    let Ok(name) = arg.text(args, i) else {
+      return Error(Usage())
+    }
+    if !model.filename(name) {
+      return Error(Path())
+    }
+    list.push(mut files, unique name)
+  }
+  Ok(
+    Command(
+      verify: verify,
+      lock_file: take lock_file,
+      root_file: unique root_file,
+      catalogs: take files,
+      jobs: jobs
+    )
+  )
+}
+
+fn run(rt: Io, cmd: Command) -> Result[unique String, explain.Report] {
+  let Ok(directory) = io.dir(rt, path.of("input")) else {
+    return Error(
+      explain.report(
+        explain.source(Grant("input"), cmd.root_file),
+        explain.source_label
+      )
+    )
+  }
+  let Ok(tasks) = io.tasks(rt) else {
+    return Error(
+      explain.report(
+        explain.source(Grant("tasks"), cmd.root_file),
+        explain.source_label
+      )
+    )
+  }
+  let raw = match catalog.read(directory, cmd.root_file, model.FILE_BYTES) {
+    Ok(data) => take data,
+    Error(fault) => return Error(
+      explain.report(explain.source(fault, cmd.root_file), explain.source_label)
+    ),
+  }
+  let root = match model.root(raw) {
+    Ok(value) => take value,
+    Error(fault) => return Error(
+      explain.report(explain.source(fault, cmd.root_file), explain.source_label)
+    ),
+  }
+  let bundle = match catalog.load(tasks, directory, cmd.catalogs, cmd.jobs, root) {
+    Ok(value) => take value,
+    Error(problem) => return Error(explain.report(problem, explain.source_label)),
+  }
+  let graph = match model.graph(root, bundle.catalogs) {
+    Ok(value) => take value,
+    Error(fault) => return Error(
+      explain.report(explain.source(fault, cmd.root_file), explain.source_label)
+    ),
+  }
+  let resolution = match resolve.build(root, graph) {
+    Ok(value) => take value,
+    Error(problem) => return Error(explain.report(problem, model.identity)),
+  }
+  let report_value = lock.create(cmd.root_file, raw, bundle.sources, resolution)
+  if cmd.verify {
+    let data = match catalog.read(directory, cmd.lock_file, 2097152u64) {
+      Ok(value) => take value,
+      Error(fault) => return Error(
+        explain.report(explain.source(fault, cmd.lock_file), explain.source_label)
+      ),
+    }
+    if let Error(fault) = lock.verify(data, report_value) {
+      return Error(
+        explain.report(explain.source(fault, cmd.lock_file), explain.source_label)
+      )
+    }
+  }
+  match lock.encode(report_value) {
+    Ok(text) => Ok(take text),
+    Error(fault) => Error(
+      explain.report(explain.source(fault, cmd.root_file), explain.source_label)
+    ),
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> std@1/process.ExitCode {
+  let Ok(output) = io.stdout(rt) else {
+    return std@1/process.exit_code(2u8)
+  }
+  if arg.len(args) == 1 {
+    if let Ok(flag) = arg.text(args, 0) {
+      if flag == "--help" {
+        let _ = out.print(output, HELP)
+        return std@1/process.SUCCESS
+      }
+    }
+  }
+  let cmd = match command(args) {
+    Ok(value) => take value,
+    Error(fault) => {
+      let report_value = explain.report(
+        explain.source(fault, "$argv"),
+        explain.source_label
+      )
+      if let Ok(text) = json.stringify(explain.report_to_json(report_value)) {
+        let _ = out.print(output, f"{text}\n")
+      }
+      return std@1/process.exit_code(2u8)
+    },
+  }
+  match run(rt, cmd) {
+    Ok(text) => {
+      if let Error(_) = out.print(output, f"{text}\n") {
+        return std@1/process.exit_code(2u8)
+      }
+      std@1/process.SUCCESS
+    },
+    Error(problem) => {
+      if let Ok(text) = json.stringify(explain.report_to_json(problem)) {
+        let _ = out.print(output, f"{text}\n")
+      }
+      if problem.error == "stale_lock" {
+        std@1/process.FAILURE
+      } else {
+        std@1/process.exit_code(2u8)
+      }
+    },
+  }
+}

@@ -1,0 +1,64 @@
+pub type Row {
+  name: String,
+  version: String,
+  path: List[String],
+}
+
+pub type Lock {
+  schema: u64,
+  root: catalog.Source,
+  catalogs: List[catalog.Source],
+  selected: List[Row],
+  visited: List[String],
+}
+
+fn row_to_json(value: Row) -> json.Value uses {} = comptime derive.json_value(
+  shape(Row)
+)
+
+fn lock_to_json(value: Lock) -> json.Value uses {} = comptime derive.json_value(
+  shape(Lock)
+)
+
+pub fn create(
+  root_file: String,
+  root_bytes: Bytes,
+  sources: List[catalog.Source],
+  resolution: resolve.Resolution
+) -> unique Lock uses {} {
+  let mut rows: List[Row] = []
+  for selection in resolution.selected {
+    list.push(
+      mut rows,
+      Row(
+        name: unique selection.requirement.name,
+        version: unique selection.requirement.version,
+        path: explain.flatten(selection.trace, model.identity)
+      )
+    )
+  }
+  Lock(
+    schema: 1,
+    root: catalog.Source(file: unique root_file, sha256: sha256.digest_hex(root_bytes)),
+    catalogs: unique sources,
+    selected: take rows,
+    visited: unique resolution.visited
+  )
+}
+
+pub fn encode(value: Lock) -> Result[unique String, explain.Fault] uses {} {
+  match json.stringify(lock_to_json(value)) {
+    Ok(text) => Ok(take text),
+    Error(_) => Error(Json()),
+  }
+}
+
+pub fn verify(data: Bytes, expected: Lock) -> Result[(), explain.Fault] uses {} {
+  // JSON equality ignores object insertion order, but preserves every array row,
+  // digest, path, field and value. Extra fields are therefore stale too.
+  let actual = model.document(data)?
+  if actual != lock_to_json(expected) {
+    return Error(Stale())
+  }
+  Ok(())
+}

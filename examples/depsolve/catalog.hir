@@ -1,0 +1,177 @@
+pub type Source {
+  file: String,
+  sha256: String,
+}
+
+pub fn source_to_json(value: Source) -> json.Value uses {} = comptime derive.json_value(
+  shape(Source)
+)
+
+pub type Request {
+  file: String,
+  bytes: u64,
+}
+
+pub type Loaded {
+  source: Source,
+  data: Bytes,
+}
+
+pub type Bundle {
+  sources: List[Source],
+  catalogs: List[model.Catalog],
+}
+
+pub fn read(directory: Dir, name: String, limit: u64) -> Result[
+  unique Bytes,
+  explain.Fault
+] {
+  if !model.filename(name) {
+    return Error(Path())
+  }
+  let mut handle = match file.open(directory, path.of(name)) {
+    Ok(opened) => take opened,
+    Error(Canceled(_)) => return Error(Canceled()),
+    Error(_) => return Error(Open()),
+  }
+  match file.read_all_bounded(directory, mut handle, limit) {
+    Ok(data) => Ok(take data),
+    Error(Limit()) => Error(Limit("file_bytes")),
+    Error(File(Canceled(_))) => Error(Canceled()),
+    Error(File(_)) => Error(Read()),
+  }
+}
+
+@noalloc
+fn by_name(a: String, b: String) -> i32 uses {} {
+  string.compare(a, b)
+}
+
+// Preflight reserves the total byte allowance before admitting any catalog read.
+// A file that grows cannot exceed its reservation; bounded reads reject it.
+fn preflight(directory: Dir, files: List[String]) -> Result[
+  unique List[Request],
+  explain.Problem[String]
+] {
+  if list.len(files) > model.MAX_FILES {
+    return Error(explain.source(Limit("catalogs"), "$catalogs"))
+  }
+  let mut ordered = unique files
+  list.sort(mut ordered, by_name)
+  let mut requests: List[Request] = []
+  let mut total = 0u64
+  let mut previous: String = ""
+  for name in ordered {
+    if !model.filename(name) {
+      return Error(explain.source(Path(), name))
+    }
+    if name == previous {
+      return Error(explain.source(Duplicate(unique name), name))
+    }
+    previous = unique name
+    let count = match file.size(directory, path.of(name)) {
+      Ok(size) => size,
+      Error(Canceled(_)) => return Error(explain.source(Canceled(), name)),
+      Error(_) => return Error(explain.source(Open(), name)),
+    }
+    if count > model.FILE_BYTES {
+      return Error(explain.source(Limit("file_bytes"), name))
+    }
+    if count > model.TOTAL_BYTES - total {
+      return Error(explain.source(Limit("catalog_bytes"), name))
+    }
+    total += count
+    list.push(mut requests, Request(file: unique name, bytes: count))
+  }
+  Ok(take requests)
+}
+
+fn load_one(directory: Dir, request: Request) -> Result[
+  unique Loaded,
+  unique explain.Problem[String]
+] {
+  let data = match read(directory, request.file, request.bytes) {
+    Ok(raw) => take raw,
+    Error(fault) => return Error(explain.source(fault, request.file)),
+  }
+  let digest = sha256.digest_hex(data)
+  Ok(
+    Loaded(
+      source: Source(file: unique request.file, sha256: take digest),
+      data: take data
+    )
+  )
+}
+
+pub fn load(
+  tasks: Tasks,
+  directory: Dir,
+  files: List[String],
+  jobs: u64,
+  root_value: model.Root
+) -> Result[unique Bundle, explain.Problem[String]] {
+  if jobs < 1 || jobs > 4 {
+    return Error(explain.source(Limit("jobs"), "$catalogs"))
+  }
+  let requests = preflight(directory, files)?
+  task.scope(
+    tasks,
+    fn(s: Scope) -> Result[unique Bundle, explain.Problem[String]] {
+      let mut budget = match model.admission(root_value) {
+        Ok(value) => take value,
+        Error(fault) => return Error(explain.source(fault, "$root")),
+      }
+      let mut sources: List[Source] = []
+      let mut catalogs: List[model.Catalog] = []
+      let mut next = 0u64
+      while next < list.len(requests) {
+        let mut members: TaskSet[Result[unique Loaded, unique explain.Problem[String]]] of s = task.set(
+          s
+        )
+        let mut active = 0u64
+        while active < jobs && next < list.len(requests) {
+          if let Error(_) = task.check_canceled(s) {
+            task.cancel_all(s, take members)
+            return Error(explain.source(Canceled(), "$catalogs"))
+          }
+          let request = unique requests[next]
+          task.add(
+            s,
+            mut members,
+            task.async(
+              s,
+              fn() -> Result[unique Loaded, unique explain.Problem[String]] {
+                load_one(directory, take request)
+              }
+            )
+          )
+          next += 1
+          active += 1
+        }
+        // Await in source order; on the first error, cancel and join all remaining
+        // siblings before returning it. Completion reorder cannot select an error.
+        for index in 0u64..active {
+          match task.await_at(s, mut members, index) {
+            Ok(loaded) => {
+              let parsed = match model.catalog(loaded.data, mut budget) {
+                Ok(value) => take value,
+                Error(fault) => {
+                  task.cancel_all(s, take members)
+                  return Error(explain.source(fault, loaded.source.file))
+                },
+              }
+              list.push(mut sources, unique loaded.source)
+              list.push(mut catalogs, take parsed)
+            },
+            Error(fault) => {
+              task.cancel_all(s, take members)
+              return Error(take fault)
+            },
+          }
+        }
+        task.cancel_all(s, take members)
+      }
+      Ok(Bundle(sources: take sources, catalogs: take catalogs))
+    }
+  )
+}

@@ -1,0 +1,294 @@
+pub const FILE_BYTES: u64 = 65536
+
+pub const TOTAL_BYTES: u64 = 524288
+
+pub const MAX_FILES: u64 = 32
+
+pub const MAX_NAMES: u64 = 64
+
+pub const MAX_VERSIONS: u64 = 128
+
+pub const MAX_EDGES: u64 = 256
+
+pub type Requirement {
+  name: String,
+  version: String,
+}
+
+pub type Package {
+  name: String,
+  version: String,
+  dependencies: List[Requirement],
+}
+
+pub type Root {
+  dependencies: List[Requirement],
+}
+
+pub type Catalog {
+  packages: List[Package],
+}
+
+// Indexed data stays borrowed during traversal; only work descriptors are owned.
+pub type Graph {
+  nodes: Map[String, Package],
+}
+
+fn requirement_from_json(value: json.Value) -> Result[unique Requirement, String] uses {} = comptime derive.from_json(
+  shape(Requirement)
+)
+
+fn package_from_json(value: json.Value) -> Result[unique Package, String] uses {} = comptime derive.from_json(
+  shape(Package)
+)
+
+fn root_from_json(value: json.Value) -> Result[unique Root, String] uses {} = comptime derive.from_json(
+  shape(Root)
+)
+
+fn catalog_from_json(value: json.Value) -> Result[unique Catalog, String] uses {} = comptime derive.from_json(
+  shape(Catalog)
+)
+
+pub fn identity(value: Requirement) -> unique String uses {} {
+  f"{value.name}@{value.version}"
+}
+
+pub fn requirement(value: Package) -> unique Requirement uses {} {
+  Requirement(name: unique value.name, version: unique value.version)
+}
+
+pub fn valid_name(name: String) -> bool uses {} {
+  if string.byte_len(name) == 0 || string.byte_len(name) > 64 {
+    return false
+  }
+  for byte in string.as_bytes(name) {
+    if !ascii.is_alnum(byte) && byte != b'_' && byte != b'-' && byte != b'.' {
+      return false
+    }
+  }
+  true
+}
+
+pub fn filename(name: String) -> bool uses {} {
+  valid_name(name) && name != "." && name != ".."
+}
+
+pub fn stable(version: String) -> Result[semver.Version, explain.Fault] uses {} {
+  let Ok(parsed) = semver.parse(version) else {
+    return Error(Version(unique version))
+  }
+  if parsed.pre != "" || parsed.build != "" {
+    return Error(Unstable(unique version))
+  }
+  Ok(take parsed)
+}
+
+pub fn validate(value: Requirement) -> Result[(), explain.Fault] uses {} {
+  if !valid_name(value.name) {
+    return Error(Name())
+  }
+  let _ = stable(value.version)?
+  Ok(())
+}
+
+pub fn document(data: Bytes) -> Result[json.Value, explain.Fault] uses {} {
+  let Ok(text_value) = string.from_bytes(unique data) else {
+    return Error(Json())
+  }
+  let Ok(value) = json.parse(take text_value) else {
+    return Error(Json())
+  }
+  Ok(take value)
+}
+
+// Bound the DOM before derived decoding allocates nominal list elements.
+fn edge_count(value: json.Value) -> Result[u64, explain.Fault] uses {} {
+  let Some(raw) = json_access.member(value, "dependencies") else {
+    return Error(Shape())
+  }
+  let Some(items) = json_access.as_array(raw) else {
+    return Error(Shape())
+  }
+  if list.len(items) > MAX_EDGES {
+    return Error(Limit("edges"))
+  }
+  Ok(list.len(items))
+}
+
+@noalloc
+pub fn by_requirement(a: Requirement, b: Requirement) -> i32 uses {} {
+  let names = string.compare(a.name, b.name)
+  if names != 0 {
+    names
+  } else {
+    string.compare(a.version, b.version)
+  }
+}
+
+pub fn root(data: Bytes) -> Result[unique Root, explain.Fault] uses {} {
+  if bytes.len(data) > FILE_BYTES {
+    return Error(Limit("root_bytes"))
+  }
+  let value = document(data)?
+  let _ = edge_count(value)?
+  let Ok(decoded) = root_from_json(value) else {
+    return Error(Shape())
+  }
+  let mut owned = take decoded
+  for i in 0u64..list.len(owned.dependencies) {
+    validate(owned.dependencies[i])?
+  }
+  list.sort(mut owned.dependencies, by_requirement)
+  Ok(take owned)
+}
+
+// One run-wide admission state, updated only by the parent in source order.
+// Inspect the bounded JSON DOM before allocating each typed catalog list.
+pub type Admission {
+  versions: u64,
+  edges: u64,
+  names: Set[String],
+  identities: Set[String],
+}
+
+pub fn admission(root_value: Root) -> Result[unique Admission, explain.Fault] uses {} {
+  let mut names: Set[String] = set.empty()
+  for dependency in root_value.dependencies {
+    admit_name(mut names, dependency.name)?
+  }
+  Ok(
+    Admission(
+      versions: 0,
+      edges: list.len(root_value.dependencies),
+      names: take names,
+      identities: set.empty()
+    )
+  )
+}
+
+fn inspect(value: json.Value, mut budget: Admission) -> Result[
+  unique Requirement,
+  explain.Fault
+] uses {} {
+  let Some(name_value) = json_access.member(value, "name") else {
+    return Error(Shape())
+  }
+  let Some(name) = json_access.as_text(name_value) else {
+    return Error(Shape())
+  }
+  let Some(version_value) = json_access.member(value, "version") else {
+    return Error(Shape())
+  }
+  let Some(version) = json_access.as_text(version_value) else {
+    return Error(Shape())
+  }
+  if !valid_name(name) {
+    return Error(Name())
+  }
+  let _ = stable(version)?
+  admit_name(mut budget.names, name)?
+  Ok(Requirement(name: unique name, version: unique version))
+}
+
+pub fn catalog(data: Bytes, mut budget: Admission) -> Result[
+  unique Catalog,
+  explain.Fault
+] uses {} {
+  if bytes.len(data) > FILE_BYTES {
+    return Error(Limit("file_bytes"))
+  }
+  let value = document(data)?
+  let Some(raw) = json_access.member(value, "packages") else {
+    return Error(Shape())
+  }
+  let Some(items) = json_access.as_array(raw) else {
+    return Error(Shape())
+  }
+  if list.len(items) > MAX_VERSIONS - budget.versions {
+    return Error(Limit("versions"))
+  }
+  for item in items {
+    let count = edge_count(item)?
+    if count > MAX_EDGES - budget.edges {
+      return Error(Limit("edges"))
+    }
+    budget.edges += count
+    let identity_value = inspect(item, mut budget)?
+    let id = identity(identity_value)
+    if set.contains(budget.identities, id) {
+      return Error(Duplicate(unique id))
+    }
+    set.insert(mut budget.identities, take id)
+    let Some(dependencies_value) = json_access.member(item, "dependencies") else {
+      return Error(Shape())
+    }
+    let Some(dependencies) = json_access.as_array(dependencies_value) else {
+      return Error(Shape())
+    }
+    for dependency in dependencies {
+      let _ = inspect(dependency, mut budget)?
+    }
+  }
+  budget.versions += list.len(items)
+  let Ok(decoded) = catalog_from_json(value) else {
+    return Error(Shape())
+  }
+  let mut owned = take decoded
+  for i in 0u64..list.len(owned.packages) {
+    validate(requirement(owned.packages[i]))?
+    for j in 0u64..list.len(owned.packages[i].dependencies) {
+      validate(owned.packages[i].dependencies[j])?
+    }
+    list.sort(mut owned.packages[i].dependencies, by_requirement)
+  }
+  Ok(take owned)
+}
+
+@preserves_unique(names)
+fn admit_name(mut names: Set[String], name: String) -> Result[(), explain.Fault] uses {} {
+  if !set.contains(names, name) {
+    if set.len(names) == MAX_NAMES {
+      return Error(Limit("names"))
+    }
+    set.insert(mut names, unique name)
+  }
+  Ok(())
+}
+
+pub fn graph(root_value: Root, catalogs: List[Catalog]) -> Result[
+  unique Graph,
+  explain.Fault
+] uses {} {
+  let mut nodes: Map[String, Package] = map.empty()
+  let mut names: Set[String] = set.empty()
+  for dependency in root_value.dependencies {
+    admit_name(mut names, dependency.name)?
+  }
+  let mut edges = list.len(root_value.dependencies)
+  if edges > MAX_EDGES {
+    return Error(Limit("edges"))
+  }
+  for catalog_value in catalogs {
+    for item in catalog_value.packages {
+      let id = identity(requirement(item))
+      if map.contains(nodes, id) {
+        return Error(Duplicate(unique id))
+      }
+      if map.len(nodes) == MAX_VERSIONS {
+        return Error(Limit("versions"))
+      }
+      admit_name(mut names, item.name)?
+      for dependency in item.dependencies {
+        admit_name(mut names, dependency.name)?
+      }
+      let count = list.len(item.dependencies)
+      if count > MAX_EDGES - edges {
+        return Error(Limit("edges"))
+      }
+      edges += count
+      map.insert(mut nodes, take id, unique item)
+    }
+  }
+  Ok(Graph(nodes: take nodes))
+}

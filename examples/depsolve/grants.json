@@ -1,0 +1,22 @@
+{
+  "io": {
+    "stdout": "stdout.bytes@1",
+    "tasks": "tasks.cooperative@1",
+    "dirs": [
+      {
+        "path": "input",
+        "host": "fixtures",
+        "access": "read"
+      }
+    ]
+  },
+  "args": [
+    "resolve",
+    "root.json",
+    "4",
+    "catalog.json"
+  ],
+  "placement": {
+    "cores": 1
+  }
+}

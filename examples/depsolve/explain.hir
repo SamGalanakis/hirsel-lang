@@ -1,0 +1,100 @@
+// Typed provenance is shared by source loading and version-graph traversal.
+// A trace is a persistent parent chain; only its boundary is copied on enqueue.
+pub type Trace[T] {
+  value: T,
+  parents: List[Trace[T]],
+}
+
+pub type Fault = Usage | Name | Path | Json | Shape | Version(String) | Unstable(String) | Limit(
+  String
+) | Duplicate(String) | Missing(String) | Open | Read | Canceled | Grant(String) | Stale
+
+pub type Problem[T] {
+  fault: Fault,
+  trace: Trace[T],
+}
+
+pub type Report {
+  error: String,
+  detail: String,
+  path: List[String],
+}
+
+pub fn start[T](take value: unique T) -> unique Trace[T] uses {} {
+  Trace(value: take value, parents: [])
+}
+
+pub fn extend[T](take parent: unique Trace[T], take value: unique T) -> unique Trace[T] uses {} {
+  Trace(value: take value, parents: [take parent])
+}
+
+pub fn flatten[T: copyable](trace: Trace[T], label: fn(T) -> String uses {}) -> unique List[
+  String
+] uses {} {
+  let mut values: List[String] = []
+  // Regular recursion: every recursive call keeps exactly the same T.
+  for parent in trace.parents {
+    let previous = flatten(parent, label)
+    for item in take previous {
+      list.push(mut values, take item)
+    }
+  }
+  list.push(mut values, unique label(trace.value))
+  unique values
+}
+
+pub fn issue[T: copyable](fault: Fault, trace: Trace[T]) -> unique Problem[T] uses {} {
+  Problem(fault: unique fault, trace: unique trace)
+}
+
+pub fn code(fault: Fault) -> unique String uses {} {
+  match fault {
+    Usage() => "usage",
+    Name() => "name",
+    Path() => "path",
+    Json() => "json",
+    Shape() => "shape",
+    Version(_) => "version",
+    Unstable(_) => "unstable",
+    Limit(_) => "limit",
+    Duplicate(_) => "duplicate",
+    Missing(_) => "missing",
+    Open() => "open",
+    Read() => "read",
+    Canceled() => "canceled",
+    Grant(_) => "grant",
+    Stale() => "stale_lock",
+  }
+}
+
+pub fn detail(fault: Fault) -> unique String uses {} {
+  match fault {
+    Version(text) => unique text,
+    Unstable(text) => unique text,
+    Limit(text) => unique text,
+    Duplicate(text) => unique text,
+    Missing(text) => unique text,
+    Grant(text) => unique text,
+    _ => "",
+  }
+}
+
+pub fn report[T: copyable](problem: Problem[T], label: fn(T) -> String uses {}) -> unique Report uses {} {
+  Report(
+    error: code(problem.fault),
+    detail: detail(problem.fault),
+    path: flatten(problem.trace, label)
+  )
+}
+
+pub fn source_label(value: String) -> String uses {} {
+  unique value
+}
+
+pub fn source(fault: Fault, file: String) -> unique Problem[String] uses {} {
+  issue(fault, start(unique file))
+}
+
+pub fn report_to_json(value: Report) -> json.Value uses {} = comptime derive.json_value(
+  shape(Report)
+)

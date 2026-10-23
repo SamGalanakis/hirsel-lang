@@ -1,0 +1,95 @@
+// Copyright 2018 The Go Authors. All rights reserved.
+// BSD-3-Clause; see LICENSE-Go. Port of cmd/go/internal/mvs/mvs.go:72-146,
+// ebe2feefc400f813aefdc8a036e66d2619da6649. All reachable version nodes
+// contribute requirements, including versions superseded in selected.
+pub type Selection {
+  requirement: model.Requirement,
+  trace: explain.Trace[model.Requirement],
+}
+
+pub type Resolution {
+  selected: List[Selection],
+  visited: List[String],
+}
+
+@noalloc
+fn by_selection(a: Selection, b: Selection) -> i32 uses {} {
+  string.compare(a.requirement.name, b.requirement.name)
+}
+
+@noalloc
+fn by_text(a: String, b: String) -> i32 uses {} {
+  string.compare(a, b)
+}
+
+pub fn build(root: model.Root, graph: model.Graph) -> Result[
+  unique Resolution,
+  explain.Problem[model.Requirement]
+] uses {} {
+  let mut work: List[explain.Trace[model.Requirement]] = []
+  let mut seen: Set[String] = set.empty()
+  let mut chosen: Map[String, Selection] = map.empty()
+  for edge in root.dependencies {
+    let id = model.identity(edge)
+    if !set.contains(seen, id) {
+      set.insert(mut seen, take id)
+      list.push(
+        mut work,
+        explain.extend(
+          explain.start(model.Requirement(name: "$root", version: "0.0.0")),
+          unique edge
+        )
+      )
+    }
+  }
+  let mut at = 0u64
+  while at < list.len(work) {
+    let trace = work[at]
+    let edge = trace.value
+    let id = model.identity(edge)
+    let Some(node) = map.get(graph.nodes, id) else {
+      return Error(explain.issue(Missing(unique id), trace))
+    }
+    let mut replace = true
+    if let Some(previous) = map.get(chosen, edge.name) {
+      // Catalog validation has already parsed both stable versions.
+      let Ok(left) = model.stable(previous.requirement.version) else {
+        return Error(explain.issue(Version(unique previous.requirement.version), trace))
+      }
+      let Ok(right) = model.stable(edge.version) else {
+        return Error(explain.issue(Version(unique edge.version), trace))
+      }
+      replace = semver.compare(left, right) < 0
+    }
+    if replace {
+      map.insert(
+        mut chosen,
+        unique edge.name,
+        Selection(requirement: unique edge, trace: unique trace)
+      )
+    }
+    for dependency in node.dependencies {
+      let dependency_id = model.identity(dependency)
+      if !set.contains(seen, dependency_id) {
+        // At most root edges + catalog edges descriptors, even on a missing node.
+        if list.len(work) == model.MAX_EDGES {
+          return Error(explain.issue(Limit("work"), trace))
+        }
+        set.insert(mut seen, take dependency_id)
+        list.push(mut work, explain.extend(unique trace, unique dependency))
+      }
+    }
+    at += 1
+  }
+  let mut selected: List[Selection] = []
+  for (_, item) in chosen {
+    list.push(mut selected, unique item)
+  }
+  list.sort(mut selected, by_selection)
+  let mut visited: List[String] = []
+  for trace in work {
+    list.push(mut visited, model.identity(trace.value))
+  }
+  list.sort(mut visited, by_text)
+  Ok(Resolution(selected: take selected, visited: take visited))
+}

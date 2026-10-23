@@ -1,0 +1,57 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "depsolve",
+    "version": "1"
+  },
+  "entry": {
+    "module": [],
+    "name": "main"
+  },
+  "sources": [
+    {
+      "path": "main.hir",
+      "module": []
+    },
+    {
+      "path": "catalog.hir",
+      "module": [
+        "catalog"
+      ]
+    },
+    {
+      "path": "model.hir",
+      "module": [
+        "model"
+      ]
+    },
+    {
+      "path": "resolve.hir",
+      "module": [
+        "resolve"
+      ]
+    },
+    {
+      "path": "explain.hir",
+      "module": [
+        "explain"
+      ]
+    },
+    {
+      "path": "lock.hir",
+      "module": [
+        "lock"
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "manifest": "../../stdlib/std@1/hirsel.json",
+      "package": {
+        "name": "std",
+        "version": "1"
+      },
+      "expose": []
+    }
+  ]
+}
