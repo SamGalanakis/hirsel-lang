@@ -2096,8 +2096,30 @@ impl QueryEngine {
             return None;
         }
         if self.verify == Verify::On {
-            let receipt =
-                self.load_execution_receipt(evaluation_subject(&key, &variant.payload))?;
+            let Some(receipt) =
+                self.load_execution_receipt(evaluation_subject(&key, &variant.payload))
+            else {
+                // The old action and its complete observed reads have held, but
+                // this reader must independently execute and verify the value.
+                // Restore only existing ordinary mode bodies of those executed
+                // dependencies before S1 starts. Missing products stay misses;
+                // no helper is evaluated or granted execution authority here.
+                let dependencies = value
+                    .executed
+                    .iter()
+                    .filter_map(|(read, _)| {
+                        if let ReadKey::ExecutedBody(id) = read {
+                            Some(id.path().clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                for dependency in dependencies {
+                    self.restore_execution_mode(&dependency);
+                }
+                return None;
+            };
             value.validation = Some(receipt.contexts().to_vec().into());
             value.acceptance = Some(receipt);
         }
@@ -2356,8 +2378,7 @@ impl QueryEngine {
         let entry = self.lowered.get(&definition.path).cloned();
         let snapshot = self.signature_snapshot();
         let policy = self.source_verification_policy();
-        if let Some(entry) = &entry
-            && let Some(evidence) = entry.verification.lock().unwrap().as_ref()
+        if let Some(evidence) = self.lowered_verification(definition.path)
             && evidence.holds(
                 definition,
                 &self.types,

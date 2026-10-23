@@ -41,6 +41,18 @@ impl Entry<hirsel_tir::DefinitionRef> {
 }
 
 impl QueryEngine {
+    /// Evidence survives body eviction on the ordinary Lower receipt. The
+    /// verifier still checks its weak body binding and complete environment.
+    pub(super) fn lowered_verification(
+        &self,
+        id: DefId,
+    ) -> Option<Arc<hirsel_validate::VerifiedDefinition>> {
+        self.lowered
+            .get(&id)
+            .and_then(|entry| entry.verification.lock().unwrap().clone())
+            .or_else(|| self.lower_receipts.get(&id)?.verdict.clone())
+    }
+
     pub(crate) fn revalidate_front_summary(
         &mut self,
         summary: &Arc<PublishedSummary>,

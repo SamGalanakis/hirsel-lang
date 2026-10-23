@@ -56,6 +56,11 @@ impl VerifiedDefinition {
     pub fn reads(&self) -> &Vec<VRead> {
         &self.reads
     }
+    /// The portable acceptance issued with this evidence. Its consumer must
+    /// first check the exact immutable artifact and current environment.
+    pub fn accepted_artifact(&self) -> Option<AcceptedArtifact> {
+        self.accepted.clone()
+    }
 }
 
 /// The ordinary receipt query, additionally binding local evidence to the

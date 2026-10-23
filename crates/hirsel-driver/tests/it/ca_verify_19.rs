@@ -8,6 +8,51 @@ use std::sync::{
 };
 
 struct PrivateTypeMutation(Arc<AtomicUsize>);
+
+#[test]
+fn scalar_execution_reuses_verified_helper_after_lower_retention() {
+    with_compiler_stack(|| {
+        for hold_bytes in [0, 1 << 20] {
+            let mut engine = QueryEngine::new(default_environment(), compiler_adapters())
+                .with_config(CompileConfig {
+                    hold_bytes,
+                    retention: memo::Retention::Batch,
+                    ..CompileConfig::for_memory_cap(None)
+                });
+            let context = default_context();
+            let file = engine
+                .sources
+                .add(
+                    "helper.hir",
+                    "fn helper()->u8{1u8}\nconst A:u8=comptime (helper()+helper())\n".into(),
+                )
+                .unwrap();
+            assert!(
+                engine
+                    .parse_file(file, &context)
+                    .unwrap()
+                    .diagnostics
+                    .is_empty()
+            );
+            let a = DefPath(hirsel_syntax::ItemPath {
+                package: context.package.clone(),
+                modules: vec![],
+                name: "A".into(),
+            });
+            let mut helper = a.clone();
+            helper.0.name = "helper".into();
+            assert_eq!(
+                engine.materialize_constant(&a).unwrap(),
+                hirsel_tir::Constant::Integer(2)
+            );
+            assert_eq!(
+                engine.body_validation_runs(&helper),
+                1,
+                "hold_bytes={hold_bytes}: collecting execution acceptance must reuse exact local V evidence"
+            );
+        }
+    });
+}
 impl LoweringPhase for PrivateTypeMutation {
     fn lower(
         &self,
