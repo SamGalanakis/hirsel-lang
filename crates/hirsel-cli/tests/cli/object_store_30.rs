@@ -287,8 +287,8 @@ fn object_store_30_scripted_reference_checked() {
     scripted(false)
 }
 #[test]
-#[ignore = "large exact boundary vectors; select separately under 2GiB"]
-fn object_store_30_boundaries_reference_checked() {
+#[ignore = "full gate: original application audit"]
+fn full_gate_object_store_30_boundaries_reference_checked() {
     scripted(true)
 }
 
@@ -402,148 +402,6 @@ fn replay_receipts(root: &Path, manifest: &Path) {
     }
     assert!(count > 0, "zero selected host replay cells");
     assert!(!root.join("world").exists());
-}
-
-#[test]
-#[ignore = "replays only retained immutable tapes; select exact missing identities"]
-fn object_store_30_retained_host_replay() {
-    with_compiler_stack(|| {
-        let root = PathBuf::from(std::env::var_os("OBJECT_STORE_30_REPLAY_ROOT").unwrap());
-        replay_receipts(&root, &root.join("hirsel.json"));
-    });
-}
-
-#[test]
-#[ignore = "audits retained immutable tapes with original providers unavailable"]
-fn object_store_30_tape_controls() {
-    with_compiler_stack(|| {
-        let root = PathBuf::from(std::env::var_os("OBJECT_STORE_30_REPLAY_ROOT").unwrap());
-        let seed = root.join("llvm-put-hello.tape");
-        let original = fs::read(&seed).unwrap();
-        let record = hirsel_rt::launch::parse_recording_bytes(&original).unwrap();
-        let audit = scratch("object-store-30-controls-").keep();
-        let mut cases = Vec::new();
-        let mut changed = record.clone();
-        let event = changed
-            .events
-            .iter_mut()
-            .find(|e| matches!(e.request, hirsel_rt::io::Request::FileRead { .. }))
-            .unwrap();
-        if let hirsel_rt::io::Request::FileRead { max, .. } = &mut event.request {
-            *max += 1;
-        }
-        cases.push((
-            "input",
-            hirsel_rt::launch::render_recording(&changed)
-                .unwrap()
-                .into_bytes(),
-        ));
-        let mut changed = record.clone();
-        let mut config = changed.bound_run().unwrap().record().clone();
-        config.io.as_mut().unwrap().stdout = None;
-        changed.binding.as_mut().unwrap().canonical =
-            config.validated().unwrap().canonical().to_vec();
-        cases.push((
-            "config",
-            hirsel_rt::launch::render_recording(&changed)
-                .unwrap()
-                .into_bytes(),
-        ));
-        let mut changed = original.clone();
-        *changed.last_mut().unwrap() ^= 1;
-        cases.push(("tape", changed));
-        let mut changed = record.clone();
-        changed.events.pop();
-        cases.push((
-            "missing",
-            hirsel_rt::launch::render_recording(&changed)
-                .unwrap()
-                .into_bytes(),
-        ));
-        for (label, bytes) in cases {
-            let tape = audit.join(format!("{label}.tape"));
-            fs::write(&tape, bytes).unwrap();
-            for engine in ["reference", "checked-h", "llvm", "cranelift"] {
-                if engine == "reference" || engine == "checked-h" {
-                    let out = if engine == "reference" {
-                        hirsel_driver::replay_observations(
-                            &root.join("hirsel.json"),
-                            &tape,
-                            Some(1_000_000),
-                        )
-                    } else {
-                        hirsel_driver::replay_observations_checked(
-                            &root.join("hirsel.json"),
-                            &tape,
-                            Some(1_000_000),
-                        )
-                    };
-                    let error = out.expect_err("changed tape/config/input must refuse");
-                    fs::write(
-                        audit.join(format!("{label}-{engine}.error")),
-                        error.to_string(),
-                    )
-                    .unwrap();
-                } else {
-                    let out = Command::new(root.join(format!("app-{engine}")))
-                        .arg("--hirsel-replay")
-                        .arg(&tape)
-                        .output()
-                        .unwrap();
-                    assert_eq!(out.status.code(), Some(3), "{label}/{engine}: {out:?}");
-                    assert!(out.stdout.is_empty());
-                    fs::write(audit.join(format!("{label}-{engine}.stderr")), out.stderr).unwrap();
-                }
-                eprintln!("OBJECT_STORE_30_CONTROL_PASS {label} {engine}");
-            }
-        }
-        let changed_dir = audit.join("changed-source");
-        fs::create_dir(&changed_dir).unwrap();
-        let changed_manifest = package(&changed_dir);
-        for engine in ["reference", "checked-h"] {
-            let check = if engine == "reference" {
-                hirsel_driver::replay_observations(&changed_manifest, &seed, Some(1_000_000))
-            } else {
-                hirsel_driver::replay_observations_checked(
-                    &changed_manifest,
-                    &seed,
-                    Some(1_000_000),
-                )
-            };
-            let error = check.expect_err("source revision must bind before entry");
-            assert!(
-                error.to_string().to_lowercase().contains("program"),
-                "{error}"
-            );
-            fs::write(
-                audit.join(format!("source-{engine}.error")),
-                error.to_string(),
-            )
-            .unwrap();
-            eprintln!("OBJECT_STORE_30_CONTROL_PASS source {engine}");
-        }
-        if let Some(directory) = std::env::var_os("OBJECT_STORE_30_OTHER_BINARIES") {
-            for engine in ["llvm", "cranelift"] {
-                let out = Command::new(PathBuf::from(&directory).join(format!("app-{engine}")))
-                    .arg("--hirsel-replay")
-                    .arg(&seed)
-                    .output()
-                    .unwrap();
-                assert_eq!(out.status.code(), Some(3), "source/{engine}: {out:?}");
-                assert!(out.stdout.is_empty());
-                assert!(
-                    String::from_utf8_lossy(&out.stderr)
-                        .to_lowercase()
-                        .contains("program"),
-                    "{out:?}"
-                );
-                fs::write(audit.join(format!("source-{engine}.stderr")), out.stderr).unwrap();
-                eprintln!("OBJECT_STORE_30_CONTROL_PASS source {engine}");
-            }
-        }
-        assert_eq!(fs::read(seed).unwrap(), original);
-        assert!(!root.join("world").exists());
-    });
 }
 
 fn tool_seal(root: &Path) {

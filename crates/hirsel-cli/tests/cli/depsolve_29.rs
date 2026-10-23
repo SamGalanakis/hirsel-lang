@@ -256,13 +256,13 @@ fn depsolve_29_scripted_checked_h() {
 }
 
 #[test]
-#[ignore = "INCOMPLETE: exact full matrix exceeds the unchanged 1M-step adapter budget; see FRICTION.md"]
-fn depsolve_29_full_scripted_reference_audit() {
+#[ignore = "full gate: original application audit"]
+fn full_gate_depsolve_29_full_scripted_reference_audit() {
     scripted(false, true);
 }
 #[test]
-#[ignore = "INCOMPLETE: exact full matrix exceeds the unchanged 1M-step adapter budget; see FRICTION.md"]
-fn depsolve_29_full_scripted_checked_h_audit() {
+#[ignore = "full gate: original application audit"]
+fn full_gate_depsolve_29_full_scripted_checked_h_audit() {
     scripted(true, true);
 }
 

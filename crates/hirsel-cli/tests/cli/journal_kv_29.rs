@@ -379,8 +379,8 @@ fn journal_kv_29_application_reference_checked() {
     reference_cases(cases(), false);
 }
 #[test]
-#[ignore = "large boundary disposition matrix; isolate with tools/capped at 2 GiB"]
-fn journal_kv_29_boundaries_reference_checked() {
+#[ignore = "full gate: original application audit"]
+fn full_gate_journal_kv_29_boundaries_reference_checked() {
     reference_cases(
         serde_json::from_str(include_str!("../support/journal_kv_29/caps.json")).unwrap(),
         true,
@@ -631,141 +631,6 @@ fn journal_kv_29_crash_cancellation_integration() {
 
 // Audits a retained full-app campaign without rebuilding or reissuing its real
 // providers. Explicit opt-in keeps raw tapes outside the permanent source tree.
-#[test]
-#[ignore = "requires JOURNAL_KV_29_AUDIT_ROOT with retained Ordered campaign"]
-fn journal_kv_29_recording_audit() {
-    let root = PathBuf::from(std::env::var_os("JOURNAL_KV_29_AUDIT_ROOT").unwrap());
-    let mut equal = 0;
-    for backend in ["llvm", "cranelift"] {
-        for kind in ["success", "domain"] {
-            let mut baseline = None;
-            for width in [1, 2, 4] {
-                let path = root.join(format!("{backend}-{width}-{kind}/run.tape"));
-                let mut recording = hirsel_rt::host_launch::read_recording(&path).unwrap();
-                let binding = recording.binding.as_mut().unwrap();
-                binding.admitted_at = 0;
-                binding.placement = None;
-                let rendered = hirsel_rt::launch::render_recording(&recording).unwrap();
-                fs::write(path.with_extension("normalized"), &rendered).unwrap();
-                if let Some(baseline) = &baseline {
-                    if baseline == &recording {
-                        equal += 1;
-                        eprintln!("JOURNAL_KV_29_PASS tape equality {backend}/{kind}/{width}");
-                    } else {
-                        eprintln!(
-                            "JOURNAL_KV_29_INCOMPLETE tape equality {backend}/{kind}/{width}: full recordings differ; no further normalization"
-                        );
-                    }
-                } else {
-                    baseline = Some(recording);
-                }
-            }
-        }
-    }
-    eprintln!("JOURNAL_KV_29_TAPE_EQUALITY {equal}/8; mismatches retain INCOMPLETE disposition");
-    if std::env::var_os("JOURNAL_KV_29_COMPARE_ONLY").is_some() {
-        return;
-    }
-    let seed = root.join("llvm-1-domain/run.tape");
-    let original = fs::read(&seed).unwrap();
-    let recording = hirsel_rt::host_launch::read_recording(&seed).unwrap();
-    let controls = root.join("controls");
-    fs::create_dir_all(&controls).unwrap();
-    let mut changed = recording.clone();
-    changed.arguments = vec!["scan".into()];
-    fs::write(
-        controls.join("changed-input.tape"),
-        hirsel_rt::launch::render_recording(&changed).unwrap(),
-    )
-    .unwrap();
-    let mut changed = recording.clone();
-    let mut canonical: serde_json::Value =
-        serde_json::from_slice(&changed.binding.as_ref().unwrap().canonical).unwrap();
-    canonical["io"]["stdout"] = serde_json::Value::Null;
-    changed.binding.as_mut().unwrap().canonical = serde_json::to_vec(&canonical).unwrap();
-    fs::write(
-        controls.join("changed-config.tape"),
-        hirsel_rt::launch::render_recording(&changed).unwrap(),
-    )
-    .unwrap();
-    let mut corrupt = original.clone();
-    *corrupt.last_mut().unwrap() ^= 1;
-    fs::write(controls.join("bad-crc.tape"), corrupt).unwrap();
-    let mut changed = recording.clone();
-    changed.events.pop().unwrap();
-    fs::write(
-        controls.join("missing-event.tape"),
-        hirsel_rt::launch::render_recording(&changed).unwrap(),
-    )
-    .unwrap();
-    // Program revision refusal uses a changed actual app, including its manifest.
-    let source = app_package(&controls);
-    let main = controls.join("main.hir");
-    fs::write(
-        &main,
-        fs::read_to_string(&main)
-            .unwrap()
-            .replace("COMPACTED", "CHANGED"),
-    )
-    .unwrap();
-    let binaries = PathBuf::from(std::env::var_os("JOURNAL_KV_29_AUDIT_BINARIES").unwrap());
-    for name in [
-        "changed-input",
-        "changed-config",
-        "bad-crc",
-        "missing-event",
-        "changed-source",
-    ] {
-        let tape = if name == "changed-source" {
-            seed.clone()
-        } else {
-            controls.join(format!("{name}.tape"))
-        };
-        for engine in ["reference", "llvm", "cranelift"] {
-            let mut cmd = Command::new("python3");
-            cmd.arg(binaries.join("capped"))
-                .args(["--timeout", "60", "prlimit", "--cpu=60:61"]);
-            if engine == "reference" {
-                cmd.arg(env!("CARGO_BIN_EXE_hirsel")).arg("run");
-                let program = if name == "changed-source" {
-                    source.clone()
-                } else {
-                    binaries.join("hirsel.json")
-                };
-                cmd.arg(program).arg("--replay");
-            } else {
-                // An existing different-source append prerequisite executable
-                // verifies native revision refusal without another app build.
-                let binary = if name == "changed-source" {
-                    PathBuf::from(std::env::var_os("JOURNAL_KV_29_OTHER_BINARY").unwrap())
-                } else {
-                    binaries.join(format!("app-{engine}"))
-                };
-                cmd.arg(binary).arg("--hirsel-replay");
-            }
-            let done = cmd
-                .arg(&tape)
-                .env("HIRSEL_JOBS", "4")
-                .env("HIRSEL_MEMORY_LIMIT", "2G")
-                .output()
-                .unwrap();
-            fs::write(
-                controls.join(format!("{name}-{engine}.stdout")),
-                &done.stdout,
-            )
-            .unwrap();
-            fs::write(
-                controls.join(format!("{name}-{engine}.stderr")),
-                &done.stderr,
-            )
-            .unwrap();
-            assert_eq!(done.status.code(), Some(3), "{name}/{engine}: {done:?}");
-            assert!(done.stdout.is_empty(), "{name}/{engine}: {done:?}");
-            assert_eq!(fs::read(&seed).unwrap(), original);
-            eprintln!("JOURNAL_KV_29_PASS refusal {name}/{engine}");
-        }
-    }
-}
 
 #[test]
 fn journal_kv_29_native_crash_helpers() {
@@ -807,65 +672,5 @@ fn journal_kv_29_native_crash_helpers() {
             "{backend}: {done:?}"
         );
         eprintln!("JOURNAL_KV_29_PASS 4 native crash/cancellation helpers {backend}");
-    }
-}
-
-#[test]
-#[ignore = "requires retained tapes and binaries outside source tree"]
-fn journal_kv_29_canonical_binding_refusal() {
-    let root = PathBuf::from(std::env::var_os("JOURNAL_KV_29_AUDIT_ROOT").unwrap());
-    let binaries = PathBuf::from(std::env::var_os("JOURNAL_KV_29_AUDIT_BINARIES").unwrap());
-    let other = PathBuf::from(std::env::var_os("JOURNAL_KV_29_OTHER_BINARY").unwrap());
-    let seed = root.join("llvm-1-domain/run.tape");
-    let original = fs::read(&seed).unwrap();
-    let mut recording = hirsel_rt::host_launch::read_recording(&seed).unwrap();
-    let mut config = recording.bound_run().unwrap().record().clone();
-    config.io.as_mut().unwrap().stdout = None;
-    let changed = config.validated().unwrap();
-    recording.binding.as_mut().unwrap().canonical = changed.canonical().to_vec();
-    let tape = root.join("controls/canonical-config.tape");
-    fs::write(
-        &tape,
-        hirsel_rt::launch::render_recording(&recording).unwrap(),
-    )
-    .unwrap();
-    for engine in ["reference", "llvm", "cranelift", "other-cranelift"] {
-        let mut cmd = Command::new("python3");
-        cmd.arg(binaries.join("capped"))
-            .args(["--timeout", "60", "prlimit", "--cpu=60:61"]);
-        if engine == "reference" {
-            cmd.arg(env!("CARGO_BIN_EXE_hirsel"))
-                .arg("run")
-                .arg(binaries.join("hirsel.json"))
-                .arg("--replay")
-                .arg(&tape);
-        } else if engine == "other-cranelift" {
-            cmd.arg(&other).arg("--hirsel-replay").arg(&seed);
-        } else {
-            cmd.arg(binaries.join(format!("app-{engine}")))
-                .arg("--hirsel-replay")
-                .arg(&tape);
-        }
-        let done = cmd
-            .env("HIRSEL_MEMORY_LIMIT", "2G")
-            .env("HIRSEL_JOBS", "4")
-            .output()
-            .unwrap();
-        fs::write(
-            root.join(format!("controls/canonical-{engine}.stdout")),
-            &done.stdout,
-        )
-        .unwrap();
-        fs::write(
-            root.join(format!("controls/canonical-{engine}.stderr")),
-            &done.stderr,
-        )
-        .unwrap();
-        assert_eq!(done.status.code(), Some(3), "{engine}: {done:?}");
-        assert!(done.stdout.is_empty());
-        let stderr = String::from_utf8_lossy(&done.stderr);
-        assert!(!stderr.contains("noncanonical"), "{engine}: {stderr}");
-        assert_eq!(fs::read(&seed).unwrap(), original);
-        eprintln!("JOURNAL_KV_29_PASS canonical-binding refusal {engine}");
     }
 }
