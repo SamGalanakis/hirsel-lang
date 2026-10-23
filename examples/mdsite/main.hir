@@ -1,65 +1,299 @@
-pub type AppError = Grant(GrantError) | Files(FileError) | Utf8 | Output(OutputError)
+pub type AppError = Grant(GrantError) | Files(FileError) | Utf8 | Output(OutputError) | Site(
+  model.Problem
+)
 
-fn page(title: String, take source: String) -> String {
-  let body = markdown.to_html(take source, markdown.default_options())
-  f"<!doctype html>\n<meta charset=\"utf-8\">\n<title>{html.esc(title)}</title>\n{body}"
-}
-
-fn output_name(name: String) -> String {
-  f"{name}.html"
-}
-
-fn build(d: Dir) -> Result[u64, AppError] {
-  let entries = file.list_recursive(d, path.of("content"))?
-  file.mkdir_all(d, path.of("site"))?
-  let mut index: List[u8] = []
-  text.append(
-    mut index,
-    "<!doctype html>\n<meta charset=\"utf-8\">\n<title>Index</title>\n<ul>\n"
-  )
-  let mut count = 0u64
-  for entry in entries {
-    let name = path.text(entry.path)
-    if entry.kind != Regular() || !string.ends_with(name, ".md") {
-      continue
-    }
-    // Preserve the input path under site, including .md, to avoid name collisions.
-    let destination = output_name(name)
-    let target = path.of(f"site/{destination}")
-    if let Some(parent) = path.parent(target) {
-      file.mkdir_all(d, parent)?
-    }
-    let raw = file.read_bytes(d, entry.path)?
-    let source = match string.from_bytes(unique raw) {
-      Ok(s) => take s,
-      Error(_) => return Error(Utf8()),
-    }
-    let rendered = page(name, take source)
-    file.write_bytes(d, target, string.as_bytes(rendered))?
-    let url = string.join(
-      list.map(
-        string.split(unique destination, "/"),
-        fn(s: String) -> String {
-          uri.percent_encode(string.as_bytes(s))
+fn load_pages(d: Dir, tasks: Tasks, config: model.Config, inputs: List[model.Input]) -> Result[
+  List[model.Page],
+  model.Problem
+] {
+  task.scope(
+    tasks,
+    fn(s: Scope) -> Result[List[model.Page], model.Problem] {
+      let mut pages: List[model.Page] = []
+      let mut next = 0u64
+      while next < list.len(inputs) {
+        let mut set: TaskSet[model.WorkResult[unique model.Page, unique model.Problem]] of s = task.set(
+          s
+        )
+        let mut active = 0u64
+        while next < list.len(inputs) && active < config.jobs {
+          if let Error(_) = task.check_canceled(s) {
+            task.cancel_all(s, take set)
+            return Error(Canceled())
+          }
+          let item = unique inputs[next]
+          next += 1
+          if !item.page {
+            continue
+          }
+          let handle = task.async(
+            s,
+            fn() -> model.WorkResult[unique model.Page, unique model.Problem] {
+              assets.page(d, take item)
+            }
+          )
+          task.add(s, mut set, take handle)
+          active += 1
         }
-      ),
-      "/"
+        for i in 0u64..active {
+          let work = task.await_at(s, mut set, i)
+          match model.resolve(take work) {
+            Ok(value) => list.push(mut pages, take value),
+            Error(problem) => {
+              task.cancel_all(s, take set)
+              return Error(take problem)
+            },
+          }
+        }
+        task.cancel_all(s, take set)
+      }
+      Ok(take pages)
+    }
+  )
+}
+
+fn load_assets(d: Dir, tasks: Tasks, config: model.Config, inputs: List[model.Input]) -> Result[
+  List[model.Output],
+  model.Problem
+] {
+  task.scope(
+    tasks,
+    fn(s: Scope) -> Result[List[model.Output], model.Problem] {
+      let mut outputs: List[model.Output] = []
+      let mut next = 0u64
+      while next < list.len(inputs) {
+        let mut set: TaskSet[model.WorkResult[unique model.Asset, unique model.Problem]] of s = task.set(
+          s
+        )
+        let mut active = 0u64
+        while next < list.len(inputs) && active < config.jobs {
+          if let Error(_) = task.check_canceled(s) {
+            task.cancel_all(s, take set)
+            return Error(Canceled())
+          }
+          let item = unique inputs[next]
+          next += 1
+          if item.page {
+            continue
+          }
+          let handle = task.async(
+            s,
+            fn() -> model.WorkResult[unique model.Asset, unique model.Problem] {
+              assets.load(d, take item)
+            }
+          )
+          task.add(s, mut set, take handle)
+          active += 1
+        }
+        for i in 0u64..active {
+          let work = task.await_at(s, mut set, i)
+          match model.resolve(take work) {
+            Ok(value) => list.push(mut outputs, assets.output(take value)),
+            Error(problem) => {
+              task.cancel_all(s, take set)
+              return Error(take problem)
+            },
+          }
+        }
+        task.cancel_all(s, take set)
+      }
+      Ok(take outputs)
+    }
+  )
+}
+
+// Owned page/config captures and a frozen navigation root cross E1 tasks.
+fn render_pages(
+  tasks: Tasks,
+  config: model.Config,
+  pages: List[model.Page],
+  nav: Shared[List[model.Navigation]]
+) -> Result[List[model.Output], model.Problem] {
+  task.scope(
+    tasks,
+    fn(s: Scope) -> Result[List[model.Output], model.Problem] {
+      let mut layouts: List[model.Output] = []
+      let mut next = 0u64
+      while next < list.len(pages) {
+        let mut members: TaskSet[
+          model.WorkResult[unique model.Output, unique model.Problem]
+        ] of s = task.set(s)
+        let mut active = 0u64
+        while next < list.len(pages) && active < config.jobs {
+          if let Error(_) = task.check_canceled(s) {
+            task.cancel_all(s, take members)
+            return Error(Canceled())
+          }
+          let owned_page = unique pages[next]
+          let owned_config = unique config
+          let handle = task.async(
+            s,
+            fn() -> model.WorkResult[unique model.Output, unique model.Problem] {
+              render.job(take owned_page, take owned_config, nav)
+            }
+          )
+          task.add(s, mut members, take handle)
+          next += 1
+          active += 1
+        }
+        for i in 0u64..active {
+          let work = task.await_at(s, mut members, i)
+          match model.resolve(take work) {
+            Ok(value) => list.push(mut layouts, take value),
+            Error(problem) => {
+              task.cancel_all(s, take members)
+              return Error(take problem)
+            },
+          }
+        }
+        task.cancel_all(s, take members)
+      }
+      Ok(take layouts)
+    }
+  )
+}
+
+fn run(d: Dir, tasks: Tasks, config: model.Config, plan: bool) -> Result[
+  model.Report,
+  model.Problem
+] {
+  let inputs = catalog.scan(d, config)?
+  let old = publish.previous(d, config.output)?
+  let pages = load_pages(d, tasks, config, inputs)?
+  let mut nav_rows: List[model.Navigation] = []
+  for page in pages {
+    // Legacy HTML uses source names, rather than extracted heading titles.
+    let title = if config.legacy {
+      let raw = string.as_bytes(page.destination)
+      let Ok(name) = string.from_bytes(unique bytes.slice(raw, 0, bytes.len(raw) - 5)) else {
+        return Error(Utf8())
+      }
+      take name
+    } else {
+      unique page.title
+    }
+    list.push(
+      mut nav_rows,
+      model.Navigation(destination: unique page.destination, title: take title)
     )
-    text.append(
-      mut index,
-      f"<li><a href=\"{html.esc(url)}\">{html.esc(name)}</a></li>\n"
-    )
-    count += 1
   }
-  text.append(mut index, "</ul>\n")
-  file.write_bytes(d, path.of("site/index.html"), bytes.from_list(take index))?
+  let nav = shared.freeze(take nav_rows)
+  let mut outputs = load_assets(d, tasks, config, inputs)?
+  let layouts = render_pages(tasks, config, pages, nav)?
+  for rendered in take layouts {
+    list.push(mut outputs, take rendered)
+  }
+  let index = shared.with(
+    nav,
+    fn(rows: List[model.Navigation]) -> model.Output {
+      render.index(config, rows)
+    }
+  )
+  list.push(mut outputs, take index)
+  let mut ordered = unique outputs
+  publish.order(mut ordered)
+  task.scope(
+    tasks,
+    fn(s: Scope) -> Result[model.Report, model.Problem] {
+      if let Error(_) = task.check_canceled(s) {
+        return Error(Canceled())
+      }
+      publish.write(d, config, ordered, list.len(pages), old, plan)
+    }
+  )
+}
+
+// Compatibility command retains its original HTML and avoids config/manifest work.
+fn build(d: Dir) -> Result[u64, AppError] {
+  let config = model.defaults()
+  let inputs = catalog.scan(d, config) ? Site
+  let mut links: List[model.Navigation] = []
+  let mut outputs: List[(String, String)] = []
+  let mut total = 0u64
+  for item in inputs {
+    let raw = assets.read(d, item.source, item.size) ? Site
+    let Ok(source) = string.from_bytes(take raw) else {
+      return Error(Utf8())
+    }
+    let rendered = render.page(item.source, take source)
+    if string.byte_len(rendered) > model.OUTPUT_BYTES - total {
+      return Error(Site(Limit("output_bytes")))
+    }
+    total += string.byte_len(rendered)
+    list.push(mut outputs, (unique item.destination, take rendered))
+    list.push(
+      mut links,
+      model.Navigation(destination: unique item.destination, title: unique item.source)
+    )
+  }
+  let count = list.len(links)
+  let index = render.legacy_index(links)
+  if string.byte_len(index) > model.OUTPUT_BYTES - total {
+    return Error(Site(Limit("output_bytes")))
+  }
+  for (target_name, _) in outputs {
+    assets.check_path(d, f"site/{target_name}") ? Site
+  }
+  assets.check_path(d, "site/index.html") ? Site
+  for (name, body) in outputs {
+    publish.atomic(d, f"site/{name}", string.as_bytes(body)) ? Site
+  }
+  publish.atomic(d, "site/index.html", string.as_bytes(index)) ? Site
   Ok(count)
 }
 
-pub fn main(rt: Io) -> Result[(), AppError] {
-  let n = build(io.dir(rt, path.of("data"))?)?
-  out.print(io.stdout(rt)?, f"rendered {n} pages\n")?
-  Ok(())
+pub fn main(rt: Io, args: Args) -> Result[std@1/process.ExitCode, AppError] {
+  let output = io.stdout(rt)?
+  let d = io.dir(rt, path.of("data"))?
+  if arg.len(args) == 0 {
+    let n = build(d)?
+    out.print(output, f"rendered {n} pages\n")?
+    return Ok(std@1/process.SUCCESS)
+  }
+  let tasks = io.tasks(rt)?
+  if arg.len(args) != 2 {
+    out.print(output, "usage: mdsite [plan|build SITE.toml]\n")?
+    return Ok(std@1/process.exit_code(2u8))
+  }
+  let Ok(command) = arg.text(args, 0) else {
+    return Ok(std@1/process.exit_code(2u8))
+  }
+  let Ok(name) = arg.text(args, 1) else {
+    return Ok(std@1/process.exit_code(2u8))
+  }
+  if command != "plan" && command != "build" || !model.safe_path(name) {
+    return Ok(std@1/process.exit_code(2u8))
+  }
+  let decoded = read_config(d, name)
+  let outcome = match take decoded {
+    Ok(config) => run(d, tasks, config, command == "plan"),
+    Error(error) => Error(take error),
+  }
+  match take outcome {
+    Ok(report) => {
+      out.print(
+        output,
+        f"pages {report.pages}; write {report.written}; skip {report.skipped}\n"
+      )?
+      for stale_path in report.stale {
+        out.print(output, f"stale {stale_path}\n")?
+      }
+      Ok(std@1/process.SUCCESS)
+    },
+    Error(problem) => {
+      out.print(output, f"site error: {model.describe(problem)}\n")?
+      Ok(std@1/process.exit_code(2u8))
+    },
+  }
+}
+
+fn read_config(d: Dir, name: String) -> Result[model.Config, model.Problem] {
+  let data = assets.read(d, name, model.CONFIG_BYTES)?
+  let config = model.decode(take data)?
+  if model.overlaps(name, config.output) {
+    return Error(model.invalid("config_output_overlap"))
+  }
+  Ok(take config)
 }
 
 @test
@@ -67,14 +301,14 @@ fn escaping(t: Test) {
   test.check(
     t,
     string.contains(
-      page("<name>&", "# Sheep & goats"),
+      render.page("<name>&", "# Sheep & goats"),
       "<title>&lt;name&gt;&amp;</title>"
     )
   )
   test.check(
     t,
     string.contains(
-      page("x", "<b>trusted</b>"),
+      render.page("x", "<b>trusted</b>"),
       "<!-- raw HTML omitted -->trusted<!-- raw HTML omitted -->"
     )
   )
@@ -102,7 +336,7 @@ fn nested(t: Test) -> Result[(), AppError] {
   test.check(
     t,
     file.read_bytes(d, path.of("site/content/sub/b.md.html")) == Ok(
-      string.as_bytes(page("content/sub/b.md", "**B**"))
+      string.as_bytes(render.page("content/sub/b.md", "**B**"))
     )
   )
   Ok(())

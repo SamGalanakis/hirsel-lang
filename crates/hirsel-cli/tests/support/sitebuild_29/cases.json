@@ -1,0 +1,188 @@
+[
+  {
+    "id": "nested-three",
+    "files": {
+      "content/a.md": "# A",
+      "content/sub/b.md": "**B**",
+      "content/a & b.md": "# <name>&",
+      "assets/style.css": "body {}"
+    },
+    "exit": 0,
+    "stdout": "pages 3; write 5; skip 0\n",
+    "outputs": {
+      "content/a & b.md.html": "<!doctype html>\n<meta charset=\"utf-8\">\n<title>&lt;name&gt;&amp; | Site &amp; sheep</title>\n<nav><ul>\n<li><a href=\"../content/a%20%26%20b.md.html\">&lt;name&gt;&amp;</a></li>\n<li><a href=\"../content/a.md.html\">A</a></li>\n<li><a href=\"../content/sub/b.md.html\">content/sub/b.md</a></li>\n</ul></nav>\n<main>\n<h1><!-- raw HTML omitted -->&amp;</h1>\n</main>\n",
+      "content/a.md.html": "<!doctype html>\n<meta charset=\"utf-8\">\n<title>A | Site &amp; sheep</title>\n<nav><ul>\n<li><a href=\"../content/a%20%26%20b.md.html\">&lt;name&gt;&amp;</a></li>\n<li><a href=\"../content/a.md.html\">A</a></li>\n<li><a href=\"../content/sub/b.md.html\">content/sub/b.md</a></li>\n</ul></nav>\n<main>\n<h1>A</h1>\n</main>\n",
+      "content/sub/b.md.html": "<!doctype html>\n<meta charset=\"utf-8\">\n<title>content/sub/b.md | Site &amp; sheep</title>\n<nav><ul>\n<li><a href=\"../../content/a%20%26%20b.md.html\">&lt;name&gt;&amp;</a></li>\n<li><a href=\"../../content/a.md.html\">A</a></li>\n<li><a href=\"../../content/sub/b.md.html\">content/sub/b.md</a></li>\n</ul></nav>\n<main>\n<p><strong>B</strong></p>\n</main>\n",
+      "index.html": "<!doctype html>\n<meta charset=\"utf-8\">\n<title>Site &amp; sheep</title>\n<ul>\n<li><a href=\"content/a%20%26%20b.md.html\">&lt;name&gt;&amp;</a></li>\n<li><a href=\"content/a.md.html\">A</a></li>\n<li><a href=\"content/sub/b.md.html\">content/sub/b.md</a></li>\n</ul>\n",
+      "style.css": "body {}"
+    }
+  },
+  {
+    "id": "empty",
+    "files": {},
+    "exit": 0,
+    "stdout": "pages 0; write 1; skip 0\n",
+    "outputs": {
+      "index.html": "<!doctype html>\n<meta charset=\"utf-8\">\n<title>Site &amp; sheep</title>\n<ul>\n</ul>\n"
+    }
+  },
+  {
+    "id": "unsafe-markdown",
+    "files": {
+      "content/a.md": "<b>trusted</b>\n\n[x](javascript:evil)"
+    },
+    "exit": 0,
+    "stdout": "pages 1; write 2; skip 0\n",
+    "outputs": {
+      "content/a.md.html": "<!doctype html>\n<meta charset=\"utf-8\">\n<title>content/a.md | Site &amp; sheep</title>\n<nav><ul>\n<li><a href=\"../content/a.md.html\">content/a.md</a></li>\n</ul></nav>\n<main>\n<p><!-- raw HTML omitted -->trusted<!-- raw HTML omitted --></p>\n<p><a>x</a></p>\n</main>\n",
+      "index.html": "<!doctype html>\n<meta charset=\"utf-8\">\n<title>Site &amp; sheep</title>\n<ul>\n<li><a href=\"content/a.md.html\">content/a.md</a></li>\n</ul>\n"
+    }
+  },
+  {
+    "id": "collision",
+    "files": {
+      "content/a.md": "# A",
+      "assets/content/a.md.html": "collision"
+    },
+    "exit": 2,
+    "error": "output_collision"
+  },
+  {
+    "id": "invalid-utf8",
+    "files": {
+      "content/a.md": [
+        255
+      ]
+    },
+    "exit": 2,
+    "error": "Utf8"
+  },
+  {
+    "id": "missing-assets",
+    "files": {},
+    "missing_assets": true,
+    "exit": 2,
+    "error": "NotFound"
+  },
+  {
+    "id": "denied-output",
+    "files": {
+      "content/a.md": "# A"
+    },
+    "read_only": true,
+    "exit": 2,
+    "error": "NotGranted"
+  },
+  {
+    "id": "cancel-before-publication",
+    "files": {
+      "content/a.md": "# A"
+    },
+    "cancel": true,
+    "exit": 2,
+    "error": "Canceled"
+  },
+  {
+    "id": "jobs-0",
+    "files": {},
+    "jobs": 0,
+    "exit": 2,
+    "error": "jobs"
+  },
+  {
+    "id": "jobs-5",
+    "files": {},
+    "jobs": 5,
+    "exit": 2,
+    "error": "jobs"
+  },
+  {
+    "id": "overlap",
+    "files": {},
+    "output": "content/site",
+    "exit": 2,
+    "error": "overlapping_roots"
+  },
+  {
+    "id": "plan",
+    "files": {
+      "content/a.md": "# A"
+    },
+    "command": "plan",
+    "exit": 0,
+    "stdout": "pages 1; write 2; skip 0\n"
+  },
+  {
+    "id": "commonmark",
+    "files": {
+      "content/a.md": "<https://foo.bar.baz/test?q=hello&id=22&boolean>"
+    },
+    "exit": 0,
+    "stdout": "pages 1; write 2; skip 0\n",
+    "outputs": {
+      "content/a.md.html": "<!doctype html>\n<meta charset=\"utf-8\">\n<title>content/a.md | Site &amp; sheep</title>\n<nav><ul>\n<li><a href=\"../content/a.md.html\">content/a.md</a></li>\n</ul></nav>\n<main>\n<p><a href=\"https://foo.bar.baz/test?q=hello&amp;id=22&amp;boolean\">https://foo.bar.baz/test?q=hello&amp;id=22&amp;boolean</a></p>\n</main>\n",
+      "index.html": "<!doctype html>\n<meta charset=\"utf-8\">\n<title>Site &amp; sheep</title>\n<ul>\n<li><a href=\"content/a.md.html\">content/a.md</a></li>\n</ul>\n"
+    }
+  },
+  {
+    "id": "jobs-1",
+    "files": {},
+    "exit": 0,
+    "stdout": "pages 0; write 1; skip 0\n",
+    "outputs": {
+      "index.html": "<!doctype html>\n<meta charset=\"utf-8\">\n<title>Site &amp; sheep</title>\n<ul>\n</ul>\n"
+    },
+    "jobs": 1
+  },
+  {
+    "id": "cancel-atomic",
+    "files": {},
+    "exit": 2,
+    "error": "Canceled",
+    "fault": "cancel"
+  },
+  {
+    "id": "failed-atomic",
+    "files": {},
+    "exit": 2,
+    "error": "PermissionDenied",
+    "fault": "permission"
+  },
+  {
+    "id": "go-walk-tree",
+    "files": {
+      "assets/a": "a",
+      "assets/c": "c",
+      "assets/d/x": "x",
+      "assets/d/z/u": "u",
+      "assets/d/z/v": "v"
+    },
+    "directories": [
+      "assets/b",
+      "assets/d/y"
+    ],
+    "exit": 0,
+    "stdout": "pages 0; write 6; skip 0\n",
+    "outputs": {
+      "a": "a",
+      "c": "c",
+      "d/x": "x",
+      "d/z/u": "u",
+      "d/z/v": "v",
+      "index.html": "<!doctype html>\n<meta charset=\"utf-8\">\n<title>Site &amp; sheep</title>\n<ul>\n</ul>\n"
+    }
+  },
+  {
+    "id": "legacy",
+    "legacy": true,
+    "files": {
+      "content/a.md": "# A"
+    },
+    "exit": 0,
+    "stdout": "rendered 1 pages\n",
+    "outputs": {
+      "content/a.md.html": "<!doctype html>\n<meta charset=\"utf-8\">\n<title>content/a.md</title>\n<h1>A</h1>\n",
+      "index.html": "<!doctype html>\n<meta charset=\"utf-8\">\n<title>Index</title>\n<ul>\n<li><a href=\"content/a.md.html\">content/a.md</a></li>\n</ul>\n"
+    }
+  }
+]

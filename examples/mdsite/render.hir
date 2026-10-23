@@ -1,0 +1,128 @@
+// The renderer remains std.markdown (CommonMark.js BSD-2-Clause port).
+// Layout holes use std.html; URI segments use the original percent-encode policy.
+pub fn page(title: String, take source: String) -> String uses {} {
+  let body = markdown.to_html(take source, markdown.default_options())
+  f"<!doctype html>\n<meta charset=\"utf-8\">\n<title>{html.esc(title)}</title>\n{body}"
+}
+
+pub fn url(name: String) -> String uses {} {
+  string.join(
+    list.map(
+      string.split(unique name, "/"),
+      fn(s: String) -> String {
+        uri.percent_encode(string.as_bytes(s))
+      }
+    ),
+    "/"
+  )
+}
+
+fn prefix(destination: String) -> String uses {} {
+  let mut out: List[u8] = []
+  let parts = path.components(path.of(destination))
+  for _ in 1u64..list.len(parts) {
+    text.append(mut out, "../")
+  }
+  text.finish_valid(take out)
+}
+
+pub fn navigation(rows: List[model.Navigation], destination: String) -> String uses {} {
+  let base = prefix(destination)
+  let mut out: List[u8] = []
+  text.append(mut out, "<nav><ul>\n")
+  for row in rows {
+    let link = f"{base}{url(row.destination)}"
+    text.append(
+      mut out,
+      f"<li><a href=\"{html.esc(link)}\">{html.esc(row.title)}</a></li>\n"
+    )
+  }
+  text.append(mut out, "</ul></nav>\n")
+  text.finish_valid(take out)
+}
+
+pub fn output(destination: String, input_hash: String, take body: String) -> model.Output uses {} {
+  let data = string.as_bytes(body)
+  model.Output(
+    destination: unique destination,
+    input_hash: unique input_hash,
+    output_hash: sha256.digest_hex(data),
+    bytes: unique data
+  )
+}
+
+pub fn layout(item: model.Page, config: model.Config, rows: List[model.Navigation]) -> Result[
+  model.Output,
+  model.Problem
+] uses {} {
+  // The input cap bounds renderer work; exact output bytes are checked before publication.
+  if string.byte_len(item.source) > model.PAGE_BYTES {
+    return Error(Limit("page_bytes"))
+  }
+  let body = if config.legacy {
+    let raw = string.as_bytes(item.destination)
+    let Ok(title) = string.from_bytes(unique bytes.slice(raw, 0, bytes.len(raw) - 5)) else {
+      return Error(Utf8())
+    }
+    render.page(title, unique item.source)
+  } else {
+    let content = markdown.to_html(unique item.source, markdown.default_options())
+    let nav = navigation(rows, item.destination)
+    f"<!doctype html>\n<meta charset=\"utf-8\">\n<title>{html.esc(item.title)} | {html.esc(
+      config.title
+    )}</title>\n{nav}<main>\n{content}</main>\n"
+  }
+  Ok(output(item.destination, item.digest, take body))
+}
+
+pub fn index(config: model.Config, rows: List[model.Navigation]) -> model.Output uses {} {
+  let mut out: List[u8] = []
+  text.append(
+    mut out,
+    f"<!doctype html>\n<meta charset=\"utf-8\">\n<title>{html.esc(config.title)}</title>\n<ul>\n"
+  )
+  for row in rows {
+    text.append(
+      mut out,
+      f"<li><a href=\"{html.esc(url(row.destination))}\">{html.esc(row.title)}</a></li>\n"
+    )
+  }
+  text.append(mut out, "</ul>\n")
+  output("index.html", config.digest, text.finish_valid(take out))
+}
+
+// Taking the captured owners happens outside the borrowing Shared callback.
+pub fn job(
+  take item: unique model.Page,
+  take config: unique model.Config,
+  nav: Shared[List[model.Navigation]]
+) -> model.WorkResult[unique model.Output, unique model.Problem] {
+  shared.with(
+    nav,
+    fn(links: List[model.Navigation]) -> model.WorkResult[
+      unique model.Output,
+      unique model.Problem
+    ] {
+      match layout(item, config, links) {
+        Ok(value) => Done(unique value),
+        Error(problem) => Failed(unique problem),
+      }
+    }
+  )
+}
+
+pub fn legacy_index(rows: List[model.Navigation]) -> String uses {} {
+  let mut out: List[u8] = []
+  text.append(
+    mut out,
+    "<!doctype html>\n<meta charset=\"utf-8\">\n<title>Index</title>\n<ul>\n"
+  )
+  for row in rows {
+    text.append(
+      mut out,
+      f"<li><a href=\"{html.esc(url(row.destination))}\">{html.esc(row.title)}</a></li>\n"
+    )
+  }
+  text.append(mut out, "</ul>\n")
+  text.finish_valid(take out)
+}

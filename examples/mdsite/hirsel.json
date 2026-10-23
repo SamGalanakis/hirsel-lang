@@ -12,6 +12,36 @@
     {
       "path": "main.hir",
       "module": []
+    },
+    {
+      "path": "catalog.hir",
+      "module": [
+        "catalog"
+      ]
+    },
+    {
+      "path": "render.hir",
+      "module": [
+        "render"
+      ]
+    },
+    {
+      "path": "assets.hir",
+      "module": [
+        "assets"
+      ]
+    },
+    {
+      "path": "publish.hir",
+      "module": [
+        "publish"
+      ]
+    },
+    {
+      "path": "model.hir",
+      "module": [
+        "model"
+      ]
     }
   ],
   "dependencies": [

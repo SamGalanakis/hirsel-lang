@@ -1,0 +1,22 @@
+{
+  "io": {
+    "stdout": "stdout.bytes@1",
+    "dirs": [
+      {
+        "path": "data",
+        "host": "data",
+        "access": "read_write"
+      }
+    ],
+    "tasks": "tasks.cooperative@1"
+  },
+  "args": [
+    "build",
+    "site.toml"
+  ],
+  "placement": {
+    "cores": 1,
+    "commit": "shared",
+    "reorder": "off"
+  }
+}

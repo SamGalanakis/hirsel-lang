@@ -1,0 +1,227 @@
+// Application policy is data; modules receive explicit capabilities separately.
+pub const ITEMS: u64 = 64
+
+pub const PAGE_BYTES: u64 = 65536
+
+pub const INPUT_BYTES: u64 = 1048576
+
+pub const OUTPUT_BYTES: u64 = 2097152
+
+pub const CONFIG_BYTES: u64 = 4096
+
+pub const MANIFEST: String = ".mdsite.json"
+
+pub type Problem = Invalid(String) | Limit(String) | Files(FileError) | Utf8 | Canceled
+
+pub type Config {
+  content: String,
+  assets: String,
+  output: String,
+  title: String,
+  jobs: u64,
+  legacy: bool,
+  input_bytes: u64,
+  digest: String,
+}
+
+pub type Input {
+  source: String,
+  destination: String,
+  size: u64,
+  page: bool,
+}
+
+pub type Page {
+  destination: String,
+  title: String,
+  source: String,
+  digest: String,
+}
+
+pub type Asset {
+  destination: String,
+  bytes: Bytes,
+  digest: String,
+}
+
+pub type Navigation {
+  destination: String,
+  title: String,
+}
+
+// Both page and asset workers use this seam: the coordinator owns every result.
+pub type WorkResult[T, E] = Done(T) | Failed(E)
+
+pub fn resolve[T, E](take work: WorkResult[T, E]) -> Result[T, E] {
+  match take work {
+    Done(value) => Ok(take value),
+    Failed(error) => Error(take error),
+  }
+}
+
+pub type Output {
+  destination: String,
+  bytes: Bytes,
+  input_hash: String,
+  output_hash: String,
+}
+
+pub type Receipt {
+  path: String,
+  input_hash: String,
+  output_hash: String,
+}
+
+pub type Report {
+  pages: u64,
+  written: u64,
+  skipped: u64,
+  stale: List[String],
+}
+
+pub fn defaults() -> Config uses {} {
+  Config(
+    content: "content",
+    assets: "",
+    output: "site",
+    title: "Index",
+    jobs: 1,
+    legacy: true,
+    input_bytes: 0,
+    digest: "legacy-v1"
+  )
+}
+
+pub fn invalid(message: String) -> Problem uses {} {
+  Invalid(unique message)
+}
+
+// Canonical lexical roots avoid normalization aliases and manifest delimiters.
+pub fn safe_path(value: String) -> bool uses {} {
+  if value == "" || value == "." || string.byte_len(value) > 256 {
+    return false
+  }
+  if string.starts_with(value, "/") || list.len(path.components(path.of(value))) > 8 {
+    return false
+  }
+  for part in path.components(path.of(value)) {
+    if part == ".." || part == "." {
+      return false
+    }
+  }
+  for b in string.as_bytes(value) {
+    if b < 32 || b == 127 || b == b'\\' {
+      return false
+    }
+  }
+  match path.normalize(path.of(value)) {
+    Ok(normal) => path.text(normal) == value,
+    Error(_) => false,
+  }
+}
+
+pub fn overlaps(a: String, b: String) -> bool uses {} {
+  a == b || string.starts_with(a, f"{b}/") || string.starts_with(b, f"{a}/")
+}
+
+pub fn validate(config: Config) -> Result[(), Problem] uses {} {
+  if !safe_path(config.content) || !safe_path(config.output) || !config.legacy && !safe_path(
+    config.assets
+  ) {
+    return Error(invalid("roots"))
+  }
+  if overlaps(config.content, config.output) || !config.legacy && (overlaps(
+    config.assets,
+    config.output
+  ) || overlaps(config.assets, config.content)) {
+    return Error(invalid("overlapping_roots"))
+  }
+  if !safe_path(f"{config.output}/index.html") || !safe_path(
+    f"{config.output}/{MANIFEST}"
+  ) {
+    return Error(Limit("output_path"))
+  }
+  if config.jobs < 1 || config.jobs > 4 {
+    return Error(invalid("jobs"))
+  }
+  if string.byte_len(config.title) > 256 {
+    return Error(Limit("title"))
+  }
+  Ok(())
+}
+
+fn field(fields: Map[String, toml.Value], name: String) -> Result[String, Problem] uses {} {
+  let Some(Text(value)) = map.get(fields, name) else {
+    return Error(invalid(name))
+  }
+  Ok(unique value)
+}
+
+pub fn decode(take data: Bytes) -> Result[Config, Problem] uses {} {
+  if bytes.len(data) > CONFIG_BYTES {
+    return Error(Limit("config"))
+  }
+  let input_size = bytes.len(data)
+  let digest = sha256.digest_hex(data)
+  let Ok(source) = string.from_bytes(take data) else {
+    return Error(Utf8())
+  }
+  let Ok(Table(fields)) = toml.parse(take source) else {
+    return Error(invalid("toml"))
+  }
+  if map.len(fields) != 5 {
+    return Error(invalid("config_fields"))
+  }
+  let Some(Integer(jobs)) = map.get(fields, "jobs") else {
+    return Error(invalid("jobs"))
+  }
+  if jobs < 1 || jobs > 4 {
+    return Error(invalid("jobs"))
+  }
+  let config = Config(
+    content: field(fields, "content")?,
+    assets: field(fields, "assets")?,
+    output: field(fields, "output")?,
+    title: field(fields, "title")?,
+    jobs: if jobs == 1 {
+      1u64
+    } else if jobs == 2 {
+      2u64
+    } else if jobs == 3 {
+      3u64
+    } else {
+      4u64
+    },
+    legacy: false,
+    input_bytes: input_size,
+    digest: take digest
+  )
+  validate(config)?
+  Ok(take config)
+}
+
+pub fn describe(problem: Problem) -> String uses {} {
+  match problem {
+    Invalid(reason) => f"invalid {reason}",
+    Limit(reason) => f"resource limit {reason}",
+    Utf8() => "Utf8",
+    Canceled() => "Canceled",
+    Files(error) => match error {
+      NotFound() => "NotFound",
+      NotGranted() => "NotGranted",
+      Canceled(_) => "Canceled",
+      PermissionDenied() => "PermissionDenied",
+      _ => "file error",
+    },
+  }
+}
+
+pub fn asset_output(take asset: Asset) -> Output uses {} {
+  let Asset(destination: name, bytes: data, digest: checksum) = take asset
+  Output(
+    destination: take name,
+    bytes: take data,
+    input_hash: unique checksum,
+    output_hash: take checksum
+  )
+}

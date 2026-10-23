@@ -1,0 +1,152 @@
+// Go filepath.walkDir path.go:319-346, ebe2feef (BSD-3-Clause).
+// Sorted direct children, visit before descent, propagate the first error.
+// An explicit bounded stack replaces recursion; symlinks are rejected.
+fn discover(
+  d: Dir,
+  root: String,
+  pages: bool,
+  mut out: List[model.Input],
+  mut total: u64
+) -> Result[(), model.Problem] {
+  assets.check_path(d, root)?
+  let meta = file.metadata(d, path.of(root)) ? Files
+  if meta.kind != Directory() {
+    return Error(model.invalid("input_directory"))
+  }
+  let mut pending: List[String] = [unique root]
+  let mut visited = 0u64
+  while let Some(current) = list.pop(mut pending) {
+    // Current API materializes one directory before its length can be checked.
+    let children = file.read_dir(d, path.of(current)) ? Files
+    if list.len(children) > model.ITEMS {
+      return Error(Limit("directory_entries"))
+    }
+    for entry in children {
+      visited += 1
+      if visited > 128 {
+        return Error(Limit("tree_entries"))
+      }
+      let name = path.text(entry.path)
+      if !model.safe_path(name) {
+        return Error(Limit("path"))
+      }
+      match entry.kind {
+        Directory() => {
+          if list.len(pending) >= model.ITEMS {
+            return Error(Limit("directories"))
+          }
+          list.push(mut pending, unique name)
+        },
+        Regular() => {
+          if pages && !string.ends_with(name, ".md") {
+            continue
+          }
+          if list.len(out) >= model.ITEMS {
+            return Error(Limit("items"))
+          }
+          let info = file.metadata(d, entry.path) ? Files
+          if info.kind != Regular() {
+            return Error(model.invalid("input_changed_kind"))
+          }
+          if info.size > model.PAGE_BYTES {
+            return Error(Limit("page_bytes"))
+          }
+          if info.size > model.INPUT_BYTES - total {
+            return Error(Limit("input_bytes"))
+          }
+          total += info.size
+          let destination = if pages {
+            f"{name}.html"
+          } else {
+            let at = string.byte_len(root) + 1
+            let data = string.as_bytes(name)
+            let Ok(relative) = string.from_bytes(
+              unique bytes.slice(data, at, bytes.len(data))
+            ) else {
+              return Error(Utf8())
+            }
+            take relative
+          }
+          if !model.safe_path(destination) {
+            return Error(Limit("output_path"))
+          }
+          list.push(
+            mut out,
+            model.Input(
+              source: unique name,
+              destination: take destination,
+              size: info.size,
+              page: pages
+            )
+          )
+        },
+        _ => return Error(model.invalid("symlink_or_special_input")),
+      }
+    }
+  }
+  Ok(())
+}
+
+@noalloc
+fn compare(a: model.Input, b: model.Input) -> i32 uses {} {
+  string.compare(a.destination, b.destination)
+}
+
+pub fn scan(d: Dir, config: model.Config) -> Result[List[model.Input], model.Problem] {
+  model.validate(config)?
+  let mut inputs: List[model.Input] = []
+  let mut total = config.input_bytes
+  discover(d, config.content, true, mut inputs, mut total)?
+  if !config.legacy {
+    discover(d, config.assets, false, mut inputs, mut total)?
+  }
+  let mut sorted = unique inputs
+  list.sort(mut sorted, compare)
+  let mut names: Map[String, bool] = map.empty()
+  map.insert(mut names, "index.html", true)
+  map.insert(mut names, unique model.MANIFEST, true)
+  for item in sorted {
+    if !model.safe_path(f"{config.output}/{item.destination}") {
+      return Error(Limit("output_path"))
+    }
+    if map.contains(names, item.destination) {
+      return Error(model.invalid("output_collision"))
+    }
+    // File/directory prefix collisions also prevent publication.
+    for other in sorted {
+      if item.destination != other.destination && model.overlaps(
+        item.destination,
+        other.destination
+      ) {
+        return Error(model.invalid("output_prefix_collision"))
+      }
+    }
+    if model.overlaps(item.destination, "index.html") || model.overlaps(
+      item.destination,
+      model.MANIFEST
+    ) {
+      return Error(model.invalid("reserved_output"))
+    }
+    map.insert(mut names, unique item.destination, true)
+  }
+  Ok(take sorted)
+}
+
+pub fn title(source: String, fallback: String) -> Result[String, model.Problem] uses {} {
+  // Read only a bounded first line; do not split/copy every line of the page.
+  let data = string.as_bytes(source)
+  if bytes.len(data) >= 2 && data[0] == b'#' && data[1] == b' ' {
+    let mut end = 2u64
+    while end < bytes.len(data) && data[end] != b'\n' && data[end] != b'\r' {
+      if end - 2 >= 256 {
+        return Error(Limit("page_title"))
+      }
+      end += 1
+    }
+    let Ok(heading) = string.from_bytes(unique bytes.slice(data, 2, end)) else {
+      return Error(Utf8())
+    }
+    return Ok(take heading)
+  }
+  Ok(unique fallback)
+}

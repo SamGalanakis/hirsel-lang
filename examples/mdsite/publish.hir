@@ -1,0 +1,190 @@
+// Version 1 JSON manifest: config hash and path-keyed input/output SHA-256 pairs.
+// A durable application format, not a grant or a claim of multi-file atomicity.
+fn digest(value: String) -> bool uses {} {
+  if string.byte_len(value) != 64 {
+    return false
+  }
+  for b in string.as_bytes(value) {
+    if !(b >= b'0' && b <= b'9' || b >= b'a' && b <= b'f') {
+      return false
+    }
+  }
+  true
+}
+
+pub fn previous(d: Dir, root: String) -> Result[
+  Map[String, model.Receipt],
+  model.Problem
+] {
+  let manifest_path = f"{root}/{model.MANIFEST}"
+  assets.check_path(d, manifest_path)?
+  match file.metadata(d, path.of(manifest_path)) {
+    Error(NotFound()) => return Ok(map.empty()),
+    Error(e) => return Error(Files(e)),
+    Ok(meta) => {
+      if meta.kind != Regular() || meta.size > 32768 {
+        return Error(model.invalid("manifest_size"))
+      }
+    },
+  }
+  let raw = assets.read(d, manifest_path, 32768)?
+  let Ok(source) = string.from_bytes(take raw) else {
+    return Error(Utf8())
+  }
+  let Ok(Object(fields)) = json.parse(take source) else {
+    return Error(model.invalid("manifest_json"))
+  }
+  if map.len(fields) != 3 || map.get(fields, "version") != Some(Number("1")) {
+    return Error(model.invalid("manifest_version"))
+  }
+  let Some(Text(config)) = map.get(fields, "config") else {
+    return Error(model.invalid("manifest_config"))
+  }
+  if config != "legacy-v1" && !digest(config) {
+    return Error(model.invalid("manifest_config_hash"))
+  }
+  let Some(Object(entries)) = map.get(fields, "files") else {
+    return Error(model.invalid("manifest_files"))
+  }
+  if map.len(entries) > model.ITEMS + 1 {
+    return Error(Limit("manifest_items"))
+  }
+  let mut out: Map[String, model.Receipt] = map.empty()
+  for (name, value) in entries {
+    if !model.safe_path(name) || name == model.MANIFEST {
+      return Error(model.invalid("manifest_path"))
+    }
+    let Object(hashes) = value else {
+      return Error(model.invalid("manifest_entry"))
+    }
+    if map.len(hashes) != 2 {
+      return Error(model.invalid("manifest_fields"))
+    }
+    let Some(Text(input)) = map.get(hashes, "input") else {
+      return Error(model.invalid("manifest_input"))
+    }
+    let Some(Text(output)) = map.get(hashes, "output") else {
+      return Error(model.invalid("manifest_output"))
+    }
+    if !digest(output) || input != "legacy-v1" && !digest(input) {
+      return Error(model.invalid("manifest_hash"))
+    }
+    map.insert(
+      mut out,
+      unique name,
+      model.Receipt(
+        path: unique name,
+        input_hash: unique input,
+        output_hash: unique output
+      )
+    )
+  }
+  Ok(take out)
+}
+
+pub fn manifest(config: model.Config, outputs: List[model.Output]) -> Result[
+  Bytes,
+  model.Problem
+] uses {} {
+  let mut entries: Map[String, json.Value] = map.empty()
+  for output in outputs {
+    let mut hashes: Map[String, json.Value] = map.empty()
+    map.insert(mut hashes, "input", Text(unique output.input_hash))
+    map.insert(mut hashes, "output", Text(unique output.output_hash))
+    map.insert(mut entries, unique output.destination, Object(take hashes))
+  }
+  let mut fields: Map[String, json.Value] = map.empty()
+  map.insert(mut fields, "version", Number("1"))
+  map.insert(mut fields, "config", Text(unique config.digest))
+  map.insert(mut fields, "files", Object(take entries))
+  let Ok(source) = json.stringify(Object(take fields)) else {
+    return Error(model.invalid("manifest_encode"))
+  }
+  Ok(unique string.as_bytes(source))
+}
+
+pub fn atomic(d: Dir, target: String, data: Bytes) -> Result[(), model.Problem] {
+  if let Some(parent) = path.parent(path.of(target)) {
+    file.mkdir_all(d, parent) ? Files
+  }
+  let mut temporary = file.create_atomic(d, path.of(target)) ? Files
+  file.write_all(d, mut temporary, data) ? Files
+  file.commit(d, take temporary) ? Files
+  Ok(())
+}
+
+@noalloc
+fn compare(a: model.Output, b: model.Output) -> i32 uses {} {
+  string.compare(a.destination, b.destination)
+}
+
+pub fn order(mut outputs: unique List[model.Output]) -> () uses {} {
+  list.sort(mut outputs, compare)
+}
+
+pub fn write(
+  d: Dir,
+  config: model.Config,
+  outputs: List[model.Output],
+  pages: u64,
+  old: Map[String, model.Receipt],
+  plan: bool
+) -> Result[model.Report, model.Problem] {
+  // Check every existing target ancestor before the first mutation.
+  assets.check_path(d, config.output)?
+  for candidate in outputs {
+    assets.check_path(d, f"{config.output}/{candidate.destination}")?
+  }
+  let encoded = manifest(config, outputs)?
+  let mut total = bytes.len(encoded)
+  for output in outputs {
+    if bytes.len(output.bytes) > model.OUTPUT_BYTES - total {
+      return Error(Limit("output_bytes"))
+    }
+    total += bytes.len(output.bytes)
+  }
+  let mut current: Map[String, bool] = map.empty()
+  for output in outputs {
+    map.insert(mut current, unique output.destination, true)
+  }
+  let mut stale: List[String] = []
+  for (name, _) in old {
+    if !map.contains(current, name) {
+      list.push(mut stale, unique name)
+    }
+  }
+  list.sort(mut stale, string.compare)
+  let mut written = 0u64
+  let mut skipped = 0u64
+  // Verify every candidate before any commit; changed navigation/layout is
+  // reflected in the computed output hash even when a page's input is unchanged.
+  let mut skips: List[bool] = []
+  for output in outputs {
+    let hit = match map.get(old, output.destination) {
+      Some(entry) => entry.input_hash == output.input_hash && entry.output_hash == output.output_hash,
+      None() => false,
+    }
+    let target = f"{config.output}/{output.destination}"
+    let verified = if hit {
+      assets.verified(d, target, output.output_hash)?
+    } else {
+      false
+    }
+    list.push(mut skips, verified)
+  }
+  for i in 0u64..list.len(outputs) {
+    if skips[i] {
+      skipped += 1
+      continue
+    }
+    if !plan {
+      atomic(d, f"{config.output}/{outputs[i].destination}", outputs[i].bytes)?
+    }
+    written += 1
+  }
+  // Always last. On failure earlier files may be new, but the old manifest stays.
+  if !plan {
+    atomic(d, f"{config.output}/{model.MANIFEST}", encoded)?
+  }
+  Ok(model.Report(pages: pages, written: written, skipped: skipped, stale: take stale))
+}

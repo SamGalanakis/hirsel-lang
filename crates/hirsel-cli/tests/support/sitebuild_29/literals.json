@@ -1,0 +1,7 @@
+{
+  "a": "<h1>A</h1>\n",
+  "b": "<p><strong>B</strong></p>\n",
+  "escaped": "<h1><!-- raw HTML omitted -->&amp;</h1>\n",
+  "unsafe": "<p><!-- raw HTML omitted -->trusted<!-- raw HTML omitted --></p>\n<p><a>x</a></p>\n",
+  "commonmark": "<p><a href=\"https://foo.bar.baz/test?q=hello&amp;id=22&amp;boolean\">https://foo.bar.baz/test?q=hello&amp;id=22&amp;boolean</a></p>\n"
+}

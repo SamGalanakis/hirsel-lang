@@ -1,0 +1,95 @@
+// Reads are bounded even if a file grows after metadata admission.
+pub fn read(d: Dir, name: String, maximum: u64) -> Result[unique Bytes, model.Problem] {
+  let mut item = file.open(d, path.of(name)) ? Files
+  match file.read_all_bounded(d, mut item, maximum) {
+    Ok(data) => Ok(take data),
+    Error(Limit()) => Error(Limit(unique name)),
+    Error(File(error)) => Error(Files(error)),
+  }
+}
+
+pub fn page(d: Dir, item: model.Input) -> model.WorkResult[
+  unique model.Page,
+  unique model.Problem
+] {
+  let data = match read(d, item.source, item.size) {
+    Ok(value) => take value,
+    Error(error) => return Failed(unique error),
+  }
+  let digest = sha256.digest_hex(data)
+  let source = match string.from_bytes(take data) {
+    Ok(value) => take value,
+    Error(_) => return Failed(Utf8()),
+  }
+  let title = match catalog.title(source, item.source) {
+    Ok(value) => take value,
+    Error(error) => return Failed(unique error),
+  }
+  Done(
+    model.Page(
+      destination: unique item.destination,
+      title: unique title,
+      source: take source,
+      digest: take digest
+    )
+  )
+}
+
+pub fn load(d: Dir, item: model.Input) -> model.WorkResult[
+  unique model.Asset,
+  unique model.Problem
+] {
+  match read(d, item.source, item.size) {
+    Ok(data) => {
+      let digest = sha256.digest_hex(data)
+      Done(
+        model.Asset(
+          destination: unique item.destination,
+          bytes: take data,
+          digest: take digest
+        )
+      )
+    },
+    Error(error) => Failed(unique error),
+  }
+}
+
+pub fn output(take asset: model.Asset) -> model.Output uses {} {
+  model.asset_output(take asset)
+}
+
+// A cache hit is evidence about the current bytes, never just a manifest claim.
+pub fn verified(d: Dir, target: String, expected: String) -> Result[bool, model.Problem] {
+  let meta = match file.metadata(d, path.of(target)) {
+    Ok(value) => value,
+    Error(NotFound()) => return Ok(false),
+    Error(error) => return Error(Files(error)),
+  }
+  if meta.kind != Regular() || meta.size > model.OUTPUT_BYTES {
+    return Ok(false)
+  }
+  let data = read(d, target, model.OUTPUT_BYTES)?
+  Ok(sha256.digest_hex(data) == expected)
+}
+
+// Refuse physical aliasing through existing path components before publication.
+// File metadata does not follow the final symlink. Missing suffixes are safe
+// to create; concurrent hostile tree mutation is outside this site's contract.
+pub fn check_path(d: Dir, name: String) -> Result[(), model.Problem] {
+  let mut prefix = ""
+  for part in path.components(path.of(name)) {
+    prefix = if prefix == "" {
+      unique part
+    } else {
+      f"{prefix}/{part}"
+    }
+    match file.metadata(d, path.of(prefix)) {
+      Ok(meta) => if meta.kind == Symlink() {
+        return Error(model.invalid("symlink_path"))
+      },
+      Error(NotFound()) => return Ok(()),
+      Error(error) => return Error(Files(error)),
+    }
+  }
+  Ok(())
+}

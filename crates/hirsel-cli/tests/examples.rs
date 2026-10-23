@@ -2453,10 +2453,32 @@ fn dogfood5_logtail_package_tests() {
 fn dogfood5_mdsite_package_tests() {
     let example = Example::new(
         "mdsite",
-        &[(
-            "main.hir",
-            include_str!("../../../examples/mdsite/main.hir"),
-        )],
+        &[
+            (
+                "main.hir",
+                include_str!("../../../examples/mdsite/main.hir"),
+            ),
+            (
+                "catalog.hir",
+                include_str!("../../../examples/mdsite/catalog.hir"),
+            ),
+            (
+                "render.hir",
+                include_str!("../../../examples/mdsite/render.hir"),
+            ),
+            (
+                "assets.hir",
+                include_str!("../../../examples/mdsite/assets.hir"),
+            ),
+            (
+                "publish.hir",
+                include_str!("../../../examples/mdsite/publish.hir"),
+            ),
+            (
+                "model.hir",
+                include_str!("../../../examples/mdsite/model.hir"),
+            ),
+        ],
         include_str!("../../../examples/mdsite/hirsel.json"),
     );
     check_interpreted_and_llvm_package_tests("mdsite", &example.dir.join("hirsel.json"), 3);
