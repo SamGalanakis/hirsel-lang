@@ -328,6 +328,15 @@ bundle’s `notices/` directory; see `tools/toolchain-dist/README.md`.
 
 Where an upstream offers MIT or Apache-2.0, the MIT option is used.
 
+Bounded stdin lines: `stdlib/std@1/input.hir` and the driver
+`stdin-line-bound-35` fixtures adapt delimiter-before-full ordering from Go
+`src/bufio/bufio.go:338-386` and stride-one/long/remainder vectors from
+`bufio_test.go:918-1021` at `ebe2feefc400f813aefdc8a036e66d2619da6649`.
+Copyright 2009 The Go Authors. BSD-3-Clause (Go), full license below.
+Hirsel's existing MIT input/file/Sheet structure supplies the owned-result and
+error-wrapper conventions; its LICENSE remains applicable. The fixture README
+lists all cursor, ownership, error and line-ending adaptations.
+
 ## Copyright notices
 
 - postcard: Copyright (c) 2019 Anthony James Munns

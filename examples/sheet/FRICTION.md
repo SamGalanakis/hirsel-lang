@@ -1,5 +1,12 @@
 # sheet-eval-31 friction
 
+Additive stdin-line-bound-35 resolution: `std.input.read_line_bounded` now owns
+the byte-at-a-time admission loop. Sheet uses max512, strips one returned LF,
+keeps CR, and preserves line_limit/input/utf8 mapping and the original small
+session and 512/513-byte command oracles. The earlier private-loop adaptation
+below remains historical. Dense boundaries and historical replay/Steps
+dispositions are unchanged and are not requalified by this reader migration.
+
 Starting main: ff3886a3. Application and focused fixture implementation complete. No compiler/runtime/std
 change. Exact bounded/native/replay dispositions below remain separate.
 

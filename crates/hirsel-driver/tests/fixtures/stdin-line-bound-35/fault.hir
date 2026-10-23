@@ -1,0 +1,18 @@
+pub type AppError = Arguments(ArgError) | Parse(scalar.ParseError) | Grant(GrantError) | Output(
+  OutputError
+) | Input(InputError)
+
+pub fn main(rt: Io, args: Args) -> Result[(), AppError] {
+  let limit = u64.parse(arg.text(args, 0)?)?
+  let stream = io.stdin(rt)?
+  let output = io.stdout(rt)?
+  match input.read_line_bounded(stream, limit) {
+    Ok(None()) => out.print(output, "none\n")?,
+    Ok(Some(line)) => out.print(output, f"some {hex.encode(string.as_bytes(line))}\n")?,
+    Error(LineTooLong()) => out.print(output, "limit\n")?,
+    Error(Input(InvalidUtf8())) => out.print(output, "utf8\n")?,
+    Error(Input(InputFault(code))) => out.print(output, f"fault {code}\n")?,
+    Error(Input(e)) => return Error(Input(take e)),
+  }
+  Ok(())
+}

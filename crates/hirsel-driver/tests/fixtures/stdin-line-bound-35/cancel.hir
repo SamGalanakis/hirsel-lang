@@ -1,0 +1,24 @@
+pub fn main(rt: Io, args: Args) -> std@1/process.ExitCode {
+  let Ok(tasks) = io.tasks(rt) else { return std@1/process.exit_code(3u8) }
+  let Ok(stream) = io.stdin(rt) else { return std@1/process.exit_code(3u8) }
+  let Ok(signals) = io.signals(rt) else { return std@1/process.exit_code(3u8) }
+  let Ok(output) = io.stdout(rt) else { return std@1/process.exit_code(3u8) }
+  let canceled = task.scope(tasks, fn(s: Scope) -> bool {
+    let child = task.async(s, fn() -> bool {
+      let _ = out.print(output, "reading\n")
+      match input.read_line_bounded(stream, 3) {
+        Error(Input(Canceled(Requested()))) => true,
+        _ => false,
+      }
+    })
+    let _ = signal.wait(signals, [Interrupt()])
+    task.cancel(s, child)
+    task.await(s, take child)
+  })
+  // Output in the canceled child is itself canceled. Report from the live root.
+  if canceled {
+    let _ = out.print(output, "canceled requested\n")
+    return std@1/process.SUCCESS
+  }
+  std@1/process.exit_code(1u8)
+}

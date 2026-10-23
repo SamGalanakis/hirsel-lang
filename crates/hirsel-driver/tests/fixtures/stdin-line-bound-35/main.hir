@@ -1,0 +1,36 @@
+// Full Io+Args entry: limit, number of lines, then a direct read of the suffix.
+pub type AppError = Arguments(ArgError) | Parse(scalar.ParseError) | Grant(GrantError) | Output(
+  OutputError
+) | Input(InputError)
+
+pub fn main(rt: Io, args: Args) -> Result[(), AppError] {
+  let limit = u64.parse(arg.text(args, 0)?)?
+  let count = u64.parse(arg.text(args, 1)?)?
+  let stream = io.stdin(rt)?
+  let output = io.stdout(rt)?
+  let mut index = 0u64
+  while index < count {
+    match input.read_line_bounded(stream, limit) {
+      Ok(None()) => out.print(output, "none\n")?,
+      Ok(Some(line)) => out.print(output, f"some {hex.encode(string.as_bytes(line))}\n")?,
+      Error(LineTooLong()) => out.print(output, "limit\n")?,
+      Error(Input(InvalidUtf8())) => out.print(output, "utf8\n")?,
+      Error(Input(InputFault(code))) => out.print(output, f"fault {code}\n")?,
+      Error(Input(Canceled(cause))) => {
+        let code = match cause {
+          Requested() => 0u64,
+          Parent() => 1u64,
+          ChildFailed() => 2u64,
+          DeadlineExceeded() => 3u64,
+        }
+        out.print(output, f"canceled {code}\n")?
+      },
+      Error(Input(InvalidInput())) => out.print(output, "invalid\n")?,
+    }
+    index += 1
+  }
+  let mut tail: List[u8] = []
+  let _ = stdin.read(stream, mut tail, 64)?
+  out.print(output, f"tail {hex.encode(bytes.from_list(take tail))}\n")?
+  Ok(())
+}

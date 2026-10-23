@@ -166,34 +166,24 @@ fn report(output: Stdout, problem: store.Problem, mut status: u8) -> bool {
   }
 }
 
-// A bounded streaming line reader leaves the following line unread. No unbounded
-// std read_line allocation occurs before checking the command admission limit.
 fn next_line(stream: Stdin) -> Result[Option[String], store.Problem] {
-  let mut buffer: List[u8] = []
-  let mut eof = false
-  while true {
-    let mut byte: List[u8] = []
-    let Ok(count) = stdin.read(stream, mut byte, 1) else {
-      return Error(Refused("input"))
-    }
-    if count == 0 {
-      eof = true
-      break
-    }
-    if byte[0] == 10 {
-      break
-    }
-    if list.len(buffer) == 512 {
-      return Error(Refused("line_limit"))
-    }
-    list.push(mut buffer, byte[0])
-  }
-  if eof && list.len(buffer) == 0 {
-    return Ok(None())
-  }
-  match string.from_bytes(bytes.from_list(take buffer)) {
-    Ok(s) => Ok(Some(take s)),
-    Error(_) => Error(Invalid("utf8")),
+  match input.read_line_bounded(stream, 512) {
+    Ok(None()) => Ok(None()),
+    Ok(Some(line)) => {
+      let raw = string.as_bytes(line)
+      let len = bytes.len(raw)
+      if len > 0 && raw[len - 1] == 10 {
+        // Remove only the returned LF; CR remains command content.
+        let Ok(text) = string.from_bytes(copy bytes.slice(raw, 0, len - 1)) else {
+          return Error(Invalid("utf8"))
+        }
+        return Ok(Some(take text))
+      }
+      Ok(Some(take line))
+    },
+    Error(LineTooLong()) => Error(Refused("line_limit")),
+    Error(Input(InvalidUtf8())) => Error(Invalid("utf8")),
+    Error(Input(_)) => Error(Refused("input")),
   }
 }
 

@@ -32,6 +32,13 @@ read. Mount directories and file parents are created in the snapshot. The
 default recipe grants one empty read-write root. An empty `mounts` map grants
 no directory. Files outside the mounts do not grant access.
 
+`Fixture.stdin: Vec<u8>` supplies plain bytes followed by EOF in reference,
+checked H and native fixture launches. Its default is empty. This adds no
+stdin readiness or fault script; use the existing production cooperative stdin
+provider for Pending/cancellation tests. Offline replay consumes the recorded
+read completions and needs no original stdin bytes. The bounded-line regression
+is `stdin_line_bound_35` in the driver stdlib harness.
+
 `Pending` parks an opened file's reads until cancellation. To release a read
 when a sibling successfully writes another snapshot file, use
 `FileReadScript::AfterWrite { path: "output/release".into() }`. Both paths are

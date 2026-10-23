@@ -48,6 +48,7 @@ mod http_date_7;
 mod sorted_bounds_7;
 mod iter_peekable_7;
 mod line_scan_7;
+mod stdin_line_bound_35;
 mod lru_cache_7;
 mod base32_8;
 mod utf16_8;

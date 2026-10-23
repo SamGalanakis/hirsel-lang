@@ -89,6 +89,9 @@ fn fixture(case: &Value) -> Fixture {
         steps: Some(case["steps"].as_u64().unwrap()),
         ..Default::default()
     };
+    if let Some(stdin) = case["stdin"].as_str() {
+        recipe.stdin = stdin.as_bytes().to_vec();
+    }
     if let Some(args) = case["args"].as_array() {
         recipe.args = args
             .iter()
@@ -229,10 +232,9 @@ fn native_cases(selected: Vec<Value>) {
         loaded
             .check_for_execution()
             .unwrap_or_else(|error| panic!("{error}"));
-        if selected
-            .iter()
-            .any(|case| case["release"] == true || case["recalc_cancel"] == true)
-        {
+        if selected.iter().any(|case| {
+            case["release"] == true || case["recalc_cancel"] == true || case["stdin"].is_string()
+        }) {
             let run = RunConfiguration {
                 entry: loaded.entry.clone(),
                 hash_seed: 0,
@@ -260,7 +262,8 @@ fn native_cases(selected: Vec<Value>) {
                     .unwrap();
                     let o = execution.observation.expect("release observation");
                     assert_eq!(o.output, case["stdout"].as_str().unwrap().as_bytes());
-                    assert_eq!(o.exit_code, Some(0));
+                    assert_eq!(o.exit_code, Some(case["exit"].as_i64().unwrap() as i32));
+                    assert!(o.failures.is_empty() && o.blocked.is_none());
                     if case["release"] == true {
                         assert!(o.effects.iter().any(|e|matches!(&e.effect,hirsel_interp::observation::Effect::CapabilityConsumed(e) if e.operation=="file.read.pending")),"release read never parked");
                     }
@@ -354,6 +357,13 @@ fn native_cases(selected: Vec<Value>) {
                         &fixture,
                     )
                     .unwrap();
+                    if case["stdin"].is_string() {
+                        let bytes = fs::read(&tape).unwrap();
+                        eprintln!(
+                            "SHEET_STDIN_TAPE {id} {backend:?} {}",
+                            bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()
+                        );
+                    }
                     let observed = observe(&live, &ready, &sites).unwrap();
                     assert_eq!(
                         observed.output,
@@ -430,6 +440,7 @@ fn native_cases(selected: Vec<Value>) {
                 }
                 // Replay has no original files or readiness gates.
                 let unavailable = Fixture {
+                    stdin: vec![],
                     files: BTreeMap::new(),
                     file_reads: BTreeMap::new(),
                     signals: None,
@@ -468,6 +479,24 @@ fn native_cases(selected: Vec<Value>) {
             }
         }
     });
+}
+
+#[test]
+fn sheet_eval_31_bounded_stdin_original_oracles() {
+    // Original small REPL oracle (also used by repl_cancel_output_entry).
+    let mut selected = vec![
+        json!({"id":"bounded-small-session","args":["--jobs","4","-"],
+        "script":"", "stdin":"set A1 = 2+3*4\nshow A1\n", "stdout":"OK\nA1 = 14\n", "exit":0,"steps":1_000_000}),
+    ];
+    // Admission counts the complete command before trimming, as the original
+    // private reader did. The 513th byte refuses without executing the next line.
+    for size in [512usize, 513] {
+        let command = format!("recalc{}\nset A1 = 9\nshow A1\n", " ".repeat(size - 6));
+        selected.push(json!({"id":format!("bounded-command-{size}"),"args":["-"],"script":"",
+            "stdin":command,"stdout":if size==512 {"RECALC 0\nOK\nA1 = 9\n"} else {"error: line_limit\n"},
+            "exit":if size==512 {0} else {3},"steps":1_000_000}));
+    }
+    native_cases(selected);
 }
 
 #[test]

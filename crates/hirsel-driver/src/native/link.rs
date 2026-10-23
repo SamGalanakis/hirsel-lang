@@ -2271,7 +2271,7 @@ pub fn launch_fixture(
     let recipe = dir.join("fixture.json");
     std::fs::write(
         &recipe,
-        serde_json::to_vec(&(&fixture.files, &fixture.mounts)).unwrap(),
+        serde_json::to_vec(&(&fixture.files, &fixture.mounts, &fixture.stdin)).unwrap(),
     )
     .map_err(|e| NativeError::new(StageName::Launch, e.to_string()))?;
     launch_impl(

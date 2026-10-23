@@ -241,6 +241,8 @@ fn toml.datetime(value: toml.Moment) -> Result[toml.Value, toml.TomlError] uses 
 @track_caller fn test.expect_error[T, E](t: Test, take value: Result[T, E]) -> E
 fn input.read_all(s: Stdin) -> Result[unique Bytes, InputError]
 fn input.read_line(s: Stdin) -> Result[Option[unique String], InputError]
+type input.ReadBoundedError = LineTooLong | Input(InputError)
+fn input.read_line_bounded(s: Stdin, max_line_bytes: u64) -> Result[Option[unique String], input.ReadBoundedError]
 N fn prng.seed(value: u64) -> prng.Generator uses {}
 N fn prng.u64(mut generator: prng.Generator) -> u64 uses {}
 N fn prng.below(mut generator: prng.Generator, upper_exclusive: u64) -> Result[u64, prng.SampleError] uses {}
@@ -2072,6 +2074,48 @@ one newline, retaining it (and a preceding carriage return). It returns `None()`
 only for EOF before any bytes, and `InvalidUtf8()` for an invalid complete line.
 Both are ordinary source loops over `core@1/stdin.read`; they grant no authority
 and share the passed stream's cursor. A final unterminated line is `Some`.
+
+`input.read_line_bounded(s, max_line_bytes)` returns the same successful text,
+with `ReadBoundedError = LineTooLong | Input(InputError)`. The limit counts
+**bytes before LF**: CR is content, so CRLF needs room for CR. Zero accepts EOF
+and the empty LF line (`Some("\n")`). A final exactly-full line succeeds at EOF.
+Success reads no byte from the following line.
+
+The helper reuses a one-byte probe and checks each content byte before appending.
+Its logical content carry is at most the limit; a completed LF line adds one
+byte, guarded against length overflow even when the limit is `u64::MAX`.
+No allocation is based on the cap or on total rejected input length. List
+capacity growth and allocator slack can exceed the logical length: this is
+not a physical memory/RSS limit.
+
+On overflow it consumes the first rejected non-LF byte, returns `LineTooLong()`,
+and drops the partial buffer without draining. A later call sees the remaining
+suffix, potentially mid-line. Recovery therefore requires the caller's own
+policy. Underlying errors are wrapped as `Input(e)` with their exact kind;
+UTF-8 validation happens only after LF or EOF, so an over-limit invalid sequence
+returns `LineTooLong` before UTF-8 validation. No error returns partial text.
+
+A complete bounded agent loop can terminate on any input or limit error,
+avoiding an implicit mid-line recovery policy:
+
+```hirsel
+pub type LoopError = Grant(GrantError) | Read(input.ReadBoundedError) | Write(OutputError)
+
+pub fn main(rt: Io, args: Args) -> Result[(), LoopError] {
+  let stream = io.stdin(rt)?
+  let output = io.stdout(rt)?
+  while true {
+    let Some(line) = input.read_line_bounded(stream, 512)? else {
+      break
+    }
+    if string.trim(line) == "quit" {
+      break
+    }
+    out.print(output, line)?
+  }
+  Ok(())
+}
+```
 
 Exact environment-name authority is available in core through `env.get(Env, String)`.
 The run configuration's Env object is the concrete exact-name facet: only its keys

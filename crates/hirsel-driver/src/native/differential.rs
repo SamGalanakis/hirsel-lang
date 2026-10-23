@@ -363,6 +363,8 @@ fn same_options(a: &Options, b: &Options) -> bool {
 #[derive(Clone, Debug)]
 pub struct Fixture {
     pub args: Vec<String>,
+    /// Plain bytes followed by EOF, shared with SimulationConfig. No readiness script.
+    pub stdin: Vec<u8>,
     pub files: std::collections::BTreeMap<String, Vec<u8>>,
     pub mounts: std::collections::BTreeMap<String, hirsel_run_schema::Access>,
     /// Simulation-only regular-file readiness, shared with SimulationConfig.
@@ -401,6 +403,7 @@ impl Default for Fixture {
     fn default() -> Self {
         Self {
             args: vec![],
+            stdin: vec![],
             files: Default::default(),
             mounts: hirsel_engine::SimulationConfig::default().mounts,
             file_reads: Default::default(),
@@ -425,6 +428,7 @@ impl From<&Fixture> for hirsel_engine::SimulationConfig {
     fn from(fixture: &Fixture) -> Self {
         let mut config = Self {
             args: fixture.args.clone(),
+            stdin: fixture.stdin.clone(),
             files: fixture.files.clone(),
             mounts: fixture.mounts.clone(),
             file_reads: fixture.file_reads.clone(),

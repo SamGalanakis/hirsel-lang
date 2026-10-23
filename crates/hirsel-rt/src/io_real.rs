@@ -381,10 +381,12 @@ impl RealIo {
     pub(crate) fn fixture(
         files: BTreeMap<String, Vec<u8>>,
         mounts: BTreeMap<String, hirsel_run_schema::Access>,
+        stdin: Vec<u8>,
         output: impl Write + 'static,
     ) -> Result<Self, hirsel_run_schema::RunRefusal> {
         let tree = Tree::fixture(files, mounts.clone())?;
         let mut io = Self::from_pinned_mounts([], output)?;
+        io.set_send_stdin(std::io::Cursor::new(stdin));
         io.state.fixture(tree, mount_access(mounts)?);
         Ok(io)
     }

@@ -1964,6 +1964,7 @@ pub(crate) unsafe fn execute(
             serde_json::from_slice::<(
                 std::collections::BTreeMap<String, Vec<u8>>,
                 std::collections::BTreeMap<String, hirsel_run_schema::Access>,
+                Vec<u8>,
             )>(&bytes)
             .map_err(|e| e.to_string())
         })
@@ -2110,8 +2111,8 @@ pub(crate) unsafe fn execute(
             }
             // Without `HIRSEL_RT_ROOT` the root Io grants nothing (determinism.md, Run
             // configuration): no mount and no projection.
-            None => match if let Some((files, mounts)) = fixture_files {
-                RealIo::fixture(files, mounts, sinks.stdout.clone())
+            None => match if let Some((files, mounts, stdin)) = fixture_files {
+                RealIo::fixture(files, mounts, stdin, sinks.stdout.clone())
                     .map(|mut io| {
                         io.set_stderr(sinks.stderr.clone());
                         io

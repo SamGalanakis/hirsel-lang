@@ -24,3 +24,45 @@ pub fn read_line(s: Stdin) -> Result[Option[unique String], InputError] {
     Error(_) => Error(InvalidUtf8()),
   }
 }
+
+// Go bufio.go:338-386 delimiter-before-full ordering (ebe2feef, BSD-3-Clause
+// (Go); third-party/NOTICES.md). Unlike Go's recycled prefix, return owned text
+// or an error without partial data. A one-byte probe leaves every unread suffix
+// on Stdin, including after the first rejected content byte.
+@serializable
+pub type ReadBoundedError = LineTooLong | Input(InputError)
+
+/// Counts bytes before LF, including CR. A limit error consumes one rejected
+/// non-LF byte and does not drain: recovery is the caller's policy.
+pub fn read_line_bounded(s: Stdin, max_line_bytes: u64) -> Result[
+  Option[unique String],
+  ReadBoundedError
+] {
+  let mut buffer: List[u8] = []
+  let mut probe: List[u8] = []
+  while core@1/stdin.read(s, mut probe, 1) ? Input != 0 {
+    let Some(byte) = core@1/list.pop(mut probe) else {
+      break
+    }
+    let len = core@1/list.len(buffer)
+    if byte == 10 {
+      // Do not evaluate max_line_bytes + 1: even MAX is a valid limit.
+      if len == 18446744073709551615u64 {
+        return Error(LineTooLong())
+      }
+      core@1/list.push(mut buffer, byte)
+      break
+    }
+    if len >= max_line_bytes {
+      return Error(LineTooLong())
+    }
+    core@1/list.push(mut buffer, byte)
+  }
+  if core@1/list.len(buffer) == 0 {
+    return Ok(None())
+  }
+  match core@1/string.from_bytes(core@1/bytes.from_list(take buffer)) {
+    Ok(line) => Ok(Some(take line)),
+    Error(_) => Error(Input(InvalidUtf8())),
+  }
+}
