@@ -115,8 +115,10 @@ fn receive_endpoint_diagnostic_19_real_count_conflict_keeps_copy_advice() {
                     ["need", "required: this requires a unique value (MODE-2)"]
                 ],
                 "notes": [
-                    "Use `unique element` for an explicit deep unique copy before passing it to the unique receiver. Alternatively, end or drop the snapshot before the loop and use an ordinary `mut` receiver; a counted copy ends static uniqueness for the rest of its owner's scope.",
-                    "help: End live shares before this operation, or use `unique x` to obtain a deep unique copy of counted data. Deep copying may allocate and preserves arena placement; `copy x` shares storage."
+                    "A counted copy ends the owner's nested uniqueness proof; ending or dropping the alias does not restore it. Supply independently unique content. Deep copying requires copyable data, permitted allocation and compatible placement; a `take` repair requires the supplier to be already unique.",
+                    "Ending or dropping an ordinary counted alias does not restore this binding's uniqueness proof. Temporary read loans end separately; a plain `mut` handback needs its own checked preservation contract.",
+                    "help: Supply an independent unique owner, or transfer an owned value with `take` before sharing when it is already proved unique. Changing a supplier to a `take` unique parameter also requires updating its callers to transfer genuinely unique owners; taking an already shared value does not make it unique.",
+                    "For concrete copyable data, pass `unique xs` instead of sharing or taking the aliased value only when its locality and allocation contract permit an independent deep copy (may allocate; costs O(size); preserves arena placement). Copying an unrelated result does not repair this root."
                 ]
             }),
         );

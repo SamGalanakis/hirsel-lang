@@ -549,3 +549,212 @@ fn uniqueness_loss_diagnostics_17_loop_item_conditional_repairs_20() {
         );
     });
 }
+
+// Ordinary counted copies stay distinct from confined related-call results.
+#[test]
+fn uniqueness_loss_diagnostics_17_ended_alias_guidance_21() {
+    with_compiler_stack(|| {
+        let text = "fn need(take xs:unique List[u64]) {}\nfn f(flag:bool){let xs:unique List[u64]=[1];if flag {let alias=copy xs};need(take xs)}";
+        let output = checked(text);
+        let [d] = &output.diagnostics[..] else {
+            panic!("{:?}", output.diagnostics)
+        };
+        eprintln!(
+            "{}\n{}",
+            d.render_human(&output.sources),
+            d.to_json(&output.sources)
+        );
+        assert_eq!(d.rule.as_str(), "MODE-2");
+        assert_eq!(output.sources.slice(d.primary), Some("need(take xs)"));
+        assert_eq!(
+            d.message,
+            "this operation requires a unique value: `xs` lost its deep uniqueness, but a unique value is required"
+        );
+        assert!(
+            d.secondary
+                .iter()
+                .any(|l| output.sources.slice(l.span) == Some("copy xs")
+                    && l.message.contains("shares counted storage"))
+        );
+        assert_eq!(
+            d.secondary
+                .iter()
+                .map(|l| (output.sources.slice(l.span).unwrap(), l.message.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("copy xs", "this copy ended the owner's nested uniqueness"),
+                ("take xs", "parameter mode requirement"),
+                (
+                    "copy xs",
+                    "provided: copying `xs` shares counted storage reachable from `xs`"
+                ),
+                ("need", "required: this requires a unique value (MODE-2)"),
+            ]
+        );
+        assert!(d.fix.is_none());
+        let notes = d.to_json(&output.sources)["notes"].to_string();
+        assert!(!notes.contains("End live shares"), "{notes}");
+        assert!(notes.contains("does not restore"), "{notes}");
+    });
+}
+
+fn uniqueness_repairs_21_accepted(source: &str) {
+    let mut engine = crate::source_std::engine();
+    engine.verify = Verify::On;
+    let file = engine
+        .sources
+        .add("share-repair.hir", source.into())
+        .unwrap();
+    let output = check_progress(&mut engine, file, &default_context()).unwrap();
+    assert_eq!(output.completion, CheckCompletion::Complete);
+    assert!(
+        output.diagnostics.is_empty(),
+        "{source}\n{:?}",
+        output.diagnostics
+    );
+    let mut input = engine.export_native_input().unwrap();
+    for definition in input.definitions.values_mut() {
+        *definition = std::sync::Arc::new(definition.as_ref().clone());
+    }
+    engine.import_native_input(input).unwrap();
+}
+
+#[test]
+fn uniqueness_loss_diagnostics_17_persistent_alias_controls_21() {
+    with_compiler_stack(|| {
+        for body in [
+            "let alias=copy xs;need(take xs);let _=alias",
+            "{let alias=copy xs};need(take xs)",
+            "let alias=copy xs;let _=alias;need(take xs)",
+        ] {
+            let source = format!(
+                "fn need(take xs:unique List[u64]) {{}}\npub fn main(){{let xs:unique List[u64]=[1];{body}}}"
+            );
+            let output = checked(&source);
+            let [d] = &output.diagnostics[..] else {
+                panic!("{source}: {:?}", output.diagnostics)
+            };
+            assert_eq!(d.rule.as_str(), "MODE-2");
+            assert_eq!(output.sources.slice(d.primary), Some("need(take xs)"));
+            assert!(
+                d.secondary
+                    .iter()
+                    .any(|l| output.sources.slice(l.span) == Some("copy xs")
+                        && l.message.contains("shares counted storage"))
+            );
+            let notes = d.to_json(&output.sources)["notes"].to_string();
+            assert!(notes.contains("does not restore"), "{d:?}");
+            assert!(
+                !notes.contains("scope that ends")
+                    && !notes.contains("End live shares")
+                    && !notes.contains("@preserves_unique"),
+                "{d:?}"
+            );
+            uniqueness_repairs_21_accepted(&source.replace("need(take xs)", "need(unique xs)"));
+        }
+        // A read loan with a plain result never creates a counted owner.
+        uniqueness_repairs_21_accepted(
+            "fn read(xs:List[u64])->u64 {list.len(xs)}\nfn need(take xs:unique List[u64]) {}\npub fn main(){let xs:unique List[u64]=[1];let n=read(xs);need(take xs);let _=n}",
+        );
+        // The same spelled transfer is valid before sharing, and a mutable
+        // binding can explicitly replace its root while preserving a snapshot.
+        uniqueness_repairs_21_accepted(
+            "fn need(take xs:unique List[u64]) {}\npub fn main(){let xs:unique List[u64]=[1];need(take xs)}",
+        );
+        uniqueness_repairs_21_accepted(
+            "fn need(take xs:unique List[u64]) {}\npub fn main(){let mut xs:unique List[u64]=[1];let alias=copy xs;xs=unique xs;need(take xs);let _=alias}",
+        );
+        let unrelated = "fn unrelated(mut ys:List[u64]) {}\nfn need(take xs:unique List[u64]) {}\npub fn main(){let xs:unique List[u64]=[1];let alias=copy xs;let mut ys:List[u64]=[];unrelated(mut ys);need(take xs);let _=alias}";
+        let output = checked(unrelated);
+        let [d] = &output.diagnostics[..] else {
+            panic!("{:?}", output.diagnostics)
+        };
+        assert_eq!(d.rule.as_str(), "MODE-2");
+        assert!(
+            d.secondary
+                .iter()
+                .all(|l| output.sources.slice(l.span) != Some("unrelated(mut ys)"))
+        );
+        assert!(d.notes.iter().all(|n| !n.contains("@preserves_unique")));
+        uniqueness_repairs_21_accepted(&unrelated.replace("need(take xs)", "need(unique xs)"));
+    });
+}
+
+#[test]
+fn uniqueness_loss_diagnostics_17_noalloc_unique_supplier_21() {
+    with_compiler_stack(|| {
+        let source = "@noalloc fn forward(take x:List[String])->unique List[String]{take x}\nfn need(take x:unique List[String]) {}\npub fn main(){let x:unique List[String]=[f\"a\"];let y=forward(take x);need(take y)}";
+        let output = checked(source);
+        let d = output
+            .diagnostics
+            .iter()
+            .find(|d| d.rule.as_str() == "MODE-2")
+            .unwrap_or_else(|| panic!("{:?}", output.diagnostics));
+        eprintln!("{}", d.render_human(&output.sources));
+        let notes = d.to_json(&output.sources)["notes"].to_string();
+        assert!(notes.contains("unavailable under `@noalloc`"), "{d:?}");
+        assert!(
+            !notes.contains("pass `unique x`") && !notes.contains("x = unique x"),
+            "{d:?}"
+        );
+        let repaired = source.replace("take x:List[String]", "take x:unique List[String]");
+        uniqueness_repairs_21_accepted(&repaired);
+        // Caller updates must transfer an owner that was already unique.
+        for invalid in [
+            repaired.replace("forward(take x)", "forward(copy x)"),
+            repaired.replace(
+                "let y=forward(take x)",
+                "let alias=copy x;let y=forward(take x);let _=alias",
+            ),
+        ] {
+            let output = checked(&invalid);
+            assert!(
+                output
+                    .diagnostics
+                    .iter()
+                    .any(|d| d.rule.as_str() == "MODE-2"),
+                "{invalid}: {:?}",
+                output.diagnostics
+            );
+        }
+        let output = checked(&source.replace("{take x}", "{unique x}"));
+        assert!(
+            output
+                .diagnostics
+                .iter()
+                .any(|d| d.rule.as_str() == "MEM-5"),
+            "{:?}",
+            output.diagnostics
+        );
+    });
+}
+
+#[test]
+fn uniqueness_loss_diagnostics_17_noncopyable_supplier_21() {
+    with_compiler_stack(|| {
+        let source = "resource type Row {text:String} drop(x) {}\nfn forward[T](take x:T)->unique T {take x}\nfn need(take x:unique Row) {}\npub fn main(){let x:unique Row=Row(text:f\"a\");let y=forward(take x);need(take y)}";
+        let output = checked(source);
+        let d = output
+            .diagnostics
+            .iter()
+            .find(|d| d.rule.as_str() == "MODE-2")
+            .unwrap_or_else(|| panic!("{:?}", output.diagnostics));
+        eprintln!("{}", d.render_human(&output.sources));
+        let notes = d.to_json(&output.sources)["notes"].to_string();
+        assert!(notes.contains("requires copyable data"), "{d:?}");
+        assert!(
+            !notes.contains("pass `unique x`") && !notes.contains("x = unique x"),
+            "{d:?}"
+        );
+        uniqueness_repairs_21_accepted(&source.replace("take x:T", "take x:unique T"));
+        let output = checked(&source.replace("{take x}", "{unique x}"));
+        assert!(
+            output
+                .diagnostics
+                .iter()
+                .any(|d| d.rule.as_str() != "MODE-2"),
+            "{:?}",
+            output.diagnostics
+        );
+    });
+}

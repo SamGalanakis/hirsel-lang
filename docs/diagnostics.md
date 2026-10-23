@@ -39,7 +39,7 @@ Typical fix: Keep the result within its owner's scope, or declare the result `in
 
 The checker cannot prove the value and its required parts are unique here.
 
-Typical fix: End live shares before this operation, or use `unique x` to obtain a deep unique copy of counted data. Deep copying may allocate and preserves arena placement; `copy x` shares storage.
+Typical fix: Supply an independent unique owner, or transfer an owned, already unique value with `take` before sharing. Ending an ordinary counted alias does not restore the binding's uniqueness proof. A deep copy with `unique x` requires copyable data, permitted allocation and compatible placement; allocating copies are unavailable under `@noalloc`.
 
 ### MEM-11: Shared graphs
 

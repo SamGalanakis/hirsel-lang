@@ -8454,7 +8454,7 @@ impl Checker<'_, '_> {
                         span: copy_span,
                         message: "this copy ended the owner's nested uniqueness".into(),
                     });
-                    diagnostic.notes.push("Use `unique element` for an explicit deep unique copy before passing it to the unique receiver. Alternatively, end or drop the snapshot before the loop and use an ordinary `mut` receiver; a counted copy ends static uniqueness for the rest of its owner's scope.".into());
+                    diagnostic.notes.push("A counted copy ends the owner's nested uniqueness proof; ending or dropping the alias does not restore it. Supply independently unique content. Deep copying requires copyable data, permitted allocation and compatible placement; a `take` repair requires the supplier to be already unique.".into());
                 }
             }
         } else if required.multiplicity == Multiplicity::Many

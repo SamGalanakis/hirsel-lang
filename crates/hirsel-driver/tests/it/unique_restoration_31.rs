@@ -621,9 +621,16 @@ fn unique_restoration_31_diagnostics_name_unproved_evidence() {
                 diagnostic
                     .notes
                     .iter()
-                    .any(|note| note.contains("scope that ends")
-                        && note.contains("m = unique m")
-                        && note.contains("unrelated result")),
+                    .any(|note| note.contains("m = unique m") && note.contains("unrelated result")),
+                "{name}: {diagnostic:?}"
+            );
+            let confined = name != "ordinary-dead-copy.hir";
+            assert_eq!(
+                diagnostic
+                    .notes
+                    .iter()
+                    .any(|note| note.contains("scope that ends")),
+                confined,
                 "{name}: {diagnostic:?}"
             );
         }

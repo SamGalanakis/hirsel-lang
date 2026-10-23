@@ -27,6 +27,8 @@ struct UniqueStep {
     /// was already aliased (including at a loop's fixed point).
     already_aliased: bool,
     losses: Vec<(Span, String)>,
+    /// Keep related-call release guidance separate from ordinary copies.
+    related_result: bool,
     repairs: Vec<Repair>,
     items: Vec<Fact<Cause>>,
 }
@@ -139,6 +141,7 @@ impl Checker<'_, '_> {
                         .bindings(Kind::Read)
                         .any(|root| root == binding)
                 {
+                    step.related_result = true;
                     let description = if self.callee_definition(*callee).is_none() {
                         format!(
                             "the function-value call has an escaped origin; its counted result may share `{name}` permanently"
@@ -437,7 +440,7 @@ impl Checker<'_, '_> {
         trace: &Trace,
         binding: usize,
         target: usize,
-    ) -> (Vec<Fact<Cause>>, Vec<Repair>) {
+    ) -> (Vec<Fact<Cause>>, Vec<Repair>, bool) {
         let (name, span) = self.binding_site(binding);
         let mut predecessors = vec![vec![]; self.graph.nodes.len()];
         for (id, node) in self.graph.nodes.iter().enumerate() {
@@ -447,6 +450,7 @@ impl Checker<'_, '_> {
         }
         let mut pending = predecessors[target].clone();
         let mut seen = BTreeSet::new();
+        let mut related_result = false;
         let mut losses = vec![];
         let mut repairs = vec![];
         let mut items = vec![];
@@ -464,6 +468,7 @@ impl Checker<'_, '_> {
             if !step.losses.is_empty() {
                 looped |= self.reachable(target, node);
                 uncertain |= step.already_aliased;
+                related_result |= step.related_result;
                 losses.extend(step.losses.iter().cloned());
                 repairs.extend(step.repairs.iter().cloned());
                 items.extend(step.items.iter().cloned());
@@ -515,7 +520,7 @@ impl Checker<'_, '_> {
         if facts.is_empty() {
             facts.push(Fact::new(Cause::Aliased, span, &[&name]));
         }
-        (facts, repairs)
+        (facts, repairs, related_result)
     }
 
     pub(super) fn span_of(&self, expression: ExprId) -> Span {
@@ -1367,13 +1372,50 @@ impl Checker<'_, '_> {
             .collect();
         for (index, mut pending) in std::mem::take(&mut self.explanations) {
             if let Some((binding, node)) = pending.uniqueness {
-                let (facts, repairs) = self.uniqueness_causes(&trace, binding, node);
+                let (facts, repairs, related_result) =
+                    self.uniqueness_causes(&trace, binding, node);
                 pending.explanation.provided = facts;
                 pending.explanation.repairs.extend(repairs);
                 let (name, _) = self.binding_site(binding);
-                self.diagnostics[index].notes.push(format!(
-                    "Put confined result holders and their derived copies in a scope that ends before this operation, or replace the root with `{name} = unique {name}` when its concrete copyable data, locality and allocation contract permit it. Copying an unrelated result does not repair this root."
-                ));
+                let noalloc = self
+                    .graph_callable()
+                    .is_some_and(|(f, _)| f.allocation == hirsel_types::Allocation::NoAlloc);
+                let binding = &self.body.bindings[binding];
+                let copyable = self.properties[binding.ty].copyable;
+                if related_result {
+                    self.diagnostics[index].notes.push(
+                        if !noalloc && copyable {
+                            format!("Put confined result holders and their derived copies in a scope that ends before this operation, or replace the root with `{name} = unique {name}` when its concrete copyable data, locality and allocation contract permit it. Copying an unrelated result does not repair this root.")
+                        } else {
+                            "Put confined result holders and their derived copies in a scope that ends before this operation. Copying an unrelated result does not repair this root.".into()
+                        }
+                    );
+                } else {
+                    self.diagnostics[index].notes.push(
+                        "Ending or dropping an ordinary counted alias does not restore this binding's uniqueness proof. Temporary read loans end separately; a plain `mut` handback needs its own checked preservation contract.".into()
+                    );
+                }
+                self.diagnostics[index].notes.push(
+                    "help: Supply an independent unique owner, or transfer an owned value with `take` before sharing when it is already proved unique. Changing a supplier to a `take` unique parameter also requires updating its callers to transfer genuinely unique owners; taking an already shared value does not make it unique.".into()
+                );
+                if !noalloc && copyable && !related_result {
+                    let edit = if binding.mutable {
+                        format!("replace the root with `{name} = unique {name}`")
+                    } else {
+                        format!(
+                            "pass `unique {name}` instead of sharing or taking the aliased value"
+                        )
+                    };
+                    self.diagnostics[index].notes.push(format!(
+                        "For concrete copyable data, {edit} only when its locality and allocation contract permit an independent deep copy (may allocate; costs O(size); preserves arena placement). Copying an unrelated result does not repair this root."
+                    ));
+                } else if noalloc || !copyable {
+                    self.diagnostics[index].notes.push(if noalloc {
+                        "Allocating deep copies are unavailable under `@noalloc`; use an already unique owner or repair the checked ownership contract."
+                    } else {
+                        "A deep-copy edit is not established for noncopyable generic or resource content; use an already unique owner or repair the checked ownership contract."
+                    }.into());
+                }
             }
             if let Some(site) = pending.temporary {
                 let fact = match site {
