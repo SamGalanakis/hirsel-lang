@@ -283,7 +283,7 @@ fn run_child(root: &Path, frozen: bool) {
         .arg("loader_inputs::namespace::tests::independent_disk_oracle_child")
         .arg("--nocapture")
         .env("HIRSEL_NAMESPACE_ORACLE_ROOT", root)
-        .env("HIRSEL_IMAGE", "/does-not-exist")
+        .env("HIRSEL_PRODUCTS", "/does-not-exist")
         .env("HIRSEL_RESULTS", "dir@1")
         .env("HIRSEL_RESULTS_DIR", "/does-not-exist")
         .current_dir("/");

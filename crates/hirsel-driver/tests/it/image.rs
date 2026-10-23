@@ -102,9 +102,7 @@ fn ordinary_std_client_semantic_and_native_products_equal_fresh_ones() {
         });
         // `aaa` places std after the program's own sources, exercising FileId rebasing.
         let client = f.program("aaa", STD_PROGRAM, &std_manifest(), "std");
-        let mut imaged = shared
-            .load_program_source_with_images(&client, None, &StdImages::none())
-            .unwrap();
+        let mut imaged = shared.load_program_source(&client, None).unwrap();
         let definitions: Vec<_> = imaged
             .engine
             .indexed_definitions()
@@ -113,9 +111,7 @@ fn ordinary_std_client_semantic_and_native_products_equal_fresh_ones() {
             .map(|path| DefId::intern(&path))
             .collect();
         assert!(definitions.len() > 100);
-        let mut reference = compiler
-            .load_program_source_with_images(&client, None, &StdImages::none())
-            .unwrap();
+        let mut reference = compiler.load_program_source(&client, None).unwrap();
         let checked = |p: &mut LoadedProgram| {
             let output = p.check(hirsel_engine::LoweringPolicy::Reachable).unwrap();
             let rendered: Vec<_> = output
@@ -162,7 +158,7 @@ fn ordinary_std_client_semantic_and_native_products_equal_fresh_ones() {
         for path in definitions.iter().copied().map(DefId::path) {
             for phase in [QueryKind::Check, QueryKind::Modes] {
                 assert_eq!(
-                    imaged.engine.recompute_count(path, phase),
+                    imaged.engine.recompute_count(&path, phase),
                     0,
                     "{path}: {phase:?}"
                 );
@@ -193,9 +189,7 @@ fn imaged_std_products_equal_fresh_ones() {
         });
         // `aaa` places std after the program's own sources, exercising FileId rebasing.
         let client = f.program("aaa", STD_PROGRAM, &std_manifest(), "std");
-        let mut imaged = shared
-            .load_program_source_with_images(&client, None, &StdImages::none())
-            .unwrap();
+        let mut imaged = shared.load_program_source(&client, None).unwrap();
         let definitions: Vec<_> = imaged
             .engine
             .indexed_definitions()
@@ -204,9 +198,7 @@ fn imaged_std_products_equal_fresh_ones() {
             .map(|path| DefId::intern(&path))
             .collect();
         assert!(definitions.len() > 100);
-        let mut reference = compiler
-            .load_program_source_with_images(&client, None, &StdImages::none())
-            .unwrap();
+        let mut reference = compiler.load_program_source(&client, None).unwrap();
         let checked = |p: &mut LoadedProgram| {
             let output = p.check(hirsel_engine::LoweringPolicy::Reachable).unwrap();
             let rendered: Vec<_> = output
@@ -293,7 +285,7 @@ fn imaged_std_products_equal_fresh_ones() {
         for path in definitions.iter().copied().map(DefId::path) {
             for phase in [QueryKind::Check, QueryKind::Modes] {
                 assert_eq!(
-                    imaged.engine.recompute_count(path, phase),
+                    imaged.engine.recompute_count(&path, phase),
                     0,
                     "{path}: {phase:?}"
                 );
@@ -321,9 +313,7 @@ fn ordinary_std_definition_products_partition(partition: usize) {
         });
         // `aaa` places std after the program's own sources, exercising FileId rebasing.
         let client = f.program("aaa", STD_PROGRAM, &std_manifest(), "std");
-        let mut imaged = shared
-            .load_program_source_with_images(&client, None, &StdImages::none())
-            .unwrap();
+        let mut imaged = shared.load_program_source(&client, None).unwrap();
         let definitions: Vec<_> = imaged
             .engine
             .indexed_definitions()
@@ -332,9 +322,7 @@ fn ordinary_std_definition_products_partition(partition: usize) {
             .map(|path| DefId::intern(&path))
             .collect();
         assert!(definitions.len() > 100);
-        let mut reference = compiler
-            .load_program_source_with_images(&client, None, &StdImages::none())
-            .unwrap();
+        let mut reference = compiler.load_program_source(&client, None).unwrap();
         let checked = |p: &mut LoadedProgram| {
             let output = p.check(hirsel_engine::LoweringPolicy::Reachable).unwrap();
             let rendered: Vec<_> = output
@@ -398,7 +386,7 @@ fn ordinary_std_definition_products_partition(partition: usize) {
         for path in definitions.iter().copied().map(DefId::path) {
             for phase in [QueryKind::Check, QueryKind::Modes] {
                 assert_eq!(
-                    imaged.engine.recompute_count(path, phase),
+                    imaged.engine.recompute_count(&path, phase),
                     0,
                     "{path}: {phase:?}"
                 );
@@ -426,105 +414,92 @@ const CLIENT: &str = "pub fn main() -> Result[(), ()] {
 }
 ";
 
-fn library_image(f: &Fixture, source: &str) -> Result<Arc<StdImage>, ToolError> {
-    let manifest = f.library(source);
-    let program = f.program("imager", CLIENT, &manifest, "lib");
-    let bytes = image(f, &mut load(&program, &StdImages::none()), "lib")?;
-    Ok(StdImage::from_bytes(bytes).unwrap())
+fn library_products(f: &Fixture, source: &str) -> Result<PathBuf, ToolError> {
+    f.library(source);
+    products(f, "lib")
 }
 
-/// `program`'s image of the dependency `name`, written to memory.
-fn image(f: &Fixture, program: &mut LoadedProgram, name: &str) -> Result<Vec<u8>, ToolError> {
-    let spill = std::fs::File::options()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .open(f.0.join("image.records"))
-        .unwrap();
-    program.image(&package(name), spill)
+fn products(f: &Fixture, name: &str) -> Result<PathBuf, ToolError> {
+    let root = f.0.join(format!("{name}.products"));
+    COMPILER.precompute_package(&f.0.join(format!("{name}.json")), &root)?;
+    Ok(root)
 }
 
 #[test]
-fn an_image_serves_only_the_compiler_and_sources_it_was_checked_under() {
+fn ordinary_products_reject_changed_compiler_and_sources() {
     with_compiler_stack(|| {
         let f = Fixture::new();
-        let image = library_image(&f, LIBRARY).unwrap();
+        let products = library_products(&f, LIBRARY).unwrap();
         let client = f.program("client", CLIENT, &f.0.join("lib.json"), "lib");
-        let images = StdImages::of(vec![image.clone()]);
-        let mut program = load(&client, &images);
-        assert!(program.engine.imaged(&package("lib")));
-        assert!(program.image_notes.is_empty());
-        program.check_for_execution().unwrap();
-
-        // Another compiler identity.
-        let other = Compiler::new(FrontPhases::shared, [7; 32]);
-        let program = other
-            .load_program_source_with_images(&client, None, &images)
+        let path = hirsel_syntax::DefPath(hirsel_syntax::ItemPath {
+            package: package("lib"),
+            modules: vec!["lib".into()],
+            name: "value".into(),
+        });
+        let mut hit = load(&client, Some(&products));
+        hit.check_for_execution().unwrap();
+        assert_eq!(hit.engine.recompute_count(&path, QueryKind::Check), 0);
+        let mut other = Compiler::new(FrontPhases::shared, [7; 32])
+            .with_config(CompileConfig {
+                store: Arc::new(
+                    store::DirStore::new(f.0.join("other-reader"))
+                        .with_read_only_root(products.clone()),
+                ),
+                ..CompileConfig::for_memory_cap(None)
+            })
+            .load_program_source(&client, None)
             .unwrap();
-        assert!(!program.engine.imaged(&package("lib")));
-        assert_eq!(program.image_notes.len(), 1, "{:?}", program.image_notes);
-
-        // Other sources: a comment changes the package's checked input.
-        f.library(&format!("{LIBRARY}// edited\n"));
-        let mut program = load(&client, &images);
-        assert!(!program.engine.imaged(&package("lib")));
-        assert_eq!(program.image_notes.len(), 1, "{:?}", program.image_notes);
-        program.check_for_execution().unwrap();
+        other.check_for_execution().unwrap();
+        assert!(other.engine.recompute_count(&path, QueryKind::Check) > 0);
+        f.library(&LIBRARY.replace("x + 1", "x + 2"));
+        let mut edited = load(&client, Some(&products));
+        let mut fresh = load(&client, None);
+        edited.check_for_execution().unwrap();
+        fresh.check_for_execution().unwrap();
+        assert!(edited.engine.recompute_count(&path, QueryKind::Check) > 0);
+        assert_eq!(
+            edited
+                .engine
+                .semantic_program_revision(&edited.entry.clone())
+                .unwrap(),
+            fresh
+                .engine
+                .semantic_program_revision(&fresh.entry.clone())
+                .unwrap()
+        );
     });
 }
 
 #[test]
-fn a_file_image_rebuilds_for_sources_compiler_and_limits_and_reuses_unchanged() {
+fn ordinary_products_reject_changed_execution_limits() {
     with_compiler_stack(|| {
         let f = Fixture::new();
-        let manifest = f.library(LIBRARY);
-        let client = f.program("client", CLIENT, &manifest, "lib");
-        let path = f.0.join("lib.image");
-        COMPILER.image_package(&manifest, &path).unwrap();
-        let images = StdImages::at(&path);
-        let check = |compiler: Compiler| {
-            let mut program = compiler
-                .load_program_source_with_images(&client, None, &images)
+        let products = library_products(&f, LIBRARY).unwrap();
+        let client = f.program("client", CLIENT, &f.0.join("lib.json"), "lib");
+        let path = hirsel_syntax::DefPath(hirsel_syntax::ItemPath {
+            package: package("lib"),
+            modules: vec!["lib".into()],
+            name: "value".into(),
+        });
+        for (steps, depth) in [(999_999, 256), (999_999, 128)] {
+            let mut p = COMPILER
+                .clone()
+                .with_comptime_limits(hirsel_interp::Limits {
+                    steps: Some(steps),
+                    call_depth: depth,
+                })
+                .with_config(CompileConfig {
+                    store: Arc::new(
+                        store::DirStore::new(f.0.join(format!("limits-{depth}")))
+                            .with_read_only_root(products.clone()),
+                    ),
+                    ..CompileConfig::for_memory_cap(None)
+                })
+                .load_program_source(&client, None)
                 .unwrap();
-            assert!(
-                program.engine.imaged(&package("lib")),
-                "{:?}",
-                program.image_notes
-            );
-            assert!(
-                program
-                    .check(LoweringPolicy::Reachable)
-                    .unwrap()
-                    .diagnostics
-                    .is_empty()
-            );
-            StdImage::open(&path).unwrap().key()
-        };
-        let original = std::fs::read(&path).unwrap();
-        let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
-        let key = check(COMPILER);
-        assert_eq!(std::fs::read(&path).unwrap(), original);
-        assert_eq!(
-            std::fs::metadata(&path).unwrap().modified().unwrap(),
-            modified
-        );
-        f.library(&format!("{LIBRARY}// edited\n"));
-        let edited = check(COMPILER);
-        assert_ne!(edited, key);
-        let other = Compiler::new(FrontPhases::shared, [7; 32]);
-        let compiler = check(other.clone());
-        assert_ne!(compiler, edited);
-        let steps = check(other.clone().with_comptime_limits(hirsel_interp::Limits {
-            steps: Some(999_999),
-            call_depth: 256,
-        }));
-        assert_ne!(steps, compiler);
-        let depth = check(other.with_comptime_limits(hirsel_interp::Limits {
-            steps: Some(999_999),
-            call_depth: 128,
-        }));
-        assert_ne!(depth, steps);
+            p.check_for_execution().unwrap();
+            assert!(p.engine.recompute_count(&path, QueryKind::Check) > 0);
+        }
     });
 }
 
@@ -532,10 +507,10 @@ fn a_file_image_rebuilds_for_sources_compiler_and_limits_and_reuses_unchanged() 
 fn editing_an_imaged_source_in_a_session_ends_its_image() {
     with_compiler_stack(|| {
         let f = Fixture::new();
-        let image = library_image(&f, LIBRARY).unwrap();
+        let image = library_products(&f, LIBRARY).unwrap();
         let client = f.program("client", CLIENT, &f.0.join("lib.json"), "lib");
-        let mut program = load(&client, &StdImages::of(vec![image]));
-        assert!(program.engine.imaged(&package("lib")));
+        let mut program = load(&client, Some(&image));
+
         let (file, context) = program
             .files
             .iter()
@@ -546,11 +521,11 @@ fn editing_an_imaged_source_in_a_session_ends_its_image() {
         let edited = LIBRARY.replace("x + 1", "x + 2");
         let file = program.engine.sources.add(&path, edited).unwrap();
         program.engine.parse_file(file, &context).unwrap();
-        assert!(!program.engine.imaged(&package("lib")));
+
         // The edited body is checked and run from source.
         let warm = program.check(LoweringPolicy::Reachable).unwrap();
         f.library(&LIBRARY.replace("x + 1", "x + 2"));
-        let mut cold = load(&client, &StdImages::none());
+        let mut cold = load(&client, None);
         let fresh = cold.check(LoweringPolicy::Reachable).unwrap();
         assert_eq!(warm.completion, fresh.completion);
         assert_eq!(
@@ -580,11 +555,11 @@ fn editing_an_imaged_std_module_is_warm_equals_cold() {
         let f = Fixture::new();
         let manifest = f.library_named("std", LIBRARY);
         let client = f.program("client", CLIENT, &manifest, "std");
-        let bytes = image(&f, &mut load(&client, &StdImages::none()), "std").unwrap();
-        let images = StdImages::of(vec![StdImage::from_bytes(bytes).unwrap()]);
-        let mut warm = load(&client, &images);
+        let bytes = products(&f, "std").unwrap();
+        let images = Some(bytes.as_path());
+        let mut warm = load(&client, images);
         warm.check_for_execution().unwrap();
-        assert!(warm.engine.imaged(&package("std")));
+
         let (file, context) = warm
             .files
             .iter()
@@ -596,8 +571,8 @@ fn editing_an_imaged_std_module_is_warm_equals_cold() {
         f.library_named("std", &edited);
         let file = warm.engine.sources.add(path, edited).unwrap();
         warm.engine.parse_file(file, &context).unwrap();
-        assert!(!warm.engine.imaged(&package("std")));
-        let mut cold = load(&client, &StdImages::none());
+
+        let mut cold = load(&client, None);
         let checked = |program: &mut LoadedProgram| {
             let output = program.check(LoweringPolicy::Reachable).unwrap();
             let diagnostics: Vec<_> = output
@@ -623,10 +598,10 @@ fn imaged_native_products_equal_fresh_and_reject_forged_audits() {
     with_compiler_stack(|| {
         let f = Fixture::new();
         let source = "const BASE: u64 = comptime 1\n@noalloc\npub fn value(x: u64) -> u64 {\n  x + comptime BASE\n}\n";
-        let image = library_image(&f, source).unwrap();
+        let image = library_products(&f, source).unwrap();
         let client = f.program("client", CLIENT, &f.0.join("lib.json"), "lib");
-        let mut cached = load(&client, &StdImages::of(vec![image.clone()]));
-        let mut fresh = load(&client, &StdImages::none());
+        let mut cached = load(&client, Some(&image));
+        let mut fresh = load(&client, None);
         cached.check_for_execution().unwrap();
         fresh.check_for_execution().unwrap();
         let actual = cached.engine.export_native_input().unwrap();
@@ -656,15 +631,20 @@ fn imaged_native_products_equal_fresh_and_reject_forged_audits() {
                 format!("{:?}", expected.constants)
             )
         );
-        for path in image.definitions().into_iter().map(DefId::path) {
+        for path in cached
+            .engine
+            .indexed_definitions()
+            .into_iter()
+            .filter(|p| p.0.package == package("lib"))
+        {
             for phase in [QueryKind::Check, QueryKind::Modes] {
                 assert_eq!(
-                    cached.engine.recompute_count(path, phase),
+                    cached.engine.recompute_count(&path, phase),
                     0,
                     "{path}: {phase:?}"
                 );
                 assert!(
-                    fresh.engine.recompute_count(path, phase) > 0,
+                    fresh.engine.recompute_count(&path, phase) > 0,
                     "{path}: {phase:?}"
                 );
             }
@@ -697,7 +677,7 @@ fn imaged_native_products_equal_fresh_and_reject_forged_audits() {
             .add(&path, source.replace("comptime 1", "comptime 2"))
             .unwrap();
         cached.engine.parse_file(file, &context).unwrap();
-        assert!(!cached.engine.imaged(&package("lib")));
+
         cached.check_for_execution().unwrap();
         let edited = cached.engine.export_native_input().unwrap();
         assert_ne!(
@@ -717,7 +697,7 @@ fn imaged_native_products_equal_fresh_and_reject_forged_audits() {
 fn a_package_with_diagnostics_is_never_imaged() {
     with_compiler_stack(|| {
         let f = Fixture::new();
-        let rejected = library_image(&f, "pub fn value(x: u64) -> u64 {\n  x + true\n}\n");
+        let rejected = library_products(&f, "pub fn value(x: u64) -> u64 {\n  x + true\n}\n");
         assert!(rejected.is_err());
     });
 }
@@ -725,30 +705,28 @@ fn a_package_with_diagnostics_is_never_imaged() {
 /// Exercise the compiler's products, including source anchors, core rows and
 /// query read sets, rather than only the image container's synthetic values.
 #[test]
-fn compiler_image_bytes_ignore_id_salts() {
-    let bytes = || {
+fn ordinary_product_identities_ignore_id_salts() {
+    let run = || {
         with_compiler_stack(|| {
             let f = Fixture::new();
-            let manifest = f.library(LIBRARY);
-            let client = f.program("imager", CLIENT, &manifest, "lib");
-            let mut program = load(&client, &StdImages::none());
-            let bytes = image(&f, &mut program, "lib").unwrap();
+            let products = library_products(&f, LIBRARY).unwrap();
+            let client = f.program("client", CLIENT, &f.0.join("lib.json"), "lib");
+            let mut p = load(&client, Some(&products));
             format!(
-                "{} {:?}",
-                bytes.len(),
-                hirsel_syntax::ContentHash::of_bytes(&bytes)
+                "{:?}",
+                p.engine
+                    .semantic_program_revision(&p.entry.clone())
+                    .unwrap()
             )
         })
     };
-    let Some(runs) = hirsel_intern::under_salts(
-        "image::compiler_image_bytes_ignore_id_salts",
+    if let Some(runs) = hirsel_intern::under_salts(
+        "image::ordinary_product_identities_ignore_id_salts",
         &[1, 2, 0x5eed],
-        bytes,
-    ) else {
-        return;
-    };
-    assert!(runs.iter().all(|run| run == &runs[0]), "{runs:#?}");
-    assert_eq!(runs[0], bytes());
+        run,
+    ) {
+        assert!(runs.iter().all(|run| run == &runs[0]));
+    }
 }
 
 /// Loading policy must preserve diagnostic selection and placement, including
@@ -757,14 +735,14 @@ fn compiler_image_bytes_ignore_id_salts() {
 fn image_diagnostics_equal_source_for_rejected_and_accepted_clients() {
     with_compiler_stack(|| {
         let f = Fixture::new();
-        let image = library_image(&f, LIBRARY).unwrap();
-        let images = StdImages::of(vec![image]);
+        let image = library_products(&f, LIBRARY).unwrap();
+        let images = Some(image.as_path());
         for (source, rejected) in [
             (CLIENT.replace("lib.value(1)", "lib.value(true)"), true),
             (CLIENT.into(), false),
         ] {
             let client = f.program("client", &source, &f.0.join("lib.json"), "lib");
-            let check = |images: &StdImages| {
+            let check = |images: Option<&std::path::Path>| {
                 let mut program = load(&client, images);
                 let output = program.check(LoweringPolicy::Comptime).unwrap();
                 let diagnostics: Vec<_> = output
@@ -775,7 +753,7 @@ fn image_diagnostics_equal_source_for_rejected_and_accepted_clients() {
                 assert_eq!(!diagnostics.is_empty(), rejected);
                 (output.completion, diagnostics)
             };
-            assert_eq!(check(&images), check(&StdImages::none()));
+            assert_eq!(check(images), check(None));
         }
     });
 }
@@ -787,13 +765,13 @@ fn imaged_generic_comptime_materializes_selected_client_sizes() {
         let source = "pub fn value[n:size](xs:Inline[u8,n])->u64{let _=xs;comptime (n*n)}\n";
         let client = "pub fn main()->Result[(),()]{let a:Inline[u8,2]=[1,2];let b:Inline[u8,3]=[1,2,3];failure.check(lib.value(a)==4u64,Arithmetic());failure.check(lib.value(b)==9u64,Arithmetic());Ok(())}\n";
         let library = f.library(source);
-        let imager = f.program("imager", client, &library, "lib");
-        let bytes = image(&f, &mut load(&imager, &StdImages::none()), "lib").unwrap();
-        let image = StdImage::from_bytes(bytes).unwrap();
+        let _imager = f.program("imager", client, &library, "lib");
+        let bytes = products(&f, "lib").unwrap();
+        let image = bytes;
         let client = f.program("client", client, &library, "lib");
-        let mut cached = load(&client, &StdImages::of(vec![image]));
-        let mut fresh = load(&client, &StdImages::none());
-        assert!(cached.engine.imaged(&package("lib")));
+        let mut cached = load(&client, Some(&image));
+        let mut fresh = load(&client, None);
+
         cached.check_for_execution().unwrap();
         fresh.check_for_execution().unwrap();
         let actual = cached.engine.export_native_input().unwrap();
@@ -825,11 +803,11 @@ fn imaged_generic_comptime_materializes_selected_client_sizes() {
 fn imaged_summary_equals_source_without_body_recomputation() {
     with_compiler_stack(|| {
         let f = Fixture::new();
-        let image = library_image(&f, LIBRARY).unwrap();
+        let image = library_products(&f, LIBRARY).unwrap();
         let library = f.0.join("lib.json");
         let client = f.program("zzz", CLIENT, &library, "lib");
-        let mut cached = load(&client, &StdImages::of(vec![image]));
-        let mut fresh = load(&client, &StdImages::none());
+        let mut cached = load(&client, Some(&image));
+        let mut fresh = load(&client, None);
         let path = hirsel_syntax::DefPath(hirsel_syntax::ItemPath {
             package: package("lib"),
             modules: vec!["lib".into()],
@@ -871,58 +849,38 @@ fn imaged_summary_equals_source_without_body_recomputation() {
 /// Only a shared local verifier cache reuses successful view checks. An image
 /// carries ordinary data and cannot convey acceptance to a separate cache.
 #[test]
-fn imaged_snapshot_reuses_signature_verdicts() {
+fn ordinary_snapshot_reuses_only_local_signature_verdicts() {
     let run = || {
         with_compiler_stack(|| {
             use hirsel_intern::work::{self, Counter};
             let f = Fixture::new();
-            let store = Arc::new(store::MemStore::default());
-            let compiler = COMPILER.clone().with_config(CompileConfig {
-                store,
-                ..CompileConfig::default()
-            });
-            let library = f.library(LIBRARY);
-            let producer = f.program("imager", CLIENT, &library, "lib");
-            let mut producer = compiler
-                .load_program_source_with_images(&producer, None, &StdImages::none())
-                .unwrap();
-            let image = StdImage::from_bytes(image(&f, &mut producer, "lib").unwrap()).unwrap();
-            drop(producer);
-            let client = f.program("zzz", CLIENT, &library, "lib");
-            let mut cached = compiler
-                .load_program_source_with_images(&client, None, &StdImages::of(vec![image.clone()]))
-                .unwrap();
-            assert!(cached.engine.imaged(&package("lib")));
+            let products = library_products(&f, LIBRARY).unwrap();
+            let client = f.program("zzz", CLIENT, &f.0.join("lib.json"), "lib");
+            let config = CompileConfig {
+                store: Arc::new(
+                    store::DirStore::new(f.0.join("shared")).with_read_only_root(products.clone()),
+                ),
+                ..CompileConfig::for_memory_cap(None)
+            };
+            let compiler = COMPILER.clone().with_config(config);
+            let mut producer = compiler.load_program_source(&client, None).unwrap();
+            producer.engine.signature_snapshot();
+            let mut local = compiler.load_program_source(&client, None).unwrap();
             let before = work::read(Counter::ValidateSignatureRows);
-            let snapshot = cached.engine.signature_snapshot();
-            assert_eq!(
-                work::read(Counter::ValidateSignatureRows) - before,
-                1,
-                "only the new program signature should be checked"
-            );
-            assert!(
-                snapshot
-                    .validation(&package("lib"))
-                    .universe_errors()
-                    .1
-                    .is_empty()
-            );
-            let mut independent = COMPILER
-                .clone()
-                .with_config(CompileConfig::default())
-                .load_program_source_with_images(&client, None, &StdImages::of(vec![image]))
-                .unwrap();
+            local.engine.signature_snapshot();
+            assert_eq!(work::read(Counter::ValidateSignatureRows) - before, 0);
+            let mut independent = load(&client, Some(&products));
             let before = work::read(Counter::ValidateSignatureRows);
             independent.engine.signature_snapshot();
             assert!(
                 work::read(Counter::ValidateSignatureRows) - before > 1,
-                "imported image bytes cannot convey local verifier authority"
+                "ordinary bytes cannot convey verifier authority"
             );
             "local".to_owned()
         })
     };
     if let Some(outputs) = hirsel_intern::under_salts(
-        "image::imaged_snapshot_reuses_signature_verdicts",
+        "image::ordinary_snapshot_reuses_only_local_signature_verdicts",
         &[1],
         run,
     ) {
@@ -936,7 +894,7 @@ fn imaged_snapshot_reuses_signature_verdicts() {
 fn explicit_image_syntax_requests_materialize_the_source() {
     with_compiler_stack(|| {
         let f = Fixture::new();
-        let image = library_image(&f, LIBRARY).unwrap();
+        let image = library_products(&f, LIBRARY).unwrap();
         let library = f.0.join("lib.json");
         let client = f.program("client", CLIENT, &library, "lib");
         let path = hirsel_syntax::DefPath(hirsel_syntax::ItemPath {
@@ -945,8 +903,8 @@ fn explicit_image_syntax_requests_materialize_the_source() {
             name: "value".into(),
         });
         for resolve in [false, true] {
-            let mut cached = load(&client, &StdImages::of(vec![image.clone()]));
-            assert!(cached.engine.imaged(&package("lib")));
+            let mut cached = load(&client, Some(&image));
+
             if resolve {
                 cached.engine.resolve_definition(&path).unwrap();
             } else {
@@ -954,7 +912,6 @@ fn explicit_image_syntax_requests_materialize_the_source() {
                 assert_eq!(syntax.value.item.definition, path);
             }
             // A syntax demand does not retire its still-current image.
-            assert!(cached.engine.imaged(&package("lib")));
         }
     });
 }
@@ -968,7 +925,7 @@ fn imaged_lowering_reuses_validated_evidence() {
         with_compiler_stack(|| {
             use hirsel_intern::timings::{self, Count};
             let f = Fixture::new();
-            let image = library_image(&f, LIBRARY).unwrap();
+            let image = library_products(&f, LIBRARY).unwrap();
             let library = f.0.join("lib.json");
             let path = hirsel_syntax::DefPath(hirsel_syntax::ItemPath {
                 package: package("lib"),
@@ -979,8 +936,8 @@ fn imaged_lowering_reuses_validated_evidence() {
             // heap-role declaration, changing V's FirstHeap read.
             for name in ["zzz", "aaa"] {
                 let client = f.program(name, CLIENT, &library, "lib");
-                let mut program = load(&client, &StdImages::of(vec![image.clone()]));
-                assert!(program.engine.imaged(&package("lib")));
+                let mut program = load(&client, Some(&image));
+
                 program.engine.signature_snapshot();
                 timings::enable();
                 let count = || {
@@ -1029,9 +986,9 @@ fn imaged_helper_lowering_preserves_dependency_depth() {
         let source = "pub const LEAF: u64 = 1u64\npub fn helper()->u64{comptime LEAF}\n";
         let library = f.library(source);
         let main = "pub fn main()->Result[(),()]{Ok(())}\n";
-        let imager = f.program("imager", main, &library, "lib");
-        let bytes = image(&f, &mut load(&imager, &StdImages::none()), "lib").unwrap();
-        let stored = StdImage::from_bytes(bytes).unwrap();
+        let _imager = f.program("imager", main, &library, "lib");
+        let bytes = products(&f, "lib").unwrap();
+        let stored = bytes;
         let mut client = main.to_owned();
         // The compiler dependency budget is min(call_depth,32). Ordinary
         // interpreter calls remain shallow in this fixture.
@@ -1046,8 +1003,8 @@ fn imaged_helper_lowering_preserves_dependency_depth() {
             name: "C0".into(),
         });
         let mut results = vec![];
-        for images in [StdImages::none(), StdImages::of(vec![stored])] {
-            let mut program = load(&manifest, &images);
+        for images in [None, Some(stored.as_path())] {
+            let mut program = load(&manifest, images);
             let result = program.engine.materialize_constant(&root);
             assert!(
                 matches!(result, Err(QueryError::Operational(_))),
@@ -1076,7 +1033,7 @@ fn frozen_s1_products_do_not_export_root_validation_universe_receipts() {
         let main = "pub fn main()->Result[(),()]{Ok(())}\n";
         let source = format!("{main}const ROOT:u32=comptime lib.helper()\n");
         let manifest = f.program("imager", &source, &library, "lib");
-        let mut program = load(&manifest, &StdImages::none());
+        let mut program = load(&manifest, None);
         let path = DefPath(hirsel_syntax::ItemPath {
             package: package("lib"),
             modules: vec!["lib".into()],
@@ -1106,11 +1063,11 @@ fn frozen_s1_products_do_not_export_root_validation_universe_receipts() {
                 "missing {origin} V input in {reads:?}"
             );
         }
-        let bytes = image(&f, &mut program, "lib").unwrap();
-        let stored = StdImage::from_bytes(bytes).unwrap();
+        let bytes = products(&f, "lib").unwrap();
+        let stored = bytes;
         let client = f.program("client", main, &library, "lib");
-        let mut imaged = load(&client, &StdImages::of(vec![stored]));
-        assert!(imaged.engine.imaged(&package("lib")));
+        let mut imaged = load(&client, Some(&stored));
+
         assert_eq!(
             imaged.engine.materialize_constant(&path).unwrap(),
             hirsel_tir::Constant::Integer(7)
@@ -1136,13 +1093,13 @@ fn image_releases_unrecorded_files_after_parallel_constant_publication() {
             .push(serde_json::json!({"path":"later.hir","module":["later"]}));
         std::fs::write(&library, serde_json::to_vec(&manifest).unwrap()).unwrap();
         let main = "pub fn main()->Result[(),()]{Ok(())}\n";
-        let imager = f.program("imager", main, &library, "lib");
+        let _imager = f.program("imager", main, &library, "lib");
         let path = DefPath(hirsel_syntax::ItemPath {
             package: package("lib"),
             modules: vec!["later".into()],
             name: "VALUE".into(),
         });
-        let mut producer = load(&imager, &StdImages::none());
+        let mut producer = load(&_imager, None);
         assert!(
             producer
                 .engine
@@ -1158,10 +1115,10 @@ fn image_releases_unrecorded_files_after_parallel_constant_publication() {
                 .iter()
                 .any(|(read, _)| matches!(read, memo::ReadKey::ValidationUniverse(_)))
         );
-        let bytes = image(&f, &mut producer, "lib").unwrap();
-        let stored = StdImage::from_bytes(bytes).unwrap();
+        let bytes = products(&f, "lib").unwrap();
+        let stored = bytes;
         let client = f.program("client", main, &library, "lib");
-        let mut program = load(&client, &StdImages::of(vec![stored]));
+        let mut program = load(&client, Some(&stored));
         let path = DefPath(hirsel_syntax::ItemPath {
             package: package("lib"),
             modules: vec!["later".into()],
@@ -1190,7 +1147,7 @@ fn imaged_frontier_replay_budget_matrix() -> String {
     with_compiler_stack(|| {
         let mut transcript = String::new();
         let f = Fixture::new();
-        let image = library_image(
+        let image = library_products(
             &f,
             "const LEAF:u64=1u64\nconst CHAIN:u64=comptime LEAF\npub fn value(x:u64)->u64{x+comptime CHAIN}\npub const BASE:u64=comptime value(1u64)\n",
         )
@@ -1206,13 +1163,13 @@ fn imaged_frontier_replay_budget_matrix() -> String {
                 .into_iter()
                 .flat_map(move |jobs| [false, true].map(move |fallback| (budget, jobs, fallback)))
         }) {
-            let mut cached = load(&client, &StdImages::of(vec![image.clone()]));
+            let mut cached = load(&client, Some(&image));
             cached.engine = cached.engine.with_config(CompileConfig {
                 hold_bytes: budget,
                 ..CompileConfig::for_memory_cap(None)
             });
-            let mut fresh = load(&client, &StdImages::none());
-            assert!(cached.engine.imaged(&package("lib")));
+            let mut fresh = load(&client, None);
+
             let expected = fresh.engine.lower_to_tir(&path).unwrap();
             let expected_depth = fresh
                 .engine
@@ -1338,11 +1295,11 @@ fn dictionary_literals_and_copied_fields_survive_package_images() {
         let client_source = "pub fn main() -> Result[(), ()] { let op = lib.COPY; failure.check(op.run(8) == 9, Arithmetic()); Ok(()) }\n";
         let manifest = f.library(library);
         let client = f.program("client", client_source, &manifest, "lib");
-        let mut fresh = load(&client, &StdImages::none());
-        let bytes = image(&f, &mut fresh, "lib").unwrap();
-        let images = StdImages::of(vec![StdImage::from_bytes(bytes).unwrap()]);
-        let mut imaged = load(&client, &images);
-        assert!(imaged.engine.imaged(&package("lib")));
+        let mut fresh = load(&client, None);
+        let bytes = products(&f, "lib").unwrap();
+        let images = Some(bytes.as_path());
+        let mut imaged = load(&client, images);
+
         fresh.check_for_execution().unwrap();
         imaged.check_for_execution().unwrap();
         assert_eq!(
@@ -1389,7 +1346,7 @@ fn dictionary_literals_and_copied_fields_survive_package_images() {
 fn scalar_private_receipts_stay_outside_package_dependency_reads() {
     with_compiler_stack(|| {
         let f = Fixture::new();
-        library_image(
+        library_products(
             &f,
             "pub const EARLY:u32=comptime 7u32\npub fn value(x:u64)->u64{let _=EARLY;x+1u64}\n",
         )

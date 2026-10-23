@@ -196,9 +196,8 @@ fn partition(group: &str, offset: usize, reference_only: bool, split_reference: 
         let input = loaded.engine.export_native_input().expect("V-export");
         let validated = loaded.engine.import_native_input(input).expect("V-import");
         eprintln!(
-            "UNICODE_IDENTITY compiler={COMPILER_IDENTITY:?} llvm={} image={:?} source={:?} input={:?}",
+            "UNICODE_IDENTITY compiler={COMPILER_IDENTITY:?} llvm={} source={:?} input={:?}",
             native::llvm_version(),
-            loaded.engine.selected_image(),
             hirsel_syntax::ContentHash::of_bytes(source.as_bytes()),
             native::input_identity(validated.snapshot())
         );

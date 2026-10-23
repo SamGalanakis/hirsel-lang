@@ -213,10 +213,12 @@ impl ObjectStore for DirObjects {
             .associate(address(key), action(key), reference)
             .is_ok()
         {
-            let len = value.len() as u64;
+            // Charge the shared content header and action record as well as
+            // the payload, including empty records after a nonempty write.
+            let len = value.len() as u64 + 64 + 152;
             let before = self.written.fetch_add(len, Relaxed);
             let interval = GC_EVERY.min(self.cap.max(1));
-            if before == 0 || (before + len) / interval != before / interval {
+            if before == 0 || before.saturating_add(len) / interval != before / interval {
                 self.gc(self.cap);
             }
         }
@@ -888,6 +890,20 @@ mod tests {
             fs::write(&path, bytes).unwrap();
         }
         assert_eq!(&*store.get(&key(1)).unwrap(), b"complete");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn dir_empty_outputs_after_nonempty_publication_still_enforce_the_cap() {
+        let root = scratch("empty-cap");
+        let cap = 4096;
+        let store = DirObjects::new(root.clone()).with_cap(cap);
+        store.put(&key(0), b"first");
+        for id in 1..100 {
+            store.put(&key(id), b"");
+        }
+        let report = store.gc(u64::MAX);
+        assert!(report.bytes <= cap + cap.min(GC_EVERY) + 216, "{report:?}");
         fs::remove_dir_all(root).unwrap();
     }
 

@@ -195,7 +195,7 @@ TEST_DATA["hirsel-driver-test-it"].append("examples/ownership-repairs/**")
 NATIVE_TESTS = {"hirsel-cranelift", "hirsel-cli", "hirsel-conformance", "hirsel-driver", "hirsel-llvm", "hirsel-pipeline-tests", "hirsel-rc", "hirsel-rt"}
 RUNTIME_ARCHIVES = "//:hirsel-rt-archives"
 
-# The std image (docs/building.md, "The std image"): written once by the built CLI,
+# Ordinary std products: precomputed once by the built CLI,
 # then loaded by the tests and campaigns that run std programs (HIRSEL_IMAGE).
 PRODUCTS = "//:hirsel-std-products"
 PRODUCT_TESTS = {"hirsel-cli", "hirsel-conformance", "hirsel-driver", "hirsel-pipeline-tests"}

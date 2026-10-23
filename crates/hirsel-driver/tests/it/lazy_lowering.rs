@@ -39,9 +39,7 @@ impl Fixture {
         self.0.join("lib.json")
     }
     fn check(&self) -> LoadedProgram {
-        let mut program =
-            load_program_source_with_images(&self.0.join("app.json"), None, &StdImages::none())
-                .unwrap();
+        let mut program = load_program_source(&self.0.join("app.json"), None).unwrap();
         let output = program
             .check(hirsel_engine::LoweringPolicy::Reachable)
             .unwrap();
@@ -310,8 +308,7 @@ fn library_diagnostics(f: &Fixture, files: &[(&str, &str)], as_dependency: bool)
         f.write("lib.json", &library.to_string());
         "lib.json"
     };
-    let mut program =
-        load_program_source_with_images(&f.0.join(root), None, &StdImages::none()).unwrap();
+    let mut program = load_program_source(&f.0.join(root), None).unwrap();
     let output = program
         .check(hirsel_engine::LoweringPolicy::Reachable)
         .unwrap();
@@ -454,8 +451,7 @@ fn package_diagnostics_and_warm_edits_match_at_every_worker_count() {
             let library = f.library("pub fn value() -> u64 { 1 }\n");
             f.app("pub fn main() -> u64 { lib.value() }\n", ("lib", &library));
             let manifest = f.0.join("app.json");
-            let mut warm =
-                load_program_source_with_images(&manifest, None, &StdImages::none()).unwrap();
+            let mut warm = load_program_source(&manifest, None).unwrap();
             let render = |program: &mut LoadedProgram| {
                 let checked = program.check(LoweringPolicy::Reachable).unwrap();
                 let mut text = format!("{:?}\n", checked.completion);
@@ -487,8 +483,7 @@ fn package_diagnostics_and_warm_edits_match_at_every_worker_count() {
                     modules: vec![],
                 };
                 warm.engine.parse_file(file, &context).unwrap();
-                let mut cold =
-                    load_program_source_with_images(&manifest, None, &StdImages::none()).unwrap();
+                let mut cold = load_program_source(&manifest, None).unwrap();
                 let actual = render(&mut warm);
                 assert_eq!(actual, render(&mut cold), "warm/cold after edit");
                 transcript.push_str(&actual);

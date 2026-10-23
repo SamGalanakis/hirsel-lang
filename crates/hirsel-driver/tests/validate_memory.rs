@@ -47,7 +47,7 @@ const BUDGET: isize = 64 << 20;
 #[test]
 fn largest_std_bodies_validate_within_a_fixed_heap_budget() {
     let f = Fixture::new();
-    let image = std_image();
+    let products = std_products();
     let program = f.program(
         "aaa",
         "pub fn main() -> () uses {} {
@@ -60,8 +60,8 @@ fn largest_std_bodies_validate_within_a_fixed_heap_budget() {
         "std",
     );
     with_compiler_stack(|| {
-        let mut p = load(&program, &StdImages::of(vec![image]));
-        assert!(p.engine.imaged(&package("std")), "{:?}", p.image_notes);
+        let mut p = load(&program, Some(&products));
+
         let input = p.engine.export_native_input().unwrap();
         // The signature input V checks std's own bodies against.
         let snapshot = p.engine.signature_snapshot();

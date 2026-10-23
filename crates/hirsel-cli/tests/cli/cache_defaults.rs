@@ -401,7 +401,7 @@ fn check_root_and_dependency_cache(
         let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
         command
             .env("HIRSEL_DAEMON", "off")
-            .env("HIRSEL_IMAGE", fixture.0.join("no-image"))
+            .env("HIRSEL_PRODUCTS", fixture.0.join("no-image"))
             .env("HIRSEL_RESULTS", "dir@1")
             .env("HIRSEL_RESULTS_DIR", fixture.0.join("results"))
             .env("HIRSEL_JOBS", "2")

@@ -420,7 +420,7 @@ fn tool_seal(root: &Path) {
     }
     let mut hashes = BTreeMap::new();
     for key in [
-        "HIRSEL_IMAGE",
+        "HIRSEL_PRODUCTS",
         "HIRSEL_RUNTIME_ARCHIVES",
         "LLVM_SYS_231_PREFIX",
         "HIRSEL_NATIVE_SELECTION",

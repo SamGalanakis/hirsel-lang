@@ -82,9 +82,8 @@ The manifest records the pinned archive provenance, license expressions,
 upstream text paths and hashes, source/build-input hashes, and every bundled
 file's hash. It has no timestamps, checkout paths or host identifiers. Notice
 collection checks that existing file bytes did not change; compiler identity,
-std image and native objects remain untouched. `hirsel-build.json` records the
-notice manifest hash and the current `hirsel-std.image` hash (the older
-`hirsel-std.precheck` filename is no longer shipped).
+ordinary std products remain untouched. `hirsel-build.json` records the
+notice manifest hash and a canonical digest of the `hirsel-std.products` file map.
 
 The standard bundle does not copy native runtime archives, the link kit, LLVM
 shared libraries, clang or host system libraries. Their external status and

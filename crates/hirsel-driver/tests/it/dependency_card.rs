@@ -104,35 +104,36 @@ fn dependency_card_verifies_signed_code_store_objects() {
 }
 
 #[test]
-fn dependency_cards_preserve_facts_when_a_matching_image_saves_body_work() {
+fn dependency_cards_preserve_facts_when_a_ordinary_product_saves_body_work() {
     with_compiler_stack(|| {
-        use hirsel_engine::{StdImage, StdImages};
         let manifest = manifest();
         let leaf = manifest.parent().unwrap().join("../leaf/hirsel.json");
         let path_scratch = tempfile::Builder::new()
             .prefix("hirsel-card-image-")
             .tempdir()
             .unwrap();
-        let path = path_scratch.path().join("image.bin");
-        COMPILER.image_package(&leaf, &path).unwrap();
-        let images = StdImages::of(vec![StdImage::open(&path).unwrap()]);
-        let mut source = COMPILER
-            .load_program_source_with_images(&manifest, None, &StdImages::none())
-            .unwrap();
-        let mut cached = COMPILER
-            .load_program_source_with_images(&manifest, None, &images)
-            .unwrap();
+        let path = path_scratch.path().join("products");
+        COMPILER.precompute_package(&leaf, &path).unwrap();
+        let mut source = COMPILER.load_program_source(&manifest, None).unwrap();
+        let mut cached = crate::image_fixture::load(&manifest, Some(&path));
         let mut a = source.dependency_cards(&manifest, Some("leaf@1")).unwrap();
         let mut b = cached.dependency_cards(&manifest, Some("leaf@1")).unwrap();
         assert_eq!(a["cards"][0]["weight"]["cost"]["prechecked_definitions"], 0);
-        assert!(
-            b["cards"][0]["weight"]["cost"]["prechecked_definitions"]
-                .as_u64()
-                .unwrap()
-                > 0
-        );
-        assert_eq!(b["cards"][0]["weight"]["cost"]["check_source_tokens"], 0);
-        assert_eq!(b["cards"][0]["weight"]["cost"]["lower_source_tokens"], 0);
+        assert_eq!(b["cards"][0]["weight"]["cost"]["prechecked_definitions"], 0);
+        let paths = cached
+            .engine
+            .indexed_definitions()
+            .into_iter()
+            .filter(|p| p.package_is("leaf", "1"))
+            .collect::<Vec<_>>();
+        assert!(!paths.is_empty());
+        for path in paths {
+            assert_eq!(
+                cached.engine.recompute_count(&path, QueryKind::Check),
+                0,
+                "{path}"
+            );
+        }
         a["cards"][0]["weight"]
             .as_object_mut()
             .unwrap()
@@ -142,6 +143,6 @@ fn dependency_cards_preserve_facts_when_a_matching_image_saves_body_work() {
             .unwrap()
             .remove("cost");
         assert_eq!(a, b);
-        std::fs::remove_file(path).unwrap();
+        std::fs::remove_dir_all(path).unwrap();
     });
 }

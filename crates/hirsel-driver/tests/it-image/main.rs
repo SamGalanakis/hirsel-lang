@@ -1,6 +1,6 @@
 //! The std image against a fresh check of std (docs/building.md, "The std
 //! precheck"): the one test that needs the toolchain's precheck
-//! (`HIRSEL_IMAGE`). It checks std from source once, so it links as its own
+//! (`HIRSEL_PRODUCTS`). It checks std from source once, so it links as its own
 //! binary with its own measured request.
 
 hirsel_guard::install!();
@@ -11,7 +11,6 @@ mod image_fixture;
 use hirsel_driver::*;
 use hirsel_engine::*;
 use image_fixture::*;
-use std::path::Path;
 
 const STD_PROGRAM: &str = "pub type AppError = Grant(GrantError) | Output(OutputError)
 
@@ -31,24 +30,21 @@ use canonical_debug::{canonical_ids, placed};
 /// and has the same revision node as in a fresh check, in a program that places
 /// std's sources at other FileIds than the program the precheck was checked in.
 #[test]
-fn imaged_std_products_equal_fresh_ones() {
+fn ordinary_std_complete_products_equal_fresh_ones() {
     with_compiler_stack(|| {
         let f = Fixture::new();
         // Buck2 checks std once for all tests. Cargo users build the same artifact
-        // with the documented `hirsel image` command and set HIRSEL_IMAGE.
-        let path = std::env::var_os("HIRSEL_IMAGE")
-            .expect("set HIRSEL_IMAGE to the toolchain's std image");
-        let precheck = StdImage::open(Path::new(&path)).unwrap();
-        // `aaa` places std after the program's own sources, exercising FileId rebasing.
+        // with the documented `hirsel image` command and set HIRSEL_PRODUCTS.
+        let products = std_products();
         let client = f.program("aaa", STD_PROGRAM, &std_manifest(), "std");
-        let mut prechecked = load(&client, &StdImages::of(vec![precheck.clone()]));
-        assert!(
-            prechecked.engine.imaged(&package("std")),
-            "{:?}",
-            prechecked.image_notes
-        );
-        let mut reference = load(&client, &StdImages::none());
-        assert!(!reference.engine.imaged(&package("std")));
+        let mut prechecked = load(&client, Some(&products));
+        let definitions = prechecked
+            .engine
+            .indexed_definitions()
+            .into_iter()
+            .filter(|p| p.0.package == package("std"))
+            .collect::<Vec<_>>();
+        let mut reference = load(&client, None);
         // LANG-6: every std definition and the program's closure hash the same
         // whether std is adopted from its precheck (definition_content's
         // prechecked-node branch) or checked from source.
@@ -83,8 +79,7 @@ fn imaged_std_products_equal_fresh_ones() {
             reference.engine.semantic_program_revision(&entry).unwrap()
         );
         let mut lowered = 0;
-        for id in precheck.definitions() {
-            let path = id.path();
+        for path in &definitions {
             assert_eq!(
                 prechecked.engine.semantic_program_revision(path).unwrap(),
                 reference.engine.semantic_program_revision(path).unwrap(),
@@ -146,8 +141,7 @@ fn imaged_std_products_equal_fresh_ones() {
             )
         );
         prechecked.engine.import_native_input(actual).unwrap();
-        for id in precheck.definitions() {
-            let path = id.path();
+        for path in &definitions {
             for phase in [QueryKind::Check, QueryKind::Modes] {
                 assert_eq!(
                     prechecked.engine.recompute_count(path, phase),

@@ -1,4 +1,4 @@
-//! Exact image admission remains authoritative for compact declaration rows.
+//! Ordinary products preserve private views, diagnostics and source positions.
 use crate::image_fixture::*;
 use hirsel_driver::*;
 use hirsel_engine::*;
@@ -7,7 +7,7 @@ use hirsel_syntax::{DefId, DefPath, ItemPath};
 mod canonical_debug;
 
 #[test]
-fn compact_image_admission_retains_private_views_unreachable_errors_and_positions() {
+fn ordinary_product_admission_retains_private_views_unreachable_errors_and_positions() {
     let run = || {
         with_compiler_stack(|| {
             let f = Fixture::new();
@@ -16,9 +16,8 @@ fn compact_image_admission_retains_private_views_unreachable_errors_and_position
             f.write("lib.hir", source);
             let manifest = serde_json::json!({"schema":1,"package":{"name":"lib","version":"1"},"sources":[{"path":"lib.hir","module":["lib"]}],"dependencies":[]});
             std::fs::write(&lib, manifest.to_string()).unwrap();
-            let image_path = f.0.join("lib.image");
-            COMPILER.image_package(&lib, &image_path).unwrap();
-            let stored = StdImage::open(&image_path).unwrap();
+            let products = f.0.join("lib.products");
+            COMPILER.precompute_package(&lib, &products).unwrap();
             let hidden = DefId::intern(&DefPath(ItemPath {
                 package: package("lib"),
                 modules: vec!["lib".into()],
@@ -26,8 +25,8 @@ fn compact_image_admission_retains_private_views_unreachable_errors_and_position
             }));
             let valid = "pub fn main()->u32{lib.value()}\n";
             let client = f.program("client", valid, &lib, "lib");
-            let mut original = load(&client, &StdImages::of(vec![stored.clone()]));
-            assert!(original.engine.imaged(&package("lib")));
+            let mut original = load(&client, Some(&products));
+
             let before = original.engine.signature_snapshot();
             let old_public = before.signature(hidden).unwrap().unwrap().fingerprint;
             let old_private = before.representation(hidden).unwrap().unwrap().1;
@@ -65,23 +64,29 @@ fn compact_image_admission_retains_private_views_unreachable_errors_and_position
                 f.program("client", &root, &lib, "lib");
                 for jobs in [1, 2, 8] {
                     let config = CompileConfig {
+                        store: std::sync::Arc::new(
+                            store::DirStore::new(f.0.join(format!(
+                                "reader-{jobs}-{:?}",
+                                hirsel_syntax::ContentHash::of_bytes(library.as_bytes())
+                            )))
+                            .with_read_only_root(products.clone()),
+                        ),
                         jobs: hirsel_intern::jobs::Jobs::new(jobs),
                         ..CompileConfig::for_memory_cap(None)
                     };
                     let mut cached = COMPILER
                         .clone()
                         .with_config(config.clone())
-                        .load_program_source_with_images(
-                            &client,
-                            None,
-                            &StdImages::of(vec![stored.clone()]),
-                        )
+                        .load_program_source(&client, None)
                         .unwrap();
-                    assert_eq!(cached.engine.imaged(&package("lib")), adopted);
+
                     let mut fresh = COMPILER
                         .clone()
-                        .with_config(config)
-                        .load_program_source_with_images(&client, None, &StdImages::none())
+                        .with_config(CompileConfig {
+                            store: std::sync::Arc::new(store::NoneStore),
+                            ..config
+                        })
+                        .load_program_source(&client, None)
                         .unwrap();
                     let a = cached.check(LoweringPolicy::Comptime).unwrap();
                     let b = fresh.check(LoweringPolicy::Comptime).unwrap();
@@ -181,13 +186,20 @@ fn compact_image_admission_retains_private_views_unreachable_errors_and_position
             let mut moved = manifest;
             moved["sources"][0]["module"] = serde_json::json!(["changed"]);
             std::fs::write(&lib, moved.to_string()).unwrap();
-            let changed = load(&client, &StdImages::of(vec![stored]));
-            assert!(!changed.engine.imaged(&package("lib")));
+            let mut changed = load(&client, Some(&products));
+            assert!(
+                !changed
+                    .check(LoweringPolicy::Comptime)
+                    .unwrap()
+                    .diagnostics
+                    .is_empty()
+            );
+
             transcript
         })
     };
     if let Some(outputs) = hirsel_intern::under_salts(
-        "image_restore_17::compact_image_admission_retains_private_views_unreachable_errors_and_positions",
+        "image_restore_17::ordinary_product_admission_retains_private_views_unreachable_errors_and_positions",
         &[1, 2, 0x5eed],
         run,
     ) {

@@ -52,9 +52,9 @@ Commands (arguments use the shared lexopt parser):
   public declarations without checking bodies. It retains full doc comments and
   signature contracts, stable definition-path anchors, and dependency links.
   std's manifest also publishes the core registry in `docs/api.md`.
-- `hirsel image <package manifest.json> -o <file>` checks the package as the only
-  dependency of an empty program and writes its std image (docs/building.md, "The std
-  image"); a package with any diagnostic is refused.
+- `hirsel precompute <package manifest.json> -o <directory>` checks the package
+  and populates the ordinary query store. It requires V and refuses diagnostics.
+  Toolchain packaging uses this same path for std (docs/building.md, "Ordinary std products").
 - `hirsel tapes check <tape>...` joins a set of linked runner tapes (docs/spec/runners.md,
   RUN-11) without a program: it prints a `checked:` line per link whose ends are both in
   the set, an `unchecked:` line per link with one end missing, and a count (exit 0), or
@@ -70,8 +70,7 @@ Commands (arguments use the shared lexopt parser):
   are the live bytes the binary's allocator counts under `--mem-usage` only.
 - `--no-verify`, anywhere before `--`, skips V for `run`, `test` and `build`
   (docs/building.md); any other command refuses it with exit 2.
-- `--verbose`, anywhere before `--`, writes one `hirsel: ...` line on stderr for each
-  dependency checked from source because no std image matched. Nothing else changes.
+- `--verbose`, anywhere before `--`, enables additional command diagnostics.
 - `--verify-cache`, anywhere before `--` on check, build and run, recomputes
   result-store hits and compares their complete canonical records. It runs in
   this process, bypassing resident dispatch, and leaves V enabled by default.

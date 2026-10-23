@@ -67,7 +67,7 @@ fn help_spellings_print_usage_to_stdout_and_exit_zero() {
         assert_eq!(output.status.code(), Some(0), "{command}");
         assert_eq!(
             output.stdout,
-            b"usage: hirsel [--verbose] [--timings[=json]] [--mem-usage] check [--verify-cache] [--watch] [--json | --safe] <source|manifest.json> | serve [--workspace <dir>] [--idle <seconds>] | test [--no-verify] [--json] [--seed <u64>] [--scheduler <name@1:seed> | --explore <n> [--scheduler <name@1>]] [--race] [--sim-points <root-release,atomic-store>] [--bless | --bench [--bench-time <ms>]] [--max-steps <n|unbounded> | --native [--backend llvm|cranelift]] <source|manifest.json> [filter...] | run [--verify-cache] [--validate-stages] [--no-verify] [--json] [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [--cores <n>] [--trace-events <jsonl>] [-- args...] | build [--verify-cache] [--validate-stages] [--no-verify] [--release | --debug] [--lto] [--backend llvm|cranelift] [--fuel] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | new <dir> [--lib] | fmt [--check] <source|manifest.json> | expand <source|manifest.json> | hash <source|manifest.json> | export --tir|--run <source|manifest.json> -o <file> | deps card <manifest.json> [--package name@ver[/module]] [--code-store config.json] [--json] | explain RULE [--json] | explain --list [--json] (docs/rule-explain.md) | doc <source|manifest.json> [-o <out.md>] [--json] | view <tape> --capture <id> -o <file> [--perfetto | --source <program> --analysis <id>] [--timing <sidecar>] | image <package manifest.json> -o <file> | tapes check <tape>... | tapes trial <candidate manifest.json> --grants <json> [--from <n>] <tape> | ctl <socket> (cores <n> | metrics) | serve [--no-verify] <source|manifest.json> --host <json>\n",
+            b"usage: hirsel [--verbose] [--timings[=json]] [--mem-usage] check [--verify-cache] [--watch] [--json | --safe] <source|manifest.json> | serve [--workspace <dir>] [--idle <seconds>] | test [--no-verify] [--json] [--seed <u64>] [--scheduler <name@1:seed> | --explore <n> [--scheduler <name@1>]] [--race] [--sim-points <root-release,atomic-store>] [--bless | --bench [--bench-time <ms>]] [--max-steps <n|unbounded> | --native [--backend llvm|cranelift]] <source|manifest.json> [filter...] | run [--verify-cache] [--validate-stages] [--no-verify] [--json] [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [--cores <n>] [--trace-events <jsonl>] [-- args...] | build [--verify-cache] [--validate-stages] [--no-verify] [--release | --debug] [--lto] [--backend llvm|cranelift] [--fuel] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | new <dir> [--lib] | fmt [--check] <source|manifest.json> | expand <source|manifest.json> | hash <source|manifest.json> | export --tir|--run <source|manifest.json> -o <file> | deps card <manifest.json> [--package name@ver[/module]] [--code-store config.json] [--json] | explain RULE [--json] | explain --list [--json] (docs/rule-explain.md) | doc <source|manifest.json> [-o <out.md>] [--json] | view <tape> --capture <id> -o <file> [--perfetto | --source <program> --analysis <id>] [--timing <sidecar>] | precompute <package manifest.json> -o <directory> | tapes check <tape>... | tapes trial <candidate manifest.json> --grants <json> [--from <n>] <tape> | ctl <socket> (cores <n> | metrics) | serve [--no-verify] <source|manifest.json> --host <json>\n",
             "{command}"
         );
         assert!(output.stderr.is_empty(), "{command}");
@@ -77,7 +77,7 @@ fn help_spellings_print_usage_to_stdout_and_exit_zero() {
 /// A missing or mismatched image costs only time: the run's output is
 /// unchanged, and only `--verbose` says why a dependency was checked from source.
 #[test]
-fn a_missing_image_is_reported_only_under_verbose() {
+fn missing_products_preserve_output_with_verbose() {
     let lib = file("pub fn value() -> u64 {\n  1\n}\n");
     let lib_manifest = lib.with_extension("json");
     std::fs::write(&lib_manifest, serde_json::json!({"schema":1,"package":{"name":"lib","version":"1"},"sources":[{"path":lib.file_name().unwrap().to_str().unwrap(),"module":["lib"]}],"dependencies":[]}).to_string()).unwrap();
@@ -93,7 +93,7 @@ fn a_missing_image_is_reported_only_under_verbose() {
         let output = command
             .arg("run")
             .arg(&path)
-            .env("HIRSEL_IMAGE", "/nonexistent/hirsel-std.image")
+            .env("HIRSEL_PRODUCTS", "/nonexistent/hirsel-std.image")
             .output()
             .unwrap();
         assert_eq!(output.status.code(), Some(0), "{output:?}");
@@ -103,8 +103,7 @@ fn a_missing_image_is_reported_only_under_verbose() {
         assert!(
             stderr
                 .lines()
-                .all(|line| line.starts_with("hirsel: no image: ")
-                    && line.ends_with("; checking lib@1")),
+                .all(|line| line.starts_with("hirsel: ") && line.ends_with("; checking lib@1")),
             "{stderr}"
         );
     }

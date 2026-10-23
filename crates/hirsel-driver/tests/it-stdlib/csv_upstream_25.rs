@@ -249,7 +249,7 @@ fn partition(part: usize) {
             Sha256::digest(source.as_bytes()),
             Sha256::digest(&expected.output)
         );
-        if let Some(image) = std::env::var_os("HIRSEL_IMAGE") {
+        if let Some(image) = std::env::var_os("HIRSEL_PRODUCTS") {
             eprintln!(
                 "csv-image sha256={:x}",
                 Sha256::digest(std::fs::read(image).unwrap())
