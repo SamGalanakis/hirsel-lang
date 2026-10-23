@@ -249,16 +249,23 @@ fn publish(execs: &Execs, saved: Saved, yielded: bool, idle: bool) {
     let dispatch = execs.dispatch.get().expect("physical dispatch enabled");
     match word_owner(saved.frame.owner.load(Ordering::Acquire)) {
         Owner::Any => {
+            if home_computes(execs) {
+                execs.home.post(Post::Saved(saved), None);
+                return;
+            }
             let me = own_exec();
             // SAFETY: an exec's local state belongs only to its OS thread.
             // Tokio's LIFO slot is private until the current poll returns.
             // A Hirsel pure segment need not return, so only an idle
             // continuation may use the slot: it searches again immediately.
-            let local = if idle && !me.is_null() {
-                unsafe { (*me).ready.take() }
-            } else {
-                None
-            };
+            // Home may retain a local after a width-one interval. Once
+            // wider, it serves host work rather than searching that local.
+            let local =
+                if idle && !me.is_null() && matches!(unsafe { (*me).kind }, Kind::Compute(_)) {
+                    unsafe { (*me).ready.take() }
+                } else {
+                    None
+                };
             if let Some(mut local) = local {
                 local.push(&dispatch.ready, saved, yielded);
                 unsafe { (*me).ready.set(Some(local)) };
@@ -290,6 +297,12 @@ fn wake_ready(execs: &Execs) {
     for offset in 0..width {
         let exec = &compute.active[(first + offset) % width];
         if !exec.busy() {
+            if exec.kind == Kind::Home {
+                // Home also services host posts; its inbox predicate needs
+                // an actual post, rather than a compute-search epoch alone.
+                exec.post(Post::Wake, None);
+                return;
+            }
             // Publish before locking the sleep predicate: a search that missed
             // this queue either sees the epoch change or receives the bell.
             let _inbox = exec.inbox.lock().unwrap();
@@ -397,7 +410,13 @@ pub(super) unsafe fn saved(run: *mut RunShared, exec: &Exec) {
 }
 
 pub(super) fn next(execs: &Execs, exec: &Exec) -> Option<Saved> {
-    if !matches!(exec.kind, Kind::Compute(_)) {
+    if exec.kind == Kind::Home && !home_computes(execs) {
+        // The idle owner releases its old width-one queue after growth.
+        // Resize cannot touch this cell from another OS thread.
+        retire(execs, exec);
+        return None;
+    }
+    if !matches!(exec.kind, Kind::Compute(_) | Kind::Home) {
         return None;
     }
     let dispatch = execs.dispatch.get()?;
@@ -434,6 +453,23 @@ pub(super) unsafe fn resume(run: *mut RunShared, exec: &Exec, saved: Saved) {
         frame,
         lease,
     } = saved;
+    let execs = unsafe { (*(*run).execs.get()).as_deref().unwrap() };
+    if exec.kind == Kind::Home
+        && word_owner(frame.owner.load(Ordering::Acquire)) == Owner::Any
+        && !home_computes(execs)
+    {
+        publish(
+            execs,
+            Saved {
+                queued,
+                frame,
+                lease,
+            },
+            false,
+            false,
+        );
+        return;
+    }
     let running = queued.start();
     let image = running.value();
     let (ctx, task, sp) = (image.ctx, image.task, image.sp);

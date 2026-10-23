@@ -172,7 +172,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_foreign_enter(
         let slot = unsafe { crate::tasks::to_pool(&mut *ctx, site) };
         word |= POOLED | u64::from(slot) << 48;
     }
-    if !nested {
+    if !nested && word & HOMED == 0 {
         let pinned = if crate::tasks::ordered::engine::on(ctx) {
             crate::tasks::ordered::foreign::pin(ctx)
         } else if crate::tasks::free::enabled(ctx) {

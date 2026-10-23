@@ -340,6 +340,109 @@ mod tests {
     }
 
     #[test]
+    fn width_one_home_callbacks_keep_their_thread_across_growth_and_shrink() {
+        use std::sync::atomic::Ordering;
+        for commit in [
+            hirsel_run_config::Commit::Shared,
+            hirsel_run_config::Commit::Dedicated,
+        ] {
+            for dispatch in [
+                FOREIGN_THREADS_ANY,
+                FOREIGN_THREADS_SERIAL | (7 << FOREIGN_PACKAGE_SHIFT),
+            ] {
+                let home = std::thread::current().id();
+                let mut run = crate::host::BodyRun::new(1, true);
+                unsafe { run.use_ordered_home_dispatch() };
+                let control = run.control();
+                let outcome = run.run(
+                    |ctx| unsafe {
+                        let mut policy = Policy::admit(&Default::default(), None);
+                        policy.commit = commit;
+                        engine::enable(ctx, policy);
+                    },
+                    move |ctx| unsafe {
+                        assert_eq!(std::thread::current().id(), home);
+                        assert!(
+                            !crate::pool::acquire_permit(ctx),
+                            "Hirsel already holds its permit"
+                        );
+                        let mut interval = [0u64; FOREIGN_SCOPE_BYTES / 8];
+                        hirsel_rt_v2_foreign_enter(ctx, 0, interval.as_mut_ptr().cast(), dispatch);
+                        let owner = scheduler(ctx).task((*ctx).task_id).owner;
+                        assert!(matches!(owner, Owner::Compute(_)));
+                        assert_eq!(hirsel_rt_v2_callback_context(), ctx);
+                        for width in [2, 1, 4] {
+                            (*ctx)
+                                .run_ref()
+                                .control
+                                .width
+                                .store(width, Ordering::Release);
+                            engine::migrate(ctx).unwrap();
+                            assert_eq!(std::thread::current().id(), home);
+                            assert_eq!(scheduler(ctx).task((*ctx).task_id).owner, owner);
+                            assert!(!crate::pool::acquire_permit(ctx));
+                            let mut nested = [0u64; FOREIGN_SCOPE_BYTES / 8];
+                            hirsel_rt_v2_foreign_enter(
+                                ctx,
+                                0,
+                                nested.as_mut_ptr().cast(),
+                                dispatch | FOREIGN_BLOCKING,
+                            );
+                            assert_eq!(std::thread::current().id(), home);
+                            hirsel_rt_v2_foreign_leave(nested.as_ptr().cast());
+                        }
+                        hirsel_rt_v2_callback_leave(ctx);
+                        hirsel_rt_v2_foreign_leave(interval.as_ptr().cast());
+                        engine::migrate(ctx).unwrap();
+                        assert_ne!(std::thread::current().id(), home);
+                        assert!(crate::pool::compute_index().is_some());
+                        assert!(!crate::pool::acquire_permit(ctx));
+                        (*ctx).run_ref().control.width.store(1, Ordering::Release);
+                        engine::migrate(ctx).unwrap();
+                        assert_eq!(std::thread::current().id(), home);
+                        assert!(!crate::pool::acquire_permit(ctx));
+                        STATUS_OK
+                    },
+                );
+                assert_eq!(outcome.ended, Ok(STATUS_OK));
+                assert_eq!(outcome.pending, 0);
+                assert_eq!(control.worker_width(), 0);
+            }
+        }
+    }
+
+    #[test]
+    fn a_stop_abandons_a_width_one_home_callback_after_growth() {
+        use std::sync::atomic::Ordering;
+        let mut run = crate::host::BodyRun::new(1, true);
+        unsafe { run.use_ordered_home_dispatch() };
+        let control = run.control();
+        let home = std::thread::current().id();
+        let outcome = run.run(
+            |ctx| unsafe { engine::enable(ctx, Policy::admit(&Default::default(), None)) },
+            move |ctx| unsafe {
+                let mut interval = [0u64; FOREIGN_SCOPE_BYTES / 8];
+                hirsel_rt_v2_foreign_enter(
+                    ctx,
+                    0,
+                    interval.as_mut_ptr().cast(),
+                    FOREIGN_THREADS_ANY,
+                );
+                assert_eq!(hirsel_rt_v2_callback_context(), ctx);
+                (*ctx).run_ref().control.width.store(2, Ordering::Release);
+                engine::migrate(ctx).unwrap();
+                assert_eq!(std::thread::current().id(), home);
+                control.stop();
+                let mut canceled = 0;
+                hirsel_rt_v2_task_canceled(ctx, &mut canceled, &0);
+                panic!("a stopped home callback resumed");
+            },
+        );
+        assert_eq!(outcome.ended, Err(crate::stop::Stop::Requested));
+        assert_eq!(outcome.pending, 0);
+    }
+
+    #[test]
     fn a_stop_abandons_a_saved_callback_on_a_pinned_retiring_worker() {
         use std::sync::atomic::Ordering;
         for width in [2, 4, 8] {
@@ -401,6 +504,9 @@ mod tests {
             return;
         }
         crate::pool::set_compute_grant(1);
+        width_one_home_callbacks_keep_their_thread_across_growth_and_shrink();
+        a_stop_abandons_a_width_one_home_callback_after_growth();
+        assert_eq!(crate::pool::compute_permits(), (1, 0, 0));
         ordered_home_pool_and_nested_callbacks_preserve_effective_thread_and_gate_depth();
         a_serial_gate_waiter_parks_until_its_older_callback_leaves_the_gate();
         caller_thread_callbacks_keep_their_exec_through_shrink_and_regrowth();

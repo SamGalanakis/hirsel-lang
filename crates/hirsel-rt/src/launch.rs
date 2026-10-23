@@ -2307,7 +2307,11 @@ pub(crate) unsafe fn execute(
         && runners.is_empty()
     {
         // SAFETY: the root context, on the admission thread, before the run's code runs.
-        unsafe { crate::pool::start(ctx, width, migrate) };
+        if ordered_enabled {
+            unsafe { crate::pool::start_ordered(ctx, width, migrate) };
+        } else {
+            unsafe { crate::pool::start(ctx, width, migrate) };
+        }
     }
     if production_free {
         unsafe {

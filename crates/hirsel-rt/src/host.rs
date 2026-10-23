@@ -480,6 +480,8 @@ pub struct BodyRun {
     /// Opt in to saved-segment dispatch for executor boundary tests. The body
     /// must use that policy's explicit suspension/wake seams throughout.
     physical_dispatch: bool,
+    #[cfg(test)]
+    ordered_home_dispatch: bool,
     pub fuel: Option<u64>,
     pub adapter: Option<Box<dyn crate::io::Adapter>>,
     /// Explicit Ordered wait-service lifetime, retained until all workers leave.
@@ -506,6 +508,8 @@ impl BodyRun {
             migrate,
             free: false,
             physical_dispatch: false,
+            #[cfg(test)]
+            ordered_home_dispatch: false,
             fuel: None,
             adapter: None,
             concurrent_adapter: None,
@@ -525,6 +529,14 @@ impl BodyRun {
     /// and every scheduler-role and service-lifetime contract.
     pub unsafe fn use_physical_dispatch(&mut self) {
         self.physical_dispatch = true;
+    }
+    /// Exercise production Ordered topology, including width-one home execution.
+    /// # Safety
+    /// As for use_physical_dispatch; setup must enable the Ordered engine.
+    #[cfg(test)]
+    pub(crate) unsafe fn use_ordered_home_dispatch(&mut self) {
+        self.physical_dispatch = true;
+        self.ordered_home_dispatch = true;
     }
     pub fn worker_metrics(&mut self) -> std::sync::Arc<crate::pool::WorkerMetrics> {
         std::sync::Arc::clone(self.metrics.get_or_insert_with(Default::default))
@@ -614,18 +626,23 @@ impl BodyRun {
                     .load(std::sync::atomic::Ordering::Acquire)
                     != 0
             {
-                crate::pool::start(
-                    ctx,
-                    match self
-                        .control
-                        .width
-                        .load(std::sync::atomic::Ordering::Acquire)
-                    {
-                        0 => self.width,
-                        width => width,
-                    },
-                    self.migrate,
-                );
+                let width = match self
+                    .control
+                    .width
+                    .load(std::sync::atomic::Ordering::Acquire)
+                {
+                    0 => self.width,
+                    width => width,
+                };
+                #[cfg(test)]
+                let ordered_home = self.ordered_home_dispatch;
+                #[cfg(not(test))]
+                let ordered_home = false;
+                if ordered_home {
+                    crate::pool::start_ordered(ctx, width, self.migrate);
+                } else {
+                    crate::pool::start(ctx, width, self.migrate);
+                }
             }
             if self.physical_dispatch {
                 assert!(crate::pool::wide((*ctx).run_ref()));

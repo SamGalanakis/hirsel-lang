@@ -404,6 +404,8 @@ pub(crate) struct Execs {
     cursor: AtomicUsize,
     /// Migrate every suspension (the W1 test mode).
     migrate: bool,
+    /// Production Ordered width one uses the admission thread as its worker.
+    home_at_one: bool,
     calls: hirsel_free::claim::Requests<()>,
     next_call: AtomicU64,
     activity: Mutex<()>,
@@ -690,10 +692,11 @@ pub(crate) fn recorder_slot() -> usize {
 
 /// Pin a foreign interval to its caller's compute exec. Only this thread may
 /// begin/end a pin; the count is atomic because resize may request its exit.
-/// Home and Pool already have exact owner routes.
+/// Home caller intervals also keep their exact Exec across width changes;
+/// explicit home intervals and Pool already have exact owner routes.
 pub(crate) fn pin_foreign_compute() -> Option<Owner> {
     let exec = own_exec();
-    if exec.is_null() || !matches!(unsafe { (*exec).kind }, Kind::Compute(_)) {
+    if exec.is_null() || !matches!(unsafe { (*exec).kind }, Kind::Compute(_) | Kind::Home) {
         return None;
     }
     unsafe { (*exec).foreign_frames.fetch_add(1, Ordering::AcqRel) };
@@ -709,7 +712,7 @@ pub(crate) fn unpin_foreign_compute(owner: Owner) {
     assert!(unsafe { (*exec).foreign_frames.fetch_sub(1, Ordering::AcqRel) } > 0);
 }
 
-/// Whether `run` runs its tasks on compute workers beside its home thread (width > 1).
+/// Whether `run` uses the physical executor topology, including Ordered home at width one.
 #[inline]
 pub(crate) fn wide(run: &RunShared) -> bool {
     run.execs
@@ -752,6 +755,7 @@ unsafe fn init_execs(ctx: *mut TaskCtx) -> &'static mut Execs {
                 }),
                 cursor: AtomicUsize::new(0),
                 migrate: false,
+                home_at_one: false,
                 calls: Default::default(),
                 next_call: AtomicU64::new(0),
                 activity: Mutex::new(()),
@@ -790,7 +794,9 @@ pub(crate) fn target(ctx: *mut TaskCtx, owner: Owner, last: Option<u16>) -> Opti
         Owner::Home => Arc::as_ptr(&execs.home),
         Owner::Pool(slot) => pool_exec(execs, slot),
         Owner::Compute(address) => std::ptr::with_exposed_provenance(address),
-        Owner::Any if compute.active.is_empty() => Arc::as_ptr(&execs.home),
+        Owner::Any if compute.active.is_empty() || compute.active[0].kind == Kind::Home => {
+            Arc::as_ptr(&execs.home)
+        }
         Owner::Any => {
             // SAFETY: the calling thread's exec lives while it serves the run.
             let here = match unsafe { (*me).kind } {
@@ -832,7 +838,8 @@ pub(crate) fn resumes_into_hirsel(ctx: *mut TaskCtx, to: *const Exec) -> bool {
         Kind::Compute(_) => true,
         Kind::Home => {
             // SAFETY: the context is live.
-            !unsafe { wide(&*(*ctx).run_ptr()) }
+            let run = unsafe { (*ctx).run_ref() };
+            !wide(run) || run.execs.as_deref().is_some_and(home_computes)
         }
         Kind::Pool(_) => false,
         Kind::Commit => false,
@@ -1136,6 +1143,28 @@ fn worker_main(run: RunPtr, exec: Arc<Exec>, holders: Arc<Holders>) {
 /// `width` is 1 to [`MAX_WIDTH`]. Physical executor reference tests can
 /// use one compute worker beside home; ordinary width1 stays on home.
 pub(crate) unsafe fn start(ctx: *mut TaskCtx, width: u32, migrate: bool) {
+    unsafe { start_with_home(ctx, width, migrate, false) };
+}
+
+/// Production Ordered keeps the width-one caller on home, using the same
+/// physical saved-frame dispatcher and permits as its wider topology.
+/// # Safety
+/// As for start, before root publication.
+pub(crate) unsafe fn start_ordered(ctx: *mut TaskCtx, width: u32, migrate: bool) {
+    unsafe { start_with_home(ctx, width, migrate, true) };
+}
+
+fn home_computes(execs: &Execs) -> bool {
+    execs
+        .compute
+        .lock()
+        .unwrap()
+        .active
+        .first()
+        .is_some_and(|e| e.kind == Kind::Home)
+}
+
+unsafe fn start_with_home(ctx: *mut TaskCtx, width: u32, migrate: bool, home_at_one: bool) {
     // SAFETY: caller contract.
     let run = unsafe { (*ctx).run_ptr() };
     let execs = unsafe { init_execs(ctx) };
@@ -1144,11 +1173,19 @@ pub(crate) unsafe fn start(ctx: *mut TaskCtx, width: u32, migrate: bool) {
     }
     execs.home.held.store(false, Ordering::Release);
     execs.migrate = migrate;
+    execs.home_at_one = home_at_one;
     // Live topology and thread handles are published under the compute lock.
     // No exclusive Execs borrow crosses the first thread spawn.
     let execs: &Execs = execs;
     unsafe { (&(*run).control).width.store(width, Ordering::Release) };
-    grow(run, execs, &mut execs.compute.lock().unwrap(), width);
+    let mut compute = execs.compute.lock().unwrap();
+    if home_at_one && width == 1 {
+        compute.active.push(Arc::clone(&execs.home));
+        unsafe { (&(*run).control).live_width.fetch_add(1, Ordering::AcqRel) };
+    } else {
+        grow(run, execs, &mut compute, width);
+    }
+    drop(compute);
     // SAFETY: as above.
     unsafe { (*run).control.set_home(Arc::clone(&execs.home)) };
 }
@@ -1193,6 +1230,21 @@ fn resize(ctx: *mut TaskCtx) {
     let mut compute = execs.compute.lock().unwrap();
     if compute.active.is_empty() {
         return;
+    }
+    if execs.home_at_one {
+        let on_home = compute.active[0].kind == Kind::Home;
+        if on_home && width > 1 {
+            compute.active.clear();
+            unsafe { (&(*run).control).live_width.fetch_sub(1, Ordering::AcqRel) };
+        } else if !on_home && width == 1 {
+            for exec in &compute.active {
+                exec.post(Post::Exit, None);
+            }
+            let retiring = std::mem::take(&mut compute.active);
+            compute.retiring.extend(retiring);
+            compute.active.push(Arc::clone(&execs.home));
+            unsafe { (&(*run).control).live_width.fetch_add(1, Ordering::AcqRel) };
+        }
     }
     if compute.active.len() > width as usize {
         let retiring = compute.active.split_off(width as usize);
@@ -1253,6 +1305,9 @@ pub(crate) unsafe fn start_root(run: *mut RunShared, task: u32) {
 pub(crate) unsafe fn serve_home(run: *mut RunShared, finished: &dyn Fn() -> bool) {
     // SAFETY: caller contract.
     let home = unsafe { Arc::clone(&(*(*run).execs.get()).as_deref().unwrap().home) };
+    // Saved-frame cleanup and immediate-child lending need this idle Exec,
+    // including when home itself is the single compute worker.
+    let enclosing_exec = EXEC.with(|e| e.replace(Arc::as_ptr(&home)));
     loop {
         // SAFETY: this is the home thread, idle on its own stack.
         unsafe { post_deferred(run, &home) };
@@ -1270,6 +1325,11 @@ pub(crate) unsafe fn serve_home(run: *mut RunShared, finished: &dyn Fn() -> bool
         {
             continue;
         }
+        let execs = unsafe { (*(*run).execs.get()).as_deref().unwrap() };
+        if let Some(saved) = free::next(execs, &home) {
+            unsafe { free::resume(run, &home, saved) };
+            continue;
+        }
         match home.take().0 {
             Post::Run { task, permit } => {
                 // SAFETY: the post names a suspended task.
@@ -1281,6 +1341,11 @@ pub(crate) unsafe fn serve_home(run: *mut RunShared, finished: &dyn Fn() -> bool
             Post::Wake => {}
             Post::Exit => fault("the home thread was asked to exit"),
         }
+    }
+    EXEC.with(|e| e.set(enclosing_exec));
+    let execs = unsafe { (*(*run).execs.get()).as_deref().unwrap() };
+    if home_computes(execs) {
+        unsafe { (&(*run).control).live_width.fetch_sub(1, Ordering::AcqRel) };
     }
     home.close();
     // Close uses the same claim/withdraw protocol as R6's request bridge. A
@@ -1338,7 +1403,8 @@ pub(crate) unsafe fn call_home(ctx: *mut TaskCtx, call: &mut dyn FnMut()) -> Sto
 pub(crate) unsafe fn call_home_in(run: *mut RunShared, call: &mut dyn FnMut()) -> Stopped<()> {
     // SAFETY: the facade is owned by this live run.
     let run = unsafe { &*run };
-    if own_exec().is_null() {
+    let caller = own_exec();
+    if caller.is_null() || unsafe { (*caller).kind } == Kind::Home {
         call();
         return Ok(());
     }
@@ -1579,6 +1645,7 @@ pub(crate) fn workers(run: &RunShared) -> Vec<*mut Worker> {
         .active
         .iter()
         .chain(&compute.retiring)
+        .filter(|exec| exec.kind != Kind::Home)
         .map(|exec| exec.worker.get())
         .filter(|worker| !worker.is_null())
         .chain(
@@ -1657,6 +1724,7 @@ pub(crate) fn forget(run: &mut RunShared) {
         .active
         .iter()
         .chain(&compute.retiring)
+        .filter(|exec| exec.kind != Kind::Home)
         .map(|exec| exec.worker.get())
         .chain(execs.pool.get_mut().unwrap().iter_mut().map(|thread| {
             thread.thread.take();
