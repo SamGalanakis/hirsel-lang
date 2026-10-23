@@ -695,12 +695,9 @@ pub fn colon(mut cursor: Reader) -> Result[(), JsonError] uses {} {
   Ok(())
 }
 
-/// Next object key, rejecting decoded duplicates before reading its value.
-/// The caller owns the key set for this object, including ignored members.
-pub fn object_next(mut cursor: Reader, mut first: bool, mut keys: Set[String]) -> Result[
-  Option[String],
-  JsonError
-] uses {} {
+// Shared lexical member boundary. Preserve the key-start offset after comma
+// whitespace without changing reader_more's delimiter and depth behavior.
+fn owned_member_start(mut cursor: Reader, mut first: bool) -> Result[Option[u64], JsonError] uses {} {
   let _ = peek(mut cursor)
   let mut start = cursor.pos
   if !first && json_peek(cursor.data, start) == 44 {
@@ -710,6 +707,18 @@ pub fn object_next(mut cursor: Reader, mut first: bool, mut keys: Set[String]) -
   if !reader_more(mut cursor, mut first, 125)? {
     return Ok(None)
   }
+  Ok(Some(start))
+}
+
+/// Next object key, rejecting decoded duplicates before reading its value.
+/// The caller owns the key set for this object, including ignored members.
+pub fn object_next(mut cursor: Reader, mut first: bool, mut keys: Set[String]) -> Result[
+  Option[String],
+  JsonError
+] uses {} {
+  let Some(start) = owned_member_start(mut cursor, mut first)? else {
+    return Ok(None)
+  }
   let key = read_owned_text(mut cursor)?
   if core@1/set.contains(keys, key) {
     return Error(DuplicateKey(start))
@@ -717,6 +726,34 @@ pub fn object_next(mut cursor: Reader, mut first: bool, mut keys: Set[String]) -
   core@1/set.insert(mut keys, copy key)
   colon(mut cursor)?
   Ok(Some(key))
+}
+
+// SmallVec 4999262d672a92b1b6a4aab7bef43b3d788f3d83 (MIT/Apache-2.0),
+// src/lib.rs:586-615,674-703: bounded inline ownership before heap spill.
+// Like the derived reader, keep both inline keys after spilling. Only later
+// keys enter the existing hashed Set, so wide objects stay bounded per lookup.
+fn remember_skipped_key(
+  mut first: Option[String],
+  mut second: Option[String],
+  mut spill: Option[Set[String]],
+  take key: String
+) -> bool uses {} {
+  match first {
+    None => { first = Some(take key); return true },
+    Some(previous) => { if previous == key { return false } },
+  }
+  match second {
+    None => { second = Some(take key); return true },
+    Some(previous) => { if previous == key { return false } },
+  }
+  let mut seen = match std@1/option.remove(mut spill) {
+    Some(previous) => take previous,
+    None => core@1/set.empty(),
+  }
+  let duplicate = core@1/set.contains(seen, key)
+  if !duplicate { core@1/set.insert(mut seen, take key) }
+  spill = Some(take seen)
+  !duplicate
 }
 
 /// Validate and skip one value, retaining only object key sets, never a DOM.
@@ -731,8 +768,15 @@ pub fn skip(mut cursor: Reader) -> Result[(), JsonError] uses {} {
   } else if c == 123 {
     begin_object(mut cursor)?
     let mut first = true
-    let mut keys: Set[String] = core@1/set.empty()
-    while let Some(_) = object_next(mut cursor, mut first, mut keys)? {
+    let mut first_key: Option[String] = None
+    let mut second_key: Option[String] = None
+    let mut spill: Option[Set[String]] = None
+    while let Some(start) = owned_member_start(mut cursor, mut first)? {
+      let key = read_owned_text(mut cursor)?
+      if !remember_skipped_key(mut first_key, mut second_key, mut spill, take key) {
+        return Error(DuplicateKey(start))
+      }
+      colon(mut cursor)?
       skip(mut cursor)?
     }
   } else {
