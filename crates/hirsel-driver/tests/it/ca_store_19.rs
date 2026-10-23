@@ -1027,3 +1027,44 @@ fn enclosing_products_replay_selected_generated_bodies_without_execution() {
         assert!(changed.materialize_constant(&definition("B")).is_err());
     });
 }
+
+#[test]
+fn worker_enclosing_generated_values_replay_only_selected_canonical_instances() {
+    with_compiler_stack(|| {
+        use hirsel_tir::TirProvider;
+        let source = "type Point{x:u32}\ntype Other{x:u64}\nfn gen[T](s:TypeShape[T])->Result[Body[fn(T)->u64 uses {}],String]{let _=s;Ok(codegen.body(\"fn(v:standalone@0/Point)->u64 uses {}{let _=v;12u64}\"))}\nfn width[T](v:T)->u64 uses {}=comptime gen(shape(T))\nconst A:u64=comptime width(Point(x:1u32))\nconst B:u64=comptime A+1u64\nfn value()->u64{comptime width(Point(x:2u32))}\n";
+        for jobs in [1, 2, 4, 8] {
+            let store = Arc::new(store::MemStore::default());
+            let mut seed = signature_session(store.clone(), source, true);
+            let roots = vec![definition("A"), definition("B")];
+            let values = seed.materialize_values(roots.clone(), hirsel_intern::jobs::Jobs::new(jobs));
+            assert!(values.iter().all(Result::is_ok), "jobs={jobs}: {values:?}");
+            seed.lower_to_tir(&definition("value")).unwrap();
+            let selected: Vec<_> = seed.generated_sources().map(|(path, source)| (path.clone(), source.text.clone())).collect();
+            assert_eq!(selected.len(), 1);
+            let mut fresh = signature_session(store.clone(), source, true);
+            fresh.adapters.modes = None; fresh.adapters.lowering = None;
+            let actual = fresh.materialize_values(roots, hirsel_intern::jobs::Jobs::new(jobs));
+            assert!(actual.iter().all(Result::is_ok), "jobs={jobs}: {actual:?}");
+            assert_eq!(actual.iter().map(|v| &v.as_ref().unwrap().root.kind).collect::<Vec<_>>(), values.iter().map(|v| &v.as_ref().unwrap().root.kind).collect::<Vec<_>>());
+            fresh.lower_to_tir(&definition("value")).unwrap();
+            assert_eq!(fresh.generated_sources().map(|(path, source)| (path.clone(), source.text.clone())).collect::<Vec<_>>(), selected);
+            assert_eq!(fresh.lower_adapter_calls(&definition("gen")), 0);
+            for name in ["A", "B", "value"] { assert_eq!(fresh.recompute_count(&definition(name), QueryKind::Modes), 0); }
+            let other = fresh.types().intern(hirsel_types::Type::with_kind(hirsel_types::TypeKind::Named { definition: hirsel_syntax::DefId::intern(&definition("Other")), arguments: vec![].into() }));
+            assert!(fresh.instance_body(&definition("width"), &[hirsel_types::GenericArgument::Type(other)]).is_err(), "unselected Other has no completed text");
+            let copied = Arc::new(store::MemStore::default());
+            for (key, bytes) in store.take() {
+                store::ResultStore::put(&*copied, &key, &bytes); store::ResultStore::put(&*store, &key, &bytes);
+            }
+            let mut remote = signature_session(copied, source, true); remote.adapters.modes = None; remote.adapters.lowering = None;
+            assert!(remote.materialize_constant(&definition("B")).is_err());
+            let mut oracle = signature_session(store.clone(), source, true).with_verify_store(store::VerifyStore::Recompute);
+            assert_eq!(oracle.materialize_constant(&definition("B")).unwrap(), hirsel_tir::Constant::Integer(13), "jobs={jobs}");
+            oracle.lower_to_tir(&definition("value")).unwrap();
+            let mut changed = signature_session(store, &source.replace("12u64", "14u64"), true);
+            changed.adapters.modes = None; changed.adapters.lowering = None;
+            assert!(changed.materialize_constant(&definition("B")).is_err());
+        }
+    });
+}

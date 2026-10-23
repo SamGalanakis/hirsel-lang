@@ -382,11 +382,12 @@ impl QueryEngine {
             let generated = self.generated_text(definition, snapshot, body, reads);
             let (_, acceptance, selections) = self.end_evaluation_validation();
             let generated = generated?;
-            if self.result_store.is_some() {
-                if let Some(executed) = self.execution_stack.last() {
-                    reads.observed.merged.extend(executed.clone());
-                }
-                if let Ok(observed) = self.typed_reads(definition, &reads.reads, &reads.observed) {
+            if let Some(executed) = self.execution_stack.last() {
+                reads.observed.merged.extend(executed.clone());
+            }
+            if let Ok(observed) = self.typed_reads(definition, &reads.reads, &reads.observed) {
+                reads.observed.merged.merge(&observed);
+                if self.result_store.is_some() {
                     self.store_generation(
                         definition,
                         &observed,
