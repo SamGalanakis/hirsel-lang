@@ -2640,6 +2640,7 @@ conformance/MEM/MEM-4-seal-noalloc-bad.hir
 conformance/MEM/MEM-4-seal-noalloc-ok.hir
 conformance/MEM/MEM-4-sealed-heap-charge-run.hir
 conformance/MEM/MEM-4-sealed-heap-run.hir
+conformance/MEM/MEM-4-sealed-retained-charge-run.hir
 conformance/MEM/MEM-4-sealed-scalar-zero-run.hir
 conformance/MEM/MEM-4-tour-12-arenas-run.hir
 conformance/MEM/MEM-5-alias-cleanup-24-direct-run.hir

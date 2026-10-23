@@ -1,0 +1,34 @@
+// rule: MEM-4
+// expect: run
+// Dead retained arena payloads contribute their ordinary heap occurrences.
+fn retained(cap: u64) -> u64 {
+  let outcome = arena.bounded(
+    cap,
+    fn(a: Arena) -> Region[u64] {
+      let h: Bytes in heap = copy_to(heap, b"abc")
+      let dead: List[Bytes] in a = [copy h, copy h]
+      let root = 7u64
+      arena.seal(take a, take root)
+    }
+  )
+  match take outcome {
+    Ok(r) => {
+      let mut owned = take r
+      region.with(
+        mut owned,
+        fn(root: u64) -> u64 {
+          root
+        }
+      )
+    },
+    Error(e) => 0u64,
+  }
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  failure.check(retained(15u64) == 0u64, Bounds())
+  failure.check(retained(16u64) == 0u64, Bounds())
+  failure.check(retained(21u64) == 0u64, Bounds())
+  failure.check(retained(22u64) == 7u64, Bounds())
+  Ok(())
+}
