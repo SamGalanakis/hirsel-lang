@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-2236 exported definitions; 972 variants.
+2237 exported definitions; 972 variants.
 
 ## Types and roots
 
@@ -6120,7 +6120,7 @@ References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Dir`](#def-core_40
 
 <a id="def-core_401_2ffile_2fread_5fdir"></a>
 
-- `fn file.read_dir(d: Dir, p: Path) -> Result[List[DirEntry], FileError]`
+- `fn file.read_dir(d: Dir, p: Path) -> Result[Iter[Result[DirEntry, FileError]], FileError]`
 
 <a id="def-core_401_2ffile_2fremove"></a>
 
@@ -9173,6 +9173,14 @@ References: [`core@1/Iter`](#def-core_401_2fIter)
 - `@captures(it) pub fn iter.take_n[T](take it: Iter[T], count: u64) -> Iter[T] uses {it}`
 
 References: [`core@1/Iter`](#def-core_401_2fIter), [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fiter_2ftry_5fcollect"></a>
+
+- `pub fn iter.try_collect[T, E](take it: Iter[Result[T, E]]) -> Result[List[T], E] uses {it}`
+
+Collects successful items, stopping at the first error.
+
+References: [`core@1/Iter`](#def-core_401_2fIter), [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult)
 
 <a id="def-std_401_2fiter_2fzip"></a>
 
