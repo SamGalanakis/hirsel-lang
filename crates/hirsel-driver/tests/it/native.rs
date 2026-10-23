@@ -965,6 +965,7 @@ fn generated_main_binds_independent_seeds_and_refuses_mismatch_before_entry() {
                     test_seed: 5,
                     scheduler: None,
                     fault_seed: None,
+                    fixture_file_faults: None,
                 };
                 let program = build(&checked.validated, &options).unwrap();
                 let exe = link(
