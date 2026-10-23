@@ -104,6 +104,7 @@ pub(crate) fn retained_lower_entry_bytes(
     );
     weight.detail(&entry.detail);
     weight.flat_vec(&entry.covered);
+    weight.vec(&entry.staged, |w, (_, arguments)| w.flat_vec(arguments));
     if let Some(depth) = &entry.depth {
         weight.add(size_of_val(&*depth.first));
     }
@@ -793,6 +794,7 @@ mod tests {
             covered: vec![],
             depth: None,
             acceptance: None,
+            staged: vec![],
             consistent: true,
         };
         let base = retained_lower_entry_bytes(&entry, None);
