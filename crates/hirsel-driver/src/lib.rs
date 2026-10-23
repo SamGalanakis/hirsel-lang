@@ -681,14 +681,14 @@ pub fn replay_observations(
     max_steps: Option<u64>,
 ) -> Result<hirsel_interp::observation::Observable, ToolError> {
     let mut observed = None;
-    run_path_on_host_observed(
+    let outcome = run_path_on_host_observed(
         path,
         HostLaunch::Replay(tape),
         max_steps,
         hirsel_engine::Verify::On,
         Some(&mut observed),
     )?;
-    observed.ok_or_else(|| ToolError::Runtime("replay produced no semantic observation".into()))
+    replay_observation(observed, &outcome)
 }
 
 /// Replay the same bound host tape with the interpreter's checked memory model.
@@ -699,7 +699,7 @@ pub fn replay_observations_checked(
     max_steps: Option<u64>,
 ) -> Result<hirsel_interp::observation::Observable, ToolError> {
     let mut observed = None;
-    session::with_program(path, hirsel_engine::Verify::On, |program| {
+    let (outcome, _) = session::with_program(path, hirsel_engine::Verify::On, |program| {
         run_loaded_on_host_with_checks(
             program,
             HostLaunch::Replay(tape),
@@ -709,7 +709,18 @@ pub fn replay_observations_checked(
             true,
         )
     })?;
-    observed.ok_or_else(|| ToolError::Runtime("replay produced no semantic observation".into()))
+    replay_observation(observed, &outcome)
+}
+
+fn replay_observation(
+    observed: Option<hirsel_interp::observation::Observable>,
+    outcome: &RunOutcome,
+) -> Result<hirsel_interp::observation::Observable, ToolError> {
+    observed.ok_or_else(|| {
+        ToolError::Runtime(format!(
+            "replay stopped without a semantic observation: {outcome:?}"
+        ))
+    })
 }
 
 fn run_path_on_host_observed(
@@ -921,18 +932,21 @@ fn run_loaded_on_host_with_checks(
             })
         })?;
     }
+    let outcome = hirsel_engine::project_outcome(&execution, &sources)
+        .map_err(|error| ToolError::Runtime(format!("{error:?}")))?;
     if let network::HostIo::Replay(io) = &mut operations.io
         && !operations.library.native_free()
         && !matches!(execution.outcome, hirsel_interp::Outcome::ToolingLimit(_))
     {
-        io.finish()
-            .map_err(|e| ToolError::Runtime(format!("replay refused: {e:?}")))?;
+        io.finish().map_err(|e| {
+            ToolError::Runtime(format!(
+                "replay refused: {e:?}; run stopped with {outcome:?}"
+            ))
+        })?;
     }
     if let Some(observed) = observed {
         *observed = execution.observable(&sources);
     }
-    let outcome = hirsel_engine::project_outcome(&execution, &sources)
-        .map_err(|error| ToolError::Runtime(format!("{error:?}")))?;
     let outcome = operations
         .finish_free(&outcome)
         .map_err(|e| ToolError::Runtime(format!("Free replay: {e}")))?

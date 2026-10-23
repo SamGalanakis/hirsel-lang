@@ -914,6 +914,32 @@ impl Tree {
         }
         Ok(tree)
     }
+    /// Build an isolated test snapshot with SimulationConfig's virtual mount selectors.
+    pub fn fixture(
+        files: BTreeMap<String, Vec<u8>>,
+        mounts: BTreeMap<String, Access>,
+    ) -> Result<Self, hirsel_run_schema::RunRefusal> {
+        let invalid = || hirsel_run_schema::RunRefusal::Invalid {
+            field: "fixture.files".into(),
+            detail: "invalid snapshot path or mount collision".into(),
+        };
+        let mounts = mount_access(mounts)?;
+        let mut tree = Self::new(files).map_err(|_| invalid())?;
+        for selector in mounts.keys() {
+            let mut path = selector.as_str();
+            loop {
+                if tree.files.contains_key(path) {
+                    return Err(invalid());
+                }
+                tree.directories.insert(path.into());
+                let Some((parent, _)) = path.rsplit_once('/') else {
+                    break;
+                };
+                path = parent;
+            }
+        }
+        Ok(tree)
+    }
     /// Resolve a relative link using an explicit granted root. The snapshot
     /// contains no host paths or handles; invalid targets remain file faults.
     pub(crate) fn resolve(
@@ -1150,6 +1176,12 @@ impl Default for State {
     }
 }
 impl State {
+    pub(crate) fn fixture(&mut self, tree: Tree, mounts: BTreeMap<String, Access>) {
+        self.mounts = mounts;
+        self.fake_files
+            .insert(0, crate::io_sim::FileIdentities::new(&tree));
+        self.fake_trees.insert(0, tree);
+    }
     pub(crate) fn denied_projection(&self, request: &Request) -> bool {
         match request {
             Request::Directory { path, .. } if self.mount(path).is_none() => return true,
@@ -1270,6 +1302,9 @@ impl State {
             .is_some_and(|files| files.is_stale(file))
     }
     fn fake_tree(&self, request: &Request) -> Option<u64> {
+        if matches!(request, Request::Directory { .. }) && self.fake_trees.contains_key(&0) {
+            return Some(0);
+        }
         let directory = match request {
             Request::NarrowDir { directory, .. }
             | Request::ReadOnlyDir { directory }
@@ -1436,7 +1471,7 @@ impl State {
             self.fake_detached.insert(tree_id, detached);
             if matches!(
                 request,
-                Request::NarrowDir { .. } | Request::ReadOnlyDir { .. }
+                Request::Directory { .. } | Request::NarrowDir { .. } | Request::ReadOnlyDir { .. }
             ) && let Ok(Completion::Handle(Ok(id))) = &result
             {
                 self.fake_directories.insert(*id, tree_id);

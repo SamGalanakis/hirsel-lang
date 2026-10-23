@@ -5,7 +5,7 @@
 //! from its name alone.
 use super::emit::Backend;
 use super::link::{
-    Partition, RuntimeBuild, Toolchain, emit_backend_objects, link_runnable, observe,
+    Partition, RuntimeBuild, Toolchain, emit_backend_objects, link_fixture_runnable, observe,
 };
 use super::observe::{Observation, Sites};
 use super::stages::{NativeError, Options, ReadyProgram, StageName, build};
@@ -360,8 +360,11 @@ fn same_options(a: &Options, b: &Options) -> bool {
 }
 
 /// Deterministic providers selected explicitly by a semantic fixture, never a host grant.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct Fixture {
+    pub args: Vec<String>,
+    pub files: std::collections::BTreeMap<String, Vec<u8>>,
+    pub mounts: std::collections::BTreeMap<String, hirsel_run_schema::Access>,
     /// Simulation-only regular-file readiness, shared with SimulationConfig.
     pub file_reads: std::collections::BTreeMap<String, hirsel_run_schema::FileReadScript>,
     /// The negative output-grant fixture, shared by every engine.
@@ -390,6 +393,59 @@ pub struct Fixture {
     /// `--migrate` (design §9 W1): native launches run on several compute workers and move
     /// every task to another worker at every suspension (`HIRSEL_RT_MIGRATE`).
     pub migrate: bool,
+}
+
+impl Default for Fixture {
+    fn default() -> Self {
+        Self {
+            args: vec![],
+            files: Default::default(),
+            mounts: hirsel_engine::SimulationConfig::default().mounts,
+            file_reads: Default::default(),
+            deny_output: false,
+            monotonic: None,
+            net: None,
+            process: None,
+            signals: None,
+            env: None,
+            steps: None,
+            runners: vec![],
+            fault_seed: None,
+            callees: Default::default(),
+            trace_roots: false,
+            migrate: false,
+        }
+    }
+}
+
+impl From<&Fixture> for hirsel_engine::SimulationConfig {
+    fn from(fixture: &Fixture) -> Self {
+        let mut config = Self {
+            args: fixture.args.clone(),
+            files: fixture.files.clone(),
+            mounts: fixture.mounts.clone(),
+            file_reads: fixture.file_reads.clone(),
+            net: fixture.net.clone(),
+            process: fixture.process.clone(),
+            signals: fixture.signals.clone(),
+            env: fixture.env.clone().unwrap_or_default(),
+            monotonic: fixture.monotonic.unwrap_or(0),
+            runners: fixture.runners.clone(),
+            fault_seed: fixture.fault_seed.unwrap_or(0),
+            callees: std::sync::Arc::new(fixture.callees.clone()),
+            trace_roots: fixture.trace_roots,
+            ..Default::default()
+        };
+        if fixture.deny_output {
+            config.projections.remove("stdout");
+            config.projections.remove("stderr");
+        }
+        if fixture.monotonic.is_some() {
+            config.grants.insert("MonotonicClock".into());
+            config.projections.insert("monotonic_clock".into());
+        }
+        config
+    }
 }
 
 /// Run `entry` under each configuration and compare with `reference`.
@@ -425,6 +481,9 @@ pub fn differential_in(
     fixture: &Fixture,
 ) -> Vec<(String, Outcome)> {
     let world = super::HeapWorld {
+        args: fixture.args.clone(),
+        files: fixture.files.clone(),
+        mounts: fixture.mounts.clone(),
         file_reads: fixture.file_reads.clone(),
         deny_output: fixture.deny_output,
         monotonic: fixture.monotonic,
@@ -459,7 +518,7 @@ pub fn differential_in(
             }
         };
         let objects = emitted[at].1.as_ref().map_err(Clone::clone)?;
-        let runnable = link_runnable(program, entry, objects, toolchain, dir, None)?;
+        let runnable = link_fixture_runnable(program, entry, objects, toolchain, dir, fixture)?;
         let target = &program.target;
         let diagnostic = runtime == Runtime::Diagnostic;
         let launched = super::link::launch_fixture(
@@ -581,8 +640,8 @@ pub fn runner_oracle_in(
                 ..toolchain.clone()
             };
             let paths = [
-                link_runnable(&program, entry, &objects, &executable, dir, None)?,
-                link_runnable(&program, entry, &objects, &toolchain, dir, None)?,
+                link_fixture_runnable(&program, entry, &objects, &executable, dir, fixture)?,
+                link_fixture_runnable(&program, entry, &objects, &toolchain, dir, fixture)?,
             ];
             let launch = |runnable: &super::link::Runnable, tape: super::link::Tape<'_>| {
                 super::link::launch_fixture(
@@ -774,7 +833,7 @@ pub fn real_io_replay_in(
             toolchain.runtime_build.measurement,
             None,
         )?;
-        let runnable = link_runnable(&program, entry, &objects, toolchain, dir, None)?;
+        let runnable = link_fixture_runnable(&program, entry, &objects, toolchain, dir, fixture)?;
         let tape = dir.join("io-tape");
         let _ = std::fs::remove_file(&tape);
         let recorded = super::link::launch_fixture(

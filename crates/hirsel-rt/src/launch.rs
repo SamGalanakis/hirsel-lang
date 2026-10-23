@@ -1933,6 +1933,28 @@ pub(crate) unsafe fn execute(
     // net.script@2 peers serve the root Net's world; the rules alone decide policy.
     let net_rules = net.as_ref().map(NetRule::from_config).unwrap_or_default();
     let net_script = net.and_then(|grant| Some((grant.peers?, grant.listeners)));
+    // Only the harness selection reads fixture inputs. Production admission and RealIo
+    // retain their host-file semantics even when these variables are present.
+    let fixture_run = harness_text("HIRSEL_RT_FIXTURE_RUN")?
+        .map(|path| hirsel_run_config::RunConfig::read_path(std::path::Path::new(&path)))
+        .transpose()
+        .map_err(|e| format!("fixture run: {e}"))?;
+    if let Some(run) = &fixture_run {
+        if run.identity() != launch_config.run_identity {
+            return Err("fixture run binding mismatch".into());
+        }
+        arguments = run.record().args.clone().unwrap_or_default();
+    }
+    let fixture_files = harness_text("HIRSEL_RT_FIXTURE_FILES")?
+        .map(|path| -> Result<_, String> {
+            let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+            serde_json::from_slice::<(
+                std::collections::BTreeMap<String, Vec<u8>>,
+                std::collections::BTreeMap<String, hirsel_run_schema::Access>,
+            )>(&bytes)
+            .map_err(|e| e.to_string())
+        })
+        .transpose()?;
     let mut initial_tree = Tree::new(Default::default()).expect("empty tree");
     let mut real = None;
     let mut zero_recording = None;
@@ -1995,6 +2017,16 @@ pub(crate) unsafe fn execute(
                     Some(binary) => SimIo::from_binary(tape.tree, binary),
                     None => SimIo::new(tape.tree, tape.events),
                 };
+                if let Some(run) = &fixture_run {
+                    io.set_mounts(
+                        run.record()
+                            .io
+                            .iter()
+                            .flat_map(|io| &io.dirs)
+                            .map(|mount| (mount.path.clone(), mount.access)),
+                    )
+                    .map_err(|e| e.to_string())?;
+                }
                 if std::env::var_os("HIRSEL_RT_DENY_OUTPUT").is_some() {
                     io.deny_output();
                 }
@@ -2050,15 +2082,21 @@ pub(crate) unsafe fn execute(
             }
             // Without `HIRSEL_RT_ROOT` the root Io grants nothing (determinism.md, Run
             // configuration): no mount and no projection.
-            None => match std::env::var_os("HIRSEL_RT_ROOT").map_or_else(
-                || {
-                    let mut io = RealIo::from_pinned_mounts([], sinks.stdout.clone())
-                        .expect("an empty mount set");
-                    io.set_projections(Default::default());
-                    Ok(io)
-                },
-                |root| RealIo::grant_with_output(std::path::Path::new(&root), sinks.stdout.clone()),
-            ) {
+            None => match if let Some((files, mounts)) = fixture_files {
+                RealIo::fixture(files, mounts, sinks.stdout.clone()).map_err(std::io::Error::other)
+            } else {
+                std::env::var_os("HIRSEL_RT_ROOT").map_or_else(
+                    || {
+                        let mut io = RealIo::from_pinned_mounts([], sinks.stdout.clone())
+                            .expect("an empty mount set");
+                        io.set_projections(Default::default());
+                        Ok(io)
+                    },
+                    |root| {
+                        RealIo::grant_with_output(std::path::Path::new(&root), sinks.stdout.clone())
+                    },
+                )
+            } {
                 Ok(mut io) => {
                     if std::env::var_os("HIRSEL_RT_DENY_OUTPUT").is_some() {
                         io.deny_output();
@@ -2133,7 +2171,16 @@ pub(crate) unsafe fn execute(
                             hash_seed: launch_config.hash_seed,
                             random_seed: launch_config.random_seed,
                             test_seed: launch_config.test_seed,
-                            binding: None,
+                            binding: fixture_run
+                                .as_ref()
+                                .filter(|run| !entry.is_test() && !run.calls())
+                                .map(|run| RecordedRun {
+                                    canonical: run.canonical().to_vec(),
+                                    placement: None,
+                                    admitted_at: 0,
+                                    revocation: None,
+                                    instance: None,
+                                }),
                             tree: initial_tree.clone(),
                             events: vec![],
                         };

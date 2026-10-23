@@ -24,6 +24,7 @@ mod signals;
 /// logical handles numbered as the runtime's adapter numbers them.
 #[derive(Clone)]
 struct Io {
+    args: Vec<String>,
     file_reads: hirsel_run_schema::FileReadiness,
     deny_output: bool,
     next: u64,
@@ -94,6 +95,14 @@ impl Io {
         world: &HeapWorld,
     ) -> Result<Self, NativeError> {
         let mut io = Self::new();
+        io.args = world.args.clone();
+        io.mounts = world.mounts.clone();
+        let tree = hirsel_rt::io::Tree::fixture(world.files.clone(), world.mounts.clone())
+            .map_err(|e| NativeError::new(StageName::Launch, e.to_string()))?;
+        for path in tree.files.keys() {
+            io.files.insert((0, path.clone()), std::sync::Arc::new(()));
+        }
+        io.trees.insert(0, (tree.directories, tree.files));
         io.file_reads = hirsel_run_schema::FileReadiness::new(world.file_reads.clone());
         io.deny_output = world.deny_output;
         io.test_seed = test_seed;
@@ -126,6 +135,7 @@ impl Io {
     }
     fn new() -> Self {
         Self {
+            args: vec![],
             file_reads: Default::default(),
             next: IO_HANDLE + 1,
             test_seed: 0,
@@ -796,16 +806,29 @@ impl Io {
                     OpValue::Handle(ARGS_HANDLE),
                     OpValue::Bits {
                         scalar: ScalarKind::U64,
-                        ..
+                        bits: index,
                     },
                 ],
-            ) => OpValue::Variant {
-                tag: 1,
-                value: Box::new(OpValue::Variant {
-                    tag: 0,
-                    value: Box::new(OpValue::Unit),
-                }),
-            },
+            ) => {
+                match usize::try_from(*index)
+                    .ok()
+                    .and_then(|i| self.args.get(i))
+                    .cloned()
+                {
+                    Some(text) => io_ok(if name == "path" {
+                        OpValue::Handle(self.path(&text))
+                    } else {
+                        OpValue::ByteSequence(text.into_bytes())
+                    }),
+                    None => OpValue::Variant {
+                        tag: 1,
+                        value: Box::new(OpValue::Variant {
+                            tag: 0,
+                            value: Box::new(OpValue::Unit),
+                        }),
+                    },
+                }
+            }
             (Some("io"), kind @ ("stdin" | "stderr"), [OpValue::Handle(IO_HANDLE)]) => {
                 if kind == "stderr" && self.deny_output {
                     return Some(OpOutcome::Value(grant_not_granted()));
@@ -859,7 +882,7 @@ impl Io {
             (Some("env"), name, _) => return self.env(name, args),
             (Some("arg"), "len", [OpValue::Handle(ARGS_HANDLE)]) => OpValue::Bits {
                 scalar: ScalarKind::U64,
-                bits: 0,
+                bits: self.args.len() as u128,
             },
             (Some("io"), "monotonic_clock", [OpValue::Handle(IO_HANDLE)])
                 if self.monotonic.is_some() =>
@@ -2164,8 +2187,11 @@ fn observation(
 }
 
 /// What a launch grants H's model beyond its entry's handles.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct HeapWorld {
+    pub args: Vec<String>,
+    pub files: BTreeMap<String, Vec<u8>>,
+    pub mounts: BTreeMap<String, Access>,
     pub file_reads: BTreeMap<String, hirsel_run_schema::FileReadScript>,
     /// Deny stdout and stderr projection for a negative grant fixture.
     pub deny_output: bool,
@@ -2182,6 +2208,24 @@ pub struct HeapWorld {
     pub env: Option<std::collections::BTreeMap<String, Option<String>>>,
     /// A raised interpreter step budget; H's instruction limit scales with it.
     pub steps: Option<u64>,
+}
+
+impl Default for HeapWorld {
+    fn default() -> Self {
+        Self {
+            args: vec![],
+            files: Default::default(),
+            mounts: hirsel_engine::SimulationConfig::default().mounts,
+            file_reads: Default::default(),
+            deny_output: false,
+            monotonic: None,
+            process: None,
+            net: None,
+            signals: None,
+            env: None,
+            steps: None,
+        }
+    }
 }
 
 /// Run `entry` once and audit it.

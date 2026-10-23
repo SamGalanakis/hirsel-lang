@@ -1141,6 +1141,86 @@ pub fn link_runnable(
     Ok(linked.runnable())
 }
 
+/// Link a test launch with the fixture's Args and virtual mounts bound into its run record.
+/// Use `launch_fixture` with the same recipe for initial files and scripted readiness.
+pub fn link_fixture_runnable(
+    program: &ReadyProgram,
+    entry: &DefPath,
+    objects: &[hirsel_lir::stage::ObjectArtifact],
+    toolchain: &Toolchain,
+    dir: &Path,
+    fixture: &super::Fixture,
+) -> Result<Runnable, NativeError> {
+    use hirsel_run_schema::{IoGrants, Mount, ProviderContract as P};
+    if !matches!(program.launches.get(entry), Some(LaunchKind::Main(_))) {
+        return link_runnable(program, entry, objects, toolchain, dir, None);
+    }
+    let revision = program
+        .revisions
+        .get(entry)
+        .ok_or_else(|| NativeError::new(StageName::Link, "missing checked program revision"))?;
+    let mut record =
+        hirsel_run_config::RunConfig::for_program(revision, hirsel_run_schema::LaunchKind::Main);
+    record.inputs = program.launch.clone();
+    record.inputs.fault_seed = fixture.fault_seed;
+    record.args = Some(fixture.args.clone());
+    record.env = fixture.env.clone();
+    record.io = Some(IoGrants {
+        stdin: Some(P::StdinBytes.name().into()),
+        stdout: (!fixture.deny_output).then(|| P::StdoutBytes.name().into()),
+        stderr: (!fixture.deny_output).then(|| P::StderrBytes.name().into()),
+        tasks: Some(P::TasksCooperative.name().into()),
+        random: Some(P::RandomSplitMix64.name().into()),
+        monotonic_clock: fixture
+            .monotonic
+            .map(|_| P::MonotonicNanoseconds.name().into()),
+        dirs: fixture
+            .mounts
+            .iter()
+            .map(|(path, access)| Mount {
+                path: path.clone(),
+                // Snapshot mounts have no host authority. A stable synthetic designator
+                // keeps the run binding independent of backend and scratch directory.
+                host: if path.is_empty() {
+                    "/__hirsel_test_fixture__".into()
+                } else {
+                    format!("/__hirsel_test_fixture__/{path}")
+                },
+                access: *access,
+            })
+            .collect(),
+        net: Some(fixture.net.clone().unwrap_or(hirsel_run_schema::NetGrant {
+            provider: P::NetScript.name().into(),
+            rules: vec![],
+            peers: Some(vec![]),
+            listeners: vec![],
+        })),
+        process: Some(
+            fixture
+                .process
+                .clone()
+                .unwrap_or(hirsel_run_schema::ProcessGrant {
+                    provider: P::ProcessScript.name().into(),
+                    rules: vec![],
+                    runs: Some(vec![]),
+                    children: None,
+                }),
+        ),
+        signals: fixture.signals.clone(),
+        runners: fixture.runners.clone(),
+        telemetry: Some(hirsel_run_schema::TelemetryGrant {
+            provider: P::TelemetryNull.name().into(),
+            seed: Some(0),
+            queue: None,
+        }),
+        ..Default::default()
+    });
+    let run = record
+        .validated()
+        .map_err(|e| NativeError::new(StageName::Link, e.to_string()))?;
+    link_runnable(program, entry, objects, toolchain, dir, Some(&run))
+}
+
 /// A standalone executable `dir/program`, including DWARF for a `debug_info` toolchain.
 pub(crate) fn link_standalone(
     program: &ReadyProgram,
@@ -2078,18 +2158,12 @@ pub fn launch_runnable(
     tape: Tape<'_>,
 ) -> Result<Launched, NativeError> {
     launch_impl(
-        runnable,
-        target,
-        toolchain,
-        dir,
-        diagnostic,
-        tape,
-        None,
-        &Default::default(),
+        runnable, target, toolchain, dir, diagnostic, tape, None, None,
     )
 }
 
-pub(crate) fn launch_fixture(
+/// Launch an explicitly selected test world; production launches never use this recipe.
+pub fn launch_fixture(
     runnable: &Runnable,
     target: &TargetSpec,
     toolchain: &Toolchain,
@@ -2098,8 +2172,49 @@ pub(crate) fn launch_fixture(
     tape: Tape<'_>,
     fixture: &super::Fixture,
 ) -> Result<Launched, NativeError> {
+    let run = hirsel_run_config::RunConfig::read_path(&absolute(&dir.join("run.json"))?)
+        .map_err(|e| NativeError::new(StageName::Launch, e.to_string()))?;
+    if run.record().launch == hirsel_run_schema::LaunchKind::Main && run.record().args.is_some() {
+        let mounts = run
+            .record()
+            .io
+            .iter()
+            .flat_map(|io| &io.dirs)
+            .map(|mount| (mount.path.clone(), mount.access))
+            .collect();
+        if run.record().args.as_deref().unwrap_or_default() != fixture.args
+            || fixture.mounts != mounts
+        {
+            return Err(NativeError::new(
+                StageName::Launch,
+                "fixture Args and mounts must match link_fixture_runnable",
+            ));
+        }
+    }
+    if let Tape::Replay(path) = tape {
+        let recording = hirsel_rt::host_launch::read_recording(path)
+            .map_err(|e| NativeError::new(StageName::Launch, e.to_string()))?;
+        if recording.binding.is_some() {
+            recording
+                .bound_run()
+                .map_err(|e| NativeError::new(StageName::Launch, e.to_string()))?;
+        }
+    }
+    let recipe = dir.join("fixture.json");
+    std::fs::write(
+        &recipe,
+        serde_json::to_vec(&(&fixture.files, &fixture.mounts)).unwrap(),
+    )
+    .map_err(|e| NativeError::new(StageName::Launch, e.to_string()))?;
     launch_impl(
-        runnable, target, toolchain, dir, diagnostic, tape, None, fixture,
+        runnable,
+        target,
+        toolchain,
+        dir,
+        diagnostic,
+        tape,
+        None,
+        Some(fixture),
     )
 }
 
@@ -2164,8 +2279,11 @@ fn launch_impl(
     diagnostic: bool,
     tape: Tape<'_>,
     live: Option<LiveRun<'_>>,
-    fixture: &super::Fixture,
+    fixture: Option<&super::Fixture>,
 ) -> Result<Launched, NativeError> {
+    let is_fixture = fixture.is_some();
+    let default = super::Fixture::default();
+    let fixture = fixture.unwrap_or(&default);
     let root = dir.join("root");
     let record = dir.join("observation");
     let roots = dir.join(ROOT_TRACE);
@@ -2187,6 +2305,13 @@ fn launch_impl(
         .env("HIRSEL_RT_ROOT", &root)
         .env("HIRSEL_RT_OBSERVATION", &record)
         .env("HIRSEL_RT_REFUSAL", &refusal);
+    if is_fixture {
+        command.env(
+            "HIRSEL_RT_FIXTURE_FILES",
+            absolute(&dir.join("fixture.json"))?,
+        );
+        command.env("HIRSEL_RT_FIXTURE_RUN", absolute(&dir.join("run.json"))?);
+    }
     if fixture.deny_output {
         command.env("HIRSEL_RT_DENY_OUTPUT", "1");
     }
@@ -2529,7 +2654,7 @@ pub(crate) fn launch_live(
         false,
         tape,
         Some(live),
-        &Default::default(),
+        None,
     )
 }
 fn run_live(

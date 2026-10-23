@@ -368,6 +368,17 @@ impl RealIo {
         )
         .expect("one explicit root mount")
     }
+    /// Test launcher only: use snapshot storage, never host files, for root mounts.
+    pub(crate) fn fixture(
+        files: BTreeMap<String, Vec<u8>>,
+        mounts: BTreeMap<String, hirsel_run_schema::Access>,
+        output: impl Write + 'static,
+    ) -> Result<Self, hirsel_run_schema::RunRefusal> {
+        let tree = Tree::fixture(files, mounts.clone())?;
+        let mut io = Self::from_pinned_mounts([], output)?;
+        io.state.fixture(tree, mount_access(mounts)?);
+        Ok(io)
+    }
     /// Retain every admitted descriptor and its rights. Empty Io has no directory pin.
     pub fn from_pinned_mounts(
         mounts: impl IntoIterator<
@@ -550,6 +561,9 @@ impl<S: Streams> RealCore<S> {
         &self.state.stdout
     }
     pub fn snapshot(&mut self) -> Result<Tree, IoError> {
+        if let Some(tree) = self.state.fake_trees.get(&0) {
+            return Ok(tree.clone());
+        }
         let pins = self
             .disk
             .mounts

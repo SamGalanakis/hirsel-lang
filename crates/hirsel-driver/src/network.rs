@@ -1770,6 +1770,48 @@ impl HostLibrary {
             _ => return Err(invalid()),
         })
     }
+    /// A snapshot read can park just like a network read. Keep its continuation alive
+    /// so siblings can release it or cancel it; Blocked is not a terminal run outcome.
+    fn host_file_read(
+        &mut self,
+        a: &mut [Value],
+        cx: &mut OperationContext<'_>,
+    ) -> Result<OperationResult, Error> {
+        if self.free_ready.is_some() {
+            return self.storage("file.read", a);
+        }
+        let token = self.next_wait;
+        self.next_wait += 1;
+        match self.file_read_request(a, token) {
+            Err(Error::Blocked(_)) => {
+                self.waits.insert(
+                    token,
+                    HostWait {
+                        name: "file.read".into(),
+                        arguments: a.to_vec(),
+                    },
+                );
+                Ok(OperationResult::Park {
+                    token,
+                    wait: hirsel_interp::BlockedWait {
+                        spawn_path: self.library.task_path(),
+                        anchor: cx.anchor().cloned().ok_or_else(invalid)?,
+                        kind: "file.read".into(),
+                        targets: vec![],
+                    },
+                })
+            }
+            result => result,
+        }
+    }
+    fn file_read_request(&mut self, a: &mut [Value], token: u64) -> Result<OperationResult, Error> {
+        self.io.adapter().enter(token);
+        let result = self.storage("file.read", a);
+        if !matches!(result, Err(Error::Blocked(_))) {
+            self.io.adapter().finish(token);
+        }
+        result
+    }
     fn storage(&mut self, name: &str, a: &mut [Value]) -> Result<OperationResult, Error> {
         let iterator_path = if name == "file.read_dir" {
             text(fields(&a[1])?[0])?
@@ -2692,6 +2734,16 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
         }
         let name = wait.name.clone();
         let arguments = wait.arguments.clone();
+        if name == "file.read" {
+            let mut arguments = arguments;
+            return match self.file_read_request(&mut arguments, token) {
+                Err(Error::Blocked(_)) => Ok(None),
+                result => {
+                    self.waits.remove(&token);
+                    result.map(Some)
+                }
+            };
+        }
         if name == "clock.sleep_until" {
             // Cancelling a pending wait removes its timer; nothing reaches the host.
             if canceled {
@@ -2872,7 +2924,11 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
         if route == HostRoute::Storage as usize
             && call.arguments.first().is_some_and(|v| self.id(v).is_ok())
         {
-            return self.storage(&name, call.arguments).map(Some);
+            return if name == "file.read" {
+                self.host_file_read(call.arguments, cx).map(Some)
+            } else {
+                self.storage(&name, call.arguments).map(Some)
+            };
         }
         if route == HostRoute::Process as usize
             && (name == "io.process" || call.arguments.first().is_some_and(|v| self.id(v).is_ok()))

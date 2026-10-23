@@ -50,3 +50,4 @@ mod match_coverage_22;
 mod authority_call_22;
 mod alias_cleanup_equality_24;
 mod sim_file_pending_29;
+mod native_harness_gaps_30;

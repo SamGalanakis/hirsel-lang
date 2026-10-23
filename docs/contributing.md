@@ -223,6 +223,10 @@ expected outcome.
 
 ## Testing and landing
 
+For deterministic full-app native Pending/AfterWrite tests, use the public
+[scripted fixture recipe](native-test-fixtures.md) with the same Args, files and
+mount rights on each engine.
+
 Run `.buck2/bin/buck2 kill` in your worktree when you finish and
 before any wait longer than a few minutes: idle daemons retain substantial
 memory on the shared host.
