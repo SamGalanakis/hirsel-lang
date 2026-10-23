@@ -1,0 +1,3 @@
+invoice_id,quantity,unit_price,expected_total
+EXP-TRAVEL-87,2,12.50,25.00
+EXP-TRAVEL-87,1,EUR19.95,19.95

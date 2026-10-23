@@ -1,0 +1,66 @@
+pub type AppError = Grant(GrantError) | Output(OutputError) | Json(json.JsonError)
+
+fn read_input(rt: Io, name: String) -> Result[unique String, String] {
+  if name == "" || string.contains(name, "/") || string.contains(name, "\\") || name == "." || name == ".." {
+    return Error("filename")
+  }
+  let Ok(directory) = io.dir(rt, path.of("fixtures")) else {
+    return Error("directory_grant")
+  }
+  let mut Ok(input) = file.open(directory, path.of(name)) else {
+    return Error("file_open")
+  }
+  let data = match file.read_all_bounded(directory, mut input, 65536) {
+    Ok(value) => take value,
+    Error(Limit()) => return Error("input_bytes_limit"),
+    Error(File(_)) => return Error("file_read"),
+  }
+  let Ok(source) = string.from_bytes(take data) else {
+    return Error("utf8")
+  }
+  Ok(take source)
+}
+
+fn invalid(output: Stdout, record: u64, reason: String) -> Result[
+  std@1/process.ExitCode,
+  AppError
+] {
+  let text = json.stringify(Text(unique reason))?
+  out.print(output, f"{{\"error\":{{\"record\":{record},\"reason\":{text}}}}}\n")?
+  Ok(std@1/process.exit_code(2u8))
+}
+
+pub fn main(rt: Io, args: Args) -> Result[std@1/process.ExitCode, AppError] {
+  let output = io.stdout(rt)?
+  if arg.len(args) != 1 {
+    return invalid(output, 0, "usage")
+  }
+  let Ok(name) = arg.text(args, 0) else {
+    return invalid(output, 0, "argument")
+  }
+  if name == "--help" {
+    out.print(
+      output,
+      "Usage: invoicecheck FILE.csv\nRead FILE.csv from the fixtures directory grant. HalfEven to 2 places per line.\nExit: 0 reconciled/help; 1 mismatches; 2 invalid input; 1 launcher/output error.\n"
+    )?
+    return Ok(std@1/process.SUCCESS)
+  }
+  let source = match read_input(rt, name) {
+    Ok(value) => take value,
+    Error(reason) => return invalid(output, 0, reason),
+  }
+  let report = match model.reconcile(source) {
+    Ok(value) => take value,
+    Error(error) => return invalid(output, error.record, model.reason(error.reason)),
+  }
+  out.print(output, f"{model.encode(report)?}\n")?
+  Ok(
+    std@1/process.exit_code(
+      if list.len(report.mismatches) == 0 {
+        0u8
+      } else {
+        1u8
+      }
+    )
+  )
+}

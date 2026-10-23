@@ -1,0 +1,245 @@
+// Exact fold through shipped decimal.add/mul/rescale; rust_decimal add.rs:1-44
+// and rounding.rs:73-97 at b23fb077 (MIT, Copyright (c) 2016 Paul Mason).
+// No arithmetic implementation is copied; the upstream vectors are tested below.
+pub type InputError = InputBytes | Csv(csv.CsvError) | Header | RecordLimit | InvoiceId | Quantity | DecimalLength | DecimalSyntax | DecimalScale
+
+pub type InvalidInput {
+  record: u64,
+  reason: InputError,
+}
+
+pub type Line {
+  invoice_id: String,
+  quantity: u64,
+  unit_price: decimal.Decimal,
+  expected_total: decimal.Decimal,
+}
+
+pub type Invoice {
+  invoice_id: String,
+  lines: u64,
+  total: String,
+  expected: String,
+  matches: bool,
+}
+
+pub type Report {
+  records: u64,
+  invoices: List[Invoice],
+  mismatches: List[u64],
+}
+
+type Accumulator {
+  invoice_id: String,
+  lines: u64,
+  total: decimal.Decimal,
+  expected: decimal.Decimal,
+}
+
+pub fn reason(error: InputError) -> String uses {} {
+  match error {
+    InputBytes() => "input_bytes_limit",
+    Csv(RecordTooLarge()) => "record_bytes_limit",
+    Csv(_) => "csv",
+    Header() => "header",
+    RecordLimit() => "record_limit",
+    InvoiceId() => "invoice_id",
+    Quantity() => "quantity",
+    DecimalLength() => "decimal_length",
+    DecimalSyntax() => "decimal_syntax",
+    DecimalScale() => "decimal_scale",
+  }
+}
+
+fn amount(value: String) -> Result[decimal.Decimal, InputError] uses {} {
+  if string.byte_len(value) > 64 {
+    return Error(DecimalLength())
+  }
+  let Ok(parsed) = decimal.parse(value) else {
+    return Error(DecimalSyntax())
+  }
+  if decimal.scale(parsed) > 6 {
+    return Error(DecimalScale())
+  }
+  Ok(parsed)
+}
+
+// Width is enforced by the CSV reader. Decode into a typed domain record before
+// arithmetic; no floating point and no representation equality for amounts.
+fn decode(reader: csv.SliceReader) -> Result[Line, InputError] uses {} {
+  let Some(id) = csv.get_field(reader, 0) else {
+    return Error(InvoiceId())
+  }
+  if string.byte_len(id) == 0 || string.byte_len(id) > 64 {
+    return Error(InvoiceId())
+  }
+  for byte in string.as_bytes(id) {
+    if byte < 32 || byte == 127 {
+      return Error(InvoiceId())
+    }
+  }
+  let Some(quantity_text) = csv.get_field(reader, 1) else {
+    return Error(Quantity())
+  }
+  if string.byte_len(quantity_text) == 0 || string.byte_len(quantity_text) > 7 {
+    return Error(Quantity())
+  }
+  for byte in string.as_bytes(quantity_text) {
+    if !ascii.is_digit(byte) {
+      return Error(Quantity())
+    }
+  }
+  let Ok(quantity) = u64.parse(quantity_text) else {
+    return Error(Quantity())
+  }
+  if quantity > 1000000 {
+    return Error(Quantity())
+  }
+  let Some(price_text) = csv.get_field(reader, 2) else {
+    return Error(DecimalSyntax())
+  }
+  let price = amount(price_text)?
+  let Some(expected_text) = csv.get_field(reader, 3) else {
+    return Error(DecimalSyntax())
+  }
+  let expected = amount(expected_text)?
+  Ok(
+    Line(
+      invoice_id: unique id,
+      quantity: quantity,
+      unit_price: price,
+      expected_total: expected
+    )
+  )
+}
+
+pub fn reconcile(source: String) -> Result[Report, InvalidInput] uses {} {
+  if string.byte_len(source) > 65536 {
+    return Error(InvalidInput(record: 0, reason: InputBytes()))
+  }
+  let config = csv.Config(
+    delimiter: b',',
+    fields_per_record: Some(4),
+    max_record_bytes: 512
+  )
+  let mut reader = match csv.slice_reader(source, config) {
+    Ok(value) => take value,
+    Error(e) => return Error(InvalidInput(record: 0, reason: Csv(e))),
+  }
+  let header = match csv.next_record(mut reader) {
+    Ok(value) => value,
+    Error(e) => return Error(InvalidInput(record: 0, reason: Csv(e))),
+  }
+  if !header || csv.get_field(reader, 0) != Some("invoice_id") || csv.get_field(
+    reader,
+    1
+  ) != Some("quantity") || csv.get_field(reader, 2) != Some("unit_price") || csv.get_field(
+    reader,
+    3
+  ) != Some("expected_total") {
+    return Error(InvalidInput(record: 0, reason: Header()))
+  }
+  let mut records = 0u64
+  let mut groups: List[Accumulator] = []
+  let mut mismatches: List[u64] = []
+  while true {
+    let next = match csv.next_record(mut reader) {
+      Ok(value) => value,
+      Error(e) => return Error(InvalidInput(record: records + 1, reason: Csv(e))),
+    }
+    if !next {
+      break
+    }
+    if records == 64 {
+      return Error(InvalidInput(record: 65, reason: RecordLimit()))
+    }
+    records += 1
+    let line = match decode(reader) {
+      Ok(value) => take value,
+      Error(e) => return Error(InvalidInput(record: records, reason: e)),
+    }
+    let factor = decimal.new(bigint.from_u64(line.quantity), 0)
+    let total = decimal.rescale(decimal.mul(line.unit_price, factor), 2, HalfEven())
+    if decimal.compare(total, line.expected_total) != 0 {
+      list.push(mut mismatches, records)
+    }
+    let mut found = false
+    for acc in mut groups {
+      if acc.invoice_id == line.invoice_id {
+        acc.lines += 1
+        acc.total = decimal.add(acc.total, total)
+        acc.expected = decimal.add(acc.expected, line.expected_total)
+        found = true
+        break
+      }
+    }
+    if !found {
+      list.push(
+        mut groups,
+        Accumulator(
+          invoice_id: unique line.invoice_id,
+          lines: 1,
+          total: total,
+          expected: line.expected_total
+        )
+      )
+    }
+  }
+  let mut invoices: List[Invoice] = []
+  for acc in groups {
+    list.push(
+      mut invoices,
+      Invoice(
+        invoice_id: unique acc.invoice_id,
+        lines: acc.lines,
+        total: decimal.to_string(acc.total),
+        expected: decimal.to_string(decimal.normalize(acc.expected)),
+        matches: decimal.compare(acc.total, acc.expected) == 0
+      )
+    )
+  }
+  Ok(Report(records: records, invoices: take invoices, mismatches: take mismatches))
+}
+
+pub fn encode(report: Report) -> Result[unique String, json.JsonError] uses {} {
+  json.stringify(report_json(report))
+}
+
+fn invoice_to_json(invoice: Invoice) -> json.Value uses {} = comptime derive.json_value(
+  shape(Invoice)
+)
+
+fn report_json(report: Report) -> json.Value uses {} = comptime derive.json_value(
+  shape(Report)
+)
+
+@test
+fn half_even_vectors(t: Test) -> Result[(), scalar.ParseError] {
+  let vectors: List[(String, i32, String)] = [
+    ("6.5", 0, "6"),
+    ("7.5", 0, "8"),
+    ("1.2250", 2, "1.22")
+  ]
+  for (input, places, expected) in vectors {
+    test.equal(
+      t,
+      decimal.to_string(decimal.rescale(decimal.parse(input)?, places, HalfEven())),
+      expected
+    )
+  }
+  Ok(())
+}
+
+@test
+fn exact_add_and_numeric_compare(t: Test) -> Result[(), scalar.ParseError] {
+  test.equal(
+    t,
+    decimal.compare(
+      decimal.add(decimal.parse("0.1")?, decimal.parse("0.2")?),
+      decimal.parse("0.3")?
+    ),
+    0i32
+  )
+  test.equal(t, decimal.compare(decimal.parse("1.0")?, decimal.parse("1.00")?), 0i32)
+  Ok(())
+}

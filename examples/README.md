@@ -77,6 +77,7 @@ selects an explicit bound.
 | [kvstore](kvstore/main.hir) | `[PORT]`: serve `GET /kv`, `GET`/`PUT`/`DELETE /kv/<key>` with percent-decoded UTF-8 keys, one task per connection; entries live in a mutex and a writer task replaces `data/kv.json` atomically before each reply. |
 | [tasks](tasks/README.md) | `tasks/run [PORT]`: a task manager over HTTP with [Datastar](../packages/datastar@1/README.md). Server-rendered HTML with inline editing, filters, search and sorting; every open browser updates live over an event stream; snapshots in `data/` survive restarts. Unit tests and a Hirsel end-to-end suite (`tasks/e2e`). |
 | [wc2](wc2/README.md) | Count lines, ASCII words and bytes across granted files/stdin; `-u` sorts unique UTF-8 lines, with bounded line reads and explicit stderr errors. |
+| [invoicecheck](invoicecheck/README.md) | Reconcile bounded invoice CSV with exact decimals, per-line HalfEven rounding, grouped totals and typed invalid-input reports. |
 | [csvstats](csvstats/README.md) | Group `group,value` CSV rows into a derived JSON report of counts, sums and means. |
 | [linkcheck](linkcheck/README.md) | Check URLs in bounded concurrent batches, with redirects, channel results and whole-request deadlines; scripted peers cover 200, 404 and timeout. |
 | [kvd](kvd/README.md) | Durable std-store key/value TCP service, a Mutex request counter and graceful SIGTERM shutdown; scripted session grants exercise four commands and shutdown. |

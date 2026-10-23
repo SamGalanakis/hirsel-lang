@@ -1,0 +1,15 @@
+{
+  "io": {
+    "stdout": "stdout.bytes@1",
+    "dirs": [
+      {
+        "path": "fixtures",
+        "host": "fixtures",
+        "access": "read"
+      }
+    ]
+  },
+  "args": [
+    "success.csv"
+  ]
+}
