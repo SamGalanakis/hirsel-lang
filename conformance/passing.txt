@@ -377,6 +377,8 @@ conformance/CLO/CLO-1-nested-local-call-result-ok.hir
 conformance/CLO/CLO-1-nested-local-call-result-run.hir
 conformance/CLO/CLO-1-outer-mutation-bad.hir
 conformance/CLO/CLO-1-outer-mutation-ok.hir
+conformance/CLO/CLO-1-pattern-recursive-capture-31-bad.hir
+conformance/CLO/CLO-1-pattern-recursive-capture-31-run.hir
 conformance/CLO/CLO-1-return-borrowed-capture-bad.hir
 conformance/CLO/CLO-1-return-borrowed-capture-ok.hir
 conformance/CLO/CLO-1-return-borrowed-capture-view-ok.hir
@@ -3157,6 +3159,10 @@ conformance/MODE/MODE-1-receiving-local-holder-wrong-source-bad.hir
 conformance/MODE/MODE-1-relation-array-tuple-loop-bad.hir
 conformance/MODE/MODE-1-relation-array-tuple-loop-ok.hir
 conformance/MODE/MODE-1-relation-names-borrowed-binding-ok.hir
+conformance/MODE/MODE-1-replace-unique-copy-31-field-bad.hir
+conformance/MODE/MODE-1-replace-unique-copy-31-nongeneric-run.hir
+conformance/MODE/MODE-1-replace-unique-copy-31-remove-run.hir
+conformance/MODE/MODE-1-replace-unique-copy-31-witness-bad.hir
 conformance/MODE/MODE-1-reserved-view-used-after-bad.hir
 conformance/MODE/MODE-1-result-holder-computed-field-live-bad.hir
 conformance/MODE/MODE-1-result-holder-computed-field-live-used-bad.hir
@@ -7266,5 +7272,3 @@ conformance/STORE/STORE-6-set-key-bad.hir
 conformance/STORE/STORE-6-set-key-ok.hir
 conformance/STORE/STORE-6-simd-key-bad.hir
 conformance/STORE/STORE-6-simd-key-ok.hir
-conformance/CLO/CLO-1-pattern-recursive-capture-31-run.hir
-conformance/CLO/CLO-1-pattern-recursive-capture-31-bad.hir

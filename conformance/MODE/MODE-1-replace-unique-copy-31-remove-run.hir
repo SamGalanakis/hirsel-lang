@@ -1,0 +1,20 @@
+// rule: MODE-1
+// expect: run
+type State[T] {
+  current: T,
+  frontier: List[T],
+}
+
+fn advance[T: copyable + inert](mut state: unique State[T]) -> T uses {} {
+  let candidate = list.remove(mut state.frontier, 0u64)
+  replace(mut state.current, take candidate)
+}
+
+pub fn main() -> Result[(), ()] {
+  let mut state: unique State[List[i64]] = State(current: [11i64], frontier: [[0i64]])
+  let old = advance(mut state)
+  if old[0u64] != 11i64 || state.current[0u64] != 0i64 || list.len(state.frontier) != 0u64 {
+    return Error(())
+  }
+  Ok(())
+}

@@ -272,6 +272,8 @@ struct ValueData {
     uniqueness_site: Option<ExprId>,
     /// Counted-copy provenance used only for a secondary diagnostic label.
     copy_site: Option<ExprId>,
+    /// Explicit deep-copy origin retained for a rejected storage transfer.
+    unique_copy_site: Option<ExprId>,
     /// An owned call receipt whose outer root has never been shared.
     fresh_receipt: bool,
     /// The parameter of this body and the field paths within it that this
@@ -336,6 +338,7 @@ impl Value {
             site: None,
             uniqueness_site: None,
             copy_site: None,
+            unique_copy_site: None,
             fresh_receipt: false,
             part_of: None,
             borrow_only: false,
@@ -664,6 +667,10 @@ impl ValueData {
     }
     fn join(&mut self, other: &Self) {
         work::count(Counter::OwnershipValueJoins);
+        self.unique_copy_site = match (self.unique_copy_site, other.unique_copy_site) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
         self.copy_site = match (self.copy_site, other.copy_site) {
             (Some(a), Some(b)) => Some(a.min(b)),
             (a, b) => a.or(b),
@@ -2806,6 +2813,88 @@ impl Checker<'_, '_> {
             bounded(self, &mut slot, &from);
             state.slots[binding].value = slot;
         }
+    }
+    /// `replace` writes the destination's fixed receiving storage. Its
+    /// inferred type argument can be Local because the first argument is a
+    /// borrowed access; that does not admit Local content into caller storage.
+    fn replacement_content(
+        &mut self,
+        state: &State,
+        expression: ExprId,
+        callee: ExprId,
+        arguments: &[hirsel_syntax::Argument],
+        requirements: &[Option<super::cfg::Requirement>],
+    ) -> bool {
+        if self
+            .callee_definition(callee)
+            .and_then(hirsel_types::core_roles::LoweredIntrinsic::for_definition)
+            != Some(hirsel_types::core_roles::LoweredIntrinsic::Replace)
+        {
+            return true;
+        }
+        let argument = |parameter| {
+            arguments.iter().zip(requirements).find_map(|(a, r)| {
+                r.as_ref()
+                    .filter(|r| r.parameter == parameter)
+                    .map(|_| a.value)
+            })
+        };
+        let (Some(destination), Some(incoming)) = (argument(0), argument(1)) else {
+            return true;
+        };
+        let Some(destination) = place(self.body, destination, self.source_rows) else {
+            return true;
+        };
+        let receiving = if self.body.bindings[destination.binding].usage == UseKind::Mut {
+            self.receiving_contract(destination.binding)
+        } else {
+            state.slots[destination.binding].declared.clone()
+        };
+        let actual = self.entry_value(state, incoming);
+        if actual.invalid
+            || !self.arenas.global(&receiving)
+            || self.arenas.global(&actual.modes.relation)
+        {
+            return true;
+        }
+        let copy = actual.unique_copy_site.map(|site| self.span_of(site));
+        let removal = actual.unique_copy_site.and_then(|site| {
+            let ExprKind::Unary {
+                op: UnaryOp::Unique,
+                value,
+            } = self.tree.expressions[site.0 as usize].kind
+            else {
+                return None;
+            };
+            let ExprKind::Index { base, index } = self.tree.expressions[value.0 as usize].kind
+            else {
+                return None;
+            };
+            Some(format!(
+                "list.remove(mut {}, {})",
+                self.spelled(base)?,
+                self.spelled(index)?
+            ))
+        });
+        if let Some(diagnostic) = self.report(
+            const { RuleId::of("MODE-1") },
+            self.span_of(expression),
+            "replace cannot install a local value into global storage",
+            |c| c.locality(state, &actual, c.receiver_requirement(destination.binding)),
+        ) {
+            if let Some(span) = copy {
+                diagnostic.secondary.push(hirsel_diag::Label {
+                    span,
+                    message: "this unique copy keeps its generic source's lifetime; it may contain borrowed captures".into(),
+                });
+                if let Some(removal) = removal {
+                    diagnostic.notes.push(format!("Move the candidate out with `{removal}`, then pass `take candidate` to `replace`. Moving transfers ownership; a generic `unique` copy cannot copy borrowed captures."));
+                } else {
+                    diagnostic.notes.push("Move the candidate out of its owner before `replace`; a generic `unique` copy cannot copy borrowed captures.".into());
+                }
+            }
+        }
+        false
     }
     /// What a `mut` parameter's storage may hold: its written relation, or
     /// global without one; its own access bound is not content (MODE-1).
@@ -5146,6 +5235,7 @@ impl Checker<'_, '_> {
                                     },
                                 );
                             }
+                            value.unique_copy_site = Some(*expression);
                             value.extract_unique(self.may_capture(*expression));
                             self.deep_copy_sendability(*expression, &mut value);
                         }
@@ -6450,6 +6540,17 @@ impl Checker<'_, '_> {
                 state.argument_loans.retain(|_, loan| loan.1 != *expression);
                 let mut failed = state.argument_conflicts.remove(expression)
                     || arguments.iter().any(|a| self.value(state, a.value).invalid);
+                if !failed
+                    && !self.replacement_content(
+                        state,
+                        *expression,
+                        *callee,
+                        arguments,
+                        requirements,
+                    )
+                {
+                    failed = true;
+                }
                 for (index, arg) in arguments.iter().enumerate() {
                     if self.property(arg.value).is_none() {
                         continue;

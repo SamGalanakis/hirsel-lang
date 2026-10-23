@@ -1,0 +1,18 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 11
+// twin: MODE/MODE-1-replace-unique-copy-31-remove-run.hir
+type State[T] {
+  current: T,
+  frontier: List[T],
+}
+
+fn advance[T: copyable + inert](mut state: unique State[T]) uses {} {
+  let candidate = unique state.frontier[0u64]
+  let old = replace(mut state.current, take candidate)
+}
+
+pub fn main() -> Result[(), ()] {
+  let mut state: unique State[List[i64]] = State(current: [11i64], frontier: [[0i64]])
+  advance(mut state)
+  Ok(())
+}
