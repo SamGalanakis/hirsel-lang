@@ -230,6 +230,64 @@ impl Compiler {
             crate::package::EntrySelection::Test,
         )
     }
+    /// Precompute a package through ordinary query persistence. Every product
+    /// remains independently keyed and checked; there is no package image or
+    /// whole-program type table. Partial work is a set of ordinary cache misses.
+    pub fn precompute_package(&self, manifest: &Path, output: &Path) -> Result<(), ToolError> {
+        if self.verify == Verify::Off {
+            return Err(ToolError::Runtime(
+                "package precomputation requires V".into(),
+            ));
+        }
+        let mut compiler = self.clone().with_owned_engines();
+        compiler.result_store = Some(Arc::new(crate::store::DirStore::new(output.to_path_buf())));
+        compiler.retention = crate::memo::Retention::Batch;
+        compiler.hold_bytes = Some(0);
+        with_compiler_stack(|| {
+            let mut program = crate::package::load_program_source_with_images(
+                &compiler,
+                manifest,
+                None,
+                &StdImages::none(),
+                crate::package::EntrySelection::Check,
+            )?;
+            let checked = program
+                .check(LoweringPolicy::Reachable)
+                .map_err(|error| program.error(error))?;
+            if crate::queries::has_errors(&checked.diagnostics) {
+                return Err(program.error(QueryError::Diagnostics(checked.diagnostics)));
+            }
+            if checked.completion != CheckCompletion::Complete {
+                return Err(program.error(QueryError::NotImplemented));
+            }
+            // Each explicit demand releases its intermediate front body under
+            // Batch retention. No second program or encoded package accumulates.
+            for path in program.engine.source_paths() {
+                let facts = program.engine.source_facts(&path);
+                program
+                    .engine
+                    .semantic_node(&path)
+                    .map_err(|error| program.error(error))?;
+                if facts.as_ref().is_some_and(|facts| facts.executable) {
+                    program
+                        .engine
+                        .source_audit(&path)
+                        .map_err(|error| program.error(error))?;
+                    program
+                        .engine
+                        .lower_to_tir(&path)
+                        .map_err(|error| program.error(error))?;
+                }
+                if facts.is_some_and(|facts| facts.constant) {
+                    program
+                        .engine
+                        .materialize_value(&path)
+                        .map_err(|error| program.error(error))?;
+                }
+            }
+            Ok(())
+        })
+    }
     /// Write to `output` the std image of the package `manifest` describes,
     /// checked freshly as the only dependency of an empty program
     /// (docs/building.md, "The std image"). Readers never see a partial image.
