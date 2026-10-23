@@ -231,6 +231,51 @@ pub fn callee_outcome(
 }
 
 impl Library {
+    /// Register runner.spawn's synthetic waiter in the same parent operation
+    /// as the native TaskSpawn, after the send acknowledgement.
+    pub fn native_runner_spawn(
+        &mut self,
+        child: u64,
+        result: OperationResult,
+        context: &OperationContext<'_>,
+    ) -> Result<OperationResult, Error> {
+        if let super::free::Enter::Park(park) =
+            self.free_enter(hirsel_free::phase::Phase::Done, context)?
+        {
+            return Ok(park);
+        }
+        let path = self.path_of(child);
+        self.free.as_mut().unwrap().session.start(&path);
+        self.free_done(result, context)
+    }
+
+    /// Enter only a registered provider-owned waiter. No source stack runs.
+    pub fn native_runner_enter_child(&mut self, child: u64) -> Result<(u64, bool), Error> {
+        if !self.tasks.frameless.contains(&child) {
+            return Err(invalid("missing spawned runner wait"));
+        }
+        let previous = (self.tasks.current, self.tasks.shielded);
+        self.tasks.current = child;
+        self.tasks.shielded = false;
+        Ok(previous)
+    }
+    pub fn native_runner_refused(
+        &mut self,
+        child: u64,
+        completion: &RunnerCompletion,
+        context: &mut OperationContext<'_>,
+    ) -> Result<(), Error> {
+        self.task_finished(
+            child,
+            OperationResult::returned(refused_value(completion)),
+            context,
+        )
+    }
+    pub fn native_runner_restore_task(&mut self, previous: (u64, bool)) {
+        self.tasks.current = previous.0;
+        self.tasks.shielded = previous.1;
+    }
+
     fn runner(&self, value: &Value) -> Result<&RunnerGrant, Error> {
         let id = self.simulation.id(value, "Runner")?;
         match self.simulation.grants.get(&id) {
@@ -454,7 +499,9 @@ impl Library {
                 });
                 let value = refused_value(&completion);
                 if scope.is_some() {
-                    self.task_finished(task, OperationResult::returned(value), context)?;
+                    if !self.native_free() {
+                        self.task_finished(task, OperationResult::returned(value), context)?;
+                    }
                     Ok(OperationResult::returned(task_handle(task)))
                 } else {
                     Ok(OperationResult::returned(value))

@@ -1008,6 +1008,9 @@ unsafe fn send(
 /// # Safety
 /// `ctx` is live and the caller holds nothing a stop must drop.
 unsafe fn wait(ctx: *mut TaskCtx, ticket: u64) -> Stopped<u64> {
+    if unsafe { (*ctx).run_ref().free_production } {
+        return unsafe { native::wait(ctx, ticket) };
+    }
     let call = state(ctx)
         .calls
         .get_mut(&ticket)

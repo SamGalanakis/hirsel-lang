@@ -11,8 +11,8 @@ pub(crate) use adapter::wrap;
 pub(crate) use home::{Home, Slot, service};
 use transport::{Spec, Transport};
 
-/// Native Free's synchronous forms own one complete host phase operation.
-/// Spawn remains explicitly gated until its cross-task phase ownership exists.
+/// Sending records only owned handoff. Generated synchronous or spawned
+/// waiters own their own bounded result polls and cancellation observations.
 #[allow(clippy::too_many_arguments)]
 pub(super) unsafe fn send(
     ctx: *mut TaskCtx,
@@ -21,13 +21,8 @@ pub(super) unsafe fn send(
     ordinal: u64,
     placed: Result<(Option<u32>, bool), CallOutcome>,
     start: Start,
-    spawn: bool,
+    _spawn: bool,
 ) -> Stopped<u64> {
-    if spawn {
-        return Err(Stop::Refused(
-            "native Free runner.spawn requires asynchronous phase ownership".into(),
-        ));
-    }
     let key = request.key;
     let slot = unsafe { (*ctx).run_ref().runner_home.as_deref() };
     let mut call = Call {
@@ -81,6 +76,7 @@ pub(super) unsafe fn send(
     let mut failure = None;
     let served = unsafe {
         crate::pool::call_home(ctx, &mut || match result.take().unwrap() {
+            Ok(Completion::Ready) if state(ctx).calls[&ordinal].completion.is_none() => {}
             Ok(Completion::Runner(completion)) => {
                 let run = state(ctx);
                 let call = run.calls.get_mut(&ordinal).unwrap();
@@ -108,6 +104,61 @@ pub(super) unsafe fn send(
         return Err(stop);
     }
     Ok(ordinal)
+}
+
+/// # Safety
+/// Running owner on home; no borrowed execution state crosses host phases.
+pub(super) unsafe fn wait(ctx: *mut TaskCtx, ticket: u64) -> Stopped<u64> {
+    loop {
+        if let Some(completion) = &state(ctx).calls[&ticket].completion {
+            return Ok(code(&completion.outcome));
+        }
+        let task = crate::tasks::current_task(ctx);
+        let mut canceled = 0;
+        unsafe { crate::tasks::hirsel_rt_v2_task_canceled(ctx, &mut canceled, &0) };
+        let cause = canceled.checked_sub(1);
+        let (key, cancel) = {
+            let call = state(ctx).calls.get_mut(&ticket).unwrap();
+            call.task = Some(task);
+            let cancel = cause.filter(|_| call.forwarded.is_none());
+            if let Some(cause) = cancel {
+                call.forwarded = Some(cause);
+            }
+            (call.key, cancel)
+        };
+        let result = unsafe {
+            crate::tasks::free::host::native::issue(ctx, Request::RunnerPoll { key, cancel })
+        }?
+        .0;
+        match result {
+            Ok(Completion::Runner(completion)) => {
+                let run = state(ctx);
+                let call = run.calls.get_mut(&ticket).unwrap();
+                if let Some(place) = call.place.as_ref().and_then(|p| run.places.get_mut(p)) {
+                    place.answered();
+                }
+                let code = code(&completion.outcome);
+                call.completion = Some(completion);
+                return Ok(code);
+            }
+            Ok(Completion::Ready) => {}
+            Ok(_) => return Err(Stop::refusal(AdapterError::InvalidCompletion)),
+            Err(error) => return Err(Stop::refusal(error)),
+        }
+        if unsafe { (*ctx).run_ref().free_replay } {
+            unsafe { crate::tasks::try_yield(&mut *ctx) }?;
+        } else {
+            let waiter = crate::tasks::free::home::runner_waiter(ctx);
+            let slot = unsafe { (*ctx).run_ref().runner_home.as_deref().unwrap() };
+            if slot.transport.waiter(key, waiter) {
+                crate::tasks::park_retry(ctx, state(ctx).calls[&ticket].forwarded.is_none());
+            }
+        }
+    }
+}
+
+pub(crate) unsafe fn pending(run: *mut RunShared) -> bool {
+    unsafe { (*run).runner_home.as_ref() }.is_some_and(|slot| slot.transport.pending())
 }
 
 /// Installed once before any child worker starts. No parent execution pointer,

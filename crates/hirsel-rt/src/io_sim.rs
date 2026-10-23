@@ -546,7 +546,10 @@ impl Adapter for SimIo {
         }
         // A runner call's recorded outcome stands in for its place; no callee runs.
         match (&request, &event.completion) {
-            (Request::RunnerCall(_), Completion::Runner(_))
+            (
+                Request::RunnerCall(_) | Request::RunnerPoll { .. },
+                Completion::Runner(_) | Completion::Ready,
+            )
             | (Request::RunnerCancel { .. } | Request::CallReturn(_), Completion::Ready)
                 if event.fault.is_none() =>
             {
@@ -554,7 +557,13 @@ impl Adapter for SimIo {
                 self.position += 1;
                 return Ok(completion);
             }
-            (Request::RunnerCall(_) | Request::RunnerCancel { .. } | Request::CallReturn(_), _) => {
+            (
+                Request::RunnerCall(_)
+                | Request::RunnerPoll { .. }
+                | Request::RunnerCancel { .. }
+                | Request::CallReturn(_),
+                _,
+            ) => {
                 return Err(AdapterError::InvalidCompletion);
             }
             _ => {}

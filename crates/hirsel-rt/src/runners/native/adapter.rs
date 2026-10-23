@@ -54,23 +54,24 @@ impl ConcurrentAdapter for Adapter {
         self.call_at(0, r)
     }
     fn call_at(&self, token: u64, r: Request) -> Result<Completion, AdapterError> {
-        if let Request::RunnerCall(request) = &r {
-            self.0.issue(token, request.key);
+        match &r {
+            Request::RunnerCall(request) => self.0.issue(token, request.key),
+            Request::RunnerPoll { key, cancel } => self.0.poll(*key, *cancel),
+            _ => self.0.io.call_at(token, r),
         }
-        self.0.io.call_at(token, r)
     }
     fn call_observed_at(
         &self,
         token: u64,
         r: Request,
     ) -> (Result<Completion, AdapterError>, Option<u64>) {
-        if let Request::RunnerCall(request) = &r {
-            self.0.issue(token, request.key);
+        if matches!(r, Request::RunnerCall(_) | Request::RunnerPoll { .. }) {
+            (self.call_at(token, r), None)
+        } else {
+            self.0.io.call_observed_at(token, r)
         }
-        self.0.io.call_observed_at(token, r)
     }
     fn finish(&self, token: u64) {
-        self.0.finish(token);
         self.0.io.finish(token)
     }
     fn parked(&self, token: u64) {

@@ -1259,6 +1259,11 @@ impl<S: Streams> RealCore<S> {
     fn perform(&mut self, request: Request) -> Result<Completion, AdapterError> {
         match &request {
             // A runner call completes with its delivered outcome, else waits for it.
+            Request::RunnerPoll { .. } => {
+                return Err(AdapterError::Unsupported(
+                    "runner polls require qualified runner transport".into(),
+                ));
+            }
             Request::RunnerCall(_) => {
                 let (readiness, log) = self.cooperative.as_ref().ok_or_else(|| {
                     AdapterError::Unsupported("a runner call without cooperative tasks".into())

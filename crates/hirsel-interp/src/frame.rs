@@ -276,6 +276,37 @@ impl Frame {
     pub fn body(&self) -> &Body {
         &self.definition.bodies[self.body_id.0 as usize]
     }
+    /// A provider-owned child has no source stack to retain at result
+    /// readiness. Give its cleanup work the caller's immutable source/type
+    /// metadata and empty storage; no instruction of that body executes.
+    pub fn cleanup_shell(&self) -> Result<Self, Error> {
+        let body = self.body();
+        let captures = body
+            .locals
+            .iter()
+            .filter(|l| l.storage == Storage::Capture)
+            .count();
+        let mut frame = Self::new_body(
+            self.types.clone(),
+            self.definition.clone(),
+            self.body_id,
+            vec![Value::Unit; body.parameters.len()],
+            vec![None; captures],
+            self.sizes.clone(),
+        )?;
+        frame.slots.fill(None);
+        frame.type_arguments = self.type_arguments.clone();
+        frame.block = self.block;
+        frame.caller = self.caller.clone();
+        if let Some(check) = &self.check {
+            let mut ended = crate::eval::enter_checked(&check.state, &frame, vec![], None)?;
+            // Ordinary holding frames ended their storage lifetimes before
+            // result readiness too. The rest retains the checking state.
+            ended.exit();
+            frame.check = Some(ended);
+        }
+        Ok(frame)
+    }
     pub fn place(&self, id: PlaceId) -> Result<&Place, Error> {
         self.body()
             .places

@@ -348,6 +348,9 @@ operation_boundary! {
     /// Whether finished child `id` holds a result nobody took yet: the evaluator keeps its
     /// frame, where a discard drops the result (`take_rests`).
     fn holds_result(&self, _id: u64) -> bool { false }
+    /// A provider-owned child has no source frame. Its result cleanup still
+    /// runs on that task through the evaluator's release worklist.
+    fn frameless_task(&self, _child: u64) -> bool { false }
     fn handles_failure(&self, _token: u64) -> bool {
         false
     }

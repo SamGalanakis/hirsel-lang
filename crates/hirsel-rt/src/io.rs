@@ -597,9 +597,16 @@ pub enum Request {
         net: u64,
         path: String,
     },
-    /// A runner call (RUN-11): parked until its callee ends, then completed with its
-    /// outcome.
+    /// A runner call (RUN-11): legacy providers wait for its outcome;
+    /// qualified transport acknowledges handoff with Ready, then RunnerPoll
+    /// observes the outcome. An immediate refusal is returned directly.
     RunnerCall(Box<hirsel_run_schema::RunnerRequest>),
+    /// Qualified runner result probe; cancellation is forwarded once as part
+    /// of this bounded canonical request, before its outcome is observed.
+    RunnerPoll {
+        key: [u8; 32],
+        cancel: Option<u32>,
+    },
     /// A cancellation forwarded to the call with key `key` (RUN-9), acknowledged with
     /// `Ready`.
     RunnerCancel {

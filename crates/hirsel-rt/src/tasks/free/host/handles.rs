@@ -21,10 +21,26 @@ pub(in crate::tasks::free) struct Envelope {
 }
 impl Envelope {
     pub(in crate::tasks::free) fn validate_request(&self, request: &Request) -> Stopped<()> {
-        if let Request::RunnerCall(request) = request
+        let runner_key = match request {
+            Request::RunnerCall(request) => Some(request.key),
+            Request::RunnerPoll { key, .. } => Some(*key),
+            _ => None,
+        };
+        if runner_key.is_some()
+            && (!self.created.is_empty()
+                || self.output_count.is_some()
+                || !matches!(
+                    self.result,
+                    Ok(Completion::Ready | Completion::Runner(_)) | Err(_)
+                )
+                || matches!(request, Request::RunnerPoll { cancel: Some(cause), .. } if *cause > 3))
+        {
+            return Err(Stop::Diverged("invalid runner protocol completion".into()));
+        }
+        if let Some(key) = runner_key
             && let Ok(Completion::Runner(completion)) = &self.result
         {
-            let expected = hirsel_run_schema::callee_instance(&request.key);
+            let expected = hirsel_run_schema::callee_instance(&key);
             let valid = match &completion.outcome {
                 hirsel_run_schema::CallOutcome::Ok(_)
                 | hirsel_run_schema::CallOutcome::Failed(_)
@@ -386,6 +402,82 @@ impl Handles {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn runner_poll_scalar_envelopes_reject_wrong_owners_and_payloads() {
+        let key = [7; 32];
+        let request = Request::RunnerPoll { key, cancel: None };
+        let outcome = hirsel_run_schema::RunnerCompletion {
+            outcome: hirsel_run_schema::CallOutcome::Ok(vec![1, 2, 3]),
+            callee: Some(hirsel_run_schema::callee_instance(&key)),
+        };
+        let mut reply = Envelope {
+            refusal: None,
+            result: Ok(Completion::Runner(outcome.clone())),
+            created: vec![],
+            output_count: None,
+        };
+        assert!(reply.validate_request(&request).is_ok());
+        let mut bytes = vec![];
+        reply.encode(&mut bytes);
+        let decoded: Envelope = crate::tape_wire::decode(&bytes).unwrap();
+        assert!(decoded.validate_request(&request).is_ok());
+        assert!(
+            decoded
+                .validate_request(&Request::RunnerPoll {
+                    key: [8; 32],
+                    cancel: None
+                })
+                .is_err()
+        );
+        assert!(
+            decoded
+                .validate_request(&Request::RunnerPoll {
+                    key,
+                    cancel: Some(4)
+                })
+                .is_err()
+        );
+        reply.output_count = Some(0);
+        assert!(reply.validate_request(&request).is_err());
+        reply.output_count = None;
+        reply.created = envelope(&[], 1, 7).created;
+        assert!(reply.validate_request(&request).is_err());
+        reply.created.clear();
+        reply.result = Ok(Completion::Handle(Ok(0)));
+        assert!(reply.validate_request(&request).is_err());
+        reply.result = Ok(Completion::Ready);
+        assert!(reply.validate_request(&request).is_ok());
+        let old_request = Request::RunnerCall(Box::new(hirsel_run_schema::RunnerRequest {
+            runner: "worker".into(),
+            form: hirsel_run_schema::CallForm::Compute,
+            path: "m@1/entry".into(),
+            grants: vec![],
+            definitions: vec![],
+            key,
+            digest: [0; 32],
+            argument: vec![],
+        }));
+        reply.result = Ok(Completion::Runner(outcome));
+        assert!(
+            reply.validate_request(&old_request).is_ok(),
+            "old synchronous outcome stays valid"
+        );
+        let mut old = vec![];
+        old_request.encode(&mut old);
+        assert_eq!(&old[..4], &108u32.to_le_bytes());
+        assert_eq!(
+            crate::tape_wire::decode::<Request>(&old).unwrap(),
+            old_request
+        );
+        let mut poll = vec![];
+        request.encode(&mut poll);
+        assert_eq!(&poll[..4], &116u32.to_le_bytes());
+        for length in 0..poll.len() {
+            assert!(crate::tape_wire::decode::<Request>(&poll[..length]).is_err());
+        }
+        poll.push(0);
+        assert!(crate::tape_wire::decode::<Request>(&poll).is_err());
+    }
     fn envelope(path: &[u32], ordinal: u64, resource: u32) -> Envelope {
         Envelope {
             refusal: None,

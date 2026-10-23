@@ -233,7 +233,11 @@ pub(crate) fn project<A>(
         // Runner messages contain the canonical grant/argument/result bytes,
         // definition path and logical call key. No field is a physical handle
         // requiring authority substitution; preserve every initialized byte.
-        R::RunnerCall(_) | R::RunnerCancel { .. } | R::CallReturn(_) | R::Stopped => {}
+        R::RunnerCall(_)
+        | R::RunnerPoll { .. }
+        | R::RunnerCancel { .. }
+        | R::CallReturn(_)
+        | R::Stopped => {}
         R::Ready { .. } | R::Schedule { .. } => {
             return Err("request needs a dedicated scheduling projection");
         }

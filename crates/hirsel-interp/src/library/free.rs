@@ -235,6 +235,24 @@ impl Library {
         Ok(true)
     }
 
+    /// The explicit cancellation observation preceding one bounded runner
+    /// poll. Replay forces the recorded cause, as TaskCanceled does natively.
+    pub fn native_runner_poll_cancellation(
+        &mut self,
+        context: &OperationContext<'_>,
+    ) -> Result<Option<Option<u32>>, Error> {
+        if let Enter::Park(_) = self.free_enter(Phase::Done, context)? {
+            return Ok(None);
+        }
+        let cause = self.free_canceled()?;
+        let result = self.free_done(OperationResult::returned(Value::Unit), context)?;
+        if matches!(result, OperationResult::Park { .. }) {
+            Ok(None)
+        } else {
+            Ok(Some(cause))
+        }
+    }
+
     pub fn native_free_cut(&mut self, context: &OperationContext<'_>) -> OperationResult {
         self.free_final(context)
     }

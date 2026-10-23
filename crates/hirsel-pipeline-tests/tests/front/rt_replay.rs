@@ -184,6 +184,7 @@ pub fn replay_interpreter_with_fixture(
                     panic!("the interpreter oracle runs no cooperative host scheduler")
                 }
                 Request::RunnerCall(_)
+                | Request::RunnerPoll { .. }
                 | Request::RunnerCancel { .. }
                 | Request::CallReturn(_)
                 | Request::Stopped => {

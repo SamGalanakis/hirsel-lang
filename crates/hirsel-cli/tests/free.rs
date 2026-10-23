@@ -2423,3 +2423,137 @@ pub fn main(rt: Io, args: Args) -> Result[(), E] {
         b"child deadline result\n",
     );
 }
+
+#[test]
+fn f1_runner_call_forwards_parent_deadline_and_keeps_callee_outcome() {
+    if !hirsel_rt::free_driver::admission_enabled() {
+        return;
+    }
+    let scratch = Scratch::new("f1-runner-parent-deadline");
+    let program = scratch.path("main.hir");
+    std::fs::write(&program, r#"pub type E = Grant(GrantError) | Output(OutputError) | Clock(ClockError)
+fn child(rt: Io, n: u64) -> Result[u64, String] {
+  let clock = match io.monotonic_clock(rt) { Ok(v) => v, Error(_) => return Error("clock") }
+  let now = match clock.monotonic(clock) { Ok(v) => v, Error(_) => return Error("now") }
+  let later = match instant.checked_add(clock, now, 3600000000000u64) { Some(v) => v, None() => now }
+  match clock.sleep_until(clock, later) {
+    Error(Canceled(Parent())) => Ok(n + 1u64),
+    _ => Error("parent cancellation not forwarded"),
+  }
+}
+pub fn main(rt: Io, args: Args) -> Result[(), E] {
+  let out = io.stdout(rt) ? Grant
+  let tasks = io.tasks(rt) ? Grant
+  let clock = io.monotonic_clock(rt) ? Grant
+  let runner = io.runner(rt, "worker") ? Grant
+  let now = clock.monotonic(clock) ? Clock
+  let later = match instant.checked_add(clock, now, 500000000u64) { Some(v) => v, None() => now }
+  let ended = task.scope_until(tasks, Deadline(clock: clock, at: later), fn(s: Scope) -> bool {
+    runner.call(runner, child, 8u64) == Ok(9u64)
+  })
+  failure.check(match ended { Expired(true) => true, _ => false }, Arithmetic())
+  out.print(out, "forwarded parent deadline\n") ? Output
+  Ok(())
+}
+"#).unwrap();
+    let grants = r#"{"io":{"stdout":"stdout.bytes@1","tasks":"tasks.free@1","monotonic_clock":"clock.monotonic.ns@1","dirs":[],"runners":[{"name":"worker","provider":"local.threads@1","threads":2,"grants":{"monotonic_clock":"clock.monotonic.ns@1","dirs":[]},"definitions":null}]},"args":[]}"#;
+    f1_runner_call_record_replay(
+        &scratch,
+        &program,
+        grants,
+        b"forwarded parent deadline\n",
+        b"forwarded parent deadline\n",
+    );
+}
+
+#[test]
+fn f1_runner_spawn_returns_while_pending_and_forwards_child_cancellation() {
+    if !hirsel_rt::free_driver::admission_enabled() {
+        return;
+    }
+    let scratch = Scratch::new("f1-runner-spawn-pending");
+    let program = scratch.path("main.hir");
+    std::fs::write(
+        &program,
+        r#"pub type E = Grant(GrantError) | Output(OutputError)
+fn child(rt: Io, n: u64) -> Result[u64, String] {
+  let clock = match io.monotonic_clock(rt) { Ok(v) => v, Error(_) => return Error("clock") }
+  let now = match clock.monotonic(clock) { Ok(v) => v, Error(_) => return Error("now") }
+  let ns = if n == 8u64 { 3600000000000u64 } else { 10000000u64 }
+  let later = match instant.checked_add(clock, now, ns) { Some(v) => v, None() => now }
+  match clock.sleep_until(clock, later) {
+    Error(Canceled(Parent())) => if n == 8u64 { Ok(9u64) } else { Error("unexpected cancel") },
+    Ok(()) => if n == 20u64 { Ok(21u64) } else { Error("missing cancel") },
+    _ => Error("sleep"),
+  }
+}
+pub fn main(rt: Io, args: Args) -> Result[(), E] {
+  let out = io.stdout(rt) ? Grant
+  let tasks = io.tasks(rt) ? Grant
+  let runner = io.runner(rt, "worker") ? Grant
+  let good = task.scope(tasks, fn(s: Scope) -> bool {
+    let first = runner.spawn(s, runner, child, 8u64)
+    let second = runner.spawn(s, runner, child, 20u64)
+    let _ = out.print(out, "spawn returned while pending\n")
+    task.cancel(s, first)
+    let right = task.await(s, take second) == Ok(21u64)
+    right && task.await(s, take first) == Ok(9u64)
+  })
+  failure.check(good, Arithmetic())
+  out.print(out, "spawn outcomes\n") ? Output
+  Ok(())
+}
+"#,
+    )
+    .unwrap();
+    let grants = r#"{"io":{"stdout":"stdout.bytes@1","tasks":"tasks.free@1","dirs":[],"runners":[{"name":"worker","provider":"local.threads@1","threads":2,"grants":{"monotonic_clock":"clock.monotonic.ns@1","dirs":[]},"definitions":null}]},"args":[]}"#;
+    f1_runner_call_record_replay(
+        &scratch,
+        &program,
+        grants,
+        b"spawn returned while pending\nspawn outcomes\n",
+        b"spawn returned while pending\nspawn outcomes\n",
+    );
+}
+
+#[test]
+fn f1_runner_spawn_immediate_refusal_and_unjoined_value_replay() {
+    if !hirsel_rt::free_driver::admission_enabled() {
+        return;
+    }
+    let scratch = Scratch::new("f1-runner-spawn-refusal");
+    let program = scratch.path("main.hir");
+    std::fs::write(
+        &program,
+        r#"pub type E = Grant(GrantError) | Output(OutputError)
+fn child(rt: Io, n: u64) -> Result[String, String] { Ok("unused result") }
+pub fn main(rt: Io, args: Args) -> Result[(), E] {
+  let out = io.stdout(rt) ? Grant
+  let tasks = io.tasks(rt) ? Grant
+  let runner = io.runner(rt, "worker") ? Grant
+  let denied = runner.only(runner, []) ? Grant
+  let refused = task.scope(tasks, fn(s: Scope) -> bool {
+    let waiter = runner.spawn(s, denied, child, 4u64)
+    task.await(s, take waiter) == Error(NotRun(Denied()))
+  })
+  failure.check(refused, Arithmetic())
+  task.scope(tasks, fn(s: Scope) {
+    let unused = runner.spawn(s, runner, child, 4u64)
+    task.detach(s, take unused)
+    ()
+  })
+  out.print(out, "refusal and cleanup\n") ? Output
+  Ok(())
+}
+"#,
+    )
+    .unwrap();
+    let grants = r#"{"io":{"stdout":"stdout.bytes@1","tasks":"tasks.free@1","dirs":[],"runners":[{"name":"worker","provider":"local.threads@1","threads":1,"grants":{"dirs":[]},"definitions":null}]},"args":[]}"#;
+    f1_runner_call_record_replay(
+        &scratch,
+        &program,
+        grants,
+        b"refusal and cleanup\n",
+        b"refusal and cleanup\n",
+    );
+}

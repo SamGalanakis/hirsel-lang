@@ -106,6 +106,11 @@ pub(crate) fn render_request(request: &Request) -> Option<String> {
             hex(&call.digest),
             hex(&call.argument)
         ),
+        Request::RunnerPoll { key, cancel } => format!(
+            "runner_poll {} {}",
+            hex(key),
+            cancel.map_or_else(|| "none".into(), |cause| cause.to_string())
+        ),
         Request::RunnerCancel { key, cause } => format!("runner_cancel {} {cause}", hex(key)),
         Request::CallReturn(outcome) => match outcome {
             hirsel_run_schema::CalleeOutcome::Ok(bytes) => format!("call_return ok {}", hex(bytes)),
@@ -537,6 +542,14 @@ pub(crate) fn parse_request(words: &[&str]) -> Result<Option<Request>, String> {
             digest: fixed(digest)?,
             argument: bytes(argument)?,
         })),
+        ["runner_poll", key, cancel] => Request::RunnerPoll {
+            key: fixed(key)?,
+            cancel: if *cancel == "none" {
+                None
+            } else {
+                Some(number(cancel)?)
+            },
+        },
         ["runner_cancel", key, cause] => Request::RunnerCancel {
             key: fixed(key)?,
             cause: number(cause)?,

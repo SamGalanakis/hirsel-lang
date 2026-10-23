@@ -264,3 +264,38 @@ pub(crate) unsafe fn service_child(run: *mut RunShared) -> crate::stop::Stopped<
     unsafe { super::check_quiet(run) };
     Ok(changed)
 }
+
+pub(crate) fn runner_waiter(ctx: *mut crate::TaskCtx) -> (u32, u32) {
+    let s = super::super::scheduler(ctx);
+    (s.current, s.task(s.current).generation)
+}
+
+/// # Safety
+/// Sole home callback, with no adapter borrow. Notifications retain physical
+/// save preflight even if they arrive before the waiting fiber fully saves.
+pub(crate) unsafe fn runner_wakes(run: *mut RunShared, waiters: &[(u32, u32)]) {
+    let _guard = unsafe { role::IdleGuard::home(run) };
+    let Some(s) = (unsafe { (*(*run).tasks.get()).as_deref_mut() }) else {
+        return;
+    };
+    for &(task, generation) in waiters {
+        if let Some(Some(row)) = s.tasks.get_mut(task as usize)
+            && row.generation == generation
+        {
+            row.retried = true;
+            s.wake(task);
+        }
+    }
+    unsafe { readiness::poll_free(s) };
+    unsafe { super::publish_ready(s, run) };
+}
+
+/// # Safety
+/// A child run's admission owner, outside adapter calls and program code.
+pub(crate) unsafe fn runner_cancel(run: *mut RunShared) {
+    let _guard = unsafe { role::IdleGuard::home(run) };
+    let s = unsafe { (*(*run).tasks.get()).as_deref_mut().unwrap() };
+    s.cancel(super::super::ROOT, super::super::CANCEL_PARENT);
+    unsafe { readiness::poll_free(s) };
+    unsafe { super::publish_ready(s, run) };
+}

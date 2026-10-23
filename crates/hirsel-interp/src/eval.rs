@@ -240,10 +240,14 @@ struct HandOff {
 fn rest_stack(
     holding: &mut std::collections::HashMap<u64, Frame>,
     rest: crate::TaskRest,
+    template: &Frame,
+    operations: &(impl Operations + ?Sized),
 ) -> Result<(u64, Vec<Frame>), Error> {
-    let mut frame = holding
-        .remove(&rest.child)
-        .ok_or_else(|| invalid("a discarded result's child holds no frame"))?;
+    let mut frame = match holding.remove(&rest.child) {
+        Some(frame) => frame,
+        None if operations.frameless_task(rest.child) => template.cleanup_shell()?,
+        None => return Err(invalid("a discarded result's child holds no frame")),
+    };
     frame.ending = Some(crate::resources::Ending::Return(Value::Unit));
     let site = site_of(&frame)?;
     for value in rest.values.into_iter().rev() {
@@ -586,7 +590,12 @@ pub(crate) fn execute_frames(
                     child: first.child,
                     rests,
                 });
-                (task, frames) = rest_stack(&mut holding, first)?;
+                (task, frames) = rest_stack(
+                    &mut holding,
+                    first,
+                    hand_offs.last().unwrap().frames.last().unwrap(),
+                    operations,
+                )?;
                 operations.enter_task(task, false);
                 continue;
             }
@@ -1553,7 +1562,12 @@ pub(crate) fn execute_frames(
             let hand_off = &mut hand_offs[index];
             if let Some(next) = hand_off.rests.pop_front() {
                 hand_off.child = next.child;
-                (task, frames) = rest_stack(&mut holding, next)?;
+                (task, frames) = rest_stack(
+                    &mut holding,
+                    next,
+                    hand_off.frames.last().unwrap(),
+                    operations,
+                )?;
             } else {
                 let hand_off = hand_offs.swap_remove(index);
                 task = hand_off.parent;

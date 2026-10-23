@@ -2611,6 +2611,9 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
     /// request is parked or a deadline armed), and the due scope deadlines expire by
     /// deadline, ties in entry order.
     fn expire_deadlines(&mut self, cx: &mut OperationContext<'_>) -> Result<(), Error> {
+        if self.free.is_some() {
+            self.free_runner_children(cx)?;
+        }
         self.remote_deliveries();
         let mut armed = std::mem::take(&mut self.armed);
         armed.retain(|(token, scope, _)| {
@@ -2677,6 +2680,9 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
         self.runner_calls()
     }
     fn take_cancels(&mut self) -> Vec<u64> {
+        if self.free.is_some() {
+            return Vec::new();
+        }
         self.runner_cancels()
     }
     fn call_ended(

@@ -1528,6 +1528,9 @@ impl Operations for Library {
             })
             .collect()
     }
+    fn frameless_task(&self, child: u64) -> bool {
+        self.tasks.frameless.contains(&child)
+    }
     fn rest_finished(
         &mut self,
         child: u64,

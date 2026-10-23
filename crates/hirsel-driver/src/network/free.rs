@@ -17,7 +17,15 @@ pub(super) struct Check {
     result: OperationResult,
 }
 pub(super) struct Runner {
-    request: Call,
+    request: Option<Call>,
+    key: [u8; 32],
+    forwarded: bool,
+    needs_check: bool,
+    child: Option<u64>,
+    immediate: Option<hirsel_run_schema::RunnerCompletion>,
+    acknowledged: bool,
+    finished: bool,
+    site: hirsel_interp::observation::Anchor,
     sent: Result<u64, hirsel_run_schema::RunnerCompletion>,
     result: OperationResult,
 }
@@ -66,14 +74,10 @@ impl HostLibrary {
             return Err(invalid());
         }
         let send = sends.pop().unwrap();
-        if send.child {
-            return Err(Error::Unavailable(
-                "native Free runner.spawn requires asynchronous phase ownership".into(),
-            ));
-        }
         if !self.library.begin_native_host()? {
             return Ok(self.library.native_free_cut(cx));
         }
+        let key = send.request.key;
         let request = Call::new(
             self.free.as_ref().unwrap(),
             R::RunnerCall(Box::new(send.request)),
@@ -84,7 +88,29 @@ impl HostLibrary {
         self.free_runners.insert(
             token,
             Runner {
-                request,
+                request: Some(request),
+                key,
+                forwarded: false,
+                needs_check: true,
+                child: if send.child {
+                    let OperationResult::Complete {
+                        value: Value::Handle { kind, id },
+                        ..
+                    } = &result
+                    else {
+                        return Err(invalid());
+                    };
+                    if kind != "Task" {
+                        return Err(invalid());
+                    }
+                    Some(*id)
+                } else {
+                    None
+                },
+                immediate: None,
+                acknowledged: false,
+                finished: false,
+                site: cx.anchor().cloned().ok_or_else(invalid)?,
                 sent: send.sent,
                 result,
             },
@@ -107,49 +133,169 @@ impl HostLibrary {
         token: u64,
         cx: &mut OperationContext<'_>,
     ) -> Result<Option<OperationResult>, Error> {
-        let mut runner = self.free_runners.remove(&token).unwrap();
-        match self.free_advance(&mut runner.request)? {
-            Poll::Pending => {
-                self.free_runners.insert(token, runner);
-                Ok(None)
-            }
-            Poll::Cut => {
-                self.free_runners.insert(token, runner);
-                Ok(Some(self.library.native_free_cut(cx)))
-            }
-            Poll::Complete(result) => {
-                let completion = match result {
-                    Ok(C::Runner(completion)) => completion,
-                    result => {
-                        return Err(Error::Unavailable(format!(
-                            "Free runner result: {result:?}"
-                        )));
-                    }
+        loop {
+            let mut runner = self.free_runners.remove(&token).unwrap();
+            if runner.request.is_none() && runner.immediate.is_none() {
+                let cause = if runner.needs_check {
+                    let Some(cause) = self.library.native_runner_poll_cancellation(cx)? else {
+                        self.free_runners.insert(token, runner);
+                        return Ok(Some(self.library.native_free_cut(cx)));
+                    };
+                    runner.needs_check = false;
+                    cause
+                } else {
+                    self.library.host_cancellation().flatten()
                 };
-                let result = match &runner.sent {
-                    Err(expected) if expected == &completion => runner.result,
-                    Err(_) => return Err(invalid()),
-                    Ok(target) => {
-                        self.library.runner_completed(*target, completion, cx)?;
-                        self.library.poll(*target, cx)?.ok_or_else(invalid)?
-                    }
-                };
-                let path = self.library.task_path();
-                if self
-                    .library
-                    .with_free_session(|session| Ok(session.at_cut(&path)))?
-                {
-                    // Keep decoded owners alive until the terminal cut ends
-                    // the execution, as native saved result storage does.
-                    runner.result = result;
+                if !self.library.begin_native_host()? {
+                    self.free_runners.insert(token, runner);
+                    return Ok(Some(self.library.native_free_cut(cx)));
+                }
+                let cancel = cause.filter(|_| !runner.forwarded);
+                runner.forwarded |= cancel.is_some();
+                runner.request = Some(
+                    Call::new(
+                        self.free.as_ref().unwrap(),
+                        R::RunnerPoll {
+                            key: runner.key,
+                            cancel,
+                        },
+                    )
+                    .map_err(Error::InvalidTir)?,
+                );
+            }
+            let poll = if let Some(completion) = runner.immediate.take() {
+                Poll::Complete(Ok(C::Runner(completion)))
+            } else {
+                self.free_advance(runner.request.as_mut().unwrap())?
+            };
+            return match poll {
+                Poll::Pending => {
+                    self.free_runners.insert(token, runner);
+                    Ok(None)
+                }
+                Poll::Cut => {
                     self.free_runners.insert(token, runner);
                     Ok(Some(self.library.native_free_cut(cx)))
-                } else {
-                    Ok(Some(result))
                 }
+                Poll::Complete(result) => {
+                    if let Some(child) = runner.child.filter(|_| !runner.acknowledged) {
+                        match &result {
+                            Ok(C::Ready) if runner.sent.is_ok() => {}
+                            Ok(C::Runner(completion)) => {
+                                if let Err(expected) = &runner.sent {
+                                    if expected != completion {
+                                        return Err(invalid());
+                                    }
+                                }
+                                runner.immediate = Some(completion.clone());
+                            }
+                            _ => return Err(invalid()),
+                        }
+                        runner.request = None;
+                        runner.needs_check = true;
+                        runner.acknowledged = true;
+                        let result =
+                            self.library
+                                .native_runner_spawn(child, runner.result.clone(), cx)?;
+                        self.free_runners.insert(token, runner);
+                        return Ok(Some(result));
+                    }
+                    if matches!(result, Ok(C::Ready)) {
+                        runner.request = None;
+                        runner.needs_check = true;
+                        self.free_runners.insert(token, runner);
+                        continue;
+                    }
+                    let completion = match result {
+                        Ok(C::Runner(completion)) => completion,
+                        result => {
+                            return Err(Error::Unavailable(format!(
+                                "Free runner result: {result:?}"
+                            )));
+                        }
+                    };
+                    let result = match &runner.sent {
+                        Err(expected) if expected == &completion => {
+                            if let Some(child) = runner.child {
+                                self.library.native_runner_refused(child, &completion, cx)?;
+                                OperationResult::returned(Value::Unit)
+                            } else {
+                                runner.result
+                            }
+                        }
+                        Err(_) => return Err(invalid()),
+                        Ok(target) => {
+                            self.library.runner_completed(*target, completion, cx)?;
+                            if runner.child.is_some() {
+                                OperationResult::returned(Value::Unit)
+                            } else {
+                                self.library.poll(*target, cx)?.ok_or_else(invalid)?
+                            }
+                        }
+                    };
+                    runner.finished = true;
+                    let path = self.library.task_path();
+                    if self
+                        .library
+                        .with_free_session(|session| Ok(session.at_cut(&path)))?
+                    {
+                        // Keep decoded owners alive until the terminal cut ends
+                        // the execution, as native saved result storage does.
+                        runner.result = result;
+                        self.free_runners.insert(token, runner);
+                        Ok(Some(self.library.native_free_cut(cx)))
+                    } else {
+                        Ok(Some(result))
+                    }
+                }
+            };
+        }
+    }
+    /// Spawned runner waiters have no source frames in the reference engine.
+    /// Consume their own registered phase logs at scheduling points, never
+    /// the current parent's log, and leave key-dependent waits pending.
+    pub(super) fn free_runner_children(
+        &mut self,
+        cx: &mut OperationContext<'_>,
+    ) -> Result<(), Error> {
+        loop {
+            let children: Vec<_> = self
+                .free_runners
+                .iter()
+                .filter(|(_, runner)| {
+                    runner.child.is_some() && runner.acknowledged && !runner.finished
+                })
+                .map(|(&token, runner)| (token, runner.child.unwrap(), runner.site.clone()))
+                .collect();
+            let mut progressed = false;
+            for (token, child, site) in children {
+                let previous = self.library.native_runner_enter_child(child)?;
+                let path = self.library.task_path();
+                let before = self.library.with_free_session(|s| Ok(s.progress(&path)))?;
+                let result = self.free_poll_runner(
+                    token,
+                    &mut OperationContext {
+                        configuration: cx.configuration,
+                        sources: cx.sources,
+                        stdout: cx.stdout,
+                        trace: cx.trace,
+                        trace_mode: cx.trace_mode,
+                        anchor: Some(&site),
+                    },
+                );
+                let after = self.library.with_free_session(|s| Ok(s.progress(&path)))?;
+                self.library.native_runner_restore_task(previous);
+                result?;
+                progressed |= before != after;
+            }
+            // Siblings can enable each other's next key epoch. A pass with
+            // no publication leaves the genuinely pending dependency alone.
+            if !progressed {
+                return Ok(());
             }
         }
     }
+
     pub(super) fn free_request(&self, name: &str, a: &[Value]) -> Result<Option<R>, Error> {
         Ok(Some(match name {
             "io.stdout" => R::Stdout { io: 1 },

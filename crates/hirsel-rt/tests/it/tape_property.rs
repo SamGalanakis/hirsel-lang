@@ -245,6 +245,7 @@ pub(super) fn requests(n: u64) -> Vec<Request> {
         UnixConnect { net: n.wrapping_add(17), path: if n == 0 { String::new() } else { format!("{text}#path") } },
         UnixListen { net: n.wrapping_add(17), path: if n == 0 { String::new() } else { format!("{text}#path") } },
         RunnerCancel { key: digest, cause: n as u32 },
+        RunnerPoll { key: digest, cancel: (n % 2 != 0).then_some(n as u32) },
         Ready { wait: n.wrapping_add(30), points: n.wrapping_add(20) },
         Schedule { count: n.wrapping_add(2), choice: n % 2 };
         RunnerCall(Box::new(hirsel_run_schema::RunnerRequest {

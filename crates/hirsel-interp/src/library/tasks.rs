@@ -46,6 +46,8 @@ pub(super) struct Tasks {
     rests: Vec<(u64, TaskRest)>,
     /// The children in their rest: whose failure a dropped result raises belongs to them.
     resting: BTreeMap<u64, Resting>,
+    /// Provider-owned runner waiters run no evaluator frames.
+    pub frameless: BTreeSet<u64>,
     /// Tasks whose operation yields once its rests return: the yield follows the hand-offs.
     deferred_yield: BTreeSet<u64>,
     /// Failures raised in the rests of a task's scope exit, by spawn path: they join its
@@ -198,6 +200,7 @@ impl Tasks {
         path.push(*ordinal);
         *ordinal += 1;
         children.children.push(task);
+        self.frameless.insert(task);
         let canceled = self.canceled().map(|_| 1);
         self.tasks.insert(
             task,
@@ -268,6 +271,8 @@ impl Tasks {
             let values = self.retire(task)?;
             if holds {
                 self.rest(task, scope, path, canceled, values, false);
+            } else {
+                self.frameless.remove(&task);
             }
         }
         Ok(())
@@ -284,6 +289,7 @@ impl Tasks {
         exit: bool,
     ) {
         if values.is_empty() && !self.free_rests {
+            self.frameless.remove(&task);
             return;
         }
         self.resting.insert(
@@ -406,6 +412,7 @@ impl Tasks {
             .resting
             .remove(&task)
             .ok_or_else(|| invalid("an unknown rest ended"))?;
+        self.frameless.remove(&task);
         if failures.is_empty() {
             return Ok(());
         }
@@ -489,10 +496,13 @@ impl Tasks {
         let detached = child.detached;
         self.spawn_counts.remove(&task);
         self.active_scopes.remove(&task);
-        if detached && !self.retire(task)?.is_empty() {
-            return Err(invalid(
-                "detached task completed before disposing its result",
-            ));
+        if detached {
+            if !self.retire(task)?.is_empty() {
+                return Err(invalid(
+                    "detached task completed before disposing its result",
+                ));
+            }
+            self.frameless.remove(&task);
         }
         Ok(())
     }
@@ -1133,6 +1143,9 @@ impl Library {
             self.tasks
                 .rest(id, scope, path, canceled, vec![value], true);
         }
+        self.tasks
+            .frameless
+            .retain(|id| self.tasks.tasks.contains_key(id) || self.tasks.resting.contains_key(id));
         if !self.tasks.closing_deadlines.values().any(|&id| id == scope) {
             self.tasks.scope_canceled.remove(&scope);
         }
@@ -1677,6 +1690,37 @@ mod tests {
                     library.free_stop("returned");
                     tape = Some(library.take_free().unwrap().report().tape);
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn provider_owned_child_markers_end_with_task_or_cleanup_rest() {
+        for free in [false, true] {
+            for detach_first in [false, true] {
+                let mut tasks = Tasks::default();
+                tasks.free_rests = free;
+                tasks.scopes.insert(1, ScopeState::default());
+                let child = tasks.native_child(1).unwrap();
+                assert!(tasks.frameless.contains(&child));
+                if detach_first {
+                    tasks.detach(child).unwrap();
+                }
+                tasks
+                    .finished(child, OperationResult::returned(Value::Unit))
+                    .unwrap();
+                if !detach_first {
+                    tasks.detach(child).unwrap();
+                }
+                let rests = tasks.take_rests(0);
+                assert_eq!(rests.len(), usize::from(free && !detach_first));
+                if !rests.is_empty() {
+                    assert!(tasks.frameless.contains(&child));
+                    tasks.rest_finished(child, vec![]).unwrap();
+                }
+                assert!(tasks.frameless.is_empty());
+                assert!(tasks.tasks.is_empty());
+                assert!(tasks.resting.is_empty());
             }
         }
     }

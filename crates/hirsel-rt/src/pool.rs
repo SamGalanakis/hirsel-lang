@@ -1863,6 +1863,13 @@ pub(crate) fn forget(run: &mut RunShared) {
     }
 }
 
+/// # Safety
+/// Sole home owner, no inbox loan escapes this readiness test.
+pub(crate) unsafe fn home_posts(run: *mut RunShared) -> bool {
+    let execs = unsafe { (*(*run).execs.get()).as_deref().unwrap() };
+    !execs.home.inbox.lock().unwrap().posts.is_empty()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

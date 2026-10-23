@@ -1411,3 +1411,85 @@ fn retired_walk_text_recording_requires_recording_again() {
     assert!(error.contains("retired Request::Walk"), "{error}");
     assert!(error.contains("re-record"), "{error}");
 }
+
+#[test]
+fn runner_protocol_replays_legacy_outcomes_and_rejects_forged_poll_replies() {
+    let key = [9; 32];
+    let request = Request::RunnerCall(Box::new(hirsel_run_schema::RunnerRequest {
+        runner: "worker".into(),
+        form: hirsel_run_schema::CallForm::Compute,
+        path: "m@1/work".into(),
+        grants: vec![],
+        definitions: vec![],
+        key,
+        digest: [3; 32],
+        argument: vec![1],
+    }));
+    let outcome = Completion::Runner(hirsel_run_schema::RunnerCompletion {
+        outcome: hirsel_run_schema::CallOutcome::NotRun(0),
+        callee: None,
+    });
+    // An old recording returns the outcome in RunnerCall itself (tag 108),
+    // without a Ready acknowledgement or any RunnerPoll entries.
+    let old = vec![Event {
+        request: request.clone(),
+        completion: outcome.clone(),
+        fault: None,
+    }];
+    let text = hirsel_rt::launch::render_tape(&old).unwrap();
+    let old = hirsel_rt::launch::parse_tape(&text).unwrap();
+    let mut replay = SimIo::new(Tree::default(), old);
+    assert_eq!(replay.call(request.clone()), Ok(outcome.clone()));
+    assert_eq!(replay.finish(), Ok(()));
+    assert!(replay.stdout().is_empty());
+    let poll = Request::RunnerPoll {
+        key,
+        cancel: Some(0),
+    };
+    let events = vec![
+        Event {
+            request: request.clone(),
+            completion: Completion::Ready,
+            fault: None,
+        },
+        Event {
+            request: poll.clone(),
+            completion: Completion::Ready,
+            fault: None,
+        },
+        Event {
+            request: Request::RunnerPoll { key, cancel: None },
+            completion: outcome,
+            fault: None,
+        },
+    ];
+    let mut replay = SimIo::new(Tree::default(), events);
+    assert_eq!(
+        replay.call(poll.clone()),
+        Err(AdapterError::ReplayMismatch(0))
+    );
+    assert_eq!(replay.position(), 0);
+    assert_eq!(replay.call(request), Ok(Completion::Ready));
+    assert_eq!(replay.call(poll.clone()), Ok(Completion::Ready));
+    assert!(matches!(
+        replay.call(Request::RunnerPoll { key, cancel: None }),
+        Ok(Completion::Runner(_))
+    ));
+    assert_eq!(replay.finish(), Ok(()));
+    for completion in [Completion::Handle(Ok(7)), Completion::Unit(Ok(()))] {
+        let mut replay = SimIo::new(
+            Tree::default(),
+            vec![Event {
+                request: poll.clone(),
+                completion,
+                fault: None,
+            }],
+        );
+        assert_eq!(
+            replay.call(poll.clone()),
+            Err(AdapterError::InvalidCompletion)
+        );
+        assert_eq!(replay.position(), 0);
+        assert!(replay.stdout().is_empty());
+    }
+}

@@ -19,7 +19,6 @@ impl Slot {
 
 struct Child {
     run: CalleeRun,
-    token: u64,
     key: [u8; 32],
     lose_reply: bool,
     io: Rc<RefCell<RealIo>>,
@@ -31,6 +30,7 @@ pub(crate) struct Home {
     config: Config,
     children: Vec<Child>,
     tag: u64,
+    driver_installed: bool,
 }
 impl Home {
     /// # Safety
@@ -42,13 +42,14 @@ impl Home {
             config,
             children: Vec::new(),
             tag: 0,
+            driver_installed: false,
         });
         let pointer = &raw mut *home;
         assert!(home.slot.home.swap(pointer, Ordering::AcqRel).is_null());
         home
     }
 
-    fn start(&mut self, token: u64, key: [u8; 32], spec: Spec) -> Stopped<()> {
+    fn start(&mut self, _token: u64, key: [u8; 32], spec: Spec) -> Stopped<()> {
         if spec.crash_after.is_some() {
             return Err(Stop::Refused(
                 "native Free runner crash simulation is not yet admitted".into(),
@@ -124,7 +125,6 @@ impl Home {
         unsafe { run.notify_on(self.slot.transport.signal.clone()) };
         self.children.push(Child {
             run,
-            token,
             key,
             lose_reply: spec.lose_reply,
             io,
@@ -133,13 +133,24 @@ impl Home {
         Ok(())
     }
 
-    fn poll(&mut self) -> Stopped<bool> {
+    fn poll(&mut self, root: *mut RunShared) -> Stopped<bool> {
+        if !self.driver_installed {
+            unsafe { crate::pool::home_driver(root, self.slot.transport.driver.clone()) };
+            self.driver_installed = true;
+        }
         self.slot.transport.signal.drain();
         let mut changed = false;
         for (token, key, spec) in self.slot.transport.take() {
             self.start(token, key, spec)?;
             changed = true;
         }
+        for key in self.slot.transport.cancels() {
+            if let Some(child) = self.children.iter().find(|child| child.key == key) {
+                unsafe { crate::tasks::free::home::runner_cancel((*child.run.root).run_ptr()) };
+                changed = true;
+            }
+        }
+        let mut waiters = Vec::new();
         let mut index = 0;
         while index < self.children.len() {
             changed |= self.children[index].run.service();
@@ -194,14 +205,25 @@ impl Home {
                     _ => CallOutcome::Faulted(reply.bytes),
                 }
             };
-            self.slot.transport.io.deliver(
-                child.token,
+            if let Some(waiter) = self.slot.transport.complete(
+                child.key,
                 RunnerCompletion {
                     outcome,
                     callee: Some(hirsel_run_schema::callee_instance(&child.key)),
                 },
-            );
+            ) {
+                waiters.push(waiter);
+            }
             changed = true;
+        }
+        unsafe { crate::tasks::free::home::runner_wakes(root, &waiters) };
+        if !changed && self.slot.transport.pending() && !unsafe { crate::pool::home_posts(root) } {
+            crate::readiness::Readiness::wait_many(&[
+                &self.slot.transport.driver,
+                &self.slot.transport.work,
+            ])
+            .map_err(Stop::refusal)?;
+            return Ok(true);
         }
         Ok(changed)
     }
@@ -228,7 +250,7 @@ pub(crate) unsafe fn service(run: *mut RunShared) -> bool {
     if home.is_null() {
         return false;
     }
-    match unsafe { (*home).poll() } {
+    match unsafe { (*home).poll(run) } {
         Ok(changed) => changed,
         Err(stop) => {
             unsafe { (*run).control.request(stop) };
