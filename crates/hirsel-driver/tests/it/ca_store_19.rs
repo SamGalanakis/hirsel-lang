@@ -1395,3 +1395,40 @@ fn ordinary_source_heads_keep_growth_rejections_and_private_execution_authority(
         }
     });
 }
+
+#[test]
+fn ordinary_source_audits_validate_lexical_heads_without_syntax_and_keep_local_authority() {
+    with_compiler_stack(|| {
+        let source = "fn helper()->u32{7u32}\nfn plain(x:u32)->u32{x+1u32}\nfn staged()->u32{comptime helper()}\n";
+        let store = Arc::new(store::MemStore::default());
+        let mut writer = QueryEngine::new(default_environment(), compiler_adapters()).with_result_store(store.clone());
+        let file = writer.sources.add("audit-heads.hir", source.into()).unwrap();
+        writer.index_source(file, &default_context()).unwrap();
+        let plain = writer.source_audit(&definition("plain")).unwrap();
+        let staged = writer.source_audit(&definition("staged")).unwrap();
+        let mut reader = QueryEngine::new(default_environment(), compiler_adapters()).with_result_store(store.clone());
+        reader.sources.add("padding.hir", "\n".into()).unwrap();
+        let file = reader.sources.add("audit-heads.hir", source.into()).unwrap();
+        reader.index_source(file, &default_context()).unwrap();
+        reader.adapters.lexer = None; reader.adapters.parser = None; reader.adapters.signature = None; reader.adapters.modes = None; reader.adapters.lowering = None;
+        assert_eq!(reader.source_audit(&definition("plain")).unwrap(), plain);
+        assert_eq!(reader.source_audit(&definition("staged")).unwrap(), staged);
+        assert_eq!(reader.work_stats().parsed_bytes, 0);
+        for name in ["plain", "staged"] {
+            assert_eq!(reader.recompute_count(&definition(name), QueryKind::Modes), 0);
+            assert_eq!(reader.lower_adapter_calls(&definition(name)), 0);
+        }
+        let copied = Arc::new(store::MemStore::default());
+        for (key, bytes) in store.take() { store::ResultStore::put(&*copied, &key, &bytes); store::ResultStore::put(&*store, &key, &bytes); }
+        let mut untrusted = QueryEngine::new(default_environment(), compiler_adapters()).with_result_store(copied);
+        let file = untrusted.sources.add("audit-heads.hir", source.into()).unwrap();
+        untrusted.index_source(file, &default_context()).unwrap();
+        untrusted.adapters.lexer = None; untrusted.adapters.parser = None; untrusted.adapters.modes = None; untrusted.adapters.lowering = None;
+        assert!(untrusted.source_audit(&definition("staged")).is_err(), "ordinary syntax-free heads do not transfer local V completion");
+        let mut oracle = QueryEngine::new(default_environment(), compiler_adapters()).with_result_store(store).with_verify_store(store::VerifyStore::Recompute);
+        let file = oracle.sources.add("audit-heads.hir", source.into()).unwrap();
+        oracle.index_source(file, &default_context()).unwrap();
+        assert_eq!(oracle.source_audit(&definition("plain")).unwrap(), plain);
+        assert_eq!(oracle.source_audit(&definition("staged")).unwrap(), staged);
+    });
+}

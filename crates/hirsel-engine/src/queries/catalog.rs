@@ -294,6 +294,15 @@ impl Catalog {
     }
 }
 impl QueryEngine {
+    pub(super) fn lexical_shape(
+        &self,
+        path: &DefPath,
+    ) -> Option<(hirsel_syntax::LexicalOwner, LexicalShape)> {
+        self.snapshot(path)
+            .ok()
+            .map(|syntax| (syntax.owner(), LexicalShape::capture(&syntax)))
+            .or_else(|| self.catalog.lexical(path))
+    }
     pub(crate) fn source_items(&self, file: FileId) -> Vec<SourceItem> {
         if let Some(items) = self.catalog.source_items(file) {
             return items;
