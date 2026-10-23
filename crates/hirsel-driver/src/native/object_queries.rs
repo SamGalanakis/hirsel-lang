@@ -776,3 +776,9 @@ snapshot_struct!(BlobRecord { len, chunks });
 
 #[cfg(test)]
 mod tests;
+
+pub mod tasks;
+pub use tasks::{
+    CODEGEN_KIND, LINK_KIND, LinkDependencies, ObjectTaskFactory, ObjectTaskRequest,
+    ObjectTaskSnapshot,
+};
