@@ -9,6 +9,8 @@ bundle’s `notices/` directory; see `tools/toolchain-dist/README.md`.
 
 | Source | Adapted | Where in this tree | Upstream revision | License |
 |---|---|---|---|---|
+| Rayon | Independent fold identity and partition/reduce structure (`src/iter/fold.rs:35-95`), sequential map/reduce equivalence (`src/iter/test.rs:78-128`); fixed contiguous chunks and ordered reduction replace dynamic splitting; mapped +1 cells become CSV input | `examples/csvreduce`, CLI `csvreduce_27` support | rayon-rs/rayon `ee0a00bdb1ab039e178a215ad5712fb7fa58e58f` | MIT (Rust), Copyright (c) 2010 The Rust Project Developers; upstream also Apache-2.0 |
+| Go standard library | Complete CSV record API (`src/encoding/csv/reader.go:197-205`) and multiline/CRLF/NoEOL fixture shapes (`reader_test.go:50-100`); remove §/¶ position markers and add integer cells, retaining Hirsel CSV policy | `examples/csvreduce`, CLI `csvreduce_27` support | golang/go `ebe2feefc400f813aefdc8a036e66d2619da6649` | BSD-3-Clause (Go), Copyright 2009 The Go Authors |
 | walkdir | `src/lib.rs:901-930` per-directory cursor reference and `src/tests/recursive.rs:211-254` nested-tree vector, adapted to bounded cap/lookahead trees with global UTF-8 file/link order and explicit directory-read effects | `crates/hirsel-cli/tests/support/filemanifest_stream_25`, `filemanifest_stream_25.rs` | BurntSushi/walkdir `6fd031c82ba5a4204b4ce6eae73dacb00dc072ec` | MIT, Copyright (c) 2015 Andrew Gallant; MIT text below |
 | Rust standard library | `library/alloc/src/string.rs:2848-2858` append value oracle and `library/alloctests/tests/string.rs:378-385` "12345", "2", "2" value vector; Hirsel uses f-strings and concat without adopting Rust addition or ownership rules | `crates/hirsel-driver/tests/fixtures/string_concat_guidance_24.hir` | rust-lang/rust `f6c1107f8be13e48465e12c0fd26e6a39fe18e4f` | MIT (Rust), The Rust Project Contributors |
 | Rust standard library | `library/core/src/option.rs:1150-1168` callback-to-Some shape and `library/coretests/tests/option.rs:103-121` Some/None vectors; callbacks return owned Hirsel values instead of references or Rust trait bounds | `crates/hirsel-pipeline-tests/tests/front/generic_result_v_21.rs` | rust-lang/rust `f6c1107f8be13e48465e12c0fd26e6a39fe18e4f` | MIT (Rust), The Rust Project Contributors |
@@ -1525,6 +1527,7 @@ Copyright (c) 2011 IETF Trust and the persons identified as the document authors
 
 ```text
 Copyright (c) The Rust Project Contributors
+Copyright (c) 2010 The Rust Project Developers (Rayon)
 
 Permission is hereby granted, free of charge, to any
 person obtaining a copy of this software and associated

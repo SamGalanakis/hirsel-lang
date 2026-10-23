@@ -1,0 +1,115 @@
+// Rayon ee0a00bd src/iter/fold.rs:72-89: independent identity per contiguous
+// partition, then an ordered reduction. See README for policy adaptations.
+pub type AppError = Grant(GrantError) | Files(FileError) | Read(file.ReadBoundedError) | Utf8 | Csv(csv.CsvError) | Args(ArgError) | Usage | Header | Columns | Records | Grain | Integer | CellBound | Output(OutputError)
+
+type Summary {
+  count: u64,
+  sum: i64,
+  min: Option[i64],
+  max: Option[i64],
+}
+
+type Chunk {
+  rows: Shared[List[List[String]]],
+  column: u64,
+  first: u64,
+  end: u64,
+}
+
+fn empty() -> Summary uses {} {
+  Summary(count: 0, sum: 0, min: None(), max: None())
+}
+
+fn merge(a: Summary, b: Summary) -> Summary uses {} {
+  let low = match (a.min, b.min) {
+    (Some(x), Some(y)) => Some(if x < y { x } else { y }),
+    (Some(x), None()) => Some(x),
+    (None(), other) => other,
+  }
+  let high = match (a.max, b.max) {
+    (Some(x), Some(y)) => Some(if x > y { x } else { y }),
+    (Some(x), None()) => Some(x),
+    (None(), other) => other,
+  }
+  Summary(count: a.count + b.count, sum: a.sum + b.sum, min: low, max: high)
+}
+
+fn compute(chunk: Chunk) -> Result[Summary, AppError] uses {} {
+  shared.with(chunk.rows, fn(rows: List[List[String]]) -> Result[Summary, AppError] uses {} {
+    let mut summary = empty()
+    for i in chunk.first..chunk.end {
+      let n = match i64.parse(rows[i][chunk.column]) {
+        Ok(value) => value,
+        Error(_) => return Error(Integer()),
+      }
+      if n < -1000000000i64 || n > 1000000000i64 {
+        return Error(CellBound())
+      }
+      summary = merge(summary, Summary(count: 1, sum: n, min: Some(n), max: Some(n)))
+    }
+    Ok(summary)
+  })
+}
+
+// Full std CSV parsing precedes every partition: quoted newlines are data.
+fn aggregate(tasks: Tasks, take source: String, column: u64, grain: u64) -> Result[Summary, AppError] {
+  if grain == 0 || grain > 4096 { return Error(Grain()) }
+  let rows = csv.parse(take source, csv.Config(delimiter: 44u8, fields_per_record: None(), max_record_bytes: 262144))?
+  if list.len(rows) == 0 { return Error(Header()) }
+  let width = list.len(rows[0])
+  if width == 0 || width > 32 || column >= width { return Error(Columns()) }
+  let count = list.len(rows) - 1
+  if count > 4096 { return Error(Records()) }
+  if count > grain * 16 { return Error(Grain()) }
+  for row in rows {
+    if list.len(row) != width { return Error(Columns()) }
+  }
+  let input = shared.freeze(unique rows)
+  let mut chunks: List[Chunk] = []
+  let mut first: u64 = 1
+  while first <= count {
+    let end = if grain < count + 1 - first { first + grain } else { count + 1 }
+    list.push(mut chunks, Chunk(rows: copy input, column: column, first: first, end: end))
+    first = end
+  }
+  // One descriptor per logical chunk, one child per descriptor; never a
+  // worker-width-dependent partition or an unbounded map_all child count.
+  let partials = task.map_all(tasks, take chunks, 1, compute)?
+  let mut summary = empty()
+  for partial in partials { summary = merge(summary, partial) }
+  Ok(summary)
+}
+
+fn optional(n: Option[i64]) -> String uses {} {
+  match n { Some(value) => i64.to_string(value), None() => "null" }
+}
+
+fn render(s: Summary) -> String uses {} {
+  f"{{\"count\":{s.count},\"sum\":{s.sum},\"min\":{optional(s.min)},\"max\":{optional(s.max)}}}\n"
+}
+
+fn execute(rt: Io, name: String, column: u64, grain: u64) -> Result[Summary, AppError] {
+  let d = io.dir(rt, path.of("data"))?
+  let mut input = file.open(d, path.of(name))?
+  let data = file.read_all_bounded(d, mut input, 262144)?
+  let text = match string.from_bytes(take data) {
+    Ok(s) => take s,
+    Error(_) => return Error(Utf8()),
+  }
+  aggregate(io.tasks(rt)?, take text, column, grain)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), AppError] {
+  if arg.len(args) != 4 { return Error(Usage()) }
+  let name = arg.text(args, 0)?
+  let column = match u64.parse(arg.text(args, 1)?) {
+    Ok(n) => n, Error(_) => return Error(Usage()),
+  }
+  if arg.text(args, 2)? != "--grain" { return Error(Usage()) }
+  let grain = match u64.parse(arg.text(args, 3)?) {
+    Ok(n) => n, Error(_) => return Error(Usage()),
+  }
+  let summary = execute(rt, name, column, grain)?
+  out.print(io.stdout(rt)?, render(summary))?
+  Ok(())
+}
