@@ -1,0 +1,24 @@
+{
+  "io": {
+    "stdout": "stdout.bytes@1",
+    "stderr": "stderr.bytes@1",
+    "tasks": "tasks.cooperative@1",
+    "dirs": [
+      {
+        "path": "input",
+        "host": "/ABSOLUTE/textindex/fixtures",
+        "access": "read"
+      },
+      {
+        "path": "index",
+        "host": "/ABSOLUTE/index-directory",
+        "access": "read_write"
+      }
+    ]
+  },
+  "placement": {
+    "cores": 1,
+    "commit": "shared",
+    "reorder": "auto"
+  }
+}

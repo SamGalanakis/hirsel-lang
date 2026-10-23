@@ -1,0 +1,217 @@
+// Bounded postings accumulation; manifest order commits independent worker maps.
+pub type Document {
+  id: String,
+  bytes: u64,
+  tokens: u64,
+}
+
+pub type Posting {
+  id: String,
+  spans: List[tokenize.Span],
+}
+
+pub type Term {
+  term: String,
+  postings: List[Posting],
+}
+
+pub type Snapshot {
+  documents: List[Document],
+  terms: List[Term],
+}
+
+type Local {
+  bytes: u64,
+  tokens: u64,
+  terms: Map[String, List[tokenize.Span]],
+  problem: String,
+}
+
+// Real application seam: used for term->span document maps and term->posting
+// global maps. Values remain typed; no tagged JSON or erased payloads in merge.
+@preserves_unique(groups)
+pub fn append[K: key, V](
+  mut groups: unique Map[K, List[V]],
+  take key: unique K,
+  take value: unique V,
+  keys: u64,
+  values: u64
+) -> Result[(), manifest.Problem] uses {} {
+  if !map.contains(groups, key) && map.len(groups) == keys {
+    return Error(manifest.problem("term_limit"))
+  }
+  let mut items = match map.remove(mut groups, key) {
+    Some(xs) => take xs,
+    None() => [],
+  }
+  if list.len(items) == values {
+    // Restore the bucket on refusal; no accepted value is silently discarded.
+    map.insert(mut groups, take key, take items)
+    return Error(manifest.problem("posting_limit"))
+  }
+  list.push(mut items, take value)
+  map.insert(mut groups, take key, take items)
+  Ok(())
+}
+
+fn failed(kind: String) -> unique Local uses {} {
+  Local(bytes: 0, tokens: 0, terms: map.empty(), problem: unique kind)
+}
+
+fn document(tasks: Tasks, d: Dir, take name: unique String, budget: u64) -> unique Local {
+  task.scope(
+    tasks,
+    fn(s: Scope) -> unique Local {
+      let data = match manifest.read(d, name, budget) {
+        Ok(data) => take data,
+        Error(problem) => return failed(problem.kind),
+      }
+      let size = bytes.len(data)
+      let Ok(source) = string.from_bytes(take data) else {
+        return failed("contents_utf8")
+      }
+      let tokens = match tokenize.scan(source, tokenize.MAX_POSTINGS) {
+        Ok(tokens) => take tokens,
+        Error(problem) => return failed(problem.kind),
+      }
+      let count = list.len(tokens)
+      let mut terms: Map[String, List[tokenize.Span]] = map.empty()
+      for token in tokens {
+        if let Error(_) = task.check_canceled(s) {
+          return failed("canceled")
+        }
+        if let Error(problem) = append(
+          mut terms,
+          unique token.term,
+          unique token.span,
+          tokenize.MAX_TERMS,
+          tokenize.MAX_POSTINGS
+        ) {
+          return failed(problem.kind)
+        }
+      }
+      Local(bytes: size, tokens: count, terms: unique terms, problem: "")
+    }
+  )
+}
+
+@noalloc
+fn document_order(a: Document, b: Document) -> i32 uses {} {
+  string.compare(a.id, b.id)
+}
+
+@noalloc
+fn term_order(a: Term, b: Term) -> i32 uses {} {
+  string.compare(a.term, b.term)
+}
+
+@noalloc
+fn posting_order(a: Posting, b: Posting) -> i32 uses {} {
+  string.compare(a.id, b.id)
+}
+
+fn smaller(a: u64, b: u64) -> u64 uses {} {
+  if a < b {
+    a
+  } else {
+    b
+  }
+}
+
+pub fn build(tasks: Tasks, d: Dir, input: List[manifest.Document], jobs: u64) -> Result[
+  Snapshot,
+  manifest.Problem
+] {
+  // An immutable scoped document table lends names; tasks receive owned copies.
+  let table = shared.freeze(unique input)
+  shared.with(
+    table,
+    fn(docs: List[manifest.Document]) -> Result[Snapshot, manifest.Problem] {
+      task.scope(
+        tasks,
+        fn(s: Scope) -> Result[Snapshot, manifest.Problem] {
+          let mut documents: List[Document] = []
+          let mut groups: Map[String, List[Posting]] = map.empty()
+          let mut total = 0u64
+          let mut occurrences = 0u64
+          let mut start = 0u64
+          while start < list.len(docs) {
+            let remaining = manifest.TOTAL_BYTES - total
+            let capacity = if remaining < manifest.MAX_BYTES {
+              1u64
+            } else {
+              remaining / manifest.MAX_BYTES
+            }
+            let count = smaller(smaller(jobs, capacity), list.len(docs) - start)
+            let budget = smaller(remaining, manifest.MAX_BYTES)
+            let mut pending: TaskSet[unique Local] of s = task.set(s)
+            let mut results: List[Option[Local]] = []
+            for slot in 0u64..count {
+              list.push(mut results, None())
+              let name = unique docs[start + slot].path
+              task.add(
+                s,
+                mut pending,
+                task.async(
+                  s,
+                  fn() -> unique Local {
+                    document(tasks, d, take name, budget)
+                  }
+                )
+              )
+            }
+            // Observe errors as soon as any member completes. Successful results
+            // are staged, then merged strictly in manifest order, independent of
+            // completion order. cancel_all joins every child before returning.
+            while let Some(slot) = task.await_any(s, pending) {
+              let row = task.await_at(s, mut pending, slot)
+              if row.problem != "" {
+                task.cancel_all(s, take pending)
+                return Error(manifest.at(row.problem, start + slot))
+              }
+              results[slot] = Some(take row)
+            }
+            task.cancel_all(s, take pending)
+            for slot in 0u64..count {
+              let Some(row) = results[slot] else {
+                return Error(manifest.problem("worker_result"))
+              }
+              if row.bytes > manifest.TOTAL_BYTES - total {
+                return Error(manifest.at("total_bytes_limit", start + slot))
+              }
+              if row.tokens > tokenize.MAX_POSTINGS - occurrences {
+                return Error(manifest.at("posting_limit", start + slot))
+              }
+              total += row.bytes
+              occurrences += row.tokens
+              let id = copy docs[start + slot].id
+              list.push(
+                mut documents,
+                Document(id: unique id, bytes: row.bytes, tokens: row.tokens)
+              )
+              for (term, spans) in row.terms {
+                append(
+                  mut groups,
+                  unique term,
+                  Posting(id: unique id, spans: unique spans),
+                  tokenize.MAX_TERMS,
+                  manifest.MAX_DOCS
+                )?
+              }
+            }
+            start += count
+          }
+          let mut terms: List[Term] = []
+          for (term, postings) in groups {
+            let mut ordered = unique postings
+            list.sort(mut ordered, posting_order)
+            list.push(mut terms, Term(term: unique term, postings: take ordered))
+          }
+          list.sort(mut documents, document_order)
+          list.sort(mut terms, term_order)
+          Ok(Snapshot(documents: take documents, terms: take terms))
+        }
+      )
+    }
+  )
+}

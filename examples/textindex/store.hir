@@ -1,0 +1,311 @@
+// Version 1 is a bounded, schema-order JSON snapshot, not Tantivy's segment
+// format. Readers never borrow storage from an open writer or live document.
+pub const INDEX_BYTES: u64 = 1048576
+
+fn decode_span(mut cursor: json.Reader) -> Result[tokenize.Span, manifest.Problem] uses {} {
+  manifest.object(mut cursor)?
+  let mut first = true
+  manifest.key(mut cursor, mut first, "start")?
+  let start = manifest.number(mut cursor)?
+  manifest.key(mut cursor, mut first, "end")?
+  let end = manifest.number(mut cursor)?
+  manifest.key(mut cursor, mut first, "position")?
+  let position = manifest.number(mut cursor)?
+  manifest.end(mut cursor)?
+  Ok(tokenize.Span(start: start, end: end, position: position))
+}
+
+fn decode_document(mut cursor: json.Reader) -> Result[index.Document, manifest.Problem] uses {} {
+  manifest.object(mut cursor)?
+  let mut first = true
+  manifest.key(mut cursor, mut first, "id")?
+  let id = manifest.text(mut cursor, 128)?
+  manifest.key(mut cursor, mut first, "bytes")?
+  let size = manifest.number(mut cursor)?
+  manifest.key(mut cursor, mut first, "tokens")?
+  let tokens = manifest.number(mut cursor)?
+  manifest.end(mut cursor)?
+  Ok(index.Document(id: take id, bytes: size, tokens: tokens))
+}
+
+fn decode_posting(mut cursor: json.Reader, mut count: u64) -> Result[
+  index.Posting,
+  manifest.Problem
+] uses {} {
+  manifest.object(mut cursor)?
+  let mut first = true
+  manifest.key(mut cursor, mut first, "id")?
+  let id = manifest.text(mut cursor, 128)?
+  manifest.key(mut cursor, mut first, "spans")?
+  manifest.array(mut cursor)?
+  let mut spans: List[tokenize.Span] = []
+  let mut item = true
+  while manifest.more(mut cursor, mut item)? {
+    if count == tokenize.MAX_POSTINGS {
+      return Error(manifest.problem("posting_limit"))
+    }
+    count += 1
+    list.push(mut spans, decode_span(mut cursor)?)
+  }
+  manifest.end(mut cursor)?
+  Ok(index.Posting(id: take id, spans: take spans))
+}
+
+fn decode_term(mut cursor: json.Reader, mut count: u64) -> Result[
+  index.Term,
+  manifest.Problem
+] uses {} {
+  manifest.object(mut cursor)?
+  let mut first = true
+  manifest.key(mut cursor, mut first, "term")?
+  let value = manifest.text(mut cursor, tokenize.NORMAL_BYTES)?
+  manifest.key(mut cursor, mut first, "postings")?
+  manifest.array(mut cursor)?
+  let mut postings: List[index.Posting] = []
+  let mut item = true
+  while manifest.more(mut cursor, mut item)? {
+    if list.len(postings) == manifest.MAX_DOCS {
+      return Error(manifest.problem("document_limit"))
+    }
+    list.push(mut postings, decode_posting(mut cursor, mut count)?)
+  }
+  manifest.end(mut cursor)?
+  Ok(index.Term(term: take value, postings: take postings))
+}
+
+pub fn decode(data: Bytes, input: List[manifest.Document]) -> Result[
+  index.Snapshot,
+  manifest.Problem
+] uses {} {
+  if bytes.len(data) > INDEX_BYTES || !json.valid_utf8(data) {
+    return Error(manifest.problem("index_bytes"))
+  }
+  let mut cursor = json.reader(data)
+  manifest.object(mut cursor)?
+  let mut first = true
+  manifest.key(mut cursor, mut first, "version")?
+  if manifest.number(mut cursor)? != 1 {
+    return Error(manifest.problem("index_version"))
+  }
+  manifest.key(mut cursor, mut first, "documents")?
+  manifest.array(mut cursor)?
+  let mut documents: List[index.Document] = []
+  let mut item = true
+  while manifest.more(mut cursor, mut item)? {
+    if list.len(documents) == manifest.MAX_DOCS {
+      return Error(manifest.problem("document_limit"))
+    }
+    list.push(mut documents, decode_document(mut cursor)?)
+  }
+  manifest.key(mut cursor, mut first, "terms")?
+  manifest.array(mut cursor)?
+  let mut terms: List[index.Term] = []
+  let mut count = 0u64
+  item = true
+  while manifest.more(mut cursor, mut item)? {
+    if list.len(terms) == tokenize.MAX_TERMS {
+      return Error(manifest.problem("term_limit"))
+    }
+    list.push(mut terms, decode_term(mut cursor, mut count)?)
+  }
+  manifest.end(mut cursor)?
+  let Ok(()) = json.finish_reader(mut cursor) else {
+    return Error(manifest.problem("json"))
+  }
+  let snapshot = index.Snapshot(documents: take documents, terms: take terms)
+  validate(snapshot, input)?
+  Ok(take snapshot)
+}
+
+fn term_characters(value: String) -> bool uses {} {
+  for c in string.scalars(value) {
+    // Full lowercase can introduce U+0307 (capital dotted I).
+    if !tokenize.alnum(c) && c != '\u{307}' {
+      return false
+    }
+  }
+  true
+}
+
+pub fn validate(snapshot: index.Snapshot, input: List[manifest.Document]) -> Result[
+  (),
+  manifest.Problem
+] uses {} {
+  if list.len(snapshot.documents) != list.len(input) {
+    return Error(manifest.problem("manifest_mismatch"))
+  }
+  let mut docs: Map[String, index.Document] = map.empty()
+  let mut total = 0u64
+  let mut tokens = 0u64
+  let mut previous = ""
+  for doc in snapshot.documents {
+    if doc.id == "" || string.compare(previous, doc.id) >= 0 {
+      return Error(manifest.problem("document_order"))
+    }
+    previous = unique doc.id
+    if doc.bytes > manifest.MAX_BYTES || doc.bytes > manifest.TOTAL_BYTES - total || doc.tokens > doc.bytes || doc.tokens > tokenize.MAX_POSTINGS - tokens {
+      return Error(manifest.problem("document_bounds"))
+    }
+    total += doc.bytes
+    tokens += doc.tokens
+    map.insert(mut docs, unique doc.id, unique doc)
+  }
+  for doc in input {
+    if !map.contains(docs, doc.id) {
+      return Error(manifest.problem("manifest_mismatch"))
+    }
+  }
+  previous = ""
+  for row in snapshot.terms {
+    if row.term == "" || string.byte_len(row.term) > tokenize.NORMAL_BYTES || string.compare(
+      previous,
+      row.term
+    ) >= 0 || string.to_lower(row.term) != row.term {
+      return Error(manifest.problem("term_order"))
+    }
+    previous = unique row.term
+    if !term_characters(row.term) {
+      return Error(manifest.problem("term_shape"))
+    }
+    if list.len(row.postings) == 0 {
+      return Error(manifest.problem("empty_postings"))
+    }
+    let mut prior = ""
+    for posting in row.postings {
+      if string.compare(prior, posting.id) >= 0 || !map.contains(docs, posting.id) || list.len(
+        posting.spans
+      ) == 0 {
+        return Error(manifest.problem("posting_reference"))
+      }
+      prior = unique posting.id
+    }
+  }
+  // Reconcile every position, across terms, against the document token count.
+  // No duplicate, missing position, crossing span or dangling doc is accepted.
+  for doc in snapshot.documents {
+    let mut positions: Map[u64, tokenize.Span] = map.empty()
+    for row in snapshot.terms {
+      for posting in row.postings {
+        if posting.id != doc.id {
+          continue
+        }
+        let mut first = true
+        let mut previous_position = 0u64
+        for span in posting.spans {
+          if span.start >= span.end || span.end > doc.bytes || span.end - span.start > tokenize.TOKEN_BYTES || span.position >= doc.tokens || !first && span.position <= previous_position || map.contains(
+            positions,
+            span.position
+          ) {
+            return Error(manifest.problem("span_bounds"))
+          }
+          first = false
+          previous_position = span.position
+          map.insert(mut positions, span.position, copy span)
+        }
+      }
+    }
+    if map.len(positions) != doc.tokens {
+      return Error(manifest.problem("position_count"))
+    }
+    let mut end = 0u64
+    for i in 0u64..doc.tokens {
+      let Some(span) = map.get(positions, i) else {
+        return Error(manifest.problem("position_count"))
+      }
+      if span.start < end {
+        return Error(manifest.problem("span_order"))
+      }
+      end = span.end
+    }
+  }
+  Ok(())
+}
+
+fn append(mut out: List[u8], chunk: String) -> Result[(), manifest.Problem] uses {} {
+  if string.byte_len(chunk) > INDEX_BYTES - list.len(out) {
+    return Error(manifest.problem("index_bytes_limit"))
+  }
+  text.append(mut out, chunk)
+  Ok(())
+}
+
+fn quoted(mut out: List[u8], value: String) -> Result[(), manifest.Problem] uses {} {
+  // Only bounded IDs/terms reach this helper. Escape into a small temporary,
+  // then check the full index budget before growing the persistent buffer.
+  let mut escaped: List[u8] = []
+  json.write_text_into(value, mut escaped)
+  if list.len(escaped) > INDEX_BYTES - list.len(out) {
+    return Error(manifest.problem("index_bytes_limit"))
+  }
+  bytes.append(mut out, bytes.from_list(take escaped))
+  Ok(())
+}
+
+pub fn encode(snapshot: index.Snapshot) -> Result[Bytes, manifest.Problem] uses {} {
+  let mut out: List[u8] = []
+  append(mut out, "{\"version\":1,\"documents\":[")?
+  let mut first = true
+  for doc in snapshot.documents {
+    if !first {
+      append(mut out, ",")?
+    }
+    first = false
+    append(mut out, "{\"id\":")?
+    quoted(mut out, doc.id)?
+    append(mut out, f",\"bytes\":{doc.bytes},\"tokens\":{doc.tokens}}}")?
+  }
+  append(mut out, "],\"terms\":[")?
+  first = true
+  for row in snapshot.terms {
+    if !first {
+      append(mut out, ",")?
+    }
+    first = false
+    append(mut out, "{\"term\":")?
+    quoted(mut out, row.term)?
+    append(mut out, ",\"postings\":[")?
+    let mut posting_first = true
+    for posting in row.postings {
+      if !posting_first {
+        append(mut out, ",")?
+      }
+      posting_first = false
+      append(mut out, "{\"id\":")?
+      quoted(mut out, posting.id)?
+      append(mut out, ",\"spans\":[")?
+      let mut span_first = true
+      for span in posting.spans {
+        if !span_first {
+          append(mut out, ",")?
+        }
+        span_first = false
+        append(
+          mut out,
+          f"{{\"start\":{span.start},\"end\":{span.end},\"position\":{span.position}}}"
+        )?
+      }
+      append(mut out, "]}")?
+    }
+    append(mut out, "]}")?
+  }
+  append(mut out, "]}\n")?
+  Ok(bytes.from_list(take out))
+}
+
+pub fn publish(d: Dir, name: String, snapshot: index.Snapshot) -> Result[
+  (),
+  manifest.Problem
+] {
+  // Encode and check every bound before acquiring the replacement transaction.
+  let data = encode(snapshot)?
+  let mut Ok(output) = file.create_atomic(d, path.of(name)) else {
+    return Error(manifest.problem("index_create"))
+  }
+  let Ok(()) = file.write_all(d, mut output, data) else {
+    return Error(manifest.problem("index_write"))
+  }
+  let Ok(()) = file.commit(d, take output) else {
+    return Error(manifest.problem("index_commit"))
+  }
+  Ok(())
+}

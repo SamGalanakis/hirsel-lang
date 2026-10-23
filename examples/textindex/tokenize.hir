@@ -1,0 +1,90 @@
+// Tantivy e988ecb7 simple_tokenizer.rs:1-91 (MIT; LICENSE-TANTIVY).
+// Walk scalar starts, skip separators, retain half-open UTF8 byte spans.
+pub const TOKEN_BYTES: u64 = 256
+
+pub const NORMAL_BYTES: u64 = 768
+
+pub const MAX_POSTINGS: u64 = 16384
+
+pub const MAX_TERMS: u64 = 4096
+
+pub type Span {
+  start: u64,
+  end: u64,
+  position: u64,
+}
+
+pub type Token {
+  term: String,
+  span: Span,
+}
+
+pub fn alnum(c: char) -> bool uses {} {
+  unicode.is_letter(c) || unicode.is_digit(c)
+}
+
+fn append(source: String, begin: u64, end: u64, mut tokens: List[Token], cap: u64) -> Result[
+  (),
+  manifest.Problem
+] uses {} {
+  if list.len(tokens) == cap {
+    return Error(manifest.problem("token_count_limit"))
+  }
+  if end - begin > TOKEN_BYTES {
+    return Error(manifest.problem("token_bytes_limit"))
+  }
+  let Some(a) = string.position(source, begin) else {
+    return Error(manifest.problem("utf8_position"))
+  }
+  let Some(b) = string.position(source, end) else {
+    return Error(manifest.problem("utf8_position"))
+  }
+  let view = string.slice(source, a, b)
+  // Unicode16 full lowercase expands to at most three output bytes per input
+  // byte. The input cap therefore bounds the allocation before calling std.
+  let term = string.to_lower(view)
+  if string.byte_len(term) > NORMAL_BYTES {
+    return Error(manifest.problem("normalization_bytes_limit"))
+  }
+  let position = list.len(tokens)
+  list.push(
+    mut tokens,
+    Token(term: take term, span: Span(start: begin, end: end, position: position))
+  )
+  Ok(())
+}
+
+pub fn scan(source: String, cap: u64) -> Result[List[Token], manifest.Problem] uses {} {
+  let mut tokens: List[Token] = []
+  let mut offset = 0u64
+  let mut begin = 0u64
+  let mut inside = false
+  for c in string.scalars(source) {
+    if alnum(c) {
+      if !inside {
+        begin = offset
+        inside = true
+      }
+    } else if inside {
+      append(source, begin, offset, mut tokens, cap)?
+      inside = false
+    }
+    let cp = char.to_u32(c)
+    offset += if cp < 128 {
+      1u64
+    } else if cp < 2048 {
+      2u64
+    } else if cp < 65536 {
+      3u64
+    } else {
+      4u64
+    }
+    if inside && offset - begin > TOKEN_BYTES {
+      return Error(manifest.problem("token_bytes_limit"))
+    }
+  }
+  if inside {
+    append(source, begin, offset, mut tokens, cap)?
+  }
+  Ok(take tokens)
+}

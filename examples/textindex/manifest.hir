@@ -1,0 +1,188 @@
+// Explicit inputs only. No directory traversal or authority hidden in data.
+pub const MAX_DOCS: u64 = 32
+
+pub const MAX_BYTES: u64 = 8192
+
+pub const TOTAL_BYTES: u64 = 131072
+
+pub const MANIFEST_BYTES: u64 = 16384
+
+pub type Problem {
+  kind: String,
+  document: u64,
+}
+
+pub type Document {
+  id: String,
+  path: String,
+}
+
+pub fn problem(kind: String) -> Problem uses {} {
+  Problem(kind: unique kind, document: 0)
+}
+
+pub fn at(kind: String, document: u64) -> Problem uses {} {
+  Problem(kind: unique kind, document: document)
+}
+
+pub fn read(d: Dir, name: String, cap: u64) -> Result[unique Bytes, Problem] {
+  let mut Ok(handle) = file.open(d, path.of(name)) else {
+    return Error(problem("file_open"))
+  }
+  match file.read_all_bounded(d, mut handle, cap) {
+    Ok(data) => Ok(take data),
+    Error(Limit()) => Error(problem("input_bytes_limit")),
+    Error(File(_)) => Error(problem("file_read")),
+  }
+}
+
+// The DOM is never built. Lists check admission before decoding an element.
+pub fn text(mut cursor: json.Reader, limit: u64) -> Result[unique String, Problem] uses {} {
+  // Bound the raw spelling, including worst-case JSON \uXXXX escaping, before
+  // the std decoder can allocate an escaped string. Reader fields are public.
+  let mut stop = cursor.pos
+  while stop < bytes.len(cursor.data) && (cursor.data[stop] == 32 || cursor.data[stop] == 10 || cursor.data[stop] == 13 || cursor.data[stop] == 9) {
+    stop += 1
+  }
+  if stop == bytes.len(cursor.data) || cursor.data[stop] != 34 {
+    return Error(problem("json_text"))
+  }
+  let start = stop
+  stop += 1
+  while stop < bytes.len(cursor.data) {
+    if stop - start > limit * 6 + 1 {
+      return Error(problem("text_bytes_limit"))
+    }
+    if cursor.data[stop] == 34 {
+      break
+    }
+    if cursor.data[stop] == 92 {
+      stop += 1
+    }
+    stop += 1
+  }
+  let Ok(value) = json.read_owned_text(mut cursor) else {
+    return Error(problem("json_text"))
+  }
+  if string.byte_len(value) > limit {
+    return Error(problem("text_bytes_limit"))
+  }
+  Ok(take value)
+}
+
+pub fn number(mut cursor: json.Reader) -> Result[u64, Problem] uses {} {
+  let Ok(raw) = json.read_number(mut cursor) else {
+    return Error(problem("json_number"))
+  }
+  if bytes.len(raw) > 20 {
+    return Error(problem("json_number"))
+  }
+  let Ok(value) = u64.parse(json.number_text(raw)) else {
+    return Error(problem("json_number"))
+  }
+  Ok(value)
+}
+
+pub fn key(mut cursor: json.Reader, mut first: bool, expected: String) -> Result[
+  (),
+  Problem
+] uses {} {
+  let Ok(Some(value)) = json.object_key(mut cursor, mut first) else {
+    return Error(problem("schema"))
+  }
+  if !json.text_is(value, expected) {
+    return Error(problem("schema"))
+  }
+  let Ok(()) = json.colon(mut cursor) else {
+    return Error(problem("schema"))
+  }
+  Ok(())
+}
+
+pub fn object(mut cursor: json.Reader) -> Result[(), Problem] uses {} {
+  match json.begin_object(mut cursor) {
+    Ok(()) => Ok(()),
+    Error(_) => Error(problem("json")),
+  }
+}
+
+pub fn array(mut cursor: json.Reader) -> Result[(), Problem] uses {} {
+  match json.begin_array(mut cursor) {
+    Ok(()) => Ok(()),
+    Error(_) => Error(problem("json")),
+  }
+}
+
+pub fn more(mut cursor: json.Reader, mut first: bool) -> Result[bool, Problem] uses {} {
+  match json.array_next(mut cursor, mut first) {
+    Ok(value) => Ok(value),
+    Error(_) => Error(problem("json")),
+  }
+}
+
+pub fn end(mut cursor: json.Reader) -> Result[(), Problem] uses {} {
+  match json.next_token(mut cursor) {
+    Ok(ObjectEnd()) => Ok(()),
+    _ => Error(problem("schema")),
+  }
+}
+
+pub fn valid_path(value: String) -> bool uses {} {
+  if string.byte_len(value) == 0 || string.starts_with(value, "/") {
+    return false
+  }
+  for part in string.split(unique value, "/") {
+    if part == "" || part == "." || part == ".." {
+      return false
+    }
+  }
+  for c in string.scalars(value) {
+    if c == '\u{0}' || c == '\\' {
+      return false
+    }
+  }
+  true
+}
+
+pub fn decode(data: Bytes) -> Result[List[Document], Problem] uses {} {
+  if bytes.len(data) > MANIFEST_BYTES || !json.valid_utf8(data) {
+    return Error(problem("manifest_bytes"))
+  }
+  let mut cursor = json.reader(data)
+  object(mut cursor)?
+  let mut first = true
+  key(mut cursor, mut first, "version")?
+  if number(mut cursor)? != 1 {
+    return Error(problem("manifest_version"))
+  }
+  key(mut cursor, mut first, "documents")?
+  array(mut cursor)?
+  let mut rows: List[Document] = []
+  let mut seen: Set[String] = set.empty()
+  let mut item = true
+  while more(mut cursor, mut item)? {
+    if list.len(rows) == MAX_DOCS {
+      return Error(problem("document_limit"))
+    }
+    object(mut cursor)?
+    let mut field = true
+    key(mut cursor, mut field, "id")?
+    let id = text(mut cursor, 128)?
+    key(mut cursor, mut field, "path")?
+    let name = text(mut cursor, 256)?
+    end(mut cursor)?
+    if id == "" || !valid_path(name) {
+      return Error(at("document", list.len(rows)))
+    }
+    if set.contains(seen, id) {
+      return Error(at("duplicate_id", list.len(rows)))
+    }
+    set.insert(mut seen, copy id)
+    list.push(mut rows, Document(id: take id, path: take name))
+  }
+  end(mut cursor)?
+  let Ok(()) = json.finish_reader(mut cursor) else {
+    return Error(problem("json"))
+  }
+  Ok(take rows)
+}

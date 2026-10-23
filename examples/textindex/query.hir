@@ -1,0 +1,132 @@
+// Tantivy e988ecb7 intersection.rs:114-185,340-390 (MIT).
+// Align monotone sorted doc IDs; bounded vectors replace Tantivy's seek/FST.
+pub type Match {
+  id: String,
+  frequencies: Map[String, u64],
+}
+
+pub fn intersect(left: List[String], right: List[String]) -> List[String] uses {} {
+  let mut out: List[String] = []
+  let mut a = 0u64
+  let mut b = 0u64
+  while a < list.len(left) && b < list.len(right) {
+    let order = string.compare(left[a], right[b])
+    if order == 0 {
+      list.push(mut out, unique left[a])
+      a += 1
+      b += 1
+    } else if order < 0 {
+      a += 1
+    } else {
+      b += 1
+    }
+  }
+  take out
+}
+
+pub fn unite(left: List[String], right: List[String]) -> List[String] uses {} {
+  let mut out: List[String] = []
+  let mut a = 0u64
+  let mut b = 0u64
+  while a < list.len(left) || b < list.len(right) {
+    if b == list.len(right) || a < list.len(left) && string.compare(left[a], right[b]) < 0 {
+      list.push(mut out, unique left[a])
+      a += 1
+    } else if a == list.len(left) || string.compare(left[a], right[b]) > 0 {
+      list.push(mut out, unique right[b])
+      b += 1
+    } else {
+      list.push(mut out, unique left[a])
+      a += 1
+      b += 1
+    }
+  }
+  take out
+}
+
+fn ids(snapshot: index.Snapshot, needle: String) -> List[String] uses {} {
+  let mut out: List[String] = []
+  for term in snapshot.terms {
+    if term.term == needle {
+      for posting in term.postings {
+        list.push(mut out, unique posting.id)
+      }
+      break
+    }
+  }
+  take out
+}
+
+fn frequency(snapshot: index.Snapshot, needle: String, id: String) -> u64 uses {} {
+  for term in snapshot.terms {
+    if term.term == needle {
+      for posting in term.postings {
+        if posting.id == id {
+          return list.len(posting.spans)
+        }
+      }
+    }
+  }
+  0
+}
+
+pub fn evaluate(snapshot: index.Snapshot, mode: String, source: String) -> Result[
+  List[Match],
+  manifest.Problem
+] uses {} {
+  if mode != "all" && mode != "any" {
+    return Error(manifest.problem("query_mode"))
+  }
+  if string.byte_len(source) > 8192 {
+    return Error(manifest.problem("query_bytes_limit"))
+  }
+  let tokens = tokenize.scan(source, 32)?
+  let mut seen: Set[String] = set.empty()
+  let mut terms: List[String] = []
+  let mut candidates: List[String] = []
+  let mut first = true
+  for token in tokens {
+    if !set.contains(seen, token.term) {
+      set.insert(mut seen, unique token.term)
+      list.push(mut terms, unique token.term)
+      let next = ids(snapshot, token.term)
+      candidates = if first {
+        take next
+      } else if mode == "all" {
+        intersect(candidates, next)
+      } else {
+        unite(candidates, next)
+      }
+      first = false
+    }
+  }
+  let mut matches: List[Match] = []
+  for id in candidates {
+    let mut frequencies: Map[String, u64] = map.empty()
+    for term in terms {
+      map.insert(mut frequencies, unique term, frequency(snapshot, term, id))
+    }
+    list.push(mut matches, Match(id: unique id, frequencies: take frequencies))
+  }
+  Ok(take matches)
+}
+
+pub fn report(matches: List[Match]) -> Bytes uses {} {
+  let mut out: List[u8] = []
+  for row in matches {
+    text.append(mut out, "{\"id\":")
+    json.write_text_into(row.id, mut out)
+    text.append(mut out, ",\"frequencies\":{")
+    let mut first = true
+    for (term, count) in row.frequencies {
+      if !first {
+        text.append(mut out, ",")
+      }
+      first = false
+      json.write_text_into(term, mut out)
+      text.append(mut out, f":{count}")
+    }
+    text.append(mut out, "}}\n")
+  }
+  bytes.from_list(take out)
+}

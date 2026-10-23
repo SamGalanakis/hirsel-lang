@@ -1,0 +1,84 @@
+pub type AppError = Output(OutputError)
+
+const HELP: String = "textindex build MANIFEST INDEX JOBS\ntextindex query MANIFEST INDEX all|any TEXT\ntextindex inspect MANIFEST INDEX\nExplicit UTF8 manifest beneath input; versioned index beneath index grant.\nJOBS: 1..4. Limits and schema: examples/textindex/README.md\n"
+
+fn argument(args: Args, i: u64) -> Result[String, manifest.Problem] in args {
+  match arg.text(args, i) {
+    Ok(value) => Ok(take value),
+    Error(_) => Error(manifest.problem("arguments")),
+  }
+}
+
+fn execute(rt: Io, args: Args) -> Result[Bytes, manifest.Problem] {
+  if arg.len(args) < 3 {
+    return Error(manifest.problem("usage"))
+  }
+  let command = argument(args, 0)?
+  let count = arg.len(args)
+  if command == "build" && count != 4 || command == "query" && count != 5 || command == "inspect" && count != 3 || command != "build" && command != "query" && command != "inspect" {
+    return Error(manifest.problem("usage"))
+  }
+  let name = argument(args, 1)?
+  let destination = argument(args, 2)?
+  if string.byte_len(name) > 256 || !manifest.valid_path(name) || !manifest.valid_path(
+    destination
+  ) || string.byte_len(destination) > 256 {
+    return Error(manifest.problem("path"))
+  }
+  let Ok(input) = io.dir(rt, path.of("input")) else {
+    return Error(manifest.problem("input_grant"))
+  }
+  let Ok(storage) = io.dir(rt, path.of("index")) else {
+    return Error(manifest.problem("index_grant"))
+  }
+  let data = manifest.read(input, name, manifest.MANIFEST_BYTES)?
+  let documents = manifest.decode(data)?
+  if command == "build" {
+    let Ok(jobs) = u64.parse(argument(args, 3)?) else {
+      return Error(manifest.problem("jobs"))
+    }
+    if jobs == 0 || jobs > 4 {
+      return Error(manifest.problem("jobs"))
+    }
+    let Ok(tasks) = io.tasks(rt) else {
+      return Error(manifest.problem("tasks_grant"))
+    }
+    let snapshot = index.build(tasks, input, documents, jobs)?
+    store.publish(storage, destination, snapshot)?
+    return Ok(b"built\n")
+  }
+  let bytes = manifest.read(storage, destination, store.INDEX_BYTES)?
+  let snapshot = store.decode(bytes, documents)?
+  if command == "inspect" {
+    return store.encode(snapshot)
+  }
+  let matches = query.evaluate(snapshot, argument(args, 3)?, argument(args, 4)?)?
+  Ok(query.report(matches))
+}
+
+pub fn main(rt: Io, args: Args) -> Result[std@1/process.ExitCode, AppError] {
+  let Ok(output) = io.stdout(rt) else {
+    return Ok(std@1/process.exit_code(3u8))
+  }
+  let Ok(errors) = io.stderr(rt) else {
+    return Ok(std@1/process.exit_code(3u8))
+  }
+  if arg.len(args) == 1 {
+    if let Ok(value) = arg.text(args, 0) {
+      if value == "--help" {
+        out.print(output, HELP)?
+        return Ok(std@1/process.SUCCESS)
+      }
+    }
+  }
+  match execute(rt, args) {
+    Ok(data) => {
+      out.write(output, data)?
+      Ok(std@1/process.SUCCESS)
+    },
+    Error(problem) => {
+      err.print(errors, f"{problem.kind}:{problem.document}\n")?
+      Ok(std@1/process.exit_code(2u8))
+    },
+  }
+}
