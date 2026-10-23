@@ -220,3 +220,38 @@ fn proposed_arm_names_drop_a_trailing_error() {
         );
     }
 }
+
+#[test]
+fn never_error_requires_actual_identity_before_plain_propagation() {
+    let (ds, _, _) = support::check_source(
+        "type App = Input(Never)\nfn probe(v: Result[u64, Never]) -> Result[u64, App] { Ok(v?) }",
+    );
+    let [d] = &ds[..] else { panic!("{ds:?}") };
+    assert_eq!(d.rule.as_str(), "LANG-8");
+    assert!(d.message.contains("not a nominal error type"), "{d:?}");
+}
+
+#[test]
+fn never_error_identity_and_explicit_arm_are_legal_neighbors() {
+    let (ds, outputs, _) = support::check_source(
+        "type App = Input(Never)\nfn identity(v: Result[u64, Never]) -> Result[u64, Never] { Ok(v?) }\nfn explicit(v: Result[u64, Never]) -> Result[u64, App] { Ok(v? Input) }",
+    );
+    assert!(ds.is_empty(), "{ds:?}");
+    assert_eq!(tries(&outputs).len(), 2);
+    assert_eq!(tries(&outputs)[0].mapper, None);
+    assert!(tries(&outputs)[1].mapper.is_some());
+}
+
+#[test]
+fn builtin_error_needs_an_explicit_arm_even_with_a_nested_success_context() {
+    let declaration = "type App = Items(List[u64])\n";
+    let probe = "fn probe(take v: Result[Result[u64, ()], List[u64]]) -> Result[Result[u64, ()], App] { Ok((take v)?) }";
+    let (ds, _, _) = support::check_source(&format!("{declaration}{probe}"));
+    let [d] = &ds[..] else { panic!("{ds:?}") };
+    assert_eq!(d.rule.as_str(), "LANG-8");
+    assert!(d.message.contains("not a nominal error type"), "{d:?}");
+    let (ds, outputs, _) =
+        support::check_source(&format!("{declaration}{}", probe.replace('?', "? Items")));
+    assert!(ds.is_empty(), "{ds:?}");
+    assert!(tries(&outputs)[0].mapper.is_some());
+}

@@ -1737,7 +1737,9 @@ impl Checker<'_, '_> {
                     return Ok(self.error());
                 }
             }
-        } else if self.compatible(error, expected) {
+        } else if self.compatible(error, expected) && (!self.bottom(error) || self.bottom(expected))
+        {
+            // Never fits any expression type, but LANG-8 requires error identity.
             // Identity comes first, so `type E = Wrap(E) | Leaf` propagates `E`.
             None
         } else {
