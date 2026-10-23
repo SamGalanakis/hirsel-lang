@@ -6,6 +6,7 @@ use crate::FnAbiId;
 use crate::ir::Callee;
 use crate::operation::{OperationArgument, OperationDeclarations};
 use crate::products::{Binding, LayoutClosure, UnitBody};
+use crate::sealed_payload_source::SealSourceWitness;
 use hirsel_artifact_store::{Action, Address, Contents, Domain, Reference, Store};
 use hirsel_codec::snapshot_struct;
 use hirsel_core_contract::{OperationId, OperationRow};
@@ -16,7 +17,7 @@ use std::sync::{Arc, Mutex};
 
 const RECEIPT: Domain = Domain {
     kind: 0x4300_0001,
-    schema: 1,
+    schema: 2,
 };
 const VALUE_BODY: Domain = Domain {
     kind: 0x4300_0002,
@@ -65,6 +66,9 @@ struct Record {
     body: ReferenceRow,
     layouts: ReferenceRow,
     definition: DefPath,
+    instance: ContentHash,
+    implementation_revision: ContentHash,
+    source_witness: Option<SealSourceWitness>,
     operations: Vec<OperationRead>,
     manifest: Vec<(OperationId, Option<OperationRow>)>,
     discharge: ContentHash,
@@ -80,6 +84,9 @@ snapshot_struct!(Record {
     body,
     layouts,
     definition,
+    instance,
+    implementation_revision,
+    source_witness,
     operations,
     manifest,
     discharge,
@@ -279,6 +286,15 @@ impl NativeCache {
                 operation_identity(environment, &read.id, &read.arguments) != Some(read.output)
             })
             || record.discharge != discharge_identity(environment.discharge, &record.definition)
+            || record.source_witness
+                != environment
+                    .operations
+                    .seal_source_witness(&record.definition, record.instance)
+            || record.source_witness.as_ref().is_some_and(|witness| {
+                witness.definition != record.definition
+                    || witness.instance != record.instance
+                    || witness.implementation_revision != record.implementation_revision
+            })
         {
             return None;
         }
@@ -323,6 +339,19 @@ impl NativeCache {
         let checked = validate(unit, inputs)?;
         let capture = || -> Option<NativeOutput> {
             let domain = body_domain(S::KIND)?;
+            // Observe the independent original-source provider, never candidate
+            // metadata. Unavailable is retained as None, not expected-empty.
+            let header = &checked.unit().header;
+            let source_witness = inputs
+                .operations
+                .seal_source_witness(&header.definition, header.instance);
+            if source_witness.as_ref().is_some_and(|witness| {
+                witness.definition != header.definition
+                    || witness.instance != header.instance
+                    || witness.implementation_revision != header.implementation_revision
+            }) {
+                return None;
+            }
             let (closure, body) = LayoutClosure::capture(&checked, inputs, additional_abis).ok()?;
             let body = self.put(domain, hirsel_codec::to_text(&body).as_bytes())?;
             let layouts = self.put(LAYOUTS, hirsel_codec::to_text(&closure).as_bytes())?;
@@ -358,7 +387,10 @@ impl NativeCache {
                 target: inputs.target.digest(),
                 body: body.into(),
                 layouts: layouts.into(),
-                definition: checked.unit().header.definition.clone(),
+                definition: header.definition.clone(),
+                instance: header.instance,
+                implementation_revision: header.implementation_revision,
+                source_witness,
                 operations: operation_reads.into_values().collect(),
                 manifest: checked
                     .unit()
@@ -378,7 +410,7 @@ impl NativeCache {
 
     /// Attach ordinary query metadata to an actual C-issued output, retaining
     /// every independent observation verbatim. No body, target, policy, stage,
-    /// operation or discharge evidence can be replaced through this method.
+    /// operation, source witness or discharge evidence can be replaced here.
     /// Lookup still rechecks the current independent environment.
     pub fn publish_output(&self, output: &NativeOutput, metadata: &[u8]) -> Option<NativeOutput> {
         if output.record.lir != crate::LIR_VERSION

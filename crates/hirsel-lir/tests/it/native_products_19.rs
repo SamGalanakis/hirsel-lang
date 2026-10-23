@@ -406,3 +406,202 @@ fn native_products_19_derived_metadata_retains_actual_c_observations() {
             .is_none()
     );
 }
+
+#[test]
+fn native_products_19_source_observation_is_independent_and_scope_bound() {
+    use hirsel_artifact_store::Store;
+    use hirsel_lir::operation::{OperationArgument, OperationDeclarations};
+    use hirsel_lir::sealed_payload_source::SealSourceWitness;
+
+    struct Declarations {
+        registry: hirsel_layout::operation::OperationRegistry,
+        witness: Option<SealSourceWitness>,
+    }
+    impl OperationDeclarations for Declarations {
+        fn seal_source_witness(
+            &self,
+            _: &hirsel_syntax::DefPath,
+            _: hirsel_syntax::ContentHash,
+        ) -> Option<SealSourceWitness> {
+            // Deliberately return the independently supplied row even for a
+            // mismatching request, so the cache must check its scope itself.
+            self.witness.clone()
+        }
+        fn derive(
+            &self,
+            operation: &hirsel_core_contract::OperationId,
+            arguments: &[OperationArgument],
+            target: &hirsel_lir::TargetSpec,
+        ) -> Result<(hirsel_lir::FnAbi, hirsel_lir::LayoutTable), hirsel_lir::layout::LayoutError>
+        {
+            self.registry.derive(operation, arguments, target)
+        }
+    }
+
+    let mut fixture = Lir::<Value>::new(&[], None);
+    fixture.builder.ret(ENTRY, None);
+    let (unit, table, manifest) = fixture.finish();
+    // A separately supplied original-source observation may prove an empty
+    // inventory. This identity is data, not permission to skip actual C.
+    let witness = SealSourceWitness::from_expectations(
+        hash("current private source output"),
+        unit.header.definition.clone(),
+        unit.header.implementation_revision,
+        unit.header.instance,
+        &[],
+        &[],
+    );
+    let operations = Declarations {
+        registry: support::registry(),
+        witness: Some(witness.clone()),
+    };
+    let target = hirsel_lir::TargetSpec::x86_64_unknown_linux_gnu();
+    let inputs = Inputs {
+        memo: Default::default(),
+        target: &target,
+        layouts: &table,
+        manifest: &manifest,
+        operations: &operations,
+        discharge: None,
+    };
+    let environment = NativeEnvironment {
+        target: &target,
+        manifest: &manifest,
+        operations: &operations,
+        discharge: None,
+    };
+    let root = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!(
+        "native-source-observation-19-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    let local = Store::new(root.clone());
+    let cache = NativeCache::new(Arc::new(local.clone()), Some(local.clone()));
+    let subject = hash("source observation query action");
+    let policy = hash("source observation query policy");
+    let (_, output) = cache
+        .validate_output(subject, policy, unit.clone(), &inputs, &[])
+        .unwrap();
+    let output = output.unwrap();
+    assert!(
+        cache
+            .lookup(subject, policy, StageKind::Value, &environment)
+            .is_none()
+    );
+    cache
+        .publish_output(&output, b"independent query metadata")
+        .unwrap();
+    assert!(
+        cache
+            .lookup(subject, policy, StageKind::Value, &environment)
+            .is_some()
+    );
+    drop(cache);
+    // The source read survives durable receipt encoding and a fresh process
+    // authority table; neither the Value nor Ready body is materialized here.
+    let reopened = NativeCache::new(Arc::new(local.clone()), Some(local));
+    let accepted = reopened
+        .lookup(subject, policy, StageKind::Value, &environment)
+        .unwrap();
+    assert_eq!(accepted.metadata(), b"independent query metadata");
+
+    let unavailable = Declarations {
+        registry: support::registry(),
+        witness: None,
+    };
+    let changed = NativeEnvironment {
+        operations: &unavailable,
+        ..environment
+    };
+    assert!(
+        reopened
+            .lookup(subject, policy, StageKind::Value, &changed)
+            .is_none()
+    );
+    for field in 0..6 {
+        let mut changed_witness = witness.clone();
+        match field {
+            0 => changed_witness.source = hash("changed private source output"),
+            1 => changed_witness.implementation_revision = hash("changed implementation"),
+            2 => changed_witness.instance = hash("different type or size actuals"),
+            3 => changed_witness.definition = path("other"),
+            4 => changed_witness.inventory_rule += 1,
+            5 => changed_witness.expectations = hash("changed semantic expectations"),
+            _ => unreachable!(),
+        }
+        let changed_operations = Declarations {
+            registry: support::registry(),
+            witness: Some(changed_witness),
+        };
+        let changed = NativeEnvironment {
+            operations: &changed_operations,
+            ..environment
+        };
+        assert!(
+            reopened
+                .lookup(subject, policy, StageKind::Value, &changed)
+                .is_none()
+        );
+        // A provider row for the wrong actual definition/instance/revision
+        // cannot mint accepted native output, even when the raw unit passes C.
+        if (1..=3).contains(&field) {
+            let changed_inputs = Inputs {
+                memo: Default::default(),
+                operations: &changed_operations,
+                ..inputs
+            };
+            let (_, refused) = reopened
+                .validate_output(
+                    hash("wrong source witness scope"),
+                    policy,
+                    unit.clone(),
+                    &changed_inputs,
+                    &[],
+                )
+                .unwrap();
+            assert!(refused.is_none());
+        }
+    }
+    // Absence also cannot be retroactively promoted to expected-empty.
+    let absent_inputs = Inputs {
+        memo: Default::default(),
+        operations: &unavailable,
+        ..inputs
+    };
+    let absent_subject = hash("unavailable source observation");
+    reopened
+        .validate_and_publish(
+            absent_subject,
+            policy,
+            unit.clone(),
+            &absent_inputs,
+            &[],
+            &[],
+        )
+        .unwrap()
+        .1
+        .unwrap();
+    assert!(
+        reopened
+            .lookup(absent_subject, policy, StageKind::Value, &changed)
+            .is_some()
+    );
+    assert!(
+        reopened
+            .lookup(absent_subject, policy, StageKind::Value, &environment)
+            .is_none()
+    );
+    let mut malformed = unit;
+    malformed.header.target = hash("invalid native target despite source witness");
+    assert!(
+        reopened
+            .validate_output(hash("C still required"), policy, malformed, &inputs, &[])
+            .is_err()
+    );
+    assert!(
+        reopened
+            .lookup(subject, policy, StageKind::Value, &environment)
+            .is_some()
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
