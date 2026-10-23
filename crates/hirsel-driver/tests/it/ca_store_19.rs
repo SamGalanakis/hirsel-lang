@@ -557,3 +557,35 @@ fn scalar_and_staged_values_from_verify_off_require_private_admission() {
         assert!(hirsel_tir::TirProvider::constant_instance(&mut staged, &hidden, &[2]).is_err(), "a staged VerifyOff value must demand private admission");
     });
 }
+
+
+#[test]
+fn scalar_evaluation_products_require_local_completion_and_skip_analyzed_bodies() {
+    with_compiler_stack(|| {
+        let source = "fn helper()->u32{7u32}\nconst VALUE:u32=comptime helper()\n";
+        let path = definition("VALUE");
+        let store = Arc::new(store::MemStore::default());
+        let mut seed = signature_session(store.clone(), source, true);
+        for name in ["helper", "VALUE"] { seed.item_signature(&definition(name)).unwrap(); }
+        assert_eq!(seed.materialize_constant(&path).unwrap(), hirsel_tir::Constant::Integer(7));
+        drop(seed);
+        let mut fresh = signature_session(store.clone(), source, false);
+        fresh.adapters.modes = None;
+        fresh.adapters.lowering = None;
+        assert_eq!(fresh.materialize_constant(&path).unwrap(), hirsel_tir::Constant::Integer(7));
+        assert_eq!(fresh.recompute_count(&path, QueryKind::Modes), 0);
+        assert!(fresh.store_adoptions() > 0);
+
+        let copied = Arc::new(store::MemStore::default());
+        for (key, bytes) in store.take() {
+            store::ResultStore::put(&*copied, &key, &bytes);
+            store::ResultStore::put(&*store, &key, &bytes);
+        }
+        let mut untrusted = signature_session(copied, source, false);
+        untrusted.adapters.modes = None;
+        untrusted.adapters.lowering = None;
+        assert!(untrusted.materialize_constant(&path).is_err(), "copied values cannot supply private V completion");
+        let mut changed = signature_session(store, &source.replace("7u32", "9u32"), true);
+        assert_eq!(changed.materialize_constant(&path).unwrap(), hirsel_tir::Constant::Integer(9));
+    });
+}

@@ -27,6 +27,8 @@ pub(crate) struct EvaluatedConstant {
     /// retain their existing explicit ValidationUniverse witnesses.
     #[serde(skip)]
     pub validation: Option<Arc<[(hirsel_syntax::PackageId, hirsel_syntax::ContentHash)]>>,
+    #[serde(skip)]
+    pub acceptance: Option<hirsel_validate::ExecutionReceipt>,
 }
 fn operational(message: impl Into<String>) -> QueryError {
     QueryError::Operational(hirsel_types::OperationalFailure {
@@ -200,19 +202,19 @@ pub(crate) fn validate_evaluation(
     artifact: Signature,
     verify: Verify,
     origin: Option<&(hirsel_span::Anchor, DefPath, u32)>,
-) -> Result<(), QueryError> {
-    let report = match verify {
+) -> Result<Option<hirsel_validate::AcceptedArtifact>, QueryError> {
+    let (report, acceptance) = match verify {
         Verify::On => {
             let _timing = timings::phase(Phase::Verify);
             snapshot.validate_private_artifact(definition, Arc::new(artifact), origin)
         }
-        Verify::Off => hirsel_validate::Validation::default(),
+        Verify::Off => (hirsel_validate::Validation::default(), None),
     };
     if let Some(error) = hirsel_validate::tooling_limit_error(&report) {
         return Err(error);
     }
     if report.violations.is_empty() {
-        Ok(())
+        Ok(acceptance)
     } else {
         Err(QueryError::Operational(hirsel_types::OperationalFailure {
             operation: "compile-time TIR validation".into(),
@@ -616,6 +618,15 @@ impl crate::queries::s1::DependencySource for EngineDependencies<'_> {
         self.recorded(|engine| {
             engine.read_implementation(path);
             let definition = engine.definition(path)?;
+            if !engine.evaluation_acceptance.is_empty() && engine.verify == Verify::On {
+                let report = engine.validate_lowered_artifact(&definition, &mut vec![]);
+                if !report.violations.is_empty() {
+                    return Err(operational(format!(
+                        "executed TIR validation: {:?}",
+                        report.violations
+                    )));
+                }
+            }
             if engine.verify == Verify::On && !engine.evaluation_validation.is_empty() {
                 let digest = engine
                     .signature_snapshot()
@@ -655,17 +666,44 @@ impl QueryEngine {
             }
         }
     }
+    pub(crate) fn record_evaluation_acceptance(
+        &mut self,
+        acceptance: Option<hirsel_validate::AcceptedArtifact>,
+    ) {
+        for frame in &mut self.evaluation_acceptance {
+            match (&mut *frame, &acceptance) {
+                (Some(proofs), Some(proof)) => {
+                    if !proofs.contains(proof) {
+                        proofs.push(proof.clone());
+                    }
+                }
+                (_, None) => *frame = None,
+                _ => (),
+            }
+        }
+    }
     fn begin_evaluation_validation(&mut self) {
         self.evaluation_validation
             .push((self.verify == Verify::On).then(Default::default));
+        self.evaluation_acceptance
+            .push((self.verify == Verify::On).then(Vec::new));
     }
     fn finish_evaluation_validation(&mut self, result: &mut Result<EvaluatedConstant, QueryError>) {
         let validation = self
             .evaluation_validation
             .pop()
             .expect("scalar validation frame");
+        let acceptance = self
+            .evaluation_acceptance
+            .pop()
+            .expect("scalar acceptance frame");
         if let Ok(value) = result {
             value.validation = validation.map(|rows| rows.into_iter().collect::<Vec<_>>().into());
+            value.acceptance = value.validation.as_ref().zip(acceptance.as_ref()).and_then(
+                |(contexts, artifacts)| {
+                    hirsel_validate::ExecutionReceipt::compose(contexts, artifacts)
+                },
+            );
         }
     }
     pub(crate) fn evaluation_validation_holds(&mut self, value: &EvaluatedConstant) -> bool {
@@ -684,6 +722,13 @@ impl QueryEngine {
             .any(|(key, _)| matches!(key, crate::ReadKey::ValidationUniverse(_)))
     }
     fn merge_evaluation_validation(&mut self, value: &EvaluatedConstant) {
+        if let Some(receipt) = &value.acceptance {
+            for artifact in receipt.artifacts() {
+                self.record_evaluation_acceptance(Some(artifact.clone()));
+            }
+        } else {
+            self.evaluation_acceptance.fill(None);
+        }
         if let Some(rows) = &value.validation {
             for (package, digest) in rows.iter() {
                 self.record_evaluation_validation(package.clone(), *digest);
@@ -755,6 +800,7 @@ impl QueryEngine {
                 executed: Default::default(),
                 depth: DepthEvidence::leaf(self.depth_limit()),
                 validation: None,
+                acceptance: None,
             });
         }
         let syntax = self.parse_definition(path)?.value;
@@ -788,6 +834,7 @@ impl QueryEngine {
                 executed: Default::default(),
                 depth: DepthEvidence::leaf(self.depth_limit()),
                 validation: None,
+                acceptance: None,
             });
         }
         let cached = self.constant_values.get(path).cloned();
@@ -802,6 +849,14 @@ impl QueryEngine {
                 return Ok(value);
             }
             self.constant_values.remove(path);
+        }
+        if let Some(value) = self.load_evaluation(path) {
+            self.depth_admit(&value.depth, reference)?;
+            self.merge_execution(&value.executed);
+            self.merge_evaluation_validation(&value);
+            self.depth_requested(&value.depth, reference);
+            self.constant_values.insert(path.clone(), value.clone());
+            return Ok(value);
         }
         if let Some(start) = self.s1.on_stack(path) {
             self.s1.fail_cycle();
@@ -882,6 +937,7 @@ impl QueryEngine {
                 executed,
                 depth: self.depth_composed(true),
                 validation: None,
+                acceptance: None,
             })
         })();
         self.execution_stack.pop();
@@ -891,6 +947,7 @@ impl QueryEngine {
         }
         self.s1.leave();
         if let Ok(evaluated) = &result {
+            self.store_evaluation(path, evaluated)?;
             self.depth_requested(&evaluated.depth, reference);
         }
         result
@@ -1083,6 +1140,7 @@ impl QueryEngine {
         let runtime = self.comptime_runtime_types()?;
         let product = validated.run(&sources, limits, &runtime, &mut EngineDependencies(self));
         self.merge_execution(&product.value.reads);
+        self.record_evaluation_acceptance(product.acceptance);
         if let Some(limit) = product.limit {
             self.last_comptime_limit = Some(limit);
         }
@@ -1282,6 +1340,7 @@ impl QueryEngine {
                     .map_err(|_| QueryError::NotImplemented)?,
                 depth: self.depth_composed(true),
                 validation: None,
+                acceptance: None,
             })
         })();
         self.execution_stack.pop();

@@ -433,6 +433,17 @@ struct LowerRecord {
     output: QueryOutput<hirsel_tir::DefinitionRef>,
     detail: DependencyReads,
 }
+#[derive(Serialize, Deserialize)]
+struct EvaluationRecord {
+    owner: DefId,
+    constant: crate::comptime::EvaluatedConstant,
+}
+fn evaluation_subject(key: &EntryKey, payload: &[u8]) -> ContentHash {
+    ContentHash::of_parts(
+        "hirsel.validate.evaluated-output.v1",
+        [key.0.0.as_slice(), key.1.0.as_slice(), payload],
+    )
+}
 /// Completion facts consumed by checking and source growth, independently of
 /// the checked/analyzed body. Its read set is validated before these bytes are
 /// decoded; a hit does not demand the separate Modes product.
@@ -1205,6 +1216,108 @@ impl QueryEngine {
             .depth = Some(record.depth);
         Some(entry)
     }
+    pub(crate) fn load_evaluation(
+        &mut self,
+        path: &DefPath,
+    ) -> Option<crate::comptime::EvaluatedConstant> {
+        if !self.s1.is_empty() {
+            return None;
+        }
+        let key = self.store_key(path, QueryKind::Evaluate)?;
+        let variant = self.stored_variant(path, QueryKind::Evaluate)?;
+        let record: EvaluationRecord = self.decode_record(&variant.payload)?;
+        let mut value = record.constant;
+        let syntax = self.snapshot(path).ok()?;
+        if record.owner != syntax.owner().def
+            || !matches!(syntax.item.kind, hirsel_syntax::ItemKind::Const { .. })
+            || value.executed != variant.reads
+            || value.depth.first.len() != self.depth_limit() as usize + 1
+            || value
+                .depth
+                .first
+                .iter()
+                .flatten()
+                .any(|site| self.sources.slice(*site).is_none())
+            || value
+                .substitutions
+                .iter()
+                .any(|(id, _)| syntax.tree.expressions.get(id.0 as usize).is_none())
+        {
+            return None;
+        }
+        if self.verify == Verify::On {
+            let cache = self.result_store.as_ref()?.verifier()?;
+            let snapshot = self.signature_snapshot();
+            let receipt = cache
+                .execution(evaluation_subject(&key, &variant.payload), |package| {
+                    snapshot.validation_input_digest(package)
+                })?;
+            value.validation = Some(receipt.contexts().to_vec().into());
+            value.acceptance = Some(receipt);
+        }
+        if self.verify_store == crate::store::VerifyStore::Recompute {
+            self.pending_store_checks.insert(
+                (DefId::intern(path), QueryKind::Evaluate),
+                Expected::capture(variant, &mut self.store_check_spool),
+            );
+            return None;
+        }
+        timings::count(Count::StoreHits);
+        self.store_adoptions += 1;
+        Some(value)
+    }
+    pub(crate) fn store_evaluation(
+        &mut self,
+        path: &DefPath,
+        value: &crate::comptime::EvaluatedConstant,
+    ) -> Result<(), QueryError> {
+        if self.result_store.is_none() || !self.s1.is_empty() || !self.s1.failure_is_own() {
+            return Ok(());
+        }
+        // Staged/generated declaration transactions need their own replay
+        // products before their values can be admitted in a fresh session.
+        if value.executed.iter().any(|(read, _)| {
+            read.definition().is_some_and(|id| {
+                let definition = id.path();
+                definition.0.name.starts_with('$')
+                    || self.generated.contains_key(definition)
+                    || self.staged_constants.contains_key(definition)
+            })
+        }) {
+            return Ok(());
+        }
+        let Some(key) = self.store_key(path, QueryKind::Evaluate) else {
+            return Ok(());
+        };
+        let Some(payload) = self.encode_record(&EvaluationRecord {
+            owner: DefId::intern(path),
+            constant: value.clone(),
+        }) else {
+            return Ok(());
+        };
+        let store = self
+            .result_store
+            .as_ref()
+            .expect("enabled evaluation store")
+            .clone();
+        if let Some(receipt) = &value.acceptance
+            && let Some(cache) = store.verifier()
+        {
+            cache.publish_execution(evaluation_subject(&key, &payload), receipt);
+        }
+        EncodedWriter {
+            types: self.type_records().expect("enabled evaluation types"),
+            store,
+            key,
+            path: path.clone(),
+            kind: QueryKind::Evaluate,
+            expected: self
+                .pending_store_checks
+                .remove(&(DefId::intern(path), QueryKind::Evaluate)),
+        }
+        .write(&value.executed, payload)
+    }
+
     pub(crate) fn remember_lowered_verdict(
         &mut self,
         definition: hirsel_tir::DefinitionRef,
@@ -1249,7 +1362,7 @@ impl QueryEngine {
     }
     /// The verifier computes its own complete artifact identity and owns the
     /// only persistent receipt writer. Producer Lower records carry no proof.
-    pub(super) fn validate_lowered_artifact(
+    pub(crate) fn validate_lowered_artifact(
         &mut self,
         definition: &hirsel_tir::Definition,
         reads: &mut Vec<hirsel_validate::VRead>,
@@ -1275,10 +1388,11 @@ impl QueryEngine {
             ],
         );
         let mut executed = false;
+        let mut acceptance = None;
         let report = self.run_v(&definition.path.path().0.package, |types, views| {
             let _time = timings::phase(Phase::Verify);
             let report = if let Some(artifact) = &artifact {
-                let (report, ran) = hirsel_validate::validate_cached(
+                let (report, ran, accepted) = hirsel_validate::validate_with_receipt(
                     artifact,
                     views,
                     policy,
@@ -1286,6 +1400,7 @@ impl QueryEngine {
                     reads,
                 );
                 executed = ran;
+                acceptance = accepted;
                 report
             } else {
                 executed = true;
@@ -1296,6 +1411,7 @@ impl QueryEngine {
             }
             report
         });
+        self.record_evaluation_acceptance(acceptance);
         if executed {
             *self
                 .scalar_validation_runs
@@ -1363,6 +1479,7 @@ mod malformed_tests {
             substitutions: vec![],
             executed: Reads::empty(),
             depth: crate::memo::DepthEvidence::leaf(engine.depth_limit()),
+            acceptance: None,
             validation: Some(
                 vec![(crate::default_context().package, ContentHash::default())].into(),
             ),
@@ -1373,6 +1490,67 @@ mod malformed_tests {
         let decoded: crate::comptime::EvaluatedConstant = engine.decode_record(&encoded).unwrap();
         assert!(decoded.validation.is_none());
         assert!(!engine.evaluation_validation_holds(&decoded));
+    }
+
+    #[test]
+    fn malformed_evaluation_owner_reads_depth_and_substitutions_miss_before_adoption() {
+        for verify in [
+            crate::store::VerifyStore::Off,
+            crate::store::VerifyStore::Recompute,
+        ] {
+            for fault in 0..5 {
+                let (mut engine, syntax) = fixture_source("const VALUE:u8=7u8");
+                engine.verify = Verify::Off;
+                let path = &syntax.item.definition;
+                let mut record = EvaluationRecord {
+                    owner: DefId::intern(path),
+                    constant: crate::comptime::EvaluatedConstant {
+                        value: hirsel_tir::Materialized {
+                            root: hirsel_tir::ValueNode {
+                                ty: engine.types.intern(hirsel_types::Type::unit()),
+                                kind: hirsel_tir::ValueKind::Constant(hirsel_tir::Constant::Unit),
+                            },
+                        },
+                        substitutions: vec![],
+                        executed: Reads::empty(),
+                        depth: crate::memo::DepthEvidence::leaf(engine.depth_limit()),
+                        validation: None,
+                        acceptance: None,
+                    },
+                };
+                match fault {
+                    0 => (),
+                    1 => record.owner = DefId::intern(&DefPath::core("foreign")),
+                    2 => record.constant.depth.first = Box::new([]),
+                    3 => record.constant.substitutions.push((
+                        hirsel_syntax::ExprId(u32::MAX),
+                        record.constant.value.clone(),
+                    )),
+                    4 => {
+                        record.constant.executed = Reads::from_vec(vec![(
+                            ReadKey::ExecutedBody(record.owner),
+                            ContentHash::default(),
+                        )])
+                        .unwrap()
+                    }
+                    _ => unreachable!(),
+                }
+                engine
+                    .write_record(path, QueryKind::Evaluate, &Reads::empty(), &record)
+                    .unwrap();
+                engine.verify_store = verify;
+                let hit = engine.load_evaluation(path);
+                assert_eq!(
+                    hit.is_some(),
+                    fault == 0 && verify == crate::store::VerifyStore::Off,
+                    "fault {fault}"
+                );
+                if fault != 0 {
+                    assert_eq!(engine.store_adoptions(), 0);
+                    assert!(engine.pending_store_checks.is_empty());
+                }
+            }
+        }
     }
 
     // Equivalent sequence serialization for the bulk byte payload vectors.

@@ -48,7 +48,10 @@ mod origin_dependencies;
 mod origin_types;
 mod proofs;
 mod receipts;
-pub use receipts::{Artifact, VerifierCache, validate_cached};
+pub use receipts::{
+    AcceptedArtifact, Artifact, ExecutionReceipt, VerifierCache, validate_cached,
+    validate_with_receipt,
+};
 mod protocol;
 mod scope_locals;
 mod scoped_transport;
