@@ -741,6 +741,7 @@ fn sheet_eval_31_production_host_replay() {
             std::env::var_os("SHEET_EVAL_31_PRODUCTION").expect("production evidence root"),
         );
         let path = evidence.join("qualified-app/hirsel.json");
+        let fresh = std::env::var_os("SHEET_EVAL_31_FRESH_CANCEL").is_some();
         let mut rows = vec![];
         let mut incomplete = vec![];
         let mut directories: Vec<_> = fs::read_dir(evidence.join("production"))
@@ -752,8 +753,8 @@ fn sheet_eval_31_production_host_replay() {
             if !dir.join("PASS").exists() {
                 continue;
             }
-            // Original reference cells are already retained; only the previously
-            // unrun checked host adapter is selected by this test.
+            // Historical runs selected only the previously unrun checked adapter.
+            // Fresh identities after the repair exercise both public host adapters.
             let tape = dir.join("recording");
             let bytes = fs::read(&tape).unwrap();
             let expected = fs::read(dir.join("stdout")).unwrap();
@@ -762,29 +763,48 @@ fn sheet_eval_31_production_host_replay() {
                 .parse()
                 .unwrap();
             let id = dir.file_name().unwrap().to_string_lossy();
-            eprintln!("SHEET_STARTED production/{id}/checked-h");
-            let attempt = hirsel_driver::replay_observations_checked(&path, &tape, Some(1_000_000));
-            let row = match attempt {
-                Ok(observed) => {
-                    assert_eq!(observed.output, expected);
-                    assert_eq!(observed.exit_code, Some(status));
-                    assert!(observed.failures.is_empty());
-                    json!({"id":id,"engine":"checked-h","status":"PASS"})
-                }
-                Err(error) => {
-                    let message = error.to_string();
-                    incomplete.push(format!("{id}: {message}"));
-                    json!({"id":id,"engine":"checked-h","status":"INCOMPLETE","error":message})
-                }
-            };
-            eprintln!("SHEET_PRODUCTION_REPLAY {row}");
-            rows.push(row);
-            assert_eq!(fs::read(&tape).unwrap(), bytes);
-            assert!(!dir.join("work").exists());
+            for checked in if fresh { vec![false, true] } else { vec![true] } {
+                let engine = if checked { "checked-h" } else { "reference" };
+                eprintln!("SHEET_STARTED production/{id}/{engine}");
+                let attempt = if checked {
+                    hirsel_driver::replay_observations_checked(&path, &tape, Some(1_000_000))
+                } else {
+                    hirsel_driver::replay_observations(&path, &tape, Some(1_000_000))
+                };
+                let row = match attempt {
+                    Ok(observed) => {
+                        assert_eq!(observed.output, expected);
+                        assert_eq!(observed.exit_code, Some(status));
+                        assert!(
+                            observed.failures.is_empty()
+                                && observed.blocked.is_none()
+                                && observed.signaled.is_none()
+                        );
+                        json!({"id":id,"engine":engine,"status":"PASS"})
+                    }
+                    Err(error) => {
+                        let message = error.to_string();
+                        incomplete.push(format!("{id}: {message}"));
+                        json!({"id":id,"engine":engine,"status":"INCOMPLETE","error":message})
+                    }
+                };
+                eprintln!("SHEET_PRODUCTION_REPLAY {row}");
+                rows.push(row);
+                assert_eq!(fs::read(&tape).unwrap(), bytes);
+                assert!(!dir.join("work").exists());
+            }
         }
-        assert_eq!(rows.len(), 18, "nonzero complete selection");
+        assert_eq!(
+            rows.len(),
+            if fresh { 12 } else { 18 },
+            "nonzero complete selection"
+        );
         fs::write(
-            evidence.join("production-checked-replay.json"),
+            evidence.join(if fresh {
+                "fresh-host-replays.json"
+            } else {
+                "production-checked-replay.json"
+            }),
             serde_json::to_vec_pretty(&rows).unwrap(),
         )
         .unwrap();

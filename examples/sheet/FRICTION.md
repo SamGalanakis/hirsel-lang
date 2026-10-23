@@ -154,3 +154,34 @@ small or scripted cells pass.
 
 Handwritten application source:1207lines added,0removed: main361, formula286,
 cells73, graph107, evaluate185, store195. Tests/fixtures/licenses are excluded.
+
+## Fresh host-signal qualification after the owner repair
+
+The interpreter scope repair landed in6993069cc6e9d5d72be5df1c46683d1b1dff4c99.
+Six new ordinary production cancellation recordings use that repaired runtime,
+the stock sheet entry and the same logical jobs4 at LLVM/Cranelift widths1/2/4.
+Every launch retained its stdin readiness handshake and a running/effective=N/
+pending=0 control receipt. The original work mounts were made unavailable.
+Twelve native cross-replays passed complete stdout, exit3 and immutable tape
+checks. All twelve public reference/checked host replays still refused with
+`interpretation is not implemented yet` on the matching repaired runtime. These
+fresh full-app residual cells are INCOMPLETE, distinct from historical binding
+incompatibility. The exact fresh source/std/compiler/image/libs/tapes and errors
+were routed to @agentlang-24 after the original owner step had settled. No
+parallel central repair or semantic acceptance of that refusal is made.
+The fresh host adapter selection uses SHEET_EVAL_31_FRESH_CANCEL=1, expects
+exactly6tapes×2engines, and keeps the historical18tape checked selection separate.
+
+These are new identities. The twelve historical host rows remain runtime-revision
+incompatible under the owner's no-migration ruling; none was relabeled recovered.
+The original dense16M cells and native06 raw-tape archival gap also remain.
+No success/domain/dense or unchanged engine matrix was repeated for this follow-up.
+
+Fresh setup retained its current CLI/image/std sources and ldd-selected libraries.
+The first relocated compiler attempts lacked libLLVM.so.23.1 and stopped at
+loader exit127 before compiling or running the app. Capturing ldd with the pinned
+LLVM library directory supplied the exact portable dependency; the original
+setup logs remain. This was test-tool packaging, not a language/runtime defect
+or a semantic pass; approximately2minutes active effort. Current source/tool/
+generator seals precede subsequent consumers; fresh tapes and receipts are kept
+externally under sheet-eval-31/fresh-cancel-6993069c.

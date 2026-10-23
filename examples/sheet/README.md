@@ -62,3 +62,8 @@ The original capture source/V defect is fixed by86ddbca1; this app keeps its
 scoped callback arrangement. Native06's original remote raw-tape archive is
 incomplete; later representative and width recordings are retained. This is a
 useful application landing with precisely recorded incomplete qualification cells.
+
+After interpreter repair6993069c, six fresh cancellation recordings and twelve
+native replays pass. Their twelve reference/checked host replays still report
+a full-application tooling residual; that exact fresh witness was routed to
+@agentlang-24. It remains separate from the incompatible historical tapes.
