@@ -1,7 +1,7 @@
-"""Deferred Ordered capacity qualification on the real spectral entry.
+"""Ordered capacity qualification on the real spectral entry.
 
 Adapted from pnm_tiles_30/qualify.py's inotify + control-socket discipline.
-Run only after exact-cpu-request-31 is deployed; no worker/topology overrides.
+Run after exact-cpu-rollout-34 client deployment; no worker/topology overrides.
 No waiting timer counts as cancellation. A missing control reply is INCOMPLETE.
 """
 import argparse,ctypes,hashlib,json,os,pathlib,select,signal,socket,struct,subprocess,time

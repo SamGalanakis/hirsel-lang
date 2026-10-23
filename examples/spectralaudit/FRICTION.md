@@ -162,3 +162,8 @@ ordered_qualification.rs. Real-host capacity tapes compare only against their
 own originals. No private runtime worker knob or topology override is used.
 The capped wrapper now inherits the ordinary test action's HIRSEL_JOBS rather
 than reducing an exact4 action's allowed affinity to one CPU.
+
+The assigned std performance owner app-budget-reds-35 acknowledged both exact
+witnesses in 657821. Its current scanner/Markdown/SHA/Chunk candidate does not
+change decimal_seq or json. Both cost obligations remain separate followups;
+no recovery is inferred from that scanner work.
