@@ -1,0 +1,225 @@
+// Alternating reachability starts at unmatched jobs. By Konig's theorem,
+// (jobs minus reached jobs) union reached resources is a minimum cover.
+// A separate verifier checks the primal matching and dual cover witness.
+pub type Certificate {
+  cardinality: u64,
+  pairs: List[model.Pair],
+  job_to_resource: List[Option[u64]],
+  resource_to_job: List[Option[u64]],
+  unmatched: List[u64],
+  reached_jobs: List[u64],
+  reached_resources: List[u64],
+  cover_jobs: List[u64],
+  cover_resources: List[u64],
+}
+
+fn has(items: List[u64], ordinal: u64) -> bool uses {} {
+  for item in items {
+    if item == ordinal {
+      return true
+    }
+  }
+  false
+}
+
+fn ordinals(flags: List[bool], wanted: bool) -> unique List[u64] uses {} {
+  let mut out: List[u64] = []
+  for i in 0u64..list.len(flags) {
+    if flags[i] == wanted {
+      list.push(mut out, i)
+    }
+  }
+  take out
+}
+
+pub fn build(manifest: model.Manifest, maps: matching.Maps) -> Result[
+  unique Certificate,
+  report.Problem
+] uses {} {
+  let j = list.len(manifest.jobs)
+  let r = list.len(manifest.resources)
+  if list.len(maps.job_to_resource) != j || list.len(maps.resource_to_job) != r {
+    return Error(Certificate())
+  }
+  let mut jobs: List[bool] = list.filled(j, false)
+  let mut resources: List[bool] = list.filled(r, false)
+  let mut unmatched: List[u64] = []
+  let mut queue: List[u64] = []
+  let mut pairs: List[model.Pair] = []
+  for job in 0u64..j {
+    match maps.job_to_resource[job] {
+      None() => {
+        jobs[job] = true
+        list.push(mut unmatched, job)
+        list.push(mut queue, job)
+      },
+      Some(slot) => {
+        if slot >= r {
+          return Error(Certificate())
+        }
+        list.push(mut pairs, model.Pair(slot: slot, job: job))
+      },
+    }
+  }
+  let mut cursor = 0u64
+  while cursor < list.len(queue) {
+    let job = queue[cursor]
+    cursor += 1
+    for edge in manifest.allowed {
+      if edge.job != job || !constraints.eligible(manifest, edge) {
+        continue
+      }
+      let slot = edge.slot
+      if maps.job_to_resource[job] == Some(slot) || resources[slot] {
+        continue
+      }
+      resources[slot] = true
+      if let Some(next) = maps.resource_to_job[slot] {
+        if next >= j {
+          return Error(Certificate())
+        }
+        if !jobs[next] {
+          jobs[next] = true
+          list.push(mut queue, next)
+        }
+      }
+    }
+  }
+  Ok(
+    unique Certificate(
+      cardinality: list.len(pairs),
+      pairs: take pairs,
+      job_to_resource: unique maps.job_to_resource,
+      resource_to_job: unique maps.resource_to_job,
+      unmatched: take unmatched,
+      reached_jobs: ordinals(jobs, true),
+      reached_resources: ordinals(resources, true),
+      cover_jobs: ordinals(jobs, false),
+      cover_resources: ordinals(resources, true)
+    )
+  )
+}
+
+// All ordinal lists are strictly increasing, bounding both cardinality and
+// multiplicity without constructing mutable hash sets in the verifier.
+fn ordered(items: List[u64], limit: u64) -> bool uses {} {
+  let mut previous: Option[u64] = None()
+  for item in items {
+    if item >= limit {
+      return false
+    }
+    if let Some(p) = previous {
+      if item <= p {
+        return false
+      }
+    }
+    previous = Some(item)
+  }
+  true
+}
+
+pub fn validate(manifest: model.Manifest, value: Certificate) -> Result[
+  (),
+  report.Problem
+] uses {} {
+  let j = list.len(manifest.jobs)
+  let r = list.len(manifest.resources)
+  if list.len(value.job_to_resource) != j || list.len(value.resource_to_job) != r {
+    return Error(Certificate())
+  }
+  if !ordered(value.unmatched, j) || !ordered(value.reached_jobs, j) || !ordered(
+    value.reached_resources,
+    r
+  ) || !ordered(value.cover_jobs, j) || !ordered(value.cover_resources, r) {
+    return Error(Certificate())
+  }
+  let mut cardinality = 0u64
+  for job in 0u64..j {
+    let reached = has(value.reached_jobs, job)
+    if has(value.cover_jobs, job) == reached {
+      return Error(Certificate())
+    }
+    match value.job_to_resource[job] {
+      None() => {
+        if !has(value.unmatched, job) || !reached {
+          return Error(Certificate())
+        }
+      },
+      Some(slot) => {
+        if slot >= r {
+          return Error(Certificate())
+        }
+        if value.resource_to_job[slot] != Some(job) || !constraints.contains(
+          manifest,
+          job,
+          slot
+        ) || has(value.unmatched, job) {
+          return Error(Certificate())
+        }
+        if cardinality >= list.len(value.pairs) {
+          return Error(Certificate())
+        }
+        if value.pairs[cardinality] != model.Pair(slot: slot, job: job) {
+          return Error(Certificate())
+        }
+        cardinality += 1
+      },
+    }
+  }
+  for slot in 0u64..r {
+    let reached = has(value.reached_resources, slot)
+    if has(value.cover_resources, slot) != reached {
+      return Error(Certificate())
+    }
+    match value.resource_to_job[slot] {
+      None() => {
+        if reached {
+          return Error(Certificate())
+        }
+      },
+      Some(job) => {
+        if job >= j {
+          return Error(Certificate())
+        }
+        if value.job_to_resource[job] != Some(slot) || constraints.disabled(
+          manifest,
+          slot
+        ) {
+          return Error(Certificate())
+        }
+        if reached != has(value.reached_jobs, job) {
+          return Error(Certificate())
+        }
+      },
+    }
+  }
+  // Closure plus equal-size cover proves maximum coverage independently from
+  // the layered search. Recompute reachability as well to reject extraneous
+  // balanced components that could otherwise satisfy closure alone.
+  for edge in manifest.allowed {
+    if !constraints.eligible(manifest, edge) {
+      continue
+    }
+    if !has(value.cover_jobs, edge.job) && !has(value.cover_resources, edge.slot) {
+      return Error(Certificate())
+    }
+  }
+  if cardinality != value.cardinality || cardinality != list.len(value.pairs) || list.len(
+    value.cover_jobs
+  ) + list.len(value.cover_resources) != cardinality {
+    return Error(Certificate())
+  }
+  let maps = matching.Maps(
+    job_to_resource: unique value.job_to_resource,
+    resource_to_job: unique value.resource_to_job
+  )
+  let expected = build(manifest, maps)?
+  if expected.reached_jobs != value.reached_jobs || expected.reached_resources != value.reached_resources {
+    return Error(Certificate())
+  }
+  Ok(())
+}
+
+pub fn certificate_to_json(value: explain.Certificate) -> json.Value uses {} = comptime derive.json_value(
+  shape(explain.Certificate)
+)

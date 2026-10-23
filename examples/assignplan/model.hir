@@ -1,0 +1,166 @@
+// Wire ordinals preserve declaration order; slot and job names are separate
+// namespaces. Only this module turns bounded JSON into immutable typed input.
+pub const INPUT_BYTES: u64 = 32768
+
+pub const MAX_RESOURCES: u64 = 32
+
+pub const MAX_JOBS: u64 = 32
+
+pub const MAX_PAIRS: u64 = 128
+
+pub const MAX_MANIFESTS: u64 = 4
+
+pub const ID_BYTES: u64 = 64
+
+pub type Resource {
+  id: String,
+}
+
+pub type Job {
+  id: String,
+}
+
+pub type Pair {
+  slot: u64,
+  job: u64,
+}
+
+pub type Manifest {
+  resources: List[Resource],
+  jobs: List[Job],
+  allowed: List[Pair],
+  disabled: List[u64],
+}
+
+pub type Batch {
+  version: u64,
+  revision: u64,
+  manifests: List[Manifest],
+}
+
+fn resource_from_json(value: json.Value) -> Result[unique Resource, String] uses {} = comptime derive.from_json(
+  shape(Resource)
+)
+
+fn job_from_json(value: json.Value) -> Result[unique Job, String] uses {} = comptime derive.from_json(
+  shape(Job)
+)
+
+// Wire keyword "resource" remains unchanged; Hirsel's field is slot.
+fn ordinal(value: json.Value, key: String) -> Result[u64, String] uses {} {
+  let Some(member) = json_access.member(value, key) else {
+    return Error("missing ordinal")
+  }
+  let Some(text) = json_access.number_text(member) else {
+    return Error("expected ordinal")
+  }
+  let Ok(number) = u64.parse(text) else {
+    return Error("expected u64 ordinal")
+  }
+  Ok(number)
+}
+
+fn pair_from_json(value: json.Value) -> Result[unique Pair, String] uses {} {
+  Ok(unique Pair(slot: ordinal(value, "resource")?, job: ordinal(value, "job")?))
+}
+
+fn manifest_from_json(value: json.Value) -> Result[unique Manifest, String] uses {} = comptime derive.from_json(
+  shape(Manifest)
+)
+
+fn batch_from_json(value: json.Value) -> Result[unique Batch, String] uses {} = comptime derive.from_json(
+  shape(Batch)
+)
+
+fn count(value: json.Value, key: String, cap: u64, problem: report.Problem) -> Result[
+  u64,
+  report.Problem
+] uses {} {
+  let Some(member) = json_access.member(value, key) else {
+    return Error(Shape())
+  }
+  let Some(items) = json_access.as_array(member) else {
+    return Error(Shape())
+  }
+  let n = list.len(items)
+  if n > cap {
+    return Error(problem)
+  }
+  Ok(n)
+}
+
+// Inspect both collection counts and decoded UTF8 name sizes before derived
+// decoding extends any typed owner. The initial std DOM is input-byte bounded.
+fn identifiers(value: json.Value, key: String, n: u64) -> Result[(), report.Problem] uses {} {
+  let Some(items) = json_access.member(value, key) else {
+    return Error(Shape())
+  }
+  for i in 0u64..n {
+    let Some(item) = json_access.element(items, i) else {
+      return Error(Shape())
+    }
+    let Some(id) = json_access.member(item, "id") else {
+      return Error(Shape())
+    }
+    let Some(text) = json_access.as_text(id) else {
+      return Error(Shape())
+    }
+    if string.byte_len(text) == 0 || string.byte_len(text) > ID_BYTES {
+      return Error(Identifier())
+    }
+  }
+  Ok(())
+}
+
+fn preflight(value: json.Value) -> Result[(), report.Problem] uses {} {
+  let n = count(value, "manifests", MAX_MANIFESTS, Manifests())?
+  let Some(items) = json_access.member(value, "manifests") else {
+    return Error(Shape())
+  }
+  for i in 0u64..n {
+    let Some(item) = json_access.element(items, i) else {
+      return Error(Shape())
+    }
+    let r = count(item, "resources", MAX_RESOURCES, Resources())?
+    let j = count(item, "jobs", MAX_JOBS, JobCount())?
+    let _ = count(item, "allowed", MAX_PAIRS, Pairs())?
+    let _ = count(item, "disabled", MAX_RESOURCES, Disabled())?
+    identifiers(item, "resources", r)?
+    identifiers(item, "jobs", j)?
+  }
+  Ok(())
+}
+
+pub fn decode(take data: unique Bytes) -> Result[unique Batch, report.Problem] uses {} {
+  if bytes.len(data) > INPUT_BYTES {
+    return Error(InputLimit())
+  }
+  let Ok(text) = string.from_bytes(take data) else {
+    return Error(Json())
+  }
+  let Ok(value) = json.parse(take text) else {
+    return Error(Json())
+  }
+  preflight(value)?
+  let Ok(batch) = batch_from_json(value) else {
+    return Error(Shape())
+  }
+  if batch.version != 1 {
+    return Error(Version())
+  }
+  if list.len(batch.manifests) > MAX_MANIFESTS {
+    return Error(Manifests())
+  }
+  // Validate every manifest before scheduling any result or publishing bytes.
+  for i in 0u64..list.len(batch.manifests) {
+    constraints.validate(batch.manifests[i])?
+  }
+  Ok(take batch)
+}
+
+pub fn pair_to_json(value: model.Pair) -> json.Value uses {} {
+  let mut fields: Map[String, json.Value] = map.empty()
+  map.insert(mut fields, "resource", Number(f"{value.slot}"))
+  map.insert(mut fields, "job", Number(f"{value.job}"))
+  Object(take fields)
+}

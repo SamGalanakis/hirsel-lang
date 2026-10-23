@@ -1,0 +1,57 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "assignplan",
+    "version": "0"
+  },
+  "entry": {
+    "module": [],
+    "name": "main"
+  },
+  "sources": [
+    {
+      "module": [
+        "model"
+      ],
+      "path": "model.hir"
+    },
+    {
+      "module": [
+        "constraints"
+      ],
+      "path": "constraints.hir"
+    },
+    {
+      "module": [
+        "matching"
+      ],
+      "path": "matching.hir"
+    },
+    {
+      "module": [
+        "explain"
+      ],
+      "path": "explain.hir"
+    },
+    {
+      "module": [
+        "report"
+      ],
+      "path": "report.hir"
+    },
+    {
+      "module": [],
+      "path": "main.hir"
+    }
+  ],
+  "dependencies": [
+    {
+      "package": {
+        "name": "std",
+        "version": "1"
+      },
+      "manifest": "../../stdlib/std@1/hirsel.json",
+      "expose": []
+    }
+  ]
+}

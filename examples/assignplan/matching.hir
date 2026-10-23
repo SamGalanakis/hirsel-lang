@@ -1,0 +1,186 @@
+// Hopcroft-Karp, NetworkX matching.py:120-182, 9d866a5f (BSD-3-Clause).
+// Jobs form the left partition. Dense owned arrays replace dictionaries;
+// 33 is infinity (strictly greater than every admitted path length).
+// Declaration-order scans replace Python set/dict traversal; no lexicographic
+// optimality is claimed. Explicit partition avoids bipartition inference.
+pub type Maps {
+  job_to_resource: unique List[Option[u64]],
+  resource_to_job: unique List[Option[u64]],
+}
+
+type Layer {
+  distance: unique List[u64],
+  shortest: u64,
+}
+
+fn empty(jobs: u64, resources: u64) -> unique Maps uses {} {
+  let mut left: unique List[Option[u64]] = unique []
+  let mut right: unique List[Option[u64]] = unique []
+  for i in 0u64..jobs {
+    list.push(mut left, None())
+  }
+  for i in 0u64..resources {
+    list.push(mut right, None())
+  }
+  unique Maps(job_to_resource: take left, resource_to_job: take right)
+}
+
+// One bounded BFS queue entry per job. The free-slot sentinel is represented
+// by shortest, so it never becomes an out-of-range matching-array access.
+fn layers(manifest: model.Manifest, maps: Maps) -> unique Layer uses {} {
+  let n = list.len(manifest.jobs)
+  let mut distance: unique List[u64] = unique []
+  let mut queue: unique List[u64] = unique []
+  for job in 0u64..n {
+    if maps.job_to_resource[job] == None() {
+      list.push(mut distance, 0)
+      list.push(mut queue, job)
+    } else {
+      list.push(mut distance, 33)
+    }
+  }
+  let mut shortest = 33u64
+  let mut cursor = 0u64
+  while cursor < list.len(queue) {
+    let job = queue[cursor]
+    cursor += 1
+    let depth = distance[job]
+    if depth >= shortest {
+      continue
+    }
+    for edge in manifest.allowed {
+      if edge.job != job || !constraints.eligible(manifest, edge) {
+        continue
+      }
+      match maps.resource_to_job[edge.slot] {
+        None() => {
+          shortest = depth + 1
+        },
+        Some(next) => {
+          if distance[next] == 33 {
+            distance[next] = depth + 1
+            list.push(mut queue, next)
+          }
+        },
+      }
+    }
+  }
+  unique Layer(distance: take distance, shortest: shortest)
+}
+
+// Both matching owners are updated within one lexical mutable callback. The
+// caller cannot observe a half-installed alternating path. Layers are private
+// search state; borrowed manifest rows remain immutable throughout recursion.
+fn paired[R](
+  mut maps: unique Maps,
+  mut layer: unique Layer,
+  body: fn(mut current: unique Maps, mut search: unique Layer) -> R uses {}
+) -> R uses {} {
+  body(mut maps, mut layer)
+}
+
+fn augment(
+  manifest: model.Manifest,
+  job: u64,
+  mut maps: unique Maps,
+  mut layer: unique Layer
+) -> bool uses {} {
+  let depth = layer.distance[job]
+  for edge in manifest.allowed {
+    if edge.job != job || !constraints.eligible(manifest, edge) {
+      continue
+    }
+    let slot = edge.slot
+    let mut found = false
+    match maps.resource_to_job[slot] {
+      None() => {
+        found = depth + 1 == layer.shortest
+      },
+      Some(next) => {
+        if layer.distance[next] == depth + 1 {
+          found = augment(manifest, next, mut maps, mut layer)
+        }
+      },
+    }
+    if found {
+      maps.resource_to_job[slot] = Some(job)
+      maps.job_to_resource[job] = Some(slot)
+      return true
+    }
+  }
+  layer.distance[job] = 33
+  false
+}
+
+pub fn maximum(manifest: model.Manifest) -> Result[unique Maps, report.Problem] uses {} {
+  constraints.validate(manifest)?
+  let mut maps = empty(list.len(manifest.jobs), list.len(manifest.resources))
+  while true {
+    let mut layer = layers(manifest, maps)
+    if layer.shortest == 33 {
+      break
+    }
+    let mut changed = false
+    for job in 0u64..list.len(manifest.jobs) {
+      if maps.job_to_resource[job] == None() {
+        let found = paired(
+          mut maps,
+          mut layer,
+          fn(mut current: unique Maps, mut search: unique Layer) -> bool uses {} {
+            augment(manifest, job, mut current, mut search)
+          }
+        )
+        if found {
+          changed = true
+        }
+      }
+    }
+    // A valid finite layer always augments. Preserve a distinct internal error
+    // rather than hiding an inconsistent state behind a partial allocation.
+    if !changed {
+      return Error(Certificate())
+    }
+  }
+  Ok(take maps)
+}
+
+pub fn one(manifest: model.Manifest) -> Result[
+  unique explain.Certificate,
+  report.Problem
+] uses {} {
+  let maps = maximum(manifest)?
+  let certificate = explain.build(manifest, maps)?
+  explain.validate(manifest, certificate)?
+  Ok(take certificate)
+}
+
+// map_all freezes the input and mapper. Its nested scope joins all children;
+// owned batch results are aggregated in manifest order before serialization.
+// Grain limits the number of independent child chunks to the requested jobs.
+pub fn batch(tasks: Tasks, take manifests: List[model.Manifest], jobs: u64) -> Result[
+  unique List[explain.Certificate],
+  report.Problem
+] {
+  if jobs == 0 || jobs > 4 {
+    return Error(Jobs())
+  }
+  let count = list.len(manifests)
+  if count > model.MAX_MANIFESTS {
+    return Error(Manifests())
+  }
+  let grain = if count == 0 {
+    1u64
+  } else {
+    (count + jobs - 1) / jobs
+  }
+  let results = task.map_all(
+    tasks,
+    take manifests,
+    grain,
+    fn(item: model.Manifest) -> Result[explain.Certificate, report.Problem] uses {} {
+      let certificate = one(item)?
+      Ok(take certificate)
+    }
+  )?
+  Ok(unique results)
+}

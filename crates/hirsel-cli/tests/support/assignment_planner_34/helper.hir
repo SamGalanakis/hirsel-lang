@@ -1,0 +1,69 @@
+// Additional publication and adversarial certificate controls. These do not
+// stand in for a complete-main CLI workflow or an original over-budget cell.
+pub fn main(rt: Io, args: Args) -> Result[(), FileError] {
+  let Ok(d) = io.dir(rt, path.of("data")) else {
+    return Error(NotGranted())
+  }
+  let data = file.read_bytes(d, path.of("probe"))?
+  if bytes.len(data) == 16384 {
+    failure.check(report.publish(d, path.of("output"), data) == Ok(()), Arithmetic())
+    failure.check(file.read_bytes(d, path.of("output"))? == data, Arithmetic())
+  } else {
+    failure.check(bytes.len(data) == 16385, Arithmetic())
+    failure.check(
+      report.publish(d, path.of("output"), data) == Error(OutputLimit()),
+      Arithmetic()
+    )
+    failure.check(file.read_bytes(d, path.of("output"))? == b"preserve", Arithmetic())
+  }
+  let manifest = model.Manifest(
+    resources: [model.Resource(id: "r")],
+    jobs: [model.Job(id: "j")],
+    allowed: [model.Pair(slot: 0, job: 0)],
+    disabled: []
+  )
+  let good = match matching.one(manifest) {
+    Ok(value) => take value,
+    Error(_) => {
+      failure.check(false, Arithmetic())
+      return Ok(())
+    },
+  }
+  let mut inverse = unique copy good
+  inverse.resource_to_job = [None()]
+  failure.check(
+    explain.validate(manifest, inverse) == Error(Certificate()),
+    Arithmetic()
+  )
+  let mut count = unique copy good
+  count.cardinality = 0
+  failure.check(explain.validate(manifest, count) == Error(Certificate()), Arithmetic())
+  let mut edge = unique copy good
+  edge.job_to_resource = [Some(1)]
+  failure.check(explain.validate(manifest, edge) == Error(Certificate()), Arithmetic())
+  let mut reached = unique copy good
+  reached.reached_jobs = [0]
+  failure.check(
+    explain.validate(manifest, reached) == Error(Certificate()),
+    Arithmetic()
+  )
+  let mut cover = unique copy good
+  cover.cover_jobs = []
+  failure.check(explain.validate(manifest, cover) == Error(Certificate()), Arithmetic())
+  let nonmaximum = explain.Certificate(
+    cardinality: 0,
+    pairs: [],
+    job_to_resource: [None()],
+    resource_to_job: [None()],
+    unmatched: [0],
+    reached_jobs: [0],
+    reached_resources: [],
+    cover_jobs: [],
+    cover_resources: []
+  )
+  failure.check(
+    explain.validate(manifest, nonmaximum) == Error(Certificate()),
+    Arithmetic()
+  )
+  Ok(())
+}

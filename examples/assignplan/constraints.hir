@@ -1,0 +1,104 @@
+// A borrowed row predicate; no row clone, authority or mutable captured owner.
+pub type Eligibility[T] {
+  accepts: fn(T, List[u64]) -> bool uses {},
+}
+
+pub fn accepts[T](predicate: Eligibility[T], row: T, excluded: List[u64]) -> bool uses {} {
+  predicate.accepts(row, excluded)
+}
+
+pub fn disabled(manifest: model.Manifest, slot: u64) -> bool uses {} {
+  for ordinal in manifest.disabled {
+    if ordinal == slot {
+      return true
+    }
+  }
+  false
+}
+
+pub fn eligible(manifest: model.Manifest, pair: model.Pair) -> bool uses {} {
+  let predicate: Eligibility[model.Pair] = Eligibility(
+    accepts: fn(row: model.Pair, excluded: List[u64]) -> bool uses {} {
+      for ordinal in excluded {
+        if ordinal == row.slot {
+          return false
+        }
+      }
+      true
+    }
+  )
+  accepts(predicate, pair, manifest.disabled)
+}
+
+pub fn contains(manifest: model.Manifest, job: u64, slot: u64) -> bool uses {} {
+  for pair in manifest.allowed {
+    if pair.job == job && pair.slot == slot && eligible(manifest, pair) {
+      return true
+    }
+  }
+  false
+}
+
+pub fn validate(manifest: model.Manifest) -> Result[(), report.Problem] uses {} {
+  let r = list.len(manifest.resources)
+  let j = list.len(manifest.jobs)
+  let e = list.len(manifest.allowed)
+  let d = list.len(manifest.disabled)
+  if r > model.MAX_RESOURCES {
+    return Error(Resources())
+  }
+  if j > model.MAX_JOBS {
+    return Error(JobCount())
+  }
+  if e > model.MAX_PAIRS {
+    return Error(Pairs())
+  }
+  if d > model.MAX_RESOURCES {
+    return Error(Disabled())
+  }
+  for i in 0u64..r {
+    let name = manifest.resources[i].id
+    if string.byte_len(name) == 0 || string.byte_len(name) > model.ID_BYTES {
+      return Error(Identifier())
+    }
+    for k in 0u64..i {
+      if manifest.resources[k].id == name {
+        return Error(Duplicate())
+      }
+    }
+  }
+  for i in 0u64..j {
+    let name = manifest.jobs[i].id
+    if string.byte_len(name) == 0 || string.byte_len(name) > model.ID_BYTES {
+      return Error(Identifier())
+    }
+    for k in 0u64..i {
+      if manifest.jobs[k].id == name {
+        return Error(Duplicate())
+      }
+    }
+  }
+  for i in 0u64..e {
+    let pair = manifest.allowed[i]
+    if pair.slot >= r || pair.job >= j {
+      return Error(Endpoint())
+    }
+    for k in 0u64..i {
+      if manifest.allowed[k] == pair {
+        return Error(Duplicate())
+      }
+    }
+  }
+  for i in 0u64..d {
+    let slot = manifest.disabled[i]
+    if slot >= r {
+      return Error(Endpoint())
+    }
+    for k in 0u64..i {
+      if manifest.disabled[k] == slot {
+        return Error(Duplicate())
+      }
+    }
+  }
+  Ok(())
+}

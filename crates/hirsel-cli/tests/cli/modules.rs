@@ -119,3 +119,4 @@ mod discrete_simulation_33;
 mod policy_evaluator_33;
 mod state_model_checker_34;
 mod geofence_audit_34;
+mod assignment_planner_34;
