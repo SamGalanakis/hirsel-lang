@@ -1,5 +1,10 @@
 # Ordered retirement protocol
 
+Production Ordered is enabled for validated cooperative FIFO runs. The initial
+protocol and adapter notes below record the implementation sequence; their
+intermediate gates were closed by the Integration status and Production
+acceptance sections.
+
 The protocol in `hirsel-rt/src/ordered` implements design section 4.3's
 logical frontier independently of fiber dispatch. `Frontier` accepts owned
 operations and exact R4 stretches, proves the four early-commit rules, and
@@ -312,8 +317,8 @@ Canonical JSONL adds the `domain` resource kind with `owner` and `label`, and
 publishes its creation before its first access. Controls vary native keys and
 handles across widths 1/2/4/8 and reorder off/auto, exercise parked discovery,
 file aliases and split-direction use, and reject changed or missing metadata.
-They extend the existing host graph and saved-wait protocol; production
-activation, terminal cuts and full differential qualification remain gated.
+They extend the existing host graph and saved-wait protocol. Terminal cuts
+and full differential qualification passed before production activation.
 
 ## Host terminal ownership
 
@@ -393,7 +398,7 @@ Focused native controls exercise real shared-object siblings at widths 2/4/8
 under shared and dedicated commit, including fallback, periodic recovery and
 refusal of conflicting early mutation. The existing allowance, envelope,
 fuel/memory order, stop and dedicated-loan controls retain their bounds.
-Production qualification remains disabled pending the remaining acceptance gates.
+These controls and the measured speed gate passed before production activation.
 
 ## Prior art and deviations
 
@@ -447,8 +452,8 @@ all SoA fields, including scalars absent from holder scans. Checked allocation
 bounds, framing, live counts, tags, work and output limits reject incomplete
 images. Spare capacity, inactive arms, native addresses, count words and
 padding never enter canonical values. This does not expand holder/type
-admission or change the four early-retirement rules. Production qualification
-remains a separate gate.
+admission or change the four early-retirement rules. These value carriers
+passed the final production acceptance gate.
 
 
 ## Production acceptance
