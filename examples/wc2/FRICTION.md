@@ -14,7 +14,7 @@ The table preserves the original incidents; the recipes below describe current r
 | Read buffered lines inside a collection loop. | [Exact output](repros/incident-6.txt) | Fixed by [natural-loop origin expiration](https://github.com/SamGalanakis/hirsel-lang/commit/8d85aeac8cb3c32b8669cc0550906234c18bf0a0); [application file loop restored](https://github.com/SamGalanakis/hirsel-lang/commit/a19ff14b9727354246a86d29663c28c62c80739a). The unchanged [12-line repro](repros/invalid-origin.hir) and restored app pass H, LLVM and Cranelift in the [exact-source regression](../../crates/hirsel-cli/tests/examples.rs); independent V still rejects forged early expiry. Verified 2026-10-22. | 4 | bug (fixed) |
 | Named a local `counts`, also the name of an @test. | [Exact output](repros/incident-7.txt) | Renamed test `count_words`; LANG-4 applies across the entire module. [Minimal program](repros/incident-7.hir). | 0.5 | language friction |
 | Took a record field directly. | [Exact output](repros/incident-8.txt) | Destructured the whole Scan with `let Scan(..) = take scan`; OWN-8. [Minimal program](repros/incident-8.hir). | 0.5 | language friction |
-| Pushed strings from a taken nested sequence into a unique accumulator. | [Exact output](repros/incident-9.txt) | Even `for line in take scan_lines` lends each element; `unique line` copies it independently and preserves the accumulator contract; MODE-2. [Minimal program](repros/incident-9.hir). | 0.5 | language friction |
+| Pushed strings from a taken nested sequence into a unique accumulator. | [Exact output](repros/incident-9.txt) | Weak `List[String]` rows need `unique line` for a unique destination. The app now stores strong `List[unique String]` rows and consumes its currently unshared scan list with `take line`; MODE-2. [Minimal program](repros/incident-9.hir). | 0.5 | language friction |
 | Expected no implicit text when main returns Error, following the tour. | [Exact output](repros/returned-error.txt): `error: ()`, exit 1. | PROG-3 correctly specifies the launcher report without a stderr grant. Fixed the stale tour sentence; [minimal program](repros/returned-error.hir). | 0.5 | doc gap |
 | Registered a new example with dynamically named `repository_manifest` paths, as tasks does. | `called `Result::unwrap()` on an `Err` value: Os { code: 2, kind: NotFound, message: "No such file or directory" }` in the remote harness (five selected tests). | Single-source examples now use `Example::new` with explicit `include_str!` inputs; added the registration note to examples/README.md. | 0.5 | doc gap |
 
@@ -110,9 +110,10 @@ pub fn main() -> Result[(), ()] {
 ```
 
 [Appending `copy line`](repros/incident-9.hir) loses the unique accumulator proof
-(MODE-2). Taking the sequence does not take each counted row: iteration lends
-rows. `unique line` makes an independent deep copy; `copy line` may share storage.
-Retain that explicit copy when the destination must remain unique:
+(MODE-2). A borrowed loop lends its rows. A consuming loop transfers owned rows,
+but `List[String]` supplies an ordinary String element contract, even when the
+collection itself is currently unique. For that weak contract, retain the deep
+copy when the destination must remain unique:
 
 ```hirsel
 fn need(take xs: unique List[String]) {}
@@ -128,14 +129,60 @@ pub fn main() -> Result[(), ()] {
 }
 ```
 
-This also explains `unique parts[0]` in `remember`, `unique parsed.positional`,
-and `previous = Some(unique line)`: each copies borrowed counted data into an
-independent owner. Explicit unique list bindings, `take lines`, the unique
-`Scan.lines` field and `Result[unique Scan, AppError]` declare and transfer the
-handback needed by sorting; they are retained. `read_stdin` remains a useful
-helper, not a workaround for InvalidOrigin. The file loop is already inline;
-[its original nested-loop repro](repros/invalid-origin.hir) is an accepted bug
-regression, not an intentional rejection.
+When the producer controls its rows, it can establish a strong stored element
+contract and transfer each row from a currently unshared owner instead:
+
+```hirsel
+fn need(take xs: unique List[unique String]) {}
+
+pub fn main() -> Result[(), ()] {
+  let source: unique List[unique String] = ["a"]
+  let mut out: unique List[unique String] = []
+  for line in take source {
+    list.push(mut out, take line)
+  }
+  need(take out)
+  Ok(())
+}
+```
+
+`wc2` uses this second recipe between `Scan.lines` and the consuming accumulator.
+The complete producer path agrees on `List[unique String]`: `remember`, `collect`,
+`read_stdin`'s storage, file storage `found`, `Scan.lines`, the final accumulator
+and the sorting input. Mutable element contracts are invariant; changing only
+the receiving loop is insufficient. These annotations state requirements, not
+proof that no sharing occurred. A live `let snapshot = copy source` weakens
+nested uniqueness even with the strong annotation; taking `source` does not
+consume `snapshot`, and the explicit unique receiver rejects MODE-2. Use a
+permitted explicit deep copy or ordinary copy-on-write mutation in that case.
+Do not assume ending a counted copy restores the original proof.
+
+Every remaining ownership workaround in the application is intentional:
+
+- `@preserves_unique(lines)` remains on both helpers for checked mutable handback;
+  sorting still needs current unique storage after those calls.
+- `string.split(unique line, "\n")` copies the helper's borrowed input into an
+  independent owner. `unique parts[0]` deep-copies a borrowed projected split
+  part; strengthening the stored row does not permit a partial move.
+- `unique parsed.positional` makes the borrowed CLI argument list independent.
+- `previous = Some(unique line)` saves independent text from the borrowed sorted
+  loop. The formatted output rows and `string.join` still construct output;
+  `output_lines: List[String]` needs no stronger row for scan transfer.
+- Whole `Scan` destructuring avoids OWN-8 partial moves. Explicit `take` of its
+  fields, scan list, yielded rows and accumulators transfers their owners.
+  `Result[unique Scan, AppError]` and `Ok(Scan(...))` retain the unique handback.
+- Empty storage and flags still need complete type context. `?` followed by
+  `Ok(())` completes Result functions; it does not wrap success automatically.
+
+`read_stdin` remains a useful helper. The file loop is inline;
+[its original nested-loop repro](repros/invalid-origin.hir) remains a fixed bug
+regression. The [source regression](../../crates/hirsel-cli/tests/support/wc2_unique_row_contract_21/app.rs)
+compares the weak and strong application bodies through interpreter, H, LLVM
+and Cranelift. Its driver supplies argument lists and creates small files via
+the language's file API because H's existing fixture has empty Args and files;
+CLI package and entry tests separately cover the shipped launch interface.
+It covers empty, single, multiple and duplicate inputs, flag errors and a file
+error after collecting rows. This is correctness dogfood; no speedup is claimed.
 
 ### Result completion
 

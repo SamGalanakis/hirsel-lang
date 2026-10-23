@@ -3242,3 +3242,6 @@ fn binary_pipe_recipe() {
     assert!(output.status.success(), "{output:?}");
     println!("{}", String::from_utf8_lossy(&output.stdout));
 }
+
+#[path = "support/wc2_unique_row_contract_21/modules.rs"]
+mod wc2_unique_row_contract_21;

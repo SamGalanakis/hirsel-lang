@@ -20,8 +20,12 @@ host-exhaustion experiment is claimed here.
 The language contracts remain explicit: empty lists need element context;
 `unique pending` snapshots buffered bytes before reset; `unique row` copies a
 borrowed counted loop item into owned output. `take matches` transfers the list.
-Taking a source sequence does not generally take each counted element, unlike
-Rust `Vec::into_iter`; the element contract controls the Hirsel loop. Mutable
+A consuming loop transfers owned elements, but its declared element contract
+controls their deep uniqueness: `List[String]` does not supply `unique String`.
+A producer using `List[unique String]` can transfer strong rows from a currently
+unshared source; the annotation alone cannot restore evidence after copying.
+Logtail retains its borrowed-row copy; [wc2](../wc2/FRICTION.md#whole-value-handback-and-row-copies)
+shows both contracts. Mutable
 buffer/offset parameters return their state through handback, while `?` and
 `Ok(...)` handle Result completion. These are intentional ownership and prefix
 inference recipes, not worker-start workarounds.

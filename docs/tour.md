@@ -294,8 +294,13 @@ Expected:
 
 The [wc2 ownership recipes](../examples/wc2/FRICTION.md#current-executable-recipes)
 show checked `@preserves_unique` helper promises, whole-record handback and
-explicit `unique` row copies. Native loans do not infer helper contracts, and
-taking a sequence still lends its counted elements during iteration.
+explicit `unique` copies of borrowed rows. Native loans do not infer helper
+contracts. Consuming a sequence transfers owned elements with their declared
+element contract: `unique List[String]` alone does not supply unique String
+rows. A currently unshared `unique List[unique String]` producer can transfer
+strong rows with `for line in take source` and `take line`. Copying the source
+weakens that evidence even when the annotation remains; an annotation cannot
+prove away live aliases.
 
 ## Errors and variant mappers
 

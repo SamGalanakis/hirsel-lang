@@ -29,12 +29,12 @@ fn count(text: String) -> Counts {
 }
 
 @preserves_unique(lines)
-fn remember(mut lines: List[String], line: String) {
+fn remember(mut lines: List[unique String], line: String) {
   let parts = string.split(unique line, "\n")
   list.push(mut lines, unique parts[0])
 }
 
-fn sorted_unique(take lines: unique List[String]) -> String {
+fn sorted_unique(take lines: unique List[unique String]) -> String {
   let mut sorted = take lines
   list.sort(mut sorted, string.compare)
   let mut output_lines: List[String] = []
@@ -50,11 +50,11 @@ fn sorted_unique(take lines: unique List[String]) -> String {
 
 type Scan {
   counts: Counts,
-  lines: unique List[String],
+  lines: unique List[unique String],
 }
 
 @preserves_unique(lines)
-fn collect(mut counts: Counts, mut lines: List[String], line: String, sorted_mode: bool) {
+fn collect(mut counts: Counts, mut lines: List[unique String], line: String, sorted_mode: bool) {
   let n = count(line)
   counts.lines += n.lines
   counts.words += n.words
@@ -67,7 +67,7 @@ fn collect(mut counts: Counts, mut lines: List[String], line: String, sorted_mod
 fn read_stdin(input: Stdin, sorted_mode: bool) -> Result[unique Scan, AppError] {
   let mut reader = bufio.new(4096)
   let mut counts = Counts(lines: 0, words: 0, bytes: 0)
-  let mut lines: unique List[String] = []
+  let mut lines: unique List[unique String] = []
   while let Some(line) = bufio.stdin_read_line(input, mut reader, 1048576)? {
     collect(mut counts, mut lines, line, sorted_mode)
   }
@@ -101,7 +101,7 @@ fn execute(rt: Io, args: Args) -> Result[(), AppError] {
   }
   let sorted_mode = map.contains(parsed.flags, "unique")
   let mut total = Counts(lines: 0, words: 0, bytes: 0)
-  let mut lines: unique List[String] = []
+  let mut lines: unique List[unique String] = []
   for source in take sources {
     let scan = if source == "-" {
       read_stdin(io.stdin(rt)?, sorted_mode)?
@@ -110,7 +110,7 @@ fn execute(rt: Io, args: Args) -> Result[(), AppError] {
       let mut f = file.open(d, path.of(source))?
       let mut reader = bufio.new(4096)
       let mut counts = Counts(lines: 0, words: 0, bytes: 0)
-      let mut found: unique List[String] = []
+      let mut found: unique List[unique String] = []
       while let Some(line) = bufio.file_read_line(d, mut f, mut reader, 1048576)? {
         collect(mut counts, mut found, line, sorted_mode)
       }
@@ -120,8 +120,8 @@ fn execute(rt: Io, args: Args) -> Result[(), AppError] {
     total.lines += scan_counts.lines
     total.words += scan_counts.words
     total.bytes += scan_counts.bytes
-    for line in scan_lines {
-      list.push(mut lines, unique line)
+    for line in take scan_lines {
+      list.push(mut lines, take line)
     }
   }
   if sorted_mode {
@@ -166,7 +166,7 @@ fn buffered_file(t: Test) -> Result[(), AppError] {
   let d = test.dir(t, [(path.of("in"), b"a\na\nb")])
   let mut f = file.open(d, path.of("in"))?
   let mut r = bufio.new(2)
-  let mut lines: unique List[String] = []
+  let mut lines: unique List[unique String] = []
   while let Some(line) = bufio.file_read_line(d, mut f, mut r, 16)? {
     remember(mut lines, line)
   }
