@@ -928,7 +928,8 @@ pub(crate) fn test_waits(ctx: *mut TaskCtx) -> String {
 /// unless other tasks finish it.
 pub(crate) fn park_final(ctx: *mut TaskCtx) -> ! {
     // SAFETY: the context is live; no poll ends this wait.
-    unsafe { block(&mut *ctx, Wait::Final, false, 0) };
+    let site = unsafe { (*ctx).operation_site };
+    unsafe { block(&mut *ctx, Wait::Final, false, site) };
     fault("a task parked for good was resumed")
 }
 
@@ -1890,7 +1891,14 @@ pub(crate) unsafe fn blocked_waits(ctx: *mut TaskCtx) -> Vec<hirsel_run_schema::
                 ("runner.call", vec![])
             }
             Wait::Host { token } => ("host request", vec![token]),
-            Wait::Final => ("free.final", vec![]),
+            Wait::Final => (
+                if unsafe { (*ctx).run_ref().free_replay } {
+                    "free.cut"
+                } else {
+                    "free.final"
+                },
+                vec![],
+            ),
             Wait::Retry { .. } => ("free.retry", vec![]),
             Wait::Gate { gate } => ("foreign.gate", vec![u64::from(gate)]),
             Wait::Pool => ("foreign.pool", vec![]),

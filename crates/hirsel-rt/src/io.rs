@@ -4523,6 +4523,32 @@ pub unsafe extern "C" fn hirsel_rt_v2_instant_checked_add(
     unsafe { out.write(value) };
     crate::STATUS_OK
 }
+/// Site-carrying variant of the stable clock wait export. Existing callers keep
+/// their ABI. The ordinary checked FnAbi carries these two inert source codes;
+/// no compiler helper invocation or additional semantic operation is introduced.
+/// # Safety
+/// As `hirsel_rt_v2_clock_sleep_until`; the source codes belong to this program.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_clock_sleep_until_at_site(
+    ctx: *mut crate::TaskCtx,
+    _caller_site: u64,
+    operation_site: u64,
+    destination: *mut u8,
+    out: *mut UnitResult,
+    clock: *const u64,
+    deadline: *const u64,
+) -> u8 {
+    // Own the semantic entry before inspecting replay state or suspending.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
+    let replay = unsafe { (*ctx).run_ref().free_replay };
+    let previous =
+        replay.then(|| unsafe { std::mem::replace(&mut (*ctx).operation_site, operation_site) });
+    let status = unsafe { hirsel_rt_v2_clock_sleep_until(ctx, destination, out, clock, deadline) };
+    if let Some(previous) = previous {
+        unsafe { (*ctx).operation_site = previous };
+    }
+    status
+}
 /// # Safety
 /// Context is exclusively bound, the clock and Instant words readable and the result
 /// writable. Without a cooperative scheduler the thread blocks until the deadline.

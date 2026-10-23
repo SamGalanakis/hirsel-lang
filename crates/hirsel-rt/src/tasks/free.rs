@@ -274,7 +274,14 @@ pub(super) unsafe fn check_quiet_without_sources(run: *mut crate::context::RunSh
                             .map(|word| u64::from(*word as u32))
                             .collect(),
                     ),
-                    Wait::Final => ("free.final", vec![]),
+                    Wait::Final => (
+                        if run.free_replay {
+                            "free.cut"
+                        } else {
+                            "free.final"
+                        },
+                        vec![],
+                    ),
                     Wait::Retry { .. } => ("free.retry", vec![]),
                     Wait::Gate { gate } => ("foreign.gate", vec![u64::from(gate)]),
                     Wait::Pool => ("foreign.pool", vec![]),

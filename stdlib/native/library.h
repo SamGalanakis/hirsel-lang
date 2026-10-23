@@ -59,6 +59,7 @@ uint8_t hirsel_rt_v2_instant_ticks(hirsel_rt_v2_ctx*, uint64_t*, const uint64_t*
 typedef struct { uint32_t tag, padding; uint64_t ticks; } hirsel_rt_v2_instant_option;
 uint8_t hirsel_rt_v2_instant_checked_add(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_instant_option*, const uint64_t*, const uint64_t*, uint64_t);
 /* Result[(), WaitError]: error 0 is Clock(ClockError), 1 is Canceled(CancelCause); the payload ordinal follows. */
+uint8_t hirsel_rt_v2_clock_sleep_until_at_site(hirsel_rt_v2_ctx*, uint64_t, uint64_t, void*, void*, const uint64_t*, const uint64_t*);
 uint8_t hirsel_rt_v2_clock_sleep_until(hirsel_rt_v2_ctx*, void*, void*, const uint64_t*, const uint64_t*);
 uint8_t hirsel_rt_v2_io_random(hirsel_rt_v2_ctx*, void*, void*, const uint64_t*);
 uint8_t hirsel_rt_v2_io_telemetry(hirsel_rt_v2_ctx*, void*, void*, const uint64_t*);

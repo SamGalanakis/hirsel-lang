@@ -744,6 +744,7 @@ pub const ENTRIES: &[Entry] = &[
     ops("hirsel_rt_v2_arg_text", &["arg.read"]),
     entry("hirsel_rt_v2_instant_checked_add", Local),
     ops("hirsel_rt_v2_clock_sleep_until", HOST),
+    ops("hirsel_rt_v2_clock_sleep_until_at_site", HOST),
     ops("hirsel_rt_v2_random_bytes", HOST),
     ops("hirsel_rt_v2_instant_ticks", HOST),
     ops("hirsel_rt_v2_test_check", HOST),

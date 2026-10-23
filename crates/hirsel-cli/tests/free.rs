@@ -2793,3 +2793,168 @@ pub fn main(rt: Io, args: Args) -> Result[(), E] {{
         }
     }
 }
+
+#[test]
+fn f1_external_stop_during_host_wait_replays_exact_terminal_and_projection() {
+    if !hirsel_rt::free_driver::admission_enabled() {
+        return;
+    }
+    let scratch = Scratch::new("f1-external-stop-host-wait");
+    let program = scratch.path("main.hir");
+    std::fs::write(&program, r#"pub type E = Grant(GrantError) | Output(OutputError) | Clock(ClockError) | Wait(WaitError)
+pub fn main(rt: Io, args: Args) -> Result[(), E] {
+  let out = io.stdout(rt) ? Grant
+  let clock = io.monotonic_clock(rt) ? Grant
+  let now = clock.monotonic(clock) ? Clock
+  out.print(out, "before stop\n") ? Output
+  let later = match instant.checked_add(clock, now, 30000000000u64) { Some(v) => v, None() => now }
+  clock.sleep_until(clock, later) ? Wait
+  out.print(out, "unadmitted suffix\n") ? Output
+  Ok(())
+}
+"#).unwrap();
+    // Follow cli/budgets.rs's standalone RunControl stop fixture. The source
+    // launcher intentionally forwards only selected environment channels.
+    let executable = scratch.path("program");
+    let mut build = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+    build.arg("build").arg(&program).arg("-o").arg(&executable);
+    let built = bounded_output(&mut build, &program, "external stop standalone build");
+    assert!(built.status.success(), "{built:?}");
+    for level in ["record", "durable"] {
+        let tape = scratch.path(level);
+        let report = scratch.path("projection");
+        let grants = format!(
+            r#"{{"io":{{"stdout":"stdout.bytes@1","tasks":"tasks.free@1","monotonic_clock":"clock.monotonic.ns@1","dirs":[]}},"args":[],"placement":{{"cores":1}},"recording":"{level}"}}"#
+        );
+        let mut command = Command::new(&executable);
+        command
+            .arg("--hirsel-record")
+            .arg(&tape)
+            .args(["--hirsel-grants", &grants])
+            .env("HIRSEL_RT_STOP_AFTER_MS", "200")
+            .env(hirsel_rt::free_replay::Report::VAR, &report);
+        f1_permits(&mut command, 1);
+        let live = bounded_output(
+            &mut command,
+            &program,
+            &format!("external stop {level} live"),
+        );
+        assert_eq!(
+            live.status.code(),
+            Some(hirsel_run_schema::exit::ENVIRONMENTAL),
+            "{live:?}"
+        );
+        assert_eq!(live.stdout, b"before stop\n", "{live:?}");
+        assert_eq!(
+            live.stderr, b"hirsel-rt: environmental failure: its place stopped the run\n",
+            "{live:?}"
+        );
+        let bytes = std::fs::read(&tape).unwrap();
+        let parsed = hirsel_free::tape::parse(&bytes).unwrap();
+        assert!(
+            parsed
+                .end
+                .as_ref()
+                .unwrap()
+                .outcome
+                .starts_with("native-stop-v2/")
+        );
+        let root = parsed.cut[&Vec::new()];
+        assert!(
+            matches!(root.phase, hirsel_free::phase::Phase::Ended(_)),
+            "{root:?}"
+        );
+        let records = hirsel_free::record::decode(&parsed.logs[&Vec::new()]).unwrap();
+        assert!(records.iter().any(
+            |r| matches!(r, hirsel_free::record::Record::Prepared { op, .. } if *op == root.op)
+        ));
+        assert!(!records.iter().any(
+            |r| matches!(r, hirsel_free::record::Record::Completion { op, .. } if *op == root.op)
+        ));
+        let projection = std::fs::read_to_string(&report).unwrap();
+        for engine in ENGINES {
+            let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+            command
+                .arg("run")
+                .args(engine)
+                .arg(&program)
+                .arg("--replay")
+                .arg(&tape)
+                .args(["--cores", "1"])
+                .env(hirsel_rt::free_replay::Report::VAR, &report);
+            f1_permits(&mut command, 1);
+            let replay = bounded_output(
+                &mut command,
+                &program,
+                &format!("external stop {level} replay {engine:?}"),
+            );
+            assert_eq!(replay.status.code(), live.status.code(), "{replay:?}");
+            assert_eq!(replay.stdout, live.stdout, "{replay:?}");
+            // These are two public frontends; their exact host diagnostic
+            // prefixes differ. Program stderr remains part of the projection.
+            assert_eq!(
+                replay.stderr, b"hirsel: environmental failure: its place stopped the run\n",
+                "{replay:?}"
+            );
+            assert_eq!(std::fs::read_to_string(&report).unwrap(), projection);
+        }
+        // Reframe exactly this observed host-wait cut as a completed flush.
+        // Neither a missing terminal nor a torn later frame may invent a
+        // completed host result or admit the output suffix.
+        let tasks: Vec<_> = parsed
+            .logs
+            .iter()
+            .map(|(path, log)| hirsel_free::tape::TaskChunk {
+                path: path.clone(),
+                progress: parsed.cut[path],
+                bytes: log.clone(),
+            })
+            .collect();
+        let mut partial = hirsel_free::tape::header(&parsed.binding);
+        partial.extend(hirsel_free::tape::flush(&parsed.keys, &tasks));
+        let expected = projection.replacen(&parsed.end.as_ref().unwrap().outcome, "truncated", 1);
+        assert_ne!(expected, projection);
+        let mut partial_reference = None;
+        for torn in [false, true] {
+            let mut bytes = partial.clone();
+            if torn {
+                bytes.extend_from_slice(&[20, 0, 0, 0, 0]);
+            }
+            let parsed_partial = hirsel_free::tape::parse(&bytes).unwrap();
+            assert_eq!(parsed_partial.torn, torn);
+            assert!(parsed_partial.end.is_none());
+            assert_eq!(parsed_partial.cut, parsed.cut);
+            let path = scratch.path(if torn { "torn" } else { "partial" });
+            std::fs::write(&path, bytes).unwrap();
+            for engine in ENGINES {
+                let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+                command
+                    .arg("run")
+                    .args(engine)
+                    .arg(&program)
+                    .arg("--replay")
+                    .arg(&path)
+                    .args(["--cores", "1"])
+                    .env(hirsel_rt::free_replay::Report::VAR, &report);
+                f1_permits(&mut command, 1);
+                let replay = bounded_output(
+                    &mut command,
+                    &program,
+                    &format!("host wait {level} partial torn={torn} {engine:?}"),
+                );
+                assert_eq!(replay.stdout, b"before stop\n", "{replay:?}");
+                assert!(
+                    !replay.status.success(),
+                    "an unfinished host wait cannot return: {replay:?}"
+                );
+                assert_eq!(std::fs::read_to_string(&report).unwrap(), expected);
+                let result = (replay.status.code(), replay.stderr);
+                if let Some(reference) = &partial_reference {
+                    assert_eq!(&result, reference);
+                } else {
+                    partial_reference = Some(result);
+                }
+            }
+        }
+    }
+}

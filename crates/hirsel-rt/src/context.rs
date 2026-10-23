@@ -174,6 +174,9 @@ pub struct TaskCtx {
     pub(crate) ordered_charge_trace: crate::budget::stretch_trace::Local,
     /// Owned Ordered request/result buffers retained across frontier saves.
     pub(crate) pending_ordered_host: Option<Box<crate::tasks::ordered::host::concurrent::Pending>>,
+    /// The actual source invocation of a site-carrying host primitive. Task-owned
+    /// across a physical save; nested calls restore their caller's site.
+    pub(crate) operation_site: u64,
 }
 
 const _: () = assert!(std::mem::offset_of!(TaskCtx, view) == 0);
@@ -390,6 +393,7 @@ impl TaskCtx {
             live_host: None,
             free_terminal: None,
             pending_ordered_host: None,
+            operation_site: 0,
             native_host_result: None,
             replay_host: None,
             ordered_charge_trace: Default::default(),
