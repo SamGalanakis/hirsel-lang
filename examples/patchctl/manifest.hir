@@ -1,0 +1,237 @@
+// Tree envelope v1. Path authority lives in records, never unified labels.
+pub const FILES: u64 = 32
+
+pub const FILE_BYTES: u64 = 65536
+
+pub const TOTAL_BYTES: u64 = 524288
+
+pub const OUTPUT_BYTES: u64 = 1048576
+
+pub const HUNKS: u64 = 256
+
+pub type Entry[T] {
+  name: String,
+  value: T,
+}
+
+pub type Change {
+  kind: String,
+  source: Option[String],
+  patch: String,
+}
+
+pub type Envelope {
+  files: List[Entry[Change]],
+}
+
+pub type Problem {
+  kind: String,
+  hunks: List[u64],
+}
+
+// Used for both bounded reads and per-file patch outcomes. Conflicts are data;
+// a domain conflict never cancels independent file work.
+pub type Outcome[T] = Ready(T) | Conflict(Problem)
+
+pub fn problem(kind: String) -> unique Problem uses {} {
+  Problem(kind: unique kind, hunks: [])
+}
+
+pub fn find[T](entries: List[Entry[T]], name: String) -> Option[u64] uses {} {
+  for i in 0u64..list.len(entries) {
+    if entries[i].name == name {
+      return Some(i)
+    }
+  }
+  None()
+}
+
+pub fn digest(data: Bytes) -> unique String uses {} {
+  sha256.digest_hex(data)
+}
+
+pub fn read(d: Dir, name: String, limit: u64) -> unique Outcome[Bytes] {
+  let mut handle = match file.open(d, path.of(name)) {
+    Ok(value) => take value,
+    Error(e) => return Conflict(problem(report.file_error(e))),
+  }
+  match file.read_all_bounded(d, mut handle, limit) {
+    Ok(data) => Ready(take data),
+    Error(Limit()) => Conflict(problem("bytes_limit")),
+    Error(File(e)) => Conflict(problem(report.file_error(e))),
+  }
+}
+
+fn field(fields: Map[String, json.Value], key: String) -> Result[String, Problem] uses {} {
+  let Some(Text(value)) = map.get(fields, key) else {
+    return Error(problem("fields"))
+  }
+  Ok(unique value)
+}
+
+fn hash_valid(value: String) -> bool uses {} {
+  if string.byte_len(value) != 64 {
+    return false
+  }
+  for byte in string.as_bytes(value) {
+    if !(byte >= b'0' && byte <= b'9' || byte >= b'a' && byte <= b'f') {
+      return false
+    }
+  }
+  true
+}
+
+// Count before allocating split_lines or passing ranges to the std search.
+// Positions are byte-size bounded (a file cannot have more lines than bytes).
+pub fn patch_bounds(value: String) -> Result[u64, Problem] uses {} {
+  if string.byte_len(value) > TOTAL_BYTES {
+    return Error(problem("patch_bytes_limit"))
+  }
+  let mut count = 0u64
+  let mut start = true
+  for byte in string.as_bytes(value) {
+    if start && byte == b'@' {
+      count += 1
+      if count > HUNKS {
+        return Error(problem("hunk_limit"))
+      }
+    }
+    start = byte == b'\n'
+  }
+  if value == "" {
+    return Ok(0)
+  }
+  let lines = diff.split_lines(value)
+  if list.len(lines) < 3 || !string.starts_with(lines[0], "--- ") || !string.starts_with(
+    lines[1],
+    "+++ "
+  ) || !string.starts_with(lines[2], "@@ ") {
+    return Error(problem("patch_envelope"))
+  }
+  for line in lines {
+    if string.starts_with(line, "@@ ") {
+      let fields = string.split(unique line, " ")
+      if list.len(fields) != 4 || fields[3] != "@@\n" {
+        return Error(problem("patch_envelope"))
+      }
+      for i in 1u64..3 {
+        let raw = string.as_bytes(fields[i])
+        if bytes.len(raw) < 2 || i == 1 && raw[0] != b'-' || i == 2 && raw[0] != b'+' {
+          return Error(problem("patch_range"))
+        }
+        let Ok(numbers) = string.from_bytes(unique bytes.slice(raw, 1, bytes.len(raw))) else {
+          return Error(problem("patch_range"))
+        }
+        let pieces = string.split(take numbers, ",")
+        if list.len(pieces) > 2 {
+          return Error(problem("patch_range"))
+        }
+        for piece in pieces {
+          let Ok(n) = u64.parse(piece) else {
+            return Error(problem("patch_range"))
+          }
+          if n > FILE_BYTES {
+            return Error(problem("patch_range"))
+          }
+        }
+      }
+    }
+  }
+  Ok(count)
+}
+
+pub fn decode(take data: Bytes) -> Result[Envelope, Problem] uses {} {
+  if bytes.len(data) > TOTAL_BYTES {
+    return Error(problem("envelope_bytes_limit"))
+  }
+  let Ok(input_text) = string.from_bytes(take data) else {
+    return Error(problem("utf8"))
+  }
+  let Ok(Object(fields)) = json.parse(take input_text) else {
+    return Error(problem("json"))
+  }
+  if map.len(fields) != 2 || map.get(fields, "schema") != Some(Number("1")) {
+    return Error(problem("schema"))
+  }
+  let Some(Array(records)) = map.get(fields, "files") else {
+    return Error(problem("files"))
+  }
+  if list.len(records) > FILES {
+    return Error(problem("file_count_limit"))
+  }
+  let mut files: List[Entry[Change]] = []
+  let mut hunks = 0u64
+  let mut patch_bytes = 0u64
+  for record in records {
+    let Object(record_fields) = record else {
+      return Error(problem("record"))
+    }
+    if map.len(record_fields) != 4 {
+      return Error(problem("fields"))
+    }
+    let name = field(record_fields, "path")?
+    plan.safe_path(name)?
+    let kind = field(record_fields, "kind")?
+    if kind != "add" && kind != "modify" && kind != "delete" {
+      return Error(problem("kind"))
+    }
+    let source: Option[String] = match map.get(record_fields, "source_sha256") {
+      Some(Null()) => None(),
+      Some(Text(hash)) => {
+        if !hash_valid(hash) {
+          return Error(problem("digest"))
+        }
+        Some(unique hash)
+      },
+      _ => return Error(problem("digest")),
+    }
+    if (kind == "add") != (source == None()) {
+      return Error(problem("precondition"))
+    }
+    let patch = field(record_fields, "patch")?
+    patch_bytes += string.byte_len(patch)
+    if patch_bytes > TOTAL_BYTES {
+      return Error(problem("patch_bytes_limit"))
+    }
+    hunks += patch_bounds(patch)?
+    if hunks > HUNKS {
+      return Error(problem("hunk_limit"))
+    }
+    list.push(
+      mut files,
+      Entry(
+        name: take name,
+        value: Change(kind: take kind, source: take source, patch: take patch)
+      )
+    )
+  }
+  let envelope = Envelope(files: take files)
+  plan.change_paths(envelope)?
+  Ok(take envelope)
+}
+
+pub fn encode(envelope: Envelope) -> Result[unique String, Problem] uses {} {
+  let mut records: List[json.Value] = []
+  for item in envelope.files {
+    let mut fields: Map[String, json.Value] = map.empty()
+    map.insert(mut fields, "path", Text(unique item.name))
+    map.insert(mut fields, "kind", Text(unique item.value.kind))
+    let source: json.Value = match item.value.source {
+      Some(hash) => Text(unique hash),
+      None() => Null(),
+    }
+    map.insert(mut fields, "source_sha256", take source)
+    map.insert(mut fields, "patch", Text(unique item.value.patch))
+    list.push(mut records, Object(take fields))
+  }
+  let mut fields: Map[String, json.Value] = map.empty()
+  map.insert(mut fields, "schema", Number("1"))
+  map.insert(mut fields, "files", Array(take records))
+  let Ok(text) = json.stringify(Object(take fields)) else {
+    return Error(problem("json"))
+  }
+  if string.byte_len(text) > TOTAL_BYTES {
+    return Error(problem("envelope_bytes_limit"))
+  }
+  Ok(take text)
+}

@@ -28,6 +28,36 @@
         "model"
       ],
       "path": "model.hir"
+    },
+    {
+      "path": "manifest.hir",
+      "module": [
+        "manifest"
+      ]
+    },
+    {
+      "path": "plan.hir",
+      "module": [
+        "plan"
+      ]
+    },
+    {
+      "path": "apply.hir",
+      "module": [
+        "apply"
+      ]
+    },
+    {
+      "path": "publish.hir",
+      "module": [
+        "publish"
+      ]
+    },
+    {
+      "path": "report.hir",
+      "module": [
+        "report"
+      ]
     }
   ]
 }

@@ -15,6 +15,30 @@ fn package(root: &std::path::Path) -> PathBuf {
     .unwrap();
     for (name, source) in [
         (
+            "manifest.hir",
+            include_str!("../../../../examples/patchctl/manifest.hir"),
+        ),
+        (
+            "plan.hir",
+            include_str!("../../../../examples/patchctl/plan.hir"),
+        ),
+        (
+            "apply.hir",
+            include_str!("../../../../examples/patchctl/apply.hir"),
+        ),
+        (
+            "publish.hir",
+            include_str!("../../../../examples/patchctl/publish.hir"),
+        ),
+        (
+            "report.hir",
+            include_str!("../../../../examples/patchctl/report.hir"),
+        ),
+    ] {
+        fs::write(root.join(name), source).unwrap();
+    }
+    for (name, source) in [
+        (
             "old.txt",
             include_str!("../../../../examples/patchctl/fixtures/old.txt"),
         ),
@@ -90,8 +114,8 @@ fn patchctl_23_pure_model_checked_heap() {
     fs::write(
         scratch.path().join("main.hir"),
         r#"pub fn main() -> Result[(), model.InvalidInput] {
-  let report = model.execute(Diff(), "a\nold", "a\nnew")?
-  let applied = model.execute(Apply(), "a\nold", report.text)?
+  let single = model.execute(Diff(), "a\nold", "a\nnew")?
+  let applied = model.execute(Apply(), "a\nold", single.text)?
   failure.check(applied.text == "a\nnew", Bounds())
   let rejected = model.execute(Apply(), "stale\n", "--- old\n+++ new\n@@ -1 +1 @@\n-a\n+b\n")
   match rejected {

@@ -82,3 +82,116 @@ Copyright Pascal Kuthe and imara-diff contributors; license and attribution in
 [third-party notices](../../third-party/NOTICES.md). The input vectors are
 retained; this application's test permits any valid edit script, adds file
 headers, and fixes Myers/context=3 instead of iterating all algorithms.
+
+## Tree changes
+
+The single-file commands above keep their original behavior. Tree commands use
+separate `source`, `target`, `fixtures` and `output` directory grants:
+
+```sh
+cd examples/patchctl
+mkdir -p tree-source tree-target tree-output
+hirsel run hirsel.json --grants grants-tree.json -- tree-diff > fixtures/proposed.json
+hirsel run hirsel.json --grants grants-tree.json -- tree-check proposed.json 4
+hirsel run hirsel.json --grants grants-tree.json -- tree-apply tree-change.json 4
+```
+
+The last command adds `new.txt` containing `hello` and LF to a separate output
+tree. `tree-output` must initially be empty, including empty directories. Use a
+fresh empty output directory for every application. `grants-tree.json` is a
+relative-path template; private copies may name absolute host roots. Source and
+target grants stay read only. A check requires no output grant. The optional
+fourth operand is a deadline in milliseconds, 0..30000; it requires the granted
+monotonic clock. Zero requests immediate cancellation:
+
+```sh
+hirsel run hirsel.json --grants grants-tree.json -- tree-check proposed.json 4 0
+hirsel build hirsel.json --backend llvm -o /tmp/patchctl-tree-llvm
+/tmp/patchctl-tree-llvm --hirsel-record /tmp/patchctl-tree.tape --hirsel-grants grants-tree.json tree-apply tree-change.json 4
+/tmp/patchctl-tree-llvm --hirsel-replay /tmp/patchctl-tree.tape
+```
+
+Native observation/record flags precede `--hirsel-grants`; application operands
+follow its template. Keep tapes outside every granted mutable directory. Set
+`placement.cores` to 1, 2 or 4 in a private template for production Ordered
+launches; this does not change logical jobs. Requested width alone does not
+establish effective execution width. No Free scheduling is used.
+
+A tree envelope is JSON with exactly two fields, `schema: 1` and `files`, an
+array of records with exactly `path`, `kind`, `source_sha256` and `patch`:
+
+```json
+{"schema":1,"files":[{"path":"new.txt","kind":"add","source_sha256":null,"patch":"--- old\n+++ new\n@@ -0,0 +1 @@\n+hello\n"}]}
+```
+
+`add` requires absence and a null digest; `modify` and `delete` require an
+existing regular file and its exact lowercase SHA-256. An empty modify patch is
+identity. A delete patch must produce empty bytes, and deletion means omission
+from output. `files: []` copies the source tree. Files absent from the envelope
+retain their bytes, including non-UTF-8 bytes. Changed files must be UTF-8.
+LF, CRLF and absent final LF are preserved. Source snapshots and all resulting
+files are validated before any output write. Per-file conflicts are collected
+in path byte order, including every rejected hunk index in original patch order.
+For example two stale paths yield two `stale_source` conflict rows, status 1,
+and no output writes. Structural/input/I/O/cancellation errors exit 2. A success
+prints a JSON summary (`bytes`, `conflicts`, `files`) and exits 0.
+
+Paths must be canonical relative paths of 1..512 bytes with no empty, dot or
+parent components, controls, backslashes or colons. `.patchctl-` components are
+reserved. Duplicate paths and file/directory collisions are refused before
+publication. A patch's header labels have no path authority. There is no rename
+or binary-patch inference. Shipped `diff.apply` retains its documented exact
+context relocation behavior after digest equality has been established.
+
+Bounds: 32 files; 65536 bytes/file; 524288 source bytes and combined source/patch
+bytes; 524288 bytes for the encoded envelope; 256 total hunks; 1048576 output
+bytes; jobs 1..4. There is an additional 8192-entry directory traversal bound.
+Sizes and path sets are checked before reading file contents; each open read
+also uses a bounded read plus an EOF probe. JSON's raw input bound contains DOM
+allocation. Std's diff allocations remain bounded by admitted inputs. Large
+boundary fixtures can encounter the reference engine's fixed 1M tooling budget;
+that is an incomplete engine cell, not a resource refusal by patchctl.
+
+Publication uses `file.put_new` for each validated file. An incomplete marker is
+created first; the completion manifest `.patchctl-complete.json` is created
+last and lists every result path and SHA-256. Failed publication can leave files
+and an incomplete marker, or an output without either marker if the final
+completion create fails. Absence of completion means incomplete. This does not
+promise tree atomicity or crash durability. Do not edit granted roots during a
+run. In particular, a private template must name physically distinct source and
+output roots: the shipped Dir API cannot establish host-root identity. The
+shipped directory API materializes a sorted directory page before returning it;
+patchctl bounds accepted traversal work and file contents, but cannot enforce a
+provider page allocation limit. These limits remain explicit incomplete parts
+of the strict dogfood qualification; see FRICTION.md.
+
+Modules are explicit in `hirsel.json`: `manifest` owns typed records, generic
+outcomes, digests and the envelope codec; `plan` owns safe paths, bounded source
+inventory and collisions; `apply` owns bounded task sets and shared immutable
+snapshots; `publish` owns the new output tree and completion; `report` owns stable
+conflicts; `main` owns the CLI and capability projections; `model` retains the
+original single-file policy. The generic `Entry[T]` / `find[T]` seam indexes both
+byte snapshots and change records; `Outcome[T]` carries bounded-read bytes and
+optional patched bytes (None is a deletion).
+
+The focused `treepatch_29` harness invokes the complete app with public reference
+and checked-H simulation adapters and with real file providers on both native
+backends. Fixtures independently specify the whole expected tree and retain the
+similar missing-newline snapshot. The source tree is compared before/after;
+replays remove the original host directories before execution. Engine-specific
+incomplete cells and original failures are documented in FRICTION.md.
+
+References: similar `96993d92851eff9a484ea157614de30f80dfdc73`,
+`src/udiff.rs:280-330,339-364` and the newline-hint snapshot (Apache-2.0);
+Go `ebe2feefc400f813aefdc8a036e66d2619da6649`,
+`src/path/filepath/path.go:319-346`, `path_test.go:532-562,630-685`
+(BSD-3-Clause, Copyright 2009 The Go Authors). The orchestration uses an explicit
+bounded worklist and rejects symlinks; similar's rendering is delegated to
+shipped std.diff with fixed labels/context=3. No new diff algorithm is included.
+
+similar is Copyright Armin Ronacher and contributors, Apache-2.0; the Apache-2.0
+license text and Go BSD-3-Clause license text are retained in
+[third-party notices](../../third-party/NOTICES.md). The pinned snapshot's
+`a.txt`/`b.txt` labels are changed to `old`/`new`; the newline marker and content
+bytes are retained. Go's tree fixture motivates nested files/empty directories;
+permission refusal is tested through explicit grants rather than host uid/chmod.

@@ -1,0 +1,231 @@
+pub type Work {
+  tree: plan.Tree,
+  envelope: manifest.Envelope,
+}
+
+pub type Row {
+  name: String,
+  outcome: manifest.Outcome[Option[Bytes]],
+}
+
+fn changed(source: Bytes, change: manifest.Change) -> unique manifest.Outcome[
+  Option[Bytes]
+] uses {} {
+  let Ok(text) = string.from_bytes(unique source) else {
+    return Conflict(manifest.problem("utf8"))
+  }
+  let patched = match diff.apply(text, change.patch) {
+    Ok(value) => take value,
+    Error(Malformed(line)) => return Conflict(
+      manifest.problem(f"malformed_patch line={line}")
+    ),
+  }
+  if list.len(patched.rejected) != 0 {
+    return Conflict(
+      manifest.Problem(kind: "rejected_hunks", hunks: unique patched.rejected)
+    )
+  }
+  if string.byte_len(patched.text) > manifest.FILE_BYTES {
+    return Conflict(manifest.problem("output_file_bytes_limit"))
+  }
+  if change.kind == "delete" {
+    if patched.text != "" {
+      return Conflict(manifest.problem("delete_not_empty"))
+    }
+    return Ready(None())
+  }
+  Ready(Some(unique string.as_bytes(patched.text)))
+}
+
+fn one(work: Work, name: String) -> unique manifest.Outcome[Option[Bytes]] uses {} {
+  let source = manifest.find(work.tree.files, name)
+  let change = manifest.find(work.envelope.files, name)
+  let Some(index) = change else {
+    let Some(at) = source else {
+      return Conflict(manifest.problem("missing_source"))
+    }
+    return Ready(Some(unique work.tree.files[at].value))
+  }
+  let record = work.envelope.files[index].value
+  if record.kind == "add" {
+    if source != None() {
+      return Conflict(manifest.problem("add_exists"))
+    }
+    return changed(bytes.from_list([]), record)
+  }
+  let Some(at) = source else {
+    return Conflict(manifest.problem("missing_source"))
+  }
+  let data = work.tree.files[at].value
+  let Some(expected) = record.source else {
+    return Conflict(manifest.problem("digest"))
+  }
+  if manifest.digest(data) != expected {
+    return Conflict(manifest.problem("stale_source"))
+  }
+  changed(data, record)
+}
+
+fn worker(work: Shared[Work], take name: unique String) -> unique manifest.Outcome[
+  Option[Bytes]
+] uses {} {
+  shared.with(
+    work,
+    fn(value: Work) -> unique manifest.Outcome[Option[Bytes]] uses {} {
+      one(value, name)
+    }
+  )
+}
+
+// Every changed file, including deletes, has a slot. Unchanged files use the
+// same result seam and preserve raw bytes without UTF-8 conversion.
+pub fn run(tasks: Tasks, tree: plan.Tree, envelope: manifest.Envelope, jobs: u64) -> Result[
+  List[Row],
+  manifest.Problem
+] {
+  let _ = plan.output_paths(tree, envelope)?
+  let mut names: unique List[String] = []
+  for item in tree.files {
+    list.push(mut names, unique item.name)
+  }
+  for item in envelope.files {
+    if manifest.find(tree.files, item.name) == None() {
+      list.push(mut names, unique item.name)
+    }
+  }
+  list.sort(mut names, string.compare)
+  let work = shared.freeze(Work(tree: unique tree, envelope: unique envelope))
+  task.scope(
+    tasks,
+    fn(s: Scope) -> Result[List[Row], manifest.Problem] {
+      let mut rows: List[Row] = []
+      let mut start = 0u64
+      let mut total = 0u64
+      while start < list.len(names) {
+        if let Error(_) = task.check_canceled(s) {
+          return Error(manifest.problem("canceled"))
+        }
+        let count = if list.len(names) - start < jobs {
+          list.len(names) - start
+        } else {
+          jobs
+        }
+        let mut pending: TaskSet[unique manifest.Outcome[Option[Bytes]]] of s = task.set(
+          s
+        )
+        for i in start..start + count {
+          let name = unique names[i]
+          task.add(
+            s,
+            mut pending,
+            task.async(
+              s,
+              fn() -> unique manifest.Outcome[Option[Bytes]] {
+                worker(work, take name)
+              }
+            )
+          )
+        }
+        for slot in 0u64..count {
+          let outcome = task.await_at(s, mut pending, slot)
+          match outcome {
+            Ready(Some(data)) => {
+              total += bytes.len(data)
+            },
+            _ => (),
+          }
+          list.push(
+            mut rows,
+            Row(name: unique names[start + slot], outcome: take outcome)
+          )
+        }
+        task.cancel_all(s, take pending)
+        if total > manifest.OUTPUT_BYTES {
+          return Error(manifest.problem("output_bytes_limit"))
+        }
+        start += count
+      }
+      Ok(take rows)
+    }
+  )
+}
+
+pub fn difference(old: plan.Tree, new: plan.Tree) -> Result[
+  manifest.Envelope,
+  manifest.Problem
+] uses {} {
+  let mut names: unique List[String] = []
+  for item in old.files {
+    list.push(mut names, unique item.name)
+  }
+  for item in new.files {
+    if manifest.find(old.files, item.name) == None() {
+      list.push(mut names, unique item.name)
+    }
+  }
+  if list.len(names) > manifest.FILES {
+    return Error(manifest.problem("file_count_limit"))
+  }
+  list.sort(mut names, string.compare)
+  let mut files: List[manifest.Entry[manifest.Change]] = []
+  let mut hunks = 0u64
+  let mut size = 0u64
+  for name in names {
+    let a = manifest.find(old.files, name)
+    let b = manifest.find(new.files, name)
+    let old_bytes = match a {
+      Some(i) => unique old.files[i].value,
+      None() => bytes.from_list([]),
+    }
+    let after = match b {
+      Some(i) => unique new.files[i].value,
+      None() => bytes.from_list([]),
+    }
+    if a != None() && b != None() && old_bytes == after {
+      continue
+    }
+    let Ok(old_text) = string.from_bytes(unique old_bytes) else {
+      return Error(manifest.problem("utf8"))
+    }
+    let Ok(new_text) = string.from_bytes(unique after) else {
+      return Error(manifest.problem("utf8"))
+    }
+    // similar udiff.rs:280-330: fixed labels, context radius, missing-newline
+    // hints; delegate rendering/algorithm to shipped std.diff.
+    let patch = diff.unified("old", old_text, "new", new_text, Myers(), 3)
+    hunks += manifest.patch_bounds(patch)?
+    size += string.byte_len(patch)
+    if hunks > manifest.HUNKS || size > manifest.TOTAL_BYTES {
+      return Error(manifest.problem("patch_limit"))
+    }
+    let kind = if a == None() {
+      "add"
+    } else if b == None() {
+      "delete"
+    } else {
+      "modify"
+    }
+    let source: Option[String] = if a == None() {
+      None()
+    } else {
+      Some(manifest.digest(old_bytes))
+    }
+    list.push(
+      mut files,
+      manifest.Entry(
+        name: unique name,
+        value: manifest.Change(kind: kind, source: take source, patch: take patch)
+      )
+    )
+  }
+  for item in old.files {
+    size += bytes.len(item.value)
+  }
+  if size > manifest.TOTAL_BYTES {
+    return Error(manifest.problem("source_patch_bytes_limit"))
+  }
+  let envelope = manifest.Envelope(files: take files)
+  plan.change_paths(envelope)?
+  let _ = plan.output_paths(old, envelope)?
+  Ok(take envelope)
+}

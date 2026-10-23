@@ -1,0 +1,40 @@
+{
+  "io": {
+    "stdout": "stdout.bytes@1",
+    "stderr": "stderr.bytes@1",
+    "tasks": "tasks.cooperative@1",
+    "monotonic_clock": "clock.monotonic.ns@1",
+    "dirs": [
+      {
+        "path": "fixtures",
+        "host": "fixtures",
+        "access": "read"
+      },
+      {
+        "path": "source",
+        "host": "tree-source",
+        "access": "read"
+      },
+      {
+        "path": "target",
+        "host": "tree-target",
+        "access": "read"
+      },
+      {
+        "path": "output",
+        "host": "tree-output",
+        "access": "read_write"
+      }
+    ]
+  },
+  "args": [
+    "tree-apply",
+    "tree-change.json",
+    "4"
+  ],
+  "placement": {
+    "cores": 1,
+    "commit": "shared",
+    "reorder": "off"
+  }
+}

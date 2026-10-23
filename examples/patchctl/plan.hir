@@ -1,0 +1,157 @@
+// Go filepath.walkDir (ebe2feef, path.go:319-346): visit before descent,
+// lexical children, stop on error. Explicit bounded worklist replaces recursion.
+// BSD-3-Clause (Go); third-party/NOTICES.md. No symlink descent.
+pub type Tree {
+  files: List[manifest.Entry[Bytes]],
+  directories: List[String],
+}
+
+pub fn safe_path(name: String) -> Result[(), manifest.Problem] uses {} {
+  if name == "" || string.byte_len(name) > 512 || string.starts_with(name, "/") {
+    return Error(manifest.problem("path"))
+  }
+  for byte in string.as_bytes(name) {
+    if byte < 32 || byte == 127 || byte == b'\\' || byte == b':' {
+      return Error(manifest.problem("path"))
+    }
+  }
+  let parts = string.split(unique name, "/")
+  for part in parts {
+    if part == "" || part == "." || part == ".." || string.starts_with(
+      part,
+      ".patchctl-"
+    ) {
+      return Error(manifest.problem("path"))
+    }
+  }
+  Ok(())
+}
+
+pub fn parent(a: String, b: String) -> bool uses {} {
+  string.starts_with(b, f"{a}/")
+}
+
+pub fn change_paths(envelope: manifest.Envelope) -> Result[(), manifest.Problem] uses {} {
+  for i in 0u64..list.len(envelope.files) {
+    let a = envelope.files[i].name
+    safe_path(a)?
+    for j in 0u64..i {
+      let b = envelope.files[j].name
+      if a == b {
+        return Error(manifest.problem("duplicate_path"))
+      }
+      if parent(a, b) || parent(b, a) {
+        return Error(manifest.problem("path_collision"))
+      }
+    }
+  }
+  Ok(())
+}
+
+// Complete path/metadata admission precedes reads. Each read is independently
+// bounded too: metadata is not a promise that a mutable source stays unchanged.
+pub fn scan(d: Dir) -> Result[Tree, manifest.Problem] {
+  let mut pending: List[String] = [""]
+  let mut names: unique List[String] = []
+  let mut directories: unique List[String] = []
+  let mut total = 0u64
+  let mut visited = 0u64
+  while list.len(pending) > 0 {
+    let Some(current) = list.pop(mut pending) else {
+      break
+    }
+    let children = file.read_dir(d, path.of(current)) ? report.file_problem
+    // read_dir is an eager provider page; this checks before admitting entries,
+    // not before the provider allocates its page (documented API limitation).
+    if list.len(children) > 8192 - visited {
+      return Error(manifest.problem("entry_count_limit"))
+    }
+    visited += list.len(children)
+    for entry in children {
+      let name = path.text(entry.path)
+      safe_path(name)?
+      match entry.kind {
+        Directory() => {
+          list.push(mut directories, unique name)
+          list.push(mut pending, unique name)
+        },
+        Regular() => {
+          if list.len(names) == manifest.FILES {
+            return Error(manifest.problem("file_count_limit"))
+          }
+          let meta = file.metadata(d, entry.path) ? report.file_problem
+          if meta.kind != Regular() {
+            return Error(manifest.problem("file_kind"))
+          }
+          if meta.size > manifest.FILE_BYTES {
+            return Error(manifest.problem("file_bytes_limit"))
+          }
+          total += meta.size
+          if total > manifest.TOTAL_BYTES {
+            return Error(manifest.problem("source_bytes_limit"))
+          }
+          list.push(mut names, unique name)
+        },
+        _ => return Error(manifest.problem("file_kind")),
+      }
+    }
+  }
+  list.sort(mut names, string.compare)
+  list.sort(mut directories, string.compare)
+  let mut files: List[manifest.Entry[Bytes]] = []
+  total = 0
+  for name in names {
+    let data = match manifest.read(d, name, manifest.FILE_BYTES) {
+      Ready(data) => take data,
+      Conflict(problem) => return Error(take problem),
+    }
+    total += bytes.len(data)
+    if total > manifest.TOTAL_BYTES {
+      return Error(manifest.problem("source_bytes_limit"))
+    }
+    list.push(mut files, manifest.Entry(name: unique name, value: take data))
+  }
+  Ok(Tree(files: take files, directories: take directories))
+}
+
+pub fn output_paths(tree: Tree, envelope: manifest.Envelope) -> Result[
+  List[String],
+  manifest.Problem
+] uses {} {
+  let mut names: unique List[String] = []
+  for item in tree.files {
+    let at = manifest.find(envelope.files, item.name)
+    let removed = match at {
+      Some(i) => envelope.files[i].value.kind == "delete",
+      None() => false,
+    }
+    if !removed {
+      list.push(mut names, unique item.name)
+    }
+  }
+  for item in envelope.files {
+    if item.value.kind != "delete" && manifest.find(tree.files, item.name) == None() {
+      list.push(mut names, unique item.name)
+    }
+  }
+  if list.len(names) > manifest.FILES {
+    return Error(manifest.problem("output_file_count_limit"))
+  }
+  for i in 0u64..list.len(names) {
+    for j in 0u64..i {
+      if names[i] == names[j] || parent(names[i], names[j]) || parent(
+        names[j],
+        names[i]
+      ) {
+        return Error(manifest.problem("path_collision"))
+      }
+    }
+    for directory in tree.directories {
+      if names[i] == directory || parent(names[i], directory) {
+        return Error(manifest.problem("path_collision"))
+      }
+    }
+  }
+  list.sort(mut names, string.compare)
+  Ok(take names)
+}

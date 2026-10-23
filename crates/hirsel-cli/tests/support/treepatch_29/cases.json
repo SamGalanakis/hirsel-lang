@@ -1,0 +1,1899 @@
+[
+  {
+    "id": "mixed",
+    "source": {
+      "gone": "bye\n",
+      "sub/change": "old\n",
+      "keep": "stay\r\n",
+      "empty": ""
+    },
+    "envelope": {
+      "schema": 1,
+      "files": [
+        {
+          "path": "gone",
+          "kind": "delete",
+          "source_sha256": "abc6fd595fc079d3114d4b71a4d84b1d1d0f79df1e70f8813212f2a65d8916df",
+          "patch": "--- old\n+++ new\n@@ -1 +0,0 @@\n-bye\n"
+        },
+        {
+          "path": "sub/change",
+          "kind": "modify",
+          "source_sha256": "01d09d19c2139a46aebfb577780d123d7396e97201bc7ead210a2ebff8239dee",
+          "patch": "--- old\n+++ new\n@@ -1 +1 @@\n-old\n+new\n"
+        },
+        {
+          "path": "added",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": "--- old\n+++ new\n@@ -0,0 +1 @@\n+hi\n"
+        }
+      ]
+    },
+    "target": {
+      "sub/change": "new\n",
+      "added": "hi\n",
+      "keep": "stay\r\n",
+      "empty": ""
+    },
+    "exit": 0,
+    "stderr": "",
+    "stdout": {
+      "files": 4,
+      "bytes": 13,
+      "conflicts": []
+    },
+    "args": [
+      "tree-apply",
+      "change.json",
+      "4"
+    ]
+  },
+  {
+    "id": "empty-envelope",
+    "source": {
+      "empty": "",
+      "keep": "a\r\nb"
+    },
+    "envelope": {
+      "schema": 1,
+      "files": []
+    },
+    "target": {
+      "empty": "",
+      "keep": "a\r\nb"
+    },
+    "exit": 0,
+    "stderr": "",
+    "stdout": {
+      "files": 2,
+      "bytes": 4,
+      "conflicts": []
+    },
+    "args": [
+      "tree-apply",
+      "change.json",
+      "4"
+    ]
+  },
+  {
+    "id": "identity-digest",
+    "source": {
+      "x": "a\n"
+    },
+    "envelope": {
+      "schema": 1,
+      "files": [
+        {
+          "path": "x",
+          "kind": "modify",
+          "source_sha256": "87428fc522803d31065e7bce3cf03fe475096631e5e07bbd7a0fde60c4cf25c7",
+          "patch": ""
+        }
+      ]
+    },
+    "target": {
+      "x": "a\n"
+    },
+    "exit": 0,
+    "stderr": "",
+    "stdout": {
+      "files": 1,
+      "bytes": 2,
+      "conflicts": []
+    },
+    "args": [
+      "tree-apply",
+      "change.json",
+      "4"
+    ]
+  },
+  {
+    "id": "missing-newline",
+    "source": {
+      "x": "a\n"
+    },
+    "envelope": {
+      "schema": 1,
+      "files": [
+        {
+          "path": "x",
+          "kind": "modify",
+          "source_sha256": "87428fc522803d31065e7bce3cf03fe475096631e5e07bbd7a0fde60c4cf25c7",
+          "patch": "--- a.txt\n+++ b.txt\n@@ -1 +1 @@\n-a\n+b\n\\ No newline at end of file\n"
+        }
+      ]
+    },
+    "target": {
+      "x": "b"
+    },
+    "exit": 0,
+    "stderr": "",
+    "stdout": {
+      "files": 1,
+      "bytes": 1,
+      "conflicts": []
+    },
+    "args": [
+      "tree-apply",
+      "change.json",
+      "4"
+    ]
+  },
+  {
+    "id": "crlf",
+    "source": {
+      "x": "old\r\n"
+    },
+    "envelope": {
+      "schema": 1,
+      "files": [
+        {
+          "path": "x",
+          "kind": "modify",
+          "source_sha256": "117c5d6a0f57e8e25b4b29cfd7db1d73c3c5e5dbf67fbcb33d218bc295c32d25",
+          "patch": "--- old\n+++ new\n@@ -1 +1 @@\n-old\r\n+new\r\n"
+        }
+      ]
+    },
+    "target": {
+      "x": "new\r\n"
+    },
+    "exit": 0,
+    "stderr": "",
+    "stdout": {
+      "files": 1,
+      "bytes": 5,
+      "conflicts": []
+    },
+    "args": [
+      "tree-apply",
+      "change.json",
+      "4"
+    ]
+  },
+  {
+    "id": "stale",
+    "source": {
+      "z": "old\n",
+      "a": "old\n"
+    },
+    "envelope": {
+      "schema": 1,
+      "files": [
+        {
+          "path": "z",
+          "kind": "modify",
+          "source_sha256": "d9298a10d1b0735837dc4bd85dac641b0f3cef27a47e5d53a54f2f3f5b2fcffa",
+          "patch": "--- old\n+++ new\n@@ -1 +1 @@\n-old\n+new\n"
+        },
+        {
+          "path": "a",
+          "kind": "modify",
+          "source_sha256": "d9298a10d1b0735837dc4bd85dac641b0f3cef27a47e5d53a54f2f3f5b2fcffa",
+          "patch": "--- old\n+++ new\n@@ -1 +1 @@\n-old\n+new\n"
+        }
+      ]
+    },
+    "target": {},
+    "exit": 1,
+    "stderr": "patchctl: conflicts\n",
+    "stdout": {
+      "files": 0,
+      "bytes": 0,
+      "conflicts": [
+        {
+          "path": "a",
+          "kind": "stale_source",
+          "hunks": []
+        },
+        {
+          "path": "z",
+          "kind": "stale_source",
+          "hunks": []
+        }
+      ]
+    },
+    "args": [
+      "tree-apply",
+      "change.json",
+      "4"
+    ]
+  },
+  {
+    "id": "rejected-later",
+    "source": {
+      "x": "a\nb\nc\n"
+    },
+    "envelope": {
+      "schema": 1,
+      "files": [
+        {
+          "path": "x",
+          "kind": "modify",
+          "source_sha256": "880553fca8fcea94e325ee2cfb48e5a985cc797f39a14cc6d3cedecfeb2ae4d2",
+          "patch": "--- untrusted/../../x\n+++ /etc/passwd\n@@ -1 +1 @@\n-a\n+A\n@@ -3 +3 @@\n-no\n+C\n"
+        }
+      ]
+    },
+    "target": {},
+    "exit": 1,
+    "stderr": "patchctl: conflicts\n",
+    "stdout": {
+      "files": 0,
+      "bytes": 0,
+      "conflicts": [
+        {
+          "path": "x",
+          "kind": "rejected_hunks",
+          "hunks": [
+            1
+          ]
+        }
+      ]
+    },
+    "args": [
+      "tree-apply",
+      "change.json",
+      "4"
+    ]
+  },
+  {
+    "id": "add-exists",
+    "source": {
+      "x": "a"
+    },
+    "envelope": {
+      "schema": 1,
+      "files": [
+        {
+          "path": "x",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        }
+      ]
+    },
+    "target": {},
+    "exit": 1,
+    "stderr": "patchctl: conflicts\n",
+    "stdout": {
+      "files": 0,
+      "bytes": 0,
+      "conflicts": [
+        {
+          "path": "x",
+          "kind": "add_exists",
+          "hunks": []
+        }
+      ]
+    },
+    "args": [
+      "tree-apply",
+      "change.json",
+      "4"
+    ]
+  },
+  {
+    "id": "delete-not-empty",
+    "source": {
+      "x": "a"
+    },
+    "envelope": {
+      "schema": 1,
+      "files": [
+        {
+          "path": "x",
+          "kind": "delete",
+          "source_sha256": "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb",
+          "patch": ""
+        }
+      ]
+    },
+    "target": {},
+    "exit": 1,
+    "stderr": "patchctl: conflicts\n",
+    "stdout": {
+      "files": 0,
+      "bytes": 0,
+      "conflicts": [
+        {
+          "path": "x",
+          "kind": "delete_not_empty",
+          "hunks": []
+        }
+      ]
+    },
+    "args": [
+      "tree-apply",
+      "change.json",
+      "4"
+    ]
+  },
+  {
+    "id": "parent",
+    "source": {},
+    "envelope": {
+      "schema": 1,
+      "files": [
+        {
+          "path": "a/../b",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        }
+      ]
+    },
+    "target": {},
+    "exit": 2,
+    "stderr": "patchctl: path\n",
+    "stdout": null,
+    "args": [
+      "tree-apply",
+      "change.json",
+      "4"
+    ]
+  },
+  {
+    "id": "absolute",
+    "source": {},
+    "envelope": {
+      "schema": 1,
+      "files": [
+        {
+          "path": "/a",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        }
+      ]
+    },
+    "target": {},
+    "exit": 2,
+    "stderr": "patchctl: path\n",
+    "stdout": null,
+    "args": [
+      "tree-apply",
+      "change.json",
+      "4"
+    ]
+  },
+  {
+    "id": "dot",
+    "source": {},
+    "envelope": {
+      "schema": 1,
+      "files": [
+        {
+          "path": "a/./b",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        }
+      ]
+    },
+    "target": {},
+    "exit": 2,
+    "stderr": "patchctl: path\n",
+    "stdout": null,
+    "args": [
+      "tree-apply",
+      "change.json",
+      "4"
+    ]
+  },
+  {
+    "id": "empty-component",
+    "source": {},
+    "envelope": {
+      "schema": 1,
+      "files": [
+        {
+          "path": "a//b",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        }
+      ]
+    },
+    "target": {},
+    "exit": 2,
+    "stderr": "patchctl: path\n",
+    "stdout": null,
+    "args": [
+      "tree-apply",
+      "change.json",
+      "4"
+    ]
+  },
+  {
+    "id": "reserved",
+    "source": {},
+    "envelope": {
+      "schema": 1,
+      "files": [
+        {
+          "path": ".patchctl-complete.json",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        }
+      ]
+    },
+    "target": {},
+    "exit": 2,
+    "stderr": "patchctl: path\n",
+    "stdout": null,
+    "args": [
+      "tree-apply",
+      "change.json",
+      "4"
+    ]
+  },
+  {
+    "id": "backslash",
+    "source": {},
+    "envelope": {
+      "schema": 1,
+      "files": [
+        {
+          "path": "a\\b",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        }
+      ]
+    },
+    "target": {},
+    "exit": 2,
+    "stderr": "patchctl: path\n",
+    "stdout": null,
+    "args": [
+      "tree-apply",
+      "change.json",
+      "4"
+    ]
+  },
+  {
+    "id": "path-513",
+    "source": {},
+    "envelope": {
+      "schema": 1,
+      "files": [
+        {
+          "path": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        }
+      ]
+    },
+    "target": {},
+    "exit": 2,
+    "stderr": "patchctl: path\n",
+    "stdout": null,
+    "args": [
+      "tree-apply",
+      "change.json",
+      "4"
+    ]
+  },
+  {
+    "id": "duplicate",
+    "source": {},
+    "envelope": {
+      "schema": 1,
+      "files": [
+        {
+          "path": "x",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        },
+        {
+          "path": "x",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        }
+      ]
+    },
+    "target": {},
+    "exit": 2,
+    "stderr": "patchctl: duplicate_path\n",
+    "stdout": null,
+    "args": [
+      "tree-apply",
+      "change.json",
+      "4"
+    ]
+  },
+  {
+    "id": "parent-collision",
+    "source": {},
+    "envelope": {
+      "schema": 1,
+      "files": [
+        {
+          "path": "x",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        },
+        {
+          "path": "x/y",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        }
+      ]
+    },
+    "target": {},
+    "exit": 2,
+    "stderr": "patchctl: path_collision\n",
+    "stdout": null,
+    "args": [
+      "tree-apply",
+      "change.json",
+      "4"
+    ]
+  },
+  {
+    "id": "source-collision",
+    "source": {
+      "x": "a"
+    },
+    "envelope": {
+      "schema": 1,
+      "files": [
+        {
+          "path": "x/y",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        }
+      ]
+    },
+    "target": {},
+    "exit": 2,
+    "stderr": "patchctl: path_collision\n",
+    "stdout": null,
+    "args": [
+      "tree-apply",
+      "change.json",
+      "4"
+    ]
+  },
+  {
+    "id": "files-32",
+    "source": {},
+    "envelope": {
+      "schema": 1,
+      "files": [
+        {
+          "path": "f00",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        },
+        {
+          "path": "f01",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        },
+        {
+          "path": "f02",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        },
+        {
+          "path": "f03",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        },
+        {
+          "path": "f04",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        },
+        {
+          "path": "f05",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        },
+        {
+          "path": "f06",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        },
+        {
+          "path": "f07",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        },
+        {
+          "path": "f08",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        },
+        {
+          "path": "f09",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        },
+        {
+          "path": "f10",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        },
+        {
+          "path": "f11",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        },
+        {
+          "path": "f12",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        },
+        {
+          "path": "f13",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        },
+        {
+          "path": "f14",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        },
+        {
+          "path": "f15",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        },
+        {
+          "path": "f16",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        },
+        {
+          "path": "f17",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        },
+        {
+          "path": "f18",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        },
+        {
+          "path": "f19",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        },
+        {
+          "path": "f20",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        },
+        {
+          "path": "f21",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        },
+        {
+          "path": "f22",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        },
+        {
+          "path": "f23",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        },
+        {
+          "path": "f24",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        },
+        {
+          "path": "f25",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        },
+        {
+          "path": "f26",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        },
+        {
+          "path": "f27",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        },
+        {
+          "path": "f28",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        },
+        {
+          "path": "f29",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        },
+        {
+          "path": "f30",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        },
+        {
+          "path": "f31",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        }
+      ]
+    },
+    "target": {
+      "f00": "",
+      "f01": "",
+      "f02": "",
+      "f03": "",
+      "f04": "",
+      "f05": "",
+      "f06": "",
+      "f07": "",
+      "f08": "",
+      "f09": "",
+      "f10": "",
+      "f11": "",
+      "f12": "",
+      "f13": "",
+      "f14": "",
+      "f15": "",
+      "f16": "",
+      "f17": "",
+      "f18": "",
+      "f19": "",
+      "f20": "",
+      "f21": "",
+      "f22": "",
+      "f23": "",
+      "f24": "",
+      "f25": "",
+      "f26": "",
+      "f27": "",
+      "f28": "",
+      "f29": "",
+      "f30": "",
+      "f31": ""
+    },
+    "exit": 0,
+    "stderr": "",
+    "stdout": {
+      "files": 32,
+      "bytes": 0,
+      "conflicts": []
+    },
+    "args": [
+      "tree-apply",
+      "change.json",
+      "4"
+    ]
+  },
+  {
+    "id": "files-33",
+    "source": {},
+    "envelope": {
+      "schema": 1,
+      "files": [
+        {
+          "path": "f00",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        },
+        {
+          "path": "f01",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        },
+        {
+          "path": "f02",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        },
+        {
+          "path": "f03",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        },
+        {
+          "path": "f04",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        },
+        {
+          "path": "f05",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        },
+        {
+          "path": "f06",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        },
+        {
+          "path": "f07",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        },
+        {
+          "path": "f08",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        },
+        {
+          "path": "f09",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        },
+        {
+          "path": "f10",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        },
+        {
+          "path": "f11",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        },
+        {
+          "path": "f12",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        },
+        {
+          "path": "f13",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        },
+        {
+          "path": "f14",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        },
+        {
+          "path": "f15",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        },
+        {
+          "path": "f16",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        },
+        {
+          "path": "f17",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        },
+        {
+          "path": "f18",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        },
+        {
+          "path": "f19",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        },
+        {
+          "path": "f20",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        },
+        {
+          "path": "f21",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        },
+        {
+          "path": "f22",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        },
+        {
+          "path": "f23",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        },
+        {
+          "path": "f24",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        },
+        {
+          "path": "f25",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        },
+        {
+          "path": "f26",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        },
+        {
+          "path": "f27",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        },
+        {
+          "path": "f28",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        },
+        {
+          "path": "f29",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        },
+        {
+          "path": "f30",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        },
+        {
+          "path": "f31",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        },
+        {
+          "path": "f32",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        }
+      ]
+    },
+    "target": {},
+    "exit": 2,
+    "stderr": "patchctl: file_count_limit\n",
+    "stdout": null,
+    "args": [
+      "tree-apply",
+      "change.json",
+      "4"
+    ]
+  },
+  {
+    "id": "jobs-1",
+    "source": {},
+    "envelope": {
+      "schema": 1,
+      "files": []
+    },
+    "target": {},
+    "exit": 0,
+    "stderr": "",
+    "stdout": {
+      "files": 0,
+      "bytes": 0,
+      "conflicts": []
+    },
+    "args": [
+      "tree-apply",
+      "change.json",
+      "1"
+    ]
+  },
+  {
+    "id": "jobs-4",
+    "source": {},
+    "envelope": {
+      "schema": 1,
+      "files": []
+    },
+    "target": {},
+    "exit": 0,
+    "stderr": "",
+    "stdout": {
+      "files": 0,
+      "bytes": 0,
+      "conflicts": []
+    },
+    "args": [
+      "tree-apply",
+      "change.json",
+      "4"
+    ]
+  },
+  {
+    "id": "jobs-0",
+    "source": {},
+    "envelope": {
+      "schema": 1,
+      "files": []
+    },
+    "target": {},
+    "exit": 2,
+    "stderr": "patchctl: jobs\n",
+    "stdout": null,
+    "args": [
+      "tree-apply",
+      "change.json",
+      "0"
+    ]
+  },
+  {
+    "id": "jobs-5",
+    "source": {},
+    "envelope": {
+      "schema": 1,
+      "files": []
+    },
+    "target": {},
+    "exit": 2,
+    "stderr": "patchctl: jobs\n",
+    "stdout": null,
+    "args": [
+      "tree-apply",
+      "change.json",
+      "5"
+    ]
+  },
+  {
+    "id": "check",
+    "source": {
+      "gone": "bye\n",
+      "sub/change": "old\n",
+      "keep": "stay\r\n",
+      "empty": ""
+    },
+    "envelope": {
+      "schema": 1,
+      "files": [
+        {
+          "path": "gone",
+          "kind": "delete",
+          "source_sha256": "abc6fd595fc079d3114d4b71a4d84b1d1d0f79df1e70f8813212f2a65d8916df",
+          "patch": "--- old\n+++ new\n@@ -1 +0,0 @@\n-bye\n"
+        },
+        {
+          "path": "sub/change",
+          "kind": "modify",
+          "source_sha256": "01d09d19c2139a46aebfb577780d123d7396e97201bc7ead210a2ebff8239dee",
+          "patch": "--- old\n+++ new\n@@ -1 +1 @@\n-old\n+new\n"
+        },
+        {
+          "path": "added",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": "--- old\n+++ new\n@@ -0,0 +1 @@\n+hi\n"
+        }
+      ]
+    },
+    "target": {
+      "sub/change": "new\n",
+      "added": "hi\n",
+      "keep": "stay\r\n",
+      "empty": ""
+    },
+    "exit": 0,
+    "stderr": "",
+    "stdout": {
+      "files": 4,
+      "bytes": 13,
+      "conflicts": []
+    },
+    "args": [
+      "tree-check",
+      "change.json",
+      "4"
+    ]
+  },
+  {
+    "id": "cancel",
+    "source": {
+      "gone": "bye\n",
+      "sub/change": "old\n",
+      "keep": "stay\r\n",
+      "empty": ""
+    },
+    "envelope": {
+      "schema": 1,
+      "files": [
+        {
+          "path": "gone",
+          "kind": "delete",
+          "source_sha256": "abc6fd595fc079d3114d4b71a4d84b1d1d0f79df1e70f8813212f2a65d8916df",
+          "patch": "--- old\n+++ new\n@@ -1 +0,0 @@\n-bye\n"
+        },
+        {
+          "path": "sub/change",
+          "kind": "modify",
+          "source_sha256": "01d09d19c2139a46aebfb577780d123d7396e97201bc7ead210a2ebff8239dee",
+          "patch": "--- old\n+++ new\n@@ -1 +1 @@\n-old\n+new\n"
+        },
+        {
+          "path": "added",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": "--- old\n+++ new\n@@ -0,0 +1 @@\n+hi\n"
+        }
+      ]
+    },
+    "target": {},
+    "exit": 2,
+    "stderr": "patchctl: canceled\n",
+    "stdout": null,
+    "args": [
+      "tree-apply",
+      "change.json",
+      "4",
+      "0"
+    ]
+  },
+  {
+    "id": "denied-write",
+    "source": {
+      "gone": "bye\n",
+      "sub/change": "old\n",
+      "keep": "stay\r\n",
+      "empty": ""
+    },
+    "envelope": {
+      "schema": 1,
+      "files": [
+        {
+          "path": "gone",
+          "kind": "delete",
+          "source_sha256": "abc6fd595fc079d3114d4b71a4d84b1d1d0f79df1e70f8813212f2a65d8916df",
+          "patch": "--- old\n+++ new\n@@ -1 +0,0 @@\n-bye\n"
+        },
+        {
+          "path": "sub/change",
+          "kind": "modify",
+          "source_sha256": "01d09d19c2139a46aebfb577780d123d7396e97201bc7ead210a2ebff8239dee",
+          "patch": "--- old\n+++ new\n@@ -1 +1 @@\n-old\n+new\n"
+        },
+        {
+          "path": "added",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": "--- old\n+++ new\n@@ -0,0 +1 @@\n+hi\n"
+        }
+      ]
+    },
+    "target": {},
+    "exit": 2,
+    "stderr": "patchctl: grant\n",
+    "stdout": null,
+    "args": [
+      "tree-apply",
+      "change.json",
+      "4"
+    ],
+    "deny_output": true
+  },
+  {
+    "id": "nonempty-output",
+    "source": {
+      "gone": "bye\n",
+      "sub/change": "old\n",
+      "keep": "stay\r\n",
+      "empty": ""
+    },
+    "envelope": {
+      "schema": 1,
+      "files": [
+        {
+          "path": "gone",
+          "kind": "delete",
+          "source_sha256": "abc6fd595fc079d3114d4b71a4d84b1d1d0f79df1e70f8813212f2a65d8916df",
+          "patch": "--- old\n+++ new\n@@ -1 +0,0 @@\n-bye\n"
+        },
+        {
+          "path": "sub/change",
+          "kind": "modify",
+          "source_sha256": "01d09d19c2139a46aebfb577780d123d7396e97201bc7ead210a2ebff8239dee",
+          "patch": "--- old\n+++ new\n@@ -1 +1 @@\n-old\n+new\n"
+        },
+        {
+          "path": "added",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": "--- old\n+++ new\n@@ -0,0 +1 @@\n+hi\n"
+        }
+      ]
+    },
+    "target": {},
+    "exit": 2,
+    "stderr": "patchctl: output_not_empty\n",
+    "stdout": null,
+    "args": [
+      "tree-apply",
+      "change.json",
+      "4"
+    ],
+    "output_initial": {
+      "occupied": ""
+    }
+  },
+  {
+    "id": "binary-unchanged",
+    "source": {
+      "keep": [
+        0,
+        255,
+        13,
+        10
+      ]
+    },
+    "envelope": {
+      "schema": 1,
+      "files": []
+    },
+    "target": {
+      "keep": [
+        0,
+        255,
+        13,
+        10
+      ]
+    },
+    "exit": 0,
+    "stderr": "",
+    "stdout": {
+      "files": 1,
+      "bytes": 4,
+      "conflicts": []
+    },
+    "args": [
+      "tree-apply",
+      "change.json",
+      "4"
+    ]
+  },
+  {
+    "id": "diff-newline",
+    "source": {
+      "x": "a\n"
+    },
+    "envelope": {
+      "schema": 1,
+      "files": [
+        {
+          "path": "x",
+          "kind": "modify",
+          "source_sha256": "87428fc522803d31065e7bce3cf03fe475096631e5e07bbd7a0fde60c4cf25c7",
+          "patch": "--- a.txt\n+++ b.txt\n@@ -1 +1 @@\n-a\n+b\n\\ No newline at end of file\n"
+        }
+      ]
+    },
+    "target": {},
+    "exit": 0,
+    "stderr": "",
+    "stdout": {
+      "schema": 1,
+      "files": [
+        {
+          "path": "x",
+          "kind": "modify",
+          "source_sha256": "87428fc522803d31065e7bce3cf03fe475096631e5e07bbd7a0fde60c4cf25c7",
+          "patch": "--- old\n+++ new\n@@ -1 +1 @@\n-a\n+b\n\\ No newline at end of file\n"
+        }
+      ]
+    },
+    "args": [
+      "tree-diff"
+    ],
+    "target_input": {
+      "x": "b"
+    }
+  },
+  {
+    "id": "canceled-read",
+    "source": {
+      "gone": "bye\n",
+      "sub/change": "old\n",
+      "keep": "stay\r\n",
+      "empty": ""
+    },
+    "envelope": {
+      "schema": 1,
+      "files": [
+        {
+          "path": "gone",
+          "kind": "delete",
+          "source_sha256": "abc6fd595fc079d3114d4b71a4d84b1d1d0f79df1e70f8813212f2a65d8916df",
+          "patch": "--- old\n+++ new\n@@ -1 +0,0 @@\n-bye\n"
+        },
+        {
+          "path": "sub/change",
+          "kind": "modify",
+          "source_sha256": "01d09d19c2139a46aebfb577780d123d7396e97201bc7ead210a2ebff8239dee",
+          "patch": "--- old\n+++ new\n@@ -1 +1 @@\n-old\n+new\n"
+        },
+        {
+          "path": "added",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": "--- old\n+++ new\n@@ -0,0 +1 @@\n+hi\n"
+        }
+      ]
+    },
+    "target": {},
+    "exit": 2,
+    "stderr": "patchctl: canceled\n",
+    "stdout": null,
+    "args": [
+      "tree-apply",
+      "change.json",
+      "4"
+    ],
+    "fault": "file.read",
+    "scripted_only": true,
+    "output_expected": {}
+  },
+  {
+    "id": "publication-canceled",
+    "source": {
+      "gone": "bye\n",
+      "sub/change": "old\n",
+      "keep": "stay\r\n",
+      "empty": ""
+    },
+    "envelope": {
+      "schema": 1,
+      "files": [
+        {
+          "path": "gone",
+          "kind": "delete",
+          "source_sha256": "abc6fd595fc079d3114d4b71a4d84b1d1d0f79df1e70f8813212f2a65d8916df",
+          "patch": "--- old\n+++ new\n@@ -1 +0,0 @@\n-bye\n"
+        },
+        {
+          "path": "sub/change",
+          "kind": "modify",
+          "source_sha256": "01d09d19c2139a46aebfb577780d123d7396e97201bc7ead210a2ebff8239dee",
+          "patch": "--- old\n+++ new\n@@ -1 +1 @@\n-old\n+new\n"
+        },
+        {
+          "path": "added",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": "--- old\n+++ new\n@@ -0,0 +1 @@\n+hi\n"
+        }
+      ]
+    },
+    "target": {},
+    "exit": 2,
+    "stderr": "patchctl: canceled\n",
+    "stdout": null,
+    "args": [
+      "tree-apply",
+      "change.json",
+      "4"
+    ],
+    "fault": "file.mkdir",
+    "scripted_only": true,
+    "output_expected": {
+      ".patchctl-incomplete": ""
+    }
+  },
+  {
+    "id": "file-bytes-65536",
+    "source": {
+      "x": {
+        "repeat": "x",
+        "count": 65536
+      }
+    },
+    "envelope": {
+      "schema": 1,
+      "files": []
+    },
+    "target": {
+      "x": {
+        "repeat": "x",
+        "count": 65536
+      }
+    },
+    "exit": 0,
+    "stderr": "",
+    "stdout": {
+      "files": 1,
+      "bytes": 65536,
+      "conflicts": []
+    },
+    "args": [
+      "tree-apply",
+      "change.json",
+      "4"
+    ],
+    "boundary": true
+  },
+  {
+    "id": "file-bytes-65537",
+    "source": {
+      "x": {
+        "repeat": "x",
+        "count": 65537
+      }
+    },
+    "envelope": {
+      "schema": 1,
+      "files": []
+    },
+    "target": {},
+    "exit": 2,
+    "stderr": "patchctl: file_bytes_limit\n",
+    "stdout": null,
+    "args": [
+      "tree-apply",
+      "change.json",
+      "4"
+    ],
+    "boundary": true
+  },
+  {
+    "id": "source-bytes-524288",
+    "source": {
+      "f0": {
+        "repeat": "x",
+        "count": 65536
+      },
+      "f1": {
+        "repeat": "x",
+        "count": 65536
+      },
+      "f2": {
+        "repeat": "x",
+        "count": 65536
+      },
+      "f3": {
+        "repeat": "x",
+        "count": 65536
+      },
+      "f4": {
+        "repeat": "x",
+        "count": 65536
+      },
+      "f5": {
+        "repeat": "x",
+        "count": 65536
+      },
+      "f6": {
+        "repeat": "x",
+        "count": 65536
+      },
+      "f7": {
+        "repeat": "x",
+        "count": 65536
+      }
+    },
+    "envelope": {
+      "schema": 1,
+      "files": []
+    },
+    "target": {
+      "f0": {
+        "repeat": "x",
+        "count": 65536
+      },
+      "f1": {
+        "repeat": "x",
+        "count": 65536
+      },
+      "f2": {
+        "repeat": "x",
+        "count": 65536
+      },
+      "f3": {
+        "repeat": "x",
+        "count": 65536
+      },
+      "f4": {
+        "repeat": "x",
+        "count": 65536
+      },
+      "f5": {
+        "repeat": "x",
+        "count": 65536
+      },
+      "f6": {
+        "repeat": "x",
+        "count": 65536
+      },
+      "f7": {
+        "repeat": "x",
+        "count": 65536
+      }
+    },
+    "exit": 0,
+    "stderr": "",
+    "stdout": {
+      "files": 8,
+      "bytes": 524288,
+      "conflicts": []
+    },
+    "args": [
+      "tree-apply",
+      "change.json",
+      "4"
+    ],
+    "boundary": true
+  },
+  {
+    "id": "source-bytes-524289",
+    "source": {
+      "f0": {
+        "repeat": "x",
+        "count": 65536
+      },
+      "f1": {
+        "repeat": "x",
+        "count": 65536
+      },
+      "f2": {
+        "repeat": "x",
+        "count": 65536
+      },
+      "f3": {
+        "repeat": "x",
+        "count": 65536
+      },
+      "f4": {
+        "repeat": "x",
+        "count": 65536
+      },
+      "f5": {
+        "repeat": "x",
+        "count": 65536
+      },
+      "f6": {
+        "repeat": "x",
+        "count": 65536
+      },
+      "f7": {
+        "repeat": "x",
+        "count": 65536
+      },
+      "last": "x"
+    },
+    "envelope": {
+      "schema": 1,
+      "files": []
+    },
+    "target": {},
+    "exit": 2,
+    "stderr": "patchctl: source_bytes_limit\n",
+    "stdout": null,
+    "args": [
+      "tree-apply",
+      "change.json",
+      "4"
+    ],
+    "boundary": true
+  },
+  {
+    "id": "hunks-256",
+    "source": {},
+    "envelope": {
+      "schema": 1,
+      "files": [
+        {
+          "path": "x",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": "--- old\n+++ new\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n"
+        }
+      ]
+    },
+    "target": {
+      "x": ""
+    },
+    "exit": 0,
+    "stderr": "",
+    "stdout": {
+      "files": 1,
+      "bytes": 0,
+      "conflicts": []
+    },
+    "args": [
+      "tree-apply",
+      "change.json",
+      "4"
+    ],
+    "boundary": true
+  },
+  {
+    "id": "hunks-257",
+    "source": {},
+    "envelope": {
+      "schema": 1,
+      "files": [
+        {
+          "path": "x",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": "--- old\n+++ new\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n@@ -0,0 +0,0 @@\n"
+        }
+      ]
+    },
+    "target": {},
+    "exit": 2,
+    "stderr": "patchctl: hunk_limit\n",
+    "stdout": null,
+    "args": [
+      "tree-apply",
+      "change.json",
+      "4"
+    ],
+    "boundary": true
+  },
+  {
+    "id": "path-bytes-512",
+    "source": {},
+    "envelope": {
+      "schema": 1,
+      "files": [
+        {
+          "path": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        }
+      ]
+    },
+    "target": {
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc": ""
+    },
+    "exit": 0,
+    "stderr": "",
+    "stdout": {
+      "files": 1,
+      "bytes": 0,
+      "conflicts": []
+    },
+    "args": [
+      "tree-apply",
+      "change.json",
+      "4"
+    ],
+    "boundary": true
+  },
+  {
+    "id": "path-bytes-513",
+    "source": {},
+    "envelope": {
+      "schema": 1,
+      "files": [
+        {
+          "path": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": ""
+        }
+      ]
+    },
+    "target": {},
+    "exit": 2,
+    "stderr": "patchctl: path\n",
+    "stdout": null,
+    "args": [
+      "tree-apply",
+      "change.json",
+      "4"
+    ],
+    "boundary": true
+  },
+  {
+    "id": "jobs-2",
+    "source": {},
+    "envelope": {
+      "schema": 1,
+      "files": []
+    },
+    "target": {},
+    "exit": 0,
+    "stderr": "",
+    "stdout": {
+      "files": 0,
+      "bytes": 0,
+      "conflicts": []
+    },
+    "args": [
+      "tree-apply",
+      "change.json",
+      "2"
+    ]
+  },
+  {
+    "id": "jobs-3",
+    "source": {},
+    "envelope": {
+      "schema": 1,
+      "files": []
+    },
+    "target": {},
+    "exit": 0,
+    "stderr": "",
+    "stdout": {
+      "files": 0,
+      "bytes": 0,
+      "conflicts": []
+    },
+    "args": [
+      "tree-apply",
+      "change.json",
+      "3"
+    ]
+  },
+  {
+    "id": "envelope-bytes-524288",
+    "source": {},
+    "envelope": {
+      "schema": 1,
+      "files": []
+    },
+    "target": {},
+    "exit": 0,
+    "stderr": "",
+    "stdout": {
+      "files": 0,
+      "bytes": 0,
+      "conflicts": []
+    },
+    "args": [
+      "tree-apply",
+      "change.json",
+      "1"
+    ],
+    "envelope_padding": 524265,
+    "boundary": true
+  },
+  {
+    "id": "envelope-bytes-524289",
+    "source": {},
+    "envelope": {
+      "schema": 1,
+      "files": []
+    },
+    "target": {},
+    "exit": 2,
+    "stderr": "patchctl: bytes_limit\n",
+    "stdout": null,
+    "args": [
+      "tree-apply",
+      "change.json",
+      "1"
+    ],
+    "envelope_padding": 524266,
+    "boundary": true
+  },
+  {
+    "id": "denied-read",
+    "source": {
+      "gone": "bye\n",
+      "sub/change": "old\n",
+      "keep": "stay\r\n",
+      "empty": ""
+    },
+    "envelope": {
+      "schema": 1,
+      "files": [
+        {
+          "path": "gone",
+          "kind": "delete",
+          "source_sha256": "abc6fd595fc079d3114d4b71a4d84b1d1d0f79df1e70f8813212f2a65d8916df",
+          "patch": "--- old\n+++ new\n@@ -1 +0,0 @@\n-bye\n"
+        },
+        {
+          "path": "sub/change",
+          "kind": "modify",
+          "source_sha256": "01d09d19c2139a46aebfb577780d123d7396e97201bc7ead210a2ebff8239dee",
+          "patch": "--- old\n+++ new\n@@ -1 +1 @@\n-old\n+new\n"
+        },
+        {
+          "path": "added",
+          "kind": "add",
+          "source_sha256": null,
+          "patch": "--- old\n+++ new\n@@ -0,0 +1 @@\n+hi\n"
+        }
+      ]
+    },
+    "target": {},
+    "exit": 2,
+    "stderr": "patchctl: grant\n",
+    "stdout": null,
+    "args": [
+      "tree-apply",
+      "change.json",
+      "4"
+    ],
+    "deny_source": true
+  }
+]

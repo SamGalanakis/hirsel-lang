@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "files": [
+    {
+      "path": "new.txt",
+      "kind": "add",
+      "source_sha256": null,
+      "patch": "--- old\n+++ new\n@@ -0,0 +1 @@\n+hello\n"
+    }
+  ]
+}

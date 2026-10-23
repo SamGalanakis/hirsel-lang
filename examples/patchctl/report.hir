@@ -1,0 +1,56 @@
+pub fn file_error(error: FileError) -> String uses {} {
+  match error {
+    NotGranted() => "grant",
+    NotFound() => "file_not_found",
+    Canceled(_) => "canceled",
+    AlreadyExists() => "already_exists",
+    _ => "file_error",
+  }
+}
+
+pub fn file_problem(error: FileError) -> manifest.Problem uses {} {
+  manifest.problem(file_error(error))
+}
+
+pub fn failed(rows: List[apply.Row]) -> bool uses {} {
+  for row in rows {
+    if let Conflict(_) = row.outcome {
+      return true
+    }
+  }
+  false
+}
+
+pub fn render(rows: List[apply.Row]) -> Result[unique String, manifest.Problem] uses {} {
+  let mut conflicts: List[json.Value] = []
+  let mut files = 0u64
+  let mut size = 0u64
+  for row in rows {
+    match row.outcome {
+      Ready(Some(data)) => {
+        files += 1
+        size += bytes.len(data)
+      },
+      Ready(None()) => (),
+      Conflict(problem) => {
+        let mut fields: Map[String, json.Value] = map.empty()
+        map.insert(mut fields, "path", Text(unique row.name))
+        map.insert(mut fields, "kind", Text(unique problem.kind))
+        let mut hunks: List[json.Value] = []
+        for index in problem.hunks {
+          list.push(mut hunks, Number(f"{index}"))
+        }
+        map.insert(mut fields, "hunks", Array(take hunks))
+        list.push(mut conflicts, Object(take fields))
+      },
+    }
+  }
+  let mut fields: Map[String, json.Value] = map.empty()
+  map.insert(mut fields, "files", Number(f"{files}"))
+  map.insert(mut fields, "bytes", Number(f"{size}"))
+  map.insert(mut fields, "conflicts", Array(take conflicts))
+  let Ok(text) = json.stringify(Object(take fields)) else {
+    return Error(manifest.problem("json"))
+  }
+  Ok(take text)
+}

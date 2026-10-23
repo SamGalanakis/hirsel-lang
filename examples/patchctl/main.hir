@@ -1,6 +1,6 @@
 pub type AppError = Grant(GrantError) | Arguments(ArgError) | Files(FileError) | InvalidInput(
   model.InvalidInput
-) | Output(OutputError)
+) | Tree(manifest.Problem) | Output(OutputError)
 
 const HELP: String = "patchctl diff OLD NEW\npatchctl apply SOURCE PATCH\nRead UTF-8 leaf filenames in the fixtures grant; write result to stdout.\nMyers, context=3; rejected hunk indexes are zero-based.\nLimits: 65536 bytes/input, 64 text lines, 256 patch lines.\nExit: 0 success/help, 1 rejected hunks, 2 invalid input/grant/I/O.\n"
 
@@ -23,6 +23,9 @@ fn execute(rt: Io, args: Args) -> Result[(), AppError] {
     out.print(io.stdout(rt)?, HELP)?
     return Ok(())
   }
+  if arg.len(args) > 0 && string.starts_with(arg.text(args, 0)?, "tree-") {
+    return tree(rt, args)
+  }
   if arg.len(args) != 3 {
     return Error(InvalidInput(Usage()))
   }
@@ -38,8 +41,8 @@ fn execute(rt: Io, args: Args) -> Result[(), AppError] {
   let d = io.dir(rt, path.of("fixtures"))?
   let source = read_text(d, source_name)?
   let other = read_text(d, other_name)?
-  let report = model.execute(command, source, other)?
-  out.print(io.stdout(rt)?, report.text)?
+  let single = model.execute(command, source, other)?
+  out.print(io.stdout(rt)?, single.text)?
   Ok(())
 }
 
@@ -55,9 +58,15 @@ pub fn main(rt: Io, args: Args) -> Result[process.ExitCode, AppError] {
         Files(_) => "file_error",
         InvalidInput(input) => model.describe(input),
         Output(_) => "output_error",
+        Tree(problem) => unique problem.kind,
       }
       let code = match error {
         InvalidInput(Rejected(_)) => 1u8,
+        Tree(problem) => if problem.kind == "conflicts" {
+          1u8
+        } else {
+          2u8
+        },
         _ => 2u8,
       }
       if let Ok(stderr) = io.stderr(rt) {
@@ -66,4 +75,97 @@ pub fn main(rt: Io, args: Args) -> Result[process.ExitCode, AppError] {
       Ok(process.exit_code(code))
     },
   }
+}
+
+fn tree(rt: Io, args: Args) -> Result[(), AppError] {
+  if arg.len(args) == 4 {
+    let Ok(milliseconds) = u64.parse(arg.text(args, 3)?) else {
+      return Error(Tree(manifest.problem("timeout")))
+    }
+    if milliseconds > 30000 {
+      return Error(Tree(manifest.problem("timeout")))
+    }
+    let tasks = io.tasks(rt)?
+    let clock = io.monotonic_clock(rt)?
+    let start = clock.monotonic(clock) ? ClockProblem
+    let Some(at) = instant.checked_add(clock, start, milliseconds * 1000000u64) else {
+      return Error(Tree(manifest.problem("timeout")))
+    }
+    let bounded = task.scope_until(
+      tasks,
+      Deadline(clock: clock, at: at),
+      fn(s: Scope) -> Result[(), AppError] {
+        tree_body(rt, args)
+      }
+    )
+    return match take bounded {
+      Finished(value) => take value,
+      Expired(_) => Error(Tree(manifest.problem("canceled"))),
+    }
+  }
+  tree_body(rt, args)
+}
+
+fn ClockProblem(error: ClockError) -> AppError {
+  Tree(manifest.problem("clock_error"))
+}
+
+fn tree_body(rt: Io, args: Args) -> Result[(), AppError] {
+  let command = arg.text(args, 0)?
+  let source = io.dir(rt, path.of("source"))?
+  if command == "tree-diff" {
+    if arg.len(args) != 1 {
+      return Error(Tree(manifest.problem("usage")))
+    }
+    let target = io.dir(rt, path.of("target"))?
+    let old = plan.scan(source)?
+    let new = plan.scan(target)?
+    let envelope = apply.difference(old, new)?
+    let text = manifest.encode(envelope)?
+    out.print(io.stdout(rt)?, f"{text}\n")?
+    return Ok(())
+  }
+  if command != "tree-check" && command != "tree-apply" || arg.len(args) != 3 && arg.len(
+    args
+  ) != 4 {
+    return Error(Tree(manifest.problem("usage")))
+  }
+  let filename = arg.text(args, 1)?
+  model.filename(filename)?
+  let Ok(jobs) = u64.parse(arg.text(args, 2)?) else {
+    return Error(Tree(manifest.problem("jobs")))
+  }
+  if jobs == 0 || jobs > 4 {
+    return Error(Tree(manifest.problem("jobs")))
+  }
+  let fixtures = io.dir(rt, path.of("fixtures"))?
+  let data = match manifest.read(fixtures, filename, manifest.TOTAL_BYTES) {
+    Ready(data) => take data,
+    Conflict(problem) => return Error(Tree(take problem)),
+  }
+  let envelope = manifest.decode(take data)?
+  let snapshot = plan.scan(source)?
+  let mut admitted = 0u64
+  for item in snapshot.files {
+    admitted += bytes.len(item.value)
+  }
+  for item in envelope.files {
+    admitted += string.byte_len(item.value.patch)
+  }
+  if admitted > manifest.TOTAL_BYTES {
+    return Error(Tree(manifest.problem("source_patch_bytes_limit")))
+  }
+  let tasks = io.tasks(rt)?
+  let rows = apply.run(tasks, snapshot, envelope, jobs)?
+  let rendered = report.render(rows)?
+  if report.failed(rows) {
+    out.print(io.stdout(rt)?, f"{rendered}\n")?
+    return Error(Tree(manifest.problem("conflicts")))
+  }
+  if command == "tree-apply" {
+    let output = io.dir(rt, path.of("output"))?
+    publish.write(output, snapshot, rows)?
+  }
+  out.print(io.stdout(rt)?, f"{rendered}\n")?
+  Ok(())
 }

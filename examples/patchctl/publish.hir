@@ -1,0 +1,56 @@
+// Separate empty grant only. Individual exclusive file creation is atomic;
+// this is not tree atomicity. The completion manifest is the final effect.
+pub fn write(d: Dir, tree: plan.Tree, rows: List[apply.Row]) -> Result[
+  (),
+  manifest.Problem
+] {
+  for row in rows {
+    if let Conflict(_) = row.outcome {
+      return Error(manifest.problem("conflicts"))
+    }
+  }
+  let entries = file.read_dir(d, path.of("")) ? report.file_problem
+  if list.len(entries) != 0 {
+    return Error(manifest.problem("output_not_empty"))
+  }
+  file.put_new(d, path.of(".patchctl-incomplete"), bytes.from_list([]), Volatile()) ? report.file_problem
+  for directory in tree.directories {
+    file.mkdir_all(d, path.of(directory)) ? report.file_problem
+  }
+  let mut completed: List[json.Value] = []
+  for row in rows {
+    let Ready(Some(data)) = row.outcome else {
+      continue
+    }
+    let parts = path.components(path.of(row.name))
+    let mut prefix = ""
+    for i in 0u64..list.len(parts) - 1 {
+      prefix = if prefix == "" {
+        unique parts[i]
+      } else {
+        f"{prefix}/{parts[i]}"
+      }
+      file.mkdir_all(d, path.of(prefix)) ? report.file_problem
+    }
+    file.put_new(d, path.of(row.name), unique data, Volatile()) ? report.file_problem
+    let mut fields: Map[String, json.Value] = map.empty()
+    map.insert(mut fields, "path", Text(unique row.name))
+    map.insert(mut fields, "sha256", Text(manifest.digest(data)))
+    list.push(mut completed, Object(take fields))
+  }
+  let mut fields: Map[String, json.Value] = map.empty()
+  map.insert(mut fields, "schema", Number("1"))
+  map.insert(mut fields, "files", Array(take completed))
+  let Ok(text) = json.stringify(Object(take fields)) else {
+    return Error(manifest.problem("json"))
+  }
+  // Remove the marker before completion: any failure still has no completion.
+  file.remove(d, path.of(".patchctl-incomplete")) ? report.file_problem
+  file.put_new(
+    d,
+    path.of(".patchctl-complete.json"),
+    unique string.as_bytes(text),
+    Volatile()
+  ) ? report.file_problem
+  Ok(())
+}
