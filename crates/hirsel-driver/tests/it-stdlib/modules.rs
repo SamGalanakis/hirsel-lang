@@ -106,3 +106,4 @@ mod unicode_normalization_upstream_25;
 mod cbor_upstream_25;
 mod unicode_case_upstream_25;
 mod yaml_upstream_25;
+mod msgpack_upstream_25;

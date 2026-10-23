@@ -791,6 +791,7 @@ Out-of-range integers, nonfinite conversions and invalid lexemes return `Invalid
 Negative zero is encoded as a float. Other float spellings can change on decode; JSON's
 arbitrary decimal precision and spelling are not a wire-format guarantee.
 
+MessagePack rejects the reserved marker `0xc1` as a syntax error at its byte offset.
 MessagePack writes shortest integer and length headers and binary64 floats. String, array
 or map extents above 4294967295 return `Unsupported(extent)` on encoding. CBOR always
 writes definite lengths and shortest integer/length headers. With `deterministic = false`,

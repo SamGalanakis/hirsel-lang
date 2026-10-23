@@ -1,0 +1,81 @@
+{
+  "seed": 2026102515,
+  "counts": {
+    "trees": 96,
+    "mutations": 64,
+    "depth": 2,
+    "partitions": 34,
+    "operations": 284
+  },
+  "files": {
+    "part-00.json": "bc3e71453927f82e37a5dd52267d349bc9fa9d5983a02b0a5cb9c006fbf5934e",
+    "part-01.json": "3c4d3e8363f3ad7e8ea4a1e11053799df765d393d04f9e01082711c1645acc15",
+    "part-02.json": "1cbd873b9253c46a5ae2d4f640fed43e87339ad241504cd845e780355a574801",
+    "part-03.json": "14c8b3256a2b3f52d9a4556710ccda5437d9a427f1a7e93186251203f47d0fd2",
+    "part-04.json": "fd650f18dca5aa6065c3008e153fd9df24624d76c36e2051330bb8eb6c5488ad",
+    "part-05.json": "6890b2de4be3f9ef3cebd2abf1775424d028a306d21265e518a0273e5e85cafa",
+    "part-06.json": "36dd273a2c0a5d489c7ae12c8a1c24c7e4174f2887d46bacd9b0959dc1992cc5",
+    "part-07.json": "ffec0b67ec2bbf0684f14aa26e56a9511a1e0e2165690aa4c6c089496ee559f2",
+    "part-08.json": "1d0eb726f61631e931d166a3927e97e32ca44ec09cd17d5d7a2497d2b2a2f60a",
+    "part-09.json": "f32d9f48e2fd4f0f5e1857efee708c8addee52f7e1b405713a03dd07b65dd307",
+    "part-10.json": "c514d822dfea22baaef5ba9b47093bd057f50825c0da27a1ca32de9a1f10d4a6",
+    "part-11.json": "37133da43933fe1e16a171e3d3cb571750d68e1ec0d075f6578816f53aa7353d",
+    "part-12.json": "af70d9154e28a8feb2055b20a58db23d014debdb1d25b6e9c0e529ee01de7d79",
+    "part-13.json": "06a819a6dec0ff36a4faf6549478874b7eb97bc949f11b0599bdf22f8359ed4a",
+    "part-14.json": "24579f013578fdf067f490925a65eb6cbec47564657c1995b494db928f38e4ad",
+    "part-15.json": "ed9ca762f00a12856c6e84cf30920e14df72e75171d3ee3ccbf7057dcdcad43e",
+    "part-16.json": "a75a02bc281bcbb1fd09c5f7667155e36757139f4cc1ab8081d30f5301e63ab7",
+    "part-17.json": "fa5828814c41b386cb2510f8b70969b136f0a90332d860b891fc2a5800292638",
+    "part-18.json": "2d22f4bacd212f71f5f37b54c73be9c2a0b2bc486ce931128b1c1caf826643ac",
+    "part-19.json": "915db8ea4716fe65517e321ae8f9b5702c77285d10bef56e7732b9a18ed284e5",
+    "part-20.json": "516a7b9bbda12185f41de2313ab43f17c8df4067ae96ec490f45a7ca625071c7",
+    "part-21.json": "42654cf18f4446854b8ad4230ac01ee734ecb6abe0817b9d0b376319a52102e7",
+    "part-22.json": "5ee6c47c4fc86a3fd2e79e11a5a31b0bc83cfad17e8e74484d6b9d56d414acc7",
+    "part-23.json": "892fbb301ee3333e4e1cf3a1ce7a1101e3ad64d594bf01fdfe0dff278049aa03",
+    "part-24.json": "e0e2205bf1f81fb63ffce6e1b4d4a91ed2bb33e86e82deef9fad888decdedfc1",
+    "part-25.json": "34b03a6ef5a7b5bb503996ad06ef3e1dec77d727611fceef968db2d5b93e7498",
+    "part-26.json": "b341b581f8ed9f0d11e9a7d3b0230fed718cd9d71f3ae84db890c9059f2fe47e",
+    "part-27.json": "63795360830e6eef84f3b640a8940fda0f6bf62c44c1d29d54ab1a29883b0172",
+    "part-28.json": "8ceaa2a48e5ab16284746eafdb995cc66647e0fb9a72c936f56d5f0b92ab9ded",
+    "part-29.json": "886138f3915e0225cc320d8a147cd02f8534b8e424c999b65b10e217910b3697",
+    "part-30.json": "bdfd65cfc9a2a4a44a0f32df2e54d8aaaa4d4b23979bfd4968aa9e66527954eb",
+    "part-31.json": "1cef51cfa8d7aa107f41771870fc17d0f2133ce6378eca18d0b16f50944c3e64",
+    "part-32.json": "06f05e2eb0b787430f832d9f8dac7c78d5b981e9674905052fa7d782a2182fc8",
+    "part-33.json": "afc56fce815b908904d8e7c40387edc49304c6fb75a6a7d8fb821c0b1dfe77ef"
+  },
+  "oracle": {
+    "name": "rmpv Value preserving binary/ext/nontext/duplicate keys",
+    "revision": "cf880019f72e35a884659a9b29d9eb89b862670b",
+    "source_sha256": {
+      "rmpv/src/decode/value.rs": "a7f1f5a4618e20a888a1050b62dd8e37072cd2a26c29a698f1f9e749c89bdd3e",
+      "rmpv/src/encode/value.rs": "9eecf8ac4da775a8805ee898a553e4b45e7d6d9aba16d95a803292ee7618b686",
+      "rmpv/tests/decode.rs": "542fef2fd6358ebc565c76984adff5b7b742969da640db6772071b6462235041",
+      "rmp/src/encode/uint.rs": "9a3e54197b1e8fa3a21a5581e50e406b353d2a01938da4d9d01f083a1e968c9a",
+      "rmp/src/encode/sint.rs": "39615e55027fe5c340ffacd1b4074dfa78fcd49768e32aef2fe6e5d4930486b4"
+    },
+    "binary_sha256": "fd3650c07e72363ad27f70928943c3cce19530012eae6d7c6c7eb4befe034209",
+    "adapter_sha256": "9bfb21fee14868017872045ff35e5b57432605e0e89b0e75a4f95cb960104e56",
+    "lock_sha256": "d6e5a12cb55d0f4a614abcd173a2a1d44d76d29d3b3cc15ebaf3e12db6b7133d",
+    "generator_sha256": "0c53b23882944af28d74652e1c5f1ce09f79e5226a4becc41519be157c9352d9"
+  },
+  "spec_paragraphs": {
+    "decode": "`msgpack` implements the MessagePack JSON domain; `cbor` implements the corresponding\nRFC 8949 domain. Both decode exactly one item into `json.Value`, reject trailing bytes,\nvalidate UTF-8, reject duplicate text map keys, and preserve insertion order. Integers\nbecome exact decimal `Number` lexemes, including MessagePack's unsigned 64-bit maximum\nand CBOR's negative minimum, -18446744073709551616. Finite binary16/32/64 floats become\nshortest binary64 decimal text, with signed zero preserved and `.0` appended when\nneeded to retain the floating-point type (`1.0` stays a float on re-encoding). A\nsubsequent encode chooses integer or floating representation from that text; original\nwire widths are not retained.",
+    "domain": "There is no lossless JSON mapping for binary strings, MessagePack extensions, CBOR tags,\nnonfinite floats, non-text keys or CBOR simple values other than bool/null. These return\n`Unsupported`; they are never silently converted to strings, arrays or null. CBOR accepts\ndefinite and indefinite text, arrays and maps, and nonpreferred integer/float widths.\nReserved two-byte simple values below 32 are malformed and return `Syntax`.\nEvery indefinite text chunk must independently be valid UTF-8; nested indefinite text\nchunks and breaks outside indefinite containers are malformed.",
+    "number": "Both encoders validate public `Number` strings with JSON's grammar. Integer lexemes must\nfit the format's integer range; decimal/exponent lexemes convert to finite binary64.\nOut-of-range integers, nonfinite conversions and invalid lexemes return `InvalidNumber`.\nNegative zero is encoded as a float. Other float spellings can change on decode; JSON's\narbitrary decimal precision and spelling are not a wire-format guarantee.",
+    "encode": "MessagePack rejects the reserved marker `0xc1` as a syntax error at its byte offset.\nMessagePack writes shortest integer and length headers and binary64 floats. String, array\nor map extents above 4294967295 return `Unsupported(extent)` on encoding. CBOR always\nwrites definite lengths and shortest integer/length headers. With `deterministic = false`,\nit retains object insertion order and uses binary64 floats. With `true`, it uses the\nshortest exactly preserving float width, including signed zero, and orders text keys by\nunsigned lexicographic comparison of their complete preferred CBOR encodings (RFC 8949\nsection 4.2.1). For this text-key domain, that is UTF-8 byte length followed by byte order.\nDeterministic output is stable across input map insertion order and run hash seeds.",
+    "errors": "`binary.DecodeError` has these cases:\n`Truncated(u64)`, `Syntax(u64)`, `Unsupported(u64)`, `Utf8(u64)`, `DuplicateKey(u64)`,\n`Nesting(u64)`, `Trailing(u64)` and `InvalidNumber`. Decode offsets are zero-based byte\npositions; UTF-8 errors identify the offending string or chunk payload start. Duplicate\nerrors identify the repeated key header. Both enforce the same library nesting policy as\nJSON: at most 128 open arrays/maps, with scalar leaves consuming no level. Encoder nesting\nerrors identify the attempted depth, 128. Partial results are released on error.",
+    "storage": "These are ordinary source codecs over explicit values. Record/variant conversion can use\nthe existing `derive.json_value` and `derive.from_json` functions; the canonical\n`codec.encode/decode[T: serializable]` envelope remains a separate wire format.",
+    "reserved": "MessagePack rejects the reserved marker `0xc1` as a syntax error at its byte offset.\nMessagePack writes shortest integer and length headers and binary64 floats. String, array\nor map extents above 4294967295 return `Unsupported(extent)` on encoding. CBOR always\nwrites definite lengths and shortest integer/length headers. With `deterministic = false`,\nit retains object insertion order and uses binary64 floats. With `true`, it uses the\nshortest exactly preserving float width, including signed zero, and orders text keys by\nunsigned lexicographic comparison of their complete preferred CBOR encodings (RFC 8949\nsection 4.2.1). For this text-key domain, that is UTF-8 byte length followed by byte order.\nDeterministic output is stable across input map insertion order and run hash seeds."
+  },
+  "deviations": [
+    "Preserve raw rmpv Value and consumed position; then reject binary/ext/nontext keys/nonfinite floats and duplicate keys under domain/decode paragraphs.",
+    "rmpv reads one item and permits trailing bytes; the decode paragraph requires EOF.",
+    "rmpv Reserved dispatch returns Nil (decode/value.rs:202); marker 0xc1 is reserved by MessagePack https://github.com/msgpack/msgpack/blob/master/spec.md#formats, reported Syntax under errors paragraph. The encode paragraph explicitly rejects reserved marker0xc1 as a syntax error at its byte offset (owner confirmed).",
+    "Upstream UTF8String retains malformed bytes; decode paragraph requires validation with payload-start errors.",
+    "Upstream default depth counts parser calls; read_value_with_max_depth(1024) preserves the full raw tree, and errors paragraph limits arrays/maps to128 open containers.",
+    "Upstream EOF diagnostics differ; selected explicit malformed byte edits use current errors paragraph read-start offsets. No duplicate host decoder or Hirsel-derived expectations.",
+    "Upstream integer encoding and length encoding are retained; encode paragraph widens decoded F32 to F64 before write_value. Original widths are not compared.",
+    "Host-built Number lexemes independently exercise number paragraph validation/finite conversion, including -0 and integer overflow."
+  ],
+  "provenance": "rmpv/tests/decode.rs:1-102 goldens and rmpv/src/decode/value.rs:83-203 at pinned revision (MIT, third-party/NOTICES.md); seed bounds generated combinations to96 trees and64 mutations. Scratch generator/oracle/logs remain external."
+}
