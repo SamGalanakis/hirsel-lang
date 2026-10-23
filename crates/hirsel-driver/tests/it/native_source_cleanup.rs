@@ -1,3 +1,10 @@
+#[path = "../support/history.rs"]
+#[allow(
+    dead_code,
+    reason = "shared test support also serves the ownership and scalar suites"
+)]
+mod history;
+
 use hirsel_driver::*;
 use hirsel_engine::*;
 use std::sync::Arc;
@@ -147,6 +154,9 @@ fn native_nested_partial_resources_finalize_once_in_reverse_order_on_every_exit(
     use hirsel_interp::observation::{Effect, SemanticRole};
     use hirsel_tir::CleanupAction;
     with_compiler_stack(|| {
+        let directory =
+            std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("source-cleanup-history-21");
+        let runner = history::Runner::new(&directory).unwrap();
         for (call_fails, bad, failures) in [
             (false, 0, 0),
             (true, 0, 1),
@@ -173,7 +183,7 @@ pub fn main(rt:Io)->Result[(),GrantError] {{
             );
             let mut producer = engine(&source);
             let input = producer.export_native_input().unwrap();
-            producer.import_native_input(input.clone()).unwrap();
+            let validated = producer.import_native_input(input.clone()).unwrap();
             let observed = run_observed_snapshot(
                 &mut producer,
                 &RunConfiguration {
@@ -222,6 +232,19 @@ pub fn main(rt:Io)->Result[(),GrantError] {{
                 assert_eq!(observation.failures[0].cause_indices, [1]);
                 assert!(observation.failures[1].cause_indices.is_empty());
             }
+            let reference = hirsel_driver::native::Observation::of_reference(&observation);
+            let name = format!("call-{call_fails}-drop-{bad}");
+            let report = runner.compare(
+                &validated,
+                &entry_path(&default_context()),
+                &reference,
+                &name,
+            );
+            assert_eq!(report.cells.len(), 4);
+            assert!(report.agrees(), "{name}: {report:#?}");
+            eprintln!(
+                "cleanup {name}: reference/H/LLVM/Cranelift agree; failures={failures}; finalizers=3"
+            );
             let mut probe = entry_path(&default_context());
             probe.0.name = "probe".into();
             let mut signatures = hirsel_validate::SignatureMap::new(input.types.clone());

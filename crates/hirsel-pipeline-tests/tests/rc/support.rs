@@ -561,3 +561,6 @@ pub fn lower_valid(source: &str) -> (Program, Lowered) {
 pub fn unit_named<'a>(lowered: &'a Lowered, name: &str) -> &'a LirUnit<hirsel_lir::stage::Value> {
     &lowered.units[instances_of(lowered, name)[0].index()]
 }
+
+#[path = "../../../hirsel-driver/tests/support/history.rs"]
+pub mod history;

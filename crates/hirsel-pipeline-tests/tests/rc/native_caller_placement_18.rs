@@ -203,7 +203,7 @@ fn native_parity(cases: &[(&str, &str)]) {
     let directory =
         std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("native-caller-placement-18");
     std::fs::create_dir_all(&directory).unwrap();
-    let toolchain = Toolchain::for_matrix(&directory.join("runtime"), &matrix).unwrap();
+    let runner = crate::rc_support::history::Runner::with_matrix(&directory, matrix).unwrap();
     for &(name, source) in cases {
         with_compiler_stack(|| {
             let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
@@ -248,20 +248,10 @@ fn native_parity(cases: &[(&str, &str)]) {
                 }
                 eprintln!("{name} regions={regions}: {:?}", heap.counters);
             }
-            let directory = directory.join(name);
-            std::fs::create_dir_all(&directory).unwrap();
-            let mut executions = 0;
-            for (configuration, outcome) in differential(
-                &validated, &entry, &reference, &matrix, &toolchain, &directory,
-            ) {
-                assert!(
-                    matches!(outcome, Outcome::Agree),
-                    "{name}: {configuration}: {outcome:?}"
-                );
-                eprintln!("{name}: {configuration}: agrees");
-                executions += 1;
-            }
-            assert_eq!(executions, 6);
+            let report = runner.compare(&validated, &entry, &reference, name);
+            assert_eq!(report.cells.len(), 7); // reference plus the six existing configurations
+            assert!(report.agrees(), "{name}: {report:#?}");
+            eprintln!("{name}: six configurations agree");
         });
     }
 }
