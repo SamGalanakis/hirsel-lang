@@ -34,7 +34,7 @@ impl store::ResultStore for Observed {
     fn get_content(&self, reference: store::Reference) -> Option<store::Bytes> {
         assert!(
             !self.forbid_content_reads.load(Ordering::Relaxed)
-                || ![QueryKind::Modes, QueryKind::Summary].iter().any(|kind| reference.domain.kind == *kind as u32 + 16),
+                || ![QueryKind::Modes, QueryKind::Summary, QueryKind::Lower].iter().any(|kind| reference.domain.kind == *kind as u32 + 16),
             "stale dependency action materialized a payload"
         );
         self.content_reads.fetch_add(1, Ordering::Relaxed);
@@ -381,5 +381,40 @@ fn signature_store_keeps_negative_namespace_and_relocated_diagnostic_dependencie
         let mut fresh = signature_session(store, &repaired, true);
         assert!(fresh.item_signature(&path).is_ok());
         assert_eq!(fresh.recompute_count(&path, QueryKind::Signature), 1);
+    });
+}
+
+#[test]
+fn lower_store_hits_validate_reads_and_v_before_demanding_modes_bodies() {
+    with_compiler_stack(|| {
+        let store = Arc::new(Observed::default());
+        let source = "fn callee()->u32{1u32}\nfn caller()->u32{callee()}\n";
+        let path = definition("caller");
+        let mut seed = signature_session(store.clone(), source, true);
+        let expected = seed.lower_to_tir(&path).unwrap();
+        let expected_signature = expected.value.signature_hash;
+        drop(seed);
+        store.mode_reads.store(0, Ordering::Relaxed);
+        let mut fresh = signature_session(store.clone(), source, true);
+        fresh.adapters.modes = None;
+        let actual = fresh.lower_to_tir(&path).unwrap();
+        assert_eq!(actual.value.signature_hash, expected_signature);
+        assert_eq!(fresh.recompute_count(&path, QueryKind::Modes), 0);
+        assert_eq!(fresh.recompute_count(&path, QueryKind::Lower), 0);
+        assert_eq!(store.mode_reads.load(Ordering::Relaxed), 0);
+        let repeated = fresh.lower_to_tir(&path).unwrap();
+        assert!(Arc::ptr_eq(&actual.value, &repeated.value));
+        let changed = source.replace("callee()->u32{1u32}", "callee()->u64{1u64}");
+        store.forbid_content_reads.store(true, Ordering::Relaxed);
+        let mut invalid = signature_session(store.clone(), &changed, true);
+        let rejected = invalid.lower_to_tir(&path).unwrap_err();
+        store.forbid_content_reads.store(false, Ordering::Relaxed);
+        let mut cold = signature_session(Arc::new(store::NoneStore), &changed, true);
+        let expected = cold.lower_to_tir(&path).unwrap_err();
+        let render = |engine: &QueryEngine, error| match error {
+            QueryError::Diagnostics(ds) => ds.iter().map(|d| d.render_human(&engine.sources)).collect::<Vec<_>>(),
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(render(&invalid, rejected), render(&cold, expected));
     });
 }
