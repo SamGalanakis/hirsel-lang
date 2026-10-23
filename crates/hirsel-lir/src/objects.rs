@@ -18,13 +18,12 @@ use crate::emission::EmitInputs;
 use crate::ir::{ConstantValue, Inst, LirUnit};
 use crate::layout_types::LayoutId;
 use crate::stage::Ready;
+use hirsel_artifact_store::{Action, Address, Domain, Store};
 use hirsel_syntax::ContentHash;
 use std::collections::{BTreeMap, HashMap};
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 use std::sync::{Arc, Mutex, PoisonError};
-use std::time::SystemTime;
 
 /// The content key of one planned unit's object.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
@@ -49,8 +48,7 @@ impl UnitKey {
 /// Stored unit fragments by `UnitKey`. A `get` that cannot produce intact bytes is a
 /// miss; a `put` that cannot store is dropped. Neither is ever an error the build sees.
 pub trait ObjectStore: Send + Sync {
-    /// Can retain approved local production associations. A legacy seed layered
-    /// over none@1 does not justify rebuilding bodies to populate an absent store.
+    /// Can retain approved local production associations.
     fn production_enabled(&self) -> bool {
         false
     }
@@ -78,47 +76,26 @@ impl ProducedBytes {
     }
 }
 
-/// A writable cache with a read-only toolchain seed as fallback. Hits never copy
-/// seed entries into the writable store; misses are written only to `writable`.
-pub struct SeededObjects {
-    pub writable: Arc<dyn ObjectStore>,
-    pub seed: Arc<dyn ObjectStore>,
-}
-
-impl ObjectStore for SeededObjects {
-    fn production_enabled(&self) -> bool {
-        self.writable.production_enabled()
-    }
-    fn get_produced(&self, key: &UnitKey) -> Option<ProducedBytes> {
-        self.writable
-            .get_produced(key)
-            .or_else(|| self.seed.get_produced(key))
-    }
-    fn enabled(&self) -> bool {
-        self.writable.enabled() || self.seed.enabled()
-    }
-    fn get(&self, key: &UnitKey) -> Option<Arc<[u8]>> {
-        self.writable.get(key).or_else(|| self.seed.get(key))
-    }
-    fn put(&self, key: &UnitKey, value: &[u8]) {
-        self.writable.put(key, value);
-    }
-}
-
-/// A toolchain object partition. It never refreshes mtimes, removes corrupt
-/// entries or writes files, so a shared installation can be read-only.
-pub struct ReadOnlyObjects(pub PathBuf);
-impl ObjectStore for ReadOnlyObjects {
-    fn get(&self, key: &UnitKey) -> Option<Arc<[u8]>> {
-        let hex = key.hex();
-        let bytes = fs::read(self.0.join(&hex[..2]).join(&hex)).ok()?;
-        Some(unframe(&bytes)?.into())
-    }
-    fn put(&self, _: &UnitKey, _: &[u8]) {}
-}
-
 /// The store format version in `dir@1`'s directory name.
-pub const FORMAT: u32 = 2;
+pub const FORMAT: u32 = 3;
+
+// Native fragments have their own typed domain, independent of query/V records.
+const OBJECT_DOMAIN: Domain = Domain {
+    kind: 0x4400_0001,
+    schema: 1,
+};
+fn address(key: &UnitKey) -> Address {
+    Address(ContentHash::of_parts(
+        "hirsel.object.address.v1",
+        [key.0.0.as_slice()],
+    ))
+}
+fn action(key: &UnitKey) -> Action {
+    Action(ContentHash::of_parts(
+        "hirsel.object.action.v1",
+        [key.0.0.as_slice()],
+    ))
+}
 
 /// The `dir@1` partition of one target, backend and opt level: objects of different
 /// partitions never share a directory, so a key collision across them is impossible.
@@ -144,32 +121,30 @@ pub const DEFAULT_CAP: u64 = 4 << 30;
 /// After this many bytes written in a process, `dir@1` enforces its cap.
 const GC_EVERY: u64 = 64 << 20;
 
-/// `dir@1`: one checksummed file per unit under
-/// `$XDG_CACHE_HOME/hirsel/objects-v<N>/<partition>`. Writes go to a temp file renamed
-/// into place, so readers never see a partial object and no lock is taken. A size cap
-/// is enforced by evicting the least recently used objects by mtime; a hit refreshes
-/// its object's mtime.
-#[derive(Debug)]
+/// `dir@1`: native action associations and checked immutable content in the
+/// common artifact store. The v3 reset has no reader for old object files.
+/// Only this configured local writable provider supplies production authority.
 pub struct DirObjects {
-    root: PathBuf,
+    store: Store,
     cap: u64,
     written: AtomicU64,
 }
-
-/// What a collection found and removed.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct GcReport {
-    pub entries: u64,
-    pub bytes: u64,
-    pub removed: u64,
-    pub removed_bytes: u64,
+impl std::fmt::Debug for DirObjects {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DirObjects")
+            .field("root", &self.root())
+            .field("cap", &self.cap)
+            .finish_non_exhaustive()
+    }
 }
+
+pub use hirsel_artifact_store::GcReport;
 
 impl DirObjects {
     /// The store at `root`, the directory of one partition.
     pub fn new(root: PathBuf) -> Self {
         Self {
-            root,
+            store: Store::new(root),
             cap: DEFAULT_CAP,
             written: AtomicU64::new(0),
         }
@@ -200,62 +175,11 @@ impl DirObjects {
         ))
     }
     pub fn root(&self) -> &Path {
-        &self.root
+        self.store.root()
     }
-    fn path(&self, key: &UnitKey) -> PathBuf {
-        let hex = key.hex();
-        self.root.join(&hex[..2]).join(&hex)
-    }
-
-    /// Evicts least recently used objects until the store is within `cap`, and removes
-    /// temp files a crashed writer left behind.
+    /// Collect the common store's action and content files within `cap`.
     pub fn gc(&self, cap: u64) -> GcReport {
-        let mut report = GcReport::default();
-        let mut files: Vec<(SystemTime, u64, PathBuf)> = vec![];
-        let Ok(shards) = fs::read_dir(&self.root) else {
-            return report;
-        };
-        for shard in shards.flatten() {
-            let shard = shard.path();
-            if shard.file_name().is_some_and(|n| n == "tmp") {
-                for stale in fs::read_dir(&shard).into_iter().flatten().flatten() {
-                    let old = stale
-                        .metadata()
-                        .and_then(|m| m.modified())
-                        .ok()
-                        .and_then(|t| t.elapsed().ok())
-                        .is_some_and(|age| age.as_secs() > 3600);
-                    if old {
-                        let _ = fs::remove_file(stale.path());
-                    }
-                }
-                continue;
-            }
-            for file in fs::read_dir(&shard).into_iter().flatten().flatten() {
-                if let Ok(meta) = file.metadata()
-                    && meta.is_file()
-                {
-                    let time = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
-                    files.push((time, meta.len(), file.path()));
-                }
-            }
-        }
-        report.entries = files.len() as u64;
-        report.bytes = files.iter().map(|f| f.1).sum();
-        // Oldest first; ties by path, so the order does not depend on readdir.
-        files.sort();
-        let mut total = report.bytes;
-        for (_, len, path) in files {
-            if total <= cap {
-                break;
-            }
-            if fs::remove_file(&path).is_ok() {
-                total -= len;
-                report.removed += 1;
-                report.removed_bytes += len;
-            }
-        }
-        report
+        self.store.collect(cap)
     }
     pub fn cap(&self) -> u64 {
         self.cap
@@ -270,59 +194,29 @@ impl ObjectStore for DirObjects {
         self.get(key).map(ProducedBytes)
     }
     fn get(&self, key: &UnitKey) -> Option<Arc<[u8]>> {
-        let path = self.path(key);
-        let bytes = fs::read(&path).ok()?;
-        match unframe(&bytes) {
-            Some(payload) => {
-                // Refresh the LRU clock; failure only ages the entry.
-                if let Ok(file) = fs::File::options().append(true).open(&path) {
-                    let _ = file.set_modified(SystemTime::now());
-                }
-                Some(payload.into())
-            }
-            None => {
-                let _ = fs::remove_file(&path);
-                None
-            }
+        let entry = self.store.lookup(address(key))?;
+        if entry.action != action(key) || entry.reference.domain != OBJECT_DOMAIN {
+            return None;
         }
+        let bytes = self.store.get(entry.reference)?;
+        self.store.touch(address(key), entry.reference);
+        Some(Arc::from(&*bytes))
     }
     fn put(&self, key: &UnitKey, value: &[u8]) {
-        let path = self.path(key);
-        let temp_dir = self.root.join("tmp");
-        let framed = frame(value);
-        let write = || -> std::io::Result<()> {
-            use std::io::Write;
-            // Separate handles in this process share a publication sequence.
-            // create_new also refuses leftovers from an earlier PID lifetime.
-            static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
-            fs::create_dir_all(path.parent().unwrap())?;
-            fs::create_dir_all(&temp_dir)?;
-            let temp = temp_dir.join(format!(
-                "{}.{}.{}",
-                key.hex(),
-                std::process::id(),
-                NEXT_TEMP.fetch_add(1, Relaxed)
-            ));
-            let mut file = fs::File::options()
-                .write(true)
-                .create_new(true)
-                .open(&temp)?;
-            if let Err(error) = file.write_all(&framed) {
-                let _ = fs::remove_file(&temp);
-                return Err(error);
-            }
-            drop(file);
-            fs::rename(&temp, &path).inspect_err(|_| {
-                let _ = fs::remove_file(&temp);
-            })
+        // Content alone is not a local production claim. Publish the association
+        // only after the checked immutable output exists.
+        let Ok(reference) = self.store.put(OBJECT_DOMAIN, value) else {
+            return;
         };
-        // A failed write is a later miss, never a build failure.
-        if write().is_ok() {
-            let before = self.written.fetch_add(framed.len() as u64, Relaxed);
-            // Short-lived CLI processes must not bypass collection forever.
-            // Afterwards allow at most one interval of slack per active handle.
+        if self
+            .store
+            .associate(address(key), action(key), reference)
+            .is_ok()
+        {
+            let len = value.len() as u64;
+            let before = self.written.fetch_add(len, Relaxed);
             let interval = GC_EVERY.min(self.cap.max(1));
-            if before == 0 || (before + framed.len() as u64) / interval != before / interval {
+            if before == 0 || (before + len) / interval != before / interval {
                 self.gc(self.cap);
             }
         }
@@ -340,15 +234,14 @@ pub struct SimFaults {
 }
 
 /// `sim@1`: a deterministic in-memory store with an operation log and injectable
-/// faults. Payloads carry `dir@1`'s checksum framing, so corruption is detected the
-/// same way.
+/// faults. Checksums model publication damage without a physical file codec.
 #[derive(Debug, Default)]
 pub struct SimObjects {
     state: Mutex<SimState>,
 }
 #[derive(Debug, Default)]
 struct SimState {
-    entries: HashMap<UnitKey, Vec<u8>>,
+    entries: HashMap<UnitKey, (ContentHash, Vec<u8>)>,
     faults: SimFaults,
     gets: u64,
     puts: u64,
@@ -383,9 +276,13 @@ impl SimObjects {
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
-    /// The bytes stored, framing included.
+    /// Simulated record bytes, including checksum/header accounting.
     pub fn bytes(&self) -> usize {
-        self.state().entries.values().map(Vec::len).sum()
+        self.state()
+            .entries
+            .values()
+            .map(|(_, bytes)| bytes.len() + 48)
+            .sum()
     }
 }
 impl ObjectStore for SimObjects {
@@ -399,25 +296,24 @@ impl ObjectStore for SimObjects {
         let mut state = self.state();
         let ordinal = state.gets;
         state.gets += 1;
-        let Some(mut framed) = state.entries.get(key).cloned() else {
+        let Some((mut checksum, mut payload)) = state.entries.get(key).cloned() else {
             state.log.push(SimOp::Miss(*key));
             return None;
         };
-        if state.faults.corrupt_gets.contains(&ordinal)
-            && let Some(last) = framed.last_mut()
-        {
-            *last ^= 0xff;
+        if state.faults.corrupt_gets.contains(&ordinal) {
+            if let Some(last) = payload.last_mut() {
+                *last ^= 0xff;
+            } else {
+                checksum.0[0] ^= 0xff;
+            }
         }
-        match unframe(&framed) {
-            Some(payload) => {
-                state.log.push(SimOp::Hit(*key));
-                Some(payload.into())
-            }
-            None => {
-                state.entries.remove(key);
-                state.log.push(SimOp::Corrupt(*key));
-                None
-            }
+        if ContentHash::of_parts("hirsel.object.payload.v1", [payload.as_slice()]) == checksum {
+            state.log.push(SimOp::Hit(*key));
+            Some(payload.into())
+        } else {
+            state.entries.remove(key);
+            state.log.push(SimOp::Corrupt(*key));
+            None
         }
     }
     fn put(&self, key: &UnitKey, value: &[u8]) {
@@ -428,31 +324,10 @@ impl ObjectStore for SimObjects {
             state.log.push(SimOp::Lost(*key));
             return;
         }
-        state.entries.insert(*key, frame(value));
+        let checksum = ContentHash::of_parts("hirsel.object.payload.v1", [value]);
+        state.entries.insert(*key, (checksum, value.to_vec()));
         state.log.push(SimOp::Put(*key));
     }
-}
-
-const FRAME_MAGIC: &[u8; 8] = b"HIROBJ01";
-
-/// A stored payload: magic, length, SHA-256 of the payload, payload.
-fn frame(payload: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(payload.len() + 48);
-    out.extend(FRAME_MAGIC);
-    out.extend((payload.len() as u64).to_le_bytes());
-    out.extend(ContentHash::of_parts("hirsel.object.payload.v1", [payload]).0);
-    out.extend(payload);
-    out
-}
-
-/// The payload of a framed record, or `None` on any mismatch.
-fn unframe(bytes: &[u8]) -> Option<&[u8]> {
-    let rest = bytes.strip_prefix(FRAME_MAGIC.as_slice())?;
-    let (len, rest) = rest.split_at_checked(8)?;
-    let (sum, payload) = rest.split_at_checked(32)?;
-    (u64::from_le_bytes(len.try_into().ok()?) as usize == payload.len()
-        && ContentHash::of_parts("hirsel.object.payload.v1", [payload]).0 == sum)
-        .then_some(payload)
 }
 
 /// The store a run-config provider name selects for `partition`: `none@1`, `dir@1`
@@ -818,6 +693,7 @@ fn unit_digest<S: crate::stage::Stage + Clone>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{fs, time::SystemTime};
 
     fn key(n: u8) -> UnitKey {
         UnitKey(ContentHash([n; 32]))
@@ -843,6 +719,16 @@ mod tests {
         assert!(objects_by_name("disk@9", None, "p").is_err());
     }
 
+    fn paths(store: &DirObjects, key: &UnitKey) -> (PathBuf, PathBuf) {
+        let entry = store.store.lookup(address(key)).unwrap();
+        let hash = address(key).0;
+        let hex: String = hash.0.iter().map(|b| format!("{b:02x}")).collect();
+        (
+            store.root().join("actions").join(&hex[..2]).join(&hex),
+            store.store.output_path(entry.reference),
+        )
+    }
+
     #[test]
     fn dir_round_trips_rejects_damage_and_evicts_least_recently_used() {
         let root = scratch("dir");
@@ -850,30 +736,159 @@ mod tests {
         assert!(store.get(&key(1)).is_none());
         store.put(&key(1), b"first object");
         store.put(&key(2), b"second object");
-        assert_eq!(&*store.get(&key(1)).unwrap(), b"first object");
-        assert_eq!(&*store.get(&key(2)).unwrap(), b"second object");
-        // A damaged file is a miss, and is removed.
-        let path = store.path(&key(2));
+        let reopened = DirObjects::new(store.root().to_owned());
+        assert_eq!(&*reopened.get(&key(1)).unwrap(), b"first object");
+        assert_eq!(
+            reopened.get_produced(&key(2)).unwrap().bytes(),
+            b"second object"
+        );
+        let (_, path) = paths(&store, &key(2));
         let mut bytes = fs::read(&path).unwrap();
         *bytes.last_mut().unwrap() ^= 1;
         fs::write(&path, bytes).unwrap();
         assert!(store.get(&key(2)).is_none());
-        assert!(!path.exists());
-        // Eviction keeps the most recently used within the cap.
+        assert!(store.get_produced(&key(2)).is_none());
+        store.gc(0);
+        store.put(&key(1), b"first object");
         store.put(&key(3), b"third object");
         let old = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1);
-        fs::File::options()
-            .append(true)
-            .open(store.path(&key(1)))
-            .unwrap()
-            .set_modified(old)
-            .unwrap();
-        let one = fs::metadata(store.path(&key(3))).unwrap().len();
+        let (old_action, old_output) = paths(&store, &key(1));
+        for path in [old_action, old_output] {
+            fs::File::options()
+                .append(true)
+                .open(path)
+                .unwrap()
+                .set_modified(old)
+                .unwrap();
+        }
+        let (action, output) = paths(&store, &key(3));
+        let one = fs::metadata(action).unwrap().len() + fs::metadata(output).unwrap().len();
         let report = store.gc(one);
-        assert_eq!((report.entries, report.removed), (2, 1));
+        assert_eq!((report.entries, report.removed), (4, 2));
+        assert_eq!(report.bytes - report.removed_bytes, one);
         assert!(store.get(&key(1)).is_none());
         assert!(store.get(&key(3)).is_some());
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn dir_requires_its_domain_action_and_complete_local_publication() {
+        let root = scratch("identity");
+        let store = DirObjects::new(root.clone());
+        let physical = Store::new(root.clone());
+        // Copying ordinary content into a local cache cannot mint an association.
+        let reference = physical.put(OBJECT_DOMAIN, b"copied content").unwrap();
+        assert!(store.get_produced(&key(1)).is_none());
+        let wrong = physical
+            .put(
+                Domain {
+                    kind: OBJECT_DOMAIN.kind + 1,
+                    ..OBJECT_DOMAIN
+                },
+                b"wrong domain",
+            )
+            .unwrap();
+        physical
+            .associate(address(&key(1)), action(&key(1)), wrong)
+            .unwrap();
+        assert!(store.get_produced(&key(1)).is_none());
+        let wrong = physical
+            .put(
+                Domain {
+                    schema: OBJECT_DOMAIN.schema + 1,
+                    ..OBJECT_DOMAIN
+                },
+                b"old schema",
+            )
+            .unwrap();
+        physical
+            .associate(address(&key(1)), action(&key(1)), wrong)
+            .unwrap();
+        assert!(store.get_produced(&key(1)).is_none());
+        physical
+            .associate(address(&key(1)), action(&key(2)), reference)
+            .unwrap();
+        assert!(store.get(&key(1)).is_none());
+        store.put(&key(1), b"local production");
+        assert_eq!(
+            store.get_produced(&key(1)).unwrap().bytes(),
+            b"local production"
+        );
+        // Unknown/read-only byte adapters never inherit the writable provider's
+        // production capability, even when their bytes came from that provider.
+        struct Imported(Arc<[u8]>);
+        impl ObjectStore for Imported {
+            fn get(&self, _: &UnitKey) -> Option<Arc<[u8]>> {
+                Some(self.0.clone())
+            }
+            fn put(&self, _: &UnitKey, _: &[u8]) {}
+        }
+        let imported = Imported(store.get(&key(1)).unwrap());
+        assert!(imported.get(&key(1)).is_some());
+        assert!(!imported.production_enabled());
+        assert!(imported.get_produced(&key(1)).is_none());
+        let (_, output) = paths(&store, &key(1));
+        fs::remove_file(output).unwrap();
+        assert!(store.get_produced(&key(1)).is_none());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn dir_ignores_old_files_and_failed_or_oversized_writes() {
+        let root = scratch("old");
+        let hex = key(1).hex();
+        fs::create_dir_all(root.join(&hex[..2])).unwrap();
+        fs::write(
+            root.join(&hex[..2]).join(&hex),
+            b"HIROBJ01old object framing",
+        )
+        .unwrap();
+        let store = DirObjects::new(root.clone());
+        assert!(store.get(&key(1)).is_none());
+        store.put(&key(1), &vec![0; hirsel_artifact_store::MAX_RECORD + 1]);
+        assert!(store.get(&key(1)).is_none());
+        let blocked = root.join("not-a-directory");
+        fs::write(&blocked, b"blocked").unwrap();
+        let blocked = DirObjects::new(blocked);
+        blocked.put(&key(1), b"never published");
+        assert!(blocked.get_produced(&key(1)).is_none());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn dir_rejects_every_truncation_and_corrupt_content_or_association() {
+        let root = scratch("truncate");
+        let store = DirObjects::new(root.clone());
+        store.put(&key(1), b"complete");
+        let (action, output) = paths(&store, &key(1));
+        for path in [output, action] {
+            let bytes = fs::read(&path).unwrap();
+            for cut in 0..bytes.len() {
+                fs::write(&path, &bytes[..cut]).unwrap();
+                assert!(
+                    store.get_produced(&key(1)).is_none(),
+                    "{} cut {cut}",
+                    path.display()
+                );
+            }
+            for at in 0..bytes.len() {
+                let mut bad = bytes.clone();
+                bad[at] ^= 1;
+                fs::write(&path, bad).unwrap();
+                assert!(
+                    store.get_produced(&key(1)).is_none(),
+                    "{} byte {at}",
+                    path.display()
+                );
+            }
+            let mut trailing = bytes.clone();
+            trailing.push(0);
+            fs::write(&path, trailing).unwrap();
+            assert!(store.get(&key(1)).is_none());
+            fs::write(&path, bytes).unwrap();
+        }
+        assert_eq!(&*store.get(&key(1)).unwrap(), b"complete");
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -943,19 +958,12 @@ mod tests {
         let store = DirObjects::new(root.clone());
         store.put(&key(99), b"complete");
         assert_eq!(&*store.get(&key(99)).unwrap(), b"complete");
-        assert!(
-            std::fs::read_dir(root.join("tmp"))
-                .unwrap()
-                .next()
-                .is_none()
-        );
-        let hex = key(99).hex();
-        let path = root.join(&hex[..2]).join(&hex);
-        let bytes = std::fs::read(&path).unwrap();
-        // Every truncated header/payload and a damaged checksum is a miss.
-        for cut in 0..bytes.len() {
-            std::fs::write(&path, &bytes[..cut]).unwrap();
-            assert!(store.get(&key(99)).is_none(), "cut {cut}");
+        for kind in ["actions", "outputs"] {
+            for shard in fs::read_dir(root.join(kind)).unwrap() {
+                for file in fs::read_dir(shard.unwrap().path()).unwrap() {
+                    assert!(!file.unwrap().file_name().to_string_lossy().starts_with('.'));
+                }
+            }
         }
         std::fs::remove_dir_all(root).unwrap();
     }
