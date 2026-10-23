@@ -279,6 +279,7 @@ impl QueryEngine {
         if instance_bodied(&snapshot) {
             return self.declaration_check_query(definition, snapshot);
         }
+        self.record_generated_selection(DefId::intern(definition));
         let site = snapshot.tree.expressions[body.0 as usize].origin.span;
         // CT-4: a generator that needs its own declaration's body.
         if self.s1.on_stack(definition).is_some() {
@@ -303,9 +304,7 @@ impl QueryEngine {
             }
             self.merge_execution(entry.reads());
             self.merge_lower_acceptance(entry.acceptance.as_ref(), true);
-            for (id, arguments) in &entry.staged {
-                self.record_staged_selection(*id, arguments);
-            }
+            self.record_selections(&entry.selections);
             return entry.result();
         }
         timings::count(Count::Definitions);
@@ -342,12 +341,12 @@ impl QueryEngine {
             .pop()
             .expect("generation execution frame");
         reads.observed.merged.extend(executed);
-        let (_, acceptance, staged) = self.end_evaluation_validation();
+        let (_, acceptance, selections) = self.end_evaluation_validation();
         let key = MemoKey::new(QueryKind::Check, id);
         let mut entry = self.finish(key, text, reads.reads, result, reads.observed);
         entry.depth = Some(depth.clone());
         entry.acceptance = acceptance;
-        entry.staged = staged;
+        entry.selections = selections;
         let entry = Arc::new(entry);
         // Its own frame is on the stack still: stored before leaving, so a
         // waiting worker finds it.
@@ -376,14 +375,12 @@ impl QueryEngine {
             reads.observed.merged.merge(&observed);
             reads.reads = record.detail;
             self.merge_lower_acceptance(record.acceptance.as_ref(), true);
-            for (id, arguments) in &record.staged {
-                self.record_staged_selection(*id, arguments);
-            }
+            self.record_selections(&record.selections);
             record.text
         } else {
             self.begin_evaluation_validation();
             let generated = self.generated_text(definition, snapshot, body, reads);
-            let (_, acceptance, staged) = self.end_evaluation_validation();
+            let (_, acceptance, selections) = self.end_evaluation_validation();
             let generated = generated?;
             if self.result_store.is_some() {
                 if let Some(executed) = self.execution_stack.last() {
@@ -399,7 +396,7 @@ impl QueryEngine {
                             text: generated.clone(),
                             detail: reads.reads.clone(),
                             depth: self.depth_composed(false),
-                            staged,
+                            selections,
                             acceptance,
                         },
                     )?;
@@ -499,7 +496,7 @@ impl QueryEngine {
                         detail: generation_detail.clone(),
                         depth: product.depth.clone(),
                         acceptance: product.acceptance.clone(),
-                        staged: product.staged.clone(),
+                        selections: product.selections.clone(),
                     },
                 )?;
             }
@@ -555,7 +552,7 @@ impl QueryEngine {
         );
         entry.depth = Some(depth);
         entry.acceptance = product.acceptance;
-        entry.staged = product.staged;
+        entry.selections = product.selections;
         let retry = entry.result().err().filter(|error| !error.cacheable());
         let own = self.s1.failure_is_own();
         keep(&mut self.checked, &mut self.graph, Arc::new(entry), own);
@@ -1012,6 +1009,7 @@ impl QueryEngine {
             });
         let (instance, fresh) = self.register_generated_instance(declaration, actuals, site)?;
         if !fresh && !restored {
+            self.record_generated_selection(DefId::intern(&instance));
             return Ok(instance);
         }
         let key = hirsel_tir::InstanceBodies::key(&self.types, &actuals.arguments)

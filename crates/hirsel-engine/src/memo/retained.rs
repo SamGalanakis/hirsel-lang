@@ -78,11 +78,13 @@ pub(crate) fn retained_lowering_output_bytes(
 
 /// Exact worker staged-use closure. DefIds belong to the session; argument
 /// vector capacities are retained by the lower memo and charged in its hold.
-pub(crate) fn retained_staged_request_bytes(
-    requests: &Vec<(hirsel_syntax::DefId, Vec<u64>)>,
-) -> u64 {
+pub(crate) fn retained_staged_request_bytes(requests: &Vec<crate::comptime::Selection>) -> u64 {
     let mut weight = Weight::default();
-    weight.vec(requests, |w, (_, arguments)| w.flat_vec(arguments));
+    weight.vec(requests, |w, selection| {
+        if let crate::comptime::Selection::Staged(_, arguments) = selection {
+            w.flat_vec(arguments);
+        }
+    });
     weight.bytes
 }
 
@@ -104,7 +106,11 @@ pub(crate) fn retained_lower_entry_bytes(
     );
     weight.detail(&entry.detail);
     weight.flat_vec(&entry.covered);
-    weight.vec(&entry.staged, |w, (_, arguments)| w.flat_vec(arguments));
+    weight.vec(&entry.selections, |w, selection| {
+        if let crate::comptime::Selection::Staged(_, arguments) = selection {
+            w.flat_vec(arguments);
+        }
+    });
     if let Some(depth) = &entry.depth {
         weight.add(size_of_val(&*depth.first));
     }
@@ -794,7 +800,7 @@ mod tests {
             covered: vec![],
             depth: None,
             acceptance: None,
-            staged: vec![],
+            selections: vec![],
             consistent: true,
         };
         let base = retained_lower_entry_bytes(&entry, None);

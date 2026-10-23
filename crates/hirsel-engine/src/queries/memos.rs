@@ -25,7 +25,7 @@ pub(crate) struct Entry<T> {
     /// dependency-request trace (design §1c).
     pub depth: Option<crate::memo::DepthEvidence<Span>>,
     pub acceptance: Option<hirsel_validate::ExecutionReceipt>,
-    pub staged: Vec<(DefId, Vec<u64>)>,
+    pub selections: Vec<crate::comptime::Selection>,
     /// False when an input changed during the evaluation: the result is
     /// returned but never kept.
     pub consistent: bool,
@@ -578,7 +578,7 @@ impl QueryEngine {
             covered: vec![],
             depth: None,
             acceptance: None,
-            staged: vec![],
+            selections: vec![],
             consistent,
         }
     }
