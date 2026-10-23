@@ -1,0 +1,95 @@
+pub type AppError = Output(OutputError)
+
+fn argument(args: Args, index: u64) -> Result[unique String, manifest.Problem] {
+  let Ok(value) = arg.text(args, index) else {
+    return Error(manifest.issue("arguments", ""))
+  }
+  if string.byte_len(value) > manifest.NAME {
+    return Error(manifest.issue("argument_limit", ""))
+  }
+  Ok(unique value)
+}
+
+fn execute(rt: Io, args: Args) -> Result[restore.Report, manifest.Problem] {
+  let count = arg.len(args)
+  if count < 2 || count > 4 {
+    return Error(manifest.issue("usage", ""))
+  }
+  let command = argument(args, 0)?
+  if command != "backup" && command != "verify" && command != "restore" {
+    return Error(manifest.issue("usage", ""))
+  }
+  if command == "backup" && count != 4 || command != "backup" && count != 2 {
+    return Error(manifest.issue("usage", ""))
+  }
+  let name = argument(args, 1)?
+  let Ok(objects) = io.dir(rt, path.of("chunks")) else {
+    return Error(manifest.issue("chunks_grant", ""))
+  }
+  let Ok(snapshots) = io.dir(rt, path.of("snapshots")) else {
+    return Error(manifest.issue("snapshots_grant", ""))
+  }
+  if command == "backup" {
+    let destination = argument(args, 2)?
+    let width = argument(args, 3)?
+    let Ok(jobs) = u64.parse(width) else {
+      return Error(manifest.issue("jobs_limit", ""))
+    }
+    if jobs == 0 || jobs > 4 {
+      return Error(manifest.issue("jobs_limit", ""))
+    }
+    let Ok(source) = io.dir(rt, path.of("source")) else {
+      return Error(manifest.issue("source_grant", ""))
+    }
+    let Ok(tasks) = io.tasks(rt) else {
+      return Error(manifest.issue("tasks_grant", ""))
+    }
+    let interrupts: Option[Signals] = match io.signals(rt) {
+      Ok(signals) => Some(signals),
+      Error(NotGranted()) => None(),
+    }
+    return snapshot.run(
+      source,
+      objects,
+      snapshots,
+      tasks,
+      interrupts,
+      name,
+      destination,
+      jobs
+    )
+  }
+  manifest.leaf(name)?
+  let rows = restore.decode(store.read(snapshots, name, manifest.MANIFEST)?)?
+  let target: Option[Dir] = if command == "restore" {
+    let Ok(d) = io.dir(rt, path.of("target")) else {
+      return Error(manifest.issue("target_grant", ""))
+    }
+    Some(d)
+  } else {
+    None()
+  }
+  restore.run(objects, rows, target)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[std@1/process.ExitCode, AppError] {
+  let Ok(output) = io.stdout(rt) else {
+    return Ok(std@1/process.exit_code(3u8))
+  }
+  let Ok(errors) = io.stderr(rt) else {
+    return Ok(std@1/process.exit_code(3u8))
+  }
+  match execute(rt, args) {
+    Ok(report) => {
+      out.write(
+        output,
+        string.as_bytes(f"{{\"files\":{report.files},\"bytes\":{report.bytes}}}\n")
+      )?
+      Ok(std@1/process.SUCCESS)
+    },
+    Error(problem) => {
+      err.write(errors, manifest.error_json(problem))?
+      Ok(std@1/process.exit_code(2u8))
+    },
+  }
+}

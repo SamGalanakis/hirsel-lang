@@ -1,0 +1,278 @@
+pub type Report {
+  files: u64,
+  bytes: u64,
+}
+
+pub fn summary(rows: List[manifest.FileResult[List[chunk.Part[String]]]]) -> Report {
+  let mut total = 0u64
+  for row in rows {
+    total += row.size
+  }
+  Report(files: list.len(rows), bytes: total)
+}
+
+pub fn validate(rows: List[manifest.FileResult[List[chunk.Part[String]]]]) -> Result[
+  (),
+  manifest.Problem
+] {
+  let mut seen: List[manifest.FileResult[()]] = []
+  let mut total = 0u64
+  let mut count = 0u64
+  for row in rows {
+    manifest.admit(seen, row.path, row.size, total)?
+    manifest.digest(row.id)?
+    total += row.size
+    let mut offset = 0u64
+    for part in row.value {
+      if count == manifest.CHUNKS {
+        return Error(manifest.issue("chunks_limit", row.path))
+      }
+      chunk.valid(part, offset, row.size - offset)?
+      offset += part.length
+      count += 1
+    }
+    if offset != row.size {
+      return Error(manifest.issue("chunk_layout", row.path))
+    }
+    list.push(
+      mut seen,
+      manifest.FileResult(
+        path: unique row.path,
+        size: row.size,
+        id: unique row.id,
+        value: ()
+      )
+    )
+  }
+  Ok(())
+}
+
+pub fn decode(data: Bytes) -> Result[
+  unique List[manifest.FileResult[List[chunk.Part[String]]]],
+  manifest.Problem
+] {
+  if bytes.len(data) > manifest.MANIFEST {
+    return Error(manifest.issue("manifest_limit", ""))
+  }
+  if !json.valid_utf8(data) {
+    return Error(manifest.issue("utf8", ""))
+  }
+  let mut cursor = json.reader(data)
+  manifest.token(mut cursor, ObjectStart())?
+  manifest.field(mut cursor, "format")?
+  if manifest.read_text(mut cursor, 64)? != manifest.FORMAT {
+    return Error(manifest.issue("configuration", ""))
+  }
+  manifest.token(mut cursor, Comma())?
+  manifest.field(mut cursor, "files")?
+  manifest.token(mut cursor, ArrayStart())?
+  let mut rows: List[manifest.FileResult[List[chunk.Part[String]]]] = []
+  let mut first = true
+  let mut total = 0u64
+  let mut count = 0u64
+  while manifest.more(mut cursor, mut first)? {
+    if list.len(rows) == manifest.FILES {
+      return Error(manifest.issue("files_limit", ""))
+    }
+    let row = manifest.header(mut cursor)?
+    manifest.admit(rows, row.path, row.size, total)?
+    manifest.token(mut cursor, Comma())?
+    manifest.field(mut cursor, "chunks")?
+    manifest.token(mut cursor, ArrayStart())?
+    let mut parts: List[chunk.Part[String]] = []
+    let mut first_part = true
+    let mut offset = 0u64
+    while manifest.more(mut cursor, mut first_part)? {
+      if count == manifest.CHUNKS {
+        return Error(manifest.issue("chunks_limit", row.path))
+      }
+      manifest.token(mut cursor, ObjectStart())?
+      manifest.field(mut cursor, "offset")?
+      let at = manifest.number(mut cursor)?
+      manifest.token(mut cursor, Comma())?
+      manifest.field(mut cursor, "length")?
+      let length = manifest.number(mut cursor)?
+      manifest.token(mut cursor, Comma())?
+      manifest.field(mut cursor, "id")?
+      let identity = manifest.read_text(mut cursor, 64)?
+      manifest.token(mut cursor, ObjectEnd())?
+      let part = chunk.describe(at, length, take identity)
+      chunk.valid(part, offset, row.size - offset)?
+      offset += length
+      count += 1
+      list.push(mut parts, take part)
+    }
+    if offset != row.size {
+      return Error(manifest.issue("chunk_layout", row.path))
+    }
+    manifest.token(mut cursor, ObjectEnd())?
+    total += row.size
+    list.push(
+      mut rows,
+      manifest.FileResult(
+        path: unique row.path,
+        size: row.size,
+        id: unique row.id,
+        value: take parts
+      )
+    )
+  }
+  manifest.token(mut cursor, ObjectEnd())?
+  if json.finish_reader(mut cursor) != Ok(()) {
+    return Error(manifest.issue("json", ""))
+  }
+  Ok(take rows)
+}
+
+// Reconstruct one bounded file; every chunk verified before append and whole
+// digest verified before any publication. Never trust the declared digest alone.
+pub fn assemble(objects: Dir, row: manifest.FileResult[List[chunk.Part[String]]]) -> Result[
+  unique Bytes,
+  manifest.Problem
+] {
+  manifest.key(row.path)?
+  if row.size > manifest.FILE {
+    return Error(manifest.issue("file_limit", row.path))
+  }
+  let mut buffer: List[u8] = []
+  let mut offset = 0u64
+  let mut whole = sha256.new()
+  for part in row.value {
+    chunk.valid(part, offset, row.size - offset)?
+    let data = store.load(objects, part)?
+    sha256.update(mut whole, data)
+    bytes.append(mut buffer, data)
+    offset += part.length
+  }
+  if offset != row.size || hex.encode(bytes.from_inline(sha256.finish(take whole))) != row.id {
+    return Error(manifest.issue("file_corrupt", row.path))
+  }
+  Ok(bytes.from_list(take buffer))
+}
+
+fn parents(target: Dir, name: String) -> Result[(), manifest.Problem] {
+  let parts = path.components(path.of(name))
+  let mut prefix = ""
+  for i in 0u64..list.len(parts) - 1 {
+    prefix = if i == 0 {
+      copy parts[i]
+    } else {
+      string.join([prefix, parts[i]], "/")
+    }
+    match file.mkdir(target, path.of(prefix)) {
+      Ok(()) => (),
+      Error(AlreadyExists()) => {
+        let Ok(info) = file.metadata(target, path.of(prefix)) else {
+          return Error(manifest.issue("target_parent", name))
+        }
+        if info.kind != Directory() {
+          return Error(manifest.issue("target_parent", name))
+        }
+        let Ok(_) = dir.narrow(target, path.of(prefix)) else {
+          return Error(manifest.issue("target_parent", name))
+        }
+      },
+      Error(Canceled(_)) => return Error(manifest.issue("canceled", name)),
+      Error(_) => return Error(manifest.issue("target_parent", name)),
+    }
+  }
+  Ok(())
+}
+
+fn publish(target: Dir, row: manifest.FileResult[List[chunk.Part[String]]], data: Bytes) -> Result[
+  (),
+  manifest.Problem
+] {
+  parents(target, row.path)?
+  // put_new is atomic and no-clobber, including a racing writer. It explicitly
+  // succeeds for equal bytes; AlreadyExists means different content. Re-read
+  // even the success to validate type/bytes and detect a replaced winner.
+  match file.put_new(target, path.of(row.path), unique data, Durable()) {
+    Ok(()) => (),
+    Error(AlreadyExists()) => return Error(manifest.issue("target_exists", row.path)),
+    Error(Canceled(_)) => return Error(manifest.issue("canceled", row.path)),
+    Error(_) => return Error(manifest.issue("target_publish", row.path)),
+  }
+  if store.read(target, row.path, row.size)? != data {
+    return Error(manifest.issue("target_changed", row.path))
+  }
+  Ok(())
+}
+
+// An initially empty grant is expected. Idempotent retries may contain only
+// declared files and their parent directories. The lazy directory provider keeps
+// a bounded page; we stop at the first unrelated entry and never scan ambient FS.
+fn destination(target: Dir, rows: List[manifest.FileResult[List[chunk.Part[String]]]]) -> Result[
+  (),
+  manifest.Problem
+] {
+  let mut pending: List[String] = ["."]
+  let mut visited = 0u64
+  while let Some(name) = list.pop(mut pending) {
+    let mut entries = match file.read_dir(target, path.of(name)) {
+      Ok(value) => take value,
+      Error(_) => return Error(manifest.issue("target_directory", name)),
+    }
+    for next in mut entries {
+      let entry = match take next {
+        Ok(value) => take value,
+        Error(_) => return Error(manifest.issue("target_directory", name)),
+      }
+      let spelling = path.text(entry.path)
+      visited += 1
+      if visited > manifest.FILES * manifest.DEPTH {
+        return Error(manifest.issue("target_limit", spelling))
+      }
+      manifest.key(spelling)?
+      let mut file_allowed = false
+      let mut parent_allowed = false
+      for row in rows {
+        if row.path == spelling {
+          file_allowed = true
+        }
+        if string.starts_with(row.path, string.concat(spelling, "/")) {
+          parent_allowed = true
+        }
+      }
+      if entry.kind == Directory() && parent_allowed {
+        if list.len(pending) == manifest.FILES * manifest.DEPTH {
+          return Error(manifest.issue("target_limit", spelling))
+        }
+        list.push(mut pending, unique spelling)
+      } else {
+        if entry.kind != Regular() || !file_allowed {
+          return Error(manifest.issue("target_not_empty", spelling))
+        }
+      }
+    }
+  }
+  Ok(())
+}
+
+pub fn run(
+  objects: Dir,
+  rows: List[manifest.FileResult[List[chunk.Part[String]]]],
+  target: Option[Dir]
+) -> Result[Report, manifest.Problem] {
+  validate(rows)?
+  if let Some(d) = target {
+    destination(d, rows)?
+  }
+  let mut completed = 0u64
+  for row in rows {
+    let outcome: Result[(), manifest.Problem] = match assemble(objects, row) {
+      Error(problem) => Error(take problem),
+      Ok(data) => match target {
+        None() => Ok(()),
+        Some(d) => publish(d, row, data),
+      },
+    }
+    if let Error(problem) = take outcome {
+      let mut report = take problem
+      report.completed = completed
+      return Error(take report)
+    }
+    completed += 1
+  }
+  Ok(summary(rows))
+}

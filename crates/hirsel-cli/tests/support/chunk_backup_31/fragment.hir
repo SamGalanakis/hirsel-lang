@@ -1,0 +1,31 @@
+// Supplemental real splitter test; full app workflows remain separate.
+// Go's forced4096 vector has one cut at 4096 under every reader fragmentation.
+fn split(data: Bytes, width: u64, lookup: chunk.Tables) -> unique List[u64] {
+  let mut state = chunk.fresh()
+  let mut cuts: List[u64] = []
+  let mut start = 0u64
+  let mut count = 0u64
+  while start < bytes.len(data) {
+    let end = if bytes.len(data) - start < width { bytes.len(data) } else { start + width }
+    let window = bytes.slice(data, start, end)
+    for value in window {
+      count += 1
+      if chunk.push(mut state, lookup, value) { list.push(mut cuts, count) }
+    }
+    start = end
+  }
+  take cuts
+}
+
+pub fn main() -> Result[(), ()] {
+  let lookup = chunk.tables()
+  let mut source: List[u8] = []
+  for i in 0u64..4096u64 { list.push(mut source, 1u8) }
+  let data = bytes.from_list(take source)
+  for width in [1u64, 7u64, 64u64, 257u64, 4096u64] {
+    failure.check(split(data, width, lookup) == [4096u64], Arithmetic())
+    // Every new file starts from the same reset state.
+    failure.check(split(b"", width, lookup) == [], Arithmetic())
+  }
+  Ok(())
+}

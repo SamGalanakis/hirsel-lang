@@ -1,0 +1,131 @@
+// restic/chunker 2e8f53f1dad5dbdcf8aca1dbf1bee7d1fc9d8ce8 chunker.go:106-249.
+// BSD-2-Clause, LICENSE.chunker. Fixed custom boundaries, unchanged Rabin cuts.
+pub const MIN: u64 = 256
+
+pub const MAX: u64 = 4096
+
+pub const POLYNOMIAL: u64 = 0x3DA3358B4DC173
+
+// Owned Bytes while transferring a chunk; String after durable insertion.
+pub type Part[T] {
+  offset: u64,
+  length: u64,
+  value: T,
+}
+
+pub type Tables {
+  out: List[u64],
+  reduce: List[u64],
+}
+
+pub type Window {
+  bytes: List[u8],
+  position: u64,
+  fingerprint: u64,
+  count: u64,
+  pre: u64,
+}
+
+// Long division in F2, as Pol.Mod. Values here have degree <=60.
+fn remainder(value: u64) -> u64 {
+  let mut h = value
+  let mut degree = 61u64
+  while degree > 53 {
+    degree -= 1
+    if h & 1u64 << degree != 0 {
+      h ^= POLYNOMIAL << degree - 53
+    }
+  }
+  h
+}
+
+pub fn tables() -> unique Tables {
+  // Linearity lets eight basis entries construct the same 256-entry out table
+  // without the upstream global cache/mutex. These are ordinary owned lists.
+  let mut basis: List[u64] = []
+  for bit in 0u64..8u64 {
+    let mut h = 1u64 << bit
+    for i in 0u64..63u64 {
+      h = remainder(h << 8)
+    }
+    list.push(mut basis, h)
+  }
+  let mut outgoing: List[u64] = []
+  let mut reduction: List[u64] = []
+  for b in 0u64..256u64 {
+    let mut h = 0u64
+    for bit in 0u64..8u64 {
+      if b & 1u64 << bit != 0 {
+        h ^= basis[bit]
+      }
+    }
+    list.push(mut outgoing, h)
+    let upper = b << 53
+    list.push(mut reduction, remainder(upper) | upper)
+  }
+  Tables(out: take outgoing, reduce: take reduction)
+}
+
+pub fn fresh() -> unique Window {
+  let mut bytes: List[u8] = []
+  for i in 0u64..64u64 {
+    list.push(
+      mut bytes,
+      if i == 0 {
+        1u8
+      } else {
+        0u8
+      }
+    )
+  }
+  Window(bytes: take bytes, position: 1, fingerprint: 1, count: 0, pre: MIN - 64)
+}
+
+pub fn reset(mut state: Window) {
+  for i in 0u64..64u64 {
+    state.bytes[i] = if i == 0 {
+      1u8
+    } else {
+      0u8
+    }
+  }
+  state.position = 1
+  state.fingerprint = 1
+  state.count = 0
+  state.pre = MIN - 64
+}
+
+// One byte of a borrowed read window. State survives any input fragmentation;
+// only a content boundary resets it. Return true after consuming the cut byte.
+pub fn push(mut state: Window, lookup: Tables, value: u8) -> bool {
+  state.count += 1
+  if state.pre > 0 {
+    state.pre -= 1
+    return false
+  }
+  let old: u64 = int.widen(state.bytes[state.position])
+  state.bytes[state.position] = value
+  state.position = (state.position + 1) % 64
+  let h = state.fingerprint ^ lookup.out[old]
+  let incoming: u64 = int.widen(value)
+  state.fingerprint = (h << 8 | incoming) ^ lookup.reduce[h >> 45]
+  if state.count >= MIN && (state.fingerprint & 1023u64 == 0 || state.count == MAX) {
+    reset(mut state)
+    return true
+  }
+  false
+}
+
+pub fn describe[T](offset: u64, length: u64, take value: unique T) -> unique Part[T] {
+  Part(offset: offset, length: length, value: take value)
+}
+
+pub fn valid(part: Part[String], offset: u64, remaining: u64) -> Result[
+  (),
+  manifest.Problem
+] {
+  if part.offset != offset || part.length == 0 || part.length > MAX || part.length > remaining {
+    return Error(manifest.issue("chunk_layout", part.value))
+  }
+  manifest.digest(part.value)
+}

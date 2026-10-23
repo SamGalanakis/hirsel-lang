@@ -1,0 +1,113 @@
+// Capability orchestration for bounded reads and immutable content.
+// Check each component, not just the leaf. Providers still enforce confinement
+// between calls; this is a read snapshot policy, not an adversarial FS lock.
+pub fn inspect(d: Dir, name: String) -> Result[Metadata, manifest.Problem] {
+  manifest.key(name)?
+  let parts = path.components(path.of(name))
+  let mut prefix = ""
+  for i in 0u64..list.len(parts) {
+    prefix = if i == 0 {
+      copy parts[i]
+    } else {
+      string.join([prefix, parts[i]], "/")
+    }
+    let info = match file.metadata(d, path.of(prefix)) {
+      Ok(value) => take value,
+      Error(Canceled(_)) => return Error(manifest.issue("canceled", name)),
+      Error(NotFound()) => return Error(manifest.issue("missing", name)),
+      Error(_) => return Error(manifest.issue("metadata", name)),
+    }
+    if info.kind == Symlink() {
+      return Error(manifest.issue("symlink", name))
+    }
+    if i + 1 < list.len(parts) && info.kind != Directory() {
+      return Error(manifest.issue("not_directory", name))
+    }
+    if i + 1 == list.len(parts) {
+      if info.kind != Regular() {
+        return Error(manifest.issue("not_regular", name))
+      }
+      return Ok(take info)
+    }
+  }
+  Error(manifest.issue("invalid_path", name))
+}
+
+pub fn read(d: Dir, name: String, limit: u64) -> Result[unique Bytes, manifest.Problem] {
+  let info = inspect(d, name)?
+  if info.size > limit {
+    return Error(manifest.issue("input_limit", name))
+  }
+  let mut f = match file.open(d, path.of(name)) {
+    Ok(value) => take value,
+    Error(Canceled(_)) => return Error(manifest.issue("canceled", name)),
+    Error(_) => return Error(manifest.issue("open", name)),
+  }
+  let data = match file.read_all_bounded(d, mut f, limit) {
+    Ok(value) => take value,
+    Error(Limit()) => return Error(manifest.issue("input_limit", name)),
+    Error(File(Canceled(_))) => return Error(manifest.issue("canceled", name)),
+    Error(_) => return Error(manifest.issue("read", name)),
+  }
+  if bytes.len(data) != info.size {
+    return Error(manifest.issue("input_changed", name))
+  }
+  let latest = inspect(d, name)?
+  if latest != info {
+    return Error(manifest.issue("input_changed", name))
+  }
+  Ok(take data)
+}
+
+pub fn put(objects: Dir, take part: unique chunk.Part[Bytes]) -> Result[
+  unique chunk.Part[String],
+  manifest.Problem
+] {
+  if bytes.len(part.value) != part.length || part.length == 0 || part.length > chunk.MAX {
+    return Error(manifest.issue("chunk_layout", ""))
+  }
+  let identity = sha256.digest_hex(part.value)
+  // Atomic arbitration, never an existence check followed by overwrite.
+  match file.put_new(objects, path.of(identity), unique part.value, Durable()) {
+    Ok(()) => (),
+    Error(AlreadyExists()) => (),
+    Error(Canceled(_)) => return Error(manifest.issue("canceled", identity)),
+    Error(_) => return Error(manifest.issue("chunk_publish", identity)),
+  }
+  let stored = read(objects, identity, part.length)?
+  if stored != part.value || sha256.digest_hex(stored) != identity {
+    return Error(manifest.issue("chunk_corrupt", identity))
+  }
+  Ok(chunk.Part(offset: part.offset, length: part.length, value: take identity))
+}
+
+pub fn load(objects: Dir, part: chunk.Part[String]) -> Result[
+  unique Bytes,
+  manifest.Problem
+] {
+  manifest.digest(part.value)?
+  if part.length == 0 || part.length > chunk.MAX {
+    return Error(manifest.issue("chunk_layout", part.value))
+  }
+  let data = read(objects, part.value, part.length)?
+  if bytes.len(data) != part.length || sha256.digest_hex(data) != part.value {
+    return Error(manifest.issue("chunk_corrupt", part.value))
+  }
+  Ok(take data)
+}
+
+pub fn publish(snapshots: Dir, name: String, data: Bytes) -> Result[
+  (),
+  manifest.Problem
+] {
+  manifest.leaf(name)?
+  if bytes.len(data) > manifest.MANIFEST {
+    return Error(manifest.issue("manifest_limit", name))
+  }
+  match file.put_new(snapshots, path.of(name), unique data, Durable()) {
+    Ok(()) => Ok(()),
+    Error(AlreadyExists()) => Error(manifest.issue("snapshot_exists", name)),
+    Error(Canceled(_)) => Error(manifest.issue("canceled", name)),
+    Error(_) => Error(manifest.issue("snapshot_publish", name)),
+  }
+}

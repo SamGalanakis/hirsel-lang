@@ -1,0 +1,349 @@
+// Four file credits; each owns one chunk credit and returns it by awaiting the
+// immutable-store stage before reading/admitting the next chunk. Scope cleanup
+// cancels and joins child insertions before releasing their owned byte buffers.
+pub fn transfer(s: Scope, objects: Dir, offset: u64, take payload: unique Bytes) -> Result[
+  unique chunk.Part[String],
+  manifest.Problem
+] {
+  let part = chunk.describe(offset, bytes.len(payload), take payload)
+  let h = task.async(
+    s,
+    fn() -> Result[unique chunk.Part[String], unique manifest.Problem] {
+      match store.put(objects, take part) {
+        Ok(value) => Ok(take value),
+        Error(problem) => Error(unique problem),
+      }
+    }
+  )
+  task.await(s, take h)
+}
+
+fn one_in_scope(
+  s: Scope,
+  source: Dir,
+  objects: Dir,
+  lookup: chunk.Tables,
+  row: manifest.FileResult[()]
+) -> Result[unique manifest.FileResult[List[chunk.Part[String]]], manifest.Problem] {
+  let initial = store.inspect(source, row.path)?
+  if initial.size != row.size {
+    return Error(manifest.issue("input_changed", row.path))
+  }
+  let mut f = match file.open(source, path.of(row.path)) {
+    Ok(value) => take value,
+    Error(Canceled(_)) => return Error(manifest.issue("canceled", row.path)),
+    Error(_) => return Error(manifest.issue("open", row.path)),
+  }
+  let mut state = chunk.fresh()
+  let mut whole = sha256.new()
+  let mut buffer: List[u8] = []
+  let mut parts: List[chunk.Part[String]] = []
+  let mut consumed = 0u64
+  let mut offset = 0u64
+  while consumed < row.size {
+    let request = if row.size - consumed < 4096 {
+      row.size - consumed
+    } else {
+      4096
+    }
+    let mut block: List[u8] = []
+    let count = match file.read(source, mut f, mut block, request) {
+      Ok(value) => value,
+      Error(Canceled(_)) => return Error(manifest.issue("canceled", row.path)),
+      Error(_) => return Error(manifest.issue("read", row.path)),
+    }
+    if count == 0 {
+      return Error(manifest.issue("input_changed", row.path))
+    }
+    let window = bytes.from_list(take block)
+    sha256.update(mut whole, window)
+    for c in window {
+      // push never exceeds MAX; cuts consume the final byte before reset.
+      list.push(mut buffer, c)
+      let cut = chunk.push(mut state, lookup, c)
+      if cut {
+        if list.len(parts) == manifest.CHUNKS {
+          return Error(manifest.issue("chunks_limit", row.path))
+        }
+        let payload = bytes.from_list(take buffer)
+        let length = bytes.len(payload)
+        list.push(mut parts, transfer(s, objects, offset, take payload)?)
+        offset += length
+        buffer = []
+      }
+    }
+    consumed += count
+  }
+  // Independent one-byte probe catches a growing file without over-allocation.
+  let mut probe: List[u8] = []
+  match file.read(source, mut f, mut probe, 1) {
+    Ok(0) => (),
+    Ok(_) => return Error(manifest.issue("input_changed", row.path)),
+    Error(Canceled(_)) => return Error(manifest.issue("canceled", row.path)),
+    Error(_) => return Error(manifest.issue("read", row.path)),
+  }
+  let identity = hex.encode(bytes.from_inline(sha256.finish(take whole)))
+  if identity != row.id || store.inspect(source, row.path)? != initial {
+    return Error(manifest.issue("input_changed", row.path))
+  }
+  if list.len(buffer) > 0 {
+    if list.len(parts) == manifest.CHUNKS {
+      return Error(manifest.issue("chunks_limit", row.path))
+    }
+    list.push(mut parts, transfer(s, objects, offset, bytes.from_list(take buffer))?)
+  }
+  Ok(
+    manifest.FileResult(
+      path: unique row.path,
+      size: row.size,
+      id: take identity,
+      value: take parts
+    )
+  )
+}
+
+// Scope is local to the file task, never captured from its parent task.
+fn one(
+  tasks: Tasks,
+  source: Dir,
+  objects: Dir,
+  lookup: chunk.Tables,
+  row: manifest.FileResult[()]
+) -> Result[unique manifest.FileResult[List[chunk.Part[String]]], manifest.Problem] {
+  task.scope(
+    tasks,
+    fn(s: Scope) -> Result[
+      unique manifest.FileResult[List[chunk.Part[String]]],
+      manifest.Problem
+    ] {
+      one_in_scope(s, source, objects, lookup, row)
+    }
+  )
+}
+
+pub fn ingest(
+  source: Dir,
+  objects: Dir,
+  tasks: Tasks,
+  rows: List[manifest.FileResult[()]],
+  jobs: u64
+) -> Result[
+  unique List[manifest.FileResult[List[chunk.Part[String]]]],
+  manifest.Problem
+] {
+  if jobs == 0 || jobs > 4 {
+    return Error(manifest.issue("jobs_limit", ""))
+  }
+  // Freeze admitted input before workers; capability metadata preflight cannot
+  // read bytes and is bounded to 16 paths of depth 8.
+  for row in rows {
+    if store.inspect(source, row.path)?.size != row.size {
+      return Error(manifest.issue("input_changed", row.path))
+    }
+  }
+  let declarations = shared.freeze(unique rows)
+  let lookup = shared.freeze(chunk.tables())
+  task.scope(
+    tasks,
+    fn(s: Scope) -> Result[
+      unique List[manifest.FileResult[List[chunk.Part[String]]]],
+      manifest.Problem
+    ] {
+      let length = shared.with(
+        declarations,
+        fn(values: List[manifest.FileResult[()]]) -> u64 {
+          list.len(values)
+        }
+      )
+      let mut imported: List[manifest.FileResult[List[chunk.Part[String]]]] = []
+      let mut start = 0u64
+      while start < length {
+        let count = if length - start < jobs {
+          length - start
+        } else {
+          jobs
+        }
+        let mut pending: TaskSet[
+          Result[
+            unique manifest.FileResult[List[chunk.Part[String]]],
+            unique manifest.Problem
+          ]
+        ] of s = task.set(s)
+        for index in start..start + count {
+          task.add(
+            s,
+            mut pending,
+            task.async(
+              s,
+              fn() -> Result[
+                unique manifest.FileResult[List[chunk.Part[String]]],
+                unique manifest.Problem
+              ] {
+                let row = shared.with(
+                  declarations,
+                  fn(values: List[manifest.FileResult[()]]) -> unique manifest.FileResult[
+                    ()
+                  ] {
+                    unique values[index]
+                  }
+                )
+                shared.with(
+                  lookup,
+                  fn(table: chunk.Tables) -> Result[
+                    unique manifest.FileResult[List[chunk.Part[String]]],
+                    unique manifest.Problem
+                  ] {
+                    match one(tasks, source, objects, table, row) {
+                      Ok(value) => Ok(take value),
+                      Error(problem) => Error(unique problem),
+                    }
+                  }
+                )
+              }
+            )
+          )
+        }
+        let mut ordered: List[Option[manifest.FileResult[List[chunk.Part[String]]]]] = []
+        for i in 0u64..count {
+          list.push(mut ordered, None())
+        }
+        while let Some(slot) = task.await_any(s, pending) {
+          let joined = task.await_at(s, mut pending, slot)
+          match take joined {
+            Ok(value) => {
+              ordered[slot] = Some(take value)
+            },
+            Error(problem) => {
+              task.cancel_all(s, take pending)
+              return Error(take problem)
+            },
+          }
+        }
+        task.cancel_all(s, take pending)
+        for item in take ordered {
+          if let Some(value) = take item {
+            list.push(mut imported, take value)
+          }
+        }
+        start += count
+      }
+      Ok(take imported)
+    }
+  )
+}
+
+pub fn encode(rows: List[manifest.FileResult[List[chunk.Part[String]]]]) -> Result[
+  unique Bytes,
+  manifest.Problem
+] {
+  restore.validate(rows)?
+  // Bound worst-case escaped output before builder growth, including every ID.
+  let mut budget = 128u64
+  for row in rows {
+    let required = string.byte_len(row.path) * 6 + 128 + list.len(row.value) * 128
+    if required > manifest.MANIFEST - budget {
+      return Error(manifest.issue("manifest_limit", row.path))
+    }
+    budget += required
+  }
+  let mut output: List[u8] = []
+  text.append(mut output, "{\"format\":")
+  json.write_text_into(manifest.FORMAT, mut output)
+  text.append(mut output, ",\"files\":[")
+  let mut first = true
+  for row in rows {
+    if !first {
+      text.append(mut output, ",")
+    }
+    first = false
+    text.append(mut output, "{\"path\":")
+    json.write_text_into(row.path, mut output)
+    text.append(mut output, f",\"size\":{row.size},\"id\":")
+    json.write_text_into(row.id, mut output)
+    text.append(mut output, ",\"chunks\":[")
+    let mut first_part = true
+    for part in row.value {
+      if !first_part {
+        text.append(mut output, ",")
+      }
+      first_part = false
+      text.append(
+        mut output,
+        f"{{\"offset\":{part.offset},\"length\":{part.length},\"id\":"
+      )
+      json.write_text_into(part.value, mut output)
+      text.append(mut output, "}")
+    }
+    text.append(mut output, "]}")
+  }
+  text.append(mut output, "]}")
+  Ok(bytes.from_list(take output))
+}
+
+fn build(source: Dir, objects: Dir, tasks: Tasks, name: String, jobs: u64) -> Result[
+  unique Bytes,
+  manifest.Problem
+] {
+  let rows = manifest.input(store.read(source, name, manifest.MANIFEST)?)?
+  let imported = ingest(source, objects, tasks, rows, jobs)?
+  encode(imported)
+}
+
+pub fn run(
+  source: Dir,
+  objects: Dir,
+  snapshots: Dir,
+  tasks: Tasks,
+  interrupts: Option[Signals],
+  name: String,
+  destination: String,
+  jobs: u64
+) -> Result[restore.Report, manifest.Problem] {
+  manifest.leaf(destination)?
+  // Publication is outside the signal race, after all losers have joined.
+  let prepared = match interrupts {
+    None() => build(source, objects, tasks, name, jobs),
+    Some(signals) => {
+      let declaration = unique name
+      task.scope(
+        tasks,
+        fn(s: Scope) -> Result[unique Bytes, manifest.Problem] {
+          let mut pending: TaskSet[Result[unique Bytes, unique manifest.Problem]] of s = task.set(
+            s
+          )
+          task.add(
+            s,
+            mut pending,
+            task.async(
+              s,
+              fn() -> Result[unique Bytes, unique manifest.Problem] {
+                match build(source, objects, tasks, take declaration, jobs) {
+                  Ok(value) => Ok(take value),
+                  Error(problem) => Error(unique problem),
+                }
+              }
+            )
+          )
+          task.add(
+            s,
+            mut pending,
+            task.async(
+              s,
+              fn() -> Result[unique Bytes, unique manifest.Problem] {
+                let _ = signal.wait(signals, [Interrupt()])
+                Error(manifest.issue("canceled", ""))
+              }
+            )
+          )
+          let (_, completed) = task.select(s, take pending)
+          take completed
+        }
+      )
+    },
+  }
+  let data = take prepared?
+  let rows = restore.decode(data)?
+  let report = restore.summary(rows)
+  store.publish(snapshots, destination, data)?
+  Ok(report)
+}

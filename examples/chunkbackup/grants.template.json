@@ -1,0 +1,40 @@
+{
+  "args": [
+    "backup",
+    "input.json",
+    "daily",
+    "4"
+  ],
+  "io": {
+    "stdout": "stdout.bytes@1",
+    "stderr": "stderr.bytes@1",
+    "tasks": "tasks.cooperative@1",
+    "dirs": [
+      {
+        "path": "source",
+        "host": "./source",
+        "access": "read"
+      },
+      {
+        "path": "chunks",
+        "host": "./chunks",
+        "access": "read_write"
+      },
+      {
+        "path": "snapshots",
+        "host": "./snapshots",
+        "access": "read_write"
+      },
+      {
+        "path": "target",
+        "host": "./target",
+        "access": "read_write"
+      }
+    ]
+  },
+  "placement": {
+    "cores": 1,
+    "commit": "shared",
+    "reorder": "off"
+  }
+}

@@ -1,0 +1,232 @@
+// Bounded metadata and strict schemas; no capability effects in this module.
+pub const FILES: u64 = 16
+
+pub const FILE: u64 = 32768
+
+pub const TOTAL: u64 = 262144
+
+pub const CHUNKS: u64 = 2048
+
+pub const MANIFEST: u64 = 262144
+
+pub const NAME: u64 = 1024
+
+pub const DEPTH: u64 = 8
+
+pub const FORMAT: String = "chunkbackup1:rabin:3da3358b4dc173:64:256:1024:4096"
+
+pub type Problem {
+  tag: String,
+  path: String,
+  completed: u64,
+}
+
+// T is () for an admitted source, List[chunk.Part[String]] for a snapshot.
+pub type FileResult[T] {
+  path: String,
+  size: u64,
+  id: String,
+  value: T,
+}
+
+pub fn issue(tag: String, name: String) -> unique Problem {
+  Problem(tag: unique tag, path: unique name, completed: 0)
+}
+
+pub fn error_json(problem: Problem) -> unique Bytes {
+  let mut buffer: List[u8] = []
+  text.append(mut buffer, "{\"error\":")
+  json.write_text_into(problem.tag, mut buffer)
+  text.append(mut buffer, ",\"path\":")
+  json.write_text_into(problem.path, mut buffer)
+  text.append(mut buffer, f",\"completed\":{problem.completed}}}\n")
+  bytes.from_list(take buffer)
+}
+
+pub fn key(name: String) -> Result[(), Problem] {
+  let raw = string.as_bytes(name)
+  if bytes.len(raw) == 0 || bytes.len(raw) > NAME || raw[0] == 47 {
+    return Error(issue("invalid_path", name))
+  }
+  for c in raw {
+    if c == 0 || c == 92 || c == 58 {
+      return Error(issue("invalid_path", name))
+    }
+  }
+  let mut start = 0u64
+  let mut levels = 0u64
+  let mut at = 0u64
+  while at <= bytes.len(raw) {
+    if at == bytes.len(raw) || raw[at] == 47 {
+      let width = at - start
+      if width == 0 || width == 1 && raw[start] == 46 || width == 2 && raw[start] == 46 && raw[start + 1] == 46 {
+        return Error(issue("invalid_path", name))
+      }
+      levels += 1
+      if levels > DEPTH {
+        return Error(issue("depth_limit", name))
+      }
+      start = at + 1
+    }
+    at += 1
+  }
+  Ok(())
+}
+
+pub fn leaf(name: String) -> Result[(), Problem] {
+  key(name)?
+  if string.contains(name, "/") {
+    return Error(issue("snapshot_name", name))
+  }
+  Ok(())
+}
+
+pub fn digest(value: String) -> Result[(), Problem] {
+  let raw = string.as_bytes(value)
+  if bytes.len(raw) != 64 {
+    return Error(issue("digest", value))
+  }
+  for c in raw {
+    if !(c >= 48 && c <= 57 || c >= 97 && c <= 102) {
+      return Error(issue("digest", value))
+    }
+  }
+  Ok(())
+}
+
+// A useful generic seam: both input and snapshot metadata share admission.
+pub fn admit[T](rows: List[FileResult[T]], name: String, size: u64, total: u64) -> Result[
+  (),
+  Problem
+] {
+  key(name)?
+  if list.len(rows) >= FILES {
+    return Error(issue("files_limit", name))
+  }
+  if size > FILE {
+    return Error(issue("file_limit", name))
+  }
+  if size > TOTAL - total {
+    return Error(issue("total_limit", name))
+  }
+  for old in rows {
+    if old.path == name {
+      return Error(issue("duplicate_path", name))
+    }
+    if string.starts_with(name, string.concat(old.path, "/")) || string.starts_with(
+      old.path,
+      string.concat(name, "/")
+    ) {
+      return Error(issue("path_collision", name))
+    }
+  }
+  Ok(())
+}
+
+pub fn token(mut cursor: json.Reader, expected: json.Token) -> Result[(), Problem] {
+  let Ok(actual) = json.next_token(mut cursor) else {
+    return Error(issue("json", ""))
+  }
+  if actual != expected {
+    return Error(issue("schema", ""))
+  }
+  Ok(())
+}
+
+// Port the shipped objstore pull-reader recipe. Bound encoded text before
+// decoding allocation, then bound decoded bytes; names never allocate unboundedly.
+pub fn read_text(mut cursor: json.Reader, limit: u64) -> Result[unique String, Problem] {
+  if json.peek(mut cursor) != 34 {
+    return Error(issue("json_text", ""))
+  }
+  let mut end = cursor.pos + 1
+  let mut escaped = false
+  while end < bytes.len(cursor.data) {
+    if end - cursor.pos > limit * 6 + 1 {
+      return Error(issue("text_limit", ""))
+    }
+    let c = cursor.data[end]
+    if !escaped && c == 34 {
+      break
+    }
+    escaped = !escaped && c == 92
+    end += 1
+  }
+  let Ok(view) = json.read_text(mut cursor) else {
+    return Error(issue("json_text", ""))
+  }
+  let value = json.text_owned(view)
+  if string.byte_len(value) > limit {
+    return Error(issue("text_limit", ""))
+  }
+  Ok(take value)
+}
+
+pub fn field(mut cursor: json.Reader, name: String) -> Result[(), Problem] {
+  if read_text(mut cursor, 16)? != name {
+    return Error(issue("json_field", name))
+  }
+  token(mut cursor, Colon())
+}
+
+pub fn number(mut cursor: json.Reader) -> Result[u64, Problem] {
+  let Ok(NumberToken(raw)) = json.next_token(mut cursor) else {
+    return Error(issue("number", ""))
+  }
+  if bytes.len(raw) > 6 {
+    return Error(issue("number_limit", ""))
+  }
+  let Ok(value) = u64.parse(json.number_text(raw)) else {
+    return Error(issue("number", ""))
+  }
+  Ok(value)
+}
+
+pub fn more(mut cursor: json.Reader, mut first: bool) -> Result[bool, Problem] {
+  match json.array_next(mut cursor, mut first) {
+    Ok(value) => Ok(value),
+    Error(_) => Error(issue("json", "")),
+  }
+}
+
+pub fn header(mut cursor: json.Reader) -> Result[unique FileResult[()], Problem] {
+  token(mut cursor, ObjectStart())?
+  field(mut cursor, "path")?
+  let name = read_text(mut cursor, NAME)?
+  token(mut cursor, Comma())?
+  field(mut cursor, "size")?
+  let size = number(mut cursor)?
+  token(mut cursor, Comma())?
+  field(mut cursor, "id")?
+  let identity = read_text(mut cursor, 64)?
+  digest(identity)?
+  Ok(FileResult(path: take name, size: size, id: take identity, value: ()))
+}
+
+pub fn input(data: Bytes) -> Result[unique List[FileResult[()]], Problem] {
+  if bytes.len(data) > MANIFEST {
+    return Error(issue("manifest_limit", ""))
+  }
+  if !json.valid_utf8(data) {
+    return Error(issue("utf8", ""))
+  }
+  let mut cursor = json.reader(data)
+  token(mut cursor, ArrayStart())?
+  let mut rows: List[FileResult[()]] = []
+  let mut first = true
+  let mut total = 0u64
+  while more(mut cursor, mut first)? {
+    if list.len(rows) == FILES {
+      return Error(issue("files_limit", ""))
+    }
+    let row = header(mut cursor)?
+    admit(rows, row.path, row.size, total)?
+    token(mut cursor, ObjectEnd())?
+    total += row.size
+    list.push(mut rows, take row)
+  }
+  if json.finish_reader(mut cursor) != Ok(()) {
+    return Error(issue("json", ""))
+  }
+  Ok(take rows)
+}
