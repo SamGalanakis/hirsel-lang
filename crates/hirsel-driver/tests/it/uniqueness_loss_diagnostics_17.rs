@@ -447,16 +447,12 @@ fn uniqueness_loss_diagnostics_17_loop_item_contract_20() {
                 );
             }
         }
-        // Consuming a unique root still uses the declared nested item row.
+        // unique-empty-builder-29 (4a4b9377): consuming a currently unique
+        // owner preserves its items' flow proof despite unqualified rows.
         let owned = loop_rows("take ", "String", "take line", "[f\"a\"]")
             .replace("source: List", "source: unique List");
-        rejected(
-            &owned,
-            "MODE-2",
-            "need(take out)",
-            &["take line", "line", "take source"],
-            "not proved deeply unique",
-        );
+        let output = checked(&owned);
+        assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
         let output = checked(&owned.replace(
             "list.push(mut out, take line)",
             "list.push(mut out, unique line)",
