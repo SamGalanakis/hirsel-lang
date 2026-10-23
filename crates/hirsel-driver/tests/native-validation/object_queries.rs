@@ -452,7 +452,7 @@ fn actual_ready_fixture_emits_links_restores_and_exits_on_both_backends() {
             .sources
             .add(
                 "object-fixture.hir",
-                "pub fn main()->u8{let x=3u8;x-3u8}".into(),
+                "pub fn main()->Result[(),String]{Ok(())}".into(),
             )
             .unwrap();
         let checked = hirsel_engine::check_progress(&mut engine, file, &default_context()).unwrap();
