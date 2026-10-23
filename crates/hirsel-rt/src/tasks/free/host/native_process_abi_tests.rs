@@ -259,9 +259,9 @@ unsafe fn program(ctx: *mut TaskCtx, mode: u8) {
         );
         let grouped = unsafe { grouped.assume_init() };
         assert_eq!((grouped.tag, grouped.padding, group), (0, 0, 0));
-        let statuses = grouped.statuses as *mut crate::Header;
+        let group_statuses = grouped.statuses as *mut crate::Header;
         assert_eq!(
-            unsafe { crate::alloc::payload(statuses).cast::<u64>().read() },
+            unsafe { crate::alloc::payload(group_statuses).cast::<u64>().read() },
             2
         );
         let errors = grouped.stderr as *mut crate::Header;
@@ -278,7 +278,7 @@ unsafe fn program(ctx: *mut TaskCtx, mode: u8) {
             b"pipeline error"
         );
         unsafe {
-            release(ctx, statuses);
+            release(ctx, group_statuses);
             release(ctx, errors);
         }
         unsafe {
