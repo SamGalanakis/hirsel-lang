@@ -2378,14 +2378,7 @@ fn f1_runner_call_record_replay(
     }
 }
 
-#[test]
-fn f1_runner_call_child_scope_deadlines_and_cancellation_replay() {
-    if !hirsel_rt::free_driver::admission_enabled() {
-        return;
-    }
-    let scratch = Scratch::new("f1-runner-call-child-deadline");
-    let program = scratch.path("main.hir");
-    std::fs::write(&program, r#"pub type E = Grant(GrantError) | Output(OutputError)
+const F1_RUNNER_CHILD_DEADLINE_SOURCE: &str = r#"pub type E = Grant(GrantError) | Output(OutputError)
 fn child(rt: Io, n: u64) -> Result[u64, String] {
   let tasks = match io.tasks(rt) { Ok(v) => v, Error(_) => return Error("tasks") }
   let clock = match io.monotonic_clock(rt) { Ok(v) => v, Error(_) => return Error("clock") }
@@ -2409,8 +2402,18 @@ pub fn main(rt: Io, args: Args) -> Result[(), E] {
   out.print(out, "child deadline result\n") ? Output
   Ok(())
 }
-"#).unwrap();
-    let grants = r#"{"io":{"stdout":"stdout.bytes@1","tasks":"tasks.free@1","dirs":[],"runners":[{"name":"worker","provider":"local.threads@1","threads":2,"grants":{"tasks":"tasks.free@1","monotonic_clock":"clock.monotonic.ns@1","dirs":[]},"definitions":null}]},"args":[]}"#;
+"#;
+const F1_RUNNER_CHILD_DEADLINE_GRANTS: &str = r#"{"io":{"stdout":"stdout.bytes@1","tasks":"tasks.free@1","dirs":[],"runners":[{"name":"worker","provider":"local.threads@1","threads":2,"grants":{"tasks":"tasks.free@1","monotonic_clock":"clock.monotonic.ns@1","dirs":[]},"definitions":null}]},"args":[]}"#;
+
+#[test]
+fn f1_runner_call_child_scope_deadlines_and_cancellation_replay() {
+    if !hirsel_rt::free_driver::admission_enabled() {
+        return;
+    }
+    let scratch = Scratch::new("f1-runner-call-child-deadline");
+    let program = scratch.path("main.hir");
+    std::fs::write(&program, F1_RUNNER_CHILD_DEADLINE_SOURCE).unwrap();
+    let grants = F1_RUNNER_CHILD_DEADLINE_GRANTS;
     f1_runner_call_record_replay(
         &scratch,
         &program,
@@ -2420,14 +2423,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), E] {
     );
 }
 
-#[test]
-fn f1_runner_call_forwards_parent_deadline_and_keeps_callee_outcome() {
-    if !hirsel_rt::free_driver::admission_enabled() {
-        return;
-    }
-    let scratch = Scratch::new("f1-runner-parent-deadline");
-    let program = scratch.path("main.hir");
-    std::fs::write(&program, r#"pub type E = Grant(GrantError) | Output(OutputError) | Clock(ClockError)
+const F1_RUNNER_PARENT_DEADLINE_SOURCE: &str = r#"pub type E = Grant(GrantError) | Output(OutputError) | Clock(ClockError)
 fn child(rt: Io, n: u64) -> Result[u64, String] {
   let clock = match io.monotonic_clock(rt) { Ok(v) => v, Error(_) => return Error("clock") }
   let now = match clock.monotonic(clock) { Ok(v) => v, Error(_) => return Error("now") }
@@ -2451,8 +2447,18 @@ pub fn main(rt: Io, args: Args) -> Result[(), E] {
   out.print(out, "forwarded parent deadline\n") ? Output
   Ok(())
 }
-"#).unwrap();
-    let grants = r#"{"io":{"stdout":"stdout.bytes@1","tasks":"tasks.free@1","monotonic_clock":"clock.monotonic.ns@1","dirs":[],"runners":[{"name":"worker","provider":"local.threads@1","threads":2,"grants":{"monotonic_clock":"clock.monotonic.ns@1","dirs":[]},"definitions":null}]},"args":[]}"#;
+"#;
+const F1_RUNNER_PARENT_DEADLINE_GRANTS: &str = r#"{"io":{"stdout":"stdout.bytes@1","tasks":"tasks.free@1","monotonic_clock":"clock.monotonic.ns@1","dirs":[],"runners":[{"name":"worker","provider":"local.threads@1","threads":2,"grants":{"monotonic_clock":"clock.monotonic.ns@1","dirs":[]},"definitions":null}]},"args":[]}"#;
+
+#[test]
+fn f1_runner_call_forwards_parent_deadline_and_keeps_callee_outcome() {
+    if !hirsel_rt::free_driver::admission_enabled() {
+        return;
+    }
+    let scratch = Scratch::new("f1-runner-parent-deadline");
+    let program = scratch.path("main.hir");
+    std::fs::write(&program, F1_RUNNER_PARENT_DEADLINE_SOURCE).unwrap();
+    let grants = F1_RUNNER_PARENT_DEADLINE_GRANTS;
     f1_runner_call_record_replay(
         &scratch,
         &program,
@@ -2462,16 +2468,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), E] {
     );
 }
 
-#[test]
-fn f1_runner_spawn_returns_while_pending_and_forwards_child_cancellation() {
-    if !hirsel_rt::free_driver::admission_enabled() {
-        return;
-    }
-    let scratch = Scratch::new("f1-runner-spawn-pending");
-    let program = scratch.path("main.hir");
-    std::fs::write(
-        &program,
-        r#"pub type E = Grant(GrantError) | Output(OutputError)
+const F1_RUNNER_SPAWN_PENDING_SOURCE: &str = r#"pub type E = Grant(GrantError) | Output(OutputError)
 fn child(rt: Io, n: u64) -> Result[u64, String] {
   let clock = match io.monotonic_clock(rt) { Ok(v) => v, Error(_) => return Error("clock") }
   let now = match clock.monotonic(clock) { Ok(v) => v, Error(_) => return Error("now") }
@@ -2499,10 +2496,18 @@ pub fn main(rt: Io, args: Args) -> Result[(), E] {
   out.print(out, "spawn outcomes\n") ? Output
   Ok(())
 }
-"#,
-    )
-    .unwrap();
-    let grants = r#"{"io":{"stdout":"stdout.bytes@1","tasks":"tasks.free@1","dirs":[],"runners":[{"name":"worker","provider":"local.threads@1","threads":2,"grants":{"monotonic_clock":"clock.monotonic.ns@1","dirs":[]},"definitions":null}]},"args":[]}"#;
+"#;
+const F1_RUNNER_SPAWN_PENDING_GRANTS: &str = r#"{"io":{"stdout":"stdout.bytes@1","tasks":"tasks.free@1","dirs":[],"runners":[{"name":"worker","provider":"local.threads@1","threads":2,"grants":{"monotonic_clock":"clock.monotonic.ns@1","dirs":[]},"definitions":null}]},"args":[]}"#;
+
+#[test]
+fn f1_runner_spawn_returns_while_pending_and_forwards_child_cancellation() {
+    if !hirsel_rt::free_driver::admission_enabled() {
+        return;
+    }
+    let scratch = Scratch::new("f1-runner-spawn-pending");
+    let program = scratch.path("main.hir");
+    std::fs::write(&program, F1_RUNNER_SPAWN_PENDING_SOURCE).unwrap();
+    let grants = F1_RUNNER_SPAWN_PENDING_GRANTS;
     f1_runner_call_record_replay(
         &scratch,
         &program,
@@ -2512,16 +2517,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), E] {
     );
 }
 
-#[test]
-fn f1_runner_spawn_immediate_refusal_and_unjoined_value_replay() {
-    if !hirsel_rt::free_driver::admission_enabled() {
-        return;
-    }
-    let scratch = Scratch::new("f1-runner-spawn-refusal");
-    let program = scratch.path("main.hir");
-    std::fs::write(
-        &program,
-        r#"pub type E = Grant(GrantError) | Output(OutputError)
+const F1_RUNNER_SPAWN_REFUSAL_SOURCE: &str = r#"pub type E = Grant(GrantError) | Output(OutputError)
 fn child(rt: Io, n: u64) -> Result[String, String] { Ok("unused result") }
 pub fn main(rt: Io, args: Args) -> Result[(), E] {
   let out = io.stdout(rt) ? Grant
@@ -2541,10 +2537,18 @@ pub fn main(rt: Io, args: Args) -> Result[(), E] {
   out.print(out, "refusal and cleanup\n") ? Output
   Ok(())
 }
-"#,
-    )
-    .unwrap();
-    let grants = r#"{"io":{"stdout":"stdout.bytes@1","tasks":"tasks.free@1","dirs":[],"runners":[{"name":"worker","provider":"local.threads@1","threads":1,"grants":{"dirs":[]},"definitions":null}]},"args":[]}"#;
+"#;
+const F1_RUNNER_SPAWN_REFUSAL_GRANTS: &str = r#"{"io":{"stdout":"stdout.bytes@1","tasks":"tasks.free@1","dirs":[],"runners":[{"name":"worker","provider":"local.threads@1","threads":1,"grants":{"dirs":[]},"definitions":null}]},"args":[]}"#;
+
+#[test]
+fn f1_runner_spawn_immediate_refusal_and_unjoined_value_replay() {
+    if !hirsel_rt::free_driver::admission_enabled() {
+        return;
+    }
+    let scratch = Scratch::new("f1-runner-spawn-refusal");
+    let program = scratch.path("main.hir");
+    std::fs::write(&program, F1_RUNNER_SPAWN_REFUSAL_SOURCE).unwrap();
+    let grants = F1_RUNNER_SPAWN_REFUSAL_GRANTS;
     f1_runner_call_record_replay(
         &scratch,
         &program,
@@ -3446,5 +3450,49 @@ fn f1_runner_host_waits_full_projection_width_and_permit_matrix() {
         F1_RUNNER_HOST_WAIT_GRANTS,
         b"child effect\nparent result\n",
         b"parent result\n",
+    );
+}
+
+#[test]
+fn f1_runner_child_deadline_full_projection_width_and_permit_matrix() {
+    f1_runner_width_and_permit_matrix(
+        "f1-runner-child-deadline-matrix",
+        F1_RUNNER_CHILD_DEADLINE_SOURCE,
+        F1_RUNNER_CHILD_DEADLINE_GRANTS,
+        b"child deadline result\n",
+        b"child deadline result\n",
+    );
+}
+
+#[test]
+fn f1_runner_parent_deadline_full_projection_width_and_permit_matrix() {
+    f1_runner_width_and_permit_matrix(
+        "f1-runner-parent-deadline-matrix",
+        F1_RUNNER_PARENT_DEADLINE_SOURCE,
+        F1_RUNNER_PARENT_DEADLINE_GRANTS,
+        b"forwarded parent deadline\n",
+        b"forwarded parent deadline\n",
+    );
+}
+
+#[test]
+fn f1_runner_spawn_pending_full_projection_width_and_permit_matrix() {
+    f1_runner_width_and_permit_matrix(
+        "f1-runner-spawn-pending-matrix",
+        F1_RUNNER_SPAWN_PENDING_SOURCE,
+        F1_RUNNER_SPAWN_PENDING_GRANTS,
+        b"spawn returned while pending\nspawn outcomes\n",
+        b"spawn returned while pending\nspawn outcomes\n",
+    );
+}
+
+#[test]
+fn f1_runner_spawn_refusal_full_projection_width_and_permit_matrix() {
+    f1_runner_width_and_permit_matrix(
+        "f1-runner-spawn-refusal-matrix",
+        F1_RUNNER_SPAWN_REFUSAL_SOURCE,
+        F1_RUNNER_SPAWN_REFUSAL_GRANTS,
+        b"refusal and cleanup\n",
+        b"refusal and cleanup\n",
     );
 }
