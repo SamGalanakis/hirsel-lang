@@ -1,0 +1,9 @@
+type Row {name:String,children:List[String]}
+fn probe(xs:Row) {
+ let row=xs
+ for c in string.scalars(row.name) {}
+ let items=row.children
+ let _=items
+}
+fn transfer(take x:Bytes) { let moved=take x }
+pub fn main()->Result[(),()] { probe(Row(name:"v",children:["child"])); Ok(()) }
