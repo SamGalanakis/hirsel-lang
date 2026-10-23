@@ -207,8 +207,137 @@ fn demanded_instance_discovery_registers_generic_callee_without_its_body() {
             discharge: None,
             memo: Default::default(),
         };
-        hirsel_lir::validate::validate(imported.unit, &inputs)
-            .unwrap_or_else(|rejected| panic!("local caller C refusal: {:?}", rejected.violations));
+        use hirsel_engine::store::{Action, MemStore, ResultStore};
+        use native::queries::instance::{
+            INSTANCE_DISCOVERY_DOMAIN, INSTANCE_RECORD_DOMAIN, InstanceQueries,
+            STATICS_FINALIZERS_DOMAIN,
+        };
+        let transport = Arc::new(MemStore::default());
+        let discovery = transport
+            .put_content(INSTANCE_DISCOVERY_DOMAIN, b"[]")
+            .unwrap();
+        let statics = transport
+            .put_content(STATICS_FINALIZERS_DOMAIN, b"[]")
+            .unwrap();
+        let key = native::queries::InstanceAddress {
+            instance: instances.view(id).key.clone(),
+            target_abi: target.digest(),
+            policy: ContentHash::of_bytes(b"native instance component policy"),
+        };
+        let action = Action(ContentHash::of_bytes(
+            b"native instance component complete action",
+        ));
+        let environment = hirsel_lir::validate::NativeEnvironment {
+            target: &target,
+            manifest: &manifest,
+            operations: &operations,
+            discharge: None,
+        };
+        let mut queries = InstanceQueries::new(transport.clone());
+        assert!(queries.lookup(&key, action, &environment).is_none());
+        let original = imported.unit.clone();
+        let (_, product) = queries
+            .publish(
+                &key,
+                action,
+                imported.unit,
+                &inputs,
+                &[],
+                discovery,
+                statics,
+            )
+            .unwrap();
+        assert_eq!(
+            queries
+                .lookup(&key, action, &environment)
+                .unwrap()
+                .product
+                .record,
+            product.product.record
+        );
+        assert_eq!(queries.counts.validations, 1);
+        let next_action = Action(ContentHash::of_bytes(
+            b"different complete action, equal canonical Value",
+        ));
+        let (_, backdated) = queries
+            .publish(
+                &key,
+                next_action,
+                original.clone(),
+                &inputs,
+                &[],
+                discovery,
+                statics,
+            )
+            .unwrap();
+        assert_eq!(backdated.product.record, product.product.record);
+        let mut header_only = original.clone();
+        header_only.header.key =
+            hirsel_lir::objects::UnitKey(ContentHash::of_bytes(b"changed nonsemantic planned key"));
+        let (_, stable) = queries
+            .publish(
+                &key,
+                next_action,
+                header_only,
+                &inputs,
+                &[],
+                discovery,
+                statics,
+            )
+            .unwrap();
+        assert_eq!(
+            stable.product.record, backdated.product.record,
+            "canonical body erases the planned key"
+        );
+        let mut different = original;
+        let constant = different
+            .tables
+            .constants
+            .iter_mut()
+            .find(|constant| constant.value == hirsel_lir::ir::ConstantValue::Integer(1))
+            .expect("the source literal is 1u64");
+        constant.value = hirsel_lir::ir::ConstantValue::Integer(2);
+        let error = queries
+            .publish(
+                &key,
+                next_action,
+                different,
+                &inputs,
+                &[],
+                discovery,
+                statics,
+            )
+            .err()
+            .expect("different canonical body under unchanged action must refuse");
+        assert!(error.contains("unchanged complete action"));
+        assert!(
+            queries.lookup(&key, next_action, &environment).is_some(),
+            "a failed recomputation preserves the previously accepted product"
+        );
+        // An ordinary product association and bytes do not transfer C authority.
+        let mut foreign = InstanceQueries::new(transport.clone());
+        assert!(foreign.lookup(&key, next_action, &environment).is_none());
+        transport.associate_product(product.product.address, action, product.product.record);
+        assert!(queries.lookup(&key, action, &environment).is_some());
+        // A producer cannot substitute different discovery data under an actual
+        // body receipt: the C-owned metadata must match every descriptor ref.
+        let forged_discovery = transport
+            .put_content(INSTANCE_DISCOVERY_DOMAIN, b"forged")
+            .unwrap();
+        let bytes = serde_json::to_vec(&(
+            product.value,
+            product.layout_closure,
+            product.local_equations,
+            forged_discovery,
+            product.statics_finalizers,
+        ))
+        .unwrap();
+        let forged = transport
+            .put_content(INSTANCE_RECORD_DOMAIN, &bytes)
+            .unwrap();
+        transport.associate_product(product.product.address, action, forged);
+        assert!(queries.lookup(&key, action, &environment).is_none());
+        assert_eq!(queries.counts.validations, 4);
         assert!(instances.view(required[0]).definition().is_err());
         assert!(weak_callee.upgrade().is_none());
     });
