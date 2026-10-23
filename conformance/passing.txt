@@ -5416,6 +5416,7 @@ conformance/SEM/SEM-3-byte-len-ascii.hir
 conformance/SEM/SEM-3-byte-len-empty.hir
 conformance/SEM/SEM-3-byte-len-unicode.hir
 conformance/SEM/SEM-3-byte-literals-run.hir
+conformance/SEM/SEM-3-bytes-find-any-run.hir
 conformance/SEM/SEM-3-bytes-freeze-run.hir
 conformance/SEM/SEM-3-bytewise-order.hir
 conformance/SEM/SEM-3-cbor-containers-run.hir

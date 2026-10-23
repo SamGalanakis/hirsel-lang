@@ -1948,6 +1948,31 @@ fn text(module: Option<&str>, name: &str, args: &[OpValue]) -> Option<OpOutcome>
         },
         (
             Some("bytes"),
+            "find_any",
+            [
+                OpValue::Bytes(source),
+                OpValue::Bytes(needles),
+                OpValue::Bits {
+                    scalar: ScalarKind::U64,
+                    bits: start,
+                },
+            ],
+        ) => {
+            // Independent scalar oracle for the native byte-set scan.
+            let offset = usize::try_from(*start).ok().and_then(|start| {
+                source
+                    .get(start..)?
+                    .iter()
+                    .position(|byte| needles.contains(byte))
+                    .map(|at| start + at)
+            });
+            OpValue::Bits {
+                scalar: ScalarKind::U64,
+                bits: offset.unwrap_or(source.len()) as u128,
+            }
+        }
+        (
+            Some("bytes"),
             name @ ("base64_encode" | "base64_decode"),
             [
                 OpValue::Bytes(bytes),

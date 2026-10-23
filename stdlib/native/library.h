@@ -311,3 +311,5 @@ uint8_t hirsel_rt_v2_proc_spawn_pipeline(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_
 typedef struct { uint32_t tag, padding; uint64_t statuses, stderr_lists; } hirsel_rt_v2_group_result;
 /* The ChildGroup word is transferred and zeroed; the trailing operand is Option[Deadline]. */
 uint8_t hirsel_rt_v2_proc_wait_group(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_group_result*, const uint64_t*, uint64_t*, const void*);
+
+uint8_t hirsel_rt_v2_bytes_find_any(hirsel_rt_v2_ctx*, uint64_t*, hirsel_rt_v2_header*, uint64_t, uint64_t, hirsel_rt_v2_header*, uint64_t, uint64_t, uint64_t);

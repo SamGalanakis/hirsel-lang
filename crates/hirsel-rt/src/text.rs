@@ -557,3 +557,36 @@ pub unsafe extern "C" fn hirsel_rt_v2_string_byte_offset(
     }
     STATUS_OK
 }
+
+/// Search exactly the borrowed extents without retaining either owner.
+/// # Safety
+/// Both extents are initialized byte slices; `out` is writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_bytes_find_any(
+    _ctx: *mut TaskCtx,
+    out: *mut u64,
+    owner: *mut Header,
+    start: u64,
+    length: u64,
+    needles_owner: *mut Header,
+    needles_start: u64,
+    needles_length: u64,
+    offset: u64,
+) -> u8 {
+    let source = unsafe {
+        bytes(Slice {
+            owner,
+            start,
+            length,
+        })
+    };
+    let needles = unsafe {
+        bytes(Slice {
+            owner: needles_owner,
+            start: needles_start,
+            length: needles_length,
+        })
+    };
+    unsafe { out.write(hirsel_kernels::byte_scan::find_any(source, needles, offset)) };
+    STATUS_OK
+}

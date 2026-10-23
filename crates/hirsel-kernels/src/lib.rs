@@ -3,6 +3,7 @@
 #[cfg(test)]
 hirsel_guard::install!();
 
+pub mod byte_scan;
 pub mod disk;
 pub mod handle_scan;
 pub mod integer;

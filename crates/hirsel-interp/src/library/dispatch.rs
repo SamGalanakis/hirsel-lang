@@ -2238,6 +2238,9 @@ primary_operations! { library, call, context, name, a, value;
                     ))));
                 }
             },
+    Primitive: "bytes.find_any" => u64_value(hirsel_kernels::byte_scan::find_any(
+        bytes(arg(a, 0)?)?, bytes(arg(a, 1)?)?, index(arg(a, 2)?)? as u64,
+    )),
     Primitive: "bytes.base64_encode" | "bytes.base64_decode" => {
         use base64::Engine;
         let Value::Variant { variant: alphabet, .. } = arg(a, 1)? else {

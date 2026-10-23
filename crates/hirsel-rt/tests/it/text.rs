@@ -432,3 +432,38 @@ fn position_checks_only_the_selected_utf8_interval_and_none_is_initialized() {
         }
     }
 }
+
+#[test]
+fn byte_search_borrows_only_the_selected_extents() {
+    for ctx in [Ctx::production(), Ctx::diagnostic()] {
+        unsafe {
+            let source = allocate_bytes(ctx.0, b"prefixa\0b\xffctail");
+            let needles = allocate_bytes(ctx.0, b"x\xff\0y");
+            let allocations = ctx.stats().backing_allocations;
+            for (offset, expected) in [(0, 1), (2, 3), (4, 5), (5, 5), (u64::MAX, 5)] {
+                let mut found = u64::MAX;
+                assert_eq!(
+                    hirsel_rt_v2_bytes_find_any(
+                        ctx.0,
+                        &mut found,
+                        source.owner,
+                        source.start + 6,
+                        5,
+                        needles.owner,
+                        needles.start + 1,
+                        2,
+                        offset,
+                    ),
+                    0
+                );
+                assert_eq!(found, expected);
+                assert_eq!((*source.owner).count, 1);
+                assert_eq!((*needles.owner).count, 1);
+                assert_eq!(ctx.stats().backing_allocations, allocations);
+            }
+            release(&ctx, source.owner);
+            release(&ctx, needles.owner);
+        }
+        assert_eq!(ctx.stats().live_blocks, 0);
+    }
+}

@@ -305,6 +305,7 @@ N fn string.slice(s: String, start: StrPos of s, end: StrPos of s) -> String in 
 fn bytes.base64_encode(data: Bytes, alphabet: Base64Alphabet, padding: Base64Padding) -> unique Bytes uses {}
 fn bytes.base64_decode(data: Bytes, alphabet: Base64Alphabet, padding: Base64Padding) -> unique Option[Bytes] uses {}
 N fn bytes.len(src: Bytes) -> u64
+N fn bytes.find_any(src: Bytes, needles: Bytes, start: u64) -> u64
 @preserves_unique(builder) @unretained(data) fn bytes.append(mut builder: List[u8], data: Bytes) -> ()
 @preserves_unique(builder) @unretained(data) fn bytes.replace_range(mut builder: List[u8], start: u64, data: Bytes) -> ()
 @preserves_unique(out) fn bytes.append_from_history(mut out: List[u8], distance: u64, count: u64) -> ()
@@ -1786,3 +1787,8 @@ run-time implementation.
 `DecodeError` is the nullary variant `Version | SchemaMismatch | Truncated |
 Trailing | Scalar | Utf8 | Tag | Length | Duplicate | Order | Invalid`, itself `serializable`; these are expected
 validation failures with no partially decoded value. Operational refusal is separate.
+
+`bytes.find_any(src, needles, start)` returns the first relative byte offset at or after
+`start` whose byte occurs in `needles`, or `bytes.len(src)` if there is none. Empty
+sets and starts at or beyond the extent have no match. It borrows both extents,
+allocates nothing and treats all 256 byte values equally.

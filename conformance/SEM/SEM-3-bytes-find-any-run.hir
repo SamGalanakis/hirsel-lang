@@ -1,0 +1,17 @@
+// rule: SEM-3
+// expect: run
+pub fn main() -> Result[(), ()] uses {} {
+  let data = b"xxa\x00b\xffcxx"
+  let view = bytes.slice(data, 2, 7)
+  failure.check(bytes.find_any(view, b"\x00\xff", 0) == 1, TextInvariant())
+  failure.check(bytes.find_any(view, b"\x00\xff", 2) == 3, TextInvariant())
+  failure.check(bytes.find_any(view, b"xx", 0) == 5, TextInvariant())
+  failure.check(bytes.find_any(view, b"", 0) == 5, TextInvariant())
+  failure.check(bytes.find_any(view, b"a", 6) == 5, TextInvariant())
+  failure.check(
+    bytes.find_any(view, b"a", 18446744073709551615u64) == 5,
+    TextInvariant()
+  )
+  failure.check(bytes.find_any(b"", b"\x00", 0) == 0, TextInvariant())
+  Ok(())
+}
