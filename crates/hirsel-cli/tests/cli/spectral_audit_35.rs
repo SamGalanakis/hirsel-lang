@@ -1080,6 +1080,15 @@ fn spectral_audit_35_scripted_ordered_streams() {
                     assert_eq!(observe(&live, &ready, &sites).unwrap(), expected);
                     let frozen = fs::read(&tape).unwrap();
                     let record = hirsel_rt::launch::parse_recording_bytes(&frozen).unwrap();
+                    let placement = record
+                        .binding
+                        .as_ref()
+                        .unwrap()
+                        .placement
+                        .as_ref()
+                        .expect("record must retain requested placement");
+                    assert_eq!(placement.cores, hirsel_run_config::Cores::Fixed(width));
+                    assert_eq!(placement.reorder, Some(hirsel_run_config::Reorder::Off));
                     if id == "pending-cancel" {
                         assert!(record.events.iter().any(|e| matches!(
                             (&e.request, &e.completion),
