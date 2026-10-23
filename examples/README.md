@@ -51,6 +51,7 @@ selects an explicit bound.
 | --- | --- |
 | [argvplan](argvplan/README.md) | Inspect bounded quoted command lines as JSON argv plans without execution. |
 | [versionaudit](versionaudit/README.md) | Audit bounded pinned versions against explicit Cargo requirements; deterministic mismatches and typed invalid-input reports. |
+| [depplan](depplan/README.md) | Turn named prerequisites into a deterministic dry-run order; typed errors name unknown references and all blocked downstream nodes. |
 | [wordscan](wordscan/main.hir) | Count newline characters, ASCII-whitespace words and UTF-8 bytes; print lines containing a substring (default `red`). |
 | [csvjson](csvjson/main.hir) | Bounded std CSV reader to JSON objects, with `--help`, optional file/`-` stdin, and `--base64-field NAME` to decode/re-encode a field and append its SHA-256 digest. Reject unequal widths and duplicate headers; explicit stderr grants enable escaped JSON error records. |
 | [configcheck](configcheck/README.md) | Validate explicitly selected TOML/YAML service settings into one typed model; normalized JSON, field paths, bounded read-only inputs. |

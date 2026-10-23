@@ -54,3 +54,4 @@ mod argvplan_23;
 mod versionaudit_23;
 mod configcheck_23;
 mod patchctl_23;
+mod depplan_23;

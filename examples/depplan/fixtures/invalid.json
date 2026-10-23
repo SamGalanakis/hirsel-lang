@@ -1,0 +1,14 @@
+{
+  "nodes": [
+    {
+      "name": "deploy",
+      "prerequisites": [
+        "migrate"
+      ]
+    },
+    {
+      "name": "build",
+      "prerequisites": []
+    }
+  ]
+}

@@ -1,0 +1,33 @@
+{
+  "nodes": [
+    {
+      "name": "deploy",
+      "prerequisites": [
+        "migrate",
+        "smoke"
+      ]
+    },
+    {
+      "name": "build",
+      "prerequisites": []
+    },
+    {
+      "name": "migrate",
+      "prerequisites": [
+        "build"
+      ]
+    },
+    {
+      "name": "smoke",
+      "prerequisites": [
+        "build"
+      ]
+    },
+    {
+      "name": "announce",
+      "prerequisites": [
+        "deploy"
+      ]
+    }
+  ]
+}

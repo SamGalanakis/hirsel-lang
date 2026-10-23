@@ -1,0 +1,304 @@
+[
+  {
+    "label": "singleton",
+    "nodes": [
+      {
+        "name": "1",
+        "prerequisites": []
+      }
+    ],
+    "order": [
+      "1"
+    ]
+  },
+  {
+    "label": "reverse-chain",
+    "nodes": [
+      {
+        "name": "0",
+        "prerequisites": [
+          "1"
+        ]
+      },
+      {
+        "name": "1",
+        "prerequisites": [
+          "2"
+        ]
+      },
+      {
+        "name": "2",
+        "prerequisites": [
+          "3"
+        ]
+      },
+      {
+        "name": "3",
+        "prerequisites": [
+          "4"
+        ]
+      },
+      {
+        "name": "4",
+        "prerequisites": [
+          "5"
+        ]
+      },
+      {
+        "name": "5",
+        "prerequisites": [
+          "6"
+        ]
+      },
+      {
+        "name": "6",
+        "prerequisites": [
+          "7"
+        ]
+      },
+      {
+        "name": "7",
+        "prerequisites": [
+          "8"
+        ]
+      },
+      {
+        "name": "8",
+        "prerequisites": [
+          "9"
+        ]
+      },
+      {
+        "name": "9",
+        "prerequisites": [
+          "10"
+        ]
+      },
+      {
+        "name": "10",
+        "prerequisites": []
+      }
+    ],
+    "order": [
+      "10",
+      "9",
+      "8",
+      "7",
+      "6",
+      "5",
+      "4",
+      "3",
+      "2",
+      "1",
+      "0"
+    ]
+  },
+  {
+    "label": "disconnected",
+    "nodes": [
+      {
+        "name": "2",
+        "prerequisites": [
+          "3"
+        ]
+      },
+      {
+        "name": "3",
+        "prerequisites": [
+          "4"
+        ]
+      },
+      {
+        "name": "4",
+        "prerequisites": [
+          "5"
+        ]
+      },
+      {
+        "name": "5",
+        "prerequisites": [
+          "1"
+        ]
+      },
+      {
+        "name": "11",
+        "prerequisites": [
+          "12"
+        ]
+      },
+      {
+        "name": "12",
+        "prerequisites": [
+          "13"
+        ]
+      },
+      {
+        "name": "13",
+        "prerequisites": [
+          "14"
+        ]
+      },
+      {
+        "name": "14",
+        "prerequisites": [
+          "15"
+        ]
+      },
+      {
+        "name": "1",
+        "prerequisites": []
+      },
+      {
+        "name": "15",
+        "prerequisites": []
+      }
+    ],
+    "order": [
+      "1",
+      "15",
+      "5",
+      "14",
+      "4",
+      "13",
+      "3",
+      "12",
+      "2",
+      "11"
+    ]
+  },
+  {
+    "label": "diamond",
+    "nodes": [
+      {
+        "name": "a",
+        "prerequisites": []
+      },
+      {
+        "name": "b",
+        "prerequisites": [
+          "a"
+        ]
+      },
+      {
+        "name": "c",
+        "prerequisites": [
+          "a"
+        ]
+      },
+      {
+        "name": "d",
+        "prerequisites": [
+          "b",
+          "c"
+        ]
+      }
+    ],
+    "order": [
+      "a",
+      "b",
+      "c",
+      "d"
+    ]
+  },
+  {
+    "label": "duplicate-prerequisite",
+    "nodes": [
+      {
+        "name": "b",
+        "prerequisites": [
+          "a",
+          "a"
+        ]
+      },
+      {
+        "name": "a",
+        "prerequisites": []
+      }
+    ],
+    "order": [
+      "a",
+      "b"
+    ]
+  },
+  {
+    "label": "self-cycle",
+    "nodes": [
+      {
+        "name": "a",
+        "prerequisites": [
+          "a"
+        ]
+      }
+    ]
+  },
+  {
+    "label": "cycle-downstream",
+    "nodes": [
+      {
+        "name": "deploy",
+        "prerequisites": [
+          "migrate"
+        ]
+      },
+      {
+        "name": "migrate",
+        "prerequisites": [
+          "deploy"
+        ]
+      },
+      {
+        "name": "announce",
+        "prerequisites": [
+          "deploy"
+        ]
+      },
+      {
+        "name": "build",
+        "prerequisites": []
+      }
+    ]
+  },
+  {
+    "label": "fifo-ties",
+    "nodes": [
+      {
+        "name": "b",
+        "prerequisites": [
+          "a"
+        ]
+      },
+      {
+        "name": "a",
+        "prerequisites": []
+      },
+      {
+        "name": "c",
+        "prerequisites": []
+      }
+    ],
+    "order": [
+      "a",
+      "c",
+      "b"
+    ]
+  },
+  {
+    "label": "escaped-unicode",
+    "nodes": [
+      {
+        "name": "羊\n\"",
+        "prerequisites": []
+      },
+      {
+        "name": "done",
+        "prerequisites": [
+          "羊\n\""
+        ]
+      }
+    ],
+    "order": [
+      "羊\n\"",
+      "done"
+    ]
+  }
+]

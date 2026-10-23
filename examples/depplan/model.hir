@@ -1,0 +1,211 @@
+// Named predecessor structure follows CPython graphlib.py:56-85 at
+// 8b7d6c53eee2226b08bed761d5a1742b5adb8507 (PSF-2.0; third-party/NOTICES.md).
+// std owns FIFO Kahn. This application requires explicit, unique declarations.
+pub const INPUT_BYTES: u64 = 65536
+
+pub const MAX_NODES: u64 = 64
+
+pub const MAX_EDGES: u64 = 128
+
+pub const MAX_PREREQUISITES: u64 = 64
+
+pub const NAME_BYTES: u64 = 128
+
+pub type Node {
+  name: String,
+  prerequisites: List[String],
+}
+
+pub type Manifest {
+  nodes: List[Node],
+}
+
+pub type Plan {
+  order: List[String],
+}
+
+pub type Invalid = Json | Shape | NodeLimit | EdgeLimit | PrerequisiteLimit | Name | Duplicate(
+  String
+) | Unknown(String, String) | Blocked(List[String]) | Graph(toposort.GraphError) | Input(
+  String
+)
+
+pub type Report {
+  error: String,
+  node: String,
+  reference: String,
+  blocked: List[String],
+}
+
+fn node_from_json(value: json.Value) -> Result[unique Node, String] uses {} = comptime derive.from_json(
+  shape(Node)
+)
+
+fn manifest_from_json(value: json.Value) -> Result[unique Manifest, String] uses {} = comptime derive.from_json(
+  shape(Manifest)
+)
+
+pub fn plan_to_json(value: Plan) -> json.Value uses {} = comptime derive.json_value(
+  shape(Plan)
+)
+
+pub fn report_to_json(value: Report) -> json.Value uses {} = comptime derive.json_value(
+  shape(Report)
+)
+
+// The byte cap bounds the JSON DOM, including ignored fields. Inspect collection
+// counts before derived decoding allocates typed records or the graph builder.
+pub fn decode(take data: unique Bytes) -> Result[unique Manifest, Invalid] uses {} {
+  if bytes.len(data) > INPUT_BYTES {
+    return Error(Input("input_bytes_limit"))
+  }
+  let Ok(text) = string.from_bytes(take data) else {
+    return Error(Json())
+  }
+  let Ok(value) = json.parse(take text) else {
+    return Error(Json())
+  }
+  let Some(nodes_value) = json_access.member(value, "nodes") else {
+    return Error(Shape())
+  }
+  let Some(nodes) = json_access.as_array(nodes_value) else {
+    return Error(Shape())
+  }
+  let count = list.len(nodes)
+  if count > MAX_NODES {
+    return Error(NodeLimit())
+  }
+  let mut raw_edges = 0u64
+  for i in 0u64..count {
+    let Some(item) = json_access.element(nodes_value, i) else {
+      return Error(Shape())
+    }
+    let Some(deps) = json_access.member(item, "prerequisites") else {
+      return Error(Shape())
+    }
+    let Some(prerequisites) = json_access.as_array(deps) else {
+      return Error(Shape())
+    }
+    let width = list.len(prerequisites)
+    if width > MAX_PREREQUISITES {
+      return Error(PrerequisiteLimit())
+    }
+    if width > MAX_EDGES - raw_edges {
+      return Error(EdgeLimit())
+    }
+    raw_edges += width
+  }
+  let Ok(manifest) = manifest_from_json(value) else {
+    return Error(Shape())
+  }
+  Ok(take manifest)
+}
+
+fn valid_name(name: String) -> bool uses {} {
+  string.byte_len(name) > 0 && string.byte_len(name) <= NAME_BYTES
+}
+
+pub fn plan(manifest: Manifest) -> Result[Plan, Invalid] uses {} {
+  let count = list.len(manifest.nodes)
+  if count > MAX_NODES {
+    return Error(NodeLimit())
+  }
+  let mut ids: Map[String, u64] = map.empty()
+  for i in 0u64..count {
+    let name = manifest.nodes[i].name
+    if !valid_name(name) {
+      return Error(Name())
+    }
+    if map.contains(ids, name) {
+      return Error(Duplicate(unique name))
+    }
+    map.insert(mut ids, unique name, i)
+  }
+  let mut edges: List[toposort.Edge] = []
+  let mut raw_edges = 0u64
+  for i in 0u64..count {
+    let node = manifest.nodes[i]
+    let width = list.len(node.prerequisites)
+    if width > MAX_PREREQUISITES {
+      return Error(PrerequisiteLimit())
+    }
+    if width > MAX_EDGES - raw_edges {
+      return Error(EdgeLimit())
+    }
+    raw_edges += width
+    let mut seen: Set[u64] = set.empty()
+    for prerequisite in node.prerequisites {
+      if !valid_name(prerequisite) {
+        return Error(Name())
+      }
+      let Some(id) = map.get(ids, prerequisite) else {
+        return Error(Unknown(unique node.name, unique prerequisite))
+      }
+      if !set.contains(seen, id) {
+        set.insert(mut seen, id)
+        list.push(mut edges, toposort.Edge(from: id, to: i))
+      }
+    }
+  }
+  match std@1/toposort.order(count, edges, MAX_NODES, MAX_EDGES) {
+    Ok(ordered) => {
+      let mut names: List[String] = []
+      for id in ordered {
+        list.push(mut names, unique manifest.nodes[id].name)
+      }
+      Ok(Plan(order: take names))
+    },
+    Error(Blocked(blocked_ids)) => {
+      let mut names: List[String] = []
+      for id in blocked_ids {
+        list.push(mut names, unique manifest.nodes[id].name)
+      }
+      Error(Blocked(take names))
+    },
+    Error(error) => Error(Graph(error)),
+  }
+}
+
+pub fn report(error: Invalid) -> Report uses {} {
+  let mut report_value = Report(error: "", node: "", reference: "", blocked: [])
+  match error {
+    Json() => {
+      report_value.error = "json"
+    },
+    Shape() => {
+      report_value.error = "shape"
+    },
+    NodeLimit() => {
+      report_value.error = "node_limit"
+    },
+    EdgeLimit() => {
+      report_value.error = "edge_limit"
+    },
+    PrerequisiteLimit() => {
+      report_value.error = "prerequisite_limit"
+    },
+    Name() => {
+      report_value.error = "name"
+    },
+    Duplicate(node) => {
+      report_value.error = "duplicate_node"
+      report_value.node = unique node
+    },
+    Unknown(node, reference) => {
+      report_value.error = "unknown_name"
+      report_value.node = unique node
+      report_value.reference = unique reference
+    },
+    Blocked(names) => {
+      report_value.error = "blocked"
+      report_value.blocked = unique names
+    },
+    Graph(_) => {
+      report_value.error = "graph"
+    },
+    Input(code) => {
+      report_value.error = unique code
+    },
+  }
+  take report_value
+}
