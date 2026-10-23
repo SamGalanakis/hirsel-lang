@@ -20,6 +20,7 @@ pub(super) struct Signatures<'q> {
     /// Flow can reach nested declarations that classification did not need.
     /// Its memo reads through the same recording Reader as classification.
     flow_memo: RefCell<ContextMemo<'q>>,
+    diagnostic_lookups: RefCell<Vec<DependencyRead>>,
 }
 impl<'q> Signatures<'q> {
     pub(super) fn type_memo(&self) -> &TypeMemo {
@@ -36,6 +37,7 @@ impl<'q> Signatures<'q> {
             reader,
             memo,
             flow_memo: RefCell::new(flow_memo),
+            diagnostic_lookups: RefCell::new(Vec::new()),
         }
     }
     /// A flow proof, including any newly needed declaration reads. The caller
@@ -58,6 +60,7 @@ impl<'q> Signatures<'q> {
     }
     /// Record the first reads made since the last call, the memo's included.
     pub fn record(&mut self, reads: &mut Vec<DependencyRead>) {
+        reads.extend(self.diagnostic_lookups.borrow_mut().drain(..));
         for (definition, result) in self.reader.borrow_mut().take_pending() {
             reads.push(DependencyRead::Signature {
                 definition,
@@ -76,6 +79,40 @@ impl<'q> Signatures<'q> {
         hirsel_modes::proofs::count_memo(hits, self.memo.hits());
         self.record(reads);
         result
+    }
+    /// Diagnostic-only freshness check. Probe the exact declaration module,
+    /// and retain misses so a newly added
+    /// module value invalidates a cached recipe. No signature/body is needed.
+    pub fn diagnostic_name_available(&self, owner: &DefPath, name: &str) -> bool {
+        let context = hirsel_syntax::FileContext {
+            package: owner.0.package.clone(),
+            modules: owner.0.modules.clone(),
+        };
+        let segments: Vec<String> = owner
+            .0
+            .modules
+            .iter()
+            .cloned()
+            .chain(std::iter::once(name.to_owned()))
+            .collect();
+        let path = hirsel_syntax::Path {
+            package: Some(owner.0.package.clone()),
+            segments: segments
+                .iter()
+                .map(|s| hirsel_intern::Symbol::intern(s))
+                .collect(),
+        };
+        let output = self.reader.borrow_mut().provider().lookup(&context, &path);
+        let available = matches!(output.result, Err(QueryError::NotImplemented));
+        self.diagnostic_lookups
+            .borrow_mut()
+            .push(DependencyRead::ProviderLookup {
+                context,
+                package: path.package,
+                segments,
+                output,
+            });
+        available
     }
     /// A signature an earlier read retained; flow makes no new reads.
     pub fn cached(&self, definition: DefId) -> Option<SignatureRef> {

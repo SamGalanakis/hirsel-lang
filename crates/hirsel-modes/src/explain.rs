@@ -694,6 +694,16 @@ impl<K> Fact<K> {
 /// the checker accepts for that cause and requirement are listed.
 #[derive(Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 pub enum Repair {
+    /// A prose recipe, never a machine edit: every field is explicitly bound.
+    WholeRecord {
+        owner: String,
+        statement: String,
+    },
+    /// Resource destruction changes cleanup semantics (LANG-13/DROP).
+    ResourcePart(String),
+    /// No concrete recipe is established for this owner/projection.
+    WholeOwnerOnly(String),
+
     /// Checked per-item extraction, or conditional guidance when a concrete
     /// independent copy is not established by the diagnostic producer.
     IterationItem {
@@ -743,6 +753,15 @@ pub enum Repair {
 impl Repair {
     fn text(&self) -> String {
         match self {
+            Repair::WholeRecord { owner, statement } => format!(
+                "replace the enclosing field-extraction statement with `{statement}` and update later field uses to the new bindings; this consumes all of `{owner}`, so `{owner}` cannot be used later. Bind every still-needed field explicitly; this recipe binds every field and omits none"
+            ),
+            Repair::ResourcePart(owner) => format!(
+                "`{owner}` is a resource: whole destructuring is governed by LANG-13/DROP and can suppress its parent finalizer; bound fields move and omitted fields drop in declaration order. Use the resource's checked API or deliberately design its whole destruction; this is not an equivalent field-extraction repair"
+            ),
+            Repair::WholeOwnerOnly(owner) => format!(
+                "moving a part requires an accessible whole owned value and consumes that whole owner; `{owner}` cannot then be used later. Borrowed owners cannot be consumed; indexed elements and nested or boxed projections need their own checked whole-owner pattern. Hidden, external or generic representations need a checked API or ownership contract; no concrete pattern is established here. Bind every still-needed field explicitly, and check LANG-13/DROP for resources before whole destruction"
+            ),
             Repair::IterationItem {
                 item,
                 independent_copy: true,
@@ -987,7 +1006,11 @@ impl Repair {
             | Repair::PlaceResult { .. }
             | Repair::HeapParameter(_) => 1,
             Repair::DeepCopy(_) | Repair::UniqueResult { .. } | Repair::IterationItem { .. } => 2,
-            Repair::TakeChangesMeaning(_) | Repair::KeepCaptureLocal(_) => 3,
+            Repair::TakeChangesMeaning(_)
+            | Repair::KeepCaptureLocal(_)
+            | Repair::WholeRecord { .. }
+            | Repair::ResourcePart(_)
+            | Repair::WholeOwnerOnly(_) => 3,
         }
     }
 }

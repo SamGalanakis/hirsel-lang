@@ -359,3 +359,422 @@ fn authoring_repairs_11_shadow_binding_sites_follow_relocated_declarations() {
         }
     });
 }
+
+fn part_checked(source: &str, extra: Option<(&str, &[&str])>) -> hirsel_engine::CheckOutput {
+    let dir = shadow_fixture(source, extra);
+    let mut program = load_program(&dir.path().join("hirsel.json")).unwrap();
+    let output = program.check(LoweringPolicy::Comptime).unwrap();
+    assert_eq!(output.completion, hirsel_engine::CheckCompletion::Complete);
+    output
+}
+
+fn part_recipe(source: &str, primary: &str) -> String {
+    let output = part_checked(source, None);
+    let errors: Vec<_> = output
+        .diagnostics
+        .iter()
+        .filter(|d| d.severity == hirsel_diag::Severity::Error)
+        .collect();
+    let [d] = errors.as_slice() else {
+        panic!("{source}: {errors:#?}")
+    };
+    assert_eq!(d.rule.as_str(), "OWN-8", "{d:#?}");
+    assert_eq!(output.sources.slice(d.primary), Some(primary));
+    assert!(
+        d.message
+            .starts_with("destructure the whole owned value to move a part")
+    );
+    let owner_site = if source.contains("take r: Row") {
+        "Row"
+    } else {
+        "r"
+    };
+    assert!(
+        d.secondary
+            .iter()
+            .any(|label| output.sources.slice(label.span) == Some(owner_site)
+                && label.message.contains("leave `r` partly moved")),
+        "{d:#?}"
+    );
+    assert!(d.fix.is_none());
+    let note = d
+        .notes
+        .iter()
+        .find(|n| n.contains("replace the enclosing field-extraction statement"))
+        .unwrap_or_else(|| panic!("{d:#?}"));
+    assert!(note.contains("consumes all of `r`"));
+    assert!(note.contains("`r` cannot be used later"));
+    assert!(note.contains("Bind every still-needed field explicitly"));
+    let human = d.render_human(&output.sources);
+    let json = d.to_json(&output.sources);
+    for note in &d.notes {
+        assert!(human.contains(note));
+        assert!(
+            json["notes"]
+                .as_array()
+                .unwrap()
+                .contains(&serde_json::json!(note))
+        );
+    }
+    note.split('`')
+        .find(|text| text.starts_with("let "))
+        .unwrap()
+        .to_owned()
+}
+
+fn part_accept(source: &str) {
+    let dir = shadow_fixture(source, None);
+    let mut program = load_program(&dir.path().join("hirsel.json")).unwrap();
+    let output = program.check(LoweringPolicy::Comptime).unwrap();
+    assert_eq!(output.completion, hirsel_engine::CheckCompletion::Complete);
+    assert!(
+        output.diagnostics.is_empty(),
+        "{source}: {:?}",
+        output.diagnostics
+    );
+    assert!(
+        !program
+            .engine
+            .export_tir(&program.entry)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn authoring_repairs_11_partial_move_record_recipes_apply_and_export() {
+    with_compiler_stack(|| {
+        for (source, expected) in [
+            (
+                "type Row { values: List[u64] }\npub fn main() { let r = Row(values: [1]); let values = take r.values }",
+                "let Row(values: moved_values) = take r",
+            ),
+            (
+                "type Inventory { values: List[u64], spare: List[u64] }\npub fn main() { let r = Inventory(values: [1], spare: [2]); let values = take r.values }",
+                "let Inventory(values: moved_values, spare: moved_spare) = take r",
+            ),
+            (
+                "type Row { values: List[u64] }\npub fn main() { let moved_values = 1u64; let moved_values_2 = 2u64; let r = Row(values: [1]); let values = take r.values }",
+                "let Row(values: moved_values_3) = take r",
+            ),
+            (
+                "type Row { values: List[u64] }\nfn moved_values() {}\nfn moved_values_2() {}\npub fn main() { let r = Row(values: [1]); let values = take r.values }",
+                "let Row(values: moved_values_3) = take r",
+            ),
+            (
+                "type Row { values: List[u64] }\ntype Collision = moved_values()\npub fn main() { let r = Row(values: [1]); let values = take r.values }",
+                "let Row(values: moved_values) = take r",
+            ),
+            (
+                "type Row { values: List[u64] }\nfn extract(take r: Row) { let values = take r.values }\npub fn main() { extract(Row(values: [1])) }",
+                "let Row(values: moved_values) = take r",
+            ),
+        ] {
+            let recipe = part_recipe(source, "take r.values");
+            assert_eq!(recipe, expected);
+            let repaired = source.replace("let values = take r.values", &recipe);
+            part_accept(&repaired);
+        }
+    });
+}
+
+#[test]
+fn authoring_repairs_11_partial_move_recipe_consumes_owner() {
+    with_compiler_stack(|| {
+        let source = "type Row { values: List[u64] }\npub fn main() { let r = Row(values: [1]); let values = take r.values; let _ = r.values }";
+        let recipe = part_recipe(source, "take r.values");
+        let repaired = source.replace("let values = take r.values", &recipe);
+        let output = part_checked(&repaired, None);
+        let errors: Vec<_> = output
+            .diagnostics
+            .iter()
+            .filter(|d| d.severity == hirsel_diag::Severity::Error)
+            .collect();
+        assert_eq!(errors.len(), 1, "{errors:#?}");
+        assert_eq!(errors[0].rule.as_str(), "OWN-2");
+        assert_eq!(output.sources.slice(errors[0].primary), Some("r.values"));
+        part_accept(&repaired.replace("let _ = r.values", "let _ = moved_values"));
+    });
+}
+
+#[test]
+fn authoring_repairs_11_partial_move_bounded_owners_have_no_recipe() {
+    with_compiler_stack(|| {
+        for (source, primary, resource) in [
+            (
+                "pub opaque type Row: data uses {} { values: List[u64] }\npub fn main() { let r = Row(values: [1]); let values = take r.values }",
+                "take r.values",
+                false,
+            ),
+            (
+                "resource type Row { values: List[u64] } drop(x) {}\npub fn main() { let r = Row(values: [1]); let values = take r.values }",
+                "take r.values",
+                true,
+            ),
+            (
+                "type Row[T] { values: T }\nfn extract[T](take r: Row[T]) { let values = take r.values }\npub fn main() {}",
+                "take r.values",
+                false,
+            ),
+            (
+                "type Row[T] { values: T }\npub fn main() { let r = Row(values: [1u64]); let values = take r.values }",
+                "take r.values",
+                false,
+            ),
+            (
+                "type Row { values: List[u64] }\nfn extract(r: Row) { let values = take r.values }\npub fn main() {}",
+                "take r.values",
+                false,
+            ),
+            (
+                "type Row { values: List[u64] }\nfn extract(mut r: Row) { let values = take r.values }\npub fn main() {}",
+                "take r.values",
+                false,
+            ),
+            (
+                "type Row { values: List[u64] }\ntype Outer { row: Row }\npub fn main() { let r = Outer(row: Row(values: [1])); let values = take r.row.values }",
+                "take r.row.values",
+                false,
+            ),
+            (
+                "type Row { values: List[u64] }\npub fn main() { let r = box Row(values: [1]); let values = take r.values }",
+                "take r.values",
+                false,
+            ),
+            (
+                "pub fn main() { let r: List[List[u64]] = [[1]]; let values = take r[0] }",
+                "take r[0]",
+                false,
+            ),
+        ] {
+            let output = part_checked(source, None);
+            let errors: Vec<_> = output
+                .diagnostics
+                .iter()
+                .filter(|d| d.severity == hirsel_diag::Severity::Error)
+                .collect();
+            assert_eq!(errors.len(), 1, "{source}: {errors:#?}");
+            let d = errors[0];
+            assert_eq!(d.rule.as_str(), "OWN-8", "{source}: {d:#?}");
+            assert_eq!(output.sources.slice(d.primary), Some(primary));
+            assert!(d.fix.is_none());
+            let notes = d.notes.join("\n");
+            assert!(!notes.contains("let Row("), "{notes}");
+            assert!(
+                notes.contains(if resource {
+                    "suppress its parent finalizer"
+                } else {
+                    "no concrete pattern is established"
+                }),
+                "{notes}"
+            );
+            assert!(notes.contains("LANG-13/DROP"));
+        }
+        // A public opaque's hidden field is rejected before OWN-8. Neither
+        // that error nor an inaccessible private type may invent a pattern.
+        for declaration in [
+            "pub opaque type Row: data uses {} { values: List[u64] }",
+            "type Row { values: List[u64] }",
+        ] {
+            let source = "type Row = shadow@1/hidden.Row\nfn extract(take r: Row) { let values = take r.values }\npub fn main() {}";
+            let output = part_checked(source, Some((declaration, &["hidden"])));
+            assert!(!output.diagnostics.is_empty());
+            for d in &output.diagnostics {
+                assert!(d.fix.is_none());
+                assert!(!d.notes.iter().any(|n| n.contains("let Row(")));
+            }
+        }
+        // A transparent type in another module is also conservatively bounded.
+        let source = "type Row = shadow@1/hidden.Row\nfn extract(take r: Row) { let values = take r.values }\npub fn main() {}";
+        let output = part_checked(
+            source,
+            Some(("pub type Row { values: List[u64] }", &["hidden"])),
+        );
+        let [d] = output.diagnostics.as_slice() else {
+            panic!("{:?}", output.diagnostics)
+        };
+        assert_eq!(d.rule.as_str(), "OWN-8");
+        assert!(
+            d.notes
+                .iter()
+                .any(|n| n.contains("no concrete pattern is established"))
+        );
+    });
+}
+
+#[test]
+fn authoring_repairs_11_partial_move_nested_and_boxed_whole_controls() {
+    with_compiler_stack(|| {
+        part_accept(
+            "type Row { values: List[u64] }\ntype Outer { row: Row }\npub fn main() { let r = Outer(row: Row(values: [1])); let Outer(row: row) = take r; let Row(values: values) = take row; let _ = values }",
+        );
+        part_accept(
+            "type Row { values: List[u64] }\npub fn main() { let r = box Row(values: [1]); let Row(values: values) = take r; let _ = values }",
+        );
+    });
+}
+
+#[test]
+fn authoring_repairs_11_partial_move_transfer_and_resource_cleanup_agree() {
+    with_compiler_stack(|| {
+        // Transfer-without-double-drop and nested boxed ownership are the
+        // reference shapes (Rust ptr/mod.rs:490-567, vec.rs:257-292 and
+        // vec/into_iter.rs:600-630 at f6c1107f8be13e48465e12c0fd26e6a39fe18e4f).
+        // Hirsel binds every field of ordinary records; resource whole
+        // destruction has its own parent-finalizer suppression rule.
+        let template = r#"
+resource type Trace { stdout: Stdout, text: String }
+drop(x) { let _ = out.print(x.stdout, x.text) }
+type Row { values: List[Trace], spare: box Trace }
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let stdout = io.stdout(rt)?
+  let r = Row(values: [Trace(stdout: stdout, text: "values\n")], spare: box Trace(stdout: stdout, text: "spare\n"))
+  let values = take r.values
+  let _ = out.print(stdout, "transferred\n")
+  Ok(())
+}
+"#;
+        let recipe = part_recipe(template, "take r.values");
+        assert_eq!(
+            recipe,
+            "let Row(values: moved_values, spare: moved_spare) = take r"
+        );
+        let repaired = template.replace("let values = take r.values", &recipe);
+        // Existing resource rules are controls, never a recommended repair:
+        // ordinary cleanup finalizes parent+child, whole destruction suppresses
+        // the parent and still finalizes the explicitly bound child once.
+        let resource = r#"
+resource type Trace { stdout: Stdout, text: String }
+drop(x) { let _ = out.print(x.stdout, x.text) }
+resource type Parent { child: Trace }
+drop(x) { let _ = out.print(x.child.stdout, "parent\n") }
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let stdout = io.stdout(rt)?
+  let p = Parent(child: Trace(stdout: stdout, text: "child\n"))
+  WHOLE
+  Ok(())
+}
+"#;
+        for (name, source, expected) in [
+            ("record", repaired, "transferred\nspare\nvalues\n"),
+            (
+                "resource-normal",
+                resource.replace("WHOLE", ""),
+                "parent\nchild\n",
+            ),
+            (
+                "resource-whole",
+                resource.replace("WHOLE", "let Parent(child: child) = take p"),
+                "child\n",
+            ),
+        ] {
+            let dir = shadow_fixture(&source, None);
+            let mut program = load_program(&dir.path().join("hirsel.json")).unwrap();
+            program.check_for_execution().unwrap();
+            assert!(
+                !program
+                    .engine
+                    .export_tir(&program.entry)
+                    .unwrap()
+                    .is_empty()
+            );
+            let execution = hirsel_engine::run_observed_checked(
+                &mut program.engine,
+                &RunConfiguration {
+                    entry: program.entry.clone(),
+                    hash_seed: 0,
+                    inputs: vec![],
+                },
+                SimulationConfig::default(),
+            )
+            .unwrap();
+            let reference =
+                native::Observation::of_reference(execution.observation.as_ref().unwrap());
+            assert_eq!(reference.exit_code, Some(0), "{name}: {reference:?}");
+            assert!(reference.failures.is_empty(), "{name}: {reference:?}");
+            assert_eq!(reference.output, expected.as_bytes(), "{name}");
+            let input = program.engine.export_native_input().unwrap();
+            let validated = program.engine.import_native_input(input).unwrap();
+            let options = native::Options::new(native::TargetSpec::x86_64_unknown_linux_gnu());
+            let configurations = vec![
+                native::Configuration {
+                    options: options.clone(),
+                    engine: native::Engine::Heap { campaign: false },
+                },
+                native::Configuration {
+                    options: options.clone(),
+                    engine: native::Engine::Native {
+                        opt: native::OptLevel::Speed,
+                        partition: native::Partition::Whole,
+                        runtime: native::Runtime::Diagnostic,
+                    },
+                },
+                native::Configuration {
+                    options,
+                    engine: native::Engine::Cranelift {
+                        partition: native::Partition::Whole,
+                        runtime: native::Runtime::Diagnostic,
+                    },
+                },
+            ];
+            let scratch = tempfile::Builder::new()
+                .prefix("partial-move-repairs-20-")
+                .tempdir()
+                .unwrap();
+            let toolchain =
+                native::Toolchain::for_matrix(&scratch.path().join("runtime"), &configurations)
+                    .unwrap();
+            let outcomes = native::differential(
+                &validated,
+                &program.entry,
+                &reference,
+                &configurations,
+                &toolchain,
+                scratch.path(),
+            );
+            assert_eq!(outcomes.len(), 3);
+            for (configuration, outcome) in outcomes {
+                eprintln!("partial-move-repairs-20/{name}: {configuration}: {outcome:?}");
+                assert!(
+                    matches!(outcome, native::Outcome::Agree),
+                    "{name}: {configuration}: {outcome:?}"
+                );
+            }
+        }
+    });
+}
+
+#[test]
+fn authoring_repairs_11_partial_move_fresh_names_follow_module_edits() {
+    with_compiler_stack(|| {
+        let mut engine = crate::source_std::engine();
+        let main = "type Row { values: List[u64] }\npub fn main() { let r = Row(values: [1]); let values = take r.values }\n";
+        for (prefix, binding) in [
+            ("", "moved_values"),
+            ("fn moved_values() {}\n", "moved_values_2"),
+            ("", "moved_values"),
+        ] {
+            let source = format!("{prefix}{main}");
+            let file = engine.sources.add("partial-move.hir", source).unwrap();
+            for _ in 0..2 {
+                let output = hirsel_engine::check_progress(
+                    &mut engine,
+                    file,
+                    &hirsel_engine::default_context(),
+                )
+                .unwrap();
+                assert_eq!(output.completion, hirsel_engine::CheckCompletion::Complete);
+                let [d] = output.diagnostics.as_slice() else {
+                    panic!("{:?}", output.diagnostics)
+                };
+                assert_eq!(d.rule.as_str(), "OWN-8");
+                assert!(
+                    d.notes
+                        .iter()
+                        .any(|n| n.contains(&format!("let Row(values: {binding}) = take r"))),
+                    "{d:#?}"
+                );
+            }
+        }
+    });
+}

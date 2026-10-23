@@ -936,6 +936,127 @@ impl Checker<'_, '_> {
             .required(required)
             .into()
     }
+    /// OWN-8 repairs consume the whole binding, never just the selected place.
+    /// Use only retained declaration evidence; failing diagnostics must not
+    /// invent a constructor for hidden, generic or indirect storage.
+    pub(super) fn part_explanation(
+        &self,
+        state: &State,
+        place: &Place,
+        value: &Value,
+        site: Span,
+    ) -> Pending {
+        let mut pending = self.binding_explanation(
+            place.binding,
+            Some(Cause::Part),
+            Fact::new(Requirement::Owned, site, &[]),
+        );
+        let (owner, _) = self.binding_site(place.binding);
+        let recipe = || {
+            if value.element_place.is_some()
+                || value.aliased().is_some()
+                || state.slots[place.binding].value.aliased().is_some()
+                || state.slots[place.binding].available != LIVE
+                || self.finalizer_self(place.binding)
+                || self.loaned(
+                    state,
+                    &Place {
+                        binding: place.binding,
+                        projections: vec![],
+                    },
+                )
+                || !matches!(place.projections.as_slice(), [Projection::Field(_)])
+            {
+                return None;
+            }
+            let binding = &self.body.bindings[place.binding];
+            if binding.owner != self.graph.owner
+                || matches!(
+                    binding_mode(self, place.binding),
+                    Some(PassingMode::Borrow | PassingMode::Mut)
+                )
+            {
+                return None;
+            }
+            let TypeKind::Named {
+                definition,
+                arguments,
+            } = &self.t.get(binding.ty)?.kind
+            else {
+                return None;
+            };
+            let path = definition.path();
+            let here = &self.syntax.item.definition;
+            // External/private representations and imported aliases need the
+            // author's checked API; do not guess a source-level import path.
+            if path.0.package != here.0.package || path.0.modules != here.0.modules {
+                return None;
+            }
+            let signature = self.signatures.cached(*definition)?;
+            let SignatureKind::Type(declaration) = &signature.kind else {
+                return None;
+            };
+            if declaration.resource || declaration.drop.is_some() {
+                return Some(Repair::ResourcePart(owner.clone()));
+            }
+            if signature.metadata.visibility == hirsel_syntax::Visibility::PublicOpaque
+                || !arguments.is_empty()
+                || !declaration.generics.is_empty()
+                || declaration.distinct
+            {
+                return None;
+            }
+            let TypeKind::Record(fields) = &self.t.get(declaration.representation?)?.kind else {
+                return None;
+            };
+            let [Projection::Field(requested)] = place.projections.as_slice() else {
+                return None;
+            };
+            fields.get(*requested as usize)?;
+            let mut used: BTreeSet<String> = self
+                .tree
+                .tokens
+                .iter()
+                .filter_map(|token| match token.kind {
+                    hirsel_syntax::TokenKind::Ident(name) => Some(name.as_str().to_owned()),
+                    _ => None,
+                })
+                .collect();
+            used.extend(
+                self.body
+                    .resolution
+                    .dependencies
+                    .iter()
+                    .map(|p| p.0.name.clone()),
+            );
+            let mut parts = Vec::new();
+            for field in fields.iter() {
+                let base = format!("moved_{}", field.name.as_str());
+                let mut fresh = base.clone();
+                let mut suffix = 2;
+                while used.contains(&fresh)
+                    || !self.signatures.diagnostic_name_available(here, &fresh)
+                {
+                    fresh = format!("{base}_{suffix}");
+                    suffix += 1;
+                    if suffix > 64 {
+                        return None;
+                    }
+                }
+                used.insert(fresh.clone());
+                parts.push(format!("{}: {fresh}", field.name.as_str()));
+            }
+            Some(Repair::WholeRecord {
+                owner: owner.clone(),
+                statement: format!("let {}({}) = take {owner}", path.0.name, parts.join(", ")),
+            })
+        };
+        pending
+            .explanation
+            .repairs
+            .push(recipe().unwrap_or(Repair::WholeOwnerOnly(owner)));
+        pending
+    }
     /// A use of a moved binding: the move site comes from the trace.
     pub(super) fn moved(&self, index: usize, read: ExprId, required: Fact<Requirement>) -> Pending {
         let (name, _) = self.binding_site(index);

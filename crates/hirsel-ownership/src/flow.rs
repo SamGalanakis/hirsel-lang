@@ -4670,13 +4670,7 @@ impl Checker<'_, '_> {
                             const { RuleId::of("OWN-8") },
                             operation_site,
                             "destructure the whole owned value to move a part",
-                            |c| {
-                                c.binding_explanation(
-                                    place.binding,
-                                    Some(Cause::Part),
-                                    Fact::new(Requirement::Owned, operation_site, &[]),
-                                )
-                            },
+                            |c| c.part_explanation(state, &place, &value, operation_site),
                         );
                         value.invalid = true;
                     } else if value.aliased().is_some() {
