@@ -293,16 +293,18 @@ pub trait NativeProducts {
     ) -> Result<R, String>;
 }
 
-/// Select once for a native request and share with every producer/consumer.
-/// An off durable store still needs transient content references; request-owned
-/// memory is dropped at completion and cannot retain cross-request hits.
+/// Select once for an admitted native request and share this same provider
+/// with native, object and runtime producers. Cache write failures retain only
+/// bounded transient transport; verifier capabilities come from the selected
+/// backend exactly. The admitted allowance outlives every external byte view.
 pub fn request_store(
     engine: &hirsel_engine::QueryEngine,
-) -> Arc<dyn hirsel_engine::store::ResultStore> {
-    engine
+    allowance: hirsel_engine::runtime::MemoryReservation,
+) -> Arc<hirsel_engine::store::RequestStore> {
+    let backend = engine
         .product_store()
-        .filter(|store| store.enabled())
-        .unwrap_or_else(|| Arc::new(hirsel_engine::store::MemStore::default()))
+        .unwrap_or_else(|| Arc::new(hirsel_engine::store::NoneStore));
+    Arc::new(hirsel_engine::store::RequestStore::new(backend, allowance))
 }
 
 /// Resolve settled descriptor bytes only. This is not a proof capability: the
