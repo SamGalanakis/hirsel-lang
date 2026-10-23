@@ -440,6 +440,17 @@ struct EvaluationRecord {
     constant: crate::comptime::EvaluatedConstant,
 }
 #[derive(Serialize, Deserialize)]
+pub(super) struct GenerationRecord {
+    pub owner: DefId,
+    pub body: hirsel_syntax::ExprId,
+    pub text: String,
+    pub detail: DependencyReads,
+    pub depth: crate::memo::DepthEvidence<Span>,
+    pub staged: Vec<(DefId, Vec<u64>)>,
+    #[serde(skip)]
+    pub acceptance: Option<hirsel_validate::ExecutionReceipt>,
+}
+#[derive(Serialize, Deserialize)]
 struct StagedEvaluationRecord {
     declaration: DefId,
     arguments: Vec<u64>,
@@ -861,7 +872,11 @@ impl QueryEngine {
         // A generated body's registration must still be replayed by S1; its
         // transient syntax isn't a source-owned record.
         let item = self.items.get(path)?.first()?;
-        if generation::generator(item).is_some() || self.generated.contains_key(path) {
+        if kind == QueryKind::Generate {
+            if generation::generator(item).is_none() || generation::instance_bodied(item) {
+                return None;
+            }
+        } else if generation::generator(item).is_some() || self.generated.contains_key(path) {
             return None;
         }
         if self
@@ -944,8 +959,10 @@ impl QueryEngine {
             .retain(|variant| variant.inputs == key.1 && variant.valid(key));
         let hit = entry
             .hit(|read| {
-                if matches!(key.2, QueryKind::Evaluate | QueryKind::Lower)
-                    && let ReadKey::Signature(id) | ReadKey::ExecutedSignature(id) = read
+                if matches!(
+                    key.2,
+                    QueryKind::Evaluate | QueryKind::Lower | QueryKind::Generate
+                ) && let ReadKey::Signature(id) | ReadKey::ExecutedSignature(id) = read
                     && id.path().0.name.starts_with("$comptime:")
                     && !self.staged_constants.contains_key(id.path())
                 {
@@ -1356,6 +1373,91 @@ impl QueryEngine {
                 }
                 _ => true,
             })
+    }
+    pub(super) fn load_generation(
+        &mut self,
+        path: &DefPath,
+        body: hirsel_syntax::ExprId,
+    ) -> Option<(GenerationRecord, Reads)> {
+        let key = self.store_key(path, QueryKind::Generate)?;
+        let variant = self.stored_variant(path, QueryKind::Generate)?;
+        let mut record: GenerationRecord = self.decode_record(&variant.payload)?;
+        if record.owner != DefId::intern(path)
+            || record.body != body
+            || !self.portable_lower_reads(path, &variant.reads, &record.staged)
+            || record.depth.bounded
+            || record.depth.first.len() != self.depth_limit() as usize + 1
+            || record
+                .depth
+                .first
+                .iter()
+                .flatten()
+                .any(|site| self.sources.slice(*site).is_none())
+        {
+            return None;
+        }
+        if self.verify == Verify::On {
+            let cache = self.result_store.as_ref()?.verifier()?;
+            let snapshot = self.signature_snapshot();
+            record.acceptance = Some(
+                cache.execution(evaluation_subject(&key, &variant.payload), |package| {
+                    snapshot.validation_input_digest(package)
+                })?,
+            );
+        }
+        if self.verify_store == crate::store::VerifyStore::Recompute {
+            self.pending_store_checks.insert(
+                (DefId::intern(path), QueryKind::Generate),
+                Expected::capture(variant, &mut self.store_check_spool),
+            );
+            return None;
+        }
+        self.replay_staged_selections(&record.staged)?;
+        timings::count(Count::StoreHits);
+        self.store_adoptions += 1;
+        Some((record, variant.reads))
+    }
+    pub(super) fn store_generation(
+        &mut self,
+        path: &DefPath,
+        reads: &Reads,
+        mut record: GenerationRecord,
+    ) -> Result<(), QueryError> {
+        if self.result_store.is_none()
+            || !self.s1.failure_is_own()
+            || !self.portable_lower_reads(path, reads, &record.staged)
+            || !self.store_staged_selections(&record.staged)?
+        {
+            return Ok(());
+        }
+        let Some(key) = self.store_key(path, QueryKind::Generate) else {
+            return Ok(());
+        };
+        record.detail = canonical_detail(record.detail);
+        let Some(payload) = self.encode_record(&record) else {
+            return Ok(());
+        };
+        let store = self
+            .result_store
+            .as_ref()
+            .expect("enabled generation store")
+            .clone();
+        if let Some(receipt) = &record.acceptance
+            && let Some(cache) = store.verifier()
+        {
+            cache.publish_execution(evaluation_subject(&key, &payload), receipt);
+        }
+        EncodedWriter {
+            types: self.type_records().expect("enabled generation types"),
+            store,
+            key,
+            path: path.clone(),
+            kind: QueryKind::Generate,
+            expected: self
+                .pending_store_checks
+                .remove(&(DefId::intern(path), QueryKind::Generate)),
+        }
+        .write(reads, payload)
     }
     pub(super) fn load_lower(
         &mut self,
@@ -1835,6 +1937,62 @@ impl QueryEngine {
 #[cfg(test)]
 mod malformed_tests {
     use super::*;
+
+    #[test]
+    fn malformed_generation_records_miss_before_source_publication() {
+        for verify in [
+            crate::store::VerifyStore::Off,
+            crate::store::VerifyStore::Recompute,
+        ] {
+            for fault in 0..6 {
+                let (mut engine, syntax) =
+                    fixture_source("fn main()->u32 uses {}=comptime ignored()");
+                engine.verify = Verify::Off;
+                let path = &syntax.item.definition;
+                let body = generation::generator(&syntax).unwrap();
+                let mut depth = crate::memo::DepthEvidence::leaf(engine.depth_limit());
+                depth.bounded = false;
+                let mut record = GenerationRecord {
+                    owner: DefId::intern(path),
+                    body,
+                    depth,
+                    text: "fn()->u32 uses {}{7u32}".into(),
+                    detail: Default::default(),
+                    staged: vec![],
+                    acceptance: None,
+                };
+                match fault {
+                    0 => (),
+                    1 => record.owner = DefId::intern(&DefPath::core("foreign")),
+                    2 => record.body = hirsel_syntax::ExprId(u32::MAX),
+                    3 => record.depth.bounded = true,
+                    4 => record.depth.first = Box::new([]),
+                    5 => record
+                        .staged
+                        .push((DefId::intern(&DefPath::core("absent-stage")), vec![2])),
+                    _ => unreachable!(),
+                }
+                engine
+                    .write_record(path, QueryKind::Generate, &Reads::empty(), &record)
+                    .unwrap();
+                engine.verify_store = verify;
+                let hit = engine.load_generation(path, body);
+                assert_eq!(
+                    hit.is_some(),
+                    fault == 0 && verify == crate::store::VerifyStore::Off,
+                    "fault={fault} verify={verify:?}"
+                );
+                assert!(
+                    engine.generated_source(path).is_none(),
+                    "a text query does not publish generated syntax"
+                );
+                if fault != 0 {
+                    assert_eq!(engine.store_adoptions(), 0);
+                    assert!(engine.pending_store_checks.is_empty());
+                }
+            }
+        }
+    }
 
     #[test]
     fn durable_evaluation_requires_exact_coverage_for_every_removed_v_guard() {
