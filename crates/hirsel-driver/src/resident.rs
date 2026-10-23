@@ -180,3 +180,29 @@ impl<O: OutputReadiness> RequestLease<hirsel_engine::runtime::AdmittedRuntime, O
         }
     }
 }
+/// Restore the engine-selected linked output through its configured provider.
+/// The descriptor is resolved and output readiness checked on every request;
+/// this adapter owns neither an executable cache nor a linker.
+pub struct ExecutableOutput {
+    pub store: Arc<dyn hirsel_engine::store::ResultStore>,
+    pub destination: std::path::PathBuf,
+}
+impl OutputReadiness for ExecutableOutput {
+    type Output = std::path::PathBuf;
+    type Error = String;
+    fn ready(
+        &mut self,
+        products: &[hirsel_engine::runtime::ProductRef],
+    ) -> Result<Self::Output, String> {
+        let [product] = products else {
+            return Err("executable request requires exactly one linked root".into());
+        };
+        let linked = crate::native::object_queries::linked_product(self.store.as_ref(), *product)?;
+        crate::native::object_queries::materialize_executable(
+            self.store.as_ref(),
+            &linked,
+            &self.destination,
+        )?;
+        Ok(self.destination.clone())
+    }
+}
