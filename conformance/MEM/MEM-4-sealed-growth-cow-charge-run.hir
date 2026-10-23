@@ -1,0 +1,61 @@
+// rule: MEM-4
+// expect: run
+fn grown(cap: u64) -> u64 {
+  let outcome = arena.bounded(
+    cap,
+    fn(a: Arena) -> Region[List[Bytes]] {
+      let h: Bytes in heap = copy_to(heap, b"abc")
+      let mut root: List[Bytes] in a = []
+      list.push(mut root, copy h)
+      list.push(mut root, copy h)
+      arena.seal(take a, take root)
+    }
+  )
+  match take outcome {
+    Ok(r) => {
+      let mut owned = take r
+      region.with(
+        mut owned,
+        fn(root: List[Bytes]) -> u64 {
+          list.len(root)
+        }
+      )
+    },
+    Error(e) => 0u64,
+  }
+}
+
+fn copied(cap: u64) -> u64 {
+  let outcome = arena.bounded(
+    cap,
+    fn(a: Arena) -> Region[List[Bytes]] {
+      let h: Bytes in heap = copy_to(heap, b"abc")
+      let mut root: List[Bytes] in a = []
+      list.push(mut root, copy h)
+      let old = copy root
+      list.push(mut root, copy h)
+      failure.check(list.len(old) == 1u64, Bounds())
+      arena.seal(take a, take root)
+    }
+  )
+  match take outcome {
+    Ok(r) => {
+      let mut owned = take r
+      region.with(
+        mut owned,
+        fn(root: List[Bytes]) -> u64 {
+          list.len(root)
+        }
+      )
+    },
+    Error(e) => 0u64,
+  }
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  failure.check(grown(21u64) == 0u64, Bounds())
+  failure.check(grown(22u64) == 2u64, Bounds())
+  failure.check(copied(32u64) == 0u64, Bounds())
+  failure.check(copied(33u64) == 2u64, Bounds())
+  Ok(())
+}

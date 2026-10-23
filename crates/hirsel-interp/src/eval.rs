@@ -2993,6 +2993,7 @@ pub(crate) async fn execute_frames<O: crate::ownership_trace::Observer>(
                                     &mut_places,
                                     &taken,
                                     returns,
+                                    target.arena,
                                 )?
                             {
                                 if let Some(returns) = returns {
@@ -5326,7 +5327,8 @@ fn callee_lifetime(
 }
 
 /// The scheduled Complete path with no user release, callback, checker or
-/// memory-meter work. The provider promised there are no task rests to collect.
+/// memory-meter or retained-arena work. The provider promised there are no
+/// task rests to collect.
 fn complete_immediate(
     frame: &mut Frame,
     result: &mut OperationResult,
@@ -5334,6 +5336,7 @@ fn complete_immediate(
     mut_places: &[(usize, PlaceId)],
     taken: &[usize],
     returns: Option<CallReturn>,
+    arena_operation: crate::code::ArenaCall,
 ) -> Result<bool, Error> {
     let OperationResult::Complete {
         value,
@@ -5345,6 +5348,26 @@ fn complete_immediate(
     else {
         return Ok(false);
     };
+    // The scheduled completion records all retained mutations and new arena
+    // allocations before publishing them. Immediate completion has no such
+    // journal step. The preflight-classified collection operations mutate only
+    // their direct block; other mutable shapes need a complete storage check.
+    let arena_result =
+        value.arena_storage().is_some() || !value.inert() && value.contains_arena_storage();
+    let arena_mutation = mut_places.iter().any(|(index, _)| {
+        let value = &arguments[*index];
+        match arena_operation {
+            crate::code::ArenaCall::List(_)
+            | crate::code::ArenaCall::Keyed(_)
+            | crate::code::ArenaCall::Read(_) => value.arena_storage().is_some(),
+            _ => {
+                value.arena_storage().is_some() || !value.inert() && value.contains_arena_storage()
+            }
+        }
+    });
+    if arena_result || arena_mutation {
+        return Ok(false);
+    }
     if !updates.is_empty()
         || !released.is_empty()
         || taken

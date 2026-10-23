@@ -1,0 +1,23 @@
+// rule: MEM-4
+// expect: run
+// Evacuation leaves an independent heap alias and its subsequent COW intact.
+pub fn main(t: Test) -> Result[(), ()] {
+  let got = arena.with(
+    fn(a: Arena) -> u64 {
+      let root: List[u64] in heap = [7u64]
+      let mut other = copy root
+      let mut r = arena.seal(take a, take root)
+      other[0] = 9u64
+      let sealed = region.with(
+        mut r,
+        fn(view: List[u64]) -> u64 {
+          view[0]
+        }
+      )
+      failure.check(other[0] == 9u64, Bounds())
+      sealed
+    }
+  )
+  failure.check(got == 7u64, Bounds())
+  Ok(())
+}

@@ -1,0 +1,22 @@
+// rule: MEM-4
+// expect: run
+// A deep heap result survives ending the loan and destroying the Region.
+pub fn main(t: Test) -> Result[(), ()] {
+  let independent = {
+    let mut r = arena.with(
+      fn(a: Arena) -> Region[List[u64]] {
+        let root: List[u64] in heap = [11u64, 12u64]
+        arena.seal(take a, take root)
+      }
+    )
+    region.with(
+      mut r,
+      fn(root: List[u64]) -> List[u64] {
+        copy_to(heap, root)
+      }
+    )
+  }
+  failure.check(list.len(independent) == 2u64, Bounds())
+  failure.check(independent[1] == 12u64, Bounds())
+  Ok(())
+}
