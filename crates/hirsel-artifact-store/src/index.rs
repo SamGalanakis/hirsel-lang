@@ -55,17 +55,47 @@ pub(crate) struct Entry {
     pub(crate) location: Location,
 }
 
+#[derive(Default)]
+struct PinnedState {
+    layers: Vec<Layer>,
+    invalid_root: bool,
+}
 #[derive(Clone, Default)]
-pub(crate) struct PinnedGeneration(Arc<Vec<Layer>>);
+pub(crate) struct PinnedGeneration(Arc<PinnedState>);
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct IndexDiagnostics {
+    pub(crate) invalid_root: bool,
+    pub(crate) bad_blocks: u64,
+    pub(crate) bad_buckets: u64,
+}
 impl PinnedGeneration {
     /// Full retained mappings plus directory/block/bucket allocations, including
     /// unlinked inodes. Shared clones must be charged once by their owner.
     pub(crate) fn retained_bytes(&self) -> u64 {
         // Include spare Vec capacity and the Arc allocation even for absence.
-        let shared = size_of::<Vec<Layer>>()
+        let shared = size_of::<PinnedState>()
             + 2 * size_of::<usize>()
-            + self.0.capacity() * size_of::<Layer>();
-        shared as u64 + self.0.iter().map(Layer::retained_bytes).sum::<u64>()
+            + self.0.layers.capacity() * size_of::<Layer>();
+        shared as u64 + self.0.layers.iter().map(Layer::retained_bytes).sum::<u64>()
+    }
+    /// Boundary observation, O(layers), without scanning status arrays or files.
+    pub(crate) fn diagnostics(&self) -> IndexDiagnostics {
+        let mut result = IndexDiagnostics {
+            invalid_root: self.0.invalid_root,
+            ..IndexDiagnostics::default()
+        };
+        for layer in &self.0.layers {
+            let (blocks, buckets) = layer.diagnostics();
+            result.bad_blocks += blocks;
+            result.bad_buckets += buckets;
+        }
+        result
+    }
+    fn invalid_root() -> Self {
+        Self(Arc::new(PinnedState {
+            invalid_root: true,
+            ..PinnedState::default()
+        }))
     }
 }
 pub(crate) struct PreparedDelta {
@@ -143,7 +173,10 @@ fn pin(root: &Path, manifest: &Manifest) -> io::Result<PinnedGeneration> {
         .iter()
         .map(|d| Layer::open(root, *d))
         .collect::<io::Result<_>>()?;
-    Ok(PinnedGeneration(Arc::new(layers)))
+    Ok(PinnedGeneration(Arc::new(PinnedState {
+        layers,
+        invalid_root: false,
+    })))
 }
 
 pub(crate) fn load_pinned(root: &Path) -> io::Result<PinnedGeneration> {
@@ -153,7 +186,10 @@ pub(crate) fn load_pinned(root: &Path) -> io::Result<PinnedGeneration> {
     let Some(_lock) = Lock::publication(root, false)? else {
         return Ok(PinnedGeneration::default());
     };
-    let manifest = Manifest::read(root)?;
+    let (manifest, invalid_root) = Manifest::read_with_status(root)?;
+    if invalid_root {
+        return Ok(PinnedGeneration::invalid_root());
+    }
     #[cfg(test)]
     PIN_OBSERVER.with(|slot| {
         let callback = slot.borrow_mut().take();
@@ -169,14 +205,14 @@ pub(crate) fn load_pinned(root: &Path) -> io::Result<PinnedGeneration> {
                 io::ErrorKind::InvalidData | io::ErrorKind::NotFound
             ) =>
         {
-            Ok(PinnedGeneration::default())
+            Ok(PinnedGeneration::invalid_root())
         }
         Err(e) => Err(e),
     }
 }
 
 pub(crate) fn find(generation: &PinnedGeneration, key: Key) -> Option<Location> {
-    generation.0.iter().find_map(|layer| layer.find(key))
+    generation.0.layers.iter().find_map(|layer| layer.find(key))
 }
 
 /// GC already owns .pack-lock. This bounded metadata helper does not lock,
@@ -309,7 +345,7 @@ pub(crate) fn compact(root: &Path, budget: MaintenanceBudget) -> io::Result<Comp
             callback();
         }
     });
-    for layer in pinned.0.iter() {
+    for layer in &pinned.0.layers {
         layer.validate_all()?;
     }
     // At most eight sorted streams. A linear head picker is bounded and avoids
@@ -320,7 +356,7 @@ pub(crate) fn compact(root: &Path, budget: MaintenanceBudget) -> io::Result<Comp
     let mut positions = [0usize; MAX_LAYERS];
     loop {
         let mut best: Option<Entry> = None;
-        for (i, layer) in pinned.0.iter().enumerate() {
+        for (i, layer) in pinned.0.layers.iter().enumerate() {
             if positions[i] < layer.rows() {
                 let entry = layer.entry(positions[i]).ok_or_else(invalid)?;
                 if best.is_none_or(|b| entry.key < b.key) {
@@ -332,7 +368,7 @@ pub(crate) fn compact(root: &Path, budget: MaintenanceBudget) -> io::Result<Comp
             break;
         };
         merged.push(best);
-        for (i, layer) in pinned.0.iter().enumerate() {
+        for (i, layer) in pinned.0.layers.iter().enumerate() {
             if positions[i] < layer.rows()
                 && layer.key(positions[i]).ok_or_else(invalid)? == best.key
             {

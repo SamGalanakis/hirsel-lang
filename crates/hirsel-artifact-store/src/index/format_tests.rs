@@ -401,6 +401,7 @@ fn concurrent_first_touches_share_race_safe_crc_and_bucket_status() {
         }
     });
     assert!(layer.validate_all().is_err());
+    assert_eq!(layer.diagnostics(), (1, 0));
 }
 
 #[test]

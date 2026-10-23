@@ -8,7 +8,7 @@ use std::{
     fs::{self, File},
     io::{self, Read},
     path::Path,
-    sync::atomic::{AtomicU8, Ordering},
+    sync::atomic::{AtomicU8, AtomicU64, Ordering},
 };
 
 const BLOCK: usize = 4096;
@@ -125,14 +125,20 @@ impl Manifest {
         Ok(bytes)
     }
     pub(super) fn read(root: &Path) -> io::Result<Self> {
+        Self::read_with_status(root).map(|(manifest, _)| manifest)
+    }
+    pub(super) fn read_with_status(root: &Path) -> io::Result<(Self, bool)> {
         let file = match File::open(root.join("index/MANIFEST")) {
             Ok(file) => file,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Self::default()),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok((Self::default(), false)),
             Err(e) => return Err(e),
         };
         let mut bytes = Vec::with_capacity(421);
         file.take(421).read_to_end(&mut bytes)?;
-        Ok(Self::decode(&bytes).unwrap_or_default())
+        Ok(match Self::decode(&bytes) {
+            Some(manifest) => (manifest, false),
+            None => (Self::default(), true),
+        })
     }
     pub(super) fn publish(&mut self, root: &Path, stage: &Stage) -> io::Result<ContentHash> {
         self.number = self.number.checked_add(1).ok_or_else(invalid)?;
@@ -334,6 +340,8 @@ pub(super) struct Layer {
     directory: Vec<u32>,
     blocks: Vec<AtomicU8>,
     buckets: Vec<AtomicU8>,
+    bad_blocks: AtomicU64,
+    bad_buckets: AtomicU64,
     rows: usize,
     segments: usize,
     radix: u8,
@@ -384,6 +392,8 @@ impl Layer {
             directory: Vec::with_capacity(count),
             blocks: (0..blocks).map(|_| AtomicU8::new(UNKNOWN)).collect(),
             buckets: (0..count - 1).map(|_| AtomicU8::new(UNKNOWN)).collect(),
+            bad_blocks: AtomicU64::new(0),
+            bad_buckets: AtomicU64::new(0),
             rows,
             segments,
             radix,
@@ -412,6 +422,12 @@ impl Layer {
     pub(super) fn rows(&self) -> usize {
         self.rows
     }
+    pub(super) fn diagnostics(&self) -> (u64, u64) {
+        (
+            self.bad_blocks.load(Ordering::Relaxed),
+            self.bad_buckets.load(Ordering::Relaxed),
+        )
+    }
     #[inline]
     fn check_block(&self, j: usize, k: usize) -> bool {
         let plane = self.planes[j];
@@ -435,11 +451,13 @@ impl Layer {
                 || bytes[plane.at(self.rows)..end].iter().all(|b| *b == 0));
         let result = if good { GOOD } else { BAD };
         // Never replace a previously observed Bad, even if validation races.
-        status
+        let previous = status
             .compare_exchange(UNKNOWN, result, Ordering::AcqRel, Ordering::Acquire)
-            .unwrap_or_else(|old| old)
-            != BAD
-            && good
+            .unwrap_or_else(|old| old);
+        if previous == UNKNOWN && !good {
+            self.bad_blocks.fetch_add(1, Ordering::Relaxed);
+        }
+        previous != BAD && good
     }
     #[inline]
     fn read<const N: usize>(&self, j: usize, mut offset: usize) -> Option<[u8; N]> {
@@ -504,11 +522,13 @@ impl Layer {
             previous = Some(key);
         }
         let result = if good { GOOD } else { BAD };
-        status
+        let previous = status
             .compare_exchange(UNKNOWN, result, Ordering::AcqRel, Ordering::Acquire)
-            .unwrap_or_else(|old| old)
-            != BAD
-            && good
+            .unwrap_or_else(|old| old);
+        if previous == UNKNOWN && !good {
+            self.bad_buckets.fetch_add(1, Ordering::Relaxed);
+        }
+        previous != BAD && good
     }
     pub(super) fn entry(&self, row: usize) -> Option<Entry> {
         let key = self.key(row)?;

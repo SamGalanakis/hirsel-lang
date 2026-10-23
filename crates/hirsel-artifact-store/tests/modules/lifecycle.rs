@@ -365,3 +365,53 @@ fn explicit_old_new_missing_torn_manifest_and_layer_survivor_permutations() {
         }
     }
 }
+
+#[test]
+fn diagnostics_distinguish_invalid_absence_and_count_each_bad_block_once_per_pin() {
+    use std::os::unix::fs::FileExt;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    assert_eq!(
+        load_pinned(root).unwrap().diagnostics(),
+        IndexDiagnostics::default()
+    );
+    fs::create_dir_all(root.join("index")).unwrap();
+    fs::write(root.join("index/MANIFEST"), b"corrupt root").unwrap();
+    let invalid = load_pinned(root).unwrap();
+    assert!(invalid.diagnostics().invalid_root);
+    published(publish(root, &[entry(1)]));
+    assert!(invalid.clone().diagnostics().invalid_root);
+    assert_eq!(find(&invalid, entry(1).key), None);
+    let path = fs::read_dir(root.join("index"))
+        .unwrap()
+        .flatten()
+        .find(|e| e.file_name().to_string_lossy().starts_with("L-"))
+        .unwrap()
+        .path();
+    let good = fs::read(&path).unwrap();
+    let mut bad = good.clone();
+    let fingerprint = u32::from_le_bytes(bad[40..44].try_into().unwrap()) as usize;
+    bad[fingerprint] ^= 1;
+    fs::write(&path, bad).unwrap();
+    let pin = load_pinned(root).unwrap();
+    assert_eq!(pin.diagnostics(), IndexDiagnostics::default());
+    for _ in 0..4 {
+        assert_eq!(find(&pin, entry(1).key), None);
+    }
+    assert_eq!(
+        pin.diagnostics(),
+        IndexDiagnostics {
+            invalid_root: false,
+            bad_blocks: 1,
+            bad_buckets: 0
+        }
+    );
+    assert_eq!(pin.clone().diagnostics(), pin.diagnostics());
+    let file = fs::OpenOptions::new().write(true).open(path).unwrap();
+    file.write_all_at(&good, 0).unwrap();
+    assert_eq!(find(&pin, entry(1).key), None);
+    assert_eq!(pin.diagnostics().bad_blocks, 1);
+    let fresh = load_pinned(root).unwrap();
+    assert_eq!(find(&fresh, entry(1).key), Some(entry(1).location));
+    assert_eq!(fresh.diagnostics(), IndexDiagnostics::default());
+}
