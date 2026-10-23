@@ -1424,14 +1424,22 @@ fn subject_previous(subject: Subject, at: u64) -> Option[char] uses {} {
 }
 
 fn make_subject(text: String, mut work: u64) -> Result[Subject, MatchError] in text uses {} {
+  // Even the empty subject needs its EOF debit; no bytes need inspecting.
+  if work == 0 { return Error(WorkLimit()) }
   let bytes = core@1/string.as_bytes(text)
   let size = core@1/bytes.len(bytes)
   let mut ascii = true
-  let mut count = 1u64 // Preserve the historical scalar plus EOF preparation debit.
-  for i in 0u64..size {
+  // util/utf8.rs:115-135: scalar count = byte count - continuation bytes.
+  // Start with the ASCII debit, so ASCII bytes need no per-byte count update.
+  let mut count = size + 1
+  let mut i = 0u64
+  while i < size {
     let byte = bytes[i]
-    if byte >= 128 { ascii = false }
-    if byte < 128 || byte >= 192 { count += 1 }
+    if byte >= 128 {
+      ascii = false
+      if byte < 192 { count -= 1 }
+    }
+    i += 1
   }
   if count > work { work = 0; return Error(WorkLimit()) }
   work -= count
