@@ -98,7 +98,7 @@ fn prepared_owner_33_rollback_releases_only_staged_shared_acquisitions() {
             let mut prepared = PreparedSeal::new(&mut *ctx, (&raw const root).cast(), 8, 8);
             prepared.retain_shared(root);
             prepared.retain_shared(root);
-            assert_eq!(roots::count(&*ctx, root), 3);
+            assert_eq!(roots::count(prepared.ctx, root), 3);
         }
         assert_eq!(roots::count(&*ctx, root), 1);
         assert_eq!(stats(ctx).active_regions, 1);
