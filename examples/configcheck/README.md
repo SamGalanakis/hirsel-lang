@@ -5,7 +5,10 @@ Validate a rollout's TOML or YAML service settings into one application-owned
 pure functions in [model.hir](model.hir); [main.hir](main.hir) handles arguments,
 bounded reads, grants, output and exit status. No implicit coercion or schema DSL.
 
-From the repository root, with a built `hirsel` on PATH:
+From the repository root, with a built `hirsel` on PATH. For the native build
+lines, also load the repository's pinned native link environment: an absolute
+`LLVM_SYS_231_PREFIX` and the matching runtime archive/link-kit inputs. The focused
+Buck2 test command below supplies that environment automatically.
 
 ```sh
 hirsel check examples/configcheck/hirsel.json
