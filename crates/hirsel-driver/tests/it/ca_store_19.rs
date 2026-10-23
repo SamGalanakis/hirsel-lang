@@ -2613,3 +2613,54 @@ fn ordinary_actor_generic_products_do_not_recheck_bodies_during_native_export() 
         }
     });
 }
+
+#[test]
+fn ordinary_read_only_constant_products_replay_without_rechecking() {
+    read_only_constant(false);
+}
+
+#[test]
+fn ordinary_read_only_constant_modes_are_available_before_execution() {
+    read_only_constant(true);
+}
+
+fn read_only_constant(prefetch: bool) {
+    with_compiler_stack(|| {
+        let scratch = tempfile::Builder::new()
+            .prefix("hirsel-readonly-constant-")
+            .tempdir()
+            .unwrap();
+        let dir = scratch.path();
+        let manifest = dir.join("hirsel.json");
+        std::fs::write(&manifest, serde_json::json!({"schema":1,"package":{"name":"library","version":"1"},"sources":[{"path":"api.hir","module":[]}],"dependencies":[]}).to_string()).unwrap();
+        std::fs::write(dir.join("api.hir"), "pub const MOD:u32=65521u32\n").unwrap();
+        let bundle = dir.join("ordinary-products");
+        let compiler = COMPILER.clone().with_config(CompileConfig {
+            jobs: hirsel_intern::jobs::Jobs::new(1),
+            ..CompileConfig::for_memory_cap(None)
+        });
+        compiler.precompute_package(&manifest, &bundle).unwrap();
+        let compiler = compiler.with_config(CompileConfig {
+            store: Arc::new(store::DirStore::new(dir.join("local")).with_read_only_root(bundle)),
+            jobs: hirsel_intern::jobs::Jobs::new(1),
+            ..CompileConfig::for_memory_cap(None)
+        });
+        let mut reader = compiler.load_check_package(&manifest).unwrap();
+        let mut constant = reader.entry.clone();
+        constant.0.name = "MOD".into();
+        if prefetch {
+            reader.engine.mode_definition(&constant).unwrap();
+        }
+        assert_eq!(
+            reader.engine.materialize_constant(&constant).unwrap(),
+            hirsel_tir::Constant::Integer(65521)
+        );
+        for kind in [QueryKind::Check, QueryKind::Modes] {
+            assert_eq!(
+                reader.engine.recompute_count(&constant, kind),
+                0,
+                "{constant}: {kind:?}"
+            );
+        }
+    });
+}

@@ -93,6 +93,10 @@ if [ -n "${HIRSEL_RUNTIME_ARCHIVES:-}" ]; then
   HIRSEL_RUNTIME_ARCHIVES="$(cd "$HIRSEL_RUNTIME_ARCHIVES" && pwd)"
   export HIRSEL_RUNTIME_ARCHIVES
 fi
+if [ -n "${HIRSEL_TEST_PRODUCTS:-}" ]; then
+  HIRSEL_TEST_PRODUCTS="$(realpath "$HIRSEL_TEST_PRODUCTS")"
+  export HIRSEL_TEST_PRODUCTS
+fi
 if [ -n "${HIRSEL_IMAGE:-}" ]; then
   HIRSEL_IMAGE="$(realpath "$HIRSEL_IMAGE")"
   export HIRSEL_IMAGE

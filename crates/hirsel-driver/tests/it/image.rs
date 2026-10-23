@@ -426,16 +426,13 @@ fn ordinary_std_definition_products_quarter(partition: usize) {
             jobs: hirsel_intern::jobs::Jobs::new(1),
             ..CompileConfig::for_memory_cap(None)
         });
-        let phase = std::time::Instant::now();
-        compiler
-            .precompute_package(&std_manifest(), &products)
-            .unwrap();
-        eprintln!(
-            "[ca41-coverage] quarter={partition} precompute={:?}",
-            phase.elapsed()
-        );
+        // Packaging computes this ordinary product seed once as a build artifact.
+        // Each reader owns fresh verifier associations; installed bytes confer no V authority.
+        let installed = std::env::var_os("HIRSEL_TEST_PRODUCTS")
+            .map(PathBuf::from)
+            .expect("the test harness supplies ordinary precomputed products");
         let shared = compiler.clone().with_config(CompileConfig {
-            store: Arc::new(store::DirStore::new(products)),
+            store: Arc::new(store::DirStore::new(products).with_read_only_root(installed)),
             jobs: hirsel_intern::jobs::Jobs::new(1),
             ..CompileConfig::for_memory_cap(None)
         });

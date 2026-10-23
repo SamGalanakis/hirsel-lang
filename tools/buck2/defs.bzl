@@ -210,7 +210,7 @@ def native_tool_inputs():
         for name in ["arm", "qemu", "valgrind", "kit", "glibc_floor"]
     }
 
-def hirsel_test(name, crate, crate_root, srcs, features, deps, manifest_dir, package_name, version, edition, build_script = None, bin_exes = {}, data = [], runtime_archives = None, image = None, shards = 1, costs = None, opt_level = None, seeded = False, skips = []):
+def hirsel_test(name, crate, crate_root, srcs, features, deps, manifest_dir, package_name, version, edition, build_script = None, bin_exes = {}, data = [], runtime_archives = None, image = None, products = None, shards = 1, costs = None, opt_level = None, seeded = False, skips = []):
     """A libtest harness (`rustc --test`) and the test that runs it.
 
     `bin_exes` are the package's binaries, as Cargo's CARGO_BIN_EXE_<name>.
@@ -248,6 +248,8 @@ def hirsel_test(name, crate, crate_root, srcs, features, deps, manifest_dir, pac
         bin_exe_dir = bin_exe_dir,
         runtime_archives = runtime_archives,
         image = image,
+        # Large installed-product fixtures are required only by their selected tests.
+        products = products if read_root_config("hirsel", "test_products", "false") == "true" else None,
         llvm = "root//tools/buck2/native-toolchain:llvm",
         native_tools = native_tool_inputs() if runtime_archives else {},
         cwd = manifest_dir,
@@ -329,6 +331,10 @@ def _rust_test_impl(ctx):
         image = ctx.attrs.image[DefaultInfo].default_outputs[0]
         inputs.append(image)
         env["HIRSEL_IMAGE"] = cmd_args(image)
+    if ctx.attrs.products:
+        products = ctx.attrs.products[DefaultInfo].default_outputs[0]
+        inputs.append(products)
+        env["HIRSEL_TEST_PRODUCTS"] = cmd_args(products)
     if ctx.attrs.native_selection:
         selection = ctx.attrs.native_selection[DefaultInfo].default_outputs[0]
         inputs.append(selection)
@@ -375,6 +381,7 @@ _rust_test = rule(
         "request": attrs.list(attrs.string(), default = []),
         "runtime_archives": attrs.option(attrs.dep(), default = None),
         "image": attrs.option(attrs.dep(), default = None),
+        "products": attrs.option(attrs.dep(), default = None),
         "seed": attrs.string(default = ""),
         "shard_index": attrs.int(default = 0),
         "shards": attrs.int(default = 0),
@@ -625,6 +632,39 @@ def hirsel_image(name, hirsel, **kwargs):
     compiler = name + "-compiler"
     native.configured_alias(name = compiler, actual = hirsel, platform = "root//tools/buck2:checked")
     _hirsel_image(name = name, hirsel = ":" + compiler, **kwargs)
+
+def _products_impl(ctx):
+    tree = ctx.actions.symlinked_dir("package", {f.short_path: f for f in ctx.attrs.srcs})
+    products = ctx.actions.declare_output("products", dir = True)
+    scratch = ctx.actions.declare_output("scratch", dir = True)
+    script = ctx.actions.write("precompute.sh", [
+        "set -eu",
+        'mkdir -p "$3"; TMPDIR="$(cd "$3" && pwd)" "$1" precompute "$2" -o "$4"',
+    ])
+    ctx.actions.run(
+        cmd_args("/bin/sh", script, ctx.attrs.hirsel[RunInfo],
+                 cmd_args(tree, format = "{}/" + ctx.attrs.manifest),
+                 scratch.as_output(), products.as_output(),
+                 hidden = ctx.attrs._llvm_libraries[DefaultInfo].default_outputs),
+        env = {"HIRSEL_MEMORY_LIMIT": IMAGE_MEMORY_LIMIT, "HIRSEL_JOBS": "1", "HIRSEL_DAEMON": "off", "HIRSEL_RESULTS": "none@1", "HIRSEL_IMAGE": "none"},
+        category = "products",
+    )
+    return [DefaultInfo(default_output = products)]
+
+_hirsel_products = rule(
+    impl = _products_impl,
+    attrs = {
+        "hirsel": attrs.exec_dep(providers = [RunInfo]),
+        "manifest": attrs.string(),
+        "srcs": attrs.list(attrs.source()),
+        "_llvm_libraries": attrs.dep(default = "toolchains//:llvm-libraries"),
+    },
+)
+
+def hirsel_products(name, hirsel, **kwargs):
+    compiler = name + "-compiler"
+    native.configured_alias(name = compiler, actual = hirsel, platform = "root//tools/buck2:checked")
+    _hirsel_products(name = name, hirsel = ":" + compiler, exec_compatible_with = [budget_constraint(pool_budget_name(*PRECHECK_REQUEST))], **kwargs)
 
 def _std_objects_impl(ctx):
     tree = ctx.actions.symlinked_dir("package", {f.short_path: f for f in ctx.attrs.srcs})
