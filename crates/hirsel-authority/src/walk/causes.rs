@@ -7,6 +7,202 @@ use hirsel_modes::explain::{
 };
 
 impl Checker<'_> {
+    /// Explain a reached nested List contract failure from the rows already
+    /// compared by the authority pass. Other projections and invariant
+    /// weakening keep their existing diagnostic. No inference is repeated.
+    pub(super) fn nested_element_diagnostic(
+        &mut self,
+        actual: TypeId,
+        expected: TypeId,
+        span: Span,
+    ) -> bool {
+        let mut pair = (actual, expected);
+        let mut contract = None;
+        for _ in 0..16 {
+            let (Some(a), Some(b)) = (self.t.get(pair.0), self.t.get(pair.1)) else {
+                return false;
+            };
+            let (
+                TypeKind::Builtin {
+                    kind: BuiltinType::List,
+                    arguments: aa,
+                },
+                TypeKind::Builtin {
+                    kind: BuiltinType::List,
+                    arguments: ba,
+                },
+            ) = (&a.kind, &b.kind)
+            else {
+                return false;
+            };
+            let (Some(GenericArgument::Type(a)), Some(GenericArgument::Type(b))) =
+                (aa.first(), ba.first())
+            else {
+                return false;
+            };
+            pair = (*a, *b);
+            if self
+                .t
+                .get(pair.0)
+                .is_some_and(|row| row.modes.uniqueness != Uniqueness::Unique)
+                && self
+                    .t
+                    .get(pair.1)
+                    .is_some_and(|row| row.modes.uniqueness == Uniqueness::Unique)
+            {
+                contract = Some(pair.1);
+                break;
+            }
+        }
+        let Some(contract) = contract else {
+            return false;
+        };
+        let required = self.diagnostic_type(expected);
+        let element = self.diagnostic_type(contract);
+        let value = self.received_span(span);
+        let receiver = self.receiving.as_ref().map_or(span, |r| r.span);
+        // The argument block preserves evaluation order. Restrict edits to
+        // fresh literal trees; a named or copied supplier may actually share.
+        let repair = self
+            .received_value()
+            .filter(|e| self.span(*e) == span)
+            .and_then(|e| self.fresh_string_sequence(e, expected, &mut 16))
+            .filter(|literal| literal.len() <= 256)
+            .and_then(|literal| {
+                self.element_binding_name().map(|name| {
+                    // Only builtin List/String trees reach this branch.
+                    // A user declaration named List must not capture the edit.
+                    let annotation = required.replace("List[", "core@1/List[");
+                    format!("{{ let {name}: {annotation} = {literal}; take {name} }}")
+                })
+            });
+        let before = self.out.diagnostics.len();
+        let rule = const { RuleId::of("MODE-2") };
+        self.error(rule.clone(), span, &format!("the supplier does not prove the nested element contract `{element}` required by `{required}`"));
+        if self.out.diagnostics.len() > before {
+            let d = self.out.diagnostics.last_mut().unwrap();
+            if d.rule != rule {
+                return true;
+            }
+            d.secondary.push(Label {
+                span: value,
+                message: "supplier: this input lacks proof of the required nested uniqueness; the receiving type cannot create that proof".into(),
+            });
+            d.secondary.push(Label {
+                span: receiver,
+                message: format!("required: nested element contract `{element}` in `{required}`"),
+            });
+            if let Some(replacement) = repair {
+                d.notes.push(format!("help: Give this fresh literal a complete type before passing it to the consumer: `{replacement}`. The element annotation is necessary; an annotation on the outer List alone is insufficient."));
+                d.fix = Some(hirsel_diag::Fix {
+                    span,
+                    replacement,
+                    message: "bind the fresh literal with its complete nested element contract"
+                        .into(),
+                });
+            } else {
+                d.notes.push("help: Construct fresh elements under the complete receiving type, or use a permitted deep unique copy before storing an element. Annotating an already shared value cannot establish uniqueness.".into());
+            }
+        }
+        true
+    }
+
+    /// Spell only small, fresh, heap String/List trees. Their explicit
+    /// receiving contract can check without strengthening existing storage.
+    fn fresh_string_sequence(
+        &self,
+        expression: ExprId,
+        ty: TypeId,
+        budget: &mut usize,
+    ) -> Option<String> {
+        *budget = budget.checked_sub(1)?;
+        let row = self.t.get(ty)?;
+        if !row.modes.relation.is_global() {
+            return None;
+        }
+        match (
+            &self.tree.expressions[expression.0 as usize].kind,
+            &row.kind,
+        ) {
+            (
+                ExprKind::Literal(hirsel_syntax::Literal::String(text)),
+                TypeKind::Primitive(Primitive::String),
+            ) if text.len() <= 256 => Some(text.clone()),
+            (
+                ExprKind::Sequence(items),
+                TypeKind::Builtin {
+                    kind: BuiltinType::List,
+                    arguments,
+                },
+            ) if !items.is_empty() => {
+                let GenericArgument::Type(element) = arguments.first()? else {
+                    return None;
+                };
+                let parts = items
+                    .iter()
+                    .map(|item| self.fresh_string_sequence(*item, *element, budget))
+                    .collect::<Option<Vec<_>>>()?;
+                Some(format!("[{}]", parts.join(", ")))
+            }
+            _ => None,
+        }
+    }
+
+    /// Avoid written identifiers and module declarations/imports. Retain
+    /// lookup misses too, so adding a declaration invalidates a cached edit.
+    fn element_binding_name(&mut self) -> Option<String> {
+        let used: BTreeSet<_> = self
+            .tree
+            .tokens
+            .iter()
+            .filter_map(|token| match token.kind {
+                hirsel_syntax::TokenKind::Ident(name) => Some(name.as_str().to_owned()),
+                _ => None,
+            })
+            .collect();
+        for suffix in 1..=64 {
+            let name = if suffix == 1 {
+                "saved".to_owned()
+            } else {
+                format!("saved_{suffix}")
+            };
+            if used.contains(&name) {
+                continue;
+            }
+            let owner = self.signature.definition.path();
+            let context = hirsel_syntax::FileContext {
+                package: owner.0.package.clone(),
+                modules: owner.0.modules.clone(),
+            };
+            let path = hirsel_syntax::Path {
+                package: Some(owner.0.package.clone()),
+                segments: owner
+                    .0
+                    .modules
+                    .iter()
+                    .chain(std::iter::once(&name))
+                    .map(|s| Symbol::intern(s))
+                    .collect(),
+            };
+            let output = self.reader.borrow_mut().provider().lookup(&context, &path);
+            let available = matches!(output.result, Err(QueryError::NotImplemented));
+            self.out.reads.push(DependencyRead::ProviderLookup {
+                context,
+                package: path.package,
+                segments: path
+                    .segments
+                    .iter()
+                    .map(|s| s.as_str().to_owned())
+                    .collect(),
+                output,
+            });
+            if available {
+                return Some(name);
+            }
+        }
+        None
+    }
+
     /// Follow only parts that the existing MODE-4 proof rejects. Like rustc's
     /// BuiltinDerived causes (a7c37f9, traits/suggestions.rs:4441-4499), expose
     /// the containing field/variant chain without changing the judgment.

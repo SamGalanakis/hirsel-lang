@@ -83,6 +83,28 @@ in and out of it but never duplicate one. A closure that captures such a value e
 it, moving it once, or borrows it, and a borrowed capture cannot leave as owned.
 [MODE-2](ownership.md#mode-2-uniqueness) relies on this to make parametric results unique.
 
+A generic consumer of unique elements needs a complete producer contract. For
+example, under [LANG-2](language.md#lang-2-prefix-law), write both the List and
+its element annotation before passing it to the generic consumer:
+
+```hirsel
+fn need[T](take x: unique T) {}
+fn relay[T](take source: unique List[unique T]) {
+  for x in take source { need(take x) }
+}
+fn example() {
+  let source: unique List[unique String] = ["a"]
+  relay(take source)
+}
+```
+
+The fresh literal checks under the complete annotation; `unique List[String]`
+alone does not supply the nested element contract needed here. An annotation
+cannot make an already shared payload unique: for concrete copyable data that
+still shares storage, an explicit `unique value` copy may be necessary before
+storing it. The copy retains placement and requires permitted allocation
+([MODE-2](ownership.md#mode-2-uniqueness)). No later use revises prefix inference.
+
 Failed generic bounds are prerequisites of the parameter defaults that depend on them
 ([diagnostics](diagnostics.md#expression-obligations)): a `sendable` bound failure reports
 MODE-4, `inert` CAP-2, and every other bound GEN-1.

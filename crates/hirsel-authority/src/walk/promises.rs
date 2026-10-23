@@ -637,7 +637,7 @@ impl Checker<'_> {
             return true;
         }
         let valid = self.proof(false, |memo| memo.nested_uniqueness(expected, actual, view));
-        if !valid {
+        if !valid && !self.nested_element_diagnostic(actual, expected, span) {
             let value = self.received_span(span);
             let receiver = self.receiving.as_ref().map_or(span, |r| r.span);
             self.explained(
