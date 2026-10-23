@@ -961,3 +961,33 @@ fn worker_generated_text_persists_only_admitted_roots_and_matches_scalar_records
         }
     });
 }
+
+#[test]
+fn selected_generic_generators_reuse_ordinary_text_under_canonical_actuals() {
+    with_compiler_stack(|| {
+        use hirsel_tir::TirProvider;
+        let source = "type Point{x:u32}\ntype Other{x:u64}\nfn gen[T](s:TypeShape[T])->Result[Body[fn(T)->u64 uses {}],String]{let _=s;Ok(codegen.body(\"fn(v:standalone@0/Point)->u64 uses {}{let _=v;12u64}\"))}\nfn width[T](v:T)->u64 uses {}=comptime gen(shape(T))\n";
+        let path = definition("width");
+        let arguments = |engine: &QueryEngine, name: &str| vec![hirsel_types::GenericArgument::Type(engine.types().intern(hirsel_types::Type::with_kind(hirsel_types::TypeKind::Named { definition: hirsel_syntax::DefId::intern(&definition(name)), arguments: vec![].into() })))];
+        let store = Arc::new(store::MemStore::default());
+        let mut seed = signature_session(store.clone(), source, true);
+        let selected = seed.instance_body(&path, &arguments(&seed, "Point")).unwrap().unwrap();
+        let expected = seed.generated_source(&selected).unwrap().text.clone();
+        let mut fresh = signature_session(store.clone(), source, true);
+        fresh.adapters.lowering = None;
+        let adopted = fresh.instance_body(&path, &arguments(&fresh, "Point")).unwrap().unwrap();
+        assert_eq!(adopted, selected);
+        assert_eq!(fresh.generated_source(&adopted).unwrap().text, expected);
+        assert_eq!(fresh.lower_adapter_calls(&definition("gen")), 0, "no generic generator execution");
+        assert!(fresh.instance_body(&path, &arguments(&fresh, "Other")).is_err(), "an unselected type has no cached generator result");
+        let copied = Arc::new(store::MemStore::default());
+        for (key, bytes) in store.take() {
+            store::ResultStore::put(&*copied, &key, &bytes);
+            store::ResultStore::put(&*store, &key, &bytes);
+        }
+        let mut remote = signature_session(copied, source, true); remote.adapters.lowering = None;
+        assert!(remote.instance_body(&path, &arguments(&remote, "Point")).is_err(), "instance text cannot transfer private completion");
+        let mut oracle = signature_session(store, source, true).with_verify_store(store::VerifyStore::Recompute);
+        assert_eq!(oracle.instance_body(&path, &arguments(&oracle, "Point")).unwrap(), Some(selected));
+    });
+}
