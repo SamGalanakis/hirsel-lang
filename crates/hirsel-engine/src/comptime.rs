@@ -1,7 +1,7 @@
 //! Compile-time execution uses the runtime interpreter; lowering receives plain values.
 use crate::memo::{DepthEvidence, Entered};
 use crate::*;
-use hirsel_intern::timings::{self, Count, Phase};
+use hirsel_intern::timings::{self, Phase};
 use hirsel_interp::Outcome;
 use hirsel_span::Span;
 use hirsel_syntax::{DefId, ExprId, ExprKind, ItemKind};
@@ -22,6 +22,11 @@ pub(crate) struct EvaluatedConstant {
     pub executed: crate::memo::Reads,
     /// Its dependency height and overflow table under the comptime limits.
     pub depth: DepthEvidence<Span>,
+    /// Memory-only acceptance contexts, recorded while private/source V ran.
+    /// Producer serialization cannot carry this authority. Workers instead
+    /// retain their existing explicit ValidationUniverse witnesses.
+    #[serde(skip)]
+    pub validation: Option<Arc<[(hirsel_syntax::PackageId, hirsel_syntax::ContentHash)]>>,
 }
 fn operational(message: impl Into<String>) -> QueryError {
     QueryError::Operational(hirsel_types::OperationalFailure {
@@ -133,6 +138,7 @@ pub(crate) struct PreparedEvaluation {
     pub(crate) definition: hirsel_tir::Definition,
     pub(crate) signature: Signature,
     pub(crate) ty: TypeId,
+    pub(crate) origin: Option<(hirsel_span::Anchor, DefPath, u32)>,
 }
 
 impl EvaluationInput<'_> {
@@ -177,6 +183,11 @@ impl EvaluationInput<'_> {
             definition,
             signature: artifact,
             ty,
+            origin: Some((
+                self.analyzed.typed.syntax.anchor,
+                self.analyzed.typed.syntax.item.definition.clone(),
+                self.analyzed.typed.syntax.occurrence,
+            )),
         })
     }
 }
@@ -188,14 +199,12 @@ pub(crate) fn validate_evaluation(
     definition: &hirsel_tir::Definition,
     artifact: Signature,
     verify: Verify,
+    origin: Option<&(hirsel_span::Anchor, DefPath, u32)>,
 ) -> Result<(), QueryError> {
     let report = match verify {
         Verify::On => {
-            let views =
-                snapshot.validation_with(&definition.path.path().0.package, Arc::new(artifact));
             let _timing = timings::phase(Phase::Verify);
-            timings::count(Count::VRuns);
-            hirsel_validate::validate(definition, snapshot.types(), &views, &mut vec![])
+            snapshot.validate_private_artifact(definition, Arc::new(artifact), origin)
         }
         Verify::Off => hirsel_validate::Validation::default(),
     };
@@ -607,6 +616,12 @@ impl crate::queries::s1::DependencySource for EngineDependencies<'_> {
         self.recorded(|engine| {
             engine.read_implementation(path);
             let definition = engine.definition(path)?;
+            if engine.verify == Verify::On && !engine.evaluation_validation.is_empty() {
+                let digest = engine
+                    .signature_snapshot()
+                    .validation_input_digest(&path.0.package);
+                engine.record_evaluation_validation(path.0.package.clone(), digest);
+            }
             let signature = engine.item_signature(path)?.value;
             let entry = match &engine.adapters.lowering {
                 Some(lowering) => lowering.entry_body(),
@@ -624,6 +639,68 @@ impl crate::queries::s1::DependencySource for EngineDependencies<'_> {
     }
 }
 impl QueryEngine {
+    pub(crate) fn record_evaluation_validation(
+        &mut self,
+        package: hirsel_syntax::PackageId,
+        digest: ContentHash,
+    ) {
+        for frame in &mut self.evaluation_validation {
+            if let Some(rows) = frame {
+                if rows
+                    .insert(package.clone(), digest)
+                    .is_some_and(|old| old != digest)
+                {
+                    *frame = None;
+                }
+            }
+        }
+    }
+    fn begin_evaluation_validation(&mut self) {
+        self.evaluation_validation
+            .push((self.verify == Verify::On).then(Default::default));
+    }
+    fn finish_evaluation_validation(&mut self, result: &mut Result<EvaluatedConstant, QueryError>) {
+        let validation = self
+            .evaluation_validation
+            .pop()
+            .expect("scalar validation frame");
+        if let Ok(value) = result {
+            value.validation = validation.map(|rows| rows.into_iter().collect::<Vec<_>>().into());
+        }
+    }
+    pub(crate) fn evaluation_validation_holds(&mut self, value: &EvaluatedConstant) -> bool {
+        if self.verify == Verify::Off {
+            return true;
+        }
+        if let Some(rows) = &value.validation {
+            let snapshot = self.signature_snapshot();
+            return rows
+                .iter()
+                .all(|(package, digest)| snapshot.validation_input_digest(package) == *digest);
+        }
+        value
+            .executed
+            .iter()
+            .any(|(key, _)| matches!(key, crate::ReadKey::ValidationUniverse(_)))
+    }
+    fn merge_evaluation_validation(&mut self, value: &EvaluatedConstant) {
+        if let Some(rows) = &value.validation {
+            for (package, digest) in rows.iter() {
+                self.record_evaluation_validation(package.clone(), *digest);
+            }
+        } else {
+            let mut witnessed = false;
+            for (key, digest) in value.executed.iter() {
+                if let crate::ReadKey::ValidationUniverse(package) = key {
+                    witnessed = true;
+                    self.record_evaluation_validation(package.id(), *digest);
+                }
+            }
+            if !witnessed {
+                self.evaluation_validation.fill(None);
+            }
+        }
+    }
     /// Complete execution evidence of a retained constant materialization.
     /// This includes lookup, citation, private-view and transitive body reads;
     /// graph memo counters alone cannot establish that closure.
@@ -677,6 +754,7 @@ impl QueryEngine {
                 substitutions: vec![],
                 executed: Default::default(),
                 depth: DepthEvidence::leaf(self.depth_limit()),
+                validation: None,
             });
         }
         let syntax = self.parse_definition(path)?.value;
@@ -699,6 +777,7 @@ impl QueryEngine {
         if let Some(value) = self.image_constant(path) {
             self.depth_admit(&value.depth, reference)?;
             self.merge_execution(&value.executed);
+            self.merge_evaluation_validation(&value);
             self.depth_requested(&value.depth, reference);
             return Ok(value);
         }
@@ -708,13 +787,17 @@ impl QueryEngine {
                 substitutions: vec![],
                 executed: Default::default(),
                 depth: DepthEvidence::leaf(self.depth_limit()),
+                validation: None,
             });
         }
         let cached = self.constant_values.get(path).cloned();
         if let Some(value) = cached {
-            if self.execution_valid(path, &value.executed) {
+            if self.evaluation_validation_holds(&value)
+                && self.execution_valid(path, &value.executed)
+            {
                 self.depth_admit(&value.depth, reference)?;
                 self.merge_execution(&value.executed);
+                self.merge_evaluation_validation(&value);
                 self.depth_requested(&value.depth, reference);
                 return Ok(value);
             }
@@ -744,8 +827,9 @@ impl QueryEngine {
             return self.constant_at(path, reference);
         }
         self.execution_stack.push(Default::default());
+        self.begin_evaluation_validation();
         self.read_implementation(path);
-        let result = (|| {
+        let mut result = (|| {
             let syntax = self.parse_definition(path)?.value;
             if !matches!(syntax.item.kind, hirsel_syntax::ItemKind::Const { .. }) {
                 return Err(operational("materialization requested for a non-constant"));
@@ -797,9 +881,11 @@ impl QueryEngine {
                 substitutions: constants,
                 executed,
                 depth: self.depth_composed(true),
+                validation: None,
             })
         })();
         self.execution_stack.pop();
+        self.finish_evaluation_validation(&mut result);
         if let Ok(evaluated) = &result {
             self.constant_values.insert(path.clone(), evaluated.clone());
         }
@@ -978,11 +1064,19 @@ impl QueryEngine {
         }
         .lower(&self.types, &self.memo, &*lowering)?;
         let snapshot = (self.verify == Verify::On).then(|| self.signature_snapshot());
+        let site = file.tree.expressions[expression.0 as usize].origin.span;
+        if let Some(snapshot) = &snapshot {
+            let package = &prepared.definition.path.path().0.package;
+            self.record_evaluation_validation(
+                package.clone(),
+                snapshot.validation_input_digest(package),
+            );
+        }
         let validated = crate::queries::s1::ValidatedEvaluation::new(
             prepared,
             snapshot.as_deref(),
             self.verify,
-            file.tree.expressions[expression.0 as usize].origin.span,
+            site,
         )?;
         let sources = self.sources.clone();
         let limits = self.comptime_limits;
@@ -1113,9 +1207,12 @@ impl QueryEngine {
             .origin
             .span;
         if let Some(value) = cached {
-            if self.execution_valid(&constant.owner, &value.executed) {
+            if self.evaluation_validation_holds(&value)
+                && self.execution_valid(&constant.owner, &value.executed)
+            {
                 self.depth_admit(&value.depth, site)?;
                 self.merge_execution(&value.executed);
+                self.merge_evaluation_validation(&value);
                 self.depth_requested(&value.depth, site);
                 return Ok(value);
             }
@@ -1137,9 +1234,10 @@ impl QueryEngine {
             return self.materialize_staged(path, arguments);
         }
         self.execution_stack.push(Default::default());
+        self.begin_evaluation_validation();
         self.read_implementation(&constant.owner);
         self.read_execution_signatures(&body.dependencies);
-        let result = (|| {
+        let mut result = (|| {
             let signature = self.item_signature(&constant.owner)?.value;
             let constants = self.prepare_values(&body.value, &staged, &signature)?;
             let ExprKind::Comptime(child) =
@@ -1183,9 +1281,11 @@ impl QueryEngine {
                     .finish()
                     .map_err(|_| QueryError::NotImplemented)?,
                 depth: self.depth_composed(true),
+                validation: None,
             })
         })();
         self.execution_stack.pop();
+        self.finish_evaluation_validation(&mut result);
         if let Ok(value) = &result {
             self.staged_values.insert(key, value.clone());
         }

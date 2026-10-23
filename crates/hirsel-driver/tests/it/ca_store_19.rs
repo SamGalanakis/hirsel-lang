@@ -499,3 +499,61 @@ fn lower_producer_records_cannot_mint_or_transfer_verifier_authority() {
         assert_eq!(copied.body_validation_runs(&path), 1);
     });
 }
+
+#[test]
+fn private_evaluation_uses_independent_receipts_in_scalar_and_worker_sessions() {
+    let run = || with_compiler_stack(|| {
+        use hirsel_intern::timings::{self, Count};
+        timings::enable();
+        let runs = || timings::report().counts.into_iter().find(|(kind, _)| *kind == Count::VRuns).unwrap().1;
+        let source = "const A:u8=comptime 7u8\nconst B:u8=comptime 8u8\n";
+        let paths = vec![definition("A"), definition("B")];
+        for jobs in [1, 2, 4, 8] {
+            let store = Arc::new(store::MemStore::default());
+            let mut seed = signature_session(store.clone(), source, true);
+            let before = runs();
+            let expected = seed.materialize_values(paths.clone(), hirsel_intern::jobs::Jobs::new(jobs));
+            assert!(expected.iter().all(Result::is_ok));
+            assert_eq!(runs() - before, 2, "first private V at jobs={jobs}");
+            let mut fresh = signature_session(store.clone(), source, true);
+            let before = runs();
+            let actual = fresh.materialize_values(paths.clone(), hirsel_intern::jobs::Jobs::new(jobs));
+            assert!(actual.iter().all(Result::is_ok));
+            assert_eq!(actual.iter().map(|v| &v.as_ref().unwrap().root.kind).collect::<Vec<_>>(), expected.iter().map(|v| &v.as_ref().unwrap().root.kind).collect::<Vec<_>>());
+            assert_eq!(runs(), before, "verifier-owned private receipts at jobs={jobs}");
+            let changed = source.replace("7u8", "9u8");
+            let mut edited = signature_session(store, &changed, true);
+            let before = runs();
+            assert_eq!(edited.materialize_constant(&definition("A")).unwrap(), hirsel_tir::Constant::Integer(9));
+            assert_eq!(runs() - before, 1, "changed private artifact requires V");
+        }
+        "private-receipts".to_owned()
+    });
+    if let Some(outputs) = hirsel_intern::under_salts(
+        "ca_store_19::private_evaluation_uses_independent_receipts_in_scalar_and_worker_sessions", &[1], run,
+    ) { assert_eq!(outputs, ["private-receipts"]); }
+}
+
+#[test]
+fn scalar_and_staged_values_from_verify_off_require_private_admission() {
+    with_compiler_stack(|| {
+        let mut scalar = signature_session(Arc::new(store::MemStore::default()), "const A:u8=comptime 7u8\n", true);
+        scalar.verify = Verify::Off;
+        assert_eq!(scalar.materialize_constant(&definition("A")).unwrap(), hirsel_tir::Constant::Integer(7));
+        scalar.verify = Verify::On;
+        scalar.adapters.lowering = None;
+        assert!(scalar.materialize_constant(&definition("A")).is_err(), "an unverified private value must demand its initializer");
+
+        let mut staged = signature_session(Arc::new(store::MemStore::default()), "fn value[n:size]()->u64{comptime (n*n)}\n", true);
+        staged.verify = Verify::Off;
+        let lowered = staged.lower_to_tir(&definition("value")).unwrap();
+        let hidden = lowered.value.bodies.iter().flat_map(|b| &b.rvalues).find_map(|v| match v {
+            hirsel_tir::Rvalue::ReadConstant { definition, arguments } if !arguments.is_empty() => Some(definition.clone()),
+            _ => None,
+        }).unwrap();
+        hirsel_tir::TirProvider::constant_instance(&mut staged, &hidden, &[2]).unwrap();
+        staged.verify = Verify::On;
+        staged.adapters.lowering = None;
+        assert!(hirsel_tir::TirProvider::constant_instance(&mut staged, &hidden, &[2]).is_err(), "a staged VerifyOff value must demand private admission");
+    });
+}
