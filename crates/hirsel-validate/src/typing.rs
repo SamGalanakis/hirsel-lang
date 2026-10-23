@@ -1736,33 +1736,31 @@ impl<'a> Checker<'a> {
                     || self.bound(types, p.ty, Bound::Plain, self.generic_declarations())
             })
     }
-    /// CLO-4: a taken capture of a whole slot moves that slot's current
-    /// content. A `let mut` slot's row is its storage contract, aliased and
-    /// unsendable at the root; the capture row may claim the root uniqueness
-    /// and data sendability its current content has, which flow proves as it
-    /// does for `let t = take s`. The rest of the row stays exact.
-    fn taken_current_content(
+    /// A whole take captures current content, whose root evidence can differ
+    /// from the storage row after sharing or replacement. Static typing checks
+    /// shape without these facts; flow derives them from the operand and
+    /// checks the original capture claim. Nested and dependent rows stay exact.
+    fn taken_capture_shape(
         &self,
         store: &TypeInterner,
         expected: TypeId,
         actual: TypeId,
         operand: &Operand,
-    ) -> TypeId {
+    ) -> (TypeId, TypeId) {
         if operand.usage != UseKind::Take
             || !self.body.places[operand.place.0 as usize]
                 .projection
                 .is_empty()
         {
-            return actual;
+            return (expected, actual);
         }
-        let claimed = store.get(expected).unwrap().modes.clone();
-        let mut row = store.get(actual).unwrap().clone();
-        if claimed.uniqueness == Uniqueness::Unique {
-            row.modes.uniqueness = Uniqueness::Unique;
-        }
-        if claimed.sendability == Sendability::Sendable
+        let mut expected = store.get(expected).unwrap().clone();
+        let mut actual = store.get(actual).unwrap().clone();
+        expected.modes.uniqueness = Uniqueness::Aliased;
+        actual.modes.uniqueness = Uniqueness::Aliased;
+        if !matches!(expected.modes.sendability, Sendability::DependsOn(_))
             && !matches!(
-                row.kind,
+                actual.kind,
                 TypeKind::Function(_)
                     | TypeKind::Builtin {
                         kind: BuiltinType::Iter,
@@ -1770,9 +1768,10 @@ impl<'a> Checker<'a> {
                     }
             )
         {
-            row.modes.sendability = Sendability::Sendable;
+            expected.modes.sendability = Sendability::NotSendable;
+            actual.modes.sendability = Sendability::NotSendable;
         }
-        store.intern(row)
+        (store.intern(expected), store.intern(actual))
     }
     fn capture_type(&mut self, _source: &TypeInterner, root: TypeId, operand: &Operand) {
         let actual = self.place_type(operand.place);
@@ -1790,7 +1789,8 @@ impl<'a> Checker<'a> {
         if operand.usage != UseKind::Copy {
             let target = self.t;
             let matches = self.imported(root, &[]).is_some_and(|expected| {
-                let actual = self.taken_current_content(target, expected, actual, operand);
+                let (expected, actual) =
+                    self.taken_capture_shape(target, expected, actual, operand);
                 self.compatible(target, expected, actual, TypeRelation::Exact)
             });
             if !matches {

@@ -805,14 +805,12 @@ impl Checker<'_> {
                 let store = self.t;
                 {
                     let expected = root;
-                    // A taken whole slot's capture row may claim sendability
-                    // its storage row lacks; only current content proves it.
+                    // A capture's positive claim requires current content,
+                    // even when its storage row still has an old proof.
                     let claimed = store.get(expected).unwrap();
-                    let stored = self.t.get(self.place_type(value.place));
                     if value.usage == UseKind::Take
                         && claimed.modes.sendability == Sendability::Sendable
                         && !erased_environment(&claimed.kind)
-                        && stored.unwrap().modes.sendability != Sendability::Sendable
                     {
                         let current = self.transferred_type(state, value, store);
                         if store.get(current).unwrap().modes.sendability != Sendability::Sendable {

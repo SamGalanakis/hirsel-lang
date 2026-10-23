@@ -414,3 +414,86 @@ let xs:List[String]=["old\n"];probe(grant_stdout,unique xs);Ok(())}
         assert_eq!(observation.output, b"new\nold\n");
     });
 }
+
+// Shape adapted from Rust allocation tests vec.rs:257-292 (Rust Project
+// Contributors, MIT): empty/equal/short/long nested snapshots. Hirsel copy
+// may share, so assert observable contents and validated lifetimes only.
+#[test]
+fn native_owning_capture_snapshots_survive_replacement_and_erasure() {
+    with_compiler_stack(|| {
+        let directory = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+            .join("capture-crossing-evidence-21");
+        let runner = history::Runner::new(&directory).unwrap();
+        let source = r#"
+type Holder {call:once fn()->List[String] uses{}}
+fn factory(take xs:List[String])->once fn()->List[String] uses{} {
+  fn()->List[String] {take xs}
+}
+fn relay(take x:once fn()->List[String] uses{})->once fn()->List[String] uses{} {take x}
+fn shared_count()->once fn()->u64 uses{} {
+  let xs:unique List[String]=["shared"]
+  {let alias=copy xs;}
+  fn(){list.len(take xs)}
+}
+fn shared_snapshot()->once fn()->List[String] uses{} {
+  let xs:unique List[String]=["shared"]
+  {let alias=copy xs;}
+  fn(){take xs}
+}
+type Cursor {xs:List[String], index:u64}
+fn next(mut c:Cursor)->Option[String] uses{} {
+  if c.index==list.len(c.xs) {None} else {
+    let s=unique copy c.xs[c.index]
+    c.index+=1
+    Some(take s)
+  }
+}
+fn show(stdout:Stdout,xs:List[String]) {
+  for x in xs {let _=out.print(stdout,x)}
+  let _=out.print(stdout,"|\n")
+}
+fn probe(stdout:Stdout,take input:List[String],take replacement:List[String]) {
+  let mut xs=take input
+  let saved=copy xs
+  let direct:fn()->u64 uses{}=fn(){list.len(saved)}
+  let own=unique copy xs
+  let returned=relay(factory(take own))
+  let held=Holder(call:factory(unique copy xs))
+  let mut erased=iter.from(Cursor(xs:unique copy xs,index:0),next)
+  xs=take replacement
+  show(stdout,xs)
+  let old=returned()
+  show(stdout,old)
+  let Holder(call:call)=take held
+  show(stdout,call())
+  for s in mut erased {let _=out.print(stdout,s)}
+  let _=out.print(stdout,"|\n")
+  if direct()!=list.len(saved) {let z:u8=0;let _=1u8/z}
+  show(stdout,saved)
+}
+pub fn main(rt:Io)->Result[(),GrantError] {
+  let stdout=io.stdout(rt)?
+  let count=shared_count()
+  if count()!=1 {let z:u8=0;let _=1u8/z}
+  let action=shared_snapshot()
+  show(stdout,action())
+  probe(stdout,[],["a","b","c"])
+  probe(stdout,["a","b","c"],["d","e","f"])
+  probe(stdout,["a","b","c"],["x"])
+  probe(stdout,["x"],["a","b","c"])
+  Ok(())
+}
+"#;
+        let report = runner.run("owning-snapshots", source);
+        let expected = b"shared|\nabc|\n|\n|\n|\n|\ndef|\nabc|\nabc|\nabc|\nabc|\nx|\nabc|\nabc|\nabc|\nabc|\nabc|\nx|\nx|\nx|\nx|\n";
+        assert!(
+            report.disagreements(expected, false).is_empty(),
+            "{report:#?}"
+        );
+        assert_eq!(report.cells.len(), 4);
+        assert!(report.agrees(), "{report:#?}");
+        eprintln!(
+            "owning capture snapshots: empty/equal/short/long; reference/H/LLVM/Cranelift agree"
+        );
+    });
+}
