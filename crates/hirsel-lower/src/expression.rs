@@ -1789,6 +1789,7 @@ impl Builder<'_, '_> {
         bodies.push(None);
         let mut capture_rows = vec![];
         let mut captures = vec![];
+        let mut restore_origins = vec![];
         for (ordinal, capture) in info.captures.into_iter().enumerate() {
             let mut rows = self
                 .decisions
@@ -1810,26 +1811,47 @@ impl Builder<'_, '_> {
                 place,
                 usage: capture.usage,
             };
-            // Structural views inherit their access bound into payload rows.
-            // Stage a mismatched read view for a plain-result callback without
-            // retyping the physical owner. Counted environment results retain
-            // the original content source used by global-result specialisation.
+            // Root borrow qualification is a receiving contract, not a new
+            // location for the source binding. A structural payload needs a
+            // staged view only when its declared or inherited access changes.
+            let source = self.types.get(self.ty(place)).unwrap();
+            let target = self.types.get(capture.ty).unwrap();
             if capture.usage == UseKind::Borrow
                 && matches!(
-                    self.types.get(capture.ty).unwrap().kind,
+                    target.kind,
                     TypeKind::Box(_)
                         | TypeKind::Tuple(_)
                         | TypeKind::Record(_)
                         | TypeKind::Variant(_)
                 )
                 && self.plain(result)
-                && !self.types.semantic_eq(self.ty(place), capture.ty)
             {
-                let binding = self.body.places[place.0 as usize].binding.clone();
-                value = self.transport_typed(value, capture.ty, Storage::Temporary, span);
-                if let Some(origin) = binding {
-                    value.place =
-                        self.bind_origin(value.place, origin, OriginBindingKind::Alias, span);
+                let source_parts = source.kind.value_parts();
+                let target_parts = target.kind.value_parts();
+                let different_payload = source_parts.len() != target_parts.len()
+                    || source_parts
+                        .iter()
+                        .zip(&target_parts)
+                        .any(|(a, b)| !self.types.semantic_eq(*a, *b));
+                let inherited_view = source.modes.relation != target.modes.relation
+                    && target_parts.iter().any(|part| {
+                        self.types.get(*part).unwrap().modes.relation.is_global()
+                            && !self.plain(*part)
+                    });
+                if different_payload || inherited_view {
+                    let mut source = self.body.places[place.0 as usize].clone();
+                    let binding = source.binding.take();
+                    value = self.transport_typed(value, capture.ty, Storage::Temporary, span);
+                    if let Some(origin) = binding {
+                        // The environment needs the named view at construction.
+                        // Restore the parent's name afterwards through the same
+                        // physical access, independent of its temporary alias.
+                        let original = PlaceId(self.body.places.len() as u32);
+                        self.body.places.push(source);
+                        restore_origins.push((original, origin.clone()));
+                        value.place =
+                            self.bind_origin(value.place, origin, OriginBindingKind::Alias, span);
+                    }
                 }
             }
             let _ = self.loan(&mut value, span);
@@ -1867,7 +1889,7 @@ impl Builder<'_, '_> {
             });
         }
         let destination = self.row_destination(info.ty);
-        Ok(self.rvalue_with_failure(
+        let value = self.rvalue_with_failure(
             info.ty,
             Rvalue::Closure {
                 context: info.context,
@@ -1877,6 +1899,10 @@ impl Builder<'_, '_> {
             },
             span,
             failure,
-        ))
+        );
+        for (place, origin) in restore_origins {
+            self.bind_origin(place, origin, OriginBindingKind::Alias, span);
+        }
+        Ok(value)
     }
 }
