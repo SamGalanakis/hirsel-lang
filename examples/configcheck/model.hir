@@ -1,0 +1,393 @@
+// Explicit typed conversion follows toml-rs de/mod.rs:36-77 (ceac6e44,
+// MIT/Apache-2.0); std parsers own all syntax and duplicate-key policy.
+pub type ServiceConfig {
+  name: String,
+  port: u16,
+  retries: u8,
+  upstreams: List[String],
+}
+
+pub type FieldError {
+  path: String,
+  kind: String,
+}
+
+pub type ConfigError = Toml(toml.TomlError) | Yaml(yaml.YamlError) | Field(FieldError) | InputLimit | Utf8
+
+pub const INPUT_BYTES: u64 = 8192
+
+pub fn field(at: String, kind: String) -> ConfigError uses {} {
+  Field(FieldError(path: unique at, kind: unique kind))
+}
+
+fn key_path(parent: String, key: String) -> String uses {} {
+  let mut builder: List[u8] = []
+  text.append(mut builder, parent)
+  text.append(mut builder, "[")
+  json.write_text_into(key, mut builder)
+  text.append(mut builder, "]")
+  text.finish_valid(take builder)
+}
+
+// Use YAML's value algebra as the parser boundary, never as the application
+// model. TOML datetime has no service meaning and is rejected explicitly.
+fn from_toml(take value: toml.Value, at: String, depth: u64, mut nodes: u64) -> Result[
+  yaml.Value,
+  ConfigError
+] uses {} {
+  if depth > 16 || nodes == 256 {
+    return Error(field(at, "structure_limit"))
+  }
+  nodes += 1
+  match value {
+    Text(s) => Ok(Text(copy s)),
+    Integer(n) => Ok(Integer(n)),
+    Bool(b) => Ok(Bool(b)),
+    Float(n) => Ok(Float(n)),
+    Datetime(_) => Error(field(at, "unsupported_value")),
+    Array(items) => {
+      if list.len(items) > 64 {
+        return Error(field(at, "collection_limit"))
+      }
+      let mut converted_items: List[yaml.Value] = []
+      for i in 0u64..list.len(items) {
+        list.push(
+          mut converted_items,
+          from_toml(copy items[i], f"{at}[{i}]", depth + 1, mut nodes)?
+        )
+      }
+      Ok(Array(take converted_items))
+    },
+    Table(entries) => {
+      if map.len(entries) > 64 {
+        return Error(field(at, "collection_limit"))
+      }
+      let mut converted_items: Map[String, yaml.Value] = map.empty()
+      for (key, item) in entries {
+        let converted = from_toml(copy item, key_path(at, key), depth + 1, mut nodes)?
+        map.insert(mut converted_items, copy key, take converted)
+      }
+      Ok(Object(take converted_items))
+    },
+  }
+}
+
+fn bounded(value: yaml.Value, at: String, depth: u64, mut nodes: u64) -> Result[
+  (),
+  ConfigError
+] uses {} {
+  if depth > 16 || nodes == 256 {
+    return Error(field(at, "structure_limit"))
+  }
+  nodes += 1
+  match value {
+    Array(items) => {
+      if list.len(items) > 64 {
+        return Error(field(at, "collection_limit"))
+      }
+      for i in 0u64..list.len(items) {
+        bounded(items[i], f"{at}[{i}]", depth + 1, mut nodes)?
+      }
+    },
+    Object(entries) => {
+      if map.len(entries) > 64 {
+        return Error(field(at, "collection_limit"))
+      }
+      for (key, item) in entries {
+        bounded(item, key_path(at, key), depth + 1, mut nodes)?
+      }
+    },
+    Tagged(..) => return Error(field(at, "unsupported_value")),
+    Null() => return Error(field(at, "unsupported_value")),
+    _ => (),
+  }
+  Ok(())
+}
+
+fn required(entries: Map[String, yaml.Value], key: String) -> Result[
+  yaml.Value,
+  ConfigError
+] in entries uses {} {
+  match map.get(entries, key) {
+    Some(value) => Ok(take value),
+    None() => Error(field(key_path("$", key), "missing_field")),
+  }
+}
+
+fn name_value(value: yaml.Value, at: String) -> Result[String, ConfigError] in value uses {} {
+  let Text(s) = value else {
+    return Error(field(at, "expected_text"))
+  }
+  if string.byte_len(s) == 0 || string.byte_len(s) > 128 {
+    return Error(field(at, "name_length"))
+  }
+  Ok(copy s)
+}
+
+pub fn validate(take value: yaml.Value) -> Result[ServiceConfig, ConfigError] uses {} {
+  let mut nodes: u64 = 0
+  bounded(value, "$", 0, mut nodes)?
+  let Object(entries) = value else {
+    return Error(field("$", "expected_object"))
+  }
+  for (key, _) in entries {
+    if key != "name" && key != "port" && key != "retries" && key != "upstreams" {
+      return Error(field(key_path("$", key), "unknown_field"))
+    }
+  }
+  let name = name_value(required(entries, "name")?, "$[\"name\"]")?
+  let Integer(port) = required(entries, "port")? else {
+    return Error(field("$[\"port\"]", "expected_integer"))
+  }
+  if port < 1 || port > 65535 {
+    return Error(field("$[\"port\"]", "port_range"))
+  }
+  let retry_value: yaml.Value = option.unwrap_or(
+    unique map.get(entries, "retries"),
+    Integer(3)
+  )
+  let Integer(retries) = retry_value else {
+    return Error(field("$[\"retries\"]", "expected_integer"))
+  }
+  if retries < 0 || retries > 10 {
+    return Error(field("$[\"retries\"]", "retries_range"))
+  }
+  let upstream_value: yaml.Value = option.unwrap_or(
+    unique map.get(entries, "upstreams"),
+    Array([])
+  )
+  let Array(items) = upstream_value else {
+    return Error(field("$[\"upstreams\"]", "expected_array"))
+  }
+  let mut upstreams: List[String] = []
+  for i in 0u64..list.len(items) {
+    list.push(mut upstreams, name_value(items[i], f"$[\"upstreams\"][{i}]")?)
+  }
+  Ok(
+    ServiceConfig(
+      name: take name,
+      port: int.narrow(port),
+      retries: int.narrow(retries),
+      upstreams: take upstreams
+    )
+  )
+}
+
+pub fn parse(format: String, data: Bytes) -> Result[ServiceConfig, ConfigError] uses {} {
+  if bytes.len(data) > INPUT_BYTES {
+    return Error(InputLimit())
+  }
+  let Ok(source) = string.from_bytes(unique data) else {
+    return Error(Utf8())
+  }
+  let value: yaml.Value = if format == "toml" {
+    let parsed = toml.parse(take source)?
+    let mut nodes: u64 = 0
+    from_toml(take parsed, "$", 0, mut nodes)?
+  } else if format == "yaml" {
+    yaml.parse_with(take source, yaml.Config(merge_keys: false))?
+  } else {
+    return Error(field("$", "format"))
+  }
+  validate(take value)
+}
+
+pub fn encode(config: ServiceConfig) -> Bytes uses {} {
+  let mut builder: List[u8] = []
+  text.append(mut builder, "{\"name\":")
+  json.write_text_into(config.name, mut builder)
+  text.append(
+    mut builder,
+    f",\"port\":{config.port},\"retries\":{config.retries},\"upstreams\":["
+  )
+  let mut first = true
+  for upstream in config.upstreams {
+    if !first {
+      text.append(mut builder, ",")
+    }
+    first = false
+    json.write_text_into(upstream, mut builder)
+  }
+  text.append(mut builder, "]}\n")
+  bytes.from_list(take builder)
+}
+
+pub fn report(kind: String, at: String, line: u64, column: u64) -> Bytes uses {} {
+  let mut builder: List[u8] = []
+  text.append(mut builder, "{\"error\":{\"kind\":")
+  json.write_text_into(kind, mut builder)
+  text.append(mut builder, ",\"path\":")
+  json.write_text_into(at, mut builder)
+  if line == 0 {
+    text.append(mut builder, ",\"line\":null,\"column\":null}}\n")
+  } else {
+    text.append(mut builder, f",\"line\":{line},\"column\":{column}}}}}\n")
+  }
+  bytes.from_list(take builder)
+}
+
+pub fn error_report(error: ConfigError) -> Bytes uses {} {
+  match error {
+    InputLimit() => report("input_bytes_limit", "$", 0, 0),
+    Utf8() => report("utf8", "$", 0, 0),
+    Field(problem) => report(problem.kind, problem.path, 0, 0),
+    Toml(problem) => match problem {
+      Syntax(p) => report("toml_syntax", "$", p.line, p.column),
+      DuplicateKey(p) => report("duplicate_key", "$", p.line, p.column),
+      Nesting(p) => report("nesting", "$", p.line, p.column),
+      _ => report("toml_value", "$", 0, 0),
+    },
+    Yaml(problem) => match problem {
+      Syntax(p) => report("yaml_syntax", "$", p.line, p.column),
+      DuplicateKey(p) => report("duplicate_key", "$", p.line, p.column),
+      Nesting(p) => report("nesting", "$", p.line, p.column),
+      Aliases(p) => report("aliases", "$", p.line, p.column),
+      Tag(p) => report("tag", "$", p.line, p.column),
+      ComplexKey(p) => report("complex_key", "$", p.line, p.column),
+      Documents(p) => report("documents", "$", p.line, p.column),
+      Merge(p) => report("merge", "$", p.line, p.column),
+      _ => report("yaml_value", "$", 0, 0),
+    },
+  }
+}
+
+// Upstream vectors are retained verbatim in fixtures/; license/pins in README.
+// Pure callable entry also permits the existing checked-H observation runner.
+@test
+pub fn reference_vectors() -> Result[(), String] uses {} {
+  let quoted = toml.parse(
+    "plain = 1\n\"with.dot\" = 2\n\n[plain_table]\nplain = 3\n\"with.dot\" = 4\n\n[table.withdot]\nplain = 5\n\"key.with.dots\" = 6\n\"escaped\\u002edot\" = 7\n"
+  ) ? reference_toml_error
+  let Table(entries) = quoted else {
+    return Error("quoted root")
+  }
+  if map.get(entries, "with.dot") != Some(Integer(2)) {
+    return Error("literal dot")
+  }
+  let Some(Table(plain_table)) = map.get(entries, "plain_table") else {
+    return Error("plain table")
+  }
+  if map.get(plain_table, "with.dot") != Some(Integer(4)) {
+    return Error("nested literal dot")
+  }
+  let Some(Table(table)) = map.get(entries, "table") else {
+    return Error("dotted table")
+  }
+  let Some(Table(withdot)) = map.get(table, "withdot") else {
+    return Error("dotted child")
+  }
+  if map.len(withdot) != 3 || map.get(withdot, "plain") != Some(Integer(5)) || map.get(
+    withdot,
+    "key.with.dots"
+  ) != Some(Integer(6)) || map.get(withdot, "escaped.dot") != Some(Integer(7)) {
+    return Error("dotted child values")
+  }
+  let typed = toml.parse("title = 'TOML Example'\n[owner]\nname = 'Lisa'\n") ? reference_toml_error
+  let Table(typed_entries) = typed else {
+    return Error("typed root")
+  }
+  if map.get(typed_entries, "title") != Some(Text("TOML Example")) {
+    return Error("typed title")
+  }
+  let Some(Table(owner)) = map.get(typed_entries, "owner") else {
+    return Error("typed owner")
+  }
+  if map.get(owner, "name") != Some(Text("Lisa")) {
+    return Error("typed name")
+  }
+  let nested = yaml.parse(
+    "\n# from yaml-cpp example\n- name: Ogre\n  position: [0, 5, 0]\n  powers:\n    - name: Club\n      damage: 10\n    - name: Fist\n      damage: 8\n- name: Dragon\n  position: [1, 0, 10]\n  powers:\n    - name: Fire Breath\n      damage: 25\n    - name: Claws\n      damage: 15\n- name: Wizard\n  position: [5, -3, 0]\n  powers:\n    - name: Acid Rain\n      damage: 50\n    - name: Staff\n      damage: 3\n"
+  ) ? reference_yaml_error
+  let Array(records) = nested else {
+    return Error("nested root")
+  }
+  if list.len(records) != 3 {
+    return Error("nested count")
+  }
+  reference_character(records[0], "Ogre", [0i64, 5, 0], ["Club", "Fist"], [10i64, 8])?
+  reference_character(
+    records[1],
+    "Dragon",
+    [1i64, 0, 10],
+    ["Fire Breath", "Claws"],
+    [25i64, 15]
+  )?
+  reference_character(
+    records[2],
+    "Wizard",
+    [5i64, -3, 0],
+    ["Acid Rain", "Staff"],
+    [50i64, 3]
+  )?
+  let all = yaml.parse_all("First document\n---\n- Second document\n") ? reference_yaml_error
+  if list.len(all) != 2 {
+    return Error("document count")
+  }
+  if all[0] != Text("First document") || all[1] != Array([Text("Second document")]) {
+    return Error("document values")
+  }
+  let a = parse("toml", b"name='checkout-api'\nport=8443\n") ? reference_config_error
+  let b = parse("yaml", b"name: checkout-api\nport: 8443\n") ? reference_config_error
+  if encode(a) != b"{\"name\":\"checkout-api\",\"port\":8443,\"retries\":3,\"upstreams\":[]}\n" || encode(
+    a
+  ) != encode(b) {
+    return Error("defaults")
+  }
+  Ok(())
+}
+
+fn reference_toml_error(error: toml.TomlError) -> String uses {} {
+  "reference TOML parse"
+}
+
+fn reference_yaml_error(error: yaml.YamlError) -> String uses {} {
+  "reference YAML parse"
+}
+
+fn reference_config_error(error: ConfigError) -> String uses {} {
+  "reference config parse"
+}
+
+fn reference_character(
+  value: yaml.Value,
+  name: String,
+  position: List[i64],
+  names: List[String],
+  damages: List[i64]
+) -> Result[(), String] uses {} {
+  let Object(record) = value else {
+    return Error("character record")
+  }
+  if map.len(record) != 3 || map.get(record, "name") != Some(Text(copy name)) {
+    return Error("character name")
+  }
+  let Some(Array(coords)) = map.get(record, "position") else {
+    return Error("position")
+  }
+  if list.len(coords) != 3 {
+    return Error("position length")
+  }
+  for i in 0u64..3 {
+    if coords[i] != Integer(position[i]) {
+      return Error("position coordinate")
+    }
+  }
+  let Some(Array(powers)) = map.get(record, "powers") else {
+    return Error("powers")
+  }
+  if list.len(powers) != 2 {
+    return Error("powers length")
+  }
+  for i in 0u64..2 {
+    let Object(power) = powers[i] else {
+      return Error("power record")
+    }
+    if map.len(power) != 2 || map.get(power, "name") != Some(Text(copy names[i])) || map.get(
+      power,
+      "damage"
+    ) != Some(Integer(damages[i])) {
+      return Error("power values")
+    }
+  }
+  Ok(())
+}

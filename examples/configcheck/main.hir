@@ -1,0 +1,87 @@
+pub type AppError = Output(OutputError)
+
+type InputError = Config(model.ConfigError) | Usage | Arguments | DirectoryGrant | Read
+
+const HELP: String = "Usage: configcheck <toml|yaml> FILE\n       configcheck --help\n\nValidate one service; print normalized JSON. FILE is relative to the input grant.\nExit: 0 success/help, 2 invalid input/usage/grant, 3 stdout unavailable.\n"
+
+fn read(d: Dir, name: String) -> Result[unique Bytes, InputError] {
+  let Ok(opened) = file.open(d, path.of(name)) else {
+    return Error(Read())
+  }
+  let mut handle = take opened
+  let mut reader = bufio.new(1024)
+  let mut data: List[u8] = []
+  while true {
+    let remaining = model.INPUT_BYTES + 1 - list.len(data)
+    let count: u64 = if remaining < 1024 {
+      remaining
+    } else {
+      1024
+    }
+    let Ok(n) = bufio.file_read_more(d, mut handle, mut reader, count) else {
+      return Error(Read())
+    }
+    if n > model.INPUT_BYTES - list.len(data) {
+      return Error(Config(InputLimit()))
+    }
+    if n == 0 {
+      break
+    }
+    for byte in bufio.peek(reader, n) {
+      list.push(mut data, byte)
+    }
+    bufio.consume(mut reader, n)
+  }
+  Ok(unique bytes.from_list(take data))
+}
+
+fn check(rt: Io, args: Args) -> Result[model.ServiceConfig, InputError] {
+  if arg.len(args) != 2 {
+    return Error(Usage())
+  }
+  let Ok(format) = arg.text(args, 0) else {
+    return Error(Arguments())
+  }
+  if format != "toml" && format != "yaml" {
+    return Error(Usage())
+  }
+  let Ok(name) = arg.text(args, 1) else {
+    return Error(Arguments())
+  }
+  let Ok(directory) = io.dir(rt, path.of("input")) else {
+    return Error(DirectoryGrant())
+  }
+  let data = read(directory, name)?
+  Ok(model.parse(format, data)?)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[process.ExitCode, AppError] {
+  let Ok(output) = io.stdout(rt) else {
+    return Ok(process.exit_code(3u8))
+  }
+  if arg.len(args) == 1 {
+    if let Ok(flag) = arg.text(args, 0) {
+      if flag == "--help" {
+        out.write(output, string.as_bytes(HELP))?
+        return Ok(process.SUCCESS)
+      }
+    }
+  }
+  match check(rt, args) {
+    Ok(config) => {
+      out.write(output, model.encode(config))?
+      Ok(process.SUCCESS)
+    },
+    Error(problem) => {
+      let report = match problem {
+        Config(error) => model.error_report(error),
+        Usage() => model.report("usage", "$", 0, 0),
+        Arguments() => model.report("arguments", "$", 0, 0),
+        DirectoryGrant() => model.report("directory_grant", "$", 0, 0),
+        Read() => model.report("file_read", "$", 0, 0),
+      }
+      out.write(output, report)?
+      Ok(process.exit_code(2u8))
+    },
+  }
+}

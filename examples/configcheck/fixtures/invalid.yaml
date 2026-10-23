@@ -1,0 +1,4 @@
+name: checkout-api
+port: 70000
+retries: 3
+upstreams: [catalog, payments]

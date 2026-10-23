@@ -1,0 +1,3 @@
+name = "checkout-api"
+port = 8443
+upstreams = ["catalog", "payments"]
