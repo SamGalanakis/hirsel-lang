@@ -99,28 +99,15 @@ fn capture_closure(
   false
 }
 
-fn capture_scalar(subject: Input, byte: u64) -> u64 uses {} {
-  let mut lo = 0u64
-  let mut hi = core@1/list.len(subject.offsets)
-  while lo < hi {
-    let mid = lo + (hi - lo) / 2
-    if subject.offsets[mid] < byte {
-      lo = mid + 1
-    } else {
-      hi = mid
-    }
-  }
-  core@1/failure.check(
-    lo < core@1/list.len(subject.offsets) && subject.offsets[lo] == byte,
-    Bounds()
-  )
-  lo
+fn capture_scalar(subject: Subject, byte: u64) -> u64 uses {} {
+  core@1/failure.check(boundary(subject.bytes, byte), Bounds())
+  byte
 }
 
 // Anchored ordered Pike replay over the confirmed span. The end boundary still
 // sees the actual following scalar; ^/$/word boundaries never see a sliced text.
 // Replay is physical implementation work, not a second logical matching debit.
-fn capture_pike(re: Regex, subject: Input, span: Span, mut scratch: CaptureScratch) -> Captures uses {} {
+fn capture_pike(re: Regex, subject: Subject, span: Span, mut scratch: CaptureScratch) -> Captures uses {} {
   let cells = capture_layout(re)
   core@1/failure.check(cells != 0, Bounds())
   capture_ensure(mut scratch, cells)
@@ -149,11 +136,11 @@ fn capture_pike(re: Regex, subject: Input, span: Span, mut scratch: CaptureScrat
   let end = capture_scalar(subject, span.end)
   let mut matched: Option[Span] = None()
   while cursor <= end {
-    let at = subject.offsets[cursor]
+    let at = cursor
     let left = if cursor == 0 {
       0u64
     } else {
-      dfa_category(dfa_byte(subject, cursor - 1))
+      dfa_category(dfa_byte(subject, subject_before(subject, cursor)))
     }
     let right = dfa_category(dfa_byte(subject, cursor))
     let mut count = 0u64
@@ -178,7 +165,7 @@ fn capture_pike(re: Regex, subject: Input, span: Span, mut scratch: CaptureScrat
       }
       if cursor < end {
         let mut unused = 18446744073709551615u64
-        let accepted = match accepts(inst, subject.scalars[cursor], mut unused) {
+        let accepted = match accepts(inst, subject_scalar(subject, cursor), mut unused) {
           Ok(value) => value,
           Error(_) => {
             core@1/failure.check(false, Bounds())
@@ -196,7 +183,7 @@ fn capture_pike(re: Regex, subject: Input, span: Span, mut scratch: CaptureScrat
     if seed_count == 0 || cursor == end {
       break
     }
-    cursor += 1
+    cursor = subject_next(subject, cursor)
   }
   // A disagreement is an internal invariant failure, never fabricated captures.
   core@1/failure.check(matched == Some(span), Bounds())
@@ -362,7 +349,7 @@ fn capture_plan(re: Regex) -> unique List[u64] uses {} {
 
 fn capture_actions(
   re: Regex,
-  subject: Input,
+  subject: Subject,
   cursor: u64,
   action: u64,
   mut scratch: CaptureScratch
@@ -370,7 +357,7 @@ fn capture_actions(
   let left = if cursor == 0 {
     0u64
   } else {
-    dfa_category(dfa_byte(subject, cursor - 1))
+    dfa_category(dfa_byte(subject, subject_before(subject, cursor)))
   }
   let right = dfa_category(dfa_byte(subject, cursor))
   for kind in [3u8, 4u8, 5u8, 6u8, 15u8, 16u8] {
@@ -382,7 +369,7 @@ fn capture_actions(
   let mut slot = 0u64
   while bits != 0 {
     if bits & 1 != 0 {
-      scratch.data[slot] = subject.offsets[cursor] + 1
+      scratch.data[slot] = cursor + 1
     }
     slot += 1
     bits >>= 1
@@ -408,7 +395,7 @@ fn capture_result(re: Regex, span: Span, scratch: CaptureScratch) -> Captures us
   Captures(spans: take spans)
 }
 
-fn capture_onepass(re: Regex, subject: Input, span: Span, mut scratch: CaptureScratch) -> Captures uses {} {
+fn capture_onepass(re: Regex, subject: Subject, span: Span, mut scratch: CaptureScratch) -> Captures uses {} {
   let slots = core@1/list.len(re.names) * 2
   capture_ensure(mut scratch, slots)
   for slot in 0u64..slots {
@@ -418,7 +405,7 @@ fn capture_onepass(re: Regex, subject: Input, span: Span, mut scratch: CaptureSc
   let end = capture_scalar(subject, span.end)
   let mut state = re.entry
   while cursor < end {
-    let cp = core@1/char.to_u32(subject.scalars[cursor])
+    let cp = core@1/char.to_u32(subject_scalar(subject, cursor))
     let byte: u64 = if cp < 128 {
       core@1/int.widen(cp)
     } else {
@@ -428,7 +415,7 @@ fn capture_onepass(re: Regex, subject: Input, span: Span, mut scratch: CaptureSc
     core@1/failure.check(transition != 0, Bounds())
     capture_actions(re, subject, cursor, transition, mut scratch)
     state = re.code[(transition & 1023) - 1].x
-    cursor += 1
+    cursor = subject_next(subject, cursor)
   }
   let accept = scratch.plan[state * 130 + 129]
   core@1/failure.check(accept != 0, Bounds())
@@ -437,7 +424,7 @@ fn capture_onepass(re: Regex, subject: Input, span: Span, mut scratch: CaptureSc
 }
 
 // Bounded DFS uses one mutable capture row plus RestoreCapture frames. Every
-// (PC, scalar position) is visited once. A split/capture can push at most one
+// (PC, byte position) is visited once. A split/capture can push at most one
 // frame per newly visited pair, so <=pairs+1 frames suffice, including empty
 // matches. 8192 pairs + slots + bitset + three-cell frames fit the same 256 KiB
 // scratch slab as PikeVM. Arithmetic is checked before multiplying.
@@ -446,7 +433,7 @@ fn capture_backtrack_fits(re: Regex, length: u64) -> bool uses {} {
   m != 0 && m <= 512 && length < 8192 && m <= 8192 / (length + 1)
 }
 
-fn capture_backtrack(re: Regex, subject: Input, span: Span, mut scratch: CaptureScratch) -> Captures uses {} {
+fn capture_backtrack(re: Regex, subject: Subject, span: Span, mut scratch: CaptureScratch) -> Captures uses {} {
   let start = capture_scalar(subject, span.start)
   let end = capture_scalar(subject, span.end)
   let length = end - start
@@ -491,14 +478,14 @@ fn capture_backtrack(re: Regex, subject: Input, span: Span, mut scratch: Capture
           break
         }
         let mut work = 18446744073709551615u64
-        let Ok(accepted) = accepts(inst, subject.scalars[cursor], mut work) else {
+        let Ok(accepted) = accepts(inst, subject_scalar(subject, cursor), mut work) else {
           core@1/failure.check(false, Bounds())
           break
         }
         if !accepted {
           break
         }
-        cursor += 1
+        cursor = subject_next(subject, cursor)
       } else if inst.kind == 10 || inst.kind == 12 {
         if inst.kind == 10 {
           scratch.data[stack + 3 * depth] = inst.y
@@ -506,14 +493,14 @@ fn capture_backtrack(re: Regex, subject: Input, span: Span, mut scratch: Capture
         } else {
           scratch.data[stack + 3 * depth] = m + inst.y
           scratch.data[stack + 3 * depth + 1] = scratch.data[inst.y]
-          scratch.data[inst.y] = subject.offsets[cursor] + 1
+          scratch.data[inst.y] = cursor + 1
         }
         depth += 1
       } else {
         let left = if cursor == 0 {
           0u64
         } else {
-          dfa_category(dfa_byte(subject, cursor - 1))
+          dfa_category(dfa_byte(subject, subject_before(subject, cursor)))
         }
         let right = dfa_category(dfa_byte(subject, cursor))
         if !dfa_allowed(inst.kind, left, right) {
@@ -527,7 +514,7 @@ fn capture_backtrack(re: Regex, subject: Input, span: Span, mut scratch: Capture
   Captures(spans: [])
 }
 
-fn capture_replay(re: Regex, subject: Input, span: Span, mut scratch: CaptureScratch) -> Captures uses {} {
+fn capture_replay(re: Regex, subject: Subject, span: Span, mut scratch: CaptureScratch) -> Captures uses {} {
   if !scratch.prepared {
     scratch.plan = capture_plan(re)
     scratch.prepared = true
@@ -535,7 +522,7 @@ fn capture_replay(re: Regex, subject: Input, span: Span, mut scratch: CaptureScr
   if core@1/list.len(scratch.plan) != 0 {
     return capture_onepass(re, subject, span, mut scratch)
   }
-  // Use scalar positions for the visited budget, including multi-byte text.
+  // Use byte positions for the visited budget; UTF-8 continuation cells remain unused.
   let start = capture_scalar(subject, span.start)
   let end = capture_scalar(subject, span.end)
   if capture_backtrack_fits(re, end - start) {
@@ -546,7 +533,7 @@ fn capture_replay(re: Regex, subject: Input, span: Span, mut scratch: CaptureScr
 
 fn capture_find_from(
   re: Regex,
-  subject: Input,
+  subject: Subject,
   start: u64,
   admitted: bool,
   haystack: Bytes,
@@ -576,7 +563,7 @@ fn capture_find_from(
 // A single resolution permanently disables acceleration. Never replay callbacks.
 fn replacement_resolve(
   re: Regex,
-  subject: Input,
+  subject: Subject,
   count: u64,
   capture: bool,
   mut work: u64
@@ -588,13 +575,13 @@ fn replacement_resolve(
     let Some(span) = matched else {
       break
     }
-    if pos < core@1/list.len(subject.scalars) && subject.offsets[pos + 1] > span.end {
-      pos += 1
-    } else if span.end == subject.offsets[pos] {
-      pos += 1
+    if pos < subject_len(subject) && subject_next(subject, pos) > span.end {
+      pos = subject_next(subject, pos)
+    } else if span.end == pos {
+      pos = subject_next(subject, pos)
     } else {
-      while subject.offsets[pos] < span.end {
-        pos += 1
+      while pos < span.end {
+        pos = subject_next(subject, pos)
       }
     }
     i += 1
@@ -604,7 +591,7 @@ fn replacement_resolve(
 
 fn replacement_afford(
   re: Regex,
-  subject: Input,
+  subject: Subject,
   capture: bool,
   charge: u64,
   pending: u64,
@@ -666,7 +653,7 @@ fn replace_accelerated[T](
   let mut scratch = capture_scratch()
   let mut pos = 0u64
   let mut last_end = 0u64
-  while pos <= core@1/list.len(source_input.scalars) {
+  while pos <= subject_len(source_input) {
     replacement_afford(re, source_input, mode != 1, 0, pending, mut bound, mut work)?
     let search_outcome = if bound != 0 && !cache.disabled {
       dfa_search(re, source_input, pos, data, mut cache)
@@ -748,15 +735,15 @@ fn replace_accelerated[T](
     // Go replaceAll advances at least one scalar from the search position.
     replacement_afford(re, source_input, mode != 1, 1, pending, mut bound, mut work)?
     spend(mut work)?
-    if pos < core@1/list.len(source_input.scalars) && source_input.offsets[pos + 1] > span.end {
-      pos += 1
-    } else if span.end == source_input.offsets[pos] {
-      pos += 1
+    if pos < subject_len(source_input) && subject_next(source_input, pos) > span.end {
+      pos = subject_next(source_input, pos)
+    } else if span.end == pos {
+      pos = subject_next(source_input, pos)
     } else {
-      while source_input.offsets[pos] < span.end {
+      while pos < span.end {
         replacement_afford(re, source_input, mode != 1, 1, pending, mut bound, mut work)?
         spend(mut work)?
-        pos += 1
+        pos = subject_next(source_input, pos)
       }
     }
   }

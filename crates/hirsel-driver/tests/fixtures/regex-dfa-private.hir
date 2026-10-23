@@ -5,12 +5,11 @@ fn dfa_test_case(pattern: String, src: String) -> bool uses {} {
   let Ok(re) = compile(pattern, 10000) else { return false }
   let mut work = 1000000000u64
   let Ok(subject) = make_subject(src, mut work) else { return false }
-  let mut ascii_only = true
-  for c in subject.scalars { if core@1/char.to_u32(c) >= 128 { ascii_only = false } }
+  let ascii_only = subject.ascii
   let mut cache = dfa_cache(re, true, 65024)
   let mut tiny = dfa_cache(re, true, 1)
   let mut start = 0u64
-  while start <= core@1/list.len(subject.scalars) {
+  while start <= subject_len(subject) {
     let mut oracle_work = work
     let Ok((expected, _)) = pike_find_from(re, subject, start, false, mut oracle_work) else { return false }
     let got = dfa_search(re, subject, start, core@1/string.as_bytes(src), mut cache)
@@ -25,7 +24,7 @@ fn dfa_test_case(pattern: String, src: String) -> bool uses {} {
     let mut retry_work = work
     let Ok((retry, _)) = find_from(re, subject, start, true, core@1/string.as_bytes(src), mut tiny, mut retry_work) else { return false }
     if retry != expected || retry_work != oracle_work || tiny.scalar_fallback { return false }
-    start += 1
+    start = subject_next(subject, start)
   }
   true
 }
@@ -169,35 +168,26 @@ fn dfa_oracle_all(re: Regex, text: String, max_matches: u64, work_limit: u64) ->
     return Ok(take matches)
   }
   let mut work = work_limit
-  let mut subject = Input(scalars: [], offsets: [], at: 0)
-  let mut byte: u64 = 0
-  for c in core@1/string.scalars(text) {
-    spend(mut work)?
-    core@1/list.push(mut subject.scalars, c)
-    core@1/list.push(mut subject.offsets, byte)
-    byte += scalar_width(c)
-  }
-  spend(mut work)?
-  core@1/list.push(mut subject.offsets, byte)
+  let subject = make_subject(text, mut work)?
   let mut pos: u64 = 0
   let mut previous_end: Option[u64] = None()
-  while pos <= core@1/list.len(subject.scalars) {
+  while pos <= subject_len(subject) {
     let (matched, _) = pike_find_from(re, subject, pos, false, mut work)?
     let Some(span) = matched else {
       return Ok(take matches)
     }
     let mut accept = true
-    if span.end == subject.offsets[pos] {
+    if span.end == pos {
       if previous_end == Some(span.start) {
         accept = false
       }
       // A scalar index makes the rune-width advance exact, including EOF+1.
       spend(mut work)?
-      pos += 1
+      pos = subject_next(subject, pos)
     } else {
-      while subject.offsets[pos] < span.end {
+      while pos < span.end {
         spend(mut work)?
-        pos += 1
+        pos = subject_next(subject, pos)
       }
     }
     previous_end = Some(span.end)

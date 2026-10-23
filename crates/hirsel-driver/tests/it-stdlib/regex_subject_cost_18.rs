@@ -142,7 +142,21 @@ fn subject_constructor_case(src: String, budget: u64) -> bool uses {} {
   let actual = make_subject(src, mut actual_work)
   let mut expected_work = budget
   let expected = subject_oracle(src, mut expected_work)
-  actual == expected && actual_work == expected_work
+  if actual_work != expected_work { return false }
+  match (actual, expected) {
+    (Error(a), Error(b)) => a == b,
+    (Ok(subject), Ok(old)) => {
+      let mut byte = 0u64
+      let mut i = 0u64
+      while i < core@1/list.len(old.scalars) {
+        if byte != old.offsets[i] || subject_scalar(subject, byte) != old.scalars[i] { return false }
+        byte = subject_next(subject, byte)
+        i += 1
+      }
+      byte == subject_len(subject) && byte == old.offsets[i]
+    },
+    _ => false,
+  }
 }
 
 pub fn subject_small() -> Result[(), SubjectFailure] uses {} {
@@ -190,10 +204,10 @@ fn subject_search_case(pattern: String, tail: String) -> bool uses {} {
   let mut tiny = dfa_cache(re, true, 1)
   let mut captures = dfa_cache(re, true, 65024)
   let mut scratch = capture_scratch()
-  let starts: List[u64] = [0,32,64,core@1/list.len(subject.scalars)]
+  let starts: List[u64] = [0,32,64,subject_len(subject)]
   for start in starts {
     let mut oracle_work = old_work
-    let expected = pike_find_from(re, old_subject, start, false, mut oracle_work)
+    let expected = subject_old_pike(re, old_subject, subject_old_index(old_subject, start), false, mut oracle_work)
     let mut actual_work = work
     let actual = find_from(re, subject, start, true, haystack, mut cache, mut actual_work)
     if actual != expected { return false }
@@ -201,14 +215,14 @@ fn subject_search_case(pattern: String, tail: String) -> bool uses {} {
     let retry = find_from(re, subject, start, true, haystack, mut tiny, mut retry_work)
     if retry != expected || retry_work != oracle_work { return false }
     oracle_work = old_work
-    let expected_capture = pike_find_from(re, old_subject, start, true, mut oracle_work)
+    let expected_capture = subject_old_pike(re, old_subject, subject_old_index(old_subject, start), true, mut oracle_work)
     actual_work = work
     let actual_capture = capture_find_from(re, subject, start, re.prefilter.enabled, haystack, mut captures, mut scratch, mut actual_work)
     if actual_capture != expected_capture { return false }
     // Non-admitted calls, even after a quit, retain exact Pike charges.
     actual_work = 100
     oracle_work = 100
-    if find_from(re, subject, start, false, haystack, mut tiny, mut actual_work) != pike_find_from(re, old_subject, start, false, mut oracle_work) || actual_work != oracle_work { return false }
+    if find_from(re, subject, start, false, haystack, mut tiny, mut actual_work) != subject_old_pike(re, old_subject, subject_old_index(old_subject, start), false, mut oracle_work) || actual_work != oracle_work { return false }
   }
   true
 }
@@ -226,6 +240,54 @@ pub fn subject_search() -> Result[(), SubjectFailure] uses {} {
     if !subject_search_case(pattern,tail) { return Error(SubjectFailure(stage: 4)) }
   }
   Ok(())
+}
+
+fn subject_old_index(subject: Input, byte: u64) -> u64 uses {} {
+  let mut i = 0u64
+  while subject.offsets[i] < byte { i += 1 }
+  i
+}
+
+fn subject_old_pike(re: Regex, subject: Input, start: u64, capture: bool, mut work: u64) -> Result[
+  (Option[Span], Captures),
+  MatchError
+] uses {} {
+  let program = vm_program(re)
+  let mut machine = Machine(
+    seen: [],
+    seeds: [],
+    matched: None(),
+    captures: Captures(spans: []),
+    capture: capture,
+    at: subject.offsets[start],
+    previous: if start == 0 {
+      None()
+    } else {
+      Some(subject.scalars[start - 1])
+    },
+    work: work
+  )
+  let mut i: u64 = 0
+  while i < core@1/list.len(re.code) {
+    spend(mut machine.work)?
+    core@1/list.push(mut machine.seen, 0)
+    i += 1
+  }
+  let mut cursor = start
+  while cursor <= core@1/list.len(subject.scalars) {
+    let next: Option[char] = if cursor < core@1/list.len(subject.scalars) {
+      Some(subject.scalars[cursor])
+    } else {
+      None()
+    }
+    if step(program, next, mut machine)? {
+      work = machine.work
+      return Ok((copy machine.matched, copy machine.captures))
+    }
+    cursor += 1
+  }
+  work = machine.work
+  Ok((copy machine.matched, copy machine.captures))
 }
 
 fn subject_oracle(text: String, mut work: u64) -> Result[Input, MatchError] uses {} {

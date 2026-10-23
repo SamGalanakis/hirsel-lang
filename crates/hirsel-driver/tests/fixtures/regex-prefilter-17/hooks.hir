@@ -6,16 +6,16 @@ pub fn prefilter_test_case(pattern: String, source: String) -> bool uses {} {
   let mut work = 18446744073709551615u64
   let Ok(subject) = make_subject(source, mut work) else { return false }
   let mut start = 0u64
-  while start <= core@1/list.len(subject.scalars) {
+  while start <= subject_len(subject) {
     let mut reference_work = 18446744073709551615u64
     let reference = pike_find_from(re, subject, start, true, mut reference_work)
     let mut fast_work = 18446744073709551615u64
     let candidate = find_from_prefilter(re, subject, start, true, re.prefilter.enabled,
       core@1/string.as_bytes(source), mut fast_work)
     if candidate != reference { return false }
-    start += 1
-    if start == 16 && core@1/list.len(subject.scalars) > 32 {
-      start = core@1/list.len(subject.scalars)
+    start = subject_next(subject, start)
+    if start == 16 && subject_len(subject) > 32 {
+      start = subject_len(subject)
     }
   }
   let mut oracle = copy re

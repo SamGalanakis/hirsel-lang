@@ -213,8 +213,8 @@ fn partitions() -> Vec<(String, String)> {
         .replace("capacity: u64)", "capacity: u64, first: u64, last: u64)")
         .replace("let mut start = 0u64", "let mut start = first")
         .replace(
-            "while start <= core@1/list.len(subject.scalars)",
-            "while start <= core@1/list.len(subject.scalars) && start < last",
+            "while start <= subject_len(subject)",
+            "while start <= subject_len(subject) && start < last",
         );
     for index in 0..13 {
         let selected = logs.replace(

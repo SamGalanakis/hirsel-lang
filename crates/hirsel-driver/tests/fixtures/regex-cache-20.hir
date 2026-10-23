@@ -8,12 +8,12 @@ fn cache_case(pattern: String, src: String, capacity: u64) -> bool uses {} {
   let Ok(subject) = make_subject(src, mut work) else { return false }
   let mut cache = dfa_cache(re, true, capacity)
   let mut start = 0u64
-  while start <= core@1/list.len(subject.scalars) {
+  while start <= subject_len(subject) {
     let mut expected_work = work
     let expected = pike_find_from(re, subject, start, false, mut expected_work)
     let actual = find_from(re, subject, start, true, core@1/string.as_bytes(src), mut cache, mut work)
     if actual != expected { return false }
-    start += 1
+    start = subject_next(subject, start)
   }
   true
 }

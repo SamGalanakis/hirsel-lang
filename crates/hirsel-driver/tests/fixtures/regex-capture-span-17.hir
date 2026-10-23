@@ -18,7 +18,7 @@ fn capture_case(pattern: String, src: String) -> bool uses {} {
   let mut cache = dfa_cache(re, true, 65024)
   let mut tiny = dfa_cache(re, true, 1)
   let mut start = 0u64
-  while start <= core@1/list.len(subject.scalars) {
+  while start <= subject_len(subject) {
     let mut expected_work = work
     let Ok((span, expected)) = pike_find_from(
       re,
@@ -66,7 +66,7 @@ fn capture_case(pattern: String, src: String) -> bool uses {} {
     if retry != (span, expected) || actual_work != expected_work {
       return false
     }
-    start += 1
+    start = subject_next(subject, start)
   }
   true
 }
@@ -124,7 +124,7 @@ fn capture_replace_case(pattern: String, src: String, output_size: u64) -> bool 
   let mut exact = work
   let mut pos = 0u64
   let mut count = 0u64
-  while pos <= core@1/list.len(subject.scalars) {
+  while pos <= subject_len(subject) {
     count += 1
     let Ok((matched, _)) = pike_find_from(re, subject, pos, true, mut exact) else {
       return false
@@ -132,13 +132,13 @@ fn capture_replace_case(pattern: String, src: String, output_size: u64) -> bool 
     let Some(span) = matched else {
       break
     }
-    if pos < core@1/list.len(subject.scalars) && subject.offsets[pos + 1] > span.end {
-      pos += 1
-    } else if span.end == subject.offsets[pos] {
-      pos += 1
+    if pos < subject_len(subject) && subject_next(subject, pos) > span.end {
+      pos = subject_next(subject, pos)
+    } else if span.end == pos {
+      pos = subject_next(subject, pos)
     } else {
-      while subject.offsets[pos] < span.end {
-        pos += 1
+      while pos < span.end {
+        pos = subject_next(subject, pos)
       }
     }
   }
@@ -286,7 +286,7 @@ fn traced_replace_pike[T](
   let mut dst: List[u8] = []
   let mut pos = 0u64
   let mut last_end = 0u64
-  while pos <= core@1/list.len(source_input.scalars) {
+  while pos <= subject_len(source_input) {
     let (matched, captures) = pike_find_from(re, source_input, pos, mode != 1, mut work)?
     let Some(span) = matched else {
       break
@@ -309,14 +309,14 @@ fn traced_replace_pike[T](
     last_end = span.end
     // Go replaceAll advances at least one scalar from the search position.
     spend(mut work)?
-    if pos < core@1/list.len(source_input.scalars) && source_input.offsets[pos + 1] > span.end {
-      pos += 1
-    } else if span.end == source_input.offsets[pos] {
-      pos += 1
+    if pos < subject_len(source_input) && subject_next(source_input, pos) > span.end {
+      pos = subject_next(source_input, pos)
+    } else if span.end == pos {
+      pos = subject_next(source_input, pos)
     } else {
-      while source_input.offsets[pos] < span.end {
+      while pos < span.end {
         spend(mut work)?
-        pos += 1
+        pos = subject_next(source_input, pos)
       }
     }
   }
@@ -345,7 +345,7 @@ fn traced_replace_accelerated[T](
   let mut scratch = capture_scratch()
   let mut pos = 0u64
   let mut last_end = 0u64
-  while pos <= core@1/list.len(source_input.scalars) {
+  while pos <= subject_len(source_input) {
     replacement_afford(re, source_input, mode != 1, 0, pending, mut bound, mut work)?
     let search_outcome = if bound != 0 && !cache.disabled {
       dfa_search(re, source_input, pos, data, mut cache)
@@ -429,15 +429,15 @@ fn traced_replace_accelerated[T](
     // Go replaceAll advances at least one scalar from the search position.
     replacement_afford(re, source_input, mode != 1, 1, pending, mut bound, mut work)?
     spend(mut work)?
-    if pos < core@1/list.len(source_input.scalars) && source_input.offsets[pos + 1] > span.end {
-      pos += 1
-    } else if span.end == source_input.offsets[pos] {
-      pos += 1
+    if pos < subject_len(source_input) && subject_next(source_input, pos) > span.end {
+      pos = subject_next(source_input, pos)
+    } else if span.end == pos {
+      pos = subject_next(source_input, pos)
     } else {
-      while source_input.offsets[pos] < span.end {
+      while pos < span.end {
         replacement_afford(re, source_input, mode != 1, 1, pending, mut bound, mut work)?
         spend(mut work)?
-        pos += 1
+        pos = subject_next(source_input, pos)
       }
     }
   }

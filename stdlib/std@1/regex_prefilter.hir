@@ -228,21 +228,22 @@ fn prefix_at(plan: PrefixPlan, haystack: Bytes, at: u64) -> bool uses {} {
 
 // Called only at a dead start state after whole-operation budget admission.
 // Return byte + scalar coordinates and original look-behind, never a slice.
-fn next_candidate(plan: PrefixPlan, haystack: Bytes, subject: Input, from: u64) -> Option[
+fn next_candidate(plan: PrefixPlan, haystack: Bytes, subject: Subject, from: u64) -> Option[
   Candidate
 ] uses {} {
   let mut cursor = from
-  let mut target = subject.offsets[from]
+  let mut target = from
   if let Some(search) = plan.search {
     let needle = core@1/string.as_bytes(plan.literals[0])
     let Some(found) = internal.substring.find_from(haystack, needle, search, target) else {
       return None()
     }
     target = found
+    cursor = target
   }
-  while cursor < core@1/list.len(subject.scalars) {
-    let byte = subject.offsets[cursor]
-    if byte >= target && prefix_has(plan, core@1/char.to_u32(subject.scalars[cursor])) && prefix_at(
+  while cursor < subject_len(subject) {
+    let byte = cursor
+    if boundary(haystack, byte) && byte >= target && prefix_has(plan, core@1/char.to_u32(subject_scalar(subject, cursor))) && prefix_at(
       plan,
       haystack,
       byte
@@ -254,12 +255,12 @@ fn next_candidate(plan: PrefixPlan, haystack: Bytes, subject: Input, from: u64) 
           previous: if cursor == 0 {
             None()
           } else {
-            Some(subject.scalars[cursor - 1])
+            Some(subject_scalar(subject, subject_before(subject, cursor)))
           }
         )
       )
     }
-    cursor += 1
+    cursor = if boundary(haystack, cursor) { subject_next(subject, cursor) } else { cursor + 1 }
   }
   None()
 }

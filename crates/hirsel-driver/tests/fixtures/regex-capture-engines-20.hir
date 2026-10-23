@@ -25,7 +25,7 @@ fn cap20_case(pattern: String, src: String) -> Result[(), CaptureEngineFailure] 
   scratch.plan = capture_plan(re)
   scratch.prepared = true
   let mut start = 0u64
-  while start <= core@1/list.len(subject.scalars) {
+  while start <= subject_len(subject) {
     let Ok((matched, expected)) = pike_find_from(re, subject, start, true, mut work) else {
       return Error(
         CaptureEngineFailure(pattern: unique pattern, source: unique src, engine: 2)
@@ -37,7 +37,7 @@ fn cap20_case(pattern: String, src: String) -> Result[(), CaptureEngineFailure] 
           CaptureEngineFailure(pattern: unique pattern, source: unique src, engine: 3)
         )
       }
-      if capture_backtrack_fits(re, core@1/list.len(subject.scalars)) {
+      if capture_backtrack_fits(re, subject_len(subject)) {
         if capture_backtrack(re, subject, span, mut scratch) != expected {
           return Error(
             CaptureEngineFailure(pattern: unique pattern, source: unique src, engine: 4)
@@ -57,7 +57,7 @@ fn cap20_case(pattern: String, src: String) -> Result[(), CaptureEngineFailure] 
         )
       }
     }
-    start += 1
+    start = subject_next(subject, start)
   }
   Ok(())
 }

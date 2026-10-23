@@ -308,9 +308,9 @@ fn dfa_transition(re: VmProgram, state: u64, byte: u64, mut cache: DfaCache) -> 
   transition
 }
 
-fn dfa_byte(subject: Input, at: u64) -> u64 uses {} {
-  if at == core@1/list.len(subject.scalars) { return 128 }
-  let cp: u64 = core@1/int.widen(core@1/char.to_u32(subject.scalars[at]))
+fn dfa_byte(subject: Subject, at: u64) -> u64 uses {} {
+  if at == subject_len(subject) { return 128 }
+  let cp: u64 = core@1/int.widen(subject.bytes[at])
   if cp >= 128 { 129u64 } else { cp }
 }
 
@@ -331,11 +331,11 @@ fn dfa_frontier(state: u64, mut cache: DfaCache) -> u64 uses {} {
 // quit. This scalar path also handles Unicode, without rescanning the prefix.
 // regex-automata hybrid/search.rs:80-110 (quit position), util/determinize/
 // mod.rs:350-490 (ordered frontier); hybrid/search.rs:340-470 (reverse).
-fn dfa_scalar_step(re: VmProgram, subject: Input, cursor: u64, reverse: bool,
+fn dfa_scalar_step(re: VmProgram, subject: Subject, cursor: u64, reverse: bool,
   pending: bool, seeds: u64, mut cache: DfaCache) -> (u64, bool, bool) uses {} {
   cache.scalar_steps += 1
   if !reverse { cache.scalar_forward_steps += 1 }
-  let left = if cursor == 0 { 0u64 } else { dfa_category(dfa_byte(subject, cursor - 1)) }
+  let left = if cursor == 0 { 0u64 } else { dfa_category(dfa_byte(subject, subject_before(subject, cursor))) }
   let right = dfa_category(dfa_byte(subject, cursor))
   let mut i = 0u64
   while i < cache.size {
@@ -357,14 +357,14 @@ fn dfa_scalar_step(re: VmProgram, subject: Input, cursor: u64, reverse: bool,
       matched = dfa_closure(re, re.entry, left, right, mut cache, mut count)
     }
   }
-  let eof = if reverse { cursor == 0 } else { cursor == core@1/list.len(subject.scalars) }
+  let eof = if reverse { cursor == 0 } else { cursor == subject_len(subject) }
   let mut next_count = 0u64
   i = 0
   while !eof && i < count {
     let pc = cache.data[cache.ready + i]
     let inst = re.code[pc]
     if inst.kind == 11 { break }
-    let c = subject.scalars[if reverse { cursor - 1 } else { cursor }]
+    let c = subject_scalar(subject, if reverse { subject_before(subject, cursor) } else { cursor })
     let mut work = 18446744073709551615u64
     let Ok(accepted) = accepts(inst, c, mut work) else { return (0, matched, true) }
     if accepted {
@@ -376,10 +376,10 @@ fn dfa_scalar_step(re: VmProgram, subject: Input, cursor: u64, reverse: bool,
   (next_count, matched, eof || next_count == 0 && (reverse || pending || matched))
 }
 
-fn dfa_search(re: Regex, subject: Input, start: u64, haystack: Bytes, mut cache: DfaCache) -> DfaResult uses {} {
+fn dfa_search(re: Regex, subject: Subject, start: u64, haystack: Bytes, mut cache: DfaCache) -> DfaResult uses {} {
   if cache.disabled { return DfaQuit() }
   let program = vm_program(re)
-  let previous = if start == 0 { 128u64 } else { dfa_byte(subject, start - 1) }
+  let previous = if start == 0 { 128u64 } else { dfa_byte(subject, subject_before(subject, start)) }
   let mut state = dfa_intern(mut cache, 0, dfa_category(previous))
   if state == 0 { return DfaQuit() }
   let mut cursor = start
@@ -392,7 +392,7 @@ fn dfa_search(re: Regex, subject: Input, start: u64, haystack: Bytes, mut cache:
     if !scalar && re.prefilter.enabled && cache.data[state + 2] == 0 && end == None() {
       let Some(candidate) = next_candidate(re.prefilter, haystack, subject, cursor) else { return DfaMiss() }
       cursor = candidate.scalar
-      let preceding = if cursor == 0 { 128u64 } else { dfa_byte(subject, cursor - 1) }
+      let preceding = if cursor == 0 { 128u64 } else { dfa_byte(subject, subject_before(subject, cursor)) }
       state = dfa_intern(mut cache, 0, dfa_category(preceding))
       if state == 0 || preceding > 128 {
         scalar = true
@@ -432,10 +432,10 @@ fn dfa_search(re: Regex, subject: Input, start: u64, haystack: Bytes, mut cache:
     }
     if matched { end = Some(cursor) }
     if stop { break }
-    cursor += 1
+    cursor = subject_next(subject, cursor)
   }
   let Some(end_at) = end else { return DfaMiss() }
-  if end_at == start { return DfaMatch(Span(start: subject.offsets[start], end: subject.offsets[end_at])) }
+  if end_at == start { return DfaMatch(Span(start: start, end: end_at)) }
   let right = dfa_byte(subject, end_at)
   cache.data[cache.next] = 0
   seeds = 1
@@ -452,7 +452,7 @@ fn dfa_search(re: Regex, subject: Input, start: u64, haystack: Bytes, mut cache:
   cursor = end_at
   let mut found: Option[u64] = None()
   while true {
-    let byte = if cursor == 0 { 128u64 } else { dfa_byte(subject, cursor - 1) }
+    let byte = if cursor == 0 { 128u64 } else { dfa_byte(subject, subject_before(subject, cursor)) }
     let transition = if scalar || byte > 128 { 0u64 } else {
       // hybrid/search.rs:63-70,95-110: keep known transitions in the loop.
       let hit = cache.data[state + 3 + byte]
@@ -481,17 +481,17 @@ fn dfa_search(re: Regex, subject: Input, start: u64, haystack: Bytes, mut cache:
     }
     if matched { found = Some(cursor) }
     if cursor == start || stop { break }
-    cursor -= 1
+    cursor = subject_before(subject, cursor)
   }
   match found {
-    Some(from) => DfaMatch(Span(start: subject.offsets[from], end: subject.offsets[end_at])),
+    Some(from) => DfaMatch(Span(start: from, end: end_at)),
     None() => DfaMiss(),
   }
 }
 
 // Finite work budgets use the exact ordered VM. An accelerated search which
 // quits mid-stream completes from its saved frontier inside dfa_search.
-fn find_from(re: Regex, subject: Input, start: u64, admitted: bool, haystack: Bytes,
+fn find_from(re: Regex, subject: Subject, start: u64, admitted: bool, haystack: Bytes,
   mut cache: DfaCache, mut work: u64) -> Result[(Option[Span], Captures), MatchError] uses {} {
   if admitted && !cache.disabled {
     match dfa_search(re, subject, start, haystack, mut cache) {

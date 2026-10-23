@@ -50,7 +50,7 @@ fn empty_utf8_case(pattern: String, src: String) -> bool uses {} {
   let mut scratch = capture_scratch()
   scratch.plan = capture_plan(re)
   scratch.prepared = true
-  for start in 0u64..core@1/list.len(subject.scalars) + 1 {
+  for start in subject_starts(subject) {
     let Ok((span, captures)) = pike_find_from(re, subject, start, true, mut work) else {
       return false
     }
@@ -261,4 +261,14 @@ pub fn empty_utf8_all() -> Result[(), ()] uses {} {
     empty_utf8_partition(partition)?
   }
   Ok(())
+}
+
+fn subject_starts(subject: Subject) -> List[u64] uses {} {
+  let mut starts: List[u64] = []
+  let mut at = 0u64
+  while at <= subject_len(subject) {
+    core@1/list.push(mut starts, at)
+    at = subject_next(subject, at)
+  }
+  take starts
 }
