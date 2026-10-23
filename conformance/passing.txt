@@ -2690,6 +2690,11 @@ conformance/MEM/MEM-5-mut-handback-cleanup-summary-bad.hir
 conformance/MEM/MEM-5-mut-handback-cleanup-summary-run.hir
 conformance/MEM/MEM-5-nested-region-closure-run.hir
 conformance/MEM/MEM-5-nested-region-escape-reject.hir
+conformance/MEM/MEM-5-nested-unique-projection-37-builder-run.hir
+conformance/MEM/MEM-5-nested-unique-projection-37-copy-run.hir
+conformance/MEM/MEM-5-nested-unique-projection-37-filled-run.hir
+conformance/MEM/MEM-5-nested-unique-projection-37-minimal-run.hir
+conformance/MEM/MEM-5-nested-unique-projection-37-run.hir
 conformance/MEM/MEM-5-net-read-noalloc-bad.hir
 conformance/MEM/MEM-5-net-read-noalloc-ok.hir
 conformance/MEM/MEM-5-nfc-noalloc-bad.hir
@@ -3455,6 +3460,7 @@ conformance/MODE/MODE-2-nested-copy-element-dropped-run.hir
 conformance/MODE/MODE-2-nested-copy-element-no-copy-run.hir
 conformance/MODE/MODE-2-nested-copy-element-ordinary-run.hir
 conformance/MODE/MODE-2-nested-copy-element-repair-run.hir
+conformance/MODE/MODE-2-nested-unique-projection-37-aliased-bad.hir
 conformance/MODE/MODE-2-nested-view-borrow-ok.hir
 conformance/MODE/MODE-2-nested-view-borrow-still-unique-ok.hir
 conformance/MODE/MODE-2-nested-view-copy-kept-bad.hir

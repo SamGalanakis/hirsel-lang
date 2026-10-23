@@ -1071,3 +1071,39 @@ fn a_displaced_value_claims_no_uniqueness() {
         );
     });
 }
+
+#[test]
+fn nested_list_builder_aliases_trap_even_with_forged_noalloc_body() {
+    with_compiler_stack(|| {
+        for edits in [
+            "list.push(mut rows, copy shared)",
+            "list.push(mut rows, [2u64]); list.push(mut rows, [3u64]); list.swap(mut rows, 0, 1); list.truncate(mut rows, 0); list.push(mut rows, copy shared)",
+            "list.push(mut rows, [2u64]); let _ = list.remove(mut rows, 0); list.push(mut rows, copy shared)",
+            "list.push(mut rows, [2u64]); let _ = list.pop(mut rows); list.push(mut rows, copy shared)",
+            "list.push(mut rows, [2u64]); list.truncate(mut rows, 0); list.push(mut rows, copy shared)",
+        ] {
+            let source = format!(
+                "@noalloc fn promise(mut rows: List[List[u64]]) {{}}\n\
+                 fn change(mut rows: List[List[u64]]) {{ rows[0][0] = 9u64 }}\n\
+                 pub fn main() -> Result[(), ()] {{\n\
+                   let shared = [1u64]\n\
+                   let mut rows: List[List[u64]] = []\n\
+                   {edits}\n\
+                   promise(mut rows)\n\
+                   if shared[0] != 1u64 {{ return Error(()) }}\n\
+                   Ok(())\n\
+                 }}"
+            );
+            let mut engine = accepted(&source);
+            assert_eq!(printed(run(&mut engine, &[], true)), "");
+            let mut forged = lowered(&mut engine, "change");
+            forged.path = hirsel_syntax::DefId::intern(&path("promise"));
+            assert_eq!(printed(run(&mut engine, &[forged.clone()], false)), "");
+            assert_eq!(
+                trapped(run(&mut engine, &[forged], true)),
+                TrapRule::AllocationInNoalloc,
+                "{edits}"
+            );
+        }
+    });
+}

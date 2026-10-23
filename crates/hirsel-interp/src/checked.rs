@@ -942,6 +942,98 @@ pub(crate) struct OperationCheck {
     pub callbacks: Bound,
 }
 impl OperationCheck {
+    /// Native list edits move the corresponding ownership subtrees as well as
+    /// their values. Keeping only the outer holder loses pushed children's
+    /// witnesses; keeping stale indices after remove/swap can invent uniqueness.
+    pub fn list_operation(
+        &mut self,
+        path: &DefPath,
+        arguments: &[Value],
+        result: &crate::OperationResult,
+    ) {
+        if ![
+            "list.push",
+            "list.pop",
+            "list.remove",
+            "list.swap",
+            "list.truncate",
+        ]
+        .iter()
+        .any(|name| path.is_core(name))
+        {
+            return;
+        }
+        let mut result = result;
+        while let crate::OperationResult::ArenaCharge { result: inner, .. } = result {
+            result = inner;
+        }
+        let crate::OperationResult::Complete {
+            value,
+            arguments: updated,
+            ..
+        } = result
+        else {
+            return;
+        };
+        let list = updated
+            .iter()
+            .find(|(i, _)| *i == 0)
+            .map(|(_, v)| v)
+            .or_else(|| arguments.first());
+        let Some(Value::Sequence {
+            kind: hirsel_types::BuiltinType::List,
+            elements,
+            ..
+        }) = list
+        else {
+            return;
+        };
+        let index = |ordinal: usize| match arguments.get(ordinal) {
+            Some(Value::Integer(i)) => usize::try_from(i.bits()).ok(),
+            _ => None,
+        };
+        let Some((_, node)) = self.updates.iter_mut().find(|(i, _)| *i == 0) else {
+            return;
+        };
+        let mut node = node;
+        while let Shadow::Ownership { content, .. } | Shadow::View { content, .. } = node {
+            node = content;
+        }
+        let Shadow::Parts(parts) = node else {
+            // No structural witness: retain the conservative existing bound.
+            return;
+        };
+        let removed = if path.is_core("list.push") && parts.len() + 1 == elements.len() {
+            let Some(input) = self.inputs.get(1) else {
+                return;
+            };
+            parts.push(input.shadow.clone());
+            None
+        } else if path.is_core("list.pop") && parts.len() == elements.len() + 1 {
+            parts.pop().map(|part| Shadow::Parts(vec![part]))
+        } else if path.is_core("list.remove") && parts.len() == elements.len() + 1 {
+            index(1)
+                .filter(|&i| i < parts.len())
+                .map(|i| parts.remove(i))
+        } else if path.is_core("list.swap") && parts.len() == elements.len() {
+            if let (Some(i), Some(j)) = (index(1), index(2))
+                && i < parts.len()
+                && j < parts.len()
+            {
+                parts.swap(i, j);
+            }
+            None
+        } else if path.is_core("list.truncate") {
+            parts.truncate(elements.len());
+            None
+        } else {
+            None
+        };
+        if let Some(mut removed) = removed {
+            removed.add_bound(&self.result.total());
+            self.result = removed.for_value(value);
+        }
+    }
     pub fn input_bound(&self) -> Bound {
         let mut bound = self.callbacks.clone();
         for input in &self.inputs {
@@ -1436,6 +1528,114 @@ impl FrameCheck {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn native_list_edits_keep_each_childs_actual_holder() {
+        let list = |values: Vec<Value>| Value::Sequence {
+            kind: hirsel_types::BuiltinType::List,
+            elements: values.into_iter().map(Some).collect(),
+            arena: None,
+        };
+        let index =
+            |i| Value::Integer(crate::Integer::new(hirsel_types::Primitive::U64, i).unwrap());
+        let first = Value::Bytes(vec![1]);
+        let second = Value::Bytes(vec![2]);
+        for name in [
+            "list.push",
+            "list.pop",
+            "list.remove",
+            "list.swap",
+            "list.truncate",
+        ] {
+            let owned = Shadow::default().ownership(&first, true);
+            let shared = Shadow::default().ownership(&second, true);
+            let alias = shared.copied();
+            shared.share();
+            let before = if name == "list.push" {
+                vec![owned.clone()]
+            } else {
+                vec![owned.clone(), shared.clone()]
+            };
+            let initial = list(if name == "list.push" {
+                vec![first.clone()]
+            } else {
+                vec![first.clone(), second.clone()]
+            });
+            let (values, returned, expected, selected) = match name {
+                "list.push" => (
+                    vec![first.clone(), second.clone()],
+                    Value::Unit,
+                    vec![true, false],
+                    None,
+                ),
+                "list.pop" => (
+                    vec![first.clone()],
+                    Value::Variant {
+                        variant: 1,
+                        fields: vec![Some(second.clone())],
+                    },
+                    vec![true],
+                    Some(false),
+                ),
+                "list.remove" => (vec![second.clone()], first.clone(), vec![false], Some(true)),
+                "list.swap" => (
+                    vec![second.clone(), first.clone()],
+                    Value::Unit,
+                    vec![false, true],
+                    None,
+                ),
+                "list.truncate" => (vec![first.clone()], Value::Unit, vec![true], None),
+                _ => unreachable!(),
+            };
+            let after = list(values);
+            let arguments = vec![after.clone(), index(0), index(1)];
+            let mut check = OperationCheck {
+                result: Shadow::default(),
+                updates: vec![(0, Shadow::Parts(before).ownership(&initial, true))],
+                inputs: vec![
+                    Argument::default(),
+                    Argument {
+                        shadow: shared.clone(),
+                        ..Default::default()
+                    },
+                ],
+                callbacks: vec![],
+            };
+            let completion = crate::OperationResult::Complete {
+                value: returned,
+                arguments: if name == "list.truncate" {
+                    vec![(0, after)]
+                } else {
+                    vec![]
+                },
+                consumed: vec![],
+                released: vec![],
+            };
+            check.list_operation(&DefPath::core(name), &arguments, &completion);
+            for (i, expected) in expected.into_iter().enumerate() {
+                assert_eq!(
+                    check.updates[0].1.part(i).is_unique(),
+                    expected,
+                    "{name} child {i}"
+                );
+            }
+            if let Some(expected) = selected {
+                let result = if name == "list.pop" {
+                    check.result.part(0)
+                } else {
+                    check.result.clone()
+                };
+                assert_eq!(result.is_unique(), expected, "{name} result");
+                if expected {
+                    owned.share();
+                    assert!(!result.is_unique(), "removed holder identity was lost");
+                } else {
+                    assert!(!result.sole_owner(), "popped alias was lost");
+                }
+            }
+            assert!(!alias.sole_owner());
+        }
+    }
+
     #[test]
     fn substitution_maps_instances_per_node_and_keeps_others() {
         let mut shadow = Shadow::Parts(vec![

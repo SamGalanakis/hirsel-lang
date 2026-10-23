@@ -1,0 +1,17 @@
+// rule: MEM-5
+// expect: run
+@noalloc
+fn update(mut rows: unique List[List[i64]]) -> () uses {} {
+  rows[0][0] += 2
+  rows[0][0] -= 1
+}
+
+pub fn main() -> Result[(), ()] {
+  let mut rows: List[List[i64]] = []
+  list.push(mut rows, [0i64])
+  update(mut rows)
+  if rows[0][0] != 1 {
+    return Error(())
+  }
+  Ok(())
+}

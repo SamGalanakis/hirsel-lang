@@ -1,0 +1,24 @@
+// rule: MEM-5
+// expect: run
+type State {
+  rows: List[List[i64]],
+}
+
+@noalloc
+fn update(mut state: unique State) -> () uses {} {
+  state.rows[0][1] += 1
+  state.rows[1][0] -= 1
+}
+
+pub fn main() -> Result[(), ()] {
+  let mut rows: List[List[i64]] = []
+  for i in 0u64..2 {
+    list.push(mut rows, [0i64, 0i64])
+  }
+  let mut state = unique State(rows: take rows)
+  update(mut state)
+  if state.rows[0][1] != 1 || state.rows[1][0] != -1 {
+    return Error(())
+  }
+  Ok(())
+}

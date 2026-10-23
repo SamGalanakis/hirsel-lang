@@ -2408,14 +2408,16 @@ pub(crate) fn execute_frames(
                                 ));
                             }
                             let bounds = frame.check.as_ref().map(|check| {
-                                operation_bounds(
+                                let mut bounds = operation_bounds(
                                     &runtime.types,
                                     &check.state.borrow(),
                                     path,
                                     &checks,
                                     &mut_places,
                                     &taken,
-                                )
+                                );
+                                bounds.list_operation(path, &arguments, &result);
+                                bounds
                             });
                             frame.operation = Some(Box::new((
                                 result,

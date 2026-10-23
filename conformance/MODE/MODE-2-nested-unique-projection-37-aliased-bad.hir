@@ -1,0 +1,19 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 14
+// twin: MEM/MEM-5-nested-unique-projection-37-minimal-run.hir
+@noalloc
+fn update(mut rows: unique List[List[i64]]) -> () uses {} {
+  rows[0][0] += 2
+  rows[0][0] -= 1
+}
+
+pub fn main() -> Result[(), ()] {
+  let row = [0i64]
+  let mut rows: List[List[i64]] = []
+  list.push(mut rows, copy row)
+  update(mut rows)
+  if row[0] != 0 {
+    return Error(())
+  }
+  Ok(())
+}
