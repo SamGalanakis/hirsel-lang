@@ -159,6 +159,7 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
         | "file.open"
         | "file.read"
         | "file.seek"
+        | "file.open_append"
         | "file.create"
         | "file.write"
         | "file.append"
@@ -401,6 +402,7 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
             | "file.open"
             | "file.read"
             | "file.seek"
+            | "file.open_append"
             | "file.create"
             | "file.write"
             | "file.append"
@@ -1841,6 +1843,13 @@ pub const HIRSEL_ABI_EXPORTS: &[AbiExport] = &[
     },
     AbiExport {
         caller_site: false,
+        symbol: "hirsel_rt_v2_file_open_append",
+        destination: true,
+        result: Some((16, 8)),
+        parameters: &[Physical::Pointer, Physical::Pointer],
+    },
+    AbiExport {
+        caller_site: false,
         symbol: "hirsel_rt_v2_file_create",
         destination: true,
         result: Some((16, 8)),
@@ -2422,6 +2431,7 @@ pub const NATIVE_PATHS: &[&str] = &[
     "mapped.with",
     "file.watch",
     "watcher.next",
+    "file.open_append",
     "file.create",
     "file.create_atomic",
     "file.narrow",

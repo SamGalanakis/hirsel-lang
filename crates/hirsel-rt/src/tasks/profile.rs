@@ -182,6 +182,7 @@ pub(crate) fn request_kind(request: &crate::io::Request) -> &'static str {
         Request::Print { .. } => "Print",
         Request::Open { .. } => "Open",
         Request::Create { .. } => "Create",
+        Request::OpenAppend { .. } => "OpenAppend",
         Request::FileRead { .. } => "FileRead",
         Request::FileSeek { .. } => "FileSeek",
         Request::FileWrite { .. } => "FileWrite",

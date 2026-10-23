@@ -925,6 +925,14 @@ impl Storage for MemoryTree<'_> {
         self.identities.opened.insert(id, identity);
         Ok(())
     }
+    fn open_append_file(&mut self, path: &str, id: u64) -> Result<(), IoError> {
+        self.destination(path)?;
+        if self.identities.reachable.contains_key(path) {
+            self.open_file(path, id)
+        } else {
+            self.create_file(path, id)
+        }
+    }
     fn create_file(&mut self, path: &str, id: u64) -> Result<(), IoError> {
         self.destination(path)?;
         let identity = if let Some(identity) = self.identities.reachable.get(path) {
@@ -1346,6 +1354,13 @@ impl Storage for LinkedTree<'_> {
         Ok(self.watch_input.take())
     }
     fn unwatch(&mut self, _id: u64) {}
+    fn open_append_file(&mut self, path: &str, id: u64) -> Result<(), IoError> {
+        let path = self.path(path, true)?;
+        if self.detached() {
+            return Err(IoError::IsDirectory);
+        }
+        self.memory().open_append_file(&path, id)
+    }
     fn create_file(&mut self, path: &str, id: u64) -> Result<(), IoError> {
         let path = self.path(path, true)?;
         if self.detached() {

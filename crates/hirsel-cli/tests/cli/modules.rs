@@ -83,3 +83,4 @@ mod trace_record_27;
 mod parhash_27;
 mod replay_select_pending_27;
 mod e1_replay_liveness_28;
+mod journal_kv_29;

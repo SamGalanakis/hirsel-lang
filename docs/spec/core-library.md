@@ -107,6 +107,7 @@ fn file.open(d: Dir, p: Path) -> Result[File of d, FileError]
 @preserves_captures(f, buffer) fn file.read(d: Dir, mut f: File of d, mut buffer: List[u8], max: u64) -> Result[u64, FileError]
 fn file.seek(d: Dir, mut f: File of d, offset: u64) -> Result[(), FileError]
 fn file.create(d: Dir, p: Path) -> Result[File of d, FileError]
+fn file.open_append(d: Dir, p: Path) -> Result[File of d, FileError]
 fn file.write(d: Dir, mut f: File of d, data: Bytes) -> Result[u64, FileError]
 fn file.append(d: Dir, mut f: File of d, data: Bytes) -> Result[(), FileError]
 fn file.narrow(d: Dir, take f: File) -> Option[File of d]
@@ -768,7 +769,12 @@ cannot cause an error before their turn or be read after an early stop.
 
 `file.open` opens a read-only `File` at position 0; `file.create` opens an
 append-only `File`, creating a missing file and truncating an existing file to zero
-bytes. Both use the same `File` type, with no source mode flags. Providers return
+bytes. `file.open_append` opens an append-only `File`, creating a missing file without
+truncating an existing one (POSIX `O_WRONLY | O_APPEND | O_CREAT`; Go
+`os.OpenFile` with the same flags). Every write uses the current end, regardless
+of seek. It requires the same write grant as `file.create`, reports the same
+`FileError` cases, and promises no durability until `file.sync`.
+All three use the same `File` type, with no source mode flags. Providers return
 `FileFault` for reads on a created handle or writes on an opened handle. A read-only
 `Dir` denies create and writes with `NotGranted`.
 

@@ -630,6 +630,7 @@ impl Library {
             && matches!(
                 name,
                 "file.create"
+                    | "file.open_append"
                     | "file.write_bytes"
                     | "file.remove"
                     | "file.mkdir"
@@ -953,6 +954,35 @@ impl Library {
                         },
                     )))
                 }
+            }
+            "file.open_append" => {
+                if let Err(error) = self.simulation.file_destination(tree, &p) {
+                    return Ok(file_error(error));
+                }
+                if self.simulation.file_identity(tree, &p).is_none() {
+                    self.simulation
+                        .trees
+                        .get_mut(&tree)
+                        .unwrap()
+                        .1
+                        .insert(p.clone(), vec![]);
+                    self.simulation.replace_identity(tree, &p);
+                }
+                let identity = self
+                    .simulation
+                    .file_identity(tree, &p)
+                    .expect("append identity");
+                Ok(ok(self.simulation.handle(
+                    "File",
+                    Grant::File {
+                        tree,
+                        path: logical,
+                        dir,
+                        identity,
+                        position: 0,
+                        writable: true,
+                    },
+                )))
             }
             "file.create" => {
                 if let Err(error) = self.simulation.file_destination(tree, &p) {
@@ -1867,7 +1897,7 @@ primary_operations! { library, call, context, name, a, value;
     Primitive: "slots.empty" | "slots.insert" | "slots.get" | "slots.remove" => {
         return super::slots::call(name, a).map(Some);
     },
-    Capability: "io.signals" | "io.stdin" | "io.stderr" | "stdin.read" | "err.print" | "err.write" | "env.get" | "env.narrow" | "clock.monotonic" | "clock.wall" | "io.monotonic_clock" | "io.wall_clock" | "io.stdout" | "io.random" | "random.bytes" | "io.net" | "io.tasks" | "io.dir" | "dir.narrow" | "dir.read_only" | "arg.len" | "arg.text" | "arg.path" | "out.print" | "out.write" | "test.check" | "test.check_case" | "test.fail" | "test.seed" | "test.tasks" | "test.clock" | "test.log" | "test.expect_snapshot" | "test.dir" | "file.open" | "file.create" | "file.read" | "file.seek" | "file.write" | "file.append" | "file.narrow" | "file.walk" | "file.size" | "file.read_dir" | "file.metadata" | "file.mkdir" | "file.rename" | "file.remove_dir" | "file.set_permissions" | "dir.remove_all" | "file.read_bytes" | "file.write_bytes" | "file.remove" | "file.create_atomic" | "file.write_all" | "file.commit" | "file.sync" | "file.put_new" | "test.crash" | "file.map" | "file.watch" => {
+    Capability: "io.signals" | "io.stdin" | "io.stderr" | "stdin.read" | "err.print" | "err.write" | "env.get" | "env.narrow" | "clock.monotonic" | "clock.wall" | "io.monotonic_clock" | "io.wall_clock" | "io.stdout" | "io.random" | "random.bytes" | "io.net" | "io.tasks" | "io.dir" | "dir.narrow" | "dir.read_only" | "arg.len" | "arg.text" | "arg.path" | "out.print" | "out.write" | "test.check" | "test.check_case" | "test.fail" | "test.seed" | "test.tasks" | "test.clock" | "test.log" | "test.expect_snapshot" | "test.dir" | "file.open" | "file.create" | "file.open_append" | "file.read" | "file.seek" | "file.write" | "file.append" | "file.narrow" | "file.walk" | "file.size" | "file.read_dir" | "file.metadata" | "file.mkdir" | "file.rename" | "file.remove_dir" | "file.set_permissions" | "dir.remove_all" | "file.read_bytes" | "file.write_bytes" | "file.remove" | "file.create_atomic" | "file.write_all" | "file.commit" | "file.sync" | "file.put_new" | "test.crash" | "file.map" | "file.watch" => {
             // A rejected replay never publishes effects or consumes grants/faults.
             if !context.configuration.inputs.is_empty() {
                 let saved = library.simulation.clone();

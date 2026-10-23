@@ -104,6 +104,7 @@ fn inventory_set_equality_and_digest_control() {
         "dir.narrow",
         "dir.read_only",
         "file.open",
+        "file.open_append",
         "file.narrow",
         "file.create_atomic",
         "file.commit",

@@ -136,6 +136,7 @@ file.metadata	63f1342316e0e362b784b97ee72474b5621e810b4272bfcd433f6cf3889795ef	0
 file.mkdir	df44864facd8d59321ca19562d8439172dec63a9d1677669c87174edb58acf84	0:b:n;1:b:n->n
 file.narrow	f8da596c47d6d3b824348d3186df613dac4cbc444ca165075016eb55832ffc0d	0:b:n;1:t:n->n
 file.open	d9b3241c4d640603e6e1cab248c02cade89ccd8e7b0612a18220ade7f0a758be	0:b:n;1:b:n->n
+file.open_append	8d5c961fcabdb8204fb400faf9f37932acb0ea2b64ff8d52a71591d59c731512	0:b:n;1:b:n->n
 file.put_new	c6f1e82538dd3860ec8b6ef02d88eb2c4531b99d2122a2b3b5f0e1abbef4a896	0:b:n;1:b:n;2:t:n;3:b:n->n
 file.read	765a0614d7bae225e423dcb12c0f91e67f75d38e6c719ac1c0f21ea17ae6c729	0:b:n;1:m:n;2:m:n;3:b:n->n
 file.read_bytes	269357134673dec205505fd2c2689db2b115ee861360e1298fe3d34e0f1f7dfa	0:b:n;1:b:n->n

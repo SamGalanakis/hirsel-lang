@@ -424,7 +424,8 @@ wire_enum!(crate::io::Request {
     110 => CallReturn(v0),
     111 => Stopped,
     112 => Ready{ wait, points },
-    113 => Schedule{ count, choice }
+    113 => Schedule{ count, choice },
+    114 => OpenAppend{ directory, path }
 } retired { 59 => "retired Request::Walk recording; re-record with streaming file.walk" });
 
 wire_enum!(crate::io::ClockError {
@@ -943,6 +944,43 @@ mod tests {
         }
         assert!(decode::<crate::io::AdapterError>(&10u32.to_le_bytes()).is_err());
         assert!(decode::<crate::io::AdapterError>(&[6, 0, 0]).is_err());
+    }
+
+    #[test]
+    fn open_append_tag_is_additive_and_unknown_request_refuses() {
+        use crate::io::Request;
+        for (tag, request) in [
+            (
+                52u32,
+                Request::Open {
+                    directory: 7,
+                    path: "log".into(),
+                },
+            ),
+            (
+                53,
+                Request::Create {
+                    directory: 7,
+                    path: "log".into(),
+                },
+            ),
+            (
+                114,
+                Request::OpenAppend {
+                    directory: 7,
+                    path: "log".into(),
+                },
+            ),
+        ] {
+            let mut encoded = vec![];
+            request.encode(&mut encoded);
+            assert_eq!(&encoded[..4], &tag.to_le_bytes());
+            assert_eq!(decode::<Request>(&encoded).unwrap(), request);
+        }
+        assert_eq!(
+            decode::<Request>(&u32::MAX.to_le_bytes()).unwrap_err(),
+            "unknown binary tape variant"
+        );
     }
 
     #[test]

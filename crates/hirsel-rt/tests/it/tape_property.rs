@@ -188,6 +188,7 @@ pub(super) fn requests(n: u64) -> Vec<Request> {
         ReadOnlyDir { directory: n.wrapping_add(7) },
         Print { stdout: n.wrapping_add(27), bytes: bytes.clone() },
         Open { directory: n.wrapping_add(7), path: if n == 0 { String::new() } else { format!("{text}#path") } },
+        OpenAppend { directory: n.wrapping_add(7), path: text.clone() },
         Create { directory: n.wrapping_add(7), path: if n == 0 { String::new() } else { format!("{text}#path") } },
         FileRead { directory: n.wrapping_add(7), file: n.wrapping_add(9), max: n.wrapping_add(14) },
         FileSeek { directory: n.wrapping_add(7), file: n.wrapping_add(9), offset: n.wrapping_add(18) },

@@ -326,6 +326,9 @@ pub fn render_tape(tape: &[Event]) -> Result<String, String> {
             Request::Open { directory, path } => {
                 format!("open {directory} {}", hex(path.as_bytes()))
             }
+            Request::OpenAppend { directory, path } => {
+                format!("open_append {directory} {}", hex(path.as_bytes()))
+            }
             Request::Create { directory, path } => {
                 format!("create {directory} {}", hex(path.as_bytes()))
             }
@@ -651,6 +654,10 @@ pub fn parse_tape(text: &str) -> Result<Vec<Event>, String> {
                     bytes: bytes(b)?,
                 },
                 ["open", d, p] => Request::Open {
+                    directory: number(d)?,
+                    path: string(p)?,
+                },
+                ["open_append", d, p] => Request::OpenAppend {
                     directory: number(d)?,
                     path: string(p)?,
                 },

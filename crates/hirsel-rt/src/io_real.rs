@@ -1518,9 +1518,10 @@ impl<S: Streams> RealCore<S> {
             fault = error.map(|error| Fault { error, partial: 0 });
         }
         match (&request, &completion) {
-            (Request::Open { .. } | Request::Create { .. }, Completion::Handle(Ok(id)))
-                if !fake =>
-            {
+            (
+                Request::Open { .. } | Request::Create { .. } | Request::OpenAppend { .. },
+                Completion::Handle(Ok(id)),
+            ) if !fake => {
                 self.disk.files.insert(
                     *id,
                     Arc::new(self.disk.last_open.take().expect("opened descriptor")),
@@ -1837,8 +1838,16 @@ impl Storage for Disk {
         self.last_open = Some(fd);
         Ok(())
     }
-    fn create_file(&mut self, path: &str, _id: u64) -> Result<(), IoError> {
-        // Open and check before truncating: special files never receive writes.
+    fn create_file(&mut self, path: &str, id: u64) -> Result<(), IoError> {
+        self.open_append_file(path, id)?;
+        let fd = self.last_open.take().expect("opened file");
+        fd.set_len(0).map_err(error)?;
+        self.last_open = Some(fd);
+        Ok(())
+    }
+    fn open_append_file(&mut self, path: &str, _id: u64) -> Result<(), IoError> {
+        // Go os.OpenFile(O_APPEND|O_CREATE|O_WRONLY): retain confined pinned paths.
+        // Open and check before writing: special files never receive writes.
         let fd = self.open(
             path,
             libc::O_WRONLY | libc::O_CREAT | libc::O_APPEND | libc::O_NONBLOCK,
@@ -1847,7 +1856,6 @@ impl Storage for Disk {
         if !fd.metadata().map_err(error)?.is_file() {
             return Err(IoError::IsDirectory);
         }
-        fd.set_len(0).map_err(error)?;
         self.last_open = Some(fd);
         Ok(())
     }

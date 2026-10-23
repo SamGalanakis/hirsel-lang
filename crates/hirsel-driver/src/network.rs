@@ -1640,6 +1640,10 @@ impl HostLibrary {
                 directory: self.id(&a[0])?,
                 path: path(&a[1])?,
             },
+            "file.open_append" => R::OpenAppend {
+                directory: self.id(&a[0])?,
+                path: path(&a[1])?,
+            },
             "file.create" => R::Create {
                 directory: self.id(&a[0])?,
                 path: path(&a[1])?,
@@ -1772,7 +1776,7 @@ impl HostLibrary {
                 Ok(id) => ok(self.handle(
                     id,
                     match name {
-                        "file.open" | "file.create" => "File",
+                        "file.open" | "file.create" | "file.open_append" => "File",
                         "file.create_atomic" => "AtomicFile",
                         "file.map" => "Mapped",
                         "file.watch" => "Watcher",

@@ -379,7 +379,8 @@ pub(in crate::tasks::free) fn request_keys_with_domains(
             file(*directory)?;
             vec![(NAMESPACE, Mode::Shared)]
         }
-        R::Create { directory, .. }
+        R::OpenAppend { directory, .. }
+        | R::Create { directory, .. }
         | R::CreateAtomic { directory, .. }
         | R::Write { directory, .. }
         | R::PutNew { directory, .. }

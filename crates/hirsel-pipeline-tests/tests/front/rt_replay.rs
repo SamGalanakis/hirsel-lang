@@ -285,6 +285,7 @@ pub fn replay_interpreter_with_fixture(
                     ],
                 ),
                 request @ (Request::Open { .. }
+                | Request::OpenAppend { .. }
                 | Request::Create { .. }
                 | Request::FileRead { .. }
                 | Request::FileSeek { .. }
@@ -821,6 +822,10 @@ pub(crate) fn file_arguments(
     Some(match request {
         Request::Open { directory, path } => (
             "file.open",
+            vec![handle("Dir", *directory), reference::path(path)],
+        ),
+        Request::OpenAppend { directory, path } => (
+            "file.open_append",
             vec![handle("Dir", *directory), reference::path(path)],
         ),
         Request::Create { directory, path } => (

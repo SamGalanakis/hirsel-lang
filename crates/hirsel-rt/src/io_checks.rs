@@ -70,6 +70,7 @@ impl State {
     fn file_error(&self, request: &R) -> Result<Option<IoError>, AdapterError> {
         let directory = match request {
             R::Open { directory, .. }
+            | R::OpenAppend { directory, .. }
             | R::Create { directory, .. }
             | R::FileRead { directory, .. }
             | R::FileWrite { directory, .. }
@@ -146,7 +147,8 @@ impl State {
         if self.access(directory)? == Access::Read
             && matches!(
                 request,
-                R::Create { .. }
+                R::OpenAppend { .. }
+                    | R::Create { .. }
                     | R::Write { .. }
                     | R::FileWrite { .. }
                     | R::FileAppend { .. }
@@ -184,6 +186,7 @@ impl State {
                 hirsel_run_schema::confined_relative(&root, path).is_none_or(|p| p == root)
             }
             R::Open { path, .. }
+            | R::OpenAppend { path, .. }
             | R::Create { path, .. }
             | R::Read { path, .. }
             | R::Write { path, .. }
@@ -210,6 +213,7 @@ impl State {
 fn file_completion(request: &R, error: IoError) -> C {
     match request {
         R::Open { .. }
+        | R::OpenAppend { .. }
         | R::Create { .. }
         | R::CreateAtomic { .. }
         | R::Map { .. }
@@ -310,6 +314,7 @@ pub(crate) fn cancellation_result(request: &R, cause: u32) -> Option<C> {
         | R::TlsAccept { .. }
         | R::TlsClose { .. } => net_completion(request, NetError::Canceled(cause)),
         R::Open { .. }
+        | R::OpenAppend { .. }
         | R::Create { .. }
         | R::FileRead { .. }
         | R::FileWrite { .. }

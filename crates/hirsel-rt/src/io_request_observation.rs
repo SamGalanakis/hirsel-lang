@@ -147,6 +147,7 @@ pub(crate) fn project<A>(
         R::NarrowDir { directory, .. }
         | R::ReadOnlyDir { directory }
         | R::Open { directory, .. }
+        | R::OpenAppend { directory, .. }
         | R::Create { directory, .. }
         | R::ReadDir { directory, .. }
         | R::Metadata { directory, .. }

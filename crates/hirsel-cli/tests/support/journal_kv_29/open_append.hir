@@ -1,0 +1,79 @@
+pub type Error = Files(FileError) | Grant(GrantError) | Output(OutputError)
+
+fn append(d: Dir, p: Path, data: Bytes) -> Result[(), Error] {
+  let mut opened = file.open_append(d, p)?
+  file.seek(d, mut opened, 0)?
+  file.append(d, mut opened, data)?
+  file.sync(d, mut opened)?
+  Ok(())
+}
+
+pub fn main(rt: Io) -> Result[(), Error] {
+  let d = io.dir(rt, path.of("data"))?
+  append(d, path.of("log"), b"first")?
+  append(d, path.of("log"), b"second")?
+  let ro = dir.read_only(d)?
+  match file.open_append(ro, path.of("denied")) {
+    Error(NotGranted()) => {},
+    _ => return Error(Files(FileFault(99))),
+  }
+  let mut reader = file.open(d, path.of("log"))?
+  match file.append(d, mut reader, b"wrong mode") {
+    Error(FileFault(_)) => {},
+    _ => return Error(Files(FileFault(98))),
+  }
+  let raw = file.read_bytes(d, path.of("log"))?
+  out.write(io.stdout(rt)?, raw)?
+  Ok(())
+}
+
+@test
+fn crash_reopen(t: Test) -> Result[(), Error] {
+  let d = test.dir(t, [])
+  append(d, path.of("log"), b"durable")?
+  let mut stale = file.open_append(d, path.of("log"))?
+  file.append(d, mut stale, b"tail")?
+  test.crash(t, d, 0)
+  match file.append(d, mut stale, b"stale") {
+    Error(FileFault(1)) => {},
+    _ => test.fail(t),
+  }
+  let prefix = file.read_bytes(d, path.of("log"))?
+  test.check(t, bytes.len(prefix) >= 7 && bytes.len(prefix) <= 11)
+  test.check(t, bytes.slice(prefix, 0, 7) == b"durable")
+  append(d, path.of("log"), b"new")?
+  test.crash(t, d, 1)
+  let recovered = file.read_bytes(d, path.of("log"))?
+  test.check(t, bytes.len(recovered) == bytes.len(prefix) + 3)
+  test.check(t, bytes.slice(recovered, bytes.len(prefix), bytes.len(recovered)) == b"new")
+  Ok(())
+}
+
+@test
+fn create_still_truncates_and_path_refusals(t: Test) -> Result[(), Error] {
+  let d = test.dir(t, [(path.of("old"), b"original")])
+  {
+    let mut created = file.create(d, path.of("old"))?
+    file.append(d, mut created, b"replacement")?
+  }
+  test.check(t, file.read_bytes(d, path.of("old"))? == b"replacement")
+  match file.open_append(d, path.of(".")) {
+    Error(IsDirectory()) => {},
+    _ => test.fail(t),
+  }
+  match file.open_append(d, path.of("missing/child")) {
+    Error(NotFound()) => {},
+    _ => test.fail(t),
+  }
+  match file.open_append(d, path.of("../outside")) {
+    Error(FileFault(_)) => {},
+    _ => test.fail(t),
+  }
+  let ro = dir.read_only(d)?
+  match file.open_append(ro, path.of("new")) {
+    Error(NotGranted()) => {},
+    _ => test.fail(t),
+  }
+  test.check(t, results.is_error(file.size(d, path.of("new"))))
+  Ok(())
+}

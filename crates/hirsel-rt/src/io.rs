@@ -325,6 +325,10 @@ pub enum Request {
         directory: u64,
         path: String,
     },
+    OpenAppend {
+        directory: u64,
+        path: String,
+    },
     Create {
         directory: u64,
         path: String,
@@ -938,6 +942,7 @@ pub(crate) trait Storage {
     fn file_fits(&mut self, id: u64, path: &str) -> bool;
     fn open_file(&mut self, path: &str, id: u64) -> Result<(), IoError>;
     fn create_file(&mut self, path: &str, id: u64) -> Result<(), IoError>;
+    fn open_append_file(&mut self, path: &str, id: u64) -> Result<(), IoError>;
     fn read_file(&mut self, id: u64, offset: u64, max: u64) -> Result<Vec<u8>, IoError>;
     fn write_file(&mut self, id: u64, bytes: &[u8], all: bool) -> Result<u64, IoError>;
     fn transfer_file(&mut self, _from: u64, _to: Option<u64>) {}
@@ -1107,6 +1112,7 @@ impl State {
             | Request::RemoveDir { directory, .. }
             | Request::RemoveAll { directory, .. }
             | Request::SetPermissions { directory, .. }
+            | Request::OpenAppend { directory, .. }
             | Request::Create { directory, .. }
             | Request::FileWrite { directory, .. }
             | Request::FileAppend { directory, .. }
@@ -1228,6 +1234,7 @@ impl State {
             | Request::RemoveDir { directory, .. }
             | Request::RemoveAll { directory, .. }
             | Request::SetPermissions { directory, .. }
+            | Request::OpenAppend { directory, .. }
             | Request::Create { directory, .. }
             | Request::FileWrite { directory, .. }
             | Request::FileAppend { directory, .. }
@@ -2096,6 +2103,7 @@ impl State {
             _ => {
                 let (directory, path) = match request {
                     R::Open { directory, path }
+                    | R::OpenAppend { directory, path }
                     | R::Create { directory, path }
                     | R::Size { directory, path }
                     | R::ReadDir { directory, path }
@@ -2125,24 +2133,28 @@ impl State {
                 storage.activate(directory, &root);
                 let path = confined_relative(&root, path).ok_or(IoError::Fault(1));
                 match request {
-                    R::Open { .. } | R::Create { .. } => Ok(C::Handle(if let Some(e) = error {
-                        Err(e)
-                    } else {
-                        path.and_then(|path| {
-                            let writable = matches!(request, R::Create { .. });
-                            if writable {
-                                storage.create_file(&path, self.handles.next())?;
-                            } else {
-                                storage.open_file(&path, self.handles.next())?;
-                            }
-                            Ok(self.handles.insert(Grant::File {
-                                path,
-                                directory,
-                                position: 0,
-                                writable,
-                            }))
-                        })
-                    })),
+                    R::Open { .. } | R::Create { .. } | R::OpenAppend { .. } => {
+                        Ok(C::Handle(if let Some(e) = error {
+                            Err(e)
+                        } else {
+                            path.and_then(|path| {
+                                let writable = !matches!(request, R::Open { .. });
+                                if matches!(request, R::OpenAppend { .. }) {
+                                    storage.open_append_file(&path, self.handles.next())?;
+                                } else if writable {
+                                    storage.create_file(&path, self.handles.next())?;
+                                } else {
+                                    storage.open_file(&path, self.handles.next())?;
+                                }
+                                Ok(self.handles.insert(Grant::File {
+                                    path,
+                                    directory,
+                                    position: 0,
+                                    writable,
+                                }))
+                            })
+                        }))
+                    }
                     R::Watch { recursive, .. } => Ok(C::Handle(if let Some(e) = error {
                         Err(e)
                     } else {
@@ -3172,6 +3184,14 @@ pub unsafe extern "C" fn hirsel_rt_v2_dir_read_only(
 path_export!(
     hirsel_rt_v2_file_open,
     Open,
+    directory,
+    Handle,
+    HandleResult,
+    HandleResult::of
+);
+path_export!(
+    hirsel_rt_v2_file_open_append,
+    OpenAppend,
     directory,
     Handle,
     HandleResult,
@@ -5477,6 +5497,9 @@ mod filesystem_authority_tests {
             unreachable!()
         }
         fn open_file(&mut self, _: &str, _: u64) -> Result<(), IoError> {
+            unreachable!()
+        }
+        fn open_append_file(&mut self, _: &str, _: u64) -> Result<(), IoError> {
             unreachable!()
         }
         fn create_file(&mut self, _: &str, _: u64) -> Result<(), IoError> {

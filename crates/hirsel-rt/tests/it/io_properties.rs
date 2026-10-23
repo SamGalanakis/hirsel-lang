@@ -73,6 +73,7 @@ fn every_request_has_an_explicit_cancellation_classification() {
             Request::Print { .. } => true,
             Request::Open { .. } => true,
             Request::Create { .. } => true,
+            Request::OpenAppend { .. } => true,
             Request::FileRead { .. } => true,
             Request::FileSeek { .. } => true,
             Request::FileWrite { .. } => true,

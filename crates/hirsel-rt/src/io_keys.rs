@@ -344,7 +344,8 @@ impl Registry {
             | R::Read { .. }
             | R::Map { .. }
             | R::Watch { .. } => keys.push((NAMESPACE, S)),
-            R::Create { .. }
+            R::OpenAppend { .. }
+            | R::Create { .. }
             | R::Mkdir { .. }
             | R::Rename { .. }
             | R::RemoveDir { .. }
