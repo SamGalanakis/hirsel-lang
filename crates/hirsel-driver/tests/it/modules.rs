@@ -130,3 +130,4 @@ mod taskset_await_mode_27;
 mod unique_empty_builder_29;
 mod while_consume_mode_30;
 mod capture_take_reconcile_30;
+mod split_socket_loan_30;

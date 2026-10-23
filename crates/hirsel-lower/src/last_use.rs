@@ -300,22 +300,19 @@ impl Builder<'_, '_> {
                 // The last instruction's successor is the terminator, which
                 // reads against the content before it, as here.
                 let needed = self.needed(&content, &after[index]);
-                // A cursor can retain a loop's source permission on a later
-                // iteration's zero-item path. Construction has not visited
-                // that feedback when it schedules lexical cleanup. Normal
-                // cleanup must defer these ends to the actual last use;
-                // failure cleanup still ends all permissions. V separately
-                // checks the backing owner's scope and availability.
-                if !self.body.borrow_cursors.is_empty() {
-                    match &mut instruction.kind {
-                        InstructionKind::EndLoan { loan, .. } if needed.contains(&loan.0) => {
-                            continue;
-                        }
-                        InstructionKind::RunCleanup(cleanup) => {
-                            *cleanup = self.defer_live_view_loans(*cleanup, &needed);
-                        }
-                        _ => {}
+                // Lexical cleanup can precede a holder's destruction: a
+                // discarded call result ends evaluation loans before its
+                // scoped callback temporary is dropped. Keep those loans
+                // through every later use, including destruction and loop
+                // feedback. Failure cleanup still ends all permissions.
+                match &mut instruction.kind {
+                    InstructionKind::EndLoan { loan, .. } if needed.contains(&loan.0) => {
+                        continue;
                     }
+                    InstructionKind::RunCleanup(cleanup) => {
+                        *cleanup = self.defer_live_loans(*cleanup, &needed);
+                    }
+                    _ => {}
                 }
                 let ended: Vec<u32> = before.difference(&needed).copied().collect();
                 let span = instruction.span;
@@ -392,7 +389,7 @@ impl Builder<'_, '_> {
         loans.reverse(); // cleanup_for prepends ends in creation order.
         self.cleanup_for(&slots, &loans)
     }
-    fn defer_live_view_loans(&mut self, cleanup: CleanupId, needed: &BTreeSet<u32>) -> CleanupId {
+    fn defer_live_loans(&mut self, cleanup: CleanupId, needed: &BTreeSet<u32>) -> CleanupId {
         let actions: Vec<_> = self.body.cleanup_actions(cleanup).cloned().collect();
         if !actions.iter().any(|action| {
             matches!(action, CleanupAction::EndLoan { loan, .. } if needed.contains(&loan.0))

@@ -1,0 +1,249 @@
+// rule: CLO-1
+// expect: run
+// entry: exercise
+// A discarded call result must keep a scoped callback's borrowed captures live
+// through destruction of the environment that also owns a resource.
+fn deadline(c: MonotonicClock) -> Result[Deadline, ClockError] {
+  let now = clock.monotonic(c)?
+  let Some(at) = instant.checked_add(c, now, 2000000000u64) else {
+    return Error(OutOfRange())
+  }
+  Ok(Deadline(clock: c, at: at))
+}
+
+fn halves(
+  tasks: Tasks,
+  n: Net,
+  c: MonotonicClock,
+  take stream: Stream of n,
+  state: Mutex[u64]
+) {
+  let (r, w) = net.split(n, take stream)
+  let Ok(until) = deadline(c) else {
+    return
+  }
+  let _ = task.scope_until(
+    tasks,
+    until,
+    fn(s: Scope) {
+      let _ = mutex.with(
+        tasks,
+        state,
+        fn(mut v: unique u64) uses {} {
+          v += 1
+        }
+      )
+      let h = task.async(
+        s,
+        fn() {
+          read_half.close(n, take r)
+        }
+      )
+      let j = task.async(
+        s,
+        fn() {
+          write_half.close(n, take w)
+        }
+      )
+      task.cancel(s, h)
+      task.cancel(s, j)
+      task.await(s, take h)
+      task.await(s, take j)
+    }
+  )
+}
+
+fn nested(
+  tasks: Tasks,
+  n: Net,
+  c: MonotonicClock,
+  take stream: Stream of n,
+  state: Mutex[u64]
+) {
+  let (r, w) = net.split(n, take stream)
+  let Ok(until) = deadline(c) else {
+    return
+  }
+  let _ = task.scope_until(
+    tasks,
+    until,
+    fn(outer: Scope) {
+      let _ = task.scope_until(
+        tasks,
+        until,
+        fn(inner: Scope) {
+          let _ = mutex.with(
+            tasks,
+            state,
+            fn(mut v: unique u64) uses {} {
+              v += 1
+            }
+          )
+          let h = task.async(
+            inner,
+            fn() {
+              read_half.close(n, take r)
+            }
+          )
+          let j = task.async(
+            inner,
+            fn() {
+              write_half.close(n, take w)
+            }
+          )
+          task.await(inner, take h)
+          task.await(inner, take j)
+        }
+      )
+    }
+  )
+}
+
+fn reader(
+  tasks: Tasks,
+  n: Net,
+  c: MonotonicClock,
+  take stream: Stream of n,
+  state: Mutex[u64]
+) {
+  let (r, w) = net.split(n, take stream)
+  let Ok(until) = deadline(c) else {
+    return
+  }
+  let _ = task.scope_until(
+    tasks,
+    until,
+    fn(s: Scope) {
+      let _ = mutex.with(
+        tasks,
+        state,
+        fn(mut v: unique u64) uses {} {
+          v += 1
+        }
+      )
+      let h = task.async(
+        s,
+        fn() {
+          read_half.close(n, take r)
+        }
+      )
+      task.await(s, take h)
+    }
+  )
+}
+
+fn whole(tasks: Tasks, n: Net, take stream: Stream of n, state: Mutex[u64]) {
+  let _ = task.scope(
+    tasks,
+    fn(s: Scope) {
+      let _ = mutex.with(
+        tasks,
+        state,
+        fn(mut v: unique u64) uses {} {
+          v += 1
+        }
+      )
+      let h = task.async(
+        s,
+        fn() {
+          net.close(n, take stream)
+        }
+      )
+      task.await(s, take h)
+    }
+  )
+}
+
+fn endpoint(tasks: Tasks, state: Mutex[u64], take tx: Sender[u64]) {
+  let _ = task.scope(
+    tasks,
+    fn(s: Scope) {
+      let _ = mutex.with(
+        tasks,
+        state,
+        fn(mut v: unique u64) uses {} {
+          v += 1
+        }
+      )
+      let h = task.async(
+        s,
+        fn() {
+          let _ = take tx
+        }
+      )
+      task.await(s, take h)
+    }
+  )
+}
+
+fn minimal(tasks: Tasks, state: Mutex[u64], take tx: Sender[u64]) {
+  let _ = task.scope(
+    tasks,
+    fn(s: Scope) {
+      let _ = state
+      let _ = take tx
+    }
+  )
+}
+
+fn statement(tasks: Tasks, state: Mutex[u64], take tx: Sender[u64]) {
+  task.scope(
+    tasks,
+    fn(s: Scope) {
+      let _ = state
+      let _ = take tx
+    }
+  )
+}
+
+fn binding(tasks: Tasks, state: Mutex[u64], take tx: Sender[u64]) {
+  let value = task.scope(
+    tasks,
+    fn(s: Scope) {
+      let _ = state
+      let _ = take tx
+    }
+  )
+}
+
+pub fn exercise(t: Test) -> Result[(), NetError] {
+  let tasks = test.tasks(t)
+  let c = test.clock(t)
+  let state = mutex.create(tasks, 0u64)
+  let n = test.net(
+    t,
+    [
+      NetPeer(
+        address: "example.com",
+        port: 80u16,
+        resolves_to: [],
+        tls: Plain(),
+        connections: [Open([]), Open([]), Open([]), Open([])]
+      )
+    ],
+    []
+  )
+  halves(tasks, n, c, net.connect(n, "example.com", 80u16, Unbounded())?, state)
+  nested(tasks, n, c, net.connect(n, "example.com", 80u16, Unbounded())?, state)
+  reader(tasks, n, c, net.connect(n, "example.com", 80u16, Unbounded())?, state)
+  whole(tasks, n, net.connect(n, "example.com", 80u16, Unbounded())?, state)
+  let (tx, rx): (Sender[u64], Receiver[u64]) = channel.open(tasks)
+  endpoint(tasks, state, take tx)
+  let (tx2, rx2): (Sender[u64], Receiver[u64]) = channel.open(tasks)
+  minimal(tasks, state, take tx2)
+  let (tx3, rx3): (Sender[u64], Receiver[u64]) = channel.open(tasks)
+  statement(tasks, state, take tx3)
+  let (tx4, rx4): (Sender[u64], Receiver[u64]) = channel.open(tasks)
+  binding(tasks, state, take tx4)
+  test.check(
+    t,
+    mutex.with(
+      tasks,
+      state,
+      fn(mut v: unique u64) -> u64 uses {} {
+        v
+      }
+    ) == 5u64
+  )
+  Ok(())
+}
