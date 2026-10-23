@@ -1074,6 +1074,10 @@ unsafe fn serve(run: *mut RunShared, exec: &Exec) -> bool {
             }
         }
     };
+    if matches!(&post, Post::Saved(_)) {
+        exec.busy.store(true, Ordering::SeqCst);
+    }
+    free::cancel_search(execs, exec);
     match post {
         Post::Exit => {
             // A resize may have posted Exit before the running segment pinned

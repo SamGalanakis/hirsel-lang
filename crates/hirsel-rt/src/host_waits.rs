@@ -547,7 +547,8 @@ unsafe fn issue_here(
         return Ok((request.take_result(), false));
     }
     let binding = unsafe { Binding::get(ctx) };
-    if binding.adapter.wants_issuer() {
+    let batch = may_park(request.get()) && binding.adapter.batches_issue();
+    if !batch && binding.adapter.wants_issuer() {
         let task = crate::tasks::current_path(ctx);
         let binding = unsafe { Binding::get(ctx) };
         binding.adapter.issuer(&task);
@@ -592,16 +593,26 @@ unsafe fn issue_here(
     }
     let token = binding.waits.next;
     binding.waits.next += 1;
-    binding.adapter.enter(token);
+    if !batch {
+        binding.adapter.enter(token);
+    }
     let yielded = !matches!(
         request.get(),
         Request::ReadStdin { .. } | Request::WatchNext { .. }
     );
     let observing =
         crate::tasks::ordered::engine::on(ctx) && crate::tasks::ordered::events::observing(ctx);
+    // The current request owns the role until the optional Segment below.
+    let issuer = batch.then(|| unsafe { crate::tasks::issuer_path(ctx) });
     let result = {
         let _segment = observing.then(|| unsafe { crate::tasks::role::Segment::new(ctx) });
-        binding.adapter.call(request.take(true))
+        if let Some(issuer) = &issuer {
+            binding
+                .adapter
+                .issue_batch(request.take(true), token, issuer)
+        } else {
+            binding.adapter.call(request.take(true))
+        }
     };
     request.save_result(result);
     unsafe { observe_result(ctx, request.result()) };

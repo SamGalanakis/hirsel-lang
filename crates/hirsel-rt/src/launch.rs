@@ -91,6 +91,18 @@ fn tape_header(line: Option<&str>) -> bool {
 pub(crate) struct Shared<A>(pub(crate) Rc<RefCell<A>>);
 
 impl<A: Adapter> Adapter for Shared<A> {
+    fn batches_issue(&self) -> bool {
+        self.0.borrow().batches_issue()
+    }
+    fn issue_batch(
+        &mut self,
+        request: Request,
+        token: u64,
+        task: &[u32],
+    ) -> Result<Completion, AdapterError> {
+        self.0.borrow_mut().issue_batch(request, token, task)
+    }
+
     fn keys(&self, request: &Request) -> Option<crate::io_keys::KeySet> {
         self.0.borrow().keys(request)
     }

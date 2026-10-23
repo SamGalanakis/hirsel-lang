@@ -93,6 +93,12 @@ pub(super) struct Dispatch {
     ready: Arc<Ready<Saved>>,
     locals: Mutex<Vec<ReadyWorker<Saved>>>,
     count: Arc<Count>,
+    /// Reservations precede publication; claims consume one after removal.
+    queued: AtomicUsize,
+    /// At most one worker is being woken to search (Go wakep / Tokio Idle).
+    searcher: AtomicUsize,
+    #[cfg(test)]
+    after_search: Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
 
 fn owner_word(owner: Owner) -> usize {
@@ -142,6 +148,10 @@ pub(crate) unsafe fn enable(ctx: *mut TaskCtx) {
             .set(Dispatch {
                 ready,
                 locals: Mutex::new(locals),
+                queued: AtomicUsize::new(0),
+                searcher: AtomicUsize::new(0),
+                #[cfg(test)]
+                after_search: Mutex::new(None),
                 count: Arc::new(Count {
                     live: AtomicU32::new(0),
                     home: Arc::downgrade(&execs.home),
@@ -253,6 +263,7 @@ fn publish(execs: &Execs, saved: Saved, yielded: bool, idle: bool) {
                 execs.home.post(Post::Saved(saved), None);
                 return;
             }
+            dispatch.queued.fetch_add(1, Ordering::SeqCst);
             let me = own_exec();
             // SAFETY: an exec's local state belongs only to its OS thread.
             // Tokio's LIFO slot is private until the current poll returns.
@@ -260,19 +271,27 @@ fn publish(execs: &Execs, saved: Saved, yielded: bool, idle: bool) {
             // continuation may use the slot: it searches again immediately.
             // Home may retain a local after a width-one interval. Once
             // wider, it serves host work rather than searching that local.
-            let local =
-                if idle && !me.is_null() && matches!(unsafe { (*me).kind }, Kind::Compute(_)) {
-                    unsafe { (*me).ready.take() }
-                } else {
-                    None
-                };
+            let local = if idle
+                && !execs.migrate
+                && !me.is_null()
+                && matches!(unsafe { (*me).kind }, Kind::Compute(_))
+            {
+                unsafe { (*me).ready.take() }
+            } else {
+                None
+            };
+            let own_continuation = local.is_some();
             if let Some(mut local) = local {
                 local.push(&dispatch.ready, saved, yielded);
                 unsafe { (*me).ready.set(Some(local)) };
             } else {
                 dispatch.ready.inject([saved]);
             }
-            wake_ready(execs);
+            // This idle worker will claim its own sole continuation next.
+            // A non-idle publisher may enter a pure interval indefinitely.
+            if !own_continuation || dispatch.queued.load(Ordering::SeqCst) > 1 {
+                wake_ready(execs);
+            }
         }
         owner => {
             let to = match owner {
@@ -288,6 +307,13 @@ fn publish(execs: &Execs, saved: Saved, yielded: bool, idle: bool) {
 }
 
 fn wake_ready(execs: &Execs) {
+    let Some(dispatch) = execs.dispatch.get() else {
+        return;
+    };
+    if dispatch.queued.load(Ordering::SeqCst) == 0 || dispatch.searcher.load(Ordering::SeqCst) != 0
+    {
+        return;
+    }
     let compute = execs.compute.lock().unwrap();
     let width = compute.active.len();
     if width == 0 {
@@ -301,6 +327,22 @@ fn wake_ready(execs: &Execs) {
                 // Home also services host posts; its inbox predicate needs
                 // an actual post, rather than a compute-search epoch alone.
                 exec.post(Post::Wake, None);
+                return;
+            }
+            // Reserve before notifying, so repeated publications do not wake
+            // more workers before this searcher can observe the queue. Like
+            // Tokio idle.rs:51-127 and Go proc.go:3232-3272, the last searcher
+            // releases its reservation before a final work check.
+            if dispatch
+                .searcher
+                .compare_exchange(
+                    0,
+                    Arc::as_ptr(exec) as usize,
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                )
+                .is_err()
+            {
                 return;
             }
             // Publish before locking the sleep predicate: a search that missed
@@ -424,7 +466,37 @@ pub(super) fn next(execs: &Execs, exec: &Exec) -> Option<Saved> {
         .ready
         .take()
         .or_else(|| dispatch.locals.lock().unwrap().pop())?;
-    let saved = local.next(&dispatch.ready);
+    let mut saved = if dispatch.queued.load(Ordering::SeqCst) != 0 {
+        local.next(&dispatch.ready)
+    } else {
+        None
+    };
+    #[cfg(test)]
+    if saved.is_none() {
+        let hook = dispatch.after_search.lock().unwrap().take();
+        if let Some(hook) = hook {
+            hook();
+        }
+    }
+    if dispatch
+        .searcher
+        .compare_exchange(
+            exec as *const Exec as usize,
+            0,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        )
+        .is_ok()
+        && saved.is_none()
+        && dispatch.queued.load(Ordering::SeqCst) != 0
+    {
+        // Publication either precedes this last check, or observes no
+        // searcher and notifies a worker. Never park on the earlier miss.
+        saved = local.next(&dispatch.ready);
+    }
+    if saved.is_some() {
+        assert_ne!(dispatch.queued.fetch_sub(1, Ordering::SeqCst), 0);
+    }
     exec.ready.set(Some(local));
     if saved.is_some() {
         // An injection/steal can leave more work behind while the selected
@@ -436,6 +508,24 @@ pub(super) fn next(execs: &Execs, exec: &Exec) -> Option<Saved> {
         wake_ready(execs);
     }
     saved
+}
+
+/// An addressed post can supersede a requested queue search. Hand its
+/// reservation on before running that post, which might never yield.
+pub(super) fn cancel_search(execs: &Execs, exec: &Exec) {
+    if let Some(dispatch) = execs.dispatch.get()
+        && dispatch
+            .searcher
+            .compare_exchange(
+                exec as *const Exec as usize,
+                0,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            )
+            .is_ok()
+    {
+        wake_ready(execs);
+    }
 }
 
 pub(super) fn retire(execs: &Execs, exec: &Exec) {
@@ -526,6 +616,41 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_last_ready_claim_does_not_wake_an_empty_searcher() {
+        let mut run = crate::host::BodyRun::new(4, false);
+        // SAFETY: this root uses no suspension and starts no other task.
+        unsafe { run.use_physical_dispatch() };
+        let observed = Arc::new(AtomicBool::new(false));
+        let result = observed.clone();
+        let outcome = run.run(
+            |_| {},
+            move |ctx| {
+                let execs = execs(ctx);
+                let epochs = || {
+                    execs
+                        .compute
+                        .lock()
+                        .unwrap()
+                        .active
+                        .iter()
+                        .map(|exec| exec.ready_epoch.load(Ordering::Acquire))
+                        .sum::<u64>()
+                };
+                let before = epochs();
+                wake_ready(execs);
+                result.store(epochs() == before, Ordering::Release);
+                crate::STATUS_OK
+            },
+        );
+        assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
+        assert_eq!(outcome.pending, 0);
+        assert!(
+            observed.load(Ordering::Acquire),
+            "the running root left no ready segment"
+        );
+    }
+
+    #[test]
     fn a_running_wake_waits_for_idle_save_and_the_root_drains_every_dispatch() {
         let mut run = crate::host::BodyRun::new(8, false);
         // SAFETY: this body uses only the explicit suspend/wake seams below;
@@ -559,3 +684,6 @@ mod tests {
         assert_eq!(count.load(Relaxed), 1024);
     }
 }
+
+#[cfg(test)]
+mod dispatch_tests;

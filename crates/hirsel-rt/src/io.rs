@@ -2491,6 +2491,24 @@ pub trait Adapter {
 
     fn call(&mut self, request: Request) -> Result<Completion, AdapterError>;
 
+    /// A facade can combine request metadata with its effect in one home
+    /// bridge. The method order remains wants_issuer, issuer, enter, call.
+    fn batches_issue(&self) -> bool {
+        false
+    }
+    fn issue_batch(
+        &mut self,
+        request: Request,
+        token: u64,
+        task: &[u32],
+    ) -> Result<Completion, AdapterError> {
+        if self.wants_issuer() {
+            self.issuer(task);
+        }
+        self.enter(token);
+        self.call(request)
+    }
+
     /// A scheduler-owned scope deadline attempt. It uses the same host/tape
     /// operation as SleepUntil, with deadline evidence rather than an issuing
     /// task's host-request evidence. Ordinary clock.sleep_until still uses call.

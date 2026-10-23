@@ -4,6 +4,20 @@ use super::super::{Logical, Scheduler, Wait, handle, readiness, role};
 use crate::{context::RunShared, stop::Stopped};
 use std::sync::atomic::Ordering;
 
+/// Called under the scheduler role after a saved frame is published. An
+/// armed host wait alone does not give home work: it needs a saved retirement
+/// poll or logical quiescence, exactly as in service's reservation predicate.
+pub(in crate::tasks) fn needed_after_save(s: &Scheduler) -> bool {
+    let Logical::Ordered(driver) = &s.logical else {
+        return false;
+    };
+    !driver.host_poll
+        && (driver
+            .poll_after_save
+            .is_some_and(|id| driver.physically_saved(id))
+            || driver.quiet())
+}
+
 /// # Safety
 /// Admission loop only; no Hirsel frame runs on this home stack.
 pub(crate) unsafe fn service(run: *mut RunShared) -> bool {
@@ -226,5 +240,30 @@ mod tests {
             crate::context::hirsel_rt_v2_ctx_destroy(ctx);
         }
         assert_eq!(*calls.lock().unwrap(), vec!["wait"]);
+    }
+}
+
+#[cfg(test)]
+mod notification_tests {
+    use super::*;
+    #[test]
+    fn a_running_frontier_has_no_saved_home_continuation_to_service() {
+        let mut s = Scheduler::default();
+        s.logical = Logical::Ordered(super::super::driver::Driver::new(
+            0,
+            crate::ordered::Policy::admit(&Default::default(), None),
+            crate::budget::stretch::Settled {
+                level: 0,
+                limit: u64::MAX,
+                fuel: u64::MAX,
+            },
+            crate::ordered::objects::Registry::default(),
+        ));
+        let Logical::Ordered(driver) = &mut s.logical else {
+            unreachable!()
+        };
+        assert_eq!(driver.select(), vec![0]);
+        driver.claimed(0, 0);
+        assert!(!needed_after_save(&s));
     }
 }

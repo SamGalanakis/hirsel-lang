@@ -972,6 +972,25 @@ pub(crate) fn current_path(ctx: *mut TaskCtx) -> Vec<u32> {
     s.task(current).path.clone()
 }
 
+/// Copy immutable issuer metadata while the caller owns the role/run token.
+/// Unlike current_path this introduces no scheduler creation or stop observation.
+/// # Safety
+/// The caller owns its task and scheduler role; no borrow crosses the home loan.
+pub(crate) unsafe fn issuer_path(ctx: *mut TaskCtx) -> Vec<u32> {
+    unsafe {
+        (*(*(*ctx).run_ptr()).tasks.get())
+            .as_deref()
+            .map(|s| {
+                s.tasks[(*ctx).task_id as usize]
+                    .as_ref()
+                    .unwrap()
+                    .path
+                    .clone()
+            })
+            .unwrap_or_default()
+    }
+}
+
 /// Suspend the running task and run `next`. The running task must already be queued, parked
 /// or holding; it returns from here when something resumes it, on whichever worker that is.
 ///
@@ -1377,10 +1396,13 @@ pub(crate) unsafe fn after_save(run: *mut crate::context::RunShared, task: u32, 
         unsafe { crate::pool::free::schedule_saved(run, task, owner) };
     }
     if unsafe {
-        ((*run)
-            .ordered_mode
-            .load(std::sync::atomic::Ordering::Acquire)
-            || (*run).free_mode)
+        ((*run).free_mode
+            || ((*run)
+                .ordered_mode
+                .load(std::sync::atomic::Ordering::Acquire)
+                && (*(*run).tasks.get())
+                    .as_deref()
+                    .is_some_and(ordered::home::needed_after_save)))
             && ((*run).host_waits.load(std::sync::atomic::Ordering::Acquire) != 0
                 || free::host::concurrent::pending(run)
                 || ordered::host::concurrent::pending(run))

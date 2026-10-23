@@ -105,6 +105,10 @@ impl HomeAdapter {
     }
 
     fn with<T>(&self, f: impl FnOnce(&mut dyn Adapter) -> T) -> T {
+        self.bridge(|| unsafe { self.invoke(f) })
+    }
+
+    fn bridge<T>(&self, f: impl FnOnce() -> T) -> T {
         let (mut f, mut out) = (Some(f), None);
         // SAFETY: the home loop alone dereferences the adapter. Its claim/withdraw
         // gate closes before admission drops the adapter. The posting fiber waits
@@ -114,11 +118,11 @@ impl HomeAdapter {
             // On home, call_home executes directly. Off home, `ctx` is this
             // fiber's context and remains valid across the synchronous bridge.
             if ctx.is_null() {
-                out = f.take().map(|f| self.invoke(f));
+                out = f.take().map(|f| f());
                 Ok(())
             } else {
                 crate::pool::call_home_in(self.run, &mut || {
-                    out = f.take().map(|f| self.invoke(f));
+                    out = f.take().map(|f| f());
                 })
             }
         };
@@ -133,6 +137,35 @@ impl HomeAdapter {
 }
 
 impl Adapter for HomeAdapter {
+    fn batches_issue(&self) -> bool {
+        crate::pool::on_pool() || crate::pool::compute_index().is_some()
+    }
+
+    fn issue_batch(
+        &mut self,
+        request: Request,
+        token: u64,
+        issuer: &[u32],
+    ) -> Result<Completion, AdapterError> {
+        let task = self.observer();
+        let observed = task.map(|_| request.clone());
+        self.bridge(|| unsafe {
+            // Keep each existing invocation boundary, including deferred
+            // timer-point draining and hint publication, within one loan.
+            if self.invoke(|adapter| adapter.wants_issuer()) {
+                self.invoke(|adapter| adapter.issuer(issuer));
+            }
+            self.invoke(|adapter| adapter.enter(token));
+            self.invoke(|adapter| {
+                let result = adapter.call(request);
+                if let Some(task) = task {
+                    self.retain(task, adapter, observed.as_ref().unwrap(), &result, None);
+                }
+                result
+            })
+        })
+    }
+
     fn scope_timer(&mut self, request: Request) -> Result<Completion, AdapterError> {
         // Scope timers are observed by deadline_armed/expire, rather than by
         // the issuing task's ordinary host request/result transfer slot.
@@ -320,5 +353,90 @@ impl Adapter for HomeAdapter {
 
     fn wake_on(&mut self, _fd: std::os::fd::RawFd) -> bool {
         self.with(|adapter| adapter.wake_on(_fd))
+    }
+}
+
+#[cfg(test)]
+mod batch_tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+
+    struct Host {
+        home: std::thread::ThreadId,
+        events: Arc<Mutex<Vec<String>>>,
+    }
+    impl Host {
+        fn event(&self, event: String) {
+            assert_eq!(std::thread::current().id(), self.home);
+            self.events.lock().unwrap().push(event);
+        }
+    }
+    impl Adapter for Host {
+        fn preflight(&self, _: &Request) -> Result<Option<Completion>, AdapterError> {
+            Ok(None)
+        }
+        fn wants_issuer(&self) -> bool {
+            self.event("wants".into());
+            true
+        }
+        fn issuer(&mut self, path: &[u32]) {
+            self.event(format!("issuer:{path:?}"));
+        }
+        fn enter(&mut self, token: u64) {
+            self.event(format!("enter:{token}"));
+        }
+        fn finish(&mut self, token: u64) {
+            self.event(format!("finish:{token}"));
+        }
+        fn call(&mut self, request: Request) -> Result<Completion, AdapterError> {
+            assert!(matches!(
+                request,
+                Request::SleepUntil {
+                    clock: 99,
+                    deadline: 100
+                }
+            ));
+            self.event("call".into());
+            Ok(Completion::Wait(Ok(())))
+        }
+    }
+
+    #[test]
+    fn batched_metadata_and_effect_keep_the_original_order_on_home_through_shared() {
+        for width in [1, 2, 4] {
+            let events = Arc::new(Mutex::new(Vec::new()));
+            let host = crate::launch::Shared(std::rc::Rc::new(std::cell::RefCell::new(Host {
+                home: std::thread::current().id(),
+                events: events.clone(),
+            })));
+            let mut run = crate::host::BodyRun::new(width, false);
+            run.adapter = Some(Box::new(host));
+            unsafe { run.use_physical_dispatch() };
+            let outcome = run.run(
+                |_| {},
+                |ctx| unsafe {
+                    let binding = Binding::get(ctx);
+                    binding
+                        .adapter
+                        .issue_batch(
+                            Request::SleepUntil {
+                                clock: 99,
+                                deadline: 100,
+                            },
+                            7,
+                            &[1, 2],
+                        )
+                        .unwrap();
+                    binding.adapter.finish(7);
+                    crate::STATUS_OK
+                },
+            );
+            assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
+            assert_eq!(outcome.pending, 0);
+            assert_eq!(
+                *events.lock().unwrap(),
+                ["wants", "issuer:[1, 2]", "enter:7", "call", "finish:7"]
+            );
+        }
     }
 }
