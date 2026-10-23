@@ -493,7 +493,7 @@ pub(super) fn canonical_bytes<T: Serialize>(
 ) -> Option<Vec<u8>> {
     hirsel_product_codec::canonical_bytes(types, record, |anchor| anchor_owner(items, anchor))
 }
-fn anchor_owner(
+pub(crate) fn anchor_owner(
     items: &BTreeMap<DefPath, Vec<Arc<ItemSyntax>>>,
     anchor: Anchor,
 ) -> Option<(DefPath, u32)> {

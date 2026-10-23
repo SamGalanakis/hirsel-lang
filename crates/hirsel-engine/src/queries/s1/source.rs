@@ -287,6 +287,9 @@ impl TirSource for FrozenSource<'_> {
     fn inputs(&self) -> &TaskInputs {
         &self.inputs
     }
+    fn anchor_owner(&self, anchor: hirsel_span::Anchor) -> Option<(DefPath, u32)> {
+        super::super::persistent::anchor_owner(self.items, anchor)
+    }
     fn implementation(&self, path: &DefPath) -> Option<ContentHash> {
         self.items
             .get(path)
@@ -815,9 +818,21 @@ impl QueryEngine {
         let mut settled = vec![];
         loop {
             let remaining = &definitions[settled.len()..];
-            if let Some(results) =
+            if let Some(mut results) =
                 self.s1_roots_round(remaining, jobs, kind, &mut selections, prefix)
             {
+                // Only admitted ordered roots publish durable values.
+                if matches!(kind, RootKind::Constant) {
+                    for outcome in &mut results {
+                        if outcome.result.is_ok()
+                            && let Some(value) =
+                                self.constant_values.get(&outcome.definition).cloned()
+                            && let Err(error) = self.store_evaluation(&outcome.definition, &value)
+                        {
+                            outcome.result = Err(error);
+                        }
+                    }
+                }
                 if let Some(last) = results.last() {
                     self.last_phase = last.phase;
                     self.last_comptime_limit = last.limit.clone();
@@ -913,11 +928,22 @@ impl QueryEngine {
         let mut results: Vec<Option<RootOutcome>> = vec![None; definitions.len()];
         let mut tasks = vec![];
         for (index, definition) in definitions.iter().enumerate() {
-            if matches!(kind, RootKind::Constant)
-                && let Some(value) = self.constant_values.get(definition).cloned()
-                && self.evaluation_validation_holds(&value)
-                && self.execution_valid(definition, &value.executed)
-            {
+            let cached = if matches!(kind, RootKind::Constant) {
+                let memory = self
+                    .constant_values
+                    .get(definition)
+                    .cloned()
+                    .filter(|value| {
+                        self.evaluation_validation_holds(value)
+                            && self.execution_valid(definition, &value.executed)
+                    });
+                memory.or_else(|| self.load_evaluation(definition))
+            } else {
+                None
+            };
+            if let Some(value) = cached {
+                self.constant_values
+                    .insert(definition.clone(), value.clone());
                 results[index] = Some(RootOutcome {
                     definition: definition.clone(),
                     result: Ok(RootValue::Constant(value.value)),
