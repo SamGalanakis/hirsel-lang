@@ -629,13 +629,10 @@ impl crate::queries::s1::DependencySource for EngineDependencies<'_> {
             engine.read_implementation(path);
             let definition = engine.definition(path)?;
             if !engine.evaluation_acceptance.is_empty() && engine.verify == Verify::On {
-                let (report, _) = engine.validate_lowered_artifact(&definition);
-                if !report.violations.is_empty() {
-                    return Err(operational(format!(
-                        "executed TIR validation: {:?}",
-                        report.violations
-                    )));
-                }
+                let evidence = engine.ensure_lowered_verdict(&definition)?;
+                engine.record_evaluation_acceptance(
+                    evidence.and_then(|evidence| evidence.accepted_artifact()),
+                );
             }
             if engine.verify == Verify::On && !engine.evaluation_validation.is_empty() {
                 let digest = engine
@@ -904,7 +901,6 @@ impl QueryEngine {
         path: &DefPath,
         reference: Span,
     ) -> Result<EvaluatedConstant, QueryError> {
-
         if let Some(value) = self.registry_dictionary_value(path)? {
             return Ok(EvaluatedConstant {
                 value,
