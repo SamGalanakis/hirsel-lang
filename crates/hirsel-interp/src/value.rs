@@ -771,10 +771,7 @@ impl Value {
         }
         let mut work = vec![self];
         while let Some(value) = work.pop() {
-            if value
-                .arena_storage()
-                .is_some_and(|s| s.logical_block.is_some())
-            {
+            if value.enrolled_arena_block() {
                 continue;
             }
             match value {
@@ -797,10 +794,7 @@ impl Value {
     pub(crate) fn acquire_arena_roots(&self) {
         let mut pending = vec![(self, false)];
         while let Some((value, inside)) = pending.pop() {
-            let inside = inside
-                || value
-                    .arena_storage()
-                    .is_some_and(|s| s.logical_block.is_some());
+            let inside = inside || value.enrolled_arena_block();
             match value {
                 Value::Shared(root) if inside => root.acquire(),
                 Value::Shared(_) => (),
@@ -993,6 +987,24 @@ impl Value {
             return Err(crate::invalid("enrolling an arena block twice"));
         }
         Ok(())
+    }
+    /// Wrapper storage proxies (SortedMap's entry array) are not their own
+    /// ownership boundaries: inline comparator fields still own their credits.
+    pub(crate) fn enrolled_arena_block(&self) -> bool {
+        self.is_block()
+            && self
+                .arena_storage()
+                .is_some_and(|s| s.logical_block.is_some())
+    }
+    pub(crate) fn contains_arena_storage(&self) -> bool {
+        let mut pending = vec![self];
+        while let Some(value) = pending.pop() {
+            if value.is_block() && value.arena_storage().is_some() {
+                return true;
+            }
+            pending.extend(value.fields().into_iter().flatten().flatten());
+        }
+        false
     }
     /// A materialized view of this byte owner keeps its semantic placement.
     pub(crate) fn byte_view(&self, bytes: Vec<u8>) -> Self {
@@ -1387,6 +1399,62 @@ mod sealed_value_tests {
         snapshot.discard();
         assert_eq!(root.count(), 1);
         value.discard();
+        assert!(root.release().unwrap().is_some());
+    }
+    #[test]
+    fn sealed_regions_33_sorted_map_comparator_keeps_its_owned_credit() {
+        let types = hirsel_types::TypeInterner::new(None);
+        let unit = types.intern(hirsel_types::Type::with_kind(
+            hirsel_types::TypeKind::Tuple(vec![].into()),
+        ));
+        let shared = types.intern(hirsel_types::Type::with_kind(
+            hirsel_types::TypeKind::Builtin {
+                kind: BuiltinType::Shared,
+                arguments: vec![hirsel_types::GenericArgument::Type(unit)].into(),
+            },
+        ));
+        let root = SharedRoot::freeze(42, Value::Unit);
+        let comparator = Value::Closure {
+            invoked: None,
+            definition: DefId::intern(&DefPath::core("compare")),
+            body: BodyId(0),
+            captures: vec![Some(Value::Shared(root.clone()))],
+            environment: Box::new(Environment {
+                storage: None,
+                capture_types: vec![shared],
+                owned_captures: vec![true],
+                sizes: Default::default(),
+                type_arguments: Default::default(),
+            }),
+        };
+        let mut storage = ArenaStorage::fresh(19, 16);
+        storage.logical_block = Some(crate::inventory::LogicalBlockId(1));
+        let entries = Value::Sequence {
+            kind: BuiltinType::Array,
+            elements: vec![].into(),
+            arena: Some(storage),
+        };
+        assert!(entries.enrolled_arena_block());
+        let value = Value::Record {
+            definition: DefPath::core("SortedMap").into(),
+            fields: vec![Some(comparator), Some(entries)],
+        };
+        assert!(!value.enrolled_arena_block());
+        let copy = value.copied();
+        assert_eq!(
+            root.count(),
+            2,
+            "inline comparator ownership is independent of the entry array"
+        );
+        copy.acquire_arena_roots();
+        assert_eq!(
+            root.count(),
+            2,
+            "deep unique must not reacquire the comparator's heap credit"
+        );
+        copy.discard();
+        value.discard();
+        assert!(root.release().unwrap().is_none());
         assert!(root.release().unwrap().is_some());
     }
 }

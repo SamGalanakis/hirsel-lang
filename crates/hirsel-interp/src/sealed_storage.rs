@@ -163,6 +163,9 @@ impl Storage {
         path: &[usize],
         source: &crate::observation::Anchor,
     ) -> Result<(), Error> {
+        if !root.contains_arena_storage() {
+            return Ok(());
+        }
         let mut ancestors = vec![(vec![], root_ty)];
         let mut ty = root_ty;
         for (depth, index) in path.iter().enumerate() {
@@ -177,6 +180,55 @@ impl Storage {
         for (path, ty) in ancestors.into_iter().rev() {
             self.record(runtime, ty, at_mut(root, &path)?, source, true)?;
         }
+        Ok(())
+    }
+
+    /// A once invocation takes the environment's owned captures. Its retained
+    /// allocation remains, with empty payload slots and no outgoing credits.
+    pub fn environment_entry(&mut self, value: &Value) -> Result<(), Error> {
+        let Value::Closure {
+            invoked: Some(_),
+            environment,
+            ..
+        } = value
+        else {
+            return Ok(());
+        };
+        let Some(tag) = environment.storage.as_ref() else {
+            return Ok(());
+        };
+        let Some(block) = tag.logical_block else {
+            return Ok(());
+        };
+        let inventory = self
+            .arenas
+            .get_mut(&tag.arena)
+            .ok_or_else(|| invalid("invoking an ended arena environment"))?;
+        let old = inventory
+            .entries()
+            .get(&block)
+            .ok_or_else(|| invalid("unknown invoked environment"))?;
+        let mut retained = Retained {
+            ty: old.payload.ty,
+            value: old.payload.value.clone(),
+            source: old.payload.source.clone(),
+        };
+        let Value::Closure {
+            captures,
+            environment,
+            ..
+        } = &mut retained.value
+        else {
+            return Err(invalid("retained environment kind"));
+        };
+        for capture in captures.iter_mut().filter_map(Option::take) {
+            capture.discard();
+        }
+        environment.owned_captures.fill(false);
+        let old = inventory
+            .replace(block, retained, Charge::ZERO)
+            .map_err(|_| invalid("invoked environment custody"))?;
+        old.value.discard();
         Ok(())
     }
 
@@ -389,14 +441,18 @@ fn children(
             else {
                 return Err(invalid("retained SortedMap arguments"));
             };
-            let map = runtime
+            let pair = runtime
+                .types
+                .intern(hirsel_types::Type::with_kind(TypeKind::Tuple(
+                    vec![*key, *item].into(),
+                )));
+            let entries = runtime
                 .types
                 .intern(hirsel_types::Type::with_kind(TypeKind::Builtin {
-                    kind: BuiltinType::Map,
-                    arguments: vec![GenericArgument::Type(*key), GenericArgument::Type(*item)]
-                        .into(),
+                    kind: BuiltinType::Array,
+                    arguments: vec![GenericArgument::Type(pair)].into(),
                 }));
-            present(vec![*comparator, map])
+            present(vec![*comparator, entries])
         }
         TypeKind::Builtin {
             kind: BuiltinType::Map,
@@ -634,5 +690,188 @@ mod custody_tests {
         view.discard();
         assert!(root.release().unwrap().is_none());
         assert!(root.release().unwrap().is_some());
+    }
+}
+
+#[cfg(test)]
+mod sorted_tests {
+    use super::*;
+    use crate::value::{ArenaStorage, NamedFunction};
+    use hirsel_types::{Primitive, Type, TypeInterner};
+    #[test]
+    fn sealed_regions_33_sorted_map_records_the_entry_array_type() {
+        let runtime = RuntimeTypes::new(TypeInterner::new(None));
+        let number = runtime
+            .types
+            .intern(Type::with_kind(TypeKind::Primitive(Primitive::U64)));
+        let bytes = runtime
+            .types
+            .intern(Type::with_kind(TypeKind::Primitive(Primitive::Bytes)));
+        let result = runtime
+            .types
+            .intern(Type::with_kind(TypeKind::Primitive(Primitive::I32)));
+        let comparator = runtime.types.intern(Type::with_kind(TypeKind::Function(
+            hirsel_types::FunctionType {
+                state_promises: Default::default(),
+                generics: vec![].into(),
+                parameters: (0..2)
+                    .map(|_| hirsel_types::Parameter {
+                        name: None,
+                        label: None,
+                        passing: hirsel_syntax::PassingMode::Borrow,
+                        ty: number,
+                    })
+                    .collect(),
+                result,
+                error: None,
+                allocation: hirsel_types::Allocation::NoAlloc,
+                authority: hirsel_types::AuthoritySummary::inert(),
+                uses: hirsel_types::Uses::Only(hirsel_types::AuthoritySummary::inert()),
+                contracts: vec![].into(),
+                incomplete: false,
+                foreign: None,
+            },
+        )));
+        let ty = runtime.types.intern(Type::with_kind(TypeKind::Builtin {
+            kind: BuiltinType::SortedMap,
+            arguments: vec![
+                GenericArgument::Type(number),
+                GenericArgument::Type(bytes),
+                GenericArgument::Type(comparator),
+            ]
+            .into(),
+        }));
+        let entries = Value::Sequence {
+            kind: BuiltinType::Array,
+            elements: vec![Some(Value::Tuple(vec![
+                Some(Value::Integer(
+                    crate::Integer::new(Primitive::U64, 7).unwrap(),
+                )),
+                Some(Value::Bytes(b"abc".to_vec())),
+            ]))]
+            .into(),
+            arena: Some(ArenaStorage::fresh(1, 16)),
+        };
+        let mut root = Value::Record {
+            definition: hirsel_syntax::DefPath::core("SortedMap").into(),
+            fields: vec![
+                Some(Value::FunctionReference(Box::new(NamedFunction {
+                    definition: hirsel_syntax::DefPath::core("compare"),
+                    arguments: vec![],
+                    types: runtime.types.clone(),
+                    ty: comparator,
+                }))),
+                Some(entries),
+            ],
+        };
+        let source = crate::observation::Anchor {
+            definition: hirsel_syntax::DefId::intern(&hirsel_syntax::DefPath::core("arena.with")),
+            body: hirsel_tir::BodyId(0),
+            site: Default::default(),
+            cleanup: None,
+        };
+        let mut storage = Storage::default();
+        storage.open(1).unwrap();
+        storage
+            .record(&runtime, ty, &mut root, &source, false)
+            .unwrap();
+        let inventory = storage.take(1).unwrap();
+        assert_eq!(inventory.entries().len(), 1);
+        let entry = inventory.entries().values().next().unwrap();
+        assert!(matches!(
+            runtime.types.row(entry.payload.ty).kind,
+            TypeKind::Builtin {
+                kind: BuiltinType::Array,
+                ..
+            }
+        ));
+        assert_eq!(entry.outgoing_heap, Charge::Bytes(3));
+        assert_eq!(entry.payload.source, source);
+    }
+}
+
+#[cfg(test)]
+mod invocation_tests {
+    use super::*;
+    use crate::value::{ArenaStorage, Environment};
+    use hirsel_types::{
+        Allocation, AuthoritySummary, FunctionType, Multiplicity, Primitive, Type, TypeInterner,
+        Uses,
+    };
+    #[test]
+    fn sealed_regions_33_once_environment_transfers_retained_outgoing_edges() {
+        let runtime = RuntimeTypes::new(TypeInterner::new(None));
+        let bytes = runtime
+            .types
+            .intern(Type::with_kind(TypeKind::Primitive(Primitive::Bytes)));
+        let scalar = runtime
+            .types
+            .intern(Type::with_kind(TypeKind::Primitive(Primitive::U64)));
+        let mut row = Type::with_kind(TypeKind::Function(FunctionType {
+            state_promises: Default::default(),
+            generics: vec![].into(),
+            parameters: vec![].into(),
+            result: scalar,
+            error: None,
+            allocation: Allocation::NoAlloc,
+            authority: AuthoritySummary::inert(),
+            uses: Uses::Only(AuthoritySummary::inert()),
+            contracts: vec![].into(),
+            incomplete: false,
+            foreign: None,
+        }));
+        row.modes.multiplicity = Multiplicity::Once;
+        let callable = runtime.types.intern(row);
+        let mut value = Value::Closure {
+            invoked: Some(Default::default()),
+            definition: hirsel_syntax::DefPath::core("owned").into(),
+            body: hirsel_tir::BodyId(0),
+            captures: vec![Some(Value::Bytes(b"abc".to_vec()))],
+            environment: Box::new(Environment {
+                storage: Some(ArenaStorage::fresh(1, 0)),
+                capture_types: vec![bytes],
+                owned_captures: vec![true],
+                sizes: Default::default(),
+                type_arguments: Default::default(),
+            }),
+        };
+        let source = crate::observation::Anchor {
+            definition: hirsel_syntax::DefPath::core("arena.with").into(),
+            body: hirsel_tir::BodyId(0),
+            site: Default::default(),
+            cleanup: None,
+        };
+        let root = Value::Integer(crate::Integer::new(Primitive::U64, 7).unwrap());
+        let mut storage = Storage::default();
+        storage.open(1).unwrap();
+        storage
+            .record(&runtime, callable, &mut value, &source, false)
+            .unwrap();
+        assert_eq!(
+            storage.seal_charge(&runtime, 1, scalar, &root).unwrap(),
+            Charge::Bytes(3)
+        );
+        storage.environment_entry(&value).unwrap();
+        value.begin_call();
+        assert_eq!(
+            storage.seal_charge(&runtime, 1, scalar, &root).unwrap(),
+            Charge::ZERO
+        );
+        let retained = storage.take(1).unwrap();
+        assert_eq!(retained.entries().len(), 1);
+        assert!(
+            retained
+                .entries()
+                .values()
+                .next()
+                .unwrap()
+                .payload
+                .value
+                .fields()
+                .unwrap()
+                .iter()
+                .all(Option::is_none)
+        );
+        value.discard();
     }
 }

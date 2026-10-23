@@ -560,6 +560,7 @@ pub(crate) async fn execute_frames<O: crate::ownership_trace::Observer>(
                     &child,
                 );
             }
+            budgets.storage.environment_entry(&start.callee)?;
             start.callee.begin_call();
             start.callee.discard();
             runnable.push_back((start.id, vec![child], vec![]));
@@ -834,11 +835,24 @@ pub(crate) async fn execute_frames<O: crate::ownership_trace::Observer>(
                     mut arguments,
                     mut_arguments,
                     writebacks,
-                    updates,
+                    mut updates,
                     owned,
                     consumed,
                     continuation,
                 } => {
+                    // The primitive already accepted these COW payloads. Their
+                    // retained credits must exist while the callback runs or
+                    // when its own entry is rejected.
+                    for (index, value) in &mut updates {
+                        if let Some((_, place)) = state.mut_places.iter().find(|(i, _)| i == index)
+                        {
+                            let ty = closed_storage_type(frame, runtime, frame.place(*place)?.ty)?;
+                            budgets
+                                .storage
+                                .record(runtime, ty, value, &state.anchor, true)?;
+                        }
+                    }
+                    record_operation_storage(frame, &mut state, runtime, &mut budgets)?;
                     let Some(activation) = frame.depth.admit() else {
                         let failed = failure(sources, state.anchor.site, "LANG-10", "Depth")?;
                         record_failure(
@@ -943,6 +957,7 @@ pub(crate) async fn execute_frames<O: crate::ownership_trace::Observer>(
                     transfer_operation(&mut state, consumed)?;
                     update_operation(&mut state, updates)?;
                     state.owned = owned;
+                    budgets.storage.environment_entry(&callee)?;
                     callee.begin_call();
                     let mut invocation_types = Default::default();
                     let (definition, body, captures, sizes) = match callee {
@@ -1534,19 +1549,14 @@ pub(crate) async fn execute_frames<O: crate::ownership_trace::Observer>(
                 }
                 crate::resources::Work::RetireShadow(shadow) => drop(shadow),
                 crate::resources::Work::Release(mut value, anchor, caller) => {
-                    // The arena opener owns the physical scope guard. Ending
-                    // its grant is mechanical, not a simulated handle drop;
-                    // the token's checker-local identity is not observable.
-                    if matches!(&value, Value::Handle { kind, .. }
-                        if kind == crate::checked::ARENA_HANDLE)
-                    {
+                    if value.enrolled_arena_block() {
+                        value.discard();
                         continue;
                     }
-                    if value
-                        .arena_storage()
-                        .is_some_and(|s| s.logical_block.is_some())
+                    // The lexical scope guard owns arena storage. Consuming a
+                    // grant token is mechanical and exposes no checker-local ID.
+                    if matches!(&value,Value::Handle {kind,..} if kind==crate::checked::ARENA_HANDLE)
                     {
-                        value.discard();
                         continue;
                     }
                     if let Some(check) = &frame.check {
@@ -4766,6 +4776,7 @@ fn execute_terminator(
                 } => {
                     let (value, shadow) = frame.operand_shadow(operand)?;
                     let check = callee_lifetime(frame, operand.place, &value, shadow)?;
+                    budgets.storage.environment_entry(&value)?;
                     value.begin_call();
                     match value {
                         Value::FunctionReference(reference) => RuntimeCallee::Definition {
