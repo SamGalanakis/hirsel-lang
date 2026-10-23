@@ -449,11 +449,16 @@ pub(crate) unsafe fn issue(
         }
     }
     let close = matches!(request.get(), Request::Close { .. });
+    let read = (ordered && matches!(request.get(), Request::NetRead { .. }))
+        .then(|| request.get().clone());
     // SAFETY: caller contract.
     let issued = unsafe { issue_here(ctx, &mut request) };
     // SAFETY: as above.
     unsafe { count(ctx) };
-    if ordered && let Ok((result, _)) = &issued {
+    if ordered && let Ok((result, parked)) = &issued {
+        if !parked && let Some(read) = &read {
+            crate::tasks::ordered::host::bounded_read(ctx, read, result);
+        }
         crate::tasks::ordered::events::complete_host(ctx, close, result);
         if print && crate::tasks::ordered::events::observing(ctx) {
             let _ = crate::tasks::ordered::events::certify_host(ctx);
@@ -637,13 +642,69 @@ unsafe fn issue_here(
     // SAFETY: the context is live and nothing is borrowed across the park.
     unsafe { crate::tasks::park_host(&mut *ctx, token, yielded) }?;
     let binding = unsafe { Binding::get(ctx) };
-    let completion = binding
-        .waits
-        .parked
-        .remove(&token)
-        .and_then(|parked| parked.completion)
-        .unwrap_or_else(|| crate::fault("a host wait resumed without its completion"));
+    let completion = if crate::tasks::ordered::host::return_pending(ctx, token) {
+        binding
+            .waits
+            .parked
+            .get(&token)
+            .and_then(|row| row.completion.clone())
+    } else {
+        binding
+            .waits
+            .parked
+            .remove(&token)
+            .and_then(|row| row.completion)
+    }
+    .unwrap_or_else(|| crate::fault("a host wait resumed without its completion"));
     Ok((completion, true))
+}
+
+/// Inspect only an already-completed row, after the original poll and wake.
+/// This neither retries a request nor changes token/row/evidence ownership.
+/// # Safety
+/// The issuer has resumed its saved frame and exclusively owns this wait.
+pub(crate) unsafe fn completed_read(
+    ctx: *mut TaskCtx,
+    token: u64,
+) -> Option<crate::tasks::ordered::host::CompletedRead> {
+    if token & CONCURRENT != 0 {
+        return unsafe { (*ctx).run_ref().ordered_io.get().unwrap() }.completed_read(token);
+    }
+    // The facade's owned wait rows are role-protected; no adapter callback or
+    // home loan is needed to inspect a completed saved owner's immutable bytes.
+    let binding = unsafe { Binding::raw(ctx) };
+    let row = binding.waits.parked.get(&token).expect("saved host wait");
+    assert!(row.borrowed.is_none());
+    crate::tasks::ordered::host::CompletedRead::new(
+        token,
+        &row.request,
+        row.completion.as_ref().expect("completed wait"),
+    )
+}
+
+/// Remove the original wait only at its canonical return, with the role held
+/// and the poll finished. No provider callback or new stop observation occurs.
+/// # Safety
+/// The caller is the generation-qualified certificate's canonical head owner.
+pub(crate) unsafe fn retire_completed_read(ctx: *mut TaskCtx, token: u64, task: u64) {
+    assert_eq!(task as u32, unsafe { (*ctx).task_id });
+    if token & CONCURRENT != 0 {
+        unsafe { (*ctx).run_ref().ordered_io.get().unwrap() }.retire_read(
+            token,
+            task as u32,
+            (task >> 32) as u32,
+        );
+    } else {
+        let binding = unsafe { Binding::raw(ctx) };
+        let row = binding
+            .waits
+            .parked
+            .remove(&token)
+            .expect("certified read row");
+        assert_eq!(row.task, Some(unsafe { (*ctx).task_id }));
+        assert!(row.completion.is_some());
+        unsafe { count(ctx) };
+    }
 }
 
 /// The token the next parkable request is issued under.

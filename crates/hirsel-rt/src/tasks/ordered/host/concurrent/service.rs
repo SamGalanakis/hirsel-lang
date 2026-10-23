@@ -213,6 +213,28 @@ impl Service {
         Ok(waited)
     }
 
+    pub(crate) fn retire_read(&self, token: u64, task: u32, generation: u32) {
+        let row = self
+            .rows
+            .lock()
+            .unwrap()
+            .remove(&token)
+            .expect("certified read row");
+        assert_eq!(row.task, Some((task, generation)));
+        assert!(row.completion.is_some());
+        assert!(self.pending.fetch_sub(1, Ordering::Release) > 0);
+    }
+
+    pub(crate) fn completed_read(&self, token: u64) -> Option<super::super::CompletedRead> {
+        let rows = self.rows.lock().unwrap();
+        let row = rows.get(&token).expect("saved concurrent wait");
+        super::super::CompletedRead::new(
+            token,
+            &row.request,
+            row.completion.as_ref().expect("completed wait"),
+        )
+    }
+
     pub(crate) fn completed(&self, token: u64) -> crate::host_waits::CompletedHost {
         let rows = self.rows.lock().unwrap();
         let row = rows.get(&token).unwrap();
@@ -286,6 +308,7 @@ pub(super) unsafe fn request(
         super::super::super::events::request_keys(ctx, &keys);
         super::super::super::events::concurrent_phases(ctx);
     }
+    let read = matches!(request, Request::NetRead { .. }).then(|| request.clone());
     let cause = unsafe { crate::tasks::canceled(ctx) };
     let (result, discovered, _) = {
         let _segment = unsafe { role::Segment::new(ctx) };
@@ -335,18 +358,26 @@ pub(super) unsafe fn request(
         );
         io.pending.fetch_add(1, Ordering::Release);
         unsafe { super::super::park(ctx, wait, yielded) }?;
-        let result = io
-            .rows
-            .lock()
-            .unwrap()
-            .remove(&wait)
-            .unwrap()
-            .completion
-            .expect("completed saved wait");
-        io.pending.fetch_sub(1, Ordering::Release);
+        let result = if super::super::return_pending(ctx, wait) {
+            io.rows
+                .lock()
+                .unwrap()
+                .get(&wait)
+                .unwrap()
+                .completion
+                .clone()
+        } else {
+            let row = io.rows.lock().unwrap().remove(&wait).unwrap();
+            io.pending.fetch_sub(1, Ordering::Release);
+            row.completion
+        }
+        .expect("completed saved wait");
         super::super::super::events::complete_host(ctx, false, &result);
         Ok(result)
     } else {
+        if let Some(read) = &read {
+            super::super::bounded_read(ctx, read, &result);
+        }
         super::super::super::events::complete_host(ctx, false, &result);
         unsafe {
             (*ctx).pending_ordered_host.as_mut().unwrap().result = Some(result);

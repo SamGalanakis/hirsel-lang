@@ -5,6 +5,88 @@ use crate::ordered::Next;
 
 pub(crate) mod concurrent;
 
+/// A completed read owns its selected outcome, not a readiness prediction.
+/// Its original wait row remains the return-value owner until the issuer takes
+/// it. The generation-qualified driver key prevents reuse by another frame.
+/// Pure evaluation may follow; canonical return and all later operations wait.
+pub(crate) struct CompletedRead {
+    pub(super) token: u64,
+    pub(super) result: Result<crate::io::Completion, crate::io::AdapterError>,
+}
+
+impl CompletedRead {
+    pub(crate) fn new(
+        token: u64,
+        request: &crate::io::Request,
+        result: &Result<crate::io::Completion, crate::io::AdapterError>,
+    ) -> Option<Self> {
+        Self::eligible(request, result).then(|| Self {
+            token,
+            result: result.clone(),
+        })
+    }
+
+    fn eligible(
+        request: &crate::io::Request,
+        result: &Result<crate::io::Completion, crate::io::AdapterError>,
+    ) -> bool {
+        use crate::io::{Completion, Request};
+        let Request::NetRead { max, .. } = request else {
+            return false;
+        };
+        let Ok(Completion::NetBytes(value)) = result else {
+            return false;
+        };
+        !value.as_ref().is_ok_and(|bytes| bytes.len() as u64 > *max)
+    }
+}
+
+/// Called only after the serial head is ready, before settling the following
+/// pure stretch. A parked read has no extra continuation/poll on return.
+pub(super) fn retire_return(ctx: *mut TaskCtx) {
+    let task = engine::current(ctx);
+    let Some(token) = engine::driver(ctx).host_returns.get(&task).map(|r| r.token) else {
+        return;
+    };
+    assert!(engine::driver(ctx).head_ready(task));
+    // No stop-aware entry or bridge between removing the original row and
+    // publishing its canonical return. The certificate stays run-owned until
+    // that point; an abandoned Rust stack is never its only owner.
+    unsafe { crate::host_waits::retire_completed_read(ctx, token, task) };
+    let s = unsafe { (*(*(*ctx).run_ptr()).tasks.get()).as_deref_mut().unwrap() };
+    let Logical::Ordered(driver) = &mut s.logical else {
+        unreachable!()
+    };
+    let completed = driver.host_returns.remove(&task).unwrap();
+    assert!(driver.host_ops.remove(&task).is_some());
+    super::events::complete_host(ctx, false, &completed.result);
+}
+
+/// Only the resumed issuer can take a clone before its canonical return.
+/// This lookup must not introduce a stop between completed bytes and evidence.
+pub(crate) fn return_pending(ctx: *mut TaskCtx, token: u64) -> bool {
+    let s = unsafe { (*(*(*ctx).run_ptr()).tasks.get()).as_deref_mut().unwrap() };
+    let index = unsafe { (*ctx).task_id };
+    let task = super::super::handle(index, s.task(index).generation);
+    let Logical::Ordered(driver) = &s.logical else {
+        return false;
+    };
+    driver
+        .host_returns
+        .get(&task)
+        .is_some_and(|r| r.token == token)
+}
+
+/// The payload certificate selects the return; the validated alternate entry
+/// separately certifies physical checkpoint/barrier coverage for its tail.
+/// Legacy entries keep the strict gate, even when their next work looks pure.
+fn tail_enabled(ctx: *mut TaskCtx) -> bool {
+    let certified = unsafe { (*ctx).ahead.is_some() };
+    certified
+        && engine::driver(ctx).private_enabled
+        && crate::pool::wide(unsafe { (*ctx).run_ref() })
+}
+
 pub(crate) fn begin(ctx: *mut TaskCtx, close: bool) -> Stopped<()> {
     engine::at_head(ctx)?;
     let task = engine::current(ctx);
@@ -26,7 +108,30 @@ pub(crate) fn finish(ctx: *mut TaskCtx, next: Next) -> Stopped<()> {
     let task = engine::current(ctx);
     assert!(engine::driver(ctx).host_ops.remove(&task).is_some());
     let (_, progress) = engine::head_continuation(ctx, || ((), next))?;
-    engine::continue_at_head(ctx, progress)
+    if engine::driver(ctx).bounded_reads.remove(&task) && tail_enabled(ctx) {
+        engine::continue_after_read(ctx, progress)
+    } else {
+        engine::continue_at_head(ctx, progress)
+    }
+}
+
+/// Record the bounded read's owned outcome before its canonical finish yields.
+pub(crate) fn bounded_read(
+    ctx: *mut TaskCtx,
+    request: &crate::io::Request,
+    result: &Result<crate::io::Completion, crate::io::AdapterError>,
+) {
+    if CompletedRead::eligible(request, result) {
+        // The effect has completed: preserve evidence before any stop-aware
+        // scheduler entry can abandon its owner.
+        let s = unsafe { (*(*(*ctx).run_ptr()).tasks.get()).as_deref_mut().unwrap() };
+        let index = unsafe { (*ctx).task_id };
+        let task = super::super::handle(index, s.task(index).generation);
+        let Logical::Ordered(driver) = &mut s.logical else {
+            unreachable!()
+        };
+        driver.bounded_reads.insert(task);
+    }
 }
 
 pub(crate) fn yield_now(ctx: *mut TaskCtx) -> Stopped<()> {
@@ -78,8 +183,22 @@ pub(crate) unsafe fn park(ctx: *mut TaskCtx, token: u64, yielded: bool) -> Stopp
     })?;
     let me = engine::current(ctx) as u32;
     unsafe { crate::host_waits::park(ctx, token, me) };
-    engine::save_boundary(ctx, progress)?;
+    // This distinct boundary may release only an irrevocably completed owned
+    // read. Joins, cleanup and all uncertified waits keep save_boundary's gate.
+    engine::save_host_boundary(ctx, progress);
     let task = engine::current(ctx);
+    if tail_enabled(ctx) {
+        if let Some(completed) = unsafe { crate::host_waits::completed_read(ctx, token) } {
+            assert_eq!(completed.token, token);
+            let s = unsafe { (*(*(*ctx).run_ptr()).tasks.get()).as_deref_mut().unwrap() };
+            let Logical::Ordered(driver) = &mut s.logical else {
+                unreachable!()
+            };
+            assert!(driver.host_returns.insert(task, completed).is_none());
+            return Ok(());
+        }
+    }
+    engine::at_head(ctx)?;
     assert!(engine::driver(ctx).host_ops.remove(&task).is_some());
     Ok(())
 }
@@ -1246,3 +1365,6 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod completed_read_tests;

@@ -1,0 +1,46 @@
+fn work(seed: u64, count: u64) -> u64 uses {} {
+  let mut x = seed
+  for i in 0u64..count {
+    x = int.wrapping_add(int.wrapping_mul(x ^ (x >> 7), 0x9e3779b97f4a7c15u64), i)
+  }
+  x
+}
+fn gated(n: Net, socket: Path, seed: u64, count: u64) -> Result[u64, NetError] {
+  let mut stream = net.unix_connect(n, socket)?
+  net.write_all(n, mut stream, bytes.from_list([71u8]))?
+  let mut chunk: List[u8] = []
+  let received = net.read(n, mut stream, mut chunk, 1u64)?
+  failure.check(received == 1u64, Arithmetic())
+  failure.check(chunk[0] == 71u8, Arithmetic())
+  Ok(work(seed, count))
+}
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let output = io.stdout(rt)?
+  let n = io.net(rt)?
+  let Ok(socket) = arg.path(args, 1) else { return Ok(()) }
+  let scale = match arg.text(args, 0) {
+    Ok("2") => 2u64,
+    Ok("4") => 4u64,
+    _ => 1u64,
+  }
+  let sum = task.scope(tasks, fn(s: Scope) -> u64 {
+    let mut set: TaskSet[Result[u64, ()]] of s = task.set(s)
+    for seed in 1u64..5u64 {
+      let path = unique socket
+      task.add(s, mut set, task.async(s, fn() -> Result[u64, ()] {
+        match gated(n, take path, seed, scale * 64u64) {
+          Ok(value) => Ok(value),
+          Error(_) => Error(()),
+        }
+      }))
+    }
+    let mut sum = 0u64
+    if let Ok(rows) = task.all(s, take set) {
+      for x in rows { sum = sum ^ x }
+    }
+    sum
+  })
+  let _ = out.print(output, f"{sum}\n")
+  Ok(())
+}

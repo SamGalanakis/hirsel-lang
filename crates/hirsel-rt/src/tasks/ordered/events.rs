@@ -1823,13 +1823,20 @@ pub(crate) fn complete_host(
     // SAFETY: the host boundary has regained its scheduler role; no bridge
     // or stop-aware entry is permitted between the effect and its evidence.
     let s = unsafe { (*(*(*ctx).run_ptr()).tasks.get()).as_deref_mut().unwrap() };
+    let index = unsafe { (*ctx).task_id };
+    let task = super::super::handle(index, s.task(index).generation);
     let Logical::Ordered(driver) = &s.logical else {
         return;
     };
+    if let Some(completed) = driver.host_returns.get(&task) {
+        assert!(!close);
+        assert_eq!(&completed.result, result, "certified return cannot change");
+        return;
+    }
     if driver.events.is_none() {
         return;
     }
-    let task = unsafe { (*ctx).task_id };
+    let task = index;
     let path = s.task(task).path.clone();
     let Logical::Ordered(driver) = &mut s.logical else {
         unreachable!()
