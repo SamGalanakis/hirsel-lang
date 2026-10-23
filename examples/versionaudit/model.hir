@@ -1,0 +1,193 @@
+// Range evaluation consumes dtolnay/semver's shipped std port; no local evaluator.
+pub const INPUT_BYTES: u64 = 65536
+
+pub type InputError = InputBytes | RowLimit | Json(json.JsonError) | Fields(u64) | FieldBytes(
+  u64
+) | EmptyName(u64) | DuplicateName(u64) | Requirement(u64, semver.SemverError) | Version(
+  u64,
+  semver.SemverError
+) | Usage | DirectoryGrant | FileOpen | FileRead | Path
+
+pub type Row {
+  name: String,
+  requirement: String,
+  version: String,
+}
+
+pub type Report {
+  checked: u64,
+  mismatches: List[Row],
+}
+
+fn row(mut cursor: json.Reader, index: u64) -> Result[unique Row, InputError] uses {} {
+  json.begin_object(mut cursor)?
+  let mut first = true
+  let mut keys: Set[String] = set.empty()
+  let mut name: Option[String] = None()
+  let mut requirement: Option[String] = None()
+  let mut version: Option[String] = None()
+  while let Some(key) = json.object_next(mut cursor, mut first, mut keys)? {
+    if set.len(keys) > 3 || key != "name" && key != "requirement" && key != "version" {
+      return Error(Fields(index))
+    }
+    let value = json.read_owned_text(mut cursor)?
+    let limit = if key == "name" {
+      128u64
+    } else {
+      256u64
+    }
+    if string.byte_len(value) > limit {
+      return Error(FieldBytes(index))
+    }
+    if key == "name" {
+      name = Some(take value)
+    } else if key == "requirement" {
+      requirement = Some(take value)
+    } else {
+      version = Some(take value)
+    }
+  }
+  let Some(row_name) = take name else {
+    return Error(Fields(index))
+  }
+  let Some(row_requirement) = take requirement else {
+    return Error(Fields(index))
+  }
+  let Some(row_version) = take version else {
+    return Error(Fields(index))
+  }
+  if row_name == "" {
+    return Error(EmptyName(index))
+  }
+  Ok(
+    Row(
+      name: take row_name,
+      requirement: take row_requirement,
+      version: take row_version
+    )
+  )
+}
+
+@noalloc
+fn by_name(a: Row, b: Row) -> i32 uses {} {
+  string.compare(a.name, b.name)
+}
+
+pub fn audit(data: Bytes) -> Result[Report, InputError] uses {} {
+  if bytes.len(data) > INPUT_BYTES {
+    return Error(InputBytes())
+  }
+  let mut cursor = json.reader(data)
+  json.begin_array(mut cursor)?
+  let mut first = true
+  let mut names: Map[String, u64] = map.empty()
+  let mut mismatches: List[Row] = []
+  let mut checked = 0u64
+  while json.array_next(mut cursor, mut first)? {
+    if checked == 64 {
+      return Error(RowLimit())
+    }
+    checked += 1
+    let item = row(mut cursor, checked)?
+    if map.contains(names, item.name) {
+      return Error(DuplicateName(checked))
+    }
+    map.insert(mut names, unique item.name, checked)
+    let parsed_requirement = match semver.parse_cargo(item.requirement) {
+      Ok(parsed) => parsed,
+      Error(error) => return Error(Requirement(checked, error)),
+    }
+    let parsed_version = match semver.parse(item.version) {
+      Ok(parsed) => parsed,
+      Error(error) => return Error(Version(checked, error)),
+    }
+    if !semver.matches(parsed_requirement, parsed_version) {
+      list.push(mut mismatches, take item)
+    }
+  }
+  json.finish_reader(mut cursor)?
+  list.sort(mut mismatches, by_name)
+  Ok(Report(checked: checked, mismatches: take mismatches))
+}
+
+fn append(mut output: List[u8], value: String) -> () uses {} {
+  bytes.append(mut output, string.as_bytes(value))
+}
+
+pub fn encode(report: Report) -> Bytes uses {} {
+  let mut output: List[u8] = []
+  append(mut output, "{\"mismatches\":[")
+  let mut first = true
+  for item in report.mismatches {
+    if !first {
+      append(mut output, ",")
+    }
+    first = false
+    append(mut output, "{\"name\":")
+    json.write_text_into(item.name, mut output)
+    append(mut output, ",\"requirement\":")
+    json.write_text_into(item.requirement, mut output)
+    append(mut output, ",\"version\":")
+    json.write_text_into(item.version, mut output)
+    append(mut output, "}")
+  }
+  let count = list.len(report.mismatches)
+  let class = if count == 0 {
+    "ok"
+  } else {
+    "mismatch"
+  }
+  append(
+    mut output,
+    f"],\"summary\":{{\"class\":\"{class}\",\"checked\":{report.checked},\"mismatched\":{count}}}}}\n"
+  )
+  bytes.from_list(take output)
+}
+
+fn semver_detail(error: semver.SemverError) -> (String, u64) uses {} {
+  match error {
+    Empty() => ("Empty", 0),
+    Syntax(at) => ("Syntax", at),
+    LeadingZero(at) => ("LeadingZero", at),
+    Overflow(at) => ("Overflow", at),
+  }
+}
+
+pub fn encode_error(error: InputError) -> Bytes uses {} {
+  let (kind, index, detail, offset): (String, u64, String, u64) = match error {
+    InputBytes() => ("input_bytes", 0, "", 0),
+    RowLimit() => ("row_limit", 65, "", 0),
+    Json(cause) => {
+      let (description, at): (String, u64) = match cause {
+        Syntax(position) => ("Syntax", position),
+        DuplicateKey(position) => ("DuplicateKey", position),
+        Nesting(position) => ("Nesting", position),
+        InvalidNumber() => ("InvalidNumber", 0),
+      }
+      ("json", 0, description, at)
+    },
+    Fields(n) => ("fields", n, "", 0),
+    FieldBytes(n) => ("field_bytes", n, "", 0),
+    EmptyName(n) => ("empty_name", n, "", 0),
+    DuplicateName(n) => ("duplicate_name", n, "", 0),
+    Requirement(n, cause) => {
+      let (description, at) = semver_detail(cause)
+      ("requirement", n, description, at)
+    },
+    Version(n, cause) => {
+      let (description, at) = semver_detail(cause)
+      ("version", n, description, at)
+    },
+    Usage() => ("usage", 0, "", 0),
+    DirectoryGrant() => ("directory_grant", 0, "", 0),
+    FileOpen() => ("file_open", 0, "", 0),
+    FileRead() => ("file_read", 0, "", 0),
+    Path() => ("path", 0, "", 0),
+  }
+  let mut output: List[u8] = []
+  append(
+    mut output,
+    f"{{\"class\":\"invalid_input\",\"error\":\"{kind}\",\"row\":{index},\"detail\":\"{detail}\",\"offset\":{offset}}}\n"
+  )
+  bytes.from_list(take output)
+}

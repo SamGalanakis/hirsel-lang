@@ -1,0 +1,82 @@
+const HELP: String = "Usage: versionaudit FILE.json\nAudit up to 64 {name,requirement,version} rows using Cargo requirements.\nExit: 0 match/help, 1 mismatch, 2 invalid input or I/O.\n"
+
+fn read_local(directory: Dir, name: String) -> Result[Bytes, model.InputError] {
+  if name == "" || string.byte_len(name) > 128 || name == "." || name == ".." {
+    return Error(Path())
+  }
+  for byte in string.as_bytes(name) {
+    if byte == b'/' || byte == b'\\' || byte == b':' || byte == 0 {
+      return Error(Path())
+    }
+  }
+  let mut Ok(handle) = file.open(directory, path.of(name)) else {
+    return Error(FileOpen())
+  }
+  let mut reader = bufio.new(4096)
+  let mut data: List[u8] = []
+  while true {
+    let remaining = model.INPUT_BYTES - list.len(data) + 1
+    let count = if remaining < 4096 {
+      remaining
+    } else {
+      4096
+    }
+    let Ok(n) = bufio.file_read_more(directory, mut handle, mut reader, count) else {
+      return Error(FileRead())
+    }
+    if n > model.INPUT_BYTES - list.len(data) {
+      return Error(InputBytes())
+    }
+    if n == 0 {
+      break
+    }
+    bytes.append(mut data, bufio.peek(reader, n))
+    bufio.consume(mut reader, n)
+  }
+  Ok(bytes.from_list(take data))
+}
+
+fn run(rt: Io, args: Args) -> Result[model.Report, model.InputError] {
+  if arg.len(args) != 1 {
+    return Error(Usage())
+  }
+  let Ok(name) = arg.text(args, 0) else {
+    return Error(Usage())
+  }
+  let Ok(directory) = io.dir(rt, path.of("input")) else {
+    return Error(DirectoryGrant())
+  }
+  model.audit(read_local(directory, name)?)
+}
+
+pub fn main(rt: Io, args: Args) -> std@1/process.ExitCode {
+  let Ok(output) = io.stdout(rt) else {
+    return std@1/process.exit_code(2u8)
+  }
+  if arg.len(args) == 1 {
+    if let Ok(argument) = arg.text(args, 0) {
+      if argument == "--help" {
+        let Ok(()) = out.write(output, string.as_bytes(HELP)) else {
+          return std@1/process.exit_code(2u8)
+        }
+        return std@1/process.SUCCESS
+      }
+    }
+  }
+  match run(rt, args) {
+    Ok(report) => {
+      let Ok(()) = out.write(output, model.encode(report)) else {
+        return std@1/process.exit_code(2u8)
+      }
+      if list.len(report.mismatches) == 0 {
+        std@1/process.SUCCESS
+      } else {
+        std@1/process.FAILURE
+      }
+    },
+    Error(error) => {
+      let _ = out.write(output, model.encode_error(error))
+      std@1/process.exit_code(2u8)
+    },
+  }
+}

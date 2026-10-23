@@ -1,0 +1,17 @@
+[
+  {
+    "name": "serde",
+    "requirement": "^1.0.0",
+    "version": "1.0.228"
+  },
+  {
+    "name": "smallvec",
+    "requirement": "^0.6.2",
+    "version": "0.6.14"
+  },
+  {
+    "name": "build-tool",
+    "requirement": "=1.0.0+vendor",
+    "version": "1.0.0+linux"
+  }
+]

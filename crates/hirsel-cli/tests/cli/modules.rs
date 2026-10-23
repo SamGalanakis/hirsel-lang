@@ -51,3 +51,4 @@ mod error_mapper_diagnostics_18;
 mod ordered_qualification;
 mod localrpc_23;
 mod argvplan_23;
+mod versionaudit_23;
