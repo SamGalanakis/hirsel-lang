@@ -85,7 +85,8 @@ impl Session {
         let (_, namespace_coupled) = binding(&tape.binding)?;
         // Validate terminal bytes before any task or user callback can run.
         if let Some(end) = &tape.end {
-            terminal(&end.outcome)?;
+            let terminal = terminal(&end.outcome)?;
+            validate_root_outcome(&tape, &terminal)?;
             validate_receipt(&tape, &end.outcome)?;
         }
         let driver = replay::Replay::new(bytes).map_err(|e| e.to_string())?;
@@ -305,6 +306,38 @@ pub(crate) unsafe fn root_end(ctx: *mut crate::TaskCtx, status: u8, words: &[u12
     outcome.encode(&mut bytes);
     drop(outcome);
     unsafe { crate::stop::check(ctx, record::end_observed(ctx, bytes)) };
+}
+
+/// A normally completed root writes its canonical public outcome at Done.
+/// Reconcile that independently recorded evidence before any replay can emit
+/// effects. Stops and internal failures can cut before root completion and
+/// therefore have no such equality requirement.
+fn validate_root_outcome(
+    tape: &hirsel_free::tape::Tape,
+    terminal: &Terminal,
+) -> Result<(), String> {
+    use hirsel_free::{phase::Phase, record::Record};
+    let Terminal::Outcome(outcome @ (RunOutcome::Returned(_) | RunOutcome::Failed { .. })) =
+        terminal
+    else {
+        return Ok(());
+    };
+    let differs = || "Free terminal outcome differs from root cut".to_string();
+    let path = Vec::new();
+    let progress = tape.cut.get(&path).ok_or_else(differs)?;
+    if progress.op == 0 || progress.phase != Phase::Done {
+        return Err(differs());
+    }
+    let records = hirsel_free::record::decode(tape.logs.get(&path).ok_or_else(differs)?)?;
+    let mut observations = records.iter().filter_map(|record| match record {
+        Record::Observation { op, bytes } if *op == progress.op => Some(bytes),
+        _ => None,
+    });
+    let bytes = observations.next().ok_or_else(differs)?;
+    if observations.next().is_some() || decode::<RunOutcome>(bytes)? != *outcome {
+        return Err(differs());
+    }
+    Ok(())
 }
 
 type Receipt = (Vec<u64>, Vec<u64>);

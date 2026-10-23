@@ -395,3 +395,80 @@ pub(super) fn failure_table() -> crate::isolate::FailureTable {
     bytes.extend_from_slice(rule.as_bytes());
     crate::isolate::FailureTable::new(Box::leak(bytes.into_boxed_slice())).unwrap()
 }
+
+#[test]
+fn normal_terminal_matches_the_completed_root_but_stops_need_no_root_end() {
+    use hirsel_free::{
+        phase::{Phase, Progress},
+        record::{Encoder, Record},
+        tape::Tape,
+    };
+    use hirsel_run_schema::{Failure, Site};
+    fn tape(outcome: &RunOutcome) -> Tape {
+        let mut bytes = Vec::new();
+        outcome.encode(&mut bytes);
+        let mut log = Vec::new();
+        Encoder::default().encode(&Record::Observation { op: 3, bytes }, &mut log);
+        Tape {
+            cut: [(vec![], Progress::new(3, Phase::Done))].into(),
+            logs: [(vec![], log)].into(),
+            ..Default::default()
+        }
+    }
+    let failure = |line| Failure {
+        rule: "SEM-1".into(),
+        site: Site {
+            definition: "fixture@1/main".into(),
+            file: "fixture.hir".into(),
+            line,
+            column: 1,
+        },
+        operation: None,
+    };
+    let outcomes = [
+        RunOutcome::Returned(Returned::Ok),
+        RunOutcome::Returned(Returned::Error),
+        RunOutcome::Returned(Returned::ExitCode(37)),
+        RunOutcome::Failed {
+            primary: failure(1),
+            causes: vec![failure(2), failure(3)],
+        },
+    ];
+    for actual in &outcomes {
+        let recorded = tape(actual);
+        for expected in &outcomes {
+            assert_eq!(
+                validate_root_outcome(&recorded, &Terminal::Outcome(expected.clone())).is_ok(),
+                actual == expected
+            );
+        }
+        let mut unfinished = recorded.clone();
+        unfinished.cut.get_mut(&vec![]).unwrap().phase = Phase::Cleanup(1);
+        assert!(validate_root_outcome(&unfinished, &Terminal::Outcome(actual.clone())).is_err());
+        let mut missing = recorded.clone();
+        missing.logs.clear();
+        assert!(validate_root_outcome(&missing, &Terminal::Outcome(actual.clone())).is_err());
+        let mut duplicate = recorded.clone();
+        let log = duplicate.logs.get_mut(&vec![]).unwrap();
+        log.clear();
+        let mut bytes = Vec::new();
+        actual.encode(&mut bytes);
+        let observation = Record::Observation { op: 3, bytes };
+        // The second record has delta zero; copying the first encoding would
+        // instead advance the ordinal to six and would not duplicate root Done.
+        let mut encoder = Encoder::default();
+        encoder.encode(&observation, log);
+        encoder.encode(&observation, log);
+        assert!(validate_root_outcome(&duplicate, &Terminal::Outcome(actual.clone())).is_err());
+    }
+    let mut reversed = outcomes[3].clone();
+    if let RunOutcome::Failed { causes, .. } = &mut reversed {
+        causes.reverse();
+    }
+    assert!(validate_root_outcome(&tape(&outcomes[3]), &Terminal::Outcome(reversed)).is_err());
+    // External stops and internal FAIL-3 cuts can precede root's final phase.
+    assert!(validate_root_outcome(&Tape::default(), &Terminal::Stop(Stop::Requested)).is_ok());
+    assert!(
+        validate_root_outcome(&Tape::default(), &Terminal::Failed(outcomes[3].clone())).is_ok()
+    );
+}

@@ -1204,16 +1204,10 @@ fn f1_terminal_restoration_rejects_forged_root_and_unconsumed_records() {
             let diagnostic = String::from_utf8_lossy(&replay.stderr);
             assert!(
                 if mutation == "root" {
-                    if engine.is_empty() {
-                        diagnostic.contains("Free root outcome differs from recording")
-                    } else {
-                        // Native root observations use the same exact byte
-                        // comparison as requests, at this root's final op.
-                        diagnostic.contains(&format!(
-                            "host request differs at [] operation {}",
-                            parsed.cut[&Vec::new()].op
-                        ))
-                    }
+                    // A contradictory terminal/root pair is independently
+                    // invalid before semantic replay begins.
+                    replay.stdout.is_empty()
+                        && diagnostic.contains("Free terminal outcome differs from root cut")
                 } else {
                     diagnostic.contains("unconsumed") || diagnostic.contains("cut")
                 },
@@ -3116,4 +3110,249 @@ fn f1_explicit_exit_codes_replay_exact_terminal_and_projection() {
             }
         }
     }
+}
+
+#[test]
+fn f1_failed_root_preserves_ordered_cleanup_causes_and_projection() {
+    if !hirsel_rt::free_driver::admission_enabled() {
+        return;
+    }
+    let scratch = Scratch::new("f1-failed-root-causes");
+    let program = scratch.path("main.hir");
+    // FAIL-3's resource-unwind shape: failed drops remain causes while the
+    // remaining resources still finalize in reverse declaration order.
+    let text = r#"resource type First { stdout: Stdout }
+drop(x) {
+  let _ = out.print(x.stdout, "first\n")
+  failure.check(false, Bounds())
+}
+resource type Second { stdout: Stdout }
+drop(x) {
+  let _ = out.print(x.stdout, "second\n")
+  failure.check(false, TextInvariant())
+}
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let stdout = io.stdout(rt)?
+  let first = First(stdout: stdout)
+  let second = Second(stdout: stdout)
+  failure.check(false, Arithmetic())
+  Ok(())
+}
+"#;
+    std::fs::write(&program, text).unwrap();
+    let expected_lines: Vec<_> = ["Arithmetic()", "TextInvariant()", "Bounds()"]
+        .iter()
+        .map(|check| text.lines().position(|line| line.contains(check)).unwrap() + 1)
+        .collect();
+    let report = scratch.path("projection");
+    for level in ["record", "durable"] {
+        let tape = scratch.path(level);
+        let grants = format!(
+            r#"{{"io":{{"stdout":"stdout.bytes@1","tasks":"tasks.free@1","dirs":[]}},"args":[],"recording":"{level}"}}"#
+        );
+        let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+        command
+            .args(["run", "--native", "--json"])
+            .arg(&program)
+            .args(["--grants", &grants, "--cores", "1", "--record"])
+            .arg(&tape)
+            .env(hirsel_rt::free_replay::Report::VAR, &report);
+        f1_permits(&mut command, 1);
+        let live = bounded_output(
+            &mut command,
+            &program,
+            &format!("failure causes {level} live"),
+        );
+        assert_eq!(
+            live.status.code(),
+            Some(hirsel_run_schema::exit::FAILED),
+            "{live:?}"
+        );
+        assert_eq!(live.stdout, b"second\nfirst\n", "{live:?}");
+        let failures: Vec<serde_json::Value> = std::str::from_utf8(&live.stderr)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(failures.len(), 3, "{failures:?}");
+        for (failure, &line) in failures.iter().zip(&expected_lines) {
+            assert_eq!(failure["schema_version"], 1);
+            assert_eq!(failure["runtime_failure"]["site"]["line"], line);
+        }
+        let rules: std::collections::BTreeSet<_> = failures
+            .iter()
+            .map(|failure| failure["runtime_failure"]["rule"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            rules.len(),
+            3,
+            "distinct primary and ordered cleanup causes: {failures:?}"
+        );
+        let bytes = std::fs::read(&tape).unwrap();
+        let parsed = hirsel_free::tape::parse(&bytes).unwrap();
+        assert!(
+            parsed
+                .end
+                .as_ref()
+                .unwrap()
+                .outcome
+                .starts_with("native-outcome-v2/")
+        );
+        let projection = std::fs::read_to_string(&report).unwrap();
+        for engine in ENGINES {
+            let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+            command
+                .args(["run", "--json"])
+                .args(engine)
+                .arg(&program)
+                .arg("--replay")
+                .arg(&tape)
+                .args(["--cores", "1"])
+                .env(hirsel_rt::free_replay::Report::VAR, &report);
+            f1_permits(&mut command, 1);
+            let replay = bounded_output(
+                &mut command,
+                &program,
+                &format!("failure causes {level} replay {engine:?}"),
+            );
+            assert_eq!(replay.status.code(), live.status.code(), "{replay:?}");
+            assert_eq!(replay.stdout, live.stdout, "{replay:?}");
+            assert_eq!(replay.stderr, live.stderr, "{replay:?}");
+            assert_eq!(std::fs::read_to_string(&report).unwrap(), projection);
+        }
+    }
+}
+
+#[test]
+fn f1_terminal_metadata_rejects_contradictory_outcomes_and_receipts_before_effects() {
+    if !hirsel_rt::free_driver::admission_enabled() {
+        return;
+    }
+    let scratch = Scratch::new("f1-terminal-metadata");
+    let program = scratch.path("main.hir");
+    let text = r#"pub fn main(rt: Io) -> Result[(), GrantError] {
+  let out = io.stdout(rt)?
+  let _ = out.print(out, "terminal guard\n")
+  Ok(())
+}
+"#;
+    std::fs::write(&program, text).unwrap();
+    let tape = scratch.path("original");
+    let grants = r#"{"io":{"stdout":"stdout.bytes@1","tasks":"tasks.free@1","dirs":[]},"args":[],"recording":"record"}"#;
+    let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+    command
+        .args(["run", "--native"])
+        .arg(&program)
+        .args(["--grants", grants, "--cores", "1", "--record"])
+        .arg(&tape);
+    f1_permits(&mut command, 1);
+    let live = bounded_output(&mut command, &program, "terminal metadata producer");
+    assert!(live.status.success(), "{live:?}");
+    assert_eq!(live.stdout, b"terminal guard\n");
+    assert!(live.stderr.is_empty(), "{live:?}");
+    let original = std::fs::read(&tape).unwrap();
+    let parsed = hirsel_free::tape::parse(&original).unwrap();
+    let end = parsed.end.as_ref().unwrap();
+    // Fixed wire tags: Returned(Ok), then two empty Vec<u64> receipts.
+    assert_eq!(
+        end.outcome,
+        format!("native-outcome-v2/{}", "00".repeat(24))
+    );
+    let tasks: Vec<_> = parsed
+        .logs
+        .iter()
+        .map(|(path, bytes)| hirsel_free::tape::TaskChunk {
+            path: path.clone(),
+            progress: parsed.cut[path],
+            bytes: bytes.clone(),
+        })
+        .collect();
+    let mut failures = Vec::new();
+    for (name, withdrawn, in_doubt) in [
+        ("unmatched-in-doubt", vec![], vec![u64::MAX]),
+        ("overlapping", vec![7u64], vec![7u64]),
+        ("duplicate-withdrawn", vec![7u64, 7u64], vec![]),
+        ("contradictory-outcome", vec![], vec![]),
+        ("consistent-forged-outcome", vec![], vec![]),
+    ] {
+        let mut payload = vec![0u8; 8];
+        if matches!(name, "contradictory-outcome" | "consistent-forged-outcome") {
+            payload[4] = 1;
+        } // Returned(Error)
+        for ids in [&withdrawn, &in_doubt] {
+            payload.extend_from_slice(&(ids.len() as u64).to_le_bytes());
+            for id in ids {
+                payload.extend_from_slice(&id.to_le_bytes());
+            }
+        }
+        let end = hirsel_free::tape::End {
+            outcome: format!("native-outcome-v2/{}", hirsel_run_schema::hex(&payload)),
+            task: end.task.clone(),
+        };
+        let mut tasks = tasks.clone();
+        if name == "consistent-forged-outcome" {
+            // Metadata agrees internally; only executing the admitted root
+            // can show that its actual deterministic result is Returned(Ok).
+            let root = tasks.iter_mut().find(|task| task.path.is_empty()).unwrap();
+            let mut records = hirsel_free::record::decode(&root.bytes).unwrap();
+            let outcome = records
+                .iter_mut()
+                .find_map(|record| match record {
+                    hirsel_free::record::Record::Observation { op, bytes }
+                        if *op == root.progress.op =>
+                    {
+                        Some(bytes)
+                    }
+                    _ => None,
+                })
+                .unwrap();
+            assert_eq!(outcome, &[0u8; 8]);
+            outcome[4] = 1;
+            root.bytes.clear();
+            let mut encoder = hirsel_free::record::Encoder::default();
+            for record in records {
+                encoder.encode(&record, &mut root.bytes);
+            }
+        }
+        let mut forged = hirsel_free::tape::header(&parsed.binding);
+        forged.extend(hirsel_free::tape::stop(&parsed.keys, &tasks, &end));
+        let path = scratch.path(name);
+        std::fs::write(&path, forged).unwrap();
+        for engine in ENGINES {
+            let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+            command
+                .arg("run")
+                .args(engine)
+                .arg(&program)
+                .arg("--replay")
+                .arg(&path)
+                .args(["--cores", "1"]);
+            f1_permits(&mut command, 1);
+            let replay = bounded_output(
+                &mut command,
+                &program,
+                &format!("terminal metadata {name} {engine:?}"),
+            );
+            let diagnostic = String::from_utf8_lossy(&replay.stderr);
+            let (expected, stdout): (&str, &[u8]) = match name {
+                "contradictory-outcome" => ("terminal outcome differs", b""),
+                "consistent-forged-outcome" => (
+                    if engine.is_empty() {
+                        "Free root outcome differs from recording"
+                    } else {
+                        "host request differs"
+                    },
+                    b"terminal guard\n",
+                ),
+                _ => ("terminal request receipt differs from cut", b""),
+            };
+            if replay.status.code() != Some(hirsel_run_schema::exit::REFUSED)
+                || replay.stdout != stdout
+                || !diagnostic.contains(expected)
+            {
+                failures.push(format!("{name} {engine:?}: {replay:?}"));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
