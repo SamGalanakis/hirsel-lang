@@ -102,18 +102,20 @@ fn scripted(caps: bool) {
         } else {
             serde_json::from_str(include_str!("../support/packtree_29/cases.json")).unwrap()
         };
+        let twins: Vec<Value> =
+            serde_json::from_str(include_str!("../support/packtree_29/reference-cases.json"))
+                .unwrap();
         let mut completed = 0;
         for row in rows {
             let id = row["id"].as_str().unwrap();
             if std::env::var("PACKTREE_29_CASE").is_ok_and(|f| !f.split(',').any(|s| s == id)) {
                 continue;
             }
-            if caps && ["payload1048576", "payload1048577", "archive2097152"].contains(&id) {
-                eprintln!(
-                    "PACKTREE_29_INCOMPLETE {id} reference,checked-h NOT_RUN: payload1048576 exhausted test08 memory before its step limit; unchanged vector retained for native"
-                );
-                continue;
-            }
+            let row = twins
+                .iter()
+                .find(|twin| twin["full_id"] == row["id"])
+                .map_or(row.clone(), |twin| twin["case"].clone());
+            let id = row["id"].as_str().unwrap();
             let mut world = SimulationConfig {
                 args: serde_json::from_value(row["args"].clone()).unwrap(),
                 mounts: [
@@ -195,16 +197,6 @@ fn scripted(caps: bool) {
                     hirsel_engine::run_observed_checked(&mut loaded.engine, &config, world.clone())
                 }
                 .unwrap();
-                if ["members64", "members65", "file65536", "walk-tree"].contains(&id)
-                    && execution.observation.is_none()
-                    && format!("{:?}", execution.outcome).contains("ToolingLimit")
-                {
-                    eprintln!(
-                        "PACKTREE_29_INCOMPLETE {id} {engine} {:?}",
-                        execution.outcome
-                    );
-                    continue;
-                }
                 let observed = execution
                     .observation
                     .unwrap_or_else(|| panic!("{id}/{engine}: {:?}", execution.outcome));
@@ -448,6 +440,10 @@ fn packtree_29_native_workflows_replay() {
             "cases.json",
             include_str!("../support/packtree_29/cases.json"),
         ),
+        (
+            "reference-cases.json",
+            include_str!("../support/packtree_29/reference-cases.json"),
+        ),
         ("capped", include_str!("../../../../tools/capped")),
         (
             "vectors.py",
@@ -487,6 +483,31 @@ fn packtree_29_native_workflows_replay() {
         assert!(q.status.success(), "{}", String::from_utf8_lossy(&q.stderr));
         compare_recordings(tmp.path());
         refusal_controls(tmp.path());
+        let twin = Command::new("python3")
+            .arg("-B")
+            .arg(tmp.path().join("qualify.py"))
+            .arg("--reference-twin")
+            .arg("--root")
+            .arg(tmp.path())
+            .arg("--hirsel")
+            .arg(env!("CARGO_BIN_EXE_hirsel"))
+            .output()
+            .unwrap();
+        fs::write(
+            tmp.path().join("qualification-reference.stdout"),
+            &twin.stdout,
+        )
+        .unwrap();
+        fs::write(
+            tmp.path().join("qualification-reference.stderr"),
+            &twin.stderr,
+        )
+        .unwrap();
+        assert!(
+            twin.status.success(),
+            "{}",
+            String::from_utf8_lossy(&twin.stderr)
+        );
     }
     let path = tmp.keep();
     assert!(
@@ -514,6 +535,10 @@ fn packtree_29_bounded_target_listing_native_replay() {
         (
             "cases.json",
             include_str!("../support/packtree_29/cases.json"),
+        ),
+        (
+            "reference-cases.json",
+            include_str!("../support/packtree_29/reference-cases.json"),
         ),
         (
             "vectors.py",

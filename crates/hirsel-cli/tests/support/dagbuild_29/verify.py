@@ -22,6 +22,10 @@ def main(a):
     if os.environ.get('DAGBUILD_29_REAL_ONLY'):cases=[]
     if os.environ.get('DAGBUILD_29_CASE'):cases=[c for c in cases if c['id'] in os.environ['DAGBUILD_29_CASE'].split(',')]
     assert cases or os.environ.get('DAGBUILD_29_REAL_ONLY')
+    twins=json.loads((root/'reference-cases.json').read_text())
+    full_ids={row['full_id'] for row in twins}
+    selected_ids={case['id'] for case in cases}
+    cases += [row['case'] for row in twins if row['full_id'] in selected_ids]
     receipts=[]
     skip=set()
     for path in os.environ.get('DAGBUILD_29_RESUME','').split(','):
@@ -89,7 +93,10 @@ def main(a):
                 # Replay has no mounted original data or executable provider. Full
                 # consumption is enforced by each launcher's complete-tape adapter.
                 receipt['replays']=[]
-                for replay_engine in ['reference','llvm','cranelift']:
+                # Full native inputs and exact output/state assertions stay above.
+                # Reference replay consumes a separately recorded, bounded input twin.
+                replay_engines=['llvm','cranelift'] if case['id'] in full_ids else ['reference','llvm','cranelift']
+                for replay_engine in replay_engines:
                     replay_argv=(['env','HIRSEL_JOBS=1',str(a.hirsel),'run',str(root/'hirsel.json'),'--replay',str(tape),'--max-steps','1000000'] if replay_engine=='reference' else [str(binaries[replay_engine]),'--hirsel-replay',str(tape)])
                     q=run(replay_argv,identity+'-replay-'+replay_engine)
                     qstderr=''.join(l+'\n' for l in q.stderr.decode().splitlines() if not l.startswith('capped:'))

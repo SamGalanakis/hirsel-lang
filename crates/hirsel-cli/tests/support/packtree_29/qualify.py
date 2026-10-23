@@ -13,18 +13,19 @@ import time
 
 
 def main(a):
-    q=a.root/'qualification';q.mkdir()
+    q=a.root/('qualification-reference' if a.reference_twin else 'qualification');q.mkdir()
     sys.path.insert(0,str(a.root))
     from oracle import archive,compact,report
     env={k:v for k,v in os.environ.items() if not k.startswith('HIRSEL_RT_')}
     env.update(HIRSEL_MEMORY_LIMIT='2G',HIRSEL_JOBS='4',HIRSEL_DAEMON='off',HIRSEL_RESULTS='none@1',HIRSEL_TIMING='off')
     trees=q/'trees';trees.mkdir()
     for name in ('source','archives','target'):(trees/name).mkdir()
-    entries=[(f'f{i}','file',bytes([65+i])*4096) for i in range(4)]
+    twins={row['full_id']:row['case'] for row in json.loads((a.root/'reference-cases.json').read_text())}
+    entries=([(p,k,bytes.fromhex(b)) for p,k,b in twins['qualification-success']['entries']] if a.reference_twin else [(f'f{i}','file',bytes([65+i])*4096) for i in range(4)])
     for p,k,b in entries:(trees/'source'/p).write_bytes(b)
     decl=dict(schema=1,entries=[dict(path=p,type=k,size=len(b)) for p,k,b in entries])
     (trees/'source/tree.json').write_text(compact(decl))
-    bad=archive([('a','file',b'x'*4096),('a','file',b'')])
+    bad=(bytes.fromhex(twins['qualification-domain']['files']['archives/bad.tar']) if a.reference_twin else archive([('a','file',b'x'*4096),('a','file',b'')]))
     (trees/'archives/bad.tar').write_bytes(bad)
     receipt=[];groups={}
     libc=ctypes.CDLL(None,use_errno=True)
@@ -85,7 +86,7 @@ def main(a):
         expected=dict(status=0,stdout=report(entries),stderr='') if workflow=='success' else dict(status=2,stdout='',stderr=compact(dict(kind='duplicate_path',path='a'))+'\n')
         for tape in tapes:
             original=hashlib.sha256(Path(tape).read_bytes()).hexdigest()
-            for backend in ('llvm','cranelift','reference'):
+            for backend in (('llvm','cranelift','reference') if a.reference_twin else ('llvm','cranelift')):
                 id=Path(tape).stem+'-replay-'+backend
                 cmd=[str(a.root/'evidence'/backend),'--hirsel-replay',tape] if backend!='reference' else [str(a.hirsel),'run',str(a.root/'hirsel.json'),'--replay',tape,'--max-steps','1000000']
                 actual=q/(id+'.result.json')
@@ -94,11 +95,7 @@ def main(a):
                 (q/(id+'.resources')).write_bytes(done.stderr)
                 observed=json.loads(actual.read_text())
                 rec=dict(id=id,actual=observed,expected=expected,passed=observed==expected)
-                known_cursor={'success':22,'domain':10}[workflow]
-                known_refusal=dict(status=3,stdout='',stderr=f'hirsel: replay refused: UnconsumedInput({known_cursor})\n')
-                if backend=='reference' and observed==known_refusal:
-                    rec['disposition']='INCOMPLETE: exact known qualification replay refusal; underlying cause not proved'
-                else:assert rec['passed'],rec
+                assert rec['passed'],rec
                 replays.append(rec);(q/'replays.json').write_text(json.dumps(replays,indent=2))
                 assert not trees.exists() and hashlib.sha256(Path(tape).read_bytes()).hexdigest()==original
     print(json.dumps(dict(qualified=len(receipt),effective=sum(r['effective_observed'] for r in receipt),replays=len(replays),replay_passes=sum(r['passed'] for r in replays))))
@@ -110,6 +107,7 @@ if __name__=='__main__':
         Path(sys.argv[2]).write_text(json.dumps(dict(status=done.returncode,stdout=done.stdout.decode(),stderr=done.stderr.decode())))
         sys.exit(done.returncode)
     parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--reference-twin',action='store_true')
     parser.add_argument('--root',type=Path,required=True)
     parser.add_argument('--hirsel',type=Path,required=True)
     main(parser.parse_args())

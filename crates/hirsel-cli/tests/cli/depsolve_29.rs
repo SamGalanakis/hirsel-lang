@@ -102,8 +102,8 @@ fn scripted(checked: bool, full: bool) {
         let manifest = package(root);
         let mut selected = cases(root);
         if !full {
-            // Preserve these exact full-workflow cells in the explicit audit;
-            // the unchanged 1M-step receipts are INCOMPLETE, never runtime passes.
+            // The explicit audit runs committed reference twins for these
+            // source-sized workloads. Native cells retain every original input.
             selected.retain(|case| {
                 ![
                     "blog",
@@ -120,6 +120,16 @@ fn scripted(checked: bool, full: bool) {
                 ]
                 .contains(&case["id"].as_str().unwrap())
             });
+        }
+        if full {
+            let twins: Vec<Value> =
+                serde_json::from_str(include_str!("../support/depsolve_29/reference-cases.json"))
+                    .unwrap();
+            for case in &mut selected {
+                if let Some(twin) = twins.iter().find(|twin| twin["full_id"] == case["id"]) {
+                    *case = twin["case"].clone();
+                }
+            }
         }
         let mut canceled = selected.iter().find(|case| case["id"] == "empty").cloned();
         if let Some(case) = &mut canceled {

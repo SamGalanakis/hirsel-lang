@@ -1,0 +1,443 @@
+[
+  {
+    "full_id": "blog",
+    "case": {
+      "id": "blog-reference",
+      "args": [
+        "resolve",
+        "root.json",
+        "4",
+        "catalog.json"
+      ],
+      "files": {
+        "catalog.json": "{\"packages\":[{\"name\":\"B\",\"version\":\"1.0.0\",\"dependencies\":[{\"name\":\"D\",\"version\":\"3.0.0\"}]},{\"name\":\"C\",\"version\":\"2.0.0\",\"dependencies\":[{\"name\":\"D\",\"version\":\"4.0.0\"}]},{\"name\":\"D\",\"version\":\"3.0.0\",\"dependencies\":[{\"name\":\"E\",\"version\":\"2.0.0\"}]},{\"name\":\"D\",\"version\":\"4.0.0\",\"dependencies\":[{\"name\":\"E\",\"version\":\"2.0.0\"},{\"name\":\"F\",\"version\":\"1.0.0\"}]},{\"name\":\"E\",\"version\":\"2.0.0\",\"dependencies\":[]},{\"name\":\"F\",\"version\":\"1.0.0\",\"dependencies\":[]}]}",
+        "root.json": "{\"dependencies\":[{\"name\":\"B\",\"version\":\"1.0.0\"},{\"name\":\"C\",\"version\":\"2.0.0\"}]}"
+      },
+      "exit": 0,
+      "output": {
+        "schema": 1,
+        "root": {
+          "file": "root.json",
+          "sha256": "b4ede6a4ed8344e78c50138989f46f423b09c4ee6aed721a6237b7fd1476b3ee"
+        },
+        "catalogs": [
+          {
+            "file": "catalog.json",
+            "sha256": "3681535a82cffd70b2097301a159dbaf638b8389192c6152b1445158abf9403c"
+          }
+        ],
+        "selected": [
+          {
+            "name": "B",
+            "version": "1.0.0",
+            "path": [
+              "$root@0.0.0",
+              "B@1.0.0"
+            ]
+          },
+          {
+            "name": "C",
+            "version": "2.0.0",
+            "path": [
+              "$root@0.0.0",
+              "C@2.0.0"
+            ]
+          },
+          {
+            "name": "D",
+            "version": "4.0.0",
+            "path": [
+              "$root@0.0.0",
+              "C@2.0.0",
+              "D@4.0.0"
+            ]
+          },
+          {
+            "name": "E",
+            "version": "2.0.0",
+            "path": [
+              "$root@0.0.0",
+              "B@1.0.0",
+              "D@3.0.0",
+              "E@2.0.0"
+            ]
+          },
+          {
+            "name": "F",
+            "version": "1.0.0",
+            "path": [
+              "$root@0.0.0",
+              "C@2.0.0",
+              "D@4.0.0",
+              "F@1.0.0"
+            ]
+          }
+        ],
+        "visited": [
+          "B@1.0.0",
+          "C@2.0.0",
+          "D@3.0.0",
+          "D@4.0.0",
+          "E@2.0.0",
+          "F@1.0.0"
+        ]
+      }
+    }
+  },
+  {
+    "full_id": "split",
+    "case": {
+      "id": "split-reference",
+      "args": [
+        "resolve",
+        "root.json",
+        "4",
+        "a.json",
+        "b.json"
+      ],
+      "files": {
+        "root.json": "{\"dependencies\":[{\"name\":\"B\",\"version\":\"1.0.0\"},{\"name\":\"C\",\"version\":\"1.0.0\"}]}",
+        "a.json": "{\"packages\":[{\"name\":\"B\",\"version\":\"1.0.0\",\"dependencies\":[{\"name\":\"D\",\"version\":\"1.0.0\"}]},{\"name\":\"C\",\"version\":\"1.0.0\",\"dependencies\":[{\"name\":\"D\",\"version\":\"2.0.0\"}]}]}",
+        "b.json": "{\"packages\":[{\"name\":\"D\",\"version\":\"1.0.0\",\"dependencies\":[]},{\"name\":\"D\",\"version\":\"2.0.0\",\"dependencies\":[]}]}"
+      },
+      "exit": 0,
+      "output": {
+        "schema": 1,
+        "root": {
+          "file": "root.json",
+          "sha256": "f5a2f87c0e312f301956be9ed0ac58018ac4a3a1176a6a3e23e970e308e38abd"
+        },
+        "catalogs": [
+          {
+            "file": "a.json",
+            "sha256": "4557754723b5c52284719e56196823179328aa10c84d34f8389d532acb27458b"
+          },
+          {
+            "file": "b.json",
+            "sha256": "2e56cecec0045f29f46d8db9e7daaec17c6cf11612015e7c9ce6cc5aac7e8da1"
+          }
+        ],
+        "selected": [
+          {
+            "name": "B",
+            "version": "1.0.0",
+            "path": [
+              "$root@0.0.0",
+              "B@1.0.0"
+            ]
+          },
+          {
+            "name": "C",
+            "version": "1.0.0",
+            "path": [
+              "$root@0.0.0",
+              "C@1.0.0"
+            ]
+          },
+          {
+            "name": "D",
+            "version": "2.0.0",
+            "path": [
+              "$root@0.0.0",
+              "C@1.0.0",
+              "D@2.0.0"
+            ]
+          }
+        ],
+        "visited": [
+          "B@1.0.0",
+          "C@1.0.0",
+          "D@1.0.0",
+          "D@2.0.0"
+        ]
+      }
+    }
+  },
+  {
+    "full_id": "names64",
+    "case": {
+      "id": "names64-reference",
+      "args": [
+        "resolve",
+        "root.json",
+        "4",
+        "catalog.json"
+      ],
+      "files": {
+        "root.json": "{\"dependencies\":[]}",
+        "catalog.json": "{\"packages\":[{\"name\":\"p0\",\"version\":\"1.0.0\",\"dependencies\":[]},{\"name\":\"p1\",\"version\":\"1.0.0\",\"dependencies\":[]},{\"name\":\"p2\",\"version\":\"1.0.0\",\"dependencies\":[]},{\"name\":\"p3\",\"version\":\"1.0.0\",\"dependencies\":[]}]}"
+      },
+      "exit": 0,
+      "output": {
+        "schema": 1,
+        "root": {
+          "file": "root.json",
+          "sha256": "81059fe6210ccee4e3349c0f34c12d180f995150128a913d63b65b7937c6b152"
+        },
+        "catalogs": [
+          {
+            "file": "catalog.json",
+            "sha256": "576a2e5d82b30a0bd0df623cca5dde254ca76851b6d9a4816922299d6956cfc4"
+          }
+        ],
+        "selected": [],
+        "visited": []
+      }
+    }
+  },
+  {
+    "full_id": "names65",
+    "case": {
+      "id": "names65-reference",
+      "args": [
+        "resolve",
+        "root.json",
+        "4",
+        "catalog.json"
+      ],
+      "files": {
+        "root.json": "{\"dependencies\":[]}",
+        "catalog.json": "{\"packages\":[{\"name\":\"A\",\"version\":\"1.0.0\",\"dependencies\":[]},{\"name\":\"A\",\"version\":\"1.0.0\",\"dependencies\":[]}]}"
+      },
+      "exit": 2,
+      "output": {
+        "error": "duplicate",
+        "detail": "A@1.0.0",
+        "path": [
+          "catalog.json"
+        ]
+      }
+    }
+  },
+  {
+    "full_id": "versions128",
+    "case": {
+      "id": "versions128-reference",
+      "args": [
+        "resolve",
+        "root.json",
+        "4",
+        "catalog.json"
+      ],
+      "files": {
+        "root.json": "{\"dependencies\":[]}",
+        "catalog.json": "{\"packages\":[{\"name\":\"A\",\"version\":\"1.0.0\",\"dependencies\":[]},{\"name\":\"A\",\"version\":\"2.0.0\",\"dependencies\":[]},{\"name\":\"A\",\"version\":\"3.0.0\",\"dependencies\":[]},{\"name\":\"A\",\"version\":\"4.0.0\",\"dependencies\":[]}]}"
+      },
+      "exit": 0,
+      "output": {
+        "schema": 1,
+        "root": {
+          "file": "root.json",
+          "sha256": "81059fe6210ccee4e3349c0f34c12d180f995150128a913d63b65b7937c6b152"
+        },
+        "catalogs": [
+          {
+            "file": "catalog.json",
+            "sha256": "964d84ae267fcb5f4d5c9bb36f11b593bcfb299d5a7b286a2d2dc55a91829bc4"
+          }
+        ],
+        "selected": [],
+        "visited": []
+      }
+    }
+  },
+  {
+    "full_id": "versions129",
+    "case": {
+      "id": "versions129-reference",
+      "args": [
+        "resolve",
+        "root.json",
+        "4",
+        "catalog.json"
+      ],
+      "files": {
+        "root.json": "{\"dependencies\":[]}",
+        "catalog.json": "{}                                                                                                                              "
+      },
+      "exit": 2,
+      "output": {
+        "error": "shape",
+        "detail": "",
+        "path": [
+          "catalog.json"
+        ]
+      }
+    }
+  },
+  {
+    "full_id": "edges256",
+    "case": {
+      "id": "edges256-reference",
+      "args": [
+        "resolve",
+        "root.json",
+        "4",
+        "catalog.json"
+      ],
+      "files": {
+        "root.json": "{\"dependencies\":[{\"name\":\"A\",\"version\":\"1.0.0\"},{\"name\":\"A\",\"version\":\"1.0.0\"},{\"name\":\"A\",\"version\":\"1.0.0\"},{\"name\":\"A\",\"version\":\"1.0.0\"}]}",
+        "catalog.json": "{\"packages\":[{\"name\":\"A\",\"version\":\"1.0.0\",\"dependencies\":[]}]}"
+      },
+      "exit": 0,
+      "output": {
+        "schema": 1,
+        "root": {
+          "file": "root.json",
+          "sha256": "45bff2121f35a178819b174d0239998ebcc24f26ceb0637fefc8a728cf8886c8"
+        },
+        "catalogs": [
+          {
+            "file": "catalog.json",
+            "sha256": "a6f3d51ec78a2c815200a914a656c26bcd58fc9e9ee6890106611847c84dafb3"
+          }
+        ],
+        "selected": [
+          {
+            "name": "A",
+            "version": "1.0.0",
+            "path": [
+              "$root@0.0.0",
+              "A@1.0.0"
+            ]
+          }
+        ],
+        "visited": [
+          "A@1.0.0"
+        ]
+      }
+    }
+  },
+  {
+    "full_id": "edges257",
+    "case": {
+      "id": "edges257-reference",
+      "args": [
+        "resolve",
+        "root.json",
+        "4",
+        "catalog.json"
+      ],
+      "files": {
+        "root.json": "{\"dependencies\":{}}",
+        "catalog.json": "{\"packages\":[]}"
+      },
+      "exit": 2,
+      "output": {
+        "error": "shape",
+        "detail": "",
+        "path": [
+          "root.json"
+        ]
+      }
+    }
+  },
+  {
+    "full_id": "catalogs32",
+    "case": {
+      "id": "catalogs32-reference",
+      "args": [
+        "resolve",
+        "root.json",
+        "4",
+        "c00.json",
+        "c01.json"
+      ],
+      "files": {
+        "root.json": "{\"dependencies\":[]}",
+        "c00.json": "{\"packages\":[]}",
+        "c01.json": "{\"packages\":[]}"
+      },
+      "exit": 0,
+      "output": {
+        "schema": 1,
+        "root": {
+          "file": "root.json",
+          "sha256": "81059fe6210ccee4e3349c0f34c12d180f995150128a913d63b65b7937c6b152"
+        },
+        "catalogs": [
+          {
+            "file": "c00.json",
+            "sha256": "454eea274ef715bed0aef364fec823e04318850d28eb04f1c16a03a5127c071c"
+          },
+          {
+            "file": "c01.json",
+            "sha256": "454eea274ef715bed0aef364fec823e04318850d28eb04f1c16a03a5127c071c"
+          }
+        ],
+        "selected": [],
+        "visited": []
+      }
+    }
+  },
+  {
+    "full_id": "bytes65536",
+    "case": {
+      "id": "bytes65536-reference",
+      "args": [
+        "resolve",
+        "root.json",
+        "4",
+        "c0.json"
+      ],
+      "files": {
+        "root.json": "{\"dependencies\":[]}",
+        "c0.json": "{\"packages\":[]}                                                                                                                                                                                                                                                 "
+      },
+      "exit": 0,
+      "output": {
+        "schema": 1,
+        "root": {
+          "file": "root.json",
+          "sha256": "81059fe6210ccee4e3349c0f34c12d180f995150128a913d63b65b7937c6b152"
+        },
+        "catalogs": [
+          {
+            "file": "c0.json",
+            "sha256": "2522b97f29ebbef2e621a7e48617b49cb0dec8b5ad4dc2e4a76eb17bcd5f67c0"
+          }
+        ],
+        "selected": [],
+        "visited": []
+      }
+    }
+  },
+  {
+    "full_id": "total524288",
+    "case": {
+      "id": "total524288-reference",
+      "args": [
+        "resolve",
+        "root.json",
+        "4",
+        "c0.json",
+        "c1.json"
+      ],
+      "files": {
+        "root.json": "{\"dependencies\":[]}",
+        "c0.json": "{\"packages\":[]}                                                                                                                                                                                                                                                 ",
+        "c1.json": "{\"packages\":[]}                                                                                                                                                                                                                                                 "
+      },
+      "exit": 0,
+      "output": {
+        "schema": 1,
+        "root": {
+          "file": "root.json",
+          "sha256": "81059fe6210ccee4e3349c0f34c12d180f995150128a913d63b65b7937c6b152"
+        },
+        "catalogs": [
+          {
+            "file": "c0.json",
+            "sha256": "2522b97f29ebbef2e621a7e48617b49cb0dec8b5ad4dc2e4a76eb17bcd5f67c0"
+          },
+          {
+            "file": "c1.json",
+            "sha256": "2522b97f29ebbef2e621a7e48617b49cb0dec8b5ad4dc2e4a76eb17bcd5f67c0"
+          }
+        ],
+        "selected": [],
+        "visited": []
+      }
+    }
+  }
+]

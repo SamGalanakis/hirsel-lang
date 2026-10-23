@@ -1,0 +1,910 @@
+[
+  {
+    "full_id": "chain-first",
+    "case": {
+      "id": "chain-first-reference",
+      "manifest": {
+        "tasks": [
+          {
+            "name": "a",
+            "argv": [
+              "/fixture/child",
+              "ok",
+              "a"
+            ],
+            "dependencies": [],
+            "inputs": [
+              "in"
+            ],
+            "outputs": []
+          },
+          {
+            "name": "b",
+            "argv": [
+              "/fixture/child",
+              "ok",
+              "b"
+            ],
+            "dependencies": [
+              "a"
+            ],
+            "inputs": [],
+            "outputs": []
+          }
+        ],
+        "jobs": 2,
+        "fail_fast": false
+      },
+      "files": {
+        "in": "alpha"
+      },
+      "prior": null,
+      "args": [
+        "build",
+        "manifest.json"
+      ],
+      "exit": 0,
+      "denied": null,
+      "rows": [
+        {
+          "name": "a",
+          "status": "built",
+          "reason": "no_record",
+          "digest_result": "352204a76b87791f4599904a4882a1ac0732d0948a7f873c943d51e6db109a0d"
+        },
+        {
+          "name": "b",
+          "status": "built",
+          "reason": "no_record",
+          "digest_result": "c7a49a3dc4d35e44b42418dc7d80a613651202870b2fd18457532fd0b475b6ab"
+        },
+        {
+          "tasks": 2,
+          "expired": false,
+          "failed": false
+        }
+      ],
+      "stderr": "",
+      "spawned": 2,
+      "state": {
+        "version": 1,
+        "tasks": [
+          {
+            "name": "a",
+            "record": {
+              "fingerprint": "39b34143f6f9b9f736d9c5ddd96e9c7eebbc61f2afd17945dc00073d77c9bb4a",
+              "digest_result": "352204a76b87791f4599904a4882a1ac0732d0948a7f873c943d51e6db109a0d",
+              "outputs": []
+            }
+          },
+          {
+            "name": "b",
+            "record": {
+              "fingerprint": "1b41134170d22270ef457406e1c29fc6135d7b7af3b698383bf15ba13d947ec2",
+              "digest_result": "c7a49a3dc4d35e44b42418dc7d80a613651202870b2fd18457532fd0b475b6ab",
+              "outputs": []
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "full_id": "diamond-first",
+    "case": {
+      "id": "diamond-first-reference",
+      "manifest": {
+        "tasks": [
+          {
+            "name": "a",
+            "argv": [
+              "/fixture/child",
+              "ok",
+              "a"
+            ],
+            "dependencies": [],
+            "inputs": [],
+            "outputs": []
+          },
+          {
+            "name": "b",
+            "argv": [
+              "/fixture/child",
+              "ok",
+              "b"
+            ],
+            "dependencies": [
+              "a"
+            ],
+            "inputs": [],
+            "outputs": []
+          }
+        ],
+        "jobs": 2,
+        "fail_fast": false
+      },
+      "files": {},
+      "prior": null,
+      "args": [
+        "build",
+        "manifest.json"
+      ],
+      "exit": 0,
+      "denied": null,
+      "rows": [
+        {
+          "name": "a",
+          "status": "built",
+          "reason": "no_record",
+          "digest_result": "d7f56f69cbfaff04f5aa30a7860b4de9a7f3161d04d687a6e5b86d7aae4b0969"
+        },
+        {
+          "name": "b",
+          "status": "built",
+          "reason": "no_record",
+          "digest_result": "cf6c3d8aff1a0412858d397e51b2a8f808b562af46b3a897695417ad09ad2e06"
+        },
+        {
+          "tasks": 2,
+          "expired": false,
+          "failed": false
+        }
+      ],
+      "stderr": "",
+      "spawned": 2,
+      "state": {
+        "version": 1,
+        "tasks": [
+          {
+            "name": "a",
+            "record": {
+              "fingerprint": "a2d774b22f75b7bf6e6a5002ad4b3091bea3f3f63ee83e25da10e2e75dbd9034",
+              "digest_result": "d7f56f69cbfaff04f5aa30a7860b4de9a7f3161d04d687a6e5b86d7aae4b0969",
+              "outputs": []
+            }
+          },
+          {
+            "name": "b",
+            "record": {
+              "fingerprint": "a34aacc2c6ecea25a51f9c42731ed8a9a76734e47663cc56293fc5b05d0c12b9",
+              "digest_result": "cf6c3d8aff1a0412858d397e51b2a8f808b562af46b3a897695417ad09ad2e06",
+              "outputs": []
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "full_id": "disconnected-first",
+    "case": {
+      "id": "disconnected-first-reference",
+      "manifest": {
+        "tasks": [
+          {
+            "name": "a",
+            "argv": [
+              "/fixture/child",
+              "ok",
+              "a"
+            ],
+            "dependencies": [],
+            "inputs": [],
+            "outputs": []
+          },
+          {
+            "name": "b",
+            "argv": [
+              "/fixture/child",
+              "ok",
+              "b"
+            ],
+            "dependencies": [
+              "a"
+            ],
+            "inputs": [],
+            "outputs": []
+          }
+        ],
+        "jobs": 2,
+        "fail_fast": false
+      },
+      "files": {},
+      "prior": null,
+      "args": [
+        "build",
+        "manifest.json"
+      ],
+      "exit": 0,
+      "denied": null,
+      "rows": [
+        {
+          "name": "a",
+          "status": "built",
+          "reason": "no_record",
+          "digest_result": "d7f56f69cbfaff04f5aa30a7860b4de9a7f3161d04d687a6e5b86d7aae4b0969"
+        },
+        {
+          "name": "b",
+          "status": "built",
+          "reason": "no_record",
+          "digest_result": "cf6c3d8aff1a0412858d397e51b2a8f808b562af46b3a897695417ad09ad2e06"
+        },
+        {
+          "tasks": 2,
+          "expired": false,
+          "failed": false
+        }
+      ],
+      "stderr": "",
+      "spawned": 2,
+      "state": {
+        "version": 1,
+        "tasks": [
+          {
+            "name": "a",
+            "record": {
+              "fingerprint": "a2d774b22f75b7bf6e6a5002ad4b3091bea3f3f63ee83e25da10e2e75dbd9034",
+              "digest_result": "d7f56f69cbfaff04f5aa30a7860b4de9a7f3161d04d687a6e5b86d7aae4b0969",
+              "outputs": []
+            }
+          },
+          {
+            "name": "b",
+            "record": {
+              "fingerprint": "a34aacc2c6ecea25a51f9c42731ed8a9a76734e47663cc56293fc5b05d0c12b9",
+              "digest_result": "cf6c3d8aff1a0412858d397e51b2a8f808b562af46b3a897695417ad09ad2e06",
+              "outputs": []
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "full_id": "reverse-chain",
+    "case": {
+      "id": "reverse-chain-reference",
+      "manifest": {
+        "tasks": [
+          {
+            "name": "a",
+            "argv": [
+              "/fixture/child",
+              "ok",
+              "a"
+            ],
+            "dependencies": [],
+            "inputs": [],
+            "outputs": []
+          },
+          {
+            "name": "b",
+            "argv": [
+              "/fixture/child",
+              "ok",
+              "b"
+            ],
+            "dependencies": [
+              "a"
+            ],
+            "inputs": [],
+            "outputs": []
+          }
+        ],
+        "jobs": 2,
+        "fail_fast": false
+      },
+      "files": {},
+      "prior": null,
+      "args": [
+        "build",
+        "manifest.json"
+      ],
+      "exit": 0,
+      "denied": null,
+      "rows": [
+        {
+          "name": "a",
+          "status": "built",
+          "reason": "no_record",
+          "digest_result": "d7f56f69cbfaff04f5aa30a7860b4de9a7f3161d04d687a6e5b86d7aae4b0969"
+        },
+        {
+          "name": "b",
+          "status": "built",
+          "reason": "no_record",
+          "digest_result": "cf6c3d8aff1a0412858d397e51b2a8f808b562af46b3a897695417ad09ad2e06"
+        },
+        {
+          "tasks": 2,
+          "expired": false,
+          "failed": false
+        }
+      ],
+      "stderr": "",
+      "spawned": 2,
+      "state": {
+        "version": 1,
+        "tasks": [
+          {
+            "name": "a",
+            "record": {
+              "fingerprint": "a2d774b22f75b7bf6e6a5002ad4b3091bea3f3f63ee83e25da10e2e75dbd9034",
+              "digest_result": "d7f56f69cbfaff04f5aa30a7860b4de9a7f3161d04d687a6e5b86d7aae4b0969",
+              "outputs": []
+            }
+          },
+          {
+            "name": "b",
+            "record": {
+              "fingerprint": "a34aacc2c6ecea25a51f9c42731ed8a9a76734e47663cc56293fc5b05d0c12b9",
+              "digest_result": "cf6c3d8aff1a0412858d397e51b2a8f808b562af46b3a897695417ad09ad2e06",
+              "outputs": []
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "full_id": "unchanged",
+    "case": {
+      "id": "unchanged-reference",
+      "manifest": {
+        "tasks": [
+          {
+            "name": "a",
+            "argv": [
+              "/fixture/child",
+              "ok",
+              "a"
+            ],
+            "dependencies": [],
+            "inputs": [],
+            "outputs": [
+              "out"
+            ]
+          }
+        ],
+        "jobs": 2,
+        "fail_fast": false
+      },
+      "files": {
+        "out": "old"
+      },
+      "prior": {
+        "version": 1,
+        "tasks": [
+          {
+            "name": "a",
+            "record": {
+              "fingerprint": "f6f000f851b9fdc25ce7c26800d65f5ed878acb899c508fe23b5c731564a9334",
+              "digest_result": "e3f97d59b4bbf1204726fece2a33fc808d06cd4f5c3b30174609b20416e9d225",
+              "outputs": [
+                {
+                  "path": "out",
+                  "digest": "cba06b5736faf67e54b07b561eae94395e774c517a7d910a54369e1263ccfbd4"
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "args": [
+        "build",
+        "manifest.json"
+      ],
+      "exit": 0,
+      "denied": null,
+      "rows": [
+        {
+          "name": "a",
+          "status": "clean",
+          "reason": "unchanged",
+          "digest_result": "e3f97d59b4bbf1204726fece2a33fc808d06cd4f5c3b30174609b20416e9d225"
+        },
+        {
+          "tasks": 1,
+          "expired": false,
+          "failed": false
+        }
+      ],
+      "stderr": "",
+      "spawned": 0,
+      "state": {
+        "version": 1,
+        "tasks": [
+          {
+            "name": "a",
+            "record": {
+              "fingerprint": "f6f000f851b9fdc25ce7c26800d65f5ed878acb899c508fe23b5c731564a9334",
+              "digest_result": "e3f97d59b4bbf1204726fece2a33fc808d06cd4f5c3b30174609b20416e9d225",
+              "outputs": [
+                {
+                  "path": "out",
+                  "digest": "cba06b5736faf67e54b07b561eae94395e774c517a7d910a54369e1263ccfbd4"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "full_id": "unchanged-plan",
+    "case": {
+      "id": "unchanged-plan-reference",
+      "manifest": {
+        "tasks": [
+          {
+            "name": "a",
+            "argv": [
+              "/fixture/child",
+              "ok",
+              "a"
+            ],
+            "dependencies": [],
+            "inputs": [],
+            "outputs": [
+              "out"
+            ]
+          }
+        ],
+        "jobs": 2,
+        "fail_fast": false
+      },
+      "files": {
+        "out": "old"
+      },
+      "prior": {
+        "version": 1,
+        "tasks": [
+          {
+            "name": "a",
+            "record": {
+              "fingerprint": "f6f000f851b9fdc25ce7c26800d65f5ed878acb899c508fe23b5c731564a9334",
+              "digest_result": "e3f97d59b4bbf1204726fece2a33fc808d06cd4f5c3b30174609b20416e9d225",
+              "outputs": [
+                {
+                  "path": "out",
+                  "digest": "cba06b5736faf67e54b07b561eae94395e774c517a7d910a54369e1263ccfbd4"
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "args": [
+        "plan",
+        "manifest.json"
+      ],
+      "exit": 0,
+      "denied": null,
+      "rows": [
+        {
+          "name": "a",
+          "status": "clean",
+          "reason": "unchanged",
+          "digest_result": "e3f97d59b4bbf1204726fece2a33fc808d06cd4f5c3b30174609b20416e9d225"
+        },
+        {
+          "tasks": 1,
+          "expired": false,
+          "failed": false
+        }
+      ],
+      "stderr": "",
+      "spawned": 0,
+      "state": {
+        "version": 1,
+        "tasks": [
+          {
+            "name": "a",
+            "record": {
+              "fingerprint": "f6f000f851b9fdc25ce7c26800d65f5ed878acb899c508fe23b5c731564a9334",
+              "digest_result": "e3f97d59b4bbf1204726fece2a33fc808d06cd4f5c3b30174609b20416e9d225",
+              "outputs": [
+                {
+                  "path": "out",
+                  "digest": "cba06b5736faf67e54b07b561eae94395e774c517a7d910a54369e1263ccfbd4"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "full_id": "input-change",
+    "case": {
+      "id": "input-change-reference",
+      "manifest": {
+        "tasks": [
+          {
+            "name": "a",
+            "argv": [
+              "/fixture/child",
+              "ok",
+              "a"
+            ],
+            "dependencies": [],
+            "inputs": [
+              "in"
+            ],
+            "outputs": []
+          }
+        ],
+        "jobs": 2,
+        "fail_fast": false
+      },
+      "files": {
+        "in": "beta"
+      },
+      "prior": {
+        "version": 1,
+        "tasks": [
+          {
+            "name": "a",
+            "record": {
+              "fingerprint": "39b34143f6f9b9f736d9c5ddd96e9c7eebbc61f2afd17945dc00073d77c9bb4a",
+              "digest_result": "352204a76b87791f4599904a4882a1ac0732d0948a7f873c943d51e6db109a0d",
+              "outputs": []
+            }
+          }
+        ]
+      },
+      "args": [
+        "build",
+        "manifest.json"
+      ],
+      "exit": 0,
+      "denied": null,
+      "rows": [
+        {
+          "name": "a",
+          "status": "built",
+          "reason": "fingerprint_changed",
+          "digest_result": "f27e1dc06461972c5e76b8ab690048b5af106c38770252bab9bf16872300ed96"
+        },
+        {
+          "tasks": 1,
+          "expired": false,
+          "failed": false
+        }
+      ],
+      "stderr": "",
+      "spawned": 1,
+      "state": {
+        "version": 1,
+        "tasks": [
+          {
+            "name": "a",
+            "record": {
+              "fingerprint": "3a7ffd475b0836cb04725619837c001eacb3953c81ff98e81f1e94f1f171db3f",
+              "digest_result": "f27e1dc06461972c5e76b8ab690048b5af106c38770252bab9bf16872300ed96",
+              "outputs": []
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "full_id": "command-change",
+    "case": {
+      "id": "command-change-reference",
+      "manifest": {
+        "tasks": [
+          {
+            "name": "a",
+            "argv": [
+              "/fixture/child",
+              "changed",
+              "a"
+            ],
+            "dependencies": [],
+            "inputs": [
+              "in"
+            ],
+            "outputs": []
+          }
+        ],
+        "jobs": 2,
+        "fail_fast": false
+      },
+      "files": {
+        "in": "alpha"
+      },
+      "prior": {
+        "version": 1,
+        "tasks": [
+          {
+            "name": "a",
+            "record": {
+              "fingerprint": "39b34143f6f9b9f736d9c5ddd96e9c7eebbc61f2afd17945dc00073d77c9bb4a",
+              "digest_result": "352204a76b87791f4599904a4882a1ac0732d0948a7f873c943d51e6db109a0d",
+              "outputs": []
+            }
+          }
+        ]
+      },
+      "args": [
+        "build",
+        "manifest.json"
+      ],
+      "exit": 0,
+      "denied": null,
+      "rows": [
+        {
+          "name": "a",
+          "status": "built",
+          "reason": "fingerprint_changed",
+          "digest_result": "673426d07b71d460cd37d546f1cc3eefaef82ad4e14d8a749c7310bd31941a60"
+        },
+        {
+          "tasks": 1,
+          "expired": false,
+          "failed": false
+        }
+      ],
+      "stderr": "",
+      "spawned": 1,
+      "state": {
+        "version": 1,
+        "tasks": [
+          {
+            "name": "a",
+            "record": {
+              "fingerprint": "241ebd63a389d9cdc1c017eed71ba2237aa9f78ec443432769db5466a6084967",
+              "digest_result": "673426d07b71d460cd37d546f1cc3eefaef82ad4e14d8a749c7310bd31941a60",
+              "outputs": []
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "full_id": "failure-descendants",
+    "case": {
+      "id": "failure-descendants-reference",
+      "manifest": {
+        "tasks": [
+          {
+            "name": "a",
+            "argv": [
+              "/fixture/child",
+              "fail",
+              "a"
+            ],
+            "dependencies": [],
+            "inputs": [],
+            "outputs": []
+          },
+          {
+            "name": "b",
+            "argv": [
+              "/fixture/child",
+              "ok",
+              "b"
+            ],
+            "dependencies": [
+              "a"
+            ],
+            "inputs": [],
+            "outputs": []
+          }
+        ],
+        "jobs": 2,
+        "fail_fast": false
+      },
+      "files": {},
+      "prior": null,
+      "args": [
+        "build",
+        "manifest.json"
+      ],
+      "exit": 1,
+      "denied": null,
+      "rows": [
+        {
+          "name": "a",
+          "status": "failed",
+          "reason": "exit:7",
+          "digest_result": ""
+        },
+        {
+          "name": "b",
+          "status": "blocked",
+          "reason": "dependency_failed",
+          "digest_result": ""
+        },
+        {
+          "tasks": 2,
+          "expired": false,
+          "failed": true
+        }
+      ],
+      "stderr": "",
+      "spawned": 1,
+      "state": {
+        "version": 1,
+        "tasks": []
+      }
+    }
+  },
+  {
+    "full_id": "cpython-disconnected",
+    "case": {
+      "id": "cpython-disconnected-reference",
+      "manifest": {
+        "tasks": [
+          {
+            "name": "a",
+            "argv": [
+              "/fixture/child",
+              "ok",
+              "a"
+            ],
+            "dependencies": [],
+            "inputs": [],
+            "outputs": []
+          },
+          {
+            "name": "b",
+            "argv": [
+              "/fixture/child",
+              "ok",
+              "b"
+            ],
+            "dependencies": [
+              "a"
+            ],
+            "inputs": [],
+            "outputs": []
+          }
+        ],
+        "jobs": 2,
+        "fail_fast": false
+      },
+      "files": {},
+      "prior": null,
+      "args": [
+        "build",
+        "manifest.json"
+      ],
+      "exit": 0,
+      "denied": null,
+      "rows": [
+        {
+          "name": "a",
+          "status": "built",
+          "reason": "no_record",
+          "digest_result": "d7f56f69cbfaff04f5aa30a7860b4de9a7f3161d04d687a6e5b86d7aae4b0969"
+        },
+        {
+          "name": "b",
+          "status": "built",
+          "reason": "no_record",
+          "digest_result": "cf6c3d8aff1a0412858d397e51b2a8f808b562af46b3a897695417ad09ad2e06"
+        },
+        {
+          "tasks": 2,
+          "expired": false,
+          "failed": false
+        }
+      ],
+      "stderr": "",
+      "spawned": 2,
+      "state": {
+        "version": 1,
+        "tasks": [
+          {
+            "name": "a",
+            "record": {
+              "fingerprint": "a2d774b22f75b7bf6e6a5002ad4b3091bea3f3f63ee83e25da10e2e75dbd9034",
+              "digest_result": "d7f56f69cbfaff04f5aa30a7860b4de9a7f3161d04d687a6e5b86d7aae4b0969",
+              "outputs": []
+            }
+          },
+          {
+            "name": "b",
+            "record": {
+              "fingerprint": "a34aacc2c6ecea25a51f9c42731ed8a9a76734e47663cc56293fc5b05d0c12b9",
+              "digest_result": "cf6c3d8aff1a0412858d397e51b2a8f808b562af46b3a897695417ad09ad2e06",
+              "outputs": []
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "full_id": "clean-ready-tie",
+    "case": {
+      "id": "clean-ready-tie-reference",
+      "manifest": {
+        "tasks": [
+          {
+            "name": "a",
+            "argv": [
+              "/fixture/child",
+              "ok",
+              "a"
+            ],
+            "dependencies": [],
+            "inputs": [],
+            "outputs": [
+              "out"
+            ]
+          }
+        ],
+        "jobs": 2,
+        "fail_fast": false
+      },
+      "files": {
+        "out": "old"
+      },
+      "prior": {
+        "version": 1,
+        "tasks": [
+          {
+            "name": "a",
+            "record": {
+              "fingerprint": "f6f000f851b9fdc25ce7c26800d65f5ed878acb899c508fe23b5c731564a9334",
+              "digest_result": "e3f97d59b4bbf1204726fece2a33fc808d06cd4f5c3b30174609b20416e9d225",
+              "outputs": [
+                {
+                  "path": "out",
+                  "digest": "cba06b5736faf67e54b07b561eae94395e774c517a7d910a54369e1263ccfbd4"
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "args": [
+        "build",
+        "manifest.json"
+      ],
+      "exit": 0,
+      "denied": null,
+      "rows": [
+        {
+          "name": "a",
+          "status": "clean",
+          "reason": "unchanged",
+          "digest_result": "e3f97d59b4bbf1204726fece2a33fc808d06cd4f5c3b30174609b20416e9d225"
+        },
+        {
+          "tasks": 1,
+          "expired": false,
+          "failed": false
+        }
+      ],
+      "stderr": "",
+      "spawned": 0,
+      "state": {
+        "version": 1,
+        "tasks": [
+          {
+            "name": "a",
+            "record": {
+              "fingerprint": "f6f000f851b9fdc25ce7c26800d65f5ed878acb899c508fe23b5c731564a9334",
+              "digest_result": "e3f97d59b4bbf1204726fece2a33fc808d06cd4f5c3b30174609b20416e9d225",
+              "outputs": [
+                {
+                  "path": "out",
+                  "digest": "cba06b5736faf67e54b07b561eae94395e774c517a7d910a54369e1263ccfbd4"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  }
+]

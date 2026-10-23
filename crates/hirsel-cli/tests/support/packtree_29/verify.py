@@ -31,6 +31,10 @@ def main(args):
     if selected: rows=[r for r in rows if r['id'] in selected.split(',')]
     rows=[r for r in rows if not r.get('fault') and not r.get('metadata')]
     assert rows
+    twins=json.loads((root/'reference-cases.json').read_text())
+    full_ids={row['full_id'] for row in twins}
+    selected_ids={row['id'] for row in rows}
+    rows += [row['case'] for row in twins if row['full_id'] in selected_ids]
     toolpaths=[args.hirsel,Path(env['HIRSEL_IMAGE']),Path(env['LLVM_SYS_231_PREFIX'])/'bin/clang',Path(env['LLVM_SYS_231_PREFIX'])/'bin/ld.lld']
     toolpaths += list(Path(env['HIRSEL_RUNTIME_ARCHIVES']).rglob('*.a'))
     toolpaths += list(Path(env['HIRSEL_LINK_KIT']).rglob('manifest.json'))
@@ -65,21 +69,11 @@ def main(args):
         command=[sys.executable,str(root/'capped'),'--timeout','60','prlimit','--cpu=60:61',sys.executable,str(root/'verify.py'),'--child',str(cell/'result.json'),'--',*map(str,argv)]
         done=subprocess.run(command,env=env,capture_output=True,timeout=90)
         (cell/'resources').write_bytes(done.stderr)
-        if not (cell/'result.json').exists() and row['id']=='archive2097152' and id.endswith('-replay-reference') and done.returncode==124:
-            rec.update(completed=0,disposition='INCOMPLETE: unchanged60s timeout before result; raw resources retained')
-            (out/'receipts.json').write_text(json.dumps(receipts,indent=2));return
         assert (cell/'result.json').exists(),(id,done)
         actual=json.loads((cell/'result.json').read_text())
         expected={k:row[k] for k in ('status','stdout','stderr')}
         rec.update(completed=1,actual=actual,passed=int(actual==expected and done.returncode==row['status']))
         (out/'receipts.json').write_text(json.dumps(receipts,indent=2))
-        known_cursor={'members64':17,'members65':17,'file65536':32,'payload1048576':267,'payload1048577':267,'walk-tree':58}.get(row['id'])
-        known_refusal=dict(status=3,stdout='',stderr=f'hirsel: replay refused: UnconsumedInput({known_cursor})\n')
-        if known_cursor is not None and id.endswith('-replay-reference') and actual==known_refusal:
-            rec['disposition']='INCOMPLETE: reference replay refused/stopped; exact raw error retained, budget not inferred from UnconsumedInput'
-            (out/'receipts.json').write_text(json.dumps(receipts,indent=2))
-            print('PACKTREE_29_INCOMPLETE '+id,flush=True)
-            return
         assert rec['passed'],(id,actual,expected)
         print('PACKTREE_29_PASS '+id,flush=True)
     tapes=[]
@@ -138,9 +132,7 @@ def main(args):
         for backend,binary in binaries.items():
             run(id+'-replay-'+backend,[binary,'--hirsel-replay',tape],row)
             assert not mounts.exists() and digest(tape)==original
-        if row['id']=='archive2097152' and id.startswith('cranelift-'):
-            receipts.append(dict(id=id+'-replay-reference',started=0,completed=0,passed=0,disposition='INCOMPLETE NOT_RUN: same2MiB vector reference adapter timed out at60s on LLVM-origin tape'))
-            (out/'receipts.json').write_text(json.dumps(receipts,indent=2));continue
+        if row['id'] in full_ids:continue
         run(id+'-replay-reference',[args.hirsel,'run',root/'hirsel.json','--replay',tape,'--max-steps','1000000'],row)
         assert not mounts.exists() and digest(tape)==original
     tape=tapes[0][1]

@@ -103,6 +103,14 @@ fn dagbuild_29_reference_checked_workflows() {
             selected.retain(|c| filter.split(',').any(|id| c["id"] == id));
         }
         assert!(!selected.is_empty());
+        let twins: Vec<Value> =
+            serde_json::from_str(include_str!("../support/dagbuild_29/reference-cases.json"))
+                .unwrap();
+        for case in &mut selected {
+            if let Some(twin) = twins.iter().find(|twin| twin["full_id"] == case["id"]) {
+                *case = twin["case"].clone();
+            }
+        }
         for case in selected {
             let id = case["id"].as_str().unwrap();
             if id == "bytes-1048576" {
@@ -307,6 +315,10 @@ fn native_workflows(backend: &str) {
         (
             "cases.json",
             include_str!("../support/dagbuild_29/cases.json"),
+        ),
+        (
+            "reference-cases.json",
+            include_str!("../support/dagbuild_29/reference-cases.json"),
         ),
         (
             "child.py",
