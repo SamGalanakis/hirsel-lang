@@ -105,6 +105,11 @@ impl QueryEngine {
         {
             return entry.result().map(|output| output.value.clone());
         }
+        if let Some(outcome) = self.load_publication(path)
+            && let Ok(published) = outcome.result
+        {
+            return Ok(published.summary);
+        }
         if let Some(summary) = self.image_summary(path)
             && summary.definition == definition
             && self.seed_definition_summary(summary.clone())

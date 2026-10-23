@@ -1343,7 +1343,12 @@ impl QueryEngine {
         }
         let output = self.signature_output(definition)?;
         Ok(match self.signatures.get(&DefId::intern(definition)) {
-            Some(entry) if self.items.contains_key(definition) => entry.covered.clone(),
+            Some(entry)
+                if self.items.contains_key(definition)
+                    || self.catalog.body(definition).is_some() =>
+            {
+                entry.covered.clone()
+            }
             _ => output.dependencies.clone(),
         })
     }
