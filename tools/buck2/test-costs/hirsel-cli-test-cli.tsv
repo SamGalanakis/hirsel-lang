@@ -60,6 +60,8 @@ localrpc_23::localrpc_23_checked_model_vectors	1.222
 localrpc_23::localrpc_23_unix_peers_all_engines	106.382
 native_run_matches_the_reference_run	6.161
 observation_view::offline_view_requires_capture_identity_and_writes_logical_perfetto	0.032
+patchctl_23::patchctl_23_oracle_three_engines_and_cleanup	74.172
+patchctl_23::patchctl_23_pure_model_checked_heap	4.464
 placement::cores_overrides_bound_record_and_works_without_explicit_grants	0.298
 placement::cores_requires_one_positive_integer	0.044
 placement::cores_shorthand_equals_record_placement_in_source_and_native_headers	1.386

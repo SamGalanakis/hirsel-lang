@@ -80,6 +80,7 @@ selects an explicit bound.
 | [linkcheck](linkcheck/README.md) | Check URLs in bounded concurrent batches, with redirects, channel results and whole-request deadlines; scripted peers cover 200, 404 and timeout. |
 | [kvd](kvd/README.md) | Durable std-store key/value TCP service, a Mutex request counter and graceful SIGTERM shutdown; scripted session grants exercise four commands and shutdown. |
 | [logtail](logtail/README.md) | Follow a growing log with a parent-directory watcher, bounded regex searches, partial-line retention and UTC timestamps. |
+| [patchctl](patchctl/README.md) | Generate and validate bounded single-file unified patches with read-only grants; reject partial application without publishing text. |
 | [mdsite](mdsite/README.md) | Recursively render Markdown to HTML with an escaped, path-preserving index and safe default rendering. |
 
 The E2E tests are in `crates/hirsel-cli/tests/examples.rs`. They check exact output

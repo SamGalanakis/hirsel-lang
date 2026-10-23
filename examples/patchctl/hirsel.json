@@ -1,0 +1,33 @@
+{
+  "dependencies": [
+    {
+      "expose": [],
+      "manifest": "../../stdlib/std@1/hirsel.json",
+      "package": {
+        "name": "std",
+        "version": "1"
+      }
+    }
+  ],
+  "entry": {
+    "module": [],
+    "name": "main"
+  },
+  "package": {
+    "name": "patchctl",
+    "version": "0"
+  },
+  "schema": 1,
+  "sources": [
+    {
+      "module": [],
+      "path": "main.hir"
+    },
+    {
+      "module": [
+        "model"
+      ],
+      "path": "model.hir"
+    }
+  ]
+}

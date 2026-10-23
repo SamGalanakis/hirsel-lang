@@ -1,0 +1,3 @@
+agent: review-bot
+mode: validate
+write_source: false

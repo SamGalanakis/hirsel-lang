@@ -1,0 +1,69 @@
+pub type AppError = Grant(GrantError) | Arguments(ArgError) | Files(FileError) | InvalidInput(
+  model.InvalidInput
+) | Output(OutputError)
+
+const HELP: String = "patchctl diff OLD NEW\npatchctl apply SOURCE PATCH\nRead UTF-8 leaf filenames in the fixtures grant; write result to stdout.\nMyers, context=3; rejected hunk indexes are zero-based.\nLimits: 65536 bytes/input, 64 text lines, 256 patch lines.\nExit: 0 success/help, 1 rejected hunks, 2 invalid input/grant/I/O.\n"
+
+fn read_text(d: Dir, name: String) -> Result[unique String, AppError] {
+  model.filename(name)?
+  let mut f = file.open(d, path.of(name))?
+  let data = match file.read_all_bounded(d, mut f, model.INPUT_BYTES) {
+    Ok(value) => take value,
+    Error(Limit()) => return Error(InvalidInput(BytesLimit())),
+    Error(File(error)) => return Error(Files(take error)),
+  }
+  let Ok(value) = string.from_bytes(take data) else {
+    return Error(InvalidInput(Utf8()))
+  }
+  Ok(take value)
+}
+
+fn execute(rt: Io, args: Args) -> Result[(), AppError] {
+  if arg.len(args) == 1 && arg.text(args, 0)? == "--help" {
+    out.print(io.stdout(rt)?, HELP)?
+    return Ok(())
+  }
+  if arg.len(args) != 3 {
+    return Error(InvalidInput(Usage()))
+  }
+  let command: model.Command = match arg.text(args, 0)? {
+    "diff" => Diff(),
+    "apply" => Apply(),
+    _ => return Error(InvalidInput(Usage())),
+  }
+  let source_name = arg.text(args, 1)?
+  let other_name = arg.text(args, 2)?
+  model.filename(source_name)?
+  model.filename(other_name)?
+  let d = io.dir(rt, path.of("fixtures"))?
+  let source = read_text(d, source_name)?
+  let other = read_text(d, other_name)?
+  let report = model.execute(command, source, other)?
+  out.print(io.stdout(rt)?, report.text)?
+  Ok(())
+}
+
+pub fn main(rt: Io, args: Args) -> Result[process.ExitCode, AppError] {
+  match execute(rt, args) {
+    Ok(()) => Ok(process.SUCCESS),
+    Error(error) => {
+      let message = match error {
+        Grant(_) => "grant",
+        Arguments(_) => "arguments",
+        Files(NotFound()) => "file_not_found",
+        Files(NotGranted()) => "grant",
+        Files(_) => "file_error",
+        InvalidInput(input) => model.describe(input),
+        Output(_) => "output_error",
+      }
+      let code = match error {
+        InvalidInput(Rejected(_)) => 1u8,
+        _ => 2u8,
+      }
+      if let Ok(stderr) = io.stderr(rt) {
+        let _ = err.print(stderr, f"patchctl: {message}\n")
+      }
+      Ok(process.exit_code(code))
+    },
+  }
+}

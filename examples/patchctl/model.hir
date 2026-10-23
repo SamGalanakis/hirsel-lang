@@ -1,0 +1,189 @@
+// Uses shipped imara-diff algorithms; no algorithm is implemented here.
+pub const INPUT_BYTES: u64 = 65536
+
+pub const TEXT_LINES: u64 = 64
+
+pub const PATCH_LINES: u64 = 256
+
+pub type Command = Diff | Apply
+
+pub type InvalidInput = Usage | Filename | Utf8 | BytesLimit | LinesLimit | PatchEnvelope | PatchRange | Malformed(
+  u64
+) | Rejected(List[u64])
+
+pub type Report {
+  text: String,
+}
+
+pub fn filename(name: String) -> Result[(), InvalidInput] uses {} {
+  if name == "" || name == "." || name == ".." || string.byte_len(name) > 255 {
+    return Error(Filename())
+  }
+  for byte in string.as_bytes(name) {
+    if byte < 32 || byte == 127 || byte == b'/' || byte == b'\\' || byte == b':' {
+      return Error(Filename())
+    }
+  }
+  Ok(())
+}
+
+// Count before split_lines allocates a collection. LF terminators stay intact.
+pub fn bounded(value: String, limit: u64) -> Result[(), InvalidInput] uses {} {
+  if string.byte_len(value) > INPUT_BYTES {
+    return Error(BytesLimit())
+  }
+  let mut count = 0u64
+  for byte in string.as_bytes(value) {
+    if byte == b'\n' {
+      count += 1
+      if count > limit {
+        return Error(LinesLimit())
+      }
+    }
+  }
+  if value != "" && !string.ends_with(value, "\n") {
+    count += 1
+  }
+  if count > limit {
+    return Error(LinesLimit())
+  }
+  Ok(())
+}
+
+// Bound positions as well as counts before std's nearest-position search.
+// This is envelope/admission policy; std still parses and applies the hunks.
+fn range(value: String, sign: String) -> Result[(), InvalidInput] uses {} {
+  if !string.starts_with(value, sign) {
+    return Error(PatchEnvelope())
+  }
+  let mut commas = 0u64
+  for byte in string.as_bytes(value) {
+    if byte == b',' {
+      commas += 1
+      if commas > 1 {
+        return Error(PatchEnvelope())
+      }
+    }
+  }
+  let pieces = string.split(unique value, ",")
+  if list.len(pieces) > 2 {
+    return Error(PatchEnvelope())
+  }
+  let raw = string.as_bytes(pieces[0])
+  let start_text = bytes.slice(raw, 1, bytes.len(raw))
+  let Ok(start_string) = string.from_bytes(unique start_text) else {
+    return Error(PatchEnvelope())
+  }
+  let Ok(start) = u64.parse(start_string) else {
+    return Error(PatchRange())
+  }
+  if start > TEXT_LINES {
+    return Error(PatchRange())
+  }
+  if list.len(pieces) == 2 {
+    let Ok(count) = u64.parse(pieces[1]) else {
+      return Error(PatchRange())
+    }
+    if count > TEXT_LINES {
+      return Error(PatchRange())
+    }
+  }
+  Ok(())
+}
+
+fn envelope(patch: String) -> Result[(), InvalidInput] uses {} {
+  bounded(patch, PATCH_LINES)?
+  if patch == "" {
+    return Ok(())
+  }
+  let lines = diff.split_lines(patch)
+  if list.len(lines) < 3 || !string.starts_with(lines[0], "--- ") || !string.starts_with(
+    lines[1],
+    "+++ "
+  ) || !string.starts_with(lines[2], "@@ ") {
+    return Error(PatchEnvelope())
+  }
+  let mut hunks = 0u64
+  for line in lines {
+    if string.starts_with(line, "@@ ") {
+      hunks += 1
+      if hunks > TEXT_LINES {
+        return Error(LinesLimit())
+      }
+      let mut spaces = 0u64
+      for byte in string.as_bytes(line) {
+        if byte == b' ' {
+          spaces += 1
+          if spaces > 3 {
+            return Error(PatchEnvelope())
+          }
+        }
+      }
+      let fields = string.split(unique line, " ")
+      if list.len(fields) != 4 || fields[0] != "@@" || fields[3] != "@@\n" {
+        return Error(PatchEnvelope())
+      }
+      range(fields[1], "-")?
+      range(fields[2], "+")?
+    }
+  }
+  Ok(())
+}
+
+pub fn execute(command: Command, source: String, other: String) -> Result[
+  Report,
+  InvalidInput
+] uses {} {
+  bounded(source, TEXT_LINES)?
+  match command {
+    Diff() => {
+      bounded(other, TEXT_LINES)?
+      let patch = diff.unified("old", source, "new", other, Myers(), 3)
+      // Every successful generated patch is admissible as an apply input.
+      envelope(patch)?
+      Ok(Report(text: take patch))
+    },
+    Apply() => {
+      envelope(other)?
+      let patched = diff.apply(source, other) ? MalformedPatch
+      if list.len(patched.rejected) != 0 {
+        return Error(Rejected(unique patched.rejected))
+      }
+      bounded(patched.text, TEXT_LINES)?
+      Ok(Report(text: unique patched.text))
+    },
+  }
+}
+
+fn MalformedPatch(error: diff.PatchError) -> InvalidInput uses {} {
+  match error {
+    Malformed(line) => Malformed(line),
+  }
+}
+
+pub fn describe(error: InvalidInput) -> String uses {} {
+  match error {
+    Usage() => "usage",
+    Filename() => "filename",
+    Utf8() => "utf8",
+    BytesLimit() => "input_bytes_limit",
+    LinesLimit() => "line_count_limit",
+    PatchEnvelope() => "patch_envelope",
+    PatchRange() => "patch_range",
+    Malformed(line) => f"malformed_patch line={line}",
+    Rejected(indexes) => {
+      let mut out: List[u8] = []
+      text.append(mut out, "rejected_hunks [")
+      let mut first = true
+      for index in indexes {
+        if !first {
+          text.append(mut out, ",")
+        }
+        first = false
+        u64.format_into(index, mut out)
+      }
+      text.append(mut out, "]")
+      text.finish_valid(take out)
+    },
+  }
+}

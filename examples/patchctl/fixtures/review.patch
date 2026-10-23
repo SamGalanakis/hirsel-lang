@@ -1,0 +1,7 @@
+--- /display/only
++++ ../../never-opened
+@@ -1,3 +1,3 @@
+ agent: review-bot
+-mode: suggest
++mode: validate
+ write_source: false
