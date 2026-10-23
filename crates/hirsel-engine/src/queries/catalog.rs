@@ -138,11 +138,18 @@ impl Catalog {
     }
     pub(super) fn file_definitions(&self, file: FileId) -> Option<Vec<DefPath>> {
         self.files.contains_key(&file).then(|| {
-            self.candidates
+            let mut definitions: Vec<_> = self
+                .candidates
                 .iter()
-                .filter(|(_, candidates)| candidates.iter().any(|c| c.file == file))
-                .map(|(path, _)| path.clone())
-                .collect()
+                .flat_map(|(path, candidates)| {
+                    candidates
+                        .iter()
+                        .filter(move |c| c.file == file)
+                        .map(move |c| (c.base, path.clone()))
+                })
+                .collect();
+            definitions.sort();
+            definitions.into_iter().map(|(_, path)| path).collect()
         })
     }
 }

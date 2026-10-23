@@ -433,15 +433,15 @@ impl LoadedProgram {
         }
         Ok(true)
     }
-    /// Parse every source in check order, as loading does, so a source that no
-    /// longer lexes or parses fails the program the same way a fresh load does.
+    /// Observe every source in check order, as loading does. Ordinary heads
+    /// avoid parsing unchanged bytes; changed invalid bytes fail as on a fresh load.
     pub fn parse_sources(&mut self) -> Result<(), ToolError> {
         for (file, context) in self.files.clone() {
             if self.engine.imaged(&context.package) {
                 continue;
             }
             self.engine
-                .parse_file(file, &context)
+                .index_source(file, &context)
                 .map_err(|e| self.error(e))?;
         }
         Ok(())
@@ -798,11 +798,20 @@ pub(crate) fn load_program_inputs(
             }
             program
                 .engine
-                .parse_file(*file, context)
+                .index_source(*file, context)
                 .map_err(|e| program.error(e))?;
         }
         // A declared wrapper names an ordinary function of its own package.
         for package in &program.unsafe_ffi {
+            // Wrapper classification consumes syntax only for this package.
+            for (file, context) in &program.files {
+                if context.package == package.package {
+                    program
+                        .engine
+                        .parse_file(*file, context)
+                        .map_err(|e| program.error(e))?;
+                }
+            }
             let functions: BTreeMap<_, _> = program
                 .files
                 .iter()
