@@ -1,0 +1,1 @@
+{"commands":[{"replace":{"module":"base","source":"let answer = true;"}},{"check":true},{"replace":{"module":"app","source":"import base; let n = base.answer + 1;"}},{"check":true}]}

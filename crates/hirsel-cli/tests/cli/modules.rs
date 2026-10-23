@@ -109,3 +109,4 @@ mod unix_listen_replay_31;
 mod property_kit_31;
 mod cancel_replay_31;
 mod sheet_eval_31;
+mod toy_analyzer_31;

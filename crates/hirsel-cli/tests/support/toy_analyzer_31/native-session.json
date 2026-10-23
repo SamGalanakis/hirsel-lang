@@ -1,0 +1,111 @@
+{
+  "id": "incremental-native-session",
+  "modules": {
+    "a": "let n=1;",
+    "b": "import a; let n=a.n+1;",
+    "c": "let n=true;"
+  },
+  "commands": [
+    {
+      "check": true
+    },
+    {
+      "replace": {
+        "module": "a",
+        "source": "let n=1; "
+      }
+    },
+    {
+      "check": true
+    },
+    {
+      "replace": {
+        "module": "a",
+        "source": "let n=true;"
+      }
+    },
+    {
+      "check": true
+    },
+    {
+      "replace": {
+        "module": "b",
+        "source": "let n=a.n+1;"
+      }
+    },
+    {
+      "check": true
+    }
+  ],
+  "steps": 1000000,
+  "exit": 1,
+  "expected_rows": [
+    {
+      "diagnostics": [],
+      "total": 0,
+      "analyzed": [
+        "a",
+        "b",
+        "c"
+      ],
+      "reused": []
+    },
+    {
+      "diagnostics": [],
+      "total": 0,
+      "analyzed": [],
+      "reused": [
+        "a",
+        "b",
+        "c"
+      ]
+    },
+    {
+      "diagnostics": [],
+      "total": 0,
+      "analyzed": [
+        "a",
+        "b"
+      ],
+      "reused": [
+        "c"
+      ]
+    },
+    {
+      "diagnostics": [
+        {
+          "module": "b",
+          "code": "type_mismatch",
+          "start": 19,
+          "end": 20
+        }
+      ],
+      "total": 1,
+      "analyzed": [
+        "a",
+        "b"
+      ],
+      "reused": [
+        "c"
+      ]
+    },
+    {
+      "diagnostics": [
+        {
+          "module": "b",
+          "code": "undefined",
+          "start": 6,
+          "end": 9
+        }
+      ],
+      "total": 1,
+      "analyzed": [
+        "b"
+      ],
+      "reused": [
+        "a",
+        "c"
+      ]
+    }
+  ]
+}

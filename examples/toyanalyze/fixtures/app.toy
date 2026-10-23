@@ -1,0 +1,3 @@
+import base;
+let answer = base.answer;
+{ let answer = true; let same = answer == false; }

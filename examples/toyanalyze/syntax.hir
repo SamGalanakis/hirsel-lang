@@ -1,0 +1,330 @@
+// Scanner/precedence parser structure: Crafting Interpreters Scanner.java and
+// Parser.java at 4a840f70 (MIT). Indexed expression arena bounds recursion.
+pub const SOURCE_BYTES: u64 = 8192
+
+pub const DEPTH: u64 = 24
+
+pub type Span {
+  start: u64,
+  end: u64,
+}
+
+pub type Located[T] {
+  value: T,
+  span: Span,
+}
+
+pub type Kind = Word | Number | Punct | End
+
+pub type Token = Located[Kind]
+
+pub type Expr = Integer | Boolean | Name(String) | Binary(String, u64, u64)
+
+pub type Node {
+  item: Located[Expr],
+  depth: u64,
+}
+
+pub type Statement = Bind(Located[String], u64) | Enter | Leave | Import(
+  Located[String]
+)
+
+pub type Tree {
+  nodes: List[Node],
+  statements: List[Located[Statement]],
+  problems: List[Located[String]],
+  problem_count: u64,
+}
+
+pub type Refusal = Limit(String)
+
+type Parser {
+  tokens: List[Token],
+  at: u64,
+  tree: Tree,
+  bindings: u64,
+  nesting: u64,
+}
+
+pub fn span(start: u64, end: u64) -> Span uses {} {
+  Span(start: start, end: end)
+}
+
+pub fn located[T](take value: T, at: Span) -> Located[T] uses {} {
+  Located(value: take value, span: at)
+}
+
+pub fn view(data: Bytes, at: Span) -> Bytes in data uses {} {
+  bytes.slice(data, at.start, at.end)
+}
+
+fn word(c: u8) -> bool uses {} {
+  ascii.is_alpha(c) || c == 95u8
+}
+
+pub fn identifier(text: String) -> bool uses {} {
+  let data = string.as_bytes(text)
+  if bytes.len(data) == 0 || !word(data[0]) {
+    return false
+  }
+  for c in data {
+    if !word(c) && !ascii.is_digit(c) {
+      return false
+    }
+  }
+  true
+}
+
+fn token_text(data: Bytes, at: Span) -> String uses {} {
+  match string.from_bytes(unique view(data, at)) {
+    Ok(text) => take text,
+    Error(_) => "?",
+  }
+}
+
+fn scan(data: Bytes) -> List[Token] uses {} {
+  let mut tokens: List[Token] = []
+  let mut at = 0u64
+  while at < bytes.len(data) {
+    let c = data[at]
+    if ascii.is_space(c) {
+      at += 1
+      continue
+    }
+    if c == 47u8 && at + 1 < bytes.len(data) && data[at + 1] == 47u8 {
+      while at < bytes.len(data) && data[at] != 10u8 {
+        at += 1
+      }
+      continue
+    }
+    let first = at
+    let kind = if word(c) {
+      Word()
+    } else if ascii.is_digit(c) {
+      Number()
+    } else {
+      Punct()
+    }
+    at += 1
+    if kind == Word() {
+      while at < bytes.len(data) && (word(data[at]) || ascii.is_digit(data[at])) {
+        at += 1
+      }
+    } else if kind == Number() {
+      while at < bytes.len(data) && ascii.is_digit(data[at]) {
+        at += 1
+      }
+    } else if at < bytes.len(data) && data[at] == 61u8 && (c == 61u8 || c == 33u8 || c == 60u8 || c == 62u8) {
+      at += 1
+    }
+    list.push(mut tokens, located(take kind, span(first, at)))
+  }
+  list.push(mut tokens, located(End(), span(at, at)))
+  take tokens
+}
+
+fn peek(p: Parser, data: Bytes) -> String uses {} {
+  token_text(data, p.tokens[p.at].span)
+}
+
+fn accept(mut p: Parser, data: Bytes, text: String) -> bool uses {} {
+  if peek(p, data) != text {
+    return false
+  }
+  p.at += 1
+  true
+}
+
+fn problem(mut p: Parser, at: Span) -> () uses {} {
+  p.tree.problem_count += 1
+  if list.len(p.tree.problems) < 128 {
+    list.push(mut p.tree.problems, located("syntax", at))
+  }
+}
+
+fn expect(mut p: Parser, data: Bytes, text: String) -> bool uses {} {
+  if accept(mut p, data, text) {
+    return true
+  }
+  let bad_span = p.tokens[p.at].span
+  problem(mut p, bad_span)
+  false
+}
+
+fn name(mut p: Parser, data: Bytes) -> Option[Located[String]] uses {} {
+  let token = p.tokens[p.at]
+  if token.value != Word() {
+    problem(mut p, token.span)
+    return None()
+  }
+  let text = token_text(data, token.span)
+  p.at += 1
+  Some(located(take text, token.span))
+}
+
+fn push_node(mut p: Parser, take value: Expr, at: Span, depth: u64) -> Result[
+  u64,
+  Refusal
+] uses {} {
+  if depth + p.nesting > DEPTH {
+    return Error(Limit("ast_depth"))
+  }
+  let index = list.len(p.tree.nodes)
+  list.push(mut p.tree.nodes, Node(item: located(take value, at), depth: depth))
+  Ok(index)
+}
+
+fn precedence(op: String) -> u64 uses {} {
+  if op == "==" || op == "!=" {
+    1
+  } else if op == "<" || op == ">" || op == "<=" || op == ">=" {
+    2
+  } else if op == "+" || op == "-" {
+    3
+  } else if op == "*" || op == "/" {
+    4
+  } else {
+    0
+  }
+}
+
+fn expression(mut p: Parser, data: Bytes, minimum: u64, recursion: u64) -> Result[
+  Option[u64],
+  Refusal
+] uses {} {
+  if recursion + p.nesting > DEPTH {
+    return Error(Limit("ast_depth"))
+  }
+  let token = p.tokens[p.at]
+  let text = peek(p, data)
+  let mut left = 0u64
+  if accept(mut p, data, "(") {
+    let Some(inner) = expression(mut p, data, 1, recursion + 1)? else {
+      return Ok(None())
+    }
+    let _ = expect(mut p, data, ")")
+    left = inner
+  } else if token.value == Number() {
+    p.at += 1
+    left = push_node(mut p, Integer(), token.span, 1)?
+  } else if token.value == Word() {
+    p.at += 1
+    if text == "true" || text == "false" {
+      left = push_node(mut p, Boolean(), token.span, 1)?
+    } else {
+      let mut spelling = take text
+      let mut at = token.span
+      if accept(mut p, data, ".") {
+        let Some(member) = name(mut p, data) else {
+          return Ok(None())
+        }
+        spelling = f"{spelling}.{member.value}"
+        at.end = member.span.end
+      }
+      left = push_node(mut p, Name(take spelling), at, 1)?
+    }
+  } else {
+    problem(mut p, token.span)
+    return Ok(None())
+  }
+  while true {
+    let op = peek(p, data)
+    let power = precedence(op)
+    if power < minimum || power == 0 {
+      break
+    }
+    let at = p.tokens[p.at].span
+    p.at += 1
+    let Some(right) = expression(mut p, data, power + 1, recursion + 1)? else {
+      return Ok(None())
+    }
+    let a = p.tree.nodes[left].depth
+    let b = p.tree.nodes[right].depth
+    let depth = if a > b {
+      a + 1
+    } else {
+      b + 1
+    }
+    left = push_node(mut p, Binary(take op, left, right), at, depth)?
+  }
+  Ok(Some(left))
+}
+
+fn recover(mut p: Parser, data: Bytes) -> () uses {} {
+  while p.tokens[p.at].value != End() {
+    let text = peek(p, data)
+    if text == "}" || text == "let" || text == "import" || text == "{" {
+      return
+    }
+    p.at += 1
+    if text == ";" {
+      return
+    }
+  }
+}
+
+pub fn parse(data: Bytes) -> Result[Tree, Refusal] uses {} {
+  if bytes.len(data) > SOURCE_BYTES {
+    return Error(Limit("source_bytes"))
+  }
+  let mut p = Parser(
+    tokens: scan(data),
+    at: 0,
+    bindings: 0,
+    nesting: 0,
+    tree: Tree(nodes: [], statements: [], problems: [], problem_count: 0)
+  )
+  while p.tokens[p.at].value != End() {
+    let at = p.tokens[p.at].span
+    let text = peek(p, data)
+    p.at += 1
+    if text == "{" {
+      if p.nesting >= DEPTH - 1 {
+        return Error(Limit("ast_depth"))
+      }
+      p.nesting += 1
+      list.push(mut p.tree.statements, located(Enter(), at))
+    } else if text == "}" {
+      if p.nesting == 0 {
+        problem(mut p, at)
+      } else {
+        p.nesting -= 1
+        list.push(mut p.tree.statements, located(Leave(), at))
+      }
+    } else if text == "import" {
+      if p.nesting != 0 {
+        problem(mut p, at)
+      }
+      if let Some(module) = name(mut p, data) {
+        list.push(mut p.tree.statements, located(Import(take module), at))
+      }
+      if !expect(mut p, data, ";") {
+        recover(mut p, data)
+      }
+    } else if text == "let" {
+      if p.bindings == 256 {
+        return Error(Limit("bindings"))
+      }
+      p.bindings += 1
+      if let Some(binding) = name(mut p, data) {
+        if expect(mut p, data, "=") {
+          if let Some(value) = expression(mut p, data, 1, 1)? {
+            list.push(mut p.tree.statements, located(Bind(take binding, value), at))
+          }
+        }
+      }
+      if !expect(mut p, data, ";") {
+        recover(mut p, data)
+      }
+    } else {
+      problem(mut p, at)
+      recover(mut p, data)
+    }
+  }
+  if p.nesting != 0 {
+    let bad_span = p.tokens[p.at].span
+    problem(mut p, bad_span)
+  }
+  let Parser(tree: parsed, ..) = take p
+  Ok(take parsed)
+}

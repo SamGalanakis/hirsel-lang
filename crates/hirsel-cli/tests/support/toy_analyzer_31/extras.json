@@ -1,0 +1,471 @@
+[
+  {
+    "id": "edits32",
+    "modules": {
+      "a": "let n=1;"
+    },
+    "commands": [
+      {
+        "replace": {
+          "module": "a",
+          "source": "let n=1;"
+        }
+      },
+      {
+        "replace": {
+          "module": "a",
+          "source": "let n=1;"
+        }
+      },
+      {
+        "replace": {
+          "module": "a",
+          "source": "let n=1;"
+        }
+      },
+      {
+        "replace": {
+          "module": "a",
+          "source": "let n=1;"
+        }
+      },
+      {
+        "replace": {
+          "module": "a",
+          "source": "let n=1;"
+        }
+      },
+      {
+        "replace": {
+          "module": "a",
+          "source": "let n=1;"
+        }
+      },
+      {
+        "replace": {
+          "module": "a",
+          "source": "let n=1;"
+        }
+      },
+      {
+        "replace": {
+          "module": "a",
+          "source": "let n=1;"
+        }
+      },
+      {
+        "replace": {
+          "module": "a",
+          "source": "let n=1;"
+        }
+      },
+      {
+        "replace": {
+          "module": "a",
+          "source": "let n=1;"
+        }
+      },
+      {
+        "replace": {
+          "module": "a",
+          "source": "let n=1;"
+        }
+      },
+      {
+        "replace": {
+          "module": "a",
+          "source": "let n=1;"
+        }
+      },
+      {
+        "replace": {
+          "module": "a",
+          "source": "let n=1;"
+        }
+      },
+      {
+        "replace": {
+          "module": "a",
+          "source": "let n=1;"
+        }
+      },
+      {
+        "replace": {
+          "module": "a",
+          "source": "let n=1;"
+        }
+      },
+      {
+        "replace": {
+          "module": "a",
+          "source": "let n=1;"
+        }
+      },
+      {
+        "replace": {
+          "module": "a",
+          "source": "let n=1;"
+        }
+      },
+      {
+        "replace": {
+          "module": "a",
+          "source": "let n=1;"
+        }
+      },
+      {
+        "replace": {
+          "module": "a",
+          "source": "let n=1;"
+        }
+      },
+      {
+        "replace": {
+          "module": "a",
+          "source": "let n=1;"
+        }
+      },
+      {
+        "replace": {
+          "module": "a",
+          "source": "let n=1;"
+        }
+      },
+      {
+        "replace": {
+          "module": "a",
+          "source": "let n=1;"
+        }
+      },
+      {
+        "replace": {
+          "module": "a",
+          "source": "let n=1;"
+        }
+      },
+      {
+        "replace": {
+          "module": "a",
+          "source": "let n=1;"
+        }
+      },
+      {
+        "replace": {
+          "module": "a",
+          "source": "let n=1;"
+        }
+      },
+      {
+        "replace": {
+          "module": "a",
+          "source": "let n=1;"
+        }
+      },
+      {
+        "replace": {
+          "module": "a",
+          "source": "let n=1;"
+        }
+      },
+      {
+        "replace": {
+          "module": "a",
+          "source": "let n=1;"
+        }
+      },
+      {
+        "replace": {
+          "module": "a",
+          "source": "let n=1;"
+        }
+      },
+      {
+        "replace": {
+          "module": "a",
+          "source": "let n=1;"
+        }
+      },
+      {
+        "replace": {
+          "module": "a",
+          "source": "let n=1;"
+        }
+      },
+      {
+        "replace": {
+          "module": "a",
+          "source": "let n=1;"
+        }
+      },
+      {
+        "check": true
+      }
+    ],
+    "expected_error": null,
+    "steps": 20000000
+  },
+  {
+    "id": "edits33",
+    "modules": {
+      "a": "let n=1;"
+    },
+    "commands": [
+      {
+        "replace": {
+          "module": "a",
+          "source": "let n=1;"
+        }
+      },
+      {
+        "replace": {
+          "module": "a",
+          "source": "let n=1;"
+        }
+      },
+      {
+        "replace": {
+          "module": "a",
+          "source": "let n=1;"
+        }
+      },
+      {
+        "replace": {
+          "module": "a",
+          "source": "let n=1;"
+        }
+      },
+      {
+        "replace": {
+          "module": "a",
+          "source": "let n=1;"
+        }
+      },
+      {
+        "replace": {
+          "module": "a",
+          "source": "let n=1;"
+        }
+      },
+      {
+        "replace": {
+          "module": "a",
+          "source": "let n=1;"
+        }
+      },
+      {
+        "replace": {
+          "module": "a",
+          "source": "let n=1;"
+        }
+      },
+      {
+        "replace": {
+          "module": "a",
+          "source": "let n=1;"
+        }
+      },
+      {
+        "replace": {
+          "module": "a",
+          "source": "let n=1;"
+        }
+      },
+      {
+        "replace": {
+          "module": "a",
+          "source": "let n=1;"
+        }
+      },
+      {
+        "replace": {
+          "module": "a",
+          "source": "let n=1;"
+        }
+      },
+      {
+        "replace": {
+          "module": "a",
+          "source": "let n=1;"
+        }
+      },
+      {
+        "replace": {
+          "module": "a",
+          "source": "let n=1;"
+        }
+      },
+      {
+        "replace": {
+          "module": "a",
+          "source": "let n=1;"
+        }
+      },
+      {
+        "replace": {
+          "module": "a",
+          "source": "let n=1;"
+        }
+      },
+      {
+        "replace": {
+          "module": "a",
+          "source": "let n=1;"
+        }
+      },
+      {
+        "replace": {
+          "module": "a",
+          "source": "let n=1;"
+        }
+      },
+      {
+        "replace": {
+          "module": "a",
+          "source": "let n=1;"
+        }
+      },
+      {
+        "replace": {
+          "module": "a",
+          "source": "let n=1;"
+        }
+      },
+      {
+        "replace": {
+          "module": "a",
+          "source": "let n=1;"
+        }
+      },
+      {
+        "replace": {
+          "module": "a",
+          "source": "let n=1;"
+        }
+      },
+      {
+        "replace": {
+          "module": "a",
+          "source": "let n=1;"
+        }
+      },
+      {
+        "replace": {
+          "module": "a",
+          "source": "let n=1;"
+        }
+      },
+      {
+        "replace": {
+          "module": "a",
+          "source": "let n=1;"
+        }
+      },
+      {
+        "replace": {
+          "module": "a",
+          "source": "let n=1;"
+        }
+      },
+      {
+        "replace": {
+          "module": "a",
+          "source": "let n=1;"
+        }
+      },
+      {
+        "replace": {
+          "module": "a",
+          "source": "let n=1;"
+        }
+      },
+      {
+        "replace": {
+          "module": "a",
+          "source": "let n=1;"
+        }
+      },
+      {
+        "replace": {
+          "module": "a",
+          "source": "let n=1;"
+        }
+      },
+      {
+        "replace": {
+          "module": "a",
+          "source": "let n=1;"
+        }
+      },
+      {
+        "replace": {
+          "module": "a",
+          "source": "let n=1;"
+        }
+      },
+      {
+        "replace": {
+          "module": "a",
+          "source": "let n=1;"
+        }
+      },
+      {
+        "check": true
+      }
+    ],
+    "expected_error": "edits",
+    "steps": 20000000
+  },
+  {
+    "id": "cache-new",
+    "modules": {
+      "a": "let n=1;"
+    },
+    "cache": null,
+    "exit": 0,
+    "steps": 1000000
+  },
+  {
+    "id": "cache-stale",
+    "modules": {
+      "a": "let n=1;"
+    },
+    "cache": {
+      "schema": 1,
+      "modules": [
+        {
+          "name": "a",
+          "fingerprint": "0000000000000000000000000000000000000000000000000000000000000000",
+          "exports": [
+            {
+              "name": "n",
+              "type": "bool"
+            }
+          ]
+        }
+      ]
+    },
+    "exit": 0,
+    "steps": 1000000
+  },
+  {
+    "id": "cache-version",
+    "modules": {
+      "a": "let n=1;"
+    },
+    "cache": {
+      "schema": 2,
+      "modules": []
+    },
+    "exit": 2,
+    "steps": 1000000
+  },
+  {
+    "id": "cache-corrupt",
+    "modules": {
+      "a": "let n=1;"
+    },
+    "cache": "{",
+    "exit": 2,
+    "steps": 1000000
+  }
+]

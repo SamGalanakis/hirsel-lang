@@ -1,0 +1,164 @@
+fn json_text(take value: String) -> json.Value uses {} {
+  Text(take value)
+}
+
+fn number(value: u64) -> json.Value uses {} {
+  Number(f"{value}")
+}
+
+fn object(take entries: List[(String, json.Value)]) -> json.Value uses {} {
+  let mut fields: Map[String, json.Value] = map.empty()
+  for (key, value) in take entries {
+    map.insert(mut fields, take key, take value)
+  }
+  Object(take fields)
+}
+
+fn names(values: List[String]) -> json.Value uses {} {
+  let mut items: List[json.Value] = []
+  for value in values {
+    list.push(mut items, Text(unique value))
+  }
+  Array(take items)
+}
+
+fn precedes(a: analyze.Diagnostic, b: analyze.Diagnostic) -> bool uses {} {
+  if a.start != b.start {
+    return a.start < b.start
+  }
+  if a.end != b.end {
+    return a.end < b.end
+  }
+  a.code < b.code
+}
+
+pub fn check(value: incremental.Check, state: incremental.State) -> String uses {} {
+  let mut rows: List[json.Value] = []
+  for module in state.modules {
+    let mut ordered: List[analyze.Diagnostic] = []
+    for diagnostic in value.diagnostics {
+      if diagnostic.module == module.declaration.name {
+        list.push(mut ordered, unique diagnostic)
+      }
+    }
+    for i in 0u64..list.len(ordered) {
+      let mut j = i
+      while j > 0 && precedes(ordered[j], ordered[j - 1]) {
+        let a = unique ordered[j]
+        ordered[j] = unique ordered[j - 1]
+        ordered[j - 1] = take a
+        j -= 1
+      }
+    }
+    for item in ordered {
+      list.push(
+        mut rows,
+        object(
+          [
+            ("module", json_text(unique item.module)),
+            ("code", json_text(unique item.code)),
+            ("start", number(item.start)),
+            ("end", number(item.end))
+          ]
+        )
+      )
+    }
+  }
+  encode(
+    object(
+      [
+        ("diagnostics", Array(take rows)),
+        ("total", number(value.total)),
+        ("analyzed", names(value.analyzed)),
+        ("reused", names(value.reused))
+      ]
+    )
+  )
+}
+
+pub fn error(code: String) -> String uses {} {
+  encode(object([("error", json_text(unique code))]))
+}
+
+fn encode(take value: json.Value) -> String uses {} {
+  match json.stringify(take value) {
+    Ok(text) => take text,
+    Error(_) => "{}",
+  }
+}
+
+pub fn cache(state: incremental.State) -> String uses {} {
+  let mut modules: List[json.Value] = []
+  for item in state.modules {
+    let mut exports: List[json.Value] = []
+    for symbol in item.summary.exports {
+      list.push(
+        mut exports,
+        object(
+          [
+            ("name", json_text(unique symbol.name)),
+            ("type", json_text(symbols.type_name(symbol.kind)))
+          ]
+        )
+      )
+    }
+    list.push(
+      mut modules,
+      object(
+        [
+          ("name", json_text(unique item.declaration.name)),
+          ("fingerprint", json_text(unique item.fingerprint)),
+          ("exports", Array(take exports))
+        ]
+      )
+    )
+  }
+  encode(object([("schema", number(1)), ("modules", Array(take modules))]))
+}
+
+pub fn validate_cache(value: json.Value) -> bool uses {} {
+  if json_access.member(value, "schema") != Some(Number("1")) {
+    return false
+  }
+  let Some(items_value) = json_access.member(value, "modules") else {
+    return false
+  }
+  let Some(items) = json_access.as_array(items_value) else {
+    return false
+  }
+  if list.len(items) > 16 {
+    return false
+  }
+  for item in items {
+    let Some(Text(name)) = json_access.member(item, "name") else {
+      return false
+    }
+    let Some(Text(hash)) = json_access.member(item, "fingerprint") else {
+      return false
+    }
+    if !syntax.identifier(name) || string.byte_len(hash) != 64 {
+      return false
+    }
+    let Some(exports_value) = json_access.member(item, "exports") else {
+      return false
+    }
+    let Some(exports) = json_access.as_array(exports_value) else {
+      return false
+    }
+    if list.len(exports) > 256 {
+      return false
+    }
+    for symbol in exports {
+      let Some(Text(export_name)) = json_access.member(symbol, "name") else {
+        return false
+      }
+      let Some(Text(kind)) = json_access.member(symbol, "type") else {
+        return false
+      }
+      if !syntax.identifier(export_name) || kind != "int" && kind != "bool" && kind != "unknown" {
+        return false
+      }
+    }
+  }
+  true
+}

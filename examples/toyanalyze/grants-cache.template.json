@@ -1,0 +1,29 @@
+{
+  "args": [
+    "check",
+    "modules.json",
+    "2",
+    "cache.json"
+  ],
+  "io": {
+    "stdout": "stdout.bytes@1",
+    "tasks": "tasks.cooperative@1",
+    "dirs": [
+      {
+        "path": "input",
+        "host": "fixtures",
+        "access": "read"
+      },
+      {
+        "path": "output",
+        "host": "./private-output",
+        "access": "read_write"
+      }
+    ]
+  },
+  "placement": {
+    "cores": 1,
+    "commit": "shared",
+    "reorder": "off"
+  }
+}

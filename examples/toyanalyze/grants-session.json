@@ -1,0 +1,24 @@
+{
+  "args": [
+    "session",
+    "modules.json",
+    "2",
+    "session.json"
+  ],
+  "io": {
+    "stdout": "stdout.bytes@1",
+    "tasks": "tasks.cooperative@1",
+    "dirs": [
+      {
+        "path": "input",
+        "host": "fixtures",
+        "access": "read"
+      }
+    ]
+  },
+  "placement": {
+    "cores": 1,
+    "commit": "shared",
+    "reorder": "off"
+  }
+}

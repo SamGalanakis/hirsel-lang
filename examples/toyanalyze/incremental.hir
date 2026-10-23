@@ -1,0 +1,289 @@
+// Dependency-ready waves adapt graphlib.py:86-136 (CPython 010bebbf,
+// PSF-2.0). Dense bounded scans replace a mutable hash/ready queue.
+pub type Decl {
+  name: String,
+  path: String,
+}
+
+pub type Module {
+  declaration: Decl,
+  fingerprint: String,
+  tree: syntax.Tree,
+  summary: analyze.Summary,
+  dirty: bool,
+}
+
+pub type State {
+  modules: List[Module],
+}
+
+pub type Check {
+  analyzed: List[String],
+  reused: List[String],
+  diagnostics: List[analyze.Diagnostic],
+  total: u64,
+}
+
+pub fn empty_summary() -> analyze.Summary uses {} {
+  analyze.Summary(exports: [], diagnostics: [], total: 0)
+}
+
+pub fn fingerprint(data: Bytes) -> String uses {} {
+  sha256.digest_hex(data)
+}
+
+pub fn find(state: State, name: String) -> Option[u64] uses {} {
+  for i in 0u64..list.len(state.modules) {
+    if state.modules[i].declaration.name == name {
+      return Some(i)
+    }
+  }
+  None()
+}
+
+pub fn imports(tree: syntax.Tree) -> List[syntax.Located[String]] uses {} {
+  let mut names: List[syntax.Located[String]] = []
+  for statement in tree.statements {
+    if let Import(name) = statement.value {
+      list.push(mut names, unique name)
+    }
+  }
+  take names
+}
+
+pub fn make(take declaration: Decl, data: Bytes) -> Result[Module, syntax.Refusal] uses {} {
+  Ok(
+    Module(
+      declaration: take declaration,
+      fingerprint: fingerprint(data),
+      tree: syntax.parse(data)?,
+      summary: empty_summary(),
+      dirty: true
+    )
+  )
+}
+
+pub fn replace_source(mut state: State, index: u64, data: Bytes) -> Result[
+  (),
+  syntax.Refusal
+] uses {} {
+  let hash = fingerprint(data)
+  if hash == state.modules[index].fingerprint {
+    return Ok(())
+  }
+  // Parse first; a refused edit leaves the previous complete state intact.
+  let replacement = syntax.parse(data)?
+  let _old = replace(mut state.modules[index].tree, take replacement)
+  state.modules[index].fingerprint = take hash
+  state.modules[index].dirty = true
+  let count = list.len(state.modules)
+  // Traverse current importers before any new summaries are installed.
+  for pass in 0u64..count {
+    for i in 0u64..count {
+      for imported in imports(state.modules[i].tree) {
+        if let Some(dep) = find(state, imported.value) {
+          if state.modules[dep].dirty {
+            state.modules[i].dirty = true
+          }
+        }
+      }
+    }
+  }
+  Ok(())
+}
+
+fn environment(state: State, index: u64) -> List[symbols.Symbol] uses {} {
+  let mut imported_symbols: List[symbols.Symbol] = []
+  let mut seen: Set[u64] = set.empty()
+  for imported in imports(state.modules[index].tree) {
+    if let Some(dep) = find(state, imported.value) {
+      if set.contains(seen, dep) {
+        continue
+      }
+      set.insert(mut seen, dep)
+      for symbol in state.modules[dep].summary.exports {
+        list.push(
+          mut imported_symbols,
+          symbols.Symbol(name: f"{imported.value}.{symbol.name}", kind: symbol.kind)
+        )
+      }
+    }
+  }
+  take imported_symbols
+}
+
+// Reachability is bounded at 16x16 bits; distinguishes cycle members from
+// downstream importers, which graphlib's Blocked set intentionally combines.
+fn closure(state: State) -> List[List[bool]] uses {} {
+  let count = list.len(state.modules)
+  let mut reach: List[List[bool]] = []
+  for i in 0u64..count {
+    let mut row: List[bool] = []
+    for j in 0u64..count {
+      list.push(mut row, false)
+    }
+    for imported in imports(state.modules[i].tree) {
+      if let Some(dep) = find(state, imported.value) {
+        row[dep] = true
+      }
+    }
+    list.push(mut reach, take row)
+  }
+  for k in 0u64..count {
+    for i in 0u64..count {
+      for j in 0u64..count {
+        if reach[i][k] && reach[k][j] {
+          reach[i][j] = true
+        }
+      }
+    }
+  }
+  take reach
+}
+
+pub fn check(tasks: Tasks, mut state: State, jobs: u64) -> Check {
+  let count = list.len(state.modules)
+  let reach = closure(state)
+  let mut done: List[bool] = []
+  let mut blocked: List[bool] = []
+  let mut output = Check(analyzed: [], reused: [], diagnostics: [], total: 0)
+  for i in 0u64..count {
+    if state.modules[i].dirty {
+      list.push(mut output.analyzed, unique state.modules[i].declaration.name)
+    } else {
+      list.push(mut output.reused, unique state.modules[i].declaration.name)
+    }
+    let mut bad = false
+    for j in 0u64..count {
+      if reach[i][j] && reach[j][j] {
+        bad = true
+      }
+    }
+    list.push(mut blocked, bad)
+    list.push(mut done, bad)
+    if bad {
+      state.modules[i].summary = empty_summary()
+      for imported in imports(state.modules[i].tree) {
+        if let Some(dep) = find(state, imported.value) {
+          let code = if reach[dep][i] {
+            "import_cycle"
+          } else {
+            "dependency_blocked"
+          }
+          let mut dependency_bad = reach[dep][i]
+          for j in 0u64..count {
+            if reach[dep][j] && reach[j][j] {
+              dependency_bad = true
+            }
+          }
+          if dependency_bad {
+            let issue = analyze.diagnostic(
+              state.modules[i].declaration.name,
+              code,
+              imported.span
+            )
+            analyze.add(mut state.modules[i].summary, take issue)
+          }
+        }
+      }
+    }
+  }
+  while true {
+    let mut ready: List[u64] = []
+    for i in 0u64..count {
+      if done[i] {
+        continue
+      }
+      let mut available = true
+      for imported in imports(state.modules[i].tree) {
+        if let Some(dep) = find(state, imported.value) {
+          if !done[dep] {
+            available = false
+          }
+        }
+      }
+      if available && list.len(ready) < jobs {
+        list.push(mut ready, i)
+      }
+    }
+    if list.len(ready) == 0 {
+      break
+    }
+    let frozen = shared.freeze(unique state)
+    let batch = task.scope(
+      tasks,
+      fn(s: Scope) -> List[Shared[analyze.Summary]] {
+        let mut set: TaskSet[Shared[analyze.Summary]] of s = task.set(s)
+        for slot in ready {
+          let index = slot
+          task.add(
+            s,
+            mut set,
+            task.async(
+              s,
+              fn() -> Shared[analyze.Summary] {
+                shared.with(
+                  frozen,
+                  fn(snapshot: State) -> Shared[analyze.Summary] {
+                    let item = snapshot.modules[index]
+                    let mut summary = if item.dirty {
+                      analyze.check_module(
+                        item.tree,
+                        item.declaration.name,
+                        environment(snapshot, index)
+                      )
+                    } else {
+                      unique item.summary
+                    }
+                    if item.dirty {
+                      for imported in imports(item.tree) {
+                        if find(snapshot, imported.value) == None() {
+                          analyze.add(
+                            mut summary,
+                            analyze.diagnostic(
+                              item.declaration.name,
+                              "unknown_import",
+                              imported.span
+                            )
+                          )
+                        }
+                      }
+                    }
+                    shared.freeze(unique summary)
+                  }
+                )
+              }
+            )
+          )
+        }
+        let mut summaries: List[Shared[analyze.Summary]] = []
+        for i in 0u64..list.len(ready) {
+          list.push(mut summaries, task.await_at(s, mut set, i))
+        }
+        task.cancel_all(s, take set)
+        take summaries
+      }
+    )
+    for position in 0u64..list.len(ready) {
+      let index = ready[position]
+      state.modules[index].summary = shared.with(
+        batch[position],
+        fn(summary: analyze.Summary) -> analyze.Summary {
+          unique summary
+        }
+      )
+      done[index] = true
+    }
+  }
+  // Aggregate by declaration order, independently of jobs or completion order.
+  for i in 0u64..count {
+    state.modules[i].dirty = false
+    output.total += state.modules[i].summary.total
+    for item in state.modules[i].summary.diagnostics {
+      if list.len(output.diagnostics) < 128 {
+        list.push(mut output.diagnostics, unique item)
+      }
+    }
+  }
+  take output
+}
