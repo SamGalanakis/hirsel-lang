@@ -1,0 +1,172 @@
+// Admission and owned command construction; no ambient process authority.
+pub const INPUT_BYTES: u64 = 262144
+
+pub type InvalidInput {
+  kind: String,
+}
+
+pub type Job {
+  argv: List[String],
+  timeout_ms: u64,
+}
+
+pub type Manifest {
+  commands: List[Job],
+  jobs: u64,
+  timeout_ms: u64,
+}
+
+pub type Outcome = Pending | Exit(i32) | Signal(i32) | Timeout | Canceled | SpawnMissing | Refused | ProcessFault | ClockFault
+
+pub type Row {
+  index: u64,
+  program: String,
+  status: String,
+  exit: Option[i32],
+  signal: Option[i32],
+  timeout: bool,
+}
+
+pub fn invalid(kind: String) -> InvalidInput uses {} {
+  InvalidInput(kind: unique kind)
+}
+
+fn positive(fields: Map[String, json.Value], key: String, maximum: u64) -> Result[
+  u64,
+  InvalidInput
+] uses {} {
+  let Some(Number(raw)) = map.get(fields, key) else {
+    return Error(invalid(key))
+  }
+  let Ok(n) = u64.parse(raw) else {
+    return Error(invalid(key))
+  }
+  if n == 0 || n > maximum {
+    return Error(invalid(key))
+  }
+  Ok(n)
+}
+
+pub fn decode(take data: Bytes) -> Result[Manifest, InvalidInput] uses {} {
+  if bytes.len(data) > INPUT_BYTES {
+    return Error(invalid("input_bytes_limit"))
+  }
+  let Ok(source) = string.from_bytes(take data) else {
+    return Error(invalid("utf8"))
+  }
+  let Ok(Object(fields)) = json.parse(take source) else {
+    return Error(invalid("json_object"))
+  }
+  if map.len(fields) != 3 {
+    return Error(invalid("fields"))
+  }
+  let jobs = positive(fields, "jobs", 4)?
+  let timeout = positive(fields, "timeout_ms", 30000)?
+  let Some(Array(entries)) = map.get(fields, "commands") else {
+    return Error(invalid("commands"))
+  }
+  if list.len(entries) > 16 {
+    return Error(invalid("commands"))
+  }
+  let mut commands: List[Job] = []
+  for entry in entries {
+    let Object(job) = entry else {
+      return Error(invalid("command"))
+    }
+    if map.len(job) != 2 {
+      return Error(invalid("command_fields"))
+    }
+    let limit = positive(job, "timeout_ms", 5000)?
+    let Some(Array(words)) = map.get(job, "argv") else {
+      return Error(invalid("argv"))
+    }
+    if list.len(words) == 0 || list.len(words) > 64 {
+      return Error(invalid("argv"))
+    }
+    let mut argv: List[String] = []
+    let mut count = 0u64
+    for word in words {
+      let Text(text) = word else {
+        return Error(invalid("argv"))
+      }
+      count += string.byte_len(text) + 1
+      if count > 8192 || string.contains(text, "\0") {
+        return Error(invalid("argv_bytes"))
+      }
+      list.push(mut argv, unique text)
+    }
+    let program = argv[0]
+    let Ok(normal) = path.normalize(path.of(program)) else {
+      return Error(invalid("program"))
+    }
+    if !string.starts_with(program, "/") || program == "/" || path.text(normal) != program {
+      return Error(invalid("program"))
+    }
+    list.push(mut commands, Job(argv: take argv, timeout_ms: limit))
+  }
+  Ok(Manifest(commands: take commands, jobs: jobs, timeout_ms: timeout))
+}
+
+pub fn command(job: Job) -> unique Command uses {} {
+  let mut args: List[String] = []
+  for i in 1u64..list.len(job.argv) {
+    list.push(mut args, unique job.argv[i])
+  }
+  Command(
+    program: path.of(unique job.argv[0]),
+    args: take args,
+    dir: None(),
+    env: None(),
+    own_group: false
+  )
+}
+
+pub fn row(index: u64, program: String, outcome: Outcome, expired: bool) -> Row uses {} {
+  let (status, code, signal, timeout): (String, Option[i32], Option[i32], bool) = match outcome {
+    Exit(n) => ("exit", Some(n), None(), false),
+    Signal(n) => ("signal", None(), Some(n), false),
+    Timeout() => ("timeout", None(), None(), true),
+    SpawnMissing() => ("spawn_not_found", None(), None(), false),
+    Refused() => ("process_not_granted", None(), None(), false),
+    ProcessFault() => ("process_error", None(), None(), false),
+    ClockFault() => ("clock_error", None(), None(), false),
+    _ => (
+      if expired {
+        "global_timeout"
+      } else {
+        "canceled"
+      },
+      None(),
+      None(),
+      expired
+    ),
+  }
+  Row(
+    index: index,
+    program: unique program,
+    status: unique status,
+    exit: code,
+    signal: signal,
+    timeout: timeout
+  )
+}
+
+pub fn filename(name: String) -> bool uses {} {
+  if name == "" || name == "." || name == ".." || string.byte_len(name) > 256 {
+    return false
+  }
+  for byte in string.as_bytes(name) {
+    if byte == 0 || byte == b'/' || byte == b'\\' || byte == b':' {
+      return false
+    }
+  }
+  true
+}
+
+pub fn error_json(value: InvalidInput) -> json.Value uses {} = comptime derive.json_value(
+  shape(InvalidInput)
+)
+
+pub fn row_json(value: Row) -> json.Value uses {} = comptime derive.json_value(
+  shape(Row)
+)

@@ -1,0 +1,191 @@
+pub type AppError = Output(OutputError) | Json(json.JsonError)
+
+const HELP: String = "Usage: batchrun FILE\nRead a JSON manifest from the read-only fixtures grant.\nAt most 16 commands, jobs 1..4, argv 8 KiB/job, child deadline 1..5000 ms, run deadline 1..30000 ms.\nChild stdout and stderr are drained and discarded. Reports retain manifest order.\nExit: 0 all successful/help, 1 failed/expired, 2 invalid input, 3 missing runtime grant.\n"
+
+fn read_manifest(rt: Io, args: Args) -> Result[model.Manifest, model.InvalidInput] {
+  if arg.len(args) != 1 {
+    return Error(model.invalid("usage"))
+  }
+  let Ok(name) = arg.text(args, 0) else {
+    return Error(model.invalid("filename"))
+  }
+  if !model.filename(name) {
+    return Error(model.invalid("filename"))
+  }
+  let Ok(dir) = io.dir(rt, path.of("fixtures")) else {
+    return Error(model.invalid("directory_grant"))
+  }
+  let mut Ok(input) = file.open(dir, path.of(name)) else {
+    return Error(model.invalid("file_open"))
+  }
+  let data = match file.read_all_bounded(dir, mut input, model.INPUT_BYTES) {
+    Ok(raw) => take raw,
+    Error(Limit()) => return Error(model.invalid("input_bytes_limit")),
+    Error(File(_)) => return Error(model.invalid("file_read")),
+  }
+  model.decode(take data)
+}
+
+fn process_error(error: ProcessError) -> model.Outcome uses {} {
+  match error {
+    TimedOut() => Timeout(),
+    Canceled(_) => Canceled(),
+    NotFound() => SpawnMissing(),
+    NotGranted() => Refused(),
+    _ => ProcessFault(),
+  }
+}
+
+fn execute(
+  p: Proc,
+  c: MonotonicClock,
+  tasks: Tasks,
+  take cmd: unique Command,
+  timeout_ms: u64
+) -> model.Outcome {
+  let Ok(start) = clock.monotonic(c) else {
+    return ClockFault()
+  }
+  let Some(at) = instant.checked_add(c, start, timeout_ms * 1000000u64) else {
+    return ClockFault()
+  }
+  // A nested scope obtains its own Scope; no parent Scope crosses a task.
+  match task.scope_until(
+    tasks,
+    Deadline(clock: c, at: at),
+    fn(s: Scope) -> model.Outcome {
+      let mut child = match proc.spawn(p, take cmd) {
+        Ok(handle) => take handle,
+        Error(e) => return process_error(e),
+      }
+      child.close_stdin(p, mut child)
+      // Go exec.Wait joins both copying loops. Hirsel wait drains/discards both
+      // streams and consumes/reaps the Child on every outcome.
+      match child.wait(p, take child, Some(Deadline(clock: c, at: at))) {
+        Ok(Exited(code)) => Exit(code),
+        Ok(Signaled(signal)) => Signal(signal),
+        Error(e) => process_error(e),
+      }
+    }
+  ) {
+    Finished(status) => status,
+    Expired(_) => Timeout(),
+  }
+}
+
+fn batch(p: Proc, c: MonotonicClock, tasks: Tasks, manifest: model.Manifest) -> (
+  List[model.Outcome],
+  bool
+) {
+  let mut initial: List[model.Outcome] = []
+  for _ in manifest.commands {
+    list.push(mut initial, Pending())
+  }
+  let Ok(start) = clock.monotonic(c) else {
+    return (take initial, true)
+  }
+  let Some(at) = instant.checked_add(c, start, manifest.timeout_ms * 1000000u64) else {
+    return (take initial, true)
+  }
+  // Tokio JoinSet's join-next/refill shape, with add-order result slots.
+  // Domain failures are values, so they do not short-circuit sibling jobs.
+  let bounded = task.scope_until(
+    tasks,
+    Deadline(clock: c, at: at),
+    fn(s: Scope) -> List[model.Outcome] {
+      let mut statuses = take initial
+      let mut members: TaskSet[model.Outcome] of s = task.set(s)
+      let mut next = 0u64
+      let mut active = 0u64
+      while next < list.len(manifest.commands) || active > 0 {
+        while next < list.len(manifest.commands) && active < manifest.jobs {
+          if let Error(_) = task.check_canceled(s) {
+            break
+          }
+          let cmd = model.command(manifest.commands[next])
+          let limit = manifest.commands[next].timeout_ms
+          let handle = task.async(
+            s,
+            fn() -> model.Outcome {
+              execute(p, c, tasks, take cmd, limit)
+            }
+          )
+          task.add(s, mut members, take handle)
+          next += 1
+          active += 1
+        }
+        if active == 0 {
+          break
+        }
+        let Some(index) = task.await_any(s, members) else {
+          break
+        }
+        statuses[index] = task.await_at(s, mut members, index)
+        active -= 1
+      }
+      task.cancel_all(s, take members)
+      take statuses
+    }
+  )
+  match take bounded {
+    Finished(statuses) => (take statuses, false),
+    Expired(statuses) => (take statuses, true),
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[std@1/process.ExitCode, AppError] {
+  let Ok(out) = io.stdout(rt) else {
+    return Ok(std@1/process.exit_code(3u8))
+  }
+  let Ok(errors) = io.stderr(rt) else {
+    return Ok(std@1/process.exit_code(3u8))
+  }
+  if arg.len(args) == 1 {
+    if let Ok(flag) = arg.text(args, 0) {
+      if flag == "--help" || flag == "-h" {
+        out.print(out, HELP)?
+        return Ok(std@1/process.SUCCESS)
+      }
+    }
+  }
+  let manifest = match read_manifest(rt, args) {
+    Ok(value) => take value,
+    Error(problem) => {
+      let rendered = json.stringify(model.error_json(problem))?
+      err.print(errors, f"{rendered}\n")?
+      return Ok(std@1/process.exit_code(2u8))
+    },
+  }
+  let Ok(p) = io.process(rt) else {
+    return Ok(std@1/process.exit_code(3u8))
+  }
+  let Ok(c) = io.monotonic_clock(rt) else {
+    return Ok(std@1/process.exit_code(3u8))
+  }
+  let Ok(tasks) = io.tasks(rt) else {
+    return Ok(std@1/process.exit_code(3u8))
+  }
+  let (statuses, expired) = batch(p, c, tasks, manifest)
+  let mut failed = expired
+  for i in 0u64..list.len(statuses) {
+    if statuses[i] != Exit(0) {
+      failed = true
+    }
+    let rendered = json.stringify(
+      model.row_json(model.row(i, manifest.commands[i].argv[0], statuses[i], expired))
+    )?
+    out.print(out, f"{rendered}\n")?
+  }
+  let count = list.len(statuses)
+  out.print(
+    out,
+    f"{{\"commands\":{count},\"expired\":{expired},\"output\":\"discarded\"}}\n"
+  )?
+  Ok(
+    if failed {
+      std@1/process.FAILURE
+    } else {
+      std@1/process.SUCCESS
+    }
+  )
+}

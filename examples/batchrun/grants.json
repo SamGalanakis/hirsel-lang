@@ -1,0 +1,9 @@
+{
+  "io": {
+    "stdout": "stdout.bytes@1", "stderr": "stderr.bytes@1",
+    "tasks": "tasks.cooperative@1", "monotonic_clock": "clock.monotonic.ns@1",
+    "dirs": [{"path":"fixtures","host":"fixtures","access":"read"}],
+    "process": {"provider":"process.spawn@1","rules":[{"program":"/usr/bin/true"}]}
+  },
+  "args": ["success.json"]
+}

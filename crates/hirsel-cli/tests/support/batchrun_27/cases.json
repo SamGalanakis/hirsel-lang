@@ -1,0 +1,595 @@
+[
+  {
+    "id": "empty",
+    "manifest": {
+      "jobs": 4,
+      "timeout_ms": 30000,
+      "commands": []
+    },
+    "rows": [
+      {
+        "commands": 0,
+        "expired": false,
+        "output": "discarded"
+      }
+    ],
+    "exit": 0,
+    "stderr": "",
+    "modes": [],
+    "refused": false
+  },
+  {
+    "id": "exit-0",
+    "manifest": {
+      "jobs": 4,
+      "timeout_ms": 30000,
+      "commands": [
+        {
+          "argv": [
+            "/fixture/child",
+            "ok",
+            "0"
+          ],
+          "timeout_ms": 5000
+        }
+      ]
+    },
+    "rows": [
+      {
+        "index": 0,
+        "program": "/fixture/child",
+        "status": "exit",
+        "exit": 0,
+        "signal": null,
+        "timeout": false
+      },
+      {
+        "commands": 1,
+        "expired": false,
+        "output": "discarded"
+      }
+    ],
+    "exit": 0,
+    "stderr": "",
+    "modes": [
+      "ok"
+    ],
+    "refused": false
+  },
+  {
+    "id": "nonzero",
+    "manifest": {
+      "jobs": 4,
+      "timeout_ms": 30000,
+      "commands": [
+        {
+          "argv": [
+            "/fixture/child",
+            "fail",
+            "0"
+          ],
+          "timeout_ms": 5000
+        }
+      ]
+    },
+    "rows": [
+      {
+        "index": 0,
+        "program": "/fixture/child",
+        "status": "exit",
+        "exit": 7,
+        "signal": null,
+        "timeout": false
+      },
+      {
+        "commands": 1,
+        "expired": false,
+        "output": "discarded"
+      }
+    ],
+    "exit": 1,
+    "stderr": "",
+    "modes": [
+      "fail"
+    ],
+    "refused": false
+  },
+  {
+    "id": "absent",
+    "manifest": {
+      "jobs": 4,
+      "timeout_ms": 30000,
+      "commands": [
+        {
+          "argv": [
+            "/fixture/child",
+            "ok",
+            "0"
+          ],
+          "timeout_ms": 5000
+        }
+      ]
+    },
+    "rows": [
+      {
+        "index": 0,
+        "program": "/fixture/child",
+        "status": "spawn_not_found",
+        "exit": null,
+        "signal": null,
+        "timeout": false
+      },
+      {
+        "commands": 1,
+        "expired": false,
+        "output": "discarded"
+      }
+    ],
+    "exit": 1,
+    "stderr": "",
+    "modes": [
+      "ok"
+    ],
+    "refused": false
+  },
+  {
+    "id": "invalid",
+    "manifest": {
+      "jobs": 0,
+      "timeout_ms": 30000,
+      "commands": [
+        {
+          "argv": [
+            "/fixture/child",
+            "ok",
+            "0"
+          ],
+          "timeout_ms": 5000
+        }
+      ]
+    },
+    "rows": [],
+    "exit": 2,
+    "stderr": "{\"kind\":\"jobs\"}\n",
+    "modes": [
+      "ok"
+    ],
+    "refused": false
+  },
+  {
+    "id": "mixed",
+    "manifest": {
+      "jobs": 4,
+      "timeout_ms": 30000,
+      "commands": [
+        {
+          "argv": [
+            "/fixture/child",
+            "hold",
+            "0"
+          ],
+          "timeout_ms": 5000
+        },
+        {
+          "argv": [
+            "/fixture/child",
+            "fail",
+            "1"
+          ],
+          "timeout_ms": 5000
+        },
+        {
+          "argv": [
+            "/fixture/child",
+            "signal",
+            "2"
+          ],
+          "timeout_ms": 5000
+        },
+        {
+          "argv": [
+            "/fixture/child",
+            "ok",
+            "3"
+          ],
+          "timeout_ms": 5000
+        }
+      ]
+    },
+    "rows": [
+      {
+        "index": 0,
+        "program": "/fixture/child",
+        "status": "exit",
+        "exit": 0,
+        "signal": null,
+        "timeout": false
+      },
+      {
+        "index": 1,
+        "program": "/fixture/child",
+        "status": "exit",
+        "exit": 7,
+        "signal": null,
+        "timeout": false
+      },
+      {
+        "index": 2,
+        "program": "/fixture/child",
+        "status": "signal",
+        "exit": null,
+        "signal": 15,
+        "timeout": false
+      },
+      {
+        "index": 3,
+        "program": "/fixture/child",
+        "status": "exit",
+        "exit": 0,
+        "signal": null,
+        "timeout": false
+      },
+      {
+        "commands": 4,
+        "expired": false,
+        "output": "discarded"
+      }
+    ],
+    "exit": 1,
+    "stderr": "",
+    "modes": [
+      "hold",
+      "fail",
+      "signal",
+      "ok"
+    ],
+    "refused": false
+  },
+  {
+    "id": "jobs-1-five",
+    "manifest": {
+      "jobs": 1,
+      "timeout_ms": 30000,
+      "commands": [
+        {
+          "argv": [
+            "/fixture/child",
+            "ok",
+            "0"
+          ],
+          "timeout_ms": 5000
+        },
+        {
+          "argv": [
+            "/fixture/child",
+            "ok",
+            "1"
+          ],
+          "timeout_ms": 5000
+        },
+        {
+          "argv": [
+            "/fixture/child",
+            "ok",
+            "2"
+          ],
+          "timeout_ms": 5000
+        },
+        {
+          "argv": [
+            "/fixture/child",
+            "ok",
+            "3"
+          ],
+          "timeout_ms": 5000
+        },
+        {
+          "argv": [
+            "/fixture/child",
+            "ok",
+            "4"
+          ],
+          "timeout_ms": 5000
+        }
+      ]
+    },
+    "rows": [
+      {
+        "index": 0,
+        "program": "/fixture/child",
+        "status": "exit",
+        "exit": 0,
+        "signal": null,
+        "timeout": false
+      },
+      {
+        "index": 1,
+        "program": "/fixture/child",
+        "status": "exit",
+        "exit": 0,
+        "signal": null,
+        "timeout": false
+      },
+      {
+        "index": 2,
+        "program": "/fixture/child",
+        "status": "exit",
+        "exit": 0,
+        "signal": null,
+        "timeout": false
+      },
+      {
+        "index": 3,
+        "program": "/fixture/child",
+        "status": "exit",
+        "exit": 0,
+        "signal": null,
+        "timeout": false
+      },
+      {
+        "index": 4,
+        "program": "/fixture/child",
+        "status": "exit",
+        "exit": 0,
+        "signal": null,
+        "timeout": false
+      },
+      {
+        "commands": 5,
+        "expired": false,
+        "output": "discarded"
+      }
+    ],
+    "exit": 0,
+    "stderr": "",
+    "modes": [
+      "ok",
+      "ok",
+      "ok",
+      "ok",
+      "ok"
+    ],
+    "refused": false
+  },
+  {
+    "id": "both-pipes",
+    "manifest": {
+      "jobs": 4,
+      "timeout_ms": 30000,
+      "commands": [
+        {
+          "argv": [
+            "/fixture/child",
+            "pipes",
+            "0"
+          ],
+          "timeout_ms": 5000
+        }
+      ]
+    },
+    "rows": [
+      {
+        "index": 0,
+        "program": "/fixture/child",
+        "status": "exit",
+        "exit": 0,
+        "signal": null,
+        "timeout": false
+      },
+      {
+        "commands": 1,
+        "expired": false,
+        "output": "discarded"
+      }
+    ],
+    "exit": 0,
+    "stderr": "",
+    "modes": [
+      "pipes"
+    ],
+    "refused": false
+  },
+  {
+    "id": "stdin-eof",
+    "manifest": {
+      "jobs": 4,
+      "timeout_ms": 30000,
+      "commands": [
+        {
+          "argv": [
+            "/fixture/child",
+            "eof",
+            "0"
+          ],
+          "timeout_ms": 5000
+        }
+      ]
+    },
+    "rows": [
+      {
+        "index": 0,
+        "program": "/fixture/child",
+        "status": "exit",
+        "exit": 0,
+        "signal": null,
+        "timeout": false
+      },
+      {
+        "commands": 1,
+        "expired": false,
+        "output": "discarded"
+      }
+    ],
+    "exit": 0,
+    "stderr": "",
+    "modes": [
+      "eof"
+    ],
+    "refused": false
+  },
+  {
+    "id": "child-deadline",
+    "manifest": {
+      "jobs": 4,
+      "timeout_ms": 30000,
+      "commands": [
+        {
+          "argv": [
+            "/fixture/child",
+            "hang",
+            "0"
+          ],
+          "timeout_ms": 300
+        }
+      ]
+    },
+    "rows": [
+      {
+        "index": 0,
+        "program": "/fixture/child",
+        "status": "timeout",
+        "exit": null,
+        "signal": null,
+        "timeout": true
+      },
+      {
+        "commands": 1,
+        "expired": false,
+        "output": "discarded"
+      }
+    ],
+    "exit": 1,
+    "stderr": "",
+    "modes": [
+      "hang"
+    ],
+    "refused": false
+  },
+  {
+    "id": "global-deadline",
+    "manifest": {
+      "jobs": 2,
+      "timeout_ms": 300,
+      "commands": [
+        {
+          "argv": [
+            "/fixture/child",
+            "hang",
+            "0"
+          ],
+          "timeout_ms": 5000
+        },
+        {
+          "argv": [
+            "/fixture/child",
+            "hang",
+            "1"
+          ],
+          "timeout_ms": 5000
+        },
+        {
+          "argv": [
+            "/fixture/child",
+            "hang",
+            "2"
+          ],
+          "timeout_ms": 5000
+        },
+        {
+          "argv": [
+            "/fixture/child",
+            "hang",
+            "3"
+          ],
+          "timeout_ms": 5000
+        }
+      ]
+    },
+    "rows": [
+      {
+        "index": 0,
+        "program": "/fixture/child",
+        "status": "global_timeout",
+        "exit": null,
+        "signal": null,
+        "timeout": true
+      },
+      {
+        "index": 1,
+        "program": "/fixture/child",
+        "status": "global_timeout",
+        "exit": null,
+        "signal": null,
+        "timeout": true
+      },
+      {
+        "index": 2,
+        "program": "/fixture/child",
+        "status": "global_timeout",
+        "exit": null,
+        "signal": null,
+        "timeout": true
+      },
+      {
+        "index": 3,
+        "program": "/fixture/child",
+        "status": "global_timeout",
+        "exit": null,
+        "signal": null,
+        "timeout": true
+      },
+      {
+        "commands": 4,
+        "expired": true,
+        "output": "discarded"
+      }
+    ],
+    "exit": 1,
+    "stderr": "",
+    "modes": [
+      "hang",
+      "hang",
+      "hang",
+      "hang"
+    ],
+    "refused": false
+  },
+  {
+    "id": "grant-refusal",
+    "manifest": {
+      "jobs": 4,
+      "timeout_ms": 30000,
+      "commands": [
+        {
+          "argv": [
+            "/fixture/child",
+            "ok",
+            "0"
+          ],
+          "timeout_ms": 5000
+        }
+      ]
+    },
+    "rows": [
+      {
+        "index": 0,
+        "program": "/fixture/child",
+        "status": "process_not_granted",
+        "exit": null,
+        "signal": null,
+        "timeout": false
+      },
+      {
+        "commands": 1,
+        "expired": false,
+        "output": "discarded"
+      }
+    ],
+    "exit": 1,
+    "stderr": "",
+    "modes": [
+      "ok"
+    ],
+    "refused": true
+  }
+]
