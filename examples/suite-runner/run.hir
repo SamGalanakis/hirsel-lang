@@ -1,0 +1,211 @@
+// E1 coordinator. Retry admissions occur only after await_at of the prior attempt.
+pub type Attempt {
+  number: u64,
+  status: String,
+  exit: Option[i32],
+  signal: Option[i32],
+}
+
+pub type State {
+  selected: bool,
+  reason: String,
+  active: bool,
+  done: bool,
+  attempts: List[Attempt],
+}
+
+pub type Run {
+  states: List[State],
+  expired: bool,
+  cutoff: bool,
+  failed_attempts: u64,
+}
+
+fn execute(
+  p: Proc,
+  c: MonotonicClock,
+  tasks: Tasks,
+  take cmd: unique Command,
+  timeout_ms: u64
+) -> Result[i32, model.Fault] {
+  let Ok(start) = clock.monotonic(c) else {
+    return Error(ClockFault())
+  }
+  let Some(at) = instant.checked_add(c, start, timeout_ms * 1000000u64) else {
+    return Error(ClockFault())
+  }
+  // Go Cmd.Wait's join of both copying loops is the discard-only child.wait.
+  // Each attempt has a fresh lexical scope and consumes its own Command/Child.
+  match task.scope_until(
+    tasks,
+    Deadline(clock: c, at: at),
+    fn(s: Scope) -> Result[i32, model.Fault] {
+      let mut child = match proc.spawn(p, take cmd) {
+        Ok(handle) => take handle,
+        Error(error) => return Error(model.process_error(error)),
+      }
+      child.close_stdin(p, mut child)
+      match child.wait(p, take child, Some(Deadline(clock: c, at: at))) {
+        Ok(Exited(code)) => Ok(code),
+        Ok(Signaled(signal)) => Error(Signal(signal)),
+        Error(error) => Error(model.process_error(error)),
+      }
+    }
+  ) {
+    Finished(value) => value,
+    Expired(_) => Error(Timeout()),
+  }
+}
+
+pub fn attempt(number: u64, value: Result[i32, model.Fault], expect: i32) -> Attempt uses {} {
+  match value {
+    Ok(code) => Attempt(
+      number: number,
+      status: if code == expect {
+        "passed"
+      } else {
+        "failed"
+      },
+      exit: Some(code),
+      signal: None()
+    ),
+    Error(Signal(signal)) => Attempt(
+      number: number,
+      status: "signal",
+      exit: None(),
+      signal: Some(signal)
+    ),
+    Error(error) => Attempt(
+      number: number,
+      status: model.fault_text(error),
+      exit: None(),
+      signal: None()
+    ),
+  }
+}
+
+fn initial(plan: List[select.Entry]) -> List[State] uses {} {
+  let mut states: List[State] = []
+  for entry in plan {
+    list.push(
+      mut states,
+      State(
+        selected: entry.selected,
+        reason: unique entry.reason,
+        active: false,
+        done: !entry.selected,
+        attempts: []
+      )
+    )
+  }
+  take states
+}
+
+fn ready(states: List[State], source: manifest.Manifest) -> Option[u64] uses {} {
+  for i in 0u64..list.len(states) {
+    if states[i].selected && !states[i].done && !states[i].active && list.len(
+      states[i].attempts
+    ) <= source.cases[i].retries {
+      return Some(i)
+    }
+  }
+  None()
+}
+
+pub fn suite(
+  p: Proc,
+  c: MonotonicClock,
+  tasks: Tasks,
+  source: manifest.Manifest,
+  plan: List[select.Entry]
+) -> Run {
+  let initial_states = initial(plan)
+  let Ok(start) = clock.monotonic(c) else {
+    return Run(
+      states: take initial_states,
+      expired: true,
+      cutoff: false,
+      failed_attempts: 0
+    )
+  }
+  let Some(at) = instant.checked_add(c, start, source.timeout_ms * 1000000u64) else {
+    return Run(
+      states: take initial_states,
+      expired: true,
+      cutoff: false,
+      failed_attempts: 0
+    )
+  }
+  let bounded = task.scope_until(
+    tasks,
+    Deadline(clock: c, at: at),
+    fn(s: Scope) -> Run {
+      let mut states = take initial_states
+      let mut members: TaskSet[model.Outcome[i32, model.Fault]] of s = task.set(s)
+      let mut active = 0u64
+      let mut failures = 0u64
+      let mut cutoff = false
+      let mut canceled = false
+      while true {
+        if let Error(_) = task.check_canceled(s) {
+          canceled = true
+        }
+        while !cutoff && !canceled && active < source.jobs {
+          let Some(index) = ready(states, source) else {
+            break
+          }
+          let cmd = manifest.command(source.cases[index])
+          let limit = source.cases[index].timeout_ms
+          states[index].active = true
+          let handle = task.async(
+            s,
+            fn() -> model.Outcome[i32, model.Fault] {
+              model.indexed(index, execute(p, c, tasks, take cmd, limit))
+            }
+          )
+          task.add(s, mut members, take handle)
+          active += 1
+        }
+        if active == 0 {
+          break
+        }
+        let Some(member) = task.await_any(s, members) else {
+          break
+        }
+        let value = task.await_at(s, mut members, member)
+        let index = value.index
+        let number = list.len(states[index].attempts) + 1
+        let row = attempt(number, value.value, source.cases[index].expect)
+        let passed = row.status == "passed"
+        list.push(mut states[index].attempts, take row)
+        states[index].active = false
+        states[index].done = passed || number > source.cases[index].retries
+        if !passed {
+          failures += 1
+          cutoff = source.failure_limit != 0 && failures >= source.failure_limit
+        }
+        active -= 1
+      }
+      // Explicitly discharge the set after all admitted attempts have been joined.
+      task.cancel_all(s, take members)
+      Run(
+        states: take states,
+        expired: canceled,
+        cutoff: cutoff,
+        failed_attempts: failures
+      )
+    }
+  )
+  match take bounded {
+    Finished(value) => take value,
+    Expired(value) => {
+      let mut expired_run = take value
+      expired_run.expired = true
+      take expired_run
+    },
+  }
+}
+
+pub fn attempt_to_json(value: Attempt) -> json.Value uses {} = comptime derive.json_value(
+  shape(Attempt)
+)

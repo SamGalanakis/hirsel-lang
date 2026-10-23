@@ -1,0 +1,11 @@
+{
+  "jobs": 1,
+  "timeout_ms": 1000,
+  "failure_limit": 0,
+  "suites": [
+    {
+      "id": "unit",
+      "cases": []
+    }
+  ]
+}

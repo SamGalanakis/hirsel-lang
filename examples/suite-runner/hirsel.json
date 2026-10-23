@@ -1,0 +1,57 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "suite_runner",
+    "version": "1"
+  },
+  "entry": {
+    "module": [],
+    "name": "main"
+  },
+  "sources": [
+    {
+      "path": "main.hir",
+      "module": []
+    },
+    {
+      "path": "manifest.hir",
+      "module": [
+        "manifest"
+      ]
+    },
+    {
+      "path": "select.hir",
+      "module": [
+        "select"
+      ]
+    },
+    {
+      "path": "run.hir",
+      "module": [
+        "run"
+      ]
+    },
+    {
+      "path": "report.hir",
+      "module": [
+        "report"
+      ]
+    },
+    {
+      "path": "model.hir",
+      "module": [
+        "model"
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "manifest": "../../stdlib/std@1/hirsel.json",
+      "package": {
+        "name": "std",
+        "version": "1"
+      },
+      "expose": []
+    }
+  ]
+}

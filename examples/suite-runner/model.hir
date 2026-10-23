@@ -1,0 +1,77 @@
+// Indexed results are shared by decoding and execution without erasing errors.
+pub type Outcome[T, E] {
+  index: u64,
+  value: Result[T, E],
+}
+
+pub type InvalidInput {
+  kind: String,
+}
+
+pub type Fault = Timeout | Canceled | SpawnMissing | Refused | ProcessFault | ClockFault | Signal(
+  i32
+)
+
+pub fn indexed[T, E](index: u64, take value: Result[T, E]) -> Outcome[T, E] uses {} {
+  Outcome(index: index, value: take value)
+}
+
+pub fn invalid(kind: String) -> InvalidInput uses {} {
+  InvalidInput(kind: unique kind)
+}
+
+pub fn process_error(error: ProcessError) -> Fault uses {} {
+  match error {
+    TimedOut() => Timeout(),
+    Canceled(_) => Canceled(),
+    NotFound() => SpawnMissing(),
+    NotGranted() => Refused(),
+    _ => ProcessFault(),
+  }
+}
+
+pub fn fault_text(error: Fault) -> String uses {} {
+  match error {
+    Timeout() => "timeout",
+    Canceled() => "canceled",
+    SpawnMissing() => "spawn_not_found",
+    Refused() => "process_not_granted",
+    ProcessFault() => "process_error",
+    ClockFault() => "clock_error",
+    Signal(_) => "signal",
+  }
+}
+
+pub fn filename(name: String) -> bool uses {} {
+  if name == "" || name == "." || name == ".." || string.byte_len(name) > 256 {
+    return false
+  }
+  for byte in string.as_bytes(name) {
+    if byte == 0 || byte == b'/' || byte == b'\\' || byte == b':' {
+      return false
+    }
+  }
+  true
+}
+
+pub fn identifier(name: String) -> bool uses {} {
+  if string.byte_len(name) == 0 || string.byte_len(name) > 64 {
+    return false
+  }
+  for byte in string.as_bytes(name) {
+    if !(byte >= b'a' && byte <= b'z') && !(byte >= b'A' && byte <= b'Z') && !(byte >= b'0' && byte <= b'9') && byte != b'_' && byte != b'-' && byte != b'.' {
+      return false
+    }
+  }
+  true
+}
+
+pub fn error_json(value: InvalidInput) -> json.Value uses {} = comptime derive.json_value(
+  shape(InvalidInput)
+)
+
+// Consume the whole record so a counted nested error is transferred, not copied.
+pub fn into_value[T, E](take outcome: Outcome[T, E]) -> Result[T, E] uses {} {
+  let Outcome(index: _, value: payload) = take outcome
+  take payload
+}

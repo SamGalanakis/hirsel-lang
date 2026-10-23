@@ -1,0 +1,240 @@
+// Decode only after a bounded file read; cardinalities precede per-entry copies.
+pub const INPUT_BYTES: u64 = 262144
+
+pub type Case {
+  id: String,
+  suite: String,
+  argv: List[String],
+  tags: List[String],
+  expect: i32,
+  retries: u64,
+  timeout_ms: u64,
+}
+
+pub type Manifest {
+  suites: List[String],
+  cases: List[Case],
+  jobs: u64,
+  timeout_ms: u64,
+  failure_limit: u64,
+}
+
+pub fn number(fields: Map[String, json.Value], key: String, minimum: u64, maximum: u64) -> Result[
+  u64,
+  model.InvalidInput
+] uses {} {
+  let Some(Number(raw)) = map.get(fields, key) else {
+    return Error(model.invalid(key))
+  }
+  let Ok(value) = u64.parse(raw) else {
+    return Error(model.invalid(key))
+  }
+  if value < minimum || value > maximum {
+    return Error(model.invalid(key))
+  }
+  Ok(value)
+}
+
+fn identifier_field(fields: Map[String, json.Value], key: String) -> Result[
+  String,
+  model.InvalidInput
+] uses {} {
+  let Some(Text(value)) = map.get(fields, key) else {
+    return Error(model.invalid(key))
+  }
+  if !model.identifier(value) {
+    return Error(model.invalid(key))
+  }
+  Ok(unique value)
+}
+
+fn words(fields: Map[String, json.Value]) -> Result[List[String], model.InvalidInput] uses {} {
+  let Some(Array(entries)) = map.get(fields, "argv") else {
+    return Error(model.invalid("argv"))
+  }
+  if list.len(entries) == 0 || list.len(entries) > 64 {
+    return Error(model.invalid("argv"))
+  }
+  let mut argv: List[String] = []
+  let mut count = 0u64
+  for entry in entries {
+    let Text(word) = entry else {
+      return Error(model.invalid("argv"))
+    }
+    let size = string.byte_len(word) + 1
+    if size > 4096 - count || string.contains(word, "\0") {
+      return Error(model.invalid("argv_bytes"))
+    }
+    count += size
+    list.push(mut argv, unique word)
+  }
+  let program = argv[0]
+  let Ok(normal) = path.normalize(path.of(program)) else {
+    return Error(model.invalid("program"))
+  }
+  if !string.starts_with(program, "/") || program == "/" || path.text(normal) != program {
+    return Error(model.invalid("program"))
+  }
+  Ok(take argv)
+}
+
+fn tags(fields: Map[String, json.Value]) -> Result[List[String], model.InvalidInput] uses {} {
+  let Some(Array(entries)) = map.get(fields, "tags") else {
+    return Error(model.invalid("tags"))
+  }
+  if list.len(entries) > 8 {
+    return Error(model.invalid("tags"))
+  }
+  let mut value: List[String] = []
+  for entry in entries {
+    let Text(tag) = entry else {
+      return Error(model.invalid("tags"))
+    }
+    if !model.identifier(tag) {
+      return Error(model.invalid("tag"))
+    }
+    for previous in value {
+      if previous == tag {
+        return Error(model.invalid("duplicate_tag"))
+      }
+    }
+    list.push(mut value, unique tag)
+  }
+  Ok(take value)
+}
+
+fn case_value(value: json.Value, suite: String) -> Result[Case, model.InvalidInput] uses {} {
+  let Object(fields) = value else {
+    return Error(model.invalid("case"))
+  }
+  if map.len(fields) != 6 {
+    return Error(model.invalid("case_fields"))
+  }
+  let id = identifier_field(fields, "id")?
+  let argv = words(fields)?
+  let labels = tags(fields)?
+  let retries = number(fields, "retries", 0, 2)?
+  let timeout = number(fields, "timeout_ms", 1, 5000)?
+  let Some(Number(raw)) = map.get(fields, "expect") else {
+    return Error(model.invalid("expect"))
+  }
+  let Ok(expect) = i32.parse(raw) else {
+    return Error(model.invalid("expect"))
+  }
+  Ok(
+    Case(
+      id: take id,
+      suite: unique suite,
+      argv: take argv,
+      tags: take labels,
+      expect: expect,
+      retries: retries,
+      timeout_ms: timeout
+    )
+  )
+}
+
+pub fn decode_case(index: u64, value: json.Value, suite: String) -> model.Outcome[
+  Case,
+  model.InvalidInput
+] uses {} {
+  model.indexed(index, case_value(value, suite))
+}
+
+pub fn decode(take data: Bytes) -> Result[Manifest, model.InvalidInput] uses {} {
+  if bytes.len(data) > INPUT_BYTES {
+    return Error(model.invalid("input_bytes_limit"))
+  }
+  let Ok(source) = string.from_bytes(take data) else {
+    return Error(model.invalid("utf8"))
+  }
+  let Ok(Object(fields)) = json.parse(take source) else {
+    return Error(model.invalid("json_object"))
+  }
+  if map.len(fields) != 4 {
+    return Error(model.invalid("fields"))
+  }
+  let jobs = number(fields, "jobs", 1, 4)?
+  let timeout = number(fields, "timeout_ms", 1, 30000)?
+  let cutoff = number(fields, "failure_limit", 0, 96)?
+  let Some(Array(entries)) = map.get(fields, "suites") else {
+    return Error(model.invalid("suites"))
+  }
+  if list.len(entries) > 4 {
+    return Error(model.invalid("suites"))
+  }
+  let mut suites: List[String] = []
+  let mut cases: List[Case] = []
+  for entry in entries {
+    let Object(suite) = entry else {
+      return Error(model.invalid("suite"))
+    }
+    if map.len(suite) != 2 {
+      return Error(model.invalid("suite_fields"))
+    }
+    let id = identifier_field(suite, "id")?
+    for previous in suites {
+      if previous == id {
+        return Error(model.invalid("duplicate_suite"))
+      }
+    }
+    let Some(Array(values)) = map.get(suite, "cases") else {
+      return Error(model.invalid("cases"))
+    }
+    if list.len(values) > 32 - list.len(cases) {
+      return Error(model.invalid("cases"))
+    }
+    list.push(mut suites, unique id)
+    for value in values {
+      let decoded = decode_case(list.len(cases), value, id)
+      let item = match model.into_value(take decoded) {
+        Ok(item) => take item,
+        Error(problem) => return Error(take problem),
+      }
+      for previous in cases {
+        if previous.id == item.id {
+          return Error(model.invalid("duplicate_case"))
+        }
+      }
+      list.push(mut cases, take item)
+    }
+  }
+  Ok(
+    Manifest(
+      suites: take suites,
+      cases: take cases,
+      jobs: jobs,
+      timeout_ms: timeout,
+      failure_limit: cutoff
+    )
+  )
+}
+
+pub fn read(dir: Dir, name: String) -> Result[Manifest, model.InvalidInput] {
+  if !model.filename(name) {
+    return Error(model.invalid("filename"))
+  }
+  let mut Ok(input) = file.open(dir, path.of(name)) else {
+    return Error(model.invalid("file_open"))
+  }
+  let data = match file.read_all_bounded(dir, mut input, INPUT_BYTES) {
+    Ok(raw) => take raw,
+    Error(Limit()) => return Error(model.invalid("input_bytes_limit")),
+    Error(File(_)) => return Error(model.invalid("file_read")),
+  }
+  decode(take data)
+}
+
+pub fn command(item: Case) -> unique Command uses {} {
+  let mut args: List[String] = []
+  for i in 1u64..list.len(item.argv) {
+    list.push(mut args, unique item.argv[i])
+  }
+  Command(
+    program: path.of(unique item.argv[0]),
+    args: take args,
+    dir: None(),
+    env: None(),
+    own_group: false
+  )
+}

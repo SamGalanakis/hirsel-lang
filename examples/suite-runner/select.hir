@@ -1,0 +1,77 @@
+// Pure, stable selection: order and jobs never enter the shard hash.
+pub type Selection {
+  tag: String,
+  shard: u64,
+  shards: u64,
+}
+
+pub type Entry {
+  index: u64,
+  id: String,
+  suite: String,
+  selected: bool,
+  reason: String,
+}
+
+pub fn selection(tag: String, index: u64, shards: u64) -> Result[
+  Selection,
+  model.InvalidInput
+] uses {} {
+  if tag != "-" && !model.identifier(tag) {
+    return Error(model.invalid("tag"))
+  }
+  if shards == 0 || shards > 32 || index >= shards {
+    return Error(model.invalid("shard"))
+  }
+  Ok(Selection(tag: unique tag, shard: index, shards: shards))
+}
+
+// Modular base-31 polynomial over the ASCII case ID. Reducing every step
+// avoids machine-width overflow; shard membership survives manifest reordering.
+pub fn shard(id: String, count: u64) -> u64 uses {} {
+  let mut hash = 0u64
+  for byte in string.as_bytes(id) {
+    let value: u64 = int.widen(byte)
+    hash = (hash * 31 + value) % count
+  }
+  hash
+}
+
+pub fn reason(item: manifest.Case, choice: Selection) -> String uses {} {
+  let mut matched = choice.tag == "-"
+  for tag in item.tags {
+    if tag == choice.tag {
+      matched = true
+    }
+  }
+  if !matched {
+    return "tag"
+  }
+  if shard(item.id, choice.shards) != choice.shard {
+    return "shard"
+  }
+  "selected"
+}
+
+pub fn plan(source: manifest.Manifest, choice: Selection) -> List[Entry] uses {} {
+  let mut entries: List[Entry] = []
+  for i in 0u64..list.len(source.cases) {
+    let item = source.cases[i]
+    let why = reason(item, choice)
+    list.push(
+      mut entries,
+      Entry(
+        index: i,
+        id: unique item.id,
+        suite: unique item.suite,
+        selected: why == "selected",
+        reason: take why
+      )
+    )
+  }
+  take entries
+}
+
+pub fn entry_json(value: Entry) -> json.Value uses {} = comptime derive.json_value(
+  shape(Entry)
+)

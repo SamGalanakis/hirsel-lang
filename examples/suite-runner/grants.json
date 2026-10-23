@@ -1,0 +1,54 @@
+{
+  "args": [
+    "run",
+    "pass.json",
+    "report.json"
+  ],
+  "io": {
+    "stdout": "stdout.bytes@1",
+    "stderr": "stderr.bytes@1",
+    "tasks": "tasks.cooperative@1",
+    "monotonic_clock": "clock.monotonic.ns@1",
+    "dirs": [
+      {
+        "path": "fixtures",
+        "host": "./fixtures",
+        "access": "read"
+      },
+      {
+        "path": "reports",
+        "host": "./reports",
+        "access": "read_write"
+      }
+    ],
+    "process": {
+      "provider": "process.script@1",
+      "rules": [
+        {
+          "program": "/fixture/child"
+        }
+      ],
+      "runs": [],
+      "children": [
+        {
+          "program": "/fixture/child",
+          "args": [
+            "a"
+          ],
+          "steps": [
+            {
+              "exit": {
+                "exited": 0
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "placement": {
+    "cores": 1,
+    "commit": "shared",
+    "reorder": "auto"
+  }
+}

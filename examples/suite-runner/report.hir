@@ -1,0 +1,147 @@
+// Aggregation is pure; publication is one atomic write after every child joins.
+pub type Row {
+  index: u64,
+  id: String,
+  suite: String,
+  status: String,
+  reason: String,
+  attempts: List[run.Attempt],
+}
+
+pub type Summary {
+  version: u64,
+  cases: List[Row],
+  selected: u64,
+  passed: u64,
+  failed: u64,
+  skipped: u64,
+  not_run: u64,
+  incomplete: u64,
+  attempts: u64,
+  failed_attempts: u64,
+  expired: bool,
+  cutoff: bool,
+  output: String,
+}
+
+pub fn status(state: run.State, expired: bool) -> String uses {} {
+  if !state.selected {
+    return "skipped"
+  }
+  let count = list.len(state.attempts)
+  if count == 0 {
+    return "not_run"
+  }
+  let last = state.attempts[count - 1].status
+  if expired && (last == "canceled" || !state.done) {
+    return "incomplete"
+  }
+  let mut failed = false
+  for row in state.attempts {
+    if row.status != "passed" {
+      failed = true
+    }
+  }
+  if last == "passed" {
+    if failed {
+      "flaky"
+    } else {
+      "passed"
+    }
+  } else {
+    "failed"
+  }
+}
+
+pub fn aggregate(source: manifest.Manifest, run_value: run.Run) -> Summary uses {} {
+  let mut rows: List[Row] = []
+  let mut selected = 0u64
+  let mut passed = 0u64
+  let mut failed = 0u64
+  let mut skipped = 0u64
+  let mut not_run = 0u64
+  let mut incomplete = 0u64
+  let mut attempts = 0u64
+  for i in 0u64..list.len(run_value.states) {
+    let state = run_value.states[i]
+    let value = status(state, run_value.expired)
+    if state.selected {
+      selected += 1
+    }
+    match value {
+      "passed" => {
+        passed += 1
+      },
+      "skipped" => {
+        skipped += 1
+      },
+      "not_run" => {
+        not_run += 1
+      },
+      "incomplete" => {
+        incomplete += 1
+      },
+      _ => {
+        failed += 1
+      },
+    }
+    attempts += list.len(state.attempts)
+    let why = if value == "not_run" {
+      if run_value.expired {
+        "global_timeout"
+      } else if run_value.cutoff {
+        "failure_limit"
+      } else {
+        "not_admitted"
+      }
+    } else if value == "incomplete" {
+      "global_timeout"
+    } else {
+      state.reason
+    }
+    list.push(
+      mut rows,
+      Row(
+        index: i,
+        id: unique source.cases[i].id,
+        suite: unique source.cases[i].suite,
+        status: unique value,
+        reason: unique why,
+        attempts: unique state.attempts
+      )
+    )
+  }
+  Summary(
+    version: 1,
+    cases: take rows,
+    selected: selected,
+    passed: passed,
+    failed: failed,
+    skipped: skipped,
+    not_run: not_run,
+    incomplete: incomplete,
+    attempts: attempts,
+    failed_attempts: run_value.failed_attempts,
+    expired: run_value.expired,
+    cutoff: run_value.cutoff,
+    output: "discarded"
+  )
+}
+
+pub fn successful(value: Summary) -> bool uses {} {
+  !value.expired && value.failed == 0 && value.incomplete == 0 && value.not_run == 0
+}
+
+pub fn summary_json(value: Summary) -> json.Value uses {} = comptime derive.json_value(
+  shape(Summary)
+)
+
+pub fn publish(dir: Dir, name: String, value: String) -> Result[(), FileError] {
+  let mut output = file.create_atomic(dir, path.of(name))?
+  file.write_all(dir, mut output, string.as_bytes(value))?
+  file.commit(dir, take output)
+}
+
+pub fn row_to_json(value: Row) -> json.Value uses {} = comptime derive.json_value(
+  shape(Row)
+)

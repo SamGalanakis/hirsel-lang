@@ -1,0 +1,240 @@
+pub type AppError = Output(OutputError) | Json(json.JsonError) | File(FileError) | Grant(
+  GrantError
+) | Usage(String) | Clock(ClockError)
+
+pub type Verdict = Passed | Failed(ExitStatus) | TimedOut | NotRun(ProcessError)
+
+const HELP: String = "Usage: suite-runner list FILE | plan FILE [TAG|- [SHARD_INDEX SHARD_COUNT]] | run FILE REPORT [TAG|- [SHARD_INDEX SHARD_COUNT]]\nCompatibility: suite-runner PROGRAM [MILLISECONDS]\nRead manifests under fixtures; atomically write REPORT under reports. Exact tags, zero-based ID shards. Child pipes discarded in suite mode.\nExit: 0 successful/help/compatibility, 1 failed/flaky/expired or I/O error, 2 invalid input, 3 missing runtime grant.\n"
+
+fn argument(args: Args, index: u64) -> Result[String, model.InvalidInput] {
+  let Ok(text) = arg.text(args, index) else {
+    return Error(model.invalid("argument"))
+  }
+  Ok(unique text)
+}
+
+fn choice(args: Args, offset: u64) -> Result[select.Selection, model.InvalidInput] {
+  let length = arg.len(args)
+  if length != offset && length != offset + 1 && length != offset + 3 {
+    return Error(model.invalid("usage"))
+  }
+  let tag = if length > offset {
+    argument(args, offset)?
+  } else {
+    "-"
+  }
+  let mut shard = 0u64
+  let mut shards = 1u64
+  if length == offset + 3 {
+    let Ok(index) = u64.parse(argument(args, offset + 1)?) else {
+      return Error(model.invalid("shard"))
+    }
+    let Ok(count) = u64.parse(argument(args, offset + 2)?) else {
+      return Error(model.invalid("shard"))
+    }
+    shard = index
+    shards = count
+  }
+  select.selection(tag, shard, shards)
+}
+
+fn invalid(errors: Stderr, problem: model.InvalidInput) -> Result[
+  std@1/process.ExitCode,
+  AppError
+] {
+  let rendered = json.stringify(model.error_json(problem))?
+  err.print(errors, f"{rendered}\n")?
+  Ok(std@1/process.exit_code(2u8))
+}
+
+pub fn main(rt: Io, args: Args) -> Result[std@1/process.ExitCode, AppError] {
+  let out = io.stdout(rt)?
+  if arg.len(args) == 1 {
+    if let Ok(flag) = arg.text(args, 0) {
+      if flag == "--help" || flag == "-h" {
+        out.print(out, HELP)?
+        return Ok(std@1/process.SUCCESS)
+      }
+    }
+  }
+  let mode = match argument(args, 0) {
+    Ok(text) => take text,
+    Error(_) => return Error(Usage("usage: suite-runner --help")),
+  }
+  if mode != "list" && mode != "plan" && mode != "run" {
+    return compatibility(rt, args, out)
+  }
+  let errors = io.stderr(rt)?
+  let offset = if mode == "run" {
+    3u64
+  } else {
+    2u64
+  }
+  let selection = match choice(args, offset) {
+    Ok(value) => take value,
+    Error(problem) => return invalid(errors, problem),
+  }
+  if mode == "list" && arg.len(args) != 2 {
+    return invalid(errors, model.invalid("usage"))
+  }
+  let filename = match argument(args, 1) {
+    Ok(value) => take value,
+    Error(problem) => return invalid(errors, problem),
+  }
+  let report_name = if mode == "run" {
+    match argument(args, 2) {
+      Ok(value) => take value,
+      Error(problem) => return invalid(errors, problem),
+    }
+  } else {
+    "unused"
+  }
+  if !model.filename(report_name) {
+    return invalid(errors, model.invalid("report_filename"))
+  }
+  let Ok(dir) = io.dir(rt, path.of("fixtures")) else {
+    return Ok(std@1/process.exit_code(3u8))
+  }
+  let source = match manifest.read(dir, filename) {
+    Ok(value) => take value,
+    Error(problem) => return invalid(errors, problem),
+  }
+  let plan = select.plan(source, selection)
+  if mode != "run" {
+    for entry in plan {
+      let rendered = json.stringify(select.entry_json(entry))?
+      out.print(out, f"{rendered}\n")?
+    }
+    return Ok(std@1/process.SUCCESS)
+  }
+  // Project authority before admitting children. Publication occurs after joins.
+  let Ok(reports) = io.dir(rt, path.of("reports")) else {
+    return Ok(std@1/process.exit_code(3u8))
+  }
+  let Ok(p) = io.process(rt) else {
+    return Ok(std@1/process.exit_code(3u8))
+  }
+  let Ok(c) = io.monotonic_clock(rt) else {
+    return Ok(std@1/process.exit_code(3u8))
+  }
+  let Ok(tasks) = io.tasks(rt) else {
+    return Ok(std@1/process.exit_code(3u8))
+  }
+  let value = run.suite(p, c, tasks, source, plan)
+  let summary = report.aggregate(source, value)
+  let successful = report.successful(summary)
+  let rendered = json.stringify(report.summary_json(summary))?
+  report.publish(reports, report_name, rendered)?
+  out.print(out, f"{rendered}\n")?
+  Ok(
+    if successful {
+      std@1/process.SUCCESS
+    } else {
+      std@1/process.FAILURE
+    }
+  )
+}
+
+// Preserve the earlier testrun PROGRAM [MILLISECONDS] streaming behavior.
+fn compatibility(rt: Io, args: Args, out: Stdout) -> Result[
+  std@1/process.ExitCode,
+  AppError
+] {
+  if arg.len(args) < 1 || arg.len(args) > 2 {
+    return Error(Usage("usage: suite-runner PROGRAM [MILLISECONDS]"))
+  }
+  let Ok(program) = arg.path(args, 0) else {
+    return Error(Usage("PROGRAM must be a path"))
+  }
+  let mut milliseconds = 5000u64
+  if arg.len(args) == 2 {
+    let Ok(text) = arg.text(args, 1) else {
+      return Error(Usage("MILLISECONDS must be UTF-8"))
+    }
+    let Ok(value) = u64.parse(text) else {
+      return Error(Usage("MILLISECONDS must be a number"))
+    }
+    milliseconds = value
+  }
+  if milliseconds > 5000 {
+    return Error(Usage("MILLISECONDS must be <=5000"))
+  }
+  let p = io.process(rt)?
+  let tasks = io.tasks(rt)?
+  let clock = io.monotonic_clock(rt)?
+  let start = clock.monotonic(clock)?
+  let Some(at) = instant.checked_add(clock, start, milliseconds * 1000000u64) else {
+    return Error(Usage("MILLISECONDS is too large"))
+  }
+  let verdict = match task.scope_until(
+    tasks,
+    Deadline(clock: clock, at: at),
+    fn(s: Scope) -> Verdict {
+      stream(p, out, program)
+    }
+  ) {
+    Finished(ran) => ran,
+    Expired(_) => TimedOut(),
+  }
+  out.print(out, verdict_text(verdict))?
+  Ok(std@1/process.SUCCESS)
+}
+
+fn print_line(out: Stdout, take line: List[u8]) -> () {
+  match text.finish(take line) {
+    Ok(s) => {
+      let _ = out.print(out, f"| {s}\n")
+    },
+    Error(_) => {
+      let _ = out.print(out, "| (not UTF-8)\n")
+    },
+  }
+}
+
+// Spawn the test and print its output line by line until it ends. Past the deadline the
+// read returns Canceled; returning then drops the Child, which kills the test.
+fn stream(p: Proc, out: Stdout, program: Path) -> Verdict {
+  let mut test = match proc.spawn(
+    p,
+    Command(program: program, args: [], dir: None(), env: None(), own_group: false)
+  ) {
+    Ok(c) => take c,
+    Error(e) => return NotRun(e),
+  }
+  child.close_stdin(p, mut test)
+  let mut line: List[u8] = []
+  while true {
+    let mut chunk: List[u8] = []
+    match child.read_stdout(p, mut test, mut chunk, 4096u64) {
+      Ok(0u64) => break,
+      Ok(n) => {
+        for i in 0u64..n {
+          if chunk[i] == b'\n' {
+            print_line(out, replace(mut line, []))
+          } else {
+            list.push(mut line, chunk[i])
+          }
+        }
+      },
+      Error(e) => return NotRun(e),
+    }
+  }
+  if list.len(line) > 0u64 {
+    print_line(out, take line)
+  }
+  match child.wait(p, take test, None()) {
+    Ok(Exited(0)) => Passed(),
+    Ok(status) => Failed(status),
+    Error(e) => NotRun(e),
+  }
+}
+
+fn verdict_text(verdict: Verdict) -> String {
+  match verdict {
+    Passed() => "PASS\n",
+    Failed(Exited(code)) => f"FAIL: exit {code}\n",
+    Failed(Signaled(signal)) => f"FAIL: signal {signal}\n",
+    TimedOut() => "TIMEOUT\n",
+    NotRun(_) => "NOT RUN\n",
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "jobs": 1,
+  "timeout_ms": 1000,
+  "failure_limit": 0,
+  "suites": [
+    {
+      "id": "unit",
+      "cases": [
+        {
+          "id": "a",
+          "argv": [
+            "/fixture/child",
+            "a"
+          ],
+          "tags": [
+            "fast"
+          ],
+          "expect": 0,
+          "retries": 1,
+          "timeout_ms": 100
+        }
+      ]
+    }
+  ]
+}

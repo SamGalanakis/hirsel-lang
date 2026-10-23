@@ -1,0 +1,1818 @@
+[
+  {
+    "id": "empty",
+    "manifest": {
+      "jobs": 1,
+      "timeout_ms": 1000,
+      "failure_limit": 0,
+      "suites": [
+        {
+          "id": "unit",
+          "cases": []
+        }
+      ]
+    },
+    "scripts": {},
+    "args": [
+      "run",
+      "manifest.json",
+      "report.json"
+    ],
+    "report": {
+      "version": 1,
+      "cases": [],
+      "selected": 0,
+      "passed": 0,
+      "failed": 0,
+      "skipped": 0,
+      "not_run": 0,
+      "incomplete": 0,
+      "attempts": 0,
+      "failed_attempts": 0,
+      "expired": false,
+      "cutoff": false,
+      "output": "discarded"
+    },
+    "exit": 0
+  },
+  {
+    "id": "empty-suites",
+    "manifest": {
+      "jobs": 1,
+      "timeout_ms": 1000,
+      "failure_limit": 0,
+      "suites": []
+    },
+    "scripts": {},
+    "args": [
+      "run",
+      "manifest.json",
+      "report.json"
+    ],
+    "report": {
+      "version": 1,
+      "cases": [],
+      "selected": 0,
+      "passed": 0,
+      "failed": 0,
+      "skipped": 0,
+      "not_run": 0,
+      "incomplete": 0,
+      "attempts": 0,
+      "failed_attempts": 0,
+      "expired": false,
+      "cutoff": false,
+      "output": "discarded"
+    },
+    "exit": 0
+  },
+  {
+    "id": "pass",
+    "manifest": {
+      "jobs": 1,
+      "timeout_ms": 1000,
+      "failure_limit": 0,
+      "suites": [
+        {
+          "id": "unit",
+          "cases": [
+            {
+              "id": "a",
+              "argv": [
+                "/fixture/child",
+                "a"
+              ],
+              "tags": [
+                "fast"
+              ],
+              "expect": 0,
+              "retries": 0,
+              "timeout_ms": 100
+            }
+          ]
+        }
+      ]
+    },
+    "scripts": {
+      "a": [
+        0
+      ]
+    },
+    "args": [
+      "run",
+      "manifest.json",
+      "report.json"
+    ],
+    "report": {
+      "version": 1,
+      "cases": [
+        {
+          "index": 0,
+          "id": "a",
+          "suite": "unit",
+          "status": "passed",
+          "reason": "selected",
+          "attempts": [
+            {
+              "number": 1,
+              "status": "passed",
+              "exit": 0,
+              "signal": null
+            }
+          ]
+        }
+      ],
+      "selected": 1,
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "not_run": 0,
+      "incomplete": 0,
+      "attempts": 1,
+      "failed_attempts": 0,
+      "expired": false,
+      "cutoff": false,
+      "output": "discarded"
+    },
+    "exit": 0
+  },
+  {
+    "id": "fail",
+    "manifest": {
+      "jobs": 1,
+      "timeout_ms": 1000,
+      "failure_limit": 0,
+      "suites": [
+        {
+          "id": "unit",
+          "cases": [
+            {
+              "id": "a",
+              "argv": [
+                "/fixture/child",
+                "a"
+              ],
+              "tags": [
+                "fast"
+              ],
+              "expect": 0,
+              "retries": 0,
+              "timeout_ms": 100
+            }
+          ]
+        }
+      ]
+    },
+    "scripts": {
+      "a": [
+        7
+      ]
+    },
+    "args": [
+      "run",
+      "manifest.json",
+      "report.json"
+    ],
+    "report": {
+      "version": 1,
+      "cases": [
+        {
+          "index": 0,
+          "id": "a",
+          "suite": "unit",
+          "status": "failed",
+          "reason": "selected",
+          "attempts": [
+            {
+              "number": 1,
+              "status": "failed",
+              "exit": 7,
+              "signal": null
+            }
+          ]
+        }
+      ],
+      "selected": 1,
+      "passed": 0,
+      "failed": 1,
+      "skipped": 0,
+      "not_run": 0,
+      "incomplete": 0,
+      "attempts": 1,
+      "failed_attempts": 1,
+      "expired": false,
+      "cutoff": false,
+      "output": "discarded"
+    },
+    "exit": 1
+  },
+  {
+    "id": "expected-nonzero",
+    "manifest": {
+      "jobs": 1,
+      "timeout_ms": 1000,
+      "failure_limit": 0,
+      "suites": [
+        {
+          "id": "unit",
+          "cases": [
+            {
+              "id": "a",
+              "argv": [
+                "/fixture/child",
+                "a"
+              ],
+              "tags": [
+                "fast"
+              ],
+              "expect": 7,
+              "retries": 0,
+              "timeout_ms": 100
+            }
+          ]
+        }
+      ]
+    },
+    "scripts": {
+      "a": [
+        7
+      ]
+    },
+    "args": [
+      "run",
+      "manifest.json",
+      "report.json"
+    ],
+    "report": {
+      "version": 1,
+      "cases": [
+        {
+          "index": 0,
+          "id": "a",
+          "suite": "unit",
+          "status": "passed",
+          "reason": "selected",
+          "attempts": [
+            {
+              "number": 1,
+              "status": "passed",
+              "exit": 7,
+              "signal": null
+            }
+          ]
+        }
+      ],
+      "selected": 1,
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "not_run": 0,
+      "incomplete": 0,
+      "attempts": 1,
+      "failed_attempts": 0,
+      "expired": false,
+      "cutoff": false,
+      "output": "discarded"
+    },
+    "exit": 0
+  },
+  {
+    "id": "retry-pass",
+    "manifest": {
+      "jobs": 1,
+      "timeout_ms": 1000,
+      "failure_limit": 0,
+      "suites": [
+        {
+          "id": "unit",
+          "cases": [
+            {
+              "id": "a",
+              "argv": [
+                "/fixture/child",
+                "a"
+              ],
+              "tags": [
+                "fast"
+              ],
+              "expect": 0,
+              "retries": 1,
+              "timeout_ms": 100
+            }
+          ]
+        }
+      ]
+    },
+    "scripts": {
+      "a": [
+        7,
+        0
+      ]
+    },
+    "args": [
+      "run",
+      "manifest.json",
+      "report.json"
+    ],
+    "report": {
+      "version": 1,
+      "cases": [
+        {
+          "index": 0,
+          "id": "a",
+          "suite": "unit",
+          "status": "flaky",
+          "reason": "selected",
+          "attempts": [
+            {
+              "number": 1,
+              "status": "failed",
+              "exit": 7,
+              "signal": null
+            },
+            {
+              "number": 2,
+              "status": "passed",
+              "exit": 0,
+              "signal": null
+            }
+          ]
+        }
+      ],
+      "selected": 1,
+      "passed": 0,
+      "failed": 1,
+      "skipped": 0,
+      "not_run": 0,
+      "incomplete": 0,
+      "attempts": 2,
+      "failed_attempts": 1,
+      "expired": false,
+      "cutoff": false,
+      "output": "discarded"
+    },
+    "exit": 1
+  },
+  {
+    "id": "retry-exhaust",
+    "manifest": {
+      "jobs": 1,
+      "timeout_ms": 1000,
+      "failure_limit": 0,
+      "suites": [
+        {
+          "id": "unit",
+          "cases": [
+            {
+              "id": "a",
+              "argv": [
+                "/fixture/child",
+                "a"
+              ],
+              "tags": [
+                "fast"
+              ],
+              "expect": 0,
+              "retries": 2,
+              "timeout_ms": 100
+            }
+          ]
+        }
+      ]
+    },
+    "scripts": {
+      "a": [
+        7,
+        7,
+        7
+      ]
+    },
+    "args": [
+      "run",
+      "manifest.json",
+      "report.json"
+    ],
+    "report": {
+      "version": 1,
+      "cases": [
+        {
+          "index": 0,
+          "id": "a",
+          "suite": "unit",
+          "status": "failed",
+          "reason": "selected",
+          "attempts": [
+            {
+              "number": 1,
+              "status": "failed",
+              "exit": 7,
+              "signal": null
+            },
+            {
+              "number": 2,
+              "status": "failed",
+              "exit": 7,
+              "signal": null
+            },
+            {
+              "number": 3,
+              "status": "failed",
+              "exit": 7,
+              "signal": null
+            }
+          ]
+        }
+      ],
+      "selected": 1,
+      "passed": 0,
+      "failed": 1,
+      "skipped": 0,
+      "not_run": 0,
+      "incomplete": 0,
+      "attempts": 3,
+      "failed_attempts": 3,
+      "expired": false,
+      "cutoff": false,
+      "output": "discarded"
+    },
+    "exit": 1
+  },
+  {
+    "id": "spawn-denial",
+    "manifest": {
+      "jobs": 1,
+      "timeout_ms": 1000,
+      "failure_limit": 0,
+      "suites": [
+        {
+          "id": "unit",
+          "cases": [
+            {
+              "id": "a",
+              "argv": [
+                "/fixture/child",
+                "a"
+              ],
+              "tags": [
+                "fast"
+              ],
+              "expect": 0,
+              "retries": 0,
+              "timeout_ms": 100
+            }
+          ]
+        }
+      ]
+    },
+    "scripts": {
+      "a": [
+        "process_not_granted"
+      ]
+    },
+    "args": [
+      "run",
+      "manifest.json",
+      "report.json"
+    ],
+    "report": {
+      "version": 1,
+      "cases": [
+        {
+          "index": 0,
+          "id": "a",
+          "suite": "unit",
+          "status": "failed",
+          "reason": "selected",
+          "attempts": [
+            {
+              "number": 1,
+              "status": "process_not_granted",
+              "exit": null,
+              "signal": null
+            }
+          ]
+        }
+      ],
+      "selected": 1,
+      "passed": 0,
+      "failed": 1,
+      "skipped": 0,
+      "not_run": 0,
+      "incomplete": 0,
+      "attempts": 1,
+      "failed_attempts": 1,
+      "expired": false,
+      "cutoff": false,
+      "output": "discarded"
+    },
+    "exit": 1,
+    "refused": true
+  },
+  {
+    "id": "spawn-missing",
+    "manifest": {
+      "jobs": 1,
+      "timeout_ms": 1000,
+      "failure_limit": 0,
+      "suites": [
+        {
+          "id": "unit",
+          "cases": [
+            {
+              "id": "a",
+              "argv": [
+                "/fixture/child",
+                "a"
+              ],
+              "tags": [
+                "fast"
+              ],
+              "expect": 0,
+              "retries": 0,
+              "timeout_ms": 100
+            }
+          ]
+        }
+      ]
+    },
+    "scripts": {
+      "a": [
+        "spawn_not_found"
+      ]
+    },
+    "args": [
+      "run",
+      "manifest.json",
+      "report.json"
+    ],
+    "report": {
+      "version": 1,
+      "cases": [
+        {
+          "index": 0,
+          "id": "a",
+          "suite": "unit",
+          "status": "failed",
+          "reason": "selected",
+          "attempts": [
+            {
+              "number": 1,
+              "status": "spawn_not_found",
+              "exit": null,
+              "signal": null
+            }
+          ]
+        }
+      ],
+      "selected": 1,
+      "passed": 0,
+      "failed": 1,
+      "skipped": 0,
+      "not_run": 0,
+      "incomplete": 0,
+      "attempts": 1,
+      "failed_attempts": 1,
+      "expired": false,
+      "cutoff": false,
+      "output": "discarded"
+    },
+    "exit": 1,
+    "absent": true
+  },
+  {
+    "id": "tag",
+    "manifest": {
+      "jobs": 1,
+      "timeout_ms": 1000,
+      "failure_limit": 0,
+      "suites": [
+        {
+          "id": "unit",
+          "cases": [
+            {
+              "id": "a",
+              "argv": [
+                "/fixture/child",
+                "a"
+              ],
+              "tags": [
+                "fast"
+              ],
+              "expect": 0,
+              "retries": 0,
+              "timeout_ms": 100
+            },
+            {
+              "id": "b",
+              "argv": [
+                "/fixture/child",
+                "b"
+              ],
+              "tags": [
+                "slow"
+              ],
+              "expect": 0,
+              "retries": 0,
+              "timeout_ms": 100
+            }
+          ]
+        }
+      ]
+    },
+    "scripts": {
+      "a": [
+        0
+      ],
+      "b": [
+        0
+      ]
+    },
+    "args": [
+      "run",
+      "manifest.json",
+      "report.json",
+      "fast"
+    ],
+    "report": {
+      "version": 1,
+      "cases": [
+        {
+          "index": 0,
+          "id": "a",
+          "suite": "unit",
+          "status": "passed",
+          "reason": "selected",
+          "attempts": [
+            {
+              "number": 1,
+              "status": "passed",
+              "exit": 0,
+              "signal": null
+            }
+          ]
+        },
+        {
+          "index": 1,
+          "id": "b",
+          "suite": "unit",
+          "status": "skipped",
+          "reason": "tag",
+          "attempts": []
+        }
+      ],
+      "selected": 1,
+      "passed": 1,
+      "failed": 0,
+      "skipped": 1,
+      "not_run": 0,
+      "incomplete": 0,
+      "attempts": 1,
+      "failed_attempts": 0,
+      "expired": false,
+      "cutoff": false,
+      "output": "discarded"
+    },
+    "exit": 0
+  },
+  {
+    "id": "shard",
+    "manifest": {
+      "jobs": 1,
+      "timeout_ms": 1000,
+      "failure_limit": 0,
+      "suites": [
+        {
+          "id": "unit",
+          "cases": [
+            {
+              "id": "a",
+              "argv": [
+                "/fixture/child",
+                "a"
+              ],
+              "tags": [
+                "fast"
+              ],
+              "expect": 0,
+              "retries": 0,
+              "timeout_ms": 100
+            },
+            {
+              "id": "b",
+              "argv": [
+                "/fixture/child",
+                "b"
+              ],
+              "tags": [
+                "fast"
+              ],
+              "expect": 0,
+              "retries": 0,
+              "timeout_ms": 100
+            }
+          ]
+        }
+      ]
+    },
+    "scripts": {
+      "a": [
+        0
+      ],
+      "b": [
+        0
+      ]
+    },
+    "args": [
+      "run",
+      "manifest.json",
+      "report.json",
+      "-",
+      "0",
+      "2"
+    ],
+    "report": {
+      "version": 1,
+      "cases": [
+        {
+          "index": 0,
+          "id": "a",
+          "suite": "unit",
+          "status": "skipped",
+          "reason": "shard",
+          "attempts": []
+        },
+        {
+          "index": 1,
+          "id": "b",
+          "suite": "unit",
+          "status": "passed",
+          "reason": "selected",
+          "attempts": [
+            {
+              "number": 1,
+              "status": "passed",
+              "exit": 0,
+              "signal": null
+            }
+          ]
+        }
+      ],
+      "selected": 1,
+      "passed": 1,
+      "failed": 0,
+      "skipped": 1,
+      "not_run": 0,
+      "incomplete": 0,
+      "attempts": 1,
+      "failed_attempts": 0,
+      "expired": false,
+      "cutoff": false,
+      "output": "discarded"
+    },
+    "exit": 0
+  },
+  {
+    "id": "cutoff",
+    "manifest": {
+      "jobs": 1,
+      "timeout_ms": 1000,
+      "failure_limit": 1,
+      "suites": [
+        {
+          "id": "unit",
+          "cases": [
+            {
+              "id": "a",
+              "argv": [
+                "/fixture/child",
+                "a"
+              ],
+              "tags": [
+                "fast"
+              ],
+              "expect": 0,
+              "retries": 0,
+              "timeout_ms": 100
+            },
+            {
+              "id": "b",
+              "argv": [
+                "/fixture/child",
+                "b"
+              ],
+              "tags": [
+                "fast"
+              ],
+              "expect": 0,
+              "retries": 0,
+              "timeout_ms": 100
+            }
+          ]
+        }
+      ]
+    },
+    "scripts": {
+      "a": [
+        7
+      ],
+      "b": [
+        0
+      ]
+    },
+    "args": [
+      "run",
+      "manifest.json",
+      "report.json"
+    ],
+    "report": {
+      "version": 1,
+      "cases": [
+        {
+          "index": 0,
+          "id": "a",
+          "suite": "unit",
+          "status": "failed",
+          "reason": "selected",
+          "attempts": [
+            {
+              "number": 1,
+              "status": "failed",
+              "exit": 7,
+              "signal": null
+            }
+          ]
+        },
+        {
+          "index": 1,
+          "id": "b",
+          "suite": "unit",
+          "status": "not_run",
+          "reason": "failure_limit",
+          "attempts": []
+        }
+      ],
+      "selected": 2,
+      "passed": 0,
+      "failed": 1,
+      "skipped": 0,
+      "not_run": 1,
+      "incomplete": 0,
+      "attempts": 1,
+      "failed_attempts": 1,
+      "expired": false,
+      "cutoff": true,
+      "output": "discarded"
+    },
+    "exit": 1
+  },
+  {
+    "id": "cutoff-retry",
+    "manifest": {
+      "jobs": 1,
+      "timeout_ms": 1000,
+      "failure_limit": 1,
+      "suites": [
+        {
+          "id": "unit",
+          "cases": [
+            {
+              "id": "a",
+              "argv": [
+                "/fixture/child",
+                "a"
+              ],
+              "tags": [
+                "fast"
+              ],
+              "expect": 0,
+              "retries": 1,
+              "timeout_ms": 100
+            },
+            {
+              "id": "b",
+              "argv": [
+                "/fixture/child",
+                "b"
+              ],
+              "tags": [
+                "fast"
+              ],
+              "expect": 0,
+              "retries": 0,
+              "timeout_ms": 100
+            }
+          ]
+        }
+      ]
+    },
+    "scripts": {
+      "a": [
+        7,
+        0
+      ],
+      "b": [
+        0
+      ]
+    },
+    "args": [
+      "run",
+      "manifest.json",
+      "report.json"
+    ],
+    "report": {
+      "version": 1,
+      "cases": [
+        {
+          "index": 0,
+          "id": "a",
+          "suite": "unit",
+          "status": "failed",
+          "reason": "selected",
+          "attempts": [
+            {
+              "number": 1,
+              "status": "failed",
+              "exit": 7,
+              "signal": null
+            }
+          ]
+        },
+        {
+          "index": 1,
+          "id": "b",
+          "suite": "unit",
+          "status": "not_run",
+          "reason": "failure_limit",
+          "attempts": []
+        }
+      ],
+      "selected": 2,
+      "passed": 0,
+      "failed": 1,
+      "skipped": 0,
+      "not_run": 1,
+      "incomplete": 0,
+      "attempts": 1,
+      "failed_attempts": 1,
+      "expired": false,
+      "cutoff": true,
+      "output": "discarded"
+    },
+    "exit": 1
+  },
+  {
+    "id": "jobs-four",
+    "manifest": {
+      "jobs": 4,
+      "timeout_ms": 1000,
+      "failure_limit": 0,
+      "suites": [
+        {
+          "id": "unit",
+          "cases": [
+            {
+              "id": "a",
+              "argv": [
+                "/fixture/child",
+                "a"
+              ],
+              "tags": [
+                "fast"
+              ],
+              "expect": 0,
+              "retries": 0,
+              "timeout_ms": 100
+            },
+            {
+              "id": "b",
+              "argv": [
+                "/fixture/child",
+                "b"
+              ],
+              "tags": [
+                "fast"
+              ],
+              "expect": 0,
+              "retries": 0,
+              "timeout_ms": 100
+            },
+            {
+              "id": "c",
+              "argv": [
+                "/fixture/child",
+                "c"
+              ],
+              "tags": [
+                "fast"
+              ],
+              "expect": 0,
+              "retries": 0,
+              "timeout_ms": 100
+            },
+            {
+              "id": "d",
+              "argv": [
+                "/fixture/child",
+                "d"
+              ],
+              "tags": [
+                "fast"
+              ],
+              "expect": 0,
+              "retries": 0,
+              "timeout_ms": 100
+            }
+          ]
+        }
+      ]
+    },
+    "scripts": {
+      "a": [
+        0
+      ],
+      "b": [
+        0
+      ],
+      "c": [
+        0
+      ],
+      "d": [
+        0
+      ]
+    },
+    "args": [
+      "run",
+      "manifest.json",
+      "report.json"
+    ],
+    "report": {
+      "version": 1,
+      "cases": [
+        {
+          "index": 0,
+          "id": "a",
+          "suite": "unit",
+          "status": "passed",
+          "reason": "selected",
+          "attempts": [
+            {
+              "number": 1,
+              "status": "passed",
+              "exit": 0,
+              "signal": null
+            }
+          ]
+        },
+        {
+          "index": 1,
+          "id": "b",
+          "suite": "unit",
+          "status": "passed",
+          "reason": "selected",
+          "attempts": [
+            {
+              "number": 1,
+              "status": "passed",
+              "exit": 0,
+              "signal": null
+            }
+          ]
+        },
+        {
+          "index": 2,
+          "id": "c",
+          "suite": "unit",
+          "status": "passed",
+          "reason": "selected",
+          "attempts": [
+            {
+              "number": 1,
+              "status": "passed",
+              "exit": 0,
+              "signal": null
+            }
+          ]
+        },
+        {
+          "index": 3,
+          "id": "d",
+          "suite": "unit",
+          "status": "passed",
+          "reason": "selected",
+          "attempts": [
+            {
+              "number": 1,
+              "status": "passed",
+              "exit": 0,
+              "signal": null
+            }
+          ]
+        }
+      ],
+      "selected": 4,
+      "passed": 4,
+      "failed": 0,
+      "skipped": 0,
+      "not_run": 0,
+      "incomplete": 0,
+      "attempts": 4,
+      "failed_attempts": 0,
+      "expired": false,
+      "cutoff": false,
+      "output": "discarded"
+    },
+    "exit": 0
+  },
+  {
+    "id": "multi-suite",
+    "manifest": {
+      "jobs": 1,
+      "timeout_ms": 1000,
+      "failure_limit": 0,
+      "suites": [
+        {
+          "id": "unit",
+          "cases": [
+            {
+              "id": "a",
+              "argv": [
+                "/fixture/child",
+                "a"
+              ],
+              "tags": [
+                "fast"
+              ],
+              "expect": 0,
+              "retries": 0,
+              "timeout_ms": 100
+            }
+          ]
+        },
+        {
+          "id": "other",
+          "cases": [
+            {
+              "id": "b",
+              "argv": [
+                "/fixture/child",
+                "b"
+              ],
+              "tags": [
+                "fast"
+              ],
+              "expect": 0,
+              "retries": 0,
+              "timeout_ms": 100
+            }
+          ]
+        }
+      ]
+    },
+    "scripts": {
+      "a": [
+        0
+      ],
+      "b": [
+        0
+      ]
+    },
+    "args": [
+      "run",
+      "manifest.json",
+      "report.json"
+    ],
+    "report": {
+      "version": 1,
+      "cases": [
+        {
+          "index": 0,
+          "id": "a",
+          "suite": "unit",
+          "status": "passed",
+          "reason": "selected",
+          "attempts": [
+            {
+              "number": 1,
+              "status": "passed",
+              "exit": 0,
+              "signal": null
+            }
+          ]
+        },
+        {
+          "index": 1,
+          "id": "b",
+          "suite": "other",
+          "status": "passed",
+          "reason": "selected",
+          "attempts": [
+            {
+              "number": 1,
+              "status": "passed",
+              "exit": 0,
+              "signal": null
+            }
+          ]
+        }
+      ],
+      "selected": 2,
+      "passed": 2,
+      "failed": 0,
+      "skipped": 0,
+      "not_run": 0,
+      "incomplete": 0,
+      "attempts": 2,
+      "failed_attempts": 0,
+      "expired": false,
+      "cutoff": false,
+      "output": "discarded"
+    },
+    "exit": 0
+  },
+  {
+    "id": "literal-argv",
+    "manifest": {
+      "jobs": 1,
+      "timeout_ms": 1000,
+      "failure_limit": 0,
+      "suites": [
+        {
+          "id": "unit",
+          "cases": [
+            {
+              "id": "a",
+              "argv": [
+                "/fixture/child",
+                "$HOME",
+                "*.hir",
+                "a b",
+                "; exit 7"
+              ],
+              "tags": [
+                "fast"
+              ],
+              "expect": 0,
+              "retries": 0,
+              "timeout_ms": 100
+            }
+          ]
+        }
+      ]
+    },
+    "scripts": {
+      "a": [
+        0
+      ]
+    },
+    "args": [
+      "run",
+      "manifest.json",
+      "report.json"
+    ],
+    "report": {
+      "version": 1,
+      "cases": [
+        {
+          "index": 0,
+          "id": "a",
+          "suite": "unit",
+          "status": "passed",
+          "reason": "selected",
+          "attempts": [
+            {
+              "number": 1,
+              "status": "passed",
+              "exit": 0,
+              "signal": null
+            }
+          ]
+        }
+      ],
+      "selected": 1,
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "not_run": 0,
+      "incomplete": 0,
+      "attempts": 1,
+      "failed_attempts": 0,
+      "expired": false,
+      "cutoff": false,
+      "output": "discarded"
+    },
+    "exit": 0
+  },
+  {
+    "id": "list",
+    "manifest": {
+      "jobs": 1,
+      "timeout_ms": 1000,
+      "failure_limit": 0,
+      "suites": [
+        {
+          "id": "unit",
+          "cases": [
+            {
+              "id": "a",
+              "argv": [
+                "/fixture/child",
+                "a"
+              ],
+              "tags": [
+                "fast"
+              ],
+              "expect": 0,
+              "retries": 0,
+              "timeout_ms": 100
+            },
+            {
+              "id": "b",
+              "argv": [
+                "/fixture/child",
+                "b"
+              ],
+              "tags": [
+                "slow"
+              ],
+              "expect": 0,
+              "retries": 0,
+              "timeout_ms": 100
+            }
+          ]
+        }
+      ]
+    },
+    "scripts": {
+      "a": [
+        0
+      ],
+      "b": [
+        0
+      ]
+    },
+    "args": [
+      "list",
+      "manifest.json"
+    ],
+    "report": {
+      "version": 1,
+      "cases": [
+        {
+          "index": 0,
+          "id": "a",
+          "suite": "unit",
+          "status": "passed",
+          "reason": "selected",
+          "attempts": [
+            {
+              "number": 1,
+              "status": "passed",
+              "exit": 0,
+              "signal": null
+            }
+          ]
+        },
+        {
+          "index": 1,
+          "id": "b",
+          "suite": "unit",
+          "status": "passed",
+          "reason": "selected",
+          "attempts": [
+            {
+              "number": 1,
+              "status": "passed",
+              "exit": 0,
+              "signal": null
+            }
+          ]
+        }
+      ],
+      "selected": 2,
+      "passed": 2,
+      "failed": 0,
+      "skipped": 0,
+      "not_run": 0,
+      "incomplete": 0,
+      "attempts": 2,
+      "failed_attempts": 0,
+      "expired": false,
+      "cutoff": false,
+      "output": "discarded"
+    },
+    "exit": 0,
+    "plan": [
+      {
+        "index": 0,
+        "id": "a",
+        "suite": "unit",
+        "selected": true,
+        "reason": "selected"
+      },
+      {
+        "index": 1,
+        "id": "b",
+        "suite": "unit",
+        "selected": true,
+        "reason": "selected"
+      }
+    ]
+  },
+  {
+    "id": "plan",
+    "manifest": {
+      "jobs": 1,
+      "timeout_ms": 1000,
+      "failure_limit": 0,
+      "suites": [
+        {
+          "id": "unit",
+          "cases": [
+            {
+              "id": "a",
+              "argv": [
+                "/fixture/child",
+                "a"
+              ],
+              "tags": [
+                "fast"
+              ],
+              "expect": 0,
+              "retries": 0,
+              "timeout_ms": 100
+            },
+            {
+              "id": "b",
+              "argv": [
+                "/fixture/child",
+                "b"
+              ],
+              "tags": [
+                "slow"
+              ],
+              "expect": 0,
+              "retries": 0,
+              "timeout_ms": 100
+            }
+          ]
+        }
+      ]
+    },
+    "scripts": {
+      "a": [
+        0
+      ],
+      "b": [
+        0
+      ]
+    },
+    "args": [
+      "plan",
+      "manifest.json",
+      "fast"
+    ],
+    "report": {
+      "version": 1,
+      "cases": [
+        {
+          "index": 0,
+          "id": "a",
+          "suite": "unit",
+          "status": "passed",
+          "reason": "selected",
+          "attempts": [
+            {
+              "number": 1,
+              "status": "passed",
+              "exit": 0,
+              "signal": null
+            }
+          ]
+        },
+        {
+          "index": 1,
+          "id": "b",
+          "suite": "unit",
+          "status": "passed",
+          "reason": "selected",
+          "attempts": [
+            {
+              "number": 1,
+              "status": "passed",
+              "exit": 0,
+              "signal": null
+            }
+          ]
+        }
+      ],
+      "selected": 2,
+      "passed": 2,
+      "failed": 0,
+      "skipped": 0,
+      "not_run": 0,
+      "incomplete": 0,
+      "attempts": 2,
+      "failed_attempts": 0,
+      "expired": false,
+      "cutoff": false,
+      "output": "discarded"
+    },
+    "exit": 0,
+    "plan": [
+      {
+        "index": 0,
+        "id": "a",
+        "suite": "unit",
+        "selected": true,
+        "reason": "selected"
+      },
+      {
+        "index": 1,
+        "id": "b",
+        "suite": "unit",
+        "selected": false,
+        "reason": "tag"
+      }
+    ]
+  },
+  {
+    "id": "report-write-failure",
+    "manifest": {
+      "jobs": 1,
+      "timeout_ms": 1000,
+      "failure_limit": 0,
+      "suites": [
+        {
+          "id": "unit",
+          "cases": [
+            {
+              "id": "a",
+              "argv": [
+                "/fixture/child",
+                "a"
+              ],
+              "tags": [
+                "fast"
+              ],
+              "expect": 0,
+              "retries": 0,
+              "timeout_ms": 100
+            }
+          ]
+        }
+      ]
+    },
+    "scripts": {
+      "a": [
+        0
+      ]
+    },
+    "args": [
+      "run",
+      "manifest.json",
+      "report.json"
+    ],
+    "report": {
+      "version": 1,
+      "cases": [
+        {
+          "index": 0,
+          "id": "a",
+          "suite": "unit",
+          "status": "passed",
+          "reason": "selected",
+          "attempts": [
+            {
+              "number": 1,
+              "status": "passed",
+              "exit": 0,
+              "signal": null
+            }
+          ]
+        }
+      ],
+      "selected": 1,
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "not_run": 0,
+      "incomplete": 0,
+      "attempts": 1,
+      "failed_attempts": 0,
+      "expired": false,
+      "cutoff": false,
+      "output": "discarded"
+    },
+    "exit": 1,
+    "write_failure": true
+  },
+  {
+    "id": "output-write-failure",
+    "manifest": {
+      "jobs": 1,
+      "timeout_ms": 1000,
+      "failure_limit": 0,
+      "suites": [
+        {
+          "id": "unit",
+          "cases": [
+            {
+              "id": "a",
+              "argv": [
+                "/fixture/child",
+                "a"
+              ],
+              "tags": [
+                "fast"
+              ],
+              "expect": 0,
+              "retries": 0,
+              "timeout_ms": 100
+            }
+          ]
+        }
+      ]
+    },
+    "scripts": {
+      "a": [
+        0
+      ]
+    },
+    "args": [
+      "run",
+      "manifest.json",
+      "report.json"
+    ],
+    "report": {
+      "version": 1,
+      "cases": [
+        {
+          "index": 0,
+          "id": "a",
+          "suite": "unit",
+          "status": "passed",
+          "reason": "selected",
+          "attempts": [
+            {
+              "number": 1,
+              "status": "passed",
+              "exit": 0,
+              "signal": null
+            }
+          ]
+        }
+      ],
+      "selected": 1,
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "not_run": 0,
+      "incomplete": 0,
+      "attempts": 1,
+      "failed_attempts": 0,
+      "expired": false,
+      "cutoff": false,
+      "output": "discarded"
+    },
+    "exit": 1,
+    "output_failure": true
+  },
+  {
+    "id": "compat-pass",
+    "manifest": {
+      "jobs": 1,
+      "timeout_ms": 1000,
+      "failure_limit": 0,
+      "suites": [
+        {
+          "id": "unit",
+          "cases": [
+            {
+              "id": "a",
+              "argv": [
+                "/fixture/child"
+              ],
+              "tags": [
+                "fast"
+              ],
+              "expect": 0,
+              "retries": 0,
+              "timeout_ms": 100
+            }
+          ]
+        }
+      ]
+    },
+    "scripts": {
+      "a": [
+        0
+      ]
+    },
+    "args": [
+      "/fixture/child",
+      "100"
+    ],
+    "report": {
+      "version": 1,
+      "cases": [
+        {
+          "index": 0,
+          "id": "a",
+          "suite": "unit",
+          "status": "passed",
+          "reason": "selected",
+          "attempts": [
+            {
+              "number": 1,
+              "status": "passed",
+              "exit": 0,
+              "signal": null
+            }
+          ]
+        }
+      ],
+      "selected": 1,
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "not_run": 0,
+      "incomplete": 0,
+      "attempts": 1,
+      "failed_attempts": 0,
+      "expired": false,
+      "cutoff": false,
+      "output": "discarded"
+    },
+    "exit": 0,
+    "text": "| OOO\nPASS\n"
+  },
+  {
+    "id": "compat-fail",
+    "manifest": {
+      "jobs": 1,
+      "timeout_ms": 1000,
+      "failure_limit": 0,
+      "suites": [
+        {
+          "id": "unit",
+          "cases": [
+            {
+              "id": "a",
+              "argv": [
+                "/fixture/child"
+              ],
+              "tags": [
+                "fast"
+              ],
+              "expect": 0,
+              "retries": 0,
+              "timeout_ms": 100
+            }
+          ]
+        }
+      ]
+    },
+    "scripts": {
+      "a": [
+        7
+      ]
+    },
+    "args": [
+      "/fixture/child",
+      "100"
+    ],
+    "report": {
+      "version": 1,
+      "cases": [
+        {
+          "index": 0,
+          "id": "a",
+          "suite": "unit",
+          "status": "failed",
+          "reason": "selected",
+          "attempts": [
+            {
+              "number": 1,
+              "status": "failed",
+              "exit": 7,
+              "signal": null
+            }
+          ]
+        }
+      ],
+      "selected": 1,
+      "passed": 0,
+      "failed": 1,
+      "skipped": 0,
+      "not_run": 0,
+      "incomplete": 0,
+      "attempts": 1,
+      "failed_attempts": 1,
+      "expired": false,
+      "cutoff": false,
+      "output": "discarded"
+    },
+    "exit": 0,
+    "text": "| OOO\nFAIL: exit 7\n"
+  }
+]
