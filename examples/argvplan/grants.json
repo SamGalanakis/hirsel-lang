@@ -1,0 +1,16 @@
+{
+  "io": {
+    "stdout": "stdout.bytes@1",
+    "stderr": "stderr.bytes@1",
+    "dirs": [
+      {
+        "path": "fixtures",
+        "host": "examples/argvplan/fixtures",
+        "access": "read"
+      }
+    ]
+  },
+  "args": [
+    "review.txt"
+  ]
+}

@@ -1,0 +1,3 @@
+git diff -- "src/agent notes.hir"
+python3 -c 'print("review only")' ""
+printf '%s\n' '$HOME `id` *.hir | cat > sentinel' 羊

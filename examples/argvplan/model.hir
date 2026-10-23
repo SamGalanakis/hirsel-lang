@@ -1,0 +1,123 @@
+// Uses std/shlex's CPython POSIX whitespace subset, never a shell evaluator.
+pub const INPUT_BYTES: u64 = 65536
+
+pub const LINE_BYTES: u64 = 4096
+
+pub const RECORDS: u64 = 64
+
+pub const ARGUMENTS: u64 = 64
+
+pub const TOTAL_ARGUMENTS: u64 = 512
+
+pub type CommandPlan {
+  line: u64,
+  argv: List[String],
+  joined: String,
+}
+
+pub type Plan {
+  schema: u8,
+  commands: List[CommandPlan],
+}
+
+// line is one-based, byte is zero-based within that line; zero line means file/usage.
+pub type InvalidInput {
+  kind: String,
+  line: u64,
+  byte: u64,
+}
+
+pub fn invalid(kind: String, line: u64, byte: u64) -> InvalidInput uses {} {
+  InvalidInput(kind: unique kind, line: line, byte: byte)
+}
+
+fn words(line: String, number: u64, comments: bool) -> Result[
+  unique List[String],
+  InvalidInput
+] uses {} {
+  let parsed = if comments {
+    shlex.split_comments(line)
+  } else {
+    shlex.split(line)
+  }
+  match take parsed {
+    Ok(argv) => Ok(take argv),
+    Error(UnclosedQuote(at)) => Error(invalid("unclosed_quote", number, at)),
+    Error(TrailingEscape(at)) => Error(invalid("trailing_escape", number, at)),
+  }
+}
+
+pub fn decode(take data: Bytes, comments: bool) -> Result[unique Plan, InvalidInput] uses {} {
+  if bytes.len(data) > INPUT_BYTES {
+    return Error(invalid("input_bytes_limit", 0, INPUT_BYTES))
+  }
+  let Ok(source) = string.from_bytes(take data) else {
+    return Error(invalid("invalid_utf8", 0, 0))
+  }
+  let raw = string.as_bytes(source)
+  let size = bytes.len(raw)
+  let mut plan = Plan(schema: 1, commands: [])
+  let mut number = 1u64
+  let mut at = 0u64
+  let mut total = 0u64
+  while at < size {
+    if number > RECORDS {
+      return Error(invalid("record_limit", number, 0))
+    }
+    let mut line: List[u8] = []
+    while at < size && raw[at] != b'\n' {
+      if list.len(line) == LINE_BYTES {
+        return Error(invalid("line_bytes_limit", number, LINE_BYTES))
+      }
+      list.push(mut line, raw[at])
+      at += 1
+    }
+    // Source is UTF-8 and a boundary is ASCII LF, so every line is UTF-8.
+    let line_text = text.finish_valid(take line)
+    let argv = words(line_text, number, comments)?
+    let count = list.len(argv)
+    if count > ARGUMENTS {
+      return Error(invalid("argument_limit", number, 0))
+    }
+    if count > TOTAL_ARGUMENTS - total {
+      return Error(invalid("total_argument_limit", number, 0))
+    }
+    total += count
+    if count > 0 {
+      let joined = shlex.join(argv)
+      list.push(
+        mut plan.commands,
+        CommandPlan(line: number, argv: take argv, joined: take joined)
+      )
+    }
+    if at < size {
+      at += 1
+    }
+    number += 1
+  }
+  Ok(take plan)
+}
+
+pub fn filename(name: String) -> bool uses {} {
+  if name == "" || name == "." || name == ".." || string.byte_len(name) > 256 {
+    return false
+  }
+  for byte in string.as_bytes(name) {
+    if byte == 0 || byte == b'/' || byte == b'\\' || byte == b':' {
+      return false
+    }
+  }
+  true
+}
+
+pub fn command_plan_to_json(value: CommandPlan) -> json.Value uses {} = comptime derive.json_value(
+  shape(CommandPlan)
+)
+
+pub fn plan_json(value: Plan) -> json.Value uses {} = comptime derive.json_value(
+  shape(Plan)
+)
+
+pub fn error_json(value: InvalidInput) -> json.Value uses {} = comptime derive.json_value(
+  shape(InvalidInput)
+)

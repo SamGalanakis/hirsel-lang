@@ -1,0 +1,211 @@
+[
+  {
+    "source": "'foo' 'bar' 'bla'",
+    "argv": [
+      "foo",
+      "bar",
+      "bla"
+    ]
+  },
+  {
+    "source": "'foo' bar 'bla'",
+    "argv": [
+      "foo",
+      "bar",
+      "bla"
+    ]
+  },
+  {
+    "source": "'foo' bar bla",
+    "argv": [
+      "foo",
+      "bar",
+      "bla"
+    ]
+  },
+  {
+    "source": "blurb foo\"bar\"bar\"fasel\" baz",
+    "argv": [
+      "blurb",
+      "foobarbarfasel",
+      "baz"
+    ]
+  },
+  {
+    "source": "blurb foo'bar'bar'fasel' baz",
+    "argv": [
+      "blurb",
+      "foobarbarfasel",
+      "baz"
+    ]
+  },
+  {
+    "source": "\"\"",
+    "argv": [
+      ""
+    ]
+  },
+  {
+    "source": "''",
+    "argv": [
+      ""
+    ]
+  },
+  {
+    "source": "foo \"\" bar",
+    "argv": [
+      "foo",
+      "",
+      "bar"
+    ]
+  },
+  {
+    "source": "foo '' bar",
+    "argv": [
+      "foo",
+      "",
+      "bar"
+    ]
+  },
+  {
+    "source": "foo \"\" \"\" \"\" bar",
+    "argv": [
+      "foo",
+      "",
+      "",
+      "",
+      "bar"
+    ]
+  },
+  {
+    "source": "foo '' '' '' bar",
+    "argv": [
+      "foo",
+      "",
+      "",
+      "",
+      "bar"
+    ]
+  },
+  {
+    "source": "\\\"",
+    "argv": [
+      "\""
+    ]
+  },
+  {
+    "source": "\"\\\"\"",
+    "argv": [
+      "\""
+    ]
+  },
+  {
+    "source": "\"foo\\ bar\"",
+    "argv": [
+      "foo\\ bar"
+    ]
+  },
+  {
+    "source": "\"foo\\\\ bar\"",
+    "argv": [
+      "foo\\ bar"
+    ]
+  },
+  {
+    "source": "\"foo\\\\ bar\\\"\"",
+    "argv": [
+      "foo\\ bar\""
+    ]
+  },
+  {
+    "source": "\"foo\\\\\" bar\\\"",
+    "argv": [
+      "foo\\",
+      "bar\""
+    ]
+  },
+  {
+    "source": "\"foo\\\\ bar\\\" dfadf\"",
+    "argv": [
+      "foo\\ bar\" dfadf"
+    ]
+  },
+  {
+    "source": "\"foo\\\\\\ bar\\\" dfadf\"",
+    "argv": [
+      "foo\\\\ bar\" dfadf"
+    ]
+  },
+  {
+    "source": "\"foo\\\\\\x bar\\\" dfadf\"",
+    "argv": [
+      "foo\\\\x bar\" dfadf"
+    ]
+  },
+  {
+    "source": "\"foo\\x bar\\\" dfadf\"",
+    "argv": [
+      "foo\\x bar\" dfadf"
+    ]
+  },
+  {
+    "source": "\\'",
+    "argv": [
+      "'"
+    ]
+  },
+  {
+    "source": "'foo\\ bar'",
+    "argv": [
+      "foo\\ bar"
+    ]
+  },
+  {
+    "source": "'foo\\\\ bar'",
+    "argv": [
+      "foo\\\\ bar"
+    ]
+  },
+  {
+    "source": "\"foo\\\\\\x bar\\\" df'a\\ 'df\"",
+    "argv": [
+      "foo\\\\x bar\" df'a\\ 'df"
+    ]
+  },
+  {
+    "source": "\\\"foo",
+    "argv": [
+      "\"foo"
+    ]
+  },
+  {
+    "source": "\\\"foo\\x",
+    "argv": [
+      "\"foox"
+    ]
+  },
+  {
+    "source": "\"foo\\x\"",
+    "argv": [
+      "foo\\x"
+    ]
+  },
+  {
+    "source": "\"foo\\ \"",
+    "argv": [
+      "foo\\ "
+    ]
+  },
+  {
+    "source": "foo\\ xx",
+    "argv": [
+      "foo xx"
+    ]
+  },
+  {
+    "source": "foo\\ x\\x",
+    "argv": [
+      "foo xx"
+    ]
+  }
+]

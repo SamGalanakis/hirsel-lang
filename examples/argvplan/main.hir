@@ -1,0 +1,73 @@
+pub type AppError = Grant(GrantError) | Output(OutputError) | Json(json.JsonError)
+
+const HELP: String = "Usage: argvplan [--comments] FILE\n       argvplan --help\n\nRead FILE from the read-only fixtures grant and print a JSON argv plan.\nNo expansion or command execution. --comments enables unquoted # comments.\nLimits: 65536 input bytes, 64 lines, 4096 bytes/line, 64 args/line, 512 args total.\n"
+
+fn read_plan(rt: Io, args: Args) -> Result[unique model.Plan, model.InvalidInput] {
+  let count = arg.len(args)
+  if count < 1 || count > 2 {
+    return Error(model.invalid("usage", 0, 0))
+  }
+  let Ok(first) = arg.text(args, 0) else {
+    return Error(model.invalid("arguments_utf8", 0, 0))
+  }
+  let comments = first == "--comments"
+  if comments && count != 2 || !comments && count != 1 {
+    return Error(model.invalid("usage", 0, 0))
+  }
+  let Ok(name) = arg.text(
+    args,
+    if comments {
+      1u64
+    } else {
+      0u64
+    }
+  ) else {
+    return Error(model.invalid("arguments_utf8", 0, 0))
+  }
+  if string.starts_with(name, "-") || !model.filename(name) {
+    return Error(model.invalid("filename", 0, 0))
+  }
+  let Ok(directory) = io.dir(rt, path.of("fixtures")) else {
+    return Error(model.invalid("directory_grant", 0, 0))
+  }
+  let mut Ok(input) = file.open(directory, path.of(name)) else {
+    return Error(model.invalid("file_open", 0, 0))
+  }
+  let data = match file.read_all_bounded(directory, mut input, model.INPUT_BYTES) {
+    Ok(raw) => take raw,
+    Error(Limit()) => return Error(
+      model.invalid("input_bytes_limit", 0, model.INPUT_BYTES)
+    ),
+    Error(File(_)) => return Error(model.invalid("file_read", 0, 0)),
+  }
+  model.decode(take data, comments)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[std@1/process.ExitCode, AppError] {
+  let Ok(output) = io.stdout(rt) else {
+    return Ok(std@1/process.exit_code(3u8))
+  }
+  let Ok(errors) = io.stderr(rt) else {
+    return Ok(std@1/process.exit_code(3u8))
+  }
+  if arg.len(args) == 1 {
+    if let Ok(flag) = arg.text(args, 0) {
+      if flag == "--help" || flag == "-h" {
+        out.write(output, string.as_bytes(HELP))?
+        return Ok(std@1/process.SUCCESS)
+      }
+    }
+  }
+  match read_plan(rt, args) {
+    Ok(plan) => {
+      let rendered = json.stringify(model.plan_json(plan))?
+      out.write(output, string.as_bytes(f"{rendered}\n"))?
+      Ok(std@1/process.SUCCESS)
+    },
+    Error(problem) => {
+      let rendered = json.stringify(model.error_json(problem))?
+      err.write(errors, string.as_bytes(f"{rendered}\n"))?
+      Ok(std@1/process.exit_code(2u8))
+    },
+  }
+}
