@@ -868,8 +868,8 @@ def first_party(meta: dict) -> str:
 
         def test_attrs(binary: str, src: pathlib.Path) -> dict:
             return dict(data=test_data(binary, name, package_dir, src), runtime_archives=None if binary == "hirsel-rt-unittest" else runtime_archives,
-                        image=IMAGE if name in IMAGED_TESTS else None,
-                        products="//:hirsel-std-products" if binary == "hirsel-driver-test-it" else None,
+                        image=IMAGE if name in IMAGED_TESTS and binary != "hirsel-driver-test-it-products" else None,
+                        products="//:hirsel-std-products" if binary == "hirsel-driver-test-it-products" else None,
                         seeded=seeded(target_dir(package_dir, src), src) or None, skips=FULL_GATE_SKIPS.get(binary))
 
         lib = next((t for t in package["targets"] if set(t["kind"]) & {"lib", "rlib", "staticlib"}), None)

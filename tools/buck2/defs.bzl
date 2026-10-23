@@ -247,8 +247,8 @@ def hirsel_test(name, crate, crate_root, srcs, features, deps, manifest_dir, pac
         bin_exe_dir = bin_exe_dir,
         runtime_archives = runtime_archives,
         image = image,
-        # Large installed-product fixtures are required only by their selected tests.
-        products = products if read_root_config("hirsel", "test_products", "false") == "true" else None,
+        products = products,
+        product_definitions = read_root_config("hirsel", "product_definitions", ""),
         llvm = "root//tools/buck2/native-toolchain:llvm",
         native_tools = native_tool_inputs() if runtime_archives else {},
         cwd = manifest_dir,
@@ -285,6 +285,7 @@ def _rust_test_impl(ctx):
         "HIRSEL_TEST_TMPDIR": TEST_TMPDIR,
         # The same effective request as the executor, including focus mode.
         "HIRSEL_TEST_CPUS": ctx.attrs.request[0],
+        "HIRSEL_TEST_PRODUCT_DEFINITIONS": ctx.attrs.product_definitions,
         "LLVM_SYS_231_PREFIX": cmd_args(llvm),
         # A pool worker's action supervisor can attribute a test run's CPU to
         # these Bazel test variables. They are stable per
@@ -379,6 +380,7 @@ _rust_test = rule(
         "runtime_archives": attrs.option(attrs.dep(), default = None),
         "image": attrs.option(attrs.dep(), default = None),
         "products": attrs.option(attrs.dep(), default = None),
+        "product_definitions": attrs.string(default = ""),
         "seed": attrs.string(default = ""),
         "shard_index": attrs.int(default = 0),
         "shards": attrs.int(default = 0),
