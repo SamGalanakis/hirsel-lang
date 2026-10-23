@@ -229,6 +229,8 @@ pub(crate) struct GeneratedText {
     pub(crate) detail: DependencyReads,
     pub(crate) depth: crate::memo::DepthEvidence<Span>,
     pub(crate) products: Arc<PhaseProducts>,
+    pub(crate) acceptance: Option<hirsel_validate::ExecutionReceipt>,
+    pub(crate) staged: Vec<(DefId, Vec<u64>)>,
 }
 pub(crate) struct PreparedGenerator {
     pub(crate) syntax: Arc<ItemSyntax>,

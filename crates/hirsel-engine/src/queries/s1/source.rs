@@ -209,7 +209,7 @@ impl TirSource for FrozenSource<'_> {
         let mut observed = ReadsBuilder::new();
         let mut products = PhaseProducts::default();
         let mut detail = DependencyReads::default();
-        let result = (|| {
+        let mut result = (|| {
             let syntax = self
                 .items
                 .get(path)
@@ -256,6 +256,9 @@ impl TirSource for FrozenSource<'_> {
         })();
         if let Some(resolution) = &products.resolution {
             detail.resolver = resolution.reads.clone();
+            if let Ok(prepared) = &mut result {
+                prepared.detail.resolver = resolution.reads.clone();
+            }
         }
         let mut source = parallel::FrozenReadSource {
             declarations: &self.declarations,
