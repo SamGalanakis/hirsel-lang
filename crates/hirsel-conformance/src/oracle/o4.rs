@@ -11,7 +11,7 @@
 //! Conformance and agreement campaigns select `VerifyStore::Recompute`
 //! explicitly in their compiler wiring.
 use super::{
-    Config, Report, Verdict, difference, fresh_images, o1::produce_in_child, produce,
+    Config, Report, Verdict, difference, o1::produce_in_child, produce,
     produce_with_store, switches,
 };
 use hirsel_engine::store::MemStore;
@@ -27,17 +27,16 @@ pub fn run(exe: &Path, root: &Path, programs: &[PathBuf], work: &Path) -> Report
             .display()
             .to_string();
         let config = Config::default();
-        let cold = match produce(program, &config, &fresh_images()) {
+        let cold = match produce(program, &config) {
             Ok(cold) => cold,
             Err(switch) => {
                 report.add(format!("{name} [cold]"), Verdict::Todo(switch));
                 continue;
             }
         };
-        let shared = fresh_images();
         let store = Arc::new(MemStore::default());
-        let hit = produce_with_store(program, &config, &shared, store.clone())
-            .and_then(|_| produce_with_store(program, &config, &shared, store));
+        let hit = produce_with_store(program, &config, store.clone())
+            .and_then(|_| produce_with_store(program, &config, store));
         report.add(
             format!("{name} [mem hit]"),
             match hit {

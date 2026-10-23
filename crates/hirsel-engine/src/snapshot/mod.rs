@@ -18,7 +18,7 @@ mod sources;
 pub use sources::CitationSource;
 pub(crate) use sources::SourceContext;
 mod views;
-pub(crate) use declarations::{DeclarationHead, RowImage, header_hash, logical};
+pub(crate) use declarations::{DeclarationHead, logical};
 pub use declarations::{DeclarationIndex, Declarations, ModuleInputs};
 pub use provider::FrozenProvider;
 

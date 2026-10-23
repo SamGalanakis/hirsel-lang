@@ -125,9 +125,7 @@ impl QueryEngine {
         &mut self,
         path: &DefPath,
     ) -> Result<SourceAuditProducts, QueryError> {
-        if let Some(products) = self.image_audit_products(path) {
-            return Ok(products);
-        }
+
         if let Some(products) = self.load_source_audit(path) {
             return Ok(products);
         }

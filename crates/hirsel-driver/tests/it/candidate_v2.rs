@@ -78,7 +78,6 @@ fn config(jobs: usize) -> CompileConfig {
 fn workspace(jobs: usize) -> CandidateWorkspace {
     CandidateWorkspace::new(
         config(jobs),
-        vec![],
         Default::default(),
         Limits {
             retain_canonical_export: true,
@@ -720,7 +719,6 @@ fn candidate_v2_h5_h18_finite_model_waiters_aba_and_idempotence() {
     );
     let w = CandidateWorkspace::new(
         config(1),
-        vec![],
         Default::default(),
         Limits {
             leases: 1,
@@ -797,7 +795,6 @@ fn candidate_v2_h16_old_secondary_diagnostics_survive_deletion_and_pressure() {
     );
     let w = CandidateWorkspace::new(
         config(1),
-        vec![],
         Default::default(),
         Limits {
             leases: 4,
@@ -1442,7 +1439,7 @@ fn candidate_v2_quotas_retained_namespace_and_request_storage_never_evict_live_d
         edit_bytes: 32 << 10,
         ..Limits::default()
     };
-    let w = CandidateWorkspace::new(config(1), vec![], Default::default(), limits).unwrap();
+    let w = CandidateWorkspace::new(config(1), Default::default(), limits).unwrap();
     let mut p = t.plan();
     p.limits.bytes = 64 << 10;
     let b = w.capture_v2(p).unwrap();
@@ -1587,7 +1584,6 @@ fn candidate_v2_loader_error_bytes_are_bounded_results_and_never_promote() {
     let t = Tree::basic();
     let w = CandidateWorkspace::new(
         config(1),
-        vec![],
         Default::default(),
         Limits {
             result_bytes: 4096,

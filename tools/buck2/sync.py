@@ -197,8 +197,8 @@ RUNTIME_ARCHIVES = "//:hirsel-rt-archives"
 
 # The std image (docs/building.md, "The std image"): written once by the built CLI,
 # then loaded by the tests and campaigns that run std programs (HIRSEL_IMAGE).
-IMAGE = "//:hirsel-std-image"
-IMAGED_TESTS = {"hirsel-cli", "hirsel-conformance", "hirsel-driver", "hirsel-pipeline-tests"}
+PRODUCTS = "//:hirsel-std-products"
+PRODUCT_TESTS = {"hirsel-cli", "hirsel-conformance", "hirsel-driver", "hirsel-pipeline-tests"}
 
 # Cases that call full_matrix (44 configurations) for toolchain or configuration
 # discovery: every run outside the full gate skips them by name, and
@@ -837,7 +837,7 @@ def first_party(meta: dict) -> str:
     unguarded = []
     out = [
         HEADER,
-        'load("//tools/buck2:defs.bzl", "hirsel_binary", "hirsel_build_script", "hirsel_command_test", "hirsel_image", "hirsel_products", "hirsel_library", "hirsel_link_hosts_test", "hirsel_runtime_archives", "hirsel_script_test", "hirsel_std_objects", "hirsel_test", "hirsel_toolchain_bundle")\n',
+        'load("//tools/buck2:defs.bzl", "hirsel_binary", "hirsel_build_script", "hirsel_command_test", "hirsel_products", "hirsel_library", "hirsel_link_hosts_test", "hirsel_runtime_archives", "hirsel_script_test", "hirsel_std_objects", "hirsel_test", "hirsel_toolchain_bundle")\n',
         'load("//tools/buck2:native_selection.bzl", "hirsel_native_selection")\n',
     ]
 
@@ -868,8 +868,7 @@ def first_party(meta: dict) -> str:
 
         def test_attrs(binary: str, src: pathlib.Path) -> dict:
             return dict(data=test_data(binary, name, package_dir, src), runtime_archives=None if binary == "hirsel-rt-unittest" else runtime_archives,
-                        image=IMAGE if name in IMAGED_TESTS else None,
-                        products="//:hirsel-std-products" if binary == "hirsel-driver-test-it" else None,
+                        products=PRODUCTS if name in PRODUCT_TESTS else None,
                         seeded=seeded(target_dir(package_dir, src), src) or None, skips=FULL_GATE_SKIPS.get(binary))
 
         lib = next((t for t in package["targets"] if set(t["kind"]) & {"lib", "rlib", "staticlib"}), None)
@@ -952,9 +951,9 @@ def first_party(meta: dict) -> str:
     if unguarded:
         raise SystemExit("these binary and test roots do not install the memory guard; add "
                          "`hirsel_guard::install!();` (`#[cfg(test)]` in a library): " + ", ".join(unguarded))
-    out.append("\n" + call("hirsel_native_selection", name="native-selection", collector="//:hirsel-conformance-bin-native-select", image=IMAGE, data=Raw(f"glob({starlark(expand(CORPUS), 4)})")))
+    out.append("\n" + call("hirsel_native_selection", name="native-selection", collector="//:hirsel-conformance-bin-native-select", products=PRODUCTS, data=Raw(f"glob({starlark(expand(CORPUS), 4)})")))
     for gate in GATE_TESTS:
-        out.append("\n" + call("hirsel_command_test", **gate, image=IMAGE, data=Raw(f"glob({starlark(expand(CORPUS), 4)})")))
+        out.append("\n" + call("hirsel_command_test", **gate, products=PRODUCTS, data=Raw(f"glob({starlark(expand(CORPUS), 4)})")))
     for index, family in enumerate(("match_try_fields", "record_fields", "nested_loops_try", "closure_captures", "if_chain", "deep_nesting"), 1):
         name = f"gate-checker-scaling-shard-{index}"
         # Cachegrind Ir under the pinned Valgrind (a native tool input), as gate-perf-counts.
@@ -969,14 +968,11 @@ def first_party(meta: dict) -> str:
     out.append("\n" + call("hirsel_products", name="hirsel-std-products", hirsel="//:hirsel-cli-bin-hirsel",
                             manifest="stdlib/std@1/hirsel.json", srcs=Raw('glob(["stdlib/std@1/**"])'),
                             visibility=["PUBLIC"]))
-    out.append("\n" + call("hirsel_image", name="hirsel-std-image", hirsel="//:hirsel-cli-bin-hirsel",
-                            manifest="stdlib/std@1/hirsel.json", srcs=Raw('glob(["stdlib/std@1/**"])'),
-                            visibility=["PUBLIC"]))
     out.append("\n" + call("hirsel_std_objects", name="hirsel-std-objects", hirsel="//:hirsel-cli-bin-hirsel",
                             manifest="stdlib/std@1/hirsel.json", srcs=Raw('glob(["stdlib/std@1/**"])'),
                             visibility=["PUBLIC"]))
     out.append("\n" + call("hirsel_toolchain_bundle", name="hirsel-toolchain", hirsel="//:hirsel-cli-bin-hirsel",
-                            image=IMAGE, objects="//:hirsel-std-objects", std=Raw('glob(["stdlib/std@1/**"])'), visibility=["PUBLIC"]))
+                            products=PRODUCTS, objects="//:hirsel-std-objects", std=Raw('glob(["stdlib/std@1/**"])'), visibility=["PUBLIC"]))
     out.append("\n" + call("hirsel_link_hosts_test", name="gate-link-hosts", listing="native-tests/link/hosts.txt",
                             data=Raw(f"glob({starlark(['native-tests/link/**', 'examples/todo-api/**', 'examples/wordscan/**', 'examples/common.hir', 'stdlib/std@1/**'], 4)})")))
     # Narrow real-I/O sanitizer/overlap probe: normal production dependencies only.
@@ -988,7 +984,7 @@ def first_party(meta: dict) -> str:
                             data=[], sanitizer="thread", files_env={"HIRSEL_IO_REAL_TSAN": ":io-real-workers"}))
     out.append("\n" + call("hirsel_script_test", name="gate-perf-counts", script="tools/perf-counts",
                             full=False, production=True, bin_exes={"hirsel": "//:hirsel-cli-bin-hirsel"},
-                            image=IMAGE, runtime_archives=RUNTIME_ARCHIVES,
+                            products=PRODUCTS, runtime_archives=RUNTIME_ARCHIVES,
                             data=Raw(f"glob({starlark(['bench/native/programs/**', 'bench/native/inputs/**', 'bench/native/manifest.json', 'bench/micro/**', 'examples/hello-web/**', 'examples/todo-api/**', 'examples/common.hir', 'stdlib/**', 'tools/perf-counts.tsv'], 4)})")))
     out.append("\n" + call("hirsel_script_test", name="gate-core-broker", script="tools/tests/core_broker.py", full=False,
                             data=["tools/core-broker", "tools/tests/core_broker.py"]))
@@ -1027,7 +1023,7 @@ def first_party(meta: dict) -> str:
                             args=["Unit"], data=["tools/json-hooks", "tools/tests/test_json_hooks.py"]))
     out.append("\n" + call("hirsel_script_test", name="test-json-hooks-integration", script="tools/tests/test_json_hooks.py", full=False,
                             args=["--hirsel", "buck-out/tmp/cargo-bin-exe/test-json-hooks-integration/hirsel", "Integration"],
-                            bin_exes={"hirsel": "//:hirsel-cli-bin-hirsel"}, image=IMAGE,
+                            bin_exes={"hirsel": "//:hirsel-cli-bin-hirsel"}, products=PRODUCTS,
                             runtime_archives=RUNTIME_ARCHIVES,
                             data=Raw('glob(["tools/json-hooks", "tools/tests/test_json_hooks.py", "examples/typed-json-kit/main.hir", "examples/typed-json-kit/check.hir", "examples/typed-json-kit/hirsel.json", "examples/typed-json-kit/check.json", "stdlib/std@1/**"])')))
     out.append("\n" + call("hirsel_script_test", name="test-portable-manifest", script="tools/tests/portable_manifest.py", full=False,
@@ -1038,7 +1034,7 @@ def first_party(meta: dict) -> str:
                             data=["tools/portable-manifest", "tools/tests/portable_manifest.py"]))
     out.append("\n" + call("hirsel_script_test", name="test-native-verification-9", script="tools/tests/native_verification_9.py", full=False,
                             args=["--hirsel", "buck-out/tmp/cargo-bin-exe/test-native-verification-9/hirsel"],
-                            bin_exes={"hirsel": "//:hirsel-cli-bin-hirsel"}, image=IMAGE,
+                            bin_exes={"hirsel": "//:hirsel-cli-bin-hirsel"}, products=PRODUCTS,
                             runtime_archives=RUNTIME_ARCHIVES,
                             data=Raw('glob(["tools/tests/native_verification_9.py", "docs/native-verification.md", "examples/native-verification-9/**", "stdlib/**"])')))
     # summerwind/h2spec v2.6.0, the latest release (tools/h2spec/run).
@@ -1047,7 +1043,7 @@ def first_party(meta: dict) -> str:
                             sha256="157ee0de702e01ad40e752dbf074b366027e550c8e7504f9450da2809e279318",
                             size_bytes=5207004))
     out.append("\n" + call("hirsel_script_test", name="gate-h2spec", script="tools/h2spec/run", full=False, production=True,
-                            bin_exes={"hirsel": "//:hirsel-cli-bin-hirsel"}, image=IMAGE,
+                            bin_exes={"hirsel": "//:hirsel-cli-bin-hirsel"}, products=PRODUCTS,
                             runtime_archives=RUNTIME_ARCHIVES, files_env={"H2SPEC_ARCHIVE": ":h2spec-release"},
                             data=Raw(f"glob({starlark(['tools/h2spec/**', 'stdlib/std@1/**'], 4)})")))
     for name, script, data, archives in (

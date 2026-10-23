@@ -914,9 +914,7 @@ impl QueryEngine {
                 .catalog
                 .facts(path)
                 .is_some_and(|facts| facts.instance_bodied),
-            None => self
-                .image_of(path)
-                .is_some_and(|image| image.generated(DefId::intern(path))),
+            None => false,
         }
     }
 
@@ -1226,11 +1224,7 @@ impl QueryEngine {
         let any = self.items.iter().any(|(_, items)| {
             self.work.selection_probe_visits += 1;
             items.first().is_some_and(|s| instance_bodied(s))
-        }) || self.catalog.paths().any(|path| self.instance_bodied(path))
-            || self
-                .image
-                .as_ref()
-                .is_some_and(|adopted| adopted.image.generates());
+        }) || self.catalog.paths().any(|path| self.instance_bodied(path));
         let mut selected = BTreeSet::new();
         if !any {
             return Ok(selected);
@@ -1265,8 +1259,7 @@ impl QueryEngine {
                     message: "instance selection expansion limit".into(),
                 }));
             }
-            if !self.declared(&path) || self.instance_bodied(&path) || self.imaged(&path.0.package)
-            {
+            if !self.declared(&path) || self.instance_bodied(&path) {
                 continue;
             }
             let published = self.front_summary(DefId::intern(&path))?;
@@ -1287,13 +1280,7 @@ impl QueryEngine {
                 })
                 .collect();
             for (callee, binder, arguments, site) in calls {
-                // An image package with no generated declaration selects no
-                // instance through its own calls.
-                if !self.declared(&callee)
-                    || self
-                        .image_of(&callee)
-                        .is_some_and(|image| !image.generates())
-                {
+                if !self.declared(&callee) {
                     continue;
                 }
                 let actuals =

@@ -97,10 +97,11 @@ if [ -n "${HIRSEL_TEST_PRODUCTS:-}" ]; then
   HIRSEL_TEST_PRODUCTS="$(realpath "$HIRSEL_TEST_PRODUCTS")"
   export HIRSEL_TEST_PRODUCTS
 fi
-if [ -n "${HIRSEL_IMAGE:-}" ]; then
-  HIRSEL_IMAGE="$(realpath "$HIRSEL_IMAGE")"
-  export HIRSEL_IMAGE
+if [ -n "${HIRSEL_PRODUCTS:-}" ]; then
+  HIRSEL_PRODUCTS="$(realpath "$HIRSEL_PRODUCTS")"
+  export HIRSEL_PRODUCTS
 fi
+
 if [ -n "${HIRSEL_NATIVE_SELECTION:-}" ]; then
   HIRSEL_NATIVE_SELECTION="$(realpath "$HIRSEL_NATIVE_SELECTION")"
   export HIRSEL_NATIVE_SELECTION

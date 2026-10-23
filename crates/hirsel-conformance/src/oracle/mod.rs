@@ -14,7 +14,7 @@ pub mod switches;
 
 use hirsel_driver::native::{Backend, OptLevel, Options, Partition, TargetSpec};
 use hirsel_engine::store::{DirStore, NoneStore, ResultStore, VerifyStore};
-use hirsel_engine::{CheckCompletion, StdImage, StdImages, ToolError};
+use hirsel_engine::{CheckCompletion, ToolError};
 use std::{
     collections::BTreeMap,
     fmt::Write as _,
@@ -174,53 +174,28 @@ impl std::str::FromStr for Limits {
     }
 }
 
-/// A cold run's images: only the toolchain's std image; nothing else checked
-/// is shared between runs.
-pub fn fresh_images() -> StdImages {
-    static IMAGES: std::sync::OnceLock<Vec<Arc<StdImage>>> = std::sync::OnceLock::new();
-    let images = IMAGES.get_or_init(|| {
-        let path = std::env::var_os("HIRSEL_IMAGE")
-            .map(PathBuf::from)
-            .or_else(|| {
-                std::env::current_exe()
-                    .ok()
-                    .map(|exe| exe.with_file_name("hirsel-std.image"))
-            });
-        path.and_then(|path| StdImage::open(&path).ok())
-            .into_iter()
-            .collect()
-    });
-    StdImages::of(images.clone())
-}
-
 /// Compile `program` under `config` with `cache`, as `hirsel check --json`
 /// renders it, then export the entry's TIR and, with `native`, its Ready
 /// receipts and objects. Refuses before compiling when a switch is missing.
-pub fn produce(program: &Path, config: &Config, cache: &StdImages) -> Result<Artifacts, Switch> {
-    produce_with_store(program, config, cache, config.result_store())
+pub fn produce(program: &Path, config: &Config) -> Result<Artifacts, Switch> {
+    produce_with_store(program, config, config.result_store())
 }
 
 fn produce_with_store(
     program: &Path,
     config: &Config,
-    cache: &StdImages,
     store: Arc<dyn ResultStore>,
 ) -> Result<Artifacts, Switch> {
     switches::missing(config.switches())?;
     Ok(hirsel_engine::with_compiler_stack(|| {
-        artifacts(program, config, cache, store)
+        artifacts(program, config, store)
     }))
 }
 
-fn artifacts(
-    path: &Path,
-    config: &Config,
-    cache: &StdImages,
-    store: Arc<dyn ResultStore>,
-) -> Artifacts {
+fn artifacts(path: &Path, config: &Config, store: Arc<dyn ResultStore>) -> Artifacts {
     let mut out = Artifacts::new();
     let compiler = hirsel_driver::COMPILER.with_config(config.compile(store));
-    let mut program = match compiler.load_program_source_with_images(path, None, cache) {
+    let mut program = match compiler.load_program_source(path, None) {
         Ok(program) => program,
         Err(error) => {
             out.insert("diagnostics".into(), tool_error(&error).into_bytes());

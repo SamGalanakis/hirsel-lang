@@ -84,8 +84,7 @@ impl Selection {
                 "entry":format!("{:?}", program.entry),
                 "sources":program.files.iter().map(|(f,c)| {
                     let s = program.engine.sources.file(*f).unwrap();
-                    json!({"logical":s.logical_path(),"package":c.package,"modules":c.modules,
-                        "image":program.engine.imaged(&c.package)})
+                    json!({"logical":s.logical_path(),"package":c.package,"modules":c.modules})
                 }).collect::<Vec<_>>(),
                 "unsafe_ffi":program.unsafe_ffi.iter().map(|p|json!({
                     "package":p.package,"headers_checked":p.headers_checked,"threads":format!("{:?}",p.threads),
@@ -95,8 +94,6 @@ impl Selection {
                     }).collect::<Vec<_>>(),
                     "wrappers":p.wrappers.iter().map(|(path,wrapper)|json!({"definition":path,"wrapper":wrapper})).collect::<Vec<_>>(),
                 })).collect::<Vec<_>>(),
-                "image_notes":program.image_notes,
-                "images":program.engine.selected_image().map(|(p,k)|json!({"package":p,"key":protocol::hex(k)})),
             }),
         }
     }

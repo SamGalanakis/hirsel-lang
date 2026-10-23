@@ -417,7 +417,7 @@ impl QueryEngine {
         self.note_environment();
         self.source_growth.unavailable(self.unavailable);
         while let Some((definition, present)) = self.source_growth.pop() {
-            if !present || self.imaged(&definition.path().0.package) {
+            if !present {
                 self.source_growth.retire(definition);
                 continue;
             }

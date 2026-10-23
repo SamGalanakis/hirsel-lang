@@ -676,7 +676,6 @@ dependencies = [
  "hirsel-fmt",
  "hirsel-graph",
  "hirsel-guard",
- "hirsel-image",
  "hirsel-intern",
  "hirsel-interp",
  "hirsel-lexer",

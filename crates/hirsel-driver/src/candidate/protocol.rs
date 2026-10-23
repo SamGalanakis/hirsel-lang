@@ -453,7 +453,6 @@ mod tests {
             Connection::new(
                 CandidateWorkspace::new(
                     CompileConfig::default(),
-                    vec![],
                     Default::default(),
                     Limits::default(),
                 )
@@ -690,7 +689,6 @@ mod matrix {
         };
         let workspace = CandidateWorkspace::new(
             config.clone(),
-            vec![],
             Default::default(),
             Limits::default(),
         )
@@ -726,10 +724,9 @@ mod matrix {
                     .clone()
                     .with_config(config.clone())
                     .with_owned_engines()
-                    .load_program_source_with_images(
+                    .load_program_source(
                         &cold.join("hirsel.json"),
                         None,
-                        &hirsel_engine::StdImages::none(),
                     )
                     .unwrap();
                 let output = p.check(LoweringPolicy::Comptime).unwrap();

@@ -170,11 +170,6 @@ impl SignatureProvider for GeneratorRecorder<'_> {
     }
 }
 impl FrozenSource<'_> {
-    fn image(&self, path: &DefPath) -> Option<&crate::image::StdImage> {
-        self.citations
-            .image
-            .filter(|image| image.package() == &path.0.package && image.declares(path))
-    }
     fn text(&self, path: &DefPath) -> Option<ContentHash> {
         let body = self.implementation(path)?;
         let manifest = self
@@ -304,11 +299,6 @@ impl TirSource for FrozenSource<'_> {
             .get(path)
             .and_then(|items| items.first())
             .map(|item| item.text_hash)
-            .or_else(|| {
-                self.image(path)?
-                    .inputs(DefId::intern(path))
-                    .map(|inputs| inputs.body)
-            })
     }
     fn site(&self, path: &DefPath) -> Result<Span, QueryError> {
         self.items
@@ -446,11 +436,6 @@ impl TirSource for FrozenSource<'_> {
                 .signatures
                 .get(&id)
                 .and_then(|entry| entry.result().ok())
-                .or_else(|| {
-                    self.image(path)?
-                        .signature_entry(id)
-                        .map(|entry| entry.output.clone())
-                })
                 .map(Ok)
                 .unwrap_or_else(|| Ok(Arc::new(output(signature.clone())))),
             Some(Err(error)) => Err(error.clone()),
@@ -544,7 +529,7 @@ impl TirSource for FrozenSource<'_> {
         &self,
         path: &DefPath,
     ) -> Result<Option<hirsel_tir::Materialized>, QueryError> {
-        if self.items.contains_key(path) || self.image(path).is_some() {
+        if self.items.contains_key(path) {
             return Ok(None);
         }
         self.registry
@@ -558,15 +543,6 @@ impl TirSource for FrozenSource<'_> {
     }
     fn staged_constant(&self, path: &DefPath) -> Option<crate::comptime::StagedConstant> {
         self.staged.get(path).cloned()
-    }
-    fn cached_constant(&self, path: &DefPath) -> Option<crate::comptime::EvaluatedConstant> {
-        let constant = self
-            .image(path)?
-            .record(DefId::intern(path))?
-            .constant
-            .clone()?;
-        (constant.depth.limit() == crate::memo::dependency_limit(self.inputs.limits.call_depth))
-            .then_some(constant)
     }
     fn cached_lowering(
         &self,
@@ -586,22 +562,7 @@ impl TirSource for FrozenSource<'_> {
                 return Some(((*output).clone(), entry.reads().clone(), depth));
             }
         }
-        let record = self.image(path)?.record(DefId::intern(path))?;
-        let lowering = record.lowering.as_ref()?;
-        if lowering.depth.limit() != crate::memo::dependency_limit(self.inputs.limits.call_depth)
-            || crate::comptime::has_staged_reads(&lowering.definition)
-        {
-            return None;
-        }
-        Some((
-            QueryOutput {
-                value: lowering.definition.clone(),
-                diagnostics: vec![],
-                dependencies: lowering.dependencies.clone(),
-            },
-            lowering.execution.clone(),
-            lowering.depth.clone(),
-        ))
+        None
     }
     fn constant_instance(
         &self,
@@ -731,7 +692,6 @@ impl QueryEngine {
                 sources: &self.sources,
                 items: &self.items,
                 declarations: &self.declarations,
-                image: self.image.as_ref().map(|adopted| &*adopted.image),
                 catalog: &self.catalog,
             },
             registry: &self.registry,

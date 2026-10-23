@@ -22,7 +22,7 @@ impl Connection {
             r,
             required,
             if op == "capture" {
-                &["identity", "env", "std_manifest", "images", "excluded"]
+                &["identity", "env", "std_manifest", "excluded"]
             } else {
                 &["identity", "env"]
             },
@@ -70,24 +70,6 @@ impl Connection {
                     Some(Value::String(p)) => Some(self.root.join(p)),
                     _ => return Err("InvalidRequest: std_manifest".into()),
                 };
-                let mut images = vec![];
-                if let Some(value) = r.get("images") {
-                    let mut bytes = 0usize;
-                    for v in value.as_array().ok_or("InvalidRequest: images")? {
-                        let path = self.root.join(v.as_str().ok_or("InvalidRequest: image")?);
-                        // Capture-only no-follow regular-file read: never block
-                        // on a FIFO or retain a mutable mmap/image path.
-                        use hirsel_engine::loader_inputs::namespace::CaptureSource;
-                        let image = hirsel_engine::loader_inputs::namespace::DiskCapture
-                            .read(&path, l.input_bytes.saturating_sub(bytes))
-                            .map_err(|e| format!("InputUnavailable: {e}"))?;
-                        bytes = bytes.checked_add(image.len()).ok_or("ResourceLimit")?;
-                        if bytes > l.input_bytes {
-                            return Err("ResourceLimit".into());
-                        }
-                        images.push(image);
-                    }
-                }
                 let mut excluded = BTreeSet::new();
                 if let Some(value) = r.get("excluded") {
                     for v in value.as_array().ok_or("InvalidRequest: excluded")? {
@@ -103,7 +85,6 @@ impl Connection {
                     std_manifest,
                     excluded,
                     failed_probes: vec![],
-                    images,
                     environment: vec![],
                     limits: NamespaceLimits {
                         bytes: l.input_bytes,
@@ -226,8 +207,8 @@ fn base_wire_v2(id: u64, base: &BaseLease) -> Value {
     json!({"base":id,"token":token_json(base.token()),"namespace":hex(n.digest()),
         "scope_complete":true,"packages":base.inputs.scope.packages,
         "usage":{"nodes":u.nodes,"directories":u.directories,"entries":u.directory_entries,
-            "aliases":u.aliases,"file_bytes":u.file_bytes,"image_bytes":u.image_bytes,
-            "external_image_handles":u.external_image_handles,"charged_bytes":u.charged_bytes}})
+            "aliases":u.aliases,"file_bytes":u.file_bytes,
+            "charged_bytes":u.charged_bytes}})
 }
 fn key_wire(k: Key) -> Value {
     json!({"root":k.root,"path":k.path})
