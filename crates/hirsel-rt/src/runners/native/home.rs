@@ -49,7 +49,7 @@ impl Home {
         home
     }
 
-    fn start(&mut self, _token: u64, key: [u8; 32], spec: Spec) -> Stopped<()> {
+    fn start_callee(&mut self, _token: u64, key: [u8; 32], spec: Spec) -> Stopped<()> {
         if spec.crash_after.is_some() {
             return Err(Stop::Refused(
                 "native Free runner crash simulation is not yet admitted".into(),
@@ -141,7 +141,7 @@ impl Home {
         self.slot.transport.signal.drain();
         let mut changed = false;
         for (token, key, spec) in self.slot.transport.take() {
-            self.start(token, key, spec)?;
+            self.start_callee(token, key, spec)?;
             changed = true;
         }
         for key in self.slot.transport.cancels() {
