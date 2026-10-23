@@ -307,3 +307,91 @@ fn unix_connects_to_a_full_backlog_park_their_task_and_replay_in_either_engine()
 fn full_gate_cranelift_unix_connects_to_a_full_backlog_park_their_task() {
     round_trip(&[Engine::Cranelift]);
 }
+
+// A completed detached child can release its native row while its retirement
+// still waits for the home poll. The timer sibling then saves another frame.
+const DETACHED: &str = r#"pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let out = io.stdout(rt)?
+  let tasks = io.tasks(rt)?
+  let c = io.monotonic_clock(rt)?
+  let n = io.net(rt)?
+  let Ok(p) = arg.path(args, 0) else { return Ok(()) }
+  let Ok(now) = clock.monotonic(c) else { return Ok(()) }
+  let Some(at) = instant.checked_add(c, now, 1000000000u64) else { return Ok(()) }
+  let summary = task.scope_until(tasks, Deadline(clock: c, at: at), fn(s: Scope) -> bool {
+    let mine = path.of(path.text(p))
+    let waiting = task.async(s, fn() -> bool {
+      match net.unix_connect(n, take mine) {
+        Error(Canceled(DeadlineExceeded())) => true,
+        _ => false,
+      }
+    })
+    task.detach(s, take waiting)
+    {
+      let child = task.async(s, fn() -> () {
+        let _ = clock.sleep_until(c, at)
+      })
+      task.detach(s, take child)
+    }
+    let _ = clock.sleep_until(c, at)
+    true
+  })
+  let parked = match summary { Expired(true) => true, _ => false }
+  let _ = out.print(out, f"parked {parked}\n")
+  Ok(())
+}
+"#;
+
+fn detached_connect_round_trip(engine: Engine) {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::net::{UnixListener, UnixStream};
+    let fixture = Fixture::new("detached");
+    std::fs::write(fixture.0.join("main.hir"), DETACHED).unwrap();
+    let socket = fixture.0.join("app.sock");
+    let listener = UnixListener::bind(&socket).unwrap();
+    // Linux admits backlog + 1 connections. Keep both slots occupied without
+    // accepting, so the language task's connect must park until cancellation.
+    assert_eq!(unsafe { libc::listen(listener.as_raw_fd(), 1) }, 0);
+    let first = UnixStream::connect(&socket).unwrap();
+    let second = UnixStream::connect(&socket).unwrap();
+    let tape = fixture.0.join("detached-tape");
+    let grants = fixture.0.join("grants.json");
+    let live = fixture.run(
+        engine,
+        &[
+            "--grants".as_ref(),
+            grants.as_os_str(),
+            "--record".as_ref(),
+            tape.as_os_str(),
+        ],
+    );
+    let check = |output: &std::process::Output| {
+        assert!(
+            output.status.success() && output.stderr.is_empty(),
+            "{engine:?}: {output:?}"
+        );
+        assert_eq!(output.stdout, b"parked true\n");
+    };
+    check(&live);
+    let text = hirsel_rt::launch::read_recording_text(&tape).unwrap();
+    assert!(
+        text.lines()
+            .any(|line| line.contains("unix_connect") && line.contains("blocked")),
+        "{text}"
+    );
+    drop((first, second, listener));
+    std::fs::remove_file(socket).unwrap();
+    for replay in [Engine::Interpreted, Engine::Llvm] {
+        check(&fixture.run(replay, &["--replay".as_ref(), tape.as_os_str()]));
+    }
+}
+
+#[test]
+fn detached_connect_and_timer_complete_after_their_scope_deadline_interpreted() {
+    detached_connect_round_trip(Engine::Interpreted);
+}
+
+#[test]
+fn detached_connect_and_timer_complete_after_their_scope_deadline_llvm() {
+    detached_connect_round_trip(Engine::Llvm);
+}

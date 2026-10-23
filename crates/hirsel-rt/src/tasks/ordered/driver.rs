@@ -211,6 +211,16 @@ impl Driver {
         self.execution.get(&task) == Some(&Execution::Saved { head_only: true })
     }
 
+    /// A retirement barrier belongs to a full logical identity, not a reusable
+    /// native row. Detached completion may release that row before home finishes
+    /// its host poll; Done remains proof that this generation physically saved.
+    pub(super) fn physically_saved(&self, task: TaskId) -> bool {
+        matches!(
+            self.execution.get(&task),
+            Some(Execution::Saved { .. } | Execution::Done)
+        )
+    }
+
     /// Only the generic idle callback calls this, after publishing physical
     /// saved=true while holding IdleGuard. A logical park alone is insufficient.
     /// Completion metadata cannot be reused until the physical token ends.
@@ -253,9 +263,7 @@ pub(crate) fn after_save(
     }
     let deferred = driver.poll_after_save;
     if let Some(retiring) = deferred {
-        let task = retiring as u32;
-        assert_eq!(s.task(task).generation, (retiring >> 32) as u32);
-        if !host_timers && super::super::readiness::saved(s, task)
+        if !host_timers && driver.physically_saved(retiring)
             // SAFETY: generic after_save owns IdleGuard and published saved.
             && unsafe { super::super::readiness::poll_ordered(s, pool_available) }
         {
@@ -489,6 +497,89 @@ mod tests {
         );
         assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
         assert_eq!(outcome.pending, 0);
+    }
+
+    #[test]
+    fn a_detached_end_keeps_its_saved_barrier_after_row_retirement_and_reuse() {
+        use super::super::super::{Logical, Scheduler, Scope, Task, handle};
+        let root = handle(0, 1);
+        let child = handle(1, 2);
+        let sibling = handle(2, 3);
+        let mut s = Scheduler::default();
+        s.tasks = vec![
+            Some(Task::new(1, std::ptr::null_mut(), None, vec![], None)),
+            Some(Task::new(2, std::ptr::null_mut(), Some(0), vec![0], None)),
+            Some(Task::new(3, std::ptr::null_mut(), Some(0), vec![1], None)),
+        ];
+        s.scopes.push(Some(Scope {
+            generation: 4,
+            owner: 0,
+            children: vec![1, 2],
+            canceled: Default::default(),
+            deadline: None,
+            completions: Default::default(),
+        }));
+        s.link_child(0, 1);
+        s.link_child(0, 2);
+        s.task(1).detached = true;
+        s.task(1).finishing = true;
+        let mut driver = Driver::new(
+            child,
+            Policy::admit(&Default::default(), None),
+            Settled {
+                level: 0,
+                limit: u64::MAX,
+                fuel: u64::MAX,
+            },
+            Registry::default(),
+        );
+        driver
+            .frontier
+            .as_mut()
+            .unwrap()
+            .held
+            .insert(child, Held::empty());
+        driver.enqueue(root, Held::empty());
+        driver.enqueue(sibling, Held::empty());
+        driver.execution.insert(child, Execution::Finishing);
+        driver
+            .execution
+            .insert(sibling, Execution::Saving { head_only: true });
+        assert_eq!(
+            driver.frontier.as_mut().unwrap().apply_head(
+                Stretch::new(Budgets {
+                    fuel: false,
+                    memory: false
+                }),
+                Command::AtomicLoad { word: 0, bytes: 8 }.operation(Default::default()),
+                &mut BackendStub(Next::End),
+            ),
+            Ok(crate::ordered::Progress::Poll)
+        );
+        driver.defer_poll_until_saved(child);
+        s.logical = Logical::Ordered(driver);
+        assert!(after_save(&mut s, 1, true, true, true).is_empty());
+        assert!(s.tasks[1].is_none(), "a detached end releases its row");
+        // Another speculative frame can save while home still owns the poll.
+        assert!(after_save(&mut s, 2, false, true, true).is_empty());
+        // Reuse the same native index for a different, not-yet-saved generation.
+        s.tasks[1] = Some(Task::new(5, std::ptr::null_mut(), Some(0), vec![2], None));
+        let Logical::Ordered(driver) = &mut s.logical else {
+            unreachable!()
+        };
+        driver
+            .execution
+            .insert(handle(1, 5), Execution::Saving { head_only: true });
+        driver
+            .execution
+            .insert(sibling, Execution::Saving { head_only: true });
+        // The old generation's barrier is satisfied independently of that row.
+        assert!(!after_save(&mut s, 2, false, false, true).is_empty());
+        let Logical::Ordered(driver) = &s.logical else {
+            unreachable!()
+        };
+        assert!(driver.poll_after_save.is_none());
+        assert_eq!(driver.frontier.as_ref().unwrap().retired(), 1);
     }
 
     #[test]

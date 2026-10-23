@@ -26,7 +26,7 @@ pub(crate) unsafe fn service(run: *mut RunShared) -> bool {
             return false;
         }
         let deferred = driver.poll_after_save;
-        let ready = deferred.is_some_and(|id| readiness::saved(s, id as u32));
+        let ready = deferred.is_some_and(|id| driver.physically_saved(id));
         let idle = idle && driver.quiet();
         if !ready && !idle {
             return false;
@@ -47,9 +47,20 @@ pub(crate) unsafe fn service(run: *mut RunShared) -> bool {
 }
 
 pub(super) unsafe fn poll(run: *mut RunShared, retiring: bool, idle: bool) -> Stopped<bool> {
+    // An idle continuation follows the last retirement's completed poll. Wait
+    // before querying readiness again, just as cooperative next_task does;
+    // otherwise the same idle boundary invents an extra recorded point.
+    let mut wait_first = !retiring;
     loop {
         if let Some(stop) = unsafe { (*run).control.stopped() } {
             return Err(stop);
+        }
+        if wait_first && !unsafe { crate::host_waits::wait_home(run) }? {
+            let _guard = unsafe { role::IdleGuard::new(run) };
+            let s = unsafe { (*(*run).tasks.get()).as_deref_mut().unwrap() };
+            complete(s, run, retiring);
+            unsafe { super::super::free::check_quiet_without_sources(run) };
+            return Ok(true);
         }
         let crate::host_waits::HomeReady { expired, hosts } =
             unsafe { crate::host_waits::ready_home(run) }?;
@@ -144,13 +155,7 @@ pub(super) unsafe fn poll(run: *mut RunShared, retiring: bool, idle: bool) -> St
                 return Ok(true);
             }
         }
-        if !unsafe { crate::host_waits::wait_home(run) }? {
-            let _guard = unsafe { role::IdleGuard::new(run) };
-            let s = unsafe { (*(*run).tasks.get()).as_deref_mut().unwrap() };
-            complete(s, run, retiring);
-            unsafe { super::super::free::check_quiet_without_sources(run) };
-            return Ok(true);
-        }
+        wait_first = true;
     }
 }
 
@@ -173,5 +178,53 @@ fn complete(s: &mut Scheduler, run: *mut RunShared, retiring: bool) {
         let task = id as u32;
         let owner = s.task(task).owner;
         unsafe { crate::pool::free::schedule_saved(run, task, owner) };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::io::{Adapter, AdapterError, Binding, Completion, Ready, Request};
+    use std::sync::{Arc, Mutex};
+
+    struct Idle(Arc<Mutex<Vec<&'static str>>>);
+    impl Adapter for Idle {
+        fn preflight(&self, _: &Request) -> Result<Option<Completion>, AdapterError> {
+            Ok(None)
+        }
+        fn call(&mut self, _: Request) -> Result<Completion, AdapterError> {
+            unreachable!()
+        }
+        fn ready(&mut self) -> Result<Ready, AdapterError> {
+            self.0.lock().unwrap().push("ready");
+            Ok(Ready::Tokens(vec![]))
+        }
+        fn wait(&mut self) -> Result<bool, AdapterError> {
+            self.0.lock().unwrap().push("wait");
+            Err(AdapterError::Stopped)
+        }
+    }
+
+    #[test]
+    fn idle_after_a_completed_retirement_waits_before_the_next_readiness_point() {
+        let calls = Arc::new(Mutex::new(vec![]));
+        let mut binding = Binding::new(Idle(calls.clone()));
+        let mut ctx = std::ptr::null_mut();
+        unsafe {
+            assert_eq!(
+                crate::context::hirsel_rt_v2_ctx_create(&crate::Config::new(), &mut ctx),
+                0
+            );
+            binding.bind(&mut *ctx);
+            super::super::engine::enable(
+                ctx,
+                crate::ordered::Policy::admit(&Default::default(), None),
+            );
+            let run = (*ctx).run_ptr();
+            (*run).host_waits.store(1, Ordering::Release);
+            assert!(poll(run, false, true).is_err());
+            crate::context::hirsel_rt_v2_ctx_destroy(ctx);
+        }
+        assert_eq!(*calls.lock().unwrap(), vec!["wait"]);
     }
 }
