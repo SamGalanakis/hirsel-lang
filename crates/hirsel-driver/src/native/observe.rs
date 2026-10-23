@@ -222,11 +222,16 @@ impl<'a> Sites<'a> {
 
     pub(crate) fn report(&self, failure: &Failure, json: bool) -> Result<String, NativeError> {
         let missing = || NativeError::new(StageName::Launch, "failure has no source site");
-        let site = self.failure_site(failure).ok_or_else(missing)?;
+        let mut site = self.failure_site(failure).ok_or_else(missing)?;
+        site.file = failure.file.clone();
         let operation = failure
             .operation
             .as_ref()
-            .map(|s| self.operation_site(s).ok_or_else(missing))
+            .map(|source| {
+                let mut site = self.operation_site(source).ok_or_else(missing)?;
+                site.file = source.file.clone();
+                Ok(site)
+            })
             .transpose()?;
         Ok(site.report(&failure.rule, json, operation.as_ref()))
     }

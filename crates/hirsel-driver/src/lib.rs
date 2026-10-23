@@ -635,6 +635,44 @@ pub fn run_path_on_host(
     run_path_on_host_observed(path, launch, max_steps, verify, None)
 }
 
+/// Render canonical failure sites against the current source snapshot. Stored
+/// outcomes keep logical paths; human and JSON diagnostics use physical paths.
+pub fn report_runtime_failures(
+    path: &Path,
+    outcome: &RunOutcome,
+    json: bool,
+    stderr: &mut dyn Write,
+) -> Result<(), ToolError> {
+    let RunOutcome::Failed { primary, causes } = outcome else {
+        return Ok(());
+    };
+    session::with_program(path, hirsel_engine::Verify::On, |program| {
+        program.check_for_execution()?;
+        let sources = &program.engine.sources;
+        let physical = |site: &hirsel_run_schema::Site| {
+            let mut site = site.clone();
+            if let Some(file) = sources.anchors().find_map(|(_, file, _)| {
+                let file = sources.file(file)?;
+                (file.logical_path().to_string_lossy() == site.file).then_some(file)
+            }) {
+                site.file = file.path.to_string_lossy().into_owned();
+            }
+            site
+        };
+        for failure in std::iter::once(primary).chain(causes) {
+            let site = physical(&failure.site);
+            let operation = failure.operation.as_ref().map(physical);
+            writeln!(
+                stderr,
+                "{}",
+                site.report(&failure.rule, json, operation.as_ref())
+            )
+            .map_err(ToolError::Io)?;
+        }
+        Ok(())
+    })
+}
+
 /// Replay-only semantic enrichment. Binding and exact request consumption happen before
 /// an observation is returned; this path never constructs or admits live host providers.
 pub fn replay_observations(

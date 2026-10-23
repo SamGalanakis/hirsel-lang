@@ -1694,7 +1694,7 @@ fn execute_command(args: Vec<OsString>, verify: Verify) -> u8 {
                     return RunOutcome::Tooling(error).exit_code() as u8;
                 }
             };
-            return run_result(
+            return run_result_for_path(
                 hirsel_driver::run_path_with_step_budget(
                     Path::new(&file),
                     simulation,
@@ -1703,6 +1703,7 @@ fn execute_command(args: Vec<OsString>, verify: Verify) -> u8 {
                     &mut std::io::stdout().lock(),
                     &mut std::io::stderr().lock(),
                 ),
+                Path::new(&file),
                 json,
             );
         }
@@ -2120,6 +2121,17 @@ fn read_simulation(path: &Path) -> Result<hirsel_engine::SimulationConfig, Strin
 }
 
 fn run_result_for_path(result: Result<RunOutcome, ToolError>, path: &Path, json: bool) -> u8 {
+    if let Ok(outcome @ RunOutcome::Failed { .. }) = &result {
+        return match hirsel_driver::report_runtime_failures(
+            path,
+            outcome,
+            json,
+            &mut std::io::stderr().lock(),
+        ) {
+            Ok(()) => outcome.exit_code() as u8,
+            Err(error) => run_error(error, json),
+        };
+    }
     let refused = matches!(
         &result,
         Err(ToolError::Launch(
