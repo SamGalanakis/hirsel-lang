@@ -153,6 +153,7 @@ pub enum QueryKind {
     Summary,
     CheckedSummary,
     Registration,
+    Evaluate,
 }
 impl QueryKind {
     pub fn phase_name(self) -> &'static str {
@@ -169,6 +170,7 @@ impl QueryKind {
             Self::Summary => "definition summary",
             Self::CheckedSummary => "checked definition summary",
             Self::Registration => "staged declaration registration",
+            Self::Evaluate => "compile-time evaluation",
         }
     }
 }
@@ -206,6 +208,7 @@ impl DefinitionKey {
             QueryKind::Format => 7,
             QueryKind::Interpret => 8,
             QueryKind::Registration => 11,
+            QueryKind::Evaluate => 12,
             QueryKind::Lex => 4,
             QueryKind::Resolve => 5,
             QueryKind::Modes => 6,

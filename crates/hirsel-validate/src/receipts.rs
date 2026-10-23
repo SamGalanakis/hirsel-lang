@@ -4,7 +4,7 @@ use crate::{SignatureLookup, VRead, Validation, read_holds};
 use bincode::Options;
 use hirsel_artifact_store::{Action, Address, Domain, Store};
 use hirsel_span::Anchor;
-use hirsel_syntax::{ContentHash, DefPath};
+use hirsel_syntax::{ContentHash, DefPath, PackageId};
 use hirsel_tir::Definition;
 use hirsel_types::TypeInterner;
 use serde::{Deserialize, Serialize};
@@ -49,7 +49,7 @@ struct Receipt {
     reads: Vec<VRead>,
 }
 enum Backend {
-    Memory(Mutex<HashMap<ContentHash, Receipt>>),
+    Memory(Mutex<HashMap<ContentHash, hirsel_artifact_store::Bytes>>),
     Directory(Store),
 }
 /// Only `validate` can issue a receipt. There is no producer/import/seed method.
@@ -74,44 +74,148 @@ impl VerifierCache {
         Self(Backend::Directory(Store::new(root)))
     }
 
-    fn load(&self, key: ContentHash) -> Option<Receipt> {
-        match &self.0 {
+    fn load<T: serde::de::DeserializeOwned>(&self, key: ContentHash, domain: Domain) -> Option<T> {
+        let bytes = match &self.0 {
             Backend::Memory(rows) => rows
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .get(&key)
-                .cloned(),
+                .cloned()?,
             Backend::Directory(store) => {
                 let association = store.lookup(Address(key))?;
-                if association.action != Action(key) || association.reference.domain != DOMAIN {
+                if association.action != Action(key) || association.reference.domain != domain {
                     return None;
                 }
                 let bytes = store.get(association.reference)?;
-                bincode::DefaultOptions::new()
-                    .with_fixint_encoding()
-                    .with_limit(bytes.len() as u64)
-                    .reject_trailing_bytes()
-                    .deserialize(&bytes)
-                    .ok()
+                store.touch(Address(key), association.reference);
+                bytes
             }
-        }
+        };
+        bincode::DefaultOptions::new()
+            .with_fixint_encoding()
+            .with_limit(bytes.len() as u64)
+            .reject_trailing_bytes()
+            .deserialize(&bytes)
+            .ok()
     }
-    fn publish(&self, key: ContentHash, receipt: Receipt) {
+    fn publish<T: Serialize>(&self, key: ContentHash, domain: Domain, receipt: &T) {
+        let Ok(bytes) = bincode::serialize(receipt) else {
+            return;
+        };
+        if bytes.len() > hirsel_artifact_store::MAX_RECORD {
+            return;
+        }
         match &self.0 {
             Backend::Memory(rows) => {
                 rows.lock()
                     .unwrap_or_else(|e| e.into_inner())
-                    .insert(key, receipt);
+                    .insert(key, bytes.into());
             }
             Backend::Directory(store) => {
-                if let Ok(bytes) = bincode::serialize(&receipt)
-                    && let Ok(reference) = store.put(DOMAIN, &bytes)
-                {
+                if let Ok(reference) = store.put(domain, &bytes) {
                     let _ = store.associate(Address(key), Action(key), reference);
                 }
             }
         }
     }
+    /// Bind an ordinary evaluation output to evidence minted by V. The opaque
+    /// receipt cannot be constructed or decoded by an ordinary producer.
+    pub fn publish_execution(&self, subject: ContentHash, receipt: &ExecutionReceipt) {
+        self.publish(
+            execution_key(subject),
+            EXECUTION_DOMAIN,
+            &ExecutionRecord {
+                subject,
+                contexts: receipt.contexts.to_vec(),
+                artifacts: receipt
+                    .artifacts
+                    .iter()
+                    .map(|a| (a.artifact, a.policy))
+                    .collect(),
+            },
+        );
+    }
+    /// Read only the verifier's local association and independently observe
+    /// every base universe used by the completed execution. No producer record
+    /// can seed this association by carrying a successful-looking read list.
+    pub fn execution(
+        &self,
+        subject: ContentHash,
+        mut current: impl FnMut(&PackageId) -> ContentHash,
+    ) -> Option<ExecutionReceipt> {
+        let record: ExecutionRecord = self.load(execution_key(subject), EXECUTION_DOMAIN)?;
+        if record.subject != subject
+            || record.artifacts.is_empty()
+            || record.contexts.is_empty()
+            || !record.contexts.windows(2).all(|w| w[0].0 < w[1].0)
+            || !record
+                .contexts
+                .iter()
+                .all(|(package, digest)| current(package) == *digest)
+        {
+            return None;
+        }
+        Some(ExecutionReceipt {
+            contexts: record.contexts.into(),
+            artifacts: record
+                .artifacts
+                .into_iter()
+                .map(|(artifact, policy)| AcceptedArtifact { artifact, policy })
+                .collect::<Vec<_>>()
+                .into(),
+        })
+    }
+}
+
+const EXECUTION_DOMAIN: Domain = Domain {
+    kind: 0x5600_0002,
+    schema: 1,
+};
+fn execution_key(subject: ContentHash) -> ContentHash {
+    ContentHash::of_parts("hirsel.validate.execution.v1", [subject.0.as_slice()])
+}
+/// A terminal successful V decision. There is intentionally no Deserialize or
+/// producer constructor: only validate_with_receipt can mint this capability.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AcceptedArtifact {
+    artifact: ContentHash,
+    policy: ContentHash,
+}
+/// Composed execution evidence contains small artifact identities, not bodies.
+/// Its complete independent base contexts guard private overlays and callees.
+#[derive(Clone, Debug)]
+pub struct ExecutionReceipt {
+    contexts: Arc<[(PackageId, ContentHash)]>,
+    artifacts: Arc<[AcceptedArtifact]>,
+}
+impl ExecutionReceipt {
+    pub fn compose(
+        contexts: &[(PackageId, ContentHash)],
+        artifacts: &[AcceptedArtifact],
+    ) -> Option<Self> {
+        if artifacts.is_empty()
+            || contexts.is_empty()
+            || !contexts.windows(2).all(|w| w[0].0 < w[1].0)
+        {
+            return None;
+        }
+        Some(Self {
+            contexts: contexts.to_vec().into(),
+            artifacts: artifacts.to_vec().into(),
+        })
+    }
+    pub fn contexts(&self) -> &[(PackageId, ContentHash)] {
+        &self.contexts
+    }
+    pub fn artifacts(&self) -> &[AcceptedArtifact] {
+        &self.artifacts
+    }
+}
+#[derive(Serialize, Deserialize)]
+struct ExecutionRecord {
+    subject: ContentHash,
+    contexts: Vec<(PackageId, ContentHash)>,
+    artifacts: Vec<(ContentHash, ContentHash)>,
 }
 
 /// Reuse only this verifier's successful terminal record, after independently
@@ -125,6 +229,18 @@ pub fn validate_cached(
     cache: Option<&VerifierCache>,
     reads: &mut Vec<VRead>,
 ) -> (Validation, bool) {
+    let (report, ran, _) = validate_with_receipt(artifact, signatures, policy, cache, reads);
+    (report, ran)
+}
+/// The same validation path, retaining the opaque evidence for composition
+/// with dependent private/source artifacts after successful execution.
+pub fn validate_with_receipt(
+    artifact: &Artifact<'_>,
+    signatures: &dyn SignatureLookup,
+    policy: ContentHash,
+    cache: Option<&VerifierCache>,
+    reads: &mut Vec<VRead>,
+) -> (Validation, bool, Option<AcceptedArtifact>) {
     let key = artifact.identity.map(|identity| {
         ContentHash::of_parts(
             "hirsel.validate.receipt.v1",
@@ -132,7 +248,7 @@ pub fn validate_cached(
         )
     });
     if let (Some(cache), Some(key), Some(identity)) = (cache, key, artifact.identity)
-        && let Some(receipt) = cache.load(key)
+        && let Some(receipt) = cache.load::<Receipt>(key, DOMAIN)
         && receipt.artifact == identity
         && receipt.policy == policy
         && receipt
@@ -141,7 +257,14 @@ pub fn validate_cached(
             .all(|read| read_holds(read, signatures))
     {
         reads.extend(receipt.reads);
-        return (Validation::default(), false);
+        return (
+            Validation::default(),
+            false,
+            Some(AcceptedArtifact {
+                artifact: identity,
+                policy,
+            }),
+        );
     }
     let mut own = vec![];
     let report = crate::validate(artifact.definition, &artifact.types, signatures, &mut own);
@@ -150,15 +273,25 @@ pub fn validate_cached(
     {
         cache.publish(
             key,
-            Receipt {
+            DOMAIN,
+            &Receipt {
                 artifact: identity,
                 policy,
                 reads: own.clone(),
             },
         );
     }
+    let accepted = report
+        .violations
+        .is_empty()
+        .then(|| {
+            artifact
+                .identity
+                .map(|artifact| AcceptedArtifact { artifact, policy })
+        })
+        .flatten();
     reads.extend(own);
-    (report, true)
+    (report, true, accepted)
 }
 
 #[cfg(test)]
@@ -243,6 +376,57 @@ mod tests {
         std::fs::write(store.output_path(receipt.reference), b"truncated").unwrap();
         let (report, ran) = check(&f, &reopened, policy);
         assert!(ran && report.violations.is_empty());
+    }
+
+    #[test]
+    fn execution_receipts_require_v_capabilities_and_exact_current_contexts() {
+        let f = Fixture::unit();
+        let directory = Directory::new();
+        let cache = VerifierCache::directory(directory.0.clone());
+        let policy = ContentHash::default();
+        let (report, _, accepted) = validate_with_receipt(
+            &artifact(&f),
+            &f.signatures,
+            policy,
+            Some(&cache),
+            &mut vec![],
+        );
+        assert!(report.violations.is_empty());
+        let contexts = vec![(
+            path("main").0.package,
+            ContentHash::of_bytes(b"private and public views"),
+        )];
+        let accepted = accepted.unwrap();
+        assert!(ExecutionReceipt::compose(&contexts, &[]).is_none());
+        assert!(ExecutionReceipt::compose(&[], &[accepted.clone()]).is_none());
+        let receipt = ExecutionReceipt::compose(&contexts, &[accepted]).unwrap();
+        let subject = ContentHash::of_bytes(b"complete evaluated value and action");
+        cache.publish_execution(subject, &receipt);
+        let reopened = VerifierCache::directory(directory.0.clone());
+        assert!(reopened.execution(subject, |_| contexts[0].1).is_some());
+        assert!(
+            reopened
+                .execution(subject, |_| ContentHash::default())
+                .is_none()
+        );
+        assert!(
+            reopened
+                .execution(ContentHash::default(), |_| contexts[0].1)
+                .is_none()
+        );
+        // Even exact output bytes do not transfer the issuer's associations.
+        let imported = Directory::new();
+        let source = Store::new(directory.0.clone());
+        let association = source.lookup(Address(execution_key(subject))).unwrap();
+        let bytes = source.get(association.reference).unwrap();
+        Store::new(imported.0.clone())
+            .put(EXECUTION_DOMAIN, &bytes)
+            .unwrap();
+        assert!(
+            VerifierCache::directory(imported.0.clone())
+                .execution(subject, |_| contexts[0].1)
+                .is_none()
+        );
     }
 
     #[test]
