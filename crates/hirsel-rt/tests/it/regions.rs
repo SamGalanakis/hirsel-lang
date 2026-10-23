@@ -235,7 +235,10 @@ fn a_failing_exit_still_releases_every_heap_edge_and_meets_the_pool_cap() {
     let mut region = enter(&ctx);
     // 20 MiB of active region storage: more than the idle cap, which only bounds idle storage.
     for _ in 0..320 {
-        reserve(&ctx, &mut region, SEGMENT_SIZE as u64 - 64, 16);
+        // One half-segment request fits with its internal header; two do
+        // not. Keep these standard segments regardless of bookkeeping size,
+        // so the exact idle-cap assertion below has its intended witness.
+        reserve(&ctx, &mut region, SEGMENT_SIZE as u64 / 2, 16);
     }
     assert!(ctx.stats().region_active_bytes > 2 * REGION_POOL_IDLE_CAP);
     for id in 1..=6u64 {
