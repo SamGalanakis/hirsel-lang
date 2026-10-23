@@ -89,3 +89,4 @@ mod stdlib_regex_dfa;
 mod regex_capture_span_17;
 mod regex_subject_cost_18;
 mod regex_cache_20;
+mod regex_capture_engines_20;

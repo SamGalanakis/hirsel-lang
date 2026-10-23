@@ -1,0 +1,282 @@
+// Internal engine differential; no public engine selector is added to std.
+// Seeded nested/optional/alternative patterns complement the existing Go and
+// regex-automata vectors. Every successful span is compared with the legacy
+// ordered PikeVM, including its unmatched-versus-empty capture distinction.
+@serializable
+pub type CaptureEngineFailure {
+  pattern: String,
+  source: String,
+  engine: u64,
+}
+
+fn cap20_case(pattern: String, src: String) -> Result[(), CaptureEngineFailure] uses {} {
+  let Ok(re) = compile(pattern, 10000) else {
+    return Error(
+      CaptureEngineFailure(pattern: unique pattern, source: unique src, engine: 0)
+    )
+  }
+  let mut work = 18446744073709551615u64
+  let Ok(subject) = make_subject(src, mut work) else {
+    return Error(
+      CaptureEngineFailure(pattern: unique pattern, source: unique src, engine: 1)
+    )
+  }
+  let mut scratch = capture_scratch()
+  scratch.plan = capture_plan(re)
+  scratch.prepared = true
+  let mut start = 0u64
+  while start <= core@1/list.len(subject.scalars) {
+    let Ok((matched, expected)) = pike_find_from(re, subject, start, true, mut work) else {
+      return Error(
+        CaptureEngineFailure(pattern: unique pattern, source: unique src, engine: 2)
+      )
+    }
+    if let Some(span) = matched {
+      if capture_pike(re, subject, span, mut scratch) != expected {
+        return Error(
+          CaptureEngineFailure(pattern: unique pattern, source: unique src, engine: 3)
+        )
+      }
+      if capture_backtrack_fits(re, core@1/list.len(subject.scalars)) {
+        if capture_backtrack(re, subject, span, mut scratch) != expected {
+          return Error(
+            CaptureEngineFailure(pattern: unique pattern, source: unique src, engine: 4)
+          )
+        }
+      }
+      if core@1/list.len(scratch.plan) != 0 {
+        if capture_onepass(re, subject, span, mut scratch) != expected {
+          return Error(
+            CaptureEngineFailure(pattern: unique pattern, source: unique src, engine: 5)
+          )
+        }
+      }
+      if capture_replay(re, subject, span, mut scratch) != expected {
+        return Error(
+          CaptureEngineFailure(pattern: unique pattern, source: unique src, engine: 6)
+        )
+      }
+    }
+    start += 1
+  }
+  Ok(())
+}
+
+pub fn capture_engines_edges() -> Result[(), CaptureEngineFailure] uses {} {
+  for pattern in [
+    "",
+    "()",
+    "(a)?",
+    "((a)?)(b?)",
+    "((a)|(b))*",
+    "(a|aa)+",
+    "((a*)*)",
+    "(a?)*?",
+    "(a*)(a*)",
+    "(a*?)(a*)",
+    "(a|ab)(b?)",
+    "((a)|(ab))*",
+    "((ab)|(a))*?",
+    "(a+)(b+)",
+    "((a)|(b))c",
+    "\\b(a+)\\b",
+    "(?m)^(a*)$",
+    "((é)|(😀))*",
+    "([^a]*)(a?)",
+    "(?i)(k+)",
+    "(?s)(.*?)(b)",
+    "(a{0})(b?)",
+    "(a{2,4})(a?)"
+  ] {
+    for src in ["", "a", "aaab", "ababa", "éa😀b", "\na\nb\n", "Kk"] {
+      cap20_case(pattern, src)?
+    }
+  }
+  // Upstream one-pass transitions carry conditional epsilon and slot actions.
+  for pattern in ["(a+)(b*)", "\\b(a+)\\b", "(?m)^(a*)$", "([^a]+)(a?)"] {
+    let Ok(re) = compile(pattern, 10000) else {
+      return Error(CaptureEngineFailure(pattern: unique pattern, source: "", engine: 7))
+    }
+    core@1/failure.check(core@1/list.len(capture_plan(re)) != 0, Bounds())
+  }
+  for pattern in ["(a|aa)+", "(a*)(a*)", "(.*?)(b)"] {
+    let Ok(re) = compile(pattern, 10000) else {
+      return Error(CaptureEngineFailure(pattern: unique pattern, source: "", engine: 8))
+    }
+    core@1/failure.check(core@1/list.len(capture_plan(re)) == 0, Bounds())
+  }
+  // Malformed patterns remain compile errors, never enter a capture engine.
+  for pattern in ["(", "[", "a{3,2}", "(?=a)"] {
+    core@1/failure.check(
+      match compile(pattern, 10000) {
+        Error(_) => true,
+        Ok(_) => false,
+      },
+      Bounds()
+    )
+  }
+  Ok(())
+}
+
+pub fn capture_engines_random() -> Result[(), CaptureEngineFailure] uses {} {
+  let atoms: List[String] = ["a", "b", "[ab]", "[^a]", ".", "é", "😀", ""]
+  let text: List[String] = ["a", "b", "é", "😀", "\n", "_", "1", ""]
+  let mut seed = 20261023u64
+  for case in 0u64..96 {
+    seed = (seed * 1664525 + 1013904223) % 4294967296
+    let a = atoms[seed / 256 % 8]
+    seed = (seed * 1664525 + 1013904223) % 4294967296
+    let b = atoms[seed / 256 % 8]
+    seed = (seed * 1664525 + 1013904223) % 4294967296
+    let c = atoms[seed / 256 % 8]
+    let pattern = match case % 6 {
+      0 => f"(({a})?({b}))*({c})?",
+      1 => f"(({a})|({b}))*?({c})",
+      2 => f"({a})?(({b})?({c})?)",
+      3 => f"(({a})({b}))|(({c})+)",
+      4 => f"(({a})*?)(({b})*)({c})?",
+      _ => f"(({a})|(({b})({c})))?",
+    }
+    let mut source: List[u8] = []
+    for i in 0u64..6 {
+      seed = (seed * 1664525 + 1013904223) % 4294967296
+      text.append(mut source, text[seed / 256 % 8])
+    }
+    cap20_case(pattern, text.finish_valid(take source))?
+  }
+  Ok(())
+}
+
+pub fn capture_engines_plan_limits() -> Result[(), CaptureEngineFailure] uses {} {
+  for (pattern, supported) in [
+    ("a{127}", true),
+    ("a{128}", false),
+    ("(é)", false),
+    ("(?i)(k)", false)
+  ] {
+    let Ok(re) = compile(pattern, 10000) else {
+      return Error(
+        CaptureEngineFailure(pattern: unique pattern, source: "", engine: 12)
+      )
+    }
+    core@1/failure.check(
+      (core@1/list.len(capture_plan(re)) != 0) == supported,
+      Bounds()
+    )
+  }
+  for i in 0u64..16 {
+    let mut pattern: List[u8] = []
+    for j in 0u64..i + 1 {
+      text.append(mut pattern, "(a)")
+    }
+    let src = text.finish_valid(take pattern)
+    let Ok(re) = compile(src, 10000) else {
+      return Error(CaptureEngineFailure(pattern: src, source: "", engine: 13))
+    }
+    core@1/failure.check((core@1/list.len(capture_plan(re)) != 0) == (i < 15), Bounds())
+  }
+  Ok(())
+}
+
+pub fn capture_engines_limits() -> Result[(), CaptureEngineFailure] uses {} {
+  let Ok(re) = compile("(a|aa)+", 10000) else {
+    return Error(CaptureEngineFailure(pattern: "(a|aa)+", source: "", engine: 9))
+  }
+  let m = core@1/list.len(re.code)
+  let limit = 8192 / m - 1
+  core@1/failure.check(capture_backtrack_fits(re, limit), Bounds())
+  core@1/failure.check(!capture_backtrack_fits(re, limit + 1), Bounds())
+  let mut source: List[u8] = []
+  for i in 0u64..limit + 1 {
+    core@1/list.push(mut source, b'a')
+  }
+  let src = text.finish_valid(take source)
+  let mut work = 18446744073709551615u64
+  let Ok(subject) = make_subject(src, mut work) else {
+    return Error(
+      CaptureEngineFailure(pattern: "(a|aa)+", source: unique src, engine: 10)
+    )
+  }
+  let Ok((Some(span), expected)) = pike_find_from(re, subject, 0, true, mut work) else {
+    return Error(
+      CaptureEngineFailure(pattern: "(a|aa)+", source: unique src, engine: 11)
+    )
+  }
+  let mut scratch = capture_scratch()
+  core@1/failure.check(
+    capture_replay(re, subject, span, mut scratch) == expected,
+    Bounds()
+  )
+  // Reuse after a large Pike replay, then exercise the exact visited boundary.
+  let smaller = Span(start: span.start, end: span.end - 1)
+  core@1/failure.check(
+    capture_backtrack(re, subject, smaller, mut scratch) == capture_pike(
+      re,
+      subject,
+      smaller,
+      mut scratch
+    ),
+    Bounds()
+  )
+  Ok(())
+}
+
+// Compose the capture resolver with lazy-DFA Unicode continuation and its
+// maximum-work replacement marker; finite-budget vectors remain unchanged.
+fn capture_engines_composed_inner() -> bool uses {} {
+  let src = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxβ123 aaabé {{aβ}} {{ab}}"
+  for pattern in ["(a+)(b?)", "(a|aa)+", "\\b([0-9]+)\\b", "\\{\\{(.*?)\\}\\}"] {
+    let Ok(re) = compile(pattern, 10000) else {
+      return false
+    }
+    let mut work = 18446744073709551615u64
+    let Ok(subject) = make_subject(src, mut work) else {
+      return false
+    }
+    let Ok(expected) = pike_find_from(re, subject, 0, true, mut work) else {
+      return false
+    }
+    let mut scratch = capture_scratch()
+    let mut cache = dfa_cache(re, true, 65024)
+    let Ok(actual) = capture_find_from(
+      re,
+      subject,
+      0,
+      true,
+      core@1/string.as_bytes(src),
+      mut cache,
+      mut scratch,
+      mut work
+    ) else {
+      return false
+    }
+    if actual != expected {
+      return false
+    }
+    if replace(re, src, "", 2, 2u64, capture_callback, 18446744073709551615) != replace_pike(
+      re,
+      src,
+      "",
+      2,
+      2u64,
+      capture_callback,
+      18446744073709551615
+    ) {
+      return false
+    }
+  }
+  true
+}
+
+pub fn capture_engines_composed() -> Result[(), CaptureEngineFailure] uses {} {
+  if !capture_engines_composed_inner() {
+    return Error(
+      CaptureEngineFailure(
+        pattern: "composed",
+        source: "Unicode frontier and callback replacement",
+        engine: 20
+      )
+    )
+  }
+  Ok(())
+}

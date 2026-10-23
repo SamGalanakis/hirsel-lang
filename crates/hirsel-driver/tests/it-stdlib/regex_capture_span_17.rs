@@ -3,7 +3,7 @@ use hirsel_driver::*;
 use hirsel_engine::*;
 use std::path::{Path, PathBuf};
 
-fn private_fixture(directory: &Path, _interpreter: bool) -> PathBuf {
+pub(super) fn private_fixture(directory: &Path, _interpreter: bool) -> PathBuf {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let std_root = root.join("stdlib/std@1").canonicalize().unwrap();
     let mut manifest: serde_json::Value =
