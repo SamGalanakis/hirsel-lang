@@ -629,7 +629,7 @@ impl crate::queries::s1::DependencySource for EngineDependencies<'_> {
             engine.read_implementation(path);
             let definition = engine.definition(path)?;
             if !engine.evaluation_acceptance.is_empty() && engine.verify == Verify::On {
-                let report = engine.validate_lowered_artifact(&definition, &mut vec![]);
+                let (report, _) = engine.validate_lowered_artifact(&definition);
                 if !report.violations.is_empty() {
                     return Err(operational(format!(
                         "executed TIR validation: {:?}",

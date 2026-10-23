@@ -28,6 +28,7 @@ impl S1LowerWork {
 /// execution reads. Publication of its TIR remains the caller's policy.
 #[derive(Clone, Debug)]
 pub struct LoweringResult<T = DefinitionRef> {
+    pub verification: Option<Arc<hirsel_validate::VerifiedDefinition>>,
     pub definition: DefPath,
     pub result: Result<QueryOutput<T>, QueryError>,
     pub phase: Option<QueryKind>,
@@ -47,8 +48,16 @@ enum RootKind {
 #[derive(Clone)]
 enum RootValue {
     Constant(hirsel_tir::Materialized),
-    Lowered(QueryOutput<DefinitionRef>, DepthEvidence<Span>),
-    Checked(QueryOutput<()>, DepthEvidence<Span>),
+    Lowered(
+        QueryOutput<DefinitionRef>,
+        DepthEvidence<Span>,
+        Option<Arc<hirsel_validate::VerifiedDefinition>>,
+    ),
+    Checked(
+        QueryOutput<()>,
+        DepthEvidence<Span>,
+        Option<Arc<hirsel_validate::VerifiedDefinition>>,
+    ),
 }
 #[derive(Clone)]
 struct RootOutcome {
@@ -62,16 +71,23 @@ struct RootOutcome {
 impl RootOutcome {
     fn lowering<T>(
         self,
-        value: impl FnOnce(RootValue) -> (QueryOutput<T>, DepthEvidence<Span>),
+        value: impl FnOnce(
+            RootValue,
+        ) -> (
+            QueryOutput<T>,
+            DepthEvidence<Span>,
+            Option<Arc<hirsel_validate::VerifiedDefinition>>,
+        ),
     ) -> LoweringResult<T> {
-        let (result, depth) = match self.result {
+        let (result, depth, verification) = match self.result {
             Ok(root) => {
-                let (output, depth) = value(root);
-                (Ok(output), Some(depth))
+                let (output, depth, verification) = value(root);
+                (Ok(output), Some(depth), verification)
             }
-            Err(error) => (Err(error), None),
+            Err(error) => (Err(error), None, None),
         };
         LoweringResult {
+            verification,
             definition: self.definition,
             result,
             phase: self.phase,
@@ -765,7 +781,9 @@ impl QueryEngine {
             .into_iter()
             .map(|outcome| {
                 outcome.lowering(|value| match value {
-                    RootValue::Lowered(output, depth) => (output, depth),
+                    RootValue::Lowered(output, depth, verification) => {
+                        (output, depth, verification)
+                    }
                     _ => unreachable!("lower task"),
                 })
             })
@@ -792,7 +810,9 @@ impl QueryEngine {
             .into_iter()
             .map(|outcome| {
                 outcome.lowering(|value| match value {
-                    RootValue::Checked(output, depth) => (output, depth),
+                    RootValue::Checked(output, depth, verification) => {
+                        (output, depth, verification)
+                    }
                     _ => unreachable!("check lower task"),
                 })
             })
@@ -867,11 +887,16 @@ impl QueryEngine {
                 self.s1.begin_requests();
                 let result = self.lower_to_tir(path);
                 let depth = self.s1.finish_requests(self.depth_limit());
-                result.map(|output| match kind {
-                    RootKind::CheckLower => {
-                        RootValue::Checked(worker::discard_lowered_output(output), depth)
-                    }
-                    _ => RootValue::Lowered(output, depth),
+                result.and_then(|output| {
+                    let verification = self.ensure_lowered_verdict(&output.value)?;
+                    Ok(match kind {
+                        RootKind::CheckLower => RootValue::Checked(
+                            worker::discard_lowered_output(output),
+                            depth,
+                            verification,
+                        ),
+                        _ => RootValue::Lowered(output, depth, verification),
+                    })
                 })
             }
         };
@@ -989,18 +1014,18 @@ impl QueryEngine {
                     RootKind::Lower => {
                         let product = worker.lower_root(&path);
                         DependencyProduct {
-                            result: product
-                                .result
-                                .map(|(output, depth)| RootValue::Lowered(output, depth)),
+                            result: product.result.map(|(output, depth, verification)| {
+                                RootValue::Lowered(output, depth, verification)
+                            }),
                             reads: product.reads,
                         }
                     }
                     RootKind::CheckLower => {
                         let product = worker.check_lower_root(&path);
                         DependencyProduct {
-                            result: product
-                                .result
-                                .map(|(output, depth)| RootValue::Checked(output, depth)),
+                            result: product.result.map(|(output, depth, verification)| {
+                                RootValue::Checked(output, depth, verification)
+                            }),
                             reads: product.reads,
                         }
                     }

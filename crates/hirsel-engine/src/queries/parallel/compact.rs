@@ -458,6 +458,7 @@ impl QueryEngine {
                 covered: vec![],
                 depth: None,
                 acceptance: None,
+                verification: Default::default(),
                 selections: vec![],
                 consistent: stage.consistent,
             }))

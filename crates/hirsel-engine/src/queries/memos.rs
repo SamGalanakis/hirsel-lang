@@ -25,6 +25,7 @@ pub(crate) struct Entry<T> {
     /// dependency-request trace (design §1c).
     pub depth: Option<crate::memo::DepthEvidence<Span>>,
     pub acceptance: Option<hirsel_validate::ExecutionReceipt>,
+    pub verification: std::sync::Mutex<Option<Arc<hirsel_validate::VerifiedDefinition>>>,
     pub selections: Vec<crate::comptime::Selection>,
     /// False when an input changed during the evaluation: the result is
     /// returned but never kept.
@@ -492,7 +493,7 @@ impl QueryEngine {
                 .signature_snapshot()
                 .validation(&owner.0.package)
                 .view(d)
-                .map_or_else(ContentHash::default, |(_, digest)| digest.0),
+                .map_or_else(ContentHash::default, |input| input.digest().0),
             ReadKey::ValidationUniverse(package) => self
                 .signature_snapshot()
                 .validation_input_digest(&package.id()),
@@ -578,6 +579,7 @@ impl QueryEngine {
             covered: vec![],
             depth: None,
             acceptance: None,
+            verification: Default::default(),
             selections: vec![],
             consistent,
         }
@@ -916,7 +918,6 @@ impl QueryEngine {
                 self.lowered.remove(&key.def);
                 self.lower_receipts.remove(&key.def);
                 self.lower_holds.forget(key);
-                self.lower_verdicts.remove(&key.def);
             }
             _ => {}
         }

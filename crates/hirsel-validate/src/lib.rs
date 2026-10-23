@@ -49,8 +49,8 @@ mod origin_types;
 mod proofs;
 mod receipts;
 pub use receipts::{
-    AcceptedArtifact, Artifact, ExecutionReceipt, ReplayEnvironment, VerifierCache,
-    validate_cached, validate_with_receipt,
+    AcceptedArtifact, Artifact, ExecutionReceipt, ReplayEnvironment, VerifiedDefinition,
+    VerifierCache, validate_cached, validate_definition, validate_with_receipt,
 };
 mod protocol;
 mod scope_locals;
@@ -65,8 +65,8 @@ mod typing;
 mod variant_brands;
 use input::Reader;
 pub use input::{
-    SignatureLookup, SignatureMap, UniverseErrors, VRead, ValidatedSignatures, ValidationDigest,
-    ViewVerdict, check_view, digest, errors_digest, read_holds,
+    IdentifiedSignature, SignatureLookup, SignatureMap, UniverseErrors, VRead, ValidatedSignatures,
+    ValidationDigest, ViewInput, ViewVerdict, check_view, digest, errors_digest, read_holds,
 };
 pub use instances::{InstanceViolation, validate_instance_bodies};
 pub use matching::{MAX_MATCH_WORK, tooling_limit_error};
@@ -187,7 +187,7 @@ pub fn validate(
     // Opt-in per-definition profiling, independent of the driver's phase
     // accounting (including V invoked by import and compile-time execution).
     let started = profile_start();
-    let reader = Reader::new(signatures);
+    let reader = Reader::new(t, signatures);
     let validation = validate_input(definition, t, &reader);
     reader.finish(reads);
     if let Some(started) = started {
@@ -211,7 +211,7 @@ pub fn qualify_scoped_transport(
     signatures: &dyn SignatureLookup,
     reads: &mut Vec<VRead>,
 ) -> Validation {
-    let reader = Reader::new(signatures);
+    let reader = Reader::new(t, signatures);
     let mut result = validate_input(definition, t, &reader);
     if result.violations.is_empty() {
         result

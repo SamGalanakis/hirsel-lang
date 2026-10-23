@@ -11,23 +11,90 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     path::PathBuf,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, Weak},
 };
+
+/// Local evidence for one immutable source Definition, minted only by V.
+/// A weak binding preserves retention limits; copying reads cannot create it.
+/// This capability is deliberately neither serializable nor deserializable.
+#[derive(Clone, Debug)]
+pub struct VerifiedDefinition {
+    definition: Weak<Definition>,
+    types: Weak<TypeInterner>,
+    policy: ContentHash,
+    reads: Vec<VRead>,
+}
+impl VerifiedDefinition {
+    pub fn holds(
+        &self,
+        definition: &hirsel_tir::DefinitionRef,
+        types: &Arc<TypeInterner>,
+        policy: ContentHash,
+        signatures: &dyn SignatureLookup,
+    ) -> bool {
+        self.definition.ptr_eq(&Arc::downgrade(definition))
+            && self.types.ptr_eq(&Arc::downgrade(types))
+            && self.environment_holds(policy, signatures)
+    }
+    /// A retained query may check its evidence before materializing a body.
+    /// Its ordinary query reads must also still hold before adopting the result.
+    pub fn environment_holds(&self, policy: ContentHash, signatures: &dyn SignatureLookup) -> bool {
+        self.policy == policy && self.reads.iter().all(|r| read_holds(r, signatures))
+    }
+    pub fn reads(&self) -> &Vec<VRead> {
+        &self.reads
+    }
+}
+
+/// The ordinary receipt query, additionally binding local evidence to the
+/// immutable input. Misses run the existing validator exactly once.
+pub fn validate_definition(
+    definition: &hirsel_tir::DefinitionRef,
+    types: Arc<TypeInterner>,
+    owner: impl FnMut(Anchor) -> Option<(DefPath, u32)>,
+    signatures: &dyn SignatureLookup,
+    policy: ContentHash,
+    cache: Option<&VerifierCache>,
+) -> (
+    Validation,
+    bool,
+    Option<AcceptedArtifact>,
+    Option<VerifiedDefinition>,
+) {
+    let mut reads = vec![];
+    let (report, ran, accepted) = if cache.is_some() {
+        let artifact = Artifact::new(definition, types.clone(), owner);
+        validate_with_receipt(&artifact, signatures, policy, cache, &mut reads)
+    } else {
+        (
+            crate::validate(definition, &types, signatures, &mut reads),
+            true,
+            None,
+        )
+    };
+    let evidence = report.violations.is_empty().then(|| VerifiedDefinition {
+        definition: Arc::downgrade(definition),
+        types: Arc::downgrade(&types),
+        policy,
+        reads,
+    });
+    (report, ran, accepted, evidence)
+}
 
 const VIEW_DOMAIN: Domain = Domain {
     kind: 0x5600_0003,
-    schema: 1,
+    schema: 2,
 };
 fn view_key(digest: crate::ValidationDigest, policy: ContentHash) -> ContentHash {
     ContentHash::of_parts(
-        "hirsel.validate.signature-receipt.v1",
+        "hirsel.validate.signature-receipt.v2",
         [digest.0.0.as_slice(), policy.0.as_slice()],
     )
 }
 
 const DOMAIN: Domain = Domain {
     kind: 0x5600_0001,
-    schema: 1,
+    schema: 2,
 };
 
 /// An exact artifact identity computed here from every field and reachable type
@@ -77,9 +144,22 @@ impl<'a> Artifact<'a> {
 
 #[derive(Clone, Serialize, Deserialize)]
 struct Receipt {
+    action: ContentHash,
     artifact: ContentHash,
     policy: ContentHash,
     reads: Vec<VRead>,
+}
+fn receipt_action(artifact: ContentHash, policy: ContentHash, reads: &[VRead]) -> ContentHash {
+    // VRead's DefIds encode stable DefPaths; order is V's canonical read order.
+    let encoded = bincode::serialize(reads).expect("verifier reads are encodable");
+    ContentHash::of_parts(
+        "hirsel.validate.action.v2",
+        [
+            artifact.0.as_slice(),
+            policy.0.as_slice(),
+            encoded.as_slice(),
+        ],
+    )
 }
 #[derive(Serialize, Deserialize)]
 struct ViewReceipt {
@@ -172,14 +252,22 @@ impl VerifierCache {
         &self,
         types: &TypeInterner,
         definition: hirsel_syntax::DefId,
-        signature: &hirsel_types::Signature,
-        digest: crate::ValidationDigest,
+        input: crate::ViewInput<'_>,
         signatures: &dyn SignatureLookup,
         policy: ContentHash,
     ) -> Arc<crate::ViewVerdict> {
-        if digest != crate::digest(types, signature) {
-            return Arc::new(crate::check_view(types, definition, signature, signatures));
+        if !input.for_types(types) {
+            return Arc::new(crate::ViewVerdict {
+                error: Some(crate::Violation {
+                    body: None,
+                    block: None,
+                    instruction: None,
+                    kind: crate::ViolationKind::InvalidSignature(definition.path().clone()),
+                }),
+                reads: vec![],
+            });
         }
+        let (signature, digest) = input.into_parts();
         let key = view_key(digest, policy);
         if let Some(receipt) = self.load::<ViewReceipt>(key, VIEW_DOMAIN)
             && receipt.digest == digest
@@ -331,7 +419,7 @@ impl VerifierCache {
                 covered.insert(package.clone());
                 let views = environment.views(&package, replay.overlay.clone())?;
                 let verdict_key = ContentHash::of_parts(
-                    "hirsel.validate.receipt.v1",
+                    "hirsel.validate.receipt.v2",
                     [accepted.artifact.0.as_slice(), accepted.policy.0.as_slice()],
                 );
                 let original: Receipt = self.load(verdict_key, DOMAIN)?;
@@ -349,7 +437,7 @@ impl VerifierCache {
                             VRead::FirstHeap(Some(previous)) => {
                                 let old = views
                                     .view(*previous)
-                                    .and_then(|(s, _)| s.metadata.roles.heap.as_ref());
+                                    .and_then(|view| view.signature().metadata.roles.heap.as_ref());
                                 let current = views.first_heap().map(|(_, role)| role);
                                 old.is_some() && old == current.as_ref()
                             }
@@ -459,11 +547,11 @@ pub trait ReplayEnvironment {
 
 const REPLAY_DOMAIN: Domain = Domain {
     kind: 0x5600_0004,
-    schema: 1,
+    schema: 2,
 };
 fn replay_key(artifact: ContentHash, policy: ContentHash) -> ContentHash {
     ContentHash::of_parts(
-        "hirsel.validate.replay.v1",
+        "hirsel.validate.replay.v2",
         [artifact.0.as_slice(), policy.0.as_slice()],
     )
 }
@@ -482,10 +570,10 @@ struct ReplayArtifact {
 }
 const EXECUTION_DOMAIN: Domain = Domain {
     kind: 0x5600_0002,
-    schema: 1,
+    schema: 2,
 };
 fn execution_key(subject: ContentHash) -> ContentHash {
-    ContentHash::of_parts("hirsel.validate.execution.v1", [subject.0.as_slice()])
+    ContentHash::of_parts("hirsel.validate.execution.v2", [subject.0.as_slice()])
 }
 /// A terminal successful V decision. There is intentionally no Deserialize or
 /// producer constructor: only validate_with_receipt can mint this capability.
@@ -556,7 +644,7 @@ pub fn validate_with_receipt(
 ) -> (Validation, bool, Option<AcceptedArtifact>) {
     let key = artifact.identity.map(|identity| {
         ContentHash::of_parts(
-            "hirsel.validate.receipt.v1",
+            "hirsel.validate.receipt.v2",
             [identity.0.as_slice(), policy.0.as_slice()],
         )
     });
@@ -564,6 +652,7 @@ pub fn validate_with_receipt(
         && let Some(receipt) = cache.load::<Receipt>(key, DOMAIN)
         && receipt.artifact == identity
         && receipt.policy == policy
+        && receipt.action == receipt_action(identity, policy, &receipt.reads)
         && receipt
             .reads
             .iter()
@@ -590,6 +679,7 @@ pub fn validate_with_receipt(
             key,
             DOMAIN,
             &Receipt {
+                action: receipt_action(identity, policy, &own),
                 artifact: identity,
                 policy,
                 reads: own.clone(),
@@ -648,7 +738,7 @@ mod tests {
     }
     fn key(artifact: &Artifact<'_>, policy: ContentHash) -> ContentHash {
         ContentHash::of_parts(
-            "hirsel.validate.receipt.v1",
+            "hirsel.validate.receipt.v2",
             [artifact.identity.unwrap().0.as_slice(), policy.0.as_slice()],
         )
     }
@@ -659,11 +749,80 @@ mod tests {
         cache.view_verdict(
             &session(),
             definition,
-            signature,
-            crate::digest(&session(), signature),
+            crate::IdentifiedSignature::new(session(), Arc::new(signature.clone())).input(),
             &f.signatures,
             policy,
         )
+    }
+
+    #[test]
+    fn local_evidence_binds_immutable_body_types_policy_and_current_views() {
+        let mut f = Fixture::unit();
+        owner_sig(&mut f, &[]);
+        let types = session();
+        let definition = Arc::new(f.definition.clone());
+        let policy = ContentHash::of_bytes(b"source policy");
+        let (report, ran, _, evidence) = validate_definition(
+            &definition,
+            types.clone(),
+            |_| Some((path("main"), 0)),
+            &f.signatures,
+            policy,
+            None,
+        );
+        assert!(ran && report.violations.is_empty());
+        let evidence = evidence.unwrap();
+        assert!(evidence.holds(&definition, &types, policy, &f.signatures));
+        assert!(!evidence.holds(
+            &Arc::new((*definition).clone()),
+            &types,
+            policy,
+            &f.signatures
+        ));
+        assert!(!evidence.holds(&definition, &types, ContentHash::default(), &f.signatures));
+        let mut changed = definition.clone();
+        Arc::make_mut(&mut changed).entry = BodyId(u32::MAX);
+        assert!(!evidence.holds(&changed, &types, policy, &f.signatures));
+        assert!(
+            !validate_definition(
+                &changed,
+                types.clone(),
+                |_| Some((path("main"), 0)),
+                &f.signatures,
+                policy,
+                None
+            )
+            .0
+            .violations
+            .is_empty()
+        );
+        assert_eq!(
+            Arc::strong_count(&definition),
+            1,
+            "evidence must not pin bodies"
+        );
+        f.signatures
+            .get_mut(f.definition.path)
+            .unwrap()
+            .metadata
+            .visibility = hirsel_syntax::Visibility::Public;
+        assert!(!evidence.holds(&definition, &types, policy, &f.signatures));
+    }
+
+    #[test]
+    fn identified_view_never_pairs_changed_bytes_with_a_foreign_digest() {
+        let mut f = Fixture::unit();
+        owner_sig(&mut f, &[]);
+        let original = f.signatures.get(f.definition.path).unwrap().clone();
+        let old = crate::IdentifiedSignature::new(session(), Arc::new(original.clone()));
+        let mut changed = original;
+        changed.metadata.visibility = hirsel_syntax::Visibility::Public;
+        let current = crate::IdentifiedSignature::new(session(), Arc::new(changed));
+        assert_ne!(old.input().digest(), current.input().digest());
+        assert_eq!(
+            old.input().signature().metadata.visibility,
+            hirsel_syntax::Visibility::Private
+        );
     }
 
     #[test]
@@ -731,8 +890,7 @@ mod tests {
             let verdict = cache.view_verdict(
                 &session(),
                 f.definition.path,
-                &broken,
-                good_digest,
+                crate::IdentifiedSignature::new(session(), Arc::new(broken.clone())).input(),
                 &f.signatures,
                 policy,
             );
@@ -744,8 +902,7 @@ mod tests {
             let verdict = cache.view_verdict(
                 &session(),
                 f.definition.path,
-                &broken,
-                bad_digest,
+                crate::IdentifiedSignature::new(session(), Arc::new(broken.clone())).input(),
                 &f.signatures,
                 policy,
             );
@@ -1023,10 +1180,7 @@ mod tests {
         current.insert(earlier.definition, earlier);
         struct MissingHeap<'a>(&'a dyn SignatureLookup);
         impl SignatureLookup for MissingHeap<'_> {
-            fn view(
-                &self,
-                d: hirsel_syntax::DefId,
-            ) -> Option<(&hirsel_types::Signature, crate::ValidationDigest)> {
+            fn view(&self, d: hirsel_syntax::DefId) -> Option<crate::ViewInput<'_>> {
                 self.0.view(d)
             }
             fn first_heap(&self) -> Option<(hirsel_syntax::DefId, hirsel_types::HeapRole)> {
@@ -1139,6 +1293,7 @@ mod tests {
         let policy = ContentHash::default();
         let artifact = artifact(&f);
         let forged = Receipt {
+            action: receipt_action(artifact.identity.unwrap(), policy, &[]),
             artifact: artifact.identity.unwrap(),
             policy,
             reads: vec![],

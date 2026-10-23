@@ -1156,6 +1156,7 @@ impl QueryEngine {
             covered: vec![],
             depth: None,
             acceptance: None,
+            verification: Default::default(),
             selections: vec![],
             consistent: true,
             products: Default::default(),
@@ -2041,9 +2042,7 @@ impl QueryEngine {
             );
             return None;
         }
-        if self.verify == Verify::On {
-            self.ensure_lowered_verdict(&record.output.value).ok()?;
-        }
+        let verification = self.ensure_lowered_verdict(&record.output.value).ok()?;
         self.replay_selections(&record.selections)?;
         timings::count(Count::StoreHits);
         self.store_adoptions += 1;
@@ -2056,6 +2055,7 @@ impl QueryEngine {
         );
         let unpublished = Arc::get_mut(&mut entry).expect("unpublished lower record");
         unpublished.depth = Some(record.depth);
+        unpublished.verification = std::sync::Mutex::new(verification);
         unpublished.acceptance = acceptance;
         unpublished.selections = record.selections;
         Some(entry)
@@ -2331,36 +2331,38 @@ impl QueryEngine {
         .write(&value.executed, payload)
     }
 
-    pub(crate) fn remember_lowered_verdict(
-        &mut self,
-        definition: hirsel_tir::DefinitionRef,
-        reads: Vec<hirsel_validate::VRead>,
-    ) {
-        self.lower_verdicts
-            .insert(definition.path, (definition, reads));
-    }
-    /// Evidence is for these exact immutable bytes and this validator's inputs.
-    pub(crate) fn lowered_verdict_holds(&mut self, definition: &hirsel_tir::DefinitionRef) -> bool {
-        let Some((accepted, reads)) = self.lower_verdicts.get(&definition.path).cloned() else {
-            return false;
-        };
-        if !Arc::ptr_eq(&accepted, definition) {
-            return false;
-        }
-        let snapshot = self.signature_snapshot();
-        reads.iter().all(|r| {
-            hirsel_validate::read_holds(r, snapshot.validation(&definition.path.path().0.package))
-        })
+    pub(super) fn source_verification_policy(&self) -> ContentHash {
+        let private = ContentHash::of_parts(
+            "hirsel.validate.private-evaluation.v1",
+            [
+                self.environment_value().0.as_slice(),
+                self.store_identity.0.as_slice(),
+            ],
+        );
+        ContentHash::of_parts("hirsel.validate.frozen-source.v2", [private.0.as_slice()])
     }
     pub(crate) fn ensure_lowered_verdict(
         &mut self,
         definition: &hirsel_tir::DefinitionRef,
-    ) -> Result<(), QueryError> {
-        if self.verify == Verify::Off || self.lowered_verdict_holds(definition) {
-            return Ok(());
+    ) -> Result<Option<Arc<hirsel_validate::VerifiedDefinition>>, QueryError> {
+        if self.verify == Verify::Off {
+            return Ok(None);
         }
-        let mut reads = vec![];
-        let report = self.validate_lowered_artifact(definition, &mut reads);
+        let entry = self.lowered.get(&definition.path).cloned();
+        let snapshot = self.signature_snapshot();
+        let policy = self.source_verification_policy();
+        if let Some(entry) = &entry
+            && let Some(evidence) = entry.verification.lock().unwrap().as_ref()
+            && evidence.holds(
+                definition,
+                &self.types,
+                policy,
+                snapshot.validation(&definition.path.path().0.package),
+            )
+        {
+            return Ok(Some(evidence.clone()));
+        }
+        let (report, evidence) = self.validate_lowered_artifact(definition);
         if let Some(error) = hirsel_validate::tooling_limit_error(&report) {
             return Err(error);
         }
@@ -2370,61 +2372,55 @@ impl QueryEngine {
                 message: format!("{:?}", report.violations),
             }));
         }
-        self.remember_lowered_verdict(definition.clone(), reads);
-        Ok(())
+        if let Some(entry) = entry
+            && entry
+                .result()
+                .is_ok_and(|o| Arc::ptr_eq(&o.value, definition))
+        {
+            *entry.verification.lock().unwrap() = evidence.clone();
+        }
+        Ok(evidence)
     }
-    /// The verifier computes its own complete artifact identity and owns the
-    /// only persistent receipt writer. Producer Lower records carry no proof.
+    /// Only V can mint the evidence attached to this ordinary query product.
     pub(crate) fn validate_lowered_artifact(
         &mut self,
-        definition: &hirsel_tir::Definition,
-        reads: &mut Vec<hirsel_validate::VRead>,
-    ) -> hirsel_validate::Validation {
+        definition: &hirsel_tir::DefinitionRef,
+    ) -> (
+        hirsel_validate::Validation,
+        Option<Arc<hirsel_validate::VerifiedDefinition>>,
+    ) {
         if self.verify == Verify::Off {
-            return hirsel_validate::Validation::default();
+            return (hirsel_validate::Validation::default(), None);
         }
         let cache = self
             .result_store
             .as_ref()
             .and_then(|store| store.verifier());
-        let artifact = cache.as_ref().map(|_| {
-            hirsel_validate::Artifact::new(definition, self.types.clone(), |anchor| {
+        let policy = self.source_verification_policy();
+        let snapshot = self.signature_snapshot();
+        if !self.evaluation_validation.is_empty() {
+            let package = definition.path.path().0.package.clone();
+            self.record_evaluation_validation(
+                package.clone(),
+                snapshot.validation_input_digest(&package),
+            );
+        }
+        let _time = timings::phase(Phase::Verify);
+        let (report, executed, acceptance, evidence) = hirsel_validate::validate_definition(
+            definition,
+            self.types.clone(),
+            |anchor| {
                 artifact_anchor_owner(&self.items, &self.sources, &self.generated, anchor)
                     .or_else(|| self.catalog.owner(anchor))
-            })
-        });
-        let policy = ContentHash::of_parts(
-            "hirsel.validate.policy.v1",
-            [
-                self.environment_value().0.as_slice(),
-                self.store_identity.0.as_slice(),
-                b"source-lower;V-on;complete-private-views",
-            ],
+            },
+            snapshot.validation(&definition.path.path().0.package),
+            policy,
+            cache.as_deref(),
         );
-        let mut executed = false;
-        let mut acceptance = None;
-        let report = self.run_v(&definition.path.path().0.package, |types, views| {
-            let _time = timings::phase(Phase::Verify);
-            let report = if let Some(artifact) = &artifact {
-                let (report, ran, accepted) = hirsel_validate::validate_with_receipt(
-                    artifact,
-                    views,
-                    policy,
-                    cache.as_deref(),
-                    reads,
-                );
-                executed = ran;
-                acceptance = accepted;
-                report
-            } else {
-                executed = true;
-                hirsel_validate::validate(definition, types, views, reads)
-            };
-            if executed {
-                timings::count(Count::VRuns);
-            }
-            report
-        });
+        if executed {
+            timings::count(Count::VRuns);
+        }
+        let evidence = evidence.map(Arc::new);
         self.record_evaluation_acceptance(acceptance);
         if executed {
             *self
@@ -2432,7 +2428,7 @@ impl QueryEngine {
                 .entry(definition.path)
                 .or_default() += 1;
         }
-        report
+        (report, evidence)
     }
     pub(super) fn store_lower(
         &mut self,
