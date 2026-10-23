@@ -385,7 +385,22 @@ fn diagnostic_gen1_size_as_type_cites_type_span() {
     let span = Span::new(hirsel_span::Anchor(3), 4, 9).unwrap();
     f.syntax.tree.types[ty.0 as usize].origin.span = span;
     f.result(ty);
-    error(&mut f, "GEN-1", span);
+    let Err(QueryError::Diagnostics(errors)) = f.run() else {
+        panic!("expected size-as-type diagnostic")
+    };
+    let [error] = &errors[..] else {
+        panic!("{errors:?}")
+    };
+    assert_eq!(error.rule.as_str(), "GEN-1");
+    assert_eq!(error.primary, span);
+    assert_eq!(error.message, "size parameter cannot be used as a type");
+    assert_eq!(
+        error.notes,
+        [
+            "help: `n` is a size parameter; use it in a size argument, for example `Inline[u8, n]`. A type position needs a type parameter: declare a separate `T` with `[T, n: size]` and use `T` here, or change the binder to `[n]` if it was intended as a type parameter"
+        ]
+    );
+    assert!(error.fix.is_none());
 }
 #[test]
 fn diagnostic_gen4_generic_ffi_cites_header_span() {

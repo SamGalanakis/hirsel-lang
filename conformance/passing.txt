@@ -1294,6 +1294,11 @@ conformance/GEN/GEN-1-key-nested-float-bad.hir
 conformance/GEN/GEN-1-key-nested-float-ok.hir
 conformance/GEN/GEN-1-keyed-read-key-bound-bad.hir
 conformance/GEN/GEN-1-keyed-read-key-bound-ok.hir
+conformance/GEN/GEN-1-kind-22-bound-bad.hir
+conformance/GEN/GEN-1-kind-22-bound-ok.hir
+conformance/GEN/GEN-1-kind-22-size-bad.hir
+conformance/GEN/GEN-1-kind-22-size-ok.hir
+conformance/GEN/GEN-1-kind-22-type-ok.hir
 conformance/GEN/GEN-1-lexical-generic-bound-bad.hir
 conformance/GEN/GEN-1-lexical-generic-bound-ok.hir
 conformance/GEN/GEN-1-local-copy-result-summary.hir

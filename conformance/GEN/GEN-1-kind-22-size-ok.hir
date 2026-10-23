@@ -1,0 +1,8 @@
+// rule: GEN-1
+// expect: accept
+fn probe[n: size](x: Inline[u8, n]) {}
+
+pub fn main() {
+  let xs: Inline[u8, 2] = [1u8, 2u8]
+  probe(xs)
+}

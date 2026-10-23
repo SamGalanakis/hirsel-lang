@@ -1,0 +1,6 @@
+// rule: GEN-1
+// expect: reject GEN-1 at line 4
+// twin: GEN/GEN-1-kind-22-size-ok.hir
+fn probe[n: size](x: n) {}
+
+pub fn main() {}

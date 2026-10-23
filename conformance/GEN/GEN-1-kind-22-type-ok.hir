@@ -1,0 +1,8 @@
+// rule: GEN-1
+// expect: accept
+fn probe[T, n: size](x: T, bytes: Inline[u8, n]) {}
+
+pub fn main() {
+  let xs: Inline[u8, 2] = [1u8, 2u8]
+  probe(7u8, xs)
+}

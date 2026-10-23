@@ -1,0 +1,7 @@
+// rule: GEN-1
+// expect: accept
+fn probe[T: plain](x: T) {}
+
+pub fn main() {
+  probe(7u8)
+}

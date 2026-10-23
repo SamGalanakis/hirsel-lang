@@ -224,24 +224,49 @@ impl Parser<'_> {
         })
     }
     fn bounds(&mut self) -> Parsed<Vec<Bound>> {
+        const BOUNDS: &[(&str, Bound)] = &[
+            ("plain", Bound::Plain),
+            ("flat", Bound::Flat),
+            ("data", Bound::Data),
+            ("key", Bound::Key),
+            ("sendable", Bound::Sendable),
+            ("inert", Bound::Inert),
+            ("copyable", Bound::Copyable),
+            ("noalloc_drop", Bound::NoallocDrop),
+            ("serializable", Bound::Serializable),
+        ];
         let mut bounds = vec![];
         loop {
-            let bound = match self.text_at(0) {
-                "plain" => Bound::Plain,
-                "flat" => Bound::Flat,
-                "data" => Bound::Data,
-                "key" => Bound::Key,
-                "sendable" => Bound::Sendable,
-                "inert" => Bound::Inert,
-                "copyable" => Bound::Copyable,
-                "noalloc_drop" => Bound::NoallocDrop,
-                "serializable" => Bound::Serializable,
-                _ => {
-                    return self.fail(const { RuleId::of("GEN-1") }, "expected structural bound");
+            let Some((_, bound)) = BOUNDS.iter().find(|(name, _)| *name == self.text_at(0)) else {
+                let mut diagnostic = Diagnostic::error(
+                    const { RuleId::of("GEN-1") },
+                    self.span(),
+                    "expected structural bound",
+                );
+                hirsel_diag::suggest_names(
+                    &mut diagnostic,
+                    self.text_at(0),
+                    BOUNDS.iter().map(|(name, _)| (*name).to_owned()),
+                    "",
+                    Some(self.span()),
+                );
+                // Only a single best spelling is a repair for this bound token.
+                if diagnostic.fix.is_none() {
+                    diagnostic.notes.clear();
                 }
+                let supported = BOUNDS
+                    .iter()
+                    .map(|(name, _)| format!("`{name}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                diagnostic.notes.push(format!(
+                    "help: use a supported structural bound: {supported}; or use `[T]` if no bound is required"
+                ));
+                self.diagnostics.push(diagnostic);
+                return Err(());
             };
             self.pos += 1;
-            bounds.push(bound);
+            bounds.push(*bound);
             if !self.eat("+") {
                 break;
             }

@@ -1662,12 +1662,16 @@ impl Normalizer<'_, '_> {
                             }),
                             pos,
                         )?,
-                        GenericParameter::Size { .. } => {
-                            return Err(diagnostic(
+                        GenericParameter::Size { name } => {
+                            let mut error = Diagnostic::error(
                                 const { RuleId::of("GEN-1") },
                                 t.origin.span,
                                 "size parameter cannot be used as a type",
+                            );
+                            error.notes.push(format!(
+                                "help: `{name}` is a size parameter; use it in a size argument, for example `Inline[u8, {name}]`. A type position needs a type parameter: declare a separate `T` with `[T, {name}: size]` and use `T` here, or change the binder to `[{name}]` if it was intended as a type parameter"
                             ));
+                            return Err(QueryError::Diagnostics(vec![error]));
                         }
                     }
                 } else if let Some(p) = name.as_deref().and_then(primitive) {

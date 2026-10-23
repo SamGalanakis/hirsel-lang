@@ -1,0 +1,5 @@
+// rule: GEN-1
+// expect: reject GEN-1 at line 4
+// twin: GEN/GEN-1-kind-22-bound-ok.hir
+fn probe[T: nonsense](x:T) {}
+pub fn main() {}
