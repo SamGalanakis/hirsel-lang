@@ -704,3 +704,69 @@ fn left_type(width: u32) -> cranelift_codegen::ir::Type {
         _ => types::I128,
     }
 }
+
+impl FnEmitter<'_, '_, '_> {
+    /// Same integer-root SipHash-1-3 lowering as LLVM's scalar::hash_integer.
+    /// Rust core/src/hash/sip.rs:245-335, f6c1107f (MIT OR Apache-2.0).
+    pub(crate) fn hash_integer(&mut self, value: Value, seed: Value, bits: u32) -> Value {
+        let k1 = 0x6869_7273_656c_2d37;
+        let a = self.u64c(0x736f6d6570736575);
+        let a = self.b.ins().bxor(a, seed);
+        let b = self.u64c(0x646f72616e646f6d ^ k1);
+        let c = self.u64c(0x6c7967656e657261);
+        let c = self.b.ins().bxor(c, seed);
+        let d = self.u64c(0x7465646279746573 ^ k1);
+        let mut v = [a, b, c, d];
+        let low = if bits < 64 {
+            self.b.ins().uextend(types::I64, value)
+        } else if bits > 64 {
+            self.b.ins().ireduce(types::I64, value)
+        } else {
+            value
+        };
+        if bits >= 64 {
+            self.hash_compress(&mut v, low);
+        }
+        if bits == 128 {
+            let high = self.b.ins().ushr_imm(value, 64);
+            let high = self.b.ins().ireduce(types::I64, high);
+            self.hash_compress(&mut v, high);
+        }
+        let length = u64::from(bits.div_ceil(8));
+        let last = self.u64c(length << 56);
+        let last = if bits < 64 {
+            self.b.ins().bor(low, last)
+        } else {
+            last
+        };
+        self.hash_compress(&mut v, last);
+        v[2] = self.b.ins().bxor_imm(v[2], 0xff);
+        for _ in 0..3 {
+            self.hash_round(&mut v);
+        }
+        let a = self.b.ins().bxor(v[0], v[1]);
+        let b = self.b.ins().bxor(v[2], v[3]);
+        self.b.ins().bxor(a, b)
+    }
+    fn hash_compress(&mut self, v: &mut [Value; 4], word: Value) {
+        v[3] = self.b.ins().bxor(v[3], word);
+        self.hash_round(v);
+        v[0] = self.b.ins().bxor(v[0], word);
+    }
+    fn hash_round(&mut self, v: &mut [Value; 4]) {
+        v[0] = self.b.ins().iadd(v[0], v[1]);
+        v[1] = self.b.ins().rotl_imm(v[1], 13);
+        v[1] = self.b.ins().bxor(v[1], v[0]);
+        v[0] = self.b.ins().rotl_imm(v[0], 32);
+        v[2] = self.b.ins().iadd(v[2], v[3]);
+        v[3] = self.b.ins().rotl_imm(v[3], 16);
+        v[3] = self.b.ins().bxor(v[3], v[2]);
+        v[0] = self.b.ins().iadd(v[0], v[3]);
+        v[3] = self.b.ins().rotl_imm(v[3], 21);
+        v[3] = self.b.ins().bxor(v[3], v[0]);
+        v[2] = self.b.ins().iadd(v[2], v[1]);
+        v[1] = self.b.ins().rotl_imm(v[1], 17);
+        v[1] = self.b.ins().bxor(v[1], v[2]);
+        v[2] = self.b.ins().rotl_imm(v[2], 32);
+    }
+}

@@ -1509,21 +1509,26 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             } => {
                 // Scalars remain a single one-shot leaf. Composite values
                 // share one stream across all layout helpers.
-                let at = self.stack(layout)?;
-                let operand = self.counted_view(value)?;
-                self.store(self.layout_shape(layout)?, operand, at);
                 let begin = self.runtime(RuntimeEntry::HashBegin)?;
                 let seed = self.builder.call(begin, &[self.context]);
                 if matches!(self.layout(layout)?.kind, LayoutKind::Scalar(kind)
                     if !matches!(kind, ScalarKind::F32 | ScalarKind::F64 | ScalarKind::Pointer))
                 {
-                    let bytes = self.runtime(RuntimeEntry::HashBytes)?;
-                    let size = self.fixed_size(layout)?;
-                    let hash = self
-                        .builder
-                        .call(bytes, &[seed, at.ptr, self.const_u64(size)]);
+                    let LayoutKind::Scalar(kind) = self.layout(layout)?.kind else {
+                        unreachable!()
+                    };
+                    let bits = if kind == ScalarKind::Bool {
+                        1
+                    } else {
+                        crate::scalar::integer(kind).expect("integer hash").0
+                    };
+                    let hash =
+                        crate::scalar::hash_integer(&self.builder, self.get(value)?, seed, bits);
                     return self.define(result, hash);
                 }
+                let at = self.stack(layout)?;
+                let operand = self.counted_view(value)?;
+                self.store(self.layout_shape(layout)?, operand, at);
                 // A short byte slice's complete framing fits in two words.
                 // Feed exactly length || bytes through the one-shot leaf; longer
                 // slices retain the streaming path without a proportional buffer.

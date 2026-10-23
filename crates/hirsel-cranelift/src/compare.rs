@@ -1370,7 +1370,7 @@ impl FnEmitter<'_, '_, '_> {
         self.define1(result, holds)
     }
 
-    /// `Hash`: the value spilled to a slot of the layout and fed by its hash function.
+    /// `Hash`: integer roots stay in SSA; other layouts use their framed hash function.
     pub(crate) fn hash(
         &mut self,
         result: ValueId,
@@ -1378,20 +1378,27 @@ impl FnEmitter<'_, '_, '_> {
         layout: LayoutId,
         failure: FailureId,
     ) -> Emitted {
-        let at = self.stack(layout)?;
-        let operand = self.counted_view(value)?;
-        let shape = self.layout_shape(layout)?;
-        self.store(shape, operand, at)?;
         let context = self.context;
         let seed = self.rt1(RuntimeEntry::HashBegin, &[context])?;
         if matches!(self.layout(layout)?.kind, LayoutKind::Scalar(kind)
             if !matches!(kind, ScalarKind::F32 | ScalarKind::F64 | ScalarKind::Pointer))
         {
-            let size = self.fixed_size(layout)?;
-            let length = self.u64c(size);
-            let hash = self.rt1(RuntimeEntry::HashBytes, &[seed, at.ptr, length])?;
+            let LayoutKind::Scalar(kind) = self.layout(layout)?.kind else {
+                unreachable!()
+            };
+            let bits = if kind == ScalarKind::Bool {
+                8
+            } else {
+                crate::scalar::integer(kind).expect("integer hash").0
+            };
+            let operand = self.get1(value)?;
+            let hash = self.hash_integer(operand, seed, bits);
             return self.define(result, V::One(hash));
         }
+        let at = self.stack(layout)?;
+        let operand = self.counted_view(value)?;
+        let shape = self.layout_shape(layout)?;
+        self.store(shape, operand, at)?;
         // The complete framing of a short byte slice fits in two words.
         let short = if matches!(self.layout(layout)?.kind, LayoutKind::Slice { element } if self.fixed_size(element)? == 1)
         {

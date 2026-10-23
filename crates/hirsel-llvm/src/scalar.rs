@@ -623,3 +623,77 @@ pub(crate) fn mul_add<'m>(
     let fma = b.module().intrinsic("llvm.fma", &[scalar_type(b, kind)])?;
     Ok(b.call(fma, &operands))
 }
+
+/// Integer-root SipHash-1-3, with the byte width fixed during emission.
+/// Structure: Rust core/src/hash/sip.rs:245-335 at f6c1107f (MIT OR Apache-2.0).
+/// Hirsel uses the run seed as k0 and its existing fixed k1. Numeric bits are
+/// the existing little-endian leaf bytes, including two's-complement signed values.
+/// Floats and composite framing never enter this path.
+pub(crate) fn hash_integer<'m>(
+    b: &Builder<'m>,
+    value: Value<'m>,
+    seed: Value<'m>,
+    bits: u32,
+) -> Value<'m> {
+    let m = b.module();
+    let ty = m.int_type(64);
+    let c = |n: u64| m.const_int(ty, u128::from(n));
+    let xor = |a, v| b.binary(BinOp::Xor, a, v);
+    let rol = |v, n| {
+        b.binary(
+            BinOp::Or,
+            b.binary(BinOp::Shl, v, c(n)),
+            b.binary(BinOp::LShr, v, c(64 - n)),
+        )
+    };
+    let round = |v: &mut [Value<'m>; 4]| {
+        v[0] = b.binary(BinOp::Add, v[0], v[1]);
+        v[1] = xor(rol(v[1], 13), v[0]);
+        v[0] = rol(v[0], 32);
+        v[2] = b.binary(BinOp::Add, v[2], v[3]);
+        v[3] = xor(rol(v[3], 16), v[2]);
+        v[0] = b.binary(BinOp::Add, v[0], v[3]);
+        v[3] = xor(rol(v[3], 21), v[0]);
+        v[2] = b.binary(BinOp::Add, v[2], v[1]);
+        v[1] = xor(rol(v[1], 17), v[2]);
+        v[2] = rol(v[2], 32);
+    };
+    let mut v = [
+        xor(c(0x736f6d6570736575), seed),
+        c(0x646f72616e646f6d ^ 0x6869_7273_656c_2d37),
+        xor(c(0x6c7967656e657261), seed),
+        c(0x7465646279746573 ^ 0x6869_7273_656c_2d37),
+    ];
+    let low = if bits < 64 {
+        b.cast(Cast::ZExt, value, ty)
+    } else if bits > 64 {
+        b.cast(Cast::Trunc, value, ty)
+    } else {
+        value
+    };
+    let compress = |v: &mut [Value<'m>; 4], word| {
+        v[3] = xor(v[3], word);
+        round(v);
+        v[0] = xor(v[0], word);
+    };
+    if bits >= 64 {
+        compress(&mut v, low);
+    }
+    if bits == 128 {
+        let high = b.binary(BinOp::LShr, value, m.const_int(m.int_type(128), 64));
+        compress(&mut v, b.cast(Cast::Trunc, high, ty));
+    }
+    // Bool is i1 in SSA and one byte in the hashed leaf.
+    let length = u64::from(bits.div_ceil(8));
+    let last = if bits < 64 {
+        b.binary(BinOp::Or, low, c(length << 56))
+    } else {
+        c(length << 56)
+    };
+    compress(&mut v, last);
+    v[2] = xor(v[2], c(0xff));
+    for _ in 0..3 {
+        round(&mut v);
+    }
+    xor(xor(v[0], v[1]), xor(v[2], v[3]))
+}

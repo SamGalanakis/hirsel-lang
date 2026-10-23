@@ -68,3 +68,4 @@ mod float_conversion_differential_26;
 mod integer_conversion_histories_26;
 mod result_propagation_runtime_26;
 mod closure_copy_resource_27;
+mod scalar_hash_width_28;
