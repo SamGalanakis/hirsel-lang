@@ -1,0 +1,121 @@
+// Exact accounting is shared by file and decoded TAR body streams.
+pub const MEMBERS: u64 = 64
+
+pub const FILE_BYTES: u64 = 65536
+
+pub const PAYLOAD: u64 = 1048576
+
+pub const ARCHIVE: u64 = 2097152
+
+pub const COMPLETE: String = ".packtree-manifest.json"
+
+pub const INCOMPLETE: String = ".packtree-incomplete"
+
+pub type Problem {
+  kind: String,
+  path: String,
+}
+
+pub type Entry {
+  path: String,
+  directory: bool,
+  size: u64,
+}
+
+pub type Member {
+  entry: Entry,
+  data: Bytes,
+  sha256: String,
+}
+
+pub type PullError[E] = Source(E) | Short | Long | InvalidRead
+
+pub fn problem(kind: String, name: String) -> Problem {
+  Problem(kind: unique kind, path: unique name)
+}
+
+// No growth beyond the admitted exact size. A separate byte probes long input.
+pub fn exact[S, E](
+  mut source: S,
+  pull: fn(mut S, mut List[u8], u64) -> Result[u64, E],
+  expected: u64
+) -> Result[unique Bytes, PullError[E]] uses {pull} {
+  let mut data: List[u8] = []
+  while list.len(data) < expected {
+    let remaining = expected - list.len(data)
+    let request = if remaining < 4096 {
+      remaining
+    } else {
+      4096
+    }
+    let previous_count = list.len(data)
+    let count = pull(mut source, mut data, request) ? Source
+    if count > request || list.len(data) != previous_count + count {
+      return Error(InvalidRead())
+    }
+    if count == 0 {
+      return Error(Short())
+    }
+  }
+  let mut probe: List[u8] = []
+  let count = pull(mut source, mut probe, 1) ? Source
+  if count > 1 || list.len(probe) != count {
+    return Error(InvalidRead())
+  }
+  if count != 0 {
+    return Error(Long())
+  }
+  Ok(unique bytes.from_list(take data))
+}
+
+pub fn make_member(take entry: unique Entry, take data: unique Bytes) -> unique Member {
+  let digest = sha256.digest_hex(data)
+  Member(entry: take entry, data: take data, sha256: take digest)
+}
+
+pub fn total(members: List[Member]) -> u64 {
+  let mut count = 0u64
+  for member in members {
+    count += member.entry.size
+  }
+  count
+}
+
+@preserves_unique(out)
+fn append(mut out: List[u8], value: String) {
+  bytes.append(mut out, string.as_bytes(value))
+}
+
+pub fn encode(members: List[Member]) -> unique Bytes {
+  let mut out: List[u8] = []
+  append(mut out, "{\"schema\":1,\"entries\":[")
+  let mut first = true
+  for member in members {
+    if !first {
+      append(mut out, ",")
+    }
+    first = false
+    append(mut out, "{\"path\":")
+    json.write_text_into(member.entry.path, mut out)
+    let kind = if member.entry.directory {
+      "directory"
+    } else {
+      "file"
+    }
+    append(mut out, f",\"type\":\"{kind}\",\"size\":{member.entry.size},\"sha256\":")
+    json.write_text_into(member.sha256, mut out)
+    append(mut out, "}")
+  }
+  append(mut out, f"],\"bytes\":{total(members)}}}\n")
+  bytes.from_list(take out)
+}
+
+pub fn error_json(issue: Problem) -> Bytes {
+  let mut out: List[u8] = []
+  append(mut out, "{\"kind\":")
+  json.write_text_into(issue.kind, mut out)
+  append(mut out, ",\"path\":")
+  json.write_text_into(issue.path, mut out)
+  append(mut out, "}\n")
+  bytes.from_list(take out)
+}

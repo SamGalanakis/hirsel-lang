@@ -1,0 +1,104 @@
+// Bounded batches: error cancels/joins siblings; successes move in path order.
+// The TaskSet's nested unique payload contracts follow the parhash recipe.
+fn read_one(d: Dir, take entry: unique manifest.Entry) -> Result[
+  unique manifest.Member,
+  manifest.Problem
+] {
+  catalog.inspect(d, entry)?
+  if entry.directory {
+    return Ok(manifest.make_member(take entry, b""))
+  }
+  let mut Ok(f) = file.open(d, path.of(entry.path)) else {
+    return Error(manifest.problem("file_open", entry.path))
+  }
+  let pulled = manifest.exact(
+    mut f,
+    fn(mut handle: File of d, mut out: List[u8], max: u64) -> Result[u64, FileError] {
+      file.read(d, mut handle, mut out, max)
+    },
+    entry.size
+  )
+  let data = match take pulled {
+    Ok(value) => take value,
+    Error(Short()) => return Error(manifest.problem("short_body", entry.path)),
+    Error(Long()) => return Error(manifest.problem("long_body", entry.path)),
+    Error(Source(Canceled(_))) => return Error(manifest.problem("canceled", entry.path)),
+    Error(_) => return Error(manifest.problem("file_read", entry.path)),
+  }
+  Ok(manifest.make_member(take entry, take data))
+}
+
+pub fn read(d: Dir, tasks: Tasks, entries: List[manifest.Entry], width: u64) -> Result[
+  List[manifest.Member],
+  manifest.Problem
+] {
+  if width == 0 || width > 4 {
+    return Error(manifest.problem("jobs_limit", ""))
+  }
+  // Complete admission, including aggregate payload, precedes any worker read.
+  let mut reserved = 0u64
+  for entry in entries {
+    if entry.size > manifest.FILE_BYTES || entry.size > manifest.PAYLOAD - reserved {
+      return Error(manifest.problem("payload_limit", entry.path))
+    }
+    reserved += entry.size
+    catalog.inspect(d, entry)?
+  }
+  task.scope(
+    tasks,
+    fn(s: Scope) -> Result[List[manifest.Member], manifest.Problem] {
+      let mut rows: List[manifest.Member] = []
+      let mut start = 0u64
+      while start < list.len(entries) {
+        let count = if list.len(entries) - start < width {
+          list.len(entries) - start
+        } else {
+          width
+        }
+        let mut pending: TaskSet[
+          Result[unique manifest.Member, unique manifest.Problem]
+        ] of s = task.set(s)
+        for index in start..start + count {
+          let entry = unique entries[index]
+          task.add(
+            s,
+            mut pending,
+            task.async(
+              s,
+              fn() -> Result[unique manifest.Member, unique manifest.Problem] {
+                match read_one(d, take entry) {
+                  Ok(row) => Ok(take row),
+                  Error(problem) => Error(unique problem),
+                }
+              }
+            )
+          )
+        }
+        let mut ordered: List[Option[manifest.Member]] = []
+        for slot in 0u64..count {
+          list.push(mut ordered, None())
+        }
+        while let Some(slot) = task.await_any(s, pending) {
+          let joined = task.await_at(s, mut pending, slot)
+          match take joined {
+            Ok(row) => {
+              ordered[slot] = Some(take row)
+            },
+            Error(problem) => {
+              task.cancel_all(s, take pending)
+              return Error(take problem)
+            },
+          }
+        }
+        task.cancel_all(s, take pending)
+        for item in take ordered {
+          if let Some(row) = take item {
+            list.push(mut rows, take row)
+          }
+        }
+        start += count
+      }
+      Ok(take rows)
+    }
+  )
+}

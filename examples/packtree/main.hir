@@ -1,0 +1,71 @@
+pub type AppError = Output(OutputError)
+
+fn execute(rt: Io, args: Args) -> Result[List[manifest.Member], manifest.Problem] {
+  if arg.len(args) < 2 {
+    return Error(manifest.problem("usage", ""))
+  }
+  let Ok(command) = arg.text(args, 0) else {
+    return Error(manifest.problem("arguments", ""))
+  }
+  let Ok(name) = arg.text(args, 1) else {
+    return Error(manifest.problem("arguments", ""))
+  }
+  let _ = catalog.key(name, false)?
+  if command != "pack" && command != "list" && command != "unpack" {
+    return Error(manifest.problem("usage", ""))
+  }
+  if command == "pack" && arg.len(args) != 4 || command != "pack" && arg.len(args) != 2 {
+    return Error(manifest.problem("usage", ""))
+  }
+  let Ok(archives) = io.dir(rt, path.of("archives")) else {
+    return Error(manifest.problem("archives_grant", ""))
+  }
+  if command == "pack" {
+    let Ok(destination) = arg.text(args, 2) else {
+      return Error(manifest.problem("arguments", ""))
+    }
+    let Ok(width) = arg.text(args, 3) else {
+      return Error(manifest.problem("arguments", ""))
+    }
+    let Ok(jobs) = u64.parse(width) else {
+      return Error(manifest.problem("jobs_limit", ""))
+    }
+    if jobs == 0 || jobs > 4 {
+      return Error(manifest.problem("jobs_limit", ""))
+    }
+    let Ok(source) = io.dir(rt, path.of("source")) else {
+      return Error(manifest.problem("source_grant", ""))
+    }
+    let Ok(tasks) = io.tasks(rt) else {
+      return Error(manifest.problem("tasks_grant", ""))
+    }
+    return pack.run(source, archives, tasks, name, destination, jobs)
+  }
+  let members = unpack.scan(catalog.read(archives, name, manifest.ARCHIVE)?)?
+  if command == "unpack" {
+    let Ok(target) = io.dir(rt, path.of("target")) else {
+      return Error(manifest.problem("target_grant", ""))
+    }
+    unpack.extract(target, members)?
+  }
+  Ok(take members)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[std@1/process.ExitCode, AppError] {
+  let Ok(output) = io.stdout(rt) else {
+    return Ok(std@1/process.exit_code(3u8))
+  }
+  let Ok(errors) = io.stderr(rt) else {
+    return Ok(std@1/process.exit_code(3u8))
+  }
+  match execute(rt, args) {
+    Ok(members) => {
+      out.write(output, manifest.encode(members))?
+      Ok(std@1/process.SUCCESS)
+    },
+    Error(problem) => {
+      err.write(errors, manifest.error_json(problem))?
+      Ok(std@1/process.exit_code(2u8))
+    },
+  }
+}

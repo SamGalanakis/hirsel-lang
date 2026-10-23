@@ -1,0 +1,80 @@
+// Go archive/tar Writer.AddFS structure; std.tar owns USTAR/PAX encoding.
+// Reserve each header's worst-case bounded PAX envelope before writer growth.
+pub fn encode(members: List[manifest.Member]) -> Result[unique Bytes, manifest.Problem] {
+  let mut budget = 1024u64
+  for member in members {
+    let size = member.entry.size
+    if bytes.len(member.data) != size {
+      return Error(manifest.problem("declared_size", member.entry.path))
+    }
+    let blocks = (size + 511) / 512 * 512
+    // Name <=512; only path can need PAX with our fixed numeric metadata:
+    // one 512-byte extended header, <=1024-byte record, one 512-byte header.
+    let required = 2048 + blocks
+    if required > manifest.ARCHIVE - budget {
+      return Error(manifest.problem("archive_bytes_limit", member.entry.path))
+    }
+    budget += required
+  }
+  let mut writer = tar.writer()
+  let mut out: List[u8] = []
+  for member in members {
+    let kind: tar.Kind = if member.entry.directory {
+      Directory()
+    } else {
+      Regular()
+    }
+    let mut header = tar.header(unique member.entry.path, kind, member.entry.size)
+    header.mode = if member.entry.directory {
+      0o755
+    } else {
+      0o644
+    }
+    if tar.write_header(mut writer, header, mut out) != Ok(()) {
+      return Error(manifest.problem("tar_header", member.entry.path))
+    }
+    if tar.write(mut writer, member.data, mut out) != Ok(()) {
+      return Error(manifest.problem("tar_body", member.entry.path))
+    }
+  }
+  if tar.close(mut writer, mut out) != Ok(()) {
+    return Error(manifest.problem("tar_close", ""))
+  }
+  Ok(bytes.from_list(take out))
+}
+
+// A failed write drops/aborts its AtomicFile; commit consumes it on failure too.
+pub fn publish(d: Dir, name: String, data: Bytes) -> Result[(), manifest.Problem] {
+  if name != manifest.COMPLETE && name != manifest.INCOMPLETE {
+    let _ = catalog.key(name, false)?
+  }
+  let mut Ok(f) = file.create_atomic(d, path.of(name)) else {
+    return Error(manifest.problem("publication_create", name))
+  }
+  match file.write_all(d, mut f, data) {
+    Ok(()) => (),
+    Error(Canceled(_)) => return Error(manifest.problem("canceled", name)),
+    Error(_) => return Error(manifest.problem("publication_write", name)),
+  }
+  match file.commit(d, take f) {
+    Ok(()) => Ok(()),
+    Error(Canceled(_)) => Error(manifest.problem("canceled", name)),
+    Error(_) => Error(manifest.problem("publication_commit", name)),
+  }
+}
+
+pub fn run(
+  source: Dir,
+  archives: Dir,
+  tasks: Tasks,
+  declaration: String,
+  destination: String,
+  width: u64
+) -> Result[List[manifest.Member], manifest.Problem] {
+  let _ = catalog.key(destination, false)?
+  let entries = catalog.decode(catalog.read(source, declaration, 65536)?)?
+  let members = jobs.read(source, tasks, entries, width)?
+  let data = encode(members)?
+  publish(archives, destination, data)?
+  Ok(take members)
+}

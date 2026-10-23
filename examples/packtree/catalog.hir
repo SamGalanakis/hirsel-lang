@@ -1,0 +1,213 @@
+// Local adaptation of archiveaudit.path_key/admit, not its archive codec.
+// Go AddFS (writer.go:401-449, ebe2feef) over an explicit bounded declaration:
+// validate kind/info, sort names, then open only admitted regular files.
+pub fn key(name: String, directory: bool) -> Result[unique String, manifest.Problem] {
+  let raw = string.as_bytes(name)
+  let mut end = bytes.len(raw)
+  if end == 0 || raw[0] == 47 {
+    return Error(manifest.problem("invalid_path", name))
+  }
+  if end > 512 {
+    return Error(manifest.problem("path_bytes_limit", name))
+  }
+  for byte in raw {
+    if byte == 0 || byte == 92 || byte == 58 {
+      return Error(manifest.problem("invalid_path", name))
+    }
+  }
+  if directory && raw[end - 1] == 47 {
+    end -= 1
+  }
+  if end == 0 {
+    return Error(manifest.problem("invalid_path", name))
+  }
+  let mut depth = 0u64
+  let mut start = 0u64
+  let mut out: List[u8] = []
+  let mut i = 0u64
+  while i <= end {
+    if i == end || raw[i] == 47 {
+      let width = i - start
+      if width == 0 || width == 1 && raw[start] == 46 || width == 2 && raw[start] == 46 && raw[start + 1] == 46 {
+        return Error(manifest.problem("invalid_path", name))
+      }
+      depth += 1
+      start = i + 1
+    }
+    if i < end {
+      list.push(mut out, raw[i])
+    }
+    i += 1
+  }
+  if depth > 8 {
+    return Error(manifest.problem("depth_limit", name))
+  }
+  let value = text.finish_valid(take out)
+  let first = path.components(path.of(value))[0]
+  if first == manifest.COMPLETE || first == manifest.INCOMPLETE {
+    return Error(manifest.problem("reserved_path", name))
+  }
+  Ok(take value)
+}
+
+@noalloc
+pub fn order(a: manifest.Entry, b: manifest.Entry) -> i32 {
+  string.compare(a.path, b.path)
+}
+
+pub fn admit(
+  name: String,
+  directory: bool,
+  size: u64,
+  entries: List[manifest.Entry],
+  total: u64
+) -> Result[unique manifest.Entry, manifest.Problem] {
+  let canonical = key(name, directory)?
+  if list.len(entries) >= manifest.MEMBERS {
+    return Error(manifest.problem("member_count_limit", name))
+  }
+  if size > manifest.FILE_BYTES {
+    return Error(manifest.problem("file_bytes_limit", name))
+  }
+  if size > manifest.PAYLOAD - total {
+    return Error(manifest.problem("payload_limit", name))
+  }
+  if directory && size != 0 {
+    return Error(manifest.problem("directory_size", name))
+  }
+  for old in entries {
+    if old.path == canonical {
+      return Error(manifest.problem("duplicate_path", name))
+    }
+    if !old.directory && string.starts_with(canonical, string.concat(old.path, "/")) || !directory && string.starts_with(
+      old.path,
+      string.concat(canonical, "/")
+    ) {
+      return Error(manifest.problem("path_collision", name))
+    }
+  }
+  Ok(manifest.Entry(path: take canonical, directory: directory, size: size))
+}
+
+fn field(fields: Map[String, json.Value], name: String) -> Result[
+  unique String,
+  manifest.Problem
+] {
+  match map.get(fields, name) {
+    Some(Text(value)) => Ok(unique value),
+    _ => Error(manifest.problem("declaration_field", name)),
+  }
+}
+
+pub fn decode(take data: Bytes) -> Result[unique List[manifest.Entry], manifest.Problem] {
+  let Ok(source) = string.from_bytes(take data) else {
+    return Error(manifest.problem("declaration_utf8", ""))
+  }
+  let Ok(Object(root)) = json.parse(take source) else {
+    return Error(manifest.problem("declaration_json", ""))
+  }
+  if map.len(root) != 2 || map.get(root, "schema") != Some(Number("1")) {
+    return Error(manifest.problem("declaration_schema", ""))
+  }
+  let Some(Array(rows)) = map.get(root, "entries") else {
+    return Error(manifest.problem("declaration_entries", ""))
+  }
+  if list.len(rows) > manifest.MEMBERS {
+    return Error(manifest.problem("member_count_limit", ""))
+  }
+  let mut entries: List[manifest.Entry] = []
+  let mut total = 0u64
+  for row in rows {
+    let Object(fields) = row else {
+      return Error(manifest.problem("declaration_entry", ""))
+    }
+    if map.len(fields) != 3 {
+      return Error(manifest.problem("declaration_field", ""))
+    }
+    let name = field(fields, "path")?
+    let kind = field(fields, "type")?
+    if kind != "file" && kind != "directory" {
+      return Error(manifest.problem("unsupported_kind", name))
+    }
+    let Some(Number(number)) = map.get(fields, "size") else {
+      return Error(manifest.problem("declaration_size", name))
+    }
+    let Ok(size) = u64.parse(number) else {
+      return Error(manifest.problem("declaration_size", name))
+    }
+    let entry = admit(name, kind == "directory", size, entries, total)?
+    total += size
+    list.push(mut entries, take entry)
+  }
+  list.sort(mut entries, order)
+  // Explicit parents keep discovery bounded; no unbounded read_dir allocation.
+  for entry in entries {
+    let parts = path.components(path.of(entry.path))
+    let mut prefix = ""
+    for i in 0u64..list.len(parts) - 1 {
+      prefix = if i == 0 {
+        copy parts[i]
+      } else {
+        string.join([prefix, parts[i]], "/")
+      }
+      let mut found = false
+      for parent in entries {
+        if parent.path == prefix && parent.directory {
+          found = true
+        }
+      }
+      if !found {
+        return Error(manifest.problem("undeclared_parent", entry.path))
+      }
+    }
+  }
+  Ok(take entries)
+}
+
+// Check every component without following a final link. Provider confinement is
+// still required between metadata and open; no adversarial race guarantee.
+pub fn inspect(d: Dir, entry: manifest.Entry) -> Result[(), manifest.Problem] {
+  let parts = path.components(path.of(entry.path))
+  let mut prefix = ""
+  for i in 0u64..list.len(parts) {
+    prefix = if i == 0 {
+      copy parts[i]
+    } else {
+      string.join([prefix, parts[i]], "/")
+    }
+    let Ok(info) = file.metadata(d, path.of(prefix)) else {
+      return Error(manifest.problem("metadata", entry.path))
+    }
+    let directory = i + 1 < list.len(parts) || entry.directory
+    if info.kind == Symlink() {
+      return Error(manifest.problem("symlink", entry.path))
+    }
+    if directory && info.kind != Directory() || !directory && info.kind != Regular() {
+      return Error(manifest.problem("unsupported_kind", entry.path))
+    }
+    if !directory && info.size != entry.size {
+      return Error(manifest.problem("declared_size", entry.path))
+    }
+  }
+  Ok(())
+}
+
+pub fn read(d: Dir, name: String, limit: u64) -> Result[unique Bytes, manifest.Problem] {
+  let _ = key(name, false)?
+  let Ok(info) = file.metadata(d, path.of(name)) else {
+    return Error(manifest.problem("metadata", name))
+  }
+  if info.size > limit {
+    return Error(manifest.problem("input_bytes_limit", name))
+  }
+  inspect(d, manifest.Entry(path: unique name, directory: false, size: info.size))?
+  let mut Ok(f) = file.open(d, path.of(name)) else {
+    return Error(manifest.problem("file_open", name))
+  }
+  match file.read_all_bounded(d, mut f, limit) {
+    Ok(data) => Ok(take data),
+    Error(Limit()) => Error(manifest.problem("input_bytes_limit", name)),
+    Error(File(Canceled(_))) => Error(manifest.problem("canceled", name)),
+    Error(_) => Error(manifest.problem("file_read", name)),
+  }
+}

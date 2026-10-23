@@ -1,0 +1,1 @@
+{"schema":1,"entries":[{"path":"subfolder/another.go","type":"file","size":5},{"path":"file.go","type":"file","size":5},{"path":"emptyfolder","type":"directory","size":0},{"path":"subfolder","type":"directory","size":0}]}

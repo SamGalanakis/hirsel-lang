@@ -1,0 +1,154 @@
+// Full preflight owns every validated body previous_count any destination effect.
+type Source {
+  data: Bytes,
+  at: u64,
+}
+
+type Body {
+  source: Source,
+  archive: tar.Reader,
+  buffer: bufio.Reader,
+}
+
+// One physical block per refill makes the strict two-block terminator visible;
+// std.tar intentionally also accepts EOF without a terminator.
+fn refill(mut source: Source, mut out: List[u8], max: u64) -> Result[u64, ()] {
+  let remaining = bytes.len(source.data) - source.at
+  let count = if remaining < max {
+    remaining
+  } else {
+    max
+  }
+  let n = if count < 512 {
+    count
+  } else {
+    512
+  }
+  bytes.append(mut out, bytes.slice(source.data, source.at, source.at + n))
+  source.at += n
+  Ok(n)
+}
+
+fn pull(mut body: Body, mut out: List[u8], max: u64) -> Result[u64, tar.ReadError[()]] {
+  tar.read(mut body.archive, mut body.buffer, mut body.source, refill, mut out, max)
+}
+
+@noalloc
+fn by_path(a: manifest.Member, b: manifest.Member) -> i32 {
+  string.compare(a.entry.path, b.entry.path)
+}
+
+pub fn scan(take data: Bytes) -> Result[unique List[manifest.Member], manifest.Problem] {
+  let length = bytes.len(data)
+  if length > manifest.ARCHIVE {
+    return Error(manifest.problem("archive_bytes_limit", ""))
+  }
+  if length < 1024 || length % 512 != 0 {
+    return Error(manifest.problem("tar_framing", ""))
+  }
+  let mut body = Body(
+    source: Source(data: take data, at: 0),
+    archive: tar.reader(None()),
+    buffer: bufio.new(512)
+  )
+  let mut entries: List[manifest.Entry] = []
+  let mut members: List[manifest.Member] = []
+  let mut total = 0u64
+  while true {
+    let previous_count = body.source.at
+    let Ok(next) = tar.next(mut body.archive, mut body.buffer, mut body.source, refill) else {
+      return Error(manifest.problem("tar_malformed", ""))
+    }
+    let Some(header) = next else {
+      if body.source.at - previous_count < 1024 {
+        return Error(manifest.problem("tar_framing", ""))
+      }
+      // Extra record padding must be zero; reject concatenated archives/data.
+      for i in body.source.at..length {
+        if body.source.data[i] != 0 {
+          return Error(manifest.problem("tar_trailing", ""))
+        }
+      }
+      break
+    }
+    let directory = match header.kind {
+      Directory() => true,
+      Regular() => false,
+      _ => return Error(manifest.problem("unsupported_kind", header.name)),
+    }
+    for (key, _) in header.records {
+      if string.starts_with(key, "GNU.sparse.") || string.starts_with(key, "SCHILY.") {
+        return Error(manifest.problem("unsupported_kind", header.name))
+      }
+    }
+    if header.linkname != "" {
+      return Error(manifest.problem("unsupported_kind", header.name))
+    }
+    let entry = catalog.admit(header.name, directory, header.size, entries, total)?
+    total += entry.size
+    list.push(mut entries, copy entry)
+    let pulled = manifest.exact(mut body, pull, entry.size)
+    let payload = match take pulled {
+      Ok(value) => take value,
+      Error(_) => return Error(manifest.problem("tar_body", entry.path)),
+    }
+    list.push(mut members, manifest.make_member(unique entry, take payload))
+  }
+  list.sort(mut members, by_path)
+  Ok(take members)
+}
+
+// Missing parents are allowed in external archives; collisions were preflighted.
+fn parents(d: Dir, name: String, directory: bool) -> Result[(), manifest.Problem] {
+  let parts = path.components(path.of(name))
+  let end = if directory {
+    list.len(parts)
+  } else {
+    list.len(parts) - 1
+  }
+  let mut prefix = ""
+  for i in 0u64..end {
+    prefix = if i == 0 {
+      copy parts[i]
+    } else {
+      string.join([prefix, parts[i]], "/")
+    }
+    match file.metadata(d, path.of(prefix)) {
+      Ok(info) => {
+        if info.kind != Directory() {
+          return Error(manifest.problem("target_collision", prefix))
+        }
+      },
+      Error(NotFound()) => {
+        if file.mkdir(d, path.of(prefix)) != Ok(()) {
+          return Error(manifest.problem("target_mkdir", prefix))
+        }
+      },
+      Error(_) => return Error(manifest.problem("target_metadata", prefix)),
+    }
+  }
+  Ok(())
+}
+
+pub fn extract(d: Dir, members: List[manifest.Member]) -> Result[(), manifest.Problem] {
+  let Ok(children) = file.read_dir(d, path.of(".")) else {
+    return Error(manifest.problem("target_listing", ""))
+  }
+  if list.len(children) != 0 {
+    return Error(manifest.problem("target_not_empty", ""))
+  }
+  // The marker survives every later error, even after a short provider write.
+  let marker = b"Incomplete unless .packtree-manifest.json exists.\n"
+  pack.publish(d, manifest.INCOMPLETE, marker)?
+  for member in members {
+    parents(d, member.entry.path, member.entry.directory)?
+    if !member.entry.directory {
+      pack.publish(d, member.entry.path, member.data)?
+    }
+  }
+  pack.publish(d, manifest.COMPLETE, manifest.encode(members))?
+  if file.remove(d, path.of(manifest.INCOMPLETE)) != Ok(()) {
+    return Error(manifest.problem("marker_cleanup", manifest.INCOMPLETE))
+  }
+  Ok(())
+}
