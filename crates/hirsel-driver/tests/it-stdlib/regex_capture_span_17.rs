@@ -216,3 +216,9 @@ fn capture_span_wrapper_smoke() {
         check_capture(backend, &["capture_forced_limits"]);
     }
 }
+
+// Keep this budget regression independently runnable from the aggregate sweep.
+#[test]
+fn capture_replacements_ambiguous_interpreter_budget() {
+    check_capture(None, &["capture_replacements_1_0"]);
+}

@@ -46,16 +46,8 @@ fn dfa_cache(re: Regex, enabled: bool, limit: u64) -> DfaCache uses {} {
   let buckets = next + m
   let initial = buckets + 1024
   let cap = if limit < 65024 { limit } else { 65024u64 }
-  let mut data: unique List[u64] = []
+  let data: unique List[u64] = []
   let disabled = !enabled || instructions > 512 || initial + 140 + m > cap
-  if !disabled {
-    core@1/list.reserve(mut data, cap)
-    let mut i = 0u64
-    while i < initial {
-      core@1/list.push(mut data, 0u64)
-      i += 1
-    }
-  }
   DfaCache(data: take data, size: m, seen: seen, stack: stack,
     ready: ready, next: next, buckets: buckets, limit: cap,
     disabled: disabled, scalar_fallback: false, misses: 0, fallbacks: 0,
@@ -123,6 +115,17 @@ fn dfa_push(mut cache: DfaCache, value: u64) uses {} {
 // Intern the ordered next-PC vector and the context/direction/pending flags.
 // Chained hash buckets and state keys also reside in the same slab.
 fn dfa_intern(mut cache: DfaCache, count: u64, flags: u64) -> u64 uses {} {
+  // Finite-work replacement may resolve its debt before any DFA search.
+  // Prepare the slab only when a state is actually requested; admission,
+  // capacity, state layout and subsequent cache reuse stay the same.
+  if core@1/list.len(cache.data) == 0 {
+    core@1/list.reserve(mut cache.data, cache.limit)
+    let mut cell = 0u64
+    while cell < cache.used {
+      core@1/list.push(mut cache.data, 0u64)
+      cell += 1
+    }
+  }
   let mut hash = flags + count * 17
   let mut i = 0u64
   while i < count {

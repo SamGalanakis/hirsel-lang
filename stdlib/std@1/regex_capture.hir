@@ -258,10 +258,6 @@ fn capture_plan(re: Regex) -> unique List[u64] uses {} {
   }
   let mut table: unique List[u64] = []
   let mut i = 0u64
-  while i < m * 130 {
-    core@1/list.push(mut table, 0u64)
-    i += 1
-  }
   let mut roots: List[u64] = [re.entry]
   let mut built: List[bool] = []
   let mut seen: List[bool] = []
@@ -284,6 +280,7 @@ fn capture_plan(re: Regex) -> unique List[u64] uses {} {
       seen[i] = false
       i += 1
     }
+    let mut ready: List[(u64, u64)] = []
     let mut stack: List[(u64, u64)] = [(root, 0u64)]
     while core@1/list.len(stack) != 0 {
       let Some((pc, actions)) = core@1/list.pop(mut stack) else {
@@ -295,6 +292,34 @@ fn capture_plan(re: Regex) -> unique List[u64] uses {} {
         return []
       }
       seen[pc] = true
+      let inst = re.code[pc]
+      if dfa_consumes(inst.kind) || inst.kind == 11 {
+        core@1/list.push(mut ready, (pc, actions))
+      } else if inst.kind == 10 {
+        core@1/list.push(mut stack, (inst.y, actions))
+        core@1/list.push(mut stack, (inst.x, actions))
+      } else {
+        let extra = if inst.kind == 12 {
+          1u64 << 10 + inst.y
+        } else if inst.kind == 0 {
+          0u64
+        } else {
+          1u64 << 42 + core@1/int.widen(inst.kind)
+        }
+        core@1/list.push(mut stack, (inst.x, actions | extra))
+      }
+    }
+    // onepass.rs:630-638,903-923 rejects duplicate epsilon paths before
+    // publishing transitions. Prove this closure before initializing the
+    // dense table or scanning its alphabet: nullable cycles decline cheaply.
+    if core@1/list.len(table) == 0 {
+      i = 0
+      while i < m * 130 {
+        core@1/list.push(mut table, 0u64)
+        i += 1
+      }
+    }
+    for (pc, actions) in ready {
       let inst = re.code[pc]
       if dfa_consumes(inst.kind) {
         let transition = pc + 1 | actions
@@ -329,18 +354,6 @@ fn capture_plan(re: Regex) -> unique List[u64] uses {} {
           return []
         }
         table[root * 130 + 129] = actions | 1
-      } else if inst.kind == 10 {
-        core@1/list.push(mut stack, (inst.y, actions))
-        core@1/list.push(mut stack, (inst.x, actions))
-      } else {
-        let extra = if inst.kind == 12 {
-          1u64 << 10 + inst.y
-        } else if inst.kind == 0 {
-          0u64
-        } else {
-          1u64 << 42 + core@1/int.widen(inst.kind)
-        }
-        core@1/list.push(mut stack, (inst.x, actions | extra))
       }
     }
   }

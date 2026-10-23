@@ -880,3 +880,4 @@ yaml_upstream_25::mutations_040	14.684
 yaml_upstream_25::mutations_044	10.728
 yaml_upstream_25::upstream_000	18.685
 yaml_upstream_25::upstream_004	15.088
+regex_capture_span_17::capture_replacements_ambiguous_interpreter_budget	34.504
