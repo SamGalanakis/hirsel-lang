@@ -915,11 +915,7 @@ impl QueryEngine {
         for (index, definition) in definitions.iter().enumerate() {
             if matches!(kind, RootKind::Constant)
                 && let Some(value) = self.constant_values.get(definition).cloned()
-                && (self.verify == Verify::Off
-                    || value
-                        .executed
-                        .iter()
-                        .any(|(key, _)| matches!(key, ReadKey::ValidationUniverse(_))))
+                && self.evaluation_validation_holds(&value)
                 && self.execution_valid(definition, &value.executed)
             {
                 results[index] = Some(RootOutcome {

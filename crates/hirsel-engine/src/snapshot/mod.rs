@@ -56,6 +56,9 @@ pub struct SignatureSnapshot {
     representation_digests: DefMap<OnceLock<ValidationDigest>>,
     /// What lookups resolve against, frozen with the signatures.
     lookup: LookupInput,
+    /// Local verifier authority is never part of a serialized snapshot/product.
+    verifier: Option<Arc<hirsel_validate::VerifierCache>>,
+    verifier_policy: ContentHash,
 }
 /// Receipt candidates are not source authority. Keep them through deferred
 /// epochs, and release the old universe once this snapshot initializes V.
@@ -148,6 +151,8 @@ impl SignatureSnapshot {
             validation: OnceLock::new(),
             validation_inputs: Mutex::new(Some(candidates)),
             representation_digests,
+            verifier: None,
+            verifier_policy: ContentHash::default(),
             lookup: LookupInput::default(),
         }
     }
@@ -253,6 +258,45 @@ impl SignatureSnapshot {
     pub(crate) fn with_lookup(mut self, lookup: LookupInput) -> Self {
         self.lookup = lookup;
         self
+    }
+    fn with_verifier(
+        mut self,
+        verifier: Option<Arc<hirsel_validate::VerifierCache>>,
+        policy: ContentHash,
+    ) -> Self {
+        self.verifier = verifier;
+        self.verifier_policy = policy;
+        self
+    }
+    pub(crate) fn validate_private_artifact(
+        &self,
+        definition: &hirsel_tir::Definition,
+        signature: SignatureRef,
+        origin: Option<&(hirsel_span::Anchor, DefPath, u32)>,
+    ) -> hirsel_validate::Validation {
+        let views = self.validation_with(&definition.path.path().0.package, signature);
+        if let Some(cache) = &self.verifier {
+            let artifact =
+                hirsel_validate::Artifact::new(definition, self.types.clone(), |anchor| {
+                    origin
+                        .filter(|(expected, _, _)| *expected == anchor)
+                        .map(|(_, path, occurrence)| (path.clone(), *occurrence))
+                });
+            let (report, ran) = hirsel_validate::validate_cached(
+                &artifact,
+                &views,
+                self.verifier_policy,
+                Some(cache),
+                &mut vec![],
+            );
+            if ran {
+                hirsel_intern::timings::count(hirsel_intern::timings::Count::VRuns);
+            }
+            report
+        } else {
+            hirsel_intern::timings::count(hirsel_intern::timings::Count::VRuns);
+            hirsel_validate::validate(definition, &self.types, &views, &mut vec![])
+        }
     }
     /// Resolve a provider lookup as the engine's provider does: a path naming
     /// a definition this snapshot holds (or a source builtin), else a bare
@@ -484,7 +528,17 @@ impl QueryEngine {
                 previous.as_deref(),
                 Some(&self.snapshot_seed_verdicts),
             )
-            .with_lookup(lookup),
+            .with_lookup(lookup)
+            .with_verifier(
+                self.result_store.as_ref().and_then(|s| s.verifier()),
+                ContentHash::of_parts(
+                    "hirsel.validate.private-evaluation.v1",
+                    [
+                        self.environment_value().0.as_slice(),
+                        self.store_identity.0.as_slice(),
+                    ],
+                ),
+            ),
         );
         if complete {
             self.snapshot_seed_verdicts = ValidatedSignatures::default();
@@ -558,6 +612,12 @@ impl QueryEngine {
         match self.verify {
             Verify::On => {
                 let snapshot = self.signature_snapshot();
+                if !self.evaluation_validation.is_empty() {
+                    self.record_evaluation_validation(
+                        package.clone(),
+                        snapshot.validation_input_digest(package),
+                    );
+                }
                 validate(snapshot.types(), snapshot.validation(package))
             }
             Verify::Off => hirsel_validate::Validation::default(),

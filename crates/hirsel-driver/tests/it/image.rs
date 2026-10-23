@@ -1083,3 +1083,13 @@ fn dictionary_literals_and_copied_fields_survive_package_images() {
         }
     });
 }
+
+/// Scalar private admission remains memory-only proof metadata. It cannot
+/// become a semantic dependency on the imager's complete V universe.
+#[test]
+fn scalar_private_receipts_stay_outside_package_dependency_reads() {
+    with_compiler_stack(|| {
+        let f = Fixture::new();
+        library_image(&f, "pub const EARLY:u32=comptime 7u32\npub fn value(x:u64)->u64{let _=EARLY;x+1u64}\n").unwrap();
+    });
+}

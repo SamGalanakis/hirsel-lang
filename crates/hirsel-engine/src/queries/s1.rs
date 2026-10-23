@@ -86,6 +86,7 @@ impl ValidatedEvaluation {
                 &prepared.definition,
                 prepared.signature,
                 verify,
+                prepared.origin.as_ref(),
             )?;
         }
         Ok(Self {
@@ -320,6 +321,7 @@ mod tests {
         definition.types = definition_types(types, &definition);
         crate::comptime::PreparedEvaluation {
             definition,
+            origin: None,
             signature: Signature {
                 definition: DefId::intern(root),
                 kind: hirsel_types::SignatureKind::Const {

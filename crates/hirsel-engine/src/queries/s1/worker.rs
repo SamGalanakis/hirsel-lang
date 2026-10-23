@@ -455,6 +455,7 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
                 substitutions: vec![],
                 executed: Reads::empty(),
                 depth: DepthEvidence::leaf(self.depth_limit()),
+                validation: None,
             });
         }
         loop {
@@ -559,6 +560,7 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
                 substitutions,
                 executed: product.reads,
                 depth,
+                validation: None,
             });
         if self.pending.len() == pending_start
             && let Ok(value) = &result
@@ -758,6 +760,7 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
                 substitutions,
                 executed: product.reads,
                 depth,
+                validation: None,
             });
         if self.pending.len() == pending_start
             && let Ok(value) = &result
