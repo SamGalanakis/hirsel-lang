@@ -1,0 +1,207 @@
+// Workflow: Go path.Match and crypto/sha256.Sum256 (ebe2feef, BSD-3-Clause).
+// std owns matching and hashing. This module owns application validation/reporting.
+pub const INPUT_BYTES: u64 = 65536
+
+pub const FILE_BYTES: u64 = 4096
+
+pub const TOTAL_BYTES: u64 = 16384
+
+pub const RECORDS: u64 = 64
+
+pub const VISITED: u64 = 128
+
+pub const PATH_BYTES: u64 = 512
+
+pub const DEPTH: u64 = 16
+
+pub const PATTERN_BYTES: u64 = 128
+
+pub type Entry {
+  path: String,
+  size: u64,
+  sha256: String,
+}
+
+pub type InvalidInput {
+  kind: String,
+  path: String,
+}
+
+pub type Verification {
+  missing: List[String],
+  changed: List[String],
+}
+
+pub fn invalid(kind: String, name: String) -> InvalidInput uses {} {
+  InvalidInput(kind: unique kind, path: unique name)
+}
+
+pub fn validate_path(name: String) -> Result[(), InvalidInput] uses {} {
+  let raw = string.as_bytes(name)
+  let count = bytes.len(raw)
+  if count == 0 || count > PATH_BYTES {
+    return Error(invalid("path_bytes_limit", name))
+  }
+  let mut start = 0u64
+  let mut depth = 0u64
+  let mut at = 0u64
+  while at <= count {
+    if at == count || raw[at] == b'/' {
+      let width = at - start
+      if width == 0 || width == 1 && raw[start] == b'.' || width == 2 && raw[start] == b'.' && raw[start + 1] == b'.' {
+        return Error(invalid("invalid_path", name))
+      }
+      depth += 1
+      if depth > DEPTH {
+        return Error(invalid("depth_limit", name))
+      }
+      start = at + 1
+    }
+    if at < count && (raw[at] == 0 || raw[at] == b'\\' || raw[at] == b':') {
+      return Error(invalid("invalid_path", name))
+    }
+    at += 1
+  }
+  Ok(())
+}
+
+@noalloc
+pub fn entry_order(a: Entry, b: Entry) -> i32 uses {} {
+  string.compare(a.path, b.path)
+}
+
+fn field(fields: Map[String, json.Value], key: String) -> Result[
+  unique String,
+  InvalidInput
+] uses {} {
+  match map.get(fields, key) {
+    Some(Text(value)) => Ok(unique value),
+    _ => Error(invalid("manifest_field", key)),
+  }
+}
+
+pub fn decode(take data: Bytes) -> Result[unique List[Entry], InvalidInput] uses {} {
+  if bytes.len(data) > INPUT_BYTES {
+    return Error(invalid("input_bytes_limit", ""))
+  }
+  let Ok(source) = string.from_bytes(take data) else {
+    return Error(invalid("manifest_utf8", ""))
+  }
+  let Ok(Object(root)) = json.parse(take source) else {
+    return Error(invalid("manifest_json", ""))
+  }
+  if map.get(root, "schema") != Some(Number("1")) {
+    return Error(invalid("manifest_schema", ""))
+  }
+  if map.len(root) != 2 {
+    return Error(invalid("manifest_fields", ""))
+  }
+  let Some(Array(values)) = map.get(root, "entries") else {
+    return Error(invalid("manifest_entries", ""))
+  }
+  if list.len(values) > RECORDS {
+    return Error(invalid("record_limit", ""))
+  }
+  let mut entries: List[Entry] = []
+  let mut seen: Set[String] = set.empty()
+  let mut total = 0u64
+  for value in values {
+    let Object(fields) = value else {
+      return Error(invalid("manifest_entry", ""))
+    }
+    if map.len(fields) != 3 {
+      return Error(invalid("manifest_fields", ""))
+    }
+    let name = field(fields, "path")?
+    validate_path(name)?
+    if set.contains(seen, name) {
+      return Error(invalid("duplicate_path", name))
+    }
+    set.insert(mut seen, copy name)
+    let Some(Number(number)) = map.get(fields, "size") else {
+      return Error(invalid("manifest_size", name))
+    }
+    let Ok(size) = u64.parse(number) else {
+      return Error(invalid("manifest_size", name))
+    }
+    if size > FILE_BYTES {
+      return Error(invalid("file_bytes_limit", name))
+    }
+    if size > TOTAL_BYTES - total {
+      return Error(invalid("total_bytes_limit", name))
+    }
+    total += size
+    let digest = field(fields, "sha256")?
+    if string.byte_len(digest) != 64 {
+      return Error(invalid("manifest_digest", name))
+    }
+    let Ok(raw) = hex.decode(digest) else {
+      return Error(invalid("manifest_digest", name))
+    }
+    if hex.encode(raw) != digest {
+      return Error(invalid("manifest_digest", name))
+    }
+    list.push(
+      mut entries,
+      unique Entry(path: take name, size: size, sha256: take digest)
+    )
+  }
+  list.sort(mut entries, entry_order)
+  Ok(take entries)
+}
+
+fn append(mut out: List[u8], value: String) uses {} {
+  bytes.append(mut out, string.as_bytes(value))
+}
+
+pub fn encode(entries: List[Entry]) -> unique Bytes uses {} {
+  let mut out: List[u8] = []
+  append(mut out, "{\"schema\":1,\"entries\":[")
+  let mut first = true
+  for entry in entries {
+    if !first {
+      append(mut out, ",")
+    }
+    first = false
+    append(mut out, "{\"path\":")
+    json.write_text_into(entry.path, mut out)
+    append(mut out, f",\"size\":{entry.size},\"sha256\":")
+    json.write_text_into(entry.sha256, mut out)
+    append(mut out, "}")
+  }
+  append(mut out, "]}\n")
+  unique bytes.from_list(take out)
+}
+
+fn names(mut out: List[u8], values: List[String]) uses {} {
+  append(mut out, "[")
+  let mut first = true
+  for value in values {
+    if !first {
+      append(mut out, ",")
+    }
+    first = false
+    json.write_text_into(value, mut out)
+  }
+  append(mut out, "]")
+}
+
+pub fn verification_json(report: Verification) -> unique Bytes uses {} {
+  let mut out: List[u8] = []
+  append(mut out, "{\"schema\":1,\"missing\":")
+  names(mut out, report.missing)
+  append(mut out, ",\"changed\":")
+  names(mut out, report.changed)
+  append(mut out, "}\n")
+  unique bytes.from_list(take out)
+}
+
+pub fn error_json(problem: InvalidInput) -> unique Bytes uses {} {
+  let mut out: List[u8] = []
+  append(mut out, "{\"class\":\"invalid_input\",\"kind\":")
+  json.write_text_into(problem.kind, mut out)
+  append(mut out, ",\"path\":")
+  json.write_text_into(problem.path, mut out)
+  append(mut out, "}\n")
+  unique bytes.from_list(take out)
+}

@@ -1,0 +1,14 @@
+{
+  "io": {
+    "stdout": "stdout.bytes@1",
+    "stderr": "stderr.bytes@1",
+    "dirs": [
+      {
+        "path": "fixtures",
+        "host": "fixtures/release",
+        "access": "read"
+      }
+    ]
+  },
+  "args": []
+}

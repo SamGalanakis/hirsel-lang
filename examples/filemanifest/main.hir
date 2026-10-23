@@ -1,0 +1,207 @@
+pub type AppError = Output(OutputError)
+
+const HELP: String = "Usage: filemanifest scan ROOT PATTERN\n       filemanifest verify ROOT MANIFEST\n       filemanifest --help\n\nROOT names an explicitly granted read-only directory. MANIFEST is relative to ROOT.\nPrint sorted SHA-256 entries, or report missing/changed selected files.\nLimits: 128 returned walk paths, depth 16, 64 records, 512 path bytes,\n128 pattern bytes, 4096 bytes/file, 16384 total file bytes, 65536 manifest bytes.\nThe current provider traverses eagerly before the application walk cap.\n"
+
+// Refuse final links and links in every parent component before opening a file.
+fn regular(d: Dir, name: String) -> Result[(), model.InvalidInput] {
+  model.validate_path(name)?
+  let parts = path.components(path.of(name))
+  let mut prefix: List[u8] = []
+  let mut index = 0u64
+  for part in parts {
+    if index != 0 {
+      list.push(mut prefix, b'/')
+    }
+    bytes.append(mut prefix, string.as_bytes(part))
+    let current = text.finish_valid(copy prefix)
+    let info = match file.metadata(d, path.of(current)) {
+      Ok(value) => take value,
+      Error(NotFound()) => return Error(model.invalid("missing", name)),
+      Error(_) => return Error(model.invalid("metadata", name)),
+    }
+    index += 1
+    if info.kind == Symlink() {
+      return Error(model.invalid("symlink", name))
+    }
+    if index < list.len(parts) && info.kind != Directory() {
+      return Error(model.invalid("not_directory", name))
+    }
+    if index == list.len(parts) && info.kind != Regular() {
+      return Error(model.invalid("not_regular", name))
+    }
+  }
+  Ok(())
+}
+
+fn hash_file(d: Dir, name: String, mut total: u64) -> Result[
+  unique model.Entry,
+  model.InvalidInput
+] {
+  regular(d, name)?
+  let mut Ok(handle) = file.open(d, path.of(name)) else {
+    return Error(model.invalid("file_open", name))
+  }
+  let mut state = sha256.new()
+  let mut size = 0u64
+  while true {
+    let left = if model.FILE_BYTES - size < model.TOTAL_BYTES - total {
+      model.FILE_BYTES - size
+    } else {
+      model.TOTAL_BYTES - total
+    }
+    let request = if left < 1024 {
+      left + 1
+    } else {
+      1024u64
+    }
+    let mut chunk: List[u8] = []
+    let Ok(count) = file.read(d, mut handle, mut chunk, request) else {
+      return Error(model.invalid("file_read", name))
+    }
+    if count > model.FILE_BYTES - size {
+      return Error(model.invalid("file_bytes_limit", name))
+    }
+    if count > model.TOTAL_BYTES - total {
+      return Error(model.invalid("total_bytes_limit", name))
+    }
+    if count == 0 {
+      break
+    }
+    size += count
+    total += count
+    sha256.update(mut state, bytes.from_list(take chunk))
+  }
+  Ok(
+    model.Entry(
+      path: unique name,
+      size: size,
+      sha256: hex.encode(bytes.from_inline(sha256.finish(take state)))
+    )
+  )
+}
+
+fn scan(d: Dir, pattern: String) -> Result[unique Bytes, model.InvalidInput] {
+  if string.byte_len(pattern) > model.PATTERN_BYTES {
+    return Error(model.invalid("pattern_bytes_limit", ""))
+  }
+  let Ok(compiled) = glob.compile(pattern) else {
+    return Error(model.invalid("pattern_syntax", ""))
+  }
+  let Ok(paths) = file.walk(d) else {
+    return Error(model.invalid("walk", ""))
+  }
+  let mut visited = 0u64
+  let mut entries: List[model.Entry] = []
+  let mut total = 0u64
+  for step in take paths {
+    if visited == model.VISITED {
+      return Error(model.invalid("visited_limit", ""))
+    }
+    visited += 1
+    let Ok(relative) = step else {
+      return Error(model.invalid("walk", ""))
+    }
+    let name = path.text(relative)
+    model.validate_path(name)?
+    if glob.is_match(compiled, name) {
+      if list.len(entries) == model.RECORDS {
+        return Error(model.invalid("record_limit", ""))
+      }
+      let entry = hash_file(d, name, mut total)?
+      list.push(mut entries, take entry)
+    }
+  }
+  list.sort(mut entries, model.entry_order)
+  Ok(model.encode(entries))
+}
+
+fn verify(d: Dir, manifest: String) -> Result[(unique Bytes, bool), model.InvalidInput] {
+  regular(d, manifest)?
+  let mut Ok(input) = file.open(d, path.of(manifest)) else {
+    return Error(model.invalid("file_open", manifest))
+  }
+  let data = match file.read_all_bounded(d, mut input, model.INPUT_BYTES) {
+    Ok(value) => take value,
+    Error(Limit()) => return Error(model.invalid("input_bytes_limit", manifest)),
+    Error(File(_)) => return Error(model.invalid("file_read", manifest)),
+  }
+  let expected = model.decode(take data)?
+  let mut report = model.Verification(missing: [], changed: [])
+  let mut total = 0u64
+  for old in expected {
+    match hash_file(d, old.path, mut total) {
+      Ok(actual) => {
+        if actual.size != old.size || actual.sha256 != old.sha256 {
+          list.push(mut report.changed, copy old.path)
+        }
+      },
+      Error(problem) => {
+        if problem.kind != "missing" {
+          return Error(take problem)
+        }
+        list.push(mut report.missing, copy old.path)
+      },
+    }
+  }
+  let matched = list.len(report.missing) == 0 && list.len(report.changed) == 0
+  Ok((model.verification_json(report), matched))
+}
+
+fn execute(rt: Io, args: Args) -> Result[(unique Bytes, bool), model.InvalidInput] {
+  if arg.len(args) != 3 {
+    return Error(model.invalid("usage", ""))
+  }
+  let Ok(command) = arg.text(args, 0) else {
+    return Error(model.invalid("arguments_utf8", ""))
+  }
+  if command != "scan" && command != "verify" {
+    return Error(model.invalid("usage", ""))
+  }
+  let Ok(root) = arg.text(args, 1) else {
+    return Error(model.invalid("arguments_utf8", ""))
+  }
+  model.validate_path(root)?
+  let Ok(operand) = arg.text(args, 2) else {
+    return Error(model.invalid("arguments_utf8", ""))
+  }
+  let Ok(directory) = io.dir(rt, path.of(root)) else {
+    return Error(model.invalid("directory_grant", root))
+  }
+  if command == "scan" {
+    return Ok((scan(directory, operand)?, true))
+  }
+  verify(directory, operand)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[std@1/process.ExitCode, AppError] {
+  let Ok(output) = io.stdout(rt) else {
+    return Ok(std@1/process.exit_code(3u8))
+  }
+  let Ok(errors) = io.stderr(rt) else {
+    return Ok(std@1/process.exit_code(3u8))
+  }
+  if arg.len(args) == 1 {
+    if let Ok(flag) = arg.text(args, 0) {
+      if flag == "--help" {
+        out.write(output, string.as_bytes(HELP))?
+        return Ok(std@1/process.SUCCESS)
+      }
+    }
+  }
+  match execute(rt, args) {
+    Ok((body, matched)) => {
+      out.write(output, body)?
+      Ok(
+        if matched {
+          std@1/process.SUCCESS
+        } else {
+          std@1/process.FAILURE
+        }
+      )
+    },
+    Error(problem) => {
+      err.write(errors, model.error_json(problem))?
+      Ok(std@1/process.exit_code(2u8))
+    },
+  }
+}

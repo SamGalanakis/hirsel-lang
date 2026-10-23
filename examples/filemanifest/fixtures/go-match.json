@@ -1,0 +1,152 @@
+[
+  {
+    "pattern": "abc",
+    "path": "abc",
+    "matches": true
+  },
+  {
+    "pattern": "*",
+    "path": "abc",
+    "matches": true
+  },
+  {
+    "pattern": "*c",
+    "path": "abc",
+    "matches": true
+  },
+  {
+    "pattern": "a*",
+    "path": "a",
+    "matches": true
+  },
+  {
+    "pattern": "a*",
+    "path": "abc",
+    "matches": true
+  },
+  {
+    "pattern": "a*",
+    "path": "ab/c",
+    "matches": false
+  },
+  {
+    "pattern": "a*/b",
+    "path": "abc/b",
+    "matches": true
+  },
+  {
+    "pattern": "a*/b",
+    "path": "a/c/b",
+    "matches": false
+  },
+  {
+    "pattern": "a*b*c*d*e*/f",
+    "path": "axbxcxdxe/f",
+    "matches": true
+  },
+  {
+    "pattern": "a*b*c*d*e*/f",
+    "path": "axbxcxdxexxx/f",
+    "matches": true
+  },
+  {
+    "pattern": "a*b*c*d*e*/f",
+    "path": "axbxcxdxe/xxx/f",
+    "matches": false
+  },
+  {
+    "pattern": "a*b*c*d*e*/f",
+    "path": "axbxcxdxexxx/fff",
+    "matches": false
+  },
+  {
+    "pattern": "a*b?c*x",
+    "path": "abxbbxdbxebxczzx",
+    "matches": true
+  },
+  {
+    "pattern": "a*b?c*x",
+    "path": "abxbbxdbxebxczzy",
+    "matches": false
+  },
+  {
+    "pattern": "ab[c]",
+    "path": "abc",
+    "matches": true
+  },
+  {
+    "pattern": "ab[b-d]",
+    "path": "abc",
+    "matches": true
+  },
+  {
+    "pattern": "ab[e-g]",
+    "path": "abc",
+    "matches": false
+  },
+  {
+    "pattern": "ab[^c]",
+    "path": "abc",
+    "matches": false
+  },
+  {
+    "pattern": "ab[^b-d]",
+    "path": "abc",
+    "matches": false
+  },
+  {
+    "pattern": "ab[^e-g]",
+    "path": "abc",
+    "matches": true
+  },
+  {
+    "pattern": "a\\*b",
+    "path": "a*b",
+    "matches": true
+  },
+  {
+    "pattern": "a\\*b",
+    "path": "ab",
+    "matches": false
+  },
+  {
+    "pattern": "a?b",
+    "path": "a☺b",
+    "matches": true
+  },
+  {
+    "pattern": "a[^a]b",
+    "path": "a☺b",
+    "matches": true
+  },
+  {
+    "pattern": "a???b",
+    "path": "a☺b",
+    "matches": false
+  },
+  {
+    "pattern": "a[^a][^a][^a]b",
+    "path": "a☺b",
+    "matches": false
+  },
+  {
+    "pattern": "[a-ζ]*",
+    "path": "α",
+    "matches": true
+  },
+  {
+    "pattern": "*[a-ζ]",
+    "path": "A",
+    "matches": false
+  },
+  {
+    "pattern": "a?b",
+    "path": "a/b",
+    "matches": false
+  },
+  {
+    "pattern": "a*b",
+    "path": "a/b",
+    "matches": false
+  }
+]

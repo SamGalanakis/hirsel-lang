@@ -57,3 +57,4 @@ mod patchctl_23;
 mod depplan_23;
 mod invoicecheck_23;
 mod metricfold_23;
+mod filemanifest_23;
