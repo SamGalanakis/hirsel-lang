@@ -2800,6 +2800,14 @@ fn f1_runner_short_callee_crash_and_lost_reply_keep_distinct_outcomes() {
 
 #[test]
 fn f1_external_stop_during_host_wait_replays_exact_terminal_and_projection() {
+    f1_external_stop_matrix("1", 1, &[("1", 1)]);
+}
+
+fn f1_external_stop_matrix(
+    record_width: &str,
+    record_permits: usize,
+    replay_dimensions: &[(&str, usize)],
+) {
     if !hirsel_rt::free_driver::admission_enabled() {
         return;
     }
@@ -2828,7 +2836,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), E] {
         let tape = scratch.path(level);
         let report = scratch.path("projection");
         let grants = format!(
-            r#"{{"io":{{"stdout":"stdout.bytes@1","tasks":"tasks.free@1","monotonic_clock":"clock.monotonic.ns@1","dirs":[]}},"args":[],"placement":{{"cores":1}},"recording":"{level}"}}"#
+            r#"{{"io":{{"stdout":"stdout.bytes@1","tasks":"tasks.free@1","monotonic_clock":"clock.monotonic.ns@1","dirs":[]}},"args":[],"placement":{{"cores":{record_width}}},"recording":"{level}"}}"#
         );
         let mut command = Command::new(&executable);
         command
@@ -2837,7 +2845,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), E] {
             .args(["--hirsel-grants", &grants])
             .env("HIRSEL_RT_STOP_AFTER_MS", "200")
             .env(hirsel_rt::free_replay::Report::VAR, &report);
-        f1_permits(&mut command, 1);
+        f1_permits(&mut command, record_permits);
         let live = bounded_output(
             &mut command,
             &program,
@@ -2877,30 +2885,34 @@ pub fn main(rt: Io, args: Args) -> Result[(), E] {
         ));
         let projection = std::fs::read_to_string(&report).unwrap();
         for engine in ENGINES {
-            let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
-            command
-                .arg("run")
-                .args(engine)
-                .arg(&program)
-                .arg("--replay")
-                .arg(&tape)
-                .args(["--cores", "1"])
-                .env(hirsel_rt::free_replay::Report::VAR, &report);
-            f1_permits(&mut command, 1);
-            let replay = bounded_output(
-                &mut command,
-                &program,
-                &format!("external stop {level} replay {engine:?}"),
-            );
-            assert_eq!(replay.status.code(), live.status.code(), "{replay:?}");
-            assert_eq!(replay.stdout, live.stdout, "{replay:?}");
-            // These are two public frontends; their exact host diagnostic
-            // prefixes differ. Program stderr remains part of the projection.
-            assert_eq!(
-                replay.stderr, b"hirsel: environmental failure: its place stopped the run\n",
-                "{replay:?}"
-            );
-            assert_eq!(std::fs::read_to_string(&report).unwrap(), projection);
+            for &(width, permits) in replay_dimensions {
+                let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+                command
+                    .arg("run")
+                    .args(engine)
+                    .arg(&program)
+                    .arg("--replay")
+                    .arg(&tape)
+                    .args(["--cores", width])
+                    .env(hirsel_rt::free_replay::Report::VAR, &report);
+                f1_permits(&mut command, permits);
+                let replay = bounded_output(
+                    &mut command,
+                    &program,
+                    &format!(
+                        "external stop {level} replay {engine:?} width{width} permits{permits}"
+                    ),
+                );
+                assert_eq!(replay.status.code(), live.status.code(), "{replay:?}");
+                assert_eq!(replay.stdout, live.stdout, "{replay:?}");
+                // These are two public frontends; their exact host diagnostic
+                // prefixes differ. Program stderr remains part of the projection.
+                assert_eq!(
+                    replay.stderr, b"hirsel: environmental failure: its place stopped the run\n",
+                    "{replay:?}"
+                );
+                assert_eq!(std::fs::read_to_string(&report).unwrap(), projection);
+            }
         }
         // Reframe exactly this observed host-wait cut as a completed flush.
         // Neither a missing terminal nor a torn later frame may invent a
@@ -2931,32 +2943,36 @@ pub fn main(rt: Io, args: Args) -> Result[(), E] {
             let path = scratch.path(if torn { "torn" } else { "partial" });
             std::fs::write(&path, bytes).unwrap();
             for engine in ENGINES {
-                let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
-                command
-                    .arg("run")
-                    .args(engine)
-                    .arg(&program)
-                    .arg("--replay")
-                    .arg(&path)
-                    .args(["--cores", "1"])
-                    .env(hirsel_rt::free_replay::Report::VAR, &report);
-                f1_permits(&mut command, 1);
-                let replay = bounded_output(
-                    &mut command,
-                    &program,
-                    &format!("host wait {level} partial torn={torn} {engine:?}"),
-                );
-                assert_eq!(replay.stdout, b"before stop\n", "{replay:?}");
-                assert!(
-                    !replay.status.success(),
-                    "an unfinished host wait cannot return: {replay:?}"
-                );
-                assert_eq!(std::fs::read_to_string(&report).unwrap(), expected);
-                let result = (replay.status.code(), replay.stderr);
-                if let Some(reference) = &partial_reference {
-                    assert_eq!(&result, reference);
-                } else {
-                    partial_reference = Some(result);
+                for &(width, permits) in replay_dimensions {
+                    let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+                    command
+                        .arg("run")
+                        .args(engine)
+                        .arg(&program)
+                        .arg("--replay")
+                        .arg(&path)
+                        .args(["--cores", width])
+                        .env(hirsel_rt::free_replay::Report::VAR, &report);
+                    f1_permits(&mut command, permits);
+                    let replay = bounded_output(
+                        &mut command,
+                        &program,
+                        &format!(
+                            "host wait {level} partial torn={torn} {engine:?} width{width} permits{permits}"
+                        ),
+                    );
+                    assert_eq!(replay.stdout, b"before stop\n", "{replay:?}");
+                    assert!(
+                        !replay.status.success(),
+                        "an unfinished host wait cannot return: {replay:?}"
+                    );
+                    assert_eq!(std::fs::read_to_string(&report).unwrap(), expected);
+                    let result = (replay.status.code(), replay.stderr);
+                    if let Some(reference) = &partial_reference {
+                        assert_eq!(&result, reference);
+                    } else {
+                        partial_reference = Some(result);
+                    }
                 }
             }
         }
@@ -3271,6 +3287,15 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
 
 #[test]
 fn f1_terminal_metadata_rejects_contradictory_outcomes_and_receipts_before_effects() {
+    f1_terminal_metadata_matrix("1", 1, &[("1", 1)], "record");
+}
+
+fn f1_terminal_metadata_matrix(
+    record_width: &str,
+    record_permits: usize,
+    replay_dimensions: &[(&str, usize)],
+    level: &str,
+) {
     if !hirsel_rt::free_driver::admission_enabled() {
         return;
     }
@@ -3284,14 +3309,16 @@ fn f1_terminal_metadata_rejects_contradictory_outcomes_and_receipts_before_effec
 "#;
     std::fs::write(&program, text).unwrap();
     let tape = scratch.path("original");
-    let grants = r#"{"io":{"stdout":"stdout.bytes@1","tasks":"tasks.free@1","dirs":[]},"args":[],"recording":"record"}"#;
+    let grants = format!(
+        r#"{{"io":{{"stdout":"stdout.bytes@1","tasks":"tasks.free@1","dirs":[]}},"args":[],"recording":"{level}"}}"#
+    );
     let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
     command
         .args(["run", "--native"])
         .arg(&program)
-        .args(["--grants", grants, "--cores", "1", "--record"])
+        .args(["--grants", &grants, "--cores", record_width, "--record"])
         .arg(&tape);
-    f1_permits(&mut command, 1);
+    f1_permits(&mut command, record_permits);
     let live = bounded_output(&mut command, &program, "terminal metadata producer");
     assert!(live.status.success(), "{live:?}");
     assert_eq!(live.stdout, b"terminal guard\n");
@@ -3365,38 +3392,40 @@ fn f1_terminal_metadata_rejects_contradictory_outcomes_and_receipts_before_effec
         let path = scratch.path(name);
         std::fs::write(&path, forged).unwrap();
         for engine in ENGINES {
-            let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
-            command
-                .arg("run")
-                .args(engine)
-                .arg(&program)
-                .arg("--replay")
-                .arg(&path)
-                .args(["--cores", "1"]);
-            f1_permits(&mut command, 1);
-            let replay = bounded_output(
-                &mut command,
-                &program,
-                &format!("terminal metadata {name} {engine:?}"),
-            );
-            let diagnostic = String::from_utf8_lossy(&replay.stderr);
-            let (expected, stdout): (&str, &[u8]) = match name {
-                "contradictory-outcome" => ("terminal outcome differs", b""),
-                "consistent-forged-outcome" => (
-                    if engine.is_empty() {
-                        "Free root outcome differs from recording"
-                    } else {
-                        "host request differs"
-                    },
-                    b"terminal guard\n",
-                ),
-                _ => ("terminal request receipt differs from cut", b""),
-            };
-            if replay.status.code() != Some(hirsel_run_schema::exit::REFUSED)
-                || replay.stdout != stdout
-                || !diagnostic.contains(expected)
-            {
-                failures.push(format!("{name} {engine:?}: {replay:?}"));
+            for &(width, permits) in replay_dimensions {
+                let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+                command
+                    .arg("run")
+                    .args(engine)
+                    .arg(&program)
+                    .arg("--replay")
+                    .arg(&path)
+                    .args(["--cores", width]);
+                f1_permits(&mut command, permits);
+                let replay = bounded_output(
+                    &mut command,
+                    &program,
+                    &format!("terminal metadata {name} {engine:?} width{width} permits{permits}"),
+                );
+                let diagnostic = String::from_utf8_lossy(&replay.stderr);
+                let (expected, stdout): (&str, &[u8]) = match name {
+                    "contradictory-outcome" => ("terminal outcome differs", b""),
+                    "consistent-forged-outcome" => (
+                        if engine.is_empty() {
+                            "Free root outcome differs from recording"
+                        } else {
+                            "host request differs"
+                        },
+                        b"terminal guard\n",
+                    ),
+                    _ => ("terminal request receipt differs from cut", b""),
+                };
+                if replay.status.code() != Some(hirsel_run_schema::exit::REFUSED)
+                    || replay.stdout != stdout
+                    || !diagnostic.contains(expected)
+                {
+                    failures.push(format!("{name} {engine:?}: {replay:?}"));
+                }
             }
         }
     }
@@ -3709,4 +3738,16 @@ fn f1_explicit_exit_codes_width_and_permit_matrix() {
 #[test]
 fn f1_ordered_cleanup_causes_width_and_permit_matrix() {
     f1_ordered_cleanup_causes_matrix("8", 8, &[("1", 1), ("1", 8), ("8", 1), ("8", 8)]);
+}
+
+#[test]
+fn f1_external_stop_width_and_permit_matrix() {
+    f1_external_stop_matrix("8", 8, &[("1", 1), ("1", 8), ("8", 1), ("8", 8)]);
+}
+
+#[test]
+fn f1_terminal_metadata_width_and_permit_matrix() {
+    for level in ["record", "durable"] {
+        f1_terminal_metadata_matrix("8", 8, &[("1", 1), ("1", 8), ("8", 1), ("8", 8)], level);
+    }
 }
