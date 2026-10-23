@@ -1321,3 +1321,77 @@ fn ordinary_program_loading_reuses_source_heads_and_observes_changed_bytes() {
         }
     });
 }
+
+#[test]
+fn ordinary_program_check_restores_lint_and_completion_without_syntax() {
+    with_compiler_stack(|| {
+        let scratch = tempfile::Builder::new().prefix("hirsel-ordinary-check-").tempdir().unwrap();
+        let dir = scratch.path();
+        let manifest = dir.join("hirsel.json");
+        std::fs::write(&manifest, serde_json::json!({"schema":1,"package":{"name":"app","version":"1"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"main"}}).to_string()).unwrap();
+        let source = "type Failure = Used() | Stale()\nfn parse()->Result[u8,Failure]{Error(Used())}\npub fn main()->Result[(),()]{Ok(())}\n";
+        std::fs::write(dir.join("main.hir"), source).unwrap();
+        for jobs in [1, 2, 4, 8] {
+            let compiler = COMPILER.clone().with_config(CompileConfig { store: Arc::new(store::MemStore::default()), jobs: hirsel_intern::jobs::Jobs::new(jobs), ..CompileConfig::for_memory_cap(None) });
+            let mut writer = compiler.load_program_source_with_images(&manifest, None, &StdImages::none()).unwrap();
+            let expected = writer.check(LoweringPolicy::Comptime).unwrap();
+            assert_eq!(expected.completion, CheckCompletion::Complete);
+            assert_eq!(expected.diagnostics.len(), 1, "{:?}", expected.diagnostics);
+            assert!(expected.diagnostics[0].message.contains("`Stale`"));
+            let mut reader = compiler.load_program_source_with_images(&manifest, None, &StdImages::none()).unwrap();
+            reader.engine.adapters.parser = None;
+            reader.engine.adapters.lexer = None;
+            reader.engine.adapters.signature = None;
+            let actual = reader.check(LoweringPolicy::Comptime).unwrap();
+            assert_eq!(actual.completion, expected.completion);
+            assert_eq!(actual.diagnostics.iter().map(|d| d.render_human(&actual.sources)).collect::<Vec<_>>(), expected.diagnostics.iter().map(|d| d.render_human(&expected.sources)).collect::<Vec<_>>());
+            assert_eq!(reader.engine.work_stats().parsed_bytes, 0);
+            for name in ["main", "parse", "Failure"] {
+                let mut path = reader.entry.clone(); path.0.name = name.into();
+                assert_eq!(reader.engine.recompute_count(&path, QueryKind::Modes), 0);
+                assert!(reader.engine.definition_items(&path).is_err());
+            }
+        }
+    });
+}
+
+#[test]
+fn ordinary_source_heads_keep_growth_rejections_and_private_execution_authority() {
+    with_compiler_stack(|| {
+        let source = "fn first[T:copyable](x:T){second((copy x,copy x))}\nfn second[U:copyable](x:U){first(x)}\n";
+        let store = Arc::new(store::MemStore::default());
+        let mut writer = QueryEngine::new(default_environment(), compiler_adapters()).with_result_store(store.clone());
+        let file = writer.sources.add("growth-heads.hir", source.into()).unwrap();
+        writer.index_source(file, &default_context()).unwrap();
+        let outcomes = writer.publish_definitions(vec![definition("first"), definition("second")], hirsel_intern::jobs::Jobs::new(2), memo::Retention::Batch);
+        assert!(outcomes.iter().all(|o| o.result.is_ok()));
+        let expected = writer.generic_graph_diagnostics().unwrap();
+        assert_eq!(expected.len(), 1);
+        assert_eq!(expected[0].rule.as_str(), "GEN-5");
+        let mut reader = QueryEngine::new(default_environment(), compiler_adapters()).with_result_store(store);
+        let file = reader.sources.add("growth-heads.hir", source.into()).unwrap();
+        reader.index_source(file, &default_context()).unwrap();
+        reader.adapters.parser = None; reader.adapters.modes = None;
+        for name in ["first", "second"] { reader.definition_summary(hirsel_syntax::DefId::intern(&definition(name))).unwrap(); }
+        let actual = reader.generic_graph_diagnostics().unwrap();
+        assert_eq!(actual.iter().map(|d|d.render_human(&reader.sources)).collect::<Vec<_>>(), expected.iter().map(|d|d.render_human(&writer.sources)).collect::<Vec<_>>());
+        assert_eq!(reader.work_stats().parsed_bytes, 0);
+
+        let source = "fn helper()->u32{7u32}\nconst VALUE:u32=comptime helper()\n";
+        let owner = definition("VALUE");
+        for verify in [Verify::On, Verify::Off] {
+            let store = Arc::new(store::MemStore::default());
+            let mut writer = QueryEngine::new(default_environment(), compiler_adapters()).with_result_store(store.clone());
+            writer.verify = verify;
+            let file = writer.sources.add("private-heads.hir", source.into()).unwrap();
+            writer.index_source(file, &default_context()).unwrap();
+            writer.lower_to_tir(&owner).unwrap();
+            let mut reader = QueryEngine::new(default_environment(), compiler_adapters()).with_result_store(store);
+            let file = reader.sources.add("private-heads.hir", source.into()).unwrap();
+            reader.index_source(file, &default_context()).unwrap();
+            reader.adapters.lexer = None; reader.adapters.parser = None; reader.adapters.signature = None; reader.adapters.modes = None; reader.adapters.lowering = None;
+            assert_eq!(reader.lower_to_tir(&owner).is_ok(), verify == Verify::On, "syntax-free metadata supplies no private completion: {verify:?}");
+            assert_eq!(reader.work_stats().parsed_bytes, 0);
+        }
+    });
+}
