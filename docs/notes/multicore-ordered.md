@@ -375,6 +375,29 @@ modes, one-permit role contention, foreign affinity, host saved waits, child
 Holding/rest cleanup, channel/mutex carriers and exact first budget cuts.
 Production qualification remains false pending the corpus and final gates.
 
+## Run-local auto decisions
+
+The native driver now feeds the existing M0b policy with its own observations.
+Each 64-turn probe window measures segment duration, accepted early results,
+offer overhead and useful continuation time after an early result. Physical
+switch-out ends a sample; suspended time earns no credit. Continuations that
+have become head also earn no parallel credit. These are host timing estimates,
+so preemption may change the next policy window without changing any semantic
+operation, budget, run identity, tape input or early-commit safety rule.
+
+Short, conflicting and losing windows disable early commit. After one strict
+64-turn window, a bounded probe allows recovery when the workload changes.
+The thresholds remain M0b's existing constants: 2 microseconds mean segment,
+25 percent eligible probes and 10 percent gain margin. Explicit `reorder: off`
+collects no timing rows and reads no policy clock. Completed tasks discard their
+timing rows; there is no worker-local or global adaptive state.
+
+Focused native controls exercise real shared-object siblings at widths 2/4/8
+under shared and dedicated commit, including fallback, periodic recovery and
+refusal of conflicting early mutation. The existing allowance, envelope,
+fuel/memory order, stop and dedicated-loan controls retain their bounds.
+Production qualification remains disabled pending the remaining acceptance gates.
+
 ## Prior art and deviations
 
 - The queue and call transitions are ports of the executable checked model,

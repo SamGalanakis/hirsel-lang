@@ -18,6 +18,7 @@ pub(crate) mod sets;
 mod terminal_tests;
 #[cfg(test)]
 mod timer_tests;
+mod tuning;
 mod values;
 
 use std::cell::RefCell;

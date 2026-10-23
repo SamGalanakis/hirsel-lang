@@ -28,6 +28,7 @@ enum Execution {
 /// budget and canonical-event adapters must be installed before admission can
 /// select this driver; constructing this metadata alone activates no workers.
 pub(crate) struct Driver {
+    pub(super) tuning: super::tuning::Tuning,
     pub(super) frontier: Option<Frontier<Command, Outcome>>,
     pub(super) objects: Registry,
     execution: BTreeMap<TaskId, Execution>,
@@ -58,6 +59,7 @@ impl Driver {
         let mut frontier = Frontier::new(root, policy, settled);
         frontier.carries = objects.carries.clone();
         Self {
+            tuning: super::tuning::Tuning::new(policy.reorder == hirsel_run_config::Reorder::Auto),
             frontier: Some(frontier),
             objects,
             execution: BTreeMap::from([(root, Execution::Saved { head_only: false })]),
@@ -104,9 +106,10 @@ impl Driver {
         if self.poll_after_save.is_some() || self.return_after_save.is_some() {
             return Vec::new();
         }
-        let Some(frontier) = &self.frontier else {
+        let Some(frontier) = &mut self.frontier else {
             return Vec::new();
         };
+        self.tuning.retire(frontier);
         let Some(head) = frontier.head() else {
             return Vec::new();
         };
@@ -212,6 +215,9 @@ impl Driver {
     /// saved=true while holding IdleGuard. A logical park alone is insufficient.
     /// Completion metadata cannot be reused until the physical token ends.
     pub(crate) fn saved(&mut self, task: TaskId, completed: bool) {
+        if completed {
+            self.tuning.finished(task);
+        }
         let execution = self.execution.get_mut(&task).expect("a saving task");
         *execution = match (*execution, completed) {
             (Execution::Saving { head_only }, false) => Execution::Saved { head_only },

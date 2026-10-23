@@ -159,6 +159,7 @@ pub(crate) fn fuel_in(ctx: *mut TaskCtx) {
     unsafe { (*ctx).heap_ref().meter.settled(level) };
     unsafe { (*ctx).heap().set_fuel(grant as i64) };
     unsafe { (*ctx).ordered_charge_trace.grant(grant as i64) };
+    driver.tuning.start(task);
 }
 
 fn capture_fuel(ctx: *mut TaskCtx) {
@@ -204,6 +205,11 @@ fn capture_fuel(ctx: *mut TaskCtx) {
 pub(crate) fn fuel_out(ctx: *mut TaskCtx) {
     capture_fuel(ctx);
     let (task, driver) = fuel_state(ctx);
+    let nonhead = driver
+        .frontier
+        .as_ref()
+        .is_some_and(|f| f.head() != Some(task));
+    driver.tuning.end(task, nonhead);
     driver.fuel_grants.remove(&task);
     unsafe { (*ctx).heap().set_fuel(0) };
 }
@@ -211,6 +217,11 @@ pub(crate) fn fuel_out(ctx: *mut TaskCtx) {
 fn stretch(ctx: *mut TaskCtx) -> Stretch {
     capture_fuel(ctx);
     let (task, driver) = fuel_state(ctx);
+    let nonhead = driver
+        .frontier
+        .as_ref()
+        .is_some_and(|f| f.head() != Some(task));
+    driver.tuning.end(task, nonhead);
     #[allow(unused_mut)]
     let mut before = driver
         .stretches
@@ -778,11 +789,16 @@ pub(super) fn submit(
             fuel_in(ctx);
             return Ok(Some(result));
         }
+        let started = driver(ctx).tuning.clock();
         let (offer, retained, result) = with_frontier(ctx, |f, backend| {
             let (offer, retained) = f.offer(task, before, operation, backend);
             let result = (offer == Offer::Early).then(|| f.early_result(task).unwrap().returned());
             (offer, retained, result)
         });
+        let overhead = started.map_or(0, |started| {
+            started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64
+        });
+        driver(ctx).tuning.offer(task, offer, overhead);
         match offer {
             Offer::Early => {
                 accepted(ctx, task, false);
