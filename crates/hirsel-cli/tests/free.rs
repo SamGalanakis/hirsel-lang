@@ -2965,6 +2965,14 @@ pub fn main(rt: Io, args: Args) -> Result[(), E] {
 
 #[test]
 fn f1_returned_error_resource_cleanup_replays_exact_terminal_and_projection() {
+    f1_returned_error_resource_matrix("1", 1, &[("1", 1)]);
+}
+
+fn f1_returned_error_resource_matrix(
+    record_width: &str,
+    record_permits: usize,
+    replay_dimensions: &[(&str, usize)],
+) {
     if !hirsel_rt::free_driver::admission_enabled() {
         return;
     }
@@ -2987,10 +2995,10 @@ fn f1_returned_error_resource_cleanup_replays_exact_terminal_and_projection() {
         command
             .args(["run", "--native"])
             .arg(&program)
-            .args(["--grants", &grants, "--cores", "1", "--record"])
+            .args(["--grants", &grants, "--cores", record_width, "--record"])
             .arg(&tape)
             .env(hirsel_rt::free_replay::Report::VAR, &report);
-        f1_permits(&mut command, 1);
+        f1_permits(&mut command, record_permits);
         let live = bounded_output(
             &mut command,
             &program,
@@ -3011,31 +3019,43 @@ fn f1_returned_error_resource_cleanup_replays_exact_terminal_and_projection() {
         );
         let projection = std::fs::read_to_string(&report).unwrap();
         for engine in ENGINES {
-            let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
-            command
-                .arg("run")
-                .args(engine)
-                .arg(&program)
-                .arg("--replay")
-                .arg(&tape)
-                .args(["--cores", "1"])
-                .env(hirsel_rt::free_replay::Report::VAR, &report);
-            f1_permits(&mut command, 1);
-            let replay = bounded_output(
-                &mut command,
-                &program,
-                &format!("returned resource {level} replay {engine:?}"),
-            );
-            assert_eq!(replay.status.code(), live.status.code(), "{replay:?}");
-            assert_eq!(replay.stdout, live.stdout, "{replay:?}");
-            assert_eq!(replay.stderr, live.stderr, "{replay:?}");
-            assert_eq!(std::fs::read_to_string(&report).unwrap(), projection);
+            for &(width, permits) in replay_dimensions {
+                let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+                command
+                    .arg("run")
+                    .args(engine)
+                    .arg(&program)
+                    .arg("--replay")
+                    .arg(&tape)
+                    .args(["--cores", width])
+                    .env(hirsel_rt::free_replay::Report::VAR, &report);
+                f1_permits(&mut command, permits);
+                let replay = bounded_output(
+                    &mut command,
+                    &program,
+                    &format!(
+                        "returned resource {level} replay {engine:?} width{width} permits{permits}"
+                    ),
+                );
+                assert_eq!(replay.status.code(), live.status.code(), "{replay:?}");
+                assert_eq!(replay.stdout, live.stdout, "{replay:?}");
+                assert_eq!(replay.stderr, live.stderr, "{replay:?}");
+                assert_eq!(std::fs::read_to_string(&report).unwrap(), projection);
+            }
         }
     }
 }
 
 #[test]
 fn f1_explicit_exit_codes_replay_exact_terminal_and_projection() {
+    f1_explicit_exit_codes_matrix("1", 1, &[("1", 1)]);
+}
+
+fn f1_explicit_exit_codes_matrix(
+    record_width: &str,
+    record_permits: usize,
+    replay_dimensions: &[(&str, usize)],
+) {
     if !hirsel_rt::free_driver::admission_enabled() {
         return;
     }
@@ -3074,10 +3094,10 @@ fn f1_explicit_exit_codes_replay_exact_terminal_and_projection() {
             command
                 .args(["run", "--native"])
                 .arg(&program)
-                .args(["--grants", &grants, "--cores", "1", "--record"])
+                .args(["--grants", &grants, "--cores", record_width, "--record"])
                 .arg(&tape)
                 .env(hirsel_rt::free_replay::Report::VAR, &report);
-            f1_permits(&mut command, 1);
+            f1_permits(&mut command, record_permits);
             let live = bounded_output(
                 &mut command,
                 &program,
@@ -3098,25 +3118,29 @@ fn f1_explicit_exit_codes_replay_exact_terminal_and_projection() {
             );
             let projection = std::fs::read_to_string(&report).unwrap();
             for engine in ENGINES {
-                let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
-                command
-                    .arg("run")
-                    .args(engine)
-                    .arg(&program)
-                    .arg("--replay")
-                    .arg(&tape)
-                    .args(["--cores", "1"])
-                    .env(hirsel_rt::free_replay::Report::VAR, &report);
-                f1_permits(&mut command, 1);
-                let replay = bounded_output(
-                    &mut command,
-                    &program,
-                    &format!("exit code {name} {level} replay {engine:?}"),
-                );
-                assert_eq!(replay.status.code(), live.status.code(), "{replay:?}");
-                assert_eq!(replay.stdout, live.stdout, "{replay:?}");
-                assert_eq!(replay.stderr, live.stderr, "{replay:?}");
-                assert_eq!(std::fs::read_to_string(&report).unwrap(), projection);
+                for &(width, permits) in replay_dimensions {
+                    let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+                    command
+                        .arg("run")
+                        .args(engine)
+                        .arg(&program)
+                        .arg("--replay")
+                        .arg(&tape)
+                        .args(["--cores", width])
+                        .env(hirsel_rt::free_replay::Report::VAR, &report);
+                    f1_permits(&mut command, permits);
+                    let replay = bounded_output(
+                        &mut command,
+                        &program,
+                        &format!(
+                            "exit code {name} {level} replay {engine:?} width{width} permits{permits}"
+                        ),
+                    );
+                    assert_eq!(replay.status.code(), live.status.code(), "{replay:?}");
+                    assert_eq!(replay.stdout, live.stdout, "{replay:?}");
+                    assert_eq!(replay.stderr, live.stderr, "{replay:?}");
+                    assert_eq!(std::fs::read_to_string(&report).unwrap(), projection);
+                }
             }
         }
     }
@@ -3124,6 +3148,14 @@ fn f1_explicit_exit_codes_replay_exact_terminal_and_projection() {
 
 #[test]
 fn f1_failed_root_preserves_ordered_cleanup_causes_and_projection() {
+    f1_ordered_cleanup_causes_matrix("1", 1, &[("1", 1)]);
+}
+
+fn f1_ordered_cleanup_causes_matrix(
+    record_width: &str,
+    record_permits: usize,
+    replay_dimensions: &[(&str, usize)],
+) {
     if !hirsel_rt::free_driver::admission_enabled() {
         return;
     }
@@ -3164,10 +3196,10 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
         command
             .args(["run", "--native", "--json"])
             .arg(&program)
-            .args(["--grants", &grants, "--cores", "1", "--record"])
+            .args(["--grants", &grants, "--cores", record_width, "--record"])
             .arg(&tape)
             .env(hirsel_rt::free_replay::Report::VAR, &report);
-        f1_permits(&mut command, 1);
+        f1_permits(&mut command, record_permits);
         let live = bounded_output(
             &mut command,
             &program,
@@ -3210,25 +3242,29 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
         );
         let projection = std::fs::read_to_string(&report).unwrap();
         for engine in ENGINES {
-            let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
-            command
-                .args(["run", "--json"])
-                .args(engine)
-                .arg(&program)
-                .arg("--replay")
-                .arg(&tape)
-                .args(["--cores", "1"])
-                .env(hirsel_rt::free_replay::Report::VAR, &report);
-            f1_permits(&mut command, 1);
-            let replay = bounded_output(
-                &mut command,
-                &program,
-                &format!("failure causes {level} replay {engine:?}"),
-            );
-            assert_eq!(replay.status.code(), live.status.code(), "{replay:?}");
-            assert_eq!(replay.stdout, live.stdout, "{replay:?}");
-            assert_eq!(replay.stderr, live.stderr, "{replay:?}");
-            assert_eq!(std::fs::read_to_string(&report).unwrap(), projection);
+            for &(width, permits) in replay_dimensions {
+                let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+                command
+                    .args(["run", "--json"])
+                    .args(engine)
+                    .arg(&program)
+                    .arg("--replay")
+                    .arg(&tape)
+                    .args(["--cores", width])
+                    .env(hirsel_rt::free_replay::Report::VAR, &report);
+                f1_permits(&mut command, permits);
+                let replay = bounded_output(
+                    &mut command,
+                    &program,
+                    &format!(
+                        "failure causes {level} replay {engine:?} width{width} permits{permits}"
+                    ),
+                );
+                assert_eq!(replay.status.code(), live.status.code(), "{replay:?}");
+                assert_eq!(replay.stdout, live.stdout, "{replay:?}");
+                assert_eq!(replay.stderr, live.stderr, "{replay:?}");
+                assert_eq!(std::fs::read_to_string(&report).unwrap(), projection);
+            }
         }
     }
 }
@@ -3658,4 +3694,19 @@ fn f1_runner_child_replay_matrix(program: &Path, tape: &Path, stopped: bool, std
             }
         }
     }
+}
+
+#[test]
+fn f1_returned_error_resource_width_and_permit_matrix() {
+    f1_returned_error_resource_matrix("8", 8, &[("1", 1), ("1", 8), ("8", 1), ("8", 8)]);
+}
+
+#[test]
+fn f1_explicit_exit_codes_width_and_permit_matrix() {
+    f1_explicit_exit_codes_matrix("8", 8, &[("1", 1), ("1", 8), ("8", 1), ("8", 8)]);
+}
+
+#[test]
+fn f1_ordered_cleanup_causes_width_and_permit_matrix() {
+    f1_ordered_cleanup_causes_matrix("8", 8, &[("1", 1), ("1", 8), ("8", 1), ("8", 8)]);
 }
