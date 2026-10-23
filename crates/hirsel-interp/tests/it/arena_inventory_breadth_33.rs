@@ -67,7 +67,7 @@ fn sorted(capture: bool) -> (RuntimeTypes, TypeId, TypeId, Value, PlacementRecei
         arena: None,
     };
     let value = Value::Record {
-        definition: DefPath::core("SortedMap"),
+        definition: DefId::intern(&DefPath::core("SortedMap")),
         fields: vec![Some(comparator), Some(entries)],
     };
     let mut receipt = PlacementReceipt::default();
@@ -184,7 +184,7 @@ fn closed_nominal_representation_charges_children_without_physical_framing() {
         representation: Some(shape),
     });
     let value = Value::Record {
-        definition,
+        definition: DefId::intern(&definition),
         fields: vec![
             Some(Value::String("abc".into())),
             Some(Value::Sequence {
