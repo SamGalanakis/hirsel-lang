@@ -20,6 +20,15 @@ pub(in crate::tasks::ordered) enum Resource {
     Domain { owner: Box<Resource>, label: String },
 }
 
+impl Resource {
+    /// These four domains exist before any host request; accessing or returning
+    /// an alias of one cannot create it. Materialized resources and auxiliary
+    /// domains retain their explicit creation evidence.
+    pub(super) fn has_creation_event(&self) -> bool {
+        matches!(self, Self::Created(_) | Self::Domain { .. })
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(in crate::tasks::ordered) enum ResourceKind {
     File,
@@ -143,9 +152,10 @@ impl super::Log {
         }));
         let mut resources = BTreeSet::new();
         for row in created {
-            if !self
-                .versions
-                .contains_key(&I::HostResource(row.resource.clone()))
+            if row.resource.has_creation_event()
+                && !self
+                    .versions
+                    .contains_key(&I::HostResource(row.resource.clone()))
                 && resources.insert(row.resource.clone())
             {
                 events.push((

@@ -1,18 +1,10 @@
 //! Launcher-owned Ordered policy, prepared before any code or host effect.
-//! Configuration is staged separately from the E1 production qualification.
-//! Neither a placement request nor a wider substrate test grants admission.
+//! The validated FIFO cooperative contract selects the production executor;
+//! placement only configures its physical policy.
 
 use crate::TaskCtx;
 use crate::ordered::Policy;
 use hirsel_run_config::ValidatedRun;
-
-// Enable only after the native differential, host, value, physical-bound and
-// performance gates have qualified production E1. Keep this independent of F1.
-const PRODUCTION_QUALIFIED: bool = cfg!(feature = "ordered-qualification");
-
-pub(crate) fn qualified() -> bool {
-    PRODUCTION_QUALIFIED
-}
 
 pub(crate) struct Admission {
     policy: Policy,
@@ -40,10 +32,6 @@ impl Admission {
         Ok(Some(Self { policy }))
     }
 
-    pub(crate) fn enabled(&self) -> bool {
-        PRODUCTION_QUALIFIED
-    }
-
     /// Install after topology, budgets and the run's mode are configured, and
     /// before root publication. Width one uses the same saved-frame dispatcher
     /// as wider Ordered runs; the home thread keeps its service ownership.
@@ -53,9 +41,6 @@ impl Admission {
     /// Production qualification must cover every reachable runtime boundary
     /// and every service's alias, lifetime, physical-save and stop contract.
     pub(crate) unsafe fn install(self, ctx: *mut TaskCtx) {
-        if !self.enabled() {
-            return;
-        }
         assert!(!unsafe { (*ctx).run_ref().free_mode });
         assert!(unsafe { crate::pool::wide((*ctx).run_ref()) });
         unsafe {
@@ -81,7 +66,7 @@ mod tests {
     }
 
     #[test]
-    fn ordered_launch_stages_placement_without_installing_a_policy_or_dispatcher() {
+    fn ordered_launch_installs_placement_policy_and_dispatcher_before_root_publication() {
         for commit in [Commit::Shared, Commit::Dedicated] {
             for reorder in [Reorder::Off, Reorder::Auto] {
                 let mut record = run("tasks.cooperative@1");
@@ -97,17 +82,19 @@ mod tests {
                 let record = record.validated().unwrap();
                 assert_eq!(record.identity(), identity);
                 let admission = Admission::prepare(Some(&record)).unwrap().unwrap();
-                assert!(!admission.enabled());
                 assert_eq!(admission.policy.commit, commit);
                 assert_eq!(admission.policy.run_ahead, 7);
                 assert_eq!(admission.policy.reorder, reorder);
                 assert_eq!(admission.policy.speculation_bytes, 8192);
                 let outcome = crate::host::BodyRun::new(1, false).run(
                     move |ctx| unsafe {
-                        admission.install(ctx);
-                        assert!(!super::super::engine::on(ctx));
-                        assert!(!crate::pool::free::enabled((*ctx).run_ref()));
                         assert!((*(*ctx).run_ptr()).tasks.is_none());
+                        crate::pool::start(ctx, 1, false);
+                        admission.install(ctx);
+                        assert!(super::super::engine::on(ctx));
+                        assert!(crate::pool::free::enabled((*ctx).run_ref()));
+                        assert!((*(*ctx).run_ptr()).tasks.is_some());
+                        assert!(!(*ctx).run_ref().free_mode);
                     },
                     |_| crate::STATUS_OK,
                 );
@@ -155,7 +142,6 @@ mod tests {
                 admission.policy.speculation_bytes,
                 limit.map_or(u64::MAX, |n| n / 16)
             );
-            assert!(!admission.enabled());
         }
     }
 }

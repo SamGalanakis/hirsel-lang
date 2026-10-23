@@ -172,7 +172,9 @@ impl Log {
             let mut events = Vec::new();
             for row in rows {
                 let resource = CanonicalItem::HostResource(row.resource.clone());
-                if !self.versions.contains_key(&resource) && resources.insert(row.resource.clone())
+                if row.resource.has_creation_event()
+                    && !self.versions.contains_key(&resource)
+                    && resources.insert(row.resource.clone())
                 {
                     events.push((resource, CanonicalOutcome::HostResourceCreated));
                 }

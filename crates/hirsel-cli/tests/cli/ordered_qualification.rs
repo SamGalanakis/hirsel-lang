@@ -1,9 +1,9 @@
 use super::*;
 
-// Qualification is an explicit build, changing only the runtime admission bit.
-// Keep these tests compiled in default builds; invoking them there must refuse.
+// Production Ordered acceptance on the standard launcher. These native
+// matrices run explicitly on the host to prove the effective eight-worker cell.
 #[test]
-#[ignore = "requires -c hirsel.ordered_qualification=true"]
+#[ignore = "native Ordered matrix; run on the host to prove widths through eight"]
 fn ordered_qualification_normal_native_launcher_exports_child_atomic_trace() {
     let source = file(include_str!(
         "../../../../conformance/CLO/CLO-3-child-atomic-capture-run.hir"
@@ -33,7 +33,7 @@ fn ordered_qualification_normal_native_launcher_exports_child_atomic_trace() {
 }
 
 #[test]
-#[ignore = "requires -c hirsel.ordered_qualification=true"]
+#[ignore = "native Ordered matrix; run on the host to prove widths through eight"]
 fn ordered_qualification_replay_policy_rejects_extra_and_duplicate_fields() {
     let scratch = tempfile::tempdir().unwrap();
     let source = scratch.path().join("main.hir");
@@ -261,7 +261,7 @@ fn replay_cells(
 }
 
 #[test]
-#[ignore = "requires -c hirsel.ordered_qualification=true"]
+#[ignore = "native Ordered matrix; run on the host to prove widths through eight"]
 fn ordered_qualification_corpus_captured_atomic() {
     corpus(
         include_str!("../../../../conformance/CLO/CLO-3-child-atomic-capture-run.hir"),
@@ -270,7 +270,7 @@ fn ordered_qualification_corpus_captured_atomic() {
 }
 
 #[test]
-#[ignore = "requires -c hirsel.ordered_qualification=true"]
+#[ignore = "native Ordered matrix; run on the host to prove widths through eight"]
 fn ordered_qualification_corpus_saved_receiver() {
     corpus(
         include_str!("../../../../conformance/CONC/CONC-6-suspended-receiver-run.hir"),
@@ -279,7 +279,7 @@ fn ordered_qualification_corpus_saved_receiver() {
 }
 
 #[test]
-#[ignore = "requires -c hirsel.ordered_qualification=true"]
+#[ignore = "native Ordered matrix; run on the host to prove widths through eight"]
 fn ordered_qualification_topology_reaches_eight_physical_workers() {
     use std::io::{BufRead, BufReader, Write};
     use std::os::unix::net::UnixStream;
@@ -331,7 +331,7 @@ fn ordered_qualification_topology_reaches_eight_physical_workers() {
 }
 
 #[test]
-#[ignore = "requires -c hirsel.ordered_qualification=true"]
+#[ignore = "native Ordered matrix; run on the host to prove widths through eight"]
 fn ordered_qualification_corpus_captured_mutex() {
     corpus(
         include_str!("../../../../conformance/CLO/CLO-3-child-mutex-capture-run.hir"),
@@ -340,7 +340,7 @@ fn ordered_qualification_corpus_captured_mutex() {
 }
 
 #[test]
-#[ignore = "requires -c hirsel.ordered_qualification=true"]
+#[ignore = "native Ordered matrix; run on the host to prove widths through eight"]
 fn ordered_qualification_corpus_child_resource_cleanup() {
     corpus(
         include_str!("../../../../conformance/CONC/CONC-2-child-resource-drop-run.hir"),
@@ -349,7 +349,7 @@ fn ordered_qualification_corpus_child_resource_cleanup() {
 }
 
 #[test]
-#[ignore = "requires -c hirsel.ordered_qualification=true"]
+#[ignore = "native Ordered matrix; run on the host to prove widths through eight"]
 fn ordered_qualification_corpus_shared_root_child_thaw() {
     corpus(
         include_str!("../../../../conformance/MODE/MODE-4-shared-root-child-run.hir"),
@@ -358,7 +358,7 @@ fn ordered_qualification_corpus_shared_root_child_thaw() {
 }
 
 #[test]
-#[ignore = "requires -c hirsel.ordered_qualification=true"]
+#[ignore = "native Ordered matrix; run on the host to prove widths through eight"]
 fn ordered_qualification_corpus_canceled_drop_send() {
     corpus(
         include_str!("../../../../conformance/CONC/CONC-3-shielded-drop-send-run.hir"),
@@ -367,7 +367,7 @@ fn ordered_qualification_corpus_canceled_drop_send() {
 }
 
 #[test]
-#[ignore = "requires -c hirsel.ordered_qualification=true"]
+#[ignore = "native Ordered matrix; run on the host to prove widths through eight"]
 fn ordered_qualification_corpus_two_sibling_channel_cycle() {
     corpus(
         include_str!("../../../../conformance/CONC/CONC-8-two-task-channel-run.hir"),
@@ -376,7 +376,7 @@ fn ordered_qualification_corpus_two_sibling_channel_cycle() {
 }
 
 #[test]
-#[ignore = "requires -c hirsel.ordered_qualification=true"]
+#[ignore = "native Ordered matrix; run on the host to prove widths through eight"]
 fn ordered_qualification_corpus_owned_mutex_payloads() {
     corpus(
         include_str!("../../../../conformance/CONC/CONC-5-owned-payload-mutexes-run.hir"),
@@ -399,7 +399,7 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
 }"#;
 
 #[test]
-#[ignore = "requires -c hirsel.ordered_qualification=true"]
+#[ignore = "native Ordered matrix; run on the host to prove widths through eight"]
 fn ordered_qualification_corpus_two_holding_child_finalizers() {
     corpus(TWO_HOLDING, b"first\nsecond\n");
 }
@@ -429,7 +429,7 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
 }"#;
 
 #[test]
-#[ignore = "requires -c hirsel.ordered_qualification=true"]
+#[ignore = "native Ordered matrix; run on the host to prove widths through eight"]
 fn ordered_qualification_corpus_head_calls_child_before_independent_send() {
     corpus(CALLED_BEFORE_SEND, b"");
 }
@@ -522,7 +522,7 @@ const CANCEL_OLDER_HOST: &str = r#"pub fn main(rt: Io) -> Result[(), GrantError]
 }"#;
 
 #[test]
-#[ignore = "requires -c hirsel.ordered_qualification=true"]
+#[ignore = "native Ordered matrix; run on the host to prove widths through eight"]
 fn ordered_qualification_corpus_cancel_older_saved_host_wait() {
     prerecorded_corpus(
         CANCEL_OLDER_HOST,
@@ -550,7 +550,7 @@ const FIRST_BUDGET_STOP: &str = r#"pub fn main(rt: Io) -> Result[(), GrantError]
 }"#;
 
 #[test]
-#[ignore = "requires -c hirsel.ordered_qualification=true"]
+#[ignore = "native Ordered matrix; run on the host to prove widths through eight"]
 fn ordered_qualification_corpus_first_budget_stop_truncates_younger_suffix() {
     prerecorded_corpus(
         FIRST_BUDGET_STOP,
@@ -591,7 +591,7 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
 }"#;
 
 #[test]
-#[ignore = "requires -c hirsel.ordered_qualification=true"]
+#[ignore = "native Ordered matrix; run on the host to prove widths through eight"]
 fn ordered_qualification_corpus_thaw_precedes_younger_root_release() {
     corpus(THAW_BEFORE_YOUNGER_RELEASE, b"refused\n");
 }
@@ -614,19 +614,19 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
 }"#;
 
 #[test]
-#[ignore = "requires -c hirsel.ordered_qualification=true"]
+#[ignore = "native Ordered matrix; run on the host to prove widths through eight"]
 fn ordered_qualification_corpus_callable_channel_carrier_llvm() {
     corpus_backends(CALLABLE_CHANNEL, b"callable\n", &["llvm"]);
 }
 
 #[test]
-#[ignore = "requires -c hirsel.ordered_qualification=true"]
+#[ignore = "native Ordered matrix; run on the host to prove widths through eight"]
 fn ordered_qualification_corpus_callable_channel_carrier_cranelift() {
     corpus_backends(CALLABLE_CHANNEL, b"callable\n", &["cranelift"]);
 }
 
 #[test]
-#[ignore = "requires -c hirsel.ordered_qualification=true"]
+#[ignore = "native Ordered matrix; run on the host to prove widths through eight"]
 fn ordered_qualification_corpus_captured_value_carrier() {
     corpus(
         r#"fn shuttle[T: sendable](tasks: Tasks, take value: T) -> Option[T] {
@@ -652,7 +652,7 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
 }
 
 #[test]
-#[ignore = "requires -c hirsel.ordered_qualification=true"]
+#[ignore = "native Ordered matrix; run on the host to prove widths through eight"]
 fn ordered_qualification_corpus_iterator_value_carrier() {
     corpus(
         r#"fn shuttle[T: sendable](tasks: Tasks, take value: T) -> Option[T] {
@@ -680,7 +680,7 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
 }
 
 #[test]
-#[ignore = "requires -c hirsel.ordered_qualification=true"]
+#[ignore = "native Ordered matrix; run on the host to prove widths through eight"]
 fn ordered_qualification_corpus_flat_value_carrier() {
     corpus(
         r#"fn shuttle[T: sendable](tasks: Tasks, take value: T) -> Option[T] {
@@ -709,7 +709,7 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
 }
 
 #[test]
-#[ignore = "requires -c hirsel.ordered_qualification=true"]
+#[ignore = "native Ordered matrix; run on the host to prove widths through eight"]
 fn ordered_qualification_corpus_packed_value_carrier() {
     corpus(
         r#"fn shuttle[T: sendable](tasks: Tasks, take value: T) -> Option[T] {
@@ -741,7 +741,7 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
 }
 
 #[test]
-#[ignore = "requires -c hirsel.ordered_qualification=true"]
+#[ignore = "native Ordered matrix; run on the host to prove widths through eight"]
 fn ordered_qualification_corpus_soa_value_carrier() {
     corpus(
         r#"fn shuttle[T: sendable](tasks: Tasks, take value: T) -> Option[T] {

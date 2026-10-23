@@ -150,8 +150,6 @@ def _rust(rule, name, **attrs):
     # Qualification changes only runtime admission. All implementation is
     # compiled in either build; native archive variants receive the same bits.
     if attrs.get("crate") == "hirsel_rt":
-        if read_root_config("hirsel", "ordered_qualification", "false") == "true":
-            attrs["features"] = attrs.get("features", []) + ["ordered-qualification"]
         if FREE_QUALIFICATION:
             attrs["features"] = attrs.get("features", []) + ["free-qualification"]
     rule(name = name, **attrs)

@@ -392,8 +392,8 @@ pub struct RunHandle<'p> {
     trace_events: Option<std::path::PathBuf>,
 }
 impl RunHandle<'_> {
-    /// Export complete canonical Ordered events. Refuses before entry while
-    /// the production executor is unqualified, or for another scheduling mode.
+    /// Export complete canonical Ordered events. Refuses before entry for
+    /// a scheduling contract other than FIFO cooperative execution.
     /// The destination is created only after complete evidence validates.
     pub fn with_trace_events(mut self, path: impl Into<std::path::PathBuf>) -> Self {
         self.trace_events = Some(path.into());

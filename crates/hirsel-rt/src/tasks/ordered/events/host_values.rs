@@ -182,6 +182,14 @@ mod tests {
         home: std::thread::ThreadId,
     }
     impl Adapter for Results {
+        fn keys(&self, _: &Request) -> Option<crate::io_keys::KeySet> {
+            Some(crate::io_keys::KeySet::coupled())
+        }
+        fn identity(&self, word: u64) -> Option<(crate::io_keys::Key, crate::io_keys::Kind)> {
+            (self.base..=self.base + 2)
+                .contains(&word)
+                .then_some((crate::io_keys::COUPLED, crate::io_keys::Kind::Other))
+        }
         fn preflight(&self, _: &Request) -> Result<Option<Completion>, AdapterError> {
             Ok(None)
         }
@@ -229,10 +237,7 @@ mod tests {
                         engine::enable(ctx, policy);
                         events::enable(ctx);
                         let objects = &mut engine::driver(ctx).objects;
-                        for (word, ordinal) in [(base, 7), (base + 1, 7), (base + 2, 8)]
-                            .into_iter()
-                            .chain((0..6).map(|test| (base + 10 + test, 9 + test)))
-                        {
+                        for (word, ordinal) in (0..6).map(|test| (base + 10 + test, 9 + test)) {
                             objects.bind_erased(
                                 crate::ordered::objects::Kind::Capability,
                                 word,
@@ -240,18 +245,6 @@ mod tests {
                                 Default::default(),
                             );
                         }
-                        engine::driver(ctx)
-                            .events
-                            .as_mut()
-                            .unwrap()
-                            .host_handles
-                            .insert(
-                                base + 2,
-                                HostHandleId {
-                                    operation: id(7).operation,
-                                    field: 1,
-                                },
-                            );
                     },
                     move |ctx| unsafe {
                         for test in 0..6 {
@@ -299,21 +292,32 @@ mod tests {
                             observed.iter().map(|row| row.0).collect::<Vec<_>>(),
                             [0, 1, 2, 3, 4, 5]
                         );
+                        let created = |ordinal, field| HostHandleId {
+                            operation: ObjectId {
+                                creator: vec![],
+                                ordinal,
+                            },
+                            field,
+                        };
+                        let first = observed[0].1.as_ref().unwrap();
+                        let alias = observed[1].1.as_ref().unwrap();
+                        assert_eq!(first.payload, alias.payload, "physical words are erased");
+                        assert_eq!(first.handles, [created(0, 0)]);
+                        assert_eq!(alias.handles, [created(1, 0)]);
+                        assert_ne!(
+                            first.handles, alias.handles,
+                            "separate returned fields retain their own handle identities"
+                        );
                         assert_eq!(
-                            observed[0].1, observed[1].1,
-                            "aliases have one logical result"
+                            log.host_bindings[&first.handles[0]].resource,
+                            log.host_bindings[&alias.handles[0]].resource,
+                            "alias handles still name one resource"
                         );
                         assert_eq!(
                             observed[2].1.as_ref().unwrap().handles,
-                            [
-                                id(7),
-                                HostHandleId {
-                                    operation: id(7).operation,
-                                    field: 1
-                                }
-                            ]
+                            [created(0, 0), created(2, 1)]
                         );
-                        assert_eq!(observed[3].1.as_ref().unwrap().handles, [id(7)]);
+                        assert_eq!(observed[3].1.as_ref().unwrap().handles, [created(0, 0)]);
                         assert!(observed[4].1.as_ref().unwrap().handles.is_empty());
                         assert!(
                             observed[5].1.is_none(),

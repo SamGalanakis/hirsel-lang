@@ -209,3 +209,54 @@ fn canonical_host_alias_observations_keep_the_original_handle_creation_version()
         1
     );
 }
+
+#[test]
+fn system_host_domains_are_accessed_without_a_creation_subevent() {
+    for resource in [
+        Resource::Coupled,
+        Resource::Namespace,
+        Resource::Root,
+        Resource::Place,
+    ] {
+        let mut log = pending();
+        let key = (vec![1], 0);
+        let handle = HostHandleId {
+            operation: ObjectId {
+                creator: vec![1],
+                ordinal: 0,
+            },
+            field: 0,
+        };
+        let result = Ok(Completion::Handle(Ok(99)));
+        let observation =
+            super::super::host_values::project(&result, |_| Some(handle.clone())).unwrap();
+        log.host_key_observations
+            .insert(key.clone(), Some(vec![(resource.clone(), Mode::Exclusive)]));
+        log.host_outputs.insert(key.clone(), Ok(None));
+        log.host_creations.insert(
+            key.clone(),
+            vec![Creation {
+                handle: handle.clone(),
+                resource: resource.clone(),
+                kind: ResourceKind::Other,
+            }],
+        );
+        let done = &mut log.host_completions[0];
+        done.result = result;
+        done.observation = Some(observation);
+        log.host_initials.insert(key, done.clone());
+        log.certify_host(&[1], 0).unwrap();
+        assert_eq!(log.versions[&CanonicalItem::HostResource(resource)], 1);
+        assert_eq!(log.versions[&CanonicalItem::HostHandle(handle)], 1);
+        assert!(
+            log.canonical
+                .iter()
+                .any(|row| matches!(row.outcome, CanonicalOutcome::HostAccess { .. }))
+        );
+        assert!(
+            log.canonical
+                .iter()
+                .all(|row| !matches!(row.outcome, CanonicalOutcome::HostResourceCreated))
+        );
+    }
+}

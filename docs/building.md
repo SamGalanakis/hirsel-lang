@@ -709,13 +709,12 @@ preserves the run identity, and never uses recorded placement provenance.
 Changing commit or reorder policy must replay identically: canonical Ordered
 events, program output and exit are unchanged. A divergent request or unconsumed
 input still refuses normally. The input tape is immutable, and a trace destination
-that aliases it is refused. Default production Ordered remains disabled until
-its qualification gate is complete.
+that aliases it is refused. Production Ordered is enabled for the FIFO
+`tasks.cooperative@1` contract, including width one. Free and seeded non-FIFO
+contracts keep their own admission.
 
-The temporary Cargo feature `ordered-qualification` (Buck configuration
-`-c hirsel.ordered_qualification=true`) changes only Ordered admission. All
-implementation and tests compile in ordinary builds. `tools/check-native.sh`
-registers the qualification corpus, including both native backends, live and
+`tools/check-native.sh` registers the Ordered acceptance corpus in ordinary
+builds, including both native backends, live and
 immutable-input replay at widths 1/2/4/8, shared/dedicated commit and reorder
 off/auto. It runs on the host so the pool executor cannot clamp wider cells to
 two CPUs. Physical perturbation uses forced migration at suspension; at width
@@ -723,7 +722,7 @@ one the replay perturbation cell is equivalent to its unperturbed counterpart.
 Run a single case with:
 
 ```sh
-.buck2/bin/buck2 test -c hirsel.tests=host -c hirsel.ordered_qualification=true \
+.buck2/bin/buck2 test -c hirsel.tests=host \
   //:hirsel-cli-test-cli-shard-1 -- \
   --test-arg=ordered_qualification_corpus_saved_receiver --test-arg=--ignored
 ```

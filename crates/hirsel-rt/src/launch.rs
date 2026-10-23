@@ -1636,9 +1636,7 @@ pub(crate) unsafe fn execute(
     // Binding refused a fuel budget this code cannot enforce (`ProgramFacts::fueled`).
     let budgets = requested.as_ref().and_then(|run| run.budgets()).cloned();
     let ordered = crate::tasks::ordered::admission::Admission::prepare(requested.as_ref())?;
-    let ordered_enabled = ordered
-        .as_ref()
-        .is_some_and(|admission| admission.enabled());
+    let ordered_enabled = ordered.is_some();
     let production_free = crate::free_launch::ENABLED
         && requested
             .as_ref()
@@ -2333,7 +2331,6 @@ pub(crate) unsafe fn execute(
     }
     if let Some(ordered) = ordered {
         // SAFETY: fresh root, after topology/budgets and before root publication.
-        // The independent E1 qualification gate keeps this inactive for now.
         unsafe { ordered.install(ctx) };
     }
     if trace_destination.is_some() {

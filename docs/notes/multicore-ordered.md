@@ -211,24 +211,22 @@ budget admission and exact charge/credit settlement remain gated.
 
 ## Integration status
 
-The normal launcher now prepares an Ordered admission plan from the validated
-`tasks.cooperative@1` provider, FIFO schedule, placement knobs and bound memory
-budget. A separate production qualification constant remains **false**. The
-plan therefore installs no scheduler, role or physical dispatcher, including
-when placement requests eight cores or dedicated commit. Substrate worker
-tests keep their explicit admission. Free and seeded non-FIFO schedules do not
-select this plan. Once E1 is qualified, the prepared plan will select the same
-saved-frame dispatcher at width one and wider widths, after topology and
-budgets are configured and before root publication. Dedicated execution uses
-its fixed bounded commit executor; it never silently selects shared retirement.
-This staging is not production activation or completed E1 acceptance.
+The normal launcher enables production Ordered from the validated
+`tasks.cooperative@1` provider and FIFO schedule. Placement configures the
+physical width, shared/dedicated commit, run-ahead and speculation allowance;
+it does not change run identity. The same saved-frame dispatcher runs width
+one and wider runs, after topology and budgets are configured and before root
+publication. Dedicated commit uses its fixed bounded executor. Free and seeded
+non-FIFO schedules retain independent admission. The temporary qualification
+build switch has been removed after the differential, host/lifetime/value,
+physical-bound and measured speed gates passed.
 
 `hirsel run --native --trace-events events.jsonl` and an embedding host's
 `RunHandle::with_trace_events` select canonical JSONL export. A standalone
 executable takes the observer prefix `--hirsel-trace-events events.jsonl`
-before its run or replay arguments. While E1 is unqualified, these requests
-refuse before program entry, without opening the trace destination. They do
-not opt a program into physical dispatch or change its run identity.
+before its run or replay arguments. These requests require the FIFO cooperative
+contract and refuse other scheduling modes before entry or destination
+creation. Trace selection does not change the program's run identity.
 
 The collector and exact charge observer are available in production builds.
 The task-local journal allocates only for an enabled trace; untraced execution
@@ -273,10 +271,9 @@ abandoned registrations before its task metadata is destroyed.
 Controls compare canonical traces at widths 1/2/4/8 with reorder off/auto for
 sleep and byte-input waits, including the real virtual-time readiness driver.
 Cancellation, a spurious retry, reused task rows, mixed home deadlines, and an
-external stop have focused controls. These are scoped native controls; the
-full language corpus, general terminal cuts and production activation remain
-qualification work. The normal launcher still uses its existing home route
-while the independent E1 production gate is OFF.
+external stop have focused controls. The full acceptance corpus adds same-engine trace/output/tape/exit agreement
+under both commit policies and interpreter outcome agreement. The normal
+launcher retains its home route and the complete saved-phase ownership protocol.
 
 ## Exact home output prefixes
 
@@ -294,7 +291,7 @@ out-of-range or completion-inconsistent counts remain unexportable. Neither a
 successful completion nor an error supplies an inferred count. Untraced output
 continues through the existing print path. Native controls compare canonical
 bytes with actual output at widths 1/2/4/8, reorder off/auto and history on/off.
-Production Ordered remains OFF pending the remaining qualification gates.
+Production Ordered uses this prefix certification in the standard launcher.
 
 ## Declared home resource graphs
 
@@ -343,7 +340,7 @@ their existing retirement path. An external Requested stop is projected only
 after workers leave; a trace request with running workers still refuses.
 Controls compare bytes at widths 1/2/4/8 and reorder off/auto for saved blocked
 requests, completed saved input, stopped home transfer, exact partial output
-and implicit close. Production Ordered remains OFF pending later gates.
+and implicit close. Production Ordered retains these ownership guarantees.
 
 ## Dedicated commit execution
 
@@ -373,7 +370,7 @@ until it actually leaves. Controls cover two competing real sibling workers,
 shared/dedicated canonical byte equality at widths 1/2/4/8 and both reorder
 modes, one-permit role contention, foreign affinity, host saved waits, child
 Holding/rest cleanup, channel/mutex carriers and exact first budget cuts.
-Production qualification remains false pending the corpus and final gates.
+The final corpus and lifecycle/host/bounds gate qualify this path for production.
 
 ## Run-local auto decisions
 
@@ -452,3 +449,21 @@ images. Spare capacity, inactive arms, native addresses, count words and
 padding never enter canonical values. This does not expand holder/type
 admission or change the four early-retirement rules. Production qualification
 remains a separate gate.
+
+
+## Production acceptance
+
+E1's final gate covers the same-engine canonical corpus at widths 1/2/4/8,
+forced migration, reorder off/auto and shared/dedicated commit, with immutable
+recorded host inputs and interpreter outcome agreement. Runtime controls cover
+alias/lifetime discovery, saved host phases, exact output prefixes, stop cuts,
+permit loans, memory/fuel bounds, initialized values and auto fallback/recovery.
+Placement, managed-core admission and scheduler-role audits remain separate
+checks. The measured independent-sibling case reports a 1.85x width-one/two
+speedup under the reserved timing campaign; it is not a universal workload floor.
+
+Namespace, Coupled, Root and Place are pre-existing host domains: returning an
+alias records its field identity and resource access without creating the
+domain. Materialized resources and auxiliary domains retain explicit creation
+subevents; each handle result field retains its own identity even when its
+resource aliases another handle.

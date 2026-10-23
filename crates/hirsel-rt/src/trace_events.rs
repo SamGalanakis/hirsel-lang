@@ -3,16 +3,8 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
-pub(crate) const UNQUALIFIED: &str =
-    "canonical trace events require production-qualified Ordered execution";
-
-pub(crate) fn check() -> Result<(), String> {
-    if crate::tasks::ordered::admission::qualified() {
-        Ok(())
-    } else {
-        Err(UNQUALIFIED.into())
-    }
-}
+pub(crate) const REQUIRES_ORDERED: &str =
+    "canonical trace events require the FIFO cooperative task provider";
 
 /// The observer prefix belongs before run/replay arguments. It never consumes
 /// an application's trailing argument with the same spelling.
@@ -28,7 +20,6 @@ pub(crate) fn select(arguments: &mut Vec<OsString>) -> Result<Option<PathBuf>, S
         .filter(|p| !p.is_empty())
         .ok_or("expected a path after --hirsel-trace-events")?;
     let path = PathBuf::from(path);
-    check()?;
     let replay = if arguments
         .get(2)
         .is_some_and(|flag| flag == "--hirsel-replay-policy")
@@ -56,9 +47,8 @@ pub(crate) fn pin(
     path: &Path,
     ordered: bool,
 ) -> Result<crate::host_paths::RecorderDestination, String> {
-    check()?;
     if !ordered {
-        return Err("canonical trace events require the FIFO cooperative task provider".into());
+        return Err(REQUIRES_ORDERED.into());
     }
     crate::host_paths::RecorderDestination::pin(path).map_err(|e| e.to_string())
 }
@@ -106,13 +96,13 @@ mod tests {
             .wait();
         assert_eq!(
             outcome,
-            hirsel_run_schema::RunOutcome::Refused(UNQUALIFIED.into())
+            hirsel_run_schema::RunOutcome::Refused(REQUIRES_ORDERED.into())
         );
         assert!(!path.exists());
         assert!(
             String::from_utf8(output.bytes())
                 .unwrap()
-                .contains(UNQUALIFIED)
+                .contains(REQUIRES_ORDERED)
         );
     }
 
@@ -145,7 +135,7 @@ mod tests {
     }
 
     #[test]
-    fn unqualified_trace_selection_refuses_without_opening_or_consuming_any_input() {
+    fn trace_selection_consumes_only_its_prefix_without_opening_any_destination() {
         let dir = tempfile::tempdir().unwrap();
         let existing = dir.path().join("existing.jsonl");
         let missing = dir.path().join("missing.jsonl");
@@ -158,9 +148,10 @@ mod tests {
                 "missing-run.json".into(),
             ];
             let before = args.clone();
-            assert_eq!(select(&mut args), Err(UNQUALIFIED.into()));
-            assert_eq!(args, before);
-            assert!(pin(path, true).is_err());
+            assert_eq!(select(&mut args), Ok(Some(path.clone())));
+            assert_eq!(args, before[2..]);
+            assert!(pin(path, false).is_err());
+            assert!(pin(path, true).is_ok());
             assert_eq!(std::fs::read(&existing).unwrap(), b"sentinel");
             assert!(!missing.exists());
         }

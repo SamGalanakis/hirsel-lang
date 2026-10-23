@@ -93,7 +93,7 @@ pub(crate) fn select(
         if let Some(policy) = policy {
             let admission = crate::tasks::ordered::admission::Admission::prepare(Some(&run))
                 .map_err(|error| replay_policy_error(&error))?;
-            if !admission.is_some_and(|admission| admission.enabled()) {
+            if admission.is_none() {
                 return Err(replay_policy_error(
                     "requires qualified FIFO cooperative execution",
                 ));
@@ -364,7 +364,7 @@ mod tests {
                 false,
                 false,
             );
-            if provider == "tasks.cooperative@1" && crate::tasks::ordered::admission::qualified() {
+            if provider == "tasks.cooperative@1" {
                 let Selected::Replay { run: selected, .. } = selected.unwrap() else {
                     panic!("expected replay");
                 };
