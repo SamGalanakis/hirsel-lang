@@ -17,7 +17,7 @@ fn scratch(label: &str) -> tempfile::TempDir {
         .tempdir_in(base)
         .unwrap()
 }
-fn package(root: &Path) -> PathBuf {
+pub(super) fn package(root: &Path) -> PathBuf {
     for (name, body) in [
         (
             "main.hir",
@@ -59,7 +59,7 @@ fn package(root: &Path) -> PathBuf {
     fs::write(&path, manifest.to_string()).unwrap();
     path
 }
-fn cases() -> Vec<Value> {
+pub(super) fn cases() -> Vec<Value> {
     serde_json::from_str(include_str!("../support/dagbuild_29/cases.json")).unwrap()
 }
 #[test]

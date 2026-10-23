@@ -6,7 +6,8 @@ use std::{
 };
 
 // Supplemental live coverage of the process/task-set/deadline diamond shape.
-// This reduction does not reproduce the archived full dagbuild race by itself.
+// This reduction does not reproduce the archived full dagbuild race by itself;
+// the full application regression below retains that race-producing fixture.
 // pool::tests::home_role_merge_serves_a_bridge_from_the_role_owner forces
 // the exact bridge/role interleavings; keep that deterministic regression too.
 const PROGRAM: &str = r#"fn job(p: Proc, deadline: Deadline) -> bool {
@@ -61,7 +62,6 @@ fn bounded(command: &mut Command, label: &str) -> Output {
         if child.try_wait().unwrap().is_some() {
             let output = child.wait_with_output().unwrap();
             assert!(output.status.success(), "{label}: {output:?}");
-            assert_eq!(output.stdout, b"done\n", "{label}: {output:?}");
             assert!(output.stderr.is_empty(), "{label}: {output:?}");
             eprintln!("LIVE_LIVENESS COMPLETED {label}");
             return output;
@@ -119,7 +119,7 @@ fn process_diamond_live_finishes_repeatedly_at_each_width() {
                 if iteration != 0 {
                     command.env("HIRSEL_RT_WORKERS", width.to_string());
                 }
-                bounded(
+                let output = bounded(
                     command
                         .arg("--hirsel-record")
                         .arg(&tape)
@@ -127,6 +127,110 @@ fn process_diamond_live_finishes_repeatedly_at_each_width() {
                         .arg(&grant_path),
                     &label,
                 );
+                assert_eq!(output.stdout, b"done\n", "{label}: {output:?}");
+            }
+        }
+    }
+}
+
+/// Keep the original race-producing source and oracle, rather than relying on
+/// the smaller supplemental shape. The archived 8453bcf1 runtime hangs on this
+/// fixture at widths four and eight; each run starts with fresh mounted state.
+#[test]
+fn dagbuild_diamond_live_matches_the_oracle_repeatedly_at_each_width() {
+    let scratch = tempfile::tempdir().unwrap();
+    let root = scratch.path();
+    let manifest = super::dagbuild_29::package(root);
+    let case = super::dagbuild_29::cases()
+        .into_iter()
+        .find(|case| case["id"] == "diamond-first")
+        .unwrap();
+    let args: Vec<_> = case["args"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|arg| arg.as_str().unwrap())
+        .collect();
+    let children: Vec<_> = case["manifest"]["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|task| {
+            serde_json::json!({
+                "program":task["argv"][0],
+                "args":task["argv"].as_array().unwrap()[1..],
+                "steps":[{"print":[79,79]},{"print_err":[69,69]},{"exit":{"exited":0}}]
+            })
+        })
+        .collect();
+    for engine in ["llvm", "cranelift"] {
+        let exe = root.join(engine);
+        let built = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+            .args(["build", "--backend", engine])
+            .arg(&manifest)
+            .arg("-o")
+            .arg(&exe)
+            .output()
+            .unwrap();
+        assert!(built.status.success(), "{engine}: {built:?}");
+        for width in [1, 2, 4, 8] {
+            for iteration in 0..50 {
+                let label = format!("dagbuild-{engine}-w{width}-{iteration}");
+                let run = root.join(&label);
+                let project = run.join("project");
+                let state = run.join("state");
+                std::fs::create_dir_all(&project).unwrap();
+                std::fs::create_dir(&state).unwrap();
+                std::fs::write(project.join("manifest.json"), case["manifest"].to_string())
+                    .unwrap();
+                for (name, data) in case["files"].as_object().unwrap() {
+                    std::fs::write(project.join(name), data.as_str().unwrap()).unwrap();
+                }
+                let grants = serde_json::json!({
+                    "args":args,
+                    "io":{
+                        "stdout":"stdout.bytes@1", "stderr":"stderr.bytes@1",
+                        "tasks":"tasks.cooperative@1", "monotonic_clock":"clock.monotonic.ns@1",
+                        "dirs":[
+                            {"path":"project","host":project,"access":"read_write"},
+                            {"path":"state","host":state,"access":"read_write"}
+                        ],
+                        "process":{
+                            "provider":"process.script@1",
+                            "rules":[{"program":"/fixture/child"}],"runs":[],"children":children
+                        }
+                    },
+                    "placement":{"cores":width,"commit":"shared","reorder":"auto"}
+                });
+                let grant_path = run.join("grants.json");
+                std::fs::write(&grant_path, grants.to_string()).unwrap();
+                let mut command = Command::new(&exe);
+                command.env_remove("HIRSEL_RT_MIGRATE");
+                // Ordinary placement first; exercise the physical substrate
+                // on subsequent launches even in a one-CPU pool action.
+                command.env_remove("HIRSEL_RT_WORKERS");
+                if iteration != 0 {
+                    command.env("HIRSEL_RT_WORKERS", width.to_string());
+                }
+                let output = bounded(
+                    command
+                        .arg("--hirsel-record")
+                        .arg(run.join("record.tape"))
+                        .arg("--hirsel-grants")
+                        .arg(grant_path)
+                        .args(&args),
+                    &label,
+                );
+                let rows: Vec<serde_json::Value> = std::str::from_utf8(&output.stdout)
+                    .unwrap()
+                    .lines()
+                    .map(|line| serde_json::from_str(line).unwrap())
+                    .collect();
+                assert_eq!(serde_json::json!(rows), case["rows"], "{label}");
+                let saved: serde_json::Value =
+                    serde_json::from_slice(&std::fs::read(state.join("state.json")).unwrap())
+                        .unwrap();
+                assert_eq!(saved, case["state"], "{label}");
             }
         }
     }
