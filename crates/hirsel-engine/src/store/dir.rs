@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 
 /// The store format version in the directory name.
-pub const FORMAT: u32 = 6;
+pub const FORMAT: u32 = 7;
 /// The default size cap.
 pub const DEFAULT_CAP: u64 = 2 << 30;
 /// After this many bytes written in a process, the store enforces its cap.

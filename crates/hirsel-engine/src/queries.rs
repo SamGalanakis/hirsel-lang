@@ -1945,13 +1945,9 @@ impl QueryEngine {
             }
             return Ok(prechecked);
         }
-        let modes = self.mode_query(definition)?;
-        self.register_staged(&modes.value)?;
-        let signature = self.signature_output(definition)?;
         let _timing = timings::phase(Phase::Lower);
         let id = DefId::intern(definition);
         let text = self.key_text(definition, QueryKind::Lower)?;
-        self.read_execution_signatures(&modes.dependencies);
         if let Some(entry) = self.lowered.get(&id).cloned()
             && entry
                 .depth
@@ -1959,6 +1955,15 @@ impl QueryEngine {
                 .is_none_or(|depth| depth.limit() == self.depth_limit())
             && self.memo_valid(definition, &entry, text)
         {
+            // Staged declarations still need their registration product. Ordinary
+            // immutable lower hits do not demand the checked/Modes bodies.
+            if entry
+                .result()
+                .is_ok_and(|output| crate::comptime::has_staged_reads(&output.value))
+            {
+                let modes = self.mode_query(definition)?;
+                self.register_staged(&modes.value)?;
+            }
             if self.verify == Verify::On {
                 if let Ok(output) = entry.result() {
                     self.ensure_lowered_verdict(&output.value)?;
@@ -1973,10 +1978,15 @@ impl QueryEngine {
         self.lower_holds
             .demand_evicted(&MemoKey::new(QueryKind::Lower, id));
         if let Some(entry) = self.load_lower(definition) {
+            self.depth_replay_requests(entry.depth.as_ref().expect("stored depth receipt"))?;
             self.merge_execution(entry.reads());
             self.lowered.insert(id, entry.clone());
             return entry.output();
         }
+        let modes = self.mode_query(definition)?;
+        self.register_staged(&modes.value)?;
+        let signature = self.signature_output(definition)?;
+        self.read_execution_signatures(&modes.dependencies);
         self.lower_receipts.remove(&id);
         timings::count(Count::Lowered);
         self.start(definition, QueryKind::Lower)?;

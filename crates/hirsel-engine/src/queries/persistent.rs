@@ -393,6 +393,7 @@ fn valid_ownership(syntax: &ItemSyntax, facts: &OwnershipFacts) -> bool {
 
 #[derive(Serialize, Deserialize)]
 struct LowerRecord {
+    depth: crate::memo::DepthEvidence<Span>,
     output: QueryOutput<hirsel_tir::DefinitionRef>,
     detail: DependencyReads,
     /// Present only when V actually accepted the exact stored TIR.
@@ -1077,7 +1078,15 @@ impl QueryEngine {
             return None;
         }
         let mut record: LowerRecord = self.decode_record(&variant.payload)?;
-        if record.output.value.path != DefId::intern(path) {
+        if record.output.value.path != DefId::intern(path)
+            || record.depth.first.len() != self.depth_limit() as usize + 1
+            || record
+                .depth
+                .first
+                .iter()
+                .flatten()
+                .any(|site| self.sources.slice(*site).is_none())
+        {
             return None;
         }
         if crate::comptime::has_staged_reads(&record.output.value) {
@@ -1108,13 +1117,17 @@ impl QueryEngine {
         }
         timings::count(Count::StoreHits);
         self.store_adoptions += 1;
-        Some(self.adopted(
+        let mut entry = self.adopted(
             path,
             QueryKind::Lower,
             variant,
             Ok(record.output),
             record.detail,
-        ))
+        );
+        Arc::get_mut(&mut entry)
+            .expect("unpublished lower record")
+            .depth = Some(record.depth);
+        Some(entry)
     }
     pub(crate) fn remember_lowered_verdict(
         &mut self,
@@ -1190,6 +1203,9 @@ impl QueryEngine {
         let Ok(output) = entry.output() else {
             return Ok(());
         };
+        let Some(depth) = entry.depth.clone() else {
+            return Ok(());
+        };
         if crate::comptime::has_staged_reads(&output.value) {
             return Ok(());
         }
@@ -1198,6 +1214,7 @@ impl QueryEngine {
             QueryKind::Lower,
             entry.reads(),
             &LowerRecord {
+                depth,
                 output,
                 detail: canonical_detail(entry.detail.clone()),
                 verdict,
@@ -1405,6 +1422,60 @@ mod malformed_tests {
             }
         }
     }
+    #[test]
+    fn malformed_lower_depth_is_rejected_before_adoption_or_replay() {
+        for verify in [
+            crate::store::VerifyStore::Off,
+            crate::store::VerifyStore::Recompute,
+        ] {
+            for fault in 0..3 {
+                let (mut engine, syntax) = fixture();
+                engine.verify = Verify::Off;
+                let path = &syntax.item.definition;
+                let mut depth = crate::memo::DepthEvidence::leaf(engine.depth_limit());
+                match fault {
+                    0 => depth.first = Box::new([]),
+                    1 => depth.first = vec![None; 2].into_boxed_slice(),
+                    2 => {
+                        depth.first[0] = Some(Span {
+                            anchor: hirsel_span::Anchor::fresh(),
+                            start: 0,
+                            end: 1,
+                        })
+                    }
+                    _ => unreachable!(),
+                }
+                if fault == 2 {
+                    // A foreign anchor cannot even enter the portable record.
+                    assert!(engine.encode_record(&depth).is_none());
+                    continue;
+                }
+                let record = LowerRecord {
+                    depth,
+                    output: output(Arc::new(hirsel_tir::Definition {
+                        path: DefId::intern(path),
+                        signature_hash: ContentHash::default(),
+                        caller_bodies: vec![],
+                        protocol_associations: vec![],
+                        types: Arc::from([]),
+                        bodies: vec![],
+                        entry: hirsel_tir::BodyId(0),
+                        contracts: vec![],
+                    })),
+                    detail: Default::default(),
+                    verdict: None,
+                };
+                engine
+                    .write_record(path, QueryKind::Lower, &Reads::empty(), &record)
+                    .unwrap();
+                engine.verify_store = verify;
+                assert!(engine.load_lower(path).is_none());
+                assert_eq!(engine.store_adoptions(), 0);
+                assert!(engine.pending_store_checks.is_empty());
+            }
+        }
+    }
+
     #[test]
     fn invalid_signature_records_miss_before_adoption_or_verification() {
         for verify in [
