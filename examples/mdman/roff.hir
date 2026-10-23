@@ -15,12 +15,14 @@ type Context {
 }
 
 fn append(mut builder: unique Builder, value: String) -> Result[(), manifest.Problem] uses {} {
-  if string.byte_len(value) > manifest.OUTPUT_BYTES - list.len(builder.bytes) {
+  let len = string.byte_len(value)
+  if len > manifest.OUTPUT_BYTES - list.len(builder.bytes) {
     return Error(manifest.limit(builder.source, "output bytes"))
   }
   text.append(mut builder.bytes, value)
-  if value != "" {
-    builder.line_start = string.ends_with(value, "\n")
+  if len != 0 {
+    let data = string.as_bytes(value)
+    builder.line_start = data[len - 1] == 10
   }
   Ok(())
 }
@@ -32,48 +34,87 @@ fn newline(mut builder: unique Builder) -> Result[(), manifest.Problem] uses {} 
   Ok(())
 }
 
+const ESCAPE_BYTES: Bytes = b"\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f\x22\x27\x2d\x2e\x5c\x7f\x80\x81\x82\x83\x84\x85\x86\x87\x88\x89\x8a\x8b\x8c\x8d\x8e\x8f\x90\x91\x92\x93\x94\x95\x96\x97\x98\x99\x9a\x9b\x9c\x9d\x9e\x9f\xa0\xa1\xa2\xa3\xa4\xa5\xa6\xa7\xa8\xa9\xaa\xab\xac\xad\xae\xaf\xb0\xb1\xb2\xb3\xb4\xb5\xb6\xb7\xb8\xb9\xba\xbb\xbc\xbd\xbe\xbf\xc0\xc1\xc2\xc3\xc4\xc5\xc6\xc7\xc8\xc9\xca\xcb\xcc\xcd\xce\xcf\xd0\xd1\xd2\xd3\xd4\xd5\xd6\xd7\xd8\xd9\xda\xdb\xdc\xdd\xde\xdf\xe0\xe1\xe2\xe3\xe4\xe5\xe6\xe7\xe8\xe9\xea\xeb\xec\xed\xee\xef\xf0\xf1\xf2\xf3\xf4\xf5\xf6\xf7\xf8\xf9\xfa\xfb\xfc\xfd\xfe\xff"
+
+fn text_piece(value: String, begin: u64, end: u64) -> String in value uses {} {
+  let Some(a) = string.position(value, begin) else {
+    failure.check(false, TextInvariant())
+    return value
+  }
+  let Some(b) = string.position(value, end) else {
+    failure.check(false, TextInvariant())
+    return value
+  }
+  string.slice(value, a, b)
+}
+
 fn escaped(mut builder: unique Builder, value: String, quoted: bool) -> Result[
   (),
   manifest.Problem
 ] uses {} {
-  for c in string.scalars(value) {
-    let replacement = match c {
-      '.' => if builder.line_start {
-        "\\&."
-      } else {
-        "."
-      },
-      '\'' => if builder.line_start {
-        "\\&'"
-      } else {
-        "'"
-      },
-      '-' => "\\-",
-      '\\' => "\\e",
-      '‘' => "\\[oq]",
-      '’' => "\\[cq]",
-      '“' => "\\[lq]",
-      '”' => "\\[rq]",
-      '—' => "\\[em]",
-      '–' => "\\[en]",
-      '"' => if quoted {
-        "\\(dq"
-      } else {
-        "\""
-      },
-      _ => "",
+  let data = string.as_bytes(value)
+  let len = bytes.len(data)
+  if len == 0 {
+    return Ok(())
+  }
+  if bytes.find_any(data, ESCAPE_BYTES, 0) == len {
+    return append(mut builder, value)
+  }
+  let mut at = 0u64
+  while at < len {
+    let end = bytes.find_any(data, ESCAPE_BYTES, at)
+    if at < end {
+      append(mut builder, text_piece(value, at, end))?
+      at = end
     }
-    if replacement != "" {
-      append(mut builder, replacement)?
-    } else if char.to_u32(c) < 32 && c != '\n' && c != '\t' || char.to_u32(c) >= 127 && char.to_u32(
-      c
-    ) <= 159 {
-      append(mut builder, "\\[uFFFD]")?
-    } else {
-      let mut encoded: List[u8] = []
-      char.format_into(c, mut encoded)
-      append(mut builder, text.finish_valid(take encoded))?
+    if at == len {
+      break
     }
+    let mut next = at + 1
+    while next < len && data[next] >= 128 && data[next] < 192 {
+      next += 1
+    }
+    let scalar = text_piece(value, at, next)
+    for c in string.scalars(scalar) {
+      let replacement = match c {
+        '.' => if builder.line_start {
+          "\\&."
+        } else {
+          "."
+        },
+        '\'' => if builder.line_start {
+          "\\&'"
+        } else {
+          "'"
+        },
+        '-' => "\\-",
+        '\\' => "\\e",
+        '‘' => "\\[oq]",
+        '’' => "\\[cq]",
+        '“' => "\\[lq]",
+        '”' => "\\[rq]",
+        '—' => "\\[em]",
+        '–' => "\\[en]",
+        '"' => if quoted {
+          "\\(dq"
+        } else {
+          "\""
+        },
+        _ => "",
+      }
+      if replacement != "" {
+        append(mut builder, replacement)?
+      } else if char.to_u32(c) < 32 && c != '\n' && c != '\t' || char.to_u32(c) >= 127 && char.to_u32(
+        c
+      ) <= 159 {
+        append(mut builder, "\\[uFFFD]")?
+      } else {
+        let mut encoded: List[u8] = []
+        char.format_into(c, mut encoded)
+        append(mut builder, text.finish_valid(take encoded))?
+      }
+    }
+    at = next
   }
   Ok(())
 }

@@ -2,6 +2,19 @@
 // expect: run
 pub fn main() -> Result[(), ()] {
   let options = markdown.default_options()
+  // CommonMark paragraphs, thematic breaks and setext headings expose the same
+  // editable AST, including soft breaks within a multi-line paragraph.
+  let literal = markdown.parse("alpha\nbeta\n\n---\n\ngamma\n---\n", options)
+  failure.check(list.len(literal.children) == 3, TextInvariant())
+  failure.check(literal.children[0].kind == Paragraph(), TextInvariant())
+  failure.check(list.len(literal.children[0].children) == 3, TextInvariant())
+  failure.check(literal.children[0].children[1].kind == SoftBreak(), TextInvariant())
+  failure.check(literal.children[1].kind == ThematicBreak(), TextInvariant())
+  failure.check(literal.children[2].kind == Heading(2), TextInvariant())
+  failure.check(
+    markdown.render_html(literal) == "<p>alpha\nbeta</p>\n<hr />\n<h2>gamma</h2>\n",
+    TextInvariant()
+  )
   let mut document = markdown.parse("# title", options)
   failure.check(list.len(document.children) == 1, TextInvariant())
   document.children[0].kind = Heading(3)

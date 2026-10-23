@@ -124,3 +124,23 @@ admission check for a complete literal span removes redundant per-byte checks
 while preserving accounting of every accepted byte and late sink errors. This is
 an acceptance fix, not a measured performance claim. The original failed witness
 and baseline receipt are retained with the lane's evidence.
+
+
+## Literal documents and byte scanning
+
+The block/inline split follows the existing commonmark.js and cmark-gfm ports.
+For a document with no inline openers or reference definitions, with autolinks
+disabled, literal paragraphs, soft breaks, exact thematic breaks and setext
+separators can construct the public Node tree directly. This omits the temporary
+Entry arena and delimiter bookkeeping. Whitespace-sensitive lines and other
+syntax use the general parser. The editable AST and rendered bytes are retained;
+`SEM-3-markdown-api-run.hir` covers the literal tree alongside the existing
+published CommonMark, GFM and malformed vectors. No parse budget API is added.
+
+Normalization combines NUL replacement, CRLF/bare-CR conversion and line splitting
+in one scan, preserving the existing omission of a final empty line. The byte-set
+leaf follows Go `src/strings/strings.go:184-240,948-967` at
+`dc70946c365d0c23dc2fccc2c3ff94c20c77e3b8`, with a full 256-byte set rather than
+an ASCII-only set. It reports offsets relative to the supplied extent and never
+retains its inputs. This is shared with the man renderer's ordinary-text scan;
+exceptional scalars retain the existing cmark man escaping rules.

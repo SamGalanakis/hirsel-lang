@@ -40,10 +40,18 @@ fn unsupported(kind: markdown.Kind) -> Option[String] uses {} {
   }
 }
 
+fn location(anchor: List[u64]) -> unique String uses {} {
+  let mut out: List[u8] = []
+  for index in anchor {
+    text.append(mut out, f"/{index}")
+  }
+  text.finish_valid(take out)
+}
+
 fn inspect(
   node: markdown.Node,
   name: String,
-  anchor: String,
+  mut anchor: List[u64],
   depth: u64,
   mut count: u64
 ) -> Result[(), manifest.Problem] uses {} {
@@ -55,11 +63,13 @@ fn inspect(
   }
   count += 1
   if let Some(kind) = unsupported(node.kind) {
-    return Error(Unsupported(unique name, unique anchor, take kind))
+    return Error(Unsupported(unique name, location(anchor), take kind))
   }
   let mut index = 0u64
   for child in node.children {
-    inspect(child, name, f"{anchor}/{index}", depth + 1, mut count)?
+    list.push(mut anchor, index)
+    inspect(child, name, mut anchor, depth + 1, mut count)?
+    list.truncate(mut anchor, depth)
     index += 1
   }
   Ok(())
@@ -67,7 +77,8 @@ fn inspect(
 
 pub fn validate(tree: markdown.Node, name: String) -> Result[(), manifest.Problem] uses {} {
   let mut count = 0u64
-  inspect(tree, name, "", 0, mut count)
+  let mut anchor: List[u64] = []
+  inspect(tree, name, mut anchor, 0, mut count)
 }
 
 pub fn load(d: Dir, item: manifest.Input) -> batch.Work[

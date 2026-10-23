@@ -166,16 +166,6 @@ fn with_words(words: Inline[u32, 8]) -> State uses {} {
 }
 
 @noalloc
-fn rotate(value: u32, bits: u32) -> u32 uses {} {
-  value >> bits | value << 32u32 - bits
-}
-
-@noalloc
-fn add(a: u32, b: u32) -> u32 uses {} {
-  core@1/int.wrapping_add(a, b)
-}
-
-@noalloc
 fn compress(mut state: State) -> () uses {} {
   let mut schedule: Inline[u32, 64] = [
     0u32,
@@ -344,9 +334,12 @@ fn rounds(mut words: Inline[u32, 8], take initial: Inline[u32, 64]) -> () uses {
   while i < 64 {
     let a = schedule[i - 15]
     let b = schedule[i - 2]
-    let s0 = rotate(a, 7) ^ rotate(a, 18) ^ a >> 3
-    let s1 = rotate(b, 17) ^ rotate(b, 19) ^ b >> 10
-    schedule[i] = add(add(schedule[i - 16], s0), add(schedule[i - 7], s1))
+    let s0 = (a >> 7u32 | a << 25u32) ^ (a >> 18u32 | a << 14u32) ^ a >> 3
+    let s1 = (b >> 17u32 | b << 15u32) ^ (b >> 19u32 | b << 13u32) ^ b >> 10
+    schedule[i] = core@1/int.wrapping_add(
+      core@1/int.wrapping_add(schedule[i - 16], s0),
+      core@1/int.wrapping_add(schedule[i - 7], s1)
+    )
     i += 1
   }
   let mut a = words[0]
@@ -359,30 +352,33 @@ fn rounds(mut words: Inline[u32, 8], take initial: Inline[u32, 64]) -> () uses {
   let mut h = words[7]
   i = 0
   while i < 64 {
-    let upper = rotate(e, 6) ^ rotate(e, 11) ^ rotate(e, 25)
+    let upper = (e >> 6u32 | e << 26u32) ^ (e >> 11u32 | e << 21u32) ^ (e >> 25u32 | e << 7u32)
     let choice = e & f ^ ~e & g
-    let t1 = add(add(add(h, upper), choice), add(K[i], schedule[i]))
-    let lower = rotate(a, 2) ^ rotate(a, 13) ^ rotate(a, 22)
+    let t1 = core@1/int.wrapping_add(
+      core@1/int.wrapping_add(core@1/int.wrapping_add(h, upper), choice),
+      core@1/int.wrapping_add(K[i], schedule[i])
+    )
+    let lower = (a >> 2u32 | a << 30u32) ^ (a >> 13u32 | a << 19u32) ^ (a >> 22u32 | a << 10u32)
     let majority = a & b ^ a & c ^ b & c
-    let t2 = add(lower, majority)
+    let t2 = core@1/int.wrapping_add(lower, majority)
     h = g
     g = f
     f = e
-    e = add(d, t1)
+    e = core@1/int.wrapping_add(d, t1)
     d = c
     c = b
     b = a
-    a = add(t1, t2)
+    a = core@1/int.wrapping_add(t1, t2)
     i += 1
   }
-  words[0] = add(words[0], a)
-  words[1] = add(words[1], b)
-  words[2] = add(words[2], c)
-  words[3] = add(words[3], d)
-  words[4] = add(words[4], e)
-  words[5] = add(words[5], f)
-  words[6] = add(words[6], g)
-  words[7] = add(words[7], h)
+  words[0] = core@1/int.wrapping_add(words[0], a)
+  words[1] = core@1/int.wrapping_add(words[1], b)
+  words[2] = core@1/int.wrapping_add(words[2], c)
+  words[3] = core@1/int.wrapping_add(words[3], d)
+  words[4] = core@1/int.wrapping_add(words[4], e)
+  words[5] = core@1/int.wrapping_add(words[5], f)
+  words[6] = core@1/int.wrapping_add(words[6], g)
+  words[7] = core@1/int.wrapping_add(words[7], h)
 }
 
 @noalloc

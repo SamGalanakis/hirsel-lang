@@ -1344,6 +1344,9 @@ fn remove_delimiter(mut ip: unique InlineParser, id: u64) -> () uses {} {
 }
 
 fn process_emphasis(mut nodes: List[Entry], mut ip: unique InlineParser, bottom: u64) -> () uses {} {
+  if ip.top == 0 {
+    return
+  }
   let mut closer = ip.top
   while closer != 0 && ip.delimiters[closer].prev != bottom {
     closer = ip.delimiters[closer].prev
@@ -1676,6 +1679,24 @@ fn close_bracket(mut p: Parser, parent: u64, mut ip: unique InlineParser) -> () 
 
 fn parse_inlines(mut p: Parser, parent: u64) -> () uses {} {
   let source = trim(p.nodes[parent].value)
+  let markers = if p.options.strikethrough {
+    b"\n`\\*_[]!<&~"
+  } else {
+    b"\n`\\*_[]!<&"
+  }
+  // A literal run needs neither a delimiter stack nor bracket bookkeeping.
+  if !p.options.autolinks && core@1/bytes.find_any(
+    core@1/string.as_bytes(source),
+    markers,
+    0
+  ) == size(source) {
+    if size(source) != 0 {
+      let literal = unique source
+      let _ = text_node(mut p.nodes, parent, literal, 9)
+    }
+    p.nodes[parent].value = ""
+    return
+  }
   let sentinel = Delimiter(
     node: 0,
     marker: 0,
@@ -1869,18 +1890,22 @@ fn parse_inlines(mut p: Parser, parent: u64) -> () uses {} {
     }
     // Aggregate ordinary text so trailing-space processing sees a complete run.
     let mut end = start + 1
-    while end < size(ip.source) {
-      let b = byte(ip.source, end)
-      if p.options.autolinks && core@1/list.len(ip.brackets) == 0 && extended_autolink(
-        ip.source,
-        end
-      ) != None() {
-        break
+    if !p.options.autolinks || core@1/list.len(ip.brackets) != 0 {
+      end = core@1/bytes.find_any(core@1/string.as_bytes(ip.source), markers, end)
+    } else {
+      while end < size(ip.source) {
+        let b = byte(ip.source, end)
+        if p.options.autolinks && core@1/list.len(ip.brackets) == 0 && extended_autolink(
+          ip.source,
+          end
+        ) != None() {
+          break
+        }
+        if b == 10 || b == 96 || b == 92 || b == 42 || b == 95 || b == 91 || b == 93 || b == 33 || b == 60 || b == 38 || b == 126 && p.options.strikethrough {
+          break
+        }
+        end += 1
       }
-      if b == 10 || b == 96 || b == 92 || b == 42 || b == 95 || b == 91 || b == 93 || b == 33 || b == 60 || b == 38 || b == 126 && p.options.strikethrough {
-        break
-      }
-      end += 1
     }
     let _ = text_node(mut p.nodes, parent, piece(ip.source, start, end), 9)
     ip.at = end
@@ -1927,14 +1952,121 @@ fn build_node(nodes: List[Entry], id: u64) -> Node uses {} {
   Node(kind: kind, children: take children)
 }
 
+// CommonMark preprocessing and line splitting share one byte scan. Delimiters
+// are ASCII, so every emitted slice starts and ends at a UTF-8 boundary.
+fn normalized_line(source: String, begin: u64, end: u64, take prefix: unique List[u8]) -> unique String uses {} {
+  if core@1/list.len(prefix) == 0 {
+    piece(source, begin, end)
+  } else {
+    let mut out = take prefix
+    text.append(mut out, piece(source, begin, end))
+    text.finish_valid(take out)
+  }
+}
+
+fn normalized_lines(source: String) -> List[String] uses {} {
+  let data = core@1/string.as_bytes(source)
+  let len = core@1/bytes.len(data)
+  let mut lines: List[String] = []
+  // LF-only input needs no replacement buffer or CRLF state.
+  if core@1/bytes.find_any(data, b"\x00\r", 0) == len {
+    let mut begin = 0u64
+    while begin < len {
+      let end = core@1/bytes.find_any(data, b"\n", begin)
+      core@1/list.push(mut lines, piece(source, begin, end))
+      if end == len {
+        return take lines
+      }
+      begin = end + 1
+    }
+    return take lines
+  }
+  let mut prefix: List[u8] = []
+  let mut begin = 0u64
+  let mut at = 0u64
+  while at < len {
+    let end = core@1/bytes.find_any(data, b"\x00\r\n", at)
+    if end == len {
+      break
+    }
+    let c = data[end]
+    if c == 0 {
+      text.append(mut prefix, piece(source, begin, end))
+      text.append(mut prefix, "\u{fffd}")
+      begin = end + 1
+    } else {
+      core@1/list.push(mut lines, normalized_line(source, begin, end, take prefix))
+      prefix = []
+      begin = end + 1
+      if c == 13 && begin < len && data[begin] == 10 {
+        begin += 1
+      }
+    }
+    at = begin
+  }
+  if begin < len || core@1/list.len(prefix) != 0 {
+    core@1/list.push(mut lines, normalized_line(source, begin, len, take prefix))
+  }
+  take lines
+}
+
+// Literal paragraphs and exact thematic/setext separators need no arena links.
+// All other syntax uses the general CommonMark passes below. The conservative
+// byte preflight also excludes reference definitions and every inline opener.
+fn literal_document(source: String, options: Options) -> Option[Node] uses {} {
+  let data = core@1/string.as_bytes(source)
+  if options.autolinks || core@1/bytes.find_any(data, b"\\`*_[]!<&#>+~=:|0123456789", 0) != core@1/bytes.len(
+    data
+  ) {
+    return None()
+  }
+  let lines = normalized_lines(source)
+  let mut nodes: List[Node] = []
+  let mut paragraph: List[Node] = []
+  for line in take lines {
+    let bytes = core@1/string.as_bytes(line)
+    let len = core@1/bytes.len(bytes)
+    if len == 0 || line == "---" {
+      if core@1/list.len(paragraph) != 0 {
+        core@1/list.push(
+          mut nodes,
+          Node(
+            kind: if len == 0 {
+              Paragraph()
+            } else {
+              Heading(2)
+            },
+            children: take paragraph
+          )
+        )
+        paragraph = []
+      } else if len != 0 {
+        core@1/list.push(mut nodes, Node(kind: ThematicBreak(), children: []))
+      }
+    } else {
+      // Leading indentation, trailing spaces and other hyphen-led blocks need
+      // the general parser (including hard breaks and list interruption).
+      if bytes[0] == 32 || bytes[0] == 9 || bytes[0] == 45 || bytes[len - 1] == 32 || bytes[len - 1] == 9 {
+        return None()
+      }
+      if core@1/list.len(paragraph) != 0 {
+        core@1/list.push(mut paragraph, Node(kind: SoftBreak(), children: []))
+      }
+      core@1/list.push(mut paragraph, Node(kind: Text(unique line), children: []))
+    }
+  }
+  if core@1/list.len(paragraph) != 0 {
+    core@1/list.push(mut nodes, Node(kind: Paragraph(), children: take paragraph))
+  }
+  Some(Node(kind: Document(), children: take nodes))
+}
+
 /// Parse every String, including incomplete Markdown. NUL becomes U+FFFD;
 /// CRLF and bare CR become LF, as required by CommonMark preprocessing.
 pub fn parse(take source: String, options: Options) -> Node uses {} {
-  let normalized = string.replace(
-    string.replace(string.replace(source, "\u{0}", "\u{fffd}"), "\r\n", "\n"),
-    "\r",
-    "\n"
-  )
+  if let Some(document) = literal_document(source, options) {
+    return take document
+  }
   let mut p = Parser(
     nodes: [entry(0)],
     tip: 0,
@@ -1953,7 +2085,7 @@ pub fn parse(take source: String, options: Options) -> Node uses {} {
     refs: core@1/map.empty(),
     options: options
   )
-  for line in string.lines(take normalized) {
+  for line in normalized_lines(source) {
     incorporate(mut p, unique line)
   }
   while p.tip != 0 {

@@ -11,20 +11,16 @@
 pub type PathError = Invalid(u64)
 
 fn owned_piece(text: String, begin: u64, end: u64) -> unique String uses {} {
-  let bytes = core@1/string.as_bytes(text)
-  let mut builder: List[u8] = []
-  let mut i = begin
-  while i < end {
-    core@1/list.push(mut builder, bytes[i])
-    i += 1
+  // Component delimiters are ASCII, so the selected offsets are UTF-8 boundaries.
+  let Some(a) = core@1/string.position(text, begin) else {
+    core@1/failure.check(false, TextInvariant())
+    return ""
   }
-  match text.finish(take builder) {
-    Ok(value) => take value,
-    Error(_) => {
-      core@1/failure.check(false, TextInvariant())
-      ""
-    },
+  let Some(b) = core@1/string.position(text, end) else {
+    core@1/failure.check(false, TextInvariant())
+    return ""
   }
+  unique core@1/string.slice(text, a, b)
 }
 
 // Adapted from Zig lib/std/fs/path.zig mem.tokenizeScalar used by resolveAppendPosix.
