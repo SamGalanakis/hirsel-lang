@@ -1,0 +1,79 @@
+const HELP: String = "Usage: zonetable FILE.json [--format PATTERN]\nConvert up to 64 local meetings using explicit TZif files.\nPolicies: Reject (default), Earlier, Later. Exit: 0 success/help, 2 invalid input or I/O.\n"
+
+fn read_local(directory: Dir, name: String, limit: u64) -> Result[
+  Bytes,
+  model.InputError
+] {
+  if !model.valid_path(name) {
+    return Error(Path())
+  }
+  let mut handle = file.open(directory, path.of(name)) ? Open
+  Ok(file.read_all_bounded(directory, mut handle, limit)?)
+}
+
+fn run(rt: Io, args: Args) -> Result[Bytes, model.InputError] {
+  if arg.len(args) != 1 && arg.len(args) != 3 {
+    return Error(Usage())
+  }
+  let Ok(name) = arg.text(args, 0) else {
+    return Error(Usage())
+  }
+  let mut pattern = model.DEFAULT_FORMAT
+  if arg.len(args) == 3 {
+    let Ok(flag) = arg.text(args, 1) else {
+      return Error(Usage())
+    }
+    let Ok(value) = arg.text(args, 2) else {
+      return Error(Usage())
+    }
+    if flag != "--format" {
+      return Error(Usage())
+    }
+    pattern = unique value
+  }
+  model.validate_format(pattern)?
+  let Ok(directory) = io.dir(rt, path.of("input")) else {
+    return Error(DirectoryGrant())
+  }
+  let rows = model.parse(read_local(directory, name, model.INPUT_BYTES)?)?
+  let mut converted: List[model.Converted] = []
+  for index in 0u64..list.len(rows) {
+    let item = rows[index]
+    let source_data = read_local(directory, item.source, model.ZONE_BYTES)?
+    let destination_data = read_local(directory, item.destination, model.ZONE_BYTES)?
+    let conversion = match model.convert(item, source_data, destination_data, pattern) {
+      Ok(value) => value,
+      Error(cause) => return Error(Row(index + 1, cause)),
+    }
+    list.push(mut converted, take conversion)
+  }
+  Ok(model.encode(converted))
+}
+
+pub fn main(rt: Io, args: Args) -> std@1/process.ExitCode {
+  let Ok(output) = io.stdout(rt) else {
+    return std@1/process.exit_code(2u8)
+  }
+  if arg.len(args) == 1 {
+    if let Ok(argument) = arg.text(args, 0) {
+      if argument == "--help" {
+        let Ok(()) = out.write(output, string.as_bytes(HELP)) else {
+          return std@1/process.exit_code(2u8)
+        }
+        return std@1/process.SUCCESS
+      }
+    }
+  }
+  match run(rt, args) {
+    Ok(report) => {
+      let Ok(()) = out.write(output, report) else {
+        return std@1/process.exit_code(2u8)
+      }
+      std@1/process.SUCCESS
+    },
+    Error(error) => {
+      let _ = out.write(output, model.encode_error(error))
+      std@1/process.exit_code(2u8)
+    },
+  }
+}

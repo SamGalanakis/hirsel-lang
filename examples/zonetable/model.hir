@@ -1,0 +1,273 @@
+pub const INPUT_BYTES: u64 = 65536
+
+pub const ZONE_BYTES: u64 = 65536
+
+pub const ROWS: u64 = 64
+
+pub const DEFAULT_FORMAT: String = "%Y-%m-%dT%H:%M:%S.%f%z"
+
+pub type ConversionError = Local(scalar.ParseError) | SourceTzif(scalar.ParseError) | DestinationTzif(
+  scalar.ParseError
+) | Resolve(time.ZoneError) | Range(time.TimeError) | Format(time.FormatError)
+
+pub type InputError = InputBytes | RowLimit | Json(json.JsonError) | Fields(u64) | FieldBytes(
+  u64
+) | Policy(u64) | Path | Usage | DirectoryGrant | Open(FileError) | Read(
+  file.ReadBoundedError
+) | Row(u64, ConversionError) | OutputFormat(time.FormatError)
+
+pub type Row {
+  source_input: String,
+  source: String,
+  destination: String,
+  policy: time.Disambiguation,
+}
+
+pub type Converted {
+  source_input: String,
+  source: String,
+  destination: String,
+  policy: String,
+  resolution: String,
+  instant: String,
+  source_time: String,
+  destination_time: String,
+  offset_seconds: i32,
+}
+
+pub fn valid_path(name: String) -> bool uses {} {
+  if name == "" || name == "." || name == ".." || string.byte_len(name) > 128 {
+    return false
+  }
+  for byte in string.as_bytes(name) {
+    if byte == b'/' || byte == b'\\' || byte == b':' || byte == 0 {
+      return false
+    }
+  }
+  true
+}
+
+fn row(mut cursor: json.Reader, index: u64) -> Result[unique Row, InputError] uses {} {
+  json.begin_object(mut cursor)?
+  let mut first = true
+  let mut keys: Set[String] = set.empty()
+  let mut source_input: Option[String] = None()
+  let mut source: Option[String] = None()
+  let mut destination: Option[String] = None()
+  let mut policy: time.Disambiguation = Reject()
+  while let Some(key) = json.object_next(mut cursor, mut first, mut keys)? {
+    if set.len(keys) > 4 || key != "local" && key != "source" && key != "destination" && key != "policy" {
+      return Error(Fields(index))
+    }
+    let value = json.read_owned_text(mut cursor)?
+    if string.byte_len(value) > 128 {
+      return Error(FieldBytes(index))
+    }
+    if key == "local" {
+      source_input = Some(take value)
+    } else if key == "source" {
+      source = Some(take value)
+    } else if key == "destination" {
+      destination = Some(take value)
+    } else {
+      policy = match value {
+        "Reject" => Reject(),
+        "Earlier" => Earlier(),
+        "Later" => Later(),
+        _ => return Error(Policy(index)),
+      }
+    }
+  }
+  let Some(local_text) = take source_input else {
+    return Error(Fields(index))
+  }
+  let Some(source_path) = take source else {
+    return Error(Fields(index))
+  }
+  let Some(destination_path) = take destination else {
+    return Error(Fields(index))
+  }
+  if !valid_path(source_path) || !valid_path(destination_path) {
+    return Error(Path())
+  }
+  Ok(
+    Row(
+      source_input: take local_text,
+      source: take source_path,
+      destination: take destination_path,
+      policy: policy
+    )
+  )
+}
+
+pub fn parse(data: Bytes) -> Result[unique List[Row], InputError] uses {} {
+  if bytes.len(data) > INPUT_BYTES {
+    return Error(InputBytes())
+  }
+  let mut cursor = json.reader(data)
+  json.begin_array(mut cursor)?
+  let mut first = true
+  let mut rows: List[Row] = []
+  while json.array_next(mut cursor, mut first)? {
+    if list.len(rows) == ROWS {
+      return Error(RowLimit())
+    }
+    let item = row(mut cursor, list.len(rows) + 1)?
+    list.push(mut rows, take item)
+  }
+  json.finish_reader(mut cursor)?
+  Ok(take rows)
+}
+
+pub fn validate_format(pattern: String) -> Result[(), InputError] uses {} {
+  if string.byte_len(pattern) > 128 {
+    return Error(FieldBytes(0))
+  }
+  let epoch = time.Timestamp(unix_nanoseconds: 0)
+  let Ok(parts) = time.broken_down(epoch, 0) else {
+    return Error(Usage())
+  }
+  let _ = time.format(parts, pattern) ? OutputFormat
+  Ok(())
+}
+
+pub fn convert(item: Row, source_data: Bytes, destination_data: Bytes, pattern: String) -> Result[
+  Converted,
+  ConversionError
+] uses {} {
+  let civil = date_time.parse(item.source_input) ? Local
+  let source_zone = time_zone.from_tzif(source_data) ? SourceTzif
+  let destination_zone = time_zone.from_tzif(destination_data) ? DestinationTzif
+  let resolution = match time_zone.to_timestamp(source_zone, civil, Reject()) {
+    Ok(_) => "single",
+    Error(Gap()) => "gap",
+    Error(Fold()) => "fold",
+  }
+  let selected = time_zone.to_timestamp(source_zone, civil, item.policy) ? Resolve
+  let destination_offset = time_zone.offset(destination_zone, selected)
+  let shown = time.broken_down(selected, destination_offset)?
+  let source_civil = time_zone.to_datetime(source_zone, selected)?
+  Ok(
+    Converted(
+      source_input: unique item.source_input,
+      source: unique item.source,
+      destination: unique item.destination,
+      policy: match item.policy {
+        Reject() => "Reject",
+        Earlier() => "Earlier",
+        Later() => "Later",
+      },
+      resolution: resolution,
+      instant: time.to_string(selected)?,
+      source_time: date_time.to_string(source_civil),
+      destination_time: time.format(shown, pattern)?,
+      offset_seconds: destination_offset
+    )
+  )
+}
+
+fn append(mut output: List[u8], value: String) -> () uses {} {
+  bytes.append(mut output, string.as_bytes(value))
+}
+
+pub fn encode(rows: List[Converted]) -> Bytes uses {} {
+  let mut output: List[u8] = []
+  append(mut output, "[")
+  let mut first = true
+  for item in rows {
+    if !first {
+      append(mut output, ",")
+    }
+    first = false
+    append(mut output, "{\"local\":")
+    json.write_text_into(item.source_input, mut output)
+    append(mut output, ",\"source\":")
+    json.write_text_into(item.source, mut output)
+    append(mut output, ",\"destination\":")
+    json.write_text_into(item.destination, mut output)
+    append(mut output, ",\"policy\":")
+    json.write_text_into(item.policy, mut output)
+    append(mut output, ",\"resolution\":")
+    json.write_text_into(item.resolution, mut output)
+    append(mut output, ",\"instant\":")
+    json.write_text_into(item.instant, mut output)
+    append(mut output, ",\"source_time\":")
+    json.write_text_into(item.source_time, mut output)
+    append(mut output, ",\"destination_time\":")
+    json.write_text_into(item.destination_time, mut output)
+    append(mut output, f",\"offset_seconds\":{item.offset_seconds}}}")
+  }
+  append(mut output, "]\n")
+  bytes.from_list(take output)
+}
+
+fn parse_detail(error: scalar.ParseError) -> String uses {} {
+  match error {
+    Invalid() => "Invalid",
+    OutOfRange() => "OutOfRange",
+  }
+}
+
+fn format_detail(error: time.FormatError) -> (String, u64) uses {} {
+  match error {
+    Invalid(at) => ("Invalid", at),
+    NoOffset() => ("NoOffset", 0),
+    OutOfRange() => ("OutOfRange", 0),
+  }
+}
+
+pub fn encode_error(error: InputError) -> Bytes uses {} {
+  let (kind, index, detail, offset): (String, u64, String, u64) = match error {
+    InputBytes() => ("input_bytes", 0, "", 0),
+    RowLimit() => ("row_limit", 65, "", 0),
+    Json(cause) => {
+      let (description, at): (String, u64) = match cause {
+        Syntax(position) => ("Syntax", position),
+        DuplicateKey(position) => ("DuplicateKey", position),
+        Nesting(position) => ("Nesting", position),
+        InvalidNumber() => ("InvalidNumber", 0),
+      }
+      ("json", 0, description, at)
+    },
+    Fields(n) => ("fields", n, "", 0),
+    FieldBytes(n) => ("field_bytes", n, "", 0),
+    Policy(n) => ("policy", n, "", 0),
+    Path() => ("path", 0, "", 0),
+    Usage() => ("usage", 0, "", 0),
+    DirectoryGrant() => ("directory_grant", 0, "", 0),
+    Open(_) => ("file_open", 0, "", 0),
+    Read(cause) => match cause {
+      Limit() => ("file_bytes", 0, "", 0),
+      File(_) => ("file_read", 0, "", 0),
+    },
+    Row(n, cause) => match cause {
+      Local(e) => ("local", n, parse_detail(e), 0),
+      SourceTzif(e) => ("source_tzif", n, parse_detail(e), 0),
+      DestinationTzif(e) => ("destination_tzif", n, parse_detail(e), 0),
+      Resolve(e) => (
+        "resolve",
+        n,
+        match e {
+          Gap() => "Gap",
+          Fold() => "Fold",
+        },
+        0
+      ),
+      Range(_) => ("range", n, "OutOfRange", 0),
+      Format(e) => {
+        let (description, at) = format_detail(e)
+        ("format", n, description, at)
+      },
+    },
+    OutputFormat(e) => {
+      let (description, at) = format_detail(e)
+      ("format", 0, description, at)
+    },
+  }
+  let mut output: List[u8] = []
+  append(
+    mut output,
+    f"{{\"class\":\"invalid_input\",\"error\":\"{kind}\",\"row\":{index},\"detail\":\"{detail}\",\"offset\":{offset}}}\n"
+  )
+  bytes.from_list(take output)
+}

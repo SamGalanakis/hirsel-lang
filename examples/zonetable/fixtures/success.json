@@ -1,0 +1,13 @@
+[
+  {
+    "local": "2024-07-15T17:30:00",
+    "source": "new-york.tzif",
+    "destination": "plus-five.tzif"
+  },
+  {
+    "local": "2024-11-03T01:30:00",
+    "source": "new-york.tzif",
+    "destination": "utc.tzif",
+    "policy": "Later"
+  }
+]
