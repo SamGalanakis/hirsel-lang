@@ -24,6 +24,7 @@ pub(crate) struct Role {
     enabled: AtomicBool,
     owner: Mutex<Option<usize>>,
     available: Condvar,
+    home_waiting: AtomicBool,
 }
 
 impl Role {
@@ -56,6 +57,46 @@ impl Role {
         *owner = Some(IDLE_OWNER);
     }
 
+    /// Like std Condvar::wait_while (rust-lang/rust a7c37f9f0ee5,
+    /// library/std/src/sync/poison/condvar.rs:182-193), check the complete
+    /// predicate under the notification lock. Hirsel's home thread must also
+    /// run synchronous bridges: the role owner may be waiting for one.
+    unsafe fn acquire_idle_home(&self, run: *mut RunShared) {
+        let mut owner = self.owner.lock().unwrap_or_else(|e| e.into_inner());
+        self.home_waiting.store(true, Ordering::Relaxed);
+        while owner.is_some() {
+            if let Some(call) = unsafe { crate::pool::take_home_call(run) } {
+                drop(owner);
+                // No role or adapter borrow crosses this callback.
+                unsafe { crate::pool::run_call(call) };
+                owner = self.owner.lock().unwrap_or_else(|e| e.into_inner());
+            } else {
+                owner = self
+                    .available
+                    .wait(owner)
+                    .unwrap_or_else(|e| e.into_inner());
+            }
+        }
+        self.home_waiting.store(false, Ordering::Relaxed);
+        *owner = Some(IDLE_OWNER);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn home_waiting(&self) -> bool {
+        self.home_waiting.load(Ordering::Relaxed)
+    }
+
+    /// A caller publishes its bridge before taking this predicate lock, so
+    /// home cannot miss the call between checking the queue and waiting.
+    pub(crate) fn notify_home_call(&self) {
+        if self.enabled.load(Ordering::Acquire) {
+            let _owner = self.owner.lock().unwrap_or_else(|e| e.into_inner());
+            if self.home_waiting.load(Ordering::Relaxed) {
+                self.available.notify_all();
+            }
+        }
+    }
+
     fn try_acquire_idle(&self) -> bool {
         let mut owner = match self.owner.try_lock() {
             Ok(owner) => owner,
@@ -78,7 +119,11 @@ impl Role {
         if *owner == Some(task) {
             before();
             *owner = None;
-            self.available.notify_one();
+            if self.home_waiting.load(Ordering::Relaxed) {
+                self.available.notify_all();
+            } else {
+                self.available.notify_one();
+            }
         }
     }
 }
@@ -107,6 +152,22 @@ impl IdleGuard {
             run: if enabled { run } else { std::ptr::null_mut() },
             _local: std::marker::PhantomData,
         })
+    }
+
+    /// Acquire on admission after releasing every adapter borrow. While a
+    /// worker owns the role, its synchronous home calls must still be served.
+    /// # Safety
+    /// As for new, on the binding's home thread with no adapter borrow.
+    pub(crate) unsafe fn home(run: *mut RunShared) -> Self {
+        let role = unsafe { &(*run).role };
+        let enabled = role.enabled.load(Ordering::Acquire);
+        if enabled {
+            unsafe { role.acquire_idle_home(run) };
+        }
+        Self {
+            run: if enabled { run } else { std::ptr::null_mut() },
+            _local: std::marker::PhantomData,
+        }
     }
 
     /// # Safety

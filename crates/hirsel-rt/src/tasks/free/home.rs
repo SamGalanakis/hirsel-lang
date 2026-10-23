@@ -73,7 +73,7 @@ pub(crate) unsafe fn service(run: *mut RunShared) -> bool {
     // The home thread serializes this call with all worker home bridges.
     // Never retain the scheduler role while an adapter blocks or calls back.
     let result = unsafe { poll_home(run, idle, &canceled) };
-    let _guard = unsafe { role::IdleGuard::new(run) };
+    let _guard = unsafe { role::IdleGuard::home(run) };
     if unsafe { (*run).control.stopped().is_some() } {
         return true;
     }

@@ -343,7 +343,7 @@ pub(crate) unsafe fn service(run: *mut RunShared) -> bool {
         .into_iter()
         .filter(|&t| io.adapter.cancellable(t))
         .collect::<Vec<_>>();
-    let _guard = unsafe { role::IdleGuard::new(run) };
+    let _guard = unsafe { role::IdleGuard::home(run) };
     if unsafe { (*run).control.stopped().is_some() } {
         return true;
     }
@@ -399,7 +399,7 @@ pub(crate) unsafe fn service(run: *mut RunShared) -> bool {
     }
     let sources = unsafe { wait(run) };
     if !matches!(sources, Ok(true)) {
-        let _guard = unsafe { role::IdleGuard::new(run) };
+        let _guard = unsafe { role::IdleGuard::home(run) };
         match sources {
             Ok(false) => unsafe { super::super::check_quiet_without_sources(run) },
             Err(stop) => {

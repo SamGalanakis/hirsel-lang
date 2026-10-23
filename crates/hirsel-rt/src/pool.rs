@@ -79,7 +79,7 @@ enum Kind {
 
 /// A closure the home thread runs for a thread that waits for it ([`call_home`]).
 #[derive(Clone)]
-struct Call {
+pub(crate) struct Call {
     claim: Arc<hirsel_free::claim::Request<()>>,
     run: *mut (dyn FnMut() + 'static),
     done: *const Done,
@@ -994,7 +994,7 @@ unsafe fn resume(run: *mut RunShared, exec: &Exec, task: u32, permit: bool) {
 ///
 /// # Safety
 /// `call` came from a live [`call_home`].
-unsafe fn run_call(call: Call) {
+pub(crate) unsafe fn run_call(call: Call) {
     // SAFETY: the caller waits for `done`, so its closure and completion are live.
     unsafe {
         let claimed = call.claim.claim();
@@ -1010,6 +1010,23 @@ unsafe fn run_call(call: Call) {
         *ended = Some(claimed);
         done.bell.notify_one();
     }
+}
+
+/// Take only a synchronous bridge while home waits to merge under the role.
+/// Saved fibers and scheduling posts retain their original queue order.
+/// # Safety
+/// Admission's home thread; no role or adapter borrow is held by the caller.
+pub(crate) unsafe fn take_home_call(run: *mut RunShared) -> Option<Call> {
+    let execs = unsafe { (*(*run).execs.get()).as_deref() }?;
+    let mut inbox = execs.home.inbox.lock().unwrap();
+    let index = inbox
+        .posts
+        .iter()
+        .position(|(post, _)| matches!(post, Post::Call(_)))?;
+    let (Post::Call(call), _) = inbox.posts.remove(index).unwrap() else {
+        unreachable!()
+    };
+    Some(call)
 }
 
 /// Wait for a post and serve it; false at the run's end.
@@ -1430,6 +1447,7 @@ pub(crate) unsafe fn call_home_in(run: *mut RunShared, call: &mut dyn FnMut()) -
         execs.calls.retire(id);
         return Err(run.control.stopped().unwrap_or(Stop::Requested));
     }
+    run.role.notify_home_call();
     let mut ended = done.ended.lock().unwrap();
     let exec = unsafe { &*current(execs) };
     let held = exec.held.load(Ordering::Relaxed);
@@ -1740,6 +1758,89 @@ pub(crate) fn forget(run: &mut RunShared) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn home_role_merge_serves_a_bridge_from_the_role_owner() {
+        const CHILD: &str = "HIRSEL_HOME_ROLE_BRIDGE_TEST";
+        if std::env::var_os(CHILD).is_none() {
+            let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "pool::tests::home_role_merge_serves_a_bridge_from_the_role_owner",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .spawn()
+                .unwrap();
+            let until = Instant::now() + Duration::from_secs(5);
+            loop {
+                if let Some(status) = child.try_wait().unwrap() {
+                    assert!(status.success(), "bridge child: {status}");
+                    return;
+                }
+                if Instant::now() >= until {
+                    child.kill().unwrap();
+                    child.wait().unwrap();
+                    panic!("home waited for the role while its owner waited for a home call");
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
+        for queued_before_merge in [false, true] {
+            let mut ctx = std::ptr::null_mut();
+            unsafe {
+                assert_eq!(
+                    crate::context::hirsel_rt_v2_ctx_create(&crate::Config::new(), &mut ctx),
+                    0
+                );
+                crate::tasks::role::enable(ctx);
+                init_execs(ctx);
+            }
+            let address = ctx.addr();
+            let run = unsafe { (*ctx).run_ptr() };
+            let (held_tx, held_rx) = std::sync::mpsc::channel();
+            let called = AtomicBool::new(false);
+            std::thread::scope(|scope| {
+                let called = &called;
+                let worker = scope.spawn(move || unsafe {
+                    let ctx = address as *mut TaskCtx;
+                    let run = (*ctx).run_ptr();
+                    let exec = Exec::new(Kind::Compute(0), std::ptr::null_mut(), false);
+                    EXEC.with(|e| e.set(Arc::as_ptr(&exec)));
+                    crate::tasks::role::enter(ctx);
+                    held_tx.send(()).unwrap();
+                    if !queued_before_merge {
+                        // Force publication after home's queue check / wait
+                        // subscription, independent of OS scheduling speed.
+                        while !(*run).role.home_waiting() {
+                            std::thread::yield_now();
+                        }
+                    }
+                    call_home_in(run, &mut || called.store(true, Ordering::Release)).unwrap();
+                    crate::tasks::role::release(ctx);
+                    EXEC.with(|e| e.set(std::ptr::null()));
+                });
+                held_rx.recv().unwrap();
+                if queued_before_merge {
+                    while unsafe { (*(*run).execs.get()).as_deref().unwrap() }
+                        .home
+                        .inbox
+                        .lock()
+                        .unwrap()
+                        .posts
+                        .is_empty()
+                    {
+                        std::thread::yield_now();
+                    }
+                }
+                let guard = unsafe { crate::tasks::role::IdleGuard::home(run) };
+                assert!(called.load(Ordering::Acquire));
+                drop(guard);
+                worker.join().unwrap();
+            });
+            unsafe { crate::context::hirsel_rt_v2_ctx_destroy(ctx) };
+        }
+    }
 
     #[test]
     fn a_detached_run_stays_pending_until_its_storage_is_reclaimed() {

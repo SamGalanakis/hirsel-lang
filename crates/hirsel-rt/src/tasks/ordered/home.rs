@@ -56,7 +56,7 @@ pub(super) unsafe fn poll(run: *mut RunShared, retiring: bool, idle: bool) -> St
             return Err(stop);
         }
         if wait_first && !unsafe { crate::host_waits::wait_home(run) }? {
-            let _guard = unsafe { role::IdleGuard::new(run) };
+            let _guard = unsafe { role::IdleGuard::home(run) };
             let s = unsafe { (*(*run).tasks.get()).as_deref_mut().unwrap() };
             complete(s, run, retiring);
             unsafe { super::super::free::check_quiet_without_sources(run) };
@@ -65,7 +65,7 @@ pub(super) unsafe fn poll(run: *mut RunShared, retiring: bool, idle: bool) -> St
         let crate::host_waits::HomeReady { expired, hosts } =
             unsafe { crate::host_waits::ready_home(run) }?;
         let (candidates, observing) = {
-            let _guard = unsafe { role::IdleGuard::new(run) };
+            let _guard = unsafe { role::IdleGuard::home(run) };
             let s = unsafe { (*(*run).tasks.get()).as_deref_mut().unwrap() };
             for scope in expired {
                 super::events::expire(s, scope);
@@ -103,7 +103,7 @@ pub(super) unsafe fn poll(run: *mut RunShared, retiring: bool, idle: bool) -> St
             };
             if let Some(attempt) = attempt {
                 assert_eq!(attempt.task, task);
-                let _guard = unsafe { role::IdleGuard::new(run) };
+                let _guard = unsafe { role::IdleGuard::home(run) };
                 let s = unsafe { (*(*run).tasks.get()).as_deref_mut().unwrap() };
                 let discovery = attempt.discovery.map_or(Ok(()), |d| {
                     if token & super::host::concurrent::CONCURRENT != 0 {
@@ -129,7 +129,7 @@ pub(super) unsafe fn poll(run: *mut RunShared, retiring: bool, idle: bool) -> St
                     // a saved request still owns its completion until wake.
                     let result = unsafe { crate::host_waits::completed_home(run, token) };
                     assert_eq!(result.task, task);
-                    let _guard = unsafe { role::IdleGuard::new(run) };
+                    let _guard = unsafe { role::IdleGuard::home(run) };
                     let s = unsafe { (*(*run).tasks.get()).as_deref_mut().unwrap() };
                     super::events::record_host_poll(s, task, result.result, !retiring);
                 }
@@ -137,7 +137,7 @@ pub(super) unsafe fn poll(run: *mut RunShared, retiring: bool, idle: bool) -> St
             }
         }
         {
-            let _guard = unsafe { role::IdleGuard::new(run) };
+            let _guard = unsafe { role::IdleGuard::home(run) };
             let s = unsafe { (*(*run).tasks.get()).as_deref_mut().unwrap() };
             for task in ready {
                 s.unpark(task);
