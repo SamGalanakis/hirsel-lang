@@ -658,3 +658,54 @@ fn ephemeral_listen_completions_record_assigned_ports_and_refuse_altered_replay(
         }
     }
 }
+
+#[test]
+fn unanswered_connect_retry_keeps_the_same_scripted_attempt() {
+    use hirsel_rt::io::{Adapter, Completion as C, Request as R};
+    let mut real = script_adapter();
+    real.set_cooperative(hirsel_rt::readiness::Readiness::default());
+    real.set_net_script(
+        vec![peer(vec![
+            NetConnection::Unanswered,
+            NetConnection::Open(vec![]),
+        ])],
+        vec![],
+    )
+    .unwrap();
+    real.set_net_rules(
+        [NetRule {
+            address: "example.com".into(),
+            port: 80,
+            operation: NetOperation::Connect,
+        }]
+        .into(),
+    );
+    assert_eq!(real.call(R::Net { io: 1 }), Ok(C::Handle(Ok(2))));
+    let connect = R::Connect {
+        net: 2,
+        host: "example.com".into(),
+        port: 80,
+        timeout: NetTimeout::Unbounded,
+    };
+    real.enter(10);
+    assert_eq!(real.call(connect.clone()), Err(AdapterError::Blocked));
+    real.parked(10);
+    real.enter(10);
+    assert_eq!(real.call(connect.clone()), Err(AdapterError::Blocked));
+    real.enter(20);
+    assert!(matches!(
+        real.call(R::Resolve {
+            net: 2,
+            host: "example.com".into(),
+            port: 80
+        }),
+        Ok(C::Addresses(Ok(_)))
+    ));
+    real.finish(20);
+    assert_eq!(real.ready(), Ok(hirsel_rt::io::Ready::Tokens(vec![])));
+    assert_eq!(real.wait(), Ok(false));
+    real.finish(10);
+    real.enter(11);
+    assert_eq!(real.call(connect), Ok(C::NetHandle(Ok(3))));
+    real.finish(11);
+}

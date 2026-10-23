@@ -941,11 +941,31 @@ impl<S: Streams> Adapter for RealCore<S> {
             return result;
         }
         let retry = request.clone();
-        match self.perform(request) {
+        let connect = scripted
+            && matches!(
+                request,
+                Request::Connect { .. } | Request::ConnectAddr { .. } | Request::UnixConnect { .. }
+            );
+        // Retrying an unanswered connect must not consume the next scripted attempt.
+        let pending_connect = connect
+            && self
+                .cooperative
+                .as_ref()
+                .unwrap()
+                .0
+                .pending_scripted_connect();
+        let result = if pending_connect {
+            Err(AdapterError::Blocked)
+        } else {
+            self.perform(request)
+        };
+        match result {
             Err(AdapterError::Blocked) => {
                 let (readiness, log) = self.cooperative.as_mut().unwrap();
                 let token = log.current();
-                if scripted {
+                if connect {
+                    readiness.scripted_connect();
+                } else if scripted {
                     readiness.scripted();
                 }
                 let committed = !readiness.cancellable(token);

@@ -81,3 +81,4 @@ mod logpipe_27;
 mod firstreply_27;
 mod trace_record_27;
 mod parhash_27;
+mod replay_select_pending_27;

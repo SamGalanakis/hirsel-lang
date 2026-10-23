@@ -1,0 +1,27 @@
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let n = io.net(rt)?
+  let output = io.stdout(rt)?
+  let c = io.monotonic_clock(rt)?
+  let Ok(now) = clock.monotonic(c) else { return Ok(()) }
+  let Some(at) = instant.checked_add(c, now, 50000000u64) else { return Ok(()) }
+  let bounded = task.scope_until(tasks, Deadline(clock: c, at: at), fn(s: Scope) -> (u64, bool) {
+    let mut set: TaskSet[bool] of s = task.set(s)
+    task.add(s, mut set, task.async(s, fn() -> bool {
+      let Ok(connected) = net.unix_connect(n, path.of("/firstreply/0.sock")) else { return false }
+      let mut stream = take connected
+      let _ = net.write_all(n, mut stream, b"ping")
+      let mut buf: List[u8] = []
+      net.read(n, mut stream, mut buf, 1u64) == Ok(1u64)
+    }))
+    task.add(s, mut set, task.async(s, fn() -> bool {
+      match net.unix_connect(n, path.of("/firstreply/1.sock")) {
+        Ok(_) => true,
+        Error(_) => false,
+      }
+    }))
+    task.select(s, take set)
+  })
+  let _ = out.print(output, "done\n")
+  Ok(())
+}

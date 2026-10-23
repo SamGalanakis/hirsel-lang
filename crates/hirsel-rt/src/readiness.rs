@@ -112,11 +112,18 @@ pub(crate) struct Pending {
     /// It waits for a delivery, not for a descriptor or deadline.
     delivery: bool,
     /// It waits on a scripted world ([`Readiness::scripted`]) since this progress epoch.
-    scripted: Option<u64>,
+    scripted: Option<ScriptedWait>,
     /// What the epoll set and the timer heaps hold for this token.
     registered: Option<(libc::c_int, libc::c_short)>,
     timer: Option<Instant>,
     virtual_timer: Option<u64>,
+}
+/// A stream may advance after another network effect; an unanswered connection
+/// has consumed its attempt and stays pending until cancellation.
+#[derive(Clone, Copy)]
+enum ScriptedWait {
+    Progress(u64),
+    UnansweredConnect,
 }
 /// A provider's mutable request row. Dropping it publishes changed interests to the driver.
 pub(crate) struct PendingGuard<'a> {
@@ -275,7 +282,22 @@ impl Readiness {
     /// The request blocked under the entered token waits on a scripted world.
     pub(crate) fn scripted(&self) {
         let progress = self.0.lock().unwrap().progress;
-        self.pending().scripted = Some(progress);
+        self.pending().scripted = Some(ScriptedWait::Progress(progress));
+    }
+    /// An unbounded Unanswered connect has no readiness source (CONC-8).
+    pub(crate) fn scripted_connect(&self) {
+        self.pending().scripted = Some(ScriptedWait::UnansweredConnect);
+    }
+    pub(crate) fn pending_scripted_connect(&self) -> bool {
+        let token = self.2.load(Ordering::Relaxed);
+        self.0
+            .lock()
+            .unwrap()
+            .pending
+            .get(&token)
+            .is_some_and(|pending| {
+                matches!(pending.scripted, Some(ScriptedWait::UnansweredConnect))
+            })
     }
     /// A network request completed: parked scripted waits are retried at the next
     /// scheduling point.
@@ -624,7 +646,7 @@ impl ReadyState {
                 self.pending
                     .get(token)
                     .and_then(|pending| pending.scripted)
-                    .is_some_and(|since| since < self.progress)
+                    .is_some_and(|wait| matches!(wait, ScriptedWait::Progress(since) if since < self.progress))
             })
             .collect()
     }

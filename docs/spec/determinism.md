@@ -601,11 +601,13 @@ ready records, before re-issuing any of them, one `ready` event per such wait in
 order, naming the wait by its creation ordinal (waits are numbered in the order their
 requests first parked) and the number of scheduling points it waited through since its task
 parked or it was last ready; scheduling points that find nothing ready are not recorded.
-A request parked on a scripted world, which no host event readies, is ready at the first
+A stream request parked on a scripted world, which no host event readies, is ready at the first
 scheduling point after another network request completes, and parks again if the script
-still holds it. Replay parks a task where its request recorded `blocked`, finds a wait ready exactly at its
-recorded scheduling point and never waits for the host, so a recorded schedule replays in either engine. Cancellation is derived from
-the schedule and is not recorded.
+still holds it. An unanswered scripted connect has consumed its connection entry and stays
+parked until cancellation; network progress never starts another connection attempt.
+Replay parks a task where its request recorded `blocked`, finds a wait ready exactly at its
+recorded scheduling point and never waits for the host, so a recorded schedule replays in
+either engine. Cancellation is derived from the schedule and is not recorded.
 
 UDP requests record the socket and Net identities, bind/destination address,
 every sent byte, and the receive limit. A receive completion records exactly one
