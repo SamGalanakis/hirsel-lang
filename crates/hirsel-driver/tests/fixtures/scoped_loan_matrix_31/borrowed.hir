@@ -1,0 +1,10 @@
+resource type Token { n: u64 }
+drop(x) {}
+fn invoke(take f: (once fn() -> u64) in f) -> u64 { f() }
+fn probe(token: Token) -> u64 {
+ invoke(fn() -> u64 { let moved = take token; moved.n })
+}
+pub fn main() -> Result[(), ()] {
+ failure.check(probe(Token(n: 7)) == 7, Arithmetic())
+ Ok(())
+}
