@@ -149,6 +149,100 @@ fn a_preserving_call_with_unique_inputs_keeps_the_argument_unique() {
     );
 }
 
+/// Before/after-call and unwind separation follows rustc_mir_dataflow's
+/// initialized.rs:255-303 and framework/tests.rs:1-68 at
+/// 19833af7224424e8b53e288097d56b6af43d5bcf (MIT, Rust Project Contributors).
+/// Only the test shape is adapted: Hirsel's current proof is the oracle.
+#[test]
+fn a_late_share_is_not_repaired_by_a_preserving_call_or_its_return() {
+    let mut f = preserving_call(true, false);
+    f.valid();
+    // The last argument is evaluated after reserving x, and shares x.
+    // The callee's promise cannot supply the missing selected-input proof.
+    f.body().rvalues[1] = Rvalue::Use(copy(1));
+    handback_error(&f, "preserved unique hand-back", 2);
+
+    let mut dropped = preserving_call(true, false);
+    let saved = dropped.slot(TypeKind::Primitive(Primitive::String), Storage::Temporary);
+    dropped.assign(saved, Rvalue::Use(copy(1)), 0);
+    let cleanup = dropped.cleanup(vec![drop(3)]);
+    dropped.body().blocks[0].instructions.push(inst(
+        InstructionKind::Drop {
+            place: PlaceId(saved),
+            if_live: false,
+        },
+        cleanup,
+    ));
+    handback_error(&dropped, "preserved unique hand-back", 2);
+}
+
+#[test]
+fn a_unique_call_requirement_does_not_supply_its_own_entry_evidence() {
+    let mut f = preserving_call(true, false);
+    // The ordinary body must meet this fixed requirement as well as the
+    // conditional re-proof: declare x unique on the caller itself.
+    let mut incoming = interner().get(f.body().places[1].ty).unwrap().clone();
+    incoming.modes.uniqueness = Uniqueness::Unique;
+    let incoming = f.definition.types.push(incoming);
+    f.body().locals[1].ty = incoming;
+    f.body().places[1].ty = incoming;
+    owner_sig(&mut f, &[PassingMode::Mut, PassingMode::Borrow]);
+    let SignatureKind::Function(fun) = &mut f.signatures.get_mut(&path("callee")).unwrap().kind
+    else {
+        panic!()
+    };
+    let mut row = interner().get(fun.parameters[0].ty).unwrap().clone();
+    row.modes.uniqueness = Uniqueness::Unique;
+    let mut parameters = fun.parameters.to_vec();
+    parameters[0].ty = interner().intern(row);
+    fun.parameters = parameters.into();
+    f.valid();
+    f.body().rvalues[1] = Rvalue::Use(copy(1));
+    let kinds = f.kinds();
+    assert!(
+        kinds.contains(&ViolationKind::TypeMismatch {
+            entity: "call argument"
+        }),
+        "{kinds:?}"
+    );
+}
+
+#[test]
+fn a_handback_promise_does_not_cover_another_parameter() {
+    let mut f = sibling_call(false, false);
+    f.valid();
+    let SignatureKind::Function(fun) = &mut f.signatures.get_mut(&path("callee")).unwrap().kind
+    else {
+        panic!()
+    };
+    let mut promises = fun.state_promises.to_vec();
+    promises[0].selector.parameter = ParameterRef::bound(ParamId(1));
+    fun.state_promises = promises.into();
+    handback_error(&f, "mutable unique hand-back", 2);
+}
+
+#[test]
+fn a_call_without_a_normal_successor_still_checks_its_failure_handback() {
+    for (preserves, shared) in [(true, false), (false, false), (true, true)] {
+        let mut f = preserving_call(preserves, shared);
+        let Terminator::Call { returns, .. } = &mut f.body().blocks[0].terminator else {
+            panic!()
+        };
+        *returns = None;
+        f.body().blocks.truncate(1);
+        let SignatureKind::Function(fun) = &mut f.signatures.get_mut(&path("callee")).unwrap().kind
+        else {
+            panic!()
+        };
+        fun.result = interner().intern(ty(TypeKind::Primitive(Primitive::Never)));
+        if preserves && !shared {
+            f.valid();
+        } else {
+            handback_error(&f, "preserved unique hand-back", 1);
+        }
+    }
+}
+
 /// `fn main() -> unique String { callee(take "fresh") }`, through a callee
 /// whose taken parameter may be selected by `@preserves_unique`.
 fn preserving_result(preserves: bool) -> Fixture {

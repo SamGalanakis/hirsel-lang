@@ -264,7 +264,27 @@ fn add(mut lines: List[u64], ok: bool) {
   failure.check(ok, Bounds())
 }
 fn need(take lines: unique List[u64]) -> u64 { list.len(lines) }
+fn stamp(mut xs: unique List[u64], other: List[u64]) { xs[0] = 9 }
+fn weak(mut xs: List[u64], other: List[u64]) { xs[0] = 8 }
+fn pair(mut xs: unique List[u64], mut ys: unique List[u64], other: List[u64]) {
+  xs[0] = 6
+  ys[0] = 7
+}
 pub fn main() -> Result[(), ()] {
+  let mut xs: unique List[u64] = [1]
+  stamp(mut xs, [2])
+  let named: fn(mut unique List[u64], List[u64]) -> () = stamp
+  named(mut xs, [2])
+  let scoped = fn(mut out: unique List[u64], other: List[u64]) { stamp(mut out, other) }
+  scoped(mut xs, [2])
+  if xs[0] != 9 { return Error(()) }
+  let saved_xs = copy xs
+  weak(mut xs, copy xs)
+  if xs[0] != 8 || saved_xs[0] != 9 { return Error(()) }
+  let mut left: unique List[u64] = [1]
+  let mut right: unique List[u64] = [2]
+  pair(mut left, mut right, [3])
+  if left[0] != 6 || right[0] != 7 { return Error(()) }
   let mut state: unique State = State(lines: [])
   add(mut state.lines, true)
   let saved = copy state

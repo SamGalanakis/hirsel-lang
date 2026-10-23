@@ -107,6 +107,90 @@ fn ordinary_borrowed_calls_cannot_silently_preserve_a_creation_snapshot() {
     }
 }
 
+#[test]
+fn call_entry_refreshes_late_shares_through_each_callable_form() {
+    for (setup, call) in [
+        ("", "keep"),
+        (
+            "let action:fn(mut unique List[u64],List[u64])->()=keep;",
+            "action",
+        ),
+        (
+            "let action=fn(mut out:unique List[u64],other:List[u64]){keep(mut out,other)};",
+            "action",
+        ),
+    ] {
+        for (argument, expected) in [("[2]", None), ("copy xs", Some("MODE-2"))] {
+            check(
+                &format!(
+                    "fn keep(mut out:unique List[u64],other:List[u64]){{out[0]=9}}\nfn probe(){{let mut xs:unique List[u64]=[1];{setup}{call}(mut xs,{argument})}}"
+                ),
+                expected,
+            );
+        }
+    }
+}
+
+#[test]
+fn call_entry_refreshes_projected_and_both_mut_arguments() {
+    for (arguments, expected) in [
+        ("mut state.xs,mut ys,[3]", None),
+        ("mut state.xs,mut ys,copy state.xs", Some("MODE-2")),
+        ("mut state.xs,mut ys,copy ys", Some("MODE-2")),
+    ] {
+        check(
+            &format!(
+                "type State{{xs:List[u64]}}\nfn keep(mut xs:unique List[u64],mut ys:unique List[u64],other:List[u64]){{xs[0]=8;ys[0]=9}}\nfn probe(){{let mut state:unique State=State(xs:[1]);let mut ys:unique List[u64]=[2];keep({arguments})}}"
+            ),
+            expected,
+        );
+    }
+}
+
+#[test]
+fn conditional_handback_uses_selected_current_evidence() {
+    for promise in ["", "@preserves_unique(xs)"] {
+        for (argument, expected) in [("[2]", None), ("copy xs", Some("MODE-2"))] {
+            // A fixed unique receiver remains a precondition, even when a
+            // preservation promise also appears on the declaration.
+            check(
+                &format!(
+                    "{promise}\nfn keep(mut xs:unique List[u64],other:List[u64]){{xs[0]=9}}\nfn probe(){{let mut xs:unique List[u64]=[1];keep(mut xs,{argument})}}"
+                ),
+                expected,
+            );
+        }
+    }
+    for (setup, expected) in [
+        ("", None),
+        ("let saved=copy xs;", Some("MODE-2")),
+        ("{let saved=copy xs;}", Some("MODE-2")),
+    ] {
+        check(
+            &format!(
+                "@preserves_unique(xs) fn keep(mut xs:List[u64],take other:List[u64]){{list.push(mut xs,1)}}\nfn need(take xs:unique List[u64]){{}}\nfn probe(){{let mut xs:unique List[u64]=[1];{setup}keep(mut xs,[2]);need(take xs)}}"
+            ),
+            expected,
+        );
+    }
+}
+
+#[test]
+fn a_unique_sibling_cannot_replace_the_selected_handback_promise() {
+    for (promise, expected) in [
+        ("", Some("MODE-2")),
+        ("@preserves_unique(ys)", Some("MODE-2")),
+        ("@preserves_unique(xs)", None),
+    ] {
+        check(
+            &format!(
+                "{promise}\nfn keep(mut xs:List[u64],mut ys:List[u64]){{list.push(mut xs,1)}}\nfn need(take xs:unique List[u64]){{}}\nfn probe(){{let mut xs:unique List[u64]=[1];let mut ys:unique List[u64]=[2];keep(mut xs,mut ys);need(take xs)}}"
+            ),
+            expected,
+        );
+    }
+}
+
 /// Each envelope axis of an unselected retained state makes it a hidden
 /// input; selecting the state admits it. A retained borrowed source cannot
 /// reach `iter.from` at all (MODE-1 requires global creation operands).
