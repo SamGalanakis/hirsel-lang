@@ -117,3 +117,4 @@ mod shortest_direct_candidate_28;
 mod base64_runtime_simd_30;
 mod markdown_bounded_output_33;
 mod json_text_bound_36;
+mod csv_owned_table_37;

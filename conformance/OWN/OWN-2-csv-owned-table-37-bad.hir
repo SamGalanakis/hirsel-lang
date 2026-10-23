@@ -1,0 +1,12 @@
+// rule: OWN-2
+// expect: reject OWN-2 at line 10
+// twin: OWN/OWN-2-csv-owned-table-37-ok.hir
+pub fn main() -> Result[(), ()] {
+  let Ok(rows) = std@1/csv.parse_owned("a,b", std@1/csv.default_config()) else {
+    return Error(())
+  }
+  let root = shared.freeze(take rows)
+  let _ = root
+  let _ = list.len(rows)
+  Ok(())
+}

@@ -1,0 +1,11 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 10
+// twin: MODE/MODE-1-csv-owned-table-37-ok.hir
+fn escape(input: String) -> Result[String, std@1/csv.CsvError] {
+  let mut reader = std@1/csv.slice_reader(input, std@1/csv.default_config())?
+  let _ = std@1/csv.next_record(mut reader)?
+  let Some(field) = std@1/csv.get_field(reader, 0) else {
+    return Ok("")
+  }
+  Ok(field)
+}

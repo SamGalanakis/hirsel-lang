@@ -272,6 +272,41 @@ pub fn parse(take text: String, config: Config) -> Result[List[List[String]], Cs
   feed(mut r, core@1/string.as_bytes(text), true)
 }
 
+// Go reader.go:439-459 assembles fields after parsing a record. Unlike Go's
+// shared record String, each field here owns its bytes. Reuse SliceReader's
+// strict transitions/positions; materialize final fields before reusing views.
+fn owned_field(data: Bytes) -> unique String uses {} {
+  let mut out: List[u8] = []
+  core@1/bytes.append(mut out, data)
+  text.finish_valid(take out)
+}
+
+fn owned_row(r: SliceReader) -> unique List[String] uses {} {
+  let mut row: List[String] = []
+  for i in 0u64..field_count(r) {
+    let Some(data) = get_field_bytes(r, i) else {
+      core@1/failure.check(false, TextInvariant())
+      return []
+    }
+    core@1/list.push(mut row, owned_field(data))
+  }
+  take row
+}
+
+/// Construct a deeply owned table, independent of the consumed input. Borrow
+/// for validation, then shared.freeze(take rows) without cloning the table.
+pub fn parse_owned(take text: String, config: Config) -> Result[
+  unique List[List[String]],
+  CsvError
+] uses {} {
+  let mut r = slice_reader(text, config)?
+  let mut rows: List[List[String]] = []
+  while next_record(mut r)? {
+    core@1/list.push(mut rows, owned_row(r))
+  }
+  Ok(take rows)
+}
+
 pub fn read_record[S, E](
   mut r: Reader,
   mut source: S,

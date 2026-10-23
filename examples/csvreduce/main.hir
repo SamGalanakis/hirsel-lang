@@ -54,7 +54,7 @@ fn compute(chunk: Chunk) -> Result[Summary, AppError] uses {} {
 // Full std CSV parsing precedes every partition: quoted newlines are data.
 fn aggregate(tasks: Tasks, take source: String, column: u64, grain: u64) -> Result[Summary, AppError] {
   if grain == 0 || grain > 4096 { return Error(Grain()) }
-  let rows = csv.parse(take source, csv.Config(delimiter: 44u8, fields_per_record: None(), max_record_bytes: 262144))?
+  let rows = csv.parse_owned(take source, csv.Config(delimiter: 44u8, fields_per_record: None(), max_record_bytes: 262144))?
   if list.len(rows) == 0 { return Error(Header()) }
   let width = list.len(rows[0])
   if width == 0 || width > 32 || column >= width { return Error(Columns()) }
@@ -64,7 +64,7 @@ fn aggregate(tasks: Tasks, take source: String, column: u64, grain: u64) -> Resu
   for row in rows {
     if list.len(row) != width { return Error(Columns()) }
   }
-  let input = shared.freeze(unique rows)
+  let input = shared.freeze(take rows)
   let mut chunks: List[Chunk] = []
   let mut first: u64 = 1
   while first <= count {

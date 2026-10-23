@@ -1,0 +1,72 @@
+// Deep ownership is on the table root, not on each generic type argument.
+fn keep[T](take value: unique T) -> unique T uses {} {
+  take value
+}
+
+fn validate(rows: List[List[String]]) -> bool uses {} {
+  list.len(rows) == 2 && rows[0] == ["a", "b"] && rows[1] == ["x\"y", "é\n水"]
+}
+
+fn make() -> Result[unique List[List[String]], std@1/csv.CsvError] uses {} {
+  // The local input dies before the caller uses the table.
+  let mut bytes: List[u8] = []
+  text.append(mut bytes, "a,b\r\n\"x\"\"y\",\"é\r\n水\"")
+  let input = text.finish_valid(take bytes)
+  std@1/csv.parse_owned(take input, std@1/csv.default_config())
+}
+
+pub fn main() -> Result[(), ()] {
+  let Ok(initial) = make() else {
+    return Error(())
+  }
+  failure.check(validate(initial), TextInvariant())
+  let receipt: Result[unique List[List[String]], ()] = Ok(take initial)
+  let mapped: Result[unique List[List[String]], ()] = results.map(take receipt, keep)
+  let Ok(mapped_rows) = take mapped else {
+    return Error(())
+  }
+  let root = shared.freeze(take mapped_rows)
+  failure.check(shared.with(root, validate), TextInvariant())
+  let Ok(thawed) = shared.thaw(take root) else {
+    return Error(())
+  }
+  let mut rows = take thawed
+  failure.check(validate(rows), TextInvariant())
+  rows[0][0] = "changed"
+  let Ok(other) = make() else {
+    return Error(())
+  }
+  failure.check(validate(other) && rows[0][0] == "changed", TextInvariant())
+  let mut bytes: List[u8] = []
+  text.append(mut bytes, "a,b\n")
+  let original = shared.freeze(text.finish_valid(take bytes))
+  let Ok(owned) = shared.with(
+    original,
+    fn(input: String) -> Result[unique List[List[String]], std@1/csv.CsvError] uses {} {
+      std@1/csv.parse_owned(unique input, std@1/csv.default_config())
+    }
+  ) else {
+    return Error(())
+  }
+  let mut parsed = take owned
+  parsed[0][0] = "new"
+  failure.check(
+    shared.with(
+      original,
+      fn(input: String) -> bool uses {} {
+        input == "a,b\n"
+      }
+    ),
+    TextInvariant()
+  )
+  let Ok(reparsed) = shared.with(
+    original,
+    fn(input: String) -> Result[unique List[List[String]], std@1/csv.CsvError] uses {} {
+      std@1/csv.parse_owned(unique input, std@1/csv.default_config())
+    }
+  ) else {
+    return Error(())
+  }
+  failure.check(reparsed == [["a", "b"]] && parsed == [["new", "b"]], TextInvariant())
+  Ok(())
+}

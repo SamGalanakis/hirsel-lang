@@ -1,0 +1,15 @@
+// rule: MODE-1
+// expect: run
+fn escape() -> Result[unique List[List[String]], std@1/csv.CsvError] {
+  let input = string.concat("a", ",b")
+  std@1/csv.parse_owned(take input, std@1/csv.default_config())
+}
+
+pub fn main() -> Result[(), ()] {
+  let Ok(rows) = escape() else {
+    return Error(())
+  }
+  failure.check(rows == [["a", "b"]], TextInvariant())
+  let _ = shared.freeze(take rows)
+  Ok(())
+}

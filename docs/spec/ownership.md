@@ -365,6 +365,12 @@ interior-mutable or channel contracts are invariant, and weakening a nominal gen
 requires `data`. Callable promises, erased captures and cleanup summaries follow the
 variance of [CLO-2](closures.md#clo-2-transparent).
 
+For example, `csv.parse_owned` returns `Result[unique List[List[String]], CsvError]`.
+Consuming its receipt with `?` or a taken match yields a deeply owned table.
+Ordinary borrowed validation preserves that evidence, so `shared.freeze(take rows)`
+needs no deep copy. This is a producer contract, not a claim that every parser
+result is unique, and it adds no ownership inference rule.
+
 The one exception in a callable header is the uniqueness of a parameter or result row
 itself, which follows that edge's variance, because a `unique` value is always a valid
 aliased one: a function value whose result is `unique` is received where the function

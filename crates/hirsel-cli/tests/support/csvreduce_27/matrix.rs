@@ -86,7 +86,16 @@ pub fn partition(part: usize) {
             failures: vec![],
             roots: vec![],
         };
-        for checked in [false, true] {
+        // Exact recovery may select only native cells after both reference
+        // observations passed on the identical application source. Normal runs
+        // retain the complete matrix and every assertion below.
+        let engines = std::env::var("HIRSEL_CSVREDUCE_ENGINES").unwrap_or_else(|_| "all".into());
+        assert!(
+            engines == "all" || engines == "native",
+            "unknown engine selection {engines}"
+        );
+        eprintln!("csvreduce engine-selection={engines} part={part}");
+        for checked in [false, true].into_iter().filter(|_| engines == "all") {
             eprintln!(
                 "csvreduce started part={part} engine={} source_sha256={:x}",
                 if checked { "checked-H" } else { "interpreter" },

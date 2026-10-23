@@ -1,0 +1,19 @@
+// rule: OWN-2
+// expect: run
+pub fn main() -> Result[(), ()] {
+  let Ok(rows) = std@1/csv.parse_owned("a,b", std@1/csv.default_config()) else {
+    return Error(())
+  }
+  failure.check(list.len(rows) == 1, TextInvariant())
+  let root = shared.freeze(take rows)
+  failure.check(
+    shared.with(
+      root,
+      fn(table: List[List[String]]) -> bool uses {} {
+        table == [["a", "b"]]
+      }
+    ),
+    TextInvariant()
+  )
+  Ok(())
+}

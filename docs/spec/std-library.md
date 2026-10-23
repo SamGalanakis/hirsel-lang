@@ -2528,6 +2528,7 @@ RecordTooLarge | InvalidUtf8 | InvalidDelimiter`, and
 fn csv.reader(config: Config) -> Result[Reader, CsvError] uses {}
 fn csv.feed(mut reader: Reader, chunk: Bytes, eof: bool) -> Result[List[List[String]], CsvError] uses {}
 fn csv.parse(take text: String, config: Config) -> Result[List[List[String]], CsvError] uses {}
+fn csv.parse_owned(take text: String, config: Config) -> Result[unique List[List[String]], CsvError] uses {}
 fn csv.read_record[S,E](mut reader: Reader, mut source: S, refill: fn(mut S, mut List[u8], u64) -> Result[u64,E]) -> Result[Option[List[String]], ReadError[E]]
 fn csv.default_write_config() -> WriteConfig uses {}
 fn csv.write_record(fields: List[String], delimiter: u8, mut out: List[u8]) -> Result[(), CsvError] uses {}
@@ -2573,6 +2574,18 @@ doubled quotes and normalized CRLF share one decoded buffer per record, and
 field spans reuse their capacity. No input copy, field allocation or completed-row
 queue is needed. As with the incremental reader, input size is caller-controlled
 and each individual record remains bounded by `max_record_bytes`.
+
+`parse_owned` consumes UTF-8 input and constructs a deeply unique table using
+these same SliceReader transitions and error policy. Each final field is
+materialized into fresh bytes once, then converted to String without a second
+field copy; fresh row and table builders preserve that ownership. Decoding
+escaped quotes/CRLF can still use record scratch, and growing lists retain
+capacity slack. No completed table is cloned. Results survive input destruction
+and may be borrowed for validation, then passed to `shared.freeze(take rows)`.
+The contract is outer `unique List[List[String]]`, not nested generic element
+modes. The existing `parse`, `feed` and `read_record` contracts remain usable.
+Unlike Go reader.go:439–459's shared record String, final field buffers cannot
+share counted storage across a deeply unique table's fields.
 
 The writer follows Go `fieldNeedsQuotes`: quote fields containing delimiter,
 quote, CR or LF, fields beginning with Unicode whitespace and the PostgreSQL

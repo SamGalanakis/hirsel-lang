@@ -123,6 +123,12 @@ Each inserted copy satisfies the receiving element contract. A fresh literal
 under the complete nested annotation is also legal; an annotation on a
 whole-value copy cannot add that contract.
 
+`csv.parse_owned` deliberately returns outer `unique List[List[String]]`.
+Its consumer, `shared.freeze(take rows)`, requires deep uniqueness of that root;
+it does not require `List[unique List[unique String]]`. A generic helper
+`fn keep[T](take value: unique T) -> unique T { take value }` can transfer the
+whole table with `T = List[List[String]]` without introducing nested modes.
+
 Failed generic bounds are prerequisites of the parameter defaults that depend on them
 ([diagnostics](diagnostics.md#expression-obligations)): a `sendable` bound failure reports
 MODE-4, `inert` CAP-2, and every other bound GEN-1.
