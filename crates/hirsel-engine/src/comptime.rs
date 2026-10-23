@@ -963,6 +963,7 @@ impl QueryEngine {
         }
         // Keep recursive compiler queries bounded separately from the interpreter's guard.
         self.depth_admit(&DepthEvidence::leaf(self.depth_limit()), reference)?;
+        self.restore_execution_mode(path);
         if self.s1.enter(path.clone(), reference) == Entered::Settled {
             // Another worker finished it: its success is in the memo, or this
             // stack evaluates it again.

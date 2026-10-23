@@ -1161,12 +1161,25 @@ impl QueryEngine {
             products: Default::default(),
         })
     }
+    /// Restore only an existing ordinary body before execution owns an S1 frame.
+    /// A miss must keep the original cycle, failure and fuel evaluation path.
+    pub(crate) fn restore_execution_mode(&mut self, path: &DefPath) {
+        if !self.modes.contains_key(&DefId::intern(path))
+            && let Some(entry) = self.load_mode(path)
+        {
+            self.modes.insert(DefId::intern(path), entry);
+        }
+    }
+
     pub(super) fn load_mode(&mut self, path: &DefPath) -> Option<Arc<Entry<AnalyzedBody>>> {
         if !self.s1.is_empty() {
             return None;
         }
         let variant = self.stored_variant(path, QueryKind::Modes)?;
         let record: ModeRecord = self.decode_record(&variant.payload)?;
+        // An ordinary product hit can start from declaration heads alone.
+        // Materialize only this demanded body's syntax after validating its reads.
+        self.materialize(path).ok()?;
         let syntax = self.snapshot(path).ok()?;
         if !record.valid(&syntax) {
             return None;
