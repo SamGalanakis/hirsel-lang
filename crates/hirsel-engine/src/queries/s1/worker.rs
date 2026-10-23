@@ -754,6 +754,7 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
         let product = self.capture(|worker| {
             worker.implementation(&constant.owner);
             worker.merge(&body.reads);
+            worker.execution_signatures(&body.dependencies);
             let signature = worker.signature(&constant.owner)?;
             let inputs = worker.source.inputs();
             let mut reads = ReadsBuilder::new();

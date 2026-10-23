@@ -444,6 +444,33 @@ struct StagedEvaluationRecord {
     arguments: Vec<u64>,
     constant: crate::comptime::EvaluatedConstant,
 }
+/// Frozen workers keep V-universe guards while products cross registration
+/// epochs. Durable values use the independent local execution association for
+/// those same guards; ordinary producer records never carry V authority.
+/// Remove only guards covered exactly by the opaque verifier completion.
+fn persisted_evaluation(
+    value: &crate::comptime::EvaluatedConstant,
+) -> Option<crate::comptime::EvaluatedConstant> {
+    let mut canonical = value.clone();
+    let mut reads = Vec::new();
+    for (read, digest) in value.executed.iter() {
+        if let ReadKey::ValidationUniverse(package) = read {
+            if !value
+                .acceptance
+                .as_ref()?
+                .contexts()
+                .iter()
+                .any(|(id, observed)| *id == package.id() && observed == digest)
+            {
+                return None;
+            }
+        } else {
+            reads.push((read.clone(), *digest));
+        }
+    }
+    canonical.executed = Reads::from_vec(reads).ok()?;
+    Some(canonical)
+}
 fn evaluation_subject(key: &EntryKey, payload: &[u8]) -> ContentHash {
     ContentHash::of_parts(
         "hirsel.validate.evaluated-output.v1",
@@ -1142,12 +1169,18 @@ impl QueryEngine {
         if self.result_store.is_none() || !self.s1.is_empty() || !self.s1.failure_is_own() {
             return Ok(());
         }
-        let Some(entry) = self
+        let reads = self
             .modes
             .get(&DefId::intern(path))
-            .cloned()
             .filter(|e| e.consistent)
-        else {
+            .map(|entry| entry.reads().clone())
+            .or_else(|| {
+                self.summaries
+                    .get(&DefId::intern(path))
+                    .filter(|entry| entry.consistent && !self.graph.is_dirty(&entry.memo.key))
+                    .map(|entry| entry.reads().clone())
+            });
+        let Some(reads) = reads else {
             return Ok(());
         };
         let rows: Vec<_> = self
@@ -1166,7 +1199,7 @@ impl QueryEngine {
             owner: DefId::intern(path),
             rows,
         };
-        self.write_record(path, QueryKind::Registration, entry.reads(), &record)
+        self.write_record(path, QueryKind::Registration, &reads, &record)
     }
 
     pub(crate) fn lower_requires_execution(&self, path: &DefPath, reads: &Reads) -> bool {
@@ -1318,6 +1351,9 @@ impl QueryEngine {
         if self.result_store.is_none() || !self.s1.is_empty() || !self.s1.failure_is_own() {
             return Ok(());
         }
+        let Some(value) = persisted_evaluation(value) else {
+            return Ok(());
+        };
         if !self.portable_execution_reads(&value.executed) {
             return Ok(());
         }
@@ -1445,6 +1481,9 @@ impl QueryEngine {
         {
             return Ok(());
         }
+        let Some(value) = persisted_evaluation(value) else {
+            return Ok(());
+        };
         let Some(key) = self.staged_evaluation_key(path, arguments) else {
             return Ok(());
         };
@@ -1644,6 +1683,165 @@ impl QueryEngine {
 #[cfg(test)]
 mod malformed_tests {
     use super::*;
+
+    #[test]
+    fn durable_evaluation_requires_exact_coverage_for_every_removed_v_guard() {
+        use hirsel_tir::*;
+        let (engine, syntax) = fixture();
+        let ty = engine.types.intern(hirsel_types::Type::unit());
+        // The validator's unit fixture (hirsel-validate/tests/it/support.rs)
+        // supplies a real successful terminal capability, never a fake token.
+        let definition = Definition {
+            path: syntax.owner().def,
+            types: vec![ty].into(),
+            signature_hash: ContentHash::default(),
+            entry: BodyId(0),
+            caller_bodies: vec![],
+            protocol_associations: vec![],
+            contracts: vec![],
+            bodies: vec![hirsel_tir::Body {
+                scoped_parameters: vec![],
+                parameter_scope: syntax.owner().site(hirsel_types::NameSite::Item),
+                locals: vec![Local {
+                    ty,
+                    storage: Storage::ReturnSlot,
+                    scope: ScopeId(0),
+                    span: Span::default(),
+                }],
+                places: vec![Place {
+                    loan: None,
+                    binding: None,
+                    root: LocalId(0),
+                    projection: vec![].into(),
+                    ty,
+                }],
+                scopes: vec![Scope {
+                    parent: None,
+                    span: Span::default(),
+                }],
+                blocks: vec![Block {
+                    instructions: vec![Instruction {
+                        kind: InstructionKind::Assign {
+                            destination: PlaceId(0),
+                            value: RvalueId(0),
+                        },
+                        span: Span::default(),
+                        on_failure: CleanupId(0),
+                    }],
+                    terminator: Terminator::Return {
+                        value: Operand {
+                            place: PlaceId(0),
+                            usage: hirsel_types::UseKind::Take,
+                        },
+                        cleanup: CleanupId(0),
+                    },
+                    span: Span::default(),
+                }],
+                rvalues: vec![Rvalue::Constant(Constant::Unit)],
+                cleanups: vec![Cleanup::default()],
+                cleanup_nodes: vec![],
+                entry: BlockId(0),
+                parameters: vec![],
+                result: ty,
+                borrow_cursors: vec![],
+                tail_sites: vec![],
+                matches: vec![],
+            }],
+        };
+        let artifact =
+            hirsel_validate::Artifact::new(&definition, engine.types.clone(), |anchor| {
+                anchor_owner(&engine.items, anchor)
+            });
+        let (report, _, accepted) = hirsel_validate::validate_with_receipt(
+            &artifact,
+            &hirsel_validate::SignatureMap::new(engine.types.clone()),
+            ContentHash::default(),
+            Some(&hirsel_validate::VerifierCache::default()),
+            &mut vec![],
+        );
+        assert!(report.violations.is_empty(), "{:?}", report.violations);
+        let package = syntax.item.definition.0.package.clone();
+        let digest = ContentHash::of_bytes(b"complete private universe");
+        let guard = ReadKey::ValidationUniverse(crate::memo::PackageKey::of(&package));
+        let semantic = vec![
+            (
+                ReadKey::ExecutedBody(syntax.owner().def),
+                ContentHash::of_bytes(b"executed source"),
+            ),
+            (
+                ReadKey::Environment,
+                ContentHash::of_bytes(b"compiler and policy"),
+            ),
+        ];
+        let mut rows = semantic.clone();
+        rows.push((guard, digest));
+        let original = crate::comptime::EvaluatedConstant {
+            value: Materialized {
+                root: ValueNode {
+                    ty,
+                    kind: ValueKind::Constant(Constant::Unit),
+                },
+            },
+            substitutions: vec![],
+            executed: Reads::from_vec(rows).unwrap(),
+            depth: crate::memo::DepthEvidence::leaf(engine.depth_limit()),
+            validation: None,
+            acceptance: Some(
+                hirsel_validate::ExecutionReceipt::compose(
+                    &[(package, digest)],
+                    &[accepted.unwrap()],
+                )
+                .unwrap(),
+            ),
+        };
+        let expected = Reads::from_vec(semantic.clone()).unwrap();
+        assert_eq!(persisted_evaluation(&original).unwrap().executed, expected);
+        assert_eq!(
+            original.executed.get(&guard),
+            Some(digest),
+            "worker memory keeps its epoch guard"
+        );
+        for fault in 0..4 {
+            let mut value = original.clone();
+            let mut rows = semantic.clone();
+            match fault {
+                0 => {
+                    value.acceptance = None;
+                    rows.push((guard, digest));
+                }
+                1 => rows.push((guard, ContentHash::of_bytes(b"wrong universe"))),
+                2 => rows.push((
+                    ReadKey::ValidationUniverse(crate::memo::PackageKey::of(
+                        &DefPath::core("other").0.package,
+                    )),
+                    digest,
+                )),
+                3 => {
+                    rows.push((guard, digest));
+                    rows.push((
+                        ReadKey::ValidationUniverse(crate::memo::PackageKey::of(
+                            &DefPath::core("other").0.package,
+                        )),
+                        digest,
+                    ));
+                }
+                _ => unreachable!(),
+            }
+            value.executed = Reads::from_vec(rows).unwrap();
+            assert!(
+                persisted_evaluation(&value).is_none(),
+                "uncovered guard fault={fault}"
+            );
+        }
+        let mut no_guard = original;
+        no_guard.executed = expected.clone();
+        no_guard.acceptance = None;
+        assert_eq!(
+            persisted_evaluation(&no_guard).unwrap().executed,
+            expected,
+            "ordinary semantic reads are never dropped"
+        );
+    }
 
     #[test]
     fn malformed_staged_values_miss_before_adoption_or_comparison() {
