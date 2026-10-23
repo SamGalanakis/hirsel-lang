@@ -160,6 +160,13 @@ fn native_discovery_cache_reuses_requirements_without_demanding_source_bodies() 
             })
             .collect()
     }
+    fn parameter_contract(engine: &QueryEngine, contracts: &NativeBodyContracts) -> Vec<u8> {
+        let mut table = hirsel_types::TableBuilder::new(engine.types().clone());
+        let payload = table
+            .with_encoding(|| serde_json::to_vec(&contracts.entry_parameters))
+            .unwrap();
+        serde_json::to_vec(&(table.finish(), payload)).unwrap()
+    }
     with_compiler_stack(|| {
         let store = Arc::new(store::MemStore::default());
         let session = || {
@@ -181,7 +188,9 @@ fn native_discovery_cache_reuses_requirements_without_demanding_source_bodies() 
             .definition(&mut first, &path("outer"), &selected)
             .unwrap();
         assert!(seed.product.is_some());
-        assert!(seed.contracts.is_some());
+        let contracts = seed.contracts.as_ref().unwrap();
+        assert_eq!(contracts.entry_parameters.len(), 1);
+        let expected_parameters = parameter_contract(&first, contracts);
         assert!(!seed.requirements.edges.is_empty());
         assert_eq!(queries.counts.body_demands, 1);
         let expected = observations(&first, &seed.requirements);
@@ -197,6 +206,10 @@ fn native_discovery_cache_reuses_requirements_without_demanding_source_bodies() 
         assert_eq!(queries.counts.body_demands, 0);
         assert_eq!(seed.product.unwrap().record, read.product.unwrap().record);
         assert_eq!(expected, observations(&fresh, &read.requirements));
+        assert_eq!(
+            expected_parameters,
+            parameter_contract(&fresh, read.contracts.as_ref().unwrap())
+        );
         // Selection of a previously observed callee is a dependency even
         // though its declaration and our owner's body did not change.
         fresh.adapters = compiler_adapters();

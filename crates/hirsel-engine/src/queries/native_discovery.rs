@@ -14,20 +14,38 @@ use std::{
 pub const NATIVE_DISCOVERY_KIND: u32 = 0x4e00_0006;
 const DISCOVERY: Domain = Domain {
     kind: NATIVE_DISCOVERY_KIND,
-    schema: 1,
+    schema: 2,
 };
 
 /// Source contracts of every lexical body, without its executable contents.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct NativeBodyContracts {
     pub entry: u32,
+    pub entry_parameters: Vec<hirsel_types::TypeId>,
     pub caller_bodies: Vec<u32>,
     pub scoped_parameters: Vec<Vec<(u32, Vec<u32>)>>,
 }
 impl NativeBodyContracts {
-    fn of(definition: &hirsel_tir::Definition) -> Self {
-        Self {
+    fn of(definition: &hirsel_tir::Definition) -> Result<Self, QueryError> {
+        let invalid = || {
+            QueryError::Operational(hirsel_types::OperationalFailure {
+                operation: "native source contracts".into(),
+                message: "source entry or parameter is outside its body".into(),
+            })
+        };
+        let body = definition
+            .bodies
+            .get(definition.entry.0 as usize)
+            .ok_or_else(invalid)?;
+        let entry_parameters = body
+            .parameters
+            .iter()
+            .map(|id| body.locals.get(id.0 as usize).map(|local| local.ty))
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(invalid)?;
+        Ok(Self {
             entry: definition.entry.0,
+            entry_parameters,
             caller_bodies: definition.caller_bodies.iter().map(|b| b.0).collect(),
             scoped_parameters: definition
                 .bodies
@@ -39,10 +57,14 @@ impl NativeBodyContracts {
                         .collect()
                 })
                 .collect(),
-        }
+        })
     }
-    fn valid(&self) -> bool {
+    fn valid(&self, types: &hirsel_types::TypeInterner) -> bool {
         (self.entry as usize) < self.scoped_parameters.len()
+            && self
+                .entry_parameters
+                .iter()
+                .all(|ty| types.get(*ty).is_some())
             && self
                 .caller_bodies
                 .iter()
@@ -174,10 +196,12 @@ impl NativeDiscoveryCache {
                     })
             && record.definition == *path
             && record.binders.windows(2).all(|w| w[0].0 < w[1].0)
+            && record.contracts.is_some()
+                == crate::queries::generation::executable(&source.source.syntax)
             && record
                 .contracts
                 .as_ref()
-                .is_none_or(NativeBodyContracts::valid)
+                .is_none_or(|contracts| contracts.valid(&engine.types))
             && record.requirements.edges.iter().all(|e| {
                 e.owner == *path
                     && e.arguments.iter().all(|a| match a {
@@ -227,7 +251,10 @@ impl NativeDiscoveryCache {
                 Ok(binder)
             },
         )?;
-        let contracts = body.as_ref().map(|d| NativeBodyContracts::of(d));
+        let contracts = body
+            .as_ref()
+            .map(|d| NativeBodyContracts::of(d))
+            .transpose()?;
         // Publish against the exact V-issued output returned by the completed
         // Lower demand, including under forced recomputation. No lookup replay.
         let record = Record {
