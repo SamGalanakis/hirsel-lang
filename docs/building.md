@@ -798,13 +798,12 @@ bundle="$(.buck2/bin/buck2 build --target-platforms //tools/buck2:release \
 install -d "$HOME/.local/bin"
 install -m 755 "$bundle/hirsel" "$HOME/.local/bin/hirsel"
 install -m 644 "$bundle/hirsel-std.image" "$HOME/.local/bin/hirsel-std.image"
-cp -R "$bundle/hirsel-std.objects" "$HOME/.local/bin/"
 install -d "$HOME/.local/bin/stdlib"
 cp -R "$bundle/stdlib/std@1" "$HOME/.local/bin/stdlib/"
 ```
 
 `//:hirsel-toolchain` produces a directory containing the executable, image,
-object seed and matching `stdlib/std@1` source tree. Keep them together when installing.
+and matching `stdlib/std@1` source tree. Keep them together when installing.
 Its executable finds its sibling std image immediately, including after installation. Plain
 `cargo build` users create that sibling with one command from the repository root
 (use `target/release/hirsel` after `cargo build --release`):
@@ -937,10 +936,9 @@ cache reuse and optional verified code-store provenance.
 Native builds lower and emit units on `HIRSEL_JOBS` workers (the host's available
 parallelism by default). `HIRSEL_OBJECTS=dir@1` is the default writable store;
 it retains checksummed fragments under
-`$XDG_CACHE_HOME/hirsel/objects-v1/<target>-<backend>-<opt>` (or `$HOME/.cache`),
-and `sim@1` keeps them in memory. `HIRSEL_OBJECTS=none@1` disables writable
-objects; also set `HIRSEL_STD_OBJECTS=none` for a completely uncached native
-control. Each partition has a 4 GiB cap with least-recently-used eviction. The
+`$XDG_CACHE_HOME/hirsel/objects-v3/<target>-<backend>-<opt>` (or `$HOME/.cache`),
+and `sim@1` keeps them in memory. `HIRSEL_OBJECTS=none@1` disables native
+object storage. Each partition has a 4 GiB cap with least-recently-used eviction. The
 first publication of each store handle collects old entries; later publications
 collect every 64 MiB (or the configured cap, if smaller), bounding slack per
 active writer. Result records use `HIRSEL_RESULTS=dir@1` by default, with a
@@ -975,13 +973,10 @@ warm object hits skip placement, RC, reuse, Ready validation and emission.
 `--validate-stages` always imports and recomputes object hits, comparing the
 fragments with fresh emission.
 
-The toolchain bundle also carries `hirsel-std.objects`, a read-only seed of std's
-non-generic runtime closure for the host. The same keys check it on a program's
-first build. `HIRSEL_STD_OBJECTS=<directory>` selects another seed;
-`HIRSEL_STD_OBJECTS=none` disables it. Misses use the selected writable store.
-`hirsel seed-objects <package manifest.json> -o <directory>` creates a seed without
-linking or executing the package, and reports the generic instances its roots
-reach. Install the `hirsel-std.objects` directory beside `hirsel` with its precheck.
+Native objects use the same checked immutable artifact store as other products.
+The configured local writable provider retains production associations; imported
+content alone supplies no production authority. The object-directory format is
+v3, with no reader for the former per-object framing or installed native seed.
 
 The timing counts `native imports`, `import hits` and `import misses` distinguish
 fresh SSA import from replay; `units` counts the placement-to-Ready pipelines run.

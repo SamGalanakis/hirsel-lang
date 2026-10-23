@@ -826,6 +826,7 @@ dependencies = [
 name = "hirsel-lir"
 version = "0.1.0"
 dependencies = [
+ "hirsel-artifact-store",
  "hirsel-codec",
  "hirsel-core-contract",
  "hirsel-diag",

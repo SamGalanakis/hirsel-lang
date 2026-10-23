@@ -72,7 +72,6 @@ impl UnitObjects {
             &format!("{opt:?}").to_lowercase(),
         );
         hirsel_lir::objects::objects_by_name(name, None, &partition)
-            .map(|store| super::std_seed::with_seed(store, &partition))
     }
 }
 
@@ -87,7 +86,7 @@ pub(crate) fn selected(
     fuel: bool,
 ) -> Result<Option<UnitObjects>, NativeError> {
     // Writable storage is optional for an implicit default. Keep explicit
-    // provider selection strict and retain read-only installed-seed lookup.
+    // provider selection strict.
     let default = if hirsel_lir::objects::DirObjects::default_location("").is_some() {
         "dir@1"
     } else {

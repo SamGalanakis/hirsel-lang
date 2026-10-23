@@ -225,7 +225,3 @@ by their callers. Bench-lite exercises both 40-word and 200-word corpora.
 file, line and column. Program output retains its original streams.
 
 `hirsel test [--json] [--seed N] [--native [--backend llvm|cranelift]] manifest.json [filter...]` runs the package's explicitly marked tests in isolation, reports seeds and totals, and exits 1 on a failure. `--scheduler name@1:seed` runs each test under that scheduler; `--explore N [--scheduler random@1|pct@1]` runs each under N seeds of the policy (random@1 by default) and stops it at its first failure, printing the failing scheduler, the schedule count and a `replay:` command (docs/building.md, "Schedules"). Neither combines with `--bench`.
-
-`hirsel seed-objects <package manifest.json> -o <directory>` compiles the host's
-non-generic runtime closure into native object-store partitions without linking
-or executing it. Toolchain builds package the directory as `hirsel-std.objects`.
