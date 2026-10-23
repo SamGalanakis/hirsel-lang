@@ -150,10 +150,10 @@ impl QueryEngine {
                 .expect("semantic body read frame")
                 .finish();
             let depth = self.s1.finish_requests(self.depth_limit());
-            let (_, _, selections) = self.end_evaluation_validation();
+            let (_, acceptance, selections) = self.end_evaluation_validation();
             let node = result?;
             let reads = reads.map_err(|_| QueryError::NotImplemented)?;
-            self.store_semantic_body(path, &node, &reads, depth, selections)?;
+            self.store_semantic_body(path, &node, &reads, depth, selections, acceptance.as_ref())?;
             node
         };
         let signature = self.item_signature(path)?;
@@ -237,6 +237,23 @@ impl QueryEngine {
                     .expect("indexed source item")
                     .clone();
                 content.extend(self.semantic_tokens(&syntax)?);
+            } else if let Some(entry) = self.load_lower(path) {
+                // Demand the ordinary Lower product before reconstructing its
+                // checked body. Its reads and private execution authority have
+                // already been validated independently by load_lower.
+                let output = entry.output()?;
+                if has_errors(&output.diagnostics) {
+                    return Err(QueryError::Diagnostics(output.diagnostics));
+                }
+                let required = self.lower_requires_execution(path, entry.reads());
+                self.merge_lower_acceptance(entry.acceptance.as_ref(), required);
+                self.merge_execution(entry.reads());
+                let syntax = self.items[path]
+                    .first()
+                    .expect("indexed source item")
+                    .clone();
+                content.extend(self.semantic_tokens(&syntax)?);
+                self.lowered.insert(DefId::intern(path), entry);
             } else {
                 let analyzed = self.mode_query(path)?;
                 if has_errors(&analyzed.diagnostics) {

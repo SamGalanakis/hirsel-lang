@@ -245,6 +245,14 @@ impl Catalog {
                 .anchor,
         )
     }
+    pub(super) fn owner(&self, anchor: hirsel_span::Anchor) -> Option<(DefPath, u32)> {
+        self.candidates.iter().find_map(|(path, candidates)| {
+            candidates
+                .iter()
+                .find(|c| c.head.name.anchor == anchor)
+                .map(|c| (path.clone(), c.occurrence))
+        })
+    }
     pub(crate) fn body(&self, path: &DefPath) -> Option<ContentHash> {
         Some(self.candidates.get(path)?.first()?.head.body)
     }

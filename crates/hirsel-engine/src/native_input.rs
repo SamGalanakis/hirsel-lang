@@ -182,10 +182,10 @@ impl QueryEngine {
                 let products = self.source_audit_products(&path)?;
                 audits.insert(path.clone(), products.audit);
                 materialized.insert(path.clone(), products.materialized);
-            } else if !self.imaged(&path.0.package) {
-                let analyzed = self.mode_definition(&path)?;
-                if crate::queries::has_errors(&analyzed.diagnostics) {
-                    return Err(QueryError::Diagnostics(analyzed.diagnostics));
+            } else {
+                let diagnostics = self.definition_diagnostics(&path)?;
+                if crate::queries::has_errors(&diagnostics) {
+                    return Err(QueryError::Diagnostics(diagnostics));
                 }
             }
             if matches!(signature.value.kind, SignatureKind::Const { ty: _, .. }) {
@@ -345,10 +345,10 @@ impl QueryEngine {
             }
             if crate::queries::generation::executable(&syntax) {
                 executable_paths.insert(path.clone());
-            } else if !self.imaged(&path.0.package) {
-                let modes = self.mode_definition(path)?;
-                if crate::queries::has_errors(&modes.diagnostics) {
-                    return Err(QueryError::Diagnostics(modes.diagnostics));
+            } else {
+                let diagnostics = self.definition_diagnostics(path)?;
+                if crate::queries::has_errors(&diagnostics) {
+                    return Err(QueryError::Diagnostics(diagnostics));
                 }
             }
             if matches!(current.value.kind, SignatureKind::Const { .. }) {

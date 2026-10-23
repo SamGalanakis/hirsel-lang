@@ -48,8 +48,8 @@ mod origin_types;
 mod proofs;
 mod receipts;
 pub use receipts::{
-    AcceptedArtifact, Artifact, ExecutionReceipt, VerifierCache, validate_cached,
-    validate_with_receipt,
+    AcceptedArtifact, Artifact, ExecutionReceipt, ReplayEnvironment, VerifierCache,
+    validate_cached, validate_with_receipt,
 };
 mod protocol;
 mod scope_locals;

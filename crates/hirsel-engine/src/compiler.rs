@@ -281,7 +281,7 @@ impl Compiler {
                 if facts.is_some_and(|facts| facts.constant) {
                     program
                         .engine
-                        .materialize_value(&path)
+                        .precompute_constant(&path)
                         .map_err(|error| program.error(error))?;
                 }
             }
