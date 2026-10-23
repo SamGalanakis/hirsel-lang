@@ -77,6 +77,40 @@ fn canonical_detail(mut detail: DependencyReads) -> DependencyReads {
 }
 
 #[derive(Serialize, Deserialize)]
+struct SignatureRecord {
+    output: Result<QueryOutput<hirsel_types::SignatureRef>, QueryError>,
+    detail: DependencyReads,
+    covered: Vec<SignatureDependency>,
+    resolution: Option<(u32, QueryOutput<Resolution>)>,
+    owner: Option<(
+        ContentHash,
+        hirsel_types::TypeDefinition,
+        Vec<SignatureDependency>,
+    )>,
+}
+impl SignatureRecord {
+    fn capture(entry: &Entry<hirsel_types::SignatureRef>) -> Self {
+        Self {
+            output: entry.output(),
+            detail: canonical_detail(entry.detail.clone()),
+            covered: entry.covered.clone(),
+            resolution: entry.products.resolution.as_ref().map(|r| {
+                let mut output = r.output.clone();
+                canonical_reads(Arc::make_mut(&mut output.value.reads).as_mut_slice());
+                (r.syntax.occurrence, output)
+            }),
+            owner: entry.products.representation.as_ref().map(|owner| {
+                (
+                    owner.text_hash,
+                    owner.representation.declaration.clone(),
+                    owner.dependencies.clone(),
+                )
+            }),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
 struct Body {
     checked: CheckedBody,
     plans: hirsel_check_protocol::body::Plans,
@@ -201,6 +235,31 @@ fn valid_site(syntax: &ItemSyntax, site: hirsel_types::NameSite) -> bool {
         NameSite::Item => true,
     }
 }
+fn valid_resolution(syntax: &ItemSyntax, resolution: &Resolution) -> bool {
+    use hirsel_types::NameSite;
+    let expression = |id| valid_expression(syntax, id);
+    let site = |id| valid_site(syntax, id);
+    let pattern = |id| site(NameSite::Pattern(id));
+    resolution.contextual.iter().all(|(id, _)| site(*id))
+        && resolution.paths.iter().all(|(id, _)| site(*id))
+        && resolution
+            .local_functions
+            .iter()
+            .all(|(id, _)| site(NameSite::Statement(*id)))
+        && resolution.deferred.iter().all(|row| site(row.site))
+        && resolution.generics.iter().all(|row| site(row.owner))
+        && resolution
+            .reference_scopes
+            .iter()
+            .all(|(a, b)| site(*a) && site(*b))
+        && resolution.expressions.iter().all(|(id, _)| expression(*id))
+        && resolution
+            .types
+            .iter()
+            .all(|(id, _)| site(NameSite::Type(*id)))
+        && resolution.bindings.iter().all(|(id, _, _)| pattern(*id))
+}
+
 /// These are source arena positions, never process IDs. Check the lexical
 /// owner first: even an in-range row from another item has no meaning here.
 fn valid_body_indices(
@@ -265,24 +324,7 @@ fn valid_body_indices(
                         }
                 })
         })
-        && resolution.contextual.iter().all(|(id, _)| site(*id))
-        && resolution.paths.iter().all(|(id, _)| site(*id))
-        && resolution
-            .local_functions
-            .iter()
-            .all(|(id, _)| site(NameSite::Statement(*id)))
-        && resolution.deferred.iter().all(|row| site(row.site))
-        && resolution.generics.iter().all(|row| site(row.owner))
-        && resolution
-            .reference_scopes
-            .iter()
-            .all(|(a, b)| site(*a) && site(*b))
-        && resolution.expressions.iter().all(|(id, _)| expression(*id))
-        && resolution
-            .types
-            .iter()
-            .all(|(id, _)| site(NameSite::Type(*id)))
-        && resolution.bindings.iter().all(|(id, _, _)| pattern(*id))
+        && valid_resolution(syntax, resolution)
         && plans.resource_patterns.iter().all(|(id, _)| pattern(*id))
         && plans.pattern_literals.iter().all(|(id, _)| pattern(*id))
         && plans.unreachable_arms.iter().all(|id| pattern(*id))
@@ -526,6 +568,101 @@ impl EncodedWriter {
 }
 
 impl QueryEngine {
+    pub(super) fn load_signature(
+        &mut self,
+        path: &DefPath,
+    ) -> Option<Arc<Entry<hirsel_types::SignatureRef>>> {
+        if !self.s1.is_empty() {
+            return None;
+        }
+        let variant = self.stored_variant(path, QueryKind::Signature)?;
+        let record: SignatureRecord = self.decode_record(&variant.payload)?;
+        if record
+            .output
+            .as_ref()
+            .is_ok_and(|o| o.value.definition != DefId::intern(path))
+        {
+            return None;
+        }
+        if !matches!(record.output, Ok(_) | Err(QueryError::Diagnostics(_))) {
+            return None;
+        }
+        let resolution = if let Some((occurrence, output)) = record.resolution {
+            let syntax = self
+                .items
+                .get(path)?
+                .iter()
+                .find(|s| s.occurrence == occurrence)?
+                .clone();
+            if !valid_resolution(&syntax, &output.value) {
+                return None;
+            }
+            Some(ResolverSnapshot { syntax, output })
+        } else {
+            None
+        };
+        let representation = if let Some((text_hash, declaration, dependencies)) = record.owner {
+            if self.implementation_hash(path)? != text_hash || declaration.representation.is_none()
+            {
+                return None;
+            }
+            Some(crate::representation::OwnerRecord {
+                text_hash,
+                representation: hirsel_check_protocol::header::OwnerRepresentation { declaration },
+                dependencies,
+                view: Default::default(),
+            })
+        } else {
+            None
+        };
+        if self.verify_store == crate::store::VerifyStore::Recompute {
+            self.pending_store_checks.insert(
+                (DefId::intern(path), QueryKind::Signature),
+                Expected::capture(variant, &mut self.store_check_spool),
+            );
+            return None;
+        }
+        let mut entry = self.adopted(
+            path,
+            QueryKind::Signature,
+            variant,
+            record.output,
+            record.detail,
+        );
+        let mutable = Arc::get_mut(&mut entry).expect("unpublished signature");
+        mutable.covered = record.covered;
+        mutable.products = Arc::new(PhaseProducts {
+            resolution,
+            representation,
+            mode_diagnostics: vec![],
+        });
+        timings::count(Count::StoreHits);
+        self.store_adoptions += 1;
+        Some(entry)
+    }
+    pub(super) fn store_signature(
+        &mut self,
+        path: &DefPath,
+        entry: &Entry<hirsel_types::SignatureRef>,
+    ) -> Result<(), QueryError> {
+        if self.result_store.is_none()
+            || !entry.consistent
+            || !self.s1.is_empty()
+            || !self.s1.failure_is_own()
+        {
+            return Ok(());
+        }
+        if !matches!(entry.memo.value, Ok(_) | Err(QueryError::Diagnostics(_))) {
+            return Ok(());
+        }
+        self.write_record(
+            path,
+            QueryKind::Signature,
+            entry.reads(),
+            &SignatureRecord::capture(entry),
+        )
+    }
+
     pub(super) fn load_publication(&mut self, path: &DefPath) -> Option<PublishedResult> {
         if !self.s1.is_empty() {
             return None;
@@ -1268,6 +1405,74 @@ mod malformed_tests {
             }
         }
     }
+    #[test]
+    fn invalid_signature_records_miss_before_adoption_or_verification() {
+        for verify in [
+            crate::store::VerifyStore::Off,
+            crate::store::VerifyStore::Recompute,
+        ] {
+            for fault in 0..5 {
+                let (mut engine, syntax) = fixture();
+                let path = &syntax.item.definition;
+                let signature = Arc::new(hirsel_types::Signature {
+                    metadata: Default::default(),
+                    definition: DefId::intern(path),
+                    kind: hirsel_types::SignatureKind::Const {
+                        ty: engine.types.intern(hirsel_types::Type::unit()),
+                        generics: Default::default(),
+                    },
+                    fingerprint: ContentHash::default(),
+                });
+                let mut record = SignatureRecord {
+                    output: Ok(output(signature)),
+                    detail: Default::default(),
+                    covered: vec![],
+                    resolution: Some((syntax.occurrence, output(Resolution::default()))),
+                    owner: None,
+                };
+                match fault {
+                    0 => (),
+                    1 => {
+                        record.output.as_mut().unwrap().value = Arc::new(hirsel_types::Signature {
+                            definition: DefId::intern(&DefPath::core("foreign")),
+                            ..(*record.output.as_ref().unwrap().value).clone()
+                        })
+                    }
+                    2 => record.resolution.as_mut().unwrap().0 += 1,
+                    3 => record
+                        .resolution
+                        .as_mut()
+                        .unwrap()
+                        .1
+                        .value
+                        .expressions
+                        .push((
+                            hirsel_syntax::ExprId(u32::MAX),
+                            hirsel_types::ResolvedName::Primitive(hirsel_types::Primitive::Bool),
+                        )),
+                    4 => record.output = Err(QueryError::NotImplemented),
+                    _ => unreachable!(),
+                }
+                engine
+                    .write_record(path, QueryKind::Signature, &Reads::empty(), &record)
+                    .unwrap();
+                engine.verify_store = verify;
+                let hit = engine.load_signature(path);
+                if fault == 0 {
+                    assert_eq!(hit.is_some(), verify == crate::store::VerifyStore::Off);
+                    assert_eq!(
+                        engine.pending_store_checks.len(),
+                        usize::from(verify == crate::store::VerifyStore::Recompute)
+                    );
+                } else {
+                    assert!(hit.is_none(), "fault {fault}");
+                    assert_eq!(engine.store_adoptions(), 0);
+                    assert!(engine.pending_store_checks.is_empty());
+                }
+            }
+        }
+    }
+
     #[test]
     fn invalid_compact_publications_miss_before_adoption_or_verification() {
         for verify in [
