@@ -278,3 +278,59 @@ fn native_products_19_directory_reopen_copy_and_corruption() {
     assert!(reopened.read(&output, &target).is_err());
     let _ = std::fs::remove_dir_all(root);
 }
+
+#[test]
+fn native_products_19_receipt_io_failure_retains_only_actual_process_acceptance() {
+    use hirsel_artifact_store::Store;
+    let mut fixture = Lir::<Value>::new(&[], None);
+    fixture.builder.ret(ENTRY, None);
+    let (unit, table, manifest) = fixture.finish();
+    let target = hirsel_lir::TargetSpec::x86_64_unknown_linux_gnu();
+    let operations = support::registry();
+    let inputs = Inputs {
+        memo: Default::default(),
+        target: &target,
+        layouts: &table,
+        manifest: &manifest,
+        operations: &operations,
+        discharge: None,
+    };
+    let environment = NativeEnvironment {
+        target: &target,
+        manifest: &manifest,
+        operations: &operations,
+        discharge: None,
+    };
+    let root = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("native-receipt-io-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let blocked = root.join("not-a-directory");
+    std::fs::write(&blocked, b"publication blocked").unwrap();
+    let local = Store::new(blocked);
+    let contents = Arc::new(Memory::default());
+    let cache = NativeCache::new(contents.clone(), Some(local.clone()));
+    let subject = hash("failed native receipt publication");
+    let policy = hash("native policy");
+    let (_, output) = cache
+        .validate_and_publish(subject, policy, unit, &inputs, &[], &[])
+        .unwrap();
+    assert!(
+        output.is_some(),
+        "actual C acceptance remains usable in this process"
+    );
+    assert!(
+        cache
+            .lookup(subject, policy, StageKind::Value, &environment)
+            .is_some()
+    );
+    drop(cache);
+    let reopened = NativeCache::new(contents, Some(local));
+    assert!(
+        reopened
+            .lookup(subject, policy, StageKind::Value, &environment)
+            .is_none(),
+        "receipt I/O failure cannot claim durable acceptance"
+    );
+    let _ = std::fs::remove_dir_all(root);
+}

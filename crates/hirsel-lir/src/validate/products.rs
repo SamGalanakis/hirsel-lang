@@ -357,8 +357,9 @@ impl NativeCache {
             // a local successful association; imported bytes cannot do so.
             if let Some(local) = &self.local {
                 let bytes = hirsel_codec::to_text(record.as_ref());
-                let reference = local.put(RECEIPT, bytes.as_bytes()).ok()?;
-                local.associate(key, Action(key.0), reference).ok()?;
+                if let Ok(reference) = local.put(RECEIPT, bytes.as_bytes()) {
+                    let _ = local.associate(key, Action(key.0), reference);
+                }
             }
             self.accepted
                 .lock()
