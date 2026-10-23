@@ -774,3 +774,43 @@ fn worker_staged_products_publish_only_prefix_selected_instances() {
         }
     });
 }
+
+#[test]
+fn staged_lower_products_restore_own_declarations_before_admission_without_modes() {
+    with_compiler_stack(|| {
+        let source = "pub opaque type Hidden:plain uses {}{field:u32}\nfn value[n:size]()->u64{comptime (n*n)}\n";
+        let path = definition("value");
+        let store = Arc::new(store::MemStore::default());
+        let mut seed = signature_session(store.clone(), source, true);
+        let expected = seed.lower_to_tir(&path).unwrap();
+        let declaration = expected.value.bodies.iter().flat_map(|body| &body.rvalues).find_map(|value| match value {
+            hirsel_tir::Rvalue::ReadConstant { definition, arguments } if !arguments.is_empty() => Some(definition.clone()),
+            _ => None,
+        }).unwrap();
+        let signature = seed.item_signature(&declaration).unwrap().value.fingerprint;
+        let mut fresh = signature_session(store.clone(), source, false);
+        fresh.adapters.modes = None;
+        fresh.adapters.lowering = None;
+        let actual = fresh.lower_to_tir(&path).unwrap();
+        assert_eq!(actual.value.path, expected.value.path);
+        assert_eq!(fresh.item_signature(&declaration).unwrap().value.fingerprint, signature);
+        assert_eq!(fresh.lower_adapter_calls(&path), 0);
+        assert_eq!(fresh.recompute_count(&path, QueryKind::Modes), 0);
+
+        let copied = Arc::new(store::MemStore::default());
+        for (key, bytes) in store.take() {
+            store::ResultStore::put(&*copied, &key, &bytes);
+            store::ResultStore::put(&*store, &key, &bytes);
+        }
+        let mut remote = signature_session(copied, source, false);
+        remote.adapters.modes = None;
+        remote.adapters.lowering = None;
+        assert!(remote.lower_to_tir(&path).is_err(), "declaration bytes cannot transfer V completion");
+        let mut edited = signature_session(store.clone(), &source.replace("field:u32", "field:u64"), true);
+        edited.adapters.modes = None;
+        edited.adapters.lowering = None;
+        assert!(edited.lower_to_tir(&path).is_err(), "private V universe changes invalidate completion");
+        let mut oracle = signature_session(store, source, true).with_verify_store(store::VerifyStore::Recompute);
+        oracle.lower_to_tir(&path).unwrap();
+    });
+}
