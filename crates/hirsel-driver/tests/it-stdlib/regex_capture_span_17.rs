@@ -95,56 +95,139 @@ fn check_capture(backend: Option<native::Backend>, selected_entries: &[&str]) {
         }
     });
 }
-#[test]
-fn capture_span_interpreter() {
-    check_capture(
-        None,
-        &[
-            "capture_exhaustive_0",
-            "capture_exhaustive_1",
-            "capture_exhaustive_2",
-            "capture_exhaustive_3",
-            "capture_exhaustive_4",
-            "capture_exhaustive_5",
-            "capture_exhaustive_6",
-            "capture_exhaustive_7",
-            "capture_exhaustive_8",
-            "capture_exhaustive_9",
-            "capture_exhaustive_10",
-            "capture_exhaustive_11",
-            "capture_exhaustive_12",
-            "capture_exhaustive_13",
-            "capture_exhaustive_14",
-            "capture_exhaustive_15",
-            "capture_replacements_0_0",
-            "capture_replacements_0_1",
-            "capture_replacements_0_2",
-            "capture_replacements_1_0",
-            "capture_replacements_1_1",
-            "capture_replacements_1_2",
-            "capture_replacements_2_0",
-            "capture_replacements_2_1",
-            "capture_replacements_2_2",
-            "capture_replacements_3_0",
-            "capture_replacements_3_1",
-            "capture_replacements_3_2",
-            "capture_budgets",
-            "capture_goldens",
-            "capture_retention",
-            "capture_expand_partial",
-            "capture_forced_limits",
-            "capture_context_0",
-            "capture_context_1",
-            "capture_context_2",
-            "capture_context_3",
-            "capture_context_4",
-            "capture_context_5",
-            "capture_context_6",
-            "capture_context_7",
-            "capture_context_8",
-        ],
-    );
+// Reuse source registration and checked compiler products within a bounded
+// shard. Each entry still checks with V on and starts a fresh simulation and
+// interpreter, including its own unchanged 100M-step budget.
+fn check_interpreter(selected_entries: &[&str]) {
+    with_compiler_stack(|| {
+        let temp = tempfile::tempdir().unwrap();
+        let path = private_fixture(temp.path(), true);
+        let mut loaded = COMPILER
+            .with_verify(Verify::On)
+            .load_program(&path)
+            .unwrap();
+        for &entry in selected_entries {
+            eprintln!("capture span {entry} None");
+            loaded.entry.0.name = entry.into();
+            loaded.check_for_execution().unwrap();
+            loaded.refuse_foreign_interpretation().unwrap();
+            loaded.engine.adapters.interpreter = Some(Box::new(InterpreterAdapter {
+                limits: hirsel_interp::Limits {
+                    steps: Some(100_000_000),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }));
+            let outcome = run_observed_snapshot(
+                &mut loaded.engine,
+                &RunConfiguration {
+                    entry: loaded.entry.clone(),
+                    hash_seed: 0,
+                    inputs: vec![],
+                },
+                SimulationConfig::default(),
+            )
+            .unwrap()
+            .outcome
+            .unwrap();
+            assert!(
+                matches!(
+                    outcome,
+                    RunOutcome::Returned(hirsel_run_schema::Returned::Ok)
+                ),
+                "{entry} None: {outcome:?}"
+            );
+        }
+    });
 }
+
+// Independently registered cases let the existing measured-cost launcher
+// distribute this matrix; no single test action runs all 42 entries.
+macro_rules! interpreter_shard {
+    ($name:ident, [$($entry:literal),+ $(,)?]) => {
+        #[test]
+        fn $name() {
+            check_interpreter(&[$($entry),+]);
+        }
+    };
+}
+interpreter_shard!(
+    capture_span_interpreter_00,
+    [
+        "capture_exhaustive_0",
+        "capture_exhaustive_1",
+        "capture_exhaustive_2",
+        "capture_exhaustive_3",
+        "capture_exhaustive_4",
+        "capture_exhaustive_5",
+    ]
+);
+interpreter_shard!(
+    capture_span_interpreter_01,
+    [
+        "capture_exhaustive_6",
+        "capture_exhaustive_7",
+        "capture_exhaustive_8",
+        "capture_exhaustive_9",
+        "capture_exhaustive_10",
+        "capture_exhaustive_11",
+    ]
+);
+interpreter_shard!(
+    capture_span_interpreter_02,
+    [
+        "capture_exhaustive_12",
+        "capture_exhaustive_13",
+        "capture_exhaustive_14",
+        "capture_exhaustive_15",
+        "capture_replacements_0_0",
+        "capture_replacements_0_1",
+    ]
+);
+interpreter_shard!(
+    capture_span_interpreter_03,
+    [
+        "capture_replacements_0_2",
+        "capture_replacements_1_0",
+        "capture_replacements_1_1",
+        "capture_replacements_1_2",
+        "capture_replacements_2_0",
+        "capture_replacements_2_1",
+    ]
+);
+interpreter_shard!(
+    capture_span_interpreter_04,
+    [
+        "capture_replacements_2_2",
+        "capture_replacements_3_0",
+        "capture_replacements_3_1",
+        "capture_replacements_3_2",
+        "capture_budgets",
+        "capture_goldens",
+    ]
+);
+interpreter_shard!(
+    capture_span_interpreter_05,
+    [
+        "capture_retention",
+        "capture_expand_partial",
+        "capture_forced_limits",
+        "capture_context_0",
+        "capture_context_1",
+        "capture_context_2",
+    ]
+);
+interpreter_shard!(
+    capture_span_interpreter_06,
+    [
+        "capture_context_3",
+        "capture_context_4",
+        "capture_context_5",
+        "capture_context_6",
+        "capture_context_7",
+        "capture_context_8",
+    ]
+);
 const NATIVE_ENTRIES: &[&str] = &[
     "capture_exhaustive",
     "capture_budgets",

@@ -881,3 +881,10 @@ yaml_upstream_25::mutations_044	10.728
 yaml_upstream_25::upstream_000	18.685
 yaml_upstream_25::upstream_004	15.088
 regex_capture_span_17::capture_replacements_ambiguous_interpreter_budget	34.504
+regex_capture_span_17::capture_span_interpreter_00	130.207
+regex_capture_span_17::capture_span_interpreter_01	66.191
+regex_capture_span_17::capture_span_interpreter_02	47.926
+regex_capture_span_17::capture_span_interpreter_03	57.121
+regex_capture_span_17::capture_span_interpreter_04	41.287
+regex_capture_span_17::capture_span_interpreter_05	42.156
+regex_capture_span_17::capture_span_interpreter_06	66.030
