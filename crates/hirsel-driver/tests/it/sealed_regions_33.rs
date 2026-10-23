@@ -558,3 +558,55 @@ fn sealed_regions_33_zero_roots_still_require_allocating_seal() {
         }
     });
 }
+
+#[test]
+fn sealed_regions_33_inferred_sorted_result_does_not_retain_the_consumed_grant() {
+    with_compiler_stack(|| {
+        check(
+            "pub fn main(){let r=arena.with(fn(a:Arena){let root:SortedMap[u64,Bytes] of u64.order in a=sorted_map.empty(u64.order);arena.seal(take a,take root)});}",
+            None,
+            true,
+        );
+    });
+}
+
+#[test]
+fn sealed_regions_33_inferred_scope_result_still_rejects_arena_escape() {
+    with_compiler_stack(|| {
+        check(
+            "pub fn main(){let n=arena.with(fn(a:Arena){let root:List[u64] in a=[7u64];list.len(root)});}",
+            None,
+            true,
+        );
+        check(
+            "pub fn main(){let escaped=arena.with(fn(a:Arena){let root:List[u64] in a=[7u64];root});}",
+            Some("PROV-4"),
+            false,
+        );
+    });
+}
+#[test]
+fn sealed_regions_33_inferred_scope_callback_keeps_its_allocation_effect() {
+    with_compiler_stack(|| {
+        check(
+            "@noalloc fn pure()->u64{arena.with(fn(a:Arena){7u64})}\npub fn main(){}",
+            None,
+            true,
+        );
+        check(
+            "@noalloc fn allocate()->List[u64]{arena.with(fn(a:Arena){copy_to(heap,[7u64])})}\npub fn main(){}",
+            Some("MEM-5"),
+            false,
+        );
+    });
+}
+#[test]
+fn sealed_regions_33_inferred_sorted_result_preserves_comparator_identity() {
+    with_compiler_stack(|| {
+        check(
+            "fn reverse(a:u64,b:u64)->i32{if a<b{1i32}else{if a>b{-1i32}else{0i32}}}\npub fn main(){let wrong=Order(compare:reverse);let mut r=arena.with(fn(a:Arena){let root:SortedMap[u64,Bytes] of u64.order in a=sorted_map.empty(u64.order);arena.seal(take a,take root)});let n=region.with(mut r,fn(view:SortedMap[u64,Bytes] of u64.order)->u64{sorted_map.len(wrong,view)});}",
+            Some("PROV-1"),
+            false,
+        );
+    });
+}

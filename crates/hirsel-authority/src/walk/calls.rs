@@ -873,7 +873,7 @@ impl Checker<'_> {
             });
             let expected =
                 expected.map(|ty| self.argument_construction_type(ty, arguments, arg.value));
-            let context = expected.and_then(|t| {
+            let mut context = expected.and_then(|t| {
                 let ty = self.t.get(t)?;
                 let TypeKind::Function(_) = &ty.kind else {
                     return Some((
@@ -910,6 +910,28 @@ impl Checker<'_> {
                 };
                 Some((ctx, expected, rule))
             });
+            // The reviewed arena callback's R is produced by its body. An
+            // omitted result header is H's provisional inference, not a written
+            // receiving contract whose unresolved brands bind callback parameters.
+            // Capture mode was determined above; the complete receiving type is
+            // checked below after the actual result refines R.
+            let inferred_scope_result = definition
+                .as_ref()
+                .and_then(|path| hirsel_types::core_roles::arena_scope_callback(path))
+                .is_some_and(|slot| {
+                    call.arguments.iter().any(|argument| {
+                        argument.expression == arg.value
+                            && argument
+                                .parameter
+                                .as_ref()
+                                .is_some_and(|(ordinal, _)| *ordinal == slot)
+                    })
+                })
+                && matches!(&self.tree.expressions[arg.value.0 as usize].kind,
+                    ExprKind::Closure { signature, .. } if signature.result.is_none());
+            if inferred_scope_result && let Some((_, expected, _)) = &mut context {
+                *expected = None;
+            }
             self.expr(arg.value, context);
             used = used.join(self.used(arg.value));
         }
@@ -1028,6 +1050,7 @@ impl Checker<'_> {
         self.out.call_allocations.retain(|(site, _)| *site != e);
         self.out.call_allocations.push((e, allocation));
         let mut generic_arguments = call.generic_arguments.clone();
+
         // Rustc15c1044 ty/erase_regions.rs:26-34: skip a transformation
         // with no possible target. Every write below requires a generic slot.
         if !generic_arguments.is_empty() {
@@ -1145,6 +1168,7 @@ impl Checker<'_> {
                 }
             }
         }
+
         // A reviewed arena scope returns exactly its callback's result. H's
         // generic inference precedes checking that callback; retain the closed
         // brands its result header now promises, including inside Region[T].
