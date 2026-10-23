@@ -343,6 +343,11 @@ impl Drop for QueryEngine {
     }
 }
 impl QueryEngine {
+    /// The configured product provider shared by front/native/object queries.
+    /// Access grants no verifier or native-validator proof authority.
+    pub fn product_store(&self) -> Option<Arc<dyn crate::store::ResultStore>> {
+        self.result_store.clone()
+    }
     /// The session's type interner, which every phase and thread shares.
     pub fn types(&self) -> &Arc<hirsel_types::TypeInterner> {
         &self.types

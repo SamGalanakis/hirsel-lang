@@ -7,7 +7,7 @@
 //! still observes its value, so the store changes only how much is recomputed.
 use crate::memo::{ReadKey, Reads};
 use crate::{LoweringPolicy, QueryKind};
-pub use hirsel_artifact_store::{Action, Bytes, Domain, Output, Reference};
+pub use hirsel_artifact_store::{Action, Address, Association, Bytes, Domain, Output, Reference};
 use hirsel_syntax::{ContentHash, DefPath};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
@@ -62,6 +62,38 @@ pub trait ResultStore: Send + Sync {
     }
     fn get(&self, key: &EntryKey) -> Option<Bytes>;
     fn put(&self, key: &EntryKey, value: &[u8]);
+    /// Generic product associations share this provider with front queries.
+    /// Their registered domains are independent of front QueryKind tags. An
+    /// association supplies integrity only, never verifier/native authority.
+    fn lookup_product(&self, address: Address) -> Option<Association> {
+        if !self.enabled() {
+            return None;
+        }
+        let bytes = self.get(&product_association_key(address))?;
+        if bytes.len() > 1024 {
+            return None;
+        }
+        let (owner, action, reference): (ContentHash, ContentHash, Reference) =
+            serde_json::from_slice(&bytes).ok()?;
+        (owner == address.0 && reference.len <= hirsel_artifact_store::MAX_RECORD as u64).then_some(
+            Association {
+                action: Action(action),
+                reference,
+            },
+        )
+    }
+    /// Publish only after immutable output publication. Eviction or a failed
+    /// write leaves a miss; read-only roots never receive an association.
+    fn associate_product(&self, address: Address, action: Action, reference: Reference) {
+        if !self.enabled() || self.get_content(reference).is_none() {
+            return;
+        }
+        let bytes = serde_json::to_vec(&(address.0, action.0, reference))
+            .expect("fixed product association serializes");
+        if bytes.len() <= 1024 {
+            self.put(&product_association_key(address), &bytes);
+        }
+    }
     /// Immutable content and logical action indexes use distinct addresses.
     /// Byte providers share their map; directory providers map content directly.
     fn get_content(&self, reference: Reference) -> Option<Bytes> {
@@ -85,6 +117,16 @@ pub trait ResultStore: Send + Sync {
     }
     /// The provider name the run config selects it by (`dir@1`, ...).
     fn name(&self) -> &'static str;
+}
+
+fn product_association_key(address: Address) -> EntryKey {
+    // Interpret is the byte-provider transport slot, as for content_key below;
+    // it is never a semantic query kind or a scheduler dispatch conversion.
+    EntryKey(
+        ContentHash::of_parts("hirsel.product.association.v1", [address.0.0.as_slice()]),
+        ContentHash::default(),
+        QueryKind::Interpret,
+    )
 }
 
 fn content_key(reference: Reference) -> EntryKey {

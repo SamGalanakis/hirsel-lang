@@ -554,3 +554,67 @@ fn directory_packaged_roots_are_read_only_and_local_corruption_does_not_mask_the
     let _ = std::fs::remove_dir_all(packaged);
     let _ = std::fs::remove_dir_all(local);
 }
+
+#[test]
+fn product_associations_share_content_without_conveying_authority() {
+    for store in [&MemStore::default() as &dyn ResultStore, &NoneStore] {
+        let address = Address(ContentHash::of_parts(
+            "product-address",
+            [b"one".as_slice()],
+        ));
+        let action = Action(ContentHash::of_parts("product-action", [b"one".as_slice()]));
+        let domain = Domain {
+            kind: 0x4e00_0001,
+            schema: 1,
+        };
+        let reference = domain.reference(b"product").unwrap();
+        store.associate_product(address, action, reference);
+        assert!(
+            store.lookup_product(address).is_none(),
+            "absent content cannot publish"
+        );
+        if store.enabled() {
+            assert_eq!(store.put_content(domain, b"product"), Some(reference));
+            store.associate_product(address, action, reference);
+            let hit = store.lookup_product(address).unwrap();
+            assert_eq!(hit.action, action);
+            assert_eq!(hit.reference, reference);
+            assert_eq!(&*store.get_content(reference).unwrap(), b"product");
+            assert!(
+                store
+                    .lookup_product(Address(ContentHash::default()))
+                    .is_none()
+            );
+        }
+    }
+}
+
+#[test]
+fn product_association_byte_transport_refuses_wrong_address_and_trailing_bytes() {
+    let store = MemStore::default();
+    let address = Address(ContentHash::of_parts(
+        "product-address",
+        [b"one".as_slice()],
+    ));
+    let action = Action(ContentHash::default());
+    let reference = store
+        .put_content(
+            Domain {
+                kind: 0x4e00_0001,
+                schema: 1,
+            },
+            b"product",
+        )
+        .unwrap();
+    store.associate_product(address, action, reference);
+    let key = product_association_key(address);
+    let mut bytes = store.get(&key).unwrap().to_vec();
+    bytes.push(b'!');
+    store.put(&key, &bytes);
+    assert!(store.lookup_product(address).is_none());
+    store.put(
+        &key,
+        &serde_json::to_vec(&(ContentHash::default(), action.0, reference)).unwrap(),
+    );
+    assert!(store.lookup_product(address).is_none());
+}
