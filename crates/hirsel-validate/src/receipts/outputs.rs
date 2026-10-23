@@ -246,6 +246,46 @@ impl VerifierCache {
         evidence: &VerifiedDefinition,
         metadata: &[u8],
     ) -> Option<VerifiedDefinitionOutput> {
+        let output = self.definition_output_with_metadata(
+            definition, types, policy, signatures, evidence, metadata,
+        )?;
+        self.publish(
+            key(subject, policy),
+            RECEIPT,
+            &Record {
+                subject,
+                owner: output.owner,
+                policy,
+                artifact: output.artifact,
+                reference: output.reference,
+                reads: output.reads.to_vec(),
+                metadata: metadata.to_vec(),
+            },
+        );
+        Some(output)
+    }
+    /// Return V's output for an actual completed validation, without looking up
+    /// or publishing an ordinary query. The empty metadata is not a cutoff
+    /// receipt: the caller must already have completed its real Lower demand.
+    pub fn definition_output_from_evidence(
+        &self,
+        definition: &hirsel_tir::DefinitionRef,
+        types: Arc<TypeInterner>,
+        policy: ContentHash,
+        signatures: &dyn SignatureLookup,
+        evidence: &VerifiedDefinition,
+    ) -> Option<VerifiedDefinitionOutput> {
+        self.definition_output_with_metadata(definition, types, policy, signatures, evidence, &[])
+    }
+    fn definition_output_with_metadata(
+        &self,
+        definition: &hirsel_tir::DefinitionRef,
+        types: Arc<TypeInterner>,
+        policy: ContentHash,
+        signatures: &dyn SignatureLookup,
+        evidence: &VerifiedDefinition,
+        metadata: &[u8],
+    ) -> Option<VerifiedDefinitionOutput> {
         if !evidence.holds(definition, &types, policy, signatures) {
             return None;
         }
@@ -265,19 +305,6 @@ impl VerifierCache {
         if BODY.reference(&bytes)? != reference {
             return None;
         }
-        self.publish(
-            key(subject, policy),
-            RECEIPT,
-            &Record {
-                subject,
-                owner: definition.path,
-                policy,
-                artifact: identity,
-                reference,
-                reads: evidence.reads.clone(),
-                metadata: metadata.to_vec(),
-            },
-        );
         Some(VerifiedDefinitionOutput {
             owner: definition.path,
             reference,

@@ -2469,6 +2469,40 @@ impl QueryEngine {
         self.depth_replay_requests(&depth)?;
         Ok(Some(output))
     }
+    /// Complete the ordinary Lower demand and return its actual V-owned output
+    /// when locally available. This also works after a forced recomputation;
+    /// unlike a cutoff lookup it never replays the completed demand's depth.
+    pub fn lower_to_tir_with_verified_output(
+        &mut self,
+        path: &DefPath,
+    ) -> Result<
+        (
+            QueryOutput<hirsel_tir::DefinitionRef>,
+            Option<hirsel_validate::VerifiedDefinitionOutput>,
+        ),
+        QueryError,
+    > {
+        let lowered = self.lower_to_tir(path)?;
+        let output = if self.verify == Verify::On
+            && let Some(cache) = self
+                .result_store
+                .as_ref()
+                .and_then(|store| store.verifier())
+            && let Some(evidence) = self.ensure_lowered_verdict(&lowered.value)?
+        {
+            let snapshot = self.signature_snapshot();
+            cache.definition_output_from_evidence(
+                &lowered.value,
+                self.types.clone(),
+                self.source_verification_policy(),
+                snapshot.validation(&path.0.package),
+                &evidence,
+            )
+        } else {
+            None
+        };
+        Ok((lowered, output))
+    }
     /// Materialize this verifier-owned source envelope only after a native
     /// consumer has decided it needs the body. Native validators stay separate.
     pub fn materialize_verified_lower_output(
