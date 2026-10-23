@@ -106,7 +106,7 @@ pub(crate) fn load_package_declarations(
                 )
                 .ok_or(ToolError::SourceTooLarge)?;
             engine
-                .reparse_file(file, context)
+                .index_source(file, context)
                 .map_err(|error| ToolError::Query {
                     error,
                     phase: None,

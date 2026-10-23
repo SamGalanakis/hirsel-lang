@@ -139,11 +139,14 @@ impl QueryEngine {
     /// Whether `path` is a source definition: indexed, or declared by the
     /// adopted image.
     pub(crate) fn declared(&self, path: &DefPath) -> bool {
-        self.items.contains_key(path) || self.image_of(path).is_some()
+        self.items.contains_key(path)
+            || self.catalog.body(path).is_some()
+            || self.image_of(path).is_some()
     }
     /// Every source definition, indexed or declared by the adopted image.
     pub(crate) fn source_paths(&self) -> Vec<DefPath> {
         let mut paths: BTreeSet<DefPath> = self.items.keys().cloned().collect();
+        paths.extend(self.catalog.paths().cloned());
         if let Some(adopted) = &self.image {
             paths.extend(adopted.image.declarations().paths().cloned());
         }
@@ -160,6 +163,9 @@ impl QueryEngine {
     /// The definitions standing in `file`, or None for a source of the
     /// adopted image's package not parsed here.
     pub(crate) fn image_file_definitions(&self, file: FileId) -> Option<Vec<DefPath>> {
+        if let Some(paths) = self.catalog.file_definitions(file) {
+            return Some(paths);
+        }
         let adopted = self.image.as_ref()?;
         let ordinal = adopted.files.iter().position(|(f, _)| *f == file)? as u32;
         if adopted.parsed.contains(&ordinal) {
@@ -178,6 +184,7 @@ impl QueryEngine {
     /// Parse the sources `path`'s items stand in, if the adopted image
     /// declares it and they are not parsed yet.
     pub(crate) fn materialize(&mut self, path: &DefPath) -> Result<(), QueryError> {
+        self.materialize_catalog(path)?;
         if self.items.contains_key(path) {
             return Ok(());
         }
@@ -199,6 +206,7 @@ impl QueryEngine {
     }
     /// Parse `file` as the image's source it is, if it is one, keeping the image.
     pub(super) fn materialize_source(&mut self, file: FileId) -> Result<(), QueryError> {
+        self.materialize_catalog_file(file)?;
         let ordinal = self
             .image
             .as_ref()
