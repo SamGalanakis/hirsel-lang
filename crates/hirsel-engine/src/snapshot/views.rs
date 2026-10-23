@@ -8,7 +8,7 @@
 //! owner's signature in place of its declared one. Only the replaced views and
 //! the verdicts that read them are checked again.
 use hirsel_syntax::{ContentHash, DefId, DefMap};
-use hirsel_types::{HeapRole, Signature, SignatureRef, TypeInterner};
+use hirsel_types::{HeapRole, SignatureRef, TypeInterner};
 use hirsel_validate::{
     SignatureLookup, UniverseErrors, VRead, ValidatedSignatures, ValidationDigest, ViewVerdict,
     Violation,
@@ -20,21 +20,29 @@ use std::sync::{Arc, OnceLock};
 #[derive(Clone, Debug)]
 pub struct View {
     pub d: DefId,
-    pub signature: SignatureRef,
-    pub digest: ValidationDigest,
+    input: hirsel_validate::IdentifiedSignature,
 }
 impl View {
     /// A view of `signature`, keeping `previous`'s digest when it is the same view.
-    pub fn new(t: &TypeInterner, signature: SignatureRef, previous: Option<&View>) -> Self {
-        let digest = match previous {
-            Some(view) if Arc::ptr_eq(&view.signature, &signature) => view.digest,
-            _ => hirsel_validate::digest(t, &signature),
+    pub fn new(t: &Arc<TypeInterner>, signature: SignatureRef, previous: Option<&View>) -> Self {
+        let input = match previous {
+            Some(view)
+                if view.input.belongs_to(t) && Arc::ptr_eq(view.input.signature(), &signature) =>
+            {
+                view.input.clone()
+            }
+            _ => hirsel_validate::IdentifiedSignature::new(t.clone(), signature),
         };
         Self {
-            d: signature.definition,
-            signature,
-            digest,
+            d: input.signature().definition,
+            input,
         }
+    }
+    pub fn signature(&self) -> &SignatureRef {
+        self.input.signature()
+    }
+    pub fn digest(&self) -> ValidationDigest {
+        self.input.digest()
     }
 }
 
@@ -53,7 +61,7 @@ fn reads_heap(verdict: &ViewVerdict) -> bool {
 }
 fn first_heap<'a>(views: impl Iterator<Item = &'a View>) -> Option<(DefId, HeapRole)> {
     views.into_iter().find_map(|v| {
-        v.signature
+        v.signature()
             .metadata
             .roles
             .heap
@@ -80,7 +88,7 @@ impl ViewTable {
     /// `previous` for unchanged views and the verdicts of `store`'s previous
     /// revision whose reads still hold.
     pub fn new(
-        t: &TypeInterner,
+        t: &Arc<TypeInterner>,
         signatures: impl IntoIterator<Item = SignatureRef>,
         previous: Option<&ViewTable>,
         store: &mut ValidatedSignatures,
@@ -151,8 +159,8 @@ impl ViewTable {
     }
 }
 impl SignatureLookup for ViewTable {
-    fn view(&self, d: DefId) -> Option<(&Signature, ValidationDigest)> {
-        self.get(d).map(|v| (&*v.signature, v.digest))
+    fn view(&self, d: DefId) -> Option<hirsel_validate::ViewInput<'_>> {
+        self.get(d).map(|v| v.input.input())
     }
     fn first_heap(&self) -> Option<(DefId, HeapRole)> {
         self.first_heap.clone()
@@ -175,7 +183,7 @@ pub struct PackageViews {
 impl PackageViews {
     /// The universe `base` with `replacements` in place of (or beside) its views.
     pub fn new(
-        t: &TypeInterner,
+        t: &Arc<TypeInterner>,
         base: Arc<ViewTable>,
         replacements: impl IntoIterator<Item = View>,
         store: &mut ValidatedSignatures,
@@ -188,7 +196,7 @@ impl PackageViews {
     /// evaluation's materialized owner.
     pub fn replace(
         &self,
-        t: &TypeInterner,
+        t: &Arc<TypeInterner>,
         signature: SignatureRef,
         store: &mut ValidatedSignatures,
         old: Option<&ValidatedSignatures>,
@@ -221,7 +229,7 @@ impl PackageViews {
         })
     }
     fn over(
-        t: &TypeInterner,
+        t: &Arc<TypeInterner>,
         base: Arc<ViewTable>,
         replaced: DefMap<View>,
         checked: &DefMap<Arc<ViewVerdict>>,
@@ -279,9 +287,9 @@ impl PackageViews {
     }
 }
 impl SignatureLookup for PackageViews {
-    fn view(&self, d: DefId) -> Option<(&Signature, ValidationDigest)> {
+    fn view(&self, d: DefId) -> Option<hirsel_validate::ViewInput<'_>> {
         match self.replaced.get(&d) {
-            Some(v) => Some((&*v.signature, v.digest)),
+            Some(v) => Some(v.input.input()),
             None => self.base.view(d),
         }
     }
@@ -308,7 +316,7 @@ fn input_digest<'a>(
     bytes.extend((views.len() as u64).to_le_bytes());
     for view in views {
         crate::memo::encode_def_path(&mut bytes, view.d.path());
-        bytes.extend(view.digest.0.0);
+        bytes.extend(view.digest().0.0);
     }
     bytes.push(u8::from(heap.is_some()));
     if let Some((d, _)) = heap {

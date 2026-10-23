@@ -8,7 +8,6 @@ use super::SignatureSnapshot;
 use crate::memo::{LookupKey, LookupSource, PackageKey, ReadKey, ReadsBuilder};
 use hirsel_syntax::{ContentHash, DefId, FileContext, PackageId, Path};
 use hirsel_types::{LookupOutput, QueryError, SignatureProvider, SignatureRef};
-use hirsel_validate::SignatureLookup;
 
 /// A signature provider for bodies of `owner`'s package, reading `snapshot`.
 pub struct FrozenProvider<'a> {
@@ -95,7 +94,7 @@ impl<'a> FrozenProvider<'a> {
             .snapshot
             .validation(&self.owner)
             .view(d)
-            .map(|(_, digest)| digest);
+            .map(|input| input.digest());
         self.reads.record(
             ReadKey::ValidationView(d),
             digest.map_or_else(ContentHash::default, |digest| digest.0),

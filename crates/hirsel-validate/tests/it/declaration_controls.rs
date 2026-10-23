@@ -1237,7 +1237,7 @@ fn a_private_shape_edit_under_an_unchanged_fingerprint_rechecks_exactly_its_read
     assert!(reads_view(&hidden, "Inner") && !reads_view(&other, "Inner"));
     let original = signatures.get(&path("Inner")).unwrap().clone();
     let before = original.fingerprint;
-    let digest = signatures.view(id("Inner")).unwrap().1;
+    let digest = signatures.view(id("Inner")).unwrap().digest();
     // A private field edit the producer's fingerprint does not cover.
     represent(
         &mut signatures,
@@ -1245,7 +1245,7 @@ fn a_private_shape_edit_under_an_unchanged_fingerprint_rechecks_exactly_its_read
         TypeKind::Primitive(Primitive::String),
     );
     assert_eq!(signatures.get(&path("Inner")).unwrap().fingerprint, before);
-    assert_ne!(signatures.view(id("Inner")).unwrap().1, digest);
+    assert_ne!(signatures.view(id("Inner")).unwrap().digest(), digest);
     assert!(!holds(&hidden, &signatures) && holds(&other, &signatures));
     let again = verdicts.verdict(interner(), id("Hidden"), &signatures);
     assert!(!std::sync::Arc::ptr_eq(&hidden, &again) && reads_view(&again, "Inner"));

@@ -136,8 +136,6 @@ pub struct QueryEngine {
     pub(crate) verify_store: crate::store::VerifyStore,
     pending_store_checks: BTreeMap<(DefId, QueryKind), persistent::Expected>,
     store_check_spool: std::sync::Weak<persistent::Spool>,
-    pub(crate) lower_verdicts:
-        hirsel_syntax::DefMap<(hirsel_tir::DefinitionRef, Vec<hirsel_validate::VRead>)>,
     pub(crate) result_store: Option<Arc<dyn crate::store::ResultStore>>,
     /// Whether V validates what this session lowers; `run_v` is its only reader.
     pub verify: Verify,
@@ -284,7 +282,6 @@ impl Drop for QueryEngine {
             return;
         }
         let _timing = timings::interval(Interval::Merge);
-        released("engine: lower verdicts", take(&mut self.lower_verdicts));
         released("engine: lowered", take(&mut self.lowered));
         released("engine: lower receipts", take(&mut self.lower_receipts));
         let holds = self.lower_holds.stats();
@@ -457,7 +454,6 @@ impl QueryEngine {
             self.lowered.clear();
             self.lower_receipts.clear();
             self.lower_holds.clear();
-            self.lower_verdicts.clear();
             self.materialization_environment = Some(now);
         }
     }
@@ -497,7 +493,6 @@ impl QueryEngine {
             verify_store: crate::store::VerifyStore::Off,
             pending_store_checks: BTreeMap::new(),
             store_check_spool: std::sync::Weak::new(),
-            lower_verdicts: Default::default(),
             result_store: None,
             verify: Verify::On,
             retention: crate::memo::Retention::Resident,
@@ -2102,7 +2097,7 @@ impl QueryEngine {
             None => self.missing(QueryKind::Lower),
         });
         let mut result = result.map(shared_output);
-        let mut vreads = vec![];
+        let mut verification = None;
         if let Ok(lowered) = &result {
             if self.verify == Verify::On
                 && self.lower_requires_execution(definition, &Reads::empty())
@@ -2111,7 +2106,8 @@ impl QueryEngine {
                 let digest = self.signature_snapshot().validation_input_digest(&package);
                 self.record_evaluation_validation(package, digest);
             }
-            let report = self.validate_lowered_artifact(&lowered.value, &mut vreads);
+            let (report, evidence) = self.validate_lowered_artifact(&lowered.value);
+            verification = evidence;
             if let Some(error) = hirsel_validate::tooling_limit_error(&report) {
                 result = Err(error);
             } else if !report.violations.is_empty() {
@@ -2133,12 +2129,8 @@ impl QueryEngine {
         entry.depth = entry.result().is_ok().then_some(depth);
         entry.acceptance = entry.result().is_ok().then_some(acceptance).flatten();
         entry.selections = selections;
+        entry.verification = std::sync::Mutex::new(verification);
         let entry = Arc::new(entry);
-        if self.verify == Verify::On
-            && let Ok(output) = entry.result()
-        {
-            self.remember_lowered_verdict(output.value.clone(), vreads.clone());
-        }
         self.store_lower(definition, &entry)?;
         keep(
             &mut self.lowered,
@@ -2148,7 +2140,6 @@ impl QueryEngine {
         );
         if !self.lowered.contains_key(&id) {
             self.lower_holds.forget(&key);
-            self.lower_verdicts.remove(&id);
         }
         // Execution closure by union: whoever executes this body reads all it read.
         self.merge_execution(entry.reads());

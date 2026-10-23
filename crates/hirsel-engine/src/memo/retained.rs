@@ -141,6 +141,10 @@ pub(crate) fn retained_lower_entry_bytes(
         Err(error) => weight.error(error),
     }
     if let Some(reads) = verdict {
+        weight.add(
+            std::mem::size_of::<hirsel_validate::VerifiedDefinition>()
+                + 2 * std::mem::size_of::<usize>(),
+        );
         weight.flat_vec(reads);
     }
     weight.bytes
@@ -795,6 +799,7 @@ mod tests {
             covered: vec![],
             depth: None,
             acceptance: None,
+            verification: Default::default(),
             selections: vec![],
             consistent: true,
         };
