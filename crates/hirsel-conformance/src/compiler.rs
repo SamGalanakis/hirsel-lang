@@ -483,19 +483,14 @@ mod tests {
                     exit: 0,
                 },
             );
-            assert_eq!(status, Status::NotImplemented);
-            assert!(
-                observation.actual.contains("not implemented"),
-                "{}",
-                observation.actual
+            // Detailed interpreter refusals (a51a3c77) remain failures, with
+            // their original cause and all stdout retained by both witnesses.
+            assert_eq!(
+                observation.actual,
+                "tool error: launch unavailable: a bounded-arena charge of a generic type; stdout \"before unavailable\\n\""
             );
-            assert!(
-                observation
-                    .actual
-                    .contains("stdout \"before unavailable\\n\""),
-                "{}",
-                observation.actual
-            );
+            assert_eq!(status, Status::Fail(observation.actual.clone()));
+            assert!(observation.checked.is_none(), "{:?}", observation.checked);
             fs::remove_file(path).unwrap();
         });
     }

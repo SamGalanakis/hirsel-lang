@@ -541,7 +541,13 @@ fn unavailable_execution_preserves_stdout_before_the_tool_error() {
         String::from_utf8_lossy(&result.stderr)
     );
     assert_eq!(result.stdout, b"before unavailable\n");
-    assert!(String::from_utf8_lossy(&result.stderr).contains("not implemented"));
+    // Detailed interpreter refusals are preserved since a51a3c77.
+    assert!(
+        String::from_utf8_lossy(&result.stderr)
+            .contains("interpretation unavailable: a bounded-arena charge of a generic type"),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
     std::fs::remove_file(source).unwrap();
     std::fs::remove_file(config).unwrap();
 }

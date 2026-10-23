@@ -668,10 +668,16 @@ fn observed_api_failure_retains_stdout_and_inner_cause() {
             Default::default(),
         )
         .unwrap();
-        assert!(matches!(
-            result.outcome,
-            Err(RuntimeError::Query(QueryError::NotImplemented))
-        ));
+        // a51a3c77 preserves the inner refusal instead of erasing its reason.
+        assert!(
+            matches!(
+                result.outcome,
+                Err(RuntimeError::Tool(ref message))
+                    if message == "launch unavailable: a bounded-arena charge of a generic type"
+            ),
+            "{:?}",
+            result.outcome
+        );
         assert!(result.observation.is_none());
         assert_eq!(result.tooling_output, b"before unavailable\n");
     });

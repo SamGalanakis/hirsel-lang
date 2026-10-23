@@ -660,8 +660,9 @@ fn explicit_image_syntax_requests_materialize_the_source() {
     });
 }
 
-/// V accepted the writer's exact TIR. Its receipt avoids body V while all
-/// contextual reads hold; a changed FirstHeap selection requires revalidation.
+/// Imported producer receipts are not V authority (soundness repair 9d683676).
+/// Each consumer independently validates once, then reuses its local evidence,
+/// whether or not its FirstHeap selection matches the producer's.
 #[test]
 fn imaged_lowering_reuses_validated_evidence() {
     let run = || {
@@ -677,7 +678,7 @@ fn imaged_lowering_reuses_validated_evidence() {
             });
             // Both roots use the same source. Only `aaa` sorts before core's
             // heap-role declaration, changing V's FirstHeap read.
-            for (name, expected_runs) in [("zzz", 0), ("aaa", 1)] {
+            for name in ["zzz", "aaa"] {
                 let client = f.program(name, CLIENT, &library, "lib");
                 let mut program = load(&client, &StdImages::of(vec![image.clone()]));
                 assert!(program.engine.imaged(&package("lib")));
@@ -695,15 +696,15 @@ fn imaged_lowering_reuses_validated_evidence() {
                 let first = program.engine.lower_to_tir(&path).unwrap();
                 assert_eq!(
                     count() - before,
-                    expected_runs,
-                    "{name}: contextual V reads"
+                    1,
+                    "{name}: imported TIR needs independent V"
                 );
                 let second = program.engine.lower_to_tir(&path).unwrap();
                 assert!(Arc::ptr_eq(&first.value, &second.value));
                 assert_eq!(
                     count() - before,
-                    expected_runs,
-                    "repeated demand must reuse its verdict"
+                    1,
+                    "repeated demand must reuse its locally established verdict"
                 );
                 assert_eq!(program.engine.recompute_count(&path, QueryKind::Lower), 0);
             }
