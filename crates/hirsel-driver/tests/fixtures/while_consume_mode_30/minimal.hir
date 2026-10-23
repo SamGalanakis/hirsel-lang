@@ -1,0 +1,70 @@
+pub type Spec {
+  input: String,
+}
+
+pub type Input {
+  spec: Spec,
+  size: u64,
+}
+
+pub type Problem = Canceled | Other
+
+pub type Node {
+  children: List[Node],
+}
+
+pub type Parsed {
+  spec: Spec,
+  tree: Node,
+}
+
+pub fn worker(item: Input) -> Work[unique Parsed, unique Problem] {
+  Done(Parsed(spec: unique item.spec, tree: Node(children: [])))
+}
+
+pub type Work[T, E] = Done(T) | Failed(E)
+
+pub fn join[T, E](s: Scope, take set: TaskSet[Work[T, E]] of s) -> Result[List[T], E] {
+  task.cancel_all(s, take set)
+  Ok([])
+}
+
+pub fn load(tasks: Tasks) -> Result[(), Problem] {
+  task.scope(
+    tasks,
+    fn(s: Scope) -> Result[(), Problem] {
+      let mut next = 0u64
+      let mut set: TaskSet[Work[unique Parsed, unique Problem]] of s = task.set(s)
+      let mut active = 0u64
+      while next < 2u64 && active < 4u64 {
+        let item = Input(spec: Spec(input: "a"), size: 0u64)
+        task.add(
+          s,
+          mut set,
+          task.async(
+            s,
+            fn() -> Work[unique Parsed, unique Problem] {
+              worker(take item)
+            }
+          )
+        )
+        next += 1
+        active += 1
+      }
+      let pages = join(s, take set)?
+      for page in take pages {}
+      Ok(())
+    }
+  )
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let tasks = test.tasks(t)
+  match load(tasks) {
+    Ok(()) => {},
+    Error(_) => {
+      test.check(t, false)
+    },
+  }
+  Ok(())
+}

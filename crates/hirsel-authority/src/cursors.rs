@@ -42,8 +42,16 @@ pub(super) fn result(
         },
     )
     .map_err(graph_error)?;
-    let result = canonical_plain_type(t, result, read)?;
-    normalize_type_properties(t, result, generics, read)
+    // Generic actuals are fixed receiving contracts, not fresh values whose
+    // nested property summaries may be strengthened. In particular, a unique
+    // nominal actual can still carry conservative NotSendable evidence. Keep
+    // that exact contract in both the call actuals and its result graph.
+    let result = canonical_current_type(t, result, generics, read)?;
+    let mut row = t.row(result).clone();
+    if row.modes.sendability == Sendability::NotSendable {
+        row.modes.sendability = structural_sendability(t, result, generics, read)?;
+    }
+    Ok(t.intern(row))
 }
 
 fn argument_authorities(

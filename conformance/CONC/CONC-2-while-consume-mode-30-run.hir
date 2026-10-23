@@ -1,0 +1,129 @@
+// rule: CONC-2
+// expect: run
+// Generic result consumption retains the exact nested cursor contract.
+
+pub const JOBS: u64 = 4
+
+pub type Spec {
+  input: String,
+}
+
+pub type Input {
+  spec: Spec,
+  size: u64,
+}
+
+pub type Problem = Canceled | Files(String, FileError)
+
+pub type Node {
+  children: List[Node],
+}
+
+pub type Parsed {
+  spec: Spec,
+  tree: Node,
+}
+
+pub fn worker(d: Dir, item: Input) -> Work[unique Parsed, unique Problem] {
+  Done(Parsed(spec: unique item.spec, tree: Node(children: [])))
+}
+
+// Two genuine instantiations: read/validated AST owners and complete roff pages.
+// Join in completion order, return in admission order; first error cancels and
+// joins every sibling, including pending file reads, before publication begins.
+pub type Work[T, E] = Done(T) | Failed(E)
+
+pub fn join[T, E](s: Scope, take set: TaskSet[Work[T, E]] of s) -> Result[List[T], E] {
+  let mut members = take set
+  let mut slots: List[Option[T]] = []
+  while let Some(index) = task.await_any(s, members) {
+    match task.await_at(s, mut members, index) {
+      Done(value) => {
+        while list.len(slots) <= index {
+          list.push(mut slots, None())
+        }
+        slots[index] = Some(take value)
+      },
+      Failed(error) => {
+        task.cancel_all(s, take members)
+        return Error(take error)
+      },
+    }
+  }
+  task.cancel_all(s, take members)
+  let mut values: List[T] = []
+  for slot in take slots {
+    if let Some(value) = take slot {
+      list.push(mut values, take value)
+    }
+  }
+  Ok(take values)
+}
+
+pub fn load(d: Dir, tasks: Tasks, inputs: List[Input]) -> Result[List[Parsed], Problem] {
+  task.scope(
+    tasks,
+    fn(s: Scope) -> Result[List[Parsed], Problem] {
+      let mut values: List[Parsed] = []
+      let mut next = 0u64
+      while next < list.len(inputs) {
+        let mut set: TaskSet[Work[unique Parsed, unique Problem]] of s = task.set(s)
+        let mut active = 0u64
+        while next < list.len(inputs) && active < JOBS {
+          if let Error(_) = task.check_canceled(s) {
+            task.cancel_all(s, take set)
+            return Error(Canceled())
+          }
+          let item = unique inputs[next]
+          task.add(
+            s,
+            mut set,
+            task.async(
+              s,
+              fn() -> Work[unique Parsed, unique Problem] {
+                worker(d, take item)
+              }
+            )
+          )
+          next += 1
+          active += 1
+        }
+        let pages = join(s, take set)?
+        for page in take pages {
+          list.push(mut values, take page)
+        }
+      }
+      Ok(take values)
+    }
+  )
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let d = test.dir(t, [])
+  let tasks = test.tasks(t)
+  let inputs = [
+    Input(spec: Spec(input: "a"), size: 0u64),
+    Input(spec: Spec(input: "bb"), size: 0u64),
+    Input(spec: Spec(input: "ccc"), size: 0u64),
+    Input(spec: Spec(input: "dddd"), size: 0u64),
+    Input(spec: Spec(input: "eeeee"), size: 0u64),
+    Input(spec: Spec(input: "ffffff"), size: 0u64),
+    Input(spec: Spec(input: "ggggggg"), size: 0u64)
+  ]
+  match load(d, tasks, inputs) {
+    Ok(rows) => {
+      test.check(t, list.len(rows) == 7u64)
+      let mut i = 0u64
+      for row in take rows {
+        test.check(t, string.byte_len(row.spec.input) == i + 1u64)
+        test.check(t, list.len(row.tree.children) == 0u64)
+        i += 1
+      }
+      test.check(t, i == 7u64)
+    },
+    Error(_) => {
+      test.check(t, false)
+    },
+  }
+  Ok(())
+}

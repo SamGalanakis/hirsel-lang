@@ -640,6 +640,7 @@ conformance/CONC/CONC-2-tour-11-concurrency-run.hir
 conformance/CONC/CONC-2-tour-11-task-all-run.hir
 conformance/CONC/CONC-2-unconsumed-handle-bad.hir
 conformance/CONC/CONC-2-unconsumed-handle-ok.hir
+conformance/CONC/CONC-2-while-consume-mode-30-run.hir
 conformance/CONC/CONC-3-cancel-order-child-run.hir
 conformance/CONC/CONC-3-cancel-order-file-run.hir
 conformance/CONC/CONC-3-cancel-order-filesystem-breadth-run.hir

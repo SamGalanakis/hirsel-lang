@@ -128,3 +128,4 @@ mod scope_closure_origin_27;
 mod own_param_selector_27;
 mod taskset_await_mode_27;
 mod unique_empty_builder_29;
+mod while_consume_mode_30;

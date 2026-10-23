@@ -1,0 +1,27 @@
+pub fn main(t: Test) -> Result[(), ()] {
+  let d = test.dir(t, [])
+  let tasks = test.tasks(t)
+  let inputs = [
+    manifest.Input(spec: manifest.Spec(input: "a"), size: 0u64),
+    manifest.Input(spec: manifest.Spec(input: "bb"), size: 0u64),
+    manifest.Input(spec: manifest.Spec(input: "ccc"), size: 0u64),
+    manifest.Input(spec: manifest.Spec(input: "dddd"), size: 0u64),
+    manifest.Input(spec: manifest.Spec(input: "eeeee"), size: 0u64),
+    manifest.Input(spec: manifest.Spec(input: "ffffff"), size: 0u64),
+    manifest.Input(spec: manifest.Spec(input: "ggggggg"), size: 0u64),
+  ]
+  match batch.load(d, tasks, inputs) {
+    Ok(rows) => {
+      test.check(t, list.len(rows) == 7u64)
+      let mut i = 0u64
+      for row in take rows {
+        test.check(t, string.byte_len(row.spec.input) == i + 1u64)
+        test.check(t, list.len(row.tree.children) == 0u64)
+        i += 1
+      }
+      test.check(t, i == 7u64)
+    },
+    Error(_) => { test.check(t, false) },
+  }
+  Ok(())
+}

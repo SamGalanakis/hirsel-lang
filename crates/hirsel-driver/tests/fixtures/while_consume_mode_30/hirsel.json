@@ -1,0 +1,1 @@
+{"schema": 1, "package": {"name": "witness", "version": "1"}, "entry": {"module": [], "name": "main"}, "sources": [{"path": "main.hir", "module": []}, {"path": "batch.hir", "module": ["batch"]}, {"path": "manifest.hir", "module": ["manifest"]}, {"path": "document.hir", "module": ["document"]}], "dependencies": []}

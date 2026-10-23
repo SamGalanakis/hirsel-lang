@@ -1,0 +1,5 @@
+pub type Node { children: List[Node] }
+pub type Parsed { spec: manifest.Spec, tree: Node }
+pub fn load(d: Dir, item: manifest.Input) -> batch.Work[unique Parsed, unique manifest.Problem] {
+ Done(Parsed(spec: unique item.spec, tree: Node(children: [])))
+}
