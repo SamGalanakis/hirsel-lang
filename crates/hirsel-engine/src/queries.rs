@@ -2015,14 +2015,7 @@ impl QueryEngine {
         let mut result = result.map(shared_output);
         let mut vreads = vec![];
         if let Ok(lowered) = &result {
-            if self.verify == Verify::On {
-                *self.scalar_validation_runs.entry(id).or_default() += 1;
-            }
-            let report = self.run_v(&definition.0.package, |types, signatures| {
-                let _timing = timings::phase(Phase::Verify);
-                timings::count(Count::VRuns);
-                hirsel_validate::validate(&lowered.value, types, signatures, &mut vreads)
-            });
+            let report = self.validate_lowered_artifact(&lowered.value, &mut vreads);
             if let Some(error) = hirsel_validate::tooling_limit_error(&report) {
                 result = Err(error);
             } else if !report.violations.is_empty() {
@@ -2047,11 +2040,7 @@ impl QueryEngine {
         {
             self.remember_lowered_verdict(output.value.clone(), vreads.clone());
         }
-        self.store_lower(
-            definition,
-            &entry,
-            (self.verify == Verify::On).then_some(vreads),
-        )?;
+        self.store_lower(definition, &entry)?;
         keep(
             &mut self.lowered,
             &mut self.graph,

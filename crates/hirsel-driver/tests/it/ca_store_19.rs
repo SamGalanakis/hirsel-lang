@@ -452,3 +452,50 @@ fn staged_registration_queries_restore_declarations_without_analyzed_bodies() {
         assert!(invalid.register_staged_definition(&path).is_err());
     });
 }
+
+
+#[test]
+fn lower_producer_records_cannot_mint_or_transfer_verifier_authority() {
+    // A remote/custom producer can replay every ordinary byte. Its default
+    // provider interface supplies no verifier capability.
+    struct ProducerOnly(Arc<store::MemStore>);
+    impl store::ResultStore for ProducerOnly {
+        fn get(&self, key: &store::EntryKey) -> Option<store::Bytes> {
+            store::ResultStore::get(&*self.0, key)
+        }
+        fn put(&self, key: &store::EntryKey, bytes: &[u8]) {
+            store::ResultStore::put(&*self.0, key, bytes)
+        }
+        fn name(&self) -> &'static str { "producer-only" }
+    }
+    with_compiler_stack(|| {
+        let source = "fn value()->u32{42u32}\n";
+        let path = definition("value");
+        let store = Arc::new(store::MemStore::default());
+        let mut writer = signature_session(store.clone(), source, true);
+        writer.lower_to_tir(&path).unwrap();
+        assert_eq!(writer.body_validation_runs(&path), 1);
+        drop(writer);
+        let mut local = signature_session(store.clone(), source, false);
+        local.adapters.modes = None;
+        local.lower_to_tir(&path).unwrap();
+        assert_eq!(local.body_validation_runs(&path), 0, "local verifier receipt");
+        let mut remote = signature_session(Arc::new(ProducerOnly(store.clone())), source, false);
+        remote.adapters.modes = None;
+        remote.lower_to_tir(&path).unwrap();
+        assert_eq!(remote.recompute_count(&path, QueryKind::Modes), 0);
+        assert_eq!(remote.body_validation_runs(&path), 1, "producer bytes require first V");
+        remote.lower_to_tir(&path).unwrap();
+        assert_eq!(remote.body_validation_runs(&path), 1, "this process now owns exact evidence");
+        // Copying all producer records into a new trusted cache transfers no
+        // receipts, even when their content came from a verified compiler.
+        let copied = Arc::new(store::MemStore::default());
+        for (key, bytes) in store.take() {
+            store::ResultStore::put(&*copied, &key, &bytes);
+        }
+        let mut copied = signature_session(copied, source, false);
+        copied.adapters.modes = None;
+        copied.lower_to_tir(&path).unwrap();
+        assert_eq!(copied.body_validation_runs(&path), 1);
+    });
+}
