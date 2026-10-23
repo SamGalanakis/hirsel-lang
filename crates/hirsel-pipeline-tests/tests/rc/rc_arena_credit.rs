@@ -3,6 +3,11 @@
 use crate::rc_support;
 use hirsel_lir::{ir::*, layout_types::TargetSpec};
 
+#[test]
+fn sealed_regions_33_native_scope_grant_closes_without_dropping_borrowed_storage() {
+    check("fn main() { arena.with(fn(a: Arena) {}); }", &[], &[]);
+}
+
 fn check(source: &str, expected: &[(&str, Option<u32>)], elided: &[(&str, bool)]) {
     let program = rc_support::compile(source);
     for target in TargetSpec::executed() {
