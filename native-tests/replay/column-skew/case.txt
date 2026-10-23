@@ -1,16 +1,16 @@
 case native-tests/replay/column-skew
 configuration synthetic/column-skew
 matrix 4
-observation-schema 4
-llvm 21.1.8
+observation-schema 5
+llvm 23.1.4
 source-digest e7adee69c65e4f14cffcc016ad55b0f18170b0277fb869dc3fcdc12f11936c54
 --- expected
-observation 4
+observation 5
 exit none
 output "before\n"
 failure SEM-1 main "case.hir" 14:13
 --- actual
-observation 4
+observation 5
 exit none
 output "before\n"
 failure SEM-1 main "case.hir" 14:14
