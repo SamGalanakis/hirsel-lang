@@ -1,0 +1,51 @@
+pub type AppError = Grant(GrantError) | Directory(FileError) | Output(OutputError)
+
+fn run(d: Dir, tasks: Tasks, command: manifest.Command) -> Result[
+  List[publish.Output],
+  manifest.Problem
+] {
+  let inputs = manifest.admit(d, command.pages)?
+  let pages = batch.load(d, tasks, inputs)?
+  batch.render(tasks, pages)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[std@1/process.ExitCode, AppError] {
+  let output = io.stdout(rt) ? Grant
+  let d = io.dir(rt, path.of("data")) ? Directory
+  let command = match manifest.command(d, args) {
+    Ok(value) => take value,
+    Error(error) => {
+      out.print(output, f"{manifest.describe(error)}\n") ? Output
+      return Ok(std@1/process.exit_code(2u8))
+    },
+  }
+  let tasks = io.tasks(rt) ? Grant
+  let outputs = match run(d, tasks, command) {
+    Ok(value) => take value,
+    Error(error) => {
+      out.print(output, f"{manifest.describe(error)}\n") ? Output
+      return Ok(std@1/process.exit_code(2u8))
+    },
+  }
+  if !command.write {
+    out.print(output, f"checked {list.len(outputs)} pages\n") ? Output
+    return Ok(std@1/process.SUCCESS)
+  }
+  let report = publish.write(d, outputs)
+  for issue in report.issues {
+    out.print(output, f"{issue.path}: publish {manifest.file_error(issue.error)}\n") ? Output
+  }
+  out.print(
+    output,
+    f"rendered {list.len(outputs)} pages; published {report.written}; failed {list.len(
+      report.issues
+    )}\n"
+  ) ? Output
+  Ok(
+    if list.len(report.issues) == 0 {
+      std@1/process.SUCCESS
+    } else {
+      std@1/process.exit_code(2u8)
+    }
+  )
+}

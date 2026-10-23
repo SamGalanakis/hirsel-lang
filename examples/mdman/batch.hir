@@ -1,0 +1,115 @@
+// Two genuine instantiations: read/validated AST owners and complete roff pages.
+// Join in completion order, return in admission order; first error cancels and
+// joins every sibling, including pending file reads, before publication begins.
+pub type Work[T, E] = Done(T) | Failed(E)
+
+pub fn join[T, E](s: Scope, take set: TaskSet[Work[T, E]] of s) -> Result[List[T], E] {
+  let mut members = take set
+  let mut slots: List[Option[T]] = []
+  while let Some(index) = task.await_any(s, members) {
+    match task.await_at(s, mut members, index) {
+      Done(value) => {
+        while list.len(slots) <= index {
+          list.push(mut slots, None())
+        }
+        slots[index] = Some(take value)
+      },
+      Failed(error) => {
+        task.cancel_all(s, take members)
+        return Error(take error)
+      },
+    }
+  }
+  task.cancel_all(s, take members)
+  let mut values: List[T] = []
+  for slot in take slots {
+    if let Some(value) = take slot {
+      list.push(mut values, take value)
+    }
+  }
+  Ok(take values)
+}
+
+pub fn load(d: Dir, tasks: Tasks, inputs: List[manifest.Input]) -> Result[
+  List[document.Parsed],
+  manifest.Problem
+] {
+  task.scope(
+    tasks,
+    fn(s: Scope) -> Result[List[document.Parsed], manifest.Problem] {
+      let mut values: List[document.Parsed] = []
+      let mut next = 0u64
+      while next < list.len(inputs) {
+        let mut set: TaskSet[Work[unique document.Parsed, unique manifest.Problem]] of s = task.set(
+          s
+        )
+        let mut active = 0u64
+        while next < list.len(inputs) && active < manifest.JOBS {
+          if let Error(_) = task.check_canceled(s) {
+            task.cancel_all(s, take set)
+            return Error(Canceled())
+          }
+          let item = unique inputs[next]
+          task.add(
+            s,
+            mut set,
+            task.async(
+              s,
+              fn() -> Work[unique document.Parsed, unique manifest.Problem] {
+                document.load(d, take item)
+              }
+            )
+          )
+          next += 1
+          active += 1
+        }
+        let pages = join(s, take set)?
+        document.append(mut values, take pages)
+      }
+      Ok(take values)
+    }
+  )
+}
+
+pub fn render(tasks: Tasks, pages: List[document.Parsed]) -> Result[
+  List[publish.Output],
+  manifest.Problem
+] {
+  task.scope(
+    tasks,
+    fn(s: Scope) -> Result[List[publish.Output], manifest.Problem] {
+      let mut values: List[publish.Output] = []
+      let mut next = 0u64
+      while next < list.len(pages) {
+        let mut set: TaskSet[Work[unique publish.Output, unique manifest.Problem]] of s = task.set(
+          s
+        )
+        let mut active = 0u64
+        while next < list.len(pages) && active < manifest.JOBS {
+          if let Error(_) = task.check_canceled(s) {
+            task.cancel_all(s, take set)
+            return Error(Canceled())
+          }
+          let item = unique pages[next]
+          task.add(
+            s,
+            mut set,
+            task.async(
+              s,
+              fn() -> Work[unique publish.Output, unique manifest.Problem] {
+                roff.job(take item)
+              }
+            )
+          )
+          next += 1
+          active += 1
+        }
+        let outputs = join(s, take set)?
+        for value in take outputs {
+          list.push(mut values, take value)
+        }
+      }
+      Ok(take values)
+    }
+  )
+}

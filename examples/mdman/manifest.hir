@@ -1,0 +1,312 @@
+// Input policy is pure; file authority is supplied only to bounded readers.
+pub const PAGES: u64 = 16
+
+pub const SOURCE_BYTES: u64 = 16384
+
+pub const TOTAL_BYTES: u64 = 131072
+
+pub const MANIFEST_BYTES: u64 = 8192
+
+pub const OUTPUT_BYTES: u64 = 65536
+
+pub const JOBS: u64 = 4
+
+pub type Problem = Invalid(String, String) | Limit(String, String) | Files(
+  String,
+  FileError
+) | Utf8(String) | Unsupported(String, String, String) | Canceled
+
+pub type Spec {
+  input: String,
+  output: String,
+  title: String,
+  section: String,
+  date: String,
+  origin: String,
+  manual: String,
+}
+
+pub type Input {
+  spec: Spec,
+  size: u64,
+}
+
+pub type Command {
+  write: bool,
+  pages: List[Spec],
+}
+
+pub fn invalid(location: String, detail: String) -> Problem uses {} {
+  Invalid(unique location, unique detail)
+}
+
+pub fn limit(location: String, detail: String) -> Problem uses {} {
+  Limit(unique location, unique detail)
+}
+
+pub fn describe(problem: Problem) -> String uses {} {
+  match problem {
+    Invalid(name, detail) => f"{name}: invalid {detail}",
+    Limit(name, detail) => f"{name}: resource limit {detail}",
+    Files(name, error) => f"{name}: file {file_error(error)}",
+    Utf8(name) => f"{name}: invalid UTF-8",
+    Unsupported(name, anchor, kind) => f"{name}: AST{anchor}: unsupported {kind}",
+    Canceled() => "batch: canceled",
+  }
+}
+
+pub fn file_error(error: FileError) -> String uses {} {
+  match error {
+    FileFault(code) => f"fault {code}",
+    Canceled(_) => "canceled",
+    NotGranted() => "not granted",
+    NotFound() => "not found",
+    PermissionDenied() => "permission denied",
+    AlreadyExists() => "already exists",
+    IsDirectory() => "is directory",
+    NotDirectory() => "not directory",
+    DirectoryNotEmpty() => "directory not empty",
+    CrossDevice() => "cross device",
+    Truncated() => "truncated",
+  }
+}
+
+pub fn safe_path(name: String) -> bool uses {} {
+  if name == "" || string.byte_len(name) > 128 {
+    return false
+  }
+  let mut components = 1u64
+  let mut length = 0u64
+  for c in string.scalars(name) {
+    if c == '/' {
+      if length == 0 {
+        return false
+      }
+      components += 1
+      length = 0
+    } else {
+      if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '.' || c == '_' || c == '-') {
+        return false
+      }
+      length += 1
+    }
+  }
+  if components > 8 || length == 0 {
+    return false
+  }
+  for part in string.split(unique name, "/") {
+    if part == "." || part == ".." {
+      return false
+    }
+  }
+  true
+}
+
+fn metadata(value: String, maximum: u64, required: bool) -> bool uses {} {
+  if string.byte_len(value) > maximum || required && value == "" {
+    return false
+  }
+  for c in string.scalars(value) {
+    let cp = char.to_u32(c)
+    if cp < 32 || cp >= 127 && cp <= 159 {
+      return false
+    }
+  }
+  true
+}
+
+pub fn validate(page: Spec) -> Result[(), Problem] uses {} {
+  if !safe_path(page.input) || !safe_path(page.output) {
+    return Error(invalid(page.input, "path"))
+  }
+  if !metadata(page.title, 64, true) || !metadata(page.date, 32, false) || !metadata(
+    page.origin,
+    64,
+    false
+  ) || !metadata(page.manual, 64, false) {
+    return Error(invalid(page.input, "metadata"))
+  }
+  let section = string.as_bytes(page.section)
+  if bytes.len(section) != 1 || section[0] < 49 || section[0] > 57 {
+    return Error(invalid(page.input, "section (1..9)"))
+  }
+  Ok(())
+}
+
+fn overlaps(a: String, b: String) -> bool uses {} {
+  a == b || string.starts_with(a, f"{b}/") || string.starts_with(b, f"{a}/")
+}
+
+pub fn validate_all(pages: List[Spec], manifest_name: String) -> Result[(), Problem] uses {} {
+  if list.len(pages) > PAGES {
+    return Error(limit("manifest", "pages"))
+  }
+  for page in pages {
+    validate(page)?
+    if manifest_name != "" && overlaps(page.output, manifest_name) {
+      return Error(invalid(page.output, "manifest overlap"))
+    }
+    for other in pages {
+      if overlaps(page.output, other.input) {
+        return Error(invalid(page.output, "input overlap"))
+      }
+    }
+  }
+  for i in 0u64..list.len(pages) {
+    for j in 0u64..i {
+      if overlaps(pages[i].output, pages[j].output) {
+        return Error(invalid(pages[i].output, "output overlap"))
+      }
+    }
+  }
+  Ok(())
+}
+
+pub fn read(d: Dir, name: String, maximum: u64) -> Result[unique Bytes, Problem] {
+  let mut handle = match file.open(d, path.of(name)) {
+    Ok(value) => take value,
+    Error(error) => return Error(Files(unique name, error)),
+  }
+  match file.read_all_bounded(d, mut handle, maximum) {
+    Ok(value) => Ok(take value),
+    Error(Limit()) => Error(limit(name, "bytes")),
+    Error(File(error)) => Error(Files(unique name, error)),
+  }
+}
+
+// Bounded TSV avoids an additional parser. Empty trailing columns are significant.
+fn decode(take source: String) -> Result[List[Spec], Problem] uses {} {
+  let mut pages: List[Spec] = []
+  for line in string.lines(take source) {
+    if line == "" {
+      continue
+    }
+    if list.len(pages) == PAGES {
+      return Error(limit("manifest", "pages"))
+    }
+    let columns = string.split(unique line, "\t")
+    if list.len(columns) != 7 {
+      return Error(invalid("manifest", "seven TSV columns"))
+    }
+    list.push(
+      mut pages,
+      Spec(
+        input: unique columns[0],
+        output: unique columns[1],
+        title: unique columns[2],
+        section: unique columns[3],
+        date: unique columns[4],
+        origin: unique columns[5],
+        manual: unique columns[6]
+      )
+    )
+  }
+  Ok(take pages)
+}
+
+pub fn command(d: Dir, args: Args) -> Result[Command, Problem] {
+  let count = arg.len(args)
+  if count < 3 || count > 6 {
+    return Error(invalid("arguments", "usage"))
+  }
+  let Ok(mode) = arg.text(args, 0) else {
+    return Error(invalid("arguments", "UTF-8"))
+  }
+  if mode != "check" && mode != "render" {
+    return Error(invalid("arguments", "command"))
+  }
+  let Ok(first) = arg.text(args, 1) else {
+    return Error(invalid("arguments", "UTF-8"))
+  }
+  if first == "--manifest" {
+    if count != 3 {
+      return Error(invalid("arguments", "manifest usage"))
+    }
+    let Ok(name) = arg.text(args, 2) else {
+      return Error(invalid("arguments", "UTF-8"))
+    }
+    if !safe_path(name) {
+      return Error(invalid("manifest", "path"))
+    }
+    let raw = read(d, name, MANIFEST_BYTES)?
+    let Ok(source) = string.from_bytes(take raw) else {
+      return Error(Utf8(unique name))
+    }
+    let pages = decode(take source)?
+    validate_all(pages, name)?
+    return Ok(Command(write: mode == "render", pages: take pages))
+  }
+  let write = mode == "render"
+  let offset: u64 = if write {
+    1
+  } else {
+    0
+  }
+  if count != 4 + offset && count != 5 + offset {
+    return Error(invalid("arguments", "single page usage"))
+  }
+  let Ok(title) = arg.text(args, 2 + offset) else {
+    return Error(invalid("arguments", "title"))
+  }
+  let Ok(section) = arg.text(args, 3 + offset) else {
+    return Error(invalid("arguments", "section"))
+  }
+  let target = if write {
+    match arg.text(args, 2) {
+      Ok(value) => take value,
+      Error(_) => return Error(invalid("arguments", "output")),
+    }
+  } else {
+    "checked.1"
+  }
+  let date = if count == 5 + offset {
+    match arg.text(args, 4 + offset) {
+      Ok(value) => take value,
+      Error(_) => return Error(invalid("arguments", "date")),
+    }
+  } else {
+    ""
+  }
+  let pages = [
+    Spec(
+      input: unique first,
+      output: take target,
+      title: take title,
+      section: take section,
+      date: take date,
+      origin: "",
+      manual: ""
+    )
+  ]
+  if write {
+    validate_all(pages, "")?
+  } else {
+    validate(pages[0])?
+  }
+  Ok(Command(write: write, pages: take pages))
+}
+
+// Admit the aggregate before any page opens. A growth race cannot escape the
+// admitted per-file size: each bounded reader also performs a one-byte probe.
+pub fn admit(d: Dir, pages: List[Spec]) -> Result[List[Input], Problem] {
+  let mut total = 0u64
+  let mut inputs: List[Input] = []
+  for page in pages {
+    let info = match file.metadata(d, path.of(page.input)) {
+      Ok(value) => value,
+      Error(error) => return Error(Files(unique page.input, error)),
+    }
+    if info.kind != Regular() {
+      return Error(invalid(page.input, "regular file required"))
+    }
+    if info.size > SOURCE_BYTES {
+      return Error(limit(page.input, "source bytes"))
+    }
+    if info.size > TOTAL_BYTES - total {
+      return Error(limit(page.input, "total source bytes"))
+    }
+    total += info.size
+    list.push(mut inputs, Input(spec: unique page, size: info.size))
+  }
+  Ok(take inputs)
+}

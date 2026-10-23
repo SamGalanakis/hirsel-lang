@@ -1,0 +1,73 @@
+// Each file has its own atomic replace. There is no multi-file transaction.
+pub type Output {
+  path: String,
+  body: Bytes,
+}
+
+pub type Issue {
+  path: String,
+  error: FileError,
+}
+
+pub type Report {
+  written: u64,
+  issues: List[Issue],
+}
+
+@noalloc
+fn compare(a: Output, b: Output) -> i32 uses {} {
+  if a.path < b.path {
+    -1
+  } else if a.path > b.path {
+    1
+  } else {
+    0
+  }
+}
+
+// Detect final symlinks in every existing prefix before publishing. Hostile
+// concurrent changes remain the provider's confined path-resolution contract.
+fn check_path(d: Dir, name: String) -> Result[(), FileError] {
+  let mut prefix = ""
+  for part in path.components(path.of(name)) {
+    prefix = if prefix == "" {
+      unique part
+    } else {
+      f"{prefix}/{part}"
+    }
+    match file.metadata(d, path.of(prefix)) {
+      Ok(info) => if info.kind == Symlink() {
+        return Error(FileFault(1u32))
+      },
+      Error(NotFound()) => return Ok(()),
+      Error(error) => return Error(error),
+    }
+  }
+  Ok(())
+}
+
+fn atomic(d: Dir, value: Output) -> Result[(), FileError] {
+  check_path(d, value.path)?
+  let mut target = file.create_atomic(d, path.of(value.path))?
+  file.write_all(d, mut target, value.body)?
+  file.commit(d, take target)
+}
+
+pub fn write(d: Dir, outputs: List[Output]) -> Report {
+  let mut ordered = unique outputs
+  list.sort(mut ordered, compare)
+  let mut written = 0u64
+  let mut issues: List[Issue] = []
+  for value in ordered {
+    match atomic(d, value) {
+      Ok(()) => {
+        written += 1
+      },
+      Error(error) => list.push(
+        mut issues,
+        Issue(path: unique value.path, error: error)
+      ),
+    }
+  }
+  Report(written: written, issues: take issues)
+}

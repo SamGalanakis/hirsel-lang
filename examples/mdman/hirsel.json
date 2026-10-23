@@ -1,0 +1,57 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "mdman",
+    "version": "1"
+  },
+  "entry": {
+    "module": [],
+    "name": "main"
+  },
+  "sources": [
+    {
+      "path": "main.hir",
+      "module": []
+    },
+    {
+      "path": "manifest.hir",
+      "module": [
+        "manifest"
+      ]
+    },
+    {
+      "path": "document.hir",
+      "module": [
+        "document"
+      ]
+    },
+    {
+      "path": "roff.hir",
+      "module": [
+        "roff"
+      ]
+    },
+    {
+      "path": "batch.hir",
+      "module": [
+        "batch"
+      ]
+    },
+    {
+      "path": "publish.hir",
+      "module": [
+        "publish"
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "manifest": "../../stdlib/std@1/hirsel.json",
+      "package": {
+        "name": "std",
+        "version": "1"
+      },
+      "expose": []
+    }
+  ]
+}

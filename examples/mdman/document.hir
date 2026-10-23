@@ -1,0 +1,104 @@
+// The shipped CommonMark parser owns syntax. Diagnostics name the source and
+// zero-based child path because std.markdown.Node exports no byte/line spans.
+pub type Parsed {
+  spec: manifest.Spec,
+  tree: markdown.Node,
+}
+
+pub const DEPTH: u64 = 32
+
+pub const NODES: u64 = 8192
+
+fn unsupported(kind: markdown.Kind) -> Option[String] uses {} {
+  match kind {
+    Document() => None(),
+    Paragraph() => None(),
+    Heading(_) => None(),
+    BlockQuote() => None(),
+    ListBlock(_, _, _) => None(),
+    Item(None()) => None(),
+    Item(Some(_)) => Some("task item"),
+    CodeBlock(_, _) => None(),
+    HtmlBlock(_) => Some("raw HTML"),
+    ThematicBreak() => None(),
+    Text(_) => None(),
+    SoftBreak() => None(),
+    HardBreak() => None(),
+    Code(_) => None(),
+    HtmlInline(_) => Some("raw HTML"),
+    Emphasis() => None(),
+    Strong() => None(),
+    Link(_, _) => None(),
+    Image(_, _) => None(),
+    Strikethrough() => Some("strikethrough"),
+    Table() => Some("table"),
+    TableRow(_) => Some("table row"),
+    TableCell(_) => Some("table cell"),
+    FootnoteDefinition(_) => Some("footnote"),
+    FootnoteReference(_, _, _) => Some("footnote"),
+    FootnoteBackrefs(_, _, _) => Some("footnote"),
+  }
+}
+
+fn inspect(
+  node: markdown.Node,
+  name: String,
+  anchor: String,
+  depth: u64,
+  mut count: u64
+) -> Result[(), manifest.Problem] uses {} {
+  if depth > DEPTH {
+    return Error(manifest.limit(name, "AST depth"))
+  }
+  if count == NODES {
+    return Error(manifest.limit(name, "AST nodes"))
+  }
+  count += 1
+  if let Some(kind) = unsupported(node.kind) {
+    return Error(Unsupported(unique name, unique anchor, take kind))
+  }
+  let mut index = 0u64
+  for child in node.children {
+    inspect(child, name, f"{anchor}/{index}", depth + 1, mut count)?
+    index += 1
+  }
+  Ok(())
+}
+
+pub fn validate(tree: markdown.Node, name: String) -> Result[(), manifest.Problem] uses {} {
+  let mut count = 0u64
+  inspect(tree, name, "", 0, mut count)
+}
+
+pub fn load(d: Dir, item: manifest.Input) -> batch.Work[
+  unique Parsed,
+  unique manifest.Problem
+] {
+  let raw = match manifest.read(d, item.spec.input, item.size) {
+    Ok(value) => take value,
+    Error(error) => return Failed(unique error),
+  }
+  let Ok(source) = string.from_bytes(take raw) else {
+    return Failed(Utf8(unique item.spec.input))
+  }
+  let mut options = markdown.default_options()
+  // Recognize tables so they are rejected, rather than rendered as paragraphs.
+  options.tables = true
+  let tree = unique markdown.parse(take source, options)
+  match validate(tree, item.spec.input) {
+    Ok(()) => Done(Parsed(spec: unique item.spec, tree: take tree)),
+    Error(error) => Failed(unique error),
+  }
+}
+
+pub fn parts(take page: Parsed) -> (manifest.Spec, markdown.Node) uses {} {
+  let Parsed(spec: spec, tree: tree) = take page
+  (take spec, take tree)
+}
+
+// Keep owned AST reception outside the coordinator loop's carried state.
+pub fn append(mut target: List[Parsed], take pages: List[unique Parsed]) {
+  for page in take pages {
+    list.push(mut target, take page)
+  }
+}

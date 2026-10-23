@@ -1,0 +1,268 @@
+// Port of cmark-gfm 27d942c8 src/man.c:20-274 (BSD-2-Clause; LICENSE.cmark).
+// No wrapping. Line state is shared through recursive inline traversal; fonts
+// are restored to the enclosing font, including nested emphasis/code/strong.
+type Builder {
+  bytes: List[u8],
+  line_start: bool,
+  source: String,
+}
+
+type Context {
+  first_item: bool,
+  ordered: bool,
+  number: u64,
+  font: String,
+}
+
+fn append(mut builder: unique Builder, value: String) -> Result[(), manifest.Problem] uses {} {
+  if string.byte_len(value) > manifest.OUTPUT_BYTES - list.len(builder.bytes) {
+    return Error(manifest.limit(builder.source, "output bytes"))
+  }
+  text.append(mut builder.bytes, value)
+  if value != "" {
+    builder.line_start = string.ends_with(value, "\n")
+  }
+  Ok(())
+}
+
+fn newline(mut builder: unique Builder) -> Result[(), manifest.Problem] uses {} {
+  if !builder.line_start {
+    append(mut builder, "\n")?
+  }
+  Ok(())
+}
+
+fn escaped(mut builder: unique Builder, value: String, quoted: bool) -> Result[
+  (),
+  manifest.Problem
+] uses {} {
+  for c in string.scalars(value) {
+    let replacement = match c {
+      '.' => if builder.line_start {
+        "\\&."
+      } else {
+        "."
+      },
+      '\'' => if builder.line_start {
+        "\\&'"
+      } else {
+        "'"
+      },
+      '-' => "\\-",
+      '\\' => "\\e",
+      '‘' => "\\[oq]",
+      '’' => "\\[cq]",
+      '“' => "\\[lq]",
+      '”' => "\\[rq]",
+      '—' => "\\[em]",
+      '–' => "\\[en]",
+      '"' => if quoted {
+        "\\(dq"
+      } else {
+        "\""
+      },
+      _ => "",
+    }
+    if replacement != "" {
+      append(mut builder, replacement)?
+    } else if char.to_u32(c) < 32 && c != '\n' && c != '\t' || char.to_u32(c) >= 127 && char.to_u32(
+      c
+    ) <= 159 {
+      append(mut builder, "\\[uFFFD]")?
+    } else {
+      let mut encoded: List[u8] = []
+      char.format_into(c, mut encoded)
+      append(mut builder, text.finish_valid(take encoded))?
+    }
+  }
+  Ok(())
+}
+
+fn children(
+  take nodes: List[markdown.Node],
+  context: Context,
+  mut builder: unique Builder
+) -> Result[(), manifest.Problem] uses {} {
+  let mut first = context.first_item
+  for child in take nodes {
+    let nested = Context(
+      first_item: first,
+      ordered: context.ordered,
+      number: context.number,
+      font: unique context.font
+    )
+    node(take child, nested, mut builder)?
+    first = false
+  }
+  Ok(())
+}
+
+fn font(
+  take nodes: List[markdown.Node],
+  context: Context,
+  selected: String,
+  mut builder: unique Builder
+) -> Result[(), manifest.Problem] uses {} {
+  if context.font != selected {
+    append(mut builder, f"\\f[{selected}]")?
+  }
+  let nested = Context(
+    first_item: false,
+    ordered: false,
+    number: 0,
+    font: unique selected
+  )
+  children(take nodes, nested, mut builder)?
+  if context.font != selected {
+    append(mut builder, f"\\f[{context.font}]")?
+  }
+  Ok(())
+}
+
+fn node(take tree: markdown.Node, context: Context, mut builder: unique Builder) -> Result[
+  (),
+  manifest.Problem
+] uses {} {
+  let mut owned_tree = take tree
+  let kind = replace(mut owned_tree.kind, Document())
+  let nodes = replace(mut owned_tree.children, [])
+  match take kind {
+    Document() => children(take nodes, context, mut builder),
+    Paragraph() => {
+      if !context.first_item {
+        newline(mut builder)?
+        append(mut builder, ".PP\n")?
+      }
+      children(take nodes, context, mut builder)?
+      newline(mut builder)
+    },
+    Heading(level) => {
+      newline(mut builder)?
+      append(
+        mut builder,
+        if level == 1 {
+          ".SH\n"
+        } else {
+          ".SS\n"
+        }
+      )?
+      children(take nodes, context, mut builder)?
+      newline(mut builder)
+    },
+    BlockQuote() => {
+      newline(mut builder)?
+      append(mut builder, ".RS\n")?
+      children(take nodes, context, mut builder)?
+      newline(mut builder)?
+      append(mut builder, ".RE\n")
+    },
+    ListBlock(ordered, start, _) => {
+      let mut number = start
+      for child in take nodes {
+        let nested = Context(
+          first_item: false,
+          ordered: ordered,
+          number: number,
+          font: unique context.font
+        )
+        node(take child, nested, mut builder)?
+        number += 1
+      }
+      Ok(())
+    },
+    Item(_) => {
+      newline(mut builder)?
+      if context.ordered {
+        append(mut builder, f".IP \"{context.number}.\" 4\n")?
+      } else {
+        append(mut builder, ".IP \\[bu] 2\n")?
+      }
+      let nested = Context(
+        first_item: true,
+        ordered: false,
+        number: 0,
+        font: unique context.font
+      )
+      children(take nodes, nested, mut builder)?
+      newline(mut builder)
+    },
+    CodeBlock(literal, _) => {
+      newline(mut builder)?
+      append(mut builder, ".IP\n.nf\n\\f[C]\n")?
+      escaped(mut builder, literal, false)?
+      newline(mut builder)?
+      append(mut builder, "\\f[]\n.fi\n")
+    },
+    ThematicBreak() => {
+      newline(mut builder)?
+      append(mut builder, ".PP\n  *  *  *  *  *\n")
+    },
+    Text(literal) => escaped(mut builder, literal, false),
+    SoftBreak() => newline(mut builder),
+    HardBreak() => append(mut builder, ".PD 0\n.P\n.PD\n"),
+    Code(literal) => {
+      append(mut builder, "\\f[C]")?
+      escaped(mut builder, literal, false)?
+      append(mut builder, f"\\f[{context.font}]")
+    },
+    Emphasis() => font(take nodes, context, "I", mut builder),
+    Strong() => font(take nodes, context, "B", mut builder),
+    Link(destination, _) => {
+      children(take nodes, context, mut builder)?
+      append(mut builder, " (")?
+      escaped(mut builder, destination, false)?
+      append(mut builder, ")")
+    },
+    Image(_, _) => {
+      append(mut builder, "[IMAGE: ")?
+      children(take nodes, context, mut builder)?
+      append(mut builder, "]")
+    },
+    HtmlBlock(_) => Error(Unsupported(unique builder.source, "", "raw HTML")),
+    HtmlInline(_) => Error(Unsupported(unique builder.source, "", "raw HTML")),
+    Strikethrough() => Error(Unsupported(unique builder.source, "", "strikethrough")),
+    Table() => Error(Unsupported(unique builder.source, "", "table")),
+    TableRow(_) => Error(Unsupported(unique builder.source, "", "table row")),
+    TableCell(_) => Error(Unsupported(unique builder.source, "", "table cell")),
+    FootnoteDefinition(_) => Error(Unsupported(unique builder.source, "", "footnote")),
+    FootnoteReference(_, _, _) => Error(
+      Unsupported(unique builder.source, "", "footnote")
+    ),
+    FootnoteBackrefs(_, _, _) => Error(
+      Unsupported(unique builder.source, "", "footnote")
+    ),
+  }
+}
+
+fn argument(mut builder: unique Builder, value: String) -> Result[(), manifest.Problem] uses {} {
+  append(mut builder, " \"")?
+  escaped(mut builder, value, true)?
+  append(mut builder, "\"")
+}
+
+pub fn render(take page: document.Parsed) -> Result[publish.Output, manifest.Problem] uses {} {
+  let (spec, tree) = document.parts(take page)
+  manifest.validate(spec)?
+  let mut builder = Builder(bytes: [], line_start: true, source: unique spec.input)
+  append(mut builder, ".TH")?
+  argument(mut builder, spec.title)?
+  argument(mut builder, spec.section)?
+  argument(mut builder, spec.date)?
+  argument(mut builder, spec.origin)?
+  argument(mut builder, spec.manual)?
+  append(mut builder, "\n")?
+  let context = Context(first_item: false, ordered: false, number: 0, font: "")
+  node(take tree, context, mut builder)?
+  let Builder(bytes: data, ..) = take builder
+  Ok(publish.Output(path: unique spec.output, body: bytes.from_list(take data)))
+}
+
+pub fn job(take page: unique document.Parsed) -> batch.Work[
+  unique publish.Output,
+  unique manifest.Problem
+] uses {} {
+  match render(take page) {
+    Ok(value) => Done(unique value),
+    Error(error) => Failed(unique error),
+  }
+}
