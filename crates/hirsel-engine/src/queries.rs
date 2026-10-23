@@ -375,6 +375,11 @@ impl QueryEngine {
     ) -> Option<&Arc<Entry<hirsel_types::SignatureRef>>> {
         self.signatures.get(&definition)
     }
+    /// Indexed source declarations, including derived declaration helpers.
+    /// Listing these names does not demand syntax, signatures or bodies.
+    pub fn indexed_definitions(&self) -> Vec<DefPath> {
+        self.source_paths()
+    }
     /// Every indexed source definition.
     pub(crate) fn item_paths(&self) -> Vec<DefPath> {
         self.source_paths()
@@ -1988,6 +1993,16 @@ impl QueryEngine {
                 self.register_staged(&body.value)?;
             }
             return Ok(prechecked);
+        }
+        if self
+            .source_facts(definition)
+            .is_some_and(|facts| !facts.executable)
+        {
+            let diagnostics = self.definition_diagnostics(definition)?;
+            if has_errors(&diagnostics) {
+                return Err(QueryError::Diagnostics(diagnostics));
+            }
+            return Err(QueryError::NotImplemented);
         }
         let _timing = timings::phase(Phase::Lower);
         let id = DefId::intern(definition);

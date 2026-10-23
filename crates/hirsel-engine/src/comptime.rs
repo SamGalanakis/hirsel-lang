@@ -857,6 +857,10 @@ impl QueryEngine {
             )),
         }
     }
+    pub(crate) fn precompute_constant(&mut self, path: &DefPath) -> Result<(), QueryError> {
+        let value = self.evaluate_constant(path)?;
+        self.store_evaluation(path, &value)
+    }
     pub fn materialize_value(&mut self, path: &DefPath) -> Result<Materialized, QueryError> {
         self.evaluate_constant(path).map(|c| c.value)
     }

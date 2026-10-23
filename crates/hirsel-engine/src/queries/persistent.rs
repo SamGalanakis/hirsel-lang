@@ -998,6 +998,36 @@ impl QueryEngine {
         *current = Some((store, records.clone()));
         Some(records)
     }
+    fn load_execution_receipt(
+        &mut self,
+        subject: ContentHash,
+    ) -> Option<hirsel_validate::ExecutionReceipt> {
+        let cache = self.result_store.as_ref()?.verifier()?;
+        let snapshot = self.signature_snapshot();
+        cache.execution_revalidated(
+            subject,
+            self.types.clone(),
+            |path, occurrence| {
+                self.items
+                    .get(path)
+                    .and_then(|items| items.iter().find(|item| item.occurrence == occurrence))
+                    .map(|item| item.anchor)
+                    .or_else(|| self.catalog.anchor(path, occurrence))
+                    .or_else(|| {
+                        self.sources.anchors().find_map(|(anchor, _, _)| {
+                            (artifact_anchor_owner(
+                                &self.items,
+                                &self.sources,
+                                &self.generated,
+                                anchor,
+                            ) == Some((path.clone(), occurrence)))
+                            .then_some(anchor)
+                        })
+                    })
+            },
+            &*snapshot,
+        )
+    }
     fn decode_record<T: serde::de::DeserializeOwned + Serialize>(&self, bytes: &[u8]) -> Option<T> {
         let records = self.type_records()?;
         let record: T = records.decode_record(bytes, |path, occurrence| {
@@ -1671,13 +1701,8 @@ impl QueryEngine {
             return None;
         }
         if self.verify == Verify::On {
-            let cache = self.result_store.as_ref()?.verifier()?;
-            let snapshot = self.signature_snapshot();
-            record.acceptance = Some(
-                cache.execution(evaluation_subject(&key, &variant.payload), |package| {
-                    snapshot.validation_input_digest(package)
-                })?,
-            );
+            record.acceptance =
+                Some(self.load_execution_receipt(evaluation_subject(&key, &variant.payload))?);
         }
         if self.verify_store == crate::store::VerifyStore::Recompute {
             self.pending_store_checks.insert(
@@ -1765,6 +1790,12 @@ impl QueryEngine {
             );
             return None;
         }
+        if self.lower_requires_execution(path, &variant.reads) {
+            let key = self.store_key(path, QueryKind::SemanticBody)?;
+            let receipt =
+                self.load_execution_receipt(evaluation_subject(&key, &variant.payload))?;
+            self.merge_lower_acceptance(Some(&receipt), true);
+        }
         self.replay_selections(&record.selections)?;
         self.depth_replay_requests(&record.depth).ok()?;
         self.merge_execution(&variant.reads);
@@ -1780,6 +1811,7 @@ impl QueryEngine {
         reads: &Reads,
         depth: crate::memo::DepthEvidence<Span>,
         selections: Vec<crate::comptime::Selection>,
+        acceptance: Option<&hirsel_validate::ExecutionReceipt>,
     ) -> Result<(), QueryError> {
         if self.result_store.is_none()
             || !self.s1.is_empty()
@@ -1789,20 +1821,45 @@ impl QueryEngine {
         {
             return Ok(());
         }
-        // A semantic identity is a producer product, not a source/private V
-        // verdict. It carries no acceptance authority into native admission.
-        self.write_record(
-            path,
-            QueryKind::SemanticBody,
-            reads,
-            &SemanticBodyRecord {
-                owner: DefId::intern(path),
-                content: node.0.clone(),
-                dependencies: node.1.clone(),
-                depth,
-                selections,
-            },
-        )
+        // The identity remains a producer product. Only the local verifier
+        // association can cover a removed V-universe guard, and all other
+        // semantic reads remain in the ordinary dependency record unchanged.
+        let Some(reads) = persisted_execution_reads(reads, acceptance) else {
+            return Ok(());
+        };
+        let Some(key) = self.store_key(path, QueryKind::SemanticBody) else {
+            return Ok(());
+        };
+        let Some(payload) = self.encode_record(&SemanticBodyRecord {
+            owner: DefId::intern(path),
+            content: node.0.clone(),
+            dependencies: node.1.clone(),
+            depth,
+            selections,
+        }) else {
+            return Ok(());
+        };
+        let store = self
+            .result_store
+            .as_ref()
+            .expect("enabled semantic store")
+            .clone();
+        if let Some(receipt) = acceptance
+            && let Some(cache) = store.verifier()
+        {
+            cache.publish_execution(evaluation_subject(&key, &payload), receipt);
+        }
+        EncodedWriter {
+            types: self.type_records().expect("enabled semantic types"),
+            store,
+            key,
+            path: path.clone(),
+            kind: QueryKind::SemanticBody,
+            expected: self
+                .pending_store_checks
+                .remove(&(DefId::intern(path), QueryKind::SemanticBody)),
+        }
+        .write(&reads, payload)
     }
     pub(crate) fn load_source_audit(
         &mut self,
@@ -1839,15 +1896,7 @@ impl QueryEngine {
         }
         let required = self.lower_requires_execution(path, &variant.reads);
         let acceptance = if required && self.verify == Verify::On {
-            let snapshot = self.signature_snapshot();
-            Some(
-                self.result_store
-                    .as_ref()?
-                    .verifier()?
-                    .execution(evaluation_subject(&key, &variant.payload), |package| {
-                        snapshot.validation_input_digest(package)
-                    })?,
-            )
+            Some(self.load_execution_receipt(evaluation_subject(&key, &variant.payload))?)
         } else {
             None
         };
@@ -1949,13 +1998,7 @@ impl QueryEngine {
         let acceptance =
             if self.verify == Verify::On && self.lower_requires_execution(path, &variant.reads) {
                 let key = self.store_key(path, QueryKind::Lower)?;
-                let cache = self.result_store.as_ref()?.verifier()?;
-                let snapshot = self.signature_snapshot();
-                Some(
-                    cache.execution(evaluation_subject(&key, &variant.payload), |package| {
-                        snapshot.validation_input_digest(package)
-                    })?,
-                )
+                Some(self.load_execution_receipt(evaluation_subject(&key, &variant.payload))?)
             } else {
                 None
             };
@@ -2016,12 +2059,8 @@ impl QueryEngine {
             return None;
         }
         if self.verify == Verify::On {
-            let cache = self.result_store.as_ref()?.verifier()?;
-            let snapshot = self.signature_snapshot();
-            let receipt = cache
-                .execution(evaluation_subject(&key, &variant.payload), |package| {
-                    snapshot.validation_input_digest(package)
-                })?;
+            let receipt =
+                self.load_execution_receipt(evaluation_subject(&key, &variant.payload))?;
             value.validation = Some(receipt.contexts().to_vec().into());
             value.acceptance = Some(receipt);
         }
@@ -2191,12 +2230,8 @@ impl QueryEngine {
             return None;
         }
         if self.verify == Verify::On {
-            let cache = self.result_store.as_ref()?.verifier()?;
-            let snapshot = self.signature_snapshot();
-            let receipt = cache
-                .execution(evaluation_subject(&key, &variant.payload), |package| {
-                    snapshot.validation_input_digest(package)
-                })?;
+            let receipt =
+                self.load_execution_receipt(evaluation_subject(&key, &variant.payload))?;
             value.validation = Some(receipt.contexts().to_vec().into());
             value.acceptance = Some(receipt);
         }
@@ -2323,6 +2358,7 @@ impl QueryEngine {
         let artifact = cache.as_ref().map(|_| {
             hirsel_validate::Artifact::new(definition, self.types.clone(), |anchor| {
                 artifact_anchor_owner(&self.items, &self.sources, &self.generated, anchor)
+                    .or_else(|| self.catalog.owner(anchor))
             })
         });
         let policy = ContentHash::of_parts(
@@ -2416,6 +2452,10 @@ impl QueryEngine {
         {
             cache.publish_execution(evaluation_subject(&key, &payload), receipt);
         }
+        let Some(reads) = persisted_execution_reads(entry.reads(), entry.acceptance.as_ref())
+        else {
+            return Ok(());
+        };
         EncodedWriter {
             types: self.type_records().expect("enabled lower types"),
             store,
@@ -2426,7 +2466,7 @@ impl QueryEngine {
                 .pending_store_checks
                 .remove(&(DefId::intern(path), QueryKind::Lower)),
         }
-        .write(entry.reads(), payload)
+        .write(&reads, payload)
     }
 }
 
