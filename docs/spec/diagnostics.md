@@ -72,6 +72,23 @@ mismatch. Every other typing failure uses the rule that defines the form; LANG-7
 incompatibility without a narrower rule. Independent failures at the same stage use the
 source and rule ordering above.
 
+### CAP-1: Explicit typed capability arguments
+
+An omitted capability and a supplied value of the wrong capability type keep the
+operation's capability-provision owner and the whole call as primary. Use the
+checked call's argument-to-parameter association, including labels and omitted
+slots. Name the expected capability type and parameter. For an omission, say that
+no argument was supplied for that parameter; otherwise name the supplied type and
+label that argument with both expected and supplied types. Same-spelling nominal
+types must remain distinguishable by their package identities.
+
+For the declared `core@1/out.print` and `core@1/err.print` pair only, a supplied
+`Stderr` or `Stdout`, respectively, may receive an advisory note naming the other
+operation. This is not an automatic edit: choosing the stream is program policy.
+User functions receive no output-API guess. A `uses` clause does not supply a
+capability value, and neither the note nor the diagnostic changes identity,
+brand compatibility, explicit forwarding or authority checks.
+
 A failed binding annotation is the primary site for its mode error. Later uses of
 that binding suppress mode diagnostics that depend on the failed annotation;
 independent availability, access and copying errors remain obligations.

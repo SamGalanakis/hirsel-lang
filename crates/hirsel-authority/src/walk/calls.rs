@@ -1,6 +1,93 @@
 use super::*;
 
 impl Checker<'_> {
+    /// Explain provision from H's association, retaining the call's rule/primary.
+    /// Like rust-analyzer's mismatched_arg_count, expected/provided data belongs
+    /// to the checked call; source order is not parameter order (LANG-12).
+    fn capability_argument_error(
+        &mut self,
+        rule: RuleId,
+        expression: ExprId,
+        call: &CheckedCall,
+        ordinal: usize,
+        parameter: &Parameter,
+        definition: Option<&DefPath>,
+    ) {
+        let argument = call.arguments.iter().find(|a| {
+            a.parameter
+                .as_ref()
+                .is_some_and(|(i, _)| *i as usize == ordinal)
+        });
+        let actual = argument.and_then(|a| self.ty(a.expression));
+        let names = &self.out.body.resolution.generic_declarations;
+        let package = &self.signature.definition.path().0.package;
+        let (expected, provided) = if let Some(actual) = actual {
+            let [expected, provided] = hirsel_type_analysis::spelling::type_spellings_apart(
+                self.t,
+                [parameter.ty, actual],
+                names,
+                package,
+                true,
+            );
+            (expected, Some(provided))
+        } else {
+            (
+                hirsel_type_analysis::spelling::type_spelling(
+                    self.t,
+                    parameter.ty,
+                    names,
+                    package,
+                    true,
+                ),
+                None,
+            )
+        };
+        let name = parameter
+            .name
+            .as_ref()
+            .or(parameter.label.as_ref())
+            .map_or_else(|| format!("#{}", ordinal + 1), Clone::clone);
+        let message = match &provided {
+            Some(provided) => format!(
+                "capability parameter `{name}` expects `{expected}`, but the supplied argument has type `{provided}`"
+            ),
+            None => format!(
+                "explicit capability argument omitted: parameter `{name}` requires `{expected}`"
+            ),
+        };
+        let before = self.out.diagnostics.len();
+        self.error(rule.clone(), self.span(expression), &message);
+        if self.out.diagnostics.len() == before {
+            return;
+        }
+        // Clause purity can change the owner and primary; preserve that policy.
+        if self.out.diagnostics.last().unwrap().rule != rule {
+            return;
+        }
+        let label = argument.zip(provided).map(|(argument, provided)| Label {
+            span: self.span(argument.expression),
+            message: format!(
+                "this argument supplies `{provided}` for capability parameter `{name}: {expected}`"
+            ),
+        });
+        let advice = definition.zip(actual).and_then(|(definition, actual)| {
+            let actual = self.capability_definition(actual)?;
+            let expected = self.capability_definition(parameter.ty)?;
+            if definition.is_core("out.print") && expected.is_core("Stdout") && actual.is_core("Stderr") {
+                Some("help: If stderr is intended, use the declared `err.print` operation with this `Stderr`; choosing the output stream is a program decision.")
+            } else if definition.is_core("err.print") && expected.is_core("Stderr") && actual.is_core("Stdout") {
+                Some("help: If stdout is intended, use the declared `out.print` operation with this `Stdout`; choosing the output stream is a program decision.")
+            } else {
+                None
+            }
+        });
+        let diagnostic = self.out.diagnostics.last_mut().unwrap();
+        diagnostic.secondary.extend(label);
+        if let Some(advice) = advice {
+            diagnostic.notes.push(advice.into());
+        }
+        diagnostic.notes.push(format!("help: Pass a `{expected}` value explicitly for `{name}` and forward it from the caller. A `uses` clause describes authority but does not create a capability value."));
+    }
     /// Replacement ends a source receipt, including writes through an existing
     /// mutable iteration view. A preservation declaration keeps it instead.
     pub(super) fn forget_receipt(&mut self, value: ExprId) {
@@ -852,11 +939,16 @@ impl Checker<'_> {
                 })
                 .collect();
             let rule = self.capability_call_rule(intrinsic, &f, &missing);
-            self.error(
-                rule,
-                self.span(e),
-                "the operation requires its explicit typed capability argument",
-            );
+            let (ordinal, parameter) = f
+                .parameters
+                .iter()
+                .enumerate()
+                .find(|(ordinal, p)| {
+                    !supplied.contains(&(*ordinal as u32))
+                        && self.capability_definition(p.ty).is_some()
+                })
+                .expect("missing capability parameter");
+            self.capability_argument_error(rule, e, &call, ordinal, parameter, definition.as_ref());
             for a in &call.arguments {
                 if let Some((_, p)) = &a.parameter {
                     if matches!(p.passing, PassingMode::Mut | PassingMode::Take) {
@@ -1229,10 +1321,13 @@ impl Checker<'_> {
                         .get(index)
                         .and_then(|actual| self.capability_definition(*actual));
                     if supplied.as_ref() != Some(&capability) {
-                        self.error(
+                        self.capability_argument_error(
                             provision_rule.clone(),
-                            span,
-                            "the operation requires its explicit typed capability argument",
+                            e,
+                            &call,
+                            index,
+                            parameter,
+                            definition.as_ref(),
                         );
                         obligation_valid = false;
                         break;

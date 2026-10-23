@@ -55,6 +55,14 @@ An already queued node keeps its place ahead of a newly ready node; the result
 is deterministic, not a globally lexicographically minimal topological order.
 Every prerequisite precedes its dependent.
 
+Output calls require their own typed capability: `out.print(output, text)` takes
+`Stdout`, while `err.print(sink, text)` takes `Stderr`. Obtain and explicitly
+forward the capability for the intended stream. A `uses {Stderr}` clause alone
+does not supply a value, and passing `Stderr` to `out.print` remains CAP-1.
+The diagnostic names the expected and supplied types and labels the supplied
+argument; its suggestion to use `err.print` is advisory. Depplan's error path
+must use `err.print` to keep reports off stdout.
+
 Invalid input writes a typed report as compact JSON plus LF to stderr, with no
 stdout. `invalid.json` catches an omitted migration before deployment:
 

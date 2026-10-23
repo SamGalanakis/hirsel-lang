@@ -120,3 +120,4 @@ mod nested_unique_result_24;
 mod json_hook_guidance_24;
 mod alias_cleanup_equality_24;
 mod string_concat_guidance_24;
+mod output_capability_guidance_24;
