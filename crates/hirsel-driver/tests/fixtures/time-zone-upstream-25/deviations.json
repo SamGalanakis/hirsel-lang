@@ -1,0 +1,39 @@
+{
+  "spec": "docs/spec/std-library.md",
+  "dispositions": {
+    "identity": "Project Jiff offsets/civil fields/timestamp integers and Gap/Fold categories without changing their values.",
+    "timestamp-range-extension": {
+      "ids": [
+        "utc-civil-135",
+        "utc-civil-139"
+      ],
+      "paragraphs": [
+        "`time.Timestamp` holds signed `i128` `unix_nanoseconds`; `TimeError` is `OutOfRange`.\n`time.parse` accepts RFC 3339 with Gregorian years 0000\u20139999, a `T` or `t` separator, a `Z`,\n`z` or numeric `\u00b1HH:MM` offset (hours 00\u201323, minutes 00\u201359), and an optional fraction of one\nto nine digits, validating dates and 00\u201323/00\u201359/00\u201359 times. Space separators, a leap\nsecond 60, a missing offset and trailing data are invalid. Numeric offsets normalize to UTC,\n`-00:00` included; an offset may move the UTC result outside the formatting range.\n`time.to_string` returns UTC with a four-digit year, uppercase `T` and `Z` and trimmed\nfractional zeros, or `TimeError.OutOfRange` outside years 0000\u20139999. These are ordinary\nalgorithms with no clock authority, locale or time-zone database.",
+        "A fixed offset is `i32` seconds east of UTC, valid strictly inside \u00b126 hours (jiff's\n\u00b125:59:59); any other offset is `TimeError.OutOfRange`. `date_time.from_timestamp(ts, offset)`\nis the civil datetime of `ts` at `offset`, `OutOfRange` when that lies outside the date\nrange, and `date_time.to_timestamp(dt, offset)` is its inverse. `date_time.add(dt, d)` and\n`date_time.between(start, end)` work on the zone-free civil timeline, where every day has\n86400 seconds. `time.to_string_at(ts, offset)` is RFC 3339 with that offset written\n`\u00b1HH:MM` (`+00:00` for zero) and the time written as `time.to_string` does; the offset must\nbe whole minutes under 24 hours and the local year 0000\u20139999, otherwise `OutOfRange`, so\nthe text always parses back to `ts` with `time.parse`."
+      ],
+      "adapter": "Jiff civil epoch.duration_until(dt).as_nanos() minus offset_seconds * 1000000000; raw narrower Timestamp rejection retained."
+    },
+    "typed-parser-error": {
+      "ids": [
+        "controls-tzif-152",
+        "controls-tzif-153",
+        "controls-tzif-154"
+      ],
+      "paragraph": "`time_zone.from_tzif(data)` returns `scalar.ParseError.OutOfRange` for a local time type\nwhose offset is outside \u00b126 hours and `Invalid` for any other malformed data: a wrong\nmagic or truncated block, unequal indicator and type counts, no local time type, a\ntransition naming a missing type, decreasing transition times, a designation index past\nthe table or without a NUL, an indicator other than 0 or 1 or a UT indicator on a wall\ntime, a footer not enclosed in newlines or longer than 1024 bytes, a malformed POSIX rule,\nor a rule whose offset or DST flag at the last transition differs from that transition's.\nTransition times are clamped to the date range, and leap-second records are skipped.\nAbbreviations are validated but not kept.",
+      "adapter": "Project upstream parser rejection to the specified scalar.ParseError.Invalid arm."
+    },
+    "negative-fraction-floor": {
+      "ids": [
+        "sitka-instant-103",
+        "minimal-instant-156"
+      ],
+      "paragraph": "Offset lookup selects the transition in effect at the instant; negative non-integral\ntimestamps use the floor second, deliberately differing from Jiff's truncation toward zero.",
+      "adapter": "Jiff zone.to_offset(Timestamp::from_second(ns.div_euclid(1000000000))), then Jiff offset.to_datetime(original timestamp); raw Jiff fractional lookup retained."
+    }
+  },
+  "features": {
+    "leap_records": "Skipped per Time zones parser paragraph; no leap-aware TZif selected.",
+    "versions": "Four pinned valid fixtures; no unsupported feature acceptance inferred.",
+    "clock_second_60": "Rejected by both constructors; Civil dates and times: TimeOfDay fields with no leap second."
+  }
+}

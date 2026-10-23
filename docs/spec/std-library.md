@@ -576,6 +576,9 @@ day that does not exist in a year (`365` in a common year) and a rule time that 
 year clamp to that year's start or end, and DST that would end where the next year's
 begins is permanent (jiff `regression_permanent_dst`).
 
+Offset lookup selects the transition in effect at the instant; negative non-integral
+timestamps use the floor second, deliberately differing from Jiff's truncation toward zero.
+
 `time_zone.offset(zone, ts)` is the offset in seconds east of UTC at `ts`, and
 `time_zone.to_datetime(zone, ts)` the civil datetime the zone shows then, `OutOfRange`
 outside the date range. `time_zone.to_timestamp(zone, dt, disambiguation)` is the instant
