@@ -533,9 +533,76 @@ impl Checker<'_> {
         })
     }
 
-    /// Trace whole-value staging to this callable's own parameters. Captures,
-    /// calls and projected writes cannot claim parameter provision; flow still
-    /// independently proves availability and authority at the invocation.
+    /// CAP-2/CLO-4: aggregate parts carry no authority beyond their holder.
+    /// Reconstruct the path from declarations; a capability seal is a nominal
+    /// authority boundary, so its representation cannot inherit this receipt.
+    fn callback_projection(&self, place: &Place) -> bool {
+        use hirsel_type_analysis::representation::{
+            RepresentationError, RepresentationFailure, expand_representation,
+        };
+        let mut ty = self.body.locals[place.root.0 as usize].ty;
+        for projection in &place.projection {
+            let layout = expand_representation(
+                self.t,
+                self.memo,
+                ty,
+                &mut |_, definition, arguments| {
+                    Ok(self.signatures.get(definition).and_then(|signature| {
+                        let SignatureKind::Type(declaration) = &signature.kind else {
+                            return None;
+                        };
+                        declaration.capability.is_none().then(|| {
+                            (
+                                std::sync::Arc::new(signature.clone()),
+                                vec![AuthoritySummary::Unknown; arguments.len()],
+                            )
+                        })
+                    }))
+                },
+                None,
+            );
+            let layout = match layout {
+                Ok(layout) => layout,
+                Err(RepresentationError {
+                    failure: RepresentationFailure::Query(error),
+                    ..
+                }) => {
+                    return self.proof_failure(error, false);
+                }
+                Err(_) => return false,
+            };
+            ty = match (projection, &self.t.get(layout).unwrap().kind) {
+                (Projection::Field(0), TypeKind::Box(part)) => *part,
+                (Projection::Field(i), TypeKind::Tuple(parts)) => {
+                    let Some(part) = parts.get(*i as usize) else {
+                        return false;
+                    };
+                    *part
+                }
+                (Projection::Field(i), TypeKind::Record(fields)) => {
+                    let Some(field) = fields.get(*i as usize) else {
+                        return false;
+                    };
+                    field.ty
+                }
+                (Projection::VariantField { variant, field }, TypeKind::Variant(variants)) => {
+                    let Some((_, part)) = variants
+                        .get(*variant as usize)
+                        .and_then(|v| v.fields.get(*field as usize))
+                    else {
+                        return false;
+                    };
+                    *part
+                }
+                _ => return false,
+            };
+        }
+        true
+    }
+
+    /// Trace staging and authority-preserving field paths to this callable's
+    /// own selected parameters. Flow independently proves availability and
+    /// authority after writes and at the invocation.
     pub(super) fn parameter_callback(
         &self,
         place: PlaceId,
@@ -546,7 +613,7 @@ impl Checker<'_> {
         let mut parameter = false;
         while let Some(place) = pending.pop() {
             let place = &self.body.places[place.0 as usize];
-            if !place.projection.is_empty() {
+            if !self.callback_projection(place) {
                 return false;
             }
             if !seen.insert(place.root.0) {
@@ -763,14 +830,9 @@ impl Checker<'_> {
             return;
         };
         let selected_parameter = if let Callee::Indirect { value, .. } = callee {
-            let place = &self.body.places[value.place.0 as usize];
-            self.body
-                .parameters
-                .iter()
-                .position(|parameter| *parameter == place.root)
-                .is_some_and(|ordinal| {
-                    place.projection.is_empty() && self.own_parameter_selected(ordinal)
-                })
+            selected
+                .as_ref()
+                .is_some_and(|selected| self.parameter_callback(value.place, Some(selected)))
         } else {
             false
         };

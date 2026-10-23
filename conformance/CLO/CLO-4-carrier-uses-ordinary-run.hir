@@ -1,0 +1,22 @@
+// rule: CLO-4
+// expect: run
+// stdout: called
+pub type Store {
+  call: fn() -> (),
+}
+
+pub fn invoke(s: Store) -> () uses {s} {
+  s.call()
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let stdout = io.stdout(rt)?
+  invoke(
+    Store(
+      call: fn() -> () uses {stdout} {
+        let _ = out.print(stdout, "called\n")
+      }
+    )
+  )
+  Ok(())
+}

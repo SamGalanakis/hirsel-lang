@@ -18,3 +18,4 @@ mod authority_call_22;
 mod mode_proof_mutations_21;
 mod closure_effect_joins_26;
 mod unique_empty_builder_29;
+mod carrier_uses_30;

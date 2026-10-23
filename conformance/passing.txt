@@ -1,4 +1,11 @@
 
+CLO/CLO-2-carrier-uses-empty-bad.hir
+CLO/CLO-2-carrier-uses-unselected-bad.hir
+CLO/CLO-4-carrier-uses-callback-run.hir
+CLO/CLO-4-carrier-uses-direct-run.hir
+CLO/CLO-4-carrier-uses-ordinary-run.hir
+CLO/CLO-4-carrier-uses-private-run.hir
+CLO/CLO-4-carrier-uses-single-run.hir
 GEN/GEN-6-package-cycle-bad.hir
 GEN/GEN-6-package-identity-distinct-bad.hir
 GEN/GEN-6-package-identity-run.hir

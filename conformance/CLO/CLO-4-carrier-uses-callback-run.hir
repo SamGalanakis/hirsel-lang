@@ -1,0 +1,16 @@
+// rule: CLO-4
+// expect: run
+// stdout: called
+fn invoke(f: fn() -> ()) -> () uses {f} {
+  f()
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let stdout = io.stdout(rt)?
+  invoke(
+    fn() -> () uses {stdout} {
+      let _ = out.print(stdout, "called\n")
+    }
+  )
+  Ok(())
+}
