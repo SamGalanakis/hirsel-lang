@@ -76,52 +76,7 @@ impl LayoutClosure {
                 abi_ids.push(id);
             }
         }
-        let mut roots = direct_layouts.clone();
-        for id in &abi_ids {
-            let abi = table
-                .fn_abis
-                .get(id.0 as usize)
-                .ok_or("finalizer ABI outside table")?;
-            roots.extend(abi.parameters.iter().map(|p| p.layout));
-            roots.extend(abi.result.iter().map(|r| r.layout));
-        }
-        roots.extend(index.introduced());
-        // Canonical first-use traversal preserves multiplicity within recursive
-        // components. Equal rooted keys must not collapse a symmetric cycle.
-        let mut ids = BTreeMap::new();
-        let mut ordered = Vec::new();
-        let mut pending = roots;
-        pending.reverse();
-        while let Some(id) = pending.pop() {
-            if ids.contains_key(&id) {
-                continue;
-            }
-            let record = table.layout(id).ok_or("product layout outside table")?;
-            ids.insert(id, LayoutId(ordered.len() as u32));
-            ordered.push(id);
-            let children: Vec<_> = record
-                .references()
-                .into_iter()
-                .chain(index.implicit(id))
-                .collect();
-            pending.extend(children.into_iter().rev());
-        }
-        let mut out = LayoutTable::new(inputs.target);
-        for id in &ordered {
-            let mut record = table.layout(*id).expect("reached layout").clone();
-            record.for_each_reference_mut(&mut |id| *id = ids[id]);
-            out.layouts.push(record);
-        }
-        let mut abi_rows = BTreeMap::new();
-        for id in abi_ids {
-            let abi = &table.fn_abis[id.0 as usize];
-            abi_rows.entry(keys.fn_abi(abi)).or_insert_with(|| {
-                let mut abi = abi.clone();
-                map_abi(&mut abi, |id| *id = ids[id]);
-                abi
-            });
-        }
-        out.fn_abis.extend(abi_rows.values().cloned());
+        let closure = Self::select(table, inputs.target, &direct_layouts, &abi_ids)?;
         // Numeric aliases are not semantic identities. Canonicalize direct
         // operands by content before encoding, so equal ABI/layout rows remain
         // byte-identical after products share a temporary binding table.
@@ -159,14 +114,76 @@ impl LayoutClosure {
             layouts: body_layouts,
             abis: body_abis,
         };
-        Ok((
-            Self {
-                table: out,
-                layouts: ordered.iter().map(|id| keys.key(*id).0).collect(),
-                abis: abi_rows.keys().copied().collect(),
-            },
-            body,
-        ))
+        Ok((closure, body))
+    }
+
+    /// Select ordinary reached layout/ABI data without inventing a unit or a
+    /// validator receipt. Discovery uses this for content-named environments;
+    /// a consuming Value or Ready still requires actual independent C.
+    pub fn select(
+        table: &LayoutTable,
+        target: &TargetSpec,
+        layout_roots: &[LayoutId],
+        abi_ids: &[FnAbiId],
+    ) -> Result<Self, String> {
+        if table.target != target.digest() {
+            return Err("native layout selection target differs".into());
+        }
+        let keys = LayoutKeys::new(table);
+        let index = LayoutIndex::new(table);
+        let mut roots = layout_roots.to_vec();
+        for id in abi_ids {
+            let abi = table
+                .fn_abis
+                .get(id.0 as usize)
+                .ok_or("finalizer ABI outside table")?;
+            roots.extend(abi.parameters.iter().map(|p| p.layout));
+            roots.extend(abi.result.iter().map(|r| r.layout));
+        }
+        roots.extend(index.introduced());
+        // Canonical first-use traversal preserves multiplicity within recursive
+        // components. Equal rooted keys must not collapse a symmetric cycle.
+        let mut ids = BTreeMap::new();
+        let mut ordered = Vec::new();
+        let mut pending = roots;
+        pending.reverse();
+        while let Some(id) = pending.pop() {
+            if ids.contains_key(&id) {
+                continue;
+            }
+            let record = table.layout(id).ok_or("product layout outside table")?;
+            ids.insert(id, LayoutId(ordered.len() as u32));
+            ordered.push(id);
+            let children: Vec<_> = record
+                .references()
+                .into_iter()
+                .chain(index.implicit(id))
+                .collect();
+            pending.extend(children.into_iter().rev());
+        }
+        let mut out = LayoutTable::new(target);
+        for id in &ordered {
+            let mut record = table.layout(*id).expect("reached layout").clone();
+            record.for_each_reference_mut(&mut |id| *id = ids[id]);
+            out.layouts.push(record);
+        }
+        let mut abi_rows = BTreeMap::new();
+        for id in abi_ids {
+            let abi = &table.fn_abis[id.0 as usize];
+            abi_rows.entry(keys.fn_abi(abi)).or_insert_with(|| {
+                let mut abi = abi.clone();
+                map_abi(&mut abi, |id| *id = ids[id]);
+                abi
+            });
+        }
+        out.fn_abis.extend(abi_rows.values().cloned());
+        let closure = Self {
+            table: out,
+            layouts: ordered.iter().map(|id| keys.key(*id).0).collect(),
+            abis: abi_rows.keys().copied().collect(),
+        };
+        closure.check(target)?;
+        Ok(closure)
     }
 
     /// Check actual rows and complete recursive keys. Descriptor fields and

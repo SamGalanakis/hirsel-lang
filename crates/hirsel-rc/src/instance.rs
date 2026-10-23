@@ -1134,6 +1134,27 @@ impl Expander<'_, '_, '_> {
             InstanceRole::Closure { .. } => {}
             _ => self.follow(&path, &actuals, None)?,
         }
+        // Whole-program expansion seeded nongeneric callees in advance. A
+        // demanded instance must register those ordinary calls/references from
+        // its own body, without loading any callee implementation.
+        for block in &body.blocks {
+            if let hirsel_tir::Terminator::Call {
+                callee: hirsel_tir::Callee::Definition { path, arguments },
+                ..
+            } = &block.terminator
+            {
+                self.source_reference(path, arguments, &actuals)?;
+            }
+        }
+        for value in &body.rvalues {
+            if let Rvalue::FunctionReference {
+                definition,
+                arguments,
+            } = value
+            {
+                self.source_reference(definition, arguments, &actuals)?;
+            }
+        }
         for block in &body.blocks {
             for instruction in &block.instructions {
                 let hirsel_tir::InstructionKind::Assign { destination, value } = &instruction.kind
@@ -1207,6 +1228,49 @@ impl Expander<'_, '_, '_> {
             self.out
                 .direct_calls
                 .insert((id, hirsel_tir::BlockId(b as u32)), bound);
+        }
+        Ok(())
+    }
+
+    fn source_reference(
+        &mut self,
+        path: &DefPath,
+        arguments: &[GenericArgument],
+        owner_actuals: &Actuals,
+    ) -> Result<(), InstanceError> {
+        let generated = self
+            .program
+            .instance_bodies
+            .declarations
+            .contains(&DefId::intern(path));
+        if !generated && !self.context.sources.contains_key(path) {
+            return Ok(());
+        }
+        let actuals = callee_actuals(
+            &self.program.types,
+            &self.program.memo,
+            if generated {
+                None
+            } else {
+                self.program.binders.get(path).copied()
+            },
+            arguments,
+            owner_actuals,
+            false,
+            path,
+        )?;
+        if generated {
+            let selected = self
+                .program
+                .instance_bodies
+                .resolve(DefId::intern(path), &self.program.types, &actuals.arguments)
+                .map_err(|e| {
+                    InstanceError::Malformed(format!("generated source reference: {e:?}"))
+                })?
+                .ok_or_else(|| InstanceError::MissingInstance(path.clone()))?;
+            self.function(selected.path(), Actuals::none())?;
+        } else {
+            self.function(path, actuals)?;
         }
         Ok(())
     }

@@ -537,6 +537,17 @@ pub fn nullary_variant() -> DefPath {
 /// The static data of each constant the units read, once per constant, of
 /// each static empty sequence (its zero count, at its payload layout) and of
 /// each boxed nullary variant (its tag, at its payload layout).
+/// Static data read by one demanded native unit, using the same encoder as
+/// program assembly. The caller publishes content-named layout bindings.
+pub fn instance_statics(
+    program: &Program,
+    instances: &Instances,
+    unit: &LirUnit<Value>,
+    layouts: &mut LayoutBuilder<'_>,
+) -> Result<Vec<hirsel_lir::statics::StaticData>, LowerError> {
+    statics(program, instances, std::slice::from_ref(unit), layouts)
+}
+
 fn statics(
     program: &Program,
     instances: &Instances,

@@ -57,7 +57,22 @@ pub struct NativeDefinitionExpansion {
     pub requirements: InstanceGraph,
 }
 
+/// Read-only policy for native admission. This describes whether descriptor
+/// reuse is permitted; it conveys no source V or native C authority.
+pub struct NativeQueryPolicy {
+    pub source: ContentHash,
+    pub reuse: bool,
+}
+
 impl QueryEngine {
+    pub fn native_query_policy(&self) -> NativeQueryPolicy {
+        NativeQueryPolicy {
+            source: self.source_verification_policy(),
+            reuse: self.verify == Verify::On
+                && self.verify_store != crate::store::VerifyStore::Recompute,
+        }
+    }
+
     /// Select compact roots and declaration/launch metadata. No Lower or Value
     /// body is admitted merely to decide an instance/object/Link hit.
     pub fn native_source_roots(
