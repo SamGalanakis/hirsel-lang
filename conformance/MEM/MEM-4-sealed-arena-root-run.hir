@@ -1,0 +1,27 @@
+// rule: MEM-4
+// expect: run
+// Adopt the arena root and evacuate its ordinary heap child.
+pub fn main(t: Test) -> Result[(), ()] {
+  let mut r = arena.with(
+    fn(a: Arena) -> Region[List[List[u64]]] {
+      let leaf: List[u64] in heap = [7u64]
+      let root: List[List[u64]] in a = [copy leaf]
+      arena.seal(take a, take root)
+    }
+  )
+  let first = region.with(
+    mut r,
+    fn(root: List[List[u64]]) -> u64 {
+      root[0][0]
+    }
+  )
+  let second = region.with(
+    mut r,
+    fn(root: List[List[u64]]) -> u64 {
+      list.len(root[0])
+    }
+  )
+  failure.check(first == 7u64, Bounds())
+  failure.check(second == 1u64, Bounds())
+  Ok(())
+}

@@ -1,0 +1,33 @@
+// rule: MEM-4
+// expect: run
+// The live arena root contributes its retained heap edges once, like B3.
+fn live(cap: u64) -> u64 {
+  let outcome = arena.bounded(
+    cap,
+    fn(a: Arena) -> Region[List[Bytes]] {
+      let h: Bytes in heap = copy_to(heap, b"abc")
+      let root: List[Bytes] in a = [copy h, copy h]
+      arena.seal(take a, take root)
+    }
+  )
+  match take outcome {
+    Ok(r) => {
+      let mut owned = take r
+      region.with(
+        mut owned,
+        fn(root: List[Bytes]) -> u64 {
+          list.len(root)
+        }
+      )
+    },
+    Error(e) => 0u64,
+  }
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  failure.check(live(15u64) == 0u64, Bounds())
+  failure.check(live(16u64) == 0u64, Bounds())
+  failure.check(live(21u64) == 0u64, Bounds())
+  failure.check(live(22u64) == 2u64, Bounds())
+  Ok(())
+}
