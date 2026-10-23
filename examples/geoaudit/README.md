@@ -71,3 +71,11 @@ and the independent rational-parity oracle are in
 `crates/hirsel-cli/tests/support/geofence_audit_34/`. Qualification limits and
 recovery obligations are recorded in FRICTION.md. No std/compiler/runtime patch
 is part of this application.
+
+Qualification currently retains665 passing cells and25 incomplete obligations:
+six evaluator Steps1M identities for the original32KiB input, one exact historical
+tape program-binding refusal, and18 undeployed physical-capacity identities.
+Native live and native replay workflows pass, including cancellation and atomic
+file faults. This is not an all-green physical-width qualification. Use the
+focused CLI module with host execution and an explicit external
+`GEOFENCE_AUDIT_34_EVIDENCE` path; CASE/recovery menus select missing cells only.

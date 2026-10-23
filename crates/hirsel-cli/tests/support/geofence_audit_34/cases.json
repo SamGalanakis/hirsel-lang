@@ -259,5 +259,87 @@
     "id": "empty-samples",
     "input": "{\"version\":1,\"regions\":[{\"outer\":[{\"x\":0,\"y\":0},{\"x\":2,\"y\":0},{\"x\":2,\"y\":2},{\"x\":0,\"y\":2},{\"x\":0,\"y\":0}],\"holes\":[]}],\"tracks\":[{\"samples\":[]}]}",
     "expected": "{\"results\":[{\"regions\":[{\"classes\":[],\"transitions\":[]}]}],\"version\":1}\n"
+  },
+  {
+    "id": "fault-open",
+    "input": "{\"version\":1,\"regions\":[{\"outer\":[{\"x\":0,\"y\":0},{\"x\":2,\"y\":0},{\"x\":2,\"y\":2},{\"x\":0,\"y\":2},{\"x\":0,\"y\":0}],\"holes\":[]}],\"tracks\":[{\"samples\":[{\"x\":1,\"y\":1},{\"x\":0,\"y\":0},{\"x\":0,\"y\":1},{\"x\":5,\"y\":5},{\"x\":5,\"y\":5}]}]}",
+    "error": "file_open",
+    "faults": {
+      "file.open": [
+        {
+          "requested": null,
+          "error": {
+            "Fault": 77
+          },
+          "partial": 0
+        }
+      ]
+    }
+  },
+  {
+    "id": "fault-read",
+    "input": "{\"version\":1,\"regions\":[{\"outer\":[{\"x\":0,\"y\":0},{\"x\":2,\"y\":0},{\"x\":2,\"y\":2},{\"x\":0,\"y\":2},{\"x\":0,\"y\":0}],\"holes\":[]}],\"tracks\":[{\"samples\":[{\"x\":1,\"y\":1},{\"x\":0,\"y\":0},{\"x\":0,\"y\":1},{\"x\":5,\"y\":5},{\"x\":5,\"y\":5}]}]}",
+    "error": "file_read",
+    "faults": {
+      "file.read": [
+        {
+          "requested": 4096,
+          "error": {
+            "Fault": 77
+          },
+          "partial": 0
+        }
+      ]
+    }
+  },
+  {
+    "id": "fault-create_atomic",
+    "input": "{\"version\":1,\"regions\":[{\"outer\":[{\"x\":0,\"y\":0},{\"x\":2,\"y\":0},{\"x\":2,\"y\":2},{\"x\":0,\"y\":2},{\"x\":0,\"y\":0}],\"holes\":[]}],\"tracks\":[{\"samples\":[{\"x\":1,\"y\":1},{\"x\":0,\"y\":0},{\"x\":0,\"y\":1},{\"x\":5,\"y\":5},{\"x\":5,\"y\":5}]}]}",
+    "error": "file_create",
+    "faults": {
+      "file.create_atomic": [
+        {
+          "requested": null,
+          "error": {
+            "Fault": 77
+          },
+          "partial": 0
+        }
+      ]
+    }
+  },
+  {
+    "id": "fault-write_all",
+    "input": "{\"version\":1,\"regions\":[{\"outer\":[{\"x\":0,\"y\":0},{\"x\":2,\"y\":0},{\"x\":2,\"y\":2},{\"x\":0,\"y\":2},{\"x\":0,\"y\":0}],\"holes\":[]}],\"tracks\":[{\"samples\":[{\"x\":1,\"y\":1},{\"x\":0,\"y\":0},{\"x\":0,\"y\":1},{\"x\":5,\"y\":5},{\"x\":5,\"y\":5}]}]}",
+    "error": "file_write",
+    "faults": {
+      "file.write_all": [
+        {
+          "requested": 125,
+          "error": {
+            "Fault": 77
+          },
+          "partial": 5
+        }
+      ]
+    },
+    "write_attempt": "{\"results\":[{\"regions\":[{\"classes\":[\"inside\",\"boundary\",\"boundary\",\"outside\",\"outside\"],\"transitions\":[1,3]}]}],\"version\":1}\n"
+  },
+  {
+    "id": "fault-commit",
+    "input": "{\"version\":1,\"regions\":[{\"outer\":[{\"x\":0,\"y\":0},{\"x\":2,\"y\":0},{\"x\":2,\"y\":2},{\"x\":0,\"y\":2},{\"x\":0,\"y\":0}],\"holes\":[]}],\"tracks\":[{\"samples\":[{\"x\":1,\"y\":1},{\"x\":0,\"y\":0},{\"x\":0,\"y\":1},{\"x\":5,\"y\":5},{\"x\":5,\"y\":5}]}]}",
+    "error": "file_commit",
+    "faults": {
+      "file.commit": [
+        {
+          "requested": null,
+          "error": {
+            "Fault": 77
+          },
+          "partial": 0
+        }
+      ]
+    },
+    "write_attempt": "{\"results\":[{\"regions\":[{\"classes\":[\"inside\",\"boundary\",\"boundary\",\"outside\",\"outside\"],\"transitions\":[1,3]}]}],\"version\":1}\n"
   }
 ]

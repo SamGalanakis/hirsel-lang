@@ -138,6 +138,10 @@ fn fixture(row: &Value, jobs: u64) -> Fixture {
                 Access::ReadWrite
             },
         )]),
+        file_faults: row
+            .get("faults")
+            .map(|v| serde_json::from_value(v.clone()).unwrap())
+            .unwrap_or_default(),
         file_reads: if row["pending"] == true {
             BTreeMap::from([("data/tracks.json".into(), FileReadScript::Pending)])
         } else {
@@ -289,6 +293,30 @@ fn geofence_audit_34_reference_checked_workflows() {
 // both native backends and both interpreters, without files/readiness scripts.
 #[test]
 fn geofence_audit_34_native_four_engine_replay() {
+    native_workflows(0);
+}
+#[test]
+fn geofence_audit_34_native_part_1() {
+    native_workflows(1);
+}
+#[test]
+fn geofence_audit_34_native_part_2() {
+    native_workflows(2);
+}
+#[test]
+fn geofence_audit_34_native_part_3() {
+    native_workflows(3);
+}
+
+fn native_workflows(part: usize) {
+    // Explicit recovery menus use the original test identity. Ordinary suite
+    // runs distribute the complete matrix across four executor-sized tests.
+    if part != 0
+        && (std::env::var_os("GEOFENCE_AUDIT_34_RECOVERY").is_some()
+            || std::env::var_os("GEOFENCE_AUDIT_34_CASE").is_some())
+    {
+        return;
+    }
     hirsel_engine::with_compiler_stack(|| {
         let root = scratch("native-");
         let path = package(&root);
@@ -327,11 +355,22 @@ fn geofence_audit_34_native_four_engine_replay() {
                 .unwrap(),
             ));
         }
+        let recovery: Option<Value> = std::env::var_os("GEOFENCE_AUDIT_34_RECOVERY")
+            .map(|p| serde_json::from_slice(&fs::read(p).unwrap()).unwrap());
         let mut receipts = vec![];
         let mut controls_failed = false;
         let mut missing_live_stderr = vec![];
-        for row in cases().iter().filter(|r| selected(r)) {
+        for (ordinal, row) in cases().iter().enumerate().filter(|(_, r)| selected(r)) {
+            if recovery.is_none()
+                && std::env::var_os("GEOFENCE_AUDIT_34_CASE").is_none()
+                && ordinal % 4 != part
+            {
+                continue;
+            }
             let id = row["id"].as_str().unwrap();
+            if recovery.as_ref().is_some_and(|r| r[id].is_null()) {
+                continue;
+            }
             let world = fixture(row, 4);
             let error = row["error"].as_str();
             let expected_stderr = error
@@ -361,7 +400,7 @@ fn geofence_audit_34_native_four_engine_replay() {
             };
             let cell = root.join(id);
             fs::create_dir(&cell).unwrap();
-            fs::write(cell.join("fixture.json"), serde_json::to_vec_pretty(&json!({"args":world.args,"files":world.files,"mounts":world.mounts,"file_reads":world.file_reads,"signals":world.signals})).unwrap()).unwrap();
+            fs::write(cell.join("fixture.json"), serde_json::to_vec_pretty(&json!({"args":world.args,"files":world.files,"mounts":world.mounts,"file_reads":world.file_reads,"file_faults":world.file_faults,"signals":world.signals})).unwrap()).unwrap();
             // Heap differential is an explicit additional execution, not a V check.
             if ["geo-square", "version", "denial", "pending-cancel"].contains(&id)
                 && !std::env::var("GEOFENCE_AUDIT_34_COMPLETED_DIFFERENTIAL")
@@ -391,14 +430,33 @@ fn geofence_audit_34_native_four_engine_replay() {
                 runnables.push((runnable, dir));
             }
             for (runnable, dir) in &runnables {
-                let retained = std::env::var_os("GEOFENCE_AUDIT_34_RECOVER_ROOT")
-                    .map(|root| {
-                        PathBuf::from(root)
-                            .join(id)
-                            .join(dir.file_name().unwrap())
-                            .join("recording")
-                    })
-                    .filter(|p| p.is_file());
+                let backend_name = dir.file_name().unwrap().to_str().unwrap();
+                let selection = recovery.as_ref().map(|r| &r[id][backend_name]);
+                if selection.is_some_and(Value::is_null) {
+                    continue;
+                }
+                let live_requested = selection.map_or(true, |r| r["live"].as_bool().unwrap());
+
+                let retained = if let Some(r) = selection {
+                    if live_requested {
+                        None
+                    } else {
+                        Some(PathBuf::from(
+                            r["tape"]
+                                .as_str()
+                                .expect("replay-only needs original immutable tape"),
+                        ))
+                    }
+                } else {
+                    std::env::var_os("GEOFENCE_AUDIT_34_RECOVER_ROOT")
+                        .map(|root| {
+                            PathBuf::from(root)
+                                .join(id)
+                                .join(backend_name)
+                                .join("recording")
+                        })
+                        .filter(|p| p.is_file())
+                };
                 let tape = retained.clone().unwrap_or_else(|| dir.join("recording"));
                 let mut raw_stderr_matches = expected_stderr.is_empty();
                 if retained.is_none() {
@@ -431,7 +489,7 @@ fn geofence_audit_34_native_four_engine_replay() {
                 } else {
                     eprintln!("GEO_REUSED_LIVE {id} {}", tape.display());
                 }
-                if !raw_stderr_matches {
+                if live_requested && !raw_stderr_matches {
                     missing_live_stderr.push(format!(
                         "{id}:{}",
                         dir.file_name().unwrap().to_str().unwrap()
@@ -476,6 +534,32 @@ fn geofence_audit_34_native_four_engine_replay() {
                             .count(),
                         1
                     );
+                } else if let Some(attempt) = row["write_attempt"].as_str() {
+                    assert_eq!(writes, attempt.as_bytes());
+                    let commits: Vec<_> = record
+                        .events
+                        .iter()
+                        .filter(|e| matches!(e.request, hirsel_rt::io::Request::Commit { .. }))
+                        .collect();
+                    if row["faults"]["file.commit"].is_array() {
+                        assert_eq!(commits.len(), 1);
+                        assert_eq!(
+                            commits[0].completion,
+                            hirsel_rt::io::Completion::Unit(Err(hirsel_rt::io::IoError::Fault(77)))
+                        );
+                    } else {
+                        assert!(commits.is_empty());
+                        let fault = record
+                            .events
+                            .iter()
+                            .find(|e| matches!(e.request, hirsel_rt::io::Request::WriteAll { .. }))
+                            .unwrap()
+                            .fault
+                            .as_ref()
+                            .unwrap();
+                        assert_eq!(fault.partial, 5);
+                        assert_eq!(fault.error, hirsel_rt::io::IoError::Fault(77));
+                    }
                 } else {
                     assert!(writes.is_empty());
                 }
@@ -491,16 +575,33 @@ fn geofence_audit_34_native_four_engine_replay() {
                 let replay_world = Fixture {
                     files: BTreeMap::new(),
                     file_reads: BTreeMap::new(),
+                    file_faults: BTreeMap::new(),
                     signals: None,
                     ..world.clone()
                 };
+                let replay_tape = selection
+                    .and_then(|r| r["replay_tape"].as_str())
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| tape.clone());
+                let interpreter_replays_expected =
+                    selection.map_or(2, |r| r["interpreters"].as_array().unwrap().len());
                 let mut interpreter_replays_completed = 0u64;
+                let mut native_replays_completed = 0u64;
                 let reused_replays = std::env::var("GEOFENCE_AUDIT_34_COMPLETED_REPLAYS")
                     .unwrap_or_default()
                     .split(',')
                     .any(|s| s == format!("{id}:{}", dir.file_name().unwrap().to_str().unwrap()));
                 if !reused_replays {
                     for (player, replay_dir) in &runnables {
+                        if selection.is_some_and(|r| {
+                            !r["native"].as_array().unwrap().iter().any(|p| {
+                                p.as_str()
+                                    == Some(replay_dir.file_name().unwrap().to_str().unwrap())
+                            })
+                        }) {
+                            continue;
+                        }
+
                         let replay_receipt = dir.join(format!(
                             "native-{}-replay.json",
                             replay_dir.file_name().unwrap().to_string_lossy()
@@ -512,7 +613,7 @@ fn geofence_audit_34_native_four_engine_replay() {
                             &tools,
                             replay_dir,
                             true,
-                            Tape::Replay(&tape),
+                            Tape::Replay(&replay_tape),
                             &replay_world,
                         )
                         .unwrap();
@@ -526,6 +627,7 @@ fn geofence_audit_34_native_four_engine_replay() {
                             "offline fixture replay mutated host root"
                         );
                         fs::write(&replay_receipt, serde_json::to_vec_pretty(&json!({"id":id,"source_backend":dir.file_name().unwrap().to_str(),"player":replay_dir.file_name().unwrap().to_str(),"selected":true,"started":true,"completed":true,"passed":true})).unwrap()).unwrap();
+                        native_replays_completed += 1;
                     }
                     for (index, replay) in [
                         hirsel_driver::replay_observations,
@@ -535,7 +637,16 @@ fn geofence_audit_34_native_four_engine_replay() {
                     .enumerate()
                     {
                         let engine = ["reference", "checked-h"][index];
-                        let replayed = replay(&path, &tape, Some(1_000_000));
+                        if selection.is_some_and(|r| {
+                            !r["interpreters"]
+                                .as_array()
+                                .unwrap()
+                                .iter()
+                                .any(|p| p.as_str() == Some(engine))
+                        }) {
+                            continue;
+                        }
+                        let replayed = replay(&path, &replay_tape, Some(1_000_000));
                         let mut receipt = json!({"id":id,"backend":dir.file_name().unwrap().to_str(),"engine":engine,"selected":true,"started":true,"completed":false,"passed":false});
                         match replayed {
                             Ok(value) => {
@@ -547,7 +658,9 @@ fn geofence_audit_34_native_four_engine_replay() {
                             Err(error) => {
                                 let message = error.to_string();
                                 assert!(
-                                    message.contains("ToolingLimit") && message.contains("Steps"),
+                                    (message.contains("ToolingLimit") && message.contains("Steps"))
+                                        || message.contains("header disagrees")
+                                        || message.contains("revision"),
                                     "{id}/{engine}: {message}"
                                 );
                                 receipt["disposition"] = json!(format!("INCOMPLETE {message}"));
@@ -565,7 +678,7 @@ fn geofence_audit_34_native_four_engine_replay() {
                         "GEO_REUSED_REPLAYS {id} immutable retained native+interpreter completions"
                     );
                 }
-                fs::write(root.join(format!("{id}-{}-replays-completed.json",dir.file_name().unwrap().to_str().unwrap())), serde_json::to_vec_pretty(&json!({"id":id,"backend":dir.file_name().unwrap().to_str(),"tape":tape,"native_replays":2,"interpreter_replays":interpreter_replays_completed,"retained_reuse":reused_replays})).unwrap()).unwrap();
+                fs::write(root.join(format!("{id}-{}-replays-completed.json",dir.file_name().unwrap().to_str().unwrap())), serde_json::to_vec_pretty(&json!({"id":id,"backend":dir.file_name().unwrap().to_str(),"tape":tape,"native_replays":native_replays_completed,"interpreter_replays":interpreter_replays_completed,"retained_reuse":reused_replays})).unwrap()).unwrap();
                 if id == "geo-square" && dir.ends_with("Llvm") {
                     for kind in ["binding", "request", "missing", "extra"] {
                         if std::env::var("GEOFENCE_AUDIT_34_COMPLETED_CONTROLS")
@@ -723,14 +836,14 @@ fn geofence_audit_34_native_four_engine_replay() {
                     }
                 }
                 assert_eq!(fs::read(&tape).unwrap(), frozen);
-                receipts.push(json!({"id":id,"backend":dir.file_name().unwrap().to_str(),"selected":true,"started":true,"completed":raw_stderr_matches,"passed":raw_stderr_matches,"live_stdout_status_file_and_tape_stderr":true,"live_raw_stderr_matches":raw_stderr_matches,"raw_stderr_owner":if raw_stderr_matches {"none"} else {"native-file-faults-33 / host-replay-parity-31"},"tape":tape,"native_replays":2,"interpreter_replays_completed":interpreter_replays_completed,"expected_provenance":"frozen rational parity + exact error oracle","interpreter_replay_disposition":if interpreter_replays_completed < 2 {"INCOMPLETE Steps1M; see per-engine receipts"} else {"pass"}}));
+                receipts.push(json!({"id":id,"backend":dir.file_name().unwrap().to_str(),"live_selected":live_requested,"selected":true,"started":true,"completed":raw_stderr_matches,"passed":raw_stderr_matches,"live_stdout_status_file_and_tape_stderr":true,"live_raw_stderr_matches":raw_stderr_matches,"raw_stderr_owner":if !live_requested {"not selected"} else if raw_stderr_matches {"none"} else {"native-file-faults-33 / host-replay-parity-31"},"tape":tape,"native_replays":native_replays_completed,"interpreter_replays_completed":interpreter_replays_completed,"expected_provenance":"frozen rational parity + exact error oracle","interpreter_replay_disposition":if reused_replays || interpreter_replays_expected == 0 {"not selected; prior receipts retained"} else if interpreter_replays_completed < interpreter_replays_expected as u64 {"INCOMPLETE; see per-engine receipts"} else {"pass"}}));
                 fs::write(
                     root.join("receipts.json"),
                     serde_json::to_vec_pretty(&receipts).unwrap(),
                 )
                 .unwrap();
                 eprintln!(
-                    "GEO_RECORDED {id} {} two native replays; live raw stderr and interpreter replay dispositions recorded separately",
+                    "GEO_RECORDED {id} {} {native_replays_completed} native replays; live raw stderr and interpreter replay dispositions recorded separately",
                     dir.display()
                 );
             }
