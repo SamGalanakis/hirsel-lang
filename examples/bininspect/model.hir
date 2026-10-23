@@ -1,0 +1,149 @@
+// Codecs remain in std. Error mapping preserves their shared typed error.
+pub const INPUT_BYTES: u64 = 65536
+
+pub const COLLECTION_ITEMS: u64 = 64
+
+pub type Format = Cbor | Msgpack
+
+pub type Invalid = Wire(binary.DecodeError) | Input(String) | Json(json.JsonError)
+
+pub type Report {
+  error: String,
+  kind: String,
+  offset: Option[u64],
+}
+
+pub fn report_to_json(value: Report) -> json.Value uses {} = comptime derive.json_value(
+  shape(Report)
+)
+
+pub fn format(name: String) -> Result[Format, Invalid] uses {} {
+  if name == "cbor" {
+    Ok(Cbor())
+  } else if name == "msgpack" {
+    Ok(Msgpack())
+  } else {
+    Error(Input("format"))
+  }
+}
+
+// The byte cap bounds the entire DOM before decode. The collection policy is
+// checked before output/encoding; no second typed collection is accumulated.
+fn validate(value: json.Value) -> Result[(), Invalid] uses {} {
+  match value {
+    Array(items) => {
+      if list.len(items) > COLLECTION_ITEMS {
+        return Error(Input("collection_items_limit"))
+      }
+      for item in items {
+        validate(item)?
+      }
+    },
+    Object(entries) => {
+      if map.len(entries) > COLLECTION_ITEMS {
+        return Error(Input("collection_items_limit"))
+      }
+      for (_, child) in entries {
+        validate(child)?
+      }
+    },
+    _ => (),
+  }
+  Ok(())
+}
+
+pub fn decode(data: Bytes, selected: Format) -> Result[json.Value, Invalid] uses {} {
+  if bytes.len(data) > INPUT_BYTES {
+    return Error(Input("input_bytes_limit"))
+  }
+  let value = match selected {
+    Cbor() => cbor.decode(data) ? Wire,
+    Msgpack() => msgpack.decode(data) ? Wire,
+  }
+  validate(value)?
+  Ok(take value)
+}
+
+pub fn encode(take data: unique Bytes, selected: Format, deterministic: bool) -> Result[
+  unique Bytes,
+  Invalid
+] uses {} {
+  if bytes.len(data) > INPUT_BYTES {
+    return Error(Input("input_bytes_limit"))
+  }
+  let Ok(text) = string.from_bytes(take data) else {
+    return Error(Input("json_utf8"))
+  }
+  let value = json.parse(take text) ? Json
+  validate(value)?
+  Ok(
+    match selected {
+      Cbor() => cbor.encode(value, deterministic) ? Wire,
+      Msgpack() => msgpack.encode(value) ? Wire,
+    }
+  )
+}
+
+pub fn report(error: Invalid) -> Report uses {} {
+  let mut report_value = Report(error: "invalid_input", kind: "", offset: None())
+  match error {
+    Input(kind) => {
+      report_value.kind = unique kind
+    },
+    Wire(wire) => {
+      match wire {
+        Truncated(n) => {
+          report_value.kind = "Truncated"
+          report_value.offset = Some(n)
+        },
+        Syntax(n) => {
+          report_value.kind = "Syntax"
+          report_value.offset = Some(n)
+        },
+        Unsupported(n) => {
+          report_value.kind = "Unsupported"
+          report_value.offset = Some(n)
+        },
+        Utf8(n) => {
+          report_value.kind = "Utf8"
+          report_value.offset = Some(n)
+        },
+        DuplicateKey(n) => {
+          report_value.kind = "DuplicateKey"
+          report_value.offset = Some(n)
+        },
+        Nesting(n) => {
+          report_value.kind = "Nesting"
+          report_value.offset = Some(n)
+        },
+        Trailing(n) => {
+          report_value.kind = "Trailing"
+          report_value.offset = Some(n)
+        },
+        InvalidNumber() => {
+          report_value.kind = "InvalidNumber"
+        },
+      }
+    },
+    Json(reason) => {
+      match reason {
+        Syntax(n) => {
+          report_value.kind = "JsonSyntax"
+          report_value.offset = Some(n)
+        },
+        DuplicateKey(n) => {
+          report_value.kind = "JsonDuplicateKey"
+          report_value.offset = Some(n)
+        },
+        Nesting(n) => {
+          report_value.kind = "JsonNesting"
+          report_value.offset = Some(n)
+        },
+        InvalidNumber() => {
+          report_value.kind = "JsonInvalidNumber"
+        },
+      }
+    },
+  }
+  take report_value
+}

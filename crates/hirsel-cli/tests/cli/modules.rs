@@ -63,3 +63,4 @@ mod zonetable_23;
 mod jsonpatchctl_23;
 mod retryrun_23;
 mod groupmap_23;
+mod bininspect_23;

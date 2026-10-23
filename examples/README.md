@@ -89,6 +89,7 @@ selects an explicit bound.
 | [kvd](kvd/README.md) | Durable std-store key/value TCP service, a Mutex request counter and graceful SIGTERM shutdown; scripted session grants exercise four commands and shutdown. |
 | [filemanifest](filemanifest/README.md) | Select live granted files with slash globs, emit sorted SHA-256 manifests, and report stale/missing artifacts with bounded application reads. |
 | [logtail](logtail/README.md) | Follow a growing log with a parent-directory watcher, bounded regex searches, partial-line retention and UTC timestamps. |
+| [bininspect](bininspect/README.md) | Inspect bounded CBOR/MessagePack caches as JSON with exact integer lexemes and typed byte-offset errors; optionally encode JSON with deterministic CBOR. |
 | [patchctl](patchctl/README.md) | Generate and validate bounded single-file unified patches with read-only grants; reject partial application without publishing text. |
 | [mdsite](mdsite/README.md) | Recursively render Markdown to HTML with an escaped, path-preserving index and safe default rendering. |
 

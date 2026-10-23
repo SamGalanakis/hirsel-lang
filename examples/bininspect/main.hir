@@ -1,0 +1,113 @@
+const HELP: String = "bininspect cbor|msgpack FILE [--encode [--deterministic]]\nDecode one binary value to compact JSON, or encode JSON to raw binary stdout.\nFILE is relative to the read-only input grant.\nLimits: 65536 input bytes, 64 items per array/map, 128 open containers.\nExit: 0 success/help, 2 invalid input, usage or I/O.\n"
+
+fn read_local(rt: Io, name: String) -> Result[unique Bytes, model.Invalid] {
+  let Ok(dir) = io.dir(rt, path.of("input")) else {
+    return Error(Input("directory_grant"))
+  }
+  let mut Ok(handle) = file.open(dir, path.of(name)) else {
+    return Error(Input("file_open"))
+  }
+  let mut reader = bufio.new(4096)
+  let mut data: List[u8] = []
+  while true {
+    let remaining = model.INPUT_BYTES - list.len(data)
+    let request = if remaining < 4096 {
+      remaining + 1
+    } else {
+      4096u64
+    }
+    let Ok(count) = bufio.file_read_more(dir, mut handle, mut reader, request) else {
+      return Error(Input("file_read"))
+    }
+    if count > remaining {
+      return Error(Input("input_bytes_limit"))
+    }
+    if count == 0 {
+      break
+    }
+    for byte in bufio.peek(reader, count) {
+      list.push(mut data, byte)
+    }
+    bufio.consume(mut reader, count)
+  }
+  Ok(unique bytes.from_list(take data))
+}
+
+fn execute(rt: Io, args: Args, output: Stdout) -> Result[(), model.Invalid] {
+  let count = arg.len(args)
+  if count < 2 || count > 4 {
+    return Error(Input("usage"))
+  }
+  let Ok(name) = arg.text(args, 0) else {
+    return Error(Input("arguments"))
+  }
+  let selected = model.format(name)?
+  let Ok(file_name) = arg.text(args, 1) else {
+    return Error(Input("arguments"))
+  }
+  let encoding = count >= 3
+  let deterministic = count == 4
+  if encoding {
+    let Ok(option) = arg.text(args, 2) else {
+      return Error(Input("arguments"))
+    }
+    if option != "--encode" {
+      return Error(Input("usage"))
+    }
+  }
+  if deterministic {
+    let Ok(option) = arg.text(args, 3) else {
+      return Error(Input("arguments"))
+    }
+    if option != "--deterministic" || selected != Cbor() {
+      return Error(Input("usage"))
+    }
+  }
+  let data = read_local(rt, file_name)?
+  if encoding {
+    let encoded = model.encode(take data, selected, deterministic)?
+    let Ok(()) = out.write(output, encoded) else {
+      return Error(Input("output"))
+    }
+  } else {
+    let value = model.decode(data, selected)?
+    let Ok(encoded) = json.stringify(value) else {
+      return Error(Input("json_output"))
+    }
+    let Ok(()) = out.print(output, f"{encoded}\n") else {
+      return Error(Input("output"))
+    }
+  }
+  Ok(())
+}
+
+pub fn main(rt: Io, args: Args) -> std@1/process.ExitCode {
+  let Ok(output) = io.stdout(rt) else {
+    return std@1/process.exit_code(2u8)
+  }
+  if arg.len(args) == 1 {
+    if let Ok(name) = arg.text(args, 0) {
+      if name == "--help" {
+        let Ok(()) = out.print(output, HELP) else {
+          return std@1/process.exit_code(2u8)
+        }
+        return std@1/process.SUCCESS
+      }
+    }
+  }
+  match execute(rt, args, output) {
+    Ok(()) => std@1/process.SUCCESS,
+    Error(reason) => {
+      let Ok(sink) = io.stderr(rt) else {
+        return std@1/process.exit_code(2u8)
+      }
+      let Ok(encoded) = json.stringify(model.report_to_json(model.report(reason))) else {
+        return std@1/process.exit_code(2u8)
+      }
+      let Ok(()) = err.print(sink, f"{encoded}\n") else {
+        return std@1/process.exit_code(2u8)
+      }
+      std@1/process.exit_code(2u8)
+    },
+  }
+}
