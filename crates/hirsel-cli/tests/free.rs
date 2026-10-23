@@ -2728,18 +2728,9 @@ fn f1_runner_simulated_crash_records_child_stop_and_replays_abandoned_outcome() 
     }
 }
 
-#[test]
-fn f1_runner_short_callee_crash_and_lost_reply_keep_distinct_outcomes() {
-    if !hirsel_rt::free_driver::admission_enabled() {
-        return;
-    }
-    for (fault, outcome) in [("crash", "Abandoned"), ("lose_reply", "Lost")] {
-        let scratch = Scratch::new(&format!("f1-runner-short-{fault}"));
-        let program = scratch.path("main.hir");
-        std::fs::write(
-            &program,
-            format!(
-                r#"pub type E = Grant(GrantError) | Output(OutputError)
+fn f1_runner_short_fixture(fault: &str, outcome: &str) -> (String, String) {
+    let text = format!(
+        r#"pub type E = Grant(GrantError) | Output(OutputError)
 fn child(rt: Io, n: u64) -> Result[u64, String] {{ Ok(n) }}
 pub fn main(rt: Io, args: Args) -> Result[(), E] {{
   let out = io.stdout(rt) ? Grant
@@ -2749,12 +2740,23 @@ pub fn main(rt: Io, args: Args) -> Result[(), E] {{
   Ok(())
 }}
 "#
-            ),
-        )
-        .unwrap();
-        let grants = format!(
-            r#"{{"io":{{"stdout":"stdout.bytes@1","tasks":"tasks.free@1","dirs":[],"runners":[{{"name":"worker","provider":"sim@1","node":"node","models":"local.process@1","faults":{{"{fault}":{{"enable":1000000,"fire":1000000}}}},"grants":{{"dirs":[]}},"definitions":null}}]}},"args":[]}}"#
-        );
+    );
+    let grants = format!(
+        r#"{{"io":{{"stdout":"stdout.bytes@1","tasks":"tasks.free@1","dirs":[],"runners":[{{"name":"worker","provider":"sim@1","node":"node","models":"local.process@1","faults":{{"{fault}":{{"enable":1000000,"fire":1000000}}}},"grants":{{"dirs":[]}},"definitions":null}}]}},"args":[]}}"#
+    );
+    (text, grants)
+}
+
+#[test]
+fn f1_runner_short_callee_crash_and_lost_reply_keep_distinct_outcomes() {
+    if !hirsel_rt::free_driver::admission_enabled() {
+        return;
+    }
+    for (fault, outcome) in [("crash", "Abandoned"), ("lose_reply", "Lost")] {
+        let scratch = Scratch::new(&format!("f1-runner-short-{fault}"));
+        let program = scratch.path("main.hir");
+        let (text, grants) = f1_runner_short_fixture(fault, outcome);
+        std::fs::write(&program, text).unwrap();
         f1_runner_call_record_replay(
             &scratch,
             &program,
@@ -3569,6 +3571,40 @@ fn f1_runner_crashed_child_width_and_permit_matrix() {
                 })
             );
             f1_runner_child_replay_matrix(&program, &child_tape, true, b"");
+        }
+    }
+}
+
+#[test]
+fn f1_runner_short_crash_and_lost_reply_width_and_permit_matrix() {
+    if !hirsel_rt::free_driver::admission_enabled() {
+        return;
+    }
+    for (fault, outcome) in [("crash", "Abandoned"), ("lose_reply", "Lost")] {
+        let scratch = Scratch::new(&format!("f1-runner-short-{fault}-matrix"));
+        let (text, grants) = f1_runner_short_fixture(fault, outcome);
+        f1_runner_matrix_in(
+            &scratch,
+            &text,
+            &grants,
+            b"outcome lost\n",
+            b"outcome lost\n",
+        );
+        let program = scratch.path("main.hir");
+        for level in ["record", "durable"] {
+            let child_tape = scratch.path(&format!("{level}.call-0"));
+            let recording = hirsel_rt::host_launch::read_recording(&child_tape).unwrap();
+            assert!(
+                !recording
+                    .events
+                    .iter()
+                    .any(|event| event.request == hirsel_rt::io::Request::Stopped)
+            );
+            assert!(recording.events.iter().any(|event| matches!(
+                event.request,
+                hirsel_rt::io::Request::CallReturn(hirsel_run_schema::CalleeOutcome::Ok(_))
+            )));
+            f1_runner_child_replay_matrix(&program, &child_tape, false, b"");
         }
     }
 }
