@@ -1350,6 +1350,31 @@ impl QueryEngine {
 mod malformed_tests {
     use super::*;
 
+    #[test]
+    fn producer_serialization_cannot_transfer_scalar_private_admission() {
+        let (mut engine, _) = fixture();
+        let mut value = crate::comptime::EvaluatedConstant {
+            value: hirsel_tir::Materialized {
+                root: hirsel_tir::ValueNode {
+                    ty: engine.types.intern(hirsel_types::Type::unit()),
+                    kind: hirsel_tir::ValueKind::Constant(hirsel_tir::Constant::Unit),
+                },
+            },
+            substitutions: vec![],
+            executed: Reads::empty(),
+            depth: crate::memo::DepthEvidence::leaf(engine.depth_limit()),
+            validation: Some(
+                vec![(crate::default_context().package, ContentHash::default())].into(),
+            ),
+        };
+        let encoded = engine.encode_record(&value).unwrap();
+        value.validation = None;
+        assert_eq!(encoded, engine.encode_record(&value).unwrap());
+        let decoded: crate::comptime::EvaluatedConstant = engine.decode_record(&encoded).unwrap();
+        assert!(decoded.validation.is_none());
+        assert!(!engine.evaluation_validation_holds(&decoded));
+    }
+
     // Equivalent sequence serialization for the bulk byte payload vectors.
     #[derive(Serialize, Deserialize)]
     struct SequenceEnvelope {

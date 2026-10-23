@@ -156,7 +156,7 @@ pub struct QueryEngine {
     /// session's coordinator (design §1c).
     pub(crate) s1: crate::memo::S1Worker<DefPath, Span>,
     pub(crate) constant_values: BTreeMap<DefPath, crate::comptime::EvaluatedConstant>,
-    materialization_environment: Option<(QueryEnvironment, hirsel_interp::Limits)>,
+    materialization_environment: Option<(QueryEnvironment, hirsel_interp::Limits, Verify)>,
     pub(crate) staged_constants: BTreeMap<DefPath, crate::comptime::StagedConstant>,
     pub(crate) staged_values: BTreeMap<(DefPath, Vec<u64>), crate::comptime::EvaluatedConstant>,
     /// Generated function bodies (CT-5), by declaration.
@@ -217,6 +217,7 @@ pub struct QueryEngine {
     /// Open evaluation frames: each collects the complete reads of what it
     /// executes or materializes (execution closure by union).
     pub(crate) execution_stack: Vec<ReadsBuilder>,
+    pub(crate) evaluation_validation: Vec<Option<BTreeMap<hirsel_syntax::PackageId, ContentHash>>>,
     active: BTreeSet<(DefPath, QueryKind)>,
     /// The runtime types compile-time evaluation runs with, and the epoch of
     /// the signature snapshot they were built from.
@@ -441,7 +442,7 @@ impl QueryEngine {
             .dictionary_value(&self.types, &self.memo, path)
     }
     pub(crate) fn prepare_materialization_environment(&mut self) {
-        let now = (self.environment.clone(), self.comptime_limits);
+        let now = (self.environment.clone(), self.comptime_limits, self.verify);
         if self.materialization_environment.as_ref() != Some(&now) {
             self.constant_values.clear();
             self.staged_values.clear();
@@ -462,7 +463,7 @@ impl QueryEngine {
             return Ok(());
         }
         let snapshot = self.signature_snapshot();
-        crate::comptime::validate_evaluation(&snapshot, definition, artifact, self.verify)
+        crate::comptime::validate_evaluation(&snapshot, definition, artifact, self.verify, None)
     }
     pub fn new(environment: QueryEnvironment, adapters: PhaseAdapters) -> Self {
         Self::new_with_hold_bytes(
@@ -537,6 +538,7 @@ impl QueryEngine {
             foreign_unreplayable: false,
             foreign_threads: BTreeMap::new(),
             execution_stack: vec![],
+            evaluation_validation: vec![],
             active: BTreeSet::new(),
             comptime_runtime: None,
             source_growth: Default::default(),
