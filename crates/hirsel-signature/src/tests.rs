@@ -1733,3 +1733,95 @@ fn instantiation_bound_schema_fingerprints_and_scoped_references() {
         assert!(canonical_encoding(&signature, &[]).is_err());
     }
 }
+
+#[test]
+fn signature_recovery_22_provider_failures_keep_their_disposition() {
+    struct Failing(QueryError);
+    impl SignatureProvider for Failing {
+        fn signature(&mut self, _: DefId) -> Result<SignatureRef, QueryError> {
+            Err(self.0.clone())
+        }
+        fn lookup(&mut self, c: &ast::FileContext, p: &ast::Path) -> LookupOutput {
+            Fake::default().lookup(c, p)
+        }
+    }
+    let span = Span::new(hirsel_span::Anchor(22), 3, 9).unwrap();
+    for failure in [
+        QueryError::NotImplemented,
+        QueryError::Operational(OperationalFailure {
+            operation: "signature fixture".into(),
+            message: "provider unavailable".into(),
+        }),
+        diagnostic(const { RuleId::of("LANG-4") }, span, "missing dependency"),
+    ] {
+        for nested in [false, true] {
+            let mut f = Fixture::new();
+            let root = f.named("Dependency");
+            let root = if nested {
+                f.ty(ast::TypeExprKind::Tuple(vec![root]))
+            } else {
+                root
+            };
+            f.result(root);
+            let result = normalize(
+                Input {
+                    types: session(),
+                    memo: memo(),
+                    syntax: &f.syntax,
+                    context: &f.context,
+                    resolution: &f.resolution,
+                    metadata: &f.metadata,
+                    declaration_sites: &[],
+                    stage: None,
+                },
+                &mut Failing(failure.clone()),
+            );
+            assert_eq!(result.unwrap_err(), failure);
+            // A repaired dependency has a normal signature, in the same session.
+            f.dependency("Dependency", None, true);
+            assert!(f.run().unwrap().diagnostics.is_empty());
+        }
+    }
+}
+
+#[test]
+fn signature_recovery_22_dependency_recovery_rows_never_publish_proofs() {
+    for nested in [false, true] {
+        for recovery in [true, false] {
+            let mut f = Fixture::new();
+            let dependency = f.dependency("Alias", None, true);
+            let root = session().intern(Type::with_kind(if recovery {
+                TypeKind::Error
+            } else {
+                TypeKind::Primitive(Primitive::U8)
+            }));
+            let root = if nested {
+                session().intern(Type::with_kind(TypeKind::Tuple(vec![root].into())))
+            } else {
+                root
+            };
+            let signature = f.provider.signatures.get_mut(&dependency).unwrap();
+            signature.metadata.alias = true;
+            let SignatureKind::Type(declaration) = &mut signature.kind else {
+                unreachable!()
+            };
+            declaration.representation = Some(root);
+            // A stale claimed bound and empty authority cannot bless a recovery row.
+            declaration.bounds = vec![Bound::Plain, Bound::Inert];
+            let root = f.named("Alias");
+            f.declaration(ast::TypeBody::Alias(root), ast::TypeFlavor::Ordinary);
+            match f.run() {
+                Err(QueryError::Diagnostics(errors)) if recovery => {
+                    assert!(!errors.is_empty());
+                    assert_eq!(errors[0].rule.as_str(), "LANG-6");
+                }
+                Ok(output) if !recovery => {
+                    assert!(output.diagnostics.is_empty());
+                    assert!(typedef(&output.value).bounds.contains(&Bound::Plain));
+                    assert_eq!(typedef(&output.value).authority, AuthoritySummary::inert());
+                }
+                result => panic!("nested={nested}, recovery={recovery}: {result:?}"),
+            }
+        }
+    }
+}
