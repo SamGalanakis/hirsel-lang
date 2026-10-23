@@ -1,0 +1,140 @@
+// SHA vector shapes: Go crypto/sha256, ebe2feef (BSD-3-Clause).
+// Hashing stays in std; this module validates the bounded application protocol.
+pub const INPUT_BYTES: u64 = 65536
+
+pub const PATH_BYTES: u64 = 512
+
+pub const DEPTH: u64 = 16
+
+pub type Problem {
+  kind: String,
+  path: String,
+}
+
+pub type Entry {
+  index: u64,
+  path: String,
+  bytes: u64,
+  sha256: String,
+}
+
+pub type Manifest {
+  paths: List[String],
+  jobs: u64,
+  byte_cap: u64,
+}
+
+pub fn invalid(kind: String, name: String) -> unique Problem uses {} {
+  Problem(kind: unique kind, path: unique name)
+}
+
+pub fn validate_path(name: String) -> Result[(), Problem] uses {} {
+  let raw = string.as_bytes(name)
+  let count = bytes.len(raw)
+  if count == 0 || count > PATH_BYTES {
+    return Error(invalid("path_bytes_limit", name))
+  }
+  let mut start = 0u64
+  let mut depth = 0u64
+  let mut at = 0u64
+  while at <= count {
+    if at == count || raw[at] == b'/' {
+      let width = at - start
+      if width == 0 || width == 1 && raw[start] == b'.' || width == 2 && raw[start] == b'.' && raw[start + 1] == b'.' {
+        return Error(invalid("invalid_path", name))
+      }
+      depth += 1
+      if depth > DEPTH {
+        return Error(invalid("depth_limit", name))
+      }
+      start = at + 1
+    }
+    if at < count && (raw[at] == 0 || raw[at] == b'\\' || raw[at] == b':') {
+      return Error(invalid("invalid_path", name))
+    }
+    at += 1
+  }
+  Ok(())
+}
+
+fn number(fields: Map[String, json.Value], key: String) -> Result[u64, Problem] uses {} {
+  let Some(Number(spelling)) = map.get(fields, key) else {
+    return Error(invalid("manifest_number", key))
+  }
+  let Ok(value) = u64.parse(spelling) else {
+    return Error(invalid("manifest_number", key))
+  }
+  Ok(value)
+}
+
+pub fn decode(source: String) -> Result[Manifest, Problem] uses {} {
+  if string.byte_len(source) > INPUT_BYTES {
+    return Error(invalid("input_bytes_limit", ""))
+  }
+  let Ok(Object(fields)) = json.parse(unique source) else {
+    return Error(invalid("manifest_json", ""))
+  }
+  if map.len(fields) != 3 {
+    return Error(invalid("manifest_fields", ""))
+  }
+  let jobs = number(fields, "jobs")?
+  let byte_cap = number(fields, "byte_cap")?
+  if jobs == 0 || jobs > 8 {
+    return Error(invalid("jobs_limit", ""))
+  }
+  if byte_cap > 262144 {
+    return Error(invalid("file_bytes_limit", ""))
+  }
+  let Some(Array(items)) = map.get(fields, "paths") else {
+    return Error(invalid("manifest_paths", ""))
+  }
+  if list.len(items) > 64 {
+    return Error(invalid("paths_limit", ""))
+  }
+  // Reserve the worst case before spawning: no run can read >4 MiB payload.
+  if list.len(items) * byte_cap > 4194304 {
+    return Error(invalid("total_bytes_limit", ""))
+  }
+  let mut paths: List[String] = []
+  for item in items {
+    let Text(name) = item else {
+      return Error(invalid("manifest_path", ""))
+    }
+    validate_path(name)?
+    list.push(mut paths, unique name)
+  }
+  Ok(Manifest(paths: take paths, jobs: jobs, byte_cap: byte_cap))
+}
+
+fn append(mut output: List[u8], value: String) uses {} {
+  bytes.append(mut output, string.as_bytes(value))
+}
+
+pub fn encode(rows: List[Entry]) -> unique Bytes uses {} {
+  let mut output: List[u8] = []
+  append(mut output, "{\"entries\":[")
+  let mut first = true
+  for row in rows {
+    if !first {
+      append(mut output, ",")
+    }
+    first = false
+    append(mut output, f"{{\"index\":{row.index},\"path\":")
+    json.write_text_into(row.path, mut output)
+    append(mut output, f",\"bytes\":{row.bytes},\"sha256\":")
+    json.write_text_into(row.sha256, mut output)
+    append(mut output, "}")
+  }
+  append(mut output, "]}\n")
+  unique bytes.from_list(take output)
+}
+
+pub fn error_json(problem: Problem) -> unique Bytes uses {} {
+  let mut output: List[u8] = []
+  append(mut output, "{\"error\":")
+  json.write_text_into(problem.kind, mut output)
+  append(mut output, ",\"path\":")
+  json.write_text_into(problem.path, mut output)
+  append(mut output, "}\n")
+  unique bytes.from_list(take output)
+}

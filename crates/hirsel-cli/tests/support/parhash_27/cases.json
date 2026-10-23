@@ -1,0 +1,377 @@
+{
+  "files": {
+    "abcde": "abcde",
+    "a": "a",
+    "empty": "",
+    "abc": "abc",
+    "ab": "ab",
+    "abcd": "abcd",
+    "long": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "nested/deep/long": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  },
+  "cases": [
+    {
+      "id": "empty",
+      "args": [
+        "fixtures",
+        "{\"paths\":[],\"jobs\":2,\"byte_cap\":128}"
+      ],
+      "jobs": 2,
+      "paths": [],
+      "status": 0,
+      "stdout": "{\"entries\":[]}\n",
+      "stderr": "",
+      "children": 0
+    },
+    {
+      "id": "empty-file",
+      "args": [
+        "fixtures",
+        "{\"paths\":[\"empty\"],\"jobs\":2,\"byte_cap\":0}"
+      ],
+      "jobs": 2,
+      "paths": [
+        "empty"
+      ],
+      "status": 0,
+      "stdout": "{\"entries\":[{\"index\":0,\"path\":\"empty\",\"bytes\":0,\"sha256\":\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"}]}\n",
+      "stderr": "",
+      "children": 1
+    },
+    {
+      "id": "abc",
+      "args": [
+        "fixtures",
+        "{\"paths\":[\"abc\"],\"jobs\":2,\"byte_cap\":128}"
+      ],
+      "jobs": 2,
+      "paths": [
+        "abc"
+      ],
+      "status": 0,
+      "stdout": "{\"entries\":[{\"index\":0,\"path\":\"abc\",\"bytes\":3,\"sha256\":\"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\"}]}\n",
+      "stderr": "",
+      "children": 1
+    },
+    {
+      "id": "duplicate",
+      "args": [
+        "fixtures",
+        "{\"paths\":[\"abc\",\"abc\"],\"jobs\":2,\"byte_cap\":128}"
+      ],
+      "jobs": 2,
+      "paths": [
+        "abc",
+        "abc"
+      ],
+      "status": 0,
+      "stdout": "{\"entries\":[{\"index\":0,\"path\":\"abc\",\"bytes\":3,\"sha256\":\"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\"},{\"index\":1,\"path\":\"abc\",\"bytes\":3,\"sha256\":\"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\"}]}\n",
+      "stderr": "",
+      "children": 2
+    },
+    {
+      "id": "distinct",
+      "args": [
+        "fixtures",
+        "{\"paths\":[\"a\",\"ab\",\"abcd\",\"abcde\"],\"jobs\":4,\"byte_cap\":128}"
+      ],
+      "jobs": 4,
+      "paths": [
+        "a",
+        "ab",
+        "abcd",
+        "abcde"
+      ],
+      "status": 0,
+      "stdout": "{\"entries\":[{\"index\":0,\"path\":\"a\",\"bytes\":1,\"sha256\":\"ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb\"},{\"index\":1,\"path\":\"ab\",\"bytes\":2,\"sha256\":\"fb8e20fc2e4c3f248c60c39bd652f3c1347298bb977b8b4d5903b85055620603\"},{\"index\":2,\"path\":\"abcd\",\"bytes\":4,\"sha256\":\"88d4266fd4e6338d13b845fcf289579d209c897823b9217da3e161936f031589\"},{\"index\":3,\"path\":\"abcde\",\"bytes\":5,\"sha256\":\"36bbe50ed96841d10443bcb670d6554f0a34b761be67ec9c4a8ad2c0c44ca42c\"}]}\n",
+      "stderr": "",
+      "children": 4
+    },
+    {
+      "id": "varied",
+      "args": [
+        "fixtures",
+        "{\"paths\":[\"nested/deep/long\",\"empty\",\"abc\",\"a\"],\"jobs\":4,\"byte_cap\":128}"
+      ],
+      "jobs": 4,
+      "paths": [
+        "nested/deep/long",
+        "empty",
+        "abc",
+        "a"
+      ],
+      "status": 0,
+      "stdout": "{\"entries\":[{\"index\":0,\"path\":\"nested/deep/long\",\"bytes\":128,\"sha256\":\"b320e85978db05134003a2914eebddd8d3b8726818f2e2c679e1898c721562a9\"},{\"index\":1,\"path\":\"empty\",\"bytes\":0,\"sha256\":\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"},{\"index\":2,\"path\":\"abc\",\"bytes\":3,\"sha256\":\"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\"},{\"index\":3,\"path\":\"a\",\"bytes\":1,\"sha256\":\"ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb\"}]}\n",
+      "stderr": "",
+      "children": 4
+    },
+    {
+      "id": "jobs-1",
+      "args": [
+        "fixtures",
+        "{\"paths\":[\"abc\",\"empty\",\"a\",\"ab\",\"abcd\",\"abcde\",\"a\",\"abc\",\"empty\"],\"jobs\":1,\"byte_cap\":128}"
+      ],
+      "jobs": 1,
+      "paths": [
+        "abc",
+        "empty",
+        "a",
+        "ab",
+        "abcd",
+        "abcde",
+        "a",
+        "abc",
+        "empty"
+      ],
+      "status": 0,
+      "stdout": "{\"entries\":[{\"index\":0,\"path\":\"abc\",\"bytes\":3,\"sha256\":\"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\"},{\"index\":1,\"path\":\"empty\",\"bytes\":0,\"sha256\":\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"},{\"index\":2,\"path\":\"a\",\"bytes\":1,\"sha256\":\"ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb\"},{\"index\":3,\"path\":\"ab\",\"bytes\":2,\"sha256\":\"fb8e20fc2e4c3f248c60c39bd652f3c1347298bb977b8b4d5903b85055620603\"},{\"index\":4,\"path\":\"abcd\",\"bytes\":4,\"sha256\":\"88d4266fd4e6338d13b845fcf289579d209c897823b9217da3e161936f031589\"},{\"index\":5,\"path\":\"abcde\",\"bytes\":5,\"sha256\":\"36bbe50ed96841d10443bcb670d6554f0a34b761be67ec9c4a8ad2c0c44ca42c\"},{\"index\":6,\"path\":\"a\",\"bytes\":1,\"sha256\":\"ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb\"},{\"index\":7,\"path\":\"abc\",\"bytes\":3,\"sha256\":\"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\"},{\"index\":8,\"path\":\"empty\",\"bytes\":0,\"sha256\":\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"}]}\n",
+      "stderr": "",
+      "children": 9
+    },
+    {
+      "id": "jobs-8",
+      "args": [
+        "fixtures",
+        "{\"paths\":[\"abc\",\"empty\",\"a\",\"ab\",\"abcd\",\"abcde\",\"a\",\"abc\",\"empty\"],\"jobs\":8,\"byte_cap\":128}"
+      ],
+      "jobs": 8,
+      "paths": [
+        "abc",
+        "empty",
+        "a",
+        "ab",
+        "abcd",
+        "abcde",
+        "a",
+        "abc",
+        "empty"
+      ],
+      "status": 0,
+      "stdout": "{\"entries\":[{\"index\":0,\"path\":\"abc\",\"bytes\":3,\"sha256\":\"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\"},{\"index\":1,\"path\":\"empty\",\"bytes\":0,\"sha256\":\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"},{\"index\":2,\"path\":\"a\",\"bytes\":1,\"sha256\":\"ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb\"},{\"index\":3,\"path\":\"ab\",\"bytes\":2,\"sha256\":\"fb8e20fc2e4c3f248c60c39bd652f3c1347298bb977b8b4d5903b85055620603\"},{\"index\":4,\"path\":\"abcd\",\"bytes\":4,\"sha256\":\"88d4266fd4e6338d13b845fcf289579d209c897823b9217da3e161936f031589\"},{\"index\":5,\"path\":\"abcde\",\"bytes\":5,\"sha256\":\"36bbe50ed96841d10443bcb670d6554f0a34b761be67ec9c4a8ad2c0c44ca42c\"},{\"index\":6,\"path\":\"a\",\"bytes\":1,\"sha256\":\"ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb\"},{\"index\":7,\"path\":\"abc\",\"bytes\":3,\"sha256\":\"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\"},{\"index\":8,\"path\":\"empty\",\"bytes\":0,\"sha256\":\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"}]}\n",
+      "stderr": "",
+      "children": 9
+    },
+    {
+      "id": "missing",
+      "args": [
+        "fixtures",
+        "{\"paths\":[\"missing\",\"long\"],\"jobs\":2,\"byte_cap\":128}"
+      ],
+      "jobs": 2,
+      "paths": [
+        "missing",
+        "long"
+      ],
+      "status": 2,
+      "stdout": "",
+      "stderr": "{\"error\":\"missing\",\"path\":\"missing\"}\n",
+      "children": 2
+    },
+    {
+      "id": "over-byte-cap",
+      "args": [
+        "fixtures",
+        "{\"paths\":[\"abc\",\"long\"],\"jobs\":2,\"byte_cap\":2}"
+      ],
+      "jobs": 2,
+      "paths": [
+        "abc",
+        "long"
+      ],
+      "status": 2,
+      "stdout": "",
+      "stderr": "{\"error\":\"file_bytes_limit\",\"path\":\"abc\"}\n",
+      "children": 2
+    },
+    {
+      "id": "outside-grant",
+      "args": [
+        "fixtures",
+        "{\"paths\":[\"../secret\"],\"jobs\":2,\"byte_cap\":128}"
+      ],
+      "jobs": 2,
+      "paths": [
+        "../secret"
+      ],
+      "status": 2,
+      "stdout": "",
+      "stderr": "{\"error\":\"invalid_path\",\"path\":\"../secret\"}\n",
+      "children": 0
+    },
+    {
+      "id": "malformed",
+      "args": [
+        "fixtures",
+        "{"
+      ],
+      "jobs": 2,
+      "paths": [],
+      "status": 2,
+      "stdout": "",
+      "stderr": "{\"error\":\"manifest_json\",\"path\":\"\"}\n",
+      "children": 0
+    },
+    {
+      "id": "jobs-zero",
+      "args": [
+        "fixtures",
+        "{\"paths\":[],\"jobs\":0,\"byte_cap\":128}"
+      ],
+      "jobs": 0,
+      "paths": [],
+      "status": 2,
+      "stdout": "",
+      "stderr": "{\"error\":\"jobs_limit\",\"path\":\"\"}\n",
+      "children": 0
+    },
+    {
+      "id": "jobs-nine",
+      "args": [
+        "fixtures",
+        "{\"paths\":[],\"jobs\":9,\"byte_cap\":128}"
+      ],
+      "jobs": 9,
+      "paths": [],
+      "status": 2,
+      "stdout": "",
+      "stderr": "{\"error\":\"jobs_limit\",\"path\":\"\"}\n",
+      "children": 0
+    },
+    {
+      "id": "path-count",
+      "args": [
+        "fixtures",
+        "{\"paths\":[\"empty\",\"empty\",\"empty\",\"empty\",\"empty\",\"empty\",\"empty\",\"empty\",\"empty\",\"empty\",\"empty\",\"empty\",\"empty\",\"empty\",\"empty\",\"empty\",\"empty\",\"empty\",\"empty\",\"empty\",\"empty\",\"empty\",\"empty\",\"empty\",\"empty\",\"empty\",\"empty\",\"empty\",\"empty\",\"empty\",\"empty\",\"empty\",\"empty\",\"empty\",\"empty\",\"empty\",\"empty\",\"empty\",\"empty\",\"empty\",\"empty\",\"empty\",\"empty\",\"empty\",\"empty\",\"empty\",\"empty\",\"empty\",\"empty\",\"empty\",\"empty\",\"empty\",\"empty\",\"empty\",\"empty\",\"empty\",\"empty\",\"empty\",\"empty\",\"empty\",\"empty\",\"empty\",\"empty\",\"empty\",\"empty\"],\"jobs\":2,\"byte_cap\":0}"
+      ],
+      "jobs": 2,
+      "paths": [
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty"
+      ],
+      "status": 2,
+      "stdout": "",
+      "stderr": "{\"error\":\"paths_limit\",\"path\":\"\"}\n",
+      "children": 0
+    },
+    {
+      "id": "total-reservation",
+      "args": [
+        "fixtures",
+        "{\"paths\":[\"empty\",\"empty\",\"empty\",\"empty\",\"empty\",\"empty\",\"empty\",\"empty\",\"empty\",\"empty\",\"empty\",\"empty\",\"empty\",\"empty\",\"empty\",\"empty\",\"empty\"],\"jobs\":2,\"byte_cap\":262144}"
+      ],
+      "jobs": 2,
+      "paths": [
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+        "empty"
+      ],
+      "status": 2,
+      "stdout": "",
+      "stderr": "{\"error\":\"total_bytes_limit\",\"path\":\"\"}\n",
+      "children": 0
+    },
+    {
+      "id": "file-cap",
+      "args": [
+        "fixtures",
+        "{\"paths\":[],\"jobs\":2,\"byte_cap\":262145}"
+      ],
+      "jobs": 2,
+      "paths": [],
+      "status": 2,
+      "stdout": "",
+      "stderr": "{\"error\":\"file_bytes_limit\",\"path\":\"\"}\n",
+      "children": 0
+    },
+    {
+      "id": "ungranted-root",
+      "args": [
+        "other",
+        "{\"paths\":[],\"jobs\":2,\"byte_cap\":128}"
+      ],
+      "jobs": 2,
+      "paths": [],
+      "status": 2,
+      "stdout": "",
+      "stderr": "{\"error\":\"directory_grant\",\"path\":\"other\"}\n",
+      "children": 0
+    }
+  ]
+}

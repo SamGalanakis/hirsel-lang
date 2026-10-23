@@ -1,0 +1,162 @@
+pub type AppError = Output(OutputError)
+
+// Refuse final links and links in every parent component before opening a file.
+fn regular(d: Dir, name: String) -> Result[(), model.Problem] {
+  model.validate_path(name)?
+  let parts = path.components(path.of(name))
+  let mut prefix: List[u8] = []
+  let mut index = 0u64
+  for part in parts {
+    if index != 0 {
+      list.push(mut prefix, b'/')
+    }
+    bytes.append(mut prefix, string.as_bytes(part))
+    let current = text.finish_valid(copy prefix)
+    let info = match file.metadata(d, path.of(current)) {
+      Ok(value) => take value,
+      Error(NotFound()) => return Error(model.invalid("missing", name)),
+      Error(_) => return Error(model.invalid("metadata", name)),
+    }
+    index += 1
+    if info.kind == Symlink() {
+      return Error(model.invalid("symlink", name))
+    }
+    if index < list.len(parts) && info.kind != Directory() {
+      return Error(model.invalid("not_directory", name))
+    }
+    if index == list.len(parts) && info.kind != Regular() {
+      return Error(model.invalid("not_regular", name))
+    }
+  }
+  Ok(())
+}
+
+fn hash_file(d: Dir, take name: unique String, index: u64, byte_cap: u64) -> Result[
+  model.Entry,
+  model.Problem
+] {
+  regular(d, name)?
+  let mut Ok(handle) = file.open(d, path.of(name)) else {
+    return Error(model.invalid("file_open", name))
+  }
+  let data = match file.read_all_bounded(d, mut handle, byte_cap) {
+    Ok(value) => take value,
+    Error(Limit()) => return Error(model.invalid("file_bytes_limit", name)),
+    Error(File(Canceled(_))) => return Error(model.invalid("canceled", name)),
+    Error(File(_)) => return Error(model.invalid("file_read", name)),
+  }
+  Ok(
+    model.Entry(
+      index: index,
+      path: take name,
+      bytes: bytes.len(data),
+      sha256: sha256.digest_hex(data)
+    )
+  )
+}
+
+// Tokio JoinSet's drain/join structure, ce685ee6, adapted to Hirsel scopes.
+// Drain in completion order, store by add index; at most jobs handles exist.
+pub fn hash(d: Dir, tasks: Tasks, manifest: model.Manifest) -> Result[
+  List[model.Entry],
+  model.Problem
+] {
+  task.scope(
+    tasks,
+    fn(s: Scope) -> Result[List[model.Entry], model.Problem] {
+      let mut rows: List[model.Entry] = []
+      let mut start = 0u64
+      while start < list.len(manifest.paths) {
+        let count = if list.len(manifest.paths) - start < manifest.jobs {
+          list.len(manifest.paths) - start
+        } else {
+          manifest.jobs
+        }
+        let mut pending: TaskSet[Result[unique model.Entry, unique model.Problem]] of s = task.set(
+          s
+        )
+        for index in start..start + count {
+          let name = unique manifest.paths[index]
+          let byte_cap = manifest.byte_cap
+          task.add(
+            s,
+            mut pending,
+            task.async(
+              s,
+              fn() -> Result[unique model.Entry, unique model.Problem] {
+                match hash_file(d, take name, index, byte_cap) {
+                  Ok(row) => Ok(unique row),
+                  Error(problem) => Error(unique problem),
+                }
+              }
+            )
+          )
+        }
+        let mut ordered: List[Option[model.Entry]] = []
+        for slot in 0u64..count {
+          list.push(mut ordered, None())
+        }
+        while let Some(slot) = task.await_any(s, pending) {
+          let joined = task.await_at(s, mut pending, slot)
+          match take joined {
+            Ok(row) => {
+              ordered[slot] = Some(take row)
+            },
+            Error(problem) => {
+              task.cancel_all(s, take pending)
+              return Error(take problem)
+            },
+          }
+        }
+        task.cancel_all(s, take pending)
+        for entry in take ordered {
+          if let Some(row) = take entry {
+            list.push(mut rows, take row)
+          }
+        }
+        start += count
+      }
+      Ok(take rows)
+    }
+  )
+}
+
+fn execute(rt: Io, args: Args) -> Result[List[model.Entry], model.Problem] {
+  if arg.len(args) != 2 {
+    return Error(model.invalid("usage", ""))
+  }
+  let Ok(root) = arg.text(args, 0) else {
+    return Error(model.invalid("arguments_utf8", ""))
+  }
+  model.validate_path(root)?
+  let Ok(source) = arg.text(args, 1) else {
+    return Error(model.invalid("arguments_utf8", ""))
+  }
+  let manifest = model.decode(source)?
+  let Ok(directory) = io.dir(rt, path.of(root)) else {
+    return Error(model.invalid("directory_grant", root))
+  }
+  let Ok(tasks) = io.tasks(rt) else {
+    return Error(model.invalid("tasks_grant", ""))
+  }
+  hash(directory, tasks, manifest)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[std@1/process.ExitCode, AppError] {
+  let Ok(output) = io.stdout(rt) else {
+    return Ok(std@1/process.exit_code(3u8))
+  }
+  let Ok(errors) = io.stderr(rt) else {
+    return Ok(std@1/process.exit_code(3u8))
+  }
+  match execute(rt, args) {
+    Ok(rows) => {
+      out.write(output, model.encode(rows))?
+      Ok(std@1/process.SUCCESS)
+    },
+    Error(problem) => {
+      err.write(errors, model.error_json(problem))?
+      Ok(std@1/process.exit_code(2u8))
+    },
+  }
+}

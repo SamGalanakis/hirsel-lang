@@ -1,0 +1,23 @@
+{
+  "io": {
+    "stdout": "stdout.bytes@1",
+    "stderr": "stderr.bytes@1",
+    "tasks": "tasks.cooperative@1",
+    "dirs": [
+      {
+        "path": "fixtures",
+        "host": "REPLACE_WITH_ABSOLUTE_FIXTURE_DIRECTORY",
+        "access": "read"
+      }
+    ]
+  },
+  "args": [
+    "fixtures",
+    "{\"paths\":[\"abc\",\"empty\",\"abc\"],\"jobs\":2,\"byte_cap\":1024}"
+  ],
+  "placement": {
+    "cores": 1,
+    "commit": "shared",
+    "reorder": "auto"
+  }
+}
