@@ -170,13 +170,13 @@ sys.exit(p.returncode)
     case('duplicate-path', {'manifest':canonical(dupe)}, ['verify','fixtures','manifest'], error('duplicate_path','a'))
     too_many=manifest([entry(str(i),b'') for i in range(65)])
     case('manifest-records', {'manifest':canonical(too_many)}, ['verify','fixtures','manifest'], error('record_limit'))
-    # No target is opened by the app after metadata detects a link. The current
-    # walk provider may follow in-root aliases before that check; an escaping or
-    # cyclic link fails in the provider. Test both commands and both link levels.
+    # Walk yields links without descending/resolving them. Selected links fail
+    # metadata validation; a link/* scan selects nothing. Verify still checks
+    # every listed parent component before opening a leaf.
     case('link-file', {'a':b'abc'}, ['scan','fixtures','link'], error('symlink','link'), links={'link':'a'})
-    case('link-parent', {'docs/a':b'abc'}, ['scan','fixtures','link/*'], error('symlink','link/a'), links={'link':'docs'})
-    case('link-outside', {}, ['scan','fixtures','*'], error('walk'), links={'link':str(outside/'secret')})
-    case('link-cycle', {}, ['scan','fixtures','*'], error('walk'), links={'link':'.'})
+    case('link-parent', {'docs/a':b'abc'}, ['scan','fixtures','link/*'], (0,canonical(manifest([])),b''), links={'link':'docs'})
+    case('link-outside', {}, ['scan','fixtures','*'], error('symlink','link'), links={'link':str(outside/'secret')})
+    case('link-cycle', {}, ['scan','fixtures','*'], error('symlink','link'), links={'link':'.'})
     case('verify-link', {'a':b'abc','manifest':canonical(manifest([entry('link',b'abc')]))},
          ['verify','fixtures','manifest'], error('symlink','link'), links={'link':'a'})
     case('verify-parent-link', {'docs/a':b'abc','manifest':canonical(manifest([entry('link/a',b'abc')]))},

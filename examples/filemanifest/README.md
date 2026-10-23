@@ -90,26 +90,40 @@ nodes, but cannot grow from an unbounded stream. Arguments are supplied by the
 launcher; the app rejects wrong counts before collecting them. It does not
 retain a copy of an overlong pattern.
 
-**Provider limitation:** the current `file.walk` provider traverses and collects
-the whole granted tree eagerly before returning its iterator. The 128-path and
-depth caps apply after that traversal, not during it; directories are not yielded
-or charged by this API. These are application processing/retention caps, not a
-bound on provider traversal, memory, total directory entries or process RSS.
-`glob.files` is also eager, so this program composes `glob.compile/is_match` with
-`file.walk` and counts every returned path before matching. Use small trusted
-fixture/workspace trees. See [FRICTION.md](FRICTION.md) for the routed witness.
+`file.walk` reads the root directory at construction and descendant directories
+on demand, yielding regular files and symlinks in global UTF-8 byte order.
+Directories, including empty ones, are traversal work and do not count toward the
+128 yielded-path cap. The app counts every result before matching. Exactly 128
+paths succeeds; a 129th result returns `visited_limit` before validating, matching
+or hashing that result. This includes a descendant-read error as the 129th result;
+an earlier traversal error returns `walk`. Discovering the extra result can require
+directory reads, but no later subtree is read after it. `take_n(128)` would silently
+truncate and cannot implement this check. `glob.files` collects its matches, so the
+app keeps the `glob.compile/is_match` and demand-pulled `file.walk` composition.
+
+The cursor retains one sorted page per active depth, O(depth × largest single
+directory) entries and path bytes. Consumed Path identities and recorded inputs
+can remain retained for the run. The app caps yielded paths and retained records;
+these caps do not bound directory entries, total traversal depth, memory or RSS.
 
 The conservative application policy refuses a selected symlink or any symlink
 component of a selected path, and requires every opened leaf, including the
-manifest, to be regular. It checks parents with `file.metadata` before descending
-through their names. The current walk provider may traverse in-grant directory
-symlinks before those application checks; dangling, escaping and cyclic links
-can fail the entire scan with `walk`, even when a pattern would not select them.
-An unselected in-grant link may be tolerated. Verification only examines listed
-paths. Metadata/open are separate operations, so concurrent replacement is not
-an atomic no-follow guarantee; ordinary Dir descriptor confinement still applies
-at every lookup and prevents escaping the grant. The tool does not promise a
-filesystem snapshot. Special files are refused without opening their data.
+manifest, to be regular. The walk yields links without resolving their targets or
+descending them: unselected dangling, escaping and cyclic links are tolerated.
+Verification only examines listed paths. Metadata/open are separate operations,
+so concurrent replacement is not an atomic no-follow guarantee; ordinary Dir
+descriptor confinement still applies at every lookup and prevents escaping the
+grant. The tool does not promise a filesystem snapshot. Special files are refused
+without opening their data. Historical limitations and their resolution remain in
+[FRICTION.md](FRICTION.md).
+
+The `filemanifest_stream_25` partitions freeze 0/127/128/129-path trees and
+cap/lookahead/error controls. The actual package runs under the reference
+interpreter, checked H, LLVM and Cranelift against the same independent expected
+status and bytes. Scripted simulator effects and native recordings check directory
+reads and selected opens, including an unread later failing subtree. Fixtures
+adapt walkdir's nested tree and independently sort its raw file/link catalogue;
+root/directory emission and default DFS order are explicit adaptations.
 
 The focused acceptance harness uses private temporary trees and compares exact
 stdout, stderr and status through interpreter, LLVM and Cranelift. All 30 rows
@@ -123,6 +137,7 @@ compilation is setup under normal build limits.
 
 ```sh
 .buck2/bin/buck2 test -c hirsel.tests=focus //:hirsel-cli-test-cli-shard-1 -- --test-arg=filemanifest_23
+.buck2/bin/buck2 test -c hirsel.tests=focus //:hirsel-cli-test-cli-shard-1 -- --test-arg=filemanifest_stream_25
 ```
 
 Prior art: Go `src/path/match.go:16–65`, `src/path/match_test.go:19–49`,

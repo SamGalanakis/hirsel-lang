@@ -492,6 +492,7 @@ dependencies = [
  "hirsel-free",
  "hirsel-guard",
  "hirsel-intern",
+ "hirsel-interp",
  "hirsel-rt",
  "hirsel-run-schema",
  "libc",

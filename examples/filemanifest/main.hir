@@ -1,6 +1,6 @@
 pub type AppError = Output(OutputError)
 
-const HELP: String = "Usage: filemanifest scan ROOT PATTERN\n       filemanifest verify ROOT MANIFEST\n       filemanifest --help\n\nROOT names an explicitly granted read-only directory. MANIFEST is relative to ROOT.\nPrint sorted SHA-256 entries, or report missing/changed selected files.\nLimits: 128 returned walk paths, depth 16, 64 records, 512 path bytes,\n128 pattern bytes, 4096 bytes/file, 16384 total file bytes, 65536 manifest bytes.\nThe current provider traverses eagerly before the application walk cap.\n"
+const HELP: String = "Usage: filemanifest scan ROOT PATTERN\n       filemanifest verify ROOT MANIFEST\n       filemanifest --help\n\nROOT names an explicitly granted read-only directory. MANIFEST is relative to ROOT.\nPrint sorted SHA-256 entries, or report missing/changed selected files.\nLimits: 128 returned walk paths, depth 16, 64 records, 512 path bytes,\n128 pattern bytes, 4096 bytes/file, 16384 total file bytes, 65536 manifest bytes.\nWalk reads the root first and descendants on demand; links are never descended.\nThe cap counts yielded paths, including links and nonmatches, not directories.\nA 129th result rejects; no later subtree is read after that lookahead.\n"
 
 // Refuse final links and links in every parent component before opening a file.
 fn regular(d: Dir, name: String) -> Result[(), model.InvalidInput] {

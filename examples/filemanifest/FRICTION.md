@@ -165,3 +165,29 @@ sentinel preservation and explicit temporary cleanup. Test times were 1.819 s
 and 204.376 s; only those two cost rows were added. The original first source
 check failed with 3 MODE-2 diagnostics; the accepted source check has 0.
 No failing engine cell was replaced with a reduced success.
+
+## Streaming walk resolution (2026-10-23)
+
+The historical eager-walk observations above describe the original provider.
+`2574f29ab368107406a88289e897ea3b2cb6edbb` replaced it with a demand-pulled
+cursor. Root construction reads one directory; descendants are read only as
+iteration reaches them. Files and links are yielded in global UTF-8 byte order;
+links are never resolved or descended. The app's existing loop already counts
+results before selection and needs no relocation or eager wrapper repair.
+
+The follow-up `filemanifest_stream_25` tests freeze 0/127/128/129-path controls,
+an unread later failing subtree, and errors discovered before/at the lookahead.
+The 129th result produces `visited_limit` before inspecting that result, even
+when it is a traversal error; an earlier error is `walk`. Directory reads needed
+to find the extra result are permitted. Exact output and directory-read/open
+projections are checked against independent fixtures on the reference interpreter,
+checked H, LLVM and Cranelift. The test fixture manifest records walkdir's
+root/directory/order adaptations and the simulator/host fault encodings.
+
+Retained workarounds: `glob.files` still collects matches, so the app uses
+`glob.compile/is_match` over the cursor; the cap counts yielded results rather
+than directories. Cursor pages are bounded by active depth and maximum directory
+width, while consumed Path identities and recorded inputs may remain retained.
+Selected paths still use separate metadata and open operations, without an atomic
+no-follow snapshot guarantee. The unique-record, bounded-copy and capability
+plumbing findings above remain applicable.

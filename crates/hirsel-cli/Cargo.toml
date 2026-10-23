@@ -25,6 +25,7 @@ sha2 = "0.10"
 serde_json = "1"
 
 [dev-dependencies]
+hirsel-interp = { path = "../hirsel-interp" }
 tempfile = "3"
 hirsel-free = { path = "../hirsel-free" }
 hirsel-rt = { path = "../hirsel-rt" }
