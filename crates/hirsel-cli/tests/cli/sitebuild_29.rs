@@ -578,3 +578,90 @@ fn markdown_bounded_output_33_native_workflows() {
 fn markdown_bounded_output_33_native_bounds() {
     native_workflows_selected(true, Some("output-2097152,output-2097153"));
 }
+#[test]
+fn sitebuild_29_small_render_and_manifest_boundaries() {
+    hirsel_engine::with_compiler_stack(|| {
+        let scratch = tempfile::tempdir().unwrap();
+        let selection = package(scratch.path());
+        let html = "<!doctype html>\n<meta charset=\"utf-8\">\n<title>A &amp; &#34;</title>\n<h1>Hi</h1>\n";
+        let limits = [0, 1, 60, html.len() - 1, html.len(), html.len() + 1];
+        let limits = limits.map(|n| format!("{n}u64")).join(",");
+        let hash = "0".repeat(64);
+        let source = r##"
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let output = io.stdout(rt)?
+  for limit in [__LIMITS__] {
+    match render.page_bounded("A & \"", "# Hi\n", limit) {
+      Ok(text) => { let _ = out.print(output, text) },
+      Error(Limit(kind)) => { let _ = out.print(output, f"{kind}\n") },
+      Error(_) => { let _ = out.print(output, "unexpected error\n") },
+    }
+  }
+  let asset = model.Output(destination: "asset/é\"\\", bytes: b"abc", input_hash: "input\n\t\"\\", output_hash: "__HASH__")
+  let page = model.Page(destination: "page/é\"\\", title: "", source: "", digest: "page\r\"\\")
+  let cases: List[(List[model.Output], List[model.Page])] = [
+    ([], []), ([copy asset], []), ([], [copy page]), ([copy asset], [copy page])
+  ]
+  for (outputs, pages) in cases {
+    match publish.remaining(model.defaults(), outputs, pages) {
+      Ok(left) => { let _ = out.print(output, f"{left}\n") },
+      Error(_) => { let _ = out.print(output, "unexpected reservation error\n") },
+    }
+  }
+  Ok(())
+}
+"##
+        .replace("__LIMITS__", &limits)
+        .replace("__HASH__", &hash);
+        fs::write(scratch.path().join("main.hir"), source).unwrap();
+        let mut expected = "output_bytes\n".repeat(4) + html + html;
+        for (asset, page) in [(false, false), (true, false), (false, true), (true, true)] {
+            let mut files = serde_json::Map::new();
+            if asset {
+                files.insert(
+                    "asset/é\"\\".into(),
+                    json!({"input":"input\n\t\"\\", "output":hash}),
+                );
+            }
+            if page {
+                files.insert(
+                    "page/é\"\\".into(),
+                    json!({"input":"page\r\"\\", "output":hash}),
+                );
+            }
+            let encoded =
+                serde_json::to_vec(&json!({"version":1,"config":"legacy-v1","files":files}))
+                    .unwrap();
+            let left = 2_097_152 - encoded.len() - if asset { 3 } else { 0 };
+            expected.push_str(&format!("{left}\n"));
+        }
+        let mut loaded = hirsel_driver::load_program(&selection).unwrap();
+        loaded
+            .check_for_execution()
+            .unwrap_or_else(|e| panic!("{e}"));
+        let run = hirsel_engine::RunConfiguration {
+            entry: loaded.entry.clone(),
+            hash_seed: 0,
+            inputs: vec![],
+        };
+        let mut previous = None;
+        for checked in [false, true] {
+            let result = if checked {
+                hirsel_engine::run_observed_checked(&mut loaded.engine, &run, Default::default())
+            } else {
+                hirsel_engine::run_observed_snapshot(&mut loaded.engine, &run, Default::default())
+            }
+            .unwrap();
+            let observation = result
+                .observation
+                .expect("small boundary controls must complete");
+            assert_eq!(observation.exit_code, Some(0));
+            assert!(observation.failures.is_empty());
+            assert_eq!(observation.output, expected.as_bytes());
+            if let Some(previous) = previous {
+                assert_eq!(observation, previous);
+            }
+            previous = Some(observation);
+        }
+    });
+}

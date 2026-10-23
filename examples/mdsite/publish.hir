@@ -192,39 +192,47 @@ pub fn write(
   Ok(model.Report(pages: pages, written: written, skipped: skipped, stale: take stale))
 }
 
-// Manifest hashes have fixed width. Size it with the final paths and real input
-// hashes before rendering, reserving exactly the eventual manifest byte count.
+// Count the same compact JSON spelling as manifest(), without building and
+// encoding a second DOM of placeholder hash pairs. Use the real JSON writer
+// for both variable strings, so quoted paths and input hashes size exactly.
+fn entry_size(destination: String, input_hash: String) -> Result[u64, model.Problem] uses {} {
+  let Ok(name) = json.stringify(Text(unique destination)) else {
+    return Error(model.invalid("manifest_encode"))
+  }
+  let Ok(input) = json.stringify(Text(unique input_hash)) else {
+    return Error(model.invalid("manifest_encode"))
+  }
+  // Colon, object delimiters, keys and an empty output string. The eventual
+  // SHA-256 output digest contributes exactly 64 unescaped ASCII bytes.
+  Ok(
+    string.byte_len(name) + string.byte_len(input) + string.byte_len(
+      ":{\"input\":,\"output\":\"\"}"
+    ) + 64
+  )
+}
+
 pub fn remaining(
   config: model.Config,
   outputs: List[model.Output],
   pages: List[model.Page]
 ) -> Result[u64, model.Problem] uses {} {
-  let mut skeleton: List[model.Output] = []
-  let placeholder: String = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  let encoded = manifest(config, [])?
+  let mut total = bytes.len(encoded)
+  let mut count = 0u64
   for item in outputs {
-    list.push(
-      mut skeleton,
-      model.Output(
-        destination: unique item.destination,
-        bytes: b"",
-        input_hash: unique item.input_hash,
-        output_hash: copy placeholder
-      )
-    )
+    total += entry_size(item.destination, item.input_hash)?
+    if count != 0 {
+      total += 1
+    }
+    count += 1
   }
   for page in pages {
-    list.push(
-      mut skeleton,
-      model.Output(
-        destination: unique page.destination,
-        bytes: b"",
-        input_hash: unique page.digest,
-        output_hash: copy placeholder
-      )
-    )
+    total += entry_size(page.destination, page.digest)?
+    if count != 0 {
+      total += 1
+    }
+    count += 1
   }
-  let encoded = manifest(config, skeleton)?
-  let mut total = bytes.len(encoded)
   if total > model.OUTPUT_BYTES {
     return Error(Limit("output_bytes"))
   }

@@ -29,11 +29,12 @@ fn literal(mut buffer: LayoutBuffer, value: String) -> Result[(), model.Problem]
   if string.byte_len(value) > buffer.limit - list.len(buffer.data) {
     return Error(Limit("output_bytes"))
   }
-  for b in string.as_bytes(value) {
-    if let Error(_) = append_byte(mut buffer, b) {
-      return Error(Limit("output_bytes"))
-    }
+  // The complete fragment fits. Keep the same first-allocation reservation,
+  // then append it in bulk, as std.json.write_text_into does for UTF-8 runs.
+  if list.len(buffer.data) == 0 && string.byte_len(value) != 0 {
+    list.reserve(mut buffer.data, buffer.limit)
   }
+  bytes.append(mut buffer.data, string.as_bytes(value))
   Ok(())
 }
 
