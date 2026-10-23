@@ -301,21 +301,10 @@ pub unsafe extern "C" fn hirsel_rt_v2_bytes_base64_decode(
                 Some(result)
             }
             Err(_) => {
-                // SAFETY: this adapter exclusively owns the fresh failed output.
-                // Byte storage has no finalizers; release cannot fail.
-                let status = unsafe {
-                    crate::release::hirsel_rt_v2_release(
-                        ctx,
-                        result.owner,
-                        (*result.owner).index(),
-                        std::ptr::null(),
-                        0,
-                        0,
-                    )
-                };
-                if status != STATUS_OK {
-                    fault("Base64 scratch release")
-                }
+                // SAFETY: the fresh byte storage is task-local, uniquely owned,
+                // unpublished and has no drop work. Free it locally rather than
+                // entering the scheduler through semantic release.
+                unsafe { (*ctx).heap().free(result.owner) };
                 None
             }
         }

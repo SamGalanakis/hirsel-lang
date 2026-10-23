@@ -406,6 +406,108 @@ mod tests {
     }
 
     #[test]
+    fn local_base64_decode_preserves_role_on_success_and_rejection() {
+        use crate::text::{allocate_bytes, hirsel_rt_v2_bytes_base64_decode};
+        use crate::views::Slice;
+        use std::ptr;
+
+        for flags in [0, crate::context::CONFIG_DIAGNOSTIC] {
+            let mut ctx = ptr::null_mut();
+            unsafe {
+                assert_eq!(
+                    crate::context::hirsel_rt_v2_ctx_create(
+                        &crate::Config {
+                            flags,
+                            ..crate::Config::new()
+                        },
+                        &mut ctx,
+                    ),
+                    0
+                );
+            }
+            let run = Run(ctx);
+            unsafe { enable(ctx) };
+            for alphabet in [0, 1] {
+                for padding in [0, 1] {
+                    let tail = if padding == 0 {
+                        b"TWE=".as_slice()
+                    } else {
+                        b"TWE"
+                    };
+                    let bad_tail = if padding == 0 {
+                        b"AB==".as_slice()
+                    } else {
+                        b"AB"
+                    };
+                    let mut bad_block = vec![b'A'; 256];
+                    bad_block[128] = b'!';
+                    for (input, expected) in [
+                        (b"".as_slice(), Some(b"".as_slice())),
+                        (b"TWFu".as_slice(), Some(b"Man".as_slice())),
+                        (tail, Some(b"Ma".as_slice())),
+                        (b"!".as_slice(), None), // Length rejection, before allocation.
+                        (b"AAAA!AAA".as_slice(), None), // Rejection after allocation.
+                        (bad_tail, None),        // Noncanonical tail bits.
+                        (bad_block.as_slice(), None), // SIMD block rejection.
+                    ] {
+                        unsafe {
+                            let source = allocate_bytes(ctx, input);
+                            let mut output = Slice {
+                                owner: ptr::null_mut(),
+                                start: 0,
+                                length: 0,
+                            };
+                            // A Local leaf must preserve the driver's role ownership.
+                            // A nested semantic release would enter and then release it.
+                            enter(ctx);
+                            assert_eq!(
+                                hirsel_rt_v2_bytes_base64_decode(
+                                    ctx,
+                                    ptr::null_mut(),
+                                    &mut output,
+                                    source.owner,
+                                    source.start,
+                                    source.length,
+                                    &alphabet,
+                                    &padding,
+                                ),
+                                crate::STATUS_OK
+                            );
+                            assert_eq!(
+                                *(*run.shared()).role.owner.lock().unwrap(),
+                                Some(ctx.addr())
+                            );
+                            assert_eq!((*ctx).role_depth, 0);
+                            assert_eq!((*source.owner).count, 1);
+                            let shown = |s: Slice| {
+                                std::slice::from_raw_parts(
+                                    crate::alloc::payload(s.owner).add(8 + s.start as usize),
+                                    s.length as usize,
+                                )
+                            };
+                            assert_eq!(shown(source), input);
+                            if let Some(expected) = expected {
+                                assert!(!output.owner.is_null());
+                                assert_ne!(output.owner, source.owner);
+                                assert_eq!(shown(output), expected);
+                                assert_eq!((*ctx).stats().live_blocks, 2);
+                                (*ctx).heap().free(output.owner);
+                            } else {
+                                assert!(output.owner.is_null());
+                                assert_eq!((output.start, output.length), (0, 0));
+                                assert_eq!((*ctx).stats().live_blocks, 1);
+                            }
+                            (*ctx).heap().free(source.owner);
+                            assert_eq!((*ctx).stats().live_blocks, 0);
+                            release(ctx);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn idle_callbacks_exclude_each_other_and_task_owners() {
         let run = Run::new(true);
         let address = run.shared().addr();
