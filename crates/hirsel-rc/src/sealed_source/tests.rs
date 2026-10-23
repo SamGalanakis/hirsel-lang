@@ -410,7 +410,6 @@ fn source_witness_33_expected_empty_is_distinct_from_unavailable_provider() {
     let expected = source.derive(&key, &types, &[0], Ok).unwrap();
     let mut declarations = SourceDeclarations::new(hirsel_layout::operation::OperationRegistry {
         types,
-        type_declarations: Default::default(),
         signatures: Default::default(),
         owners: Default::default(),
     });
@@ -549,7 +548,6 @@ fn source_witness_33_provider_refuses_mixed_source_snapshots() {
     let two = observe(2);
     let mut declarations = SourceDeclarations::new(hirsel_layout::operation::OperationRegistry {
         types,
-        type_declarations: Default::default(),
         signatures: Default::default(),
         owners: Default::default(),
     });
