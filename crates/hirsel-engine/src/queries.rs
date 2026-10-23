@@ -831,8 +831,12 @@ impl QueryEngine {
                 return entry.result();
             }
         }
-        self.start(definition, QueryKind::Signature)?;
+        // A miss can still have declaration heads without expression arenas.
+        // Materialize the demanded source before opening normalization's active
+        // query, so an unavailable body cannot leave a false recursive frame.
+        self.materialize(definition)?;
         let candidates = self.definition_items(definition)?;
+        self.start(definition, QueryKind::Signature)?;
         let declarations = self.frozen_declarations();
         let adapter = self.adapters.signature.clone();
         let mut products = PhaseProducts::default();
