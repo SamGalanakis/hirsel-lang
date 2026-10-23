@@ -1002,6 +1002,7 @@ impl QueryEngine {
             self.materialize_catalog(&path)?;
         }
         self.comptime_runtime = None;
+        self.catalog.clear_facts();
         let source_path = self.sources.file(file.file).unwrap().path.clone();
         // Every snapshot of this source, each at its own FileId.
         let mut snapshots = self.declarations.snapshots(&source_path);

@@ -1477,16 +1477,7 @@ impl QueryEngine {
                 read,
                 ReadKey::ExecutedBody(_) | ReadKey::ValidationUniverse(_)
             )
-        }) || self
-            .items
-            .get(path)
-            .and_then(|items| items.first())
-            .is_some_and(|syntax| {
-                matches!(syntax.item.kind, hirsel_syntax::ItemKind::Const { .. })
-                    || syntax.tree.expressions.iter().any(|expression| {
-                        matches!(expression.kind, hirsel_syntax::ExprKind::Comptime(_))
-                    })
-            })
+        }) || self.source_facts(path).is_some_and(|facts| facts.execution)
     }
     fn staged_declaration_owner(&self, path: &DefPath) -> Option<DefPath> {
         if let Some(constant) = self.staged_constants.get(path) {
@@ -1498,7 +1489,7 @@ impl QueryEngine {
         }
         let mut owner = path.clone();
         owner.0.name = name.into();
-        self.items.contains_key(&owner).then_some(owner)
+        self.declared(&owner).then_some(owner)
     }
     fn portable_evaluation_reads(&self, value: &crate::comptime::EvaluatedConstant) -> bool {
         self.portable_selection_reads(None, &value.executed, &value.selections)

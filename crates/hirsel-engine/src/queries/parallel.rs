@@ -699,6 +699,13 @@ impl QueryEngine {
         for definition in definitions {
             self.last_phase = None;
             self.unavailable = None;
+            if self
+                .source_facts(&definition)
+                .is_some_and(|facts| !facts.generator)
+            {
+                frontier.push(definition);
+                continue;
+            }
             match self
                 .materialize(&definition)
                 .and_then(|_| self.snapshot(&definition))
@@ -759,6 +766,10 @@ impl QueryEngine {
             first.insert(definition.clone(), index);
             self.last_phase = None;
             self.unavailable = None;
+            if compact && let Some(outcome) = self.load_publication(&definition) {
+                outputs[index] = Some(FrontResult::Compact(outcome));
+                continue;
+            }
             let syntax = self
                 .materialize(&definition)
                 .and_then(|_| self.snapshot(&definition));
@@ -799,10 +810,6 @@ impl QueryEngine {
         let mut tasks = Vec::new();
         for (index, definition, syntax) in sources {
             let id = DefId::intern(&definition);
-            if compact && let Some(outcome) = self.load_publication(&definition) {
-                outputs[index] = Some(FrontResult::Compact(outcome));
-                continue;
-            }
             let text = match self.key_text(&definition, QueryKind::Modes) {
                 Ok(text) => text,
                 Err(error) => {

@@ -258,37 +258,28 @@ pub(crate) fn association_diagnostics(
     context: &FileContext,
 ) -> Result<Vec<Diagnostic>, QueryError> {
     let _timing = hirsel_intern::timings::interval(hirsel_intern::timings::Interval::S0);
-    let parsed = engine.parse_file(file, context)?;
-    let mut diagnostics = parsed.diagnostics;
-    if crate::queries::has_errors(&diagnostics) {
-        return Ok(diagnostics);
-    }
-    for syntax in &parsed.value.items {
+    engine.index_source(file, context)?;
+    let mut diagnostics = vec![];
+    for item in engine.source_items(file) {
         engine.work.association_visits += 1;
-        let source = &syntax.item;
-        for attribute in &source.attributes {
-            let name = attribute.name.as_str();
-            if !matches!(name, "loop_source" | "format")
-                && !matches!(
-                    attribute.arguments.as_slice(),
-                    [hirsel_syntax::AttributeArgument::SerializableCheck(_)]
-                )
-            {
-                continue;
-            }
+        for (kind, start, end) in item.facts.associations {
             let phases = engine
                 .adapters
                 .phases
                 .clone()
                 .ok_or(QueryError::NotImplemented)?;
-            let span = attribute.origin.span;
+            let span = hirsel_span::Span {
+                anchor: item.anchor,
+                start,
+                end,
+            };
             let (types, memo) = (engine.types.clone(), engine.memo.clone());
             let result = engine
-                .item_signature(&source.definition)
+                .item_signature(&item.definition)
                 .and_then(|signature| {
-                    if name == "format" {
+                    if kind == 0 {
                         phases.validate_format(&types, &memo, &signature.value, span, engine)
-                    } else if name == "serializable" {
+                    } else if kind == 1 {
                         phases.validate_serializable_check(
                             &types,
                             &memo,
@@ -343,7 +334,7 @@ pub(crate) struct FileCheckOutput {
 
 /// One file's state through `check_files`.
 struct FileCheck {
-    parsed: Option<SyntaxFile>,
+    parsed: Option<Vec<crate::queries::catalog::SourceItem>>,
     diagnostics: Vec<Diagnostic>,
     /// The first error that stopped the file's steps.
     stopped: Option<QueryError>,
@@ -359,7 +350,11 @@ impl FileCheck {
     fn step(
         &mut self,
         engine: &mut QueryEngine,
-        step: impl FnOnce(&mut QueryEngine, &SyntaxFile, &mut Vec<Diagnostic>) -> Result<(), QueryError>,
+        step: impl FnOnce(
+            &mut QueryEngine,
+            &[crate::queries::catalog::SourceItem],
+            &mut Vec<Diagnostic>,
+        ) -> Result<(), QueryError>,
     ) -> bool {
         if !self.clean() {
             return false;
@@ -439,8 +434,8 @@ pub(crate) fn check_files(
                 stopped: None,
                 missing_phase: None,
             };
-            match engine.parse_file(file, context) {
-                Ok(parsed) => check.parsed = Some(parsed.value),
+            match engine.index_source(file, context) {
+                Ok(()) => check.parsed = Some(engine.source_items(file)),
                 Err(QueryError::Diagnostics(errors)) => check.diagnostics.extend(errors),
                 Err(error) => {
                     check.missing_phase = engine.unavailable.or(engine.last_phase);
@@ -464,23 +459,13 @@ pub(crate) fn check_files(
         let Some(parsed) = &check.parsed else {
             continue;
         };
-        for syntax in &parsed.items {
+        for item in parsed {
             engine.work.planning_visits += 1;
-            planned.push((
-                owner,
-                syntax.item.definition.clone(),
-                crate::queries::generation::generator(syntax).is_some(),
-            ));
-            if matches!(
-                &syntax.item.kind,
-                hirsel_syntax::ItemKind::Type {
-                    body: hirsel_syntax::TypeBody::Distinct { fact: Some(_), .. },
-                    ..
-                }
-            ) {
+            planned.push((owner, item.definition.clone(), item.facts.generator));
+            if item.facts.fact {
                 planned.push((
                     owner,
-                    hirsel_check_protocol::fact::fact_path(&syntax.item.definition),
+                    hirsel_check_protocol::fact::fact_path(&item.definition),
                     false,
                 ));
             }
@@ -529,19 +514,15 @@ pub(crate) fn check_files(
             // file, does `Reachable` lower the rest, which reports none.
             let comptime: Vec<_>;
             (comptime, *rest) = parsed
-                .items
                 .iter()
-                .filter(|syntax| crate::queries::generation::executable(syntax))
-                .map(|syntax| syntax.item.definition.clone())
+                .filter(|item| item.facts.executable)
+                .map(|item| item.definition.clone())
                 .partition(|definition| {
                     engine.lowers_at_check(definition, LoweringPolicy::Comptime)
                 });
             engine.front_lowerings(comptime, jobs, diagnostics)?;
             // CT-5: each instance a body selects is generated and checked here.
-            let roots = parsed
-                .items
-                .iter()
-                .map(|syntax| syntax.item.definition.clone());
+            let roots = parsed.iter().map(|item| item.definition.clone());
             match engine.select_generated_instances(roots) {
                 Ok(instances) => {
                     engine.front_lowerings(instances.into_iter().collect(), jobs, diagnostics)?;

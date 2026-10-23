@@ -2,7 +2,7 @@
 //! no body of the package constructs. Declared error types otherwise collect
 //! arms nothing returns, which every exhaustive match then has to handle.
 use super::*;
-use hirsel_syntax::{Punct, TokenKind, TypeBody, Visibility};
+use hirsel_syntax::{Punct, TokenKind};
 use hirsel_types::{CallTarget, ContextualName, NameSite, SignatureKind, TypeKind};
 
 impl QueryEngine {
@@ -13,28 +13,17 @@ impl QueryEngine {
     /// file several packages share, can construct a `pub` type's arms. Any
     /// body that did not check cleanly leaves the package unlinted.
     pub(crate) fn dead_arm_warnings(&mut self, files: &[FileId]) -> Vec<Diagnostic> {
-        let definitions: Vec<DefPath> = files
-            .iter()
-            .flat_map(|file| self.file_definitions(*file))
-            .collect();
         let mut bodies = vec![];
         let mut declarations = BTreeMap::new();
-        for definition in &definitions {
-            self.work.lint_definition_visits += 1;
-            let Ok(snapshot) = self.snapshot(definition) else {
-                return vec![];
-            };
-            let item = &snapshot.item;
-            match &item.kind {
-                ItemKind::Type {
-                    body: TypeBody::Variants(arms),
-                    ..
-                } if !arms.is_empty() && item.visibility == Visibility::Private => {
-                    declarations.insert(definition.clone(), snapshot.clone());
+        for file in files {
+            for item in self.source_items(*file) {
+                self.work.lint_definition_visits += 1;
+                if !item.facts.arms.is_empty() {
+                    declarations.insert(item.definition.clone(), (item.anchor, item.facts.arms));
                 }
-                ItemKind::Function { body: Some(_), .. } => bodies.push(definition.clone()),
-                ItemKind::Const { .. } => bodies.push(definition.clone()),
-                _ => {}
+                if item.facts.body {
+                    bodies.push(item.definition);
+                }
             }
         }
         if declarations.is_empty() {
@@ -52,23 +41,12 @@ impl QueryEngine {
             constructed.extend(inputs.constructed);
         }
         let mut warnings = vec![];
-        for (owner, snapshot) in declarations {
-            let item = &snapshot.item;
+        for (owner, (anchor, names)) in declarations {
             if !errors.contains(&owner) {
                 continue;
             }
-            let ItemKind::Type {
-                body: TypeBody::Variants(declared),
-                ..
-            } = &item.kind
-            else {
-                continue;
-            };
-            let names = arm_names(&snapshot);
-            if names.len() != declared.len() {
-                continue;
-            }
-            for (index, (name, span)) in names.into_iter().enumerate() {
+            for (index, (name, start, end)) in names.into_iter().enumerate() {
+                let span = Span { anchor, start, end };
                 if constructed.contains(&(owner.clone(), index as u32)) {
                     continue;
                 }
@@ -154,7 +132,7 @@ pub(super) fn body_use(
 
 /// Each arm's name and site in a variant declaration: the identifiers that
 /// follow its `=` and each top-level `|`.
-fn arm_names(syntax: &ItemSyntax) -> Vec<(String, Span)> {
+pub(super) fn arm_names(syntax: &ItemSyntax) -> Vec<(String, Span)> {
     let item = &syntax.item;
     let tokens =
         &syntax.tree.tokens[item.origin.tokens.start as usize..item.origin.tokens.end as usize];
