@@ -4,7 +4,7 @@ use hirsel_heapcheck::{Config, Event, NoOperations, Observed};
 use hirsel_lir::{ir::LirUnit, stage::Ready, validate::Inputs};
 use hirsel_rc::{cleanup::Finalizers, insert::Proofs, placement::Options};
 
-fn program(source: &str) -> hirsel_heapcheck::Program<Ready> {
+pub(super) fn program(source: &str) -> hirsel_heapcheck::Program<Ready> {
     let p = compile(source); // J and independent TIR validation on export/import.
     let lowered = hirsel_rc::import::lower(&p, &target()).unwrap();
     let mut rc = vec![];

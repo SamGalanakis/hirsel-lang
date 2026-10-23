@@ -60,3 +60,4 @@ mod unique_copy_nested_20;
 mod ownership_history_21;
 mod integer_boundary_21;
 mod placement_boundary_21;
+mod failure_cleanup_21;

@@ -20,6 +20,13 @@
   still needs allocation/scheduler models. Unsafe-FFI failing-drop process
   termination already has a native runtime subprocess control.
 
+- **Finite synchronous model:** `failure_cleanup_21` retains a division failure
+  after take as primary while three failing finalizers extend its ordered cause
+  chain; early returns and Result errors have normal-cleanup twins. Interpreter
+  cause links, H reached-fault audits and full public four-engine observations
+  are checked. Native injected faults remain unsupported by the public adapter;
+  synchronous native failures are exercised.
+
 See [UNTESTABLE.md](UNTESTABLE.md) and the
 [evidence index](../coverage-ledger.md#destruction-and-failure). Pending corpus rows
 are executed cases with exact failure reasons, not unspecified-contract tickets.

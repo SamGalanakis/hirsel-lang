@@ -16,6 +16,13 @@ and structural `noalloc_drop`. These are settled rules, not v20 proposals.
   described as an absent scheduler. The cancellation/drop source control and
   low-level shielding controls are finite witnesses.
 
+- **Finite synchronous model:** `failure_cleanup_21` composes three-owner takes
+  with both branch arms, joins, first-iteration break, return, `?` and division
+  failure. It checks exact finalizer identities/order and zero live storage in H,
+  reached H faults, and full public observations across interpreter, H, LLVM and
+  Cranelift. Native arbitrary-site fault injection is not exposed by the test
+  adapters; these controls do not establish cancellation or universal coverage.
+
 See [UNTESTABLE.md](UNTESTABLE.md) for universal obligations and the
 [evidence index](../coverage-ledger.md#destruction-and-failure) for exact executed
 controls, current failures, owners and minimal commands.
