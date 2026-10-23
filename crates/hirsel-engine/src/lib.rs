@@ -12,6 +12,8 @@ mod native_audit;
 pub use native_audit::{CleanupSite, SourceAudit};
 mod native_input;
 pub use native_input::*;
+mod native_queries;
+pub use native_queries::*;
 mod representation;
 pub use representation::RepresentationRecord;
 mod compiler;
