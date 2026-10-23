@@ -1,0 +1,15 @@
+pub type Problem = Shape | Duplicate
+fn object(v: json.Value) -> Result[Map[String, json.Value], Problem] in v uses {} {
+  let Object(row) = v else { return Error(Shape()) }
+  Ok(row)
+}
+fn array(v: json.Value) -> Result[List[json.Value], Problem] in v uses {} {
+  let Array(items) = v else { return Error(Shape()) }
+  Ok(items)
+}
+fn test(value: json.Value) -> Result[(), Problem] uses {} {
+  let items = array(value)?
+  for item in items { let decoded = object(item); let row = match take decoded { Ok(row) => row, Error(e) => return Error(e), } }
+  Ok(())
+}
+pub fn main() -> Result[(), Problem] { test(Array([])) }

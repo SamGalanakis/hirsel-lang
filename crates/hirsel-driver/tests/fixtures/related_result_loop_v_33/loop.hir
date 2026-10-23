@@ -1,0 +1,15 @@
+pub type Problem = Shape | Duplicate
+fn array(v: json.Value) -> Result[List[json.Value], Problem] in v uses {} {
+  let Array(items) = v else { return Error(Shape()) }
+  Ok(items)
+}
+fn test(value: json.Value) -> Result[unique List[String], Problem] uses {} {
+  let items = array(value)?
+  let mut output: List[String] = []
+  for item in items {
+    let Text(s) = item else { return Error(Shape()) }
+    list.push(mut output, unique s)
+  }
+  Ok(take output)
+}
+pub fn main() -> Result[(), Problem] { let _ = test(Array([]))?; Ok(()) }

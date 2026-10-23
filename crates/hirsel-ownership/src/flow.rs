@@ -5955,6 +5955,13 @@ impl Checker<'_, '_> {
                             }
                         }
                     }
+                    if indexed_iteration && !plain {
+                        // SEM-4 reads the same source place in flow and in the
+                        // physical pattern. J's item row predates the source's
+                        // refined receiving lifetime; do not restore that stale
+                        // locality after refreshing the physical view above.
+                        part.modes.relation = physical_modes.relation.clone();
+                    }
                     if iterator {
                         part.set_alias(None);
                         part.content = Content::default();
