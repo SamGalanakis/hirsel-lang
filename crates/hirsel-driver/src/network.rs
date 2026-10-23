@@ -1038,12 +1038,14 @@ impl HostLibrary {
         a: &[Value],
         cx: &mut OperationContext<'_>,
     ) -> Result<OperationResult, Error> {
+        // Cancellation suppresses the provider call, not this blocking entry's
+        // scheduling point. Native capability_call and simulated sleeps yield too.
+        self.yield_now = true;
         if self.free_ready.is_none()
             && let Some(cause) = self.library.cancellation()
         {
             return Ok(OperationResult::returned(wait_canceled(cause)));
         }
-        self.yield_now = true;
         let token = self.next_wait;
         self.next_wait += 1;
         match self.sleep_request(a, token) {
@@ -3059,6 +3061,57 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn canceled_host_sleep_keeps_its_scheduling_point_without_consuming_tape() {
+        let run = hirsel_tir::RunConfiguration {
+            entry: DefPath::core("main"),
+            hash_seed: 0,
+            inputs: vec![],
+        };
+        let admitted = hirsel_run_config::RunConfig::empty(
+            [0; 32],
+            "core@1/main".into(),
+            hirsel_run_schema::LaunchKind::Main,
+        )
+        .validated()
+        .unwrap();
+        let mut host = HostLibrary::new(
+            &run,
+            &admitted,
+            HostIo::Replay(SimIo::new(Default::default(), vec![])),
+        )
+        .unwrap();
+        hirsel_interp::Operations::cancel_run(&mut host.library);
+        let arguments = [
+            host.handle(11, "MonotonicClock"),
+            Value::Handle {
+                kind: "Instant".into(),
+                id: 100,
+            },
+        ];
+        let result = host
+            .host_sleep(
+                &arguments,
+                &mut OperationContext {
+                    configuration: &run,
+                    sources: &Default::default(),
+                    stdout: &mut vec![],
+                    trace: &mut vec![],
+                    trace_mode: Default::default(),
+                    anchor: None,
+                },
+            )
+            .unwrap();
+        assert_eq!(result, OperationResult::returned(wait_canceled(1)));
+        assert!(hirsel_interp::OperationsAdapter::take_yield(&mut host));
+        assert!(!hirsel_interp::OperationsAdapter::take_yield(&mut host));
+        let HostIo::Replay(io) = &host.io else {
+            unreachable!()
+        };
+        assert_eq!(io.position(), 0);
+        io.finish().unwrap();
+    }
 
     #[test]
     fn process_run_with_a_scripted_directory_returns_invalid_input_without_host_io() {
