@@ -432,8 +432,6 @@ struct LowerRecord {
     depth: crate::memo::DepthEvidence<Span>,
     output: QueryOutput<hirsel_tir::DefinitionRef>,
     detail: DependencyReads,
-    /// Present only when V actually accepted the exact stored TIR.
-    verdict: Option<Vec<hirsel_validate::VRead>>,
 }
 /// Completion facts consumed by checking and source growth, independently of
 /// the checked/analyzed body. Its read set is validated before these bytes are
@@ -1168,7 +1166,7 @@ impl QueryEngine {
         }) {
             return None;
         }
-        let mut record: LowerRecord = self.decode_record(&variant.payload)?;
+        let record: LowerRecord = self.decode_record(&variant.payload)?;
         if record.output.value.path != DefId::intern(path)
             || record.depth.first.len() != self.depth_limit() as usize + 1
             || record
@@ -1190,21 +1188,8 @@ impl QueryEngine {
             );
             return None;
         }
-        if let Some(reads) = record.verdict.clone() {
-            self.remember_lowered_verdict(record.output.value.clone(), reads);
-        }
         if self.verify == Verify::On {
             self.ensure_lowered_verdict(&record.output.value).ok()?;
-            let reads = self
-                .lower_verdicts
-                .get(&record.output.value.path)?
-                .1
-                .clone();
-            if record.verdict.as_ref() != Some(&reads) {
-                record.verdict = Some(reads);
-                self.write_record(path, QueryKind::Lower, &variant.reads, &record)
-                    .ok()?;
-            }
         }
         timings::count(Count::StoreHits);
         self.store_adoptions += 1;
@@ -1248,16 +1233,8 @@ impl QueryEngine {
         if self.verify == Verify::Off || self.lowered_verdict_holds(definition) {
             return Ok(());
         }
-        *self
-            .scalar_validation_runs
-            .entry(definition.path)
-            .or_default() += 1;
         let mut reads = vec![];
-        let report = self.run_v(&definition.path.path().0.package, |types, views| {
-            let _time = timings::phase(Phase::Verify);
-            timings::count(Count::VRuns);
-            hirsel_validate::validate(definition, types, views, &mut reads)
-        });
+        let report = self.validate_lowered_artifact(definition, &mut reads);
         if let Some(error) = hirsel_validate::tooling_limit_error(&report) {
             return Err(error);
         }
@@ -1270,11 +1247,67 @@ impl QueryEngine {
         self.remember_lowered_verdict(definition.clone(), reads);
         Ok(())
     }
+    /// The verifier computes its own complete artifact identity and owns the
+    /// only persistent receipt writer. Producer Lower records carry no proof.
+    pub(super) fn validate_lowered_artifact(
+        &mut self,
+        definition: &hirsel_tir::Definition,
+        reads: &mut Vec<hirsel_validate::VRead>,
+    ) -> hirsel_validate::Validation {
+        if self.verify == Verify::Off {
+            return hirsel_validate::Validation::default();
+        }
+        let cache = self
+            .result_store
+            .as_ref()
+            .and_then(|store| store.verifier());
+        let artifact = cache.as_ref().map(|_| {
+            hirsel_validate::Artifact::new(definition, self.types.clone(), |anchor| {
+                anchor_owner(&self.items, anchor)
+            })
+        });
+        let policy = ContentHash::of_parts(
+            "hirsel.validate.policy.v1",
+            [
+                self.environment_value().0.as_slice(),
+                self.store_identity.0.as_slice(),
+                b"source-lower;V-on;complete-private-views",
+            ],
+        );
+        let mut executed = false;
+        let report = self.run_v(&definition.path.path().0.package, |types, views| {
+            let _time = timings::phase(Phase::Verify);
+            let report = if let Some(artifact) = &artifact {
+                let (report, ran) = hirsel_validate::validate_cached(
+                    artifact,
+                    views,
+                    policy,
+                    cache.as_deref(),
+                    reads,
+                );
+                executed = ran;
+                report
+            } else {
+                executed = true;
+                hirsel_validate::validate(definition, types, views, reads)
+            };
+            if executed {
+                timings::count(Count::VRuns);
+            }
+            report
+        });
+        if executed {
+            *self
+                .scalar_validation_runs
+                .entry(definition.path)
+                .or_default() += 1;
+        }
+        report
+    }
     pub(super) fn store_lower(
         &mut self,
         path: &DefPath,
         entry: &Entry<hirsel_tir::DefinitionRef>,
-        verdict: Option<Vec<hirsel_validate::VRead>>,
     ) -> Result<(), QueryError> {
         if self.result_store.is_none()
             || !entry.consistent
@@ -1308,7 +1341,6 @@ impl QueryEngine {
                 depth,
                 output,
                 detail: canonical_detail(entry.detail.clone()),
-                verdict,
             },
         )
     }
@@ -1557,7 +1589,6 @@ mod malformed_tests {
                         contracts: vec![],
                     })),
                     detail: Default::default(),
-                    verdict: None,
                 };
                 engine
                     .write_record(path, QueryKind::Lower, &Reads::empty(), &record)

@@ -1205,10 +1205,13 @@ dependencies = [
 name = "hirsel-validate"
 version = "0.1.0"
 dependencies = [
+ "bincode",
+ "hirsel-artifact-store",
  "hirsel-diag",
  "hirsel-graph",
  "hirsel-guard",
  "hirsel-intern",
+ "hirsel-product-codec",
  "hirsel-span",
  "hirsel-syntax",
  "hirsel-tir",

@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 
 /// The store format version in the directory name.
-pub const FORMAT: u32 = 7;
+pub const FORMAT: u32 = 8;
 /// The default size cap.
 pub const DEFAULT_CAP: u64 = 2 << 30;
 /// After this many bytes written in a process, the store enforces its cap.
@@ -17,6 +17,7 @@ pub struct DirStore {
     root: PathBuf,
     cap: u64,
     written: AtomicU64,
+    verifier: std::sync::Arc<hirsel_validate::VerifierCache>,
 }
 
 /// What a collection found and removed.
@@ -31,6 +32,7 @@ pub struct GcReport {
 impl DirStore {
     pub fn new(root: PathBuf) -> Self {
         Self {
+            verifier: std::sync::Arc::new(hirsel_validate::VerifierCache::directory(root.clone())),
             root,
             cap: DEFAULT_CAP,
             written: AtomicU64::new(0),
@@ -102,6 +104,9 @@ impl DirStore {
 }
 
 impl ResultStore for DirStore {
+    fn verifier(&self) -> Option<std::sync::Arc<hirsel_validate::VerifierCache>> {
+        Some(self.verifier.clone())
+    }
     fn get_content(&self, reference: super::Reference) -> Option<super::Bytes> {
         let store = hirsel_artifact_store::Store::new(self.root.clone());
         let bytes = store.get(reference)?;
