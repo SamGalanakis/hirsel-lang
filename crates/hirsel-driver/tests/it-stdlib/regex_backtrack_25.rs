@@ -3,7 +3,7 @@ use hirsel_driver::*;
 use hirsel_engine::*;
 use std::path::PathBuf;
 
-fn engines_for(backend: Option<native::Backend>, entries: &[&str]) {
+pub(super) fn engines_for(backend: Option<native::Backend>, entries: &[&str]) {
     engines_for_budget(backend, entries, 200_000_000);
 }
 

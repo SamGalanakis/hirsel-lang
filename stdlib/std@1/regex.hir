@@ -65,6 +65,7 @@ pub opaque type Regex: copyable + inert + noalloc_drop uses {} {
   entry: u64,
   names: List[String],
   prefilter: PrefixPlan,
+  fixed_captures: List[u64],
 }
 
 // The hot ordered VM sees only its original compiled fields. Optional search
@@ -911,7 +912,8 @@ pub fn compile_flags(pattern: String, flags: Flags, max_instructions: u64) -> Re
       code: take code,
       entry: entry,
       names: copy tree.names,
-      prefilter: take prefilter
+      prefilter: take prefilter,
+      fixed_captures: fixed_capture_plan(tree, root)
     )
   )
 }

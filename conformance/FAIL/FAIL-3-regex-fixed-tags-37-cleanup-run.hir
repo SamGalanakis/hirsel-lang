@@ -1,0 +1,52 @@
+// rule: FAIL-3
+// expect: run
+resource type Guard {
+  n: u8,
+}
+drop(g) {
+  let _ = g.n + 1
+}
+
+fn broken(state: u64, src: String, caps: regex.Captures) -> String uses {} {
+  let guard = Guard(n: 255u8)
+  failure.check(
+    caps.spans == [
+      Some(regex.Span(start: 64, end: 66)),
+      Some(regex.Span(start: 65, end: 65))
+    ],
+    TextInvariant()
+  )
+  failure.check(false, Bounds())
+  ""
+}
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let status: Result[(), Failure] = task.isolate(
+    tasks,
+    fn() -> () {
+      let Ok(re) = regex.compile("a(.*?)z", 100) else {
+        failure.check(false, Bounds())
+        return
+      }
+      let _ = regex.replace_all_func(
+        re,
+        "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxaz",
+        0u64,
+        broken,
+        18446744073709551615
+      )
+    }
+  )
+  match status {
+    Ok(_) => failure.check(false, TextInvariant()),
+    Error(primary) => {
+      failure.check(primary.site.line == 19, TextInvariant())
+      match primary.cause {
+        None() => failure.check(false, TextInvariant()),
+        Some(cause) => failure.check(cause.site.line == 7, TextInvariant()),
+      }
+    },
+  }
+  Ok(())
+}

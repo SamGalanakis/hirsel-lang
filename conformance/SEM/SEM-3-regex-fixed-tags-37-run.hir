@@ -1,0 +1,70 @@
+// rule: SEM-3
+// expect: run
+pub fn main() -> Result[(), ()] {
+  let Ok(re) = regex.compile("é(.*?)😀", 100) else {
+    return Error(())
+  }
+  let source = "prefixéβ😀é😀suffix"
+  let Some(lo) = string.position(source, 6) else {
+    return Error(())
+  }
+  let Some(hi) = string.position(source, 20) else {
+    return Error(())
+  }
+  let view = string.slice(source, lo, hi)
+  let Ok(caps) = regex.find_all_captures(re, view, 10, 18446744073709551615) else {
+    return Error(())
+  }
+  failure.check(
+    caps == [
+      regex.Captures(
+        spans: [Some(regex.Span(start: 0, end: 8)), Some(regex.Span(start: 2, end: 4))]
+      ),
+      regex.Captures(
+        spans: [
+          Some(regex.Span(start: 8, end: 14)),
+          Some(regex.Span(start: 10, end: 10))
+        ]
+      )
+    ],
+    TextInvariant()
+  )
+  // The long nonzero view also reaches span discovery and fixed recovery.
+  let Ok(ascii_re) = regex.compile("a(.*?)z", 100) else {
+    return Error(())
+  }
+  let long_source = "prefixxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxaβzazsuffix"
+  let Some(view_start) = string.position(long_source, 6) else {
+    return Error(())
+  }
+  let Some(view_end) = string.position(long_source, 76) else {
+    return Error(())
+  }
+  let long_view = string.slice(long_source, view_start, view_end)
+  let Ok(actual) = regex.find_all_captures(
+    ascii_re,
+    long_view,
+    10,
+    18446744073709551615
+  ) else {
+    return Error(())
+  }
+  failure.check(
+    actual == [
+      regex.Captures(
+        spans: [
+          Some(regex.Span(start: 64, end: 68)),
+          Some(regex.Span(start: 65, end: 67))
+        ]
+      ),
+      regex.Captures(
+        spans: [
+          Some(regex.Span(start: 68, end: 70)),
+          Some(regex.Span(start: 69, end: 69))
+        ]
+      )
+    ],
+    TextInvariant()
+  )
+  Ok(())
+}

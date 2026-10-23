@@ -1,3 +1,166 @@
+// Fixed-distance analysis adapted from re2c 8dca815eb424d8ebcb3df805d17504835e14de11,
+// src/regexp/fixed_tags.cc:12-163 (public domain). Unlike lexer code units,
+// distances here are UTF-8 bytes. No tag histories or POSIX disambiguation.
+// Zero means unknown; positive widths are stored +1, bounded at 1 MiB.
+// Captures below alternatives/repetition decline, preserving participation and
+// last-write semantics. Only a complete proof is published with this Regex.
+fn fixed_add(a: u64, b: u64) -> u64 uses {} {
+  if a == 0 || b == 0 || a > 1048577 || b > 1048578 - a {
+    0u64
+  } else {
+    a + b - 1
+  }
+}
+
+fn fixed_width(node: Node) -> u64 uses {} {
+  if node.kind == 0 || node.kind == 3 || node.kind == 4 || node.kind == 5 || node.kind == 6 || node.kind == 15 || node.kind == 16 {
+    return 1
+  }
+  if node.kind != 1 || node.negated || core@1/list.len(node.ranges) == 0 {
+    return 0
+  }
+  let mut width = 0u64
+  for (lo, hi) in node.ranges {
+    let a = if lo < 128 {
+      1u64
+    } else if lo < 2048 {
+      2u64
+    } else if lo < 65536 {
+      3u64
+    } else {
+      4u64
+    }
+    let b = if hi < 128 {
+      1u64
+    } else if hi < 2048 {
+      2u64
+    } else if hi < 65536 {
+      3u64
+    } else {
+      4u64
+    }
+    if a != b || width != 0 && width != a {
+      return 0
+    }
+    width = a
+  }
+  width + 1
+}
+
+fn fixed_capture_plan(tree: Tree, root: u64) -> List[u64] uses {} {
+  let count = core@1/list.len(tree.nodes)
+  let groups = core@1/list.len(tree.names)
+  if count > 512 || groups > 128 || groups <= 1 {
+    return []
+  }
+  let slots = groups * 2
+  let mut widths: List[u64] = []
+  for index in 0u64..count {
+    let node = tree.nodes[index]
+    let mut width = fixed_width(node)
+    if node.kind == 7 || node.kind == 8 || node.kind == 9 || node.kind == 17 {
+      // Parser trees are postorder. Refuse malformed/cyclic dependencies.
+      if node.left >= index || (node.kind == 7 || node.kind == 8) && node.right >= index {
+        return []
+      }
+      width = widths[node.left]
+      if node.kind == 7 {
+        width = fixed_add(width, widths[node.right])
+      } else if node.kind == 8 {
+        if width != widths[node.right] {
+          width = 0
+        }
+      } else if node.kind == 9 {
+        if node.unbounded || node.min != node.max || width == 0 || node.max > 1048576 {
+          width = 0
+        } else if width > 1 && node.max > 1048576 / (width - 1) {
+          width = 0
+        } else {
+          width = (width - 1) * node.max + 1
+        }
+      }
+    }
+    core@1/list.push(mut widths, width)
+  }
+  let mut plan: List[u64] = []
+  for slot in 0u64..slots {
+    core@1/list.push(mut plan, 0u64)
+  }
+  // from_start/from_end are independent forward/backward distances, encoded +1.
+  let mut stack: List[(u64, u64, u64, bool)] = [(root, 1u64, 1u64, true)]
+  while let Some((index, from_start, from_end, mandatory)) = core@1/list.pop(mut stack) {
+    let node = tree.nodes[index]
+    if node.kind == 7 {
+      core@1/list.push(
+        mut stack,
+        (node.left, from_start, fixed_add(from_end, widths[node.right]), mandatory)
+      )
+      core@1/list.push(
+        mut stack,
+        (node.right, fixed_add(from_start, widths[node.left]), from_end, mandatory)
+      )
+    } else if node.kind == 8 || node.kind == 9 {
+      // Do not infer participation or last writes from a fixed length alone.
+      core@1/list.push(mut stack, (node.left, 0u64, 0u64, false))
+      if node.kind == 8 {
+        core@1/list.push(mut stack, (node.right, 0u64, 0u64, false))
+      }
+    } else if node.kind == 17 {
+      if !mandatory {
+        return []
+      }
+      let start_end = fixed_add(from_end, widths[node.left])
+      let end_start = fixed_add(from_start, widths[node.left])
+      // Odd = start + distance, even = end - distance; zero = unproved.
+      plan[node.right * 2] = if from_start != 0 {
+        from_start * 2 - 1
+      } else {
+        start_end * 2
+      }
+      plan[node.right * 2 + 1] = if from_end != 0 {
+        from_end * 2
+      } else if end_start != 0 {
+        end_start * 2 - 1
+      } else {
+        0u64
+      }
+      core@1/list.push(mut stack, (node.left, from_start, from_end, mandatory))
+    }
+  }
+  for slot in 2u64..slots {
+    if plan[slot] == 0 {
+      return []
+    }
+  }
+  take plan
+}
+
+fn fixed_capture_offset(tag: u64, span: Span) -> u64 uses {} {
+  let distance = (tag - 1) / 2
+  core@1/failure.check(distance <= span.end - span.start, Bounds())
+  if tag % 2 == 1 {
+    span.start + distance
+  } else {
+    span.end - distance
+  }
+}
+
+fn fixed_capture_result(re: Regex, subject: Subject, span: Span) -> Captures uses {} {
+  let mut spans: List[Option[Span]] = [Some(span)]
+  let mut slot = 2u64
+  while slot < core@1/list.len(re.fixed_captures) {
+    let a = fixed_capture_offset(re.fixed_captures[slot], span)
+    let b = fixed_capture_offset(re.fixed_captures[slot + 1], span)
+    core@1/failure.check(
+      a <= b && boundary(subject.bytes, a) && boundary(subject.bytes, b),
+      Bounds()
+    )
+    core@1/list.push(mut spans, Some(Span(start: a, end: b)))
+    slot += 2
+  }
+  Captures(spans: take spans)
+}
+
 // Span-first capture recovery: rust-lang/regex 80b9d14e4be9f0b703a742d11c064abce05f210b
 // regex-automata/src/meta/strategy.rs:802-864; regex-lite/src/pikevm.rs:294-435,
 // :550-731, :798-900. Copyright 2014 The Rust Project Developers; MIT,
@@ -593,6 +756,9 @@ fn capture_backtrack(
 }
 
 fn capture_replay(re: Regex, subject: Subject, span: Span, mut scratch: CaptureScratch) -> Captures uses {} {
+  if core@1/list.len(re.fixed_captures) != 0 {
+    return fixed_capture_result(re, subject, span)
+  }
   if !scratch.prepared {
     scratch.plan = capture_plan(re)
     scratch.prepared = true

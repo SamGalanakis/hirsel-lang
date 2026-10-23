@@ -1,0 +1,308 @@
+// Fixed-tag optional/nested negative controls adapted from re2c
+// 8dca815eb424d8ebcb3df805d17504835e14de11 test/codegen/c/nested_fixed_tags.re
+// (public domain). Hirsel uses leftmost-first captures, no POSIX histories.
+fn fixed37_admit(pattern: String, admitted: bool) -> Result[(), CompileError] uses {} {
+  let re = compile(pattern, 10000)?
+  core@1/failure.check((core@1/list.len(re.fixed_captures) != 0) == admitted, Bounds())
+  Ok(())
+}
+
+fn fixed37_golden(pattern: String, src: String, expected: List[Option[Span]]) -> Result[
+  (),
+  CompileError
+] uses {} {
+  let re = compile(pattern, 10000)?
+  let mut work = 18446744073709551615u64
+  let Ok(subject) = make_subject(src, mut work) else {
+    core@1/failure.check(false, Bounds())
+    return Ok(())
+  }
+  let Ok((Some(span), original)) = pike_find_from(re, subject, 0, true, mut work) else {
+    core@1/failure.check(false, Bounds())
+    return Ok(())
+  }
+  core@1/failure.check(original.spans == expected, Bounds())
+  let mut scratch = capture_scratch()
+  let actual = capture_replay(re, subject, span, mut scratch)
+  core@1/failure.check(actual.spans == expected, Bounds())
+  if core@1/list.len(re.fixed_captures) != 0 {
+    core@1/failure.check(
+      !scratch.prepared && core@1/list.len(scratch.data) == 0 && core@1/list.len(
+        scratch.backtrack_code
+      ) == 0 && core@1/list.len(scratch.plan) == 0,
+      Bounds()
+    )
+  }
+  Ok(())
+}
+
+pub fn fixed37_vectors() -> Result[(), CompileError] uses {} {
+  for pattern in [
+    "a(.*?)z",
+    "(a.*z)",
+    "a((.*?))z",
+    "é(.*?)😀",
+    "[éê](.*?)😀",
+    "(?:a|b)(.*?)z",
+    "a{2}(.*?)z",
+    "a()z",
+    "\\(\\[(.*?)\\]\\)",
+    "^(.*)$"
+  ] {
+    fixed37_admit(pattern, true)?
+  }
+  for pattern in [
+    "([b]([a]))?",
+    "((a))?",
+    "(a)+",
+    "(a){2}",
+    "a(b)?z",
+    "(a)|(b)",
+    "(a*)(a*)",
+    "[aé](.*?)z",
+    "(?i:a)(.*?)z",
+    "(?i:k)(.*?)z"
+  ] {
+    fixed37_admit(pattern, false)?
+  }
+  fixed37_golden(
+    "a(.*?)z",
+    "xaaazaz",
+    [Some(Span(start: 1, end: 5)), Some(Span(start: 2, end: 4))]
+  )?
+  fixed37_golden(
+    "a(.*)z",
+    "xaaazaz",
+    [Some(Span(start: 1, end: 7)), Some(Span(start: 2, end: 6))]
+  )?
+  fixed37_golden(
+    "a((.*?))z",
+    "xaz",
+    [
+      Some(Span(start: 1, end: 3)),
+      Some(Span(start: 2, end: 2)),
+      Some(Span(start: 2, end: 2))
+    ]
+  )?
+  fixed37_golden(
+    "é(.*?)😀",
+    "xéβ😀",
+    [Some(Span(start: 1, end: 9)), Some(Span(start: 3, end: 5))]
+  )?
+  fixed37_golden(
+    "a()z",
+    "az",
+    [Some(Span(start: 0, end: 2)), Some(Span(start: 1, end: 1))]
+  )?
+  fixed37_golden("((a))?", "", [Some(Span(start: 0, end: 0)), None(), None()])?
+  fixed37_golden(
+    "([b]([a]))?",
+    "ba",
+    [
+      Some(Span(start: 0, end: 2)),
+      Some(Span(start: 0, end: 2)),
+      Some(Span(start: 1, end: 2))
+    ]
+  )?
+  fixed37_golden(
+    "(a)+",
+    "aa",
+    [Some(Span(start: 0, end: 2)), Some(Span(start: 1, end: 2))]
+  )?
+  fixed37_golden(
+    "(a)|(b)",
+    "b",
+    [Some(Span(start: 0, end: 1)), None(), Some(Span(start: 0, end: 1))]
+  )?
+  fixed37_golden(
+    "\\(\\[(.*?)\\]\\)",
+    "x([β])",
+    [Some(Span(start: 1, end: 7)), Some(Span(start: 3, end: 5))]
+  )?
+  for pattern in [
+    "a(.*?)z",
+    "a(.*)z",
+    "a((.*?))z",
+    "é(.*?)😀",
+    "[aé](.*?)z",
+    "(?:a|b)(.*?)z",
+    "a{2}(.*?)z",
+    "(a)+",
+    "((a))?",
+    "(a)|(b)",
+    "\\b(a.*z)\\b",
+    "(?m)^(.*)$",
+    "()"
+  ] {
+    for src in ["", "xyz", "xaaazaz", "xéβ😀", "aéz", "a\nb\n", "aa"] {
+      core@1/failure.check(capture_case(pattern, src), Bounds())
+    }
+  }
+  core@1/failure.check(
+    fixed_add(1048577, 2) == 0 && fixed_add(0, 1) == 0 && fixed_add(1, 1) == 1,
+    Bounds()
+  )
+  Ok(())
+}
+
+pub fn fixed37_generated() -> Result[(), CompileError] uses {} {
+  // Bounded AST constructors, including admitted and declined programs.
+  let atoms: List[String] = ["a", "[ab]", "é", "[aé]", ".", ""]
+  for i in 0u64..6 {
+    for j in 0u64..3 {
+      let a = atoms[i]
+      let b = atoms[j]
+      for pattern in [
+        f"{a}({b}*?){a}",
+        f"({a}({b})){a}",
+        f"(?:{a}|{b})(.*)z",
+        f"(({a})?({b}))*",
+        f"({a})|({b})"
+      ] {
+        for src in ["", "aabaz", "éaé"] {
+          core@1/failure.check(capture_case(pattern, src), Bounds())
+        }
+      }
+    }
+  }
+  Ok(())
+}
+
+pub fn fixed37_limits() -> Result[(), CompileError] uses {} {
+  // Admission caps must preserve fallback, never enlarge the scratch bound.
+  let mut bytes: List[u8] = []
+  for i in 0u64..520 {
+    core@1/list.push(mut bytes, b'a')
+  }
+  text.append(mut bytes, "(b)")
+  let pattern = text.finish_valid(take bytes)
+  fixed37_admit(pattern, false)?
+  core@1/failure.check(capture_layout(compile(pattern, 10000)?) == 0, Bounds())
+  let mut groups: List[u8] = []
+  for i in 0u64..128 {
+    text.append(mut groups, "()")
+  }
+  fixed37_admit(text.finish_valid(take groups), false)?
+  let re = compile("a(.*?)z", 10000)?
+  let m = core@1/list.len(re.code)
+  core@1/failure.check(
+    capture_backtrack_fits(re, 8192 / m - 1) && !capture_backtrack_fits(re, 8192 / m),
+    Bounds()
+  )
+  let mut src: List[u8] = [b'a']
+  for i in 0u64..8192 / m {
+    core@1/list.push(mut src, b'b')
+  }
+  core@1/list.push(mut src, b'z')
+  let source = text.finish_valid(take src)
+  let mut work = 18446744073709551615u64
+  let Ok(subject) = make_subject(source, mut work) else {
+    core@1/failure.check(false, Bounds())
+    return Ok(())
+  }
+  let Ok((Some(span), original)) = pike_find_from(re, subject, 0, true, mut work) else {
+    core@1/failure.check(false, Bounds())
+    return Ok(())
+  }
+  let mut scratch = capture_scratch()
+  core@1/failure.check(
+    capture_replay(re, subject, span, mut scratch) == original && core@1/list.len(
+      scratch.data
+    ) == 0,
+    Bounds()
+  )
+  Ok(())
+}
+
+pub fn fixed37_work() -> Result[(), CompileError] uses {} {
+  // Exhaustive finite budgets cover immediately below/at/above callback and
+  // output charges. Existing traced loops compare callback count and order.
+  for size in [0u64, 2u64, 90u64] {
+    core@1/failure.check(capture_replace_case("a(.*?)z", "azabz", size), Bounds())
+  }
+  core@1/failure.check(capture_work("a(.*?)z", "xabz"), Bounds())
+  let src = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxazabz"
+  let re = compile("a(.*?)z", 10000)?
+  for budget in [0u64, 64u64, 100u64, 500u64, 5000u64, 18446744073709551615u64] {
+    core@1/failure.check(
+      replace(re, src, "<$1>", 0, 0u64, capture_callback, budget) == replace_pike(
+        re,
+        src,
+        "<$1>",
+        0,
+        0u64,
+        capture_callback,
+        budget
+      ),
+      Bounds()
+    )
+    core@1/failure.check(
+      replace(re, src, "", 2, 90u64, capture_callback, budget) == replace_pike(
+        re,
+        src,
+        "",
+        2,
+        90u64,
+        capture_callback,
+        budget
+      ),
+      Bounds()
+    )
+  }
+  Ok(())
+}
+
+// Exact checked-H partition of the original work entry; same helper and sweep.
+pub fn fixed37_work_output_zero() -> Result[(), CompileError] uses {} {
+  core@1/failure.check(capture_replace_case("a(.*?)z", "azabz", 0u64), Bounds())
+  Ok(())
+}
+
+// Exact checked-H partition of the original work entry; same helper and sweep.
+pub fn fixed37_work_output_two() -> Result[(), CompileError] uses {} {
+  core@1/failure.check(capture_replace_case("a(.*?)z", "azabz", 2u64), Bounds())
+  Ok(())
+}
+
+// Exact checked-H partition of the original work entry; same helper and sweep.
+pub fn fixed37_work_output_large() -> Result[(), CompileError] uses {} {
+  core@1/failure.check(capture_replace_case("a(.*?)z", "azabz", 90u64), Bounds())
+  Ok(())
+}
+
+pub fn fixed37_work_search() -> Result[(), CompileError] uses {} {
+  core@1/failure.check(capture_work("a(.*?)z", "xabz"), Bounds())
+  Ok(())
+}
+
+pub fn fixed37_work_public() -> Result[(), CompileError] uses {} {
+  let src = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxazabz"
+  let re = compile("a(.*?)z", 10000)?
+  for budget in [0u64, 64u64, 100u64, 500u64, 5000u64, 18446744073709551615u64] {
+    core@1/failure.check(
+      replace(re, src, "<$1>", 0, 0u64, capture_callback, budget) == replace_pike(
+        re,
+        src,
+        "<$1>",
+        0,
+        0u64,
+        capture_callback,
+        budget
+      ),
+      Bounds()
+    )
+    core@1/failure.check(
+      replace(re, src, "", 2, 90u64, capture_callback, budget) == replace_pike(
+        re,
+        src,
+        "",
+        2,
+        90u64,
+        capture_callback,
+        budget
+      ),
+      Bounds()
+    )
+  }
+  Ok(())
+}

@@ -1749,3 +1749,10 @@ Bounded JSON text decoding (`json_text_bound_36`) also adapts serde_json
 `tests/test.rs:1099-1167` (MIT OR Apache-2.0, Serde project contributors).
 Hirsel adds decoded-byte admission with scan-only overflow, retains its own
 error offsets and delayed UTF-8 validation, and never ports lax/WTF-8 decoding.
+
+Fixed capture boundary analysis adapts re2c `src/regexp/fixed_tags.cc:12-163`
+and optional/nested controls from `test/codegen/c/nested_fixed_tags.re:11-90`,
+commit `8dca815eb424d8ebcb3df805d17504835e14de11`. re2c is in the public domain.
+Hirsel uses UTF-8 byte distances and leftmost-first captures; it conservatively
+declines tags inside alternatives/repetition, publishes only complete plans,
+and does not import POSIX disambiguation or tag histories.

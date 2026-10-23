@@ -118,3 +118,4 @@ mod base64_runtime_simd_30;
 mod markdown_bounded_output_33;
 mod json_text_bound_36;
 mod csv_owned_table_37;
+mod capture_fixed_tags_37;

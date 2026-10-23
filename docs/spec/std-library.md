@@ -3880,7 +3880,13 @@ its lower bound and budget checkpoint. One primitive slab holds both directions,
 state keys, intern buckets and scratch, with at most 65,024 `u64` cells plus
 scalar metadata, below the combined 2 MiB charge ceiling. The first full cache
 disables acceleration for the rest of that operation. Captures and replacements
-continue to use the scalar VM. The DFA cache is separate from the immutable prefix plan on `Regex`.
+retain the original logical VM accounting. For proven fixed capture boundaries,
+an immutable plan on `Regex` reconstructs all groups from the confirmed whole
+span using checked UTF-8 byte distances, bypassing capture replay and its scratch.
+Captures below alternatives or repetitions conservatively retain replay, as do
+unknown widths or participation. No partial capture plan is published; empty
+and unmatched groups remain distinct. The DFA cache is separate from the
+immutable plans on `Regex`.
 
 `find_all` returns at most `max_matches` nonoverlapping, leftmost-first whole
 matches, preserving the same alternative and greedy/lazy priority. Offsets

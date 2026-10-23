@@ -6,6 +6,7 @@ CLO/CLO-4-carrier-uses-direct-run.hir
 CLO/CLO-4-carrier-uses-ordinary-run.hir
 CLO/CLO-4-carrier-uses-private-run.hir
 CLO/CLO-4-carrier-uses-single-run.hir
+FAIL/FAIL-3-regex-fixed-tags-37-cleanup-run.hir
 GEN/GEN-6-package-cycle-bad.hir
 GEN/GEN-6-package-identity-distinct-bad.hir
 GEN/GEN-6-package-identity-run.hir
@@ -23,6 +24,7 @@ MODE/MODE-1-replace-local-content-33-projected-run.hir
 MODE/MODE-1-replace-local-content-33-retained-bad.hir
 OWN/OWN-2-csv-owned-table-37-bad.hir
 OWN/OWN-2-csv-owned-table-37-ok.hir
+SEM/SEM-3-regex-fixed-tags-37-run.hir
 conformance/CAP/CAP-1-acquire-net-result-run.hir
 conformance/CAP/CAP-1-acquire-random-result-run.hir
 conformance/CAP/CAP-1-acquire-stdout-result-run.hir
