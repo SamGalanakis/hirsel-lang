@@ -1,0 +1,119 @@
+{
+  "schema": 1,
+  "seed": 2026102503,
+  "scope": "128 bounded records/documents (including fixed goldens and contract controls), 64 quote/newline/UTF-8 mutations, 8 writer controls; at most 4 fields and 48 bytes per field; not exhaustive Unicode or fuzzing.",
+  "oracles": {
+    "go": {
+      "revision": "ebe2feefc400f813aefdc8a036e66d2619da6649",
+      "version": "go version go1.27.3 linux/amd64",
+      "files": {
+        "reader.go": "c37960d74220590547febce08339aa321f4d85c524740451e14692ebbc9fef1e",
+        "writer.go": "a0a4bdd01fddd75efc583f822599118320d30b8269f05eb957777c28e2aec1ee",
+        "reader_test.go": "290e930b31250102589928f953c39b4fee0159f794f7b68d38f90862c3b72f38",
+        "writer_test.go": "15c98dd6fa0711d34ef48710b54a85548606e40bccede76a4573110b2284437b"
+      },
+      "source_ranges": [
+        "reader.go:250-281,297-453",
+        "reader_test.go:40-90,134-153,248-309",
+        "writer.go:160-184",
+        "writer_test.go:19-180"
+      ],
+      "license": "BSD-3-Clause (Go); Copyright 2011 The Go Authors; third-party/NOTICES.md"
+    },
+    "csv_core": {
+      "revision": "05612e87e6e92910d40d7214b70952b8434fef9b",
+      "version": "0.1.13",
+      "files": {
+        "reader.rs": "f6afc1ff07b4bcc50aa609b758a3a15f777f1985c89f97739e0de4745057b308",
+        "writer.rs": "3694981d0546f96bf7138a6a9de8130f1e03636ffe8f7819087322bb00949c82",
+        "lib.rs": "fe26486d344174279a7ad155afd56dbedad78fb17e46672623d769bf4a4ca3fd"
+      },
+      "source_ranges": [
+        "reader.rs:575-618,1476-1555,1598-1599",
+        "writer.rs:366-401"
+      ],
+      "license": "MIT/Unlicense; Copyright (c) 2015 Andrew Gallant; third-party/LICENSE.csv-core"
+    }
+  },
+  "generator": {
+    "python": "3.12.3",
+    "source_sha256": "4be4754eb3b53da24655a4867b050696f23af2a4b580068300ad4381da693732",
+    "method": "Seeded bounded field selection and quoted record construction; 20 Go goldens, 4 csv-core/empty goldens, 10 semantic controls, 74 constructed documents, 12 explicit-width controls, 8 record-bound controls; 64 mutations. Expectations only from upstream oracle plus listed contract adaptations.",
+    "chunk_plans": "All n+1 one-split positions for inputs <=20 bytes, including empty endpoint chunks; otherwise fixed 1/2/7-byte plans. Identical plans are exercised by feed and refill read_record. Refill callbacks skip zero-length endpoint pieces (zero denotes EOF) and additionally honor the parser request bound; feed exercises endpoint empty chunks explicitly.",
+    "oracle_sources": {
+      "oracle/main.go": "c29a35639ade794f48e76d4161c59a86e7788f5470133c53e93807fe19e13607",
+      "core-oracle/src/main.rs": "98c0055f2ae9f0392741c166cfe54ad920b98c21c43c1e42d6602ebc22310872",
+      "core-oracle/Cargo.lock": "d6b321e7ebeccb518c6a2c8f5ddea0cd12be15023a28a2b8165c350875d6601e"
+    },
+    "oracle_binaries": {
+      "go-oracle": "1268ad6b724cb3fa80c73770c88cc02a3ece41530495772e9e805face4a63eb6",
+      "core-oracle/target/debug/csv-core-oracle": "4ff93430397c58699786004861d054c26d162b90656ebaa8532bb95f8632d0e3"
+    },
+    "packaging_sha256": "7c0b641e1879705b6194260d4beb1abb1938da648595aebf5e85d6fae2f6d57a"
+  },
+  "deviations": [
+    {
+      "id": "terminal-no-partial",
+      "adaptation": "Go returns completed earlier records and may return fields with its first error. Wrappers discard partial/error-call data and stop at the first error; all operations return a whole-document Result.",
+      "spec": "docs/spec/std-library.md#bounded-csv",
+      "exact_spec_paragraph": "The record limit counts bytes after CRLF/final-CR normalization, including quotes,\ndelimiters and quoted newlines, excluding an outside-quote terminator. It is\nchecked before retaining another normalized byte; at most one CR is held as\nlookahead. Zero permits blank lines only. Width is checked per record when\nconfigured; there is no first-record width inference. Positions have one-based\nline numbers and byte columns, with the record's starting line. A bad closing\nquote points at the quote, and an unclosed field points just past its final\nnormalized line. UnequalFields points at column 1 of the starting line. UTF-8 may\ncross chunks, but every completed field must validate. Header uniqueness is\napplication policy. Errors are terminal; later calls report Syntax at the current\ninput position. Go's partial-record/recovery APIs, Comment, LazyQuotes,\nTrimLeadingSpace, ReuseRecord and UseCRLF options are outside this API."
+    },
+    {
+      "id": "explicit-zero-width",
+      "adaptation": "Raw Go zero-width requests run with FieldsPerRecord=-1; adapted expected UnequalFields at the first nonempty record. Positive widths use Go directly.",
+      "spec": "docs/spec/std-library.md#bounded-csv",
+      "exact_spec_paragraph": "The record limit counts bytes after CRLF/final-CR normalization, including quotes,\ndelimiters and quoted newlines, excluding an outside-quote terminator. It is\nchecked before retaining another normalized byte; at most one CR is held as\nlookahead. Zero permits blank lines only. Width is checked per record when\nconfigured; there is no first-record width inference. Positions have one-based\nline numbers and byte columns, with the record's starting line. A bad closing\nquote points at the quote, and an unclosed field points just past its final\nnormalized line. UnequalFields points at column 1 of the starting line. UTF-8 may\ncross chunks, but every completed field must validate. Header uniqueness is\napplication policy. Errors are terminal; later calls report Syntax at the current\ninput position. Go's partial-record/recovery APIs, Comment, LazyQuotes,\nTrimLeadingSpace, ReuseRecord and UseCRLF options are outside this API."
+    },
+    {
+      "id": "normalized-byte-bound",
+      "adaptation": "Only syntactically valid bound-control rows are adapted. Count bytes from Go InputOffset record extents after CRLF/final-CR normalization, excluding the final outside-quote newline.",
+      "spec": "docs/spec/std-library.md#bounded-csv",
+      "exact_spec_paragraph": "The record limit counts bytes after CRLF/final-CR normalization, including quotes,\ndelimiters and quoted newlines, excluding an outside-quote terminator. It is\nchecked before retaining another normalized byte; at most one CR is held as\nlookahead. Zero permits blank lines only. Width is checked per record when\nconfigured; there is no first-record width inference. Positions have one-based\nline numbers and byte columns, with the record's starting line. A bad closing\nquote points at the quote, and an unclosed field points just past its final\nnormalized line. UnequalFields points at column 1 of the starting line. UTF-8 may\ncross chunks, but every completed field must validate. Header uniqueness is\napplication policy. Errors are terminal; later calls report Syntax at the current\ninput position. Go's partial-record/recovery APIs, Comment, LazyQuotes,\nTrimLeadingSpace, ReuseRecord and UseCRLF options are outside this API."
+    },
+    {
+      "id": "utf8",
+      "adaptation": "Go byte fields are retained as hex. Malformed UTF-8 field controls adapt to InvalidUtf8; complete String and borrowed lanes are inapplicable, recorded by string_input=false. Valid multibyte fields run at byte splits.",
+      "spec": "docs/spec/std-library.md#bounded-csv",
+      "exact_spec_paragraph": "The record limit counts bytes after CRLF/final-CR normalization, including quotes,\ndelimiters and quoted newlines, excluding an outside-quote terminator. It is\nchecked before retaining another normalized byte; at most one CR is held as\nlookahead. Zero permits blank lines only. Width is checked per record when\nconfigured; there is no first-record width inference. Positions have one-based\nline numbers and byte columns, with the record's starting line. A bad closing\nquote points at the quote, and an unclosed field points just past its final\nnormalized line. UnequalFields points at column 1 of the starting line. UTF-8 may\ncross chunks, but every completed field must validate. Header uniqueness is\napplication policy. Errors are terminal; later calls report Syntax at the current\ninput position. Go's partial-record/recovery APIs, Comment, LazyQuotes,\nTrimLeadingSpace, ReuseRecord and UseCRLF options are outside this API."
+    },
+    {
+      "id": "positions",
+      "adaptation": "Go errors keep one-based byte columns and start/line numbers; no scalar conversion is made. Partial-record fields are removed, position is preserved.",
+      "spec": "docs/spec/std-library.md#bounded-csv",
+      "exact_spec_paragraph": "The record limit counts bytes after CRLF/final-CR normalization, including quotes,\ndelimiters and quoted newlines, excluding an outside-quote terminator. It is\nchecked before retaining another normalized byte; at most one CR is held as\nlookahead. Zero permits blank lines only. Width is checked per record when\nconfigured; there is no first-record width inference. Positions have one-based\nline numbers and byte columns, with the record's starting line. A bad closing\nquote points at the quote, and an unclosed field points just past its final\nnormalized line. UnequalFields points at column 1 of the starting line. UTF-8 may\ncross chunks, but every completed field must validate. Header uniqueness is\napplication policy. Errors are terminal; later calls report Syntax at the current\ninput position. Go's partial-record/recovery APIs, Comment, LazyQuotes,\nTrimLeadingSpace, ReuseRecord and UseCRLF options are outside this API."
+    },
+    {
+      "id": "bom",
+      "adaptation": "Go preserves BOM as field content; csv-core strips it only when enough bytes are buffered. BOM input is a Go contract control, excluded from common csv-core comparison.",
+      "spec": "docs/spec/std-library.md#bounded-csv",
+      "exact_spec_paragraph": "Delimiters must be nonzero ASCII other than quote/CR/LF. The strict dialect\nmatches Go `encoding/csv`: fields may be quoted, contain delimiters or newlines,\nand escape a quote by doubling it. A quote in an unquoted field or data after a\nclosing quote is a syntax error. LF terminates records; CRLF is normalized to LF\ninside and outside quotes. Bare CR is field data except that a final CR before\nEOF is dropped for Go compatibility. Blank lines are skipped, including trailing\nblank lines under a width constraint. Quoted empty fields remain records; empty\ninput has no records. EOF finalizes an unterminated record once, rejecting an\nunclosed quote. Empty feeds after EOF are harmless; nonempty feeds return Syntax."
+    },
+    {
+      "id": "cr-and-strictness",
+      "adaptation": "csv-core never errors and defaults to CR/LF/CRLF terminators; quoted CRLF is not Go normalization. Compare only Go-valid LF-only BOM-free tokenization; all other IDs retain an explicit csv_core_disposition.",
+      "spec": "docs/spec/std-library.md#bounded-csv",
+      "exact_spec_paragraph": "Delimiters must be nonzero ASCII other than quote/CR/LF. The strict dialect\nmatches Go `encoding/csv`: fields may be quoted, contain delimiters or newlines,\nand escape a quote by doubling it. A quote in an unquoted field or data after a\nclosing quote is a syntax error. LF terminates records; CRLF is normalized to LF\ninside and outside quotes. Bare CR is field data except that a final CR before\nEOF is dropped for Go compatibility. Blank lines are skipped, including trailing\nblank lines under a width constraint. Quoted empty fields remain records; empty\ninput has no records. EOF finalizes an unterminated record once, rejecting an\nunclosed quote. Empty feeds after EOF are harmless; nonempty feeds return Syntax."
+    },
+    {
+      "id": "preserve-single-empty",
+      "adaptation": "Writer raw bytes are pinned Go results; preserve mode changes exactly one empty field to quoted empty plus LF. Zero fields stay LF.",
+      "spec": "docs/spec/std-library.md#bounded-csv",
+      "exact_spec_paragraph": "`WriteConfig { delimiter: u8, preserve_single_empty: bool }` controls\n`write_record_with`; `default_write_config()` selects comma and false, preserving\nall legacy bytes. With `preserve_single_empty: true`, exactly `[\"\"]` appends\n`b\"\\\"\\\"\\n\"` (two quote bytes and LF), which reparses as one row with one empty\nfield. Zero-field records (`[]`) still append bare LF and remain indistinguishable\nfrom blank lines. Records with two or more fields and all other quoting,\nwhitespace and newline rules are unchanged. This is not a general lossless CSV\nround-trip policy: the reader still normalizes CRLF."
+    },
+    {
+      "id": "ascii-delimiters",
+      "adaptation": "The matrix selects comma, tab and semicolon, with all optional Go modes disabled. It makes no claim about Unicode delimiters.",
+      "spec": "docs/spec/std-library.md#bounded-csv",
+      "exact_spec_paragraph": "Delimiters must be nonzero ASCII other than quote/CR/LF. The strict dialect\nmatches Go `encoding/csv`: fields may be quoted, contain delimiters or newlines,\nand escape a quote by doubling it. A quote in an unquoted field or data after a\nclosing quote is a syntax error. LF terminates records; CRLF is normalized to LF\ninside and outside quotes. Bare CR is field data except that a final CR before\nEOF is dropped for Go compatibility. Blank lines are skipped, including trailing\nblank lines under a width constraint. Quoted empty fields remain records; empty\ninput has no records. EOF finalizes an unterminated record once, rejecting an\nunclosed quote. Empty feeds after EOF are harmless; nonempty feeds return Syntax."
+    }
+  ],
+  "observation": "Every selected operation executes in Hirsel with host-built input/expected literals. Each engine must match the independent pass transcript, exit 0, no failures, no budget/block/signal and no root trace. A syntax-error Result is an expected completed operation, never a source/V/H/tooling pass. The reference interpreter runs one original ID per source batch at its unchanged 1M-step budget; the other three engines run the four-ID union. HIRSEL_CSV_RETRY_ENGINES=reference explicitly selects pending reference cells for retries; default is all four engines and missing native tooling fails.",
+  "layout": "vectors.json has input bytes, input SHA256, upstream raw hex fields/errors and separate adapted expected values/SHA256 for every ID; core-raw.tsv retains every common-valid upstream split result. Engine/run receipts and oracle executables remain external.",
+  "data_sha256": {
+    "vectors.json": "4201af28404d798f1204cfae3579f7ec0915305545e856a60ee3df3e2b3f64a8",
+    "core-raw.tsv": "5ee31bf551d393e4ffd2a60f55739b97fd2bb87215edafcf9e98cd2d69b5bd6d",
+    "dispositions.json": "93a40fd8141e4ca492d57158af2a587fc5df4e38d00b2f2f8b2a682bcc381ace",
+    "helpers.hir": "e86fc0e9e2369314525b2d7961de7e55c46139f6bacdf35bababb8801ad2212a"
+  },
+  "writer_input_encoding": "input_hex is canonical ASCII JSON of the fields list; input_sha256 seals those bytes. Added as provenance metadata after execution; every consumed fields/expected value remains identical to the frozen campaign manifest."
+}

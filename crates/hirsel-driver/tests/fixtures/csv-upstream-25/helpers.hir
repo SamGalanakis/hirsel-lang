@@ -1,0 +1,102 @@
+// Host-built literals supply all inputs and independent expected values.
+fn borrowed(text: String, config: std@1/csv.Config) -> Result[List[List[String]], std@1/csv.CsvError] {
+  let mut cursor = std@1/csv.slice_reader(text, config)?
+  let mut rows: List[List[String]] = []
+  while true {
+    let next = std@1/csv.next_record(mut cursor)
+    match next {
+      Error(error) => {
+        failure.check(std@1/csv.field_count(cursor) == 0, TextInvariant())
+        failure.check(std@1/csv.get_field(cursor, 0) == None(), TextInvariant())
+        match std@1/csv.next_record(mut cursor) {
+          Error(Syntax(_)) => (),
+          _ => failure.check(false, TextInvariant()),
+        }
+        return Error(error)
+      },
+      Ok(false) => break,
+      Ok(true) => (),
+    }
+    let mut row: List[String] = []
+    for i in 0u64..std@1/csv.field_count(cursor) {
+      let Some(value) = std@1/csv.get_field(cursor, i) else {
+        failure.check(false, TextInvariant())
+        return Ok([])
+      }
+      failure.check(std@1/csv.get_field_bytes(cursor, i) == Some(string.as_bytes(value)), TextInvariant())
+      list.push(mut row, unique value)
+    }
+    list.push(mut rows, take row)
+  }
+  failure.check(std@1/csv.field_count(cursor) == 0, TextInvariant())
+  failure.check(std@1/csv.next_record(mut cursor) == Ok(false), TextInvariant())
+  Ok(take rows)
+}
+
+fn fed(data: Bytes, sizes: List[u64], config: std@1/csv.Config) -> Result[List[List[String]], std@1/csv.CsvError] {
+  let mut reader = std@1/csv.reader(config)?
+  let mut rows: List[List[String]] = []
+  let mut offset: u64 = 0
+  for size in sizes {
+    let outcome = std@1/csv.feed(mut reader, bytes.slice(data, offset, offset + size), false)
+    offset += size
+    match take outcome {
+      Error(error) => {
+        match std@1/csv.feed(mut reader, b"", true) {
+          Error(Syntax(_)) => (),
+          _ => failure.check(false, TextInvariant()),
+        }
+        return Error(error)
+      },
+      Ok(chunk) => { for row in chunk { list.push(mut rows, copy row) } },
+    }
+  }
+  failure.check(offset == bytes.len(data), TextInvariant())
+  let final = std@1/csv.feed(mut reader, b"", true)?
+  for row in final { list.push(mut rows, copy row) }
+  failure.check(std@1/csv.feed(mut reader, b"", true) == Ok([]), TextInvariant())
+  match std@1/csv.feed(mut reader, b"x", false) {
+    Error(Syntax(_)) => (),
+    _ => failure.check(false, TextInvariant()),
+  }
+  Ok(take rows)
+}
+
+type Input { data: Bytes, sizes: List[u64], offset: u64, chunk: u64, remaining: u64 }
+fn refill(mut source: Input, mut out: List[u8], max: u64) -> Result[u64, ()] {
+  while source.remaining == 0 && source.chunk < list.len(source.sizes) {
+    source.remaining = source.sizes[source.chunk]
+    source.chunk += 1
+  }
+  let count = if source.remaining < max { source.remaining } else { max }
+  for i in 0u64..count { list.push(mut out, source.data[source.offset + i]) }
+  source.offset += count
+  source.remaining -= count
+  Ok(count)
+}
+fn pulled(data: Bytes, sizes: List[u64], config: std@1/csv.Config) -> Result[List[List[String]], std@1/csv.CsvError] {
+  let mut source = Input(data: data, sizes: sizes, offset: 0, chunk: 0, remaining: 0)
+  let mut reader = std@1/csv.reader(config)?
+  let mut rows: List[List[String]] = []
+  while true {
+    match std@1/csv.read_record(mut reader, mut source, refill) {
+      Error(Csv(error)) => {
+        match std@1/csv.read_record(mut reader, mut source, refill) {
+          Error(Csv(Syntax(_))) => (),
+          _ => failure.check(false, TextInvariant()),
+        }
+        return Error(error)
+      },
+      Error(_) => { failure.check(false, TextInvariant()); return Ok([]) },
+      Ok(None()) => break,
+      Ok(Some(row)) => list.push(mut rows, unique row),
+    }
+  }
+  failure.check(std@1/csv.read_record(mut reader, mut source, refill) == Ok(None()), TextInvariant())
+  Ok(take rows)
+}
+fn check(t: Test, label: String, ok: bool) {
+  test.check(t, ok)
+  if !ok { test.log(t, "FAIL") }
+  test.log(t, label)
+}
