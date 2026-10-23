@@ -1,0 +1,151 @@
+// Capability orchestration: stat the entire explicit set before any file read,
+// then bounded E1 windows. Reports own their text and never borrow a task frame.
+pub type Request {
+  files: List[String],
+  target: i64,
+  jobs: u64,
+}
+
+pub type Report {
+  source: String,
+  outcome: Result[document.Planned, schema.Problem],
+}
+
+pub fn filename(name: String) -> bool uses {} {
+  // One canonical relative operand, with bounded metadata allocation.
+  if string.byte_len(name) == 0 || string.byte_len(name) > 240 {
+    return false
+  }
+  if string.starts_with(name, "/") || string.contains(name, "\\") {
+    return false
+  }
+  for part in string.split(unique name, "/") {
+    if part == "" || part == "." || part == ".." {
+      return false
+    }
+  }
+  for byte in string.as_bytes(name) {
+    if byte < 32 || byte == 127 {
+      return false
+    }
+  }
+  true
+}
+
+pub fn validate(request: Request) -> Result[(), schema.Problem] uses {} {
+  if request.jobs < 1 || request.jobs > 4 || request.target < 2 || request.target > 3 {
+    return Error(Target())
+  }
+  let count = list.len(request.files)
+  if count == 0 || count > schema.FILES {
+    return Error(Limit())
+  }
+  let mut seen: Set[String] = set.empty()
+  for name in request.files {
+    if !filename(name) || set.contains(seen, name) {
+      return Error(Shape())
+    }
+    set.insert(mut seen, unique name)
+  }
+  Ok(())
+}
+
+fn read(d: Dir, name: String, size: u64) -> Result[unique String, schema.Problem] {
+  let mut handle = match file.open(d, path.of(name)) {
+    Ok(f) => take f,
+    Error(Canceled(_)) => return Error(Canceled()),
+    Error(_) => return Error(Read()),
+  }
+  let raw = match file.read_all_bounded(d, mut handle, size) {
+    Ok(data) => take data,
+    Error(Limit()) => return Error(Changed()),
+    Error(File(Canceled(_))) => return Error(Canceled()),
+    Error(_) => return Error(Read()),
+  }
+  if bytes.len(raw) != size {
+    return Error(Changed())
+  }
+  let Ok(text) = string.from_bytes(take raw) else {
+    return Error(Shape())
+  }
+  Ok(take text)
+}
+
+fn failed(name: String, problem: schema.Problem) -> unique Report uses {} {
+  Report(source: unique name, outcome: Error(unique problem))
+}
+
+fn execute(d: Dir, take name: String, size: u64, target: i64) -> unique Report {
+  let outcome = match read(d, name, size) {
+    Ok(source) => document.plan(take source, name, target),
+    Error(problem) => Error(take problem),
+  }
+  unique Report(source: take name, outcome: take outcome)
+}
+
+pub fn plan(d: Dir, tasks: Tasks, request: Request) -> Result[
+  unique List[Report],
+  schema.Problem
+] {
+  validate(request)?
+  let mut sizes: List[Result[u64, schema.Problem]] = []
+  let mut total: u64 = 0
+  for name in request.files {
+    let size: Result[u64, schema.Problem] = match file.size(d, path.of(name)) {
+      Ok(n) => {
+        if n > schema.FILE_BYTES || n > schema.TOTAL_BYTES - total {
+          return Error(Limit())
+        }
+        total += n
+        Ok(n)
+      },
+      Error(Canceled(_)) => Error(Canceled()),
+      Error(_) => Error(Read()),
+    }
+    list.push(mut sizes, take size)
+  }
+  let mut reports: List[Report] = []
+  let mut start: u64 = 0
+  while start < list.len(request.files) {
+    let end = if list.len(request.files) - start < request.jobs {
+      list.len(request.files)
+    } else {
+      start + request.jobs
+    }
+    let window = task.scope(
+      tasks,
+      fn(s: Scope) -> unique List[Report] {
+        let mut members: TaskSet[unique Report] of s = task.set(s)
+        for index in start..end {
+          let name = unique request.files[index]
+          let size = unique sizes[index]
+          let target = request.target
+          task.add(
+            s,
+            mut members,
+            task.async(
+              s,
+              fn() -> unique Report {
+                match take size {
+                  Ok(n) => execute(d, take name, n, target),
+                  Error(problem) => failed(name, problem),
+                }
+              }
+            )
+          )
+        }
+        let mut output: List[Report] = []
+        for index in 0u64..end - start {
+          list.push(mut output, task.await_at(s, mut members, index))
+        }
+        task.cancel_all(s, take members)
+        unique output
+      }
+    )
+    for report in take window {
+      list.push(mut reports, take report)
+    }
+    start = end
+  }
+  Ok(unique reports)
+}

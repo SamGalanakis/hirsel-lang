@@ -1,0 +1,12 @@
+{
+  "args": [],
+  "io": {
+    "stdout": "stdout.bytes@1",
+    "tasks": "tasks.cooperative@1",
+    "dirs": [
+      {"path": "configs", "host": "/replace/with/input", "access": "read"},
+      {"path": "migrated", "host": "/replace/with/output", "access": "read_write"}
+    ]
+  },
+  "placement": {"cores": 1, "commit": "shared", "reorder": "auto"}
+}

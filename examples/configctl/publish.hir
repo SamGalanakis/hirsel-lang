@@ -1,0 +1,96 @@
+// Serial publication. Each file is atomic, while the manifest states actual
+// partial success. A failed write drops AtomicFile and removes its temporary.
+pub type PublishError = File(FileError) | Json(json.JsonError) | Output(OutputError)
+
+fn write(d: Dir, name: String, data: Bytes) -> Result[(), FileError] {
+  let mut file = file.create_atomic(d, path.of(name))?
+  file.write_all(d, mut file, data)?
+  file.commit(d, take file)
+}
+
+fn strings(values: List[String]) -> json.Value uses {} {
+  let mut output: List[json.Value] = []
+  for value in values {
+    list.push(mut output, Text(unique value))
+  }
+  Array(take output)
+}
+
+fn row(report: batch.Report, status: String, destination: Option[String]) -> json.Value uses {} {
+  let mut fields: Map[String, json.Value] = map.empty()
+  map.insert(mut fields, "source", Text(unique report.source))
+  map.insert(mut fields, "status", Text(unique status))
+  map.insert(
+    mut fields,
+    "destination",
+    match destination {
+      Some(s) => Text(unique s),
+      None() => Null(),
+    }
+  )
+  match report.outcome {
+    Ok(planned) => {
+      map.insert(mut fields, "changes", strings(planned.changes))
+      map.insert(mut fields, "diff", Text(unique planned.diff))
+    },
+    Error(problem) => {
+      map.insert(mut fields, "error", Text(schema.code(problem)))
+    },
+  }
+  Object(take fields)
+}
+
+pub fn plan(output: Stdout, reports: List[batch.Report]) -> Result[bool, PublishError] {
+  let mut success = true
+  for report in reports {
+    let status = match report.outcome {
+      Ok(_) => "planned",
+      Error(_) => "failed",
+    }
+    if status == "failed" {
+      success = false
+    }
+    let line = json.stringify(row(report, status, None())) ? Json
+    out.print(output, f"{line}\n") ? Output
+  }
+  Ok(success)
+}
+
+pub fn migrate(d: Dir, output: Stdout, reports: List[batch.Report], target: i64) -> Result[
+  bool,
+  PublishError
+] {
+  let mut success = true
+  let mut rows: List[json.Value] = []
+  let mut index: u64 = 0
+  for report in reports {
+    let destination = f"{index}.toml"
+    let status = match report.outcome {
+      Ok(planned) => {
+        match write(d, destination, string.as_bytes(planned.text)) {
+          Ok(()) => "published",
+          Error(_) => "write_failed",
+        }
+      },
+      Error(_) => "failed",
+    }
+    if status != "published" {
+      success = false
+    }
+    list.push(mut rows, row(report, status, Some(copy destination)))
+    index += 1
+  }
+  let mut fields: Map[String, json.Value] = map.empty()
+  map.insert(mut fields, "schema", Number("1"))
+  map.insert(mut fields, "target", Number(f"{target}"))
+  map.insert(mut fields, "success", Bool(success))
+  map.insert(mut fields, "files", Array(copy rows))
+  let manifest = json.stringify(Object(take fields)) ? Json
+  // Even if stdout fails, publication already has its authoritative manifest.
+  write(d, "manifest.json", string.as_bytes(manifest)) ? File
+  for entry in rows {
+    let line = json.stringify(entry) ? Json
+    out.print(output, f"{line}\n") ? Output
+  }
+  Ok(success)
+}

@@ -1,0 +1,121 @@
+// Ordered, typed transitions. The generic seam carries each real next-schema
+// record and the exact edits that establish it; there is no migration DSL.
+pub type Edit = Set(List[toml.Segment], toml.Value) | Remove(List[toml.Segment])
+
+pub type Step[T] {
+  value: T,
+  edits: List[Edit],
+  changes: List[String],
+}
+
+pub type Plan {
+  expected: schema.Service,
+  edits: List[Edit],
+  changes: List[String],
+}
+
+/// Consume the transition without copying the owned next-schema record.
+pub fn append[T](take step: Step[T], mut edits: List[Edit], mut changes: List[String]) -> T uses {} {
+  let Step(value: value, edits: more, changes: descriptions) = take step
+  for edit in take more {
+    list.push(mut edits, take edit)
+  }
+  for description in take descriptions {
+    list.push(mut changes, take description)
+  }
+  take value
+}
+
+fn one_two(take old: schema.V1) -> Step[schema.V2] uses {} {
+  let connect = if old.timeout_ms < 1000 {
+    old.timeout_ms
+  } else {
+    1000
+  }
+  let endpoint = copy old.endpoint
+  let request = old.timeout_ms
+  let next = schema.V2(
+    endpoint: copy old.endpoint,
+    timeouts: schema.Timeouts(connect_ms: connect, request_ms: request),
+    retries: old.retries,
+    log_level: copy old.log_level
+  )
+  Step(
+    value: take next,
+    edits: [
+      Set([Key("version")], Integer(2)),
+      Set([Key("service"), Key("endpoint")], Text(take endpoint)),
+      Set([Key("timeouts"), Key("connect_ms")], Integer(connect)),
+      Set([Key("timeouts"), Key("request_ms")], Integer(request)),
+      Remove([Key("endpoint")]),
+      Remove([Key("timeout_ms")])
+    ],
+    changes: [
+      "version: 1 -> 2",
+      "endpoint -> service.endpoint",
+      "timeout_ms -> timeouts.connect_ms/request_ms"
+    ]
+  )
+}
+
+fn two_three(take old: schema.V2) -> Step[schema.V3] uses {} {
+  let policy = if old.retries == 0 {
+    "none"
+  } else {
+    "fixed"
+  }
+  let attempts = old.retries
+  let next = schema.V3(
+    endpoint: copy old.endpoint,
+    timeouts: copy old.timeouts,
+    retry: schema.Retry(attempts: attempts, policy: copy policy),
+    log_level: copy old.log_level
+  )
+  Step(
+    value: take next,
+    edits: [
+      Set([Key("version")], Integer(3)),
+      Set([Key("retry"), Key("attempts")], Integer(attempts)),
+      Set([Key("retry"), Key("policy")], Text(take policy)),
+      Remove([Key("retries")])
+    ],
+    changes: [
+      "version: 2 -> 3",
+      "retries -> retry.attempts",
+      "retry.policy: explicit none/fixed"
+    ]
+  )
+}
+
+pub fn plan(take current: schema.Service, target: i64) -> Result[
+  unique Plan,
+  schema.Problem
+] uses {} {
+  if target < 2 || target > 3 || target < schema.version(current) {
+    return Error(Target())
+  }
+  let mut edits: List[Edit] = []
+  let mut changes: List[String] = []
+  let expected = match take current {
+    One(old) => {
+      let v2 = append(one_two(take old), mut edits, mut changes)
+      if target == 2 {
+        Two(take v2)
+      } else {
+        Three(append(two_three(take v2), mut edits, mut changes))
+      }
+    },
+    Two(old) => {
+      if target == 2 {
+        Two(take old)
+      } else {
+        Three(append(two_three(take old), mut edits, mut changes))
+      }
+    },
+    Three(old) => Three(take old),
+  }
+  if list.len(edits) > schema.EDITS {
+    return Error(Limit())
+  }
+  Ok(unique Plan(expected: take expected, edits: take edits, changes: take changes))
+}

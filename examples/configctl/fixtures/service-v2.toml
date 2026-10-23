@@ -1,0 +1,6 @@
+version = 2
+retries = 0
+log_level = "warn"
+service.endpoint = "local" # endpoint
+timeouts.connect_ms = 50
+timeouts.request_ms = 100

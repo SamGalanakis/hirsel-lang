@@ -1,0 +1,195 @@
+// Service wire schemas are application policy; TOML syntax stays in std.toml.
+pub const FILE_BYTES: u64 = 65536
+
+pub const TOTAL_BYTES: u64 = 524288
+
+pub const FILES: u64 = 16
+
+pub const EDITS: u64 = 64
+
+pub type Problem = Shape | Version | Endpoint | Duration | Retries | Level | Conflict | Target | Limit | Changed | Read | Canceled | Toml(
+  toml.TomlError
+)
+
+pub type V1 {
+  endpoint: String,
+  timeout_ms: i64,
+  retries: i64,
+  log_level: String,
+}
+
+pub type Timeouts {
+  connect_ms: i64,
+  request_ms: i64,
+}
+
+pub type V2 {
+  endpoint: String,
+  timeouts: Timeouts,
+  retries: i64,
+  log_level: String,
+}
+
+pub type Retry {
+  attempts: i64,
+  policy: String,
+}
+
+pub type V3 {
+  endpoint: String,
+  timeouts: Timeouts,
+  retry: Retry,
+  log_level: String,
+}
+
+pub type Service = One(V1) | Two(V2) | Three(V3)
+
+pub fn field(value: toml.Value, name: String) -> Option[toml.Value] in value uses {} {
+  let Table(fields) = value else {
+    return None()
+  }
+  map.get(fields, name)
+}
+
+fn integer(value: toml.Value, name: String) -> Result[i64, Problem] uses {} {
+  let Some(Integer(n)) = field(value, name) else {
+    return Error(Shape())
+  }
+  Ok(n)
+}
+
+fn text_field(value: toml.Value, name: String) -> Result[unique String, Problem] uses {} {
+  let Some(Text(s)) = field(value, name) else {
+    return Error(Shape())
+  }
+  Ok(unique s)
+}
+
+fn common(endpoint: String, attempts: i64, level: String) -> Result[(), Problem] uses {} {
+  if endpoint == "" {
+    return Error(Endpoint())
+  }
+  if attempts < 0 || attempts > 10 {
+    return Error(Retries())
+  }
+  if level != "debug" && level != "info" && level != "warn" && level != "error" {
+    return Error(Level())
+  }
+  Ok(())
+}
+
+pub fn duration(value: Timeouts) -> Result[(), Problem] uses {} {
+  if value.connect_ms < 1 || value.request_ms < 1 || value.connect_ms > value.request_ms || value.request_ms > 3600000 {
+    return Error(Duration())
+  }
+  Ok(())
+}
+
+fn absent(root: toml.Value, names: List[String]) -> Result[(), Problem] uses {} {
+  for name in names {
+    if field(root, name) != None() {
+      return Error(Conflict())
+    }
+  }
+  Ok(())
+}
+
+fn timeouts(root: toml.Value) -> Result[Timeouts, Problem] uses {} {
+  let Some(value) = field(root, "timeouts") else {
+    return Error(Shape())
+  }
+  let decoded = Timeouts(
+    connect_ms: integer(value, "connect_ms")?,
+    request_ms: integer(value, "request_ms")?
+  )
+  duration(decoded)?
+  Ok(take decoded)
+}
+
+fn nested_endpoint(root: toml.Value) -> Result[unique String, Problem] uses {} {
+  let Some(service) = field(root, "service") else {
+    return Error(Shape())
+  }
+  text_field(service, "endpoint")
+}
+
+/// Unknown fields are deliberately not rejected or reencoded.
+pub fn decode(root: toml.Value) -> Result[unique Service, Problem] uses {} {
+  let wire_version = integer(root, "version")?
+  let level = text_field(root, "log_level")?
+  if wire_version == 1 {
+    absent(root, ["service", "timeouts", "retry"])?
+    let value = V1(
+      endpoint: text_field(root, "endpoint")?,
+      timeout_ms: integer(root, "timeout_ms")?,
+      retries: integer(root, "retries")?,
+      log_level: take level
+    )
+    common(value.endpoint, value.retries, value.log_level)?
+    duration(Timeouts(connect_ms: value.timeout_ms, request_ms: value.timeout_ms))?
+    return Ok(unique One(take value))
+  }
+  if wire_version == 2 {
+    absent(root, ["endpoint", "timeout_ms", "retry"])?
+    let value = V2(
+      endpoint: nested_endpoint(root)?,
+      timeouts: timeouts(root)?,
+      retries: integer(root, "retries")?,
+      log_level: take level
+    )
+    common(value.endpoint, value.retries, value.log_level)?
+    return Ok(unique Two(take value))
+  }
+  if wire_version == 3 {
+    absent(root, ["endpoint", "timeout_ms", "retries"])?
+    let Some(retry) = field(root, "retry") else {
+      return Error(Shape())
+    }
+    let value = V3(
+      endpoint: nested_endpoint(root)?,
+      timeouts: timeouts(root)?,
+      retry: Retry(
+        attempts: integer(retry, "attempts")?,
+        policy: text_field(retry, "policy")?
+      ),
+      log_level: take level
+    )
+    common(value.endpoint, value.retry.attempts, value.log_level)?
+    let expected = if value.retry.attempts == 0 {
+      "none"
+    } else {
+      "fixed"
+    }
+    if value.retry.policy != expected {
+      return Error(Retries())
+    }
+    return Ok(unique Three(take value))
+  }
+  Error(Version())
+}
+
+pub fn version(value: Service) -> i64 uses {} {
+  match value {
+    One(_) => 1,
+    Two(_) => 2,
+    Three(_) => 3,
+  }
+}
+
+pub fn code(problem: Problem) -> String uses {} {
+  match problem {
+    Shape() => "shape",
+    Version() => "version",
+    Endpoint() => "endpoint",
+    Duration() => "duration",
+    Retries() => "retries",
+    Level() => "level",
+    Conflict() => "conflict",
+    Target() => "target",
+    Limit() => "limit",
+    Changed() => "changed",
+    Read() => "read",
+    Canceled() => "canceled",
+    Toml(_) => "toml",
+  }
+}

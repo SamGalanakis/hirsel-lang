@@ -1,0 +1,14 @@
+[
+ {"id":"files-16","count":16,"bytes":128,"exit":0},
+ {"id":"files-17","count":17,"bytes":128,"exit":1},
+ {"id":"bytes-65536","count":1,"bytes":65536,"exit":0},
+ {"id":"bytes-65537","count":1,"bytes":65537,"exit":1},
+ {"id":"total-524288","count":8,"bytes":65536,"exit":0},
+ {"id":"total-524289","count":9,"bytes":65536,"last_bytes":1,"exit":1},
+ {"id":"jobs-0","count":1,"bytes":128,"jobs":0,"exit":1},
+ {"id":"jobs-1","count":1,"bytes":128,"jobs":1,"exit":0},
+ {"id":"jobs-2","count":1,"bytes":128,"jobs":2,"exit":0},
+ {"id":"jobs-3","count":1,"bytes":128,"jobs":3,"exit":0},
+ {"id":"jobs-4","count":1,"bytes":128,"jobs":4,"exit":0},
+ {"id":"jobs-5","count":1,"bytes":128,"jobs":5,"exit":1}
+]

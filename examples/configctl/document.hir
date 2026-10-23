@@ -1,0 +1,40 @@
+// toml-rs DocumentMut (ceac6e44, document.rs:113-161, MIT/Apache-2.0)
+// supplies the parse/own/edit structure through shipped std.toml. Similar
+// 96993d92 udiff.rs:280-330 (Apache-2.0) supplies headered line-diff structure
+// through std.diff. No parser or diff implementation is copied here.
+pub type Planned {
+  text: String,
+  changes: List[String],
+  diff: String,
+}
+
+pub fn plan(take source: String, name: String, target: i64) -> Result[
+  unique Planned,
+  schema.Problem
+] uses {} {
+  if string.byte_len(source) > schema.FILE_BYTES {
+    return Error(Limit())
+  }
+  let mut doc = toml.document(take source) ? Toml
+  let original = unique toml.source(doc)
+  let next = migration.plan(schema.decode(toml.root(doc))?, target)?
+  for edit in next.edits {
+    match edit {
+      Set(path, value) => toml.set(mut doc, path, value) ? Toml,
+      Remove(path) => toml.remove(mut doc, path) ? Toml,
+    }
+  }
+  // source is borrowed from opaque Document. Copy once at the ownership edge;
+  // never stringify the whole document, which would discard unchanged trivia.
+  let output = unique toml.source(doc)
+  if string.byte_len(output) > schema.FILE_BYTES {
+    return Error(Limit())
+  }
+  let root = toml.parse(copy output) ? Toml
+  let actual = schema.decode(root)?
+  if actual != next.expected {
+    return Error(Shape())
+  }
+  let patch = diff.unified(name, original, name, output, Myers(), 3)
+  Ok(unique Planned(text: take output, changes: unique next.changes, diff: take patch))
+}

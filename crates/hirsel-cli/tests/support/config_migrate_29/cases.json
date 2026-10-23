@@ -1,0 +1,346 @@
+[
+  {
+    "id": "tiny-v1",
+    "files": [
+      "version=1\nendpoint=\"x\"\ntimeout_ms=1\nretries=0\nlog_level=\"info\"\n"
+    ],
+    "target": 2,
+    "jobs": 4,
+    "errors": [
+      null
+    ],
+    "exit": 0
+  },
+  {
+    "id": "tiny-v2",
+    "files": [
+      "version=2\nretries=0\nlog_level=\"info\"\nservice.endpoint=\"x\"\ntimeouts={connect_ms=1,request_ms=1}\n"
+    ],
+    "target": 3,
+    "jobs": 4,
+    "errors": [
+      null
+    ],
+    "exit": 0
+  },
+  {
+    "id": "tiny-current",
+    "files": [
+      "version=3\nlog_level=\"info\"\nservice.endpoint=\"x\"\ntimeouts={connect_ms=1,request_ms=1}\nretry={attempts=0,policy=\"none\"}\n"
+    ],
+    "target": 3,
+    "jobs": 4,
+    "errors": [
+      null
+    ],
+    "exit": 0
+  },
+  {
+    "id": "v1-v2",
+    "files": [
+      "# service config\nversion = 1 # version\nendpoint = \"https://example.test\" # moved\ntimeout_ms = 2000\nretries = 2\nlog_level = \"info\"\n# app-owned\n\"app.name\" = \"wool\"\n[[workers]] # pool\nname = \"one\"\n"
+    ],
+    "target": 2,
+    "jobs": 4,
+    "errors": [
+      null
+    ],
+    "exit": 0
+  },
+  {
+    "id": "v1-v3",
+    "files": [
+      "# service config\nversion = 1 # version\nendpoint = \"https://example.test\" # moved\ntimeout_ms = 2000\nretries = 2\nlog_level = \"info\"\n# app-owned\n\"app.name\" = \"wool\"\n[[workers]] # pool\nname = \"one\"\n"
+    ],
+    "target": 3,
+    "jobs": 4,
+    "errors": [
+      null
+    ],
+    "exit": 0
+  },
+  {
+    "id": "v2-v3",
+    "files": [
+      "version = 2\nretries = 0\nlog_level = \"warn\"\nservice.endpoint = \"local\" # endpoint\ntimeouts.connect_ms = 50\ntimeouts.request_ms = 100\n"
+    ],
+    "target": 3,
+    "jobs": 4,
+    "errors": [
+      null
+    ],
+    "exit": 0
+  },
+  {
+    "id": "current",
+    "files": [
+      "# service config\nversion = 3\nlog_level = \"debug\"\nservice.endpoint = \"local\"\ntimeouts.connect_ms = 1\ntimeouts.request_ms = 2\nretry.attempts = 0\nretry.policy = \"none\"\n# untouched\napp.\"quoted.key\" = [1, 2, 3]\n"
+    ],
+    "target": 3,
+    "jobs": 4,
+    "errors": [
+      null
+    ],
+    "exit": 0
+  },
+  {
+    "id": "mixed",
+    "files": [
+      "# service config\nversion = 1 # version\nendpoint = \"https://example.test\" # moved\ntimeout_ms = 2000\nretries = 2\nlog_level = \"info\"\n# app-owned\n\"app.name\" = \"wool\"\n[[workers]] # pool\nname = \"one\"\n",
+      "version = 1\n",
+      "version = 2\nretries = 0\nlog_level = \"warn\"\nservice.endpoint = \"local\" # endpoint\ntimeouts.connect_ms = 50\ntimeouts.request_ms = 100\n"
+    ],
+    "target": 3,
+    "jobs": 4,
+    "errors": [
+      null,
+      "shape",
+      null
+    ],
+    "exit": 1
+  },
+  {
+    "id": "conflict",
+    "files": [
+      "# service config\nversion = 1 # version\nendpoint = \"https://example.test\" # moved\ntimeout_ms = 2000\nservice.endpoint = \"conflict\"\nretries = 2\nlog_level = \"info\"\n# app-owned\n\"app.name\" = \"wool\"\n[[workers]] # pool\nname = \"one\"\n"
+    ],
+    "target": 3,
+    "jobs": 4,
+    "errors": [
+      "conflict"
+    ],
+    "exit": 1
+  },
+  {
+    "id": "duplicate",
+    "files": [
+      "# service config\nversion = 1 # version\nversion = 1\nendpoint = \"https://example.test\" # moved\ntimeout_ms = 2000\nretries = 2\nlog_level = \"info\"\n# app-owned\n\"app.name\" = \"wool\"\n[[workers]] # pool\nname = \"one\"\n"
+    ],
+    "target": 3,
+    "jobs": 4,
+    "errors": [
+      "toml"
+    ],
+    "exit": 1
+  },
+  {
+    "id": "type",
+    "files": [
+      "# service config\nversion = 1 # version\nendpoint = \"https://example.test\" # moved\ntimeout_ms = \"2000\"\nretries = 2\nlog_level = \"info\"\n# app-owned\n\"app.name\" = \"wool\"\n[[workers]] # pool\nname = \"one\"\n"
+    ],
+    "target": 3,
+    "jobs": 4,
+    "errors": [
+      "shape"
+    ],
+    "exit": 1
+  },
+  {
+    "id": "duration-zero",
+    "files": [
+      "# service config\nversion = 1 # version\nendpoint = \"https://example.test\" # moved\ntimeout_ms = 0\nretries = 2\nlog_level = \"info\"\n# app-owned\n\"app.name\" = \"wool\"\n[[workers]] # pool\nname = \"one\"\n"
+    ],
+    "target": 3,
+    "jobs": 4,
+    "errors": [
+      "duration"
+    ],
+    "exit": 1
+  },
+  {
+    "id": "duration-over",
+    "files": [
+      "# service config\nversion = 1 # version\nendpoint = \"https://example.test\" # moved\ntimeout_ms = 3600001\nretries = 2\nlog_level = \"info\"\n# app-owned\n\"app.name\" = \"wool\"\n[[workers]] # pool\nname = \"one\"\n"
+    ],
+    "target": 3,
+    "jobs": 4,
+    "errors": [
+      "duration"
+    ],
+    "exit": 1
+  },
+  {
+    "id": "retry-over",
+    "files": [
+      "version = 2\nretries = 11\nlog_level = \"warn\"\nservice.endpoint = \"local\" # endpoint\ntimeouts.connect_ms = 50\ntimeouts.request_ms = 100\n"
+    ],
+    "target": 3,
+    "jobs": 4,
+    "errors": [
+      "retries"
+    ],
+    "exit": 1
+  },
+  {
+    "id": "policy",
+    "files": [
+      "# service config\nversion = 3\nlog_level = \"debug\"\nservice.endpoint = \"local\"\ntimeouts.connect_ms = 1\ntimeouts.request_ms = 2\nretry.attempts = 0\nretry.policy = \"fixed\"\n# untouched\napp.\"quoted.key\" = [1, 2, 3]\n"
+    ],
+    "target": 3,
+    "jobs": 4,
+    "errors": [
+      "retries"
+    ],
+    "exit": 1
+  },
+  {
+    "id": "downgrade",
+    "files": [
+      "# service config\nversion = 3\nlog_level = \"debug\"\nservice.endpoint = \"local\"\ntimeouts.connect_ms = 1\ntimeouts.request_ms = 2\nretry.attempts = 0\nretry.policy = \"none\"\n# untouched\napp.\"quoted.key\" = [1, 2, 3]\n"
+    ],
+    "target": 2,
+    "jobs": 4,
+    "errors": [
+      "target"
+    ],
+    "exit": 1
+  },
+  {
+    "id": "missing",
+    "files": [
+      null
+    ],
+    "target": 3,
+    "jobs": 4,
+    "errors": [
+      "read"
+    ],
+    "exit": 1
+  },
+  {
+    "id": "read-cancel",
+    "files": [
+      "# service config\nversion = 3\nlog_level = \"debug\"\nservice.endpoint = \"local\"\ntimeouts.connect_ms = 1\ntimeouts.request_ms = 2\nretry.attempts = 0\nretry.policy = \"none\"\n# untouched\napp.\"quoted.key\" = [1, 2, 3]\n"
+    ],
+    "target": 3,
+    "jobs": 4,
+    "errors": [
+      "canceled"
+    ],
+    "exit": 1,
+    "fault": "file.open",
+    "cancel": true
+  },
+  {
+    "id": "write-cancel",
+    "files": [
+      "# service config\nversion = 3\nlog_level = \"debug\"\nservice.endpoint = \"local\"\ntimeouts.connect_ms = 1\ntimeouts.request_ms = 2\nretry.attempts = 0\nretry.policy = \"none\"\n# untouched\napp.\"quoted.key\" = [1, 2, 3]\n"
+    ],
+    "target": 3,
+    "jobs": 4,
+    "errors": [
+      null
+    ],
+    "exit": 1,
+    "fault": "file.write_all",
+    "cancel": true,
+    "write_fail": true
+  },
+  {
+    "id": "write-error",
+    "files": [
+      "# service config\nversion = 3\nlog_level = \"debug\"\nservice.endpoint = \"local\"\ntimeouts.connect_ms = 1\ntimeouts.request_ms = 2\nretry.attempts = 0\nretry.policy = \"none\"\n# untouched\napp.\"quoted.key\" = [1, 2, 3]\n"
+    ],
+    "target": 3,
+    "jobs": 4,
+    "errors": [
+      null
+    ],
+    "exit": 1,
+    "fault": "file.write_all",
+    "write_fail": true
+  },
+  {
+    "id": "stdout-error",
+    "files": [
+      "# service config\nversion = 3\nlog_level = \"debug\"\nservice.endpoint = \"local\"\ntimeouts.connect_ms = 1\ntimeouts.request_ms = 2\nretry.attempts = 0\nretry.policy = \"none\"\n# untouched\napp.\"quoted.key\" = [1, 2, 3]\n"
+    ],
+    "target": 3,
+    "jobs": 4,
+    "errors": [
+      null
+    ],
+    "exit": 1,
+    "fault": "out.print",
+    "output_fail": true
+  },
+  {
+    "id": "missing-grant",
+    "files": [
+      "# service config\nversion = 3\nlog_level = \"debug\"\nservice.endpoint = \"local\"\ntimeouts.connect_ms = 1\ntimeouts.request_ms = 2\nretry.attempts = 0\nretry.policy = \"none\"\n# untouched\napp.\"quoted.key\" = [1, 2, 3]\n"
+    ],
+    "target": 3,
+    "jobs": 4,
+    "errors": [
+      null
+    ],
+    "exit": 1,
+    "deny": true
+  },
+  {
+    "id": "plan-tiny-v1",
+    "files": [
+      "version=1\nendpoint=\"x\"\ntimeout_ms=1\nretries=0\nlog_level=\"info\"\n"
+    ],
+    "target": 2,
+    "jobs": 4,
+    "errors": [
+      null
+    ],
+    "exit": 0,
+    "command": "toml-plan"
+  },
+  {
+    "id": "plan-current",
+    "files": [
+      "version=3\nlog_level=\"info\"\nservice.endpoint=\"x\"\ntimeouts={connect_ms=1,request_ms=1}\nretry={attempts=0,policy=\"none\"}\n"
+    ],
+    "target": 3,
+    "jobs": 4,
+    "errors": [
+      null
+    ],
+    "exit": 0,
+    "command": "toml-plan"
+  },
+  {
+    "id": "tiny-direct",
+    "files": [
+      "version=1\nendpoint=\"x\"\ntimeout_ms=1\nretries=0\nlog_level=\"info\"\n"
+    ],
+    "target": 3,
+    "jobs": 4,
+    "errors": [
+      null
+    ],
+    "exit": 0
+  },
+  {
+    "id": "tiny-peers",
+    "files": [
+      "version=3\nlog_level=\"info\"\nservice.endpoint=\"x\"\ntimeouts={connect_ms=1,request_ms=1}\nretry={attempts=0,policy=\"none\"}\n",
+      "version=1\n",
+      "version=3\nlog_level=\"info\"\nservice.endpoint=\"x\"\ntimeouts={connect_ms=1,request_ms=1}\nretry={attempts=0,policy=\"none\"}\n"
+    ],
+    "target": 3,
+    "jobs": 4,
+    "errors": [
+      null,
+      "shape",
+      null
+    ],
+    "exit": 1
+  },
+  {
+    "id": "upstream-trivia",
+    "files": [
+      "version=3\nlog_level=\"info\"\nservice.endpoint=\"x\"\ntimeouts={connect_ms=1,request_ms=1}\nretry={attempts=0,policy=\"none\"}\n# leading comment\n[ parent . 'child' ] # header\nvalue = { dotted . key = [ 1, 2, ], other = 'text' } # value\n\n[[ parent . 'entries' ]] # first\nname = \"first\"\n\n[[ parent . 'entries' ]] # second\nname = \"second\"\n# trailing comment\n"
+    ],
+    "target": 3,
+    "jobs": 4,
+    "errors": [
+      null
+    ],
+    "exit": 0
+  }
+]

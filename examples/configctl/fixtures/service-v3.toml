@@ -1,0 +1,10 @@
+# service config
+version = 3
+log_level = "debug"
+service.endpoint = "local"
+timeouts.connect_ms = 1
+timeouts.request_ms = 2
+retry.attempts = 0
+retry.policy = "none"
+# untouched
+app."quoted.key" = [1, 2, 3]

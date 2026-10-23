@@ -2,7 +2,9 @@
 // ccc89b83875474399e9d9d70841163f6319d1a41, MIT (Individual contributors).
 pub type AppError = Usage | Arguments(ArgError) | File(FileError) | Grant(GrantError) | Output(
   OutputError
-) | Config(model.ConfigError) | Read | Limit
+) | Toml(schema.Problem) | Publish(publish.PublishError) | Partial | Config(
+  model.ConfigError
+) | Read | Limit
 
 const ROOT_HELP: String = "Usage: configctl <COMMAND>\n\nCommands:\n  validate FILE\n  migrate FILE --to 2\n  diff OLD NEW\n\nOptions:\n  -h, --help  Print help\n"
 
@@ -37,7 +39,7 @@ fn parse_command(take argv: List[String], flags: List[cli.Flag]) -> Result[
       after = true
     } else if string.starts_with(token, "-") && token != "-" {
       list.push(mut options, copy token)
-      if token == "--to" || token == "-to" {
+      if token == "--to" || token == "-to" || token == "--jobs" {
         if i + 1 == list.len(argv) {
           return Error(Usage())
         }
@@ -98,6 +100,14 @@ fn read(d: Dir, name: String) -> Result[unique Bytes, AppError] {
 }
 
 pub fn main(rt: Io, args: Args) -> Result[(), AppError] {
+  if arg.len(args) > 0 {
+    let first = arg.text(args, 0)?
+    if first == "toml-plan" || first == "toml-migrate" {
+      if arg.len(args) > 22 {
+        return Error(Toml(Limit()))
+      }
+    }
+  }
   let mut argv: List[String] = []
   for i in 0u64..arg.len(args) {
     list.push(mut argv, arg.text(args, i)?)
@@ -116,6 +126,9 @@ pub fn main(rt: Io, args: Args) -> Result[(), AppError] {
     return Error(Usage())
   }
   let command = root.positional[0]
+  if command == "toml-plan" || command == "toml-migrate" {
+    return toml_command(rt, copy root.positional)
+  }
   if command != "validate" && command != "migrate" && command != "diff" {
     return Error(Usage())
   }
@@ -168,6 +181,69 @@ pub fn main(rt: Io, args: Args) -> Result[(), AppError] {
       model.diff(data, read(d, parsed.positional[1])?) ? Config
     }
     out.write(io.stdout(rt)?, output)?
+  }
+  Ok(())
+}
+
+// New bounded TOML commands keep legacy option parsing and help bytes stable.
+fn toml_command(rt: Io, take argv: List[String]) -> Result[(), AppError] {
+  let flags = [
+    cli.Flag(name: "to", short: None(), kind: Value, help: "Target version (2 or 3)"),
+    cli.Flag(name: "jobs", short: None(), kind: Value, help: "Parallel plans (1..4)"),
+    cli.Flag(name: "help", short: Some(b'h'), kind: Switch, help: "Print help")
+  ]
+  let mut tail: List[String] = []
+  for i in 1u64..list.len(argv) {
+    list.push(mut tail, copy argv[i])
+  }
+  let parsed = parse_command(take tail, flags)?
+  if map.get(parsed.flags, "help") == Some(["true"]) {
+    if list.len(parsed.positional) != 0 || map.len(parsed.flags) != 1 {
+      return Error(Usage())
+    }
+    out.print(
+      io.stdout(rt)?,
+      cli.usage(f"configctl {argv[0]} --to 2|3 --jobs 1..4 FILE...", flags)
+    )?
+    return Ok(())
+  }
+  let selected = map.get(parsed.flags, "to")
+  let target: i64 = if selected == Some(["2"]) {
+    2
+  } else if selected == Some(["3"]) {
+    3
+  } else {
+    return Error(Usage())
+  }
+  let parallel = map.get(parsed.flags, "jobs")
+  let jobs: u64 = if parallel == None() || parallel == Some(["1"]) {
+    1
+  } else if parallel == Some(["2"]) {
+    2
+  } else if parallel == Some(["3"]) {
+    3
+  } else if parallel == Some(["4"]) {
+    4
+  } else {
+    return Error(Usage())
+  }
+  let request = batch.Request(files: copy parsed.positional, target: target, jobs: jobs)
+  batch.validate(request) ? Toml
+  let configs = io.dir(rt, path.of("configs"))?
+  let tasks = io.tasks(rt)?
+  let output = io.stdout(rt)?
+  let destination = if argv[0] == "toml-migrate" {
+    Some(io.dir(rt, path.of("migrated"))?)
+  } else {
+    None()
+  }
+  let reports = batch.plan(configs, tasks, request) ? Toml
+  let success = match destination {
+    Some(d) => publish.migrate(d, output, reports, target) ? Publish,
+    None() => publish.plan(output, reports) ? Publish,
+  }
+  if !success {
+    return Error(Partial())
   }
   Ok(())
 }

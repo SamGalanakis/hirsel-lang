@@ -28,6 +28,36 @@
         "model"
       ],
       "path": "model.hir"
+    },
+    {
+      "module": [
+        "schema"
+      ],
+      "path": "schema.hir"
+    },
+    {
+      "module": [
+        "migration"
+      ],
+      "path": "migration.hir"
+    },
+    {
+      "module": [
+        "document"
+      ],
+      "path": "document.hir"
+    },
+    {
+      "module": [
+        "batch"
+      ],
+      "path": "batch.hir"
+    },
+    {
+      "module": [
+        "publish"
+      ],
+      "path": "publish.hir"
     }
   ]
 }

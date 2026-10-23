@@ -27,6 +27,26 @@ fn verify_group(group: &str, observations: u64) {
     std::fs::write(package.join("hirsel.json"), manifest.to_string()).unwrap();
     for (name, data) in [
         (
+            "schema.hir",
+            include_str!("../../../examples/configctl/schema.hir"),
+        ),
+        (
+            "migration.hir",
+            include_str!("../../../examples/configctl/migration.hir"),
+        ),
+        (
+            "document.hir",
+            include_str!("../../../examples/configctl/document.hir"),
+        ),
+        (
+            "batch.hir",
+            include_str!("../../../examples/configctl/batch.hir"),
+        ),
+        (
+            "publish.hir",
+            include_str!("../../../examples/configctl/publish.hir"),
+        ),
+        (
             "main.hir",
             include_str!("../../../examples/configctl/main.hir"),
         ),
