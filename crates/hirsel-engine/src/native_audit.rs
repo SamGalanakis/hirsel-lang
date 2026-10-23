@@ -128,6 +128,26 @@ impl QueryEngine {
         if let Some(products) = self.image_audit_products(path) {
             return Ok(products);
         }
+        if let Some(products) = self.load_source_audit(path) {
+            return Ok(products);
+        }
+        self.s1.begin_requests();
+        self.begin_evaluation_validation();
+        self.execution_stack.push(crate::memo::ReadsBuilder::new());
+        let result = self.compute_source_audit(path);
+        let reads = self
+            .execution_stack
+            .pop()
+            .expect("source audit execution frame")
+            .finish();
+        let depth = self.s1.finish_requests(self.depth_limit());
+        let (_, acceptance, selections) = self.end_evaluation_validation();
+        let products = result?;
+        let reads = reads.map_err(|_| QueryError::NotImplemented)?;
+        self.store_source_audit(&products, &reads, depth, selections, acceptance)?;
+        Ok(products)
+    }
+    fn compute_source_audit(&mut self, path: &DefPath) -> Result<SourceAuditProducts, QueryError> {
         let signature = self.item_signature(path)?.value;
         let representation = if matches!(signature.kind, SignatureKind::Type(_)) {
             match self.owner_representation(path, path) {
@@ -139,6 +159,7 @@ impl QueryEngine {
             None
         };
         let analyzed = self.mode_definition(path)?;
+        self.read_execution_signatures(&analyzed.dependencies);
         if crate::queries::has_errors(&analyzed.diagnostics) {
             return Err(QueryError::Diagnostics(analyzed.diagnostics));
         }

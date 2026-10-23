@@ -156,6 +156,7 @@ pub enum QueryKind {
     Evaluate,
     Generate,
     GeneratedRegistration,
+    SourceAudit,
 }
 impl QueryKind {
     pub fn phase_name(self) -> &'static str {
@@ -175,6 +176,7 @@ impl QueryKind {
             Self::Evaluate => "compile-time evaluation",
             Self::Generate => "generated source evaluation",
             Self::GeneratedRegistration => "generated instance registration",
+            Self::SourceAudit => "source allocation audit",
         }
     }
 }
@@ -215,6 +217,7 @@ impl DefinitionKey {
             QueryKind::Evaluate => 12,
             QueryKind::Generate => 13,
             QueryKind::GeneratedRegistration => 14,
+            QueryKind::SourceAudit => 15,
             QueryKind::Lex => 4,
             QueryKind::Resolve => 5,
             QueryKind::Modes => 6,
