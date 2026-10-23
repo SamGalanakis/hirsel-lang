@@ -1,12 +1,11 @@
 use hirsel_run_config::*;
 use hirsel_run_schema::*;
-use hirsel_run_schema::*;
 use proptest::prelude::*;
 use std::collections::BTreeMap;
 
 /// Choices read from a byte string; an exhausted string picks 0, the simplest choice, so
 /// shrinking the bytes shrinks the record.
-struct Draw<'a>(&'a [u8]);
+pub(super) struct Draw<'a>(pub(super) &'a [u8]);
 impl Draw<'_> {
     fn pick(&mut self, n: usize) -> usize {
         match self.0.split_first() {
@@ -79,7 +78,7 @@ fn rule((address, service, operation): (&str, &str, &str)) -> NetRule {
 }
 
 /// A record over a small universe, so independent records are often related.
-fn record(d: &mut Draw) -> RunConfig {
+pub(super) fn record(d: &mut Draw) -> RunConfig {
     let mut r = RunConfig::empty([0; 32], "probe@1/main".into(), LaunchKind::Main);
     r.unsafe_root = d.coin();
     if d.coin() {
@@ -135,6 +134,23 @@ fn record(d: &mut Draw) -> RunConfig {
                 children: None,
             });
         }
+        io.signals = match d.pick(3) {
+            0 => None,
+            provider => Some(signal_grant(provider, 1 + d.pick(7) as u8, d)),
+        };
+        io.telemetry = match d.pick(3) {
+            0 => None,
+            1 => Some(TelemetryGrant {
+                provider: "telemetry.capture@1".into(),
+                seed: None,
+                queue: None,
+            }),
+            _ => Some(TelemetryGrant {
+                provider: "telemetry.null@1".into(),
+                seed: Some(d.pick(3) as u64),
+                queue: d.coin().then(|| d.pick(3) as u64),
+            }),
+        };
         r.io = Some(io);
     }
     if d.coin() {
@@ -150,13 +166,41 @@ fn record(d: &mut Draw) -> RunConfig {
     r
 }
 
+// Explicit test encoding: independent of SignalKind::bit/bits and signal_kinds.
+pub(super) fn signal_grant(provider: usize, mask: u8, d: &mut Draw) -> SignalsGrant {
+    let kinds = [
+        (1, SignalKind::Interrupt),
+        (2, SignalKind::Terminate),
+        (4, SignalKind::Hangup),
+    ]
+    .into_iter()
+    .filter(|(bit, _)| mask & bit != 0)
+    .map(|(_, kind)| kind)
+    .collect();
+    SignalsGrant {
+        provider: ["signals.host@1", "signals.script@1"][provider - 1].into(),
+        kinds,
+        script: (provider == 2).then(|| {
+            (0..d.pick(5))
+                .map(|_| {
+                    [
+                        SignalKind::Interrupt,
+                        SignalKind::Terminate,
+                        SignalKind::Hangup,
+                    ][d.pick(3)]
+                })
+                .collect()
+        }),
+    }
+}
+
 fn nth<T>(items: &[T], d: &mut Draw) -> Option<usize> {
     (!items.is_empty()).then(|| d.pick(items.len()))
 }
 
 /// One narrowing step: it removes authority or keeps the record as it is.
 fn narrow_once(r: &mut RunConfig, d: &mut Draw) {
-    match d.pick(14) {
+    match d.pick(17) {
         0 => r.unsafe_root = false,
         1 => r.io = None,
         2 => r.env = None,
@@ -213,7 +257,7 @@ fn narrow_once(r: &mut RunConfig, d: &mut Draw) {
                     }
                 }
                 11 => io.process = None,
-                _ => {
+                12 | 13 => {
                     let Some(process) = &mut io.process else {
                         return;
                     };
@@ -226,6 +270,19 @@ fn narrow_once(r: &mut RunConfig, d: &mut Draw) {
                         process.rules[i].env.remove(j);
                     }
                 }
+                14 => io.signals = None,
+                15 => {
+                    let Some(signals) = &mut io.signals else {
+                        return;
+                    };
+                    let i = d.pick(signals.kinds.len());
+                    if signals.kinds.len() == 1 {
+                        io.signals = None;
+                    } else {
+                        signals.kinds.remove(i);
+                    }
+                }
+                _ => io.telemetry = None,
             }
         }
     }
@@ -242,7 +299,7 @@ fn narrow(r: &RunConfig, d: &mut Draw) -> RunConfig {
 /// One step that adds authority `r` lacks, or None when it does not apply.
 fn widen(r: &RunConfig, d: &mut Draw) -> Option<RunConfig> {
     let mut r = r.clone();
-    match d.pick(14) {
+    match d.pick(17) {
         0 if r.unsafe_root => return None,
         0 => r.unsafe_root = true,
         1 if r.io.is_some() => return None,
@@ -335,10 +392,48 @@ fn widen(r: &RunConfig, d: &mut Draw) -> Option<RunConfig> {
                     program: "/wide/bin".into(),
                     env: vec![],
                 }),
-                _ => {
+                13 => {
                     let process = io.process.as_mut()?;
                     let i = nth(&process.rules, d)?;
                     process.rules[i].env.push("WIDE".into());
+                }
+                14 => {
+                    if let Some(signals) = &mut io.signals {
+                        let kind = [
+                            SignalKind::Interrupt,
+                            SignalKind::Terminate,
+                            SignalKind::Hangup,
+                        ]
+                        .into_iter()
+                        .find(|kind| !signals.kinds.contains(kind))?;
+                        signals.kinds.push(kind);
+                    } else {
+                        io.signals = Some(signal_grant(1 + d.pick(2), 1 + d.pick(7) as u8, d));
+                    }
+                }
+                15 => {
+                    let signals = io.signals.as_mut()?;
+                    if signals.provider == "signals.host@1" {
+                        signals.provider = "signals.script@1".into();
+                        signals.script = Some(vec![]);
+                    } else {
+                        signals.provider = "signals.host@1".into();
+                        signals.script = None;
+                    }
+                }
+                _ => {
+                    // Preserve current whole-record telemetry comparison; do not infer
+                    // that a seed or queue change is a semantic weakening.
+                    if let Some(telemetry) = &mut io.telemetry {
+                        telemetry.provider = "telemetry.null@1".into();
+                        telemetry.seed = Some(telemetry.seed.unwrap_or(0) + 1);
+                    } else {
+                        io.telemetry = Some(TelemetryGrant {
+                            provider: "telemetry.capture@1".into(),
+                            seed: None,
+                            queue: None,
+                        });
+                    }
                 }
             }
         }
@@ -346,16 +441,22 @@ fn widen(r: &RunConfig, d: &mut Draw) -> Option<RunConfig> {
     Some(r)
 }
 
-fn valid(r: &RunConfig) -> ValidatedRun {
+pub(super) fn valid(r: &RunConfig) -> ValidatedRun {
     r.validated().expect("generated records are valid")
 }
 
 proptest! {
+    #![proptest_config(ProptestConfig {
+        cases: 128,
+        rng_seed: proptest::test_runner::RngSeed::Fixed(0x22_51_6e_a1),
+        ..ProptestConfig::default()
+    })]
 
     #[test]
     fn narrowing_yields_a_subset(bytes in proptest::collection::vec(any::<u8>(), 0..128)) {
         let d = &mut Draw(&bytes);
         let wide = record(d);
+        let _ = valid(&wide);
         let narrow = narrow(&wide, d);
         prop_assert!(grants_within(&valid(&narrow), &valid(&wide)));
     }
@@ -364,13 +465,29 @@ proptest! {
     fn widening_never_does(bytes in proptest::collection::vec(any::<u8>(), 0..128)) {
         let d = &mut Draw(&bytes);
         let base = record(d);
+        let _ = valid(&base);
         let base = narrow(&base, d);
-        if let Some(wide) = widen(&base, d)
-            && let Ok(wide) = wide.validated()
-        {
-            prop_assert!(!grants_within(&wide, &valid(&base)));
+        let validated_base = valid(&base);
+        if let Some(wide) = widen(&base, d) {
+            prop_assert!(!grants_within(&valid(&wide), &validated_base));
         }
     }
+
+    #[test]
+    fn reflexivity_and_transitive_narrowing(bytes in proptest::collection::vec(any::<u8>(), 0..128)) {
+        let d = &mut Draw(&bytes);
+        let wide = record(d);
+        let middle = narrow(&wide, d);
+        let small = narrow(&middle, d);
+        let (wide, middle, small) = (valid(&wide), valid(&middle), valid(&small));
+        prop_assert!(grants_within(&wide, &wide));
+        prop_assert!(grants_within(&middle, &middle));
+        prop_assert!(grants_within(&small, &small));
+        prop_assert!(grants_within(&small, &middle));
+        prop_assert!(grants_within(&middle, &wide));
+        prop_assert!(grants_within(&small, &wide));
+    }
+
 }
 
 fn io(io: IoGrants) -> ValidatedRun {
