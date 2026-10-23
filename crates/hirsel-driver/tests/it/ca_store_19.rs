@@ -622,3 +622,66 @@ fn worker_evaluation_products_adopt_only_local_complete_verdicts() {
         }
     });
 }
+
+#[test]
+fn comptime_lower_products_need_local_execution_completion_before_body_free_hits() {
+    with_compiler_stack(|| {
+        for source in [
+            "fn helper()->u32{7u32}\nfn value()->u32{comptime helper()}\n",
+            "fn value()->u32{comptime 7u32}\n",
+        ] {
+            let path = definition("value");
+            let store = Arc::new(store::MemStore::default());
+            let mut seed = signature_session(store.clone(), source, true);
+            seed.item_signature(&path).unwrap();
+            seed.lower_to_tir(&path).unwrap();
+            let mut fresh = signature_session(store.clone(), source, false);
+            fresh.adapters.modes = None;
+            fresh.adapters.lowering = None;
+            let adopted = fresh.lower_to_tir(&path).unwrap();
+            assert_eq!(adopted.value.path, hirsel_syntax::DefId::intern(&path));
+            assert_eq!(fresh.lower_adapter_calls(&path), 0);
+            assert_eq!(fresh.recompute_count(&path, QueryKind::Modes), 0);
+            let copied = Arc::new(store::MemStore::default());
+            for (key, bytes) in store.take() {
+                store::ResultStore::put(&*copied, &key, &bytes);
+                store::ResultStore::put(&*store, &key, &bytes);
+            }
+            let mut remote = signature_session(copied, source, false);
+            remote.adapters.modes = None;
+            remote.adapters.lowering = None;
+            assert!(remote.lower_to_tir(&path).is_err(), "producer Lower bytes cannot supply private execution authority");
+            let edited = source.replace("7u32", "9u32");
+            let mut stale = signature_session(store.clone(), &edited, true);
+            stale.adapters.modes = None;
+            stale.adapters.lowering = None;
+            assert!(stale.lower_to_tir(&path).is_err());
+            let off_store = Arc::new(store::MemStore::default());
+            let mut off = signature_session(off_store.clone(), source, true);
+            off.verify = Verify::Off;
+            off.lower_to_tir(&path).unwrap();
+            let mut on = signature_session(off_store, source, true);
+            on.adapters.modes = None;
+            on.adapters.lowering = None;
+            assert!(on.lower_to_tir(&path).is_err(), "VerifyOff cannot mint completion");
+        }
+    });
+}
+
+#[test]
+fn resident_lower_completion_rechecks_its_private_validation_context() {
+    with_compiler_stack(|| {
+        let source = "pub opaque type Hidden:plain uses {}{field:u32}\nfn value()->u32{comptime 7u32}\n";
+        let store = Arc::new(store::MemStore::default());
+        let mut engine = signature_session(store, source, true);
+        let path = definition("value");
+        engine.lower_to_tir(&path).unwrap();
+        let before = engine.lower_adapter_calls(&path);
+        engine.lower_to_tir(&path).unwrap();
+        assert_eq!(engine.lower_adapter_calls(&path), before);
+        let file = engine.sources.add("signatures.hir", source.replace("field:u32", "field:u64")).unwrap();
+        engine.parse_file(file, &default_context()).unwrap();
+        engine.lower_to_tir(&path).unwrap();
+        assert_eq!(engine.lower_adapter_calls(&path), before + 1, "complete private V context changed");
+    });
+}

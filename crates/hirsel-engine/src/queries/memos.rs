@@ -24,6 +24,7 @@ pub(crate) struct Entry<T> {
     /// A generator evaluation's depth evidence, or a lowering's transparent
     /// dependency-request trace (design §1c).
     pub depth: Option<crate::memo::DepthEvidence<Span>>,
+    pub acceptance: Option<hirsel_validate::ExecutionReceipt>,
     /// False when an input changed during the evaluation: the result is
     /// returned but never kept.
     pub consistent: bool,
@@ -575,6 +576,7 @@ impl QueryEngine {
             detail,
             covered: vec![],
             depth: None,
+            acceptance: None,
             consistent,
         }
     }
