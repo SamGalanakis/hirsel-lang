@@ -369,16 +369,25 @@ mod tests {
             project(&b, identity).unwrap()
         );
         for request in [
-            Request::Ready { wait: 1, points: 2 },
-            Request::Schedule {
-                count: 3,
-                choice: 1,
-            },
             Request::RunnerCancel {
                 key: [1; 32],
                 cause: 3,
             },
             Request::Stopped,
+        ] {
+            let value = project(&request, |_| panic!("runner payload has no authorities")).unwrap();
+            assert!(value.authorities.is_empty());
+            assert_eq!(
+                crate::tape_wire::decode::<Request>(&value.payload).unwrap(),
+                request
+            );
+        }
+        for request in [
+            Request::Ready { wait: 1, points: 2 },
+            Request::Schedule {
+                count: 3,
+                choice: 1,
+            },
         ] {
             assert!(project(&request, identity).is_err());
         }

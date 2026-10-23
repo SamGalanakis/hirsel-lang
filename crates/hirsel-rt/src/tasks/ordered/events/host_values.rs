@@ -148,6 +148,7 @@ mod tests {
             Ok(Completion::OptionalFile(None)),
             Ok(Completion::Handle(Err(crate::io::IoError::NotFound))),
             Ok(Completion::Wait(Err(crate::io::WaitError::Canceled(7)))),
+            Ok(Completion::Ready),
             Err(AdapterError::InvalidCompletion),
         ] {
             let value = project(&result, |_| panic!("scalar has no handles")).unwrap();
@@ -161,7 +162,6 @@ mod tests {
         for result in [
             Ok(Completion::Refused(99)),
             Ok(Completion::Blocked { committed: false }),
-            Ok(Completion::Ready),
             Ok(Completion::View(crate::io::MapView {
                 length: 1,
                 bytes: None,
