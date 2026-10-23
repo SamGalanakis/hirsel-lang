@@ -70,6 +70,26 @@ fn renamed(definition: &DefPath, suffix: &str) -> DefPath {
     path
 }
 
+pub(super) fn instance_path(
+    declaration: &DefPath,
+    key: hirsel_types::GeneratedActualKey,
+) -> DefPath {
+    let digest = ContentHash::of_parts(
+        "hirsel.generated-instance.v1",
+        key.spellings().iter().map(|spelling| spelling.as_bytes()),
+    );
+    renamed(
+        declaration,
+        &format!(
+            "instance${}",
+            digest.0[..8]
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        ),
+    )
+}
+
 fn diagnostic(rule: &'static str, span: Span, message: impl Into<String>) -> QueryError {
     QueryError::Diagnostics(vec![Diagnostic::error(
         hirsel_diag::RuleId::new(rule).expect("rule id"),
@@ -978,8 +998,20 @@ impl QueryEngine {
         actuals: &hirsel_types::Actuals,
         site: Span,
     ) -> Result<DefPath, QueryError> {
+        let restored = hirsel_tir::InstanceBodies::key(&self.types, &actuals.arguments)
+            .filter(|key| {
+                !self
+                    .instance_bodies
+                    .instances
+                    .get(&DefId::intern(declaration))
+                    .is_some_and(|instances| instances.contains_key(key))
+            })
+            .is_some_and(|key| {
+                self.load_generated_registration(&instance_path(declaration, key))
+                    .is_some()
+            });
         let (instance, fresh) = self.register_generated_instance(declaration, actuals, site)?;
-        if !fresh {
+        if !fresh && !restored {
             return Ok(instance);
         }
         let key = hirsel_tir::InstanceBodies::key(&self.types, &actuals.arguments)
@@ -1123,20 +1155,7 @@ impl QueryEngine {
                 None => text.push_str(spelling),
             }
         }
-        let instance = renamed(
-            declaration,
-            &format!(
-                "instance${}",
-                ContentHash::of_parts(
-                    "hirsel.generated-instance.v1",
-                    spellings.iter().map(|k| k.as_bytes())
-                )
-                .0[..8]
-                    .iter()
-                    .map(|b| format!("{b:02x}"))
-                    .collect::<String>()
-            ),
-        );
+        let instance = instance_path(declaration, key);
         let origin = self.sources.file(declaring).unwrap().path.display();
         let file = self
             .sources
@@ -1190,6 +1209,7 @@ impl QueryEngine {
                     definition: DefId::intern(&instance),
                 },
             );
+        self.store_generated_registration(declaration, &actuals.arguments, &instance)?;
         Ok((instance, true))
     }
 
