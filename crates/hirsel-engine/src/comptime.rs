@@ -882,8 +882,11 @@ impl QueryEngine {
                 acceptance: None,
             });
         }
-        let syntax = self.parse_definition(path)?.value;
-        self.constant_at(path, syntax.item.name_span)
+        let reference = match self.declarations.sites(path).first() {
+            Some(site) => site.name_span,
+            None => self.parse_definition(path)?.value.item.name_span,
+        };
+        self.constant_at(path, reference)
     }
     fn constant_at(
         &mut self,

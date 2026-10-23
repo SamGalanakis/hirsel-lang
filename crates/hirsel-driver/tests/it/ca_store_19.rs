@@ -1477,3 +1477,45 @@ fn ordinary_staged_registrations_restore_from_heads_without_syntax_or_execution_
         assert_eq!(oracle.constant_instance(&hidden, &[2]).unwrap().root.kind, hirsel_tir::ValueKind::Constant(hirsel_tir::Constant::Integer(4)));
     });
 }
+
+#[test]
+fn ordinary_constant_values_reuse_heads_without_syntax_and_refuse_unverified_completion() {
+    with_compiler_stack(|| {
+        use hirsel_tir::TirProvider;
+        let source = "fn helper()->u32{7u32}\nconst VALUE:u32=comptime helper()\n";
+        let owner = definition("VALUE");
+        for verify in [Verify::On, Verify::Off] {
+            let store = Arc::new(store::MemStore::default());
+            let mut writer = QueryEngine::new(default_environment(), compiler_adapters()).with_result_store(store.clone());
+            writer.verify = verify;
+            let file = writer.sources.add("value-heads.hir", source.into()).unwrap();
+            writer.index_source(file, &default_context()).unwrap();
+            assert_eq!(writer.materialize_constant(&owner).unwrap(), hirsel_tir::Constant::Integer(7));
+            let open = |store: Arc<dyn store::ResultStore>| {
+                let mut reader = QueryEngine::new(default_environment(), compiler_adapters()).with_result_store(store);
+                reader.sources.add("padding.hir", "\n".into()).unwrap();
+                let file = reader.sources.add("value-heads.hir", source.into()).unwrap();
+                reader.index_source(file, &default_context()).unwrap();
+                reader.adapters.lexer = None; reader.adapters.parser = None; reader.adapters.signature = None; reader.adapters.modes = None; reader.adapters.lowering = None;
+                reader
+            };
+            let mut reader = open(store.clone());
+            let actual = reader.materialize_constant(&owner);
+            if verify == Verify::On {
+                assert_eq!(actual.unwrap(), hirsel_tir::Constant::Integer(7));
+                assert!(reader.constant_definitions().unwrap().contains(&owner));
+            } else { assert!(actual.is_err(), "heads cannot mint private V completion"); }
+            assert_eq!(reader.work_stats().parsed_bytes, 0);
+            assert_eq!(reader.recompute_count(&owner, QueryKind::Modes), 0);
+            let copied = Arc::new(store::MemStore::default());
+            for (key, bytes) in store.take() { store::ResultStore::put(&*copied, &key, &bytes); store::ResultStore::put(&*store, &key, &bytes); }
+            assert!(open(copied).materialize_constant(&owner).is_err(), "ordinary copied values have no verifier authority");
+            if verify == Verify::On {
+                let mut oracle = QueryEngine::new(default_environment(), compiler_adapters()).with_result_store(store).with_verify_store(store::VerifyStore::Recompute);
+                let file = oracle.sources.add("value-heads.hir", source.into()).unwrap();
+                oracle.index_source(file, &default_context()).unwrap();
+                assert_eq!(oracle.materialize_constant(&owner).unwrap(), hirsel_tir::Constant::Integer(7));
+            }
+        }
+    });
+}
