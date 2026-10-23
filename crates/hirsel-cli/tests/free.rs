@@ -2958,3 +2958,74 @@ pub fn main(rt: Io, args: Args) -> Result[(), E] {
         }
     }
 }
+
+#[test]
+fn f1_returned_error_resource_cleanup_replays_exact_terminal_and_projection() {
+    if !hirsel_rt::free_driver::admission_enabled() {
+        return;
+    }
+    let scratch = Scratch::new("f1-returned-error-resource");
+    let program = scratch.path("main.hir");
+    // Reuse PROG-3's returned-resource fixture and its cleanup expectations.
+    let text = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../conformance/PROG/PROG-3-exit-report-resource-error-run.hir"),
+    )
+    .unwrap();
+    std::fs::write(&program, text).unwrap();
+    let report = scratch.path("projection");
+    for level in ["record", "durable"] {
+        let tape = scratch.path(level);
+        let grants = format!(
+            r#"{{"io":{{"stdout":"stdout.bytes@1","tasks":"tasks.free@1","dirs":[]}},"args":[],"recording":"{level}"}}"#
+        );
+        let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+        command
+            .args(["run", "--native"])
+            .arg(&program)
+            .args(["--grants", &grants, "--cores", "1", "--record"])
+            .arg(&tape)
+            .env(hirsel_rt::free_replay::Report::VAR, &report);
+        f1_permits(&mut command, 1);
+        let live = bounded_output(
+            &mut command,
+            &program,
+            &format!("returned resource {level} live"),
+        );
+        assert_eq!(live.status.code(), Some(1), "{live:?}");
+        assert_eq!(live.stdout, b"beforedrop\n", "{live:?}");
+        assert_eq!(live.stderr, b"error: { stdout: <Stdout> }\n", "{live:?}");
+        let bytes = std::fs::read(&tape).unwrap();
+        let parsed = hirsel_free::tape::parse(&bytes).unwrap();
+        assert!(
+            parsed
+                .end
+                .as_ref()
+                .unwrap()
+                .outcome
+                .starts_with("native-outcome-v2/")
+        );
+        let projection = std::fs::read_to_string(&report).unwrap();
+        for engine in ENGINES {
+            let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+            command
+                .arg("run")
+                .args(engine)
+                .arg(&program)
+                .arg("--replay")
+                .arg(&tape)
+                .args(["--cores", "1"])
+                .env(hirsel_rt::free_replay::Report::VAR, &report);
+            f1_permits(&mut command, 1);
+            let replay = bounded_output(
+                &mut command,
+                &program,
+                &format!("returned resource {level} replay {engine:?}"),
+            );
+            assert_eq!(replay.status.code(), live.status.code(), "{replay:?}");
+            assert_eq!(replay.stdout, live.stdout, "{replay:?}");
+            assert_eq!(replay.stderr, live.stderr, "{replay:?}");
+            assert_eq!(std::fs::read_to_string(&report).unwrap(), projection);
+        }
+    }
+}
