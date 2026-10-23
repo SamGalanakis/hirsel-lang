@@ -138,6 +138,10 @@ enum Region {
     },
     Owned(Arc<[u8]>),
     Static(&'static [u8]),
+    Retained {
+        region: Arc<Region>,
+        _owner: Arc<dyn Send + Sync>,
+    },
 }
 // SAFETY: mappings are read-only; publication replaces files rather than
 // modifying a mapped inode. Every view retains an Arc to its mapping.
@@ -191,6 +195,7 @@ impl Region {
             }
             Self::Owned(bytes) => bytes,
             Self::Static(bytes) => bytes,
+            Self::Retained { region, .. } => region.bytes(),
         }
     }
 }
@@ -250,6 +255,18 @@ impl Deref for Bytes {
     }
 }
 impl Bytes {
+    /// Retain an admission reservation or other lifetime owner through clones
+    /// and child ranges without copying the underlying immutable bytes.
+    pub fn retain_owner(self, owner: Arc<dyn Send + Sync>) -> Self {
+        Self {
+            region: Arc::new(Region::Retained {
+                region: self.region,
+                _owner: owner,
+            }),
+            range: self.range,
+        }
+    }
+
     /// A checked child range; both the offset and length are portable integers.
     /// Alignment describes the archive layout, not a cast to a Rust heap type.
     pub fn range(&self, offset: u64, len: u64, alignment: u64) -> Option<Self> {

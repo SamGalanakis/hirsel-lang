@@ -238,3 +238,30 @@ fn embedded_products_use_the_mapped_store_integrity_boundary() {
     *corrupt.last_mut().unwrap() ^= 1;
     assert!(embedded(corrupt).get_content(reference).is_none());
 }
+
+#[test]
+fn retained_owner_survives_parent_drop_clone_and_child_ranges() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    struct Owner(Arc<AtomicBool>);
+    impl Drop for Owner {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+    let dropped = Arc::new(AtomicBool::new(false));
+    let owner = Arc::new(Owner(dropped.clone()));
+    let bytes = Bytes::from(b"immutable transport".as_slice()).retain_owner(owner.clone());
+    let clone = bytes.clone();
+    let child = bytes.range(10, 9, 1).unwrap();
+    let nested = child.range(0, 4, 1).unwrap();
+    assert_eq!(&*bytes, b"immutable transport");
+    assert_eq!(&*child, b"transport");
+    drop(owner);
+    drop(bytes);
+    drop(clone);
+    drop(child);
+    assert!(!dropped.load(Ordering::SeqCst));
+    assert_eq!(&*nested, b"tran");
+    drop(nested);
+    assert!(dropped.load(Ordering::SeqCst));
+}
