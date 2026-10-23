@@ -1338,13 +1338,7 @@ impl QueryEngine {
         if constant.inputs.len() != arguments.len() {
             return Err(operational("staged constant arity"));
         }
-        let site = self
-            .parse_definition(&constant.owner)?
-            .value
-            .tree
-            .expressions[constant.expression.0 as usize]
-            .origin
-            .span;
+        let site = self.comptime_site(&constant.owner, constant.expression)?;
         self.record_staged_selection(DefId::intern(path), arguments);
         if let Some(value) = cached {
             if self.evaluation_validation_holds(&value)

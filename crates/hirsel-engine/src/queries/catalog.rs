@@ -42,6 +42,7 @@ pub(crate) struct SourceFacts {
     pub(crate) body: bool,
     pub(crate) constant: bool,
     pub(crate) execution: bool,
+    pub(crate) comptime: Vec<(u32, u32, u32)>,
     pub(crate) fact: bool,
     pub(crate) associations: Vec<(u8, u32, u32)>,
     pub(crate) arms: Vec<(String, u32, u32)>,
@@ -68,18 +69,27 @@ impl SourceFacts {
             }
             _ => vec![],
         };
+        let comptime: Vec<_> = syntax
+            .tree
+            .expressions
+            .iter()
+            .enumerate()
+            .filter_map(|(index, e)| {
+                matches!(e.kind, hirsel_syntax::ExprKind::Comptime(_)).then_some((
+                    index as u32,
+                    e.origin.span.start,
+                    e.origin.span.end,
+                ))
+            })
+            .collect();
         Self {
             generator: generation::generator(syntax).is_some(),
             instance_bodied: generation::instance_bodied(syntax),
             executable: generation::executable(syntax),
             body: constant || matches!(item.kind, ItemKind::Function { body: Some(_), .. }),
             constant,
-            execution: constant
-                || syntax
-                    .tree
-                    .expressions
-                    .iter()
-                    .any(|e| matches!(e.kind, hirsel_syntax::ExprKind::Comptime(_))),
+            execution: constant || !comptime.is_empty(),
+            comptime,
             fact: matches!(
                 item.kind,
                 ItemKind::Type {
@@ -294,6 +304,34 @@ impl Catalog {
     }
 }
 impl QueryEngine {
+    pub(crate) fn comptime_site(
+        &mut self,
+        path: &DefPath,
+        expression: hirsel_syntax::ExprId,
+    ) -> Result<Span, QueryError> {
+        if let Some(facts) = self.source_facts(path)
+            && let Ok(index) = facts
+                .comptime
+                .binary_search_by_key(&expression.0, |site| site.0)
+        {
+            let (_, start, end) = facts.comptime[index];
+            let (owner, _) = self.lexical_shape(path).ok_or(QueryError::NotImplemented)?;
+            let anchor = self
+                .snapshot(path)
+                .ok()
+                .map(|syntax| syntax.anchor)
+                .or_else(|| self.catalog.anchor(path, owner.occurrence))
+                .ok_or(QueryError::NotImplemented)?;
+            return Ok(Span { anchor, start, end });
+        }
+        let syntax = self.parse_definition(path)?.value;
+        syntax
+            .tree
+            .expressions
+            .get(expression.0 as usize)
+            .map(|e| e.origin.span)
+            .ok_or(QueryError::NotImplemented)
+    }
     pub(super) fn lexical_shape(
         &self,
         path: &DefPath,
@@ -457,7 +495,7 @@ impl QueryEngine {
             .collect();
         heads.sort_by_key(|h| (h.base, h.definition.path().clone()));
         FileHeads {
-            schema: 3,
+            schema: 4,
             context: context.clone(),
             source: ContentHash::of_bytes(self.sources.file(file).unwrap().text().as_bytes()),
             heads,
@@ -467,7 +505,7 @@ impl QueryEngine {
         let Some(source) = self.sources.file(file) else {
             return false;
         };
-        record.schema == 3
+        record.schema == 4
             && record.context == *context
             && record.source == ContentHash::of_bytes(source.text().as_bytes())
             && record
@@ -480,6 +518,16 @@ impl QueryEngine {
                     && path.0.modules == context.modules
                     && h.kind <= 3
                     && h.start <= h.end
+                    && h.facts.comptime.windows(2).all(|w| w[0].0 < w[1].0)
+                    && h.facts.comptime.iter().all(|(id, start, end)| {
+                        start <= end
+                            && h.base
+                                .checked_add(*end)
+                                .is_some_and(|end| end as usize <= source.text().len())
+                            && h.lexical.valid_site(hirsel_types::NameSite::Expression(
+                                hirsel_syntax::ExprId(*id),
+                            ))
+                    })
                     && h.facts.associations.iter().all(|(kind, start, end)| {
                         *kind <= 2
                             && start <= end
@@ -716,14 +764,14 @@ mod tests {
                 name: "value".into(),
             });
             let source = "fn value() {}\n";
-            for mutation in 0..13 {
+            for mutation in 0..15 {
                 let store = Arc::new(crate::store::MemStore::default());
                 let mut engine = QueryEngine::new(default_environment(), PhaseAdapters::default())
                     .with_result_store(store.clone());
                 let file = engine.sources.add("heads.hir", source.into()).unwrap();
                 let key = engine.catalog_key(file, &context).unwrap();
                 let mut record = FileHeads {
-                    schema: 3,
+                    schema: 4,
                     context: context.clone(),
                     source: ContentHash::of_bytes(source.as_bytes()),
                     heads: vec![Head {
@@ -742,6 +790,7 @@ mod tests {
                             body: false,
                             constant: false,
                             execution: false,
+                            comptime: vec![],
                             fact: false,
                             associations: vec![],
                             arms: vec![],
@@ -769,6 +818,11 @@ mod tests {
                     10 => record.heads[0].facts.associations.push((0, 0, u32::MAX)),
                     11 => record.heads[0].facts.arms.push(("bad".into(), 2, 1)),
                     12 => record.heads[0].facts.arms.push(("bad".into(), 0, u32::MAX)),
+                    13 => record.heads[0].facts.comptime.push((u32::MAX, 0, 0)),
+                    14 => {
+                        record.heads[0].lexical.expressions = 1;
+                        record.heads[0].facts.comptime = vec![(0, 0, 0), (0, 0, 0)];
+                    }
                     _ => unreachable!(),
                 }
                 store.put(&key, &bincode::serialize(&record).unwrap());
