@@ -554,3 +554,58 @@ fn source_witness_33_provider_refuses_mixed_source_snapshots() {
     declarations.insert(one).unwrap();
     assert!(declarations.insert(two).is_err());
 }
+
+#[test]
+fn source_body_33_inline_construction_is_not_an_extra_semantic_allocation() {
+    let types = TypeInterner::new(None);
+    let arena = types.intern(Type::with_kind(TypeKind::Named {
+        definition: hirsel_syntax::DefId::intern(&hirsel_syntax::DefPath::core("Arena")),
+        arguments: vec![].into(),
+    }));
+    let scalar = types.intern(Type::with_kind(TypeKind::Primitive(Primitive::U64)));
+    for boxed in [false, true] {
+        let root = types.intern(Type::with_kind(if boxed {
+            TypeKind::Box(scalar)
+        } else {
+            TypeKind::Tuple(vec![scalar].into())
+        }));
+        let mut original = body(&[arena, scalar, root], 2);
+        let origin = hirsel_types::Origin {
+            root: hirsel_types::OriginRoot::Parameter(hirsel_types::ParameterRef::bound(
+                hirsel_types::ParamId(0),
+            )),
+            fields: Default::default(),
+        };
+        original.places[0].binding = Some(origin.clone());
+        assign(
+            &mut original,
+            2,
+            Rvalue::Construct {
+                constructor: if boxed {
+                    Constructor::Box
+                } else {
+                    Constructor::Tuple
+                },
+                fields: vec![ConstructField {
+                    field: 0,
+                    value: operand(1),
+                }],
+                destination: Destination::Arena(origin),
+            },
+        );
+        let definition = witness_definition(original);
+        let key = witness_key(&types, &definition);
+        let expected = SourceInput::capture(
+            witness_input(1),
+            hirsel_syntax::ContentHash([2; 32]),
+            definition,
+        )
+        .derive(&key, &types, &[0, 1], Ok)
+        .unwrap();
+        assert_eq!(expected.events().len(), usize::from(boxed));
+        assert_eq!(expected.payloads().len(), 1);
+        let source = expected.source();
+        assert_eq!(source.reference.body, key.body());
+        source.check().unwrap();
+    }
+}

@@ -2,7 +2,7 @@
 //! rewrite a body. No candidate LIR is accepted by any constructor in this file.
 use super::{Context, SourceError, payloads};
 use hirsel_layout::instance::InstanceKey;
-use hirsel_lir::operation::{OperationArgument, OperationDeclarations};
+use hirsel_lir::operation::{NativeType, OperationArgument, OperationDeclarations};
 use hirsel_lir::sealed_payload_source::*;
 use hirsel_syntax::{ContentHash, DefPath};
 use hirsel_tir::{DefinitionRef, InstructionKind, Rvalue, Terminator};
@@ -22,6 +22,7 @@ pub struct SourceInput {
 /// a factory error / absent provider row, never by an empty expectation vector.
 #[derive(Clone)]
 pub struct SourceExpectation {
+    body: u32,
     witness: SealSourceWitness,
     events: Vec<SourceEvent>,
     payloads: Vec<SourcePayload>,
@@ -90,22 +91,50 @@ impl SourceInput {
             },
             substitute,
         )?;
-        let events = payloads
-            .iter()
-            .filter_map(|payload| {
-                matches!(
-                    payload.recipe.operation,
-                    PayloadOperation::Allocate {
-                        destination: PayloadDestination::Arena(_)
+        let mut events = Vec::new();
+        for payload in &payloads {
+            if matches!(
+                payload.recipe.operation,
+                PayloadOperation::Allocate {
+                    destination: PayloadDestination::Arena(_)
+                }
+            ) {
+                let allocated = match &payload.root_type {
+                    NativeType::Box(_) => true,
+                    NativeType::Builtin(kind, _) => match kind {
+                        hirsel_lir::operation::BuiltinType::List
+                        | hirsel_lir::operation::BuiltinType::Array
+                        | hirsel_lir::operation::BuiltinType::Map
+                        | hirsel_lir::operation::BuiltinType::Set
+                        | hirsel_lir::operation::BuiltinType::SortedMap => true,
+                        hirsel_lir::operation::BuiltinType::Inline
+                        | hirsel_lir::operation::BuiltinType::Packed
+                        | hirsel_lir::operation::BuiltinType::Simd => false,
+                        _ => {
+                            return Err(SourceError::Unsupported(
+                                "source allocation classification needs a reviewed builtin rule",
+                            ));
+                        }
+                    },
+                    NativeType::Tuple(_)
+                    | NativeType::Record(_)
+                    | NativeType::Variant(_)
+                    | NativeType::Primitive(_) => false,
+                    NativeType::Named(..) | NativeType::Function(_) => {
+                        return Err(SourceError::Unsupported(
+                            "source allocation classification needs complete held/nominal declarations",
+                        ));
                     }
-                )
-                .then(|| SourceEvent {
-                    anchor: payload.recipe.source.clone(),
-                    kind: SourceEventKind::Allocate,
-                    root_type: payload.root_type.clone(),
-                })
-            })
-            .collect::<Vec<_>>();
+                };
+                if allocated {
+                    events.push(SourceEvent {
+                        anchor: payload.recipe.source.clone(),
+                        kind: SourceEventKind::Allocate,
+                        root_type: payload.root_type.clone(),
+                    });
+                }
+            }
+        }
         let witness = SealSourceWitness::from_expectations(
             self.source,
             key.definition().clone(),
@@ -115,6 +144,7 @@ impl SourceInput {
             &payloads,
         );
         Ok(SourceExpectation {
+            body: key.body(),
             witness,
             events,
             payloads,
@@ -125,6 +155,18 @@ impl SourceInput {
 impl SourceExpectation {
     pub fn witness(&self) -> &SealSourceWitness {
         &self.witness
+    }
+    pub fn source(&self) -> SourceSeal {
+        SourceSeal {
+            reference: hirsel_lir::invocations::ReferenceBody {
+                definition: self.witness.definition.clone(),
+                instance: self.witness.instance,
+                body: self.body,
+            },
+            witness: self.witness.clone(),
+            events: self.events.clone(),
+            payloads: self.payloads.clone(),
+        }
     }
     pub fn events(&self) -> &[SourceEvent] {
         &self.events
