@@ -1037,7 +1037,9 @@ impl QueryEngine {
             .collect();
         previous.extend(carried.iter().cloned());
         // CT-5: a retired declaration's instances are made again from its new
-        // text when a call selects them.
+        // text when a call selects them. Their disappearance is an ordinary
+        // input change too: retire growth roots and invalidate all subscribers.
+        let mut retired_instances = BTreeSet::new();
         for path in &owned {
             let id = DefId::intern(path);
             self.instance_bodies.declarations.remove(&id);
@@ -1049,6 +1051,7 @@ impl QueryEngine {
             {
                 self.items.remove(instance.definition.path());
                 self.generated.remove(instance.definition.path());
+                retired_instances.insert(instance.definition.path().clone());
             }
         }
         for path in &owned {
@@ -1063,7 +1066,7 @@ impl QueryEngine {
                 self.items.insert(path.clone(), kept);
             }
         }
-        let mut affected: BTreeSet<DefPath> = owned.into_iter().collect();
+        let mut affected: BTreeSet<DefPath> = owned.into_iter().chain(retired_instances).collect();
         // Occurrences: this source's items take their places among each
         // definition's other candidates.
         let new_positions: Vec<_> = file.items.iter().map(|new| self.position(new)).collect();

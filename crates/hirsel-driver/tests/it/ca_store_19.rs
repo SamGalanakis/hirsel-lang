@@ -1280,3 +1280,44 @@ fn ordinary_summary_demands_restore_compact_facts_without_syntax() {
         }
     });
 }
+
+#[test]
+fn ordinary_program_loading_reuses_source_heads_and_observes_changed_bytes() {
+    with_compiler_stack(|| {
+        let scratch = tempfile::Builder::new().prefix("hirsel-ordinary-loader-").tempdir().unwrap();
+        let dir = scratch.path();
+        let manifest = dir.join("hirsel.json");
+        std::fs::write(&manifest, serde_json::json!({"schema":1,"package":{"name":"app","version":"1"},"sources":[{"path":"main.hir","module":[]},{"path":"helper.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"main"}}).to_string()).unwrap();
+        let main = "pub fn main()->Result[(),()]{let _=helper();Ok(())}\n";
+        let helper = "fn zebra()->u32{1u32}\nfn helper()->u32{zebra()}\nfn alpha()->u32{2u32}\n";
+        std::fs::write(dir.join("main.hir"), main).unwrap();
+        std::fs::write(dir.join("helper.hir"), helper).unwrap();
+        for jobs in [1, 2, 4, 8] {
+            let config = CompileConfig { store: Arc::new(store::MemStore::default()), jobs: hirsel_intern::jobs::Jobs::new(jobs), ..CompileConfig::for_memory_cap(None) };
+            let compiler = COMPILER.clone().with_config(config);
+            let mut writer = compiler.load_program_source_with_images(&manifest, None, &StdImages::none()).unwrap();
+            assert_eq!(writer.engine.work_stats().parsed_bytes, (main.len()+helper.len()) as u64);
+            let first = writer.check(LoweringPolicy::Reachable).unwrap();
+            assert_eq!(first.completion, CheckCompletion::Complete);
+            assert!(first.diagnostics.is_empty(), "{:?}", first.diagnostics);
+            let mut reader = compiler.load_program_source_with_images(&manifest, None, &StdImages::none()).unwrap();
+            assert_eq!(reader.engine.work_stats().parsed_bytes, 0);
+            reader.parse_sources().unwrap();
+            assert_eq!(reader.engine.work_stats().parsed_bytes, 0);
+            let id = hirsel_syntax::DefId::intern(&reader.entry);
+            reader.engine.adapters.parser = None;
+            reader.engine.adapters.lexer = None;
+            reader.engine.adapters.modes = None;
+            assert_eq!(reader.engine.definition_summary_identity(id).unwrap(), writer.engine.definition_summary_identity(id).unwrap());
+            assert_eq!(reader.engine.work_stats().parsed_bytes, 0);
+            let mut checked = compiler.load_program_source_with_images(&manifest, None, &StdImages::none()).unwrap();
+            let output = checked.check(LoweringPolicy::Reachable).unwrap();
+            assert_eq!(output.completion, first.completion);
+            assert_eq!(output.diagnostics, first.diagnostics);
+            // Equal length and same path do not hide changed source bytes.
+            std::fs::write(dir.join("helper.hir"), helper.replacen("1u32", "?u32", 1)).unwrap();
+            assert!(compiler.load_program_source_with_images(&manifest, None, &StdImages::none()).is_err());
+            std::fs::write(dir.join("helper.hir"), helper).unwrap();
+        }
+    });
+}
