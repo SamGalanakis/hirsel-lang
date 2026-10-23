@@ -38,6 +38,9 @@ impl IdentifiedSignature {
             digest,
         }
     }
+    pub fn belongs_to(&self, types: &TypeInterner) -> bool {
+        std::ptr::eq(&*self.types, types)
+    }
     pub fn signature(&self) -> &hirsel_types::SignatureRef {
         &self.signature
     }
@@ -203,6 +206,22 @@ pub fn read_holds(read: &VRead, signatures: &dyn SignatureLookup) -> bool {
     }
 }
 
+/// The same witness, also bound to the type universe actually being checked.
+/// A canonical digest from a foreign interner is not permission to interpret
+/// that interner's numeric TypeIds in this one.
+pub(crate) fn read_holds_for_types(
+    t: &TypeInterner,
+    read: &VRead,
+    signatures: &dyn SignatureLookup,
+) -> bool {
+    match read {
+        VRead::View(d, digest) => signatures
+            .view(*d)
+            .is_some_and(|view| view.for_types(t) && view.digest() == *digest),
+        _ => read_holds(read, signatures),
+    }
+}
+
 /// The recording lookup V's checks read through, for one validation.
 pub(crate) struct Reader<'a> {
     types: &'a TypeInterner,
@@ -210,6 +229,7 @@ pub(crate) struct Reader<'a> {
     /// A set: a check reads the same views many times, and V's verdict reads
     /// each once.
     reads: RefCell<crate::hashed::HashSet<VRead>>,
+    foreign: RefCell<BTreeSet<DefId>>,
 }
 impl<'a> Reader<'a> {
     pub(crate) fn new(types: &'a TypeInterner, signatures: &'a dyn SignatureLookup) -> Self {
@@ -217,15 +237,19 @@ impl<'a> Reader<'a> {
             types,
             signatures,
             reads: RefCell::default(),
+            foreign: RefCell::default(),
         }
     }
     pub(crate) fn get(&self, d: impl Into<DefId>) -> Option<&'a Signature> {
         let d = d.into();
-        match self
-            .signatures
-            .view(d)
-            .filter(|input| input.for_types(self.types))
-        {
+        match self.signatures.view(d) {
+            Some(view) if !view.for_types(self.types) => {
+                self.foreign.borrow_mut().insert(d);
+                self.reads
+                    .borrow_mut()
+                    .insert(VRead::View(d, view.digest()));
+                None
+            }
             Some(view) => {
                 let (signature, digest) = view.into_parts();
                 self.reads.borrow_mut().insert(VRead::View(d, digest));
@@ -236,6 +260,18 @@ impl<'a> Reader<'a> {
                 None
             }
         }
+    }
+    pub(crate) fn input_errors(&self) -> Vec<Violation> {
+        self.foreign
+            .borrow()
+            .iter()
+            .map(|d| Violation {
+                body: None,
+                block: None,
+                instruction: None,
+                kind: ViolationKind::InvalidSignature(d.path().clone()),
+            })
+            .collect()
     }
     /// The first heap role. The selection is a read, and so is the view that
     /// supplies the role.
@@ -278,7 +314,8 @@ pub fn check_view(
     signatures: &dyn SignatureLookup,
 ) -> ViewVerdict {
     let reader = Reader::new(t, signatures);
-    let error = signature_error(t, d, signature, &reader);
+    let error = signature_error(t, d, signature, &reader)
+        .or_else(|| reader.input_errors().into_iter().next());
     let mut reads = vec![];
     reader.finish(&mut reads);
     ViewVerdict { error, reads }
@@ -348,8 +385,23 @@ impl ValidatedSignatures {
         previous: Option<&ValidatedSignatures>,
     ) -> Arc<ViewVerdict> {
         let input = signatures.view(d).expect("a verdict names a view");
+        if !input.for_types(t) {
+            return Arc::new(ViewVerdict {
+                error: Some(Violation {
+                    body: None,
+                    block: None,
+                    instruction: None,
+                    kind: ViolationKind::InvalidSignature(d.path().clone()),
+                }),
+                reads: vec![],
+            });
+        }
         let (signature, digest) = input.into_parts();
-        let holds = |v: &&Arc<ViewVerdict>| v.reads.iter().all(|read| read_holds(read, signatures));
+        let holds = |v: &&Arc<ViewVerdict>| {
+            v.reads
+                .iter()
+                .all(|read| read_holds_for_types(t, read, signatures))
+        };
         if let Some(verdict) = self
             .verdicts
             .get(&digest)

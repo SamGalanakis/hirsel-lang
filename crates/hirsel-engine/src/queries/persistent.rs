@@ -449,6 +449,11 @@ struct LowerRecord {
     detail: DependencyReads,
 }
 #[derive(Serialize, Deserialize)]
+struct LowerIdentityMetadata {
+    depth: crate::memo::DepthEvidence<Span>,
+    selections: Vec<crate::comptime::Selection>,
+}
+#[derive(Serialize, Deserialize)]
 struct SemanticBodyRecord {
     owner: DefId,
     content: Vec<Vec<u8>>,
@@ -2430,6 +2435,88 @@ impl QueryEngine {
         }
         (report, evidence)
     }
+    /// A body-free native cutoff over the same ordinary Lower query. Metadata
+    /// and private execution are checked before V's own body envelope is used.
+    /// A miss follows the ordinary lowering/validation path; no alternate proof.
+    pub fn verified_lower_output(
+        &mut self,
+        path: &DefPath,
+    ) -> Result<Option<hirsel_validate::VerifiedDefinitionOutput>, QueryError> {
+        let Some((output, depth)) = self.verified_lower_output_inner(path) else {
+            return Ok(None);
+        };
+        self.depth_replay_requests(&depth)?;
+        Ok(Some(output))
+    }
+    /// Materialize this verifier-owned source envelope only after a native
+    /// consumer has decided it needs the body. Native validators stay separate.
+    pub fn materialize_verified_lower_output(
+        &mut self,
+        output: &hirsel_validate::VerifiedDefinitionOutput,
+    ) -> Option<hirsel_tir::DefinitionRef> {
+        if self.verify != Verify::On {
+            return None;
+        }
+        let cache = self.result_store.as_ref()?.verifier()?;
+        let snapshot = self.signature_snapshot();
+        cache.read_definition(
+            output,
+            self.types.clone(),
+            |path, occurrence| {
+                self.items
+                    .get(path)
+                    .and_then(|items| items.iter().find(|item| item.occurrence == occurrence))
+                    .map(|item| item.anchor)
+                    .or_else(|| self.catalog.anchor(path, occurrence))
+            },
+            self.source_verification_policy(),
+            snapshot.validation(&output.owner().path().0.package),
+        )
+    }
+    fn verified_lower_output_inner(
+        &mut self,
+        path: &DefPath,
+    ) -> Option<(
+        hirsel_validate::VerifiedDefinitionOutput,
+        crate::memo::DepthEvidence<Span>,
+    )> {
+        if self.verify != Verify::On
+            || !self.s1.is_empty()
+            || self.verify_store == crate::store::VerifyStore::Recompute
+        {
+            return None;
+        }
+        let variant = self.stored_variant(path, QueryKind::Lower)?;
+        let key = self.store_key(path, QueryKind::Lower)?;
+        let cache = self.result_store.as_ref()?.verifier()?;
+        let snapshot = self.signature_snapshot();
+        let policy = self.source_verification_policy();
+        let subject = evaluation_subject(&key, &variant.payload);
+        let output = cache.definition_output(
+            subject,
+            DefId::intern(path),
+            &self.types,
+            policy,
+            snapshot.validation(&path.0.package),
+        )?;
+        let metadata: LowerIdentityMetadata = self.decode_record(output.metadata())?;
+        if metadata.depth.first.len() != self.depth_limit() as usize + 1
+            || metadata
+                .depth
+                .first
+                .iter()
+                .flatten()
+                .any(|site| self.sources.slice(*site).is_none())
+            || !self.portable_lower_reads(path, &variant.reads, &metadata.selections)
+        {
+            return None;
+        }
+        if self.lower_requires_execution(path, &variant.reads) {
+            self.load_execution_receipt(subject)?;
+        }
+        self.replay_selections(&metadata.selections)?;
+        Some((output, metadata.depth))
+    }
     pub(super) fn store_lower(
         &mut self,
         path: &DefPath,
@@ -2462,6 +2549,11 @@ impl QueryEngine {
         let Some(key) = self.store_key(path, QueryKind::Lower) else {
             return Ok(());
         };
+        let definition = output.value.clone();
+        let identity_metadata = self.encode_record(&LowerIdentityMetadata {
+            depth: depth.clone(),
+            selections: entry.selections.clone(),
+        });
         let Some(payload) = self.encode_record(&LowerRecord {
             selections: entry.selections.clone(),
             depth,
@@ -2484,6 +2576,22 @@ impl QueryEngine {
         else {
             return Ok(());
         };
+        if let (Some(cache), Some(metadata), Some(evidence)) = (
+            store.verifier(),
+            identity_metadata,
+            entry.verification.lock().unwrap().clone(),
+        ) {
+            let snapshot = self.signature_snapshot();
+            cache.publish_definition(
+                evaluation_subject(&key, &payload),
+                &definition,
+                self.types.clone(),
+                self.source_verification_policy(),
+                snapshot.validation(&path.0.package),
+                &evidence,
+                &metadata,
+            );
+        }
         EncodedWriter {
             types: self.type_records().expect("enabled lower types"),
             store,

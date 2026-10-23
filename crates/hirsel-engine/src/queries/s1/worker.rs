@@ -1235,6 +1235,11 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
                 &held.diagnostics,
                 &held.dependencies,
             ));
+        let bytes = bytes.saturating_add(held.verification.as_ref().map_or(0, |e| {
+            std::mem::size_of::<hirsel_validate::VerifiedDefinition>() as u64
+                + 2 * std::mem::size_of::<usize>() as u64
+                + e.reads().capacity() as u64 * std::mem::size_of::<hirsel_validate::VRead>() as u64
+        }));
         self.lowered.hold(key, held, bytes);
         Ok((
             QueryOutput {

@@ -26,7 +26,11 @@ impl View {
     /// A view of `signature`, keeping `previous`'s digest when it is the same view.
     pub fn new(t: &Arc<TypeInterner>, signature: SignatureRef, previous: Option<&View>) -> Self {
         let input = match previous {
-            Some(view) if Arc::ptr_eq(view.input.signature(), &signature) => view.input.clone(),
+            Some(view)
+                if view.input.belongs_to(t) && Arc::ptr_eq(view.input.signature(), &signature) =>
+            {
+                view.input.clone()
+            }
             _ => hirsel_validate::IdentifiedSignature::new(t.clone(), signature),
         };
         Self {
