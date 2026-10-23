@@ -162,17 +162,16 @@ fn demanded_instance_discovery_registers_generic_callee_without_its_body() {
         assert!(weak_callee.upgrade().is_none());
         let target = hirsel_lir::TargetSpec::x86_64_unknown_linux_gnu();
         let mut layouts = hirsel_layout::layout::LayoutBuilder::new(&target, &program.owners);
-        let mut instances = Instances::new(program.types.clone(), program.memo.clone());
-        let source = &context.sources[&main];
-        let (id, _) = instances
-            .register_function(
-                &program,
-                source.declaration.clone(),
-                source.entry,
-                Actuals::none(),
-                &mut layouts,
-            )
-            .unwrap();
+        let (instances, roots) =
+            hirsel_rc::instance::seed_instances(&program, &context, &mut layouts).unwrap();
+        let id = instances.find(&program, &main, &Actuals::none()).unwrap();
+        assert!(roots.contains(&id));
+        assert!(
+            instances
+                .ids()
+                .all(|id| instances.view(id).definition().is_err()),
+            "root registration demands no implementation bodies"
+        );
         let (instances, required) = hirsel_rc::instance::discover_instance(
             &program,
             &context,
@@ -242,17 +241,16 @@ fn demanded_instance_discovery_registers_finalizer_without_its_body() {
         assert!(weak_finalizer.upgrade().is_none());
         let target = hirsel_lir::TargetSpec::x86_64_unknown_linux_gnu();
         let mut layouts = hirsel_layout::layout::LayoutBuilder::new(&target, &program.owners);
-        let mut instances = Instances::new(program.types.clone(), program.memo.clone());
-        let source = &context.sources[&main];
-        let (id, _) = instances
-            .register_function(
-                &program,
-                source.declaration.clone(),
-                source.entry,
-                Actuals::none(),
-                &mut layouts,
-            )
-            .unwrap();
+        let (instances, roots) =
+            hirsel_rc::instance::seed_instances(&program, &context, &mut layouts).unwrap();
+        let id = instances.find(&program, &main, &Actuals::none()).unwrap();
+        assert!(roots.contains(&id));
+        assert!(
+            instances
+                .ids()
+                .all(|id| instances.view(id).definition().is_err()),
+            "root registration demands no implementation bodies"
+        );
         let (instances, required) = hirsel_rc::instance::discover_instance(
             &program,
             &context,

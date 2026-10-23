@@ -787,7 +787,6 @@ struct Expander<'p, 'l, 'o> {
     program: &'p Program,
     layouts: &'l mut LayoutBuilder<'o>,
     out: Instances,
-    queue: VecDeque<InstanceId>,
     context: &'p DiscoveryContext,
     /// Nominal instances already visited (recursive representations).
     nominals: std::collections::HashSet<InstanceKey>,
@@ -810,7 +809,6 @@ pub fn discover_instance(
         program,
         layouts,
         out: instances,
-        queue: VecDeque::new(),
         context,
         nominals: Default::default(),
     };
@@ -821,27 +819,27 @@ pub fn discover_instance(
     Ok((discovery.out, required))
 }
 
-/// Expand every instance the program executes.
-pub fn expand(
+/// Register source, nominal-finalizer and registry-constant roots using only
+/// compact contracts. Every returned source instance starts without a body.
+pub fn seed_instances(
     program: &Program,
+    context: &DiscoveryContext,
     layouts: &mut LayoutBuilder<'_>,
-) -> Result<Instances, InstanceError> {
+) -> Result<(Instances, Vec<InstanceId>), InstanceError> {
     // Explicit scoped capture specialization erases only dead callable carriers
     // to Unit; reserve its ordinary layout before the table is sealed.
     layouts
         .layout(&program.types, program.types.intern(Type::unit()))
         .map_err(|e| InstanceError::Layout(DefPath::core("Unit"), e))?;
-    let context = DiscoveryContext::of(program)?;
     let mut e = Expander {
         program,
         layouts,
         out: Instances::new(program.types.clone(), program.memo.clone()),
-        queue: VecDeque::new(),
-        context: &context,
+        context,
         nominals: Default::default(),
     };
     for (path, signature) in &program.signatures {
-        if !program.definitions.contains_key(path) {
+        if !context.sources.contains_key(path) {
             continue;
         }
         match &signature.kind {
@@ -878,7 +876,7 @@ pub fn expand(
                             arguments.clone(),
                         )?)
                     } else if program.operations.contains_key(definition)
-                        && !program.definitions.contains_key(definition)
+                        && !context.sources.contains_key(definition)
                         && crate::library::value::forwards(definition)
                     {
                         Some(crate::library::Request::operation_value(
@@ -898,19 +896,36 @@ pub fn expand(
             }
         }
     }
-    while let Some(id) = e.queue.pop_front() {
-        if !e.out.roles[id.index()].is_library() {
-            let path = e.out.view(id).key.definition();
-            let definition = program
-                .definitions
-                .get(path)
-                .ok_or_else(|| InstanceError::MissingDefinition(path.clone()))?
-                .clone();
-            e.out.attach_definition(id, definition)?;
+    let roots = e.out.ids().collect();
+    Ok((e.out, roots))
+}
+
+/// Expand every instance the program executes. The current whole-program
+/// caller uses the same registration and one-instance discovery operations;
+/// query consumers demand these operations independently.
+pub fn expand(
+    program: &Program,
+    layouts: &mut LayoutBuilder<'_>,
+) -> Result<Instances, InstanceError> {
+    let context = DiscoveryContext::of(program)?;
+    let (mut instances, roots) = seed_instances(program, &context, layouts)?;
+    let mut pending: VecDeque<_> = roots.into();
+    while let Some(id) = pending.pop_front() {
+        if instances.roles[id.index()].is_library() {
+            continue;
         }
-        e.visit(id)?;
+        let path = instances.view(id).key.definition();
+        let definition = program
+            .definitions
+            .get(path)
+            .ok_or_else(|| InstanceError::MissingDefinition(path.clone()))?
+            .clone();
+        let (next, required) =
+            discover_instance(program, &context, layouts, instances, id, definition)?;
+        instances = next;
+        pending.extend(required);
     }
-    Ok(e.out)
+    Ok(instances)
 }
 
 impl Expander<'_, '_, '_> {
@@ -943,7 +958,6 @@ impl Expander<'_, '_, '_> {
             if let Ok(definition) = self.out.view(id).definition().cloned() {
                 self.out.attach_definition(id, definition)?;
             }
-            self.queue.push_back(id);
         }
         Ok(id)
     }
@@ -955,16 +969,13 @@ impl Expander<'_, '_, '_> {
             .sources
             .get(path)
             .ok_or_else(|| InstanceError::MissingDefinition(path.clone()))?;
-        let (id, fresh) = self.out.register_function(
+        let (id, _) = self.out.register_function(
             self.program,
             source.declaration.clone(),
             source.entry,
             actuals,
             self.layouts,
         )?;
-        if fresh {
-            self.queue.push_back(id);
-        }
         Ok(id)
     }
 
