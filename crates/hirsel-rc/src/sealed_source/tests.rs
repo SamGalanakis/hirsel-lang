@@ -328,3 +328,231 @@ fn semantic_source_33_mut_indirect_call_invalidates_old_environment_producer() {
 fn semantic_source_33_borrow_call_preserves_source_producer() {
     assert!(call_transport(false, false, UseKind::Borrow).is_ok());
 }
+
+#[test]
+fn semantic_destination_33_arena_retains_original_parameter_lineage() {
+    let types = TypeInterner::new(None);
+    let arena = types.intern(Type::with_kind(TypeKind::Named {
+        definition: hirsel_syntax::DefId::intern(&hirsel_syntax::DefPath::core("Arena")),
+        arguments: vec![].into(),
+    }));
+    let scalar = types.intern(Type::with_kind(TypeKind::Primitive(Primitive::U64)));
+    let tuple = types.intern(Type::with_kind(TypeKind::Tuple(vec![scalar].into())));
+    let mut body = body(&[arena, scalar, tuple], 2);
+    let origin = hirsel_types::Origin {
+        root: hirsel_types::OriginRoot::Parameter(hirsel_types::ParameterRef::bound(
+            hirsel_types::ParamId(0),
+        )),
+        fields: Default::default(),
+    };
+    body.places[0].binding = Some(origin.clone());
+    assign(
+        &mut body,
+        2,
+        Rvalue::Construct {
+            constructor: Constructor::Tuple,
+            fields: vec![ConstructField {
+                field: 0,
+                value: operand(1),
+            }],
+            destination: Destination::Arena(origin),
+        },
+    );
+    let recipes = extract(&types, &body, &[4, 5]).unwrap();
+    let PayloadOperation::Allocate {
+        destination: PayloadDestination::Arena(arena),
+    } = &recipes[0].recipe.operation
+    else {
+        panic!("source arena destination")
+    };
+    assert_eq!(arena.place, 0);
+    assert_eq!(arena.producer, PayloadProducer::Parameter(4));
+    assert_eq!(arena.capture_slot, None);
+}
+
+fn witness_definition(body: Body) -> DefinitionRef {
+    std::sync::Arc::new(hirsel_tir::Definition {
+        caller_bodies: vec![BodyId(0)],
+        protocol_associations: vec![],
+        types: vec![].into(),
+        path: hirsel_syntax::DefId::intern(&hirsel_syntax::DefPath::core(
+            "seal_source_witness_fixture",
+        )),
+        signature_hash: hirsel_syntax::ContentHash([0; 32]),
+        bodies: vec![body],
+        entry: BodyId(0),
+        contracts: vec![],
+    })
+}
+fn witness_input(tag: u8) -> hirsel_syntax::ContentHash {
+    hirsel_syntax::ContentHash([tag; 32])
+}
+fn witness_key(
+    types: &TypeInterner,
+    definition: &DefinitionRef,
+) -> hirsel_layout::instance::InstanceKey {
+    hirsel_layout::instance::InstanceKey::new(definition.path.path(), 0, &[], types, None, None)
+        .unwrap()
+}
+
+#[test]
+fn source_witness_33_expected_empty_is_distinct_from_unavailable_provider() {
+    use hirsel_lir::operation::OperationDeclarations;
+    let types = TypeInterner::new(None);
+    let scalar = types.intern(Type::with_kind(TypeKind::Primitive(Primitive::U64)));
+    let definition = witness_definition(body(&[scalar], 1));
+    let key = witness_key(&types, &definition);
+    let source = SourceInput::capture(
+        witness_input(1),
+        hirsel_syntax::ContentHash([2; 32]),
+        definition,
+    );
+    let expected = source.derive(&key, &types, &[0], Ok).unwrap();
+    let mut declarations = SourceDeclarations::new(hirsel_layout::operation::OperationRegistry {
+        types,
+        type_declarations: Default::default(),
+        signatures: Default::default(),
+        owners: Default::default(),
+    });
+    assert!(
+        declarations
+            .seal_source_witness(key.definition(), key.digest())
+            .is_none()
+    );
+    assert!(
+        declarations
+            .seal_events(key.definition(), key.digest())
+            .is_none()
+    );
+    declarations.insert(expected.clone()).unwrap();
+    assert_eq!(
+        declarations
+            .seal_source_witness(key.definition(), key.digest())
+            .as_ref(),
+        Some(expected.witness())
+    );
+    assert_eq!(
+        declarations.seal_events(key.definition(), key.digest()),
+        Some(vec![])
+    );
+    assert_eq!(
+        declarations.seal_payloads(key.definition(), key.digest()),
+        Some(vec![])
+    );
+}
+
+#[test]
+fn source_witness_33_private_revision_and_complete_input_invalidate_same_shape() {
+    let types = TypeInterner::new(None);
+    let scalar = types.intern(Type::with_kind(TypeKind::Primitive(Primitive::U64)));
+    let definition = witness_definition(body(&[scalar], 1));
+    let key = witness_key(&types, &definition);
+    let observe = |input, revision| {
+        SourceInput::capture(input, revision, definition.clone())
+            .derive(&key, &types, &[0], Ok)
+            .unwrap()
+    };
+    let before = observe(witness_input(1), hirsel_syntax::ContentHash([2; 32]));
+    let private_edit = observe(witness_input(1), hirsel_syntax::ContentHash([3; 32]));
+    let input_edit = observe(witness_input(4), hirsel_syntax::ContentHash([2; 32]));
+    assert_eq!(
+        before.witness().expectations,
+        private_edit.witness().expectations
+    );
+    assert_ne!(before.witness(), private_edit.witness());
+    assert_ne!(before.witness(), input_edit.witness());
+}
+
+#[test]
+fn source_witness_33_capture_keeps_original_lower_before_body_rewrite() {
+    let types = TypeInterner::new(None);
+    let scalar = types.intern(Type::with_kind(TypeKind::Primitive(Primitive::U64)));
+    let tuple = types.intern(Type::with_kind(TypeKind::Tuple(vec![scalar].into())));
+    let mut original = body(&[scalar, tuple], 0);
+    assign(&mut original, 0, Rvalue::Constant(Constant::Integer(1)));
+    assign(
+        &mut original,
+        1,
+        Rvalue::Construct {
+            constructor: Constructor::Tuple,
+            fields: vec![ConstructField {
+                field: 0,
+                value: operand(0),
+            }],
+            destination: Destination::Heap,
+        },
+    );
+    let mut definition = witness_definition(original);
+    let key = witness_key(&types, &definition);
+    let captured = SourceInput::capture(
+        witness_input(1),
+        hirsel_syntax::ContentHash([2; 32]),
+        definition.clone(),
+    );
+    std::sync::Arc::make_mut(&mut definition).bodies[0].rvalues[0] =
+        Rvalue::Constant(Constant::Integer(9));
+    let later = SourceInput::capture(
+        witness_input(1),
+        hirsel_syntax::ContentHash([3; 32]),
+        definition,
+    );
+    let before = captured.derive(&key, &types, &[], Ok).unwrap();
+    let after = later.derive(&key, &types, &[], Ok).unwrap();
+    assert_ne!(before.witness().expectations, after.witness().expectations);
+}
+
+#[test]
+fn source_witness_33_unexpanded_call_is_unavailable_not_empty() {
+    let types = TypeInterner::new(None);
+    let scalar = types.intern(Type::with_kind(TypeKind::Primitive(Primitive::U64)));
+    let mut original = body(&[scalar], 1);
+    original.blocks[0].terminator = Terminator::Call {
+        callee: Callee::Definition {
+            path: hirsel_syntax::DefPath::core("unexpanded_source_operation"),
+            arguments: vec![],
+        },
+        arguments: vec![],
+        returns: None,
+        on_failure: CleanupId(0),
+    };
+    let definition = witness_definition(original);
+    let key = witness_key(&types, &definition);
+    let source = SourceInput::capture(
+        witness_input(1),
+        hirsel_syntax::ContentHash([2; 32]),
+        definition,
+    );
+    assert!(matches!(
+        source.derive(&key, &types, &[0], Ok),
+        Err(SourceError::Unsupported(
+            "source witness needs reviewed call event expansion"
+        ))
+    ));
+}
+
+#[test]
+fn source_witness_33_provider_refuses_mixed_source_snapshots() {
+    let types = TypeInterner::new(None);
+    let scalar = types.intern(Type::with_kind(TypeKind::Primitive(Primitive::U64)));
+    let definition = witness_definition(body(&[scalar], 1));
+    let key = witness_key(&types, &definition);
+    let observe = |tag| {
+        SourceInput::capture(
+            witness_input(tag),
+            hirsel_syntax::ContentHash([2; 32]),
+            definition.clone(),
+        )
+        .derive(&key, &types, &[0], Ok)
+        .unwrap()
+    };
+    let one = observe(1);
+    let two = observe(2);
+    let mut declarations = SourceDeclarations::new(hirsel_layout::operation::OperationRegistry {
+        types,
+        type_declarations: Default::default(),
+        signatures: Default::default(),
+        owners: Default::default(),
+    });
+    declarations.insert(one).unwrap();
+    assert!(declarations.insert(two).is_err());
+}
