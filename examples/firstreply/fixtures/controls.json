@@ -1,0 +1,477 @@
+[
+  {
+    "id": "cap-timeout-zero",
+    "grants": {
+      "args": [
+        "0",
+        "{\"id\":\"a\",\"method\":\"ping\"}",
+        "/firstreply/0.sock"
+      ],
+      "io": {
+        "stdout": "stdout.bytes@1",
+        "tasks": "tasks.cooperative@1",
+        "monotonic_clock": "clock.monotonic.ns@1",
+        "dirs": [],
+        "net": {
+          "provider": "net.script@2",
+          "rules": [
+            {
+              "address": "/firstreply/0.sock",
+              "service": "0",
+              "operation": "unix_connect"
+            }
+          ],
+          "peers": [
+            {
+              "address": "/firstreply/0.sock",
+              "port": 0,
+              "resolves_to": [],
+              "tls": "plain",
+              "connections": [
+                {
+                  "open": [
+                    {
+                      "send": [0, 0, 0, 26, 123, 34, 105, 100, 34, 58, 34, 97, 34, 44, 34, 114, 101, 115, 117, 108, 116, 34, 58, 34, 112, 111, 110, 103, 34, 125]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "expected": {
+      "status": 2,
+      "stdout": "{\"error\":\"usage\"}\n",
+      "stderr": ""
+    },
+    "cleanup": {
+      "children": 1,
+      "join_all_before_output": true,
+      "no_client_io_after_output": true,
+      "allow_already_delivered_requests": true
+    }
+  },
+  {
+    "id": "cap-timeout-over",
+    "grants": {
+      "args": [
+        "60001",
+        "{\"id\":\"a\",\"method\":\"ping\"}",
+        "/firstreply/0.sock"
+      ],
+      "io": {
+        "stdout": "stdout.bytes@1",
+        "tasks": "tasks.cooperative@1",
+        "monotonic_clock": "clock.monotonic.ns@1",
+        "dirs": [],
+        "net": {
+          "provider": "net.script@2",
+          "rules": [
+            {
+              "address": "/firstreply/0.sock",
+              "service": "0",
+              "operation": "unix_connect"
+            }
+          ],
+          "peers": [
+            {
+              "address": "/firstreply/0.sock",
+              "port": 0,
+              "resolves_to": [],
+              "tls": "plain",
+              "connections": [
+                {
+                  "open": [
+                    {
+                      "send": [0, 0, 0, 26, 123, 34, 105, 100, 34, 58, 34, 97, 34, 44, 34, 114, 101, 115, 117, 108, 116, 34, 58, 34, 112, 111, 110, 103, 34, 125]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "expected": {
+      "status": 2,
+      "stdout": "{\"error\":\"usage\"}\n",
+      "stderr": ""
+    },
+    "cleanup": {
+      "children": 1,
+      "join_all_before_output": true,
+      "no_client_io_after_output": true,
+      "allow_already_delivered_requests": true
+    }
+  },
+  {
+    "id": "cap-endpoints-five",
+    "grants": {
+      "args": [
+        "50",
+        "{\"id\":\"a\",\"method\":\"ping\"}",
+        "/firstreply/0.sock",
+        "/firstreply/1.sock",
+        "/firstreply/2.sock",
+        "/firstreply/3.sock",
+        "/firstreply/4.sock"
+      ],
+      "io": {
+        "stdout": "stdout.bytes@1",
+        "tasks": "tasks.cooperative@1",
+        "monotonic_clock": "clock.monotonic.ns@1",
+        "dirs": [],
+        "net": {
+          "provider": "net.script@2",
+          "rules": [
+            {
+              "address": "/firstreply/0.sock",
+              "service": "0",
+              "operation": "unix_connect"
+            }
+          ],
+          "peers": [
+            {
+              "address": "/firstreply/0.sock",
+              "port": 0,
+              "resolves_to": [],
+              "tls": "plain",
+              "connections": [
+                {
+                  "open": [
+                    {
+                      "send": [0, 0, 0, 26, 123, 34, 105, 100, 34, 58, 34, 97, 34, 44, 34, 114, 101, 115, 117, 108, 116, 34, 58, 34, 112, 111, 110, 103, 34, 125]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "expected": {
+      "status": 2,
+      "stdout": "{\"error\":\"usage\"}\n",
+      "stderr": ""
+    },
+    "cleanup": {
+      "children": 1,
+      "join_all_before_output": true,
+      "no_client_io_after_output": true,
+      "allow_already_delivered_requests": true
+    }
+  },
+  {
+    "id": "negative-unknown-method",
+    "grants": {
+      "args": [
+        "50",
+        "{\"id\":\"a\",\"method\":\"delete\"}",
+        "/firstreply/0.sock"
+      ],
+      "io": {
+        "stdout": "stdout.bytes@1",
+        "tasks": "tasks.cooperative@1",
+        "monotonic_clock": "clock.monotonic.ns@1",
+        "dirs": [],
+        "net": {
+          "provider": "net.script@2",
+          "rules": [
+            {
+              "address": "/firstreply/0.sock",
+              "service": "0",
+              "operation": "unix_connect"
+            }
+          ],
+          "peers": [
+            {
+              "address": "/firstreply/0.sock",
+              "port": 0,
+              "resolves_to": [],
+              "tls": "plain",
+              "connections": [
+                {
+                  "open": [
+                    {
+                      "send": [0, 0, 0, 26, 123, 34, 105, 100, 34, 58, 34, 97, 34, 44, 34, 114, 101, 115, 117, 108, 116, 34, 58, 34, 112, 111, 110, 103, 34, 125]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "expected": {
+      "status": 2,
+      "stdout": "{\"error\":\"usage\"}\n",
+      "stderr": ""
+    },
+    "cleanup": {
+      "children": 1,
+      "join_all_before_output": true,
+      "no_client_io_after_output": true,
+      "allow_already_delivered_requests": true
+    }
+  },
+  {
+    "id": "cap-text-over",
+    "grants": {
+      "args": [
+        "50",
+        "{\"id\":\"a\",\"method\":\"normalize\",\"text\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+        "/firstreply/0.sock"
+      ],
+      "io": {
+        "stdout": "stdout.bytes@1",
+        "tasks": "tasks.cooperative@1",
+        "monotonic_clock": "clock.monotonic.ns@1",
+        "dirs": [],
+        "net": {
+          "provider": "net.script@2",
+          "rules": [
+            {
+              "address": "/firstreply/0.sock",
+              "service": "0",
+              "operation": "unix_connect"
+            }
+          ],
+          "peers": [
+            {
+              "address": "/firstreply/0.sock",
+              "port": 0,
+              "resolves_to": [],
+              "tls": "plain",
+              "connections": [
+                {
+                  "open": [
+                    {
+                      "send": [0, 0, 0, 26, 123, 34, 105, 100, 34, 58, 34, 97, 34, 44, 34, 114, 101, 115, 117, 108, 116, 34, 58, 34, 112, 111, 110, 103, 34, 125]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "expected": {
+      "status": 2,
+      "stdout": "{\"error\":\"text_limit\"}\n",
+      "stderr": ""
+    },
+    "cleanup": {
+      "children": 1,
+      "join_all_before_output": true,
+      "no_client_io_after_output": true,
+      "allow_already_delivered_requests": true
+    }
+  },
+  {
+    "id": "cap-frame-over",
+    "grants": {
+      "args": [
+        "50",
+        "{\"id\":\"a\",\"method\":\"ping\"}                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       ",
+        "/firstreply/0.sock"
+      ],
+      "io": {
+        "stdout": "stdout.bytes@1",
+        "tasks": "tasks.cooperative@1",
+        "monotonic_clock": "clock.monotonic.ns@1",
+        "dirs": [],
+        "net": {
+          "provider": "net.script@2",
+          "rules": [
+            {
+              "address": "/firstreply/0.sock",
+              "service": "0",
+              "operation": "unix_connect"
+            }
+          ],
+          "peers": [
+            {
+              "address": "/firstreply/0.sock",
+              "port": 0,
+              "resolves_to": [],
+              "tls": "plain",
+              "connections": [
+                {
+                  "open": [
+                    {
+                      "send": [0, 0, 0, 26, 123, 34, 105, 100, 34, 58, 34, 97, 34, 44, 34, 114, 101, 115, 117, 108, 116, 34, 58, 34, 112, 111, 110, 103, 34, 125]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "expected": {
+      "status": 2,
+      "stdout": "{\"error\":\"frame_limit\"}\n",
+      "stderr": ""
+    },
+    "cleanup": {
+      "children": 1,
+      "join_all_before_output": true,
+      "no_client_io_after_output": true,
+      "allow_already_delivered_requests": true
+    }
+  },
+  {
+    "id": "cap-frame-exact",
+    "grants": {
+      "args": [
+        "50",
+        "{\"id\":\"a\",\"method\":\"ping\"}                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      ",
+        "/firstreply/0.sock"
+      ],
+      "io": {
+        "stdout": "stdout.bytes@1",
+        "tasks": "tasks.cooperative@1",
+        "monotonic_clock": "clock.monotonic.ns@1",
+        "dirs": [],
+        "net": {
+          "provider": "net.script@2",
+          "rules": [
+            {
+              "address": "/firstreply/0.sock",
+              "service": "0",
+              "operation": "unix_connect"
+            }
+          ],
+          "peers": [
+            {
+              "address": "/firstreply/0.sock",
+              "port": 0,
+              "resolves_to": [],
+              "tls": "plain",
+              "connections": [
+                {
+                  "open": [
+                    {
+                      "send": [0, 0, 0, 26, 123, 34, 105, 100, 34, 58, 34, 97, 34, 44, 34, 114, 101, 115, 117, 108, 116, 34, 58, 34, 112, 111, 110, 103, 34, 125]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "expected": {
+      "status": 0,
+      "stdout": "{\"endpoint\":0,\"response\":{\"id\":\"a\",\"result\":\"pong\"}}\n",
+      "stderr": ""
+    },
+    "cleanup": {
+      "children": 1,
+      "join_all_before_output": true,
+      "no_client_io_after_output": true,
+      "allow_already_delivered_requests": true
+    }
+  },
+  {
+    "id": "cap-endpoints-four",
+    "grants": {
+      "args": [
+        "50",
+        "{\"id\":\"a\",\"method\":\"ping\"}",
+        "/firstreply/0.sock",
+        "/firstreply/1.sock",
+        "/firstreply/2.sock",
+        "/firstreply/3.sock"
+      ],
+      "io": {
+        "stdout": "stdout.bytes@1",
+        "tasks": "tasks.cooperative@1",
+        "monotonic_clock": "clock.monotonic.ns@1",
+        "dirs": [],
+        "net": {
+          "provider": "net.script@2",
+          "rules": [
+            {
+              "address": "/firstreply/0.sock",
+              "service": "0",
+              "operation": "unix_connect"
+            },
+            {
+              "address": "/firstreply/1.sock",
+              "service": "0",
+              "operation": "unix_connect"
+            },
+            {
+              "address": "/firstreply/2.sock",
+              "service": "0",
+              "operation": "unix_connect"
+            },
+            {
+              "address": "/firstreply/3.sock",
+              "service": "0",
+              "operation": "unix_connect"
+            }
+          ],
+          "peers": [
+            {
+              "address": "/firstreply/0.sock",
+              "port": 0,
+              "resolves_to": [],
+              "tls": "plain",
+              "connections": [
+                "refused"
+              ]
+            },
+            {
+              "address": "/firstreply/1.sock",
+              "port": 0,
+              "resolves_to": [],
+              "tls": "plain",
+              "connections": [
+                "refused"
+              ]
+            },
+            {
+              "address": "/firstreply/2.sock",
+              "port": 0,
+              "resolves_to": [],
+              "tls": "plain",
+              "connections": [
+                "refused"
+              ]
+            },
+            {
+              "address": "/firstreply/3.sock",
+              "port": 0,
+              "resolves_to": [],
+              "tls": "plain",
+              "connections": [
+                "refused"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "expected": {
+      "status": 1,
+      "stdout": "{\"endpoint\":0,\"error\":\"connection_refused\"}\n",
+      "stderr": ""
+    },
+    "cleanup": {
+      "children": 1,
+      "join_all_before_output": true,
+      "no_client_io_after_output": true,
+      "allow_already_delivered_requests": true
+    }
+  }
+]

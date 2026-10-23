@@ -1,0 +1,201 @@
+pub type QueryError = Input(localrpc@1/model.InputError) | Network(NetError)
+
+pub type AppError = Usage | Input(localrpc@1/model.InputError) | Grant(GrantError) | Output(
+  OutputError
+) | Clock(time.SleepError)
+
+type Outcome = Answer(u64, Bytes) | Failed(u64, QueryError) | TimedOut
+
+// Read exactly the remaining header/body, never beyond the first frame.
+// localrpc's decoder caps the declared body before accumulating it.
+fn receive(n: Net, mut stream: Stream of n) -> Result[Bytes, QueryError] {
+  let mut state = localrpc@1/model.decoder()
+  while true {
+    let mut chunk: List[u8] = []
+    let count = net.read(n, mut stream, mut chunk, localrpc@1/model.remaining(state))?
+    if count == 0 {
+      localrpc@1/model.finish(state)?
+      return Error(Input(TruncatedHeader()))
+    }
+    for byte in chunk {
+      if let Some(payload) = localrpc@1/model.push(mut state, byte)? {
+        return Ok(take payload)
+      }
+    }
+  }
+  Error(Input(TruncatedHeader()))
+}
+
+fn exchange(n: Net, socket: Path, payload: Bytes, sent: localrpc@1/model.Request) -> Result[
+  Bytes,
+  QueryError
+] {
+  let frame = localrpc@1/model.frame(payload)?
+  let mut stream = net.unix_connect(n, socket)?
+  net.write_all(n, mut stream, frame)?
+  let reply = receive(n, mut stream)?
+  Ok(localrpc@1/model.encode(localrpc@1/model.response(reply, sent)?))
+}
+
+// First completion, including Error. select consumes every handle and performs
+// cancel+join before returning (CONC-2), like Tokio JoinSet::shutdown's abort+drain.
+fn first(
+  n: Net,
+  tasks: Tasks,
+  c: MonotonicClock,
+  sockets: List[Path],
+  payload: Bytes,
+  sent: localrpc@1/model.Request,
+  interval: time.Duration
+) -> Result[Outcome, AppError] {
+  if list.len(sockets) == 0 || list.len(sockets) > 4 {
+    return Error(Usage())
+  }
+  let at = time.deadline(c, interval)?
+  let bounded = task.scope_until(
+    tasks,
+    Deadline(clock: c, at: at),
+    fn(s: Scope) -> Outcome {
+      let mut pending: TaskSet[unique Result[Bytes, QueryError]] of s = task.set(s)
+      for socket in sockets {
+        let owned_payload = unique payload
+        let owned_request = unique sent
+        task.add(
+          s,
+          mut pending,
+          task.async(
+            s,
+            fn() -> unique Result[Bytes, QueryError] {
+              unique exchange(n, socket, take owned_payload, take owned_request)
+            }
+          )
+        )
+      }
+      let (index, completed) = task.select(s, take pending)
+      match take completed {
+        Ok(reply) => Answer(index, take reply),
+        Error(error) => Failed(index, take error),
+      }
+    }
+  )
+  match take bounded {
+    Finished(value) => Ok(take value),
+    Expired(_) => Ok(TimedOut()),
+  }
+}
+
+fn error_name(error: QueryError) -> String uses {} {
+  match error {
+    Input(problem) => localrpc@1/model.error_name(problem),
+    Network(ConnectionRefused()) => "connection_refused",
+    Network(ConnectionReset()) => "connection_reset",
+    Network(NotGranted()) => "not_granted",
+    Network(Canceled(_)) => "canceled",
+    Network(TimedOut()) => "network_timeout",
+    Network(_) => "network",
+  }
+}
+
+fn execute(rt: Io, args: Args, output: Stdout) -> Result[u8, AppError] {
+  if arg.len(args) == 1 {
+    if let Ok(flag) = arg.text(args, 0) {
+      if flag == "--help" {
+        out.print(
+          output,
+          "usage: firstreply TIMEOUT_MS REQUEST SOCKET [SOCKET ...]\nFirst completion (including errors); 1..4 Unix sockets; Ping/Normalize only.\n"
+        )?
+        return Ok(0u8)
+      }
+    }
+  }
+  if arg.len(args) < 3 || arg.len(args) > 6 {
+    return Error(Usage())
+  }
+  let Ok(milliseconds) = arg.text(args, 0) else {
+    return Error(Usage())
+  }
+  let Ok(limit) = u64.parse(milliseconds) else {
+    return Error(Usage())
+  }
+  if limit == 0 || limit > 60000 {
+    return Error(Usage())
+  }
+  let Ok(request_text) = arg.text(args, 1) else {
+    return Error(Usage())
+  }
+  let payload = string.as_bytes(request_text)
+  let sent = localrpc@1/model.request(payload)?
+  match sent {
+    Unknown(_, _) => return Error(Usage()),
+    _ => {},
+  }
+  // Validate the encoded frame before projecting network/task/clock grants.
+  let _ = localrpc@1/model.frame(payload)?
+  let mut sockets: List[Path] = []
+  for i in 2u64..arg.len(args) {
+    let Ok(socket) = arg.path(args, i) else {
+      return Error(Usage())
+    }
+    list.push(mut sockets, socket)
+  }
+  let wide_limit: i128 = int.widen(limit)
+  let outcome = first(
+    io.net(rt)?,
+    io.tasks(rt)?,
+    io.monotonic_clock(rt)?,
+    sockets,
+    payload,
+    sent,
+    time.Duration(nanoseconds: wide_limit * 1000000)
+  )?
+  let mut rendered: List[u8] = []
+  let code = match outcome {
+    Answer(index, reply) => {
+      text.append(mut rendered, f"{{\"endpoint\":{index},\"response\":")
+      bytes.append(mut rendered, reply)
+      text.append(mut rendered, "}\n")
+      0u8
+    },
+    Failed(index, error) => {
+      text.append(
+        mut rendered,
+        f"{{\"endpoint\":{index},\"error\":\"{error_name(error)}\"}}\n"
+      )
+      1u8
+    },
+    TimedOut() => {
+      text.append(mut rendered, "{\"error\":\"timeout\"}\n")
+      1u8
+    },
+  }
+  out.write(output, bytes.from_list(take rendered))?
+  Ok(code)
+}
+
+pub fn main(rt: Io, args: Args) -> process.ExitCode {
+  let Ok(output) = io.stdout(rt) else {
+    return process.exit_code(3u8)
+  }
+  match execute(rt, args, output) {
+    Ok(code) => process.exit_code(code),
+    Error(Usage()) => {
+      match out.print(output, "{\"error\":\"usage\"}\n") {
+        Ok(()) => process.exit_code(2u8),
+        Error(_) => process.exit_code(3u8),
+      }
+    },
+    Error(Input(problem)) => {
+      match out.print(
+        output,
+        f"{{\"error\":\"{localrpc@1/model.error_name(problem)}\"}}\n"
+      ) {
+        Ok(()) => process.exit_code(2u8),
+        Error(_) => process.exit_code(3u8),
+      }
+    },
+    Error(_) => {
+      let _ = out.print(output, "{\"error\":\"io\"}\n")
+      process.exit_code(3u8)
+    },
+  }
+}

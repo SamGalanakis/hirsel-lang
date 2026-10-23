@@ -1,0 +1,899 @@
+[
+  {
+    "id": "one-success",
+    "grants": {
+      "args": [
+        "50",
+        "{\"id\":\"a\",\"method\":\"normalize\",\"text\":\"  HELLO  \"}",
+        "/firstreply/0.sock"
+      ],
+      "io": {
+        "stdout": "stdout.bytes@1",
+        "tasks": "tasks.cooperative@1",
+        "monotonic_clock": "clock.monotonic.ns@1",
+        "dirs": [],
+        "net": {
+          "provider": "net.script@2",
+          "rules": [
+            {
+              "address": "/firstreply/0.sock",
+              "service": "0",
+              "operation": "unix_connect"
+            }
+          ],
+          "peers": [
+            {
+              "address": "/firstreply/0.sock",
+              "port": 0,
+              "resolves_to": [],
+              "tls": "plain",
+              "connections": [
+                {
+                  "open": [
+                    {
+                      "send": [0, 0, 0, 27, 123, 34, 105, 100, 34, 58, 34, 97, 34, 44, 34, 114, 101, 115, 117, 108, 116, 34, 58, 34, 104, 101, 108, 108, 111, 34, 125]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "expected": {
+      "status": 0,
+      "stdout": "{\"endpoint\":0,\"response\":{\"id\":\"a\",\"result\":\"hello\"}}\n",
+      "stderr": ""
+    },
+    "cleanup": {
+      "children": 1,
+      "join_all_before_output": true,
+      "no_client_io_after_output": true,
+      "allow_already_delivered_requests": true
+    }
+  },
+  {
+    "id": "one-error",
+    "grants": {
+      "args": [
+        "50",
+        "{\"id\":\"a\",\"method\":\"ping\"}",
+        "/firstreply/0.sock"
+      ],
+      "io": {
+        "stdout": "stdout.bytes@1",
+        "tasks": "tasks.cooperative@1",
+        "monotonic_clock": "clock.monotonic.ns@1",
+        "dirs": [],
+        "net": {
+          "provider": "net.script@2",
+          "rules": [
+            {
+              "address": "/firstreply/0.sock",
+              "service": "0",
+              "operation": "unix_connect"
+            }
+          ],
+          "peers": [
+            {
+              "address": "/firstreply/0.sock",
+              "port": 0,
+              "resolves_to": [],
+              "tls": "plain",
+              "connections": [
+                "refused"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "expected": {
+      "status": 1,
+      "stdout": "{\"endpoint\":0,\"error\":\"connection_refused\"}\n",
+      "stderr": ""
+    },
+    "cleanup": {
+      "children": 1,
+      "join_all_before_output": true,
+      "no_client_io_after_output": true,
+      "allow_already_delivered_requests": true
+    }
+  },
+  {
+    "id": "success-before-pending",
+    "grants": {
+      "args": [
+        "50",
+        "{\"id\":\"a\",\"method\":\"ping\"}",
+        "/firstreply/0.sock",
+        "/firstreply/1.sock"
+      ],
+      "io": {
+        "stdout": "stdout.bytes@1",
+        "tasks": "tasks.cooperative@1",
+        "monotonic_clock": "clock.monotonic.ns@1",
+        "dirs": [],
+        "net": {
+          "provider": "net.script@2",
+          "rules": [
+            {
+              "address": "/firstreply/0.sock",
+              "service": "0",
+              "operation": "unix_connect"
+            },
+            {
+              "address": "/firstreply/1.sock",
+              "service": "0",
+              "operation": "unix_connect"
+            }
+          ],
+          "peers": [
+            {
+              "address": "/firstreply/0.sock",
+              "port": 0,
+              "resolves_to": [],
+              "tls": "plain",
+              "connections": [
+                {
+                  "open": [
+                    {
+                      "send": [0, 0, 0, 26, 123, 34, 105, 100, 34, 58, 34, 97, 34, 44, 34, 114, 101, 115, 117, 108, 116, 34, 58, 34, 112, 111, 110, 103, 34, 125]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "address": "/firstreply/1.sock",
+              "port": 0,
+              "resolves_to": [],
+              "tls": "plain",
+              "connections": [
+                "unanswered"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "expected": {
+      "status": 0,
+      "stdout": "{\"endpoint\":0,\"response\":{\"id\":\"a\",\"result\":\"pong\"}}\n",
+      "stderr": ""
+    },
+    "cleanup": {
+      "children": 2,
+      "join_all_before_output": true,
+      "no_client_io_after_output": true,
+      "allow_already_delivered_requests": true
+    }
+  },
+  {
+    "id": "error-before-later-success",
+    "grants": {
+      "args": [
+        "50",
+        "{\"id\":\"a\",\"method\":\"ping\"}",
+        "/firstreply/0.sock",
+        "/firstreply/1.sock"
+      ],
+      "io": {
+        "stdout": "stdout.bytes@1",
+        "tasks": "tasks.cooperative@1",
+        "monotonic_clock": "clock.monotonic.ns@1",
+        "dirs": [],
+        "net": {
+          "provider": "net.script@2",
+          "rules": [
+            {
+              "address": "/firstreply/0.sock",
+              "service": "0",
+              "operation": "unix_connect"
+            },
+            {
+              "address": "/firstreply/1.sock",
+              "service": "0",
+              "operation": "unix_connect"
+            }
+          ],
+          "peers": [
+            {
+              "address": "/firstreply/0.sock",
+              "port": 0,
+              "resolves_to": [],
+              "tls": "plain",
+              "connections": [
+                "refused"
+              ]
+            },
+            {
+              "address": "/firstreply/1.sock",
+              "port": 0,
+              "resolves_to": [],
+              "tls": "plain",
+              "connections": [
+                {
+                  "open": [
+                    {
+                      "send": [0]
+                    },
+                    {
+                      "send": [0]
+                    },
+                    {
+                      "send": [0]
+                    },
+                    {
+                      "send": [26]
+                    },
+                    {
+                      "send": [123]
+                    },
+                    {
+                      "send": [34]
+                    },
+                    {
+                      "send": [105]
+                    },
+                    {
+                      "send": [100]
+                    },
+                    {
+                      "send": [34]
+                    },
+                    {
+                      "send": [58]
+                    },
+                    {
+                      "send": [34]
+                    },
+                    {
+                      "send": [97]
+                    },
+                    {
+                      "send": [34]
+                    },
+                    {
+                      "send": [44]
+                    },
+                    {
+                      "send": [34]
+                    },
+                    {
+                      "send": [114]
+                    },
+                    {
+                      "send": [101]
+                    },
+                    {
+                      "send": [115]
+                    },
+                    {
+                      "send": [117]
+                    },
+                    {
+                      "send": [108]
+                    },
+                    {
+                      "send": [116]
+                    },
+                    {
+                      "send": [34]
+                    },
+                    {
+                      "send": [58]
+                    },
+                    {
+                      "send": [34]
+                    },
+                    {
+                      "send": [112]
+                    },
+                    {
+                      "send": [111]
+                    },
+                    {
+                      "send": [110]
+                    },
+                    {
+                      "send": [103]
+                    },
+                    {
+                      "send": [34]
+                    },
+                    {
+                      "send": [125]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "expected": {
+      "status": 1,
+      "stdout": "{\"endpoint\":0,\"error\":\"connection_refused\"}\n",
+      "stderr": ""
+    },
+    "cleanup": {
+      "children": 2,
+      "join_all_before_output": true,
+      "no_client_io_after_output": true,
+      "allow_already_delivered_requests": true
+    }
+  },
+  {
+    "id": "timeout-before-all-responses",
+    "grants": {
+      "args": [
+        "50",
+        "{\"id\":\"a\",\"method\":\"ping\"}",
+        "/firstreply/0.sock",
+        "/firstreply/1.sock"
+      ],
+      "io": {
+        "stdout": "stdout.bytes@1",
+        "tasks": "tasks.cooperative@1",
+        "monotonic_clock": "clock.monotonic.ns@1",
+        "dirs": [],
+        "net": {
+          "provider": "net.script@2",
+          "rules": [
+            {
+              "address": "/firstreply/0.sock",
+              "service": "0",
+              "operation": "unix_connect"
+            },
+            {
+              "address": "/firstreply/1.sock",
+              "service": "0",
+              "operation": "unix_connect"
+            }
+          ],
+          "peers": [
+            {
+              "address": "/firstreply/0.sock",
+              "port": 0,
+              "resolves_to": [],
+              "tls": "plain",
+              "connections": [
+                {
+                  "open": [
+                    "stall"
+                  ]
+                }
+              ]
+            },
+            {
+              "address": "/firstreply/1.sock",
+              "port": 0,
+              "resolves_to": [],
+              "tls": "plain",
+              "connections": [
+                "unanswered"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "expected": {
+      "status": 1,
+      "stdout": "{\"error\":\"timeout\"}\n",
+      "stderr": ""
+    },
+    "cleanup": {
+      "children": 2,
+      "join_all_before_output": true,
+      "no_client_io_after_output": true,
+      "allow_already_delivered_requests": true
+    }
+  },
+  {
+    "id": "two-ready-fifo",
+    "grants": {
+      "args": [
+        "50",
+        "{\"id\":\"a\",\"method\":\"ping\"}",
+        "/firstreply/0.sock",
+        "/firstreply/1.sock"
+      ],
+      "io": {
+        "stdout": "stdout.bytes@1",
+        "tasks": "tasks.cooperative@1",
+        "monotonic_clock": "clock.monotonic.ns@1",
+        "dirs": [],
+        "net": {
+          "provider": "net.script@2",
+          "rules": [
+            {
+              "address": "/firstreply/0.sock",
+              "service": "0",
+              "operation": "unix_connect"
+            },
+            {
+              "address": "/firstreply/1.sock",
+              "service": "0",
+              "operation": "unix_connect"
+            }
+          ],
+          "peers": [
+            {
+              "address": "/firstreply/0.sock",
+              "port": 0,
+              "resolves_to": [],
+              "tls": "plain",
+              "connections": [
+                {
+                  "open": [
+                    {
+                      "send": [0, 0, 0, 26, 123, 34, 105, 100, 34, 58, 34, 97, 34, 44, 34, 114, 101, 115, 117, 108, 116, 34, 58, 34, 112, 111, 110, 103, 34, 125]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "address": "/firstreply/1.sock",
+              "port": 0,
+              "resolves_to": [],
+              "tls": "plain",
+              "connections": [
+                {
+                  "open": [
+                    {
+                      "send": [0, 0, 0, 26, 123, 34, 105, 100, 34, 58, 34, 97, 34, 44, 34, 114, 101, 115, 117, 108, 116, 34, 58, 34, 112, 111, 110, 103, 34, 125]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "expected": {
+      "status": 0,
+      "stdout": "{\"endpoint\":0,\"response\":{\"id\":\"a\",\"result\":\"pong\"}}\n",
+      "stderr": ""
+    },
+    "cleanup": {
+      "children": 2,
+      "join_all_before_output": true,
+      "no_client_io_after_output": true,
+      "allow_already_delivered_requests": true
+    }
+  },
+  {
+    "id": "loser-blocked-in-read",
+    "grants": {
+      "args": [
+        "50",
+        "{\"id\":\"a\",\"method\":\"ping\"}",
+        "/firstreply/0.sock",
+        "/firstreply/1.sock"
+      ],
+      "io": {
+        "stdout": "stdout.bytes@1",
+        "tasks": "tasks.cooperative@1",
+        "monotonic_clock": "clock.monotonic.ns@1",
+        "dirs": [],
+        "net": {
+          "provider": "net.script@2",
+          "rules": [
+            {
+              "address": "/firstreply/0.sock",
+              "service": "0",
+              "operation": "unix_connect"
+            },
+            {
+              "address": "/firstreply/1.sock",
+              "service": "0",
+              "operation": "unix_connect"
+            }
+          ],
+          "peers": [
+            {
+              "address": "/firstreply/0.sock",
+              "port": 0,
+              "resolves_to": [],
+              "tls": "plain",
+              "connections": [
+                {
+                  "open": [
+                    "stall"
+                  ]
+                }
+              ]
+            },
+            {
+              "address": "/firstreply/1.sock",
+              "port": 0,
+              "resolves_to": [],
+              "tls": "plain",
+              "connections": [
+                {
+                  "open": [
+                    {
+                      "send": [0, 0, 0, 26, 123, 34, 105, 100, 34, 58, 34, 97, 34, 44, 34, 114, 101, 115, 117, 108, 116, 34, 58, 34, 112, 111, 110, 103, 34, 125]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "expected": {
+      "status": 0,
+      "stdout": "{\"endpoint\":1,\"response\":{\"id\":\"a\",\"result\":\"pong\"}}\n",
+      "stderr": ""
+    },
+    "cleanup": {
+      "children": 2,
+      "join_all_before_output": true,
+      "no_client_io_after_output": true,
+      "allow_already_delivered_requests": true
+    }
+  },
+  {
+    "id": "loser-completion-racing-cancellation",
+    "grants": {
+      "args": [
+        "50",
+        "{\"id\":\"a\",\"method\":\"ping\"}",
+        "/firstreply/0.sock",
+        "/firstreply/1.sock"
+      ],
+      "io": {
+        "stdout": "stdout.bytes@1",
+        "tasks": "tasks.cooperative@1",
+        "monotonic_clock": "clock.monotonic.ns@1",
+        "dirs": [],
+        "net": {
+          "provider": "net.script@2",
+          "rules": [
+            {
+              "address": "/firstreply/0.sock",
+              "service": "0",
+              "operation": "unix_connect"
+            },
+            {
+              "address": "/firstreply/1.sock",
+              "service": "0",
+              "operation": "unix_connect"
+            }
+          ],
+          "peers": [
+            {
+              "address": "/firstreply/0.sock",
+              "port": 0,
+              "resolves_to": [],
+              "tls": "plain",
+              "connections": [
+                {
+                  "open": [
+                    {
+                      "send": [0, 0, 0, 26, 123, 34, 105, 100, 34, 58, 34, 97, 34, 44, 34, 114, 101, 115, 117, 108, 116, 34, 58, 34, 112, 111, 110, 103, 34, 125]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "address": "/firstreply/1.sock",
+              "port": 0,
+              "resolves_to": [],
+              "tls": "plain",
+              "connections": [
+                {
+                  "open": [
+                    {
+                      "send": [0]
+                    },
+                    {
+                      "send": [0]
+                    },
+                    {
+                      "send": [0]
+                    },
+                    {
+                      "send": [26]
+                    },
+                    {
+                      "send": [123]
+                    },
+                    {
+                      "send": [34]
+                    },
+                    {
+                      "send": [105]
+                    },
+                    {
+                      "send": [100]
+                    },
+                    {
+                      "send": [34]
+                    },
+                    {
+                      "send": [58]
+                    },
+                    {
+                      "send": [34]
+                    },
+                    {
+                      "send": [97]
+                    },
+                    {
+                      "send": [34]
+                    },
+                    {
+                      "send": [44]
+                    },
+                    {
+                      "send": [34]
+                    },
+                    {
+                      "send": [114]
+                    },
+                    {
+                      "send": [101]
+                    },
+                    {
+                      "send": [115]
+                    },
+                    {
+                      "send": [117]
+                    },
+                    {
+                      "send": [108]
+                    },
+                    {
+                      "send": [116]
+                    },
+                    {
+                      "send": [34]
+                    },
+                    {
+                      "send": [58]
+                    },
+                    {
+                      "send": [34]
+                    },
+                    {
+                      "send": [112]
+                    },
+                    {
+                      "send": [111]
+                    },
+                    {
+                      "send": [110]
+                    },
+                    {
+                      "send": [103]
+                    },
+                    {
+                      "send": [34]
+                    },
+                    {
+                      "send": [125]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "expected": {
+      "status": 0,
+      "stdout": "{\"endpoint\":0,\"response\":{\"id\":\"a\",\"result\":\"pong\"}}\n",
+      "stderr": ""
+    },
+    "cleanup": {
+      "children": 2,
+      "join_all_before_output": true,
+      "no_client_io_after_output": true,
+      "allow_already_delivered_requests": true
+    }
+  },
+  {
+    "id": "malformed-frame-first",
+    "grants": {
+      "args": [
+        "50",
+        "{\"id\":\"a\",\"method\":\"ping\"}",
+        "/firstreply/0.sock",
+        "/firstreply/1.sock"
+      ],
+      "io": {
+        "stdout": "stdout.bytes@1",
+        "tasks": "tasks.cooperative@1",
+        "monotonic_clock": "clock.monotonic.ns@1",
+        "dirs": [],
+        "net": {
+          "provider": "net.script@2",
+          "rules": [
+            {
+              "address": "/firstreply/0.sock",
+              "service": "0",
+              "operation": "unix_connect"
+            },
+            {
+              "address": "/firstreply/1.sock",
+              "service": "0",
+              "operation": "unix_connect"
+            }
+          ],
+          "peers": [
+            {
+              "address": "/firstreply/0.sock",
+              "port": 0,
+              "resolves_to": [],
+              "tls": "plain",
+              "connections": [
+                {
+                  "open": [
+                    {
+                      "send": [0, 0, 0, 0]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "address": "/firstreply/1.sock",
+              "port": 0,
+              "resolves_to": [],
+              "tls": "plain",
+              "connections": [
+                {
+                  "open": [
+                    {
+                      "send": [0]
+                    },
+                    {
+                      "send": [0]
+                    },
+                    {
+                      "send": [0]
+                    },
+                    {
+                      "send": [26]
+                    },
+                    {
+                      "send": [123]
+                    },
+                    {
+                      "send": [34]
+                    },
+                    {
+                      "send": [105]
+                    },
+                    {
+                      "send": [100]
+                    },
+                    {
+                      "send": [34]
+                    },
+                    {
+                      "send": [58]
+                    },
+                    {
+                      "send": [34]
+                    },
+                    {
+                      "send": [97]
+                    },
+                    {
+                      "send": [34]
+                    },
+                    {
+                      "send": [44]
+                    },
+                    {
+                      "send": [34]
+                    },
+                    {
+                      "send": [114]
+                    },
+                    {
+                      "send": [101]
+                    },
+                    {
+                      "send": [115]
+                    },
+                    {
+                      "send": [117]
+                    },
+                    {
+                      "send": [108]
+                    },
+                    {
+                      "send": [116]
+                    },
+                    {
+                      "send": [34]
+                    },
+                    {
+                      "send": [58]
+                    },
+                    {
+                      "send": [34]
+                    },
+                    {
+                      "send": [112]
+                    },
+                    {
+                      "send": [111]
+                    },
+                    {
+                      "send": [110]
+                    },
+                    {
+                      "send": [103]
+                    },
+                    {
+                      "send": [34]
+                    },
+                    {
+                      "send": [125]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "expected": {
+      "status": 1,
+      "stdout": "{\"endpoint\":0,\"error\":\"empty_frame\"}\n",
+      "stderr": ""
+    },
+    "cleanup": {
+      "children": 2,
+      "join_all_before_output": true,
+      "no_client_io_after_output": true,
+      "allow_already_delivered_requests": true
+    }
+  },
+  {
+    "id": "empty-set-rejected",
+    "grants": {
+      "args": [
+        "50",
+        "{\"id\":\"a\",\"method\":\"ping\"}"
+      ],
+      "io": {
+        "stdout": "stdout.bytes@1",
+        "tasks": "tasks.cooperative@1",
+        "monotonic_clock": "clock.monotonic.ns@1",
+        "dirs": [],
+        "net": {
+          "provider": "net.script@2",
+          "rules": [],
+          "peers": []
+        }
+      }
+    },
+    "expected": {
+      "status": 2,
+      "stdout": "{\"error\":\"usage\"}\n",
+      "stderr": ""
+    },
+    "cleanup": {
+      "children": 0,
+      "join_all_before_output": true,
+      "no_client_io_after_output": true,
+      "allow_already_delivered_requests": true
+    }
+  }
+]
