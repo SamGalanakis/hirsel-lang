@@ -2558,14 +2558,7 @@ fn f1_runner_spawn_immediate_refusal_and_unjoined_value_replay() {
     );
 }
 
-#[test]
-fn f1_runner_linked_child_tape_current_runtime_replay_and_join() {
-    if !hirsel_rt::free_driver::admission_enabled() {
-        return;
-    }
-    let scratch = Scratch::new("f1-runner-linked-tapes");
-    let program = scratch.path("main.hir");
-    let source = r#"pub type E = Grant(GrantError) | Output(OutputError)
+const F1_RUNNER_LINKED_SOURCE: &str = r#"pub type E = Grant(GrantError) | Output(OutputError)
 fn child(rt: Io, n: u64) -> Result[u64, String] {
   let out = match io.stdout(rt) { Ok(v) => v, Error(_) => return Error("stdout") }
   match out.print(out, "linked child\n") { Ok(()) => Ok(n + 1u64), Error(_) => Error("print") }
@@ -2578,8 +2571,18 @@ pub fn main(rt: Io, args: Args) -> Result[(), E] {
   Ok(())
 }
 "#;
+const F1_RUNNER_LINKED_GRANTS: &str = r#"{"io":{"stdout":"stdout.bytes@1","tasks":"tasks.free@1","dirs":[],"runners":[{"name":"worker","provider":"local.threads@1","threads":1,"grants":{"stdout":"stdout.bytes@1","dirs":[]},"definitions":null}]},"args":[]}"#;
+
+#[test]
+fn f1_runner_linked_child_tape_current_runtime_replay_and_join() {
+    if !hirsel_rt::free_driver::admission_enabled() {
+        return;
+    }
+    let scratch = Scratch::new("f1-runner-linked-tapes");
+    let program = scratch.path("main.hir");
+    let source = F1_RUNNER_LINKED_SOURCE;
     std::fs::write(&program, source).unwrap();
-    let grants = r#"{"io":{"stdout":"stdout.bytes@1","tasks":"tasks.free@1","dirs":[],"runners":[{"name":"worker","provider":"local.threads@1","threads":1,"grants":{"stdout":"stdout.bytes@1","dirs":[]},"definitions":null}]},"args":[]}"#;
+    let grants = F1_RUNNER_LINKED_GRANTS;
     let tape = scratch.path("T");
     let child_tape = scratch.path("T.call-0");
     let report = scratch.path("projection");
@@ -2641,16 +2644,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), E] {
     }
 }
 
-#[test]
-fn f1_runner_simulated_crash_records_child_stop_and_replays_abandoned_outcome() {
-    if !hirsel_rt::free_driver::admission_enabled() {
-        return;
-    }
-    let scratch = Scratch::new("f1-runner-simulated-crash");
-    let program = scratch.path("main.hir");
-    std::fs::write(
-        &program,
-        r#"pub type E = Grant(GrantError) | Output(OutputError)
+const F1_RUNNER_CRASH_SOURCE: &str = r#"pub type E = Grant(GrantError) | Output(OutputError)
 fn child(rt: Io, n: u64) -> Result[u64, String] {
   let random = match io.random(rt) { Ok(v) => v, Error(_) => return Error("random") }
   let mut i = 0u64
@@ -2668,10 +2662,18 @@ pub fn main(rt: Io, args: Args) -> Result[(), E] {
   out.print(out, "abandoned twice\n") ? Output
   Ok(())
 }
-"#,
-    )
-    .unwrap();
-    let grants = r#"{"io":{"stdout":"stdout.bytes@1","tasks":"tasks.free@1","dirs":[],"runners":[{"name":"worker","provider":"sim@1","node":"node","models":"local.process@1","faults":{"crash":{"enable":1000000,"fire":1000000}},"grants":{"random":"random.splitmix64@1","dirs":[]},"definitions":null}]},"args":[]}"#;
+"#;
+const F1_RUNNER_CRASH_GRANTS: &str = r#"{"io":{"stdout":"stdout.bytes@1","tasks":"tasks.free@1","dirs":[],"runners":[{"name":"worker","provider":"sim@1","node":"node","models":"local.process@1","faults":{"crash":{"enable":1000000,"fire":1000000}},"grants":{"random":"random.splitmix64@1","dirs":[]},"definitions":null}]},"args":[]}"#;
+
+#[test]
+fn f1_runner_simulated_crash_records_child_stop_and_replays_abandoned_outcome() {
+    if !hirsel_rt::free_driver::admission_enabled() {
+        return;
+    }
+    let scratch = Scratch::new("f1-runner-simulated-crash");
+    let program = scratch.path("main.hir");
+    std::fs::write(&program, F1_RUNNER_CRASH_SOURCE).unwrap();
+    let grants = F1_RUNNER_CRASH_GRANTS;
     f1_runner_call_record_replay(
         &scratch,
         &program,
@@ -3376,6 +3378,17 @@ fn f1_runner_width_and_permit_matrix(
         return;
     }
     let scratch = Scratch::new(name);
+    f1_runner_matrix_in(&scratch, text, grants, live_output, replay_output);
+}
+
+fn f1_runner_matrix_in(
+    scratch: &Scratch,
+    text: &str,
+    grants: &str,
+    live_output: &[u8],
+    replay_output: &[u8],
+) {
+    let name = scratch.0.display();
     let program = scratch.path("main.hir");
     std::fs::write(&program, text).unwrap();
     let report = scratch.path("projection");
@@ -3495,4 +3508,118 @@ fn f1_runner_spawn_refusal_full_projection_width_and_permit_matrix() {
         b"refusal and cleanup\n",
         b"refusal and cleanup\n",
     );
+}
+
+#[test]
+fn f1_runner_linked_tapes_width_and_permit_matrix() {
+    if !hirsel_rt::free_driver::admission_enabled() {
+        return;
+    }
+    let scratch = Scratch::new("f1-runner-linked-matrix");
+    f1_runner_matrix_in(
+        &scratch,
+        F1_RUNNER_LINKED_SOURCE,
+        F1_RUNNER_LINKED_GRANTS,
+        b"linked child\nlinked parent\n",
+        b"linked parent\n",
+    );
+    let program = scratch.path("main.hir");
+    for level in ["record", "durable"] {
+        let tape = scratch.path(level);
+        let child_tape = scratch.path(&format!("{level}.call-0"));
+        let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+        command.args(["tapes", "check"]).arg(&tape).arg(&child_tape);
+        let joined = bounded_output(&mut command, &program, "actual-eight joined runner tapes");
+        assert!(joined.status.success(), "{joined:?}");
+        assert!(
+            String::from_utf8_lossy(&joined.stdout)
+                .ends_with("tapes: 1 links checked, 0 unchecked\n"),
+            "{joined:?}"
+        );
+        assert!(joined.stderr.is_empty(), "{joined:?}");
+        f1_runner_child_replay_matrix(&program, &child_tape, false, b"linked child\n");
+    }
+}
+
+#[test]
+fn f1_runner_crashed_child_width_and_permit_matrix() {
+    if !hirsel_rt::free_driver::admission_enabled() {
+        return;
+    }
+    let scratch = Scratch::new("f1-runner-crash-matrix");
+    f1_runner_matrix_in(
+        &scratch,
+        F1_RUNNER_CRASH_SOURCE,
+        F1_RUNNER_CRASH_GRANTS,
+        b"abandoned twice\n",
+        b"abandoned twice\n",
+    );
+    let program = scratch.path("main.hir");
+    for level in ["record", "durable"] {
+        for ordinal in 0..2 {
+            let child_tape = scratch.path(&format!("{level}.call-{ordinal}"));
+            let recording = hirsel_rt::host_launch::read_recording(&child_tape).unwrap();
+            assert!(recording.events.iter().any(|event| {
+                event.request == hirsel_rt::io::Request::Stopped
+                    && event.completion == hirsel_rt::io::Completion::Ready
+            }));
+            assert!(
+                !recording.events.iter().any(|event| {
+                    matches!(event.request, hirsel_rt::io::Request::CallReturn(_))
+                })
+            );
+            f1_runner_child_replay_matrix(&program, &child_tape, true, b"");
+        }
+    }
+}
+
+/// Child tapes have Host admission rather than Free task logs. Check their
+/// exact process outcome independently of the caller's full Free Projection.
+fn f1_runner_child_replay_matrix(program: &Path, tape: &Path, stopped: bool, stdout: &[u8]) {
+    let mut reference = None;
+    for engine in ENGINES {
+        for width in ["1", "8"] {
+            for permits in [1, 8] {
+                let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+                command
+                    .arg("run")
+                    .args(engine)
+                    .arg(program)
+                    .arg("--replay")
+                    .arg(tape)
+                    .args(["--cores", width]);
+                f1_permits(&mut command, permits);
+                let replay = bounded_output(
+                    &mut command,
+                    program,
+                    &format!(
+                        "child {} {engine:?} width{width} permits{permits}",
+                        tape.display()
+                    ),
+                );
+                assert_eq!(replay.stdout, stdout, "{replay:?}");
+                if stopped {
+                    assert_eq!(
+                        replay.status.code(),
+                        Some(hirsel_run_schema::exit::ENVIRONMENTAL),
+                        "{replay:?}"
+                    );
+                    assert!(
+                        String::from_utf8_lossy(&replay.stderr)
+                            .contains("its place stopped the run"),
+                        "{replay:?}"
+                    );
+                } else {
+                    assert!(replay.status.success(), "{replay:?}");
+                    assert!(replay.stderr.is_empty(), "{replay:?}");
+                }
+                let observed = (replay.status.code(), replay.stdout, replay.stderr);
+                if let Some(reference) = &reference {
+                    assert_eq!(&observed, reference);
+                } else {
+                    reference = Some(observed);
+                }
+            }
+        }
+    }
 }
