@@ -2013,6 +2013,7 @@ impl QueryEngine {
         // A Lower hit must replay the same trace as computing it from source.
         self.s1.begin_requests();
         self.begin_evaluation_validation();
+        self.execution_stack.push(ReadsBuilder::new());
         let front = (|| {
             let modes = self.mode_query(definition)?;
             self.register_staged(&modes.value)?;
@@ -2027,6 +2028,9 @@ impl QueryEngine {
             Ok(front) => front,
             Err(error) => {
                 self.s1.finish_requests(self.depth_limit());
+                self.execution_stack
+                    .pop()
+                    .expect("failed lowering execution frame");
                 self.end_evaluation_validation();
                 return Err(error);
             }
@@ -2038,7 +2042,6 @@ impl QueryEngine {
             .unwrap_or_default();
         reads.signatures.extend(modes.dependencies.clone());
         let mut observed = Observed::inheriting(previous.as_ref().map(|c| c.reads()));
-        self.execution_stack.push(ReadsBuilder::new());
         let prepared = self.prepare_comptime(&modes.value, &signature.value);
         let result = prepared.and_then(|comptime| match self.adapters.lowering.clone() {
             Some(adapter) => {

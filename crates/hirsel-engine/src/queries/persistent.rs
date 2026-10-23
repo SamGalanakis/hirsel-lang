@@ -2257,7 +2257,7 @@ mod malformed_tests {
             crate::store::VerifyStore::Off,
             crate::store::VerifyStore::Recompute,
         ] {
-            for fault in 0..6 {
+            for fault in 0..7 {
                 let (mut engine, syntax) =
                     fixture_source("fn main()->u32 uses {}=comptime ignored()");
                 engine.verify = Verify::Off;
@@ -2284,6 +2284,11 @@ mod malformed_tests {
                         DefId::intern(&DefPath::core("absent-stage")),
                         vec![2],
                     )),
+                    6 => record
+                        .selections
+                        .push(crate::comptime::Selection::Generated(DefId::intern(
+                            &DefPath::core("absent-generator"),
+                        ))),
                     _ => unreachable!(),
                 }
                 engine
@@ -2598,7 +2603,7 @@ mod malformed_tests {
             crate::store::VerifyStore::Off,
             crate::store::VerifyStore::Recompute,
         ] {
-            for fault in 0..6 {
+            for fault in 0..7 {
                 let (mut engine, syntax) = fixture_source("const VALUE:u8=7u8");
                 engine.verify = Verify::Off;
                 let path = &syntax.item.definition;
@@ -2641,6 +2646,12 @@ mod malformed_tests {
                             DefId::intern(&DefPath::core("absent-stage")),
                             vec![2],
                         )),
+                    6 => record
+                        .constant
+                        .selections
+                        .push(crate::comptime::Selection::Generated(DefId::intern(
+                            &DefPath::core("absent-generator"),
+                        ))),
                     _ => unreachable!(),
                 }
                 engine
