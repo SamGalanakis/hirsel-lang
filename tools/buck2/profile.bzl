@@ -28,8 +28,25 @@ PGO_FLAGS = {
 }
 DIST_FLAGS = RELEASE_FLAGS + ["-Cembed-bitcode=yes", "-Clto=fat", "-Ccodegen-units=1"] + PGO_FLAGS[DIST_PGO]
 
-# The runtime archive is built as Cargo's release profile with
-# CARGO_PROFILE_RELEASE_PANIC=abort (crates/hirsel-driver/src/native/link.rs).
+# Keep hot runtime operations at O3; only launch/configuration codecs use Os.
+RUNTIME_FLAGS = RELEASE_FLAGS + ["-Cembed-bitcode=yes", "-Clto=fat", "-Ccodegen-units=1"]
+COLD_RUNTIME_CRATES = [
+    "hirsel_run_config",
+    "hirsel_run_schema",
+    "serde",
+    "serde_core",
+    "serde_json",
+    "serde_path_to_error",
+]
+
+def runtime_profile_flags(crate):
+    return select({
+        "root//tools/buck2:profile_runtime": ["-Copt-level=s"] if crate in COLD_RUNTIME_CRATES else [],
+        "DEFAULT": [],
+    })
+
+# Native runtime platforms add LTO and cold-crate size overrides to Cargo's
+# panic-abort release settings. Ordinary compiler profiles stay independent.
 # Cargo leaves proc macros and build scripts unwinding; so does this. Cargo's
 # staticlib is position independent, as the native link (a PIE) requires; the
 # prelude's staticlib and its dependencies default to the static model.
@@ -43,6 +60,7 @@ PANIC_ABORT = select({
 def workspace_profile_flags(host_code = False):
     return select({
         "root//tools/buck2:profile_release": RELEASE_FLAGS,
+        "root//tools/buck2:profile_runtime": RUNTIME_FLAGS,
         "root//tools/buck2:profile_dist": DIST_FLAGS,
         "root//tools/buck2:profile_profiling": RELEASE_FLAGS + ["-Cdebuginfo=line-tables-only", "-Cforce-frame-pointers=yes"],
         "root//tools/buck2:profile_checked": RELEASE_FLAGS + ["-Cdebug-assertions=yes", "-Coverflow-checks=yes"],
@@ -53,6 +71,7 @@ def workspace_profile_flags(host_code = False):
 def third_party_profile_flags(host_code = False):
     return select({
         "root//tools/buck2:profile_release": RELEASE_FLAGS,
+        "root//tools/buck2:profile_runtime": RUNTIME_FLAGS,
         "root//tools/buck2:profile_dist": DIST_FLAGS,
         "root//tools/buck2:profile_profiling": RELEASE_FLAGS + ["-Cdebuginfo=line-tables-only", "-Cforce-frame-pointers=yes"],
         "root//tools/buck2:profile_checked": RELEASE_FLAGS + ["-Cdebug-assertions=yes", "-Coverflow-checks=yes"],

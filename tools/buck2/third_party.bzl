@@ -3,7 +3,7 @@
 load("@prelude//rust:cargo_buildscript.bzl", "buildscript_run")
 load("@prelude//rust:cargo_package.bzl", "cargo", "get_reindeer_platforms")
 load("@prelude//utils:selects.bzl", "selects")
-load(":profile.bzl", "third_party_profile_flags")
+load(":profile.bzl", "runtime_profile_flags", "third_party_profile_flags")
 load(":platforms.bzl", "budget_constraint", "compile_request", "pool_budget_name")
 
 def third_party_http_archive(name, **kwargs):
@@ -24,7 +24,7 @@ def _compatible(platforms, kwargs):
 
 def _flags(kwargs):
     host_code = kwargs.get("proc_macro", False) or kwargs.get("crate", "").startswith("build_script")
-    kwargs["rustc_flags"] = third_party_profile_flags(host_code) + kwargs.get("rustc_flags", [])
+    kwargs["rustc_flags"] = third_party_profile_flags(host_code) + kwargs.get("rustc_flags", []) + runtime_profile_flags(kwargs.get("crate", ""))
     return kwargs
 
 def _compile_constraints(name):
@@ -32,6 +32,7 @@ def _compile_constraints(name):
     return select({
         "root//tools/buck2:profile_release": [budget_constraint(pool_budget_name(*compile_request("release", target)))],
         "root//tools/buck2:profile_dist": [budget_constraint(pool_budget_name(*compile_request("release", target)))],
+        "root//tools/buck2:profile_runtime": [budget_constraint(pool_budget_name(*compile_request("release", target)))],
         "root//tools/buck2:profile_profiling": [budget_constraint(pool_budget_name(*compile_request("release", target)))],
         "DEFAULT": [budget_constraint(pool_budget_name(*compile_request("dev", target)))],
     })

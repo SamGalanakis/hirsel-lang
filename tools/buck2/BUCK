@@ -20,6 +20,9 @@ constraint_value(name = "profile_dev", constraint_setting = ":profile", visibili
 
 constraint_value(name = "profile_release", constraint_setting = ":profile", visibility = ["PUBLIC"])
 
+# Native runtime: LTO with cold launch/configuration crates built for size.
+constraint_value(name = "profile_runtime", constraint_setting = ":profile", visibility = ["PUBLIC"])
+
 constraint_value(name = "profile_checked", constraint_setting = ":profile", visibility = ["PUBLIC"])
 
 constraint_value(name = "profile_profiling", constraint_setting = ":profile", visibility = ["PUBLIC"])
@@ -101,7 +104,7 @@ platform(
     constraint_values = [
         "prelude//os/constraints:linux",
         "prelude//cpu/constraints:x86_64",
-        ":profile_release",
+        ":profile_runtime",
         ":panic_abort",
     ],
     visibility = ["PUBLIC"],
@@ -112,7 +115,7 @@ platform(
     constraint_values = [
         "prelude//os/constraints:linux",
         "prelude//cpu/constraints:arm64",
-        ":profile_release",
+        ":profile_runtime",
         ":panic_abort",
     ],
     visibility = ["PUBLIC"],

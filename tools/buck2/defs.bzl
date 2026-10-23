@@ -14,7 +14,7 @@ CARGO_TARGET_TMPDIR and CARGO_BIN_EXE_<name>.
 
 load(":platforms.bzl", "CLIPPY_REQUEST", "PRECHECK_REQUEST", "PROBE_CPUS", "budget_constraint", "compile_request", "doctest_properties", "dist_compile_request", "pool_budget_name", "test_budget_name", "test_executor", "test_request", "test_memory_limit")
 load(":exec_sizes.bzl", "COMPILE_CLASSES", "COMPILE_REQUESTS")
-load(":profile.bzl", "workspace_profile_flags")
+load(":profile.bzl", "runtime_profile_flags", "workspace_profile_flags")
 load("@prelude//linking:link_info.bzl", "ArchiveLinkable", "LinkStrategy", "ObjectsLinkable")
 load("@prelude//rust:link_info.bzl", "RustLinkInfo", "dfs_dedupe_by_label")
 
@@ -92,6 +92,7 @@ def _compile_constraints(name):
     return select({
         "root//tools/buck2:profile_release": [budget_constraint(pool_budget_name(*compile_request("release", name)))],
         "root//tools/buck2:profile_dist": [budget_constraint(pool_budget_name(*dist_compile_request(name)))],
+        "root//tools/buck2:profile_runtime": [budget_constraint(pool_budget_name(*compile_request("release", name)))],
         "root//tools/buck2:profile_profiling": [budget_constraint(pool_budget_name(*compile_request("release", name)))],
         "DEFAULT": [budget_constraint(pool_budget_name(*compile_request("dev", name)))],
     })
@@ -121,6 +122,7 @@ def _codegen_flags(name):
     return select({
         "root//tools/buck2:profile_release": _release_codegen_units(name),
         "root//tools/buck2:profile_dist": [],
+        "root//tools/buck2:profile_runtime": [],
         "root//tools/buck2:profile_profiling": _release_codegen_units(name),
         "DEFAULT": _dev_codegen(name),
     })
@@ -129,7 +131,7 @@ def _flags(manifest_dir, extra = [], host_code = False, target = None, opt_level
     # A member's `[profile.dev.package.<name>] opt-level`; the release flags
     # that follow override it, as Cargo applies the entry to dev only.
     dev = ["-Copt-level={}".format(opt_level)] if opt_level != None else []
-    return ["-Zunstable-options", _env_set("CARGO_MANIFEST_DIR", _from_package(manifest_dir, manifest_dir))] + dev + extra + workspace_profile_flags(host_code) + (_codegen_flags(target) if target else [])
+    return ["-Zunstable-options", _env_set("CARGO_MANIFEST_DIR", _from_package(manifest_dir, manifest_dir))] + dev + extra + workspace_profile_flags(host_code) + (_codegen_flags(target) if target else []) + runtime_profile_flags(manifest_dir.split("/")[-1].replace("-", "_"))
 
 def _compile_env(package_name, crate, version, build_script):
     env = _cargo_env(package_name, crate, version)
@@ -756,10 +758,10 @@ RUNTIME_TARGETS = {
 }
 
 def hirsel_runtime_archives(name, crate, crate_root, srcs, features, deps, feature_deps, manifest_dir, package_name, version, edition):
-    """Every runtime archive the native pipeline links, as Cargo builds them.
+    """Every runtime archive the native pipeline links.
 
-    `cargo build --release -p hirsel-rt --lib [--features ...]` with aborting
-    panics: one staticlib per feature subset for each target triple, and per
+    Panic-abort release code with LTO and cold-crate size overrides: one
+    staticlib per feature subset for each target triple, and per
     solo variant for its listed triples, laid out
     as `<triple>/<features or default>/libhirsel_rt.a` (debug-stripped) and
     `.../debug/libhirsel_rt.a`, with `<triple>/libhirsel_builtins.a`: the

@@ -163,6 +163,13 @@ The copied runtime archives accounted for about 8.16 GiB and toolchain bundles
 
 ## Distribution compiler
 
+Native runtime archives use a separate `profile_runtime` on both target
+architectures: fat LTO, `opt-level=3` for the runtime and its live-operation
+dependencies, and `opt-level=s` for run-config, run-schema and the Serde codecs.
+The allowlist and flags live in `profile.bzl`; generated programs keep the
+native compiler's speed optimization. Compiler dev/release/dist profiles and
+host build scripts are independent of this archive profile.
+
 `tools/toolchain-dist/build --pgo --output /tmp/hirsel-dist` builds the shipped
 compiler with `//tools/buck2:dist`: fat LTO, one codegen unit and PGO trained on
 compiler-bench's examples and syn3k. The existing mimalloc dependency already
