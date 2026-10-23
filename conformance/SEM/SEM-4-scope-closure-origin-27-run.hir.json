@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "scope_closure_origin",
+    "version": "1"
+  },
+  "entry": {
+    "module": [],
+    "name": "main"
+  },
+  "sources": [
+    {
+      "path": "SEM-4-scope-closure-origin-27-run.hir",
+      "module": []
+    }
+  ],
+  "dependencies": []
+}

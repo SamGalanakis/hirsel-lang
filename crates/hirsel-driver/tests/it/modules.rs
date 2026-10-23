@@ -124,3 +124,4 @@ mod output_capability_guidance_24;
 mod closure_effect_joins_26;
 mod result_injection_typing_26;
 mod stored_callable_authority_26;
+mod scope_closure_origin_27;

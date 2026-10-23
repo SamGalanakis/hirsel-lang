@@ -1,0 +1,183 @@
+// rule: SEM-4
+// expect: run
+// boundary: Fresh borrowed loop bindings over captures use body-local view storage.
+fn scope_options(tasks: Tasks, files: List[String]) {
+  task.scope(
+    tasks,
+    fn(s: Scope) {
+      let mut previous: List[Option[u64]] = []
+      for name in files {
+        list.push(mut previous, None())
+      }
+      failure.check(list.len(previous) == list.len(files), Arithmetic())
+      failure.check(previous[0] == None(), Arithmetic())
+    }
+  )
+}
+
+fn plain(files: List[String]) {
+  let f = fn() {
+    let mut previous: List[Option[u64]] = []
+    for name in files {
+      list.push(mut previous, None())
+    }
+    failure.check(list.len(previous) == list.len(files), Arithmetic())
+  }
+  f()
+}
+
+fn single(tasks: Tasks, files: List[String]) {
+  task.scope(
+    tasks,
+    fn(s: Scope) {
+      let mut previous: List[Option[u64]] = []
+      list.push(mut previous, None())
+      failure.check(list.len(previous) == 1 && list.len(files) == 3, Arithmetic())
+    }
+  )
+}
+
+fn local_source(tasks: Tasks) {
+  task.scope(
+    tasks,
+    fn(s: Scope) {
+      let files = ["a", "bb", "ccc"]
+      let mut previous: List[Option[u64]] = []
+      for name in files {
+        list.push(mut previous, None())
+      }
+      failure.check(list.len(previous) == 3, Arithmetic())
+    }
+  )
+}
+
+fn strings(tasks: Tasks, files: List[String]) {
+  task.scope(
+    tasks,
+    fn(s: Scope) {
+      let mut previous: List[String] = []
+      for name in files {
+        list.push(mut previous, "x")
+      }
+      failure.check(previous == ["x", "x", "x"], Arithmetic())
+    }
+  )
+}
+
+fn no_closure(files: List[String]) {
+  let mut previous: List[Option[u64]] = []
+  for name in files {
+    list.push(mut previous, None())
+  }
+  failure.check(list.len(previous) == list.len(files), Arithmetic())
+}
+
+fn minimal(files: List[String]) {
+  let f = fn() {
+    for name in files {}
+  }
+  f()
+}
+
+fn indexed(tasks: Tasks, files: List[String]) {
+  task.scope(
+    tasks,
+    fn(s: Scope) {
+      let mut previous: List[Option[u64]] = []
+      let mut index = 0u64
+      for name in files {
+        failure.check(name == files[index], Arithmetic())
+        list.push(mut previous, Some(index))
+        index += 1
+      }
+      failure.check(previous == [Some(0u64), Some(1u64), Some(2u64)], Arithmetic())
+      for i in 0u64..list.len(files) {
+        failure.check(files[i] == files[i], Arithmetic())
+      }
+    }
+  )
+}
+
+fn nested(files: List[String]) {
+  let f = fn() {
+    let g = fn() {
+      let mut previous: List[String] = []
+      for name in files {
+        list.push(mut previous, "x")
+      }
+      failure.check(previous == ["x", "x", "x"], Arithmetic())
+    }
+    g()
+  }
+  f()
+}
+
+fn while_loop(tasks: Tasks, files: List[String]) {
+  task.scope(
+    tasks,
+    fn(s: Scope) {
+      let mut previous: List[Option[u64]] = []
+      let mut i = 0u64
+      while i < list.len(files) {
+        list.push(mut previous, None())
+        i += 1
+      }
+      failure.check(list.len(previous) == list.len(files), Arithmetic())
+    }
+  )
+}
+
+fn item_brand(files: List[String]) {
+  let f = fn() {
+    for name in files {
+      match string.position(name, 0u64) {
+        Some(p) => failure.check(string.byte_offset(name, p) == 0, TextInvariant()),
+        None() => (),
+      }
+    }
+  }
+  f()
+}
+
+fn exits(files: List[String]) {
+  let f = fn() -> u64 {
+    let mut n = 0u64
+    for name in files {
+      if name == "a" {
+        continue
+      }
+      n += 1
+      if name == "bb" {
+        break
+      }
+    }
+    n
+  }
+  failure.check(f() == 1, Arithmetic())
+  let g = fn() -> u64 {
+    for name in files {
+      return string.byte_len(name)
+    }
+    0
+  }
+  failure.check(g() == 1, Arithmetic())
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let tasks = test.tasks(t)
+  let files = ["a", "bb", "ccc"]
+  scope_options(tasks, files)
+  plain(files)
+  single(tasks, files)
+  local_source(tasks)
+  strings(tasks, files)
+  no_closure(files)
+  minimal(files)
+  minimal([])
+  indexed(tasks, files)
+  nested(files)
+  while_loop(tasks, files)
+  item_brand(files)
+  exits(files)
+  Ok(())
+}

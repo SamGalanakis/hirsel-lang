@@ -256,6 +256,15 @@ impl Builder<'_, '_> {
                                 self.transport_typed(value, binding.ty, Storage::Temporary, span);
                         }
                     }
+                    if fresh
+                        && self.body.locals[self.root(value.place).0 as usize].storage
+                            == Storage::Capture
+                    {
+                        // Capture storage carries the environment's names. A
+                        // fresh loop binding belongs to this body instead;
+                        // stage its view without copying or taking the referent.
+                        value = self.transport_typed(value, binding.ty, Storage::Temporary, span);
+                    }
                     let origin = Self::binding_origin(
                         self.decisions.lexical,
                         binding.owner,
