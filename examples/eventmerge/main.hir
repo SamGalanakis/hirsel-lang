@@ -1,0 +1,90 @@
+const HELP: String = "Usage: eventmerge LEFT.ndjson RIGHT.ndjson\nMerge event exports by canonical UUID; reject conflicting payloads.\nLimits: 32768 bytes/file, 4096 bytes/record, 64 records total.\nExit: 0 success/help, 1 conflict, 2 invalid input or I/O.\n"
+
+fn read_local(directory: Dir, name: String) -> Result[Bytes, model.InputError] {
+  if name == "" || name == "." || name == ".." || string.byte_len(name) > 128 {
+    return Error(model.invalid(Path(), name, 0))
+  }
+  for byte in string.as_bytes(name) {
+    if byte == b'/' || byte == b'\\' || byte == b':' || byte == 0 {
+      return Error(model.invalid(Path(), name, 0))
+    }
+  }
+  let mut Ok(handle) = file.open(directory, path.of(name)) else {
+    return Error(model.invalid(FileOpen(), name, 0))
+  }
+  let mut reader = bufio.new(4096)
+  let mut data: List[u8] = []
+  while true {
+    let remaining = model.INPUT_BYTES - list.len(data) + 1
+    let count = if remaining < 4096 {
+      remaining
+    } else {
+      4096
+    }
+    let Ok(n) = bufio.file_read_more(directory, mut handle, mut reader, count) else {
+      return Error(model.invalid(FileRead(), name, 0))
+    }
+    if n > model.INPUT_BYTES - list.len(data) {
+      return Error(model.invalid(InputBytes(), name, 0))
+    }
+    if n == 0 {
+      break
+    }
+    bytes.append(mut data, bufio.peek(reader, n))
+    bufio.consume(mut reader, n)
+  }
+  Ok(bytes.from_list(take data))
+}
+
+fn run(rt: Io, args: Args) -> Result[model.Report, model.InputError] {
+  if arg.len(args) != 2 {
+    return Error(model.invalid(Usage(), "", 0))
+  }
+  let Ok(left_name) = arg.text(args, 0) else {
+    return Error(model.invalid(Usage(), "", 0))
+  }
+  let Ok(right_name) = arg.text(args, 1) else {
+    return Error(model.invalid(Usage(), "", 0))
+  }
+  let Ok(directory) = io.dir(rt, path.of("input")) else {
+    return Error(model.invalid(DirectoryGrant(), "", 0))
+  }
+  let left = read_local(directory, left_name)?
+  let right = read_local(directory, right_name)?
+  model.merge(left, left_name, right, right_name)
+}
+
+pub fn main(rt: Io, args: Args) -> std@1/process.ExitCode {
+  let Ok(output) = io.stdout(rt) else {
+    return std@1/process.exit_code(2u8)
+  }
+  if arg.len(args) == 1 {
+    if let Ok(argument) = arg.text(args, 0) {
+      if argument == "--help" {
+        let Ok(()) = out.write(output, string.as_bytes(HELP)) else {
+          return std@1/process.exit_code(2u8)
+        }
+        return std@1/process.SUCCESS
+      }
+    }
+  }
+  match run(rt, args) {
+    Ok(report) => {
+      let Ok(encoded) = model.encode(report) else {
+        return std@1/process.exit_code(2u8)
+      }
+      let Ok(()) = out.write(output, encoded) else {
+        return std@1/process.exit_code(2u8)
+      }
+      std@1/process.SUCCESS
+    },
+    Error(error) => {
+      let code = match error.kind {
+        Conflict() => 1u8,
+        _ => 2u8,
+      }
+      let _ = out.write(output, model.encode_error(error))
+      std@1/process.exit_code(code)
+    },
+  }
+}

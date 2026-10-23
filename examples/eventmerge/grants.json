@@ -1,0 +1,16 @@
+{
+  "io": {
+    "stdout": "stdout.bytes@1",
+    "dirs": [
+      {
+        "path": "input",
+        "host": "fixtures",
+        "access": "read"
+      }
+    ]
+  },
+  "args": [
+    "job-a.ndjson",
+    "job-b.ndjson"
+  ]
+}

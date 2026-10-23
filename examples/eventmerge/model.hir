@@ -1,0 +1,240 @@
+// UUID usage/vectors: google/uuid uuid.go:95-145, uuid_test.go:20-58,129-135,
+// 2d3c2a9cc518326daf99a383f07c4d3c44317e4d (BSD-3-Clause; fixtures/LICENSE).
+// Parsing and formatting stay in shipped std; event identity ignores metadata.
+pub const INPUT_BYTES: u64 = 32768
+
+pub const RECORD_BYTES: u64 = 4096
+
+pub const RECORDS: u64 = 64
+
+pub opaque type EventKey: copyable + data + key + inert + noalloc_drop uses {} {
+  canonical: String,
+}
+
+pub type Location {
+  source: String,
+  line: u64,
+}
+
+pub type Event {
+  id: EventKey,
+  payload: json.Value,
+  location: Location,
+}
+
+pub type Report {
+  events: List[Event],
+  duplicates: u64,
+  records: u64,
+}
+
+pub type Kind = Usage | DirectoryGrant | Path | FileOpen | FileRead | InputBytes | RecordBytes | RecordLimit | Utf8 | Json(
+  json.JsonError
+) | Fields | Id(uuid.UuidError) | Conflict
+
+pub type InputError {
+  kind: Kind,
+  location: Location,
+  first: Location,
+  id: String,
+}
+
+pub fn invalid(kind: Kind, source: String, line: u64) -> InputError uses {} {
+  InputError(
+    kind: copy kind,
+    location: Location(source: unique source, line: line),
+    first: Location(source: "", line: 0),
+    id: ""
+  )
+}
+
+// Parsed structural equality: object key order is irrelevant, array order matters,
+// and Number(String) compares the validated token spelling, without normalization.
+pub fn equal(a: json.Value, b: json.Value) -> bool uses {} {
+  match (a, b) {
+    (Null(), Null()) => true,
+    (Bool(x), Bool(y)) => x == y,
+    (Number(x), Number(y)) => x == y,
+    (Text(x), Text(y)) => x == y,
+    (Array(x), Array(y)) => {
+      if list.len(x) != list.len(y) {
+        return false
+      }
+      let mut i = 0u64
+      while i < list.len(x) {
+        if !equal(x[i], y[i]) {
+          return false
+        }
+        i += 1
+      }
+      true
+    },
+    (Object(x), Object(y)) => {
+      if map.len(x) != map.len(y) {
+        return false
+      }
+      for (key, value) in x {
+        let Some(other) = map.get(y, key) else {
+          return false
+        }
+        if !equal(value, other) {
+          return false
+        }
+      }
+      true
+    },
+    _ => false,
+  }
+}
+
+fn decode(line: Bytes, source: String, number: u64) -> Result[Event, InputError] uses {} {
+  let Ok(text) = string.from_bytes(unique line) else {
+    return Error(invalid(Utf8(), source, number))
+  }
+  let value = match json.parse(take text) {
+    Ok(parsed) => take parsed,
+    Error(cause) => return Error(invalid(Json(cause), source, number)),
+  }
+  let Object(fields) = value else {
+    return Error(invalid(Fields(), source, number))
+  }
+  if map.len(fields) != 2 {
+    return Error(invalid(Fields(), source, number))
+  }
+  let Some(Text(spelling)) = map.get(fields, "id") else {
+    return Error(invalid(Fields(), source, number))
+  }
+  let Some(payload) = map.get(fields, "payload") else {
+    return Error(invalid(Fields(), source, number))
+  }
+  let parsed_id = match uuid.parse(spelling) {
+    Ok(parsed) => parsed,
+    Error(cause) => return Error(invalid(Id(cause), source, number)),
+  }
+  Ok(
+    Event(
+      id: EventKey(canonical: uuid.to_string(parsed_id)),
+      payload: unique payload,
+      location: Location(source: unique source, line: number)
+    )
+  )
+}
+
+fn consume(
+  data: Bytes,
+  source: String,
+  mut report: Report,
+  mut seen: Map[EventKey, u64]
+) -> Result[(), InputError] uses {} {
+  if bytes.len(data) > INPUT_BYTES {
+    return Error(invalid(InputBytes(), source, 0))
+  }
+  let mut at = 0u64
+  let mut number = 0u64
+  while at < bytes.len(data) {
+    number += 1
+    if report.records == RECORDS {
+      return Error(invalid(RecordLimit(), source, number))
+    }
+    let start = at
+    while at < bytes.len(data) && data[at] != b'\n' {
+      if at - start == RECORD_BYTES {
+        return Error(invalid(RecordBytes(), source, number))
+      }
+      at += 1
+    }
+    let event = decode(bytes.slice(data, start, at), source, number)?
+    if at < bytes.len(data) {
+      at += 1
+    }
+    report.records += 1
+    if let Some(index) = map.get(seen, event.id) {
+      let previous = report.events[index]
+      if !equal(previous.payload, event.payload) {
+        return Error(
+          InputError(
+            kind: Conflict(),
+            location: copy event.location,
+            first: unique previous.location,
+            id: unique event.id.canonical
+          )
+        )
+      }
+      report.duplicates += 1
+    } else {
+      map.insert(mut seen, copy event.id, list.len(report.events))
+      list.push(mut report.events, take event)
+    }
+  }
+  Ok(())
+}
+
+pub fn merge(left: Bytes, left_name: String, right: Bytes, right_name: String) -> Result[
+  Report,
+  InputError
+] uses {} {
+  let mut report = Report(events: [], duplicates: 0, records: 0)
+  let mut seen: Map[EventKey, u64] = map.empty()
+  consume(left, left_name, mut report, mut seen)?
+  consume(right, right_name, mut report, mut seen)?
+  Ok(take report)
+}
+
+fn append(mut output: List[u8], value: String) uses {} {
+  bytes.append(mut output, string.as_bytes(value))
+}
+
+pub fn encode(report: Report) -> Result[Bytes, json.JsonError] uses {} {
+  let mut output: List[u8] = []
+  append(mut output, "{\"class\":\"ok\",\"events\":[")
+  let mut first = true
+  for event in report.events {
+    if !first {
+      append(mut output, ",")
+    }
+    first = false
+    append(mut output, "{\"id\":")
+    json.write_text_into(event.id.canonical, mut output)
+    append(mut output, ",\"payload\":")
+    json.stringify_into(event.payload, mut output)?
+    append(mut output, "}")
+  }
+  let count = list.len(report.events)
+  append(
+    mut output,
+    f"],\"unique\":{count},\"duplicates\":{report.duplicates},\"records\":{report.records}}}\n"
+  )
+  Ok(bytes.from_list(take output))
+}
+
+pub fn encode_error(error: InputError) -> Bytes uses {} {
+  let kind: String = match error.kind {
+    Usage() => "usage",
+    DirectoryGrant() => "directory_grant",
+    Path() => "path",
+    FileOpen() => "file_open",
+    FileRead() => "file_read",
+    InputBytes() => "input_bytes",
+    RecordBytes() => "record_bytes",
+    RecordLimit() => "record_limit",
+    Utf8() => "utf8",
+    Json(_) => "json",
+    Fields() => "fields",
+    Id(_) => "id",
+    Conflict() => "conflict",
+  }
+  let class = if kind == "conflict" {
+    "conflict"
+  } else {
+    "invalid_input"
+  }
+  let mut output: List[u8] = []
+  append(mut output, f"{{\"class\":\"{class}\",\"error\":\"{kind}\",\"source\":")
+  json.write_text_into(error.location.source, mut output)
+  append(mut output, f",\"line\":{error.location.line},\"first_source\":")
+  json.write_text_into(error.first.source, mut output)
+  append(mut output, f",\"first_line\":{error.first.line},\"id\":")
+  json.write_text_into(error.id, mut output)
+  append(mut output, "}\n")
+  bytes.from_list(take output)
+}
