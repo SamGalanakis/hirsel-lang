@@ -73,3 +73,4 @@ mod output_capability_guidance_24;
 mod filemanifest_stream_25;
 mod shardsearch_27;
 mod watchfiles_27;
+mod rpcbatch_27;

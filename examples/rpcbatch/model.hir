@@ -1,0 +1,95 @@
+pub const MAX_REQUESTS: u64 = 16
+
+pub const MAX_SLOTS: u64 = 4
+
+pub const MAX_MILLIS: u64 = 2000
+
+pub type InputError = Usage | DuplicateId | RequestLimit | Protocol(
+  localrpc@1/model.InputError
+)
+
+pub type Job {
+  index: u64,
+  id: String,
+  payload: Bytes,
+  sent: localrpc@1/model.Request,
+}
+
+pub type Outcome {
+  index: u64,
+  id: String,
+  status: String,
+  response: Option[Bytes],
+}
+
+pub fn number(args: Args, index: u64, max: u64) -> Result[u64, InputError] {
+  let Ok(text) = arg.text(args, index) else {
+    return Error(Usage())
+  }
+  let Ok(value) = u64.parse(text) else {
+    return Error(Usage())
+  }
+  if value == 0 || value > max {
+    return Error(Usage())
+  }
+  Ok(value)
+}
+
+fn request_id(sent: localrpc@1/model.Request) -> String uses {} {
+  match sent {
+    Ping(id) => unique id,
+    Normalize(id, _) => unique id,
+    Unknown(id, _) => unique id,
+  }
+}
+
+// Validate the entire batch before requesting network authority or spawning.
+pub fn jobs(args: Args) -> Result[List[Option[Job]], InputError] {
+  if arg.len(args) - 4 > MAX_REQUESTS {
+    return Error(RequestLimit())
+  }
+  let mut output: List[Option[Job]] = []
+  let mut ids: List[String] = []
+  for i in 4u64..arg.len(args) {
+    let Ok(raw) = arg.text(args, i) else {
+      return Error(Usage())
+    }
+    let payload = string.as_bytes(raw)
+    let sent = localrpc@1/model.request(payload)?
+    let id = request_id(sent)
+    for previous in ids {
+      if previous == id {
+        return Error(DuplicateId())
+      }
+    }
+    list.push(mut ids, copy id)
+    list.push(
+      mut output,
+      Some(Job(index: i - 4, id: take id, payload: take payload, sent: take sent))
+    )
+  }
+  Ok(take output)
+}
+
+pub fn encode(row: Outcome) -> Bytes uses {} {
+  let mut output: List[u8] = []
+  text.append(mut output, f"{{\"index\":{row.index},\"id\":")
+  json.write_text_into(row.id, mut output)
+  text.append(mut output, ",\"status\":")
+  json.write_text_into(row.status, mut output)
+  if let Some(payload) = row.response {
+    text.append(mut output, ",\"response\":")
+    bytes.append(mut output, payload)
+  }
+  text.append(mut output, "}")
+  bytes.from_list(take output)
+}
+
+pub fn error_name(error: InputError) -> String uses {} {
+  match error {
+    Usage() => "usage",
+    DuplicateId() => "duplicate_id",
+    RequestLimit() => "request_limit",
+    Protocol(e) => localrpc@1/model.error_name(e),
+  }
+}

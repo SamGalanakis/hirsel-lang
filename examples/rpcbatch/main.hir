@@ -1,0 +1,261 @@
+pub type AppError = Input(model.InputError) | Protocol(localrpc@1/model.InputError) | Network(
+  NetError
+) | Grant(GrantError) | Output(OutputError) | Clock(ClockError)
+
+// Go io.ReadFull's exact-length/EOF distinction, using localrpc's capped decoder.
+fn receive(n: Net, mut stream: Stream of n) -> Result[Bytes, AppError] {
+  let mut state = localrpc@1/model.decoder()
+  while true {
+    let mut chunk: List[u8] = []
+    let count = net.read(n, mut stream, mut chunk, localrpc@1/model.remaining(state))?
+    if count == 0 {
+      localrpc@1/model.finish(state)?
+      return Error(Protocol(TruncatedHeader()))
+    }
+    for byte in chunk {
+      if let Some(payload) = localrpc@1/model.push(mut state, byte)? {
+        return Ok(take payload)
+      }
+    }
+  }
+  Error(Protocol(TruncatedHeader()))
+}
+
+fn deadline(c: MonotonicClock, millis: u64) -> Result[Deadline, AppError] {
+  let now = clock.monotonic(c)?
+  let Some(at) = instant.checked_add(c, now, millis * 1000000) else {
+    return Error(Input(Usage()))
+  }
+  Ok(Deadline(clock: c, at: at))
+}
+
+fn call(n: Net, socket: Path, job: model.Job) -> Result[Bytes, AppError] {
+  let frame = localrpc@1/model.frame(job.payload)?
+  let mut stream = net.unix_connect(n, socket)?
+  net.write_all(n, mut stream, frame)?
+  net.shutdown(n, mut stream, Write())?
+  let reply = receive(n, mut stream)?
+  Ok(localrpc@1/model.encode(localrpc@1/model.response(reply, job.sent)?))
+}
+
+fn status(error: AppError) -> String uses {} {
+  match error {
+    Input(e) => model.error_name(e),
+    Protocol(e) => localrpc@1/model.error_name(e),
+    Network(Canceled(_)) => "deadline",
+    _ => "io",
+  }
+}
+
+fn bounded_call(
+  tasks: Tasks,
+  n: Net,
+  c: MonotonicClock,
+  socket: Path,
+  millis: u64,
+  job: model.Job
+) -> unique model.Outcome {
+  let outcome = match deadline(c, millis) {
+    Ok(limit) => match task.scope_until(
+      tasks,
+      limit,
+      fn(s: Scope) -> Result[Bytes, AppError] {
+        call(n, socket, job)
+      }
+    ) {
+      Finished(value) => take value,
+      Expired(_) => Error(Network(Canceled(DeadlineExceeded()))),
+    },
+    Error(e) => Error(take e),
+  }
+  let (label, response): (String, Option[Bytes]) = match take outcome {
+    Ok(payload) => ("ok", Some(take payload)),
+    Error(e) => (status(e), None()),
+  }
+  unique model.Outcome(
+    index: job.index,
+    id: unique job.id,
+    status: take label,
+    response: take response
+  )
+}
+
+// Fixed waves cap active calls and task metadata at slots. Each child returns
+// its domain error as data inside Ok, preserving every task.all add-order row.
+fn batch(
+  tasks: Tasks,
+  n: Net,
+  c: MonotonicClock,
+  socket: Path,
+  slots: u64,
+  millis: u64,
+  take jobs: List[Option[model.Job]]
+) -> List[model.Outcome] {
+  task.scope(
+    tasks,
+    fn(s: Scope) -> List[model.Outcome] {
+      let mut pending = take jobs
+      let mut output: List[model.Outcome] = []
+      let mut start = 0u64
+      while start < list.len(pending) {
+        let end = if slots < list.len(pending) - start {
+          start + slots
+        } else {
+          list.len(pending)
+        }
+        let mut set: TaskSet[Result[model.Outcome, ()]] of s = task.set(s)
+        for i in start..end {
+          let Some(job) = replace(mut pending[i], None()) else {
+            continue
+          }
+          let path = unique socket
+          let owned = unique job
+          task.add(
+            s,
+            mut set,
+            task.async(
+              s,
+              fn() -> unique Result[model.Outcome, ()] {
+                let local_job = take owned
+                let local_path = take path
+                unique Ok(bounded_call(tasks, n, c, local_path, millis, local_job))
+              }
+            )
+          )
+        }
+        let rows = match task.all(s, take set) {
+          Ok(values) => take values,
+          Error(_) => [],
+        }
+        for row in take rows {
+          list.push(mut output, take row)
+        }
+        start = end
+      }
+      take output
+    }
+  )
+}
+
+fn serve(n: Net, socket: Path, output: Stdout, limit: u64) -> Result[u64, AppError] {
+  let mut listener = net.unix_listen(n, socket)?
+  out.print(output, "{\"listening\":true}\n")?
+  let mut count = 0u64
+  while count < limit {
+    let connected = match net.accept(n, mut listener) {
+      Ok((stream, _)) => take stream,
+      Error(Canceled(_)) => return Ok(count),
+      Error(e) => return Error(Network(take e)),
+    }
+    let mut stream = take connected
+    let payload = match receive(n, mut stream) {
+      Ok(bytes) => take bytes,
+      Error(Network(Canceled(_))) => return Ok(count),
+      Error(e) => return Error(take e),
+    }
+    let incoming = localrpc@1/model.request(payload)?
+    let reply = localrpc@1/model.frame(
+      localrpc@1/model.encode(localrpc@1/model.answer(incoming))
+    )?
+    match net.write_all(n, mut stream, reply) {
+      Ok(()) => {},
+      Error(Canceled(_)) => return Ok(count),
+      Error(e) => return Error(Network(take e)),
+    }
+    count += 1
+  }
+  Ok(count)
+}
+
+fn execute(rt: Io, args: Args, output: Stdout) -> Result[(), AppError] {
+  if arg.len(args) == 1 {
+    if arg.text(args, 0) == Ok("--help") {
+      out.print(
+        output,
+        "usage: rpcbatch batch SOCKET SLOTS DEADLINE_MS [REQUEST ...] | serve SOCKET LIMIT DEADLINE_MS\nmax 16 requests; 1..4 slots; 1..2000 ms per call/server; localrpc frames <=2048 bytes.\n"
+      )?
+      return Ok(())
+    }
+  }
+  if arg.len(args) < 4 {
+    return Error(Input(Usage()))
+  }
+  let Ok(mode) = arg.text(args, 0) else {
+    return Error(Input(Usage()))
+  }
+  let Ok(socket) = arg.path(args, 1) else {
+    return Error(Input(Usage()))
+  }
+  let millis = model.number(args, 3, model.MAX_MILLIS)?
+  if mode == "batch" {
+    let slots = model.number(args, 2, model.MAX_SLOTS)?
+    let jobs = model.jobs(args)?
+    if list.len(jobs) == 0 {
+      out.print(output, "[]\n")?
+      return Ok(())
+    }
+    let tasks = io.tasks(rt)?
+    let c = io.monotonic_clock(rt)?
+    let n = io.net(rt)?
+    let results = batch(tasks, n, c, socket, slots, millis, take jobs)
+    out.print(output, "[")?
+    let mut first = true
+    for row in results {
+      if !first {
+        out.print(output, ",")?
+      }
+      first = false
+      out.write(output, model.encode(row))?
+    }
+    out.print(output, "]\n")?
+    return Ok(())
+  }
+  if mode == "serve" && arg.len(args) == 4 {
+    let limit = model.number(args, 2, model.MAX_REQUESTS)?
+    let tasks = io.tasks(rt)?
+    let c = io.monotonic_clock(rt)?
+    let n = io.net(rt)?
+    let bounded = task.scope_until(
+      tasks,
+      deadline(c, millis)?,
+      fn(s: Scope) -> Result[u64, AppError] {
+        serve(n, socket, output, limit)
+      }
+    )
+    let (count, expired) = match bounded {
+      Finished(value) => (value?, false),
+      Expired(value) => (value?, true),
+    }
+    out.print(output, f"{{\"served\":{count},\"expired\":{expired}}}\n")?
+    return Ok(())
+  }
+  Error(Input(Usage()))
+}
+
+pub fn main(rt: Io, args: Args) -> process.ExitCode {
+  let Ok(output) = io.stdout(rt) else {
+    return process.exit_code(3u8)
+  }
+  match execute(rt, args, output) {
+    Ok(()) => process.SUCCESS,
+    Error(Input(e)) => {
+      let Ok(()) = out.print(output, f"{{\"error\":\"{model.error_name(e)}\"}}\n") else {
+        return process.exit_code(3u8)
+      }
+      process.exit_code(2u8)
+    },
+    Error(Protocol(e)) => {
+      let Ok(()) = out.print(
+        output,
+        f"{{\"error\":\"{localrpc@1/model.error_name(e)}\"}}\n"
+      ) else {
+        return process.exit_code(3u8)
+      }
+      process.exit_code(2u8)
+    },
+    Error(_) => {
+      let _ = out.print(output, "{\"error\":\"io\"}\n")
+      process.exit_code(3u8)
+    },
+  }
+}
