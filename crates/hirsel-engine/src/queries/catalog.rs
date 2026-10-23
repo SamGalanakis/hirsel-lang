@@ -33,6 +33,93 @@ impl LexicalShape {
         }
     }
 }
+/// Declaration observations needed by checking without retaining syntax.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub(crate) struct SourceFacts {
+    pub(crate) generator: bool,
+    pub(crate) instance_bodied: bool,
+    pub(crate) executable: bool,
+    pub(crate) body: bool,
+    pub(crate) constant: bool,
+    pub(crate) execution: bool,
+    pub(crate) fact: bool,
+    pub(crate) associations: Vec<(u8, u32, u32)>,
+    pub(crate) arms: Vec<(String, u32, u32)>,
+}
+impl SourceFacts {
+    pub(crate) fn capture(syntax: &ItemSyntax) -> Self {
+        use hirsel_syntax::{AttributeArgument, TypeBody, Visibility};
+        let item = &syntax.item;
+        let constant = matches!(item.kind, ItemKind::Const { .. });
+        let arms = match &item.kind {
+            ItemKind::Type {
+                body: TypeBody::Variants(arms),
+                ..
+            } if !arms.is_empty() && item.visibility == Visibility::Private => {
+                let names = super::dead_arms::arm_names(syntax);
+                if names.len() == arms.len() {
+                    names
+                        .into_iter()
+                        .map(|(name, span)| (name, span.start, span.end))
+                        .collect()
+                } else {
+                    vec![]
+                }
+            }
+            _ => vec![],
+        };
+        Self {
+            generator: generation::generator(syntax).is_some(),
+            instance_bodied: generation::instance_bodied(syntax),
+            executable: generation::executable(syntax),
+            body: constant || matches!(item.kind, ItemKind::Function { body: Some(_), .. }),
+            constant,
+            execution: constant
+                || syntax
+                    .tree
+                    .expressions
+                    .iter()
+                    .any(|e| matches!(e.kind, hirsel_syntax::ExprKind::Comptime(_))),
+            fact: matches!(
+                item.kind,
+                ItemKind::Type {
+                    body: TypeBody::Distinct { fact: Some(_), .. },
+                    ..
+                }
+            ),
+            associations: item
+                .attributes
+                .iter()
+                .filter_map(|attribute| {
+                    let name = attribute.name.as_str();
+                    if !matches!(name, "loop_source" | "format")
+                        && !matches!(
+                            attribute.arguments.as_slice(),
+                            [AttributeArgument::SerializableCheck(_)]
+                        )
+                    {
+                        return None;
+                    }
+                    let kind = if name == "format" {
+                        0
+                    } else if name == "serializable" {
+                        1
+                    } else {
+                        2
+                    };
+                    Some((kind, attribute.origin.span.start, attribute.origin.span.end))
+                })
+                .collect(),
+            arms,
+        }
+    }
+}
+#[derive(Clone)]
+pub(crate) struct SourceItem {
+    pub(crate) definition: DefPath,
+    pub(crate) anchor: hirsel_span::Anchor,
+    pub(crate) facts: SourceFacts,
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct Head {
     definition: DefId,
@@ -43,7 +130,7 @@ struct Head {
     end: u32,
     header: ContentHash,
     body: ContentHash,
-    generator: bool,
+    facts: SourceFacts,
     lexical: LexicalShape,
 }
 #[derive(Serialize, Deserialize)]
@@ -58,7 +145,7 @@ struct Candidate {
     head: DeclarationHead,
     file: FileId,
     base: u32,
-    generator: bool,
+    facts: SourceFacts,
     lexical: LexicalShape,
     occurrence: u32,
 }
@@ -66,8 +153,26 @@ struct Candidate {
 pub(crate) struct Catalog {
     files: BTreeMap<FileId, FileContext>,
     candidates: BTreeMap<DefPath, Vec<Candidate>>,
+    facts_cache:
+        std::sync::RwLock<BTreeMap<hirsel_syntax::LexicalOwner, (ContentHash, SourceFacts)>>,
 }
 impl Catalog {
+    pub(super) fn clear_facts(&self) {
+        self.facts_cache.write().unwrap().clear();
+    }
+    fn syntax_facts(&self, syntax: &ItemSyntax) -> SourceFacts {
+        if let Some((text, facts)) = self.facts_cache.read().unwrap().get(&syntax.owner())
+            && *text == syntax.text_hash
+        {
+            return facts.clone();
+        }
+        let facts = SourceFacts::capture(syntax);
+        self.facts_cache
+            .write()
+            .unwrap()
+            .insert(syntax.owner(), (syntax.text_hash, facts.clone()));
+        facts
+    }
     pub(super) fn lexical(
         &self,
         path: &DefPath,
@@ -80,6 +185,41 @@ impl Catalog {
             },
             candidate.lexical,
         ))
+    }
+    pub(super) fn facts(&self, path: &DefPath) -> Option<&SourceFacts> {
+        Some(&self.candidates.get(path)?.first()?.facts)
+    }
+    pub(super) fn source_items(&self, file: FileId) -> Option<Vec<SourceItem>> {
+        self.files.contains_key(&file).then(|| {
+            let mut items: Vec<_> = self
+                .candidates
+                .iter()
+                .flat_map(|(path, candidates)| {
+                    candidates
+                        .iter()
+                        .filter(move |c| c.file == file)
+                        .map(move |c| {
+                            (
+                                c.base,
+                                SourceItem {
+                                    definition: path.clone(),
+                                    anchor: c.head.name.anchor,
+                                    facts: c.facts.clone(),
+                                },
+                            )
+                        })
+                })
+                .collect();
+            items.sort_by_key(|(base, item)| (*base, item.definition.clone()));
+            items
+                .into_iter()
+                .map(|(_, item)| item)
+                .filter(|item| {
+                    hirsel_check_protocol::fact::fact_owner(&item.definition).is_none()
+                        && !item.definition.0.name.starts_with("$dictionary$")
+                })
+                .collect()
+        })
     }
     pub(crate) fn paths(&self) -> impl Iterator<Item = &DefPath> {
         self.candidates.keys()
@@ -104,9 +244,9 @@ impl Catalog {
             .and_then(|c| c.first())
             .is_some_and(|c| {
                 if kind == QueryKind::Generate {
-                    c.generator
+                    c.facts.generator
                 } else {
-                    !c.generator
+                    !c.facts.generator
                 }
             })
     }
@@ -154,6 +294,34 @@ impl Catalog {
     }
 }
 impl QueryEngine {
+    pub(crate) fn source_items(&self, file: FileId) -> Vec<SourceItem> {
+        if let Some(items) = self.catalog.source_items(file) {
+            return items;
+        }
+        self.parsed
+            .get(&file)
+            .and_then(|(_, _, result)| result.as_ref().ok())
+            .map(|parsed| {
+                parsed
+                    .value
+                    .items
+                    .iter()
+                    .map(|syntax| SourceItem {
+                        definition: syntax.item.definition.clone(),
+                        anchor: syntax.anchor,
+                        facts: self.catalog.syntax_facts(syntax),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+    pub(crate) fn source_facts(&self, path: &DefPath) -> Option<SourceFacts> {
+        self.items
+            .get(path)
+            .and_then(|items| items.first())
+            .map(|syntax| self.catalog.syntax_facts(syntax))
+            .or_else(|| self.catalog.facts(path).cloned())
+    }
     fn catalog_key(&self, file: FileId, context: &FileContext) -> Option<crate::store::EntryKey> {
         self.result_store.as_ref()?;
         let source = self.sources.file(file)?;
@@ -273,14 +441,14 @@ impl QueryEngine {
                     end: head.name.end,
                     header: head.header,
                     body: head.body,
-                    generator: generation::generator(syntax).is_some(),
+                    facts: self.catalog.syntax_facts(syntax),
                     lexical: LexicalShape::capture(syntax),
                 })
             })
             .collect();
         heads.sort_by_key(|h| (h.base, h.definition.path().clone()));
         FileHeads {
-            schema: 2,
+            schema: 3,
             context: context.clone(),
             source: ContentHash::of_bytes(self.sources.file(file).unwrap().text().as_bytes()),
             heads,
@@ -290,7 +458,7 @@ impl QueryEngine {
         let Some(source) = self.sources.file(file) else {
             return false;
         };
-        record.schema == 2
+        record.schema == 3
             && record.context == *context
             && record.source == ContentHash::of_bytes(source.text().as_bytes())
             && record
@@ -303,6 +471,19 @@ impl QueryEngine {
                     && path.0.modules == context.modules
                     && h.kind <= 3
                     && h.start <= h.end
+                    && h.facts.associations.iter().all(|(kind, start, end)| {
+                        *kind <= 2
+                            && start <= end
+                            && h.base
+                                .checked_add(*end)
+                                .is_some_and(|end| end as usize <= source.text().len())
+                    })
+                    && h.facts.arms.iter().all(|(_, start, end)| {
+                        start <= end
+                            && h.base
+                                .checked_add(*end)
+                                .is_some_and(|end| end as usize <= source.text().len())
+                    })
                     && h.base
                         .checked_add(h.end)
                         .is_some_and(|end| end as usize <= source.text().len())
@@ -331,7 +512,7 @@ impl QueryEngine {
                 .push(Candidate {
                     file,
                     base: head.base,
-                    generator: head.generator,
+                    facts: head.facts,
                     lexical: head.lexical,
                     occurrence: 0,
                     head: DeclarationHead {
@@ -384,6 +565,8 @@ impl QueryEngine {
                     .unwrap() as u32;
             }
             self.declarations.set_heads(&path, &heads);
+            self.source_growth.changed(DefId::intern(&path), true);
+            self.front_changes.changed(DefId::intern(&path), true);
         }
         self.catalog.files.insert(file, context.clone());
         let revision = self.manifest_revision();
@@ -429,6 +612,7 @@ impl QueryEngine {
             if syntax.text_hash != candidate.head.body
                 || self.header_hash(syntax) != candidate.head.header
                 || LexicalShape::capture(syntax) != candidate.lexical
+                || SourceFacts::capture(syntax) != candidate.facts
             {
                 return Err(QueryError::NotImplemented);
             }
@@ -523,14 +707,14 @@ mod tests {
                 name: "value".into(),
             });
             let source = "fn value() {}\n";
-            for mutation in 0..9 {
+            for mutation in 0..13 {
                 let store = Arc::new(crate::store::MemStore::default());
                 let mut engine = QueryEngine::new(default_environment(), PhaseAdapters::default())
                     .with_result_store(store.clone());
                 let file = engine.sources.add("heads.hir", source.into()).unwrap();
                 let key = engine.catalog_key(file, &context).unwrap();
                 let mut record = FileHeads {
-                    schema: 2,
+                    schema: 3,
                     context: context.clone(),
                     source: ContentHash::of_bytes(source.as_bytes()),
                     heads: vec![Head {
@@ -542,7 +726,17 @@ mod tests {
                         end: 8,
                         header: ContentHash::default(),
                         body: ContentHash::default(),
-                        generator: false,
+                        facts: SourceFacts {
+                            generator: false,
+                            instance_bodied: false,
+                            executable: false,
+                            body: false,
+                            constant: false,
+                            execution: false,
+                            fact: false,
+                            associations: vec![],
+                            arms: vec![],
+                        },
                         lexical: LexicalShape {
                             expressions: 0,
                             statements: 0,
@@ -562,6 +756,10 @@ mod tests {
                     6 => record.heads[0].kind = u8::MAX,
                     7 => record.heads.push(record.heads[0].clone()),
                     8 => record.heads[0].definition = DefId::intern(&DefPath::core("foreign")),
+                    9 => record.heads[0].facts.associations.push((3, 0, 1)),
+                    10 => record.heads[0].facts.associations.push((0, 0, u32::MAX)),
+                    11 => record.heads[0].facts.arms.push(("bad".into(), 2, 1)),
+                    12 => record.heads[0].facts.arms.push(("bad".into(), 0, u32::MAX)),
                     _ => unreachable!(),
                 }
                 store.put(&key, &bincode::serialize(&record).unwrap());

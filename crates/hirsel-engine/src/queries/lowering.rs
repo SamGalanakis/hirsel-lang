@@ -86,6 +86,9 @@ impl QueryEngine {
     fn source_constant(&self, path: &DefPath) -> bool {
         match self.items.get(path).and_then(|i| i.first()) {
             Some(item) => matches!(item.item.kind, ItemKind::Const { .. }),
+            None if self.catalog.body(path).is_some() => {
+                self.catalog.facts(path).is_some_and(|facts| facts.constant)
+            }
             None => self.image_signature(path).is_some_and(|signature| {
                 matches!(
                     signature.output.value.kind,
