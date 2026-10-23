@@ -778,3 +778,71 @@ fn affine_factory_queue_obeys_same_metadata_bound_before_creating_local_state() 
     assert_eq!(rx.try_iter().count(), 0);
     assert_eq!(rt.stats().claims, 0);
 }
+
+struct Reads(mpsc::Sender<()>);
+impl RuntimeObserver for Reads {
+    fn record(&self, event: RuntimeEvent) {
+        if let RuntimeEvent::Read { .. } = event {
+            self.0.send(()).unwrap();
+        }
+    }
+}
+#[test]
+fn new_dependent_keeps_its_latch_when_cancelled_inflight_claim_is_restarted() {
+    let mut rt = runtime(2, 8 << 20);
+    let (read, read_rx) = mpsc::channel();
+    rt.observe(Arc::new(Reads(read))).unwrap();
+    let (entered, entered_rx) = mpsc::channel();
+    let (release, released) = mpsc::channel();
+    rt.register(
+        1,
+        Arc::new(BlockingFactory {
+            entered,
+            release: Mutex::new(Some(released)),
+        }),
+    )
+    .unwrap();
+    let (events, local_rx) = mpsc::channel();
+    rt.register_local(
+        2,
+        Arc::new(AffineFactory {
+            dependency: query(0),
+            events,
+            barrier: None,
+        }),
+    )
+    .unwrap();
+    let old = rt.request(&[query(0)]);
+    entered_rx.recv().unwrap();
+    rt.cancel(old);
+    // A fresh dependency attaches to the cancelled claim while its old poll is
+    // still draining. The replacement must inherit that dependency's waiter.
+    let request = rt.request(&[local_query(1)]);
+    read_rx.recv().unwrap();
+    release.send(()).unwrap();
+    {
+        let state = rt.shared.lock();
+        let (_state, timeout) = rt
+            .shared
+            .changed
+            .wait_timeout_while(state, std::time::Duration::from_secs(2), |s| {
+                !s.request_complete(request.0)
+            })
+            .unwrap();
+        assert!(
+            !timeout.timed_out(),
+            "replacement lost a newly subscribed dependency latch"
+        );
+    }
+    assert_eq!(
+        rt.poll(request),
+        Poll::Ready(Ok(vec![product(local_query(1))]))
+    );
+    assert_eq!(rt.stats().claims, 3);
+    let events: Vec<_> = local_rx.try_iter().collect();
+    assert_eq!(
+        events.iter().filter(|e| e.1 == LocalEvent::Create).count(),
+        1
+    );
+    assert_eq!(events.iter().filter(|e| e.1 == LocalEvent::Drop).count(), 1);
+}

@@ -615,6 +615,19 @@ impl State {
             }
         }
     }
+    fn restart(&mut self, query: Key) {
+        // New requesters may subscribe after cancellation but before the old
+        // bounded poll/home cleanup returns. Their latch belongs to the logical
+        // query, so transfer it to the replacement claim rather than losing it.
+        let waiters = std::mem::take(&mut self.nodes.get_mut(&query).expect("old claim").waiters);
+        self.remove(query);
+        self.ensure(query)
+            .expect("replacement uses the same admitted node slot");
+        self.nodes.get_mut(&query).unwrap().waiters = waiters;
+        if let Some(result) = self.result(query) {
+            self.settle(query, result);
+        }
+    }
     fn prune(&mut self) {
         self.mark_live();
         let mut remove = Vec::new();
@@ -781,14 +794,15 @@ fn run_worker(shared: Arc<Shared>, worker: usize, stack: u64) {
                 };
                 state.settle(query, Err(error));
             } else {
-                state.remove(query);
                 if live && !state.stopped {
-                    let _ = state.ensure(query);
+                    state.restart(query);
                     if dropped.is_err() {
                         let error = state.errors.panicked;
                         state.unqueue(query);
                         state.settle(query, Err(error));
                     }
+                } else {
+                    state.remove(query);
                 }
             }
             state.account();
@@ -888,14 +902,14 @@ fn run_worker(shared: Arc<Shared>, worker: usize, stack: u64) {
             pending: BTreeSet::new(),
         };
         let mut send_task = None;
-        let outcome = catch_unwind(AssertUnwindSafe(|| match work {
+        let mut outcome = catch_unwind(AssertUnwindSafe(|| match work {
             Work::Send(mut task) => {
                 let outcome = task.poll(&mut cx);
                 send_task = Some(task);
                 outcome
             }
             Work::Local(factory) => {
-                if !locals.contains_key(&query) {
+                if let std::collections::btree_map::Entry::Vacant(entry) = locals.entry(query) {
                     let task = match factory.create(id(query)) {
                         Ok(task) => task,
                         Err(error) => return QueryPoll::Failed(error),
@@ -903,7 +917,7 @@ fn run_worker(shared: Arc<Shared>, worker: usize, stack: u64) {
                     if task.id() != id(query) || task.weight() != weight {
                         return QueryPoll::Failed(shared.lock().errors.protocol);
                     }
-                    locals.insert(query, task);
+                    entry.insert(task);
                 }
                 locals.get_mut(&query).unwrap().poll(&mut cx)
             }
@@ -911,10 +925,12 @@ fn run_worker(shared: Arc<Shared>, worker: usize, stack: u64) {
         // Completed/failed local states are destroyed on this worker before
         // releasing its execution accounting. Waiting states stay in locals.
         let keep_local = matches!(outcome, Ok(QueryPoll::Waiting(_)));
-        if !keep_local {
-            let _ = catch_unwind(AssertUnwindSafe(|| {
+        if !keep_local
+            && let Err(panic) = catch_unwind(AssertUnwindSafe(|| {
                 locals.remove(&query);
-            }));
+            }))
+        {
+            outcome = Err(panic);
         }
         let cpu_ns = thread_cpu_ns().saturating_sub(start);
         let mut state = shared.lock();
@@ -939,9 +955,10 @@ fn run_worker(shared: Arc<Shared>, worker: usize, stack: u64) {
                 locals.remove(&query);
             }));
             state = shared.lock();
-            state.remove(query);
             if live && !state.stopped {
-                let _ = state.ensure(query);
+                state.restart(query);
+            } else {
+                state.remove(query);
             }
         } else {
             match outcome {
