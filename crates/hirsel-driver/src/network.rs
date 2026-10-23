@@ -118,6 +118,18 @@ fn address(a: SocketAddr) -> Value {
         ],
     }
 }
+fn network_name(name: &str) -> &str {
+    match name {
+        "read_half.read" => "net.read",
+        "read_half.read_into" => "net.read_into",
+        "read_half.set_timeout" => "net.set_read_timeout",
+        "write_half.write" => "net.write",
+        "write_half.write_all" => "net.write_all",
+        "write_half.set_timeout" => "net.set_write_timeout",
+        "read_half.close" | "write_half.close" => "net.close",
+        name => name,
+    }
+}
 fn net_error(e: NetError) -> Value {
     use NetError::*;
     let (t, f) = match e {
@@ -186,6 +198,48 @@ fn result<T>(r: Result<T, NetError>, f: impl FnOnce(T) -> Value) -> Value {
     match r {
         Ok(v) => ok(f(v)),
         Err(e) => net_error(e),
+    }
+}
+
+enum TlsSetup {
+    Client {
+        stream: u64,
+        roots: Option<Vec<u8>>,
+        identity: Option<(Vec<u8>, Vec<u8>)>,
+    },
+    Server {
+        stream: u64,
+        identities: Vec<(Vec<u8>, Vec<u8>)>,
+        clients: ClientAuth<Vec<u8>>,
+        alpn: Vec<String>,
+    },
+}
+impl TlsSetup {
+    fn install(self, io: &mut HostIo) {
+        io.tls();
+        match self {
+            Self::Client {
+                stream,
+                roots,
+                identity,
+            } => {
+                if let Some(pem) = roots {
+                    io.tls_roots(stream, &pem);
+                }
+                if let Some((chain, key)) = identity {
+                    io.tls_identity(stream, &chain, &key);
+                }
+            }
+            Self::Server {
+                stream,
+                identities,
+                clients,
+                alpn,
+            } => {
+                let identities: Vec<_> = identities.iter().map(|(c, k)| (&c[..], &k[..])).collect();
+                io.tls_server(stream, &identities, clients.as_ref().map(|v| &v[..]), &alpn);
+            }
+        }
     }
 }
 
@@ -1749,6 +1803,9 @@ impl HostLibrary {
         cx: &mut OperationContext<'_>,
     ) -> Result<OperationResult, Error> {
         self.yield_now = true;
+        if self.free_ready.is_some() {
+            return self.network(name, a, 0, cx);
+        }
         let token = self.next_wait;
         self.next_wait += 1;
         match self.try_network(name, a, token, cx) {
@@ -1787,25 +1844,10 @@ impl HostLibrary {
         }
         result
     }
-    fn network(
-        &mut self,
-        name: &str,
-        a: &[Value],
-        token: u64,
-        cx: &mut OperationContext<'_>,
-    ) -> Result<OperationResult, Error> {
-        // A half's operations are its stream's, on the half's own handle.
-        let name = match name {
-            "read_half.read" => "net.read",
-            "read_half.read_into" => "net.read_into",
-            "read_half.set_timeout" => "net.set_read_timeout",
-            "write_half.write" => "net.write",
-            "write_half.write_all" => "net.write_all",
-            "write_half.set_timeout" => "net.set_write_timeout",
-            "read_half.close" | "write_half.close" => "net.close",
-            name => name,
-        };
-        let request = match name {
+    /// Pure request construction, shared by ordinary conversion and Free replay.
+    fn network_request(&self, name: &str, a: &[Value]) -> Result<Option<R>, Error> {
+        let name = network_name(name);
+        Ok(Some(match name {
             "io.net" => R::Net { io: 1 },
             "net.narrow" => R::NetNarrow {
                 net: self.id(&a[0])?,
@@ -1947,9 +1989,21 @@ impl HostLibrary {
                 net: self.id(&a[0])?,
                 stream: self.id(&a[1])?,
             },
+            "tls.peer" => R::TlsPeer {
+                net: self.id(&a[0])?,
+                stream: self.id(&a[1])?,
+            },
+            "tls.negotiated_protocol" => R::TlsProtocol {
+                net: self.id(&a[0])?,
+                stream: self.id(&a[1])?,
+            },
+            _ => return Ok(None),
+        }))
+    }
+    fn tls_request(&self, name: &str, a: &[Value]) -> Result<(R, TlsSetup), Error> {
+        Ok(match name {
             "tls.connect" | "tls.connect_as" | "tls.connect_with" => {
                 let stream = self.id(&a[1])?;
-                self.io.tls();
                 // A TlsClient carries the roots, an optional identity and the ALPN offer.
                 let (roots, identity, alpn) = match name {
                     "tls.connect" => (&a[3], None, vec![]),
@@ -1968,33 +2022,44 @@ impl HostLibrary {
                         (client[0], identity, alpn)
                     }
                 };
+                let mut pem_roots = None;
                 let roots = match tag(roots)? {
                     0 => RootsDigest::WebPki("webpki-roots@1.0.9".into()),
                     1 => {
                         use sha2::Digest;
                         let pem = bytes(fields(roots)?[0])?;
-                        self.io.tls_roots(stream, &pem);
-                        RootsDigest::Pem(sha2::Sha256::digest(pem).into())
+                        let digest = RootsDigest::Pem(sha2::Sha256::digest(&pem).into());
+                        pem_roots = Some(pem);
+                        digest
                     }
                     _ => return Err(invalid()),
                 };
+                let mut identity_bytes = None;
                 let identity = match identity {
                     Some(identity) => {
                         let identity = fields(identity)?;
                         let (chain, key) = (bytes(identity[0])?, bytes(identity[1])?);
-                        self.io.tls_identity(stream, &chain, &key);
-                        Some(hirsel_rt::net_tls::chain_digest(&chain))
+                        let digest = hirsel_rt::net_tls::chain_digest(&chain);
+                        identity_bytes = Some((chain, key));
+                        Some(digest)
                     }
                     None => None,
                 };
-                R::TlsConnect {
-                    net: self.id(&a[0])?,
-                    stream,
-                    server_name: text(&a[2])?,
-                    roots,
-                    identity,
-                    alpn,
-                }
+                (
+                    R::TlsConnect {
+                        net: self.id(&a[0])?,
+                        stream,
+                        server_name: text(&a[2])?,
+                        roots,
+                        identity,
+                        alpn,
+                    },
+                    TlsSetup::Client {
+                        stream,
+                        roots: pem_roots,
+                        identity: identity_bytes,
+                    },
+                )
             }
             "tls.accept" => {
                 let server = fields(&a[2])?;
@@ -2005,17 +2070,14 @@ impl HostLibrary {
                         Ok((bytes(identity[0])?, bytes(identity[1])?))
                     })
                     .collect::<Result<Vec<_>, Error>>()?;
-                let identities: Vec<(&[u8], &[u8])> =
-                    identities.iter().map(|(c, k)| (&c[..], &k[..])).collect();
-                let trust;
                 let clients = match tag(server[1])? {
                     0 => ClientAuth::Anonymous,
                     t @ (1 | 2) => {
-                        trust = bytes(fields(server[1])?[0])?;
+                        let trust = bytes(fields(server[1])?[0])?;
                         if t == 1 {
-                            ClientAuth::Request(&trust[..])
+                            ClientAuth::Request(trust)
                         } else {
-                            ClientAuth::Require(&trust[..])
+                            ClientAuth::Require(trust)
                         }
                     }
                     _ => return Err(invalid()),
@@ -2025,23 +2087,46 @@ impl HostLibrary {
                     .map(text)
                     .collect::<Result<Vec<_>, _>>()?;
                 let stream = self.id(&a[1])?;
-                self.io.tls();
-                self.io.tls_server(stream, &identities, clients, &alpn);
-                R::TlsAccept {
-                    net: self.id(&a[0])?,
-                    stream,
-                    server: hirsel_rt::net::TlsServerDigest::of(&identities, clients, &alpn),
-                }
+                let refs: Vec<_> = identities.iter().map(|(c, k)| (&c[..], &k[..])).collect();
+                let digest = hirsel_rt::net::TlsServerDigest::of(
+                    &refs,
+                    clients.as_ref().map(|v| &v[..]),
+                    &alpn,
+                );
+                (
+                    R::TlsAccept {
+                        net: self.id(&a[0])?,
+                        stream,
+                        server: digest,
+                    },
+                    TlsSetup::Server {
+                        stream,
+                        identities,
+                        clients,
+                        alpn,
+                    },
+                )
             }
-            "tls.peer" => R::TlsPeer {
-                net: self.id(&a[0])?,
-                stream: self.id(&a[1])?,
-            },
-            "tls.negotiated_protocol" => R::TlsProtocol {
-                net: self.id(&a[0])?,
-                stream: self.id(&a[1])?,
-            },
             _ => return Err(Error::Unavailable(format!("host network {name}"))),
+        })
+    }
+    fn network(
+        &mut self,
+        name: &str,
+        a: &[Value],
+        token: u64,
+        cx: &mut OperationContext<'_>,
+    ) -> Result<OperationResult, Error> {
+        let name = network_name(name);
+        let request = match self.network_request(name, a)? {
+            Some(request) => request,
+            None => {
+                let (request, setup) = self.tls_request(name, a)?;
+                if self.free_ready.is_none() {
+                    setup.install(&mut self.io);
+                }
+                request
+            }
         };
         let cancellation = self
             .library

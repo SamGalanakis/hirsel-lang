@@ -726,6 +726,17 @@ fn f1_corpus_matrix_with_run(
     expected_exit: i32,
     stdin: &[u8],
 ) {
+    f1_corpus_matrix_with_live(name, text, grants, expected_exit, stdin, || Box::new(|| {}));
+}
+
+fn f1_corpus_matrix_with_live(
+    name: &str,
+    text: &str,
+    grants: impl FnOnce(&Scratch) -> serde_json::Value,
+    expected_exit: i32,
+    stdin: &[u8],
+    mut live_peer: impl FnMut() -> Box<dyn FnOnce()>,
+) {
     let scratch = Scratch::new(name);
     let mut grants = grants(&scratch);
     let io = grants["io"].clone();
@@ -747,7 +758,9 @@ fn f1_corpus_matrix_with_run(
             .stdin(std::fs::File::open(&input).unwrap())
             .env(hirsel_rt::free_replay::Report::VAR, &report);
         f1_permits(&mut command, 8);
+        let stop_peer = live_peer();
         let live = command.output().unwrap();
+        stop_peer();
         assert_eq!(
             live.status.code(),
             Some(expected_exit),
@@ -1463,5 +1476,481 @@ pub fn main(rt: Io) -> Result[(), AppError] {
 }
 "#,
         |_| serde_json::json!({"stdout":"stdout.bytes@1", "signals":{"provider":"signals.script@1","kinds":["interrupt"],"script":[]}, "tasks":"tasks.free@1", "dirs":[]}),
+    );
+}
+
+#[test]
+fn f1_network_aliases_replay_without_a_tcp_peer() {
+    use std::io::{Read, Write};
+    use std::net::{Ipv4Addr, TcpListener};
+    use std::time::Duration;
+    // Reuse stream_replay.rs's nonblocking accept + stop channel structure so
+    // a failed source compilation cannot leave the peer waiting indefinitely.
+    let reservation = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let port = reservation.local_addr().unwrap().port();
+    drop(reservation);
+    let source = r#"pub type E = Grant(GrantError) | Network(NetError) | Output(OutputError)
+pub fn main(rt: Io, args: Args) -> Result[(), E] {
+  let root = io.net(rt) ? Grant
+  let n = net.narrow(root, [NetRule(address: "127.0.0.1", port: PORTu16, operation: Connect())]) ? Network
+  let out = io.stdout(rt) ? Grant
+  let addresses = net.resolve(n, "127.0.0.1", PORTu16) ? Network
+  failure.check(list.len(addresses) > 0u64, Arithmetic())
+  let stream = net.connect(n, "127.0.0.1", PORTu16, Unbounded()) ? Network
+  let (initial_read, initial_write) = net.split(n, take stream)
+  let joined = net.join(n, take initial_read, take initial_write) ? Network
+  let (read, write) = net.split(n, take joined)
+  let mut r = take read
+  let mut w = take write
+  write_half.set_timeout(n, mut w, Unbounded()) ? Network
+  read_half.set_timeout(n, mut r, Unbounded()) ? Network
+  failure.check(write_half.write(n, mut w, b"hi") == Ok(2u64), Arithmetic())
+  write_half.write_all(n, mut w, b"!") ? Network
+  write_half.shutdown(n, mut w) ? Network
+  let mut received: List[u8] = []
+  let mut more = true
+  while more {
+    more = (read_half.read(n, mut r, mut received, 8u64) ? Network) > 0u64
+  }
+  failure.check(bytes.from_list(take received) == b"ok", Arithmetic())
+  read_half.close(n, take r)
+  write_half.close(n, take w)
+  out.print(out, "tcp aliases ok\n") ? Output
+  Ok(())
+}
+"#.replace("PORT", &port.to_string());
+    f1_corpus_matrix_with_live(
+        "tcp-aliases",
+        &source,
+        |_| {
+            serde_json::json!({"io":{"stdout":"stdout.bytes@1","tasks":"tasks.free@1","dirs":[],
+            "net":{"provider":"net.stream@1","rules":[{"address":"127.0.0.1","service":port.to_string(),"operation":"connect"}]}},"args":[]})
+        },
+        0,
+        b"",
+        || {
+            let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, port)).unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let (stop, stopped) = std::sync::mpsc::channel();
+            let server = std::thread::spawn(move || {
+                let mut stream = loop {
+                    match listener.accept() {
+                        Ok((stream, _)) => break stream,
+                        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                            if !matches!(
+                                stopped.recv_timeout(Duration::from_millis(10)),
+                                Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+                            ) {
+                                return;
+                            }
+                        }
+                        Err(e) => panic!("TCP accept: {e}"),
+                    }
+                };
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(30)))
+                    .unwrap();
+                stream
+                    .set_write_timeout(Some(Duration::from_secs(30)))
+                    .unwrap();
+                let mut request = Vec::new();
+                stream.read_to_end(&mut request).unwrap();
+                assert_eq!(request, b"hi!");
+                stream.write_all(b"ok").unwrap();
+            });
+            Box::new(move || {
+                let _ = stop.send(());
+                server.join().unwrap();
+            })
+        },
+    );
+}
+
+#[test]
+fn f1_udp_datagrams_replay_without_a_udp_peer() {
+    use std::net::{Ipv4Addr, UdpSocket};
+    use std::time::Duration;
+    let reservation = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let port = reservation.local_addr().unwrap().port();
+    drop(reservation);
+    let source = r#"pub type E = Grant(GrantError) | Network(NetError)
+fn address(port: u16) -> SocketAddr uses {} {
+  SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: port)
+}
+pub fn main(rt: Io, args: Args) -> Result[(), E] {
+  let n = io.net(rt) ? Grant
+  let mut socket = net.udp_bind(n, address(0u16)) ? Network
+  failure.check(udp.send_to(n, mut socket, b"q", address(PORTu16)) == Ok(1u64), Arithmetic())
+  let mut buffer: List[u8] = []
+  let answer = udp.recv_from(n, mut socket, mut buffer, 2u64) ? Network
+  let empty = udp.recv_from(n, mut socket, mut buffer, 2u64) ? Network
+  failure.check(answer.count == 2u64 && answer.truncated && answer.peer.port == PORTu16 && empty.count == 0u64 && !empty.truncated && buffer == [97u8, 98u8], Arithmetic())
+  udp.close(n, take socket)
+  Ok(())
+}
+"#.replace("PORT", &port.to_string());
+    f1_corpus_matrix_with_live(
+        "udp-datagrams",
+        &source,
+        |_| {
+            serde_json::json!({"io":{"tasks":"tasks.free@1","dirs":[],
+            "net":{"provider":"net.stream@1","rules":[
+                {"address":"127.0.0.1","service":"0","operation":"udp_bind"},
+                {"address":"127.0.0.1","service":port.to_string(),"operation":"udp_peer"}]}},"args":[]})
+        },
+        0,
+        b"",
+        || {
+            let socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, port)).unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_millis(10)))
+                .unwrap();
+            let (stop, stopped) = std::sync::mpsc::channel();
+            let server = std::thread::spawn(move || {
+                let mut request = [0; 8];
+                loop {
+                    match socket.recv_from(&mut request) {
+                        Ok((count, peer)) => {
+                            assert_eq!(&request[..count], b"q");
+                            socket.send_to(b"abc", peer).unwrap();
+                            socket.send_to(b"", peer).unwrap();
+                            return;
+                        }
+                        Err(e)
+                            if matches!(
+                                e.kind(),
+                                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                            ) =>
+                        {
+                            if stopped.try_recv().is_ok() {
+                                return;
+                            }
+                        }
+                        Err(e) => panic!("UDP recv: {e}"),
+                    }
+                }
+            });
+            Box::new(move || {
+                let _ = stop.send(());
+                server.join().unwrap();
+            })
+        },
+    );
+}
+
+#[test]
+fn f1_tcp_listener_and_connect_addr_replay_without_sockets() {
+    let reservation = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let port = reservation.local_addr().unwrap().port();
+    drop(reservation);
+    f1_corpus_matrix_with_io(
+        "tcp-listener",
+        &r#"pub type E = Grant(GrantError) | Network(NetError)
+pub fn main(rt: Io, args: Args) -> Result[(), E] {
+  let n = io.net(rt) ? Grant
+  let tasks = io.tasks(rt) ? Grant
+  let listener = net.listen(n, SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: PORTu16)) ? Network
+  let address = net.local_addr(n, listener) ? Network
+  task.scope(tasks, fn(s: Scope) -> Result[(), E] {
+    let server = task.async(s, fn() -> Result[(), E] {
+      let mut owned = take listener
+      let mut (stream, from) = net.accept(n, mut owned) ? Network
+      let peer = net.peer_addr(n, stream) ? Network
+      failure.check(peer.port == from.port, Arithmetic())
+      let mut buffer: Inline[u8, 3] = [0u8; 3]
+      let count = net.read_into(n, mut stream, mut buffer) ? Network
+      failure.check(count == 1u64 && buffer[0u64] == 120u8 && buffer[2u64] == 0u8, Arithmetic())
+      net.write_all(n, mut stream, b"y") ? Network
+      net.close(n, take stream)
+      Ok(())
+    })
+    let client = task.async(s, fn() -> Result[(), E] {
+      let mut stream = net.connect_addr(n, address, Unbounded()) ? Network
+      net.write_all(n, mut stream, b"x") ? Network
+      let mut buffer: List[u8] = []
+      let count = net.read(n, mut stream, mut buffer, 1u64) ? Network
+      failure.check(count == 1u64 && buffer == [121u8], Arithmetic())
+      net.shutdown(n, mut stream, Both()) ? Network
+      net.close(n, take stream)
+      Ok(())
+    })
+    task.await(s, take server)?
+    task.await(s, take client)?
+    Ok(())
+  })
+}
+"#
+        .replace("PORT", &port.to_string()),
+        |_| {
+            serde_json::json!({"tasks":"tasks.free@1","dirs":[],"net":{"provider":"net.stream@1","rules":[
+            {"address":"127.0.0.1","service":port.to_string(),"operation":"listen"},
+            {"address":"127.0.0.1","service":port.to_string(),"operation":"connect"}]}})
+        },
+    );
+}
+
+#[test]
+fn f1_tls_client_setup_replays_without_a_tls_peer() {
+    f1_tls_client_matrix("tls.connect_with(n, take stream, \"localhost\", client)");
+}
+
+#[test]
+fn f1_tls_basic_and_identity_connect_replay_without_a_tls_peer() {
+    f1_tls_client_matrix("tls.connect(n, take stream, \"localhost\", Pem(bCA))");
+    f1_tls_client_matrix(
+        "tls.connect_as(n, take stream, \"localhost\", Pem(bCA), TlsIdentity(chain: bCHAIN, key: bKEY))",
+    );
+}
+
+fn f1_tls_client_matrix(upgrade: &str) {
+    use rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
+    use std::io::{Read, Write};
+    use std::net::{Ipv4Addr, TcpListener};
+    use std::sync::Arc;
+    use std::time::Duration;
+    // rustls 0.23.46 public test-ca fixtures, reused by rt/tests/support/tls_peer.rs.
+    const CA: &str = include_str!("../../hirsel-rt/tests/it/tls-data/ca.cert");
+    const CHAIN: &str = include_str!("../../hirsel-rt/tests/it/tls-data/end.fullchain");
+    const KEY: &str = include_str!("../../hirsel-rt/tests/it/tls-data/end.key");
+    let reservation = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let port = reservation.local_addr().unwrap().port();
+    drop(reservation);
+    let source = r#"pub type E = Grant(GrantError) | Network(NetError)
+pub fn main(rt: Io, args: Args) -> Result[(), E] {
+  let n = io.net(rt) ? Grant
+  let stream = net.connect(n, "127.0.0.1", PORTu16, Unbounded()) ? Network
+  let client = TlsClient(roots: Pem(bCA), identity: Some(TlsIdentity(chain: bCHAIN, key: bKEY)), alpn: ["h2"])
+  let mut secure = UPGRADE ? Network
+  failure.check(tls.negotiated_protocol(n, secure) == Ok(PROTOCOL), Arithmetic())
+  failure.check(match tls.peer(n, secure) ? Network { Some(chain) => bytes.len(chain) > 0u64, None() => false }, Arithmetic())
+  net.write_all(n, mut secure, b"ping") ? Network
+  let mut buffer: List[u8] = []
+  let mut more = true
+  while more { more = (net.read(n, mut secure, mut buffer, 8u64) ? Network) > 0u64 }
+  failure.check(bytes.from_list(take buffer) == b"pong", Arithmetic())
+  tls.close(n, take secure) ? Network
+  Ok(())
+}
+"#.replace("PROTOCOL", if upgrade.contains("connect_with") { "Some(\"h2\")" } else { "None()" })
+      .replace("UPGRADE", upgrade)
+      .replace("PORT", &port.to_string())
+      .replace("CA", &format!("{CA:?}"))
+      .replace("CHAIN", &format!("{CHAIN:?}"))
+      .replace("KEY", &format!("{KEY:?}"));
+    f1_corpus_matrix_with_live(
+        "tls-client",
+        &source,
+        |_| {
+            serde_json::json!({"io":{"tasks":"tasks.free@1","dirs":[],"net":{"provider":"net.stream@1","rules":[
+            {"address":"127.0.0.1","service":port.to_string(),"operation":"connect"}]}},"args":[]})
+        },
+        0,
+        b"",
+        || {
+            let certs = CertificateDer::pem_slice_iter(CHAIN.as_bytes())
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            let key = PrivateKeyDer::from_pem_slice(KEY.as_bytes()).unwrap();
+            let mut config = rustls::ServerConfig::builder_with_provider(Arc::new(
+                rustls::crypto::ring::default_provider(),
+            ))
+            .with_protocol_versions(&[&rustls::version::TLS13])
+            .unwrap()
+            .with_no_client_auth()
+            .with_single_cert(certs, key)
+            .unwrap();
+            config.alpn_protocols = vec![b"h2".to_vec()];
+            let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, port)).unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let (stop, stopped) = std::sync::mpsc::channel();
+            let server = std::thread::spawn(move || {
+                let socket = loop {
+                    match listener.accept() {
+                        Ok((socket, _)) => break socket,
+                        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                            if !matches!(
+                                stopped.recv_timeout(Duration::from_millis(10)),
+                                Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+                            ) {
+                                return;
+                            }
+                        }
+                        Err(e) => panic!("TLS accept: {e}"),
+                    }
+                };
+                socket
+                    .set_read_timeout(Some(Duration::from_secs(10)))
+                    .unwrap();
+                socket
+                    .set_write_timeout(Some(Duration::from_secs(10)))
+                    .unwrap();
+                let conn = rustls::ServerConnection::new(Arc::new(config)).unwrap();
+                let mut stream = rustls::StreamOwned::new(conn, socket);
+                let mut request = [0; 4];
+                stream.read_exact(&mut request).unwrap();
+                assert_eq!(&request, b"ping");
+                stream.write_all(b"pong").unwrap();
+                stream.conn.send_close_notify();
+                stream.flush().unwrap();
+                assert_eq!(stream.read(&mut [0]).unwrap(), 0);
+            });
+            Box::new(move || {
+                let _ = stop.send(());
+                server.join().unwrap();
+            })
+        },
+    );
+}
+
+#[test]
+fn f1_tls_server_mutual_auth_replays_without_handshakes() {
+    const CA: &str = include_str!("../../hirsel-rt/tests/it/tls-data/ca.cert");
+    const CHAIN: &str = include_str!("../../hirsel-rt/tests/it/tls-data/end.fullchain");
+    const KEY: &str = include_str!("../../hirsel-rt/tests/it/tls-data/end.key");
+    const CLIENT_CA: &str = include_str!("../../hirsel-rt/tests/it/tls-data/client-ca.cert");
+    const CLIENT_CHAIN: &str = include_str!("../../hirsel-rt/tests/it/tls-data/client.cert");
+    const CLIENT_KEY: &str = include_str!("../../hirsel-rt/tests/it/tls-data/client.key");
+    let reservation = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let port = reservation.local_addr().unwrap().port();
+    drop(reservation);
+    let source = r#"pub type E = Grant(GrantError) | Network(NetError)
+pub fn main(rt: Io, args: Args) -> Result[(), E] {
+  let n = io.net(rt) ? Grant
+  let tasks = io.tasks(rt) ? Grant
+  let address = SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: PORTu16)
+  let listener = net.listen(n, address) ? Network
+  task.scope(tasks, fn(s: Scope) -> Result[(), E] {
+    let server = task.async(s, fn() -> Result[(), E] {
+      let mut owned = take listener
+      let (stream, _) = net.accept(n, mut owned) ? Network
+      let config = TlsServer(identities: [TlsIdentity(chain: b{{CHAIN}}, key: b{{KEY}})], clients: Require(b{{CLIENT_CA}}), alpn: ["h2"])
+      let mut secure = tls.accept(n, take stream, config) ? Network
+      failure.check(tls.negotiated_protocol(n, secure) == Ok(Some("h2")), Arithmetic())
+      failure.check(match tls.peer(n, secure) ? Network { Some(chain) => bytes.len(chain) > 0u64, None() => false }, Arithmetic())
+      let mut buffer: List[u8] = []
+      failure.check((net.read(n, mut secure, mut buffer, 1u64) ? Network) == 1u64 && buffer == [120u8], Arithmetic())
+      net.write_all(n, mut secure, b"y") ? Network
+      tls.close(n, take secure) ? Network
+      Ok(())
+    })
+    let client = task.async(s, fn() -> Result[(), E] {
+      let stream = net.connect_addr(n, address, Unbounded()) ? Network
+      let config = TlsClient(roots: Pem(b{{CA}}), identity: Some(TlsIdentity(chain: b{{CLIENT_CHAIN}}, key: b{{CLIENT_KEY}})), alpn: ["h2"])
+      let mut secure = tls.connect_with(n, take stream, "localhost", config) ? Network
+      net.write_all(n, mut secure, b"x") ? Network
+      let mut buffer: List[u8] = []
+      failure.check((net.read(n, mut secure, mut buffer, 1u64) ? Network) == 1u64 && buffer == [121u8], Arithmetic())
+      tls.close(n, take secure) ? Network
+      Ok(())
+    })
+    task.await(s, take server)?
+    task.await(s, take client)?
+    Ok(())
+  })
+}
+"#.replace("PORT", &port.to_string())
+      .replace("{{CLIENT_CHAIN}}", &format!("{CLIENT_CHAIN:?}"))
+      .replace("{{CLIENT_KEY}}", &format!("{CLIENT_KEY:?}"))
+      .replace("{{CLIENT_CA}}", &format!("{CLIENT_CA:?}"))
+      .replace("{{CHAIN}}", &format!("{CHAIN:?}"))
+      .replace("{{KEY}}", &format!("{KEY:?}"))
+      .replace("{{CA}}", &format!("{CA:?}"));
+    f1_corpus_matrix_with_io("tls-server", &source, |_| {
+        serde_json::json!({"tasks":"tasks.free@1","dirs":[],
+        "net":{"provider":"net.stream@1","rules":[
+            {"address":"127.0.0.1","service":port.to_string(),"operation":"listen_tls"},
+            {"address":"127.0.0.1","service":port.to_string(),"operation":"connect"}]}})
+    });
+}
+
+#[test]
+fn f1_unix_streams_replay_without_socket_paths() {
+    let socket = Scratch::new("unix-endpoint");
+    let path = socket.path("peer.sock");
+    let source = r#"pub type E = Grant(GrantError) | Network(NetError)
+pub fn main(rt: Io, args: Args) -> Result[(), E] {
+  let n = io.net(rt) ? Grant
+  let tasks = io.tasks(rt) ? Grant
+  let address = path.of(SOCKET)
+  let listener = net.unix_listen(n, address) ? Network
+  task.scope(tasks, fn(s: Scope) -> Result[(), E] {
+    let server = task.async(s, fn() -> Result[(), E] {
+      let mut owned = take listener
+      let mut (stream, _) = net.accept(n, mut owned) ? Network
+      let mut buffer: List[u8] = []
+      failure.check((net.read(n, mut stream, mut buffer, 1u64) ? Network) == 1u64 && buffer == [120u8], Arithmetic())
+      net.write_all(n, mut stream, b"y") ? Network
+      net.close(n, take stream)
+      Ok(())
+    })
+    let client = task.async(s, fn() -> Result[(), E] {
+      let mut stream = net.unix_connect(n, path.of(SOCKET)) ? Network
+      net.write_all(n, mut stream, b"x") ? Network
+      let mut buffer: List[u8] = []
+      failure.check((net.read(n, mut stream, mut buffer, 1u64) ? Network) == 1u64 && buffer == [121u8], Arithmetic())
+      net.close(n, take stream)
+      Ok(())
+    })
+    task.await(s, take server)?
+    task.await(s, take client)?
+    Ok(())
+  })
+}
+"#.replace("SOCKET", &format!("{:?}", path.to_str().unwrap()));
+    f1_corpus_matrix_with_io("unix-stream", &source, |_| {
+        serde_json::json!({"tasks":"tasks.free@1","dirs":[],
+        "net":{"provider":"net.stream@1","rules":[
+            {"address":path,"service":"0","operation":"unix_listen"},
+            {"address":path,"service":"0","operation":"unix_connect"}]}})
+    });
+    assert!(!path.exists(), "owned listener must unlink its socket");
+}
+
+#[test]
+fn f1_canceled_network_requests_replay_checked_precedence() {
+    f1_corpus_matrix_with_io(
+        "canceled-network",
+        r#"pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let n = io.net(rt)?
+  let bind_address = SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: 0u16)
+  let listener = match net.listen(n, bind_address) { Ok(value) => take value, Error(_) => { failure.check(false, Arithmetic()); return Ok(()) } }
+  let socket = match net.udp_bind(n, bind_address) { Ok(value) => take value, Error(_) => { failure.check(false, Arithmetic()); return Ok(()) } }
+  let (sender, receiver): (Sender[bool], Receiver[bool]) = channel.open(tasks)
+  task.scope(tasks, fn(s: Scope) {
+    let mut tx = take sender
+    let child = task.async(s, fn() {
+      let mut rx = take receiver
+      let mut owned = take listener
+      let mut datagram = take socket
+      let _ = channel.receive(tasks, mut rx)
+      failure.check(match net.accept(n, mut owned) { Error(Canceled(Requested())) => true, _ => false }, Arithmetic())
+      failure.check(net.resolve(n, "INVALID", 7u16) == Error(InvalidInput()), Arithmetic())
+      failure.check(net.resolve(n, "example.com", 7u16) == Error(NotGranted()), Arithmetic())
+      failure.check(net.resolve(n, "127.0.0.1", 7u16) == Error(Canceled(Requested())), Arithmetic())
+      failure.check(match net.connect(n, "127.0.0.1", 7u16, Nanos(0u64)) { Error(InvalidInput()) => true, _ => false }, Arithmetic())
+      failure.check(match net.connect(n, "127.0.0.1", 7u16, Unbounded()) { Error(Canceled(Requested())) => true, _ => false }, Arithmetic())
+      let mut buffer: List[u8] = [7u8]
+      failure.check(match udp.recv_from(n, mut datagram, mut buffer, 1u64) { Error(Canceled(Requested())) => true, _ => false }, Arithmetic())
+      failure.check(match udp.recv_from(n, mut datagram, mut buffer, 0u64) { Error(InvalidInput()) => true, _ => false }, Arithmetic())
+      let peer = SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: 7u16)
+      failure.check(udp.send_to(n, mut datagram, b"no", peer) == Error(Canceled(Requested())), Arithmetic())
+      failure.check(buffer == [7u8], Arithmetic())
+      udp.close(n, take datagram)
+    })
+    task.cancel(s, child)
+    let _ = channel.send(tasks, mut tx, true)
+    task.await(s, take child)
+  })
+  Ok(())
+}
+"#,
+        |_| {
+            serde_json::json!({"tasks":"tasks.free@1","dirs":[],"net":{"provider":"net.stream@1","rules":[
+            {"address":"127.0.0.1","service":"0","operation":"listen"},
+            {"address":"127.0.0.1","service":"0","operation":"udp_bind"},
+            {"address":"127.0.0.1","service":"7","operation":"udp_peer"},
+            {"address":"127.0.0.1","service":"7","operation":"connect"}]}})
+        },
     );
 }

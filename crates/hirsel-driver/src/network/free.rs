@@ -78,6 +78,24 @@ impl HostLibrary {
                 stderr: self.id(&a[0])?,
                 bytes: bytes(&a[1])?,
             },
+            _ if matches!(
+                host_route(name),
+                HostRoute::Network | HostRoute::NetProjection
+            ) =>
+            {
+                return match self.network_request(name, a)? {
+                    Some(request) => Ok(Some(request)),
+                    None if matches!(
+                        name,
+                        "tls.connect" | "tls.connect_as" | "tls.connect_with" | "tls.accept"
+                    ) =>
+                    {
+                        self.tls_request(name, a)
+                            .map(|(request, _setup)| Some(request))
+                    }
+                    None => Ok(None),
+                };
+            }
             _ if matches!(host_route(name), HostRoute::Process) => {
                 if matches!(name, "io.process" | "proc.narrow") {
                     self.process_projection_request(name, a)?
