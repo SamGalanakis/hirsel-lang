@@ -1068,3 +1068,40 @@ fn worker_enclosing_generated_values_replay_only_selected_canonical_instances() 
         }
     });
 }
+
+#[test]
+fn ordinary_source_audits_reuse_compact_products_and_keep_private_completion() {
+    with_compiler_stack(|| {
+        let source = "fn helper()->u32{7u32}\nfn plain(x:u32)->u32{x+1u32}\nfn staged()->u32{comptime helper()}\n";
+        let store = Arc::new(store::MemStore::default());
+        let mut seed = signature_session(store.clone(), source, true);
+        let plain = seed.source_audit(&definition("plain")).unwrap();
+        let staged = seed.source_audit(&definition("staged")).unwrap();
+        let mut fresh = signature_session(store.clone(), source, false);
+        fresh.adapters.modes = None; fresh.adapters.lowering = None;
+        assert_eq!(fresh.source_audit(&definition("plain")).unwrap(), plain);
+        assert_eq!(fresh.source_audit(&definition("staged")).unwrap(), staged);
+        for name in ["plain", "staged"] {
+            assert_eq!(fresh.recompute_count(&definition(name), QueryKind::Modes), 0);
+            assert_eq!(fresh.lower_adapter_calls(&definition(name)), 0);
+        }
+        let copied = Arc::new(store::MemStore::default());
+        for (key, bytes) in store.take() {
+            store::ResultStore::put(&*copied, &key, &bytes); store::ResultStore::put(&*store, &key, &bytes);
+        }
+        let mut remote = signature_session(copied, source, false);
+        remote.adapters.modes = None; remote.adapters.lowering = None;
+        assert!(remote.source_audit(&definition("staged")).is_err(), "producer audit cannot transfer private execution completion");
+        let mut changed = signature_session(store.clone(), &source.replace("7u32", "9u32"), true);
+        changed.adapters.modes = None; changed.adapters.lowering = None;
+        assert!(changed.source_audit(&definition("staged")).is_err(), "executed helper invalidates audit substitutions");
+        let mut oracle = signature_session(store, source, true).with_verify_store(store::VerifyStore::Recompute);
+        assert_eq!(oracle.source_audit(&definition("plain")).unwrap(), plain);
+        assert_eq!(oracle.source_audit(&definition("staged")).unwrap(), staged);
+        let off_store = Arc::new(store::MemStore::default());
+        let mut off = signature_session(off_store.clone(), source, true); off.verify = Verify::Off;
+        off.source_audit(&definition("staged")).unwrap();
+        let mut on = signature_session(off_store, source, true); on.adapters.modes = None; on.adapters.lowering = None;
+        assert!(on.source_audit(&definition("staged")).is_err());
+    });
+}
