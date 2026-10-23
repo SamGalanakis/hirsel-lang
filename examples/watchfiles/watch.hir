@@ -1,0 +1,122 @@
+// Tokio ce685ee6: join_set.rs:381-383 (cancel then join), interval.rs:334-338
+// (now + period). Completion-relative delay is applied after EVERY tick here.
+pub type ReadJob {
+  call: sendable once fn() -> Result[unique model.Snapshot, FileError],
+}
+
+pub type WatchError = Clock(ClockError) | Wait(WaitError) | Files(FileError) | Output(
+  OutputError
+) | Cancel(CancelError) | Overflow | Invalid
+
+pub fn read(d: Dir, name: String) -> Result[unique model.Snapshot, FileError] {
+  let mut opened = match file.open(d, path.of(name)) {
+    Ok(f) => take f,
+    Error(NotFound()) => return Ok(unique Missing()),
+    Error(Canceled(cause)) => return Error(Canceled(cause)),
+    Error(e) => return Ok(unique ReadError(e)),
+  }
+  match file.read_all_bounded(d, mut opened, 65536) {
+    Ok(data) => Ok(unique Present(take data)),
+    Error(Limit()) => Ok(unique TooLarge()),
+    Error(File(Canceled(cause))) => Error(Canceled(cause)),
+    Error(File(e)) => Ok(unique ReadError(e)),
+  }
+}
+
+// The same loop is used by the CLI and deterministic fixture providers.
+// The factory owns each read job; paths are copied once per observation.
+pub fn run(
+  tasks: Tasks,
+  c: MonotonicClock,
+  emit: fn(u64, u64, String, u64) -> Result[(), OutputError],
+  files: List[String],
+  interval_ns: u64,
+  ticks: u64,
+  timeout_ns: u64,
+  make_read: fn(u64, take unique String) -> ReadJob
+) -> Result[Option[CancelCause], WatchError] {
+  if interval_ns == 0 || ticks == 0 || ticks > 16 || list.len(files) == 0 || list.len(
+    files
+  ) > 16 {
+    return Error(Invalid())
+  }
+  let start = clock.monotonic(c)?
+  let Some(end) = instant.checked_add(c, start, timeout_ns) else {
+    return Error(Overflow())
+  }
+  let bounded = task.scope_until(
+    tasks,
+    Deadline(clock: c, at: end),
+    fn(outer: Scope) -> Result[(), WatchError] {
+      let mut previous: List[Option[model.Snapshot]] = []
+      let mut slot = 0u64
+      while slot < list.len(files) {
+        list.push(mut previous, None())
+        slot += 1
+      }
+      let mut tick = 0u64
+      while tick < ticks {
+        task.check_canceled(outer)?
+        let tick_index = tick
+        let values = task.scope(
+          tasks,
+          fn(inner: Scope) -> Result[List[model.Snapshot], WatchError] {
+            let mut values: List[model.Snapshot] = []
+            let mut first = 0u64
+            while first < list.len(files) {
+              task.check_canceled(inner)?
+              let mut pending: TaskSet[Result[unique model.Snapshot, FileError]] of inner = task.set(
+                inner
+              )
+              let mut index = first
+              while index < list.len(files) && index < first + 4 {
+                let name = unique files[index]
+                let reader = make_read(tick_index, take name)
+                let ReadJob(call: job) = take reader
+                task.add(inner, mut pending, task.async(inner, take job))
+                index += 1
+              }
+              let batch = task.all(inner, take pending)?
+              for value in take batch {
+                list.push(mut values, take value)
+              }
+              first = index
+            }
+            Ok(take values)
+          }
+        )?
+        let mut index = 0u64
+        for value in take values {
+          let label = model.status(previous[index], value)
+          let size = model.length(value)
+          emit(tick, index, label, size)?
+          previous[index] = Some(take value)
+          index += 1
+        }
+        tick += 1
+        if tick < ticks {
+          // Sample after the complete tick, including ordered output: never catch up.
+          let completed = clock.monotonic(c)?
+          let Some(next) = instant.checked_add(c, completed, interval_ns) else {
+            return Error(Overflow())
+          }
+          clock.sleep_until(c, next)?
+        }
+      }
+      Ok(())
+    }
+  )
+  match bounded {
+    Finished(done) => {
+      done?
+      Ok(None())
+    },
+    Expired(done) => match done {
+      Error(Wait(Canceled(cause))) | Error(Files(Canceled(cause))) | Error(
+        Cancel(Canceled(cause))
+      ) => Ok(Some(cause)),
+      Error(e) => Error(e),
+      Ok(()) => Ok(Some(DeadlineExceeded())),
+    },
+  }
+}

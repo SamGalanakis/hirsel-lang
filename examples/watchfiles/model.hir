@@ -1,0 +1,37 @@
+pub type Snapshot = Present(Bytes) | Missing | ReadError(FileError) | TooLarge
+
+pub fn relative(name: String) -> bool uses {} {
+  if name == "" || string.byte_len(name) > 1024 || string.starts_with(name, "/") {
+    return false
+  }
+  for part in string.split(unique name, "/") {
+    if part == "" || part == "." || part == ".." {
+      return false
+    }
+  }
+  !string.contains(name, "\\") && !string.contains(name, "\0")
+}
+
+pub fn status(previous: Option[Snapshot], current: Snapshot) -> String uses {} {
+  match current {
+    Missing() => "missing",
+    ReadError(_) => "error",
+    TooLarge() => "limit",
+    Present(data) => match previous {
+      None() => "initial",
+      Some(Present(old)) => if data == old {
+        "present"
+      } else {
+        "changed"
+      },
+      _ => "initial",
+    },
+  }
+}
+
+pub fn length(value: Snapshot) -> u64 uses {} {
+  match value {
+    Present(data) => bytes.len(data),
+    _ => 0,
+  }
+}

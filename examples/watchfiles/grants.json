@@ -1,0 +1,20 @@
+{
+  "args": [
+    "1000000",
+    "2",
+    "1000000000",
+    "ready.txt"
+  ],
+  "io": {
+    "stdout": "stdout.bytes@1",
+    "monotonic_clock": "clock.monotonic.ns@1",
+    "tasks": "tasks.cooperative@1",
+    "dirs": [
+      {
+        "path": "data",
+        "host": "fixtures",
+        "access": "read"
+      }
+    ]
+  }
+}

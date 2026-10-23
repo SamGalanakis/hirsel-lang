@@ -1,0 +1,48 @@
+pub type AppError = Grant(GrantError) | Files(FileError) | Watch(watch.WatchError)
+
+fn reader(
+  tasks: Tasks,
+  c: MonotonicClock,
+  input: Stdin,
+  output: Stdout,
+  d: Dir,
+  tick: u64,
+  take name: unique String
+) -> watch.ReadJob {
+  watch.ReadJob(
+    call: fn() -> Result[unique model.Snapshot, FileError] {
+      let file_name = take name
+      let _ = out.print(output, f"read:{tick}\n")
+      let mut ack: List[u8] = []
+      match stdin.read(input, mut ack, 1) {
+        Ok(1) => watch.read(d, file_name),
+        Error(Canceled(why)) => Error(Canceled(why)),
+        _ => Error(FileFault(95)),
+      }
+    }
+  )
+}
+
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let tasks = io.tasks(rt)?
+  let c = io.monotonic_clock(rt)?
+  let input = io.stdin(rt)?
+  let output = io.stdout(rt)?
+  let d = io.dir(rt, path.of("data"))?
+  let stopped = watch.run(
+    tasks,
+    c,
+    fn(tick: u64, index: u64, label: String, size: u64) -> Result[(), OutputError] {
+      out.print(output, f"{tick}:{index}:{label}:{size}\n")
+    },
+    ["artifact"],
+    1,
+    2,
+    1000000000,
+    fn(tick: u64, take name: unique String) -> watch.ReadJob {
+      reader(tasks, c, input, output, d, tick, take name)
+    }
+  )?
+  failure.check(stopped == None(), Arithmetic())
+  Ok(())
+}

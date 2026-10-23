@@ -1,0 +1,78 @@
+pub type AppError = Grant(GrantError) | Arguments(ArgError) | Number(scalar.ParseError) | Invalid | Watch(
+  watch.WatchError
+) | Files(FileError) | Output(OutputError)
+
+pub fn main(rt: Io, args: Args) -> Result[std@1/process.ExitCode, AppError] {
+  let out = io.stdout(rt)?
+  if arg.len(args) == 1 && arg.text(args, 0)? == "--help" {
+    out.print(
+      out,
+      "Usage: watchfiles INTERVAL_NS TICKS TIMEOUT_NS FILE...\n1..16 relative files; 1..16 ticks; positive interval; 65536 bytes/file.\nOutput: tick<TAB>input index<TAB>status<TAB>byte length.\n"
+    )?
+    return Ok(std@1/process.SUCCESS)
+  }
+  if arg.len(args) < 4 || arg.len(args) > 19 {
+    return Error(Invalid())
+  }
+  let interval = u64.parse(arg.text(args, 0)?)?
+  let ticks = u64.parse(arg.text(args, 1)?)?
+  let timeout = u64.parse(arg.text(args, 2)?)?
+  if interval == 0 || ticks == 0 || ticks > 16 {
+    return Error(Invalid())
+  }
+  let mut files: List[String] = []
+  let mut index = 3u64
+  while index < arg.len(args) {
+    let name = arg.text(args, index)?
+    if !model.relative(name) {
+      return Error(Invalid())
+    }
+    list.push(mut files, unique name)
+    index += 1
+  }
+  let d = io.dir(rt, path.of("data"))?
+  let c = io.monotonic_clock(rt)?
+  let tasks = io.tasks(rt)?
+  let stopped = watch.run(
+    tasks,
+    c,
+    fn(tick: u64, input_index: u64, label: String, size: u64) -> Result[(), OutputError] {
+      out.print(out, f"{tick}\t{input_index}\t{label}\t{size}\n")
+    },
+    files,
+    interval,
+    ticks,
+    timeout,
+    fn(tick: u64, take name: unique String) -> watch.ReadJob {
+      reader(d, take name)
+    }
+  )?
+  let expired = match stopped {
+    Some(_) => true,
+    None() => false,
+  }
+  out.print(
+    out,
+    if expired {
+      "deadline\n"
+    } else {
+      "complete\n"
+    }
+  )?
+  Ok(
+    if expired {
+      std@1/process.FAILURE
+    } else {
+      std@1/process.SUCCESS
+    }
+  )
+}
+
+fn reader(d: Dir, take name: unique String) -> watch.ReadJob {
+  watch.ReadJob(
+    call: fn() -> Result[unique model.Snapshot, FileError] {
+      let file_name = take name
+      watch.read(d, file_name)
+    }
+  )
+}

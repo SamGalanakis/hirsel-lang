@@ -1,0 +1,196 @@
+// Virtual-clock vectors adapted from Tokio ce685ee6 tests/time_interval.rs:35-136.
+// No granularity epsilon; fixed delay is measured from observation completion.
+type Stats {
+  active: u64,
+  maximum: u64,
+  reads: u64,
+  cause: u64,
+}
+
+fn pause(c: MonotonicClock, ns: u64) -> Result[(), FileError] {
+  let Ok(now) = clock.monotonic(c) else {
+    return Error(FileFault(91))
+  }
+  let Some(later) = instant.checked_add(c, now, ns) else {
+    return Error(FileFault(92))
+  }
+  match clock.sleep_until(c, later) {
+    Ok(()) => Ok(()),
+    Error(Canceled(why)) => Error(Canceled(why)),
+    _ => Error(FileFault(93)),
+  }
+}
+
+fn sample(
+  tasks: Tasks,
+  c: MonotonicClock,
+  stats: Mutex[Stats],
+  which: u64,
+  tick: u64,
+  name: String
+) -> Result[unique model.Snapshot, FileError] {
+  mutex.with(
+    tasks,
+    stats,
+    fn(mut state: unique Stats) uses {} {
+      state.active += 1
+      state.reads += 1
+      if state.active > state.maximum {
+        state.maximum = state.active
+      }
+    }
+  )
+  let fetched: Result[unique model.Snapshot, FileError] = if which == 11 {
+    // An unanswered scripted read: a live producer never supplies its response.
+    let (tx, rx): (Sender[u64], Receiver[u64]) = channel.open(tasks)
+    let mut inbox = take rx
+    match channel.receive(tasks, mut inbox) {
+      Error(Canceled(why)) => {
+        mutex.with(
+          tasks,
+          stats,
+          fn(mut state: unique Stats) uses {} {
+            state.cause = match why {
+              Parent() => 2,
+              DeadlineExceeded() => 1,
+              _ => 9,
+            }
+          }
+        )
+        Error(Canceled(why))
+      },
+      _ => Error(FileFault(94)),
+    }
+  } else {
+    if which == 7 {
+      pause(c, 650)?
+    }
+    Ok(
+      unique if which == 2 && tick == 0 || which == 3 && tick > 0 {
+        Missing()
+      } else if which == 5 {
+        ReadError(PermissionDenied())
+      } else if which == 1 && tick > 0 {
+        Present(b"changed")
+      } else if which == 4 && tick > 0 {
+        Present(b"xyz")
+      } else {
+        Present(b"abc")
+      }
+    )
+  }
+  mutex.with(
+    tasks,
+    stats,
+    fn(mut state: unique Stats) uses {} {
+      state.active -= 1
+    }
+  )
+  fetched
+}
+
+pub fn main(t: Test) -> Result[(), watch.WatchError] {
+  let which = test.seed(t)
+  let tasks = test.tasks(t)
+  let c = test.clock(t)
+  let stats = mutex.create(
+    tasks,
+    unique Stats(active: 0, maximum: 0, reads: 0, cause: 0)
+  )
+  let ticks = if which == 8 {
+    1u64
+  } else {
+    3u64
+  }
+  let interval = if which == 6 {
+    0u64
+  } else {
+    300u64
+  }
+  let timeout = if which == 9 {
+    0u64
+  } else if which >= 10 {
+    150u64
+  } else {
+    10000u64
+  }
+  let ran = watch.run(
+    tasks,
+    c,
+    fn(tick: u64, index: u64, label: String, size: u64) -> Result[(), OutputError] {
+      let Ok(now) = clock.monotonic(c) else {
+        test.fail(t)
+      }
+      test.log(t, f"{tick}:{index}:{label}:{size}@{instant.ticks(now)}")
+      Ok(())
+    },
+    ["a", "b", "c", "d", "e"],
+    interval,
+    ticks,
+    timeout,
+    fn(tick: u64, take name: unique String) -> watch.ReadJob {
+      reader(tasks, c, copy stats, which, tick, take name)
+    }
+  )
+  let final_stats = mutex.with(
+    tasks,
+    stats,
+    fn(mut state: unique Stats) -> unique Stats uses {} {
+      unique state
+    }
+  )
+  test.check(t, final_stats.active == 0 && final_stats.maximum <= 4)
+  test.check(
+    t,
+    if which == 9 || which == 6 {
+      final_stats.reads == 0
+    } else {
+      final_stats.reads > 0
+    }
+  )
+  if which == 11 {
+    test.check(t, final_stats.cause == 2)
+  }
+  if which == 6 {
+    test.check(t, ran == Error(Invalid()))
+    test.log(t, "invalid")
+  } else {
+    test.check(
+      t,
+      ran == Ok(
+        if which == 11 {
+          Some(Parent())
+        } else if which >= 9 {
+          Some(DeadlineExceeded())
+        } else {
+          None()
+        }
+      )
+    )
+    test.log(
+      t,
+      if which >= 9 {
+        "deadline"
+      } else {
+        "complete"
+      }
+    )
+  }
+  Ok(())
+}
+
+fn reader(
+  tasks: Tasks,
+  c: MonotonicClock,
+  take stats: Mutex[Stats],
+  which: u64,
+  tick: u64,
+  take name: unique String
+) -> watch.ReadJob {
+  watch.ReadJob(
+    call: fn() -> Result[unique model.Snapshot, FileError] {
+      let file_name = take name
+      sample(tasks, c, stats, which, tick, file_name)
+    }
+  )
+}
