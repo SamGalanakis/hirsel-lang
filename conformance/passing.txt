@@ -7207,3 +7207,5 @@ conformance/MODE/MODE-2-nested-copy-element-dropped-run.hir
 conformance/MODE/MODE-2-nested-copy-element-no-copy-run.hir
 conformance/MODE/MODE-2-nested-copy-element-ordinary-run.hir
 conformance/MODE/MODE-2-nested-copy-element-repair-run.hir
+conformance/FACT/FACT-1-plain-early-helper-22.hir
+conformance/FACT/FACT-1-plain-early-constant-22.hir

@@ -61,3 +61,4 @@ mod ownership_history_21;
 mod integer_boundary_21;
 mod placement_boundary_21;
 mod failure_cleanup_21;
+mod plain_contract_22;

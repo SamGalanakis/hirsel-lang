@@ -1,0 +1,25 @@
+// rule: FACT-1
+// expect: fail FACT-1 at line 11
+// Plain early-return twin; the declared clause wins over caller division.
+// Same executable input as plain_contract_22::ensures_early_false::constant.
+type Pair {
+  left: u32,
+  right: u32,
+}
+
+fn probe(p: Pair) -> Pair
+  ensures 1u32 == 2u32 {
+  if p.left == 1u32 {
+    return p
+  }
+  p
+}
+
+pub fn main() -> Result[(), u8] {
+  let value = probe(Pair(left: 1u32, right: 2u32))
+  if value.left != 1u32 {
+    return Error(2u8)
+  }
+  let _ = 9u32 / 0u32
+  Ok(())
+}
