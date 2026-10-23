@@ -41,6 +41,84 @@ mod tests {
     }
 
     #[test]
+    fn completed_definition_returns_its_existing_verifier_replay_without_publication() {
+        for directory_backed in [false, true] {
+            let mut f = Fixture::unit();
+            owner_sig(&mut f, &[]);
+            let definition = Arc::new(f.definition.clone());
+            let directory = Directory::new();
+            let physical = Store::rebuildable(directory.0.clone());
+            let statistics = physical.enable_statistics();
+            let cache = if directory_backed {
+                VerifierCache::directory_store(physical.clone())
+            } else {
+                VerifierCache::default()
+            };
+            let policy = ContentHash::of_bytes(b"completed source validation");
+            let (report, _, _, evidence) = validate_definition(
+                &definition,
+                session(),
+                |_| Some((path("main"), 0)),
+                &f.signatures,
+                policy,
+                Some(&cache),
+            );
+            assert!(report.violations.is_empty(), "{report:?}");
+            let evidence = evidence.unwrap();
+            let accepted = evidence.accepted.as_ref().unwrap();
+            let (expected, record): (_, ReplayRecord) = cache
+                .load_record(replay_key(accepted.artifact, policy), REPLAY_DOMAIN)
+                .unwrap();
+            assert_eq!(record.artifact, accepted.artifact);
+            let before = statistics.snapshot();
+            for _ in 0..2 {
+                let output = cache
+                    .definition_output_from_evidence(
+                        &definition,
+                        session(),
+                        policy,
+                        &f.signatures,
+                        &evidence,
+                    )
+                    .unwrap();
+                assert_eq!(output.reference(), expected);
+                assert!(cache.contents().get_content(expected).is_some());
+                assert!(
+                    cache
+                        .read_definition(
+                            &output,
+                            session(),
+                            |_, _| Some(Anchor::default()),
+                            policy,
+                            &f.signatures,
+                        )
+                        .is_some()
+                );
+            }
+            assert!(
+                cache
+                    .definition_output_from_evidence(
+                        &definition,
+                        session(),
+                        ContentHash::default(),
+                        &f.signatures,
+                        &evidence,
+                    )
+                    .is_none()
+            );
+            let after = statistics.snapshot();
+            assert_eq!(
+                after.counters["PublicationAttempts"],
+                before.counters["PublicationAttempts"]
+            );
+            assert_eq!(
+                after.counters["IndexPublications"],
+                before.counters["IndexPublications"]
+            );
+        }
+    }
+
+    #[test]
     fn output_receipt_reopens_without_body_decode_and_rejects_foreign_bytes_and_contexts() {
         let mut f = Fixture::unit();
         owner_sig(&mut f, &[]);
@@ -246,6 +324,46 @@ impl VerifierCache {
         evidence: &VerifiedDefinition,
         metadata: &[u8],
     ) -> Option<VerifiedDefinitionOutput> {
+        let output = self.definition_output_with_metadata(
+            definition, types, policy, signatures, evidence, metadata,
+        )?;
+        self.publish(
+            key(subject, policy),
+            RECEIPT,
+            &Record {
+                subject,
+                owner: output.owner,
+                policy,
+                artifact: output.artifact,
+                reference: output.reference,
+                reads: output.reads.to_vec(),
+                metadata: metadata.to_vec(),
+            },
+        );
+        Some(output)
+    }
+    /// Return V's output for an actual completed validation, without looking up
+    /// or publishing an ordinary query. The empty metadata is not a cutoff
+    /// receipt: the caller must already have completed its real Lower demand.
+    pub fn definition_output_from_evidence(
+        &self,
+        definition: &hirsel_tir::DefinitionRef,
+        types: Arc<TypeInterner>,
+        policy: ContentHash,
+        signatures: &dyn SignatureLookup,
+        evidence: &VerifiedDefinition,
+    ) -> Option<VerifiedDefinitionOutput> {
+        self.definition_output_with_metadata(definition, types, policy, signatures, evidence, &[])
+    }
+    fn definition_output_with_metadata(
+        &self,
+        definition: &hirsel_tir::DefinitionRef,
+        types: Arc<TypeInterner>,
+        policy: ContentHash,
+        signatures: &dyn SignatureLookup,
+        evidence: &VerifiedDefinition,
+        metadata: &[u8],
+    ) -> Option<VerifiedDefinitionOutput> {
         if !evidence.holds(definition, &types, policy, signatures) {
             return None;
         }
@@ -254,30 +372,13 @@ impl VerifierCache {
             return None;
         }
         let identity = accepted.artifact;
-        // Reuse the existing verifier replay envelope. No second body encoding
-        // or provider is introduced for the native cutoff.
-        let record: ReplayRecord = self.load(replay_key(identity, policy), REPLAY_DOMAIN)?;
+        // Return V's own checked replay output, without serializing or writing
+        // the envelope again for a native cutoff.
+        let (reference, record): (_, ReplayRecord) =
+            self.load_record(replay_key(identity, policy), REPLAY_DOMAIN)?;
         if record.artifact != identity || record.policy != policy {
             return None;
         }
-        let bytes = bincode::serialize(&record).ok()?;
-        let reference = self.contents().put_content(BODY, &bytes)?;
-        if BODY.reference(&bytes)? != reference {
-            return None;
-        }
-        self.publish(
-            key(subject, policy),
-            RECEIPT,
-            &Record {
-                subject,
-                owner: definition.path,
-                policy,
-                artifact: identity,
-                reference,
-                reads: evidence.reads.clone(),
-                metadata: metadata.to_vec(),
-            },
-        );
         Some(VerifiedDefinitionOutput {
             owner: definition.path,
             reference,

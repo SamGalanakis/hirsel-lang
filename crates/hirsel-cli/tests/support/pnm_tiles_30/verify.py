@@ -22,7 +22,7 @@ def main(args):
     env = {k:v for k,v in os.environ.items() if not k.startswith('HIRSEL_RT_')}
     env.update(HIRSEL_DAEMON='off', HIRSEL_RESULTS='none@1', HIRSEL_JOBS='4', HIRSEL_MEMORY_LIMIT='2G', HIRSEL_TIMING='off')
     tools={}
-    for name in ['HIRSEL_IMAGE','HIRSEL_RUNTIME_ARCHIVES','HIRSEL_LINK_KIT','LLVM_SYS_231_PREFIX']:
+    for name in ['HIRSEL_PRODUCTS','HIRSEL_RUNTIME_ARCHIVES','HIRSEL_LINK_KIT','LLVM_SYS_231_PREFIX']:
         value=env.get(name)
         if not value:continue
         path=Path(value).resolve()

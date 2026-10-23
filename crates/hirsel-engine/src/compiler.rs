@@ -217,10 +217,14 @@ impl Compiler {
             ));
         }
         let mut compiler = self.clone().with_owned_engines();
-        compiler.result_store = Some(Arc::new(crate::store::DirStore::new(output.to_path_buf())));
+        let store = Arc::new(crate::store::DirStore::new(output.to_path_buf()));
+        // Own all encoding, transitive type and V writes before package load.
+        let publication =
+            crate::store::ResultStore::local_product_store(&*store).map(|store| store.request());
+        compiler.result_store = Some(store);
         compiler.retention = crate::memo::Retention::Batch;
         compiler.hold_bytes = Some(0);
-        with_compiler_stack(|| {
+        let result = with_compiler_stack(|| {
             let mut program = crate::package::load_program_source(
                 &compiler,
                 manifest,
@@ -262,17 +266,54 @@ impl Compiler {
                 }
             }
             Ok(())
-        })
+        });
+        result?;
+        if let Some(publication) = publication {
+            publication
+                .finish()
+                .map_err(|e| ToolError::Runtime(e.to_string()))?;
+        }
+        Ok(())
     }
     /// A partial pipeline can produce rejection diagnostics, but never a clean acceptance.
     pub fn check_path(&self, path: &Path) -> Result<CheckOutput, ToolError> {
-        with_compiler_stack(|| {
-            let mut program = self.load_check_package(path)?;
+        let mut compiler = self.clone();
+        // Select one physical provider before package loading can publish its
+        // first parse/type/V product. Engines and workers share this owner.
+        if compiler.result_store.is_none() && crate::policy::uses_persistent_results() {
+            if crate::policy::verifies_cached_results()
+                || std::env::var_os("HIRSEL_VERIFY_CACHE").is_some_and(|v| v != "0")
+            {
+                compiler.verify_store = crate::store::VerifyStore::Recompute;
+            }
+            let name = std::env::var("HIRSEL_RESULTS").unwrap_or_else(|_| "dir@1".into());
+            compiler.result_store = crate::store::store_by_name(
+                &name,
+                std::env::var_os("HIRSEL_RESULTS_DIR")
+                    .filter(|v| !v.is_empty())
+                    .map(Into::into),
+            )
+            .ok();
+        }
+        let publication = compiler
+            .result_store
+            .as_ref()
+            .and_then(|store| store.local_product_store())
+            .map(|store| store.request());
+        let result = with_compiler_stack(|| {
+            let mut program = compiler.load_check_package(path)?;
             program
                 .check(self.lowering)
                 .map_err(|error| program.error(error))
-        })
-        .or_else(check_diagnostics)
+        });
+        if result
+            .as_ref()
+            .is_ok_and(|output| output.completion == CheckCompletion::Complete)
+            && let Some(publication) = publication
+        {
+            let _ = publication.finish();
+        }
+        result.or_else(check_diagnostics)
     }
     /// `check_path`, then, when the program checks complete and accepted, the
     /// escape from capability checking its entry reaches (CAP-6).

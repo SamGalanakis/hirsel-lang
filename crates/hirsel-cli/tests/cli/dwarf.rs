@@ -703,7 +703,6 @@ fn cached_debug_lines_after_insertion_and_a_file_move_match_fresh_emission() {
                 Command::new(env!("CARGO_BIN_EXE_hirsel"))
                     .env("HIRSEL_DAEMON", "off")
                     .env("HIRSEL_RESULTS", "none@1")
-                    .env("HIRSEL_STD_OBJECTS", "none")
                     .env("HIRSEL_OBJECTS", store)
                     .env("HIRSEL_JOBS", "1")
                     .env("XDG_CACHE_HOME", root.join(backend))

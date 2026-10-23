@@ -1007,7 +1007,9 @@ fn imaged_helper_lowering_preserves_dependency_depth() {
             let result = program.engine.materialize_constant(&root);
             assert!(
                 matches!(result, Err(QueryError::Operational(_))),
-                "{result:?}"
+                "products={} phase={:?} result={result:?}",
+                images.is_some(),
+                program.engine.last_phase
             );
             let limit = program.engine.last_comptime_limit.as_ref().unwrap();
             assert_eq!(limit.kind, hirsel_tir::ToolingLimitKind::CallDepth);
@@ -1162,8 +1164,20 @@ fn imaged_frontier_replay_budget_matrix() -> String {
                 .into_iter()
                 .flat_map(move |jobs| [false, true].map(move |fallback| (budget, jobs, fallback)))
         }) {
-            let mut cached = load(&client, Some(&image));
+            // This positive receipt-reuse matrix shares the producer's local
+            // verifier namespace. Separate read-only roots carry no authority.
+            let mut cached = COMPILER
+                .clone()
+                .with_config(CompileConfig {
+                    store: Arc::new(store::DirStore::new(image.clone())),
+                    jobs: hirsel_intern::jobs::Jobs::new(jobs),
+                    ..CompileConfig::for_memory_cap(None)
+                })
+                .load_program_source(&client, None)
+                .unwrap();
+            let product_store = cached.engine.product_store().unwrap();
             cached.engine = cached.engine.with_config(CompileConfig {
+                store: product_store,
                 hold_bytes: budget,
                 ..CompileConfig::for_memory_cap(None)
             });
@@ -1192,7 +1206,12 @@ fn imaged_frontier_replay_budget_matrix() -> String {
             }
             for outcome in outcomes {
                 assert_eq!(outcome.definition, path);
-                assert_eq!(outcome.phase, Some(QueryKind::Lower));
+                assert_eq!(
+                    outcome.phase,
+                    Some(QueryKind::Lower),
+                    "budget={budget} jobs={jobs} fallback={fallback} result={:?}",
+                    outcome.result
+                );
                 assert!(outcome.limit.is_none());
                 assert_eq!(
                     placed(

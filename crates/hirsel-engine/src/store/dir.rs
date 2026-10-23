@@ -3,21 +3,18 @@
 use super::{EntryKey, ResultStore};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 
 /// The store format version in the directory name.
-pub const FORMAT: u32 = 12;
+pub const FORMAT: u32 = 14;
 /// The default size cap.
 pub const DEFAULT_CAP: u64 = 2 << 30;
-/// After this many bytes written in a process, the store enforces its cap.
-const GC_EVERY: u64 = 64 << 20;
 
 #[derive(Debug)]
 pub struct DirStore {
     root: PathBuf,
-    read_only: Vec<PathBuf>,
+    physical: hirsel_artifact_store::Store,
+    read_only: Vec<hirsel_artifact_store::Store>,
     cap: u64,
-    written: AtomicU64,
     verifier: std::sync::Arc<hirsel_validate::VerifierCache>,
 }
 
@@ -32,24 +29,29 @@ pub struct GcReport {
 
 impl DirStore {
     pub fn new(root: PathBuf) -> Self {
+        let physical = hirsel_artifact_store::Store::rebuildable(root.clone());
+        physical.set_cache_cap(DEFAULT_CAP);
         Self {
-            verifier: std::sync::Arc::new(hirsel_validate::VerifierCache::directory(root.clone())),
+            verifier: std::sync::Arc::new(hirsel_validate::VerifierCache::directory_store(
+                physical.clone(),
+            )),
+            physical,
             root,
             read_only: vec![],
             cap: DEFAULT_CAP,
-            written: AtomicU64::new(0),
         }
     }
     /// Read installed ordinary products with the same checked format. Writes,
     /// collection and verifier associations remain in this store's own root.
     pub fn with_read_only_root(mut self, root: PathBuf) -> Self {
-        if root != self.root && !self.read_only.contains(&root) {
-            self.read_only.push(root);
+        if root != self.root && !self.read_only.iter().any(|store| store.root() == root) {
+            self.read_only.push(hirsel_artifact_store::Store::new(root));
         }
         self
     }
     pub fn with_cap(mut self, cap: u64) -> Self {
         self.cap = cap;
+        self.physical.set_cache_cap(cap);
         self
     }
     /// `$XDG_CACHE_HOME/hirsel/results-v<N>`, else `$HOME/.cache/...`.
@@ -67,17 +69,33 @@ impl DirStore {
         if !base.is_absolute() {
             return None;
         }
-        let mut store = Self::new(base.join("hirsel").join(format!("results-v{FORMAT}")));
-        let installed = std::env::var_os("HIRSEL_PRODUCTS").map(PathBuf::from).or_else(|| std::env::current_exe().ok().map(|executable| executable.with_file_name("hirsel-std.products")));
-        if let Some(installed) = installed { store = store.with_read_only_root(installed); }
-        Some(store)
+        Some(
+            Self::new(base.join("hirsel").join(format!("results-v{FORMAT}")))
+                .with_installed_products(),
+        )
+    }
+    /// Compose environment-selected local storage with installed ordinary
+    /// products. Explicit library providers remain exactly caller configured.
+    pub(super) fn with_installed_products(mut self) -> Self {
+        let installed = std::env::var_os("HIRSEL_PRODUCTS")
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| {
+                std::env::current_exe()
+                    .ok()
+                    .map(|executable| executable.with_file_name("hirsel-std.products"))
+            });
+        if let Some(installed) = installed {
+            self = self.with_read_only_root(installed);
+        }
+        self
     }
     pub fn root(&self) -> &Path {
         &self.root
     }
     /// Collect immutable outputs and action roots with bounded scratch.
     pub fn gc(&self, cap: u64) -> GcReport {
-        let report = hirsel_artifact_store::Store::new(self.root.clone()).collect(cap);
+        let report = self.physical.collect(cap);
         GcReport {
             entries: report.entries,
             bytes: report.bytes,
@@ -88,16 +106,10 @@ impl DirStore {
     pub fn cap(&self) -> u64 {
         self.cap
     }
-    fn account(&self, len: u64) {
-        let before = self.written.fetch_add(len, Relaxed);
-        let interval = GC_EVERY.min(self.cap.max(1));
-        if before == 0 || before / interval != before.saturating_add(len) / interval {
-            self.gc(self.cap);
-        }
-    }
     fn publish(&self, key: &EntryKey, action: super::Action, value: &[u8]) {
-        use hirsel_artifact_store::{Address, Domain, Store};
-        let store = Store::new(self.root.clone());
+        use hirsel_artifact_store::{Address, Domain};
+        let store = &self.physical;
+        let _batch = store.batch();
         let write = || -> std::io::Result<()> {
             let reference = store.put(
                 Domain {
@@ -108,20 +120,18 @@ impl DirStore {
             )?;
             store.associate(Address(key.0), action, reference)
         };
-        if write().is_ok() {
-            self.account(value.len() as u64 + 64 + 152);
-        }
+        let _ = write();
     }
 }
 
 impl ResultStore for DirStore {
     fn local_product_store(&self) -> Option<hirsel_artifact_store::Store> {
-        Some(hirsel_artifact_store::Store::new(self.root.clone()))
+        Some(self.physical.clone())
     }
     fn lookup_product(&self, address: super::Address) -> Option<super::Association> {
-        std::iter::once(&self.root)
+        std::iter::once(&self.physical)
             .chain(&self.read_only)
-            .find_map(|root| hirsel_artifact_store::Store::new(root.clone()).lookup(address))
+            .find_map(|store| store.lookup(address))
     }
     fn associate_product(
         &self,
@@ -129,23 +139,22 @@ impl ResultStore for DirStore {
         action: super::Action,
         reference: super::Reference,
     ) {
-        let store = hirsel_artifact_store::Store::new(self.root.clone());
+        let store = &self.physical;
         // Shared immutable roots may supply ordinary content, but local writes
         // and GC remain in the writable root. A missing reference is a miss.
         if self.get_content(reference).is_some() {
             let _ = store.associate(address, action, reference);
-            self.account(152);
         }
     }
     fn verifier(&self) -> Option<std::sync::Arc<hirsel_validate::VerifierCache>> {
         Some(self.verifier.clone())
     }
     fn get_content(&self, reference: super::Reference) -> Option<super::Bytes> {
-        for (index, root) in std::iter::once(&self.root)
+        for (index, root) in std::iter::once(&self.physical)
             .chain(&self.read_only)
             .enumerate()
         {
-            let store = hirsel_artifact_store::Store::new(root.clone());
+            let store = root;
             if let Some(bytes) = store.get(reference) {
                 if index == 0 {
                     store.touch(
@@ -159,21 +168,25 @@ impl ResultStore for DirStore {
         None
     }
     fn put_content(&self, domain: super::Domain, bytes: &[u8]) -> Option<super::Reference> {
-        let reference = hirsel_artifact_store::Store::new(self.root.clone())
-            .put(domain, bytes)
-            .ok()?;
-        self.account(bytes.len() as u64 + 64);
+        let reference = self.physical.put(domain, bytes).ok()?;
         Some(reference)
     }
     fn get(&self, key: &EntryKey) -> Option<super::Bytes> {
-        for (index, root) in std::iter::once(&self.root)
+        for (index, root) in std::iter::once(&self.physical)
             .chain(&self.read_only)
             .enumerate()
         {
-            let store = hirsel_artifact_store::Store::new(root.clone());
-            let Some(previous) = store.lookup(hirsel_artifact_store::Address(key.0)) else {
+            let store = root;
+            let Some(opened) = store.lookup_open(hirsel_artifact_store::Address(key.0)) else {
+                if index == 0
+                    && let Some(path) =
+                        store.association_path(hirsel_artifact_store::Address(key.0))
+                {
+                    let _ = fs::remove_file(path);
+                }
                 continue;
             };
+            let previous = opened.association;
             // Query code validates prior input/output identities before decoding.
             if previous.reference.domain
                 != (hirsel_artifact_store::Domain {
@@ -183,7 +196,7 @@ impl ResultStore for DirStore {
             {
                 continue;
             }
-            let Some(bytes) = store.get(previous.reference) else {
+            let Some(bytes) = opened.get() else {
                 if index == 0 {
                     let _ = fs::remove_file(store.output_path(previous.reference));
                 }

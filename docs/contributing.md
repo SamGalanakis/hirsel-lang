@@ -46,23 +46,20 @@ threads) to 4. Export them explicitly when a wrapper might override them:
 export CARGO_BUILD_JOBS=4 HIRSEL_JOBS=4 RUST_TEST_THREADS=4
 ```
 
-## Compiler std images
+## Compiler std products
 
-Buck2 test targets that run std programs get `HIRSEL_IMAGE` from
-`//:hirsel-std-image`, which rebuilds whenever std or the compiler changes.
-The std image compiler and
-Buck2 test tools share the optimized `//tools/buck2:checked` profile, with
-debug assertions and integer overflow checks enabled.
+Buck2 test targets that run std programs get `HIRSEL_PRODUCTS` from
+`//:hirsel-std-products`, which rebuilds whenever std or the compiler changes.
+The ordinary `hirsel precompute <manifest> -o <directory>` command publishes
+std through the same lazy typed content store used for user query products.
+Test tools use the optimized `//tools/buck2:checked` profile, with debug
+assertions and integer overflow checks enabled.
 
-`hirsel image` writes each source's records as soon as that source checks,
-streaming them through a scratch file, and then releases the source's checked
-bodies, so its peak memory follows the largest definition rather than the size
-of std. `//:hirsel-std-image` runs under `HIRSEL_MEMORY_LIMIT=2G`
-(`IMAGE_MEMORY_LIMIT` in `tools/buck2/defs.bzl`); the mmap image writer needed 923
-MiB of it on 2026-10-21. Every test run that loads std waits on it, so it
-requests the pool's fast workers and that memory (`PRECHECK_REQUEST` in
-`tools/buck2/platforms.bzl`). A std image that reaches the bound is a memory
-regression to find, not a bound to raise.
+Precomputation publishes bounded query products and releases completed bodies.
+Its memory cap remains `HIRSEL_MEMORY_LIMIT=2G` (`PRODUCT_MEMORY_LIMIT` in
+`tools/buck2/defs.bzl`). A build that reaches the bound is a memory regression
+to find, not a bound to raise. Provider bytes supply products; verifier-owned
+local receipts remain a separate authority.
 
 ## Cargo
 

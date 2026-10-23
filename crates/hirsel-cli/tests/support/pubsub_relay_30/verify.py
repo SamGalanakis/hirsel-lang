@@ -27,7 +27,7 @@ def run(cmd, stem, timeout=20, measured=True):
 
 def digest(path): return hashlib.sha256(path.read_bytes()).hexdigest()
 def tool_seal(label):
-    paths=[Path(cli),Path(env['HIRSEL_IMAGE'])]
+    paths=[Path(cli),*Path(env['HIRSEL_PRODUCTS']).rglob('*')]
     paths.extend((Path(env['LLVM_SYS_231_PREFIX'])/'bin').iterdir())
     paths.extend(Path(env['HIRSEL_RUNTIME_ARCHIVES']).rglob('*'))
     paths.extend(Path(env['HIRSEL_LINK_KIT']).rglob('*'))

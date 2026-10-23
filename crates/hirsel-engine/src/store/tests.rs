@@ -190,12 +190,23 @@ fn dir_store_round_trips_rejects_corruption_and_collects_lru() {
         .unwrap()
         .set_modified(old)
         .unwrap();
-    // Two roots plus two live outputs and the dangling corrupt root.
-    // The new format accounts for its roots as well as output bytes.
-    let report = store.gc(1400);
-    assert_eq!(report.entries, 5);
-    assert!(report.removed >= 2);
-    assert!(report.bytes - report.removed_bytes <= 1400);
+    // Packed roots and outputs share a segment. Retain exactly a's segment
+    // plus the checked index, while the older c segment must be evicted.
+    let index_files: Vec<_> = std::fs::read_dir(root.join("index"))
+        .unwrap()
+        .flatten()
+        .filter_map(|file| file.metadata().ok().filter(|m| m.is_file()))
+        .collect();
+    let retained = std::fs::metadata(
+        artifacts.output_path(artifacts.lookup(Address(key("a").0)).unwrap().reference),
+    )
+    .unwrap()
+    .len()
+        + index_files.iter().map(|meta| meta.len()).sum::<u64>();
+    let report = store.gc(retained);
+    assert_eq!(report.entries, index_files.len() as u64 + 2);
+    assert_eq!(report.removed, 1);
+    assert_eq!(report.bytes - report.removed_bytes, retained);
     assert!(store.get(&key("c")).is_none());
     assert!(store.get(&key("a")).is_some());
     assert_eq!(store.gc(u64::MAX).removed, 0);
@@ -617,4 +628,50 @@ fn product_association_byte_transport_refuses_wrong_address_and_trailing_bytes()
         &serde_json::to_vec(&(ContentHash::default(), action.0, reference)).unwrap(),
     );
     assert!(store.lookup_product(address).is_none());
+}
+
+#[test]
+fn explicit_directory_selection_keeps_installed_products_without_forwarding_authority() {
+    const CHILD: &str = "HIRSEL_STORE_SELECTED_CHILD";
+    let query = key("selected-products");
+    let domain = Domain {
+        kind: 123,
+        schema: 1,
+    };
+    let reference = domain.reference(b"installed bytes").unwrap();
+    if let Some(local) = std::env::var_os(CHILD) {
+        let local = PathBuf::from(local);
+        let store = store_by_name("dir@1", Some(local.clone())).unwrap();
+        assert_eq!(&*store.get(&query).unwrap(), b"installed index");
+        assert_eq!(&*store.get_content(reference).unwrap(), b"installed bytes");
+        assert_eq!(store.local_product_store().unwrap().root(), local);
+        // An explicitly constructed library provider receives no ambient roots.
+        assert!(DirStore::new(local.join("library")).get(&query).is_none());
+        store.put(&query, b"local index");
+        assert_eq!(&*store.get(&query).unwrap(), b"local index");
+        return;
+    }
+    let packaged = scratch("selected-packaged");
+    let local = scratch("selected-local");
+    let seed = DirStore::new(packaged.clone());
+    assert_eq!(
+        seed.put_content(domain, b"installed bytes"),
+        Some(reference)
+    );
+    seed.put(&query, b"installed index");
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "store::tests::explicit_directory_selection_keeps_installed_products_without_forwarding_authority", "--nocapture"])
+        .env(CHILD, &local)
+        .env("HIRSEL_PRODUCTS", &packaged)
+        .output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
+    assert_eq!(&*seed.get(&query).unwrap(), b"installed index");
+    let _ = std::fs::remove_dir_all(packaged);
+    let _ = std::fs::remove_dir_all(local);
 }

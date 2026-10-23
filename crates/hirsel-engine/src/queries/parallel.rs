@@ -490,6 +490,15 @@ impl QueryEngine {
                 .ok_or_else(compact::missing_summary)
         });
         if release {
+            // The published summary owns the complete inherited observations;
+            // a successful resolver body is no longer needed by this batch.
+            if self
+                .resolutions
+                .get(&definition)
+                .is_some_and(|e| e.memo.value.is_ok())
+            {
+                self.forget(&MemoKey::new(QueryKind::Resolve, definition));
+            }
             // Errors are already body-free and retain their complete receipts.
             if self
                 .checked

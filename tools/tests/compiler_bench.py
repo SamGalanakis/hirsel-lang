@@ -221,11 +221,11 @@ class Matrix(unittest.TestCase):
             self.assertEqual(json.loads(path.read_text())['io']['dirs'], [])
             self.assertEqual(endpoint, 'stdout')
 
-    def test_native_selects_release_rust_and_std_stays_image(self):
+    def test_native_selects_release_rust_and_std_precomputes_products(self):
         rust = corpus.Program('p', 'rust', Path('/tmp'), 3)
         std = corpus.Program('std@1', 'hirsel', Path('/tmp'), 3, check_only=True)
         self.assertEqual(run.modes(rust, ['native']), ['release'])
-        self.assertEqual(run.modes(std, ['check', 'native']), ['image'])
+        self.assertEqual(run.modes(std, ['check', 'native']), ['precompute'])
 
     def test_cold_warm_are_adjacent_and_failure_does_not_drop_the_rust_pair(self):
         with tempfile.TemporaryDirectory() as work:

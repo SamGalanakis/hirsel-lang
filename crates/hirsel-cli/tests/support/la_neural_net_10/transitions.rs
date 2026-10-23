@@ -70,7 +70,6 @@ impl Fixture {
                 .arg("-o")
                 .arg(&binary)
                 .env("HIRSEL_DAEMON", "off")
-                .env("HIRSEL_STD_OBJECTS", "none")
                 .output()
                 .unwrap();
             assert!(
@@ -88,11 +87,7 @@ impl Fixture {
                 .arg(self.0.join("hirsel.json"));
             run
         };
-        let output = command
-            .env("HIRSEL_DAEMON", "off")
-            .env("HIRSEL_STD_OBJECTS", "none")
-            .output()
-            .unwrap();
+        let output = command.env("HIRSEL_DAEMON", "off").output().unwrap();
         assert!(
             output.status.success(),
             "{}",

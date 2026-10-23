@@ -51,7 +51,7 @@ def main(args):
         assert binary.is_file()
         binaries[backend] = binary
     provenance = {}
-    for name in ['HIRSEL_IMAGE', 'LLVM_SYS_231_PREFIX', 'HIRSEL_RUNTIME_ARCHIVES']:
+    for name in ['HIRSEL_PRODUCTS', 'LLVM_SYS_231_PREFIX', 'HIRSEL_RUNTIME_ARCHIVES']:
         value = os.environ.get(name)
         if value:
             path = Path(value).resolve()

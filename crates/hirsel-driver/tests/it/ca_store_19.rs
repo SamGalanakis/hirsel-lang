@@ -6,6 +6,75 @@ use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
+#[test]
+fn ordinary_program_checks_publish_bounded_batches_before_returning() {
+    with_compiler_stack(|| {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("results");
+        let manifest = dir.path().join("hirsel.json");
+        let source = (0..32)
+            .map(|n| format!("pub type T{n} {{ value: u8 }}\npub fn f{n}(x:T{n})->T{n}{{x}}\n"))
+            .collect::<String>();
+        std::fs::write(dir.path().join("main.hir"), source).unwrap();
+        std::fs::write(
+            &manifest,
+            serde_json::json!({
+                "schema": 1,
+                "package": {"name": "packcheck", "version": "1"},
+                "sources": [{"path": "main.hir", "module": []}],
+                "dependencies": [],
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let observed = Arc::new(store::DirStore::new(root.clone()));
+        let statistics = store::ResultStore::local_product_store(&*observed)
+            .unwrap()
+            .enable_statistics();
+        let compiler = |store: Arc<store::DirStore>| {
+            COMPILER
+                .clone()
+                .with_owned_engines()
+                .with_config(CompileConfig {
+                    store,
+                    jobs: hirsel_intern::jobs::Jobs::new(1),
+                    ..CompileConfig::for_memory_cap(None)
+                })
+        };
+        let checked = compiler(observed.clone()).check_path(&manifest).unwrap();
+        assert_eq!(checked.completion, CheckCompletion::Complete);
+        assert!(checked.diagnostics.is_empty(), "{:?}", checked.diagnostics);
+        let segments = std::fs::read_dir(root.join("packs"))
+            .unwrap()
+            .flatten()
+            .flat_map(|shard| std::fs::read_dir(shard.path()).unwrap().flatten())
+            .count();
+        assert!(
+            segments <= 8,
+            "ordinary check published {segments} small segments"
+        );
+        assert_eq!(statistics.snapshot().counters["FileSyncs"], 0);
+        assert_eq!(statistics.snapshot().counters["DirectorySyncs"], 0);
+        assert_eq!(statistics.snapshot().counters["IndexPublications"], 1);
+        assert_eq!(statistics.snapshot().counters["FinishCommits"], 1);
+        assert_eq!(statistics.snapshot().counters["DropCommits"], 0);
+        assert_eq!(statistics.snapshot().counters["CollectionCommits"], 0);
+        // A separately opened provider must see the completed request while the
+        // compiler and its original provider are still available to the caller.
+        eprintln!(
+            "physical-store-statistics: {}",
+            serde_json::to_string(&statistics.snapshot()).unwrap()
+        );
+        let mut fresh = compiler(Arc::new(store::DirStore::new(root)))
+            .load_check_package(&manifest)
+            .unwrap();
+        assert_eq!(fresh.engine.work_stats().parsed_bytes, 0);
+        let warm = fresh.check(LoweringPolicy::Comptime).unwrap();
+        assert_eq!(warm.completion, checked.completion);
+        assert_eq!(warm.diagnostics, checked.diagnostics);
+    });
+}
+
 #[derive(Default)]
 struct Observed {
     inner: store::MemStore,
@@ -18,6 +87,62 @@ struct Observed {
     summary_content_reads: AtomicUsize,
     indexes: Mutex<std::collections::BTreeSet<hirsel_syntax::ContentHash>>,
     forbid_content_reads: AtomicBool,
+}
+
+#[test]
+fn ordinary_catalog_native_roots_survive_fresh_warm_checks() {
+    with_compiler_stack(|| {
+        let dir = tempfile::tempdir().unwrap();
+        let manifest = dir.path().join("hirsel.json");
+        std::fs::write(dir.path().join("main.hir"), "pub fn main()->u8{0u8}\n").unwrap();
+        std::fs::write(
+            &manifest,
+            serde_json::json!({
+                "schema": 1,
+                "package": {"name": "warmroot", "version": "1"},
+                "sources": [{"path": "main.hir", "module": []}],
+                "dependencies": [],
+                "entry": {"module": [], "name": "main"},
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let compiler = || {
+            COMPILER
+                .clone()
+                .with_owned_engines()
+                .with_config(CompileConfig {
+                    store: Arc::new(store::DirStore::new(dir.path().join("results"))),
+                    jobs: hirsel_intern::jobs::Jobs::new(1),
+                    ..CompileConfig::for_memory_cap(None)
+                })
+        };
+        let mut seed = compiler().load_check_package(&manifest).unwrap();
+        let checked = seed.check(LoweringPolicy::Reachable).unwrap();
+        assert_eq!(checked.completion, CheckCompletion::Complete);
+        assert!(checked.diagnostics.is_empty());
+        let input = seed.engine.export_native_input().unwrap();
+        assert!(input.definitions.contains_key(&seed.entry));
+        let expected: Vec<_> = input.definitions.keys().cloned().collect();
+        seed.engine.import_native_input(input).unwrap();
+        drop(seed);
+
+        let mut warm = compiler().load_check_package(&manifest).unwrap();
+        assert_eq!(warm.engine.work_stats().parsed_bytes, 0);
+        let checked = warm.check(LoweringPolicy::Reachable).unwrap();
+        assert_eq!(checked.completion, CheckCompletion::Complete);
+        assert!(checked.diagnostics.is_empty());
+        let input = warm.engine.export_native_input().unwrap();
+        assert!(
+            input.definitions.contains_key(&warm.entry),
+            "warm catalog entry omitted from native roots"
+        );
+        assert_eq!(
+            input.definitions.keys().cloned().collect::<Vec<_>>(),
+            expected
+        );
+        warm.engine.import_native_input(input).unwrap();
+    });
 }
 impl store::ResultStore for Observed {
     fn get(&self, key: &store::EntryKey) -> Option<store::Bytes> {

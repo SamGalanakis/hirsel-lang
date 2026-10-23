@@ -145,7 +145,6 @@ pub struct QueryEngine {
     pub(crate) session: bool,
     /// Image construction requires closure-local evidence. Until worker V
     /// receipts are closure-qualified, its source materializations stay scalar.
-    pub(crate) portable_products: bool,
     pub comptime_limits: hirsel_interp::Limits,
     pub last_comptime_limit: Option<hirsel_tir::ToolingLimit>,
     /// This engine's S1 stack: the open evaluations, generators and staged
@@ -388,10 +387,9 @@ impl QueryEngine {
     /// engine without dependency packages selects every definition.
     pub(crate) fn native_paths(&mut self) -> Result<BTreeSet<DefPath>, QueryError> {
         let roots: Vec<_> = self
-            .items
-            .keys()
+            .source_paths()
+            .into_iter()
             .filter(|path| !self.package_manifests.contains_key(&path.0.package))
-            .cloned()
             .collect();
         self.native_paths_from(roots)
     }
@@ -444,9 +442,27 @@ impl QueryEngine {
     pub(crate) fn prepare_materialization_environment(&mut self) {
         let now = (self.environment.clone(), self.comptime_limits, self.verify);
         if self.materialization_environment.as_ref() != Some(&now) {
+            // A verification-policy transition invalidates executed values,
+            // but an unchanged source body with no execution inputs remains
+            // the same artifact. Its next demand still runs actual V. Keeping
+            // that artifact avoids rebuilding and then separately validating
+            // the identical original supplied to native import.
+            let unchanged_source: BTreeSet<_> = self
+                .materialization_environment
+                .as_ref()
+                .filter(|(environment, limits, _)| environment == &now.0 && limits == &now.1)
+                .into_iter()
+                .flat_map(|_| self.lowered.iter())
+                .filter(|(id, entry)| {
+                    self.source_facts(id.path())
+                        .is_some_and(|facts| !facts.execution)
+                        && !self.lower_requires_execution(id.path(), entry.reads())
+                })
+                .map(|(id, _)| *id)
+                .collect();
             self.constant_values.clear();
             self.staged_values.clear();
-            self.lowered.clear();
+            self.lowered.retain(|id, _| unchanged_source.contains(id));
             self.lower_receipts.clear();
             self.lower_holds.clear();
             self.materialization_environment = Some(now);
@@ -495,7 +511,6 @@ impl QueryEngine {
             configured_jobs: None,
             configured_lowering: LoweringPolicy::Comptime,
             session: false,
-            portable_products: false,
             comptime_limits: hirsel_interp::Limits::default(),
             last_comptime_limit: None,
             s1: crate::memo::S1Coordinator::new().worker(),

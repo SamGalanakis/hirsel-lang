@@ -1733,3 +1733,42 @@ four configurations, malformed bytes and exhaustive canonical-tail checks.
 The MIT credits are retained in LICENSE.base64-simd (also vsimd), LICENSE.outref
 and LICENSE.base64; linked dependency license
 notices accompany release packaging.
+
+Immutable store index v36 vendors hashbrown fingerprint group load/match
+primitives from f7c44c608517ec79e0134d5747458aeb0aa8b86e,
+src/control/group/sse2.rs:73-88 and generic.rs:95-112 (Copyright (c) 2016
+The Rust Project Developers; MIT OR Apache-2.0, licenses above). group.rs
+normalizes portable word masks to 16 byte lanes and refines borrow candidates;
+all 256 bytes are fingerprints, with no empty/deleted controls.
+
+The index links crc32c 0.6.8 (MIT OR Apache-2.0), retaining upstream hardware
+dispatch and generated software tables. Its upstream source witness is
+254a861f7cc71bfe455e86f0e1d86e3c83c33390. Build scripts run in Buck/Reindeer.
+
+The masked CRC convention and test vectors are adapted from LevelDB
+bb74ef739973a70ca9f0d90788a1da89b788c0ad util/crc32c.h:25-42,
+util/crc32c_test.cc:12-30 and table/table_builder.cc:192-206.
+Copyright (c) 2011 The LevelDB Authors. All rights reserved.
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+1. Redistributions of source code must retain the above copyright notice,
+   this list of conditions and the following disclaimer.
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+3. Neither the name of Google Inc. nor the names of its contributors may be
+   used to endorse or promote products derived from this software without
+   specific prior written permission.
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
+LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+POSSIBILITY OF SUCH DAMAGE.
+Git idx/MIDX and RocksDB/Lucene policies are conceptual references only;
+no Git (GPL-2.0), RocksDB or Lucene implementation code is copied here.

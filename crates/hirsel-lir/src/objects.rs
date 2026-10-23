@@ -144,7 +144,7 @@ impl DirObjects {
     /// The store at `root`, the directory of one partition.
     pub fn new(root: PathBuf) -> Self {
         Self {
-            store: Store::new(root),
+            store: Store::rebuildable(root),
             cap: DEFAULT_CAP,
             written: AtomicU64::new(0),
         }

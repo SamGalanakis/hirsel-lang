@@ -133,7 +133,7 @@ class Runner:
         # Explicit provider controls override ambient values; native reuse is retained.
         self.env |= {'HIRSEL_JOBS': '1', 'HIRSEL_DAEMON': 'off', 'HIRSEL_RESULTS': 'dir@1',
                      'HIRSEL_OBJECTS': 'dir@1', 'HIRSEL_PROGRAM_CACHE': 'off',
-                     'HIRSEL_STD_OBJECTS': 'none', 'LC_ALL': 'C'}
+                     'LC_ALL': 'C'}
         self.report = {'schema': 1, 'seed': args.seed, 'rounds': args.rounds, 'cpu': args.cpu,
                        'wall_ratios': False, 'scope': 'compiler threads and descendants, including linker',
                        'std_objects': 'none; fixture selects no std', 'jobs': 1,

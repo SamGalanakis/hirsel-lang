@@ -188,7 +188,15 @@ struct ViewReceipt {
 }
 enum Backend {
     Memory(
-        Mutex<HashMap<ContentHash, hirsel_artifact_store::Bytes>>,
+        Mutex<
+            HashMap<
+                ContentHash,
+                (
+                    hirsel_artifact_store::Reference,
+                    hirsel_artifact_store::Bytes,
+                ),
+            >,
+        >,
         Arc<hirsel_artifact_store::Memory>,
     ),
     Directory(Store),
@@ -218,32 +226,58 @@ impl VerifierCache {
     /// Use the same immutable output containers as ordinary query products.
     /// The verifier's domain and address associations remain separately owned.
     pub fn directory(root: PathBuf) -> Self {
-        Self(Backend::Directory(Store::new(root)), Mutex::default())
+        Self::directory_store(Store::rebuildable(root))
+    }
+    /// Share physical publication state with ordinary products in the selected
+    /// trusted local directory. This does not import verifier associations.
+    pub fn directory_store(store: Store) -> Self {
+        Self(Backend::Directory(store), Mutex::default())
+    }
+
+    pub(crate) fn publication_batch(&self) -> Option<hirsel_artifact_store::Batch> {
+        match &self.0 {
+            Backend::Directory(store) => Some(store.batch()),
+            Backend::Memory(..) => None,
+        }
     }
 
     fn load<T: serde::de::DeserializeOwned>(&self, key: ContentHash, domain: Domain) -> Option<T> {
-        let bytes = match &self.0 {
+        self.load_record(key, domain).map(|(_, value)| value)
+    }
+    /// The reference comes from this verifier's own association and the same
+    /// checked bytes that are decoded below, never from producer metadata.
+    fn load_record<T: serde::de::DeserializeOwned>(
+        &self,
+        key: ContentHash,
+        domain: Domain,
+    ) -> Option<(hirsel_artifact_store::Reference, T)> {
+        let (reference, bytes) = match &self.0 {
             Backend::Memory(rows, _) => rows
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .get(&key)
                 .cloned()?,
             Backend::Directory(store) => {
-                let association = store.lookup(Address(key))?;
+                let opened = store.lookup_open(Address(key))?;
+                let association = opened.association;
                 if association.action != Action(key) || association.reference.domain != domain {
                     return None;
                 }
-                let bytes = store.get(association.reference)?;
+                let bytes = opened.get()?;
                 store.touch(Address(key), association.reference);
-                bytes
+                (association.reference, bytes)
             }
         };
-        bincode::DefaultOptions::new()
+        if reference.domain != domain {
+            return None;
+        }
+        let value = bincode::DefaultOptions::new()
             .with_fixint_encoding()
             .with_limit(bytes.len() as u64)
             .reject_trailing_bytes()
             .deserialize(&bytes)
-            .ok()
+            .ok()?;
+        Some((reference, value))
     }
     fn publish<T: Serialize>(&self, key: ContentHash, domain: Domain, receipt: &T) {
         let Ok(bytes) = bincode::serialize(receipt) else {
@@ -253,12 +287,20 @@ impl VerifierCache {
             return;
         }
         match &self.0 {
-            Backend::Memory(rows, _) => {
+            Backend::Memory(rows, contents) => {
+                use hirsel_artifact_store::Contents;
+                let Some(reference) = contents.put_content(domain, &bytes) else {
+                    return;
+                };
+                let Some(bytes) = contents.get_content(reference) else {
+                    return;
+                };
                 rows.lock()
                     .unwrap_or_else(|e| e.into_inner())
-                    .insert(key, bytes.into());
+                    .insert(key, (reference, bytes));
             }
             Backend::Directory(store) => {
+                let _batch = store.batch();
                 if let Ok(reference) = store.put(domain, &bytes) {
                     let _ = store.associate(Address(key), Action(key), reference);
                 }
@@ -318,7 +360,7 @@ impl VerifierCache {
     fn contents(&self) -> Arc<dyn hirsel_artifact_store::Contents> {
         match &self.0 {
             Backend::Memory(_, contents) => contents.clone(),
-            Backend::Directory(store) => Arc::new(Store::new(store.root().to_path_buf())),
+            Backend::Directory(store) => Arc::new(store.clone()),
         }
     }
     fn records(&self, types: Arc<TypeInterner>) -> Arc<hirsel_product_codec::TypeRecords> {
@@ -333,6 +375,7 @@ impl VerifierCache {
         records
     }
     fn retain_artifact(&self, artifact: &Artifact<'_>, policy: ContentHash) {
+        let _batch = self.publication_batch();
         let Some(identity) = artifact.identity else {
             return;
         };
@@ -745,6 +788,29 @@ mod tests {
     }
     fn artifact(f: &Fixture) -> Artifact<'_> {
         Artifact::new(&f.definition, session(), |_| Some((path("main"), 0)))
+    }
+
+    #[test]
+    fn verifier_type_content_joins_its_own_publication_batch() {
+        let dir = Directory::new();
+        let cache = VerifierCache::directory(dir.0.clone());
+        let batch = cache.publication_batch().unwrap();
+        let contents = cache.contents();
+        let reader = Store::new(dir.0.clone());
+        let mut references = vec![];
+        for n in 0u32..8 {
+            let reference = contents.put_content(VIEW_DOMAIN, &n.to_le_bytes()).unwrap();
+            assert!(contents.get_content(reference).is_some());
+            assert!(
+                reader.get(reference).is_none(),
+                "type content escaped its batch"
+            );
+            references.push(reference);
+        }
+        batch.finish().unwrap();
+        for (n, reference) in references.into_iter().enumerate() {
+            assert_eq!(&*reader.get(reference).unwrap(), &(n as u32).to_le_bytes());
+        }
     }
     fn check(f: &Fixture, cache: &VerifierCache, policy: ContentHash) -> (Validation, bool) {
         validate_cached(

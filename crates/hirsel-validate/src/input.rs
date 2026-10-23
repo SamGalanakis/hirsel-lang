@@ -348,6 +348,13 @@ pub struct ValidatedSignatures {
     policy: ContentHash,
 }
 impl ValidatedSignatures {
+    /// Group physical writes while retaining each independent verdict and its
+    /// complete current reads. The batch itself confers no verification proof.
+    pub fn publication_batch(&self) -> Option<hirsel_artifact_store::Batch> {
+        self.cache
+            .as_ref()
+            .and_then(|cache| cache.publication_batch())
+    }
     /// Successful locally checked per-view reads, for inspection only.
     pub fn successful(&self) -> impl Iterator<Item = (ValidationDigest, &[VRead])> {
         self.verdicts.iter().flat_map(|(digest, verdicts)| {
@@ -433,6 +440,7 @@ impl ValidatedSignatures {
         views: impl IntoIterator<Item = DefId>,
         signatures: &dyn SignatureLookup,
     ) -> UniverseErrors {
+        let _batch = self.publication_batch();
         let errors = views
             .into_iter()
             .filter_map(|d| self.verdict(t, d, signatures).error.clone())

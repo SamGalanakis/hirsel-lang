@@ -410,6 +410,14 @@ impl QueryEngine {
         for path in representations {
             self.read_layout_body(&path);
         }
+        if outcome.result.is_ok()
+            && self
+                .resolutions
+                .get(&id)
+                .is_some_and(|entry| entry.memo.value.is_ok())
+        {
+            self.forget(&MemoKey::new(QueryKind::Resolve, id));
+        }
         self.last_phase = outcome.phase;
         self.unavailable = matches!(outcome.result, Err(QueryError::NotImplemented))
             .then_some(outcome.phase)

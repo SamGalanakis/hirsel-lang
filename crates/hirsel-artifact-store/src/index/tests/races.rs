@@ -1,0 +1,346 @@
+use crate::{index::*, pack::index_benchmark_epoch};
+use hirsel_syntax::ContentHash;
+use std::os::{
+    fd::AsRawFd,
+    unix::net::{UnixListener, UnixStream},
+};
+use std::{
+    fs,
+    io::{Read, Write},
+    path::Path,
+    process::{Command, Stdio},
+};
+fn entry(n: u64) -> Entry {
+    let mut d = [0; 32];
+    d[..8].copy_from_slice(&n.to_be_bytes());
+    Entry {
+        key: Key {
+            kind: KeyKind::Content,
+            digest: ContentHash(d),
+        },
+        location: Location {
+            segment: ContentHash([n as u8; 32]),
+            offset: 64,
+            len: 128,
+        },
+    }
+}
+fn write(root: &Path, entries: &[Entry]) {
+    assert!(matches!(
+        publish_delta(
+            root,
+            build(root, entries).unwrap(),
+            &index_benchmark_epoch(root).unwrap()
+        )
+        .unwrap(),
+        PublishOutcome::Published { .. }
+    ));
+}
+fn budget() -> MaintenanceBudget {
+    MaintenanceBudget {
+        max_input_bytes: 128 << 20,
+        max_rows: 2_000_000,
+        max_scratch_bytes: 256 << 20,
+    }
+}
+fn child(root: &Path, mode: &str, id: u64) -> Command {
+    let mut c = Command::new(std::env::current_exe().unwrap());
+    c.args([
+        "--ignored",
+        "--exact",
+        "index::tests::races::cooperating_child",
+        "--nocapture",
+    ])
+    .env("INDEX36_CHILD_ROOT", root)
+    .env("INDEX36_CHILD_MODE", mode)
+    .env("INDEX36_CHILD_ID", id.to_string())
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped());
+    c
+}
+fn accept(listener: &UnixListener) -> UnixStream {
+    let mut p = libc::pollfd {
+        fd: listener.as_raw_fd(),
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    // SAFETY: one valid stack pollfd and a finite timeout.
+    assert_eq!(
+        unsafe { libc::poll(&mut p, 1, 5000) },
+        1,
+        "child did not connect"
+    );
+    let (stream, _) = listener.accept().unwrap();
+    stream
+        .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+        .unwrap();
+    stream
+        .set_write_timeout(Some(std::time::Duration::from_secs(5)))
+        .unwrap();
+    stream
+}
+#[test]
+#[ignore = "only launched by the bounded multiprocess parent"]
+fn cooperating_child() {
+    let root = std::path::PathBuf::from(std::env::var("INDEX36_CHILD_ROOT").unwrap());
+    let mode = std::env::var("INDEX36_CHILD_MODE").unwrap();
+    let id: u64 = std::env::var("INDEX36_CHILD_ID").unwrap().parse().unwrap();
+    if mode == "append" {
+        write(&root, &[entry(id)]);
+        return;
+    }
+    if mode.starts_with("gc-") {
+        let lock = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(root.join(".pack-lock"))
+            .unwrap();
+        // SAFETY: valid owned fd, finite nonblocking lock attempt.
+        let result = unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+        if mode == "gc-reader-gap" {
+            assert_eq!(result, -1);
+            assert_eq!(
+                std::io::Error::last_os_error().kind(),
+                std::io::ErrorKind::WouldBlock
+            );
+        } else {
+            assert_eq!(result, 0);
+            let live: Vec<_> = current_layer_ids_locked(&root)
+                .unwrap()
+                .iter()
+                .map(|id| {
+                    let mut name = String::from("L-");
+                    use std::fmt::Write;
+                    for byte in id.0 {
+                        write!(name, "{byte:02x}").unwrap();
+                    }
+                    name
+                })
+                .collect();
+            for path in fs::read_dir(root.join("index")).unwrap().flatten() {
+                let name = path.file_name().to_string_lossy().into_owned();
+                if name.starts_with("L-") && !live.contains(&name) {
+                    fs::remove_file(path.path()).unwrap();
+                }
+            }
+        }
+        return;
+    }
+    let stale = load_pinned(&root).unwrap();
+    let mut record = entry(if mode == "overwrite" { 1 } else { id });
+    if mode == "overwrite" {
+        record.location.offset = id as u32 * 64;
+    }
+    let epoch = index_benchmark_epoch(&root).unwrap();
+    let delta = build(&root, &[record]).unwrap();
+    let mut socket = UnixStream::connect(root.join("barrier")).unwrap();
+    socket
+        .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+        .unwrap();
+    socket.write_all(&[id as u8]).unwrap();
+    let mut go = [0];
+    socket.read_exact(&mut go).unwrap();
+    assert_eq!(go, [1]);
+    assert_eq!(find(&stale, record.key), None);
+    assert!(matches!(
+        publish_delta(&root, delta, &epoch).unwrap(),
+        PublishOutcome::Published { .. }
+    ));
+    socket.write_all(&[2]).unwrap();
+}
+#[test]
+fn multiprocess_common_pin_publication_and_live_staging_gc_owner() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let listener = UnixListener::bind(root.join("barrier")).unwrap();
+    let mut a = child(root, "barrier", 1).spawn().unwrap();
+    let mut b = child(root, "barrier", 2).spawn().unwrap();
+    let mut connections = [accept(&listener), accept(&listener)];
+    let mut seen = Vec::new();
+    for socket in &mut connections {
+        let mut id = [0];
+        socket.read_exact(&mut id).unwrap();
+        seen.push(id[0]);
+    }
+    seen.sort();
+    assert_eq!(seen, [1, 2]);
+    // A cooperating GC holds publication exclusively, and only try-locks owners.
+    let gc = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(root.join(".pack-lock"))
+        .unwrap();
+    // SAFETY: valid owned fd; nonblocking flock has no pointers.
+    assert_eq!(
+        unsafe { libc::flock(gc.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+        0
+    );
+    let stages: Vec<_> = fs::read_dir(root.join("index/staging"))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect();
+    assert_eq!(stages.len(), 2);
+    for stage in &stages {
+        let owner = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(stage.join("owner.lock"))
+            .unwrap();
+        // SAFETY: valid separate fd, nonblocking lock only.
+        assert_eq!(
+            unsafe { libc::flock(owner.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+            -1
+        );
+        assert!(stage.join("layer").is_file());
+    }
+    drop(gc);
+    // Serialize publication while both children retain the same absent pin.
+    for socket in &mut connections {
+        socket.write_all(&[1]).unwrap();
+        let mut done = [0];
+        socket.read_exact(&mut done).unwrap();
+        assert_eq!(done, [2]);
+    }
+    assert!(a.wait().unwrap().success());
+    assert!(b.wait().unwrap().success());
+    let pin = load_pinned(root).unwrap();
+    for id in [1, 2] {
+        assert_eq!(find(&pin, entry(id).key), Some(entry(id).location));
+    }
+    assert_eq!(fs::read_dir(root.join("index/staging")).unwrap().count(), 0);
+}
+#[test]
+fn multiprocess_append_survives_off_lock_compaction() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    write(root, &[entry(1)]);
+    write(root, &[entry(2)]);
+    let path = root.to_owned();
+    observe_compaction(move || {
+        let output = child(&path, "append", 3).output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    });
+    assert!(matches!(
+        compact(root, budget()).unwrap(),
+        CompactOutcome::Published { layers: 2, .. }
+    ));
+    let pin = load_pinned(root).unwrap();
+    for n in [1, 2, 3] {
+        assert_eq!(find(&pin, entry(n).key), Some(entry(n).location));
+    }
+}
+#[test]
+fn changed_compaction_inputs_conflict_once_without_overwriting_root() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    write(root, &[entry(1)]);
+    let old = fs::read(root.join("index/MANIFEST")).unwrap();
+    write(root, &[entry(2)]);
+    let path = root.to_owned();
+    let expected = old.clone();
+    observe_compaction(move || fs::write(path.join("index/MANIFEST"), old).unwrap());
+    assert_eq!(compact(root, budget()).unwrap(), CompactOutcome::Conflict);
+    assert_eq!(fs::read(root.join("index/MANIFEST")).unwrap(), expected);
+}
+#[test]
+fn fully_shadowed_inputs_reuse_selected_inode_and_free_a_slot() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    write(root, &[entry(1)]);
+    write(root, &[entry(1), entry(2)]);
+    assert!(matches!(
+        compact(root, budget()).unwrap(),
+        CompactOutcome::Published { layers: 1, .. }
+    ));
+    let pin = load_pinned(root).unwrap();
+    for n in [1, 2] {
+        assert_eq!(find(&pin, entry(n).key), Some(entry(n).location));
+    }
+}
+#[test]
+fn concurrently_appended_identical_output_cannot_create_duplicate_descriptors() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    write(root, &[entry(1)]);
+    write(root, &[entry(2)]);
+    let path = root.to_owned();
+    observe_compaction(move || write(&path, &[entry(1), entry(2)]));
+    assert_eq!(compact(root, budget()).unwrap(), CompactOutcome::Conflict);
+    assert_eq!(current_layer_ids_locked(root).unwrap().len(), 3);
+    let pin = load_pinned(root).unwrap();
+    for n in [1, 2] {
+        assert_eq!(find(&pin, entry(n).key), Some(entry(n).location));
+    }
+}
+
+#[test]
+fn multiprocess_gc_cannot_enter_reader_open_gap_and_unlinked_pin_survives() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    write(root, &[entry(1)]);
+    let path = root.to_owned();
+    observe_pin(move || {
+        let out = child(&path, "gc-reader-gap", 0).output().unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    });
+    let old = load_pinned(root).unwrap();
+    write(root, &[entry(2)]);
+    assert!(matches!(
+        compact(root, budget()).unwrap(),
+        CompactOutcome::Published { layers: 1, .. }
+    ));
+    let out = child(root, "gc-unlisted", 0).output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        fs::read_dir(root.join("index"))
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().starts_with("L-"))
+            .count(),
+        1
+    );
+    assert_eq!(find(&old, entry(1).key), Some(entry(1).location));
+    assert_eq!(find(&old, entry(2).key), None);
+    let current = load_pinned(root).unwrap();
+    for id in [1, 2] {
+        assert_eq!(find(&current, entry(id).key), Some(entry(id).location));
+    }
+}
+
+#[test]
+fn multiprocess_same_address_precedence_follows_publication_order() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let listener = UnixListener::bind(root.join("barrier")).unwrap();
+    let mut a = child(root, "overwrite", 1).spawn().unwrap();
+    let mut b = child(root, "overwrite", 2).spawn().unwrap();
+    let mut connections = [accept(&listener), accept(&listener)];
+    let mut expected = entry(1).location;
+    for socket in &mut connections {
+        let mut id = [0];
+        socket.read_exact(&mut id).unwrap();
+        expected.offset = u32::from(id[0]) * 64;
+        socket.write_all(&[1]).unwrap();
+        let mut done = [0];
+        socket.read_exact(&mut done).unwrap();
+        assert_eq!(done, [2]);
+    }
+    assert!(a.wait().unwrap().success());
+    assert!(b.wait().unwrap().success());
+    assert_eq!(
+        find(&load_pinned(root).unwrap(), entry(1).key),
+        Some(expected)
+    );
+}

@@ -14,7 +14,6 @@ fn default_native_store_reuses_unchanged_units_and_none_recomputes() {
             command
                 .env("HIRSEL_DAEMON", "off")
                 .env("HIRSEL_RESULTS", "none@1")
-                .env("HIRSEL_STD_OBJECTS", "none")
                 .env("HIRSEL_JOBS", "2")
                 .env("XDG_CACHE_HOME", &cache)
                 .env_remove("HIRSEL_OBJECTS")
@@ -85,7 +84,6 @@ pub fn main(rt:Io)->Result[(),GrantError] {
                 let mut cmd = Command::new(env!("CARGO_BIN_EXE_hirsel"));
                 cmd.env("HIRSEL_DAEMON", "off")
                     .env("HIRSEL_RESULTS", "none@1")
-                    .env("HIRSEL_STD_OBJECTS", "none")
                     .env("HIRSEL_JOBS", jobs)
                     .env("XDG_CACHE_HOME", cache.join(backend).join(jobs))
                     .env_remove("HIRSEL_OBJECTS")
@@ -179,7 +177,6 @@ impl HermeticCacheFixture {
         command
             .current_dir(&self.0)
             .env("HIRSEL_DAEMON", "off")
-            .env("HIRSEL_STD_OBJECTS", "none")
             .args(["build", "--debug", "--timings=json"])
             .arg(self.0.join("hirsel.json"))
             .arg("-o")

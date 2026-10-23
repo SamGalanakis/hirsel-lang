@@ -424,6 +424,14 @@ pub(crate) fn check_files(
     files: &[(FileId, &FileContext, LoweringPolicy)],
 ) -> Result<Vec<(FileId, FileCheckOutput)>, QueryError> {
     use hirsel_intern::timings::{Interval, interval};
+    // Canonical type records are written while queries encode their products,
+    // before the per-record writers run. Capacity spills stay private; a
+    // completed request explicitly publishes its last bounded subepoch.
+    let publication = engine
+        .result_store
+        .as_ref()
+        .and_then(|store| store.local_product_store())
+        .map(|store| store.request());
     let s0 = interval(Interval::S0);
     let mut checks: Vec<FileCheck> = files
         .iter()
@@ -592,6 +600,13 @@ pub(crate) fn check_files(
                 completion,
             },
         ));
+    }
+    if outputs
+        .iter()
+        .all(|(_, output)| output.completion == CheckCompletion::Complete)
+        && let Some(publication) = publication
+    {
+        let _ = publication.finish();
     }
     Ok(outputs)
 }

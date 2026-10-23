@@ -27,7 +27,6 @@ fn validate_stages_preserves_native_bytes_and_restores_four_checks_per_unit() {
             let mut cmd = Command::new(env!("CARGO_BIN_EXE_hirsel"));
             cmd.env_remove("HIRSEL_VALIDATE_STAGES")
                 .env("HIRSEL_OBJECTS", "none@1")
-                .env("HIRSEL_STD_OBJECTS", "none")
                 .env("HIRSEL_JOBS", jobs.to_string())
                 .args([
                     "--timings=json",
@@ -120,7 +119,6 @@ fn optimized_warm_fragments_preserve_executables_and_runtime_across_policies_and
             command
                 .env_remove("HIRSEL_VALIDATE_STAGES")
                 .env("HIRSEL_OBJECTS", "dir@1")
-                .env("HIRSEL_STD_OBJECTS", "none")
                 .env("XDG_CACHE_HOME", &cache)
                 .env("HIRSEL_JOBS", jobs.to_string())
                 .args(["--timings=json", "build", "--release", "--backend", "llvm"]);

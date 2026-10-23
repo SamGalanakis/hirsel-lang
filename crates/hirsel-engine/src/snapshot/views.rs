@@ -94,6 +94,7 @@ impl ViewTable {
         store: &mut ValidatedSignatures,
         old: Option<&ValidatedSignatures>,
     ) -> Self {
+        let _batch = store.publication_batch();
         let mut sorted: Vec<SignatureRef> = signatures.into_iter().collect();
         sorted.sort_by(|a, b| a.definition.cmp(&b.definition));
         let views: Vec<View> = sorted
@@ -237,6 +238,7 @@ impl PackageViews {
         old: Option<&ValidatedSignatures>,
     ) -> Self {
         // The universe in DefPath order: the base's views and new ones.
+        let _batch = store.publication_batch();
         let mut order: Vec<&View> = base
             .views
             .iter()

@@ -96,11 +96,7 @@ impl QueryEngine {
         if self.front_changes.activate() {
             // A new aggregate has no prior products. Tracking starts on demand;
             // scalar-only sessions retain no unused notification history.
-            for path in self
-                .item_paths()
-                .into_iter()
-                .collect::<Vec<_>>()
-            {
+            for path in self.item_paths().into_iter().collect::<Vec<_>>() {
                 self.front_changes.changed(DefId::intern(&path), true);
             }
         }

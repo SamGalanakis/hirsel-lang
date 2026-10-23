@@ -4,8 +4,8 @@ from host import send,recv
 cli, manifest, destination = sys.argv[1:]
 base=Path(manifest).parent
 root=Path(destination);root.mkdir()
-image=os.environ['HIRSEL_IMAGE']
-env={**os.environ,'HIRSEL_DAEMON':'off','HIRSEL_RESULTS':'none@1','HIRSEL_IMAGE':image,'HIRSEL_JOBS':'4','HIRSEL_MEMORY_LIMIT':'2G','HIRSEL_TIMING':'off'}
+products=os.environ['HIRSEL_PRODUCTS']
+env={**os.environ,'HIRSEL_DAEMON':'off','HIRSEL_RESULTS':'none@1','HIRSEL_PRODUCTS':products,'HIRSEL_JOBS':'4','HIRSEL_MEMORY_LIMIT':'2G','HIRSEL_TIMING':'off'}
 (base/'capped').chmod(0o755)
 rows=[]
 for mode in ['success','domain','cancel']:

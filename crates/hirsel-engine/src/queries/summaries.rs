@@ -420,10 +420,7 @@ impl QueryEngine {
         &mut self,
     ) -> Result<Vec<(DefId, CheckedSummary)>, QueryError> {
         self.invalidate_front_products();
-        let paths = self
-            .item_paths()
-            .into_iter()
-            .collect::<Vec<_>>();
+        let paths = self.item_paths().into_iter().collect::<Vec<_>>();
         paths
             .into_iter()
             .map(|path| {
