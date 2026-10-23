@@ -1,0 +1,269 @@
+// The JSON DOM is an admission boundary, never the installed policy model.
+pub const INPUT_BYTES: u64 = 131072
+
+pub const OUTPUT_BYTES: u64 = 65536
+
+pub type Problem = Shape | Version | OperationsLimit | RolesLimit | PrincipalsLimit | EdgesLimit | RulesLimit | QueriesLimit | GrantsLimit | Id | PathSyntax | EffectSyntax | DuplicateRole | DuplicatePrincipal | DuplicateRule | DuplicateQuery | DuplicateEdge | DuplicateGrant | UnknownRole | Cycle | RoleDepth | InputBytesLimit | OutputBytesLimit | Json | Usage | Grant | Read | CanceledInput | Assembly
+
+pub type Principal {
+  id: String,
+  roles: List[String],
+}
+
+pub type Resource {
+  path: String,
+  owner: String,
+}
+
+pub type Query {
+  id: String,
+  principal: String,
+  action: String,
+  target: Resource,
+}
+
+pub type Edge {
+  role: String,
+  parent: String,
+}
+
+pub type Effect = Allow | Deny
+
+pub type Rule {
+  id: String,
+  effect: Effect,
+  role: String,
+  action: String,
+  path: String,
+  owner: String,
+}
+
+pub type Policy {
+  roles: List[String],
+  edges: List[Edge],
+  principals: List[Principal],
+  rules: List[Rule],
+}
+
+pub type Decision {
+  id: String,
+  allow: bool,
+  rules: List[String],
+}
+
+pub fn code(problem: Problem) -> String uses {} {
+  match problem {
+    Shape() => "shape",
+    Version() => "version",
+    OperationsLimit() => "operations_limit",
+    RolesLimit() => "roles_limit",
+    PrincipalsLimit() => "principals_limit",
+    EdgesLimit() => "edges_limit",
+    RulesLimit() => "rules_limit",
+    QueriesLimit() => "queries_limit",
+    GrantsLimit() => "grants_limit",
+    Id() => "id",
+    PathSyntax() => "path",
+    EffectSyntax() => "effect",
+    DuplicateRole() => "duplicate_role",
+    DuplicatePrincipal() => "duplicate_principal",
+    DuplicateRule() => "duplicate_rule",
+    DuplicateQuery() => "duplicate_query",
+    DuplicateEdge() => "duplicate_edge",
+    DuplicateGrant() => "duplicate_grant",
+    UnknownRole() => "unknown_role",
+    Cycle() => "cycle",
+    RoleDepth() => "role_depth",
+    InputBytesLimit() => "input_bytes_limit",
+    OutputBytesLimit() => "output_bytes_limit",
+    Json() => "json",
+    Usage() => "usage",
+    Grant() => "grant",
+    Read() => "read",
+    CanceledInput() => "canceled",
+    Assembly() => "assembly",
+  }
+}
+
+pub fn object(value: json.Value, keys: List[String]) -> Result[
+  Map[String, json.Value],
+  Problem
+] in value uses {} {
+  let Object(entries) = value else {
+    return Error(Shape())
+  }
+  if map.len(entries) != list.len(keys) {
+    return Error(Shape())
+  }
+  for key in keys {
+    if map.get(entries, key) == None() {
+      return Error(Shape())
+    }
+  }
+  Ok(entries)
+}
+
+pub fn field(entries: Map[String, json.Value], key: String) -> Result[
+  json.Value,
+  Problem
+] in entries uses {} {
+  match map.get(entries, key) {
+    Some(value) => Ok(take value),
+    None() => Error(Shape()),
+  }
+}
+
+pub fn array(value: json.Value, maximum: u64, limit: Problem) -> Result[
+  List[json.Value],
+  Problem
+] in value uses {} {
+  let Array(items) = value else {
+    return Error(Shape())
+  }
+  if list.len(items) > maximum {
+    return Error(limit)
+  }
+  Ok(items)
+}
+
+pub fn id(value: json.Value) -> Result[unique String, Problem] uses {} {
+  let Text(s) = value else {
+    return Error(Id())
+  }
+  if string.byte_len(s) == 0 || string.byte_len(s) > 32 {
+    return Error(Id())
+  }
+  Ok(unique s)
+}
+
+pub fn text_field(entries: Map[String, json.Value], key: String) -> Result[
+  unique String,
+  Problem
+] uses {} {
+  id(field(entries, key)?)
+}
+
+fn role_rows(items: List[json.Value]) -> Result[unique List[String], Problem] uses {} {
+  let mut output: List[String] = []
+  for item in items {
+    list.push(mut output, id(item)?)
+  }
+  Ok(take output)
+}
+
+fn edge_rows(items: List[json.Value]) -> Result[unique List[Edge], Problem] uses {} {
+  let mut output: List[Edge] = []
+  for item in items {
+    let row = object(unique item, ["role", "parent"])?
+    list.push(
+      mut output,
+      Edge(role: text_field(row, "role")?, parent: text_field(row, "parent")?)
+    )
+  }
+  Ok(take output)
+}
+
+fn principal_rows(items: List[json.Value]) -> Result[unique List[Principal], Problem] uses {} {
+  let mut output: List[Principal] = []
+  for item in items {
+    let row = object(unique item, ["id", "roles"])?
+    let name = text_field(row, "id")?
+    let grants = role_rows(array(field(row, "roles")?, 64, GrantsLimit())?)?
+    list.push(mut output, Principal(id: take name, roles: take grants))
+  }
+  Ok(take output)
+}
+
+fn rule_rows(items: List[json.Value]) -> Result[unique List[Rule], Problem] uses {} {
+  let mut output: List[Rule] = []
+  for item in items {
+    let row = object(unique item, ["id", "effect", "role", "action", "path", "owner"])?
+    let name = text_field(row, "id")?
+    let role = text_field(row, "role")?
+    let action = text_field(row, "action")?
+    let owner = text_field(row, "owner")?
+    let path = matchers.path(field(row, "path")?, true)?
+    let effect = match field(row, "effect")? {
+      Text("allow") => Allow(),
+      Text("deny") => Deny(),
+      _ => return Error(EffectSyntax()),
+    }
+    list.push(
+      mut output,
+      Rule(
+        id: take name,
+        effect: effect,
+        role: take role,
+        action: take action,
+        path: take path,
+        owner: take owner
+      )
+    )
+  }
+  Ok(take output)
+}
+
+pub fn policy(value: json.Value) -> Result[unique Policy, Problem] uses {} {
+  let row = object(value, ["roles", "edges", "principals", "rules"])?
+  // Admit all collection bounds before materializing typed rows.
+  let role_items = array(field(row, "roles")?, 64, RolesLimit())?
+  let edge_items = array(field(row, "edges")?, 128, EdgesLimit())?
+  let principal_items = array(field(row, "principals")?, 64, PrincipalsLimit())?
+  let rule_items = array(field(row, "rules")?, 128, RulesLimit())?
+  let names = role_rows(role_items)?
+  let edges = edge_rows(edge_items)?
+  let principals = principal_rows(principal_items)?
+  let rules = rule_rows(rule_items)?
+  Ok(
+    Policy(
+      roles: take names,
+      edges: take edges,
+      principals: take principals,
+      rules: take rules
+    )
+  )
+}
+
+pub fn queries(value: json.Value) -> Result[unique List[Query], Problem] uses {} {
+  let items = array(value, 32, QueriesLimit())?
+  let mut output: List[Query] = []
+  for item in items {
+    let row = object(unique item, ["id", "principal", "action", "resource"])?
+    let name = text_field(row, "id")?
+    let principal = text_field(row, "principal")?
+    let action = text_field(row, "action")?
+    let resource_row = object(field(row, "resource")?, ["path", "owner"])?
+    let target = Resource(
+      path: matchers.path(field(resource_row, "path")?, false)?,
+      owner: text_field(resource_row, "owner")?
+    )
+    for earlier in output {
+      if earlier.id == name {
+        return Error(DuplicateQuery())
+      }
+    }
+    list.push(
+      mut output,
+      Query(
+        id: take name,
+        principal: take principal,
+        action: take action,
+        target: take target
+      )
+    )
+  }
+  Ok(take output)
+}
+
+pub fn parse(take data: Bytes) -> Result[json.Value, Problem] uses {} {
+  if bytes.len(data) > INPUT_BYTES {
+    return Error(InputBytesLimit())
+  }
+  let Ok(source) = string.from_bytes(take data) else {
+    return Error(Json())
+  }
+  match json.parse(take source) {
+    Ok(value) => Ok(take value),
+    Error(_) => Error(Json()),
+  }
+}

@@ -1,0 +1,125 @@
+pub type Store {
+  revision: u64,
+  installed: Option[Shared[model.Policy]],
+}
+
+pub fn empty() -> Store uses {} {
+  Store(revision: 0, installed: None())
+}
+
+// The sole policy mutation occurs after every shape/reference/graph check.
+// The taken replacement is frozen once; existing snapshots remain independent.
+pub fn replace(mut state: Store, take replacement: unique model.Policy) -> Result[
+  u64,
+  model.Problem
+] uses {} {
+  roles.validate(replacement)?
+  let snapshot = shared.freeze(take replacement)
+  state.installed = Some(take snapshot)
+  state.revision += 1
+  Ok(state.revision)
+}
+
+fn admission(take document: json.Value) -> Result[List[json.Value], model.Problem] uses {} {
+  let row = model.object(document, ["version", "operations"])?
+  if model.field(row, "version")? != Number("1") {
+    return Error(Version())
+  }
+  let value = model.field(row, "operations")?
+  model.array(value, 32, OperationsLimit())
+}
+
+fn output_limit(output: List[u8]) -> Result[(), model.Problem] uses {} {
+  if list.len(output) > model.OUTPUT_BYTES {
+    return Error(OutputBytesLimit())
+  }
+  Ok(())
+}
+
+fn reload(mut state: Store, value: json.Value, mut output: unique List[u8]) -> () uses {} {
+  let outcome = match model.policy(value) {
+    Ok(replacement) => replace(mut state, take replacement),
+    Error(error) => Error(take error),
+  }
+  match take outcome {
+    Ok(revision) => text.append(
+      mut output,
+      f"{{\"reload\":true,\"revision\":{revision}}}"
+    ),
+    Error(problem) => {
+      text.append(mut output, "{\"reload\":false,\"error\":")
+      json.write_text_into(model.code(problem), mut output)
+      text.append(mut output, "}")
+    },
+  }
+}
+
+fn batch(
+  tasks: Tasks,
+  state: Store,
+  value: json.Value,
+  jobs: u64,
+  mut output: unique List[u8]
+) -> Result[(), model.Problem] {
+  let queries = model.queries(value)?
+  // One copy of the shared handle fixes the entire batch's policy revision.
+  let snapshot = copy state.installed
+  let decisions = evaluate.batch(tasks, snapshot, take queries, jobs)?
+  text.append(mut output, f"{{\"revision\":{state.revision},\"decisions\":[")
+  let mut first = true
+  for decision in take decisions {
+    if !first {
+      text.append(mut output, ",")
+    }
+    first = false
+    evaluate.encode(decision, mut output)
+    output_limit(output)?
+  }
+  text.append(mut output, "]}")
+  Ok(())
+}
+
+pub fn run(tasks: Tasks, take document: json.Value, jobs: u64) -> Result[
+  unique Bytes,
+  model.Problem
+] {
+  if jobs == 0 || jobs > 4 {
+    return Error(Usage())
+  }
+  let operations = admission(take document)?
+  let mut state = empty()
+  let mut output: unique List[u8] = []
+  text.append(mut output, "{\"results\":[")
+  let mut first = true
+  for operation in operations {
+    let Object(row) = operation else {
+      return Error(Shape())
+    }
+    if map.len(row) != 1 {
+      return Error(Shape())
+    }
+    if !first {
+      text.append(mut output, ",")
+    }
+    first = false
+    if let Some(value) = map.get(row, "reload") {
+      reload(mut state, value, mut output)
+    } else if let Some(value) = map.get(row, "batch") {
+      batch(tasks, state, value, jobs, mut output)?
+    } else {
+      return Error(Shape())
+    }
+    output_limit(output)?
+  }
+  text.append(mut output, "]}\n")
+  output_limit(output)?
+  Ok(bytes.from_list(take output))
+}
+
+pub fn diagnostic(problem: model.Problem) -> Bytes uses {} {
+  let mut output: List[u8] = []
+  text.append(mut output, "{\"error\":")
+  json.write_text_into(model.code(problem), mut output)
+  text.append(mut output, "}\n")
+  bytes.from_list(take output)
+}

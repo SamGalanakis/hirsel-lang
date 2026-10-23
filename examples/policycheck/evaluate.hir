@@ -1,0 +1,123 @@
+// Casbin default_effector.go:64-91, c35c93d (Apache-2.0): allow AND
+// no deny. We retain all matching IDs, deliberately avoiding its short circuit.
+fn fold(policy: model.Policy, query: model.Query) -> unique model.Decision uses {} {
+  let principal_test = matchers.principal(unique query.principal)
+  let mut held: List[String] = []
+  for principal in policy.principals {
+    if matchers.apply(principal_test, principal) {
+      held = roles.closure(policy, principal)
+    }
+  }
+  let mut allowed = false
+  let mut denied = false
+  let mut explanation: unique List[String] = []
+  for rule in policy.rules {
+    if !roles.contains(held, rule.role) || !matchers.action(rule.action, query.action) {
+      continue
+    }
+    let resource_test = matchers.target(unique rule.path, unique rule.owner)
+    if !matchers.apply(resource_test, query.target) {
+      continue
+    }
+    list.push(mut explanation, unique rule.id)
+    match rule.effect {
+      Allow() => {
+        allowed = true
+      },
+      Deny() => {
+        denied = true
+      },
+    }
+  }
+  model.Decision(
+    id: unique query.id,
+    allow: allowed && !denied,
+    rules: take explanation
+  )
+}
+
+fn decide(snapshot: Option[Shared[model.Policy]], query: model.Query) -> unique model.Decision uses {} {
+  match snapshot {
+    None() => model.Decision(id: unique query.id, allow: false, rules: []),
+    Some(policy) => shared.with(
+      policy,
+      fn(value: model.Policy) -> unique model.Decision uses {} {
+        fold(value, query)
+      }
+    ),
+  }
+}
+
+// Independent jobs each own a unique explanation; borrowed shared policy and
+// query views are confined to nested callbacks. Publication awaits add order.
+pub fn batch(
+  tasks: Tasks,
+  snapshot: Option[Shared[model.Policy]],
+  take queries: unique List[model.Query],
+  jobs: u64
+) -> Result[unique List[unique model.Decision], model.Problem] {
+  let count = list.len(queries)
+  let input = shared.freeze(take queries)
+  task.scope(
+    tasks,
+    fn(s: Scope) -> Result[unique List[unique model.Decision], model.Problem] {
+      let mut output: unique List[unique model.Decision] = []
+      let mut first: u64 = 0
+      while first < count {
+        let mut pending: TaskSet[Result[unique model.Decision, model.Problem]] of s = task.set(
+          s
+        )
+        let mut added: u64 = 0
+        while added < jobs && first + added < count {
+          let index = first + added
+          task.add(
+            s,
+            mut pending,
+            task.async(
+              s,
+              fn() -> Result[unique model.Decision, model.Problem] {
+                Ok(
+                  shared.with(
+                    input,
+                    fn(rows: List[model.Query]) -> unique model.Decision uses {} {
+                      decide(snapshot, rows[index])
+                    }
+                  )
+                )
+              }
+            )
+          )
+          added += 1
+        }
+        for i in 0u64..added {
+          let joined = task.await_at(s, mut pending, i)
+          match take joined {
+            Ok(decision) => list.push(mut output, take decision),
+            Error(problem) => {
+              task.cancel_all(s, take pending)
+              return Error(problem)
+            },
+          }
+        }
+        task.cancel_all(s, take pending)
+        first += added
+      }
+      Ok(take output)
+    }
+  )
+}
+
+pub fn encode(value: model.Decision, mut output: unique List[u8]) -> () uses {} {
+  text.append(mut output, "{\"id\":")
+  json.write_text_into(value.id, mut output)
+  text.append(mut output, f",\"allow\":{value.allow},\"rules\":[")
+  let mut first = true
+  for id in value.rules {
+    if !first {
+      text.append(mut output, ",")
+    }
+    first = false
+    json.write_text_into(id, mut output)
+  }
+  text.append(mut output, "]}")
+}

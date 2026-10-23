@@ -1,0 +1,149 @@
+// Casbin role_manager.go:327-372, c35c93d (Apache-2.0), bounded
+// reachability adapted to explicit immutable rows; no dynamic matching funcs.
+pub fn contains(names: List[String], name: String) -> bool uses {} {
+  for candidate in names {
+    if candidate == name {
+      return true
+    }
+  }
+  false
+}
+
+fn distinct_names(names: List[String], error: model.Problem) -> Result[
+  (),
+  model.Problem
+] uses {} {
+  let mut seen: Set[String] = set.empty()
+  for name in names {
+    if set.contains(seen, name) {
+      return Error(error)
+    }
+    set.insert(mut seen, unique name)
+  }
+  Ok(())
+}
+
+fn references(policy: model.Policy) -> Result[(), model.Problem] uses {} {
+  for edge in policy.edges {
+    if !contains(policy.roles, edge.role) || !contains(policy.roles, edge.parent) {
+      return Error(UnknownRole())
+    }
+  }
+  for principal in policy.principals {
+    for role in principal.roles {
+      if !contains(policy.roles, role) {
+        return Error(UnknownRole())
+      }
+    }
+  }
+  for rule in policy.rules {
+    if !contains(policy.roles, rule.role) {
+      return Error(UnknownRole())
+    }
+  }
+  Ok(())
+}
+
+// Three colors distinguish shared ancestors from back edges. Memoized longest
+// suffixes make the depth bound independent of edge declaration/traversal order.
+fn visit(
+  policy: model.Policy,
+  index: u64,
+  depth: u64,
+  mut colors: List[u8],
+  mut lengths: List[u64]
+) -> Result[u64, model.Problem] uses {} {
+  if colors[index] == 1 {
+    return Error(Cycle())
+  }
+  if colors[index] == 2 {
+    return Ok(lengths[index])
+  }
+  // All admitted graphs have at most64 roles: a longer active path is cyclic.
+  if depth >= 64 {
+    return Error(Cycle())
+  }
+  colors[index] = 1
+  let mut longest: u64 = 0
+  for edge in policy.edges {
+    if edge.role == policy.roles[index] {
+      for parent in 0u64..list.len(policy.roles) {
+        if policy.roles[parent] == edge.parent {
+          let suffix = visit(policy, parent, depth + 1, mut colors, mut lengths)?
+          if suffix + 1 > longest {
+            longest = suffix + 1
+          }
+        }
+      }
+    }
+  }
+  colors[index] = 2
+  lengths[index] = longest
+  Ok(longest)
+}
+
+pub fn validate(policy: model.Policy) -> Result[(), model.Problem] uses {} {
+  distinct_names(policy.roles, DuplicateRole())?
+  let mut principals: List[String] = []
+  for principal in policy.principals {
+    list.push(mut principals, unique principal.id)
+  }
+  distinct_names(principals, DuplicatePrincipal())?
+  let mut rules: List[String] = []
+  for rule in policy.rules {
+    list.push(mut rules, unique rule.id)
+  }
+  distinct_names(rules, DuplicateRule())?
+  let mut edges: Set[(String, String)] = set.empty()
+  for edge in policy.edges {
+    let pair = (unique edge.role, unique edge.parent)
+    if set.contains(edges, pair) {
+      return Error(DuplicateEdge())
+    }
+    set.insert(mut edges, take pair)
+  }
+  for principal in policy.principals {
+    distinct_names(principal.roles, DuplicateGrant())?
+  }
+  references(policy)?
+  let mut colors: List[u8] = []
+  let mut lengths: List[u64] = []
+  for _ in policy.roles {
+    list.push(mut colors, 0)
+    list.push(mut lengths, 0)
+  }
+  let mut longest: u64 = 0
+  for i in 0u64..list.len(policy.roles) {
+    let length = visit(policy, i, 0, mut colors, mut lengths)?
+    if length > longest {
+      longest = length
+    }
+  }
+  if longest > 16 {
+    return Error(RoleDepth())
+  }
+  Ok(())
+}
+
+// The validated graph bounds this monotone closure to16 edge expansions.
+// A set deduplicates diamonds; final names retain policy declaration order.
+pub fn closure(policy: model.Policy, principal: model.Principal) -> List[String] uses {} {
+  let mut held: Set[String] = set.empty()
+  for role in principal.roles {
+    set.insert(mut held, unique role)
+  }
+  for _ in 0u64..16 {
+    for edge in policy.edges {
+      if set.contains(held, edge.role) && !set.contains(held, edge.parent) {
+        set.insert(mut held, unique edge.parent)
+      }
+    }
+  }
+  let mut output: List[String] = []
+  for role in policy.roles {
+    if set.contains(held, role) {
+      list.push(mut output, unique role)
+    }
+  }
+  take output
+}

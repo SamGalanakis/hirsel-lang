@@ -1,0 +1,57 @@
+{
+  "dependencies": [
+    {
+      "expose": [],
+      "manifest": "../../stdlib/std@1/hirsel.json",
+      "package": {
+        "name": "std",
+        "version": "1"
+      }
+    }
+  ],
+  "entry": {
+    "module": [],
+    "name": "main"
+  },
+  "package": {
+    "name": "policycheck",
+    "version": "0"
+  },
+  "schema": 1,
+  "sources": [
+    {
+      "module": [],
+      "path": "main.hir"
+    },
+    {
+      "module": [
+        "model"
+      ],
+      "path": "model.hir"
+    },
+    {
+      "module": [
+        "roles"
+      ],
+      "path": "roles.hir"
+    },
+    {
+      "module": [
+        "matchers"
+      ],
+      "path": "matchers.hir"
+    },
+    {
+      "module": [
+        "evaluate"
+      ],
+      "path": "evaluate.hir"
+    },
+    {
+      "module": [
+        "store"
+      ],
+      "path": "store.hir"
+    }
+  ]
+}

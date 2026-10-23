@@ -1,0 +1,137 @@
+pub type AppError = Output(OutputError)
+
+type Options {
+  root: Path,
+  file: Path,
+  jobs: u64,
+  interruptible: bool,
+}
+
+const HELP: String = "Usage: policycheck ROOT FILE JOBS [--interruptible]\n       policycheck --help\n\nEvaluate an offline v1 JSON workflow. JOBS: 1..4. Denials are decisions.\nExit: 0 completed, 2 invalid input/grant/canceled, 3 unavailable output.\n"
+
+fn arguments(args: Args) -> Result[Options, model.Problem] {
+  let count = arg.len(args)
+  if count != 3 && count != 4 {
+    return Error(Usage())
+  }
+  let Ok(root) = arg.path(args, 0) else {
+    return Error(Usage())
+  }
+  let Ok(file) = arg.path(args, 1) else {
+    return Error(Usage())
+  }
+  let Ok(text) = arg.text(args, 2) else {
+    return Error(Usage())
+  }
+  let Ok(jobs) = u64.parse(text) else {
+    return Error(Usage())
+  }
+  if jobs == 0 || jobs > 4 {
+    return Error(Usage())
+  }
+  if count == 4 {
+    if arg.text(args, 3) != Ok("--interruptible") {
+      return Error(Usage())
+    }
+  }
+  Ok(Options(root: root, file: file, jobs: jobs, interruptible: count == 4))
+}
+
+fn read(directory: Dir, name: Path) -> Result[unique Bytes, model.Problem] {
+  let mut handle = match file.open(directory, name) {
+    Ok(value) => take value,
+    Error(_) => return Error(Read()),
+  }
+  match file.read_all_bounded(directory, mut handle, model.INPUT_BYTES) {
+    Ok(data) => Ok(take data),
+    Error(Limit()) => Error(InputBytesLimit()),
+    Error(File(_)) => Error(Read()),
+  }
+}
+
+fn execute(directory: Dir, tasks: Tasks, options: Options) -> Result[
+  unique Bytes,
+  model.Problem
+] {
+  let data = read(directory, options.file)?
+  let document = model.parse(take data)?
+  store.run(tasks, take document, options.jobs)
+}
+
+// A granted interrupt races the complete workflow, cancels the pending reader
+// and joins every child before publication. Pure query jobs require no timers.
+fn interruptible(directory: Dir, tasks: Tasks, signals: Signals, options: Options) -> Result[
+  unique Bytes,
+  model.Problem
+] {
+  task.scope(
+    tasks,
+    fn(s: Scope) -> Result[unique Bytes, model.Problem] {
+      let mut pending: TaskSet[Result[unique Bytes, model.Problem]] of s = task.set(s)
+      task.add(
+        s,
+        mut pending,
+        task.async(
+          s,
+          fn() -> Result[unique Bytes, model.Problem] {
+            execute(directory, tasks, options)
+          }
+        )
+      )
+      task.add(
+        s,
+        mut pending,
+        task.async(
+          s,
+          fn() -> Result[unique Bytes, model.Problem] {
+            let _ = signal.wait(signals, [Interrupt()])
+            Error(CanceledInput())
+          }
+        )
+      )
+      let (_, outcome) = task.select(s, take pending)
+      take outcome
+    }
+  )
+}
+
+fn run(rt: Io, args: Args) -> Result[unique Bytes, model.Problem] {
+  let options = arguments(args)?
+  let Ok(directory) = io.dir(rt, options.root) else {
+    return Error(Grant())
+  }
+  let Ok(tasks) = io.tasks(rt) else {
+    return Error(Grant())
+  }
+  if options.interruptible {
+    let Ok(signals) = io.signals(rt) else {
+      return Error(Grant())
+    }
+    interruptible(directory, tasks, signals, options)
+  } else {
+    execute(directory, tasks, options)
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[process.ExitCode, AppError] {
+  let Ok(output) = io.stdout(rt) else {
+    return Ok(process.exit_code(3u8))
+  }
+  let Ok(errors) = io.stderr(rt) else {
+    return Ok(process.exit_code(3u8))
+  }
+  if arg.len(args) == 1 && arg.text(args, 0) == Ok("--help") {
+    out.write(output, string.as_bytes(HELP))?
+    return Ok(process.SUCCESS)
+  }
+  match run(rt, args) {
+    Ok(report) => {
+      out.write(output, report)?
+      Ok(process.SUCCESS)
+    },
+    Error(problem) => {
+      err.write(errors, store.diagnostic(problem))?
+      Ok(process.exit_code(2u8))
+    },
+  }
+}

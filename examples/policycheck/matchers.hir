@@ -1,0 +1,110 @@
+// Generic, authority-free predicates own their environments. apply borrows
+// both the callback and typed input; no view can escape through its bool result.
+pub type Predicate[T] {
+  test: fn(T) -> bool uses {},
+}
+
+pub fn apply[T](predicate: Predicate[T], value: T) -> bool uses {} {
+  predicate.test(value)
+}
+
+pub fn equality[T: data + copyable](take expected: T) -> Predicate[T] uses {} {
+  Predicate(
+    test: fn(actual: T) -> bool uses {} {
+      actual == expected
+    }
+  )
+}
+
+pub fn principal(take name: String) -> Predicate[model.Principal] uses {} {
+  Predicate(
+    test: fn(value: model.Principal) -> bool uses {} {
+      value.id == name
+    }
+  )
+}
+
+fn segment_byte(c: u8) -> bool uses {} {
+  ascii.is_alnum(c) || c == 95 || c == 46 || c == 45
+}
+
+pub fn path(value: json.Value, pattern: bool) -> Result[unique String, model.Problem] uses {} {
+  let Text(s) = value else {
+    return Error(PathSyntax())
+  }
+  let n = string.byte_len(s)
+  if n == 0 || n > 256 {
+    return Error(PathSyntax())
+  }
+  let data = string.as_bytes(s)
+  if data[0] != 47 {
+    return Error(PathSyntax())
+  }
+  let mut end = n
+  if pattern && n >= 2 {
+    if data[n - 2] == 47 && data[n - 1] == 42 {
+      end = n - 2
+    }
+  }
+  if end == 0 || n == 1 {
+    return Ok(unique s)
+  }
+  if end == 1 {
+    return Error(PathSyntax())
+  }
+  let mut start: u64 = 1
+  let mut i: u64 = 1
+  while i <= end {
+    if i == end || data[i] == 47 {
+      if i == start {
+        return Error(PathSyntax())
+      }
+      let width = i - start
+      if width == 1 && data[start] == 46 {
+        return Error(PathSyntax())
+      }
+      if width == 2 && data[start] == 46 && data[start + 1] == 46 {
+        return Error(PathSyntax())
+      }
+      start = i + 1
+    } else if !segment_byte(data[i]) {
+      return Error(PathSyntax())
+    }
+    i += 1
+  }
+  Ok(unique s)
+}
+
+pub fn path_matches(pattern: String, actual: String) -> bool uses {} {
+  if pattern == actual {
+    return true
+  }
+  let p = string.as_bytes(pattern)
+  let a = string.as_bytes(actual)
+  let n = bytes.len(p)
+  if n < 2 || p[n - 2] != 47 || p[n - 1] != 42 {
+    return false
+  }
+  if bytes.len(a) < n {
+    return false
+  }
+  // Keep the slash in the prefix: /data/* never matches /database/a.
+  bytes.slice(a, 0, n - 1) == bytes.slice(p, 0, n - 1)
+}
+
+pub fn target(take pattern: String, take owner: String) -> Predicate[model.Resource] uses {} {
+  Predicate(
+    test: fn(value: model.Resource) -> bool uses {} {
+      let owner_test = equality(copy owner)
+      (owner == "*" || apply(owner_test, value.owner)) && path_matches(
+        pattern,
+        value.path
+      )
+    }
+  )
+}
+
+pub fn action(expected: String, actual: String) -> bool uses {} {
+  let predicate = equality(unique expected)
+  expected == "*" || apply(predicate, actual)
+}
