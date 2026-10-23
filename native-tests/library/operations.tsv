@@ -74,9 +74,9 @@ $intrinsic.TextFinish	e1098ba4b705cb55327924f2f5e108dca425e06e539e36a4ca5688d0b2
 $intrinsic.UnicodeScalars_next	5083f524b68f9f077c43ac5aceab500813c17e0b756ed4fa90514836ec338e8e	0:m:[0]->[0]
 $intrinsic.UnicodeScalars_open	b48d377378eededd0bb7ac9d9a3a203a1776bcdfec1db7c82f2ca2b5335d91fd	0:b:n->n
 $intrinsic.heap	b71b1828f9a7167d3e37589dd36fdeb2c5310d46d044ff27a027ae9323fff14b	->n
-arena.bounded	e0d6d9fadb6cffaeee5b2151b3d9c910226971765a415c8554c4df462d814309	0:b:n;1:b:a->[0]
-arena.seal	b003c5c2c26c78faee288d71158a4ed3a06bfe74523de342dc1dcef465690ffd	0:t:n;1:t:[0]->[0]
-arena.with	401e5e065f29e498856c8040b17d07672cab1b111bd5c7e72d6d681da3c9976c	0:b:a->[0]
+arena.bounded	58cbf1cc3f27b50cf938729502929c3bcf5a9b28193b03a90e3d83a115034fe3	0:b:n;1:b:a->[0]
+arena.seal	2e1559705bc82868f0e659e4e4a3edf0f66ce1370cf5dd643773985090688f56	0:t:n;1:t:[0]->n
+arena.with	4cc54cdf0bf1060f46ec066738a9e2e5d71b9d7f223021e117dbf8e57c251ab5	0:b:a->[0]
 arg.len	a3cd8811dbd3874f30400ddbbd6d5bda8010c1f33e1fd35dcc572c392bc002ea	0:b:n->n
 arg.path	6d95133f4ab5739068a993b822de10cab23149e81f8795b1f223222687baa4fb	0:b:n;1:b:n->n
 arg.text	9d1b246a9eae36dd73b02720116739f5bb60f7f4ebb89cab16fa89c8d0825f6e	0:b:n;1:b:n->n
@@ -265,7 +265,7 @@ read_half.close	3823c6d19571b039eac6321e9756546cd21ebe93016f12332d94ba18079435b4
 read_half.read	d07e20de45d2a8351e654d6a6da2802de0b7124f783f82c5bffc15e27b8ba349	0:b:n;1:m:n;2:m:n;3:b:n->n
 read_half.read_into	577a6b8fd5ed77a218bbe291dc5d771392ba2aafd79ff8ef522aa2b034f133e9	0:b:n;1:m:n;2:m:n->n
 read_half.set_timeout	c5971552286b6ded4fa3edb079e479a73f42885cf4ce4d46faa08a5cb1964fcf	0:b:n;1:m:n;2:b:n->n
-region.with	74b21977146dbce44364a550b6224786e1823aaa31287b6598c51a12e28653ff	0:m:[0];1:b:a->[1]
+region.with	8f17543db40229d78600525c32bd97e19f841d6e24bc177bfa7c28a41af1911a	0:m:n;1:b:a->[1]
 runner.call	2bd3313b331a6271222af5031e296256b559a58a20e1f24c55cca609e9ca1082	0:b:n;1:b:n;2:b:[0]->[1,2]
 runner.compute	4936a259254decc416ae72238e51dd5c88bf6d20ca30da3e8ad7dd5cc14c0fbf	0:b:n;1:b:n;2:b:[0]->[1,2]
 runner.entry_path	d68548254a95e8177f4fe2a838a6526d85954ed354b336d5bd6fc1470048b42d	0:b:n->n
