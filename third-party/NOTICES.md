@@ -1657,3 +1657,10 @@ Copyright (c) 2014 The Rust Project Developers; MIT, full text in
 work-limit admission and scalar VM fallback; one combined primitive cache quits
 on first fullness instead of clearing and retrying. Reverse graph traversal
 uses the compiled Thompson predecessors rather than a separately compiled HIR.
+
+JSON upstream fixtures: `crates/hirsel-driver/tests/fixtures/json-upstream-25/`
+imports numeric and string golden vectors from serde_json `tests/test.rs:1043-1089,1151-1164`
+at `20572a6d066958542d79cdd6cf1a7cd9f0c8e1f8`. Copyright (c) Serde project contributors;
+MIT, full text above. Number spellings use raw spans; insertion order, duplicate
+keys, byte offsets, depth and public-number validation follow Hirsel policy as
+recorded in the fixture provenance manifest.

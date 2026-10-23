@@ -1,0 +1,52 @@
+{
+  "seed": 2026102501,
+  "serde_json_revision": "20572a6d066958542d79cdd6cf1a7cd9f0c8e1f8",
+  "serde_json_version": "1.0.154",
+  "features": [
+    "arbitrary_precision",
+    "raw_value"
+  ],
+  "oracle_source_sha256": "4eaaf052d979233a72a383cee4dea8b4b1730027fbe38f03382ffaf0c8e7a0e0",
+  "oracle_binary_sha256": "1f0ef0af767215a02e0fa0800f0bc340017bd87331ddd876f133758a91dc4ce3",
+  "generator_sha256": "75f19b9931667f1c87e44910a8b84dbb8a8d5a573020e66dbaf7878cf0b2646a",
+  "lockfile_sha256": "cdee5240326a24ac36aba96ddc71ec12efbee330981f8650d900876555b3a47f",
+  "vector_count": 261,
+  "vectors_sha256": "bb83ea940f46a6e632f9c870f870ea13b0d3d2e410ab85eb76064a1e7c2599fd",
+  "sanity": "upstream golden sanity: 16 numbers, 11 strings, ordered duplicate control passed",
+  "reference_files": {
+    "src/de.rs": "cb55666913c47d86130e7bd48a9c35081ea9a4bb0e2c45ab6429912d905629c5",
+    "tests/test.rs": "63646becb5c8ae724d4ea00a765407ca55e661d325f80006566a3c954646b1fa"
+  },
+  "policy": {
+    "lossless-spelling": {
+      "spec": "docs/spec/std-library.md:609-616",
+      "paragraph": "json.parse takes a UTF-8 String and returns an owned tree, keeping validated decimal number lexemes exactly.",
+      "adaptation": "RawValue spans retain the token spelling; Number formatting is raw upstream evidence only."
+    },
+    "duplicate-decoded-key": {
+      "spec": "docs/spec/std-library.md:609-616",
+      "paragraph": "rejects duplicate decoded object keys and preserves insertion order; DuplicateKey points at the repeated key opening quote.",
+      "adaptation": "Ordered pairs visitor classifies duplicates independently, overriding upstream last-wins."
+    },
+    "syntax-byte-offset": {
+      "spec": "docs/spec/std-library.md:609-616",
+      "paragraph": "Syntax, DuplicateKey and parser Nesting payloads are zero-based byte offsets into the input; end of input is its byte length.",
+      "adaptation": "Mutations replace one token with ? or append #; byte offsets derive from the edit position. Fixed escape rows use the first invalid escape byte per lexical contract."
+    },
+    "hirsel-depth-boundary": {
+      "spec": "docs/spec/std-library.md:609-616,699-707",
+      "paragraph": "MAX_NESTING: u64 = 128 counts open arrays and objects, scalars using no level; opening container 129 is Nesting. Writing uses the same nesting bound, returning Nesting(128) at the attempted container depth.",
+      "adaptation": "Three independently constructed depth chains; upstream default recursion refusal is retained separately."
+    },
+    "public-number-validation": {
+      "spec": "docs/spec/std-library.md:699-707",
+      "paragraph": "Both validate every Number against the decimal grammar, requiring complete consumption, and return InvalidNumber otherwise; stringify_into keeps existing content and may leave a written prefix on error.",
+      "adaptation": "Grammar fullmatch selects validity; preceding array element and comma remain in the output prefix."
+    },
+    "shared-domain": {
+      "spec": "docs/spec/std-library.md:609-616,699-707",
+      "paragraph": "preserves insertion order; escape ASCII controls, quotes and backslashes, and leave other scalars unescaped.",
+      "adaptation": "Ordered visitor provides direct host-built trees; string escaping uses serde_json."
+    }
+  }
+}
