@@ -9,6 +9,7 @@ use hirsel_types::{
 
 fn body(types: &[TypeId], parameters: usize) -> Body {
     Body {
+        arena_scope_grant: None,
         parameter_scope: hirsel_syntax::LexicalOwner::first(&hirsel_syntax::DefPath::core(
             "sealed_source_fixture",
         ))
