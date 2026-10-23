@@ -1,0 +1,15 @@
+// rule: LANG-7
+// expect: accept
+fn probe(x: (bool, bool)) -> u32 {
+  match x {
+    (true, _) => 1,
+    (false, true) => 2,
+    (false, false) => 3,
+  }
+}
+
+pub fn main() {
+  probe((false, false))
+  probe((true, false))
+  probe((false, true));
+}

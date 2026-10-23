@@ -1,0 +1,10 @@
+// rule: LANG-7
+// expect: reject LANG-7 at line 5
+// twin: LANG/LANG-7-missing-guard-22-ok.hir
+fn probe(x: bool) -> u32 {
+  match x {
+    true if x => 1,
+    false => 2,
+    true if true => 3,
+  }
+}

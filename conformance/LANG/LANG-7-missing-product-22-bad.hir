@@ -1,0 +1,9 @@
+// rule: LANG-7
+// expect: reject LANG-7 at line 5
+// twin: LANG/LANG-7-missing-product-22-ok.hir
+fn probe(x: (bool, bool)) -> u32 {
+  match x {
+    (true, _) => 1,
+    (false, true) => 2,
+  }
+}

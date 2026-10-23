@@ -2338,11 +2338,13 @@ impl Checker<'_, '_> {
                     self.pattern(arm.pattern, ty, UseKind::Borrow, false, false, None, frame)?;
                 }
                 if !self.invalid(ty) && !self.exhaustive(ty, &arms)? {
+                    let notes = self.missing_patterns(ty, &arms)?;
                     self.report(
                         const { RuleId::of("LANG-7") },
                         self.span(id),
                         "match does not cover every value",
                     );
+                    self.diagnostics.last_mut().unwrap().notes.extend(notes);
                 }
                 if !self.invalid(ty) {
                     self.unreachable_patterns(ty, &arms)?;

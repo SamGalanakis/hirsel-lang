@@ -113,3 +113,4 @@ mod signature_recovery_22;
 mod dictionary_identity_22;
 mod related_literal_21;
 mod generic_kind_22;
+mod match_missing_case_22;

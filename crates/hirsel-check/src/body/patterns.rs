@@ -603,6 +603,251 @@ impl Checker<'_, '_> {
             .collect();
         Ok(!self.useful(root, rows, vec![None])?)
     }
+    /// Concrete finite witnesses only. The coverage verdict still comes from
+    /// `exhaustive`; exhausting this separate diagnostic budget changes no rule.
+    /// Rendering follows rust-analyzer's missing_match_arms (MIT/Apache-2.0),
+    /// expr.rs:725-768 at 3131751e: constructor spelling and a three-example cap.
+    pub(super) fn missing_patterns(
+        &mut self,
+        root: TypeId,
+        arms: &[ast::MatchArm],
+    ) -> Result<Vec<String>, QueryError> {
+        let mut budget = 4096usize;
+        let Some(values) = self.finite_witnesses(root, &mut vec![], &mut budget)? else {
+            return Ok(vec![]);
+        };
+        let mut missing = vec![];
+        for value in values {
+            let mut covered = false;
+            for arm in arms.iter().filter(|a| a.guard.is_none()) {
+                let Some(matches) = self.witness_matches(Some(arm.pattern), &value, &mut budget)
+                else {
+                    return Ok(vec![]);
+                };
+                if matches {
+                    covered = true;
+                    break;
+                }
+            }
+            if !covered {
+                missing.push(value.spelling);
+            }
+        }
+        if missing.is_empty() {
+            return Ok(vec![]);
+        }
+        let examples = missing
+            .iter()
+            .take(3)
+            .map(|p| format!("`{p}`"))
+            .collect::<Vec<_>>();
+        let mut notes = vec![format!(
+            "help: Add unguarded arms for missing patterns: {}. Guarded arms do not establish complete coverage.",
+            examples.join(", ")
+        )];
+        if missing.len() > 3 {
+            notes.push(format!(
+                "{} more missing patterns not shown.",
+                missing.len() - 3
+            ));
+        }
+        Ok(notes)
+    }
+    /// Enumerate only small, fully known plain domains. Never unwrap boxes or
+    /// unfold recursive types, even if some constructors could be printed.
+    fn finite_witnesses(
+        &mut self,
+        ty: TypeId,
+        parents: &mut Vec<TypeId>,
+        budget: &mut usize,
+    ) -> Result<Option<Vec<FiniteWitness>>, QueryError> {
+        if parents.len() >= 8 || parents.contains(&ty) || *budget == 0 {
+            return Ok(None);
+        }
+        *budget -= 1;
+        let (owner, repr) = self.representation(ty)?;
+        let mut distinct = false;
+        if let Some(owner) = &owner {
+            let signature = self.snapshot(owner)?;
+            if let SignatureKind::Type(td) = &signature.kind {
+                // Do not rely on the provider having already hidden an opaque
+                // representation, and do not suggest inaccessible destructuring.
+                if signature.metadata.visibility == ast::Visibility::PublicOpaque
+                    && owner.0.package != self.input.context.package
+                    || td.resource
+                    || td.drop.is_some()
+                {
+                    return Ok(None);
+                }
+                distinct = td.distinct;
+            }
+        }
+        // (tag, constructor, labelled field types); None denotes a tuple.
+        let constructors = match self.kind(repr) {
+            TypeKind::Primitive(Primitive::Bool) => {
+                return Ok(Some(
+                    [false, true]
+                        .into_iter()
+                        .map(|b| FiniteWitness {
+                            tag: Tag::Bool(b),
+                            fields: vec![],
+                            spelling: b.to_string(),
+                        })
+                        .collect(),
+                ));
+            }
+            TypeKind::Tuple(ts) => vec![(
+                Tag::Tuple,
+                None,
+                ts.iter().map(|t| (None, *t)).collect::<Vec<_>>(),
+            )],
+            TypeKind::Record(fs) => {
+                let Some(owner) = owner else { return Ok(None) };
+                // Source spelling, including the module/package when necessary.
+                let name = if owner.0.package == self.input.context.package {
+                    owner
+                        .0
+                        .modules
+                        .iter()
+                        .chain(std::iter::once(&owner.0.name))
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join(".")
+                } else {
+                    format!(
+                        "{}@{}/{}",
+                        owner.0.package.name,
+                        owner.0.package.version,
+                        owner
+                            .0
+                            .modules
+                            .iter()
+                            .chain(std::iter::once(&owner.0.name))
+                            .cloned()
+                            .collect::<Vec<_>>()
+                            .join(".")
+                    )
+                };
+                vec![(
+                    Tag::Record,
+                    Some(name),
+                    fs.iter()
+                        .map(|f| (if distinct { None } else { Some(f.name) }, f.ty))
+                        .collect(),
+                )]
+            }
+            TypeKind::Variant(vs) => vs
+                .iter()
+                .enumerate()
+                .map(|(i, v)| {
+                    (
+                        Tag::Variant(i as u32),
+                        Some(v.name.as_str().to_owned()),
+                        v.fields.to_vec(),
+                    )
+                })
+                .collect(),
+            _ => return Ok(None),
+        };
+        parents.push(ty);
+        let mut values = vec![];
+        for (tag, name, fields) in constructors {
+            let mut products = vec![vec![]];
+            for (_, field) in &fields {
+                let Some(children) = self.finite_witnesses(*field, parents, budget)? else {
+                    parents.pop();
+                    return Ok(None);
+                };
+                if products.len().saturating_mul(children.len()) > 128 {
+                    parents.pop();
+                    return Ok(None);
+                }
+                let mut next = vec![];
+                for product in products {
+                    for child in &children {
+                        let cost = product.len() + 1;
+                        let Some(left) = budget.checked_sub(cost) else {
+                            parents.pop();
+                            return Ok(None);
+                        };
+                        *budget = left;
+                        let mut product = product.clone();
+                        product.push(child.clone());
+                        next.push(product);
+                    }
+                }
+                products = next;
+            }
+            for product in products {
+                if values.len() >= 128 || *budget == 0 {
+                    parents.pop();
+                    return Ok(None);
+                }
+                *budget -= 1;
+                let parts = product
+                    .iter()
+                    .zip(&fields)
+                    .map(|(v, (label, _))| {
+                        label.map_or_else(|| v.spelling.clone(), |l| format!("{l}: {}", v.spelling))
+                    })
+                    .collect::<Vec<_>>();
+                let spelling = match &name {
+                    Some(name) if product.is_empty() && matches!(tag, Tag::Variant(_)) => {
+                        name.clone()
+                    }
+                    Some(name) => format!("{name}({})", parts.join(", ")),
+                    None => format!(
+                        "({}{})",
+                        parts.join(", "),
+                        if parts.len() == 1 { "," } else { "" }
+                    ),
+                };
+                if spelling.len() > 256 {
+                    parents.pop();
+                    return Ok(None);
+                }
+                values.push(FiniteWitness {
+                    tag: tag.clone(),
+                    fields: product,
+                    spelling,
+                });
+            }
+        }
+        parents.pop();
+        Ok(Some(values))
+    }
+    /// Test the concrete value through the existing constructor specialization,
+    /// including nested alternatives and declared field order. Budget exhaustion
+    /// is uncertainty, never evidence that a pattern misses a value.
+    fn witness_matches(
+        &self,
+        pattern: Cell,
+        value: &FiniteWitness,
+        budget: &mut usize,
+    ) -> Option<bool> {
+        *budget = budget.checked_sub(1)?;
+        if self.wild(pattern) {
+            return Some(true);
+        }
+        if let Some(alternatives) = self.alternatives_of(pattern, &ast::PatternChoice::new()) {
+            for alternative in alternatives {
+                if self.witness_matches(Some(alternative), value, budget)? {
+                    return Some(true);
+                }
+            }
+            return Some(false);
+        }
+        let Some(children) = self.specialize(&[pattern], &value.tag, value.fields.len(), None)
+        else {
+            return Some(false);
+        };
+        for (child, value) in children.into_iter().zip(&value.fields) {
+            if !self.witness_matches(child, value, budget)? {
+                return Some(false);
+            }
+        }
+        Some(true)
+    }
     /// Usefulness where every row and the query take every alternative.
     fn useful(
         &mut self,
@@ -1042,3 +1287,11 @@ type RefiningAlternation = (
     ast::PatternChoice,
     Vec<std::rc::Rc<ast::PatternChoice>>,
 );
+
+/// A concrete constructor tree; spelling never contains a catch-all.
+#[derive(Clone)]
+struct FiniteWitness {
+    tag: Tag,
+    fields: Vec<FiniteWitness>,
+    spelling: String,
+}

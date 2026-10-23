@@ -2089,6 +2089,10 @@ conformance/LANG/LANG-7-map-key-capability-field-bad.hir
 conformance/LANG/LANG-7-map-key-capability-field-run.hir
 conformance/LANG/LANG-7-match-exhaustive-bad.hir
 conformance/LANG/LANG-7-match-exhaustive-ok.hir
+conformance/LANG/LANG-7-missing-guard-22-bad.hir
+conformance/LANG/LANG-7-missing-guard-22-ok.hir
+conformance/LANG/LANG-7-missing-product-22-bad.hir
+conformance/LANG/LANG-7-missing-product-22-ok.hir
 conformance/LANG/LANG-7-nested-generic-alias-mismatch.hir
 conformance/LANG/LANG-7-nested-generic-coincident-bound.hir
 conformance/LANG/LANG-7-nested-generic-outer-result.hir
