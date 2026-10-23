@@ -1604,7 +1604,9 @@ impl Checker<'_> {
                             .is_some_and(|ty| !self.t.get(ty).unwrap().modes.relation.is_global())
                     {
                         match &f.uses {
-                            Uses::Unrestricted => AuthoritySummary::Unknown,
+                            Uses::Unrestricted => {
+                                self.receipt_authority(callee, AuthoritySummary::Unknown, &frame)
+                            }
                             Uses::Only(_) => AuthoritySummary::inert(),
                         }
                     } else {
@@ -2537,6 +2539,22 @@ impl Checker<'_> {
                 }
                 Some(n) => {
                     let owner = scopes.next();
+                    // A function type has no runtime binding rows for its own
+                    // parameters. Resolve the header binder before looking up
+                    // captured values in the surrounding frame.
+                    if let ResolvedName::Parameter(parameter) = n
+                        && owner == Some(site)
+                    {
+                        let reference = if matches!(site, NameSite::Type(_)) {
+                            ParameterRef::bound(parameter)
+                        } else {
+                            ParameterRef::body(self.lexical.site(site), parameter)
+                        };
+                        authority = authority.join(AuthoritySummary::Known(
+                            vec![AuthorityTerm::Parameter(reference)].into(),
+                        ));
+                        continue;
+                    }
                     if let Some(b) = self
                         .out
                         .body

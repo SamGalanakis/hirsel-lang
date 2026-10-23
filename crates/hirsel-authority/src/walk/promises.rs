@@ -272,9 +272,9 @@ impl Checker<'_> {
         }
         if let (TypeKind::Function(af), TypeKind::Function(bf)) = (&a.kind, &b.kind) {
             if let Uses::Only(allowed) = &bf.uses {
-                let allowed = self.scoped_authority(allowed.clone());
+                let allowed = self.callable_uses(bf, allowed);
                 let valid = match &af.uses {
-                    Uses::Only(actual) => subset(&self.scoped_authority(actual.clone()), &allowed),
+                    Uses::Only(actual) => subset(&self.callable_uses(af, actual), &allowed),
                     Uses::Unrestricted => false,
                 };
                 if !valid {
@@ -1122,6 +1122,44 @@ impl Checker<'_> {
                 .is_some_and(|held| held.iter().all(|selector| required.contains(selector))),
         }
     }
+    /// Own selectors are compared under their own callable's formal types.
+    /// A capability has its exact nominal authority; inert inputs contribute
+    /// none. A callable's ceiling can be attenuated by an actual value, so its
+    /// selector stays symbolic and cannot authorize a sibling callback.
+    fn callable_uses(
+        &mut self,
+        function: &FunctionType,
+        uses: &AuthoritySummary,
+    ) -> AuthoritySummary {
+        let AuthoritySummary::Known(terms) = uses else {
+            return AuthoritySummary::Unknown;
+        };
+        let mut summary = AuthoritySummary::inert();
+        for term in terms.iter() {
+            let replacement = if let AuthorityTerm::Parameter(ParameterRef::Bound {
+                depth: 0,
+                parameter,
+            }) = term
+            {
+                function.parameters.get(parameter.0 as usize).and_then(|p| {
+                    self.capability_definition(p.ty)
+                        .map(|path| {
+                            AuthoritySummary::Known(vec![AuthorityTerm::Capability(path)].into())
+                        })
+                        .or_else(|| {
+                            (self.authority(p.ty) == AuthoritySummary::inert())
+                                .then(AuthoritySummary::inert)
+                        })
+                })
+            } else {
+                None
+            };
+            summary = summary.join(
+                replacement.unwrap_or_else(|| AuthoritySummary::Known(vec![term.clone()].into())),
+            );
+        }
+        self.scoped_authority(summary)
+    }
     fn promises(&mut self, value: &FunctionType, place: &FunctionType) -> bool {
         state_promises_satisfy(&value.state_promises, &place.state_promises)
             && self.captures_promised(value, place)
@@ -1129,8 +1167,8 @@ impl Checker<'_> {
             && match (&value.uses, &place.uses) {
                 (_, Uses::Unrestricted) => true,
                 (Uses::Only(held), Uses::Only(allowed)) => {
-                    let allowed = self.scoped_authority(allowed.clone());
-                    subset(&self.scoped_authority(held.clone()), &allowed)
+                    let allowed = self.callable_uses(place, allowed);
+                    subset(&self.callable_uses(value, held), &allowed)
                 }
                 (Uses::Unrestricted, Uses::Only(_)) => false,
             }

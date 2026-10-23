@@ -39,6 +39,26 @@ impl Checker<'_> {
         self.executable_header()
     }
 
+    /// Resolve comparison selectors from V's signature map, independently of
+    /// elaboration. Only exact capability identities and empty summaries may
+    /// replace a selector; callback environments retain their own receipt.
+    pub(super) fn comparison_authorities(
+        &self,
+        store: &TypeInterner,
+        root: TypeId,
+    ) -> Option<TypeId> {
+        hirsel_types::normalize_callable_authorities(store, root, |ty| {
+            if let Some(TypeKind::Named { definition, .. }) = store.get(ty).map(|row| &row.kind)
+                && self.signatures.get(*definition).is_some_and(|signature|
+                    matches!(&signature.kind, SignatureKind::Type(declaration) if declaration.capability.is_some()))
+            {
+                return Some(AuthoritySummary::Known(vec![AuthorityTerm::Capability(definition.path().clone())].into()));
+            }
+            (self.authority_with_generics(store, ty, &self.generic_declarations()) == AuthoritySummary::inert())
+                .then(AuthoritySummary::inert)
+        }).ok()
+    }
+
     pub(super) fn noalloc_body(&self) -> bool {
         self.executable_header()
             .is_some_and(|header| header.allocation == Allocation::NoAlloc)
@@ -744,11 +764,12 @@ impl Checker<'_> {
         };
         let selected_parameter = if let Callee::Indirect { value, .. } = callee {
             let place = &self.body.places[value.place.0 as usize];
-            self.body.parameters.iter().position(|parameter| *parameter == place.root)
+            self.body
+                .parameters
+                .iter()
+                .position(|parameter| *parameter == place.root)
                 .is_some_and(|ordinal| {
-                    place.projection.is_empty()
-                        && self.invocation_header().is_some_and(|header| matches!(&header.uses,
-                            Uses::Only(AuthoritySummary::Known(terms)) if terms.contains(&AuthorityTerm::Parameter(hirsel_types::ParameterRef::bound(hirsel_types::ParamId(ordinal as u32))))))
+                    place.projection.is_empty() && self.own_parameter_selected(ordinal)
                 })
         } else {
             false

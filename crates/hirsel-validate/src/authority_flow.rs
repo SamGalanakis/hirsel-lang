@@ -9,6 +9,17 @@ fn within(actual: &AuthoritySummary, allowed: &AuthoritySummary) -> bool {
 }
 
 impl Checker<'_> {
+    /// Resolve a selector against V's executable header and declaration-order
+    /// body parameters. A receipt belongs only to this invocation's own slot.
+    pub(crate) fn own_parameter_selected(&self, ordinal: usize) -> bool {
+        ordinal < self.body.parameters.len()
+            && self.invocation_header().is_some_and(|header| {
+                ordinal < header.parameters.len()
+                    && matches!(&header.uses, Uses::Only(AuthoritySummary::Known(terms))
+                        if terms.contains(&AuthorityTerm::Parameter(ParameterRef::bound(hirsel_types::ParamId(ordinal as u32)))))
+            })
+    }
+
     pub(super) fn initial_authority(&self, model: &Model, state: &mut State) {
         let allowed = self.frame_authority();
         for (root, local) in self.body.locals.iter().enumerate() {
@@ -21,15 +32,15 @@ impl Checker<'_> {
                 if self.site.body != self.definition.entry || allowed.is_none() {
                     return true;
                 }
-                let authority = self.authority_with_generics(self.t, local.ty, &self.generic_declarations());
+                let authority =
+                    self.authority_with_generics(self.t, local.ty, &self.generic_declarations());
                 within(&authority, allowed.as_ref().unwrap())
-                    || self.invocation_header().is_some_and(|header| matches!(&header.uses,
-                        Uses::Only(AuthoritySummary::Known(terms)) if terms.contains(&AuthorityTerm::Parameter(ParameterRef::bound(hirsel_types::ParamId(ordinal as u32))))))
+                    || self.own_parameter_selected(ordinal)
             }) || local.storage == Storage::Capture
-                    && allowed.as_ref().is_none_or(|allowed| {
-                        self.authority_with_generics(self.t, local.ty, &self.generic_declarations())
-                            .is_subset_of(allowed)
-                    });
+                && allowed.as_ref().is_none_or(|allowed| {
+                    self.authority_with_generics(self.t, local.ty, &self.generic_declarations())
+                        .is_subset_of(allowed)
+                });
             for &part in &model.root_parts[root] {
                 state.must.set_fact(part, MustFacts::AUTHORITY, valid);
             }

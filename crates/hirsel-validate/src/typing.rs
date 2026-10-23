@@ -1451,6 +1451,12 @@ impl<'a> Checker<'a> {
         // owned receipts; no receiving row supplies a cleanup proof (GEN-1/MEM-5).
         let expected = instantiate_cleanup_bounds(store, expected, context)?;
         let actual = instantiate_cleanup_bounds(store, actual, context)?;
+        let Some(expected) = self.comparison_authorities(store, expected) else {
+            return Ok(false);
+        };
+        let Some(actual) = self.comparison_authorities(store, actual) else {
+            return Ok(false);
+        };
         let expected = self.canonical_plain(store, expected);
         let actual = self.canonical_plain(store, actual);
         let mut memo = hirsel_types::ContextMemo::new(store, context, &mut lookup);

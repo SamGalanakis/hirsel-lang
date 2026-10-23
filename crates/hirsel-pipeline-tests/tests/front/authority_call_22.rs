@@ -56,8 +56,8 @@ fn check(source: &str, expected: Option<&str>) {
 fn authority_call_22_explicit_callable_seed() {
     for (binding, expected) in [
         ("let f=effect", None),
-        ("let f:fn(arg:Dir)->() uses {arg}=effect", Some("CLO-4")),
-        ("let f:fn(arg:Dir)->() uses {Dir}=effect", Some("CLO-4")),
+        ("let f:fn(arg:Dir)->() uses {arg}=effect", None),
+        ("let f:fn(arg:Dir)->() uses {Dir}=effect", None),
         ("let f:fn(arg:Dir)->() uses {}=effect", Some("CLO-4")),
     ] {
         check(

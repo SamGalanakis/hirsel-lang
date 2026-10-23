@@ -702,6 +702,46 @@ pub fn instantiate_parameter_authorities(
     })
 }
 
+/// Comparison-only expansion of a callable's own selectors whose parameter
+/// authority is fixed (a nominal capability or an inert value). Unknown and
+/// attenuable callable environments keep their exact symbolic selector. The
+/// caller derives fixed summaries from its own declaration provider; published
+/// contracts retain ParamIds for actual-argument substitution at invocation.
+pub fn normalize_callable_authorities(
+    store: &TypeInterner,
+    root: TypeId,
+    mut fixed: impl FnMut(TypeId) -> Option<AuthoritySummary>,
+) -> Result<TypeId, GraphError> {
+    rewrite_parameter_graph_for(store, root, AUTHORITIES, |_, row, _| {
+        let TypeKind::Function(function) = &mut row.kind else {
+            return Ok(());
+        };
+        let parameters: Vec<_> = function.parameters.iter().map(|p| fixed(p.ty)).collect();
+        let expand = |summary: &mut AuthoritySummary| {
+            if let AuthoritySummary::Known(terms) = summary {
+                *summary = terms.iter().fold(AuthoritySummary::inert(), |out, term| {
+                    let replacement = match term {
+                        AuthorityTerm::Parameter(ParameterRef::Bound {
+                            depth: 0,
+                            parameter,
+                        }) => parameters.get(parameter.0 as usize).and_then(|a| a.clone()),
+                        _ => None,
+                    };
+                    out.join(
+                        replacement
+                            .unwrap_or_else(|| AuthoritySummary::Known(vec![term.clone()].into())),
+                    )
+                });
+            }
+        };
+        expand(&mut function.authority);
+        if let Uses::Only(uses) = &mut function.uses {
+            expand(uses);
+        }
+        Ok(())
+    })
+}
+
 /// Publish a checked callable using its own lexical binder while retaining
 /// concrete references to captured outer scopes. `root` is the callable value.
 pub fn abstract_parameter_scope(

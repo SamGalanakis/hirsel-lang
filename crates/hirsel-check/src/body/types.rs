@@ -1957,16 +1957,36 @@ impl Checker<'_, '_> {
             .filter(|(s, _)| *s == site)
             .map(|(_, name)| name.clone())
             .collect();
+        let scopes: Vec<_> = self
+            .input
+            .resolution
+            .reference_scopes
+            .iter()
+            .filter(|(at, _)| *at == site)
+            .map(|(_, owner)| *owner)
+            .collect();
+        let mut scopes = scopes.into_iter();
         let mut authority = AuthoritySummary::inert();
         for index in 0..paths.len() {
             let term = match resolved.get(index) {
                 Some(ResolvedName::Definition(d)) => {
                     AuthoritySummary::Known(vec![AuthorityTerm::Capability(d.clone())].into())
                 }
-                Some(name) => match self.lookup_binding_at(site, name, frame) {
-                    Some(ty) => self.type_authority(ty)?,
-                    None => AuthoritySummary::Unknown,
-                },
+                Some(name) => {
+                    let owner = scopes.next();
+                    match name {
+                        ResolvedName::Parameter(parameter) if owner == Some(site) => {
+                            AuthoritySummary::Known(
+                                vec![AuthorityTerm::Parameter(ParameterRef::bound(*parameter))]
+                                    .into(),
+                            )
+                        }
+                        _ => match self.lookup_binding_at(site, name, frame) {
+                            Some(ty) => self.type_authority(ty)?,
+                            None => AuthoritySummary::Unknown,
+                        },
+                    }
+                }
                 None => AuthoritySummary::Unknown,
             };
             authority = authority.join(term);
