@@ -1,0 +1,65 @@
+// The entry alone projects Io. Pure config/schema decisions live in modules.
+const HELP: String = "Usage: schemaetl check|explain|run MANIFEST.json PIPELINE.json\nInputs use the input Dir grant; run publishes into a fresh output Dir.\n"
+
+fn execute(rt: Io, args: Args) -> Result[(), String] {
+  if arg.len(args) != 3 {
+    return Error(HELP)
+  }
+  let Ok(command) = arg.text(args, 0) else {
+    return Error("usage")
+  }
+  if command != "check" && command != "explain" && command != "run" {
+    return Error(HELP)
+  }
+  let Ok(manifest) = arg.text(args, 1) else {
+    return Error("usage")
+  }
+  let Ok(pipeline) = arg.text(args, 2) else {
+    return Error("usage")
+  }
+  if !plan.filename(manifest) || !plan.filename(pipeline) {
+    return Error("config: path")
+  }
+  let Ok(directory) = io.dir(rt, path.of("input")) else {
+    return Error("grant: input")
+  }
+  let inputs = plan.inputs(decode.json_document(directory, manifest)?)?
+  let p = plan.parse(decode.json_document(directory, pipeline)?)?
+  let Ok(output) = io.stdout(rt) else {
+    return Error("grant: stdout")
+  }
+  if command == "check" {
+    let Ok(()) = out.print(output, "valid\n") else {
+      return Error("output: stdout")
+    }
+    return Ok(())
+  }
+  if command == "explain" {
+    let count = list.len(inputs)
+    let fields = list.len(p.fields)
+    let Ok(()) = out.print(
+      output,
+      f"files={count} fields={fields} credits={p.jobs} order=manifest,row groups=sorted completion=manifest\n"
+    ) else {
+      return Error("output: stdout")
+    }
+    return Ok(())
+  }
+  let Ok(destination) = io.dir(rt, path.of("output")) else {
+    return Error("grant: output")
+  }
+  sink.available(destination)?
+  let Ok(tasks) = io.tasks(rt) else {
+    return Error("grant: tasks")
+  }
+  let state = sink.collect(tasks, directory, inputs, p)?
+  sink.publish(destination, take state)?
+  let Ok(()) = out.print(output, "complete\n") else {
+    return Error("output: stdout after completion")
+  }
+  Ok(())
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), String] {
+  execute(rt, args)
+}

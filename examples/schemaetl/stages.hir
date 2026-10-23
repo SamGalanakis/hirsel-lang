@@ -1,0 +1,165 @@
+// A taken cursor clears one slot per pull; row ownership crosses no borrow.
+type Cursor[T] {
+  items: List[Option[T]],
+  at: u64,
+}
+
+pub fn flow[T: inert](take items: List[T]) -> stream.Flow[T, String] uses {} {
+  let mut slots: List[Option[T]] = []
+  for value in take items {
+    list.push(mut slots, Some(take value))
+  }
+  stream.from_results(
+    iter.from(
+      take Cursor(items: take slots, at: 0),
+      fn(mut cursor: Cursor[T]) -> Option[Result[T, String]] uses {} {
+        if cursor.at == list.len(cursor.items) {
+          return None()
+        }
+        let slot = replace(mut cursor.items[cursor.at], take None())
+        cursor.at += 1
+        match take slot {
+          Some(value) => Some(Ok(take value)),
+          None() => None(),
+        }
+      }
+    )
+  )
+}
+
+// The same consuming seam handles WireRow -> Row and Record -> JSONL bytes.
+@captures(input, mapper)
+pub fn transform[A, B](
+  take input: stream.Flow[A, String],
+  take mapper: fn(take A) -> Result[B, String] uses {}
+) -> stream.Flow[B, String] uses {input, mapper} {
+  stream.try_map(take input, take mapper)
+}
+
+pub type Batch {
+  rows: List[validate.Row],
+}
+
+pub fn batch(
+  tasks: Tasks,
+  directory: Dir,
+  take input: plan.Input,
+  take p: plan.Plan,
+  counter: decode.Admission
+) -> Result[Shared[Batch], String] {
+  task.scope(
+    tasks,
+    fn(scope: Scope) -> Result[Shared[Batch], String] {
+      let raw = decode.read_rows(scope, directory, input, p, counter)?
+      let boundary = validate.make_boundary(p.fields, false)
+      let source = flow(take unique raw)
+      let mapped = transform(
+        take source,
+        fn(take row: validate.WireRow) -> Result[validate.Row, String] uses {} {
+          validate.decode_row(boundary, take row)
+        }
+      )
+      let seed: List[validate.Row] = []
+      let skip = p.skip
+      let rows = stream.try_fold(
+        take mapped,
+        take seed,
+        fn(take accumulated: List[validate.Row], take row: validate.Row) -> Result[
+          List[validate.Row],
+          String
+        ] uses {} {
+          if !skip {
+            if let Error(_) = row.value {
+              return Error("row: validation")
+            }
+          }
+          let mut out = take accumulated
+          list.push(mut out, take row)
+          Ok(take out)
+        }
+      )?
+      Ok(shared.freeze(unique Batch(rows: take rows)))
+    }
+  )
+}
+
+pub fn accepts(record: validate.Record, p: plan.Plan) -> bool uses {} {
+  for filter in p.filters {
+    let Ok(index) = plan.field_index(p.fields, filter.field) else {
+      return false
+    }
+    if validate.wire(record.cells[index]) != filter.equals {
+      return false
+    }
+  }
+  true
+}
+
+pub type Totals {
+  groups: Map[String, i64],
+  accepted: u64,
+  filtered: u64,
+  rejected: u64,
+  seen: u64,
+}
+
+pub fn empty_totals() -> Totals uses {} {
+  Totals(groups: map.empty(), accepted: 0, filtered: 0, rejected: 0, seen: 0)
+}
+
+// Checked arithmetic precedes both aggregate mutation and output admission.
+pub fn aggregate(record: validate.Record, p: plan.Plan, mut counts: Totals) -> Result[
+  (),
+  String
+] uses {} {
+  let Some(grouping) = p.group else {
+    return Ok(())
+  }
+  let key_index = plan.field_index(p.fields, grouping.key)?
+  let sum_index = plan.field_index(p.fields, grouping.sum)?
+  let TextCell(key) = record.cells[key_index] else {
+    return Error("group-required")
+  }
+  let IntegerCell(value) = record.cells[sum_index] else {
+    return Error("sum-required")
+  }
+  let previous = match map.get(counts.groups, key) {
+    Some(n) => n,
+    None() => {
+      if map.len(counts.groups) == plan.GROUPS {
+        return Error("limit: groups")
+      }
+      0i64
+    },
+  }
+  let Some(sum) = i64.checked_add(previous, value) else {
+    return Error("overflow")
+  }
+  map.insert(mut counts.groups, unique key, sum)
+  Ok(())
+}
+
+pub fn encode(fields: List[plan.Field], take record: validate.Record) -> Result[
+  String,
+  String
+] uses {} {
+  let mut selected: List[plan.Field] = []
+  let mut cells: List[validate.Cell] = []
+  for i in 0u64..list.len(fields) {
+    if fields[i].projected {
+      list.push(mut selected, unique fields[i])
+      list.push(mut cells, unique record.cells[i])
+    }
+  }
+  let projected = validate.Record(cells: take cells)
+  let boundary = validate.make_boundary(selected, true)
+  match schema.write_checked(
+    boundary,
+    projected,
+    validate.projection,
+    validate.options()
+  ) {
+    Ok(text) => Ok(f"{text}\n"),
+    Error(_) => Error("output: schema"),
+  }
+}

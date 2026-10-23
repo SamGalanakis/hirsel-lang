@@ -98,3 +98,4 @@ mod replay_child_artifact_29;
 mod read_dir_stream;
 mod man_render_30;
 mod pnm_tiles_30;
+mod schema_etl_30;

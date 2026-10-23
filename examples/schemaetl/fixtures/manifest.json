@@ -1,0 +1,12 @@
+{
+  "inputs": [
+    {
+      "path": "a.csv",
+      "format": "csv"
+    },
+    {
+      "path": "b.jsonl",
+      "format": "jsonl"
+    }
+  ]
+}

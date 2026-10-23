@@ -1,0 +1,248 @@
+// Tokio bounded.rs:760-830 reserve/send: hold a credit until the consumer
+// releases its value. Here the credit is a manifest-window slot, released only
+// after ordered consumption, including completed out-of-order work.
+pub type State {
+  totals: stages.Totals,
+  data: List[u8],
+  issues: List[json.Value],
+}
+
+pub fn initial() -> State uses {} {
+  State(totals: stages.empty_totals(), data: [], issues: [])
+}
+
+fn reject(mut state: State, file: u64, issue: validate.RowIssue, skip: bool) -> Result[
+  (),
+  String
+] uses {} {
+  if !skip {
+    return Error(f"row: {issue.code}")
+  }
+  state.totals.rejected += 1
+  if list.len(state.issues) < plan.ISSUES {
+    let mut item: Map[String, json.Value] = map.empty()
+    map.insert(mut item, "file", Number(u64.to_string(file)))
+    map.insert(mut item, "row", Number(u64.to_string(issue.row)))
+    map.insert(mut item, "field", Text(unique issue.field))
+    map.insert(mut item, "code", Text(unique issue.code))
+    map.insert(mut item, "stage", Text(unique issue.stage))
+    list.push(mut state.issues, Object(take item))
+  }
+  Ok(())
+}
+
+fn consume(mut state: State, file: u64, batch: stages.Batch, p: plan.Plan) -> Result[
+  (),
+  String
+] uses {} {
+  if list.len(batch.rows) > plan.ROWS - state.totals.seen {
+    return Error("limit: rows")
+  }
+  for row in batch.rows {
+    state.totals.seen += 1
+    let record = match row.value {
+      Ok(record) => unique record,
+      Error(issue) => {
+        reject(mut state, file, issue, p.skip)?
+        continue
+      },
+    }
+    if !stages.accepts(record, p) {
+      state.totals.filtered += 1
+      continue
+    }
+    if let Error(code) = stages.aggregate(record, p, mut state.totals) {
+      if code == "limit: groups" {
+        return Error(unique code)
+      }
+      reject(
+        mut state,
+        file,
+        validate.RowIssue(
+          row: row.ordinal,
+          field: "group",
+          code: unique code,
+          stage: "transform"
+        ),
+        p.skip
+      )?
+      continue
+    }
+    // A second instantiation of the application Flow transform seam owns the
+    // output record and builder; the schema writer checks its round-trip DTO.
+    let output_fields = unique p.fields
+    let input = stages.flow(take [take record])
+    let encoded = stages.transform(
+      take input,
+      fn(take item: validate.Record) -> Result[String, String] uses {} {
+        stages.encode(output_fields, take item)
+      }
+    )
+    let data = stream.try_fold(
+      take encoded,
+      take unique state.data,
+      fn(take builder: List[u8], take line: String) -> Result[List[u8], String] uses {} {
+        if string.byte_len(line) > plan.OUTPUT_BYTES - list.len(builder) {
+          return Error("limit: output bytes")
+        }
+        let mut out = take builder
+        text.append(mut out, line)
+        Ok(take out)
+      }
+    )?
+    state.data = take data
+    state.totals.accepted += 1
+  }
+  Ok(())
+}
+
+pub fn collect(tasks: Tasks, directory: Dir, inputs: List[plan.Input], p: plan.Plan) -> Result[
+  State,
+  String
+] {
+  let counter = decode.Admission(tasks: tasks, rows: mutex.create(tasks, take 0u64))
+  task.scope(
+    tasks,
+    fn(scope: Scope) -> Result[State, String] {
+      let mut members: TaskSet[Result[Shared[stages.Batch], unique String]] of scope = task.set(
+        scope
+      )
+      let mut slots: List[Option[Shared[stages.Batch]]] = []
+      for _ in inputs {
+        list.push(mut slots, None())
+      }
+      let mut next: u64 = 0
+      let mut released: u64 = 0
+      let mut state = initial()
+      while released < list.len(inputs) {
+        while next < list.len(inputs) && next - released < p.jobs {
+          let input = unique inputs[next]
+          let config = unique p
+          let handle = task.async(
+            scope,
+            fn() -> Result[Shared[stages.Batch], unique String] {
+              match stages.batch(tasks, directory, take input, take config, counter) {
+                Ok(value) => Ok(take value),
+                Error(problem) => Error(unique problem),
+              }
+            }
+          )
+          task.add(scope, mut members, take handle)
+          next += 1
+        }
+        let Some(index) = task.await_any(scope, members) else {
+          break
+        }
+        match task.await_at(scope, mut members, index) {
+          Ok(batch) => {
+            slots[index] = Some(take batch)
+          },
+          Error(problem) => {
+            task.cancel_all(scope, take members)
+            return Error(take problem)
+          },
+        }
+        while released < next {
+          let Some(batch) = slots[released] else {
+            break
+          }
+          let completed = shared.with(
+            batch,
+            fn(payload: stages.Batch) -> stages.Batch uses {} {
+              unique payload
+            }
+          )
+          let outcome = consume(mut state, released, completed, p)
+          if let Error(problem) = take outcome {
+            task.cancel_all(scope, take members)
+            return Error(take problem)
+          }
+          slots[released] = None()
+          released += 1
+        }
+      }
+      task.cancel_all(scope, take members)
+      if released != list.len(inputs) {
+        return Error("internal: credits")
+      }
+      Ok(take state)
+    }
+  )
+}
+
+fn group_json(groups: Map[String, i64]) -> json.Value uses {} {
+  let mut keys: unique List[String] = unique []
+  for (key, _) in groups {
+    list.push(mut keys, unique key)
+  }
+  list.sort(mut keys, string.compare)
+  let mut out: List[json.Value] = []
+  for key in keys {
+    let Some(sum) = map.get(groups, key) else {
+      continue
+    }
+    let mut entry: Map[String, json.Value] = map.empty()
+    map.insert(mut entry, "key", Text(unique key))
+    map.insert(mut entry, "sum", Number(i64.to_string(sum)))
+    list.push(mut out, Object(take entry))
+  }
+  Array(take out)
+}
+
+pub fn render_summary(state: State) -> Result[String, String] uses {} {
+  let mut obj: Map[String, json.Value] = map.empty()
+  map.insert(mut obj, "rows", Number(u64.to_string(state.totals.seen)))
+  map.insert(mut obj, "accepted", Number(u64.to_string(state.totals.accepted)))
+  map.insert(mut obj, "filtered", Number(u64.to_string(state.totals.filtered)))
+  map.insert(mut obj, "rejected", Number(u64.to_string(state.totals.rejected)))
+  map.insert(
+    mut obj,
+    "issues_truncated",
+    Bool(state.totals.rejected > list.len(state.issues))
+  )
+  map.insert(mut obj, "issues", Array(unique state.issues))
+  map.insert(mut obj, "groups", group_json(state.totals.groups))
+  match json.stringify(Object(take obj)) {
+    Ok(s) => Ok(f"{s}\n"),
+    _ => Error("output: summary"),
+  }
+}
+
+pub fn available(directory: Dir) -> Result[(), String] {
+  // A fresh destination is required: never invalidate somebody else's marker.
+  for name in ["data.jsonl", "summary.json", "completion.json"] {
+    match file.metadata(directory, path.of(name)) {
+      Error(NotFound()) => (),
+      _ => return Error("output: destination exists or unavailable"),
+    }
+  }
+  Ok(())
+}
+
+fn publish_one(directory: Dir, name: String, bytes: Bytes) -> Result[(), String] {
+  let mut handle = match file.create_atomic(directory, path.of(name)) {
+    Ok(handle) => take handle,
+    _ => return Error("output: create"),
+  }
+  if let Error(_) = file.write_all(directory, mut handle, bytes) {
+    return Error("output: write")
+  }
+  if let Error(_) = file.commit(directory, take handle) {
+    return Error("output: commit")
+  }
+  Ok(())
+}
+
+pub fn publish(directory: Dir, take state: State) -> Result[(), String] {
+  let report = render_summary(state)?
+  let count = list.len(state.data)
+  publish_one(directory, "data.jsonl", bytes.from_list(unique state.data))?
+  publish_one(directory, "summary.json", copy string.as_bytes(report))?
+  publish_one(
+    directory,
+    "completion.json",
+    copy string.as_bytes(
+      f"{{\"schema\":1,\"data\":\"data.jsonl\",\"summary\":\"summary.json\",\"bytes\":{count}}}\n"
+    )
+  )
+}

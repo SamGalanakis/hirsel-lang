@@ -1,0 +1,299 @@
+// Bounded declarative language; no expressions or ambient capabilities.
+pub const FILES: u64 = 8
+
+pub const FILE_BYTES: u64 = 65536
+
+pub const ROWS: u64 = 1024
+
+pub const FIELDS: u64 = 16
+
+pub const RECORD_BYTES: u64 = 4096
+
+pub const GROUPS: u64 = 64
+
+pub const ISSUES: u64 = 32
+
+pub const CREDITS: u64 = 4
+
+pub const OUTPUT_BYTES: u64 = 262144
+
+pub type Kind = StringField | IntegerField | BoolField
+
+pub type Field {
+  name: String,
+  output: String,
+  projected: bool,
+  kind: Kind,
+  required: bool,
+  fallback: Option[json.Value],
+}
+
+pub type Input {
+  path: String,
+  format: String,
+}
+
+pub type Filter {
+  field: String,
+  equals: json.Value,
+}
+
+pub type Group {
+  key: String,
+  sum: String,
+}
+
+pub type Plan {
+  fields: List[Field],
+  filters: List[Filter],
+  group: Option[Group],
+  skip: bool,
+  jobs: u64,
+}
+
+pub fn object(value: json.Value) -> Result[Map[String, json.Value], String] uses {} {
+  match value {
+    Object(items) => Ok(unique items),
+    _ => Error("config: object"),
+  }
+}
+
+pub fn array(value: json.Value) -> Result[List[json.Value], String] uses {} {
+  match value {
+    Array(items) => Ok(unique items),
+    _ => Error("config: array"),
+  }
+}
+
+pub fn text(value: json.Value) -> Result[String, String] uses {} {
+  match value {
+    Text(s) => Ok(unique s),
+    _ => Error("config: string"),
+  }
+}
+
+pub fn member(items: Map[String, json.Value], key: String) -> Result[json.Value, String] uses {} {
+  match map.get(items, key) {
+    Some(value) => Ok(unique value),
+    None() => Error(f"config: missing {key}"),
+  }
+}
+
+pub fn keys(items: Map[String, json.Value], allowed: List[String]) -> Result[(), String] uses {} {
+  for (name, _) in items {
+    let mut found = false
+    for key in allowed {
+      if name == key {
+        found = true
+      }
+    }
+    if !found {
+      return Error(f"config: unknown {name}")
+    }
+  }
+  Ok(())
+}
+
+pub fn valid_name(value: String) -> bool uses {} {
+  let raw = string.as_bytes(value)
+  if bytes.len(raw) == 0 || bytes.len(raw) > 64 {
+    return false
+  }
+  for c in raw {
+    if !(c >= b'a' && c <= b'z' || c >= b'A' && c <= b'Z' || c >= b'0' && c <= b'9' || c == b'_') {
+      return false
+    }
+  }
+  true
+}
+
+pub fn filename(value: String) -> bool uses {} {
+  if string.byte_len(value) == 0 || string.byte_len(value) > 256 || string.starts_with(
+    value,
+    "/"
+  ) {
+    return false
+  }
+  for part in path.components(path.of(value)) {
+    if part == ".." {
+      return false
+    }
+  }
+  !string.contains(value, "\u{0}")
+}
+
+pub fn inputs(value: json.Value) -> Result[List[Input], String] uses {} {
+  let obj = object(value)?
+  keys(obj, ["inputs"])?
+  let values = array(member(obj, "inputs")?)?
+  if list.len(values) == 0 || list.len(values) > FILES {
+    return Error("limit: files")
+  }
+  let mut out: List[Input] = []
+  let mut seen: Set[String] = set.empty()
+  for item in values {
+    let entry = object(item)?
+    keys(entry, ["path", "format"])?
+    let path = text(member(entry, "path")?)?
+    let format = text(member(entry, "format")?)?
+    if !filename(path) || set.contains(seen, path) {
+      return Error("config: input path")
+    }
+    if format != "csv" && format != "jsonl" {
+      return Error("config: format")
+    }
+    set.insert(mut seen, copy path)
+    list.push(mut out, Input(path: take path, format: take format))
+  }
+  Ok(take out)
+}
+
+pub fn matches(kind: Kind, value: json.Value) -> bool uses {} {
+  match (kind, value) {
+    (StringField(), Text(_)) => true,
+    (IntegerField(), Number(n)) => match i64.parse(n) {
+      Ok(_) => true,
+      _ => false,
+    },
+    (BoolField(), Bool(_)) => true,
+    _ => false,
+  }
+}
+
+fn field(value: json.Value) -> Result[Field, String] uses {} {
+  let obj = object(value)?
+  keys(obj, ["name", "type", "required", "default", "as", "project"])?
+  let name = text(member(obj, "name")?)?
+  if !valid_name(name) {
+    return Error("config: field name")
+  }
+  let output = match map.get(obj, "as") {
+    Some(v) => text(v)?,
+    None() => copy name,
+  }
+  if !valid_name(output) {
+    return Error("config: output name")
+  }
+  let kind = match text(member(obj, "type")?)? {
+    "string" => StringField(),
+    "integer" => IntegerField(),
+    "bool" => BoolField(),
+    _ => return Error("config: field type"),
+  }
+  let required = match member(obj, "required")? {
+    Bool(b) => b,
+    _ => return Error("config: required"),
+  }
+  let projected = match map.get(obj, "project") {
+    Some(Bool(b)) => b,
+    None() => true,
+    _ => return Error("config: project"),
+  }
+  let fallback = match map.get(obj, "default") {
+    Some(v) => {
+      if !matches(kind, v) {
+        return Error("config: default type")
+      }
+      Some(unique v)
+    },
+    None() => None(),
+  }
+  Ok(
+    Field(
+      name: take name,
+      output: take output,
+      projected: projected,
+      kind: kind,
+      required: required,
+      fallback: take fallback
+    )
+  )
+}
+
+pub fn field_index(fields: List[Field], name: String) -> Result[u64, String] uses {} {
+  for i in 0u64..list.len(fields) {
+    if fields[i].name == name {
+      return Ok(i)
+    }
+  }
+  Error("config: unknown field")
+}
+
+pub fn parse(value: json.Value) -> Result[Plan, String] uses {} {
+  let obj = object(value)?
+  keys(obj, ["fields", "filters", "group", "policy", "jobs"])?
+  let declarations = array(member(obj, "fields")?)?
+  if list.len(declarations) == 0 || list.len(declarations) > FIELDS {
+    return Error("limit: fields")
+  }
+  let mut fields: List[Field] = []
+  let mut names: Set[String] = set.empty()
+  let mut outputs: Set[String] = set.empty()
+  for item in declarations {
+    let f = field(item)?
+    if set.contains(names, f.name) || set.contains(outputs, f.output) {
+      return Error("config: duplicate field")
+    }
+    set.insert(mut names, copy f.name)
+    set.insert(mut outputs, copy f.output)
+    list.push(mut fields, take f)
+  }
+  let skip = match text(member(obj, "policy")?)? {
+    "fail-fast" => false,
+    "report-and-skip" => true,
+    _ => return Error("config: policy"),
+  }
+  let jobs = match member(obj, "jobs")? {
+    Number(n) => match u64.parse(n) {
+      Ok(count) => count,
+      _ => return Error("config: jobs"),
+    },
+    _ => return Error("config: jobs"),
+  }
+  if jobs == 0 || jobs > CREDITS {
+    return Error("limit: credits")
+  }
+  let mut filters: List[Filter] = []
+  if let Some(raw) = map.get(obj, "filters") {
+    let items = array(raw)?
+    if list.len(items) > FIELDS {
+      return Error("limit: filters")
+    }
+    for item in items {
+      let entry = object(item)?
+      keys(entry, ["field", "equals"])?
+      let key = text(member(entry, "field")?)?
+      let index = field_index(fields, key)?
+      let equals = member(entry, "equals")?
+      if !matches(fields[index].kind, equals) {
+        return Error("config: filter type")
+      }
+      list.push(mut filters, Filter(field: take key, equals: take equals))
+    }
+  }
+  let grouping: Option[Group] = match map.get(obj, "group") {
+    None() => None(),
+    Some(raw) => {
+      let entry = object(raw)?
+      keys(entry, ["key", "sum"])?
+      let key = text(member(entry, "key")?)?
+      let sum = text(member(entry, "sum")?)?
+      if fields[field_index(fields, key)?].kind != StringField() || fields[field_index(
+        fields,
+        sum
+      )?].kind != IntegerField() {
+        return Error("config: group types")
+      }
+      Some(Group(key: take key, sum: take sum))
+    },
+  }
+  Ok(
+    Plan(
+      fields: take fields,
+      filters: take filters,
+      group: take grouping,
+      skip: skip,
+      jobs: jobs
+    )
+  )
+}

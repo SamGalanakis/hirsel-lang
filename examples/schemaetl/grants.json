@@ -1,0 +1,28 @@
+{
+  "args": [
+    "run",
+    "manifest.json",
+    "pipeline.json"
+  ],
+  "io": {
+    "stdout": "stdout.bytes@1",
+    "tasks": "tasks.cooperative@1",
+    "dirs": [
+      {
+        "path": "input",
+        "host": "/ABSOLUTE/INPUT",
+        "access": "read"
+      },
+      {
+        "path": "output",
+        "host": "/ABSOLUTE/FRESH/OUTPUT",
+        "access": "read_write"
+      }
+    ]
+  },
+  "placement": {
+    "cores": 1,
+    "commit": "shared",
+    "reorder": "auto"
+  }
+}

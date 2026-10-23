@@ -1,0 +1,244 @@
+// Schema dictionaries keep wire values outside the typed transformation seam.
+@serializable
+pub type Cell = TextCell(String) | IntegerCell(i64) | BoolCell(bool) | Absent
+
+@serializable
+pub type Record {
+  cells: List[Cell],
+}
+
+pub type RowIssue {
+  row: u64,
+  field: String,
+  code: String,
+  stage: String,
+}
+
+pub type Row {
+  ordinal: u64,
+  value: Result[Record, RowIssue],
+}
+
+pub type WireRow {
+  ordinal: u64,
+  value: json.Value,
+}
+
+pub fn options() -> schema.Options uses {} {
+  schema.Options(
+    limits: schema.Limits(
+      max_depth: 32,
+      max_issues: 1,
+      max_work: 4096,
+      max_input_bytes: 32768,
+      max_output_bytes: 32768
+    ),
+    mode: First()
+  )
+}
+
+pub fn wire(cell: Cell) -> json.Value uses {} {
+  match cell {
+    TextCell(s) => Text(unique s),
+    IntegerCell(n) => Number(i64.to_string(n)),
+    BoolCell(b) => Bool(b),
+    Absent() => Null(),
+  }
+}
+
+pub fn scalar(kind: plan.Kind, take site: String) -> schema.Boundary[Cell, json.Value] uses {} {
+  schema.Boundary(
+    decode: fn(value: json.Value, mut check: schema.CheckState) -> Result[
+      Cell,
+      schema.SchemaError
+    ] uses {} {
+      schema.charge_check(mut check)?
+      match (kind, value) {
+        (StringField(), Text(s)) => Ok(TextCell(unique s)),
+        (BoolField(), Bool(b)) => Ok(BoolCell(b)),
+        (IntegerField(), Number(s)) => match i64.parse(s) {
+          Ok(n) => Ok(IntegerCell(n)),
+          _ => Error(schema.invalid(mut check, "integer", Wire(), unique site, None())),
+        },
+        _ => Error(schema.invalid(mut check, "type", Wire(), unique site, None())),
+      }
+    },
+    encode: fn(cell: Cell, mut check: schema.CheckState) -> Result[
+      json.Value,
+      schema.SchemaError
+    ] uses {} {
+      schema.charge_check(mut check)?
+      let value = wire(cell)
+      if !plan.matches(kind, value) {
+        return Error(schema.invalid(mut check, "type", Wire(), unique site, None()))
+      }
+      Ok(take value)
+    }
+  )
+}
+
+fn object_boundary() -> schema.Boundary[Map[String, json.Value], json.Value] uses {} {
+  schema.Boundary(
+    decode: fn(value: json.Value, mut check: schema.CheckState) -> Result[
+      Map[String, json.Value],
+      schema.SchemaError
+    ] uses {} {
+      schema.charge_check(mut check)?
+      match value {
+        Object(items) => Ok(unique items),
+        _ => Error(schema.invalid(mut check, "object", Wire(), "row", None())),
+      }
+    },
+    encode: fn(items: Map[String, json.Value], mut check: schema.CheckState) -> Result[
+      json.Value,
+      schema.SchemaError
+    ] uses {} {
+      schema.charge_check(mut check)?
+      Ok(Object(unique items))
+    }
+  )
+}
+
+fn decode_record(
+  fields: List[plan.Field],
+  output: bool,
+  items: Map[String, json.Value],
+  mut check: schema.CheckState
+) -> Result[Record, schema.SchemaError] uses {} {
+  if map.len(items) > plan.FIELDS {
+    return Error(schema.invalid(mut check, "fields", Wire(), "row", None()))
+  }
+  for (key, _) in items {
+    let mut known = false
+    for field in fields {
+      let name = if output {
+        field.output
+      } else {
+        field.name
+      }
+      if name == key {
+        known = true
+      }
+    }
+    if !known {
+      return Error(schema.invalid(mut check, "extra", Wire(), unique key, None()))
+    }
+  }
+  let mut cells: List[Cell] = []
+  for field in fields {
+    let name = if output {
+      field.output
+    } else {
+      field.name
+    }
+    let present = map.get(items, name)
+    let value = match present {
+      Some(v) => {
+        if output && v == Null() && !field.required && field.fallback == None() {
+          list.push(mut cells, Absent())
+          continue
+        }
+        unique v
+      },
+      None() => match field.fallback {
+        Some(v) => unique v,
+        None() => {
+          if field.required {
+            return Error(
+              schema.invalid(mut check, "required", Wire(), unique name, None())
+            )
+          }
+          list.push(mut cells, Absent())
+          continue
+        },
+      },
+    }
+    let boundary = scalar(field.kind, take unique name)
+    match boundary.decode(value, mut check) {
+      Ok(cell) => list.push(mut cells, take cell),
+      Error(error) => return Error(unique error),
+    }
+  }
+  Ok(Record(cells: take cells))
+}
+
+pub fn make_boundary(fields: List[plan.Field], output: bool) -> schema.Boundary[
+  Record,
+  json.Value
+] uses {} {
+  let owned = unique fields
+  let inner: schema.Boundary[Record, Map[String, json.Value]] = schema.Boundary(
+    decode: fn(items: Map[String, json.Value], mut check: schema.CheckState) -> Result[
+      Record,
+      schema.SchemaError
+    ] uses {} {
+      decode_record(owned, output, items, mut check)
+    },
+    encode: fn(record: Record, mut check: schema.CheckState) -> Result[
+      Map[String, json.Value],
+      schema.SchemaError
+    ] uses {} {
+      if list.len(record.cells) != list.len(owned) {
+        return Error(schema.invalid(mut check, "width", Wire(), "row", None()))
+      }
+      let mut items: Map[String, json.Value] = map.empty()
+      for i in 0u64..list.len(owned) {
+        let key = if output {
+          owned[i].output
+        } else {
+          owned[i].name
+        }
+        let value = wire(record.cells[i])
+        if value != Null() && !plan.matches(owned[i].kind, value) {
+          return Error(schema.invalid(mut check, "type", Wire(), unique key, None()))
+        }
+        map.insert(mut items, unique key, take value)
+      }
+      Ok(take items)
+    }
+  )
+  schema.then(object_boundary(), take inner)
+}
+
+pub fn issue(row: u64, error: schema.SchemaError) -> RowIssue uses {} {
+  match error {
+    Invalid(issues) => {
+      if list.len(issues.items) > 0 {
+        let first = issues.items[0]
+        return RowIssue(
+          row: row,
+          field: unique first.schema_site,
+          code: unique first.code,
+          stage: "wire"
+        )
+      }
+      RowIssue(row: row, field: "row", code: "invalid", stage: "wire")
+    },
+    Limit(_) => RowIssue(
+      row: row,
+      field: "row",
+      code: "schema-limit",
+      stage: "resource"
+    ),
+  }
+}
+
+pub fn decode_row(boundary: schema.Boundary[Record, json.Value], take raw: WireRow) -> Result[
+  Row,
+  String
+] uses {} {
+  let outcome: Result[Record, RowIssue] = match schema.decode(
+    boundary,
+    raw.value,
+    options()
+  ) {
+    Ok(value) => Ok(take value),
+    Error(Limit(_)) => return Error("limit: schema"),
+    Error(error) => Error(issue(raw.ordinal, error)),
+  }
+  Ok(Row(ordinal: raw.ordinal, value: take outcome))
+}
+
+pub fn projection(record: Record) -> Record uses {} {
+  unique record
+}

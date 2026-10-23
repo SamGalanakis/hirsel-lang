@@ -1,0 +1,33 @@
+{
+  "fields": [
+    {
+      "name": "team",
+      "as": "group",
+      "type": "string",
+      "required": true
+    },
+    {
+      "name": "amount",
+      "type": "integer",
+      "required": true
+    },
+    {
+      "name": "active",
+      "type": "bool",
+      "required": false,
+      "default": true
+    }
+  ],
+  "filters": [
+    {
+      "field": "active",
+      "equals": true
+    }
+  ],
+  "group": {
+    "key": "team",
+    "sum": "amount"
+  },
+  "policy": "report-and-skip",
+  "jobs": 4
+}

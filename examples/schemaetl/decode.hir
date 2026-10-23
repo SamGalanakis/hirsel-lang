@@ -1,0 +1,208 @@
+// Admission counter is run-owned. Count rejected and filtered rows too.
+pub type Admission {
+  tasks: Tasks,
+  rows: Mutex[u64],
+}
+
+pub fn admit(counter: Admission) -> Result[(), String] {
+  let allowed = mutex.with(
+    counter.tasks,
+    counter.rows,
+    fn(mut count: unique u64) -> bool uses {} {
+      if count == plan.ROWS {
+        return false
+      }
+      count += 1
+      true
+    }
+  )
+  if allowed {
+    Ok(())
+  } else {
+    Error("limit: rows")
+  }
+}
+
+// Go reader.go:197-205: pull one complete CSV record before row processing.
+// Codec/state transitions are shipped std CSV, including quoted newlines.
+pub fn read(directory: Dir, name: String) -> Result[String, String] {
+  let mut handle = match file.open(directory, path.of(name)) {
+    Ok(f) => take f,
+    Error(_) => return Error("source: open"),
+  }
+  let data = match file.read_all_bounded(directory, mut handle, plan.FILE_BYTES) {
+    Ok(bytes) => take bytes,
+    Error(Limit()) => return Error("limit: file bytes"),
+    Error(File(_)) => return Error("source: read"),
+  }
+  match string.from_bytes(take data) {
+    Ok(text) => Ok(take text),
+    Error(_) => Error("source: utf8"),
+  }
+}
+
+pub fn json_document(directory: Dir, name: String) -> Result[json.Value, String] {
+  let text = read(directory, name)?
+  match json.parse(take text) {
+    Ok(value) => Ok(take value),
+    Error(_) => Error("source: json"),
+  }
+}
+
+fn csv_rows(scope: Scope, text: String, p: plan.Plan, counter: Admission) -> Result[
+  List[validate.WireRow],
+  String
+] {
+  let config = csv.Config(
+    delimiter: b',',
+    fields_per_record: None(),
+    max_record_bytes: plan.RECORD_BYTES
+  )
+  let mut reader = match csv.slice_reader(text, config) {
+    Ok(value) => take value,
+    Error(_) => return Error("source: csv"),
+  }
+  let Ok(true) = csv.next_record(mut reader) else {
+    return Error("source: header")
+  }
+  let width = csv.field_count(reader)
+  if width == 0 || width > plan.FIELDS {
+    return Error("limit: fields")
+  }
+  let mut names: List[String] = []
+  let mut seen: Set[String] = set.empty()
+  for i in 0u64..width {
+    let Some(name) = csv.get_field(reader, i) else {
+      return Error("source: header")
+    }
+    if set.contains(seen, name) {
+      return Error("source: duplicate header")
+    }
+    if let Error(_) = plan.field_index(p.fields, name) {
+      return Error("source: extra header")
+    }
+    set.insert(mut seen, unique name)
+    list.push(mut names, unique name)
+  }
+  for field in p.fields {
+    if field.required && field.fallback == None() && !set.contains(seen, field.name) {
+      return Error("source: missing header")
+    }
+  }
+  let mut rows: List[validate.WireRow] = []
+  while true {
+    if let Error(_) = task.check_canceled(scope) {
+      return Error("canceled")
+    }
+    let more = match csv.next_record(mut reader) {
+      Ok(more) => more,
+      Error(RecordTooLarge()) => return Error("limit: record bytes"),
+      Error(_) => return Error("source: csv"),
+    }
+    if !more {
+      break
+    }
+    admit(counter)?
+    let count = csv.field_count(reader)
+    if count > plan.FIELDS {
+      return Error("limit: fields")
+    }
+    let mut obj: Map[String, json.Value] = map.empty()
+    if count == width {
+      for i in 0u64..width {
+        let Some(cell) = csv.get_field(reader, i) else {
+          return Error("source: csv field")
+        }
+        let kind = p.fields[plan.field_index(p.fields, names[i])?].kind
+        let value: json.Value = match kind {
+          StringField() => Text(unique cell),
+          IntegerField() => match i64.parse(cell) {
+            Ok(n) => Number(i64.to_string(n)),
+            Error(_) => Text(unique cell),
+          },
+          BoolField() => if cell == "true" {
+            Bool(true)
+          } else if cell == "false" {
+            Bool(false)
+          } else {
+            Text(unique cell)
+          },
+        }
+        map.insert(mut obj, unique names[i], take value)
+      }
+    }
+    // A non-object wire value represents a row-width issue, not source corruption.
+    let value: json.Value = if count == width {
+      Object(take obj)
+    } else {
+      Null()
+    }
+    list.push(
+      mut rows,
+      validate.WireRow(ordinal: list.len(rows) + 1, value: take value)
+    )
+  }
+  Ok(take rows)
+}
+
+fn json_rows(scope: Scope, text: String, counter: Admission) -> Result[
+  List[validate.WireRow],
+  String
+] {
+  let data = string.as_bytes(text)
+  let mut start: u64 = 0
+  let mut pos: u64 = 0
+  let mut ordinal: u64 = 0
+  let mut rows: List[validate.WireRow] = []
+  while pos < bytes.len(data) {
+    let end = pos == bytes.len(data) - 1
+    let newline = data[pos] == b'\n'
+    if !newline && pos - start == plan.RECORD_BYTES {
+      return Error("limit: record bytes")
+    }
+    pos += 1
+    if newline || end {
+      if let Error(_) = task.check_canceled(scope) {
+        return Error("canceled")
+      }
+      admit(counter)?
+      let stop = if newline {
+        pos - 1
+      } else {
+        pos
+      }
+      let raw = bytes.slice(data, start, stop)
+      let Ok(line) = string.from_bytes(unique raw) else {
+        return Error("source: utf8")
+      }
+      let value = match json.parse(take line) {
+        Ok(value) => take value,
+        Error(_) => return Error("source: jsonl"),
+      }
+      if let Object(items) = value {
+        if map.len(items) > plan.FIELDS {
+          return Error("limit: fields")
+        }
+      }
+      ordinal += 1
+      list.push(mut rows, validate.WireRow(ordinal: ordinal, value: take value))
+      start = pos
+    }
+  }
+  Ok(take rows)
+}
+
+pub fn read_rows(
+  scope: Scope,
+  directory: Dir,
+  spec: plan.Input,
+  p: plan.Plan,
+  counter: Admission
+) -> Result[List[validate.WireRow], String] {
+  let source = read(directory, spec.path)?
+  if spec.format == "csv" {
+    csv_rows(scope, source, p, counter)
+  } else {
+    json_rows(scope, source, counter)
+  }
+}
