@@ -262,7 +262,7 @@ fn native_transaction_33_virtual_shared_credits_survive_and_rollback_every_check
             if fail_at.is_some() {
                 assert_eq!(result, Err(Error::Interrupted));
                 assert_eq!(arena.cleanup, cleanup);
-                assert_eq!((*ctx).region, &mut *arena);
+                assert_eq!((*ctx).region, ptr::from_mut(&mut *arena));
                 assert_eq!(crate::roots::count(&*ctx, shared), 3);
             } else {
                 let owner = result.unwrap();
@@ -405,7 +405,7 @@ fn native_transaction_33_overflow_invalid_plan_and_nested_named_arena() {
         );
         plan.root.patches.clear();
         let owner = prepare_commit(ctx, &mut *outer, &plan).unwrap();
-        assert_eq!((*ctx).region, &mut *inner);
+        assert_eq!((*ctx).region, ptr::from_mut(&mut *inner));
         let block = hirsel_rt_v2_arena_alloc(ctx, &mut *inner, 2, 8, 8, 0);
         payload(block).cast::<u64>().write(29);
         assert_eq!(payload(block).cast::<u64>().read(), 29);
@@ -456,5 +456,36 @@ fn native_transaction_33_receiver_reads_copied_headers_after_source_worker_exit(
                 .heaps()
                 .all(|heap| (*heap).regions.owned_bytes() == 0)
         );
+    });
+}
+
+#[test]
+fn native_transaction_33_semantic_heap_in_compiler_region_still_charges_and_copies() {
+    with_context(|ctx| unsafe {
+        let mut compiler = enter(ctx);
+        let physical = hirsel_rt_v2_arena_alloc(ctx, &mut *compiler, 2, 8, 8, 0);
+        payload(physical).cast::<u64>().write(97);
+        let mut arena = enter(ctx);
+        let mut source = physical;
+        let mut plan = root_plan((&raw mut source).cast(), 4, 8, 8);
+        plan.root.patches.push(patch(0, 0));
+        plan.blocks.push(block(physical, 2, 8, Placement::Evacuate));
+        hirsel_rt_v2_arena_bound(ctx, &mut *arena, 7);
+        assert_eq!(
+            prepare_commit(ctx, &mut *arena, &plan),
+            Err(Error::Exhausted)
+        );
+        hirsel_rt_v2_arena_bound(ctx, &mut *arena, 8);
+        let owner = prepare_commit(ctx, &mut *arena, &plan).unwrap();
+        assert_eq!(arena.remaining, 0);
+        let moved = root(owner).cast::<*mut Header>().read();
+        assert_ne!(moved, physical);
+        assert_eq!(hirsel_rt_v2_region_exit(ctx, &mut *arena, 0, 0), 0);
+        assert_eq!(hirsel_rt_v2_region_exit(ctx, &mut *compiler, 0, 0), 0);
+        drop(arena);
+        drop(compiler);
+        crate::count::check_live_block(&*ctx, moved);
+        assert_eq!(payload(moved).cast::<u64>().read(), 97);
+        drop_owner(ctx, owner);
     });
 }

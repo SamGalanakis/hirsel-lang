@@ -123,7 +123,10 @@ impl Plan {
                         .checked_add(size_of::<*mut Header>())
                         .is_some_and(|end| end <= extent)
                     && words.insert(patch.offset)
-            })
+            }) && words
+                .iter()
+                .zip(words.iter().skip(1))
+                .all(|(left, right)| right - left >= size_of::<*mut Header>())
         };
         let mut sources = BTreeSet::new();
         if !extent_valid(self.root.extent, self.root.align)
