@@ -1,0 +1,23 @@
+// rule: LANG-1
+// expect: run
+// boundary: written if-let grouping and standalone comments before else are stable.
+fn choose() -> u64 {
+  let n = (if let Some(x) = Some(1u64) {
+    x
+  } else {
+    0u64
+  } // condition
+  ) + 1
+  if n == 2 {
+    1
+  }
+  /* standalone else */
+  else {
+    0
+  }
+}
+
+pub fn main() -> Result[(), ()] {
+  failure.check(choose() == 1, Arithmetic())
+  Ok(())
+}

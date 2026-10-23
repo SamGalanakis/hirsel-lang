@@ -244,6 +244,9 @@ pub(crate) fn merge(
             } else {
                 append_gap(&mut out, &gap);
                 gap.clear();
+                if !c.trailing && !out.is_empty() {
+                    newline(&mut out, indent);
+                }
                 if !out.is_empty() && !out.ends_with(' ') && !out.ends_with('\n') {
                     out.push(' ');
                 }

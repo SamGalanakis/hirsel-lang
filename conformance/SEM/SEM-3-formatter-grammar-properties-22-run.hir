@@ -1,0 +1,12 @@
+// rule: SEM-3
+// expect: run
+// boundary: interpolation and repeat literals retain comment-protecting parentheses.
+pub fn main() -> Result[(), ()] {
+  let same = (f"{1u64}" // interpolation
+  ) == "1"
+  failure.check(same, TextInvariant())
+  let values: Inline[u64, 2] = ([1u64; 2] // repeat
+  )
+  failure.check(values[0] == 1 && values[1] == 1, Arithmetic())
+  Ok(())
+}

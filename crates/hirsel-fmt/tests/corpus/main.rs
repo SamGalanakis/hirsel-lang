@@ -1,5 +1,7 @@
 hirsel_guard::install!();
 
+include!("modules.rs");
+
 use hirsel_span::{SourceMap, Span};
 use hirsel_syntax::*;
 fn parse(source: &str) -> (SyntaxFile, SourceMap, bool) {
@@ -219,7 +221,7 @@ fn semantic_content_ignores_comment_protection_and_analysis_but_keeps_structure(
 
 #[test]
 fn real_spec_examples_reparse_to_equal_trees_and_match_the_hand_built_goldens() {
-    let source = include_str!("fixtures/spec-overview-original.hir");
+    let source = include_str!("../fixtures/spec-overview-original.hir");
     let (original, sources, errors) = parse(source);
     assert!(!errors);
     let formatted = hirsel_fmt::format(&original, &sources);
@@ -228,7 +230,7 @@ fn real_spec_examples_reparse_to_equal_trees_and_match_the_hand_built_goldens() 
         formatted.source,
         format!(
             "{}\n",
-            include_str!("fixtures/spec-overview.hir").trim_end()
+            include_str!("../fixtures/spec-overview.hir").trim_end()
         )
     );
     let (reparsed, new_sources, errors) = parse(&formatted.source);
@@ -275,8 +277,8 @@ fn outer_uses_survives_function_typed_results() {
 
 #[test]
 fn leading_header_blank_line_matches_golden_and_is_idempotent() {
-    let source = include_str!("fixtures/leading-header-original.hir");
-    let expected = include_str!("fixtures/leading-header.hir");
+    let source = include_str!("../fixtures/leading-header-original.hir");
+    let expected = include_str!("../fixtures/leading-header.hir");
     let (file, sources, errors) = parse(source);
     assert!(!errors);
     let formatted = hirsel_fmt::format(&file, &sources);

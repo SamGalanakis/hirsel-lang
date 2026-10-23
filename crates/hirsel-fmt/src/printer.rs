@@ -321,7 +321,10 @@ impl<'a> Printer<'a> {
             let mut result = self.ty(t)?;
             // A following uses clause must belong to this header. Function and
             // box types greedily consume it unless the result is delimited.
-            if sig.uses.is_some() && self.result_accepts_uses(t)? {
+            if sig.uses.is_some()
+                && self.result_accepts_uses(t)?
+                && !self.comment_group(self.tree.types.get(t.0 as usize)?.origin)
+            {
                 result = cat([token("("), result, token(")")]);
             }
             ds.extend([Space, token("->"), Space, result]);
@@ -821,6 +824,16 @@ impl<'a> Printer<'a> {
     fn expr(&self, id: ExprId, minimum: u8) -> Printed {
         self.expr_inner(id, minimum)
     }
+    fn protect_expr(&self, e: &Expr, doc: Doc, precedence: u8, minimum: u8) -> Doc {
+        // Written forms reconstructed from desugaring need the same comment
+        // protection as ordinary expressions, including before projections.
+        let grouped_comment = !matches!(e.kind, ExprKind::Tuple(_)) && self.comment_group(e.origin);
+        if precedence < minimum || grouped_comment {
+            cat([token("("), doc, token(")")])
+        } else {
+            doc
+        }
+    }
     /// A written f-string, in place of the block the parser desugared it to.
     /// A hole starting with `{` is spaced so it cannot read as an escaped `{{`.
     fn format_string(&self, format: &FormatString) -> Printed {
@@ -872,20 +885,21 @@ impl<'a> Printer<'a> {
         .into()
     }
     fn expr_inner(&self, id: ExprId, minimum: u8) -> Printed {
+        let e = self.tree.expressions.get(id.0 as usize)?;
         if let Some(format) = self.formats.get(&id) {
-            return self.format_string(format);
+            return Some(self.protect_expr(e, self.format_string(format)?, 13, minimum));
         }
         if let Some(repeat) = self.repeats.get(&id) {
-            return Some(cat([
+            let doc = cat([
                 token("["),
                 self.expr(repeat.value, 0)?,
                 token(";"),
                 Space,
                 self.expr(repeat.count, 0)?,
                 token("]"),
-            ]));
+            ]);
+            return Some(self.protect_expr(e, doc, 13, minimum));
         }
-        let e = self.tree.expressions.get(id.0 as usize)?;
         if let Some(LetCondition::If { otherwise, .. }) = self.conditions.get(&id) {
             let mut ds = vec![token("if"), Space, self.let_condition(id)?];
             if let (true, ExprKind::Match { arms, .. }) = (otherwise, &e.kind) {
@@ -896,7 +910,7 @@ impl<'a> Printer<'a> {
                     self.expr(arms.get(1)?.body, 0)?,
                 ]);
             }
-            return Some(cat(ds));
+            return Some(self.protect_expr(e, cat(ds), 13, minimum));
         }
         let precedence = match &e.kind {
             ExprKind::Binary { op, .. } => binary(*op).1,
@@ -1136,14 +1150,7 @@ impl<'a> Printer<'a> {
             }
             ExprKind::Error => return None,
         };
-        // A comment-induced newline before a postfix/binary operator must not
-        // become a statement END, even when the parser omitted group delimiters.
-        let grouped_comment = !matches!(e.kind, ExprKind::Tuple(_)) && self.comment_group(e.origin);
-        Some(if precedence < minimum || grouped_comment {
-            cat([token("("), doc, token(")")])
-        } else {
-            doc
-        })
+        Some(self.protect_expr(e, doc, precedence, minimum))
     }
 }
 fn literal(l: &Literal) -> Doc {
