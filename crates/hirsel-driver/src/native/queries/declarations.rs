@@ -18,6 +18,7 @@ pub struct NativeDeclarations {
     pub program: Program,
     pub context: DiscoveryContext,
     pub sources: BTreeMap<DefPath, NativeDefinitionProduct>,
+    pub source_anchors: BTreeMap<DefPath, Vec<hirsel_span::Anchor>>,
     pub discoveries: Vec<ProductRef>,
     pub constant_definitions: Vec<DefPath>,
 }
@@ -103,6 +104,7 @@ impl NativeDeclarations {
         let mut context = DiscoveryContext::default();
         let mut sources = BTreeMap::new();
         let mut discoveries = Vec::new();
+        let mut source_anchors = BTreeMap::new();
         let mut graph = InstanceGraph::default();
         let mut source_constants = BTreeSet::new();
         for path in &roots.definitions {
@@ -112,6 +114,13 @@ impl NativeDeclarations {
             {
                 context.sources.insert(path.clone(), declaration);
             }
+            source_anchors.insert(
+                path.clone(),
+                product.contracts.as_ref().map_or_else(
+                    || vec![product.source.source.syntax.anchor],
+                    |c| c.source_anchors.clone(),
+                ),
+            );
             if let Some(product) = product.product {
                 discoveries.push(product);
             }
@@ -182,6 +191,7 @@ impl NativeDeclarations {
             program,
             context,
             sources,
+            source_anchors,
             discoveries,
             constant_definitions: statics.definitions,
         })

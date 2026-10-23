@@ -193,6 +193,19 @@ fn native_discovery_cache_reuses_requirements_without_demanding_source_bodies() 
         let expected_parameters = parameter_contract(&first, contracts);
         let body = first.native_definition_body(&seed.source).unwrap();
         let expected_declaration = hirsel_rc::instance::SourceDeclaration::of(&body).unwrap();
+        assert_eq!(contracts.source_anchors, hirsel_tir::source_anchors(&body));
+        let source_positions = |engine: &QueryEngine, anchors: &[hirsel_span::Anchor]| {
+            anchors
+                .iter()
+                .map(|anchor| {
+                    let (file, base) = engine.sources.anchor(*anchor).unwrap();
+                    (engine.sources.file(file).unwrap().path.clone(), base)
+                })
+                .collect::<Vec<_>>()
+        };
+        let expected_positions = source_positions(&first, &contracts.source_anchors);
+        let owning_codec = NativeRecords::new(first.types().clone(), store.clone());
+        let recipe = owning_codec.encode(&first, contracts).unwrap();
         drop(body);
         assert!(!seed.requirements.edges.is_empty());
         assert_eq!(queries.counts.body_demands, 1);
@@ -201,12 +214,29 @@ fn native_discovery_cache_reuses_requirements_without_demanding_source_bodies() 
         drop(first);
         let mut fresh = session();
         fresh.adapters.lowering = None;
+        assert!(
+            owning_codec
+                .decode::<NativeBodyContracts>(&fresh, &recipe)
+                .is_none(),
+            "a codec cannot bind TypeIds into another session's interner"
+        );
+        let relocated_codec = NativeRecords::new(fresh.types().clone(), store.clone());
+        let relocated: NativeBodyContracts = relocated_codec.decode(&fresh, &recipe).unwrap();
+        assert_ne!(relocated.source_anchors, contracts.source_anchors);
+        assert_eq!(
+            source_positions(&fresh, &relocated.source_anchors),
+            expected_positions
+        );
         let mut queries = NativeDiscoveryCache::new(fresh.types().clone(), store);
         let read = queries
             .definition(&mut fresh, &path("outer"), &selected)
             .unwrap();
         assert_eq!(queries.counts.hits, 1);
         assert_eq!(queries.counts.body_demands, 0);
+        assert_eq!(
+            source_positions(&fresh, &read.contracts.as_ref().unwrap().source_anchors),
+            expected_positions
+        );
         let declaration = native::queries::source::source_declaration(&read)
             .unwrap()
             .unwrap();

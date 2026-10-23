@@ -34,6 +34,8 @@ mod program_revision;
 pub use program_revision::ForeignUse;
 pub(crate) use program_revision::SemanticProgram;
 mod native_discovery;
+mod native_records;
+pub use native_records::NativeRecords;
 mod persistent;
 pub use native_discovery::*;
 mod retention;
