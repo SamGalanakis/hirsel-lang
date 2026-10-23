@@ -79,8 +79,7 @@ pub trait ObjectTaskSnapshot: Send + Sync {
     fn link_dependencies(&self, manifest: ProductRef) -> Result<LinkDependencies, Reference>;
     /// Resolve a settled static/runtime/foreign/launch record to its content.
     fn link_input(&self, product: ProductRef) -> Result<Reference, Reference>;
-    fn products(&self, settled: &[ProductRef])
-    -> Result<Box<dyn ObjectProducts + Send>, Reference>;
+    fn products(&self, settled: &[ProductRef]) -> Result<Box<dyn ObjectProducts>, Reference>;
     fn failure(&self, message: &str) -> Reference;
 }
 
