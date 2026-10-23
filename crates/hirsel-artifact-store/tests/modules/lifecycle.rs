@@ -44,6 +44,8 @@ fn pins_cache_absence_clone_and_hold_unlinked_backings() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     let absent = load_pinned(root).unwrap();
+    assert!(absent.retained_bytes() > 0);
+    assert_eq!(absent.retained_bytes(), absent.clone().retained_bytes());
     published(publish(root, &[entry(1)]));
     assert_eq!(find(&absent, entry(1).key), None);
     let old = load_pinned(root).unwrap();

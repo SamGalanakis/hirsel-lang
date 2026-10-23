@@ -46,7 +46,11 @@ impl PinnedGeneration {
     /// Full retained mappings plus directory/block/bucket allocations, including
     /// unlinked inodes. Shared clones must be charged once by their owner.
     pub(crate) fn retained_bytes(&self) -> u64 {
-        self.0.iter().map(Layer::retained_bytes).sum()
+        // Include spare Vec capacity and the Arc allocation even for absence.
+        let shared = size_of::<Vec<Layer>>()
+            + 2 * size_of::<usize>()
+            + self.0.capacity() * size_of::<Layer>();
+        shared as u64 + self.0.iter().map(Layer::retained_bytes).sum::<u64>()
     }
 }
 pub(crate) struct PreparedDelta {

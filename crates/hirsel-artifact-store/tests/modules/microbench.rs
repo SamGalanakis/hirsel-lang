@@ -11,7 +11,9 @@ use std::{
 fn read_keys(path: &Path) -> Vec<Key> {
     fs::read(path)
         .unwrap()
-        .chunks_exact(33)
+        .as_chunks::<33>()
+        .0
+        .iter()
         .map(|b| Key {
             kind: match b[0] {
                 0 => KeyKind::Content,
@@ -56,7 +58,9 @@ fn publish_entries(path: &Path, header: usize) -> Vec<Entry> {
         raw.len() / 88
     };
     let mut entries: Vec<_> = raw[header..header + n * 88]
-        .chunks_exact(88)
+        .as_chunks::<88>()
+        .0
+        .iter()
         .map(|r| Entry {
             key: Key {
                 kind: if r[0] == 0 {

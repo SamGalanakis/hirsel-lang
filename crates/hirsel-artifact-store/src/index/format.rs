@@ -407,8 +407,7 @@ impl Layer {
         (self.backing.bytes().len()
             + self.directory.capacity() * 4
             + self.blocks.capacity()
-            + self.buckets.capacity()
-            + size_of::<Self>()) as u64
+            + self.buckets.capacity()) as u64
     }
     pub(super) fn rows(&self) -> usize {
         self.rows
