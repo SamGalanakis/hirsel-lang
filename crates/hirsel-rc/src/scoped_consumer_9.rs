@@ -69,6 +69,7 @@ pub(crate) fn specialize(
                 units: lowered.units.clone(),
                 table: lowered.table.clone(),
                 origins: result.origins.clone(),
+                keys: result.keys.clone(),
                 inline: result.inline.clone(),
                 baseline,
                 target: target.clone(),
@@ -91,6 +92,7 @@ pub(crate) fn specialize(
                 lowered.units = transaction.units;
                 lowered.table = transaction.table;
                 result.origins = transaction.origins;
+                result.keys = transaction.keys;
                 result.inline = transaction.inline;
                 changed = true;
                 break;
@@ -412,6 +414,7 @@ struct Transaction {
     units: Vec<Unit>,
     table: LayoutTable,
     origins: Vec<crate::instance::InstanceId>,
+    keys: Vec<hirsel_layout::instance::InstanceKey>,
     inline: BTreeSet<ContentHash>,
     baseline: usize,
     target: hirsel_lir::TargetSpec,
@@ -426,6 +429,7 @@ impl Transaction {
         mut abi: FnAbi,
         types: &[LirType],
         domain: &str,
+        source_key: hirsel_layout::instance::InstanceKey,
     ) -> Result<(usize, bool), ()> {
         let owner = self.origins[original];
         for ty in types {
@@ -466,10 +470,11 @@ impl Transaction {
             hirsel_lir::abi::scoped_contract_digest(&abi.nonretaining, &abi.nonretaining_captures);
         let key = hirsel_lir::LayoutKeys::new(&self.table).fn_abi(&abi);
         let encoded = ContentHash::of_parts(domain, [key.0.as_slice()]);
-        u.header.instance = ContentHash::of_parts(
+        let effective = source_key.derived(
             "hirsel.scoped-explicit-captures.v1",
-            [u.header.instance.0.as_slice(), encoded.0.as_slice()],
+            &[encoded.0.as_slice()],
         );
+        u.header.instance = effective.digest();
         abi.key.callable = ContentHash::of_parts(
             "hirsel.scoped-direct-abi.v1",
             [abi.key.callable.0.as_slice(), encoded.0.as_slice()],
@@ -489,6 +494,7 @@ impl Transaction {
         self.inline.insert(u.header.instance);
         self.units.push(u);
         self.origins.push(owner);
+        self.keys.push(effective);
         Ok((self.units.len() - 1, true))
     }
     fn capture_body(&mut self, body: usize, types: &[LirType]) -> Result<usize, ()> {
@@ -509,8 +515,15 @@ impl Transaction {
         }
         u.parameters.append(&mut u.captures);
         abi.nonretaining_captures.clear();
-        self.append(u, body, abi, types, "scoped-capture-body")
-            .map(|(i, _)| i)
+        self.append(
+            u,
+            body,
+            abi,
+            types,
+            "scoped-capture-body",
+            self.keys[body].clone(),
+        )
+        .map(|(i, _)| i)
     }
     fn consumer(
         &mut self,
@@ -535,14 +548,14 @@ impl Transaction {
         {
             return Err(());
         }
-        u.header.instance = ContentHash::of_parts(
+        let source_key = self.keys[original].derived(
             "hirsel.scoped-consumer-target.v1",
-            [
-                u.header.instance.0.as_slice(),
+            &[
                 self.units[entry].header.instance.0.as_slice(),
                 &parameter.to_le_bytes(),
             ],
         );
+        u.header.instance = source_key.digest();
         let root = *u.parameters.get(parameter as usize).ok_or(())?;
         let aliases = aliases(&u, root)?;
         let unit = self
@@ -571,7 +584,8 @@ impl Transaction {
             u.parameters.push(v);
             values.push(v);
         }
-        let (i, created) = self.append(u, original, abi, types, "scoped-consumer-body")?;
+        let (i, created) =
+            self.append(u, original, abi, types, "scoped-consumer-body", source_key)?;
         self.cache.insert(key, i);
         if !created {
             self.active.remove(&key);

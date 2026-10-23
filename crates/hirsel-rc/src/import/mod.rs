@@ -106,6 +106,9 @@ pub struct Lowered {
     /// appends Value units without adding source instances: a unit index must
     /// be mapped through this table before indexing `instances`.
     pub unit_origins: Vec<InstanceId>,
+    /// Effective identities include selected callable/scoped implementations;
+    /// unit_origins retains the separate lexical proof owner.
+    pub unit_keys: Vec<hirsel_layout::instance::InstanceKey>,
     /// Explicit semantic owner of each native definition. None denotes a planned
     /// library body covered by the shared runtime node in ProgramRevision.
     pub semantic_owners: BTreeMap<DefPath, Option<DefPath>>,
@@ -452,6 +455,7 @@ pub fn lower_cached(
         table,
         statics,
         unit_origins: Vec::new(),
+        unit_keys: Vec::new(),
         semantic_owners,
         inline_instances: Default::default(),
         discharged,
@@ -465,6 +469,7 @@ pub fn lower_cached(
     );
     specialized.assert_origins(&lowered);
     lowered.unit_origins = specialized.origins;
+    lowered.unit_keys = specialized.keys;
     lowered.inline_instances = specialized.inline;
     crate::arena_credit::summarize(&mut lowered.units, &mut lowered.table);
     Ok(lowered)
