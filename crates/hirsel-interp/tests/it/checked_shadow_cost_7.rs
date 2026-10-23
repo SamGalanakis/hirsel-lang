@@ -259,6 +259,7 @@ fn frame(tree: Shadow, projection: Vec<hirsel_tir::Projection>) -> crate::frame:
     let body = Body {
         parameter_scope: hirsel_syntax::LexicalOwner::first(&path)
             .site(hirsel_types::NameSite::Item),
+        arena_scope_grant: None,
         scoped_parameters: Vec::new(),
         borrow_cursors: Vec::new(),
         locals: (0..3)

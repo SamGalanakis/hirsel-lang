@@ -15,6 +15,7 @@ use hirsel_syntax::{
     PatternId, SiteRef, StmtId, TypeExprId, UnaryOp, Visibility,
 };
 use hirsel_tir::{
+    ArenaScopeGrant,
     Block, BlockId, Body, BodyId, BorrowCursor, CallArgument, CallReturn, Callee, Cleanup,
     CleanupAction, CleanupId, CleanupNode, CleanupNodeId, Constant, ConstructField, Constructor,
     Definition, Instruction, InstructionKind, LoanId, Local, LocalId, MatchArm, MatchPattern,
@@ -990,9 +991,11 @@ snapshot_struct!(TailSite {
     owned_loop_arguments
 } in Cx);
 snapshot_struct!(ScopedParameter { parameter, fields } in Cx);
+snapshot_struct!(ArenaScopeGrant { intrinsic, callback_parameter, arena_parameter } in Cx);
 snapshot_enum!(CaptureContext { Scoped, OwningScoped, Escaping, Task } in Cx);
 snapshot_struct!(BorrowCursor { carrier, initializer, cover } in Cx);
 snapshot_struct!(Body {
+    arena_scope_grant,
     parameter_scope,
     locals,
     places,

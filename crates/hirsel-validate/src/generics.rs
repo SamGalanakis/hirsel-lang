@@ -198,6 +198,7 @@ impl Checker<'_> {
                         BuiltinType::Ptr
                             | BuiltinType::FnPtr
                             | BuiltinType::SlotId
+                            | BuiltinType::Region
                             | BuiltinType::TypeShape
                     ) {
                         continue;

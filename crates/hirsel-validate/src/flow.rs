@@ -28,6 +28,8 @@ pub(super) mod lifetimes;
 mod loan_content;
 #[path = "state_proof.rs"]
 mod state_proof;
+#[path = "seal_flow.rs"]
+mod seal_flow;
 #[path = "tags.rs"]
 pub(super) mod tags;
 #[path = "uniqueness.rs"]
@@ -535,6 +537,13 @@ impl Model {
             for (p, l) in f.parameters.iter().zip(&body.parameters) {
                 borrowed[l.0 as usize] = p.passing != PassingMode::Take;
                 mutable_parameters[l.0 as usize] = p.passing == PassingMode::Mut;
+            }
+        }
+        // The independent entry/use proof runs before any flow model is built.
+        // Only that contextual callback's designated formal owns the grant.
+        if let Some(grant) = &body.arena_scope_grant {
+            if let Some(local) = body.parameters.get(grant.arena_parameter.0 as usize) {
+                borrowed[local.0 as usize] = false;
             }
         }
         if checker.site.body == checker.definition.entry
@@ -5685,6 +5694,7 @@ impl Checker<'_> {
                 on_failure,
             } => {
                 let protocol = self.consuming_protocol(callee);
+                self.seal_flow(model, state, callee, arguments, report);
                 let protocol_unique = protocol
                     && arguments.first().is_some_and(|a| {
                         matches!(a.value.usage, UseKind::Take | UseKind::Mut)

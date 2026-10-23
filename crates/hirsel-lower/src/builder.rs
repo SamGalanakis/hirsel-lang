@@ -127,6 +127,7 @@ impl<'a, 'b> Builder<'a, 'b> {
             types,
             projection_paths: Default::default(),
             body: Body {
+                arena_scope_grant: None,
                 scoped_parameters: Vec::new(),
                 parameter_scope: decisions.lexical.site(owner),
                 locals: vec![],
@@ -178,6 +179,26 @@ impl<'a, 'b> Builder<'a, 'b> {
             joining: None,
         };
         this.current = Some(this.block(Span::default()));
+        if let NameSite::Expression(literal) = owner {
+            for call in &input.checked.calls {
+                let hirsel_types::CallTarget::Definition(path) = &call.target else {
+                    continue;
+                };
+                let Some(slot) = hirsel_types::core_roles::arena_scope_callback(path) else {
+                    continue;
+                };
+                if call.arguments.iter().any(|argument| {
+                    argument.expression == literal
+                        && argument.parameter.as_ref().is_some_and(|(p, _)| *p == slot)
+                }) {
+                    this.body.arena_scope_grant = Some(ArenaScopeGrant {
+                        intrinsic: path.clone(),
+                        callback_parameter: hirsel_types::ParamId(slot),
+                        arena_parameter: hirsel_types::ParamId(0),
+                    });
+                }
+            }
+        }
         if input.plans.evaluation_frame && owner == input.owner {
             return Ok(this);
         }

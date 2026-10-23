@@ -45,7 +45,7 @@ use std::sync::Arc;
 /// v8: declared dictionary callable actuals and explicit constant alias edges.
 /// v9: source scoped selectors and closure classification.
 /// v10: independently checked fixed-origin borrow-cursor claims.
-pub const FORMAT: &str = "hirsel.tir.export.v10";
+pub const FORMAT: &str = "hirsel.tir.export.v11";
 /// PS-5.
 pub const TIR_DIGEST_DOMAIN: &str = "hirsel.tir.digest.v1";
 /// PS-6.

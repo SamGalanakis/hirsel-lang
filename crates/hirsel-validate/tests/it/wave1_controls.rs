@@ -436,6 +436,7 @@ fn captured_inactive_payload(present: bool) -> Fixture {
     let choice = f.body().places[3].ty;
     let scope = scoped(NameSite::Statement(hirsel_syntax::StmtId(8)));
     let child = Body {
+        arena_scope_grant: None,
         scoped_parameters: Vec::new(),
         parameter_scope: scope,
         locals: vec![

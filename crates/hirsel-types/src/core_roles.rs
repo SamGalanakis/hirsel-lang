@@ -48,6 +48,18 @@ pub enum Intrinsic {
     UnsafeOperation,
 }
 
+/// The reviewed core arena callback slot which supplies a consumable scope grant.
+/// This identifies a contract, not evidence that a particular callable has that entry.
+pub fn arena_scope_callback(path: &DefPath) -> Option<u32> {
+    if path.is_core("arena.with") {
+        Some(0)
+    } else if path.is_core("arena.bounded") {
+        Some(1)
+    } else {
+        None
+    }
+}
+
 /// Checker dispatch is by nominal path and typed authority role.
 /// A user same-spelled function has no role.
 pub fn intrinsic_roles() -> Vec<(DefPath, Intrinsic)> {

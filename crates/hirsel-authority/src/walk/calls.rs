@@ -1447,10 +1447,15 @@ impl Checker<'_> {
                     borrowed: p.passing == PassingMode::Borrow,
                     result: false,
                 });
-                let kept = p.passing != PassingMode::Take || {
-                    let argument = self.span(arguments[i].value);
-                    self.keeps_placement(*actual, expected, argument, false)
-                };
+                // Seal transfers the designated arena's storage. I proves
+                // closure over that grant and the heap before ownership flow
+                // publishes its result; an ordinary taken parameter cannot do this.
+                let kept = intrinsic == Some(Intrinsic::ArenaSeal) && i == 1
+                    || p.passing != PassingMode::Take
+                    || {
+                        let argument = self.span(arguments[i].value);
+                        self.keeps_placement(*actual, expected, argument, false)
+                    };
                 let valid = kept
                     && self.compatible(*actual, receiving_expected, span, intrinsic, false)
                     && (p.passing != PassingMode::Mut

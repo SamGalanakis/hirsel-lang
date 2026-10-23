@@ -15,6 +15,7 @@ mod cursors;
 mod loans;
 mod parameter_parts;
 mod state;
+mod sealed;
 use hirsel_modes::explain::{Cause, Explanation, Fact, Requirement};
 use loans::{Kind, Loan, LoanSet, On, Site};
 
@@ -2161,6 +2162,22 @@ impl Checker<'_, '_> {
             )
     }
     fn parameter_passing(&self, owner: &NameSite, parameter: ParamId) -> PassingMode {
+        if parameter == ParamId(0)
+            && let NameSite::Expression(literal) = owner
+            && self.body.calls.iter().any(|call| {
+                let CallTarget::Definition(path) = &call.target else {
+                    return false;
+                };
+                hirsel_types::core_roles::arena_scope_callback(path).is_some_and(|slot| {
+                    call.arguments.iter().any(|argument| {
+                        argument.expression == *literal
+                            && argument.parameter.as_ref().is_some_and(|(p, _)| *p == slot)
+                    })
+                })
+            })
+        {
+            return PassingMode::Take;
+        }
         if let NameSite::Item = owner {
             if let SignatureKind::Function(f) = &self.own.kind {
                 return f
@@ -6638,6 +6655,9 @@ impl Checker<'_, '_> {
                 state.argument_loans.retain(|_, loan| loan.1 != *expression);
                 let mut failed = state.argument_conflicts.remove(expression)
                     || arguments.iter().any(|a| self.value(state, a.value).invalid);
+                if !failed && !self.seal_entry(state, *expression, arguments, requirements) {
+                    failed = true;
+                }
                 if !failed
                     && !self.replacement_content(
                         state,

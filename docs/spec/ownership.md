@@ -602,6 +602,21 @@ reaches each tracked block and traps when another task uses it
 
 ### OWN-7: Uniqueness test
 
+The core arena scope callback's consumable grant is an affine entry permission
+([MEM-4](memory.md#mem-4-arenas)), even though its parameter retains the borrowed
+`fn(a: Arena)` spelling. Ordinary borrowed Arena parameters supply no such permission.
+Consuming the grant transfers only the root's own custody loan; all other live views,
+including later closure captures and cleanup uses, must have ended. An explicit taken
+Arena helper transfers the same permission and cannot recreate it. Branch joins retain
+the possibility of consumption, so a later use requires the grant live on every path.
+
+`Region[T]` is noncopyable and owns one DROP-2 cleanup obligation. Its complete T evidence
+determines sendability: `Region[unique List[u64]]` can cross with that proof preserved;
+`Region[List[u64]]` alone supplies no crossing proof. `region.with` reserves its owner
+exclusively and supplies a read-only, invocation-bounded payload view with no new owning
+credits. Neither taking a projected noncopyable part nor returning a nested borrowed
+field or capture can turn that view into ownership.
+
 A block whose count says it has one holder may be mutated or reused in place. Region and
 arena blocks, and blocks inside a `Shared`, carry no count. Published region and `Shared`
 blocks are never mutated; the unpublished builder phase

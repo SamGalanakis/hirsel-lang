@@ -1455,6 +1455,18 @@ impl Checker<'_, '_> {
                     }
                 }
                 let child = self.frame(NameSite::Expression(id), Some(frame), &f, &signature);
+                // MEM-4 grants custody only to a literal in the reviewed core
+                // callback slot. Its public callable header stays borrow-only.
+                let scope_grant = self.arena_scope_literal(id);
+                if scope_grant {
+                    for binding in &mut self.body.bindings {
+                        if binding.owner == NameSite::Expression(id)
+                            && binding.binding == ResolvedName::Parameter(ParamId(0))
+                        {
+                            binding.usage = UseKind::Take;
+                        }
+                    }
+                }
                 if inferred && expected.is_none() {
                     self.frames[child].result = None;
                 }

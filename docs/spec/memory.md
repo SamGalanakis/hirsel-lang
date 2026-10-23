@@ -58,12 +58,55 @@ collections and otherwise detaches onto the heap. Arena blocks carry no count; t
 blocks they hold are released when the arena closes.
 `copy_to(heap, x)` deep-copies out of an arena (an allocation site).
 
-`arena.seal(take a, take root) -> Region[T]` first copies every heap block the arena holds
-into the arena, so a region owns all of its storage, then turns the arena and root into a
-resource that may move between tasks when `T` is sendable. Sealing is an allocation site,
-consumes the arena grant and accepts a root stored there or on the heap; a sealed region
-accepts no allocation. `region.with(mut r, body)` lends a read-only root and returns only
-results not in `r`. Seal and freeze reject roots containing resources.
+The callback of the reviewed core `arena.with` or `arena.bounded` receives a consumable
+scope grant, using the existing `fn(a: Arena)` spelling. This permission belongs to that
+callback entry, not to arbitrary borrowed Arena parameters or same-spelled user functions.
+A contextual literal can forward the grant through an explicitly taken Arena parameter.
+Named borrow-only callbacks remain valid. The scope retains a separate guard which closes
+the invocation and bounded recovery boundary even after the grant transfers its storage.
+
+`arena.seal(take a, take root) -> Region[T]` consumes the live explicit grant and the owned
+root. It rejects `heap`, resources at any owned payload depth, foreign arena/frame storage,
+and unknown erased contents without a complete proof. Callable captures are payload edges;
+callable parameter and result headers are not. The root may be inline, arena-resident or
+heap-owned and need not be unique. Its own arena loan transfers with it; every other live
+arena view must have ended. No allocation, second seal or old-view use through the consumed
+grant is permitted.
+
+Seal evacuates ordinary heap contents into the arena and transfers the arena storage into
+one affine `Region[T]` resource. Independent nested `Shared` roots remain immutable ownership
+boundaries with their existing MEM-11 root credits; seal neither freezes again nor copies
+through them. An independent heap alias remains unchanged. The lexical arena guard does not
+free transferred storage. Region cleanup is mechanical NoAlloc at DROP-2 points, and movement
+requires the complete root's sendability evidence, including its modes and captures. A sealed
+region exposes no fields, accepts no allocation and contains no user finalizers.
+
+Seal is always MayAllocate, including scalar and empty roots. Before publication it charges
+the MEM-6 tree-copy size of every owned outgoing heap occurrence in the arena's semantic
+retained-allocation inventory, including dead allocations, stopping at Shared boundaries.
+Repeated heap identities count repeatedly. Add a heap root's tree charge, or inline root
+heap fields not already held by an inventory slot; an arena root adds no second inventory
+charge. Semantic COW adds an entry; unique builder replacement updates one entry; growth
+relocation and abandoned empty backing add none. Overflow exceeds every capacity. For
+example, an arena List holding two references to a three-byte heap Bytes costs 16 at
+construction and 6 at seal, even when sealing an unrelated scalar: cap 21 fails at seal,
+cap 22 succeeds. Sealing that List has the same total 22. This inventory rule is part of
+artifact and replay semantic compatibility.
+
+Seal preflights the whole charge before evacuation and publishes only after all fallible
+preparation. Failure publishes no owner and entered-operation cleanup releases grant/root
+once. `arena.bounded` catches only its own sole OutOfSpace, retaining its identity after
+transfer. Seal adds no cancellation point; mechanical evacuation/drop adds no structural
+Depth limit. Invocation admission follows the ordinary call ownership contract.
+
+`region.with(mut r, body)` exclusively borrows the owner and lends a read-only root for
+that invocation. Mut applies to the owner guard, never the payload. The callback cannot
+take/mutate the payload, move/drop the owner or reenter the same owner. Its result must be
+independent at every payload depth: plain bits, independently constructed heap values,
+`copy_to(heap, root)` for copyable T, and copied nested Shared roots qualify. `copy root`
+and bare `unique root` retain placement and cannot escape. Callback failure, suspension
+and cancellation retain the owner and end its loan on every exit. With's own work is
+NoAlloc; callback effects and result cleanup still join into the call under MEM-5.
 
 An escaping environment cannot keep non-plain arena or region content at any owned
 payload depth, tuple, record, variant, box and type-argument components included (PROV-4

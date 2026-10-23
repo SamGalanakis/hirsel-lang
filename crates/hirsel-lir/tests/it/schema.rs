@@ -1956,6 +1956,7 @@ mod instance_keys {
 
 fn tir_coverage_body() -> hirsel_tir::Body {
     hirsel_tir::Body {
+        arena_scope_grant: None,
         scoped_parameters: Vec::new(),
         parameter_scope: hirsel_syntax::LexicalOwner::first(&path("f"))
             .site(hirsel_types::NameSite::Item),

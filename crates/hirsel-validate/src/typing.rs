@@ -286,6 +286,7 @@ pub(super) fn constant_valid(c: &Constant, kind: &TypeKind) -> bool {
 
 impl<'a> Checker<'a> {
     pub(super) fn types(&mut self) {
+        self.arena_scope_entry();
         self.match_tables();
         let declarations = self.generic_declarations();
         if self
@@ -1851,6 +1852,7 @@ impl<'a> Checker<'a> {
         actuals: &BTreeMap<ParameterRef, TypeId>,
         value: &Operand,
         preserves_state: bool,
+        seal_payload: bool,
     ) {
         let place = value.place;
         let target = self.t;
@@ -1977,6 +1979,18 @@ impl<'a> Checker<'a> {
         };
         // PROV-4: a taken value is the callee's to keep, so an unplaced take
         // parameter cannot receive an arena value; a borrow cannot keep it.
+        let expected = if seal_payload {
+            // MEM-4 is a storage transfer. seal_flow independently proves the
+            // actual grant, complete closure and absence of other live views.
+            let mut row = target.row(expected).clone();
+            row.modes.relation = row
+                .modes
+                .relation
+                .union(&self.placement(&target.row(actual).modes.relation));
+            target.intern(row)
+        } else {
+            expected
+        };
         let laundered = value.usage == UseKind::Take
             && !self.placed(&target.get(expected).unwrap().modes.relation)
             && self.placed(&target.get(actual).unwrap().modes.relation);
@@ -2142,6 +2156,9 @@ impl<'a> Checker<'a> {
         destination: Option<PlaceId>,
         origins: Option<&super::flow_origins::CallOriginProof>,
     ) {
+        if matches!(callee, Callee::Definition { path, .. } if path.is_core("arena.seal")) {
+            self.seal_type(arguments);
+        }
         let (store, f, generics) = match callee {
             Callee::Definition { path, arguments } => {
                 self.table_key_arguments(path, arguments);
@@ -2411,6 +2428,16 @@ impl<'a> Checker<'a> {
                 });
                 continue;
             };
+            if p.passing == PassingMode::Take
+                && self.arena_type(p.ty)
+                && self
+                    .t
+                    .row(self.place_type(a.value.place))
+                    .allocation_target
+                    .is_some()
+            {
+                self.error(ViolationKind::InvalidUse(a.value.place));
+            }
             if let Some(origins) = origins {
                 self.parameter_type(
                     p.ty,
@@ -2427,6 +2454,8 @@ impl<'a> Checker<'a> {
                             && promise.selector.fields.is_empty()
                             && promise.preserve_captures
                     }),
+                    matches!(callee, Callee::Definition { path, .. } if path.is_core("arena.seal"))
+                        && a.parameter.0 == 1,
                 );
             }
             let plain_take_borrow = p.passing == PassingMode::Borrow

@@ -73,6 +73,7 @@ impl Builder {
         Self {
             types,
             body: Body {
+                arena_scope_grant: None,
                 scoped_parameters: Vec::new(),
                 parameter_scope: item_scope(),
                 locals: vec![],

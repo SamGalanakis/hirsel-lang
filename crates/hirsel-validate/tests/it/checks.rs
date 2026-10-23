@@ -803,6 +803,7 @@ fn closure_fixture() -> Fixture {
     });
     let capture_ty = f.body().places[1].ty;
     let nested = Body {
+        arena_scope_grant: None,
         scoped_parameters: Vec::new(),
         parameter_scope: scoped(hirsel_types::NameSite::Item),
 

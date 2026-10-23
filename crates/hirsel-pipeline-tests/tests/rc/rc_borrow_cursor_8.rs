@@ -389,6 +389,7 @@ fn install_loop_body(input: &mut hirsel_engine::NativeInput) {
         }],
         tail_sites: vec![],
         matches: vec![],
+        arena_scope_grant: None,
         scoped_parameters: vec![],
     };
     body.add_cleanup(vec![CleanupAction::EndLoan {

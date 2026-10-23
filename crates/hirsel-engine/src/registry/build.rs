@@ -578,6 +578,9 @@ pub(crate) fn registry(types: &Arc<TypeInterner>) -> BTreeMap<DefId, SignatureRe
         let text = format!("{name}[{}]", b.names.join(","));
         let repr = b.ty(&text, PassingMode::Take);
         let mut t = type_definition(b.generics.clone(), Some(repr));
+        // MEM-4: the opaque owner has mechanical cleanup, not a user finalizer.
+        // The builtin property rule still checks its complete root modes.
+        t.resource = name == "Region";
         // Authority is declared by the constructor, never recovered from a body.
         t.authority = match name {
             "Task" | "Mutex" | "Atomic" | "Sender" | "Receiver" => {
@@ -612,7 +615,7 @@ pub(crate) fn registry(types: &Arc<TypeInterner>) -> BTreeMap<DefId, SignatureRe
         };
         publish(
             types,
-            b.signature(name, SignatureKind::Type(t), false),
+            b.signature(name, SignatureKind::Type(t), name == "Region"),
             &mut out,
         );
     }

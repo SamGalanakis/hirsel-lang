@@ -327,6 +327,7 @@ fn unit_body(signature: &Signature, syntax: &ItemSyntax, span: Span) -> hirsel_t
         _ => unreachable!(),
     };
     Body {
+        arena_scope_grant: None,
         scoped_parameters: Vec::new(),
         parameter_scope: syntax.owner().site(NameSite::Item),
         locals: vec![Local {

@@ -20,7 +20,8 @@ use hirsel_types::{
 /// v8 retains ordinary generic actuals in declared dictionary constant graphs;
 /// v9 transports source scoped selectors and closure classification.
 /// v10 adds independently checked fixed-origin borrow cursor claims.
-pub const TIR_VERSION: u32 = 10;
+/// v11 adds contextual consumable arena scope entries (MEM-4).
+pub const TIR_VERSION: u32 = 11;
 
 pub mod representation;
 
@@ -454,9 +455,19 @@ pub struct ScopedParameter {
     pub fields: Vec<u32>,
 }
 
+/// Entry requirement of a contextual core arena scope callback. V reconstructs
+/// every executable producer/use; this receipt alone grants no permission.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
+pub struct ArenaScopeGrant {
+    pub intrinsic: DefPath,
+    pub callback_parameter: hirsel_types::ParamId,
+    pub arena_parameter: hirsel_types::ParamId,
+}
+
 /// A monomorphic or generic body whose TypeIds refer to Definition.types (GEN-4).
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct Body {
+    pub arena_scope_grant: Option<ArenaScopeGrant>,
     /// Declaring source scope for value-parameter references, separate from storage scopes.
     pub parameter_scope: hirsel_types::SiteRef,
     pub locals: Vec<Local>,
@@ -622,6 +633,7 @@ mod tests {
         });
         let span = Span::default();
         let body = Body {
+            arena_scope_grant: None,
             scoped_parameters: Vec::new(),
             parameter_scope: hirsel_types::LexicalOwner::first(&hirsel_syntax::DefPath::core(
                 "main",

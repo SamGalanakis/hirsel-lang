@@ -634,6 +634,7 @@ impl Weight {
     }
     fn body(&mut self, body: &Body) {
         let Body {
+            arena_scope_grant,
             scoped_parameters,
             parameter_scope: _,
             locals,
@@ -650,6 +651,9 @@ impl Weight {
             borrow_cursors,
             matches,
         } = body;
+        if let Some(grant) = arena_scope_grant {
+            self.def_path(&grant.intrinsic);
+        }
         self.flat_vec(locals);
         self.vec(places, |w, place| {
             w.path(&place.projection);
@@ -701,6 +705,7 @@ mod tests {
             path: hirsel_syntax::DefId::intern(&DefPath::core("held")),
             signature_hash: Default::default(),
             bodies: vec![Body {
+                arena_scope_grant: None,
                 scoped_parameters: Vec::new(),
                 parameter_scope: hirsel_types::LexicalOwner::first(&DefPath::core("held"))
                     .site(hirsel_types::NameSite::Item),

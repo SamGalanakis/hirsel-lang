@@ -17,6 +17,21 @@ pub(super) struct PendingCall {
     checked: usize,
 }
 impl Checker<'_, '_> {
+    pub(super) fn arena_scope_literal(&self, literal: ast::ExprId) -> bool {
+        self.calls.iter().any(|call| {
+            let CallTarget::Definition(path) = &call.target else {
+                return false;
+            };
+            hirsel_types::core_roles::arena_scope_callback(path).is_some_and(|slot| {
+                call.arguments
+                    .iter()
+                    .zip(&call.ordinals)
+                    .any(|(argument, ordinal)| {
+                        argument.value == literal && *ordinal == Some(slot as usize)
+                    })
+            })
+        })
+    }
     /// A function value has no inference variables of its own. Its complete
     /// receiving callable supplies every actual, using only the declaration.
     pub(super) fn instantiate_function_value(

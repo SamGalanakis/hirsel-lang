@@ -161,6 +161,7 @@ impl Fixture {
                 entry: BodyId(0),
                 contracts: vec![],
                 bodies: vec![Body {
+                    arena_scope_grant: None,
                     scoped_parameters: Vec::new(),
                     parameter_scope: scoped(hirsel_types::NameSite::Item),
                     locals: vec![Local {
@@ -661,6 +662,7 @@ pub(crate) fn empty_body(f: &mut Fixture) -> Body {
     // Closure type IDs refer to the definition store.
     let unit = f.body().locals[0].ty;
     Body {
+        arena_scope_grant: None,
         scoped_parameters: Vec::new(),
         parameter_scope: scoped(hirsel_types::NameSite::Statement(hirsel_syntax::StmtId(
             f.definition.bodies.len() as u32,
