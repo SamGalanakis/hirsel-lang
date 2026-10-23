@@ -1,0 +1,24 @@
+{
+  "io": {
+    "stdout": "stdout.bytes@1",
+    "tasks": "tasks.cooperative@1",
+    "monotonic_clock": "clock.monotonic.ns@1",
+    "dirs": [
+      {
+        "path": "data",
+        "host": "/ABSOLUTE/OWNED/LOG/DIRECTORY",
+        "access": "read"
+      }
+    ]
+  },
+  "args": [
+    "sample.log",
+    "ERROR",
+    "2"
+  ],
+  "placement": {
+    "cores": 1,
+    "commit": "shared",
+    "reorder": "auto"
+  }
+}

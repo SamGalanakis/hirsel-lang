@@ -1,0 +1,367 @@
+pub type AppError = Grant(GrantError) | Arguments(ArgError) | Number(scalar.ParseError) | Files(
+  FileError
+) | Read(bufio.ReadError[FileError]) | Channel(ChannelError) | Output(OutputError) | Sleep(
+  time.SleepError
+) | Clock(ClockError) | Invalid | InputCap | LineCap | OutputCap | Utf8 | Sink | Deadline
+
+type Raw {
+  credit: u64,
+  number: u64,
+  data: Bytes,
+}
+
+type Row {
+  credit: u64,
+  number: u64,
+  text: String,
+}
+
+// These options are also the deterministic fixture seam. The CLI uses no delays.
+pub type Options {
+  credits: u64,
+  stop: u64,
+  source_delay: u64,
+  sink_delay: u64,
+}
+
+pub type Event = Reserve(u64) | Pull(u64, u64) | Transfer(u64) | Consume(u64) | Discard(
+  u64
+) | Terminal(u64) | Joined
+
+pub type Ledger {
+  audit: bool,
+  events: List[Event],
+  held: u64,
+  peak: u64,
+  pulls: u64,
+}
+
+pub fn ledger(tasks: Tasks, audit: bool) -> Mutex[Ledger] {
+  mutex.create(tasks, Ledger(audit: audit, events: [], held: 0, peak: 0, pulls: 0))
+}
+
+fn note(tasks: Tasks, log: Mutex[Ledger], event: Event) {
+  mutex.with(
+    tasks,
+    log,
+    fn(mut state: unique Ledger) uses {} {
+      match event {
+        Reserve(_) => {
+          state.held += 1
+          if state.held > state.peak {
+            state.peak = state.held
+          }
+        },
+        Pull(_, _) => {
+          state.pulls += 1
+        },
+        Consume(_) | Discard(_) | Terminal(_) => {
+          state.held -= 1
+        },
+        Joined() => {
+          state.held = 0
+        },
+        _ => {},
+      }
+      if state.audit {
+        // Only tiny fixture runs enable this; the retained log has a hard bound.
+        failure.check(list.len(state.events) < 128, Arithmetic())
+        list.push(mut state.events, event)
+      }
+    }
+  )
+}
+
+pub fn snapshot(tasks: Tasks, log: Mutex[Ledger]) -> unique Ledger {
+  mutex.with(
+    tasks,
+    log,
+    fn(mut state: unique Ledger) -> unique Ledger uses {} {
+      unique state
+    }
+  )
+}
+
+fn drop_owned[T](take value: T) uses {value} {}
+
+fn pause(clock: MonotonicClock, delay: u64) -> Result[(), AppError] {
+  if delay != 0 {
+    time.sleep(clock, time.Duration(nanoseconds: int.widen(delay)))?
+  }
+  Ok(())
+}
+
+// Tokio ce685ee: reserve_owned (bounded.rs:1265-1311), shutdown
+// (join_set.rs:381-384). Credit lives through the sink, beyond channel dequeue.
+pub fn pipeline(
+  tasks: Tasks,
+  dir: Dir,
+  input: Path,
+  query: String,
+  clock: MonotonicClock,
+  options: Options,
+  log: Mutex[Ledger],
+  write: fn(String) -> Result[(), AppError]
+) -> Result[(), AppError] {
+  if options.credits < 1 || options.credits > 8 {
+    return Error(Invalid())
+  }
+  if options.stop == 0 {
+    note(tasks, log, Joined())
+    return Ok(())
+  }
+  if file.size(dir, input)? > 262144 {
+    return Error(InputCap())
+  }
+  let source_path = unique input
+  let needle = unique query
+  task.scope(
+    tasks,
+    fn(scope: Scope) -> Result[(), AppError] {
+      let (credit_tx, credit_rx): (Sender[u64], Receiver[u64]) = channel.open(tasks)
+      let (raw_tx, raw_rx): (
+        Sender[Result[Option[unique Raw], AppError]],
+        Receiver[Result[Option[unique Raw], AppError]]
+      ) = channel.open(tasks)
+      let (row_tx, row_rx): (
+        Sender[Result[Option[unique Row], AppError]],
+        Receiver[Result[Option[unique Row], AppError]]
+      ) = channel.open(tasks)
+      let mut credits = take credit_tx
+      for slot in 0u64..options.credits {
+        let _ = channel.send(tasks, mut credits, slot)
+      }
+      let discard_credits = sender.dup(tasks, credits)
+      let producer = task.async(
+        scope,
+        fn() {
+          let mut admission = take credit_rx
+          let mut outgoing = take raw_tx
+          let owned_path = take source_path
+          let source_result = fn(
+            mut source_credit: Receiver[u64],
+            mut source_output: Sender[Result[Option[unique Raw], AppError]],
+            source_name: Path
+          ) -> Result[(), AppError] {
+            'produce: {
+              let mut source = file.open(dir, source_name)?
+              let mut reader = bufio.new(256)
+              let mut number = 0u64
+              let mut total = 0u64
+              while true {
+                let token = match channel.receive(tasks, mut source_credit) {
+                  Ok(value) => value,
+                  Error(_) => break 'produce Ok(()),
+                }
+                note(tasks, log, Reserve(token))
+                pause(clock, options.source_delay)?
+                let mut data: List[u8] = []
+                let count = match bufio.file_read_until(
+                  dir,
+                  mut source,
+                  mut reader,
+                  b'\n',
+                  mut data,
+                  4099
+                ) {
+                  Ok(value) => value,
+                  Error(Limit()) => break 'produce Error(LineCap()),
+                  Error(error) => break 'produce Error(Read(error)),
+                }
+                total += count
+                if total > 262144 {
+                  break 'produce Error(InputCap())
+                }
+                if count == 0 {
+                  note(tasks, log, Terminal(token))
+                  let _ = channel.send(tasks, mut source_output, Ok(None()))
+                  break 'produce Ok(())
+                }
+                number += 1
+                note(tasks, log, Pull(token, number))
+                let packet = Raw(
+                  credit: token,
+                  number: number,
+                  data: bytes.from_list(take data)
+                )
+                match channel.send(tasks, mut source_output, Ok(Some(take packet))) {
+                  Ok(()) => {},
+                  Error(_) => break 'produce Ok(()),
+                }
+              }
+              Ok(())
+            }
+          }(mut admission, mut outgoing, owned_path)
+          if let Error(error) = source_result {
+            let _ = channel.send(tasks, mut outgoing, Error(error))
+          }
+        }
+      )
+      let transform = task.async(
+        scope,
+        fn() {
+          let mut incoming = take raw_rx
+          let mut outgoing = take row_tx
+          let mut returned = take discard_credits
+          let search = take needle
+          let transform_result = fn(
+            mut filter_input: Receiver[Result[Option[unique Raw], AppError]],
+            mut filter_output: Sender[Result[Option[unique Row], AppError]],
+            mut filter_credit: Sender[u64]
+          ) -> Result[(), AppError] {
+            'transform: {
+              while true {
+                let envelope = match channel.receive(tasks, mut filter_input) {
+                  Ok(value) => take value,
+                  Error(_) => break 'transform Ok(()),
+                }
+                let packet = match take envelope? {
+                  Some(value) => take value,
+                  None() => {
+                    let _ = channel.send(tasks, mut filter_output, Ok(None()))
+                    break 'transform Ok(())
+                  },
+                }
+                let Raw(credit: token, number: number, data: data) = take packet
+                let mut end = bytes.len(data)
+                if end > 0 && data[end - 1] == b'\n' {
+                  end -= 1
+                  if end > 0 && data[end - 1] == b'\r' {
+                    end -= 1
+                  }
+                }
+                if end > 4096 {
+                  break 'transform Error(LineCap())
+                }
+                let text = match string.from_bytes(unique bytes.slice(data, 0, end)) {
+                  Ok(value) => take value,
+                  Error(_) => break 'transform Error(Utf8()),
+                }
+                if string.contains(text, search) {
+                  note(tasks, log, Transfer(token))
+                  let row = Row(credit: token, number: number, text: take text)
+                  match channel.send(tasks, mut filter_output, Ok(Some(take row))) {
+                    Ok(()) => {},
+                    Error(_) => break 'transform Ok(()),
+                  }
+                } else {
+                  note(tasks, log, Discard(token))
+                  if let Error(_) = channel.send(tasks, mut filter_credit, token) {
+                    break 'transform Ok(())
+                  }
+                }
+              }
+              Ok(())
+            }
+          }(mut incoming, mut outgoing, mut returned)
+          if let Error(error) = transform_result {
+            let _ = channel.send(tasks, mut outgoing, Error(error))
+          }
+        }
+      )
+      let mut incoming = take row_rx
+      let outcome = fn(
+        mut sink_input: Receiver[Result[Option[unique Row], AppError]],
+        mut sink_credit: Sender[u64]
+      ) -> Result[(), AppError] {
+        'consume: {
+          let mut matched = 0u64
+          let mut emitted = 0u64
+          while true {
+            let envelope = channel.receive(tasks, mut sink_input)?
+            let row = match take envelope? {
+              Some(value) => take value,
+              None() => break 'consume Ok(()),
+            }
+            let Row(credit: token, number: number, text: text) = take row
+            pause(clock, options.sink_delay)?
+            let rendered = f"{number}: {text}\n"
+            let length = string.byte_len(rendered)
+            if length > 262144 - emitted {
+              break 'consume Error(OutputCap())
+            }
+            write(rendered)?
+            emitted += length
+            note(tasks, log, Consume(token))
+            matched += 1
+            if matched == options.stop {
+              break 'consume Ok(())
+            }
+            let _ = channel.send(tasks, mut sink_credit, token)
+          }
+          Ok(())
+        }
+      }(mut incoming, mut credits)
+      // Close our endpoints first. A racing send owns and drops its Closed payload.
+      drop_owned(take incoming)
+      drop_owned(take credits)
+      task.cancel(scope, producer)
+      task.cancel(scope, transform)
+      task.await(scope, take producer)
+      task.await(scope, take transform)
+      note(tasks, log, Joined())
+      take outcome
+    }
+  )
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), AppError] {
+  if arg.len(args) < 2 || arg.len(args) > 5 {
+    return Error(Invalid())
+  }
+  let input = path.of(arg.text(args, 0)?)
+  let query = arg.text(args, 1)?
+  if string.byte_len(query) > 4096 {
+    return Error(Invalid())
+  }
+  let slots = if arg.len(args) >= 3 {
+    u64.parse(arg.text(args, 2)?)?
+  } else {
+    2u64
+  }
+  let stop = if arg.len(args) >= 4 {
+    u64.parse(arg.text(args, 3)?)?
+  } else {
+    18446744073709551615u64
+  }
+  let timeout = if arg.len(args) >= 5 {
+    u64.parse(arg.text(args, 4)?)?
+  } else {
+    60000u64
+  }
+  if timeout == 0 || timeout > 60000 {
+    return Error(Invalid())
+  }
+  let tasks = io.tasks(rt)?
+  let dir = io.dir(rt, path.of("data"))?
+  let output = io.stdout(rt)?
+  let clock = io.monotonic_clock(rt)?
+  let start = clock.monotonic(clock)?
+  let at = match instant.checked_add(clock, start, timeout * 1000000) {
+    Some(value) => value,
+    None() => return Error(Invalid()),
+  }
+  let log = ledger(tasks, false)
+  match task.scope_until(
+    tasks,
+    core@1/Deadline(clock: clock, at: at),
+    fn(scope: Scope) -> Result[(), AppError] {
+      pipeline(
+        tasks,
+        dir,
+        input,
+        query,
+        clock,
+        Options(credits: slots, stop: stop, source_delay: 0, sink_delay: 0),
+        log,
+        fn(text: String) -> Result[(), AppError] {
+          out.print(output, text)?
+          Ok(())
+        }
+      )
+    }
+  ) {
+    Finished(finished) => take finished,
+    Expired(_) => Error(Deadline()),
+  }
+}

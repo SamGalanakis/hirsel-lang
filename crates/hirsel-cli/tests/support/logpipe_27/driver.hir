@@ -1,0 +1,91 @@
+fn run_case(
+  rt: Io,
+  id: String,
+  input: Bytes,
+  slots: u64,
+  stop: u64,
+  source_delay: u64,
+  sink_delay: u64,
+  expires: u64,
+  sink_failure: bool,
+  audit: bool
+) -> Result[(), AppError] {
+  let tasks = io.tasks(rt)?
+  let dir = io.dir(rt, path.of(""))?
+  let output = io.stdout(rt)?
+  let clock = io.monotonic_clock(rt)?
+  file.write_bytes(dir, path.of("input"), unique input)?
+  let log = ledger(tasks, audit)
+  out.print(output, f"CASE {id}\n")?
+  let options = Options(
+    credits: slots,
+    stop: stop,
+    source_delay: source_delay,
+    sink_delay: sink_delay
+  )
+  let write = fn(text: String) -> Result[(), AppError] {
+    if sink_failure {
+      return Error(Sink())
+    }
+    if audit {
+      let rendered = match json.stringify(Text(text)) {
+        Ok(value) => take value,
+        Error(_) => return Error(Invalid()),
+      }
+      out.print(output, f"{rendered}\n")?
+    } else {
+      out.print(output, text)?
+    }
+    Ok(())
+  }
+  let outcome = if expires == 0 {
+    pipeline(tasks, dir, path.of("input"), "hit", clock, options, log, write)
+  } else {
+    let start = clock.monotonic(clock)?
+    let Some(at) = instant.checked_add(clock, start, expires) else {
+      return Error(Invalid())
+    }
+    match task.scope_until(
+      tasks,
+      core@1/Deadline(clock: clock, at: at),
+      fn(s: Scope) -> Result[(), AppError] {
+        pipeline(tasks, dir, path.of("input"), "hit", clock, options, log, write)
+      }
+    ) {
+      Finished(finished) => take finished,
+      Expired(_) => Error(Deadline()),
+    }
+  }
+  let status = match outcome {
+    Ok(()) => "ok",
+    Error(Invalid()) => "Invalid",
+    Error(InputCap()) => "InputCap",
+    Error(LineCap()) => "LineCap",
+    Error(OutputCap()) => "OutputCap",
+    Error(Utf8()) => "Utf8",
+    Error(Sink()) => "Sink",
+    Error(Deadline()) => "Deadline",
+    _ => "UNEXPECTED",
+  }
+  out.print(output, f"STATUS {status}\nTRACE\n")?
+  let after = snapshot(tasks, log)
+  failure.check(after.held == 0 && after.peak <= slots, Arithmetic())
+  for event in after.events {
+    let line = match event {
+      Reserve(token) => f"R {token}\n",
+      Pull(token, number) => f"P {token} {number}\n",
+      Transfer(token) => f"T {token}\n",
+      Consume(token) => f"C {token}\n",
+      Discard(token) => f"D {token}\n",
+      Terminal(token) => f"E {token}\n",
+      Joined() => "J\n",
+    }
+    out.print(output, line)?
+  }
+  // Let runnable work and timers proceed after return; admission must remain closed.
+  time.sleep(clock, time.Duration(nanoseconds: 200))?
+  let later = snapshot(tasks, log)
+  failure.check(later.pulls == after.pulls && later.held == 0, Arithmetic())
+  out.print(output, "END\n")?
+  Ok(())
+}

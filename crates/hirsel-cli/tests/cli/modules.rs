@@ -77,3 +77,4 @@ mod rpcbatch_27;
 mod csvreduce_27;
 mod batchrun_27;
 mod runner_descriptor;
+mod logpipe_27;
