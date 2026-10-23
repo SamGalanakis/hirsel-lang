@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-2235 exported definitions; 972 variants.
+2236 exported definitions; 972 variants.
 
 ## Types and roots
 
@@ -6093,6 +6093,10 @@ References: [`core@1/Dir`](#def-core_401_2fDir), [`core@1/FileError`](#def-core_
 <a id="def-core_401_2ffile_2fopen"></a>
 
 - `fn file.open(d: Dir, p: Path) -> Result[File of d, FileError]`
+
+<a id="def-core_401_2ffile_2fopen_5fappend"></a>
+
+- `fn file.open_append(d: Dir, p: Path) -> Result[File of d, FileError]`
 
 <a id="def-core_401_2ffile_2fput_5fnew"></a>
 
