@@ -1,0 +1,16 @@
+// rule: LANG-13
+// expect: reject LANG-13 at line 10
+// twin: LANG/LANG-13-nested-or-coverage-22-run.hir
+// B cannot make the nested false alternative reachable after A(false).
+type Choice = A(bool) | B
+
+fn pick(x: Choice) -> u32 {
+  match x {
+    A(false) => 0,
+    A(false | _) | B => 1,
+  }
+}
+
+pub fn main() -> u32 {
+  pick(A(true))
+}

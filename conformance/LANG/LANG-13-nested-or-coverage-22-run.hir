@@ -1,0 +1,18 @@
+// rule: LANG-13
+// expect: run
+// Remove the unreachable alternative, preserving all three plain values.
+type Choice = A(bool) | B
+
+fn pick(x: Choice) -> u32 {
+  match x {
+    A(false) => 0,
+    A(true) | B => 1,
+  }
+}
+
+pub fn main(t: Test) -> Result[(), String] {
+  test.check(t, pick(A(false)) == 0)
+  test.check(t, pick(A(true)) == 1)
+  test.check(t, pick(B) == 1)
+  Ok(())
+}

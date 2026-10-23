@@ -652,11 +652,13 @@ impl Checker<'_, '_> {
                     );
                 }
             }
-            for (alternation, alternatives) in alternations {
+            for (alternation, alternatives, parents, preceding) in alternations {
                 let mut earlier = rows.clone();
+                earlier.extend(preceding.into_iter().map(|choice| (whole.clone(), choice)));
                 for alternative in alternatives {
-                    let choice =
-                        std::rc::Rc::new(ast::PatternChoice::from([(alternation, alternative)]));
+                    let mut choice = parents.clone();
+                    choice.insert(alternation, alternative);
+                    let choice = std::rc::Rc::new(choice);
                     if !self.useful_choosing(
                         root,
                         earlier.clone(),
@@ -682,14 +684,11 @@ impl Checker<'_, '_> {
     fn refining_patterns(
         &self,
         root: ast::PatternId,
-    ) -> (
-        Vec<(ast::PatternId, Vec<ast::PatternId>)>,
-        Option<ast::PatternId>,
-    ) {
+    ) -> (Vec<RefiningAlternation>, Option<ast::PatternId>) {
         let mut alternations = vec![];
         let mut range = None;
-        let mut todo = vec![root];
-        while let Some(id) = todo.pop() {
+        let mut todo = vec![(root, ast::PatternChoice::new(), vec![])];
+        while let Some((id, parents, preceding)) = todo.pop() {
             let Some(row) = self.body.patterns.iter().find(|p| p.pattern == id) else {
                 continue;
             };
@@ -698,10 +697,31 @@ impl Checker<'_, '_> {
                     range.get_or_insert(id);
                 }
                 PatternDecisionKind::Or(alternatives) => {
-                    alternations.push((id, alternatives.clone()));
-                    todo.extend(alternatives.iter().rev());
+                    alternations.push((
+                        id,
+                        alternatives.clone(),
+                        parents.clone(),
+                        preceding.clone(),
+                    ));
+                    let mut earlier = preceding;
+                    let mut children = vec![];
+                    for alternative in alternatives {
+                        // Query this occurrence through its enclosing alternatives.
+                        // Other branches cannot witness a nested alternative's
+                        // usefulness, and preceding branches already claimed values.
+                        let mut choice = parents.clone();
+                        choice.insert(id, *alternative);
+                        children.push((*alternative, choice.clone(), earlier.clone()));
+                        earlier.push(std::rc::Rc::new(choice));
+                    }
+                    todo.extend(children.into_iter().rev());
                 }
-                _ => todo.extend(row.fields.iter().rev().map(|(_, child)| *child)),
+                _ => todo.extend(
+                    row.fields
+                        .iter()
+                        .rev()
+                        .map(|(_, child)| (*child, parents.clone(), preceding.clone())),
+                ),
             }
         }
         (alternations, range)
@@ -1013,3 +1033,12 @@ enum Tag {
     /// An interval of scalar keys that each named interval contains or misses.
     Scalar(u128, u128),
 }
+
+/// An or-pattern occurrence, its enclosing choices, and alternatives that
+/// precede that occurrence along the enclosing path.
+type RefiningAlternation = (
+    ast::PatternId,
+    Vec<ast::PatternId>,
+    ast::PatternChoice,
+    Vec<std::rc::Rc<ast::PatternChoice>>,
+);

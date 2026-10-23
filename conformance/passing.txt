@@ -1588,6 +1588,8 @@ conformance/LANG/LANG-13-native-strpat-floats-run.hir
 conformance/LANG/LANG-13-native-strpat-strings-run.hir
 conformance/LANG/LANG-13-nested-match-on-binding-run.hir
 conformance/LANG/LANG-13-nested-ok-none-error-paths-run.hir
+conformance/LANG/LANG-13-nested-or-coverage-22-bad.hir
+conformance/LANG/LANG-13-nested-or-coverage-22-run.hir
 conformance/LANG/LANG-13-nested-single-variant-pattern-run.hir
 conformance/LANG/LANG-13-nested-variant-payload-drop-run.hir
 conformance/LANG/LANG-13-or-choices-bad.hir

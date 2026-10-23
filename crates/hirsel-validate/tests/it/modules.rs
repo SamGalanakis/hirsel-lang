@@ -13,3 +13,4 @@ mod destructure_failure_order_17;
 mod generic_result_v_21;
 mod generic_bound_22;
 mod nominal_authority_22;
+mod match_coverage_22;

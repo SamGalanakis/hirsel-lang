@@ -46,3 +46,4 @@ mod unique_copy_17;
 mod generic_result_v_21;
 mod unique_join_history;
 mod generic_bound_22;
+mod match_coverage_22;
