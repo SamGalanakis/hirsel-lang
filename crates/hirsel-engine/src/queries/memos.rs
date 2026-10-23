@@ -482,7 +482,9 @@ impl QueryEngine {
                 }
             }
             ReadKey::Representation(d) => self.representation_digest(d.path()),
-            ReadKey::ExecutedBody(d) => optional(self.implementation_hash(d.path())),
+            ReadKey::ExecutedBody(d) | ReadKey::LayoutBody(d) => {
+                optional(self.implementation_hash(d.path()))
+            }
             ReadKey::CitedText(d) => self.cited_value(d.path()),
             ReadKey::DeclarationCandidates(d) => self.candidates_value(d.path()),
             ReadKey::Environment => self.environment_value(),
@@ -662,6 +664,7 @@ impl QueryEngine {
                 (Some(b), Some(n)) => {
                     if b.body != n.body {
                         read(ReadKey::ExecutedBody(id));
+                        read(ReadKey::LayoutBody(id));
                         read(ReadKey::Representation(id));
                         read(ReadKey::CitedText(id));
                     }
@@ -698,6 +701,7 @@ impl QueryEngine {
                         ReadKey::FailedSignature(id),
                         ReadKey::ExecutedSignature(id),
                         ReadKey::ExecutedBody(id),
+                        ReadKey::LayoutBody(id),
                         ReadKey::Representation(id),
                         ReadKey::CitedText(id),
                         ReadKey::DeclarationCandidates(id),
@@ -880,6 +884,7 @@ impl QueryEngine {
                 ReadKey::FailedSignature(id),
                 ReadKey::ExecutedSignature(id),
                 ReadKey::ExecutedBody(id),
+                ReadKey::LayoutBody(id),
                 ReadKey::Representation(id),
                 ReadKey::CitedText(id),
                 ReadKey::DeclarationCandidates(id),

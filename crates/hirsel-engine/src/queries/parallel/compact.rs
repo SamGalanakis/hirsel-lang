@@ -408,7 +408,7 @@ impl QueryEngine {
             })
             .collect();
         for path in representations {
-            self.read_implementation(&path);
+            self.read_layout_body(&path);
         }
         self.last_phase = outcome.phase;
         self.unavailable = matches!(outcome.result, Err(QueryError::NotImplemented))
