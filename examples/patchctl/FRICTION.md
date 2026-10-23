@@ -130,3 +130,22 @@ base). Forty-six independent tree workflow/boundary fixtures are retained;
 large public-adapter cells stopped by the fixed budget remain INCOMPLETE, not
 replaced by smaller vectors. Exact selection/started/completed receipts, including
 passing tests whose per-cell libtest output was captured, are external.
+
+Owner disposition after the first application landing: reference-replay-29
+landed `d78c17e17b33ff0e781817072b01e11323120fcd`. It preserves the
+`evaluator tooling limit: Steps` outcome instead of masking a stopped evaluator
+with replay finalization's UnconsumedInput. Fresh full files32 recordings from
+both native backends confirm Steps at the unchanged 1M limit and exact native
+replays with providers removed. Diagnostic copies of the other retained boundary
+tapes also stop as Steps, but binding transplants are nonauthoritative and are
+not acceptance runs. Original failures remain immutable.
+
+The harness recognizes the exact new Steps tuple only for the ten already-owned
+identities above, retaining their historical tuples too. All remain INCOMPLETE;
+no request matching, event consumption or budget was relaxed. Step-cost work
+belongs to interp-step-budget-29. The owner also added the public
+`replay_observations_checked` host-tape adapter. Thus the historical checked-H
+adapter limitation is now fixed upstream; this lane's prior tapes bind the old
+runtime revision and its checked-H host replay cells remain UNRUN/INCOMPLETE.
+No unchanged green campaign was repeated because main moved. Public full-app
+checked-H SimulationConfig cells and the prior replay receipts remain as stated.

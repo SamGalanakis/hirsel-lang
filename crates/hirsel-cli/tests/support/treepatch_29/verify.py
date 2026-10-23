@@ -151,8 +151,12 @@ for backend, exe in binaries.items():
                     'cranelift-source-bytes-524288-w1-replay-reference': (3, b'', b'hirsel: replay refused: UnconsumedInput(172)\n'),
                     'cranelift-hunks-256-w1-replay-reference': (3, b'', b'hirsel: replay refused: UnconsumedInput(7)\n'),
                 }
-                if replay_label in known_refusals and (replay.returncode, replay.stdout, replay.stderr) == known_refusals[replay_label]:
-                    ledger.append(dict(id=replay_label, disposition='INCOMPLETE', reason='exact owned reference-replay-29 witness; no Steps attribution'))
+                observed = (replay.returncode, replay.stdout, replay.stderr)
+                # d78c17e1 preserves the evaluator cut instead of masking it at
+                # tape finish. Only these exact owned identities may stop here.
+                tooling_stop = (3, b'', b'evaluator tooling limit: Steps\n')
+                if replay_label in known_refusals and observed in (known_refusals[replay_label], tooling_stop):
+                    ledger.append(dict(id=replay_label, disposition='INCOMPLETE', reason='exact reference-replay-29 disposition; evaluator limit is not semantic completion'))
                 else:
                     assert (replay.returncode, replay.stdout, replay.stderr) == (original_result.returncode, original_result.stdout, original_result.stderr), (replay_label, replay)
                     ledger.append(dict(id=replay_label, disposition='PASS'))
