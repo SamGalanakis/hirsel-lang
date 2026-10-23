@@ -1320,6 +1320,14 @@ impl QueryEngine {
                 return Ok(value);
             }
         }
+        if let Some(value) = self.load_staged_evaluation(path, arguments) {
+            self.depth_admit(&value.depth, site)?;
+            self.merge_execution(&value.executed);
+            self.merge_evaluation_validation(&value);
+            self.depth_requested(&value.depth, site);
+            self.staged_values.insert(key, value.clone());
+            return Ok(value);
+        }
         let body = self.mode_query(&constant.owner)?;
         let staged = self.prepare_staged_types(&body.value)?;
         let file = &body.value.typed.syntax;
@@ -1395,6 +1403,7 @@ impl QueryEngine {
         }
         self.s1.leave();
         if let Ok(value) = &result {
+            self.store_staged_evaluation(path, arguments, value)?;
             self.merge_execution(&value.executed);
             self.depth_requested(&value.depth, site);
         }
