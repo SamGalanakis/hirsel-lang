@@ -452,7 +452,7 @@ fn actual_ready_fixture_emits_links_restores_and_exits_on_both_backends() {
             .sources
             .add(
                 "object-fixture.hir",
-                "fn main()->u8{let x=3u8;x-3u8}".into(),
+                "pub fn main()->u8{let x=3u8;x-3u8}".into(),
             )
             .unwrap();
         let checked = hirsel_engine::check_progress(&mut engine, file, &default_context()).unwrap();
@@ -641,4 +641,251 @@ fn object_hit_never_reads_ready_body_payload() {
     })
     .unwrap();
     assert_eq!(cold.product, warm.product);
+}
+
+use super::tasks::{LinkDependencies, ObjectTaskFactory, ObjectTaskRequest, ObjectTaskSnapshot};
+use hirsel_engine::runtime::{MemoryWeight, QueryContext, QueryFactory, QueryId, QueryPoll};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::task::Poll;
+
+struct TaskSnapshot {
+    request: ObjectTaskRequest,
+    ready: ReadyProduct,
+    link: LinkDependencies,
+    result: ProductRef,
+    store: Arc<hirsel_engine::store::MemStore>,
+    makes: Arc<AtomicUsize>,
+}
+struct TaskProducts {
+    result: ProductRef,
+    reference: Reference,
+}
+impl ObjectProducts for TaskProducts {
+    fn codegen(&mut self, _: &CodegenKey) -> Result<Arc<FragmentProduct>, String> {
+        Ok(Arc::new(FragmentProduct {
+            product: self.result,
+            object: self.reference,
+            summary: self.reference,
+        }))
+    }
+    fn link(&mut self, _: &LinkKey, _: &LinkInputs) -> Result<Arc<LinkedProduct>, String> {
+        Ok(Arc::new(LinkedProduct {
+            product: self.result,
+            executable: self.reference,
+        }))
+    }
+}
+impl ObjectTaskSnapshot for TaskSnapshot {
+    fn store(&self) -> &dyn ResultStore {
+        self.store.as_ref()
+    }
+    fn request(&self, _: QueryId) -> Result<ObjectTaskRequest, Reference> {
+        Ok(self.request.clone())
+    }
+    fn ready_descriptor(&self, p: ProductRef) -> Result<ReadyProduct, Reference> {
+        assert_eq!(p, self.ready.product);
+        Ok(self.ready.clone())
+    }
+    fn optimizer_query(&self, p: ProductRef) -> Result<QueryId, Reference> {
+        Ok(QueryId {
+            kind: 0x4e000004,
+            address: p.address,
+        })
+    }
+    fn link_dependencies(&self, _: ProductRef) -> Result<LinkDependencies, Reference> {
+        Ok(self.link.clone())
+    }
+    fn link_input(&self, p: ProductRef) -> Result<Reference, Reference> {
+        Ok(p.record)
+    }
+    fn products(
+        &self,
+        settled: &[ProductRef],
+    ) -> Result<Box<dyn ObjectProducts + Send>, Reference> {
+        assert!(!settled.is_empty());
+        self.makes.fetch_add(1, Ordering::SeqCst);
+        Ok(Box::new(TaskProducts {
+            result: self.result,
+            reference: self.result.record,
+        }))
+    }
+    fn failure(&self, message: &str) -> Reference {
+        input(self.store.as_ref(), message)
+    }
+}
+#[derive(Default)]
+struct TaskContext {
+    settled: Vec<(QueryId, Result<ProductRef, Reference>)>,
+    reads: Vec<QueryId>,
+}
+impl QueryContext for TaskContext {
+    fn read(&mut self, id: QueryId) -> Poll<Result<ProductRef, Reference>> {
+        self.reads.push(id);
+        self.settled
+            .iter()
+            .find(|(q, _)| *q == id)
+            .map_or(Poll::Pending, |(_, p)| Poll::Ready(*p))
+    }
+}
+fn query(product: ProductRef) -> QueryId {
+    QueryId {
+        kind: 0x4e000004,
+        address: product.address,
+    }
+}
+fn task_snapshot(
+    request: ObjectTaskRequest,
+    ready: ReadyProduct,
+    store: Arc<hirsel_engine::store::MemStore>,
+    result: ProductRef,
+) -> Arc<TaskSnapshot> {
+    Arc::new(TaskSnapshot {
+        request,
+        ready,
+        link: LinkDependencies {
+            fragments: vec![],
+            static_manifest: query(result),
+            runtime_archives: vec![],
+            foreign_inputs: vec![],
+            launch_manifest: query(result),
+        },
+        result,
+        store,
+        makes: Arc::new(AtomicUsize::new(0)),
+    })
+}
+
+#[test]
+fn codegen_task_create_is_lazy_and_waits_for_complete_optimizer_inventory() {
+    let store = Arc::new(hirsel_engine::store::MemStore::default());
+    let mut ready = ready(store.as_ref());
+    ready.optimizer_reads = vec![
+        product(store.as_ref(), "copy1"),
+        product(store.as_ref(), "copy2"),
+    ];
+    let key = key("caller");
+    let id = key.query_id();
+    let owner = query(ready.product);
+    let result = ProductRef {
+        address: id.address,
+        ..product(store.as_ref(), "emitted")
+    };
+    let snapshot = task_snapshot(
+        ObjectTaskRequest::Codegen {
+            key,
+            ready: owner,
+            weight: MemoryWeight::default(),
+        },
+        ready.clone(),
+        store,
+        result,
+    );
+    let mut task = ObjectTaskFactory::new(snapshot.clone()).create(id).unwrap();
+    let mut cx = TaskContext::default();
+    assert_eq!(snapshot.makes.load(Ordering::SeqCst), 0);
+    assert!(matches!(task.poll(&mut cx),QueryPoll::Waiting(ref p) if p==&vec![owner]));
+    cx.settled.push((owner, Ok(ready.product)));
+    let copies: Vec<_> = ready.optimizer_reads.iter().copied().map(query).collect();
+    assert!(matches!(task.poll(&mut cx),QueryPoll::Waiting(ref p) if p==&copies));
+    assert_eq!(snapshot.makes.load(Ordering::SeqCst), 0);
+    for (q, p) in copies.iter().zip(&ready.optimizer_reads) {
+        cx.settled.push((*q, Ok(*p)));
+    }
+    assert!(matches!(task.poll(&mut cx),QueryPoll::Complete(p) if p==result));
+    assert!(matches!(task.poll(&mut cx),QueryPoll::Complete(p) if p==result));
+    assert_eq!(snapshot.makes.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn codegen_task_rejects_stale_optimizer_and_dependency_failure_before_emission() {
+    for stale in [false, true] {
+        let store = Arc::new(hirsel_engine::store::MemStore::default());
+        let mut ready = ready(store.as_ref());
+        let copy = product(store.as_ref(), "old copy");
+        ready.optimizer_reads = vec![copy];
+        let key = key("caller");
+        let id = key.query_id();
+        let owner = query(ready.product);
+        let result = ProductRef {
+            address: id.address,
+            ..product(store.as_ref(), "emitted")
+        };
+        let snapshot = task_snapshot(
+            ObjectTaskRequest::Codegen {
+                key,
+                ready: owner,
+                weight: MemoryWeight::default(),
+            },
+            ready.clone(),
+            store.clone(),
+            result,
+        );
+        let mut task = ObjectTaskFactory::new(snapshot.clone()).create(id).unwrap();
+        let mut cx = TaskContext::default();
+        cx.settled.push((owner, Ok(ready.product)));
+        let next = if stale {
+            Ok(ProductRef {
+                record: input(store.as_ref(), "new body"),
+                ..copy
+            })
+        } else {
+            Err(input(store.as_ref(), "failed validation"))
+        };
+        cx.settled.push((query(copy), next));
+        assert!(matches!(task.poll(&mut cx), QueryPoll::Failed(_)));
+        assert_eq!(snapshot.makes.load(Ordering::SeqCst), 0);
+    }
+}
+
+#[test]
+fn link_task_waits_for_manifest_then_all_fragments_and_runtime_inputs() {
+    let store = Arc::new(hirsel_engine::store::MemStore::default());
+    let ready = ready(store.as_ref());
+    let fragment = codegen(store.as_ref(), &key("main"), &ready, || Ok(object())).unwrap();
+    let key = link_key();
+    let id = key.query_id();
+    let manifest = product(store.as_ref(), "manifest");
+    let manifest_id = query(manifest);
+    let result = ProductRef {
+        address: id.address,
+        ..product(store.as_ref(), "linked")
+    };
+    let static_p = product(store.as_ref(), "statics");
+    let runtime = product(store.as_ref(), "archive");
+    let launch = product(store.as_ref(), "launch");
+    let mut snapshot = task_snapshot(
+        ObjectTaskRequest::Link {
+            key,
+            manifest: manifest_id,
+            weight: MemoryWeight::default(),
+        },
+        ready,
+        store,
+        result,
+    );
+    Arc::get_mut(&mut snapshot).unwrap().link = LinkDependencies {
+        fragments: vec![QueryId {
+            kind: super::tasks::CODEGEN_KIND,
+            address: fragment.product.address,
+        }],
+        static_manifest: query(static_p),
+        runtime_archives: vec![query(runtime)],
+        foreign_inputs: vec![],
+        launch_manifest: query(launch),
+    };
+    let mut task = ObjectTaskFactory::new(snapshot.clone()).create(id).unwrap();
+    let mut cx = TaskContext::default();
+    assert!(matches!(task.poll(&mut cx),QueryPoll::Waiting(ref p) if p==&vec![manifest_id]));
+    cx.settled.push((manifest_id, Ok(manifest)));
+    assert!(matches!(task.poll(&mut cx),QueryPoll::Waiting(ref p) if p.len()==4));
+    assert_eq!(snapshot.makes.load(Ordering::SeqCst), 0);
+    let deps = &snapshot.link;
+    cx.settled.extend([
+        (deps.fragments[0], Ok(fragment.product)),
+        (deps.static_manifest, Ok(static_p)),
+        (deps.runtime_archives[0], Ok(runtime)),
+        (deps.launch_manifest, Ok(launch)),
+    ]);
+    assert!(matches!(task.poll(&mut cx),QueryPoll::Complete(p) if p==result));
+    assert_eq!(snapshot.makes.load(Ordering::SeqCst), 1);
 }
