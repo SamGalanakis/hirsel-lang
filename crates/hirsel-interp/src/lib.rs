@@ -467,6 +467,9 @@ operation_boundary! {
         _context: &mut OperationContext<'_>) -> Result<(), Error> {
         Ok(())
     }
+    /// A destructor's owned wait, taken immediately after drop_handle. Existing
+    /// synchronous hooks need no continuation. A returned completion must be unit.
+    fn take_drop_wait(&mut self) -> Option<OperationResult> { None }
     /// Resume with retained operation arguments; mutable owners can change in place.
     fn resume(&mut self,
         _continuation: u64,

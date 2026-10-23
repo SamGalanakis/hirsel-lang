@@ -1015,7 +1015,9 @@ mod tests {
                             std::ptr::null_mut(),
                             &mut atomic,
                             (&0u64 as *const u64).cast(),
-                            8
+                            8,
+                            0,
+                            8,
                         ),
                         STATUS_OK
                     );

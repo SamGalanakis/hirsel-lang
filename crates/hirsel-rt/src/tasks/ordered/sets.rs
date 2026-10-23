@@ -469,7 +469,9 @@ mod tests {
                         std::ptr::null_mut(),
                         &mut trace,
                         (&raw const initial).cast(),
-                        8
+                        8,
+                        0,
+                        8,
                     ),
                     STATUS_OK
                 );
@@ -482,7 +484,9 @@ mod tests {
                             std::ptr::null_mut(),
                             &mut observed,
                             (&raw const initial).cast(),
-                            8
+                            8,
+                            0,
+                            8,
                         ),
                         STATUS_OK
                     );

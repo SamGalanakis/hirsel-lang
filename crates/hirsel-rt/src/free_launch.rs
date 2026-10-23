@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 // Staged until the full F1 qualification matrix is complete. Runtime unit
 // tests exercise the ordinary configured launch path with production wiring.
-pub(crate) const ENABLED: bool = cfg!(test);
+pub(crate) const ENABLED: bool = cfg!(any(test, feature = "free-qualification"));
 
 pub(crate) enum Session {
     Recording {
@@ -24,11 +24,19 @@ pub(crate) enum Session {
     },
 }
 
-fn binding(bytes: &[u8]) -> Result<(Recording, bool), String> {
+pub(crate) fn binding(bytes: &[u8]) -> Result<(Recording, bool), String> {
+    if bytes.starts_with(b"F1B2") {
+        return Err("Free recording runtime ABI version mismatch".into());
+    }
     let bytes = bytes
-        .strip_prefix(b"F1B2")
+        .strip_prefix(b"F1B3")
         .ok_or("unsupported Free admission binding")?;
-    decode(bytes)
+    let mut input = crate::tape_wire::Decode(bytes);
+    let abi = u32::decode(&mut input)?;
+    if abi != crate::ABI_VERSION {
+        return Err("Free recording runtime ABI version mismatch".into());
+    }
+    decode(input.0)
 }
 
 pub(crate) fn header(bytes: &[u8]) -> Result<Recording, String> {
@@ -55,7 +63,8 @@ impl Session {
             (_, Some(path)) => {
                 let (file, header, _) = crate::host_launch::header(io, admitted, path, outputs)?;
                 let namespace_coupled = io.namespace_coupled();
-                let mut binding = b"F1B2".to_vec();
+                let mut binding = b"F1B3".to_vec();
+                crate::ABI_VERSION.encode(&mut binding);
                 header.encode(&mut binding);
                 namespace_coupled.encode(&mut binding);
                 record::Recording::open(file, &binding, level == RecordingLevel::Durable)
@@ -130,13 +139,33 @@ impl Session {
         Ok(())
     }
 
-    pub(crate) fn finish_replay(&self) -> Result<Option<Terminal>, String> {
+    pub(crate) fn report_recording(
+        &self,
+        report: &mut Option<crate::free_replay::Report>,
+    ) -> Result<(), String> {
+        if let (Self::Recording { recorder, .. }, Some(report)) = (self, report) {
+            report.write(
+                &recorder
+                    .projection()
+                    .ok_or("missing live Free projection")?,
+            )?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn finish_replay(
+        &self,
+        report: &mut Option<crate::free_replay::Report>,
+    ) -> Result<Option<Terminal>, String> {
         let Self::Replay { driver, end, .. } = self else {
             return Ok(None);
         };
         // This is the same strict consume-every-record/progress-at-cut check
         // used by the runtime replay proofs, before restoring the public outcome.
-        driver.finish().map_err(|e| e.to_string())?;
+        let projection = driver.finish().map_err(|e| e.to_string())?;
+        if let Some(report) = report {
+            report.write(&projection)?;
+        }
         end.as_deref().map(terminal).transpose()
     }
 }
@@ -170,7 +199,7 @@ fn terminal_payload(text: &str) -> Result<(&str, Vec<u8>), String> {
     Ok((kind, bytes))
 }
 
-fn terminal(text: &str) -> Result<Terminal, String> {
+pub(crate) fn terminal(text: &str) -> Result<Terminal, String> {
     let (kind, bytes) = terminal_payload(text)?;
     match kind {
         "native-stop-v1" => decode(&bytes).map(Terminal::Stop),
@@ -188,6 +217,52 @@ fn terminal(text: &str) -> Result<Terminal, String> {
         }
         _ => Err("unsupported Free terminal encoding".into()),
     }
+}
+
+/// Render the restored public outcome using the same observation fields as a
+/// completed native entry. Cut parking may precede its final status return, so
+/// the launcher cannot read a completed result or failure chain from that fiber.
+pub(crate) fn replay_observation(
+    program: &crate::program::Program,
+    outcome: &RunOutcome,
+) -> Result<String, String> {
+    use std::fmt::Write;
+    let mut text = String::new();
+    match outcome {
+        RunOutcome::Returned(_) => {
+            writeln!(text, "status {}", crate::STATUS_OK).unwrap();
+            // The observation reader projects only the public exit code. The
+            // inactive Result payload contains no replay-visible value.
+            let mut result = vec![0u8; program.result_size as usize];
+            let code = outcome.exit_code() as u8;
+            if program.return_kind == 1 || program.return_kind == 2 {
+                result[program.success_offset as usize] = code;
+            } else if code != 0 {
+                result[0] = 1;
+            }
+            writeln!(text, "result {}", hirsel_run_schema::hex(&result)).unwrap();
+            writeln!(text, "exit_code {code}").unwrap();
+        }
+        RunOutcome::Failed { primary, causes } => {
+            let table = program
+                .failure_table
+                .ok_or("replayed failure has no bound program table")?;
+            writeln!(text, "status {}", crate::STATUS_FAILURE).unwrap();
+            for failure in std::iter::once(primary).chain(causes) {
+                let record = table
+                    .record(failure)
+                    .ok_or("replayed failure differs from bound program table")?;
+                writeln!(
+                    text,
+                    "failure {} {} {:016x} {:016x}",
+                    record.kind, record.rule, record.site, record.operation_site
+                )
+                .unwrap();
+            }
+        }
+        _ => {}
+    }
+    Ok(text)
 }
 
 // Called only on the owning task before its continuation is abandoned.

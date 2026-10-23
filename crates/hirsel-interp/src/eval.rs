@@ -280,9 +280,17 @@ impl Scheduler {
     pub(crate) fn waits(&self) -> Vec<BlockedWait> {
         self.parked
             .iter()
-            .filter_map(|(_, stack, _)| match &stack.last()?.operation.as_ref()?.0 {
-                OperationResult::Park { wait, .. } => Some(wait.clone()),
-                _ => None,
+            .filter_map(|(_, stack, _)| {
+                let frame = stack.last()?;
+                let result = if let Some(drop) = &frame.drop_wait {
+                    &drop.result
+                } else {
+                    &frame.operation.as_ref()?.0
+                };
+                match result {
+                    OperationResult::Park { wait, .. } => Some(wait.clone()),
+                    _ => None,
+                }
             })
             .collect()
     }
@@ -465,25 +473,38 @@ pub(crate) fn execute_frames(
                     .ok_or_else(|| invalid("parked task left early"))?;
                 operations.enter_task(*id, stack.iter().any(|f| f.finalized.is_some()));
                 let frame: &mut Frame = stack.last_mut().unwrap();
-                let (OperationResult::Park { token, .. }, state) =
-                    frame.operation.as_deref().unwrap()
-                else {
-                    return Err(invalid("parked task has no wait"));
+                let (token, anchor) = if let Some(drop) = &frame.drop_wait {
+                    let OperationResult::Park { token, .. } = &drop.result else {
+                        return Err(invalid("parked destructor has no wait"));
+                    };
+                    (*token, &drop.anchor)
+                } else {
+                    let (OperationResult::Park { token, .. }, state) =
+                        frame.operation.as_deref().unwrap()
+                    else {
+                        return Err(invalid("parked task has no wait"));
+                    };
+                    (*token, &state.anchor)
                 };
                 let result = operations.poll(
-                    *token,
+                    token,
                     &mut OperationContext {
                         configuration,
                         sources,
                         stdout: &mut execution.stdout,
                         trace: &mut execution.trace,
                         trace_mode: runtime.trace_mode,
-                        anchor: Some(&state.anchor),
+                        anchor: Some(anchor),
                     },
                 )?;
                 if let Some(result) = result {
                     let (id, mut stack, failures) = parked.remove(key).unwrap();
-                    stack.last_mut().unwrap().operation.as_mut().unwrap().0 = result;
+                    let frame = stack.last_mut().unwrap();
+                    if let Some(drop) = &mut frame.drop_wait {
+                        drop.result = result;
+                    } else {
+                        frame.operation.as_mut().unwrap().0 = result;
+                    }
                     runnable.push_back((id, stack, failures));
                 }
             }
@@ -584,6 +605,42 @@ pub(crate) fn execute_frames(
                     },
                 )?;
             }
+        }
+        if let Some(drop) = frames.last_mut().unwrap().drop_wait.take() {
+            match drop.result {
+                OperationResult::Park { token, .. } => {
+                    frames.last_mut().unwrap().drop_wait = Some(drop);
+                    operations.parked(token);
+                    parked.push(
+                        (
+                            task,
+                            std::mem::take(&mut frames),
+                            std::mem::take(&mut execution.failures),
+                        ),
+                        token,
+                        operations.wait_deadline(token),
+                        operations.watched(token),
+                    );
+                }
+                OperationResult::Complete {
+                    value: Value::Unit,
+                    arguments,
+                    consumed,
+                    released,
+                } if arguments.is_empty() && consumed.is_empty() && released.is_empty() => {
+                    finish_handle_drop(
+                        frames.last_mut().unwrap(),
+                        operations,
+                        runtime.trace_mode,
+                        execution,
+                        sources,
+                        &drop.anchor,
+                        drop.caller.as_ref(),
+                    )?;
+                }
+                _ => return Err(invalid("invalid destructor completion")),
+            }
+            continue;
         }
         let depth = frames.len();
         // Test before taking: moving the large empty slot on every step costs.
@@ -1306,24 +1363,23 @@ pub(crate) fn execute_frames(
                                 anchor: Some(&anchor),
                             },
                         )?;
-                        for value in operations.take_releases() {
-                            frame.work.push_front(crate::resources::Work::Release(
-                                value,
-                                anchor.clone(),
-                                caller.clone(),
-                            ));
-                        }
-                        if let Some((rule, kind)) = operations.take_drop_failure() {
-                            let mut at = anchor.clone();
-                            at.site = dropped_binding_site(frame, &anchor).unwrap_or(anchor.site);
-                            record_failure(
+                        let suspended = operations.take_drop_wait();
+                        if let Some(result) = suspended {
+                            frame.drop_wait = Some(Box::new(crate::frame::DropWait {
+                                result,
+                                anchor,
+                                caller,
+                            }));
+                        } else {
+                            finish_handle_drop(
+                                frame,
+                                operations,
                                 runtime.trace_mode,
                                 execution,
-                                failure(sources, at.site, &rule, &kind)?,
-                                at,
+                                sources,
+                                &anchor,
                                 caller.as_ref(),
-                            );
-                            frame.ending = Some(crate::resources::Ending::Failed);
+                            )?;
                         }
                         continue;
                     }
@@ -4446,6 +4502,37 @@ fn complete_immediate(
     frame.assign(destination, value)?;
     frame.goto(next);
     Ok(true)
+}
+
+fn finish_handle_drop(
+    frame: &mut Frame,
+    operations: &mut (impl Operations + ?Sized),
+    trace_mode: TraceMode,
+    execution: &mut Execution,
+    sources: &hirsel_span::SourceMap,
+    anchor: &crate::observation::Anchor,
+    caller: Option<&crate::frame::CallerSite>,
+) -> Result<(), Error> {
+    for value in operations.take_releases() {
+        frame.work.push_front(crate::resources::Work::Release(
+            value,
+            anchor.clone(),
+            caller.cloned(),
+        ));
+    }
+    if let Some((rule, kind)) = operations.take_drop_failure() {
+        let mut at = anchor.clone();
+        at.site = dropped_binding_site(frame, anchor).unwrap_or(anchor.site);
+        record_failure(
+            trace_mode,
+            execution,
+            failure(sources, at.site, &rule, &kind)?,
+            at,
+            caller,
+        );
+        frame.ending = Some(crate::resources::Ending::Failed);
+    }
+    Ok(())
 }
 
 fn restore_operation(

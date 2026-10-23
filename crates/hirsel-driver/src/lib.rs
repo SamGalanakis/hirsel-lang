@@ -849,7 +849,9 @@ pub(crate) fn run_loaded_on_host(
             })
         })?;
     }
-    if let network::HostIo::Replay(io) = &mut operations.io {
+    if let network::HostIo::Replay(io) = &mut operations.io
+        && !operations.library.native_free()
+    {
         io.finish()
             .map_err(|e| ToolError::Runtime(format!("replay refused: {e:?}")))?;
     }
@@ -858,6 +860,10 @@ pub(crate) fn run_loaded_on_host(
     }
     let outcome = hirsel_engine::project_outcome(&execution, &sources)
         .map_err(|error| ToolError::Runtime(format!("{error:?}")))?;
+    let outcome = operations
+        .finish_free(&outcome)
+        .map_err(|e| ToolError::Runtime(format!("Free replay: {e}")))?
+        .unwrap_or(outcome);
     if let network::HostIo::Live(io) = &mut operations.io {
         io.finish_recording(&outcome)
             .map_err(|e| ToolError::Runtime(format!("the Io tape: {e}")))?;

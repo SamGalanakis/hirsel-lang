@@ -2178,6 +2178,9 @@ fn launch_impl(
     if let Some(hook) = std::env::var_os(hirsel_free::session::TestHook::VAR) {
         command.env(hirsel_free::session::TestHook::VAR, hook);
     }
+    if let Some(path) = std::env::var_os(hirsel_rt::free_replay::Report::VAR) {
+        command.env(hirsel_rt::free_replay::Report::VAR, path);
+    }
     // A replay reads no host input.
     let stdin = live.as_ref().is_some_and(|live| {
         !matches!(tape, Tape::Replay(_))

@@ -9,6 +9,7 @@ use hirsel_free::claim::Claim;
 use hirsel_free::phase::Progress;
 use std::sync::Arc;
 pub(crate) mod concurrent;
+pub mod engine;
 pub(super) mod handles;
 pub(crate) mod live;
 pub(crate) mod native;

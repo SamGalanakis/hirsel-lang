@@ -875,7 +875,12 @@ pub const HIRSEL_ABI_EXPORTS: &[AbiExport] = &[
         symbol: "hirsel_rt_v2_atomic_create",
         destination: true,
         result: Some((8, 8)),
-        parameters: &[Physical::Pointer, Physical::I64],
+        parameters: &[
+            Physical::Pointer,
+            Physical::I64,
+            Physical::I64,
+            Physical::I64,
+        ],
     },
     AbiExport {
         caller_site: false,

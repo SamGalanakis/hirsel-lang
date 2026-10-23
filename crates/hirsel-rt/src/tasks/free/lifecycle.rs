@@ -314,7 +314,7 @@ pub(crate) unsafe fn finish(
     none: *const u8,
     size: u64,
 ) -> Stopped<u8> {
-    if unsafe { super::spawn::finish(ctx, slot, none, size) } {
+    if unsafe { super::spawn::finish(ctx, slot, none, size) }? {
         return Ok(STATUS_OK);
     }
     let s = scheduler(ctx) as *mut Scheduler;
@@ -322,6 +322,12 @@ pub(crate) unsafe fn finish(
     let row = unsafe { (*s).task(me) };
     assert!(row.scope.is_some(), "the root cannot finish as a child");
     if row.detached {
+        // Detachment changes result ownership, not the child's semantic ops.
+        // A replay may reach this point on either side of the parent's detach.
+        super::record::end(ctx, || unsafe {
+            (*s).task(me).ended = true;
+            (*s).order(me);
+        })?;
         return Ok(STATUS_OK);
     }
     let held = Slot {

@@ -39,6 +39,8 @@ unsafe extern "C" fn destroy(ctx: *mut TaskCtx, value: *mut u8, _: u64, _: u64) 
             &mut atomic,
             (&0u64 as *const u64).cast(),
             8,
+            0,
+            8,
         );
     }
     STATUS_OK
@@ -166,6 +168,8 @@ fn nested_finalizer_replay_keeps_outer_images_stable_across_owner_growth_and_sav
                     &mut word,
                     (&0u64 as *const u64).cast(),
                     8,
+                    0,
+                    8,
                 );
                 STATUS_OK
             },
@@ -206,6 +210,8 @@ fn nested_finalizer_replay_keeps_outer_images_stable_across_owner_growth_and_sav
                         std::ptr::null_mut(),
                         &mut word,
                         (&0u64 as *const u64).cast(),
+                        8,
+                        0,
                         8,
                     );
                     panic!("nested finalizer replay passed its cut");

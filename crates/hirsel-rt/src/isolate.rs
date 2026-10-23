@@ -115,6 +115,40 @@ impl FailureTable {
         }
     }
 
+    /// Resolve a replayed public failure back into this exact program's
+    /// source/rule table for the native observation reader. No source code or
+    /// rule absent from the bound program can be manufactured by a terminal.
+    pub(crate) fn record(
+        &self,
+        failure: &hirsel_run_schema::Failure,
+    ) -> Option<crate::failure::FailureRecord> {
+        let site = |wanted: &hirsel_run_schema::Site| {
+            self.sites.iter().find_map(|row| {
+                let key = code(row);
+                (self.located(key) == *wanted).then_some(key)
+            })
+        };
+        let rule = hirsel_core_contract::RUNTIME_RULES
+            .iter()
+            .position(|rule| *rule == failure.rule)
+            .map(|index| hirsel_core_contract::RUNTIME_RULE_BASE + index as u32)
+            .or_else(|| {
+                self.rules
+                    .iter()
+                    .position(|row| self.text(row, 0) == failure.rule)
+                    .map(|index| index as u32 + 1)
+            })?;
+        Some(crate::failure::FailureRecord {
+            kind: 1,
+            rule,
+            site: site(&failure.site)?,
+            operation_site: match &failure.operation {
+                Some(operation) => site(operation)?,
+                None => 0,
+            },
+        })
+    }
+
     /// A failure record as its host reports it.
     pub(crate) fn failure(
         &self,

@@ -312,6 +312,8 @@ mod tests {
                                 &mut atomic,
                                 (&0u64 as *const u64).cast(),
                                 8,
+                                0,
+                                8,
                             );
                             for value in 0..256u64 {
                                 tasks::hirsel_rt_v2_atomic_store(
@@ -427,7 +429,7 @@ mod tests {
                     tasks::hirsel_rt_v2_task_scope_enter(ctx, std::ptr::null_mut(), &mut scope, &0);
                     let mut word = 0;
                     tasks::hirsel_rt_v2_atomic_create(ctx, std::ptr::null_mut(), &mut word,
-                        (&0u64 as *const u64).cast(), 8);
+                        (&0u64 as *const u64).cast(), 8, 0, 8);
                     for _ in 0..2 {
                         let environment = crate::alloc::hirsel_rt_v2_alloc(ctx, 2, 8, 8, crate::alloc::DOMAIN_HEAP, 0);
                         crate::alloc::payload(environment).cast::<u64>().write(word);

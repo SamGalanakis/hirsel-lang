@@ -4304,8 +4304,15 @@ mod tests {
                     move |ctx| unsafe {
                         let initial = 0x1122334455667788u64.to_le_bytes();
                         let mut word = 0;
-                        super::super::engine::atomic_create(ctx, &mut word, initial.as_ptr(), 8)
-                            .unwrap();
+                        super::super::engine::atomic_create(
+                            ctx,
+                            &mut word,
+                            initial.as_ptr(),
+                            8,
+                            0,
+                            8,
+                        )
+                        .unwrap();
                         let mut loaded = [0u8; 8];
                         super::super::engine::atomic_load(ctx, word, loaded.as_mut_ptr(), 8)
                             .unwrap();
@@ -7514,6 +7521,8 @@ mod tests {
                             ctx,
                             &mut word,
                             7u64.to_le_bytes().as_ptr(),
+                            8,
+                            0,
                             8,
                         )
                         .unwrap();

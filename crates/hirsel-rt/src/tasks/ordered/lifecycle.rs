@@ -919,7 +919,9 @@ mod tests {
                             std::ptr::null_mut(),
                             &mut atomic,
                             (&0u64 as *const u64).cast(),
-                            8
+                            8,
+                            0,
+                            8,
                         ),
                         STATUS_OK
                     );
@@ -1312,7 +1314,7 @@ mod tests {
                                 &mut atomic,
                                 (&raw const id).cast(),
                                 8
-                            ),
+                            , 0, 8,),
                             STATUS_OK
                         );
                         let environment = crate::alloc::hirsel_rt_v2_alloc(

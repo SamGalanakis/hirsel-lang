@@ -909,7 +909,7 @@ pub(crate) fn registry(types: &Arc<TypeInterner>) -> BTreeMap<DefId, SignatureRe
         (
             "A",
             "$intrinsic.AtomicCreate",
-            "value: Option[A], size: u64",
+            "value: Option[A], size: u64, payload_offset: u64, payload_size: u64",
             "Atomic[A]",
         ),
         (

@@ -884,6 +884,8 @@ pub(crate) unsafe fn atomic_create(
     out: *mut u64,
     image: *const u8,
     size: u64,
+    payload_offset: u64,
+    payload_size: u64,
 ) -> Stopped<()> {
     let reservation = scheduler(ctx).sync.reserve_image();
     let word = reservation.word();
@@ -894,6 +896,8 @@ pub(crate) unsafe fn atomic_create(
         Command::AtomicCreate {
             reservation: std::cell::RefCell::new(Some(reservation)),
             image,
+            payload_offset,
+            payload_size,
         }
         .operation(footprint),
     )?;
@@ -1630,7 +1634,9 @@ mod tests {
                             std::ptr::null_mut(),
                             &mut atomic,
                             (&raw const zero).cast(),
-                            8
+                            8,
+                            0,
+                            8,
                         ),
                         0
                     );
@@ -1833,7 +1839,9 @@ mod tests {
                             std::ptr::null_mut(),
                             &mut word,
                             (&raw const zero).cast(),
-                            8
+                            8,
+                            0,
+                            8,
                         ),
                         0
                     );
@@ -2125,7 +2133,9 @@ mod tests {
                             std::ptr::null_mut(),
                             &mut word,
                             (&raw const initial).cast(),
-                            8
+                            8,
+                            0,
+                            8,
                         ),
                         crate::STATUS_OK
                     );

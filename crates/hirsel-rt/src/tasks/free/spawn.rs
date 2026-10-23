@@ -116,13 +116,27 @@ pub(super) unsafe fn run(
 /// still executes on the child's context, with the result moved to its owner.
 /// # Safety
 /// The live result and none are size-byte Option images.
-pub(super) unsafe fn finish(ctx: *mut TaskCtx, slot: *mut u8, none: *const u8, size: u64) -> bool {
+pub(super) unsafe fn finish(
+    ctx: *mut TaskCtx,
+    slot: *mut u8,
+    none: *const u8,
+    size: u64,
+) -> Stopped<bool> {
     let s = scheduler(ctx);
     let me = s.current;
     let row = s.task(me);
     if !row.inline_running {
-        return false;
+        return Ok(false);
     }
+    // The physical stack loan does not remove TaskFinish's result-ready op.
+    // Replay uses independent fibers and must reach this same child ordinal
+    // before its distinct cleanup/completion op.
+    let s = s as *mut Scheduler;
+    super::record::end(ctx, || unsafe {
+        (*s).task(me).ended = true;
+        (*s).order(me);
+    })?;
+    let row = unsafe { (*s).task(me) };
     if let Some((out, expected)) = row.inline_result.take() {
         assert_eq!(expected, size);
         unsafe { std::ptr::copy_nonoverlapping(slot, out, size as usize) };
@@ -135,7 +149,7 @@ pub(super) unsafe fn finish(ctx: *mut TaskCtx, slot: *mut u8, none: *const u8, s
         row.inline_value = Some((image, size));
     }
     unsafe { std::ptr::copy_nonoverlapping(none, slot, size as usize) };
-    true
+    Ok(true)
 }
 
 #[cfg(test)]
@@ -377,6 +391,8 @@ mod store_load_gate {
                     std::ptr::null_mut(),
                     &mut word,
                     (&0u64 as *const u64).cast(),
+                    8,
+                    0,
                     8,
                 );
                 let shared = Arc::new(Shared {

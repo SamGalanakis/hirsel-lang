@@ -95,6 +95,31 @@ fn put(
         .collect();
     arguments.push(argument(first, Passing::Borrow, view));
     arguments.push(argument(first + 1, Passing::Borrow, size));
+    if handle.is_none() {
+        // AtomicCreate carries the actual Some field's extent. Carrier width
+        // includes the Option tag and alignment padding, including for u128.
+        let field = &b.record(option_layout).tag.as_ref().unwrap().variants[..]
+            .iter()
+            .find(|v| v.ordinal == 1)
+            .unwrap()
+            .fields[0];
+        let offset = field.offset;
+        let payload = b.record(field.layout);
+        if !matches!(payload.kind, LayoutKind::Scalar(_)) {
+            return Err(PassError::Malformed(
+                "an atomic requires a scalar payload".into(),
+            ));
+        }
+        let hirsel_lir::layout_types::SizeSpec::Fixed(bytes) = payload.size else {
+            return Err(PassError::Malformed(
+                "an atomic requires a fixed scalar payload".into(),
+            ));
+        };
+        let offset = b.u64(offset)?;
+        let bytes = b.u64(bytes)?;
+        arguments.push(argument(first + 2, Passing::Borrow, offset));
+        arguments.push(argument(first + 3, Passing::Borrow, bytes));
+    }
     let result = call(b, entry, arguments, &[loan]);
     drop_local(b, slot, address);
     Ok(result)

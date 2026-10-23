@@ -25,6 +25,8 @@ fn native_atomic_replay_substitutes_loads_and_stops_before_the_cut_suffix() {
                     &mut word,
                     (&0u64 as *const u64).cast(),
                     8,
+                    0,
+                    8,
                 );
                 hirsel_rt_v2_atomic_store(ctx, &word, (&7u64 as *const u64).cast(), 8);
                 let mut loaded = 0u64;
@@ -103,6 +105,8 @@ fn native_atomic_replay_substitutes_loads_and_stops_before_the_cut_suffix() {
                             std::ptr::null_mut(),
                             &mut word,
                             (&0u64 as *const u64).cast(),
+                            8,
+                            0,
                             8,
                         );
                         // Different live cells prove loads use the recording.
@@ -354,6 +358,8 @@ unsafe extern "C" fn held_child(
             std::ptr::null_mut(),
             &mut word,
             (&0u64 as *const u64).cast(),
+            8,
+            0,
             8,
         );
         hirsel_rt_v2_atomic_store(ctx, &word, (&7u64 as *const u64).cast(), 8);

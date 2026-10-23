@@ -489,6 +489,7 @@ dependencies = [
  "hirsel-diag",
  "hirsel-driver",
  "hirsel-engine",
+ "hirsel-free",
  "hirsel-guard",
  "hirsel-intern",
  "hirsel-rt",

@@ -27,6 +27,9 @@
 //! `hirsel_run_config::validate_net_grant`; absent, the root Net permits nothing). A
 //! `net.script@2` grant's peers serve the root Net's world on record and on replay; its
 //! rules alone decide policy. Replay re-derives every network grant decision from it.
+//! `HIRSEL_RT_FREE_PROJECTION` optionally writes the full normalized Free
+//! projection as a host-test diagnostic. It never selects admission, scheduling,
+//! recording contents or replay decisions; it is compiled in ordinary archives.
 use crate::context::{
     Audit, Config as RuntimeConfig, hirsel_rt_v2_ctx_create, hirsel_rt_v2_ctx_destroy,
     hirsel_rt_v2_task_exit,
@@ -1660,6 +1663,20 @@ pub(crate) unsafe fn execute(
         .iter()
         .map(|(name, file)| (*name, file))
         .collect();
+    let mut free_projection = if production_free {
+        let grants = production_io
+            .as_ref()
+            .map_or_else(Vec::new, |(io, _, _)| io.mount_pins());
+        if let Some(path) = production_io
+            .as_ref()
+            .and_then(|(_, _, tape)| tape.as_deref())
+        {
+            crate::free_replay::Report::check_input(path)?;
+        }
+        crate::free_replay::Report::open(&grants, &output_grants)?
+    } else {
+        None
+    };
     if let Some(destination) = &trace_destination {
         let io = production_io.as_ref().map(|(io, _, _)| io);
         let grants = io.map_or_else(Vec::new, |io| io.mount_pins());
@@ -2451,7 +2468,7 @@ pub(crate) unsafe fn execute(
             Err(crate::stop::Stop::Diverged(_) | crate::stop::Stop::Requested)
         )
     {
-        match session.finish_replay() {
+        match session.finish_replay(&mut free_projection) {
             Ok(Some(crate::free_launch::Terminal::Stop(stop))) => ran = Err(stop),
             Ok(Some(crate::free_launch::Terminal::Failed(outcome))) => {
                 // FAIL-3 abandons still-owned task storage, including on replay.
@@ -2506,7 +2523,13 @@ pub(crate) unsafe fn execute(
     let ended = matches!(ran, Err(crate::stop::Stop::Failed));
     let ran = if ended { Ok(STATUS_FAILURE) } else { ran };
     let outcome = if let Some(outcome) = replay_outcome {
-        outcome
+        match crate::free_launch::replay_observation(program, &outcome) {
+            Ok(text) => {
+                record.push_str(&text);
+                outcome
+            }
+            Err(error) => RunOutcome::Diverged(error),
+        }
     } else {
         match ran {
             Ok(STATUS_OK) => {
@@ -2575,6 +2598,9 @@ pub(crate) unsafe fn execute(
         && let Err(error) = session.finish_recording(&outcome)
     {
         outcome = RunOutcome::Environmental(hirsel_run_schema::Environmental::Recording(error));
+    }
+    if let Some(session) = &free_session {
+        session.report_recording(&mut free_projection)?;
     }
     if !detached {
         crate::free::finish(unsafe { &mut *ctx }, &outcome);

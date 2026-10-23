@@ -169,6 +169,8 @@ fn dedicated_commit_competing_siblings_use_actual_workers_and_one_commit_thread(
                                 atomic,
                                 (&0u64 as *const u64).cast(),
                                 8,
+                                0,
+                                8,
                             );
                         }
                         for identity in 0..2 {
@@ -260,6 +262,8 @@ fn dedicated_commit_runs_on_one_distinct_thread_and_matches_shared_canonical_byt
                             std::ptr::null_mut(),
                             &mut atomic,
                             (&raw const initial).cast(),
+                            8,
+                            0,
                             8,
                         );
                         for value in [18u64, 19, 23] {

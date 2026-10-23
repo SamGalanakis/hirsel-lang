@@ -214,7 +214,7 @@ impl<'a> Sites<'a> {
     pub fn failure_site(&self, failure: &Failure) -> Option<hirsel_run_schema::Site> {
         Some(hirsel_run_schema::Site {
             definition: failure.definition.to_string(),
-            file: failure.file.clone(),
+            file: self.outcome_file(&failure.definition, &failure.file)?,
             line: failure.line.into(),
             column: failure.column.into(),
         })
@@ -237,9 +237,20 @@ impl<'a> Sites<'a> {
     ) -> Option<hirsel_run_schema::Site> {
         Some(hirsel_run_schema::Site {
             definition: source.definition.to_string(),
-            file: source.file.clone(),
+            file: self.outcome_file(&source.definition, &source.file)?,
             line: source.line.into(),
             column: source.column.into(),
+        })
+    }
+
+    /// Host outcomes bind the same logical file as the compiled failure table.
+    /// The observation retains its physical spelling for source diagnostics.
+    fn outcome_file(&self, definition: &DefPath, path: &str) -> Option<String> {
+        (0..self.anchors.get(definition)?.len()).find_map(|source| {
+            let file = self.file(definition, source as u32)?;
+            (file.path == std::path::Path::new(path)
+                || file.logical_path() == std::path::Path::new(path))
+            .then(|| file.logical_path().to_string_lossy().into_owned())
         })
     }
     /// The one-based line and column a failure site starts at.

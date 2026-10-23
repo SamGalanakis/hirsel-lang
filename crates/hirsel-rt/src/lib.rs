@@ -79,6 +79,8 @@ pub mod finalize;
 pub mod foreign;
 mod free;
 pub mod free_driver;
+/// Engine-facing production Free replay using the native host codec.
+pub use tasks::free::host::engine as free_replay;
 mod free_launch;
 mod heaps;
 pub mod host;
@@ -129,7 +131,7 @@ pub use release::{
 pub use roots::ROOT_OVERFLOW;
 
 /// The interface version a caller must request in [`Config::abi_version`].
-pub const ABI_VERSION: u32 = 46;
+pub const ABI_VERSION: u32 = 47;
 /// Success status.
 pub const STATUS_OK: u8 = 0;
 /// A language failure. Substrate entries record it in the run context; a library

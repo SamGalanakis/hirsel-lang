@@ -162,6 +162,10 @@ fn timing_journal(
 /// re-deriving every grant decision from that record. It acquires no host resource.
 /// The caller checks the run against the program it launches.
 pub fn replay(path: &Path) -> Result<(SimIo, ValidatedRun), RunRefusal> {
+    crate::free_replay::Report::check_input(path).map_err(|detail| RunRefusal::Invalid {
+        field: "free_projection".into(),
+        detail,
+    })?;
     let bytes = std::fs::read(path).map_err(|e| RunRefusal::Invalid {
         field: "recording".into(),
         detail: e.to_string(),

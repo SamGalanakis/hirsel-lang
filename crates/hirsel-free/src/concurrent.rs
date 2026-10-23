@@ -34,6 +34,7 @@ pub struct Task {
     /// Canonical test trace, absent in ordinary recording.
     trace: Option<Vec<Stamped>>,
     spawned: u32,
+    observer: Option<Arc<Observer>>,
 }
 
 /// An allocated child log that has not joined the recorder registry. A cut
@@ -51,6 +52,7 @@ impl Task {
             self.identity.clone(),
             path,
             self.trace.is_some(),
+            self.observer.clone(),
         ))
     }
     pub fn path(&self) -> &[u32] {
@@ -68,6 +70,7 @@ struct Output<S> {
     sink: S,
     named: usize,
     watermark: BTreeMap<Vec<u32>, Progress>,
+    projection: Option<crate::projection::Projection>,
 }
 
 /// A recorder's cut and the sink offset/flush policy belong to the caller. The
@@ -89,6 +92,21 @@ pub struct Recorder<S: TapeSink, B = ()> {
     durable: bool,
     trace: bool,
     metrics: Option<Arc<Metrics>>,
+    observer: Option<Arc<Observer>>,
+}
+
+/// Optional redundant live-event observer. Events are copied inside their
+/// publishing section, so a closed terminal gate also closes this snapshot.
+#[derive(Default)]
+pub struct Observer(Mutex<Vec<Stamped>>);
+impl Observer {
+    pub fn projection(
+        &self,
+        outcome: &str,
+        cut: &BTreeMap<Vec<u32>, Progress>,
+    ) -> crate::projection::Projection {
+        crate::projection::Projection::new(outcome, cut, &self.0.lock().unwrap())
+    }
 }
 
 /// B1 recording counters. A run without metrics allocates none, reads no
@@ -158,11 +176,19 @@ impl<S: TapeSink, B> Recorder<S, B> {
                 sink,
                 named: 0,
                 watermark: BTreeMap::new(),
+                projection: None,
             }),
             durable,
             trace,
             metrics,
+            observer: None,
         })
+    }
+
+    /// Install before root admission. Ordinary recording allocates no observer.
+    pub fn observe(&mut self, observer: Arc<Observer>) {
+        assert!(!self.root_started.load(std::sync::atomic::Ordering::Relaxed));
+        self.observer = Some(observer);
     }
 
     /// Take a worker's slot outside any section. A second owner cannot take
@@ -219,6 +245,7 @@ impl<S: TapeSink, B> Recorder<S, B> {
             self.identity.clone(),
             Vec::new(),
             self.trace,
+            self.observer.clone(),
         ))
     }
 
@@ -400,6 +427,12 @@ impl<S: TapeSink, B> Recorder<S, B> {
         output.sink.append(&bytes)?;
         output.sink.barrier()?;
         output.named = keys.len();
+        // Terminal output owns this assignment. A concurrent reporter cannot
+        // observe a terminal frame without its corresponding live snapshot.
+        output.projection = self
+            .observer
+            .as_ref()
+            .map(|observer| observer.projection(&end.outcome, &progress));
         Ok(Some((
             Cut {
                 progress,
@@ -407,6 +440,10 @@ impl<S: TapeSink, B> Recorder<S, B> {
             },
             terminal.sweep,
         )))
+    }
+
+    pub fn projection(&self) -> Option<crate::projection::Projection> {
+        self.output.lock().unwrap().projection.clone()
     }
 
     pub fn into_sink(self) -> S {
@@ -424,13 +461,24 @@ fn chunks(scanned: Vec<Scanned>) -> Vec<TaskChunk> {
         })
         .collect()
 }
-fn new_task(section: &Section<'_>, identity: Arc<()>, path: Vec<u32>, trace: bool) -> Task {
-    let task = unregistered_task(identity, path, trace);
+fn new_task(
+    section: &Section<'_>,
+    identity: Arc<()>,
+    path: Vec<u32>,
+    trace: bool,
+    observer: Option<Arc<Observer>>,
+) -> Task {
+    let task = unregistered_task(identity, path, trace, observer);
     section.register(&task.log);
     task
 }
 
-fn unregistered_task(identity: Arc<()>, path: Vec<u32>, trace: bool) -> Task {
+fn unregistered_task(
+    identity: Arc<()>,
+    path: Vec<u32>,
+    trace: bool,
+    observer: Option<Arc<Observer>>,
+) -> Task {
     Task {
         identity,
         log: TaskLog::new(path),
@@ -442,6 +490,7 @@ fn unregistered_task(identity: Arc<()>, path: Vec<u32>, trace: bool) -> Task {
         scratch: Vec::new(),
         trace: trace.then(Vec::new),
         spawned: 0,
+        observer,
     }
 }
 
@@ -492,6 +541,13 @@ impl Writer<'_, '_> {
         self.section.append(&self.task.log, &self.task.scratch);
     }
     fn event(&mut self, event: Event) {
+        if let Some(observer) = &self.task.observer {
+            observer.0.lock().unwrap().push(Stamped {
+                task: self.task.log.path().into(),
+                progress: self.progress,
+                event: event.clone(),
+            });
+        }
         if let Some(trace) = &mut self.task.trace {
             trace.push(Stamped {
                 task: self.task.log.path().into(),

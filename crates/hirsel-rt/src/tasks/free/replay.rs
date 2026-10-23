@@ -392,30 +392,19 @@ impl Token {
     pub(super) fn host_result(
         &self,
         request: &crate::io::Request,
-        mut envelope: super::host::handles::Envelope,
+        envelope: super::host::handles::Envelope,
     ) -> Stopped<Result<crate::io::Completion, crate::io::AdapterError>> {
-        if super::host::handles::restore_refusal(&mut envelope, &self.shared.authorities)? {
-            return Ok(envelope.result);
-        }
-        if envelope
-            .created
-            .iter()
-            .any(|created| created.path != self.path)
-        {
-            return Err(Stop::Diverged(
-                "host creation belongs to a different task".into(),
-            ));
-        }
-        let result = self
-            .shared
-            .handles
-            .lock()
-            .unwrap()
-            .substitute_for(request, envelope)?;
         let op = self.shared.with(|session| session.op(&self.path));
-        self.shared.authorities.observe(&self.path, op, &result)?;
-        Ok(result)
+        super::host::engine::restore(
+            &self.path,
+            op,
+            request,
+            envelope,
+            &mut self.shared.handles.lock().unwrap(),
+            &self.shared.authorities,
+        )
     }
+
     pub(super) fn host_request(&self, request: &crate::io::Request) -> Stopped<()> {
         let actual = self.shared.authorities.project(request)?;
         self.observation(&actual)

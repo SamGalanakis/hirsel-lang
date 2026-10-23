@@ -149,13 +149,18 @@ impl Synchronizers {
         reservation: Reserved,
         image: *const u8,
         size: u64,
+        payload_offset: u64,
+        payload_size: u64,
     ) {
         if reservation.word & MUTEX != 0 {
             fault("a mutex reservation initialized as an atomic");
         }
-        let image = AtomicImage::new(unsafe { bytes(image, size) }, || {
-            self.stripes.get_or_insert_with(Default::default).clone()
-        });
+        let image = AtomicImage::new(
+            unsafe { bytes(image, size) },
+            payload_offset as usize,
+            payload_size as usize,
+            || self.stripes.get_or_insert_with(Default::default).clone(),
+        );
         self.initialize(reservation, Payload::Image(Arc::new(image)));
     }
 
@@ -205,10 +210,16 @@ impl Synchronizers {
 
     /// # Safety
     /// `image` is readable for `size` bytes.
-    pub(crate) unsafe fn create_image(&mut self, image: *const u8, size: u64) -> u64 {
+    pub(crate) unsafe fn create_image(
+        &mut self,
+        image: *const u8,
+        size: u64,
+        payload_offset: u64,
+        payload_size: u64,
+    ) -> u64 {
         let reservation = self.reserve_image();
         let word = reservation.word();
-        unsafe { self.initialize_image(reservation, image, size) };
+        unsafe { self.initialize_image(reservation, image, size, payload_offset, payload_size) };
         word
     }
 
@@ -381,10 +392,24 @@ mod free_atomic_tests {
     fn resolved_images_remain_live_after_registry_growth_and_retirement() {
         let mut cells = Synchronizers::default();
         let initial = [0x13u8; 32];
-        let word = unsafe { cells.create_image(initial.as_ptr(), initial.len() as u64) };
+        let word = unsafe {
+            cells.create_image(
+                initial.as_ptr(),
+                initial.len() as u64,
+                0,
+                initial.len() as u64,
+            )
+        };
         let image = cells.image(word, initial.len() as u64);
         for _ in 0..128 {
-            unsafe { cells.create_image(initial.as_ptr(), initial.len() as u64) };
+            unsafe {
+                cells.create_image(
+                    initial.as_ptr(),
+                    initial.len() as u64,
+                    0,
+                    initial.len() as u64,
+                )
+            };
         }
         cells.end();
         std::thread::scope(|scope| {

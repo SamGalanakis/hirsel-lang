@@ -133,6 +133,8 @@ fn nested_entry(cut_tail: bool) {
                             &mut atomic,
                             (&raw const value).cast(),
                             8,
+                            0,
+                            8,
                         );
                     }
                     assert!(!(*ctx).roots.has_pending());
@@ -516,6 +518,8 @@ fn native_replay_applies_nested_root_tails_at_an_entered_only_cut() {
                                 ctx,
                                 &mut word,
                                 (&0u64 as *const u64).cast(),
+                                8,
+                                0,
                                 8,
                             );
                             // Runtime-owner check before propagating the cut:

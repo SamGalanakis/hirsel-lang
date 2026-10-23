@@ -33,6 +33,9 @@ BIN_EXE_DIR = "buck-out/tmp/cargo-bin-exe"
 # `-c hirsel.tests=host` explicitly opts into execution on the invoking host;
 # `-c hirsel.tests=focus` keeps them on the pool at one CPU each (platforms.bzl).
 TESTS_ON_HOST = read_root_config("hirsel", "tests", "pool") == "host"
+# Compiled F1 qualification uses the ordinary launch with dedicated runtime
+# artifacts. This is a build input, never a runtime admission environment knob.
+FREE_QUALIFICATION = read_root_config("hirsel", "free_qualification", "false") == "true"
 # The seed of every randomly seeded test (PROPTEST_RNG_SEED). It is part of the
 # test's environment, so of its cached verdict: a pass is reused only under the
 # same seed, and main's hourly run draws a new one each run (tools/main-runs).
@@ -145,9 +148,12 @@ CLIPPY_TWINS = read_root_config("hirsel", "clippy", "false") == "true"
 
 def _rust(rule, name, **attrs):
     # Qualification changes only runtime admission. All implementation is
-    # compiled in either build; native archive variants receive the same bit.
-    if attrs.get("crate") == "hirsel_rt" and read_root_config("hirsel", "ordered_qualification", "false") == "true":
-        attrs["features"] = attrs.get("features", []) + ["ordered-qualification"]
+    # compiled in either build; native archive variants receive the same bits.
+    if attrs.get("crate") == "hirsel_rt":
+        if read_root_config("hirsel", "ordered_qualification", "false") == "true":
+            attrs["features"] = attrs.get("features", []) + ["ordered-qualification"]
+        if FREE_QUALIFICATION:
+            attrs["features"] = attrs.get("features", []) + ["free-qualification"]
     rule(name = name, **attrs)
     if CLIPPY_TWINS:
         twin = attrs | dict(exec_compatible_with = [budget_constraint(pool_budget_name(*CLIPPY_REQUEST))], visibility = ["PUBLIC"])

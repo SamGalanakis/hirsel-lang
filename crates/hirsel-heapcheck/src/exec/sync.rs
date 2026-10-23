@@ -245,6 +245,15 @@ impl<S: Stage> Machine<'_, S> {
             }
             "$intrinsic.AtomicCreate" => {
                 let image = self.sync_image(f, arguments, 0)?;
+                let size = self.task_word(f, &Self::task_argument(arguments, 1)?)?;
+                let offset = self.task_word(f, &Self::task_argument(arguments, 2)?)?;
+                let payload = self.task_word(f, &Self::task_argument(arguments, 3)?)?;
+                if size != image.len()
+                    || payload == 0
+                    || offset.checked_add(payload).is_none_or(|end| end > size)
+                {
+                    return fail(V::Malformed, "an Atomic scalar extent outside its carrier");
+                }
                 let s = self.scheduler();
                 s.sync.cells.push(Cell {
                     image: Some(image),

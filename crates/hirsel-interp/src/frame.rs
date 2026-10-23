@@ -93,6 +93,11 @@ impl CallerSite {
         }
     }
 }
+pub(crate) struct DropWait {
+    pub result: crate::OperationResult,
+    pub anchor: crate::observation::Anchor,
+    pub caller: Option<CallerSite>,
+}
 pub(crate) struct Frame {
     pub caller: Option<CallerSite>,
     pub definition: DefinitionRef,
@@ -102,6 +107,7 @@ pub(crate) struct Frame {
     pub mut_parameters: Vec<LocalId>,
     pub operation: Option<Box<(crate::OperationResult, crate::resources::OperationState)>>,
     pub callback: Option<Box<crate::resources::Callback>>,
+    pub drop_wait: Option<Box<DropWait>>,
     pub work: std::collections::VecDeque<crate::resources::Work>,
     pub ending: Option<crate::resources::Ending>,
     pub finalized: Option<Box<(LocalId, crate::observation::Anchor, Option<CallerSite>)>>,
@@ -246,6 +252,7 @@ impl Frame {
             body_id,
             mut_parameters: vec![],
             operation: None,
+            drop_wait: None,
             callback: None,
             work: std::collections::VecDeque::new(),
             ending: None,
@@ -1073,6 +1080,9 @@ impl Drop for Frame {
         }
         if let Some(crate::resources::Ending::Return(value)) = self.ending.take() {
             value.discard();
+        }
+        if let Some(drop) = self.drop_wait.take() {
+            crate::resources::discard_result(drop.result);
         }
         if let Some((result, _)) = self.operation.take().map(|operation| *operation) {
             crate::resources::discard_result(result);

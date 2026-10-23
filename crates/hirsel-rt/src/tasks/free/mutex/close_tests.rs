@@ -30,6 +30,8 @@ unsafe extern "C" fn destroy(ctx: *mut TaskCtx, value: *mut u8, _: u64, _: u64) 
             &mut atomic,
             (&raw const input).cast(),
             8,
+            0,
+            8,
         );
         hirsel_rt_v2_atomic_load(ctx, &atomic, (&raw mut output).cast(), 8);
     }

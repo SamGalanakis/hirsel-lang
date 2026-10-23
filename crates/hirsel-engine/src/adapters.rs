@@ -315,7 +315,7 @@ fn locate(
         definition: definition.to_string(),
         file: sources
             .file(sources.resolve(span).file)?
-            .path
+            .logical_path()
             .to_string_lossy()
             .into_owned(),
         line: location.line.into(),
@@ -398,7 +398,7 @@ pub fn project_outcome(
                 Some(Site {
                     file: sources
                         .file(sources.resolve(span).file)?
-                        .path
+                        .logical_path()
                         .to_string_lossy()
                         .into_owned(),
                     line: location.line.into(),

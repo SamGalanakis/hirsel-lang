@@ -14,6 +14,7 @@ use hirsel_rt::{
 use hirsel_syntax::DefPath;
 use hirsel_types::{BuiltinType, Primitive};
 use std::collections::BTreeMap;
+mod free;
 mod remote;
 mod runners;
 pub(crate) use remote::{CancelHandle, ExternalCancel, RemoteRunners, wire as remote_wire};
@@ -276,6 +277,12 @@ fn wait_canceled(cause: u32) -> Value {
 }
 pub(crate) struct HostLibrary {
     pub library: Library,
+    free: Option<hirsel_rt::free_replay::Codec>,
+    free_report: Option<hirsel_rt::free_replay::Report>,
+    free_waits: BTreeMap<u64, free::Wait>,
+    free_drops: BTreeMap<u64, free::Drop>,
+    pending_free_drop: Option<OperationResult>,
+    free_ready: Option<(R, Result<C, hirsel_rt::io::AdapterError>)>,
     pub io: HostIo,
     /// The first adapter refusal: a replay divergence or a live provider error.
     pub refused: Option<String>,
@@ -354,7 +361,32 @@ impl HostLibrary {
         };
         let mut library = Library::new(run, config)?;
         library.host_deadlines();
+        let free = if hirsel_rt::free_driver::admission_enabled() {
+            match &io {
+                HostIo::Replay(io) => {
+                    hirsel_rt::free_replay::Codec::open(io).map_err(Error::InvalidTir)?
+                }
+                _ => None,
+            }
+        } else {
+            None
+        };
+        let free = free.map(|(codec, session)| {
+            library.enable_native_free(session, record.inputs.test_seed);
+            codec
+        });
+        let free_report = if free.is_some() {
+            hirsel_rt::free_replay::Report::open(&[], &[]).map_err(Error::InvalidTir)?
+        } else {
+            None
+        };
         Ok(Self {
+            free_report,
+            free,
+            free_waits: BTreeMap::new(),
+            free_drops: BTreeMap::new(),
+            pending_free_drop: None,
+            free_ready: None,
             next_wait: 1 << 62,
             waits: BTreeMap::new(),
             armed: Vec::new(),
@@ -567,6 +599,17 @@ impl HostLibrary {
         self.host_cancelable(request, self.library.cancellation())
     }
     fn host_cancelable(&mut self, request: R, cancellation: Option<u32>) -> Result<C, Error> {
+        if let Some((expected, result)) = self.free_ready.take() {
+            if expected != request {
+                return Err(invalid());
+            }
+            return result.map_err(|e| Error::Unavailable(format!("Free completion: {e:?}")));
+        }
+        if self.free.is_some() {
+            return Err(Error::Unavailable(
+                "Free host request has no evaluator continuation".into(),
+            ));
+        }
         self.crash_point()?;
         if self.io.adapter().wants_issuer() {
             let task = self.library.task_path();
@@ -830,7 +873,9 @@ impl HostLibrary {
         a: &[Value],
         cx: &mut OperationContext<'_>,
     ) -> Result<OperationResult, Error> {
-        if let Some(cause) = self.library.cancellation() {
+        if self.free_ready.is_none()
+            && let Some(cause) = self.library.cancellation()
+        {
             return Ok(OperationResult::returned(wait_canceled(cause)));
         }
         self.yield_now = true;
@@ -1047,7 +1092,7 @@ impl HostLibrary {
     ) -> Result<OperationResult, Error> {
         if name == "io.process" {
             return Ok(OperationResult::returned(
-                match self.host(R::Process { io: 1 })? {
+                match self.host(self.process_projection_request(name, a)?)? {
                     C::Handle(Ok(id)) => ok(self.handle(id, "Proc")),
                     C::Handle(Err(hirsel_rt::io::IoError::NotGranted)) => error(variant(0, vec![])),
                     _ => return Err(invalid()),
@@ -1055,29 +1100,12 @@ impl HostLibrary {
             ));
         }
         if name == "proc.narrow" {
-            let rules = fields(&a[1])?
-                .into_iter()
-                .map(|rule| {
-                    let [program, env] = fields(rule)?[..] else {
-                        return Err(invalid());
-                    };
-                    Ok(hirsel_run_schema::ProcessRule {
-                        program: text(program)?,
-                        env: fields(env)?
-                            .into_iter()
-                            .map(text)
-                            .collect::<Result<_, _>>()?,
-                    })
-                })
-                .collect::<Result<_, _>>()?;
-            let process = self.id(&a[0])?;
-            return Ok(OperationResult::returned(
-                match self.host(R::ProcessNarrow { process, rules })? {
-                    C::Spawned(Ok(id)) => ok(self.handle(id, "Proc")),
-                    C::Spawned(Err(f)) => error(hirsel_interp::library::process::failure_value(f)),
-                    _ => return Err(invalid()),
-                },
-            ));
+            let request = self.process_projection_request(name, a)?;
+            return Ok(OperationResult::returned(match self.host(request)? {
+                C::Spawned(Ok(id)) => ok(self.handle(id, "Proc")),
+                C::Spawned(Err(f)) => error(hirsel_interp::library::process::failure_value(f)),
+                _ => return Err(invalid()),
+            }));
         }
         self.yield_now = true;
         if name != "proc.run" && name != "proc.pipeline" {
@@ -1105,6 +1133,28 @@ impl HostLibrary {
                 targets: vec![],
             },
         })
+    }
+    fn process_projection_request(&self, name: &str, a: &[Value]) -> Result<R, Error> {
+        if name == "io.process" {
+            return Ok(R::Process { io: 1 });
+        }
+        let rules = fields(&a[1])?
+            .into_iter()
+            .map(|rule| {
+                let [program, env] = fields(rule)?[..] else {
+                    return Err(invalid());
+                };
+                Ok(hirsel_run_schema::ProcessRule {
+                    program: text(program)?,
+                    env: fields(env)?
+                        .into_iter()
+                        .map(text)
+                        .collect::<Result<_, _>>()?,
+                })
+            })
+            .collect::<Result<_, _>>()?;
+        let process = self.id(&a[0])?;
+        Ok(R::ProcessNarrow { process, rules })
     }
     /// `proc.spawn` or a child operation of a host Proc (`hirsel-rt/src/host_waits.rs`): a
     /// cancellation point completes Canceled without a request, and a write, read or wait
@@ -1150,23 +1200,13 @@ impl HostLibrary {
             },
         })
     }
-    /// Issue a child request, under `token` when it can park.
-    fn child_request(
-        &mut self,
-        name: &str,
-        a: &[Value],
-        token: Option<u64>,
-        cx: &mut OperationContext<'_>,
-    ) -> Result<OperationResult, Error> {
-        use hirsel_interp::library::process::{failure_value, script_failure, status_value};
+    fn child_host_request(&self, name: &str, a: &[Value]) -> Result<Option<R>, Error> {
         let process = self.id(&a[0])?;
-        let request = match name {
+        Ok(Some(match name {
             "proc.spawn" => match self.command(&a[1])? {
                 Some(command) => R::ProcessSpawn { process, command },
                 None => {
-                    return Ok(OperationResult::returned(error(failure_value(
-                        ProcessFailure::InvalidInput,
-                    ))));
+                    return Ok(None);
                 }
             },
             "proc.spawn_pipeline" => {
@@ -1175,9 +1215,7 @@ impl HostLibrary {
                     match self.command(stage)? {
                         Some(command) => stages.push(command),
                         None => {
-                            return Ok(OperationResult::returned(error(failure_value(
-                                ProcessFailure::InvalidInput,
-                            ))));
+                            return Ok(None);
                         }
                     }
                 }
@@ -1222,6 +1260,21 @@ impl HostLibrary {
                 signal: hirsel_rt::process::Signal::of_ordinal(tag(&a[2])?).ok_or_else(invalid)?,
             },
             _ => return Err(Error::Unavailable(format!("host process {name}"))),
+        }))
+    }
+    /// Issue a child request, under `token` when it can park.
+    fn child_request(
+        &mut self,
+        name: &str,
+        a: &[Value],
+        token: Option<u64>,
+        cx: &mut OperationContext<'_>,
+    ) -> Result<OperationResult, Error> {
+        use hirsel_interp::library::process::{failure_value, script_failure, status_value};
+        let Some(request) = self.child_host_request(name, a)? else {
+            return Ok(OperationResult::returned(error(failure_value(
+                ProcessFailure::InvalidInput,
+            ))));
         };
         if let Some(token) = token {
             self.io.adapter().enter(token);
@@ -1343,17 +1396,10 @@ impl HostLibrary {
             }
         })
     }
-    /// Issue `proc.run` or `proc.pipeline` under `token`: its completion, or Blocked while
-    /// the children run.
-    fn process_request(
-        &mut self,
-        name: &str,
-        a: &[Value],
-        token: u64,
-    ) -> Result<OperationResult, Error> {
+    fn process_run_request(&self, name: &str, a: &[Value]) -> Result<Option<R>, Error> {
         let (process, stdin, max_output) = (self.id(&a[0])?, bytes(&a[2])?, word(&a[3])?);
         let deadline = self.deadline(&a[4])?;
-        let request = if name == "proc.run" {
+        Ok(Some(if name == "proc.run" {
             match self.command(&a[1])? {
                 Some(command) => R::ProcessRun {
                     process,
@@ -1362,11 +1408,7 @@ impl HostLibrary {
                     max_output,
                     deadline,
                 },
-                None => {
-                    return Ok(OperationResult::returned(process_value(
-                        ProcessOutcome::Error(ProcessFailure::InvalidInput),
-                    )));
-                }
+                None => return Ok(None),
             }
         } else {
             match fields(&a[1])?
@@ -1381,12 +1423,24 @@ impl HostLibrary {
                     max_output,
                     deadline,
                 },
-                None => {
-                    return Ok(OperationResult::returned(pipeline_value(
-                        PipelineOutcome::Error(ProcessFailure::InvalidInput),
-                    )));
-                }
+                None => return Ok(None),
             }
+        }))
+    }
+    /// Issue `proc.run` or `proc.pipeline` under `token`: its completion, or Blocked while
+    /// the children run.
+    fn process_request(
+        &mut self,
+        name: &str,
+        a: &[Value],
+        token: u64,
+    ) -> Result<OperationResult, Error> {
+        let Some(request) = self.process_run_request(name, a)? else {
+            return Ok(OperationResult::returned(if name == "proc.run" {
+                process_value(ProcessOutcome::Error(ProcessFailure::InvalidInput))
+            } else {
+                pipeline_value(PipelineOutcome::Error(ProcessFailure::InvalidInput))
+            }));
         };
         self.io.adapter().enter(token);
         let cancellation = self
@@ -1403,10 +1457,9 @@ impl HostLibrary {
             _ => Err(invalid()),
         }
     }
-    fn storage(&mut self, name: &str, a: &[Value]) -> Result<OperationResult, Error> {
-        self.yield_now = true;
+    fn storage_request(&self, name: &str, a: &[Value]) -> Result<R, Error> {
         let path = |v: &Value| text(fields(v)?[0]);
-        let request = match name {
+        Ok(match name {
             "io.dir" => R::Directory {
                 io: 1,
                 path: path(&a[1])?,
@@ -1541,7 +1594,11 @@ impl HostLibrary {
                 clock: self.id(&a[0])?,
             },
             _ => return Err(invalid()),
-        };
+        })
+    }
+    fn storage(&mut self, name: &str, a: &[Value]) -> Result<OperationResult, Error> {
+        self.yield_now = true;
+        let request = self.storage_request(name, a)?;
         let completion = self.host(request)?;
         let mut updates = vec![];
         let value = match completion {
@@ -2286,7 +2343,7 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
     /// replay, as the native scheduler does.
     fn choose_task(&mut self, runnable: &[u64]) -> Result<usize, Error> {
         let choice = self.library.choose_task(runnable)?;
-        if !self.library.schedule_recorded(runnable.len()) {
+        if self.free.is_some() || !self.library.schedule_recorded(runnable.len()) {
             return Ok(choice);
         }
         let count = runnable.len() as u64;
@@ -2352,6 +2409,9 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
         self.runner_children(cx)
     }
     fn wait(&mut self) -> Result<bool, Error> {
+        if self.free.is_some() {
+            return Ok(false);
+        }
         self.remote_deliveries();
         self.io.adapter().wait().map_err(|e| match e {
             hirsel_rt::io::AdapterError::Signaled(kind) => Error::Signaled(kind),
@@ -2359,6 +2419,9 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
         })
     }
     fn ready_now(&mut self) -> Result<bool, Error> {
+        if self.free.is_some() {
+            return Ok(false);
+        }
         self.remote_deliveries();
         self.io
             .adapter()
@@ -2402,6 +2465,12 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
         token: u64,
         cx: &mut OperationContext<'_>,
     ) -> Result<Option<OperationResult>, Error> {
+        if self.free_drops.contains_key(&token) {
+            return self.free_poll_drop(token, cx);
+        }
+        if self.free_waits.contains_key(&token) {
+            return self.free_poll(token, cx);
+        }
         if self.waits_on_runner(token) {
             return self.runner_poll(token, cx);
         }
@@ -2533,6 +2602,12 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
         let route = operation.index >> HOST_ROUTE_SHIFT;
         operation.index &= (1 << HOST_ROUTE_SHIFT) - 1;
         let name = operation.name;
+        if self.free.is_some()
+            && self.free_ready.is_none()
+            && let Some(request) = self.free_request(name, call.arguments)?
+        {
+            return self.free_call(request, call, cx).map(Some);
+        }
         if route == HostRoute::Input as usize {
             let result = self.host_input(&name, call, cx);
             self.echo(cx.stdout)?;
@@ -2628,12 +2703,39 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
         }
         result
     }
+    fn take_drop_wait(&mut self) -> Option<OperationResult> {
+        self.pending_free_drop.take()
+    }
     fn drop_handle(
         &mut self,
         kind: &str,
         id: u64,
         cx: &mut OperationContext<'_>,
     ) -> Result<(), Error> {
+        if self.free.is_some()
+            && matches!(
+                kind,
+                "Stream"
+                    | "ReadHalf"
+                    | "WriteHalf"
+                    | "Listener"
+                    | "UdpSocket"
+                    | "File"
+                    | "AtomicFile"
+                    | "Child"
+                    | "ChildGroup"
+                    | "Mapped"
+                    | "Watcher"
+                    | "Span"
+            )
+            && let Some(&handle) = self.handles.get(&id)
+        {
+            if self.pending_free_drop.is_some() {
+                return Err(invalid());
+            }
+            self.pending_free_drop = Some(self.free_drop(kind, id, handle, cx)?);
+            return Ok(());
+        }
         if matches!(
             kind,
             "Stream"

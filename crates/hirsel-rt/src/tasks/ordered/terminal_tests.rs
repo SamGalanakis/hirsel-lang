@@ -116,7 +116,9 @@ fn terminal_run(mode: u64) {
                         std::ptr::null_mut(),
                         &mut atomic,
                         (&0u64 as *const u64).cast(),
-                        8
+                        8,
+                        0,
+                        8,
                     ),
                     STATUS_OK
                 );
@@ -277,7 +279,9 @@ fn returned_error_sink_and_yielding_cleanup_follow_older_turns_on_the_production
                     std::ptr::null_mut(),
                     &mut atomic,
                     (&0u64 as *const u64).cast(),
-                    8
+                    8,
+                    0,
+                    8,
                 ),
                 STATUS_OK
             );
@@ -457,6 +461,8 @@ fn stopped_trace_with_failures(
                     std::ptr::null_mut(),
                     &mut atomic,
                     (&0u64 as *const u64).cast(),
+                    8,
+                    0,
                     8,
                 ),
                 STATUS_OK
@@ -755,7 +761,9 @@ fn budget_terminal_trace_truncates_actual_younger_suffix_and_accumulates_live_he
                                     std::ptr::null_mut(),
                                     &mut atomic,
                                     (&0u64 as *const u64).cast(),
-                                    8
+                                    8,
+                                    0,
+                                    8,
                                 ),
                                 STATUS_OK
                             );
@@ -1008,7 +1016,9 @@ fn exact_charge_trace_preserves_fuel_before_and_after_a_free_across_head_settlem
                         std::ptr::null_mut(),
                         &mut atomic,
                         (&0u64 as *const u64).cast(),
-                        8
+                        8,
+                        0,
+                        8,
                     ),
                     STATUS_OK
                 );

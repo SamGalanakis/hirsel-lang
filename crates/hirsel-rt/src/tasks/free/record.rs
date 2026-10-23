@@ -459,6 +459,8 @@ pub(crate) unsafe fn atomic_create(
     out: *mut u64,
     value: *const u8,
     size: u64,
+    payload_offset: u64,
+    payload_size: u64,
 ) -> Stopped<()> {
     entry(ctx);
     // scheduler() observes a runtime stop and can abandon its calling fiber.
@@ -466,7 +468,11 @@ pub(crate) unsafe fn atomic_create(
     // normally before any stop/suspension. The role keeps this pointer stable.
     let scheduler = crate::tasks::scheduler(ctx) as *mut crate::tasks::Scheduler;
     phase(ctx, |_| unsafe {
-        out.write((*scheduler).sync.create_image(value, size));
+        out.write(
+            (*scheduler)
+                .sync
+                .create_image(value, size, payload_offset, payload_size),
+        );
     })
 }
 
@@ -481,9 +487,6 @@ pub(crate) unsafe fn atomic_load(
     begin(ctx);
     let replay = super::replay::token(ctx);
     let size_bytes = usize::try_from(size).expect("an atomic image fits memory");
-    if on(ctx) || super::replay::on(ctx) {
-        assert!(size_bytes <= 16, "a recorded atomic image fits 128 bits");
-    }
     let image = crate::tasks::scheduler(ctx).sync.image(word, size);
     unsafe { crate::tasks::role::release(ctx) };
     // The wide-image stripe is acquired outside the section. Retain it until
@@ -494,17 +497,18 @@ pub(crate) unsafe fn atomic_load(
         let out = std::slice::from_raw_parts_mut(slot, size_bytes);
         access.load(out);
         if writer.is_some() || replay.is_some() {
-            let mut bits = [0; 16];
-            bits[..size_bytes].copy_from_slice(out);
+            let bits = image.bits(out).ok_or_else(|| {
+                Stop::Diverged("a recorded atomic scalar exceeds 128 bits".into())
+            })?;
             if let Some(writer) = writer {
-                writer.load(u128::from_le_bytes(bits));
+                writer.load(bits);
             } else {
-                let bits = replay
-                    .as_ref()
-                    .unwrap()
-                    .load(u128::from_le_bytes(bits))?
-                    .to_le_bytes();
-                out.copy_from_slice(&bits[..size_bytes]);
+                let bits = replay.as_ref().unwrap().load(bits)?;
+                if !image.substitute(out, bits) {
+                    return Err(Stop::Diverged(
+                        "a recorded atomic load does not fit its scalar".into(),
+                    ));
+                }
             }
         }
         Ok(())
@@ -564,21 +568,31 @@ impl Recording {
         trace: bool,
     ) -> std::io::Result<Arc<Self>> {
         let production = sink.file.is_some();
+        let observer = (production && std::env::var_os(crate::free_replay::Report::VAR).is_some())
+            .then(|| Arc::new(hirsel_free::concurrent::Observer::default()));
+        let mut recorder = Recorder::new(
+            sink,
+            binding,
+            crate::pool::MAX_WIDTH as usize + crate::pool::POOL_THREADS + 1,
+            durable,
+            trace,
+            None,
+        )?;
+        if let Some(observer) = &observer {
+            recorder.observe(observer.clone());
+        }
         Ok(Arc::new(Self {
             production,
-            recorder: Recorder::new(
-                sink,
-                binding,
-                crate::pool::MAX_WIDTH as usize + crate::pool::POOL_THREADS + 1,
-                durable,
-                trace,
-                None,
-            )?,
+            recorder,
             trace: Mutex::new(Vec::new()),
             requests: std::sync::atomic::AtomicU64::new(1),
             host_keys: Default::default(),
             authorities: Default::default(),
         }))
+    }
+
+    pub(crate) fn projection(&self) -> Option<hirsel_free::projection::Projection> {
+        self.recorder.projection()
     }
 
     #[cfg(test)]
@@ -662,6 +676,8 @@ mod tests {
                             std::ptr::null_mut(),
                             &mut word,
                             out.as_ptr(),
+                            size as u64,
+                            0,
                             size as u64,
                         );
                         hirsel_rt_v2_atomic_store(ctx, &word, value.as_ptr(), size as u64);
@@ -812,6 +828,8 @@ mod tests {
                         &mut word,
                         (&raw const initial).cast(),
                         8,
+                        0,
+                        8,
                     )
                 };
                 let race = Arc::new(Race {
@@ -946,6 +964,8 @@ mod tests {
                         std::ptr::null_mut(),
                         &mut word,
                         (&raw const value).cast(),
+                        8,
+                        0,
                         8,
                     );
                 }

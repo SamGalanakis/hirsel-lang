@@ -307,6 +307,8 @@ fn atomic_cells_do_not_alias_a_closed_host_handle() {
         fixtures::HEAP,
     );
     let image = f.b.plain(ValueRepr::Aggregate, c.cell);
+    let scalar_size = f.int(8);
+    let scalar_offset = f.int(0);
     let failure = f.propagates();
     f.inst(Inst::Construct {
         result: image,
@@ -327,7 +329,12 @@ fn atomic_cells_do_not_alias_a_closed_host_handle() {
         let atomic = f.b.plain(ValueRepr::Handle, handle);
         f.call(
             create.clone(),
-            &[(Passing::Borrow, ArgumentValue::Value(image))],
+            &[
+                (Passing::Borrow, ArgumentValue::Value(image)),
+                (Passing::Borrow, ArgumentValue::Value(scalar_size)),
+                (Passing::Borrow, ArgumentValue::Value(scalar_offset)),
+                (Passing::Borrow, ArgumentValue::Value(scalar_size)),
+            ],
             Some(atomic),
         );
         f.call(

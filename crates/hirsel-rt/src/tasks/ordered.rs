@@ -84,6 +84,8 @@ pub(crate) enum Command {
     AtomicCreate {
         reservation: RefCell<Option<crate::sync::Reserved>>,
         image: Vec<u8>,
+        payload_offset: u64,
+        payload_size: u64,
     },
     MutexCreate {
         reservation: RefCell<Option<crate::sync::Reserved>>,
@@ -520,14 +522,24 @@ impl Backend<Command> for Objects<'_> {
                     );
                     (Outcome::image(0, Vec::new()), Next::Keep)
                 }
-                Command::AtomicCreate { reservation, image } => {
+                Command::AtomicCreate {
+                    reservation,
+                    image,
+                    payload_offset,
+                    payload_size,
+                } => {
                     let reservation = reservation
                         .borrow_mut()
                         .take()
                         .expect("creation committed once");
                     let word = reservation.word();
-                    s.sync
-                        .initialize_image(reservation, image.as_ptr(), image.len() as u64);
+                    s.sync.initialize_image(
+                        reservation,
+                        image.as_ptr(),
+                        image.len() as u64,
+                        *payload_offset,
+                        *payload_size,
+                    );
                     (Outcome::image(0, word.to_ne_bytes().to_vec()), Next::Yield)
                 }
                 Command::MutexCreate {
@@ -820,7 +832,7 @@ mod tests {
         unsafe {
             super::super::scheduler(ctx)
                 .sync
-                .create_image((&raw const n).cast(), 8)
+                .create_image((&raw const n).cast(), 8, 0, 8)
         }
     }
 
@@ -1382,6 +1394,8 @@ mod tests {
                 Command::AtomicCreate {
                     reservation: RefCell::new(Some(reservation)),
                     image: bytes(41),
+                    payload_offset: 0,
+                    payload_size: 8,
                 }
                 .operation(footprint(1, true)),
                 &mut backend

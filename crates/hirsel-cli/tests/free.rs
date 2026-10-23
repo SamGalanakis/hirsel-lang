@@ -71,6 +71,10 @@ impl Scratch {
 }
 impl Drop for Scratch {
     fn drop(&mut self) {
+        if std::thread::panicking() {
+            eprintln!("Free replay artifacts retained at {}", self.0.display());
+            return;
+        }
         let _ = std::fs::remove_dir_all(&self.0);
     }
 }
@@ -481,4 +485,841 @@ fn recorded_deadline_exit_with_a_child_rest_replays_across_engines() {
             );
         }
     }
+}
+
+#[test]
+fn f1_compiled_eight_worker_admission_records_production_host_phases() {
+    let scratch = Scratch::new("f1-ordinary-admission");
+    let program = scratch.path("main.hir");
+    std::fs::write(
+        &program,
+        r#"
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let out = io.stdout(rt)?
+  let _ = out.print(out, "f1 production\n")
+  Ok(())
+}
+"#,
+    )
+    .unwrap();
+    let tape = scratch.path("recording");
+    let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+        .args(["run", "--native"])
+        .arg(&program)
+        .args([
+            "--grants",
+            r#"{"io":{"stdout":"stdout.bytes@1","tasks":"tasks.free@1","dirs":[]},"args":[]}"#,
+            "--cores",
+            "8",
+            "--record",
+        ])
+        .arg(&tape)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(output.stdout, b"f1 production\n");
+    let bytes = std::fs::read(&tape).unwrap();
+    let qualified = hirsel_rt::free_driver::admission_enabled();
+    assert_eq!(
+        bytes.starts_with(b"hirsel-free-tape 2\n"),
+        qualified,
+        "compiled admission must use F1 phases exactly in the qualification build"
+    );
+    // A replay must be bound to this exact program before entering code.
+    let replay = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+        .args(["run", "--native"])
+        .arg(&program)
+        .arg("--replay")
+        .arg(&tape)
+        .args(["--cores", "1"])
+        .output()
+        .unwrap();
+    assert!(replay.status.success(), "{replay:?}");
+    assert_eq!(replay.stdout, output.stdout);
+}
+
+#[test]
+fn f1_native_recording_replays_stdout_and_bound_root_on_interpreter() {
+    let scratch = Scratch::new("f1-interpreter-host");
+    let program = scratch.path("main.hir");
+    std::fs::write(
+        &program,
+        r#"
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let out = io.stdout(rt)?
+  let _ = out.print(out, "f1 engine replay\n")
+  Ok(())
+}
+"#,
+    )
+    .unwrap();
+    let tape = scratch.path("recording");
+    let live = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+        .args(["run", "--native"])
+        .arg(&program)
+        .args([
+            "--grants",
+            r#"{"io":{"stdout":"stdout.bytes@1","tasks":"tasks.free@1","dirs":[]},"args":[]}"#,
+            "--cores",
+            "8",
+            "--record",
+        ])
+        .arg(&tape)
+        .output()
+        .unwrap();
+    assert!(live.status.success(), "{live:?}");
+    assert_eq!(live.stdout, b"f1 engine replay\n");
+    assert!(
+        std::fs::read(&tape)
+            .unwrap()
+            .starts_with(b"hirsel-free-tape 2\n")
+    );
+    let replay = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+        .arg("run")
+        .arg(&program)
+        .arg("--replay")
+        .arg(&tape)
+        .output()
+        .unwrap();
+    assert!(replay.status.success(), "{replay:?}");
+    assert_eq!(replay.stdout, live.stdout);
+}
+
+#[test]
+fn f1_native_task_channel_recording_replays_across_engines() {
+    let scratch = Scratch::new("f1-task-channel");
+    let program = scratch.path("main.hir");
+    std::fs::write(&program, source("gap")).unwrap();
+    let tape = scratch.path("recording");
+    let report = scratch.path("projection");
+    let live = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+        .env(hirsel_rt::free_replay::Report::VAR, &report)
+        .args(["run", "--native"])
+        .arg(&program)
+        .args([
+            "--grants",
+            r#"{"io":{"stdout":"stdout.bytes@1","tasks":"tasks.free@1","dirs":[]},"args":[]}"#,
+            "--cores",
+            "8",
+            "--record",
+        ])
+        .arg(&tape)
+        .output()
+        .unwrap();
+    assert!(live.status.success(), "{live:?}");
+    assert!(
+        live.stdout == b"sent\n" || live.stdout == b"closed\n",
+        "{live:?}"
+    );
+    assert_eq!(
+        std::fs::read(&tape)
+            .unwrap()
+            .starts_with(b"hirsel-free-tape 2\n"),
+        hirsel_rt::free_driver::admission_enabled()
+    );
+    let live_projection = if hirsel_rt::free_driver::admission_enabled() {
+        Some(std::fs::read_to_string(&report).unwrap())
+    } else {
+        None
+    };
+    for engine in ENGINES {
+        for width in ["1", "8"] {
+            let replay = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+                .env(hirsel_rt::free_replay::Report::VAR, &report)
+                .arg("run")
+                .args(engine)
+                .arg(&program)
+                .arg("--replay")
+                .arg(&tape)
+                .args(["--cores", width])
+                .output()
+                .unwrap();
+            assert!(
+                replay.status.success(),
+                "{engine:?} width {width}: {replay:?}"
+            );
+            assert_eq!(replay.stdout, live.stdout, "{engine:?} width {width}");
+            if let Some(live) = &live_projection {
+                assert_eq!(
+                    &std::fs::read_to_string(&report).unwrap(),
+                    live,
+                    "{engine:?} width {width}: full normalized projection"
+                );
+            }
+        }
+    }
+}
+
+/// Restrict a child to a subset of the test's admitted CPUs. The runtime's
+/// process permit grant uses available_parallelism, while replay retains its
+/// requested logical width independently of the host topology.
+fn f1_permits(command: &mut Command, permits: usize) {
+    let mut admitted = unsafe { std::mem::zeroed::<libc::cpu_set_t>() };
+    assert_eq!(
+        unsafe { libc::sched_getaffinity(0, std::mem::size_of_val(&admitted), &mut admitted) },
+        0
+    );
+    let cpus: Vec<_> = (0..libc::CPU_SETSIZE as usize)
+        .filter(|&cpu| unsafe { libc::CPU_ISSET(cpu, &admitted) })
+        .take(permits)
+        .collect();
+    assert_eq!(
+        cpus.len(),
+        permits,
+        "acceptance needs {permits} CPUs inside its admitted mask"
+    );
+    assert!(
+        std::thread::available_parallelism().unwrap().get() >= permits,
+        "acceptance permit grant exceeds this process's quota"
+    );
+    let mut mask = unsafe { std::mem::zeroed::<libc::cpu_set_t>() };
+    for cpu in cpus {
+        unsafe {
+            libc::CPU_SET(cpu, &mut mask);
+        }
+    }
+    unsafe {
+        command.pre_exec(move || {
+            if libc::sched_setaffinity(0, std::mem::size_of_val(&mask), &mask) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+}
+
+fn f1_corpus_matrix(name: &str, text: &str) {
+    f1_corpus_matrix_with_io(
+        name,
+        text,
+        |_| serde_json::json!({"stdout":"stdout.bytes@1", "tasks":"tasks.free@1", "dirs":[]}),
+    );
+}
+
+fn f1_corpus_matrix_with_io(
+    name: &str,
+    text: &str,
+    grants: impl FnOnce(&Scratch) -> serde_json::Value,
+) {
+    f1_corpus_matrix_with_exit(name, text, grants, 0);
+}
+
+fn f1_corpus_matrix_with_exit(
+    name: &str,
+    text: &str,
+    grants: impl FnOnce(&Scratch) -> serde_json::Value,
+    expected_exit: i32,
+) {
+    let scratch = Scratch::new(name);
+    let io = grants(&scratch);
+    let program = scratch.path("main.hir");
+    std::fs::write(&program, text).unwrap();
+    for level in ["record", "durable"] {
+        let tape = scratch.path(level);
+        let report = scratch.path("projection");
+        let grants = serde_json::json!({"io":io,"args":[],"recording":level}).to_string();
+        let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+        command
+            .args(["run", "--native"])
+            .arg(&program)
+            .args(["--grants", &grants, "--cores", "8", "--record"])
+            .arg(&tape)
+            .env(hirsel_rt::free_replay::Report::VAR, &report);
+        f1_permits(&mut command, 8);
+        let live = command.output().unwrap();
+        assert_eq!(
+            live.status.code(),
+            Some(expected_exit),
+            "{name} {level} live: {live:?}"
+        );
+        assert_eq!(
+            std::fs::read(&tape)
+                .unwrap()
+                .starts_with(b"hirsel-free-tape 2\n"),
+            hirsel_rt::free_driver::admission_enabled()
+        );
+        let projection = if hirsel_rt::free_driver::admission_enabled() {
+            Some(std::fs::read_to_string(&report).unwrap())
+        } else {
+            None
+        };
+        // Replay must use recorded completions even when the granted tree is
+        // unavailable. Restore it only for the next independent live recording.
+        let withheld: Vec<_> = io["dirs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .enumerate()
+            .map(|(index, grant)| {
+                let host = PathBuf::from(grant["host"].as_str().unwrap());
+                let saved = scratch.path(&format!("withheld-{index}"));
+                std::fs::rename(&host, &saved).unwrap();
+                (host, saved)
+            })
+            .collect();
+        for engine in ENGINES {
+            for width in ["1", "8"] {
+                for permits in [1, 8] {
+                    let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+                    command
+                        .arg("run")
+                        .args(engine)
+                        .arg(&program)
+                        .arg("--replay")
+                        .arg(&tape)
+                        .args(["--cores", width])
+                        .env(hirsel_rt::free_replay::Report::VAR, &report);
+                    f1_permits(&mut command, permits);
+                    let replay = command.output().unwrap();
+                    let cell = format!("{name} {level} {engine:?} width {width} permits {permits}");
+                    assert_eq!(
+                        replay.status.code(),
+                        live.status.code(),
+                        "{cell}: {replay:?}"
+                    );
+                    assert_eq!(replay.stdout, live.stdout, "{cell}");
+                    assert_eq!(replay.stderr, live.stderr, "{cell}");
+                    if let Some(projection) = &projection {
+                        assert_eq!(
+                            &std::fs::read_to_string(&report).unwrap(),
+                            projection,
+                            "{cell}: full normalized projection"
+                        );
+                    }
+                }
+            }
+        }
+        for (host, saved) in withheld {
+            std::fs::rename(saved, host).unwrap();
+        }
+    }
+}
+
+#[test]
+fn f1_atomic_corpus_full_projection_width_and_permit_matrix() {
+    f1_corpus_matrix(
+        "atomic-capture",
+        &std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../conformance/CLO/CLO-3-child-atomic-capture-run.hir"),
+        )
+        .unwrap(),
+    );
+}
+#[test]
+fn f1_mutex_corpus_full_projection_width_and_permit_matrix() {
+    f1_corpus_matrix(
+        "mutex-capture",
+        &std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../conformance/CLO/CLO-3-child-mutex-capture-run.hir"),
+        )
+        .unwrap(),
+    );
+}
+#[test]
+fn f1_task_set_corpus_full_projection_width_and_permit_matrix() {
+    f1_corpus_matrix(
+        "task-set",
+        &std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../conformance/CONC/CONC-2-task-set-first-completed-run.hir"),
+        )
+        .unwrap(),
+    );
+}
+
+/// The scalar's tape value is independent of Option tag, padding and backend.
+#[test]
+fn atomic_scalar_tape_bytes_match_interpreter_llvm_and_cranelift() {
+    let scratch = Scratch::new("atomic-scalars");
+    let program = scratch.path("main.hir");
+    let scalars = [
+        ("u8", 255u128),
+        ("u32", u32::MAX as u128),
+        ("u64", u64::MAX as u128),
+        ("u128", u128::MAX),
+    ];
+    let mut text = String::new();
+    for (ty, value) in scalars {
+        text.push_str(&format!(
+            "@noalloc\nfn check_{ty}(x: {ty}) -> () requires x == {value} {{ () }}\n"
+        ));
+    }
+    text.push_str("pub fn main(rt: Io) -> Result[(), GrantError] {\n let tasks = io.tasks(rt)?\n");
+    for (ty, value) in scalars {
+        text.push_str(&format!(" let a_{ty}: Atomic[{ty}] = atomic.create(tasks, 0)\n atomic.store(tasks, a_{ty}, {value})\n check_{ty}(atomic.load(tasks, a_{ty}))\n"));
+    }
+    text.push_str(" Ok(())\n}\n");
+    std::fs::write(&program, text).unwrap();
+    let canonical = |tape: &Path| {
+        let tape = hirsel_free::tape::parse(&std::fs::read(tape).unwrap()).unwrap();
+        let loads: Vec<_> = tape
+            .logs
+            .values()
+            .flat_map(|bytes| hirsel_free::record::decode(bytes).unwrap())
+            .filter_map(|record| match record {
+                hirsel_free::record::Record::Load { bits, .. } => Some(bits),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(loads, scalars.map(|(_, bits)| bits));
+        let mut bytes = Vec::new();
+        for bits in loads {
+            hirsel_free::record::put_varint(&mut bytes, bits);
+        }
+        bytes
+    };
+    let mut expected = None;
+    for (index, engine) in ENGINES.into_iter().enumerate() {
+        let tape = scratch.path(&format!("f0-{index}"));
+        let report = scratch.path(&format!("f0-report-{index}"));
+        let output = run(
+            engine,
+            &program,
+            GRANTS,
+            &format!(
+                "mode=record,tape={},report={},seed=1",
+                tape.display(),
+                report.display()
+            ),
+        );
+        assert!(output.status.success(), "{engine:?}: {output:?}");
+        let bytes = canonical(&tape);
+        if let Some(expected) = &expected {
+            assert_eq!(&bytes, expected, "{engine:?}: canonical scalar tape bytes");
+        } else {
+            expected = Some(bytes);
+        }
+        if index != 0 {
+            let grants =
+                r#"{"io":{"tasks":"tasks.free@1","dirs":[]},"args":[],"recording":"record"}"#;
+            let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+                .arg("run")
+                .args(engine)
+                .arg(&program)
+                .args(["--grants", grants, "--cores", "8", "--record"])
+                .arg(&tape)
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "F1 {engine:?}: {output:?}");
+            if hirsel_rt::free_driver::admission_enabled() {
+                assert_eq!(
+                    canonical(&tape),
+                    *expected.as_ref().unwrap(),
+                    "F1 {engine:?}: canonical scalar tape bytes"
+                );
+            } else {
+                assert!(
+                    !std::fs::read(&tape)
+                        .unwrap()
+                        .starts_with(hirsel_free::tape::MAGIC)
+                );
+                let replay = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+                    .arg("run")
+                    .args(engine)
+                    .arg(&program)
+                    .arg("--replay")
+                    .arg(&tape)
+                    .output()
+                    .unwrap();
+                assert!(
+                    replay.status.success(),
+                    "default admission {engine:?}: {replay:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn f1_atomic_all_scalar_widths_full_projection_and_permit_matrix() {
+    let text = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../conformance/CLO/CLO-3-child-atomic-capture-run.hir"),
+    )
+    .unwrap();
+    for ty in ["u8", "u64", "u128"] {
+        f1_corpus_matrix(&format!("atomic-{ty}"), &text.replace("u32", ty));
+    }
+}
+
+#[test]
+fn f1_storage_and_clock_requests_replay_without_live_host_access() {
+    f1_corpus_matrix_with_io(
+        "storage-clock",
+        r#"
+pub type AppError = Grant(GrantError) | Files(FileError) | Clock(ClockError) | Output(OutputError)
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let tasks = io.tasks(rt) ? Grant
+  let output = io.stdout(rt) ? Grant
+  let clock = io.monotonic_clock(rt) ? Grant
+  let _ = clock.monotonic(clock) ? Clock
+  let dir = io.dir(rt, path.of("data")) ? Files
+  file.write_bytes(dir, path.of("message"), b"owned") ? Files
+  let data = file.read_bytes(dir, path.of("message")) ? Files
+  out.print(output, if data == b"owned" { "storage ok\n" } else { "wrong\n" }) ? Output
+  Ok(())
+}
+"#,
+        |scratch| {
+            let host = scratch.path("data");
+            std::fs::create_dir(&host).unwrap();
+            serde_json::json!({"stdout":"stdout.bytes@1", "tasks":"tasks.free@1", "monotonic_clock":"clock.monotonic.ns@1", "dirs":[{"path":"data","host":host,"access":"read_write"}]})
+        },
+    );
+}
+
+#[test]
+fn f1_random_and_sleep_requests_replay_through_recorded_attempts() {
+    f1_corpus_matrix_with_io(
+        "random-sleep",
+        r#"
+pub type AppError = Grant(GrantError) | Random(RandomError) | Clock(ClockError) | Wait(WaitError) | Output(OutputError)
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let tasks = io.tasks(rt) ? Grant
+  let output = io.stdout(rt) ? Grant
+  let random = io.random(rt) ? Grant
+  let draw = random.bytes(random, 8) ? Random
+  let c = io.monotonic_clock(rt) ? Grant
+  let now = clock.monotonic(c) ? Clock
+  let later = match instant.checked_add(c, now, 1000000u64) { Some(at) => at, None() => now }
+  clock.sleep_until(c, later) ? Wait
+  out.print(output, if bytes.len(draw) == 8 { "awake\n" } else { "wrong\n" }) ? Output
+  Ok(())
+}
+"#,
+        |_| serde_json::json!({"stdout":"stdout.bytes@1", "tasks":"tasks.free@1", "random":"random.system@1", "monotonic_clock":"clock.monotonic.ns@1", "dirs":[]}),
+    );
+}
+
+#[test]
+fn f1_failed_root_terminal_outcome_replays_exactly() {
+    f1_corpus_matrix_with_exit(
+        "failed-root",
+        "pub fn main(rt: Io) -> Result[(), GrantError] { let tasks = io.tasks(rt)?; failure.check(false, Arithmetic()); Ok(()) }",
+        |_| serde_json::json!({"stdout":"stdout.bytes@1", "tasks":"tasks.free@1", "dirs":[]}),
+        hirsel_run_schema::exit::FAILED,
+    );
+}
+
+#[test]
+fn f1_blocked_terminal_outcome_replays_exactly() {
+    f1_corpus_matrix_with_exit(
+        "blocked-root",
+        "pub fn main(rt: Io) -> Result[(), GrantError] { let tasks = io.tasks(rt)?; let (tx, rx): (Sender[u32], Receiver[u32]) = channel.open(tasks); let mut sender = take tx; let mut receiver = take rx; let _ = channel.receive(tasks, mut receiver); let _ = channel.send(tasks, mut sender, 1u32); Ok(()) }",
+        |_| serde_json::json!({"stdout":"stdout.bytes@1", "tasks":"tasks.free@1", "dirs":[]}),
+        hirsel_run_schema::exit::BLOCKED,
+    );
+}
+
+#[test]
+fn f1_terminal_restoration_rejects_forged_root_and_unconsumed_records() {
+    use hirsel_free::{
+        phase::Progress,
+        record::{Encoder, Record},
+        tape::{self, TaskChunk},
+    };
+    let scratch = Scratch::new("terminal-forgery");
+    let program = scratch.path("main.hir");
+    std::fs::write(
+        &program,
+        "pub fn main(rt: Io) -> Result[(), GrantError] { let tasks = io.tasks(rt)?; Ok(()) }",
+    )
+    .unwrap();
+    let path = scratch.path("record");
+    let live = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+        .args(["run", "--native"])
+        .arg(&program)
+        .args([
+            "--cores",
+            "8",
+            "--grants",
+            r#"{"io":{"tasks":"tasks.free@1","dirs":[]},"args":[],"recording":"record"}"#,
+            "--record",
+        ])
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert!(live.status.success(), "{live:?}");
+    let original = std::fs::read(&path).unwrap();
+    if !hirsel_rt::free_driver::admission_enabled() {
+        assert!(!original.starts_with(tape::MAGIC));
+        let replay = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+            .arg("run")
+            .arg(&program)
+            .arg("--replay")
+            .arg(&path)
+            .output()
+            .unwrap();
+        assert!(replay.status.success(), "default admission: {replay:?}");
+        return;
+    }
+    let parsed = tape::parse(&original).unwrap();
+    for mutation in ["root", "record", "progress"] {
+        let mut tasks: Vec<_> = parsed
+            .logs
+            .iter()
+            .map(|(path, bytes)| TaskChunk {
+                path: path.clone(),
+                progress: parsed.cut[path],
+                bytes: bytes.clone(),
+            })
+            .collect();
+        let root = tasks.iter_mut().find(|task| task.path.is_empty()).unwrap();
+        match mutation {
+            "root" => {
+                let mut records = hirsel_free::record::decode(&root.bytes).unwrap();
+                let outcome = records
+                    .iter_mut()
+                    .rev()
+                    .find_map(|record| match record {
+                        Record::Observation { op, bytes } if *op == root.progress.op => Some(bytes),
+                        _ => None,
+                    })
+                    .unwrap();
+                assert_eq!(outcome, &[0; 8]); // Returned(Ok)
+                outcome[4] = 1; // Returned(Error), with every other phase unchanged.
+                root.bytes.clear();
+                let mut encoder = Encoder::default();
+                for record in records {
+                    encoder.encode(&record, &mut root.bytes);
+                }
+            }
+            "record" => {
+                let mut records = hirsel_free::record::decode(&root.bytes).unwrap();
+                records.push(Record::Load {
+                    op: root.progress.op,
+                    bits: 7,
+                });
+                root.bytes.clear();
+                let mut encoder = Encoder::default();
+                for record in records {
+                    encoder.encode(&record, &mut root.bytes);
+                }
+            }
+            "progress" => root.progress = Progress::new(root.progress.op + 1, root.progress.phase),
+            _ => unreachable!(),
+        }
+        let mut forged = tape::header(&parsed.binding);
+        forged.extend(tape::stop(
+            &parsed.keys,
+            &tasks,
+            parsed.end.as_ref().unwrap(),
+        ));
+        std::fs::write(&path, forged).unwrap();
+        for engine in ENGINES {
+            let replay = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+                .arg("run")
+                .args(engine)
+                .arg(&program)
+                .arg("--replay")
+                .arg(&path)
+                .args(["--cores", "1"])
+                .output()
+                .unwrap();
+            assert_eq!(
+                replay.status.code(),
+                Some(hirsel_run_schema::exit::REFUSED),
+                "{mutation} {engine:?}: {replay:?}"
+            );
+            let diagnostic = String::from_utf8_lossy(&replay.stderr);
+            assert!(
+                if mutation == "root" {
+                    if engine.is_empty() {
+                        diagnostic.contains("Free root outcome differs from recording")
+                    } else {
+                        // Native root observations use the same exact byte
+                        // comparison as requests, at this root's final op.
+                        diagnostic.contains(&format!(
+                            "host request differs at [] operation {}",
+                            parsed.cut[&Vec::new()].op
+                        ))
+                    }
+                } else {
+                    diagnostic.contains("unconsumed") || diagnostic.contains("cut")
+                },
+                "{mutation} {engine:?}: {diagnostic}"
+            );
+        }
+    }
+}
+
+#[test]
+fn f1_canceled_sleep_completion_is_consumed_before_terminal_restoration() {
+    f1_corpus_matrix_with_io(
+        "canceled-sleep",
+        r#"
+pub type AppError = Grant(GrantError) | Clock(ClockError) | Output(OutputError)
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let tasks = io.tasks(rt) ? Grant
+  let output = io.stdout(rt) ? Grant
+  let c = io.monotonic_clock(rt) ? Grant
+  let now = clock.monotonic(c) ? Clock
+  let later = match instant.checked_add(c, now, 3600000000000u64) { Some(at) => at, None() => now }
+  let canceled = task.scope(tasks, fn(s: Scope) -> bool {
+    let child = task.async(s, fn() -> bool {
+      match clock.sleep_until(c, later) { Error(Canceled(Requested())) => true, _ => false }
+    })
+    task.cancel(s, child)
+    task.await(s, take child)
+  })
+  out.print(output, if canceled { "canceled\n" } else { "wrong\n" }) ? Output
+  Ok(())
+}
+"#,
+        |_| serde_json::json!({"stdout":"stdout.bytes@1", "tasks":"tasks.free@1", "monotonic_clock":"clock.monotonic.ns@1", "dirs":[]}),
+    );
+}
+
+#[test]
+fn f1_process_completion_replays_with_its_executable_unavailable() {
+    use std::os::unix::fs::PermissionsExt;
+    let executable = Scratch::new("recorded-child");
+    let host = executable.path("data");
+    std::fs::create_dir(&host).unwrap();
+    let child = host.join("child");
+    std::fs::write(&child, "#!/bin/sh\nprintf 'recorded-child\\n'\n").unwrap();
+    std::fs::set_permissions(&child, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let source = format!(
+        r#"
+pub type AppError = Grant(GrantError) | Process(ProcessError) | Output(OutputError)
+pub fn main(rt: Io) -> Result[(), AppError] {{
+  let tasks = io.tasks(rt) ? Grant
+  let output = io.stdout(rt) ? Grant
+  let p = io.process(rt) ? Grant
+  let ran = proc.run(p, Command(program: path.of("{}"), args: [], dir: None(), env: None(), own_group: false), b"", 64u64, None()) ? Process
+  out.print(output, if ran.status == Exited(0) && ran.stdout == b"recorded-child\n" {{ "child ok\n" }} else {{ "wrong\n" }}) ? Output
+  Ok(())
+}}
+"#,
+        child.display()
+    );
+    f1_corpus_matrix_with_io(
+        "process-run",
+        &source,
+        |_| serde_json::json!({"stdout":"stdout.bytes@1", "tasks":"tasks.free@1", "process":{"provider":"process.spawn@1","rules":[{"program":child,"env":[]}]}, "dirs":[{"path":"data","host":host,"access":"read"}]}),
+    );
+}
+
+#[test]
+fn f1_child_streaming_and_narrowing_replay_without_spawning() {
+    let executable = Scratch::new("recorded-cat");
+    let host = executable.path("data");
+    std::fs::create_dir(&host).unwrap();
+    let child = host.join("cat");
+    std::fs::copy("/bin/cat", &child).unwrap();
+    let source = format!(
+        r#"
+pub type AppError = Grant(GrantError) | Process(ProcessError) | Output(OutputError)
+pub fn main(rt: Io) -> Result[(), AppError] {{
+  let tasks = io.tasks(rt) ? Grant
+  let output = io.stdout(rt) ? Grant
+  let original = io.process(rt) ? Grant
+  let p = proc.narrow(original, [ProcessRule(program: "{}", env: [])]) ? Process
+  let mut c = proc.spawn(p, Command(program: path.of("{}"), args: [], dir: None(), env: None(), own_group: false)) ? Process
+  child.write(p, mut c, b"streamed\n") ? Process
+  child.close_stdin(p, mut c)
+  let mut got: List[u8] = []
+  while child.read_stdout(p, mut c, mut got, 64u64) ? Process != 0u64 {{}}
+  failure.check(bytes.from_list(take got) == b"streamed\n", Bounds())
+  let mut errors: List[u8] = []
+  failure.check(child.read_stderr(p, mut c, mut errors, 64u64) ? Process == 0u64, Bounds())
+  failure.check(child.wait(p, take c, None()) ? Process == Exited(0), Bounds())
+  let mut killed = proc.spawn(p, Command(program: path.of("{}"), args: [], dir: None(), env: None(), own_group: false)) ? Process
+  child.kill(p, mut killed, Kill())
+  failure.check(child.wait(p, take killed, None()) ? Process == Signaled(9), Bounds())
+  out.print(output, "streamed and killed\n") ? Output
+  Ok(())
+}}
+"#,
+        child.display(),
+        child.display(),
+        child.display()
+    );
+    f1_corpus_matrix_with_io(
+        "child-streaming",
+        &source,
+        |_| serde_json::json!({"stdout":"stdout.bytes@1", "tasks":"tasks.free@1", "process":{"provider":"process.spawn@1","rules":[{"program":child,"env":[]}]}, "dirs":[{"path":"data","host":host,"access":"read"}]}),
+    );
+}
+
+#[test]
+fn f1_pipeline_and_group_replay_without_spawning() {
+    let executable = Scratch::new("recorded-pipeline");
+    let host = executable.path("data");
+    std::fs::create_dir(&host).unwrap();
+    let child = host.join("cat");
+    std::fs::copy("/bin/cat", &child).unwrap();
+    let source = format!(
+        r#"
+fn command() -> Command {{
+  Command(program: path.of("{}"), args: [], dir: None(), env: None(), own_group: false)
+}}
+pub type AppError = Grant(GrantError) | Process(ProcessError) | Output(OutputError)
+pub fn main(rt: Io) -> Result[(), AppError] {{
+  let tasks = io.tasks(rt) ? Grant
+  let output = io.stdout(rt) ? Grant
+  let p = io.process(rt) ? Grant
+  let ran = proc.pipeline(p, [command(), command()], b"pipeline\n", 64u64, None()) ? Process
+  failure.check(ran.statuses == [Exited(0), Exited(0)] && ran.stdout == b"pipeline\n", Bounds())
+  let mut g = proc.spawn_pipeline(p, [command(), command()], 64u64) ? Process
+  group.write(p, mut g, b"group\n") ? Process
+  group.close_stdin(p, mut g)
+  let mut got: List[u8] = []
+  while group.read_stdout(p, mut g, mut got, 64u64) ? Process != 0u64 {{}}
+  failure.check(bytes.from_list(take got) == b"group\n", Bounds())
+  let done = proc.wait_group(p, take g, None()) ? Process
+  failure.check(done.statuses == [Exited(0), Exited(0)], Bounds())
+  let mut killed = proc.spawn_pipeline(p, [command(), command()], 64u64) ? Process
+  group.kill(p, mut killed, Kill())
+  let dead = proc.wait_group(p, take killed, None()) ? Process
+  failure.check(dead.statuses == [Signaled(9), Signaled(9)], Bounds())
+  out.print(output, "pipelines complete\n") ? Output
+  Ok(())
+}}
+"#,
+        child.display()
+    );
+    f1_corpus_matrix_with_io(
+        "pipeline-group",
+        &source,
+        |_| serde_json::json!({"stdout":"stdout.bytes@1", "tasks":"tasks.free@1", "process":{"provider":"process.spawn@1","rules":[{"program":child,"env":[]}]}, "dirs":[{"path":"data","host":host,"access":"read"}]}),
+    );
+}
+
+#[test]
+fn f1_owned_file_and_child_drops_replay_through_host_phases() {
+    let executable = Scratch::new("recorded-drops");
+    let host = executable.path("data");
+    std::fs::create_dir(&host).unwrap();
+    let child = host.join("cat");
+    std::fs::copy("/bin/cat", &child).unwrap();
+    let source = format!(
+        r#"
+pub type AppError = Grant(GrantError) | File(FileError) | Process(ProcessError) | Output(OutputError)
+fn write(d: Dir) -> Result[(), FileError] {{
+  let mut f = file.create(d, path.of("result")) ?
+  file.write(d, mut f, b"owned file\n") ?
+  Ok(())
+}}
+pub fn main(rt: Io) -> Result[(), AppError] {{
+  let tasks = io.tasks(rt) ? Grant
+  let output = io.stdout(rt) ? Grant
+  let d = io.dir(rt, path.of("data")) ? File
+  write(d) ? File
+  failure.check(file.read_bytes(d, path.of("result")) ? File == b"owned file\n", Bounds())
+  let p = io.process(rt) ? Grant
+  let c = proc.spawn(p, Command(program: path.of("{}"), args: [], dir: None(), env: None(), own_group: false)) ? Process
+  out.print(output, "owners closed\n") ? Output
+  Ok(())
+}}
+"#,
+        child.display()
+    );
+    f1_corpus_matrix_with_io(
+        "owned-drops",
+        &source,
+        |_| serde_json::json!({"stdout":"stdout.bytes@1", "tasks":"tasks.free@1", "process":{"provider":"process.spawn@1","rules":[{"program":child,"env":[]}]}, "dirs":[{"path":"data","host":host,"access":"read_write"}]}),
+    );
 }

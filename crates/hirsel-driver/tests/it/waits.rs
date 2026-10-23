@@ -330,3 +330,110 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
     assert!(host.points > 100, "{} scheduling points", host.points);
     assert_eq!(host.polls, 3, "each timer is polled once, when woken");
 }
+
+// A native Free close may wait for another task's resource epoch. The evaluator
+// must park only the destructor, retaining any enclosing operation and cleanup.
+#[test]
+fn suspended_handle_drops_resume_once_after_sibling_progress() {
+    use hirsel_interp::{
+        Error, OperationContext, OperationResult, Operations, OperationsAdapter, Value,
+        library::Library,
+    };
+    struct DelayedDrops {
+        library: Library,
+        pending: Option<OperationResult>,
+        waiting: std::collections::BTreeMap<u64, (String, u64, usize, bool)>,
+        next: u64,
+        polls: usize,
+        completed: usize,
+        progressed: bool,
+    }
+    impl OperationsAdapter for DelayedDrops {
+        fn operations(&self) -> &dyn Operations { &self.library }
+        fn operations_mut(&mut self) -> &mut dyn Operations { &mut self.library }
+        fn drop_handle(&mut self, kind: &str, id: u64, cx: &mut OperationContext<'_>) -> Result<(), Error> {
+            if kind != "File" {
+                return self.library.drop_handle(kind, id, cx);
+            }
+            assert!(self.pending.is_none());
+            let token = self.next;
+            self.next += 1;
+            self.waiting.insert(token, (kind.into(), id, cx.stdout.len(), false));
+            self.pending = Some(OperationResult::Park { token, wait: hirsel_interp::BlockedWait {
+                spawn_path: self.library.task_path(),
+                anchor: cx.anchor().unwrap().clone(),
+                kind: "test.delayed.close".into(), targets: vec![],
+            }});
+            Ok(())
+        }
+        fn take_drop_wait(&mut self) -> Option<OperationResult> { self.pending.take() }
+        fn poll(&mut self, token: u64, cx: &mut OperationContext<'_>) -> Result<Option<OperationResult>, Error> {
+            let Some((kind, id, start, polled)) = self.waiting.get_mut(&token) else {
+                return self.library.poll(token, cx);
+            };
+            self.polls += 1;
+            if !*polled {
+                *polled = true;
+                return Ok(None);
+            }
+            self.progressed |= cx.stdout.len() > *start;
+            self.library.drop_handle(kind, *id, cx)?;
+            self.waiting.remove(&token);
+            self.completed += 1;
+            Ok(Some(OperationResult::returned(Value::Unit)))
+        }
+    }
+    // Default forwarding must preserve both the overridden legacy drop and the
+    // optional wait hook through a layer that overrides neither.
+    struct Layer(DelayedDrops);
+    impl OperationsAdapter for Layer {
+        fn operations(&self) -> &dyn Operations { &self.0 }
+        fn operations_mut(&mut self) -> &mut dyn Operations { &mut self.0 }
+    }
+    let source = r#"
+pub type AppError = Grant(GrantError) | File(FileError)
+fn files(d: Dir, output: Stdout) -> Result[(), FileError] {
+  let _ = file.create(d, path.of("discarded")) ?
+  let mut f = file.create(d, path.of("local")) ?
+  file.write(d, mut f, b"closed once") ?
+  let _ = out.print(output, "child body\n")
+  Ok(())
+}
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let tasks = io.tasks(rt) ? Grant
+  let output = io.stdout(rt) ? Grant
+  let d = io.dir(rt, path.of("")) ? File
+  let done = task.scope(tasks, fn(s: Scope) -> Result[(), FileError] {
+    let child = task.async(s, fn() -> Result[(), FileError] { files(d, output) })
+    for i in 0u64..16u64 { let _ = out.print(output, "sibling\n") }
+    task.await(s, take child)
+  })
+  done ? File
+  let _ = out.print(output, "finished\n")
+  Ok(())
+}
+"#;
+    let mut engine = source_std::engine();
+    let file = engine.sources.add("drop-waits.hir", source.into()).unwrap();
+    let checked = check_progress(&mut engine, file, &default_context()).unwrap();
+    assert!(checked.diagnostics.is_empty(), "{:?}", checked.diagnostics);
+    let runtime = engine.runtime_types().unwrap();
+    let sources = engine.sources.clone();
+    let run = RunConfiguration { entry: entry_path(&default_context()), hash_seed: 0, inputs: vec![] };
+    let mut host = Layer(DelayedDrops {
+        library: Library::new(&run, SimulationConfig::default()).unwrap(),
+        pending: None, waiting: Default::default(), next: 1 << 61,
+        polls: 0, completed: 0, progressed: false,
+    });
+    let root = host.0.library.simulation.grant_root("Io").unwrap();
+    let execution = hirsel_interp::run_with_runtime(&mut engine, &sources, &run, vec![root],
+        Default::default(), &mut host, &runtime).unwrap();
+    assert!(matches!(execution.outcome, hirsel_interp::Outcome::Returned { exit_code: 0, .. }), "{:?}", execution.outcome);
+    assert_eq!(host.0.completed, 2, "each file closes once");
+    assert!(host.0.polls >= 4, "each destructor actually returned Pending");
+    assert!(host.0.progressed, "sibling progressed while destructor was parked");
+    assert!(host.0.waiting.is_empty());
+    assert!(host.0.pending.is_none());
+    assert!(execution.stdout.ends_with(b"finished\n"));
+    assert_eq!(execution.stdout.windows(b"child body\n".len()).filter(|s| *s == b"child body\n").count(), 1);
+}

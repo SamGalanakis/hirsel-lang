@@ -596,6 +596,54 @@ impl Library {
             vec![],
             context,
         )?;
+        // The compiled await_at body checks and removes a member in two
+        // administrative operations before joining its handle. Keep these
+        // native F1 ordinals without changing the cooperative F0 convention.
+        let mut native_member = None;
+        if self.native_free() && name == "task.await_at" {
+            match self.free_enter(hirsel_free::phase::Phase::Done, context)? {
+                super::free::Enter::Park(park) => return Ok(park),
+                super::free::Enter::Run => {}
+                super::free::Enter::Off => unreachable!(),
+            }
+            let scope = id(arg(a, 0)?, "Scope")?;
+            let set = id(arg(a, 1)?, "TaskSet")?;
+            let index = super::dispatch::index(arg(a, 2)?)?;
+            let has = self
+                .tasks
+                .set(set, scope)?
+                .members
+                .get(index)
+                .is_some_and(Option::is_some);
+            let checked = self.free_done(OperationResult::returned(Value::Bool(has)), context)?;
+            if !matches!(checked, OperationResult::Complete { .. }) {
+                return Ok(checked);
+            }
+            if !has {
+                self.tasks.yield_now = false;
+                return Ok(OperationResult::Failed(super::dispatch::fail(
+                    call,
+                    context,
+                    "CONC-2",
+                    "the task set has no unawaited member at this index",
+                )));
+            }
+            match self.free_enter(hirsel_free::phase::Phase::Done, context)? {
+                super::free::Enter::Park(park) => return Ok(park),
+                super::free::Enter::Run => {}
+                super::free::Enter::Off => unreachable!(),
+            }
+            native_member = self
+                .tasks
+                .set(set, scope)?
+                .members
+                .get_mut(index)
+                .and_then(Option::take);
+            let taken = self.free_done(OperationResult::returned(Value::Unit), context)?;
+            if !matches!(taken, OperationResult::Complete { .. }) {
+                return Ok(taken);
+            }
+        }
         let waiting = matches!(
             name,
             "task.await" | "task.await_at" | "task.await_any" | "task.cancel_all"
@@ -621,7 +669,7 @@ impl Library {
             super::free::Enter::Park(park) => return Ok(park),
             super::free::Enter::Run => true,
         };
-        let result = self.task_action(name, call, context)?;
+        let result = self.task_action(name, call, context, native_member)?;
         if !free {
             Ok(result)
         } else if waiting {
@@ -635,6 +683,7 @@ impl Library {
         name: &str,
         call: &OperationCall<'_>,
         context: &mut OperationContext<'_>,
+        native_member: Option<u64>,
     ) -> Result<OperationResult, Error> {
         let a = &*call.arguments;
         Ok(match name {
@@ -859,12 +908,15 @@ impl Library {
             "task.await_at" => {
                 let scope = id(arg(a, 0)?, "Scope")?;
                 let index = super::dispatch::index(arg(a, 2)?)?;
-                let member = self
-                    .tasks
-                    .set(id(arg(a, 1)?, "TaskSet")?, scope)?
-                    .members
-                    .get_mut(index)
-                    .and_then(Option::take);
+                let member = match native_member {
+                    Some(task) => Some(task),
+                    None => self
+                        .tasks
+                        .set(id(arg(a, 1)?, "TaskSet")?, scope)?
+                        .members
+                        .get_mut(index)
+                        .and_then(Option::take),
+                };
                 let Some(task) = member else {
                     // The check precedes the await: the failing operation does not yield.
                     self.tasks.yield_now = false;

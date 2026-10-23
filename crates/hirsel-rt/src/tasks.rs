@@ -4128,6 +4128,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_atomic_create(
     out: *mut u64,
     value: *const u8,
     size: u64,
+    payload_offset: u64,
+    payload_size: u64,
 ) -> u8 {
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
@@ -4135,19 +4137,31 @@ pub unsafe extern "C" fn hirsel_rt_v2_atomic_create(
     let _segment = profile::Operation::new(ctx, "atomic_create");
     // SAFETY: caller contract.
     if ordered::engine::on(ctx) {
-        unsafe { crate::stop::check(ctx, ordered::engine::atomic_create(ctx, out, value, size)) };
+        unsafe {
+            crate::stop::check(
+                ctx,
+                ordered::engine::atomic_create(ctx, out, value, size, payload_offset, payload_size),
+            )
+        };
         return STATUS_OK;
     }
     if free::enabled(ctx) {
         unsafe {
-            crate::stop::check(ctx, free::record::atomic_create(ctx, out, value, size));
+            crate::stop::check(
+                ctx,
+                free::record::atomic_create(ctx, out, value, size, payload_offset, payload_size),
+            );
             yield_now(&mut *ctx);
         }
         return STATUS_OK;
     }
     crate::free::enter(ctx, Phase::Done);
     unsafe {
-        out.write(scheduler(ctx).sync.create_image(value, size));
+        out.write(
+            scheduler(ctx)
+                .sync
+                .create_image(value, size, payload_offset, payload_size),
+        );
         crate::free::done(ctx);
         yield_now(&mut *ctx);
     }
@@ -4186,14 +4200,15 @@ pub unsafe extern "C" fn hirsel_rt_v2_atomic_load(
         scheduler(ctx).sync.read(a.read(), slot, size);
         if crate::free::on(ctx) {
             // The load's image is recorded live and substituted in a replay.
-            let n = usize::try_from(size).unwrap_or(usize::MAX);
-            if n > 16 {
-                fault("a free-mode atomic image wider than 16 bytes");
+            let image = scheduler(ctx).sync.image(a.read(), size);
+            let carrier = std::slice::from_raw_parts_mut(slot, image.size());
+            let live = image
+                .bits(carrier)
+                .unwrap_or_else(|| fault("a free-mode atomic scalar wider than 16 bytes"));
+            let bits = crate::free::load(ctx, live);
+            if !image.substitute(carrier, bits) {
+                fault("a recorded atomic load does not fit its scalar");
             }
-            let mut bits = [0u8; 16];
-            std::ptr::copy_nonoverlapping(slot, bits.as_mut_ptr(), n);
-            let bits = crate::free::load(ctx, u128::from_le_bytes(bits)).to_le_bytes();
-            std::ptr::copy_nonoverlapping(bits.as_ptr(), slot, n);
         }
         crate::free::done(ctx);
         yield_now(&mut *ctx);

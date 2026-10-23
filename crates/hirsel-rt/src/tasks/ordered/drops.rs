@@ -610,9 +610,10 @@ mod tests {
                         (receiver, Some(sender))
                     };
                     assert!(image.is_null(), "ownership moved into the carrier");
-                    let atomic = scheduler(ctx)
-                        .sync
-                        .create_image((&0u64 as *const u64).cast(), 8);
+                    let atomic =
+                        scheduler(ctx)
+                            .sync
+                            .create_image((&0u64 as *const u64).cast(), 8, 0, 8);
                     (*ctx).heap_ref().meter.ordered((*ctx).run_ptr());
                     let empty = || {
                         Stretch::new(Budgets {
@@ -1160,9 +1161,10 @@ mod tests {
                 crate::alloc::payload(root)
                     .cast::<*mut Header>()
                     .write(inner);
-                let atomic = scheduler(ctx)
-                    .sync
-                    .create_image((&0u64 as *const u64).cast(), 8);
+                let atomic =
+                    scheduler(ctx)
+                        .sync
+                        .create_image((&0u64 as *const u64).cast(), 8, 0, 8);
                 (*ctx).heap_ref().meter.ordered((*ctx).run_ptr());
                 let budgets = Budgets {
                     fuel: false,

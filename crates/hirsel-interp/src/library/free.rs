@@ -53,6 +53,8 @@ pub fn outcome_name(outcome: &crate::Outcome) -> &'static str {
 /// A run's free-mode state.
 pub(super) struct Free {
     pub session: Session,
+    native: bool,
+    root_observation: Option<Vec<u8>>,
     /// Pending releases by task id.
     pending: BTreeMap<u64, Pending<SharedRoot>>,
     /// Tokens of tasks parked for good.
@@ -154,6 +156,8 @@ impl Free {
     pub(super) fn new(session: Session) -> Free {
         Free {
             session,
+            native: false,
+            root_observation: None,
             pending: BTreeMap::new(),
             finals: BTreeSet::new(),
             waits: BTreeSet::new(),
@@ -187,6 +191,58 @@ impl Library {
         self.tasks.root_priority = self.tasks.schedule.admit();
         self.tasks.free_rests = true;
         self.free = Some(Free::new(session));
+    }
+
+    /// Native recordings carry typed host envelopes and a canonical root outcome.
+    pub fn enable_native_free(&mut self, session: Session, seed: u64) {
+        self.enable_free(session, seed);
+        self.free.as_mut().unwrap().native = true;
+    }
+
+    /// None is a shielded request; Some is its observed cancellation check.
+    pub fn host_cancellation(&self) -> Option<Option<u32>> {
+        (!self.tasks.shielded).then(|| self.tasks.canceled())
+    }
+
+    pub fn native_free(&self) -> bool {
+        self.free.as_ref().is_some_and(|free| free.native)
+    }
+
+    /// Short session access; the caller retains no borrow across evaluator suspension.
+    pub fn with_free_session<T>(
+        &mut self,
+        action: impl FnOnce(&mut Session) -> Result<T, String>,
+    ) -> Result<T, Error> {
+        let session = &mut self
+            .free
+            .as_mut()
+            .ok_or_else(|| invalid("no Free phase session"))?
+            .session;
+        action(session).map_err(|e| invalid(format!("free-mode {e}")))
+    }
+
+    /// Apply the same entered root tail as a native host request.
+    pub fn begin_native_host(&mut self) -> Result<bool, Error> {
+        self.free_apply_closes()?;
+        let path = self.tasks.path();
+        let session = &mut self.free.as_mut().unwrap().session;
+        session.begin(&path);
+        if !session.admits(&path, Phase::Entered) {
+            return Ok(false);
+        }
+        self.free_apply_pending(self.tasks.current)?;
+        self.tasks.yield_now = true;
+        Ok(true)
+    }
+
+    pub fn native_free_cut(&mut self, context: &OperationContext<'_>) -> OperationResult {
+        self.free_final(context)
+    }
+
+    pub fn take_native_root_observation(&mut self) -> Option<Vec<u8>> {
+        self.free
+            .as_mut()
+            .and_then(|free| free.root_observation.take())
     }
 
     /// Whether a free-mode replay drives this run.
@@ -551,6 +607,9 @@ impl Library {
         a: &[Value],
         context: &mut OperationContext<'_>,
     ) -> Result<Option<FreePrint>, Error> {
+        if self.native_free() {
+            return Ok(None);
+        }
         let Some(entry) = self.free_enter_host(context)? else {
             return Ok(None);
         };
@@ -866,6 +925,13 @@ impl Library {
             .publish(&path, Phase::Entered)
             .map_err(diverged)?;
         if free.session.admits(&path, Phase::Done) {
+            if task == 0 && free.native {
+                free.root_observation = Some(
+                    free.session
+                        .replay_host_observation(&path, &[])
+                        .map_err(diverged)?,
+                );
+            }
             free.session.publish(&path, Phase::Done).map_err(diverged)?;
         }
         Ok(())
