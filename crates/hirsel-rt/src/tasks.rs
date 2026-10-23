@@ -1314,12 +1314,16 @@ pub(crate) unsafe fn dispatch_frame(
     *mut TaskCtx,
 ) {
     unsafe {
-        let task = (*(*run).tasks.get()).as_deref_mut().unwrap().task(task);
+        let s = (*(*run).tasks.get()).as_deref_mut().unwrap();
+        let task = ordered::ahead::physical(s, task);
         (&mut task.dispatch, task.ctx)
     }
 }
 
 pub(crate) fn dispatch_owner(ctx: *mut TaskCtx) -> Owner {
+    if ordered::ahead::private(ctx) {
+        return Owner::Any;
+    }
     let s = scheduler(ctx);
     let me = s.current;
     s.task(me).owner
@@ -1336,7 +1340,11 @@ pub(crate) unsafe fn record_dispatch(
 ) {
     let run = unsafe { &*run };
     let s = unsafe { (*run.tasks.get()).as_deref_mut().unwrap() };
-    record_worker(s.task(task), here, run.worker_metrics.as_deref());
+    record_worker(
+        ordered::ahead::physical(s, task),
+        here,
+        run.worker_metrics.as_deref(),
+    );
 }
 
 /// # Safety
@@ -1364,6 +1372,14 @@ pub(crate) unsafe fn after_save(run: *mut crate::context::RunShared, task: u32, 
         let Some(s) = (unsafe { (*(*run).tasks.get()).as_deref_mut() }) else {
             return;
         };
+        if let Some(ready) = ordered::ahead::after_save(s, task, completed, unsafe {
+            (*run).control.stopped().is_some()
+        }) {
+            for (task, owner) in ready {
+                unsafe { crate::pool::free::schedule_saved(run, task, owner) };
+            }
+            return;
+        }
         if let Some(Some(row)) = s.tasks.get(task as usize)
             && let Some(frame) = &row.dispatch
         {
@@ -2162,11 +2178,13 @@ unsafe extern "C" fn task_entry(ctx: *mut u8, task: *mut u8) -> ! {
     let ctx = ctx.cast::<TaskCtx>();
     let index = task as usize as u32;
     // SAFETY: this new fiber owns its stable task context.
-    let _role = unsafe { role::Guard::new(ctx) };
+    let _role = unsafe { role::Guard::physical(ctx) };
     // SAFETY: the task's context lies at the top of this stack and is bound to its worker.
     recycle(unsafe { &mut *ctx });
     free::replay::start(ctx);
-    let Some((code, environment, operation_site)) = scheduler(ctx).task(index).code.take() else {
+    let Some((code, environment, operation_site)) =
+        ordered::ahead::physical(scheduler(ctx), index).code.take()
+    else {
         fault("a task started without code");
     };
     #[cfg(feature = "measurement")]
@@ -2177,6 +2195,8 @@ unsafe extern "C" fn task_entry(ctx: *mut u8, task: *mut u8) -> ! {
         let _segment = unsafe { role::Segment::new(ctx) };
         unsafe { code(ctx, environment, operation_site, operation_site) }
     };
+    // An uncommitted prefix cannot run environment cleanup or publish an end.
+    unsafe { ordered::ahead::barrier(ctx) };
     // The caller of a closure releases its environment wholesale.
     status |= unsafe {
         crate::release::release_block(
