@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-2237 exported definitions; 972 variants.
+2241 exported definitions; 972 variants.
 
 ## Types and roots
 
@@ -43,6 +43,38 @@ Variant of ArgError.
 <a id="def-core_401_2fAtomicFile"></a>
 
 - `resource type AtomicFile: noalloc_drop uses {Dir} = { dir: Dir, tmp: Path, dst: Path }`
+
+<a id="def-core_401_2fBase64Alphabet"></a>
+
+- `type Base64Alphabet: plain + copyable + data + key + sendable + inert + noalloc_drop + serializable uses {} = Standard() | UrlSafe()`
+
+<a id="def-core_401_2fBase64Alphabet_23Standard"></a>
+
+- `Standard() -> Base64Alphabet`
+
+Variant of Base64Alphabet.
+
+<a id="def-core_401_2fBase64Alphabet_23UrlSafe"></a>
+
+- `UrlSafe() -> Base64Alphabet`
+
+Variant of Base64Alphabet.
+
+<a id="def-core_401_2fBase64Padding"></a>
+
+- `type Base64Padding: plain + copyable + data + key + sendable + inert + noalloc_drop + serializable uses {} = Required() | Omitted()`
+
+<a id="def-core_401_2fBase64Padding_23Omitted"></a>
+
+- `Omitted() -> Base64Padding`
+
+Variant of Base64Padding.
+
+<a id="def-core_401_2fBase64Padding_23Required"></a>
+
+- `Required() -> Base64Padding`
+
+Variant of Base64Padding.
 
 <a id="def-core_401_2fBody"></a>
 
@@ -2251,19 +2283,9 @@ References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/u64`](#def-core_
 
 <a id="def-std_401_2fbase64_2fAlphabet"></a>
 
-- `@serializable pub type base64.Alphabet = Standard | UrlSafe`
+- `pub type base64.Alphabet = core@1/Base64Alphabet`
 
-<a id="def-std_401_2fbase64_2fAlphabet_23Standard"></a>
-
-- `Standard -> base64.Alphabet`
-
-Variant of base64.Alphabet.
-
-<a id="def-std_401_2fbase64_2fAlphabet_23UrlSafe"></a>
-
-- `UrlSafe -> base64.Alphabet`
-
-Variant of base64.Alphabet.
+References: [`core@1/Base64Alphabet`](#def-core_401_2fBase64Alphabet)
 
 <a id="def-std_401_2fbase64_2fDecodeError"></a>
 
@@ -2313,19 +2335,9 @@ References: [`core@1/u64`](#def-core_401_2fu64)
 
 <a id="def-std_401_2fbase64_2fPadding"></a>
 
-- `@serializable pub type base64.Padding = Required | Omitted`
+- `pub type base64.Padding = core@1/Base64Padding`
 
-<a id="def-std_401_2fbase64_2fPadding_23Omitted"></a>
-
-- `Omitted -> base64.Padding`
-
-Variant of base64.Padding.
-
-<a id="def-std_401_2fbase64_2fPadding_23Required"></a>
-
-- `Required -> base64.Padding`
-
-Variant of base64.Padding.
+References: [`core@1/Base64Padding`](#def-core_401_2fBase64Padding)
 
 <a id="def-std_401_2fbase64_2fStreamError"></a>
 
@@ -3396,6 +3408,14 @@ References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/u64`](#def-core_40
 <a id="def-core_401_2fbytes_2fappend_5ffrom_5fhistory"></a>
 
 - `@preserves_unique(out) fn bytes.append_from_history(mut out: List[u8], distance: u64, count: u64) -> ()`
+
+<a id="def-core_401_2fbytes_2fbase64_5fdecode"></a>
+
+- `fn bytes.base64_decode(data: Bytes, alphabet: Base64Alphabet, padding: Base64Padding) -> unique Option[Bytes] uses {}`
+
+<a id="def-core_401_2fbytes_2fbase64_5fencode"></a>
+
+- `fn bytes.base64_encode(data: Bytes, alphabet: Base64Alphabet, padding: Base64Padding) -> unique Bytes uses {}`
 
 <a id="def-std_401_2fbytes_2ffrom_5finline"></a>
 
