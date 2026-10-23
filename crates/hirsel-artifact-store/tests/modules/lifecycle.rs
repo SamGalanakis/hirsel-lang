@@ -272,3 +272,96 @@ fn crash_survivors_missing_layers_and_old_format_are_misses() {
     assert_eq!(find(&load_pinned(root).unwrap(), entry(1).key), None);
     assert_eq!(current_layer_ids_locked(root).unwrap().len(), 1);
 }
+
+#[test]
+fn layer_installed_but_manifest_write_failure_never_changes_root_or_recovers_orphan() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    published(publish(root, &[entry(1)]));
+    let original = fs::read(root.join("index/MANIFEST")).unwrap();
+    let delta = build(root, &[entry(2)]).unwrap();
+    let stage = fs::read_dir(root.join("index/staging"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    // Fail create-new of the staged manifest after the completed layer link.
+    fs::write(stage.join("manifest"), b"injected fault").unwrap();
+    assert!(publish_delta(root, delta, &EpochLease(root.to_owned())).is_err());
+    assert_eq!(fs::read(root.join("index/MANIFEST")).unwrap(), original);
+    assert!(!stage.exists());
+    let pin = load_pinned(root).unwrap();
+    assert_eq!(find(&pin, entry(1).key), Some(entry(1).location));
+    assert_eq!(find(&pin, entry(2).key), None);
+    assert_eq!(
+        fs::read_dir(root.join("index"))
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().starts_with("L-"))
+            .count(),
+        2
+    );
+    fs::remove_file(root.join("index/MANIFEST")).unwrap();
+    assert_eq!(find(&load_pinned(root).unwrap(), entry(1).key), None);
+}
+
+#[test]
+fn explicit_old_new_missing_torn_manifest_and_layer_survivor_permutations() {
+    let source = tempfile::tempdir().unwrap();
+    let root = source.path();
+    published(publish(root, &[entry(1)]));
+    let old = fs::read(root.join("index/MANIFEST")).unwrap();
+    published(publish(root, &[entry(2)]));
+    let new = fs::read(root.join("index/MANIFEST")).unwrap();
+    let layers: Vec<_> = fs::read_dir(root.join("index"))
+        .unwrap()
+        .flatten()
+        .filter(|e| e.file_name().to_string_lossy().starts_with("L-"))
+        .map(|e| (e.file_name(), fs::read(e.path()).unwrap()))
+        .collect();
+    assert_eq!(layers.len(), 2);
+    for manifest in 0..4 {
+        for first in 0..3 {
+            for second in 0..3 {
+                let case = tempfile::tempdir().unwrap();
+                fs::create_dir(case.path().join("index")).unwrap();
+                match manifest {
+                    0 => {}
+                    1 => fs::write(case.path().join("index/MANIFEST"), &old).unwrap(),
+                    2 => fs::write(case.path().join("index/MANIFEST"), &new).unwrap(),
+                    _ => fs::write(case.path().join("index/MANIFEST"), &new[..new.len() - 1])
+                        .unwrap(),
+                }
+                for ((name, bytes), state) in layers.iter().zip([first, second]) {
+                    match state {
+                        0 => {}
+                        1 => fs::write(case.path().join("index").join(name), bytes).unwrap(),
+                        _ => fs::write(
+                            case.path().join("index").join(name),
+                            &bytes[..bytes.len() - 1],
+                        )
+                        .unwrap(),
+                    }
+                }
+                let pin = load_pinned(case.path()).unwrap();
+                if manifest == 0 || manifest == 3 {
+                    assert_eq!(find(&pin, entry(1).key), None);
+                    assert_eq!(find(&pin, entry(2).key), None);
+                }
+                if manifest == 2 && (first != 1 || second != 1) {
+                    assert_eq!(find(&pin, entry(1).key), None);
+                    assert_eq!(find(&pin, entry(2).key), None);
+                }
+                if manifest == 2 && first == 1 && second == 1 {
+                    for id in [1, 2] {
+                        assert_eq!(find(&pin, entry(id).key), Some(entry(id).location));
+                    }
+                }
+                if manifest == 1 {
+                    assert_eq!(find(&pin, entry(2).key), None);
+                }
+            }
+        }
+    }
+}

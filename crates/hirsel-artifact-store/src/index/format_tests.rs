@@ -345,3 +345,94 @@ fn repaired_crc_cannot_make_invalid_routing_or_locations_valid() {
     assert_eq!(layer.find(entries[0].key), None);
     assert!(layer.validate_all().is_err());
 }
+
+#[test]
+fn untouched_key_and_fingerprint_blocks_are_lazy_and_cached_bad_never_repairs() {
+    use std::os::unix::fs::FileExt;
+    let mut records = fixture_entries(4097);
+    for (i, entry) in records.iter_mut().enumerate() {
+        entry.key.digest = ContentHash::of_bytes(&(i as u64).to_le_bytes());
+    }
+    records.sort_unstable_by_key(|e| e.key);
+    let good = encode_layer(&records).unwrap();
+    for plane in [1, 2, 3] {
+        let mut bad = good.clone();
+        let start = u32_at(&bad, 32 + plane * 8).unwrap() as usize;
+        let len = u32_at(&bad, 36 + plane * 8).unwrap() as usize;
+        let last = (len.div_ceil(BLOCK) - 1) * STRIDE;
+        bad[start + last] ^= 1;
+        let (dir, result) = open(&bad, records.len());
+        let layer = result.unwrap();
+        assert_eq!(layer.find(records[0].key), Some(records[0].location));
+        assert!(layer.validate_all().is_err());
+        // Controlled same-length repair after readers have stopped: no truncate,
+        // so no SIGBUS. A pinned Bad status must not become Good after repair.
+        let path = layer_path(dir.path(), descriptor(&bad, records.len()));
+        let file = fs::OpenOptions::new().write(true).open(path).unwrap();
+        file.write_all_at(&good, 0).unwrap();
+        assert!(layer.validate_all().is_err());
+    }
+}
+
+#[test]
+fn concurrent_first_touches_share_race_safe_crc_and_bucket_status() {
+    let records = fixture_entries(4097);
+    let bytes = encode_layer(&records).unwrap();
+    let (_dir, result) = open(&bytes, records.len());
+    let layer = result.unwrap();
+    std::thread::scope(|scope| {
+        for _ in 0..4 {
+            scope.spawn(|| {
+                for record in records.iter().step_by(127) {
+                    assert_eq!(layer.find(record.key), Some(record.location));
+                }
+            });
+        }
+    });
+    layer.validate_all().unwrap();
+    let mut bad = bytes;
+    let locator = u32_at(&bad, 56).unwrap() as usize;
+    bad[locator] ^= 1;
+    let (_dir, result) = open(&bad, records.len());
+    let layer = result.unwrap();
+    std::thread::scope(|scope| {
+        for _ in 0..4 {
+            scope.spawn(|| assert_eq!(layer.find(records[0].key), None));
+        }
+    });
+    assert!(layer.validate_all().is_err());
+}
+
+#[test]
+fn repaired_crc_rejects_misplaced_keys_and_noncanonical_dictionaries_in_full_validation() {
+    let records = fixture_entries(342);
+    let good = encode_layer(&records).unwrap();
+    let mut bad = good.clone();
+    let mut misplaced = records[0].key;
+    misplaced.digest.0[0] = 0xff;
+    change_logical(&mut bad, 2, 0, &key_bytes(misplaced));
+    repair_plane(&mut bad, 2);
+    let (_dir, result) = open(&bad, records.len());
+    let layer = result.unwrap();
+    assert!(layer.validate_all().is_err());
+    assert_eq!(layer.find(records[0].key), None);
+    for duplicate in [false, true] {
+        let mut bad = good.clone();
+        let first = records[0].location.segment.0;
+        change_logical(&mut bad, 4, 32, &if duplicate { first } else { [0xff; 32] });
+        repair_plane(&mut bad, 4);
+        let (_dir, result) = open(&bad, records.len());
+        assert!(result.unwrap().validate_all().is_err());
+    }
+    // Both blocks have full payloads. Cross-plane swaps must fail even when
+    // their byte lengths agree: type and plane ordinal are part of the CRC.
+    let mut bad = good;
+    let key = u32_at(&bad, 48).unwrap() as usize;
+    let locator = u32_at(&bad, 56).unwrap() as usize;
+    let a = bad[key..key + STRIDE].to_vec();
+    let b = bad[locator..locator + STRIDE].to_vec();
+    bad[key..key + STRIDE].copy_from_slice(&b);
+    bad[locator..locator + STRIDE].copy_from_slice(&a);
+    let (_dir, result) = open(&bad, records.len());
+    assert!(result.unwrap().validate_all().is_err());
+}

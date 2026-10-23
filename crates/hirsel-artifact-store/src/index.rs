@@ -17,6 +17,16 @@ pub(crate) const MAX_BYTES: usize = 128 << 20;
 pub(crate) const MAX_SCRATCH: usize = 256 << 20;
 const MAX_LAYERS: usize = 8;
 
+#[cfg(test)]
+thread_local! {
+    static COMPACT_OBSERVER: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
+}
+/// Deterministic test barrier after selection, with the publication lock free.
+#[cfg(test)]
+pub(crate) fn observe_compaction(callback: impl FnOnce() + 'static) {
+    COMPACT_OBSERVER.with(|slot| *slot.borrow_mut() = Some(Box::new(callback)));
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 #[repr(u8)]
 pub(crate) enum KeyKind {
@@ -280,6 +290,13 @@ pub(crate) fn compact(root: &Path, budget: MaintenanceBudget) -> io::Result<Comp
         let pinned = pin(root, &selected)?;
         (original, selected, pinned)
     };
+    #[cfg(test)]
+    COMPACT_OBSERVER.with(|slot| {
+        let callback = slot.borrow_mut().take();
+        if let Some(callback) = callback {
+            callback();
+        }
+    });
     for layer in pinned.0.iter() {
         layer.validate_all()?;
     }
@@ -324,13 +341,27 @@ pub(crate) fn compact(root: &Path, budget: MaintenanceBudget) -> io::Result<Comp
         return Ok(CompactOutcome::Conflict);
     }
     let start = latest.layers.len() - original.layers.len();
+    // A concurrent writer may already have appended exactly our output. Do
+    // not emit duplicate descriptors (which a subsequent pin must refuse).
+    if latest
+        .layers
+        .iter()
+        .enumerate()
+        .any(|(i, d)| (i < start || i >= start + selected.layers.len()) && d.id == descriptor.id)
+    {
+        return Ok(CompactOutcome::Conflict);
+    }
+    let reusable = selected.layers.contains(&descriptor);
     latest
         .layers
         .splice(start..start + selected.layers.len(), [descriptor]);
     if admission(&latest.layers).is_some() {
         return Ok(CompactOutcome::Deferred);
     }
-    if !stage.install(root, descriptor)? {
+    // If newer inputs completely shadow older ones, the deterministic output
+    // can be an already-listed, fully validated selected layer. Reuse its
+    // immutable inode instead of deferring maintenance forever.
+    if !stage.install(root, descriptor)? && !reusable {
         return Ok(CompactOutcome::Deferred);
     }
     let generation = latest.publish(root, stage)?;
@@ -339,3 +370,7 @@ pub(crate) fn compact(root: &Path, budget: MaintenanceBudget) -> io::Result<Comp
         layers: latest.layers.len() as u8,
     })
 }
+
+#[cfg(test)]
+#[path = "index/policy_tests.rs"]
+mod policy_tests;
