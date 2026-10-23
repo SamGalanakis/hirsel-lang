@@ -29,6 +29,7 @@ pub mod object;
 pub mod objects;
 pub mod operation;
 pub mod persistent;
+pub mod products;
 pub mod profile;
 pub mod rt_program;
 pub mod runtime_abi;
