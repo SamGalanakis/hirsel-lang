@@ -365,6 +365,7 @@ fn executed_definitions(reads: &crate::memo::Reads) -> Vec<DefPath> {
             matches!(
                 read,
                 ReadKey::ExecutedBody(_)
+                    | ReadKey::LayoutBody(_)
                     | ReadKey::ExecutedSignature(_)
                     | ReadKey::Representation(_)
             )

@@ -108,6 +108,13 @@ impl QueryEngine {
     }
     /// Every open evaluation frame executed `path`'s body.
     pub(crate) fn read_implementation(&mut self, path: &DefPath) {
+        self.read_body(path, ReadKey::ExecutedBody(DefId::intern(path)));
+    }
+    /// H consumed the representation source, without executing a callable.
+    pub(crate) fn read_layout_body(&mut self, path: &DefPath) {
+        self.read_body(path, ReadKey::LayoutBody(DefId::intern(path)));
+    }
+    fn read_body(&mut self, path: &DefPath, key: ReadKey) {
         if self.execution_stack.is_empty() {
             return;
         }
@@ -116,7 +123,6 @@ impl QueryEngine {
             return;
         };
         let value = memos::optional(Some(hash));
-        let key = ReadKey::ExecutedBody(DefId::intern(path));
         for frame in &mut self.execution_stack {
             frame.record(key, value);
         }

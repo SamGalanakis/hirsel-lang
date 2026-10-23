@@ -154,6 +154,8 @@ pub enum ReadKey {
     /// All V input views in the originating package's private universe.
     /// The package is explicit because execution-read unions cross packages.
     ValidationUniverse(PackageKey),
+    /// A representation body consumed by H, without interpreting its code.
+    LayoutBody(DefId),
 }
 
 /// The kind of a read, for counters and durability rules.
@@ -173,9 +175,10 @@ pub enum ReadKind {
     FirstHeap,
     Environment,
     ValidationUniverse,
+    LayoutBody,
 }
 impl ReadKind {
-    pub const ALL: [ReadKind; 14] = [
+    pub const ALL: [ReadKind; 15] = [
         ReadKind::Signature,
         ReadKind::FailedSignature,
         ReadKind::Lookup,
@@ -190,6 +193,7 @@ impl ReadKind {
         ReadKind::FirstHeap,
         ReadKind::Environment,
         ReadKind::ValidationUniverse,
+        ReadKind::LayoutBody,
     ];
     pub fn name(self) -> &'static str {
         match self {
@@ -199,6 +203,7 @@ impl ReadKind {
             ReadKind::NameSet => "name set",
             ReadKind::Representation => "representation",
             ReadKind::ExecutedBody => "executed body",
+            ReadKind::LayoutBody => "layout body",
             ReadKind::ExecutedSignature => "executed signature",
             ReadKind::CitedText => "cited text",
             ReadKind::DeclarationCandidates => "declaration candidates",
@@ -220,6 +225,7 @@ impl ReadKey {
             ReadKey::NameSet(..) => ReadKind::NameSet,
             ReadKey::Representation(_) => ReadKind::Representation,
             ReadKey::ExecutedBody(_) => ReadKind::ExecutedBody,
+            ReadKey::LayoutBody(_) => ReadKind::LayoutBody,
             ReadKey::ExecutedSignature(_) => ReadKind::ExecutedSignature,
             ReadKey::CitedText(_) => ReadKind::CitedText,
             ReadKey::DeclarationCandidates(_) => ReadKind::DeclarationCandidates,
@@ -237,6 +243,7 @@ impl ReadKey {
             | ReadKey::FailedSignature(d)
             | ReadKey::Representation(d)
             | ReadKey::ExecutedBody(d)
+            | ReadKey::LayoutBody(d)
             | ReadKey::ExecutedSignature(d)
             | ReadKey::CitedText(d)
             | ReadKey::DeclarationCandidates(d)
@@ -270,6 +277,7 @@ impl ReadKey {
             | ReadKey::FailedSignature(d)
             | ReadKey::Representation(d)
             | ReadKey::ExecutedBody(d)
+            | ReadKey::LayoutBody(d)
             | ReadKey::ExecutedSignature(d)
             | ReadKey::CitedText(d)
             | ReadKey::DeclarationCandidates(d)
@@ -539,6 +547,7 @@ fn decode_key(input: &mut &[u8]) -> Option<ReadKey> {
         ReadKind::FailedSignature => ReadKey::FailedSignature(take_def(input)?),
         ReadKind::Representation => ReadKey::Representation(take_def(input)?),
         ReadKind::ExecutedBody => ReadKey::ExecutedBody(take_def(input)?),
+        ReadKind::LayoutBody => ReadKey::LayoutBody(take_def(input)?),
         ReadKind::ExecutedSignature => ReadKey::ExecutedSignature(take_def(input)?),
         ReadKind::CitedText => ReadKey::CitedText(take_def(input)?),
         ReadKind::DeclarationCandidates => ReadKey::DeclarationCandidates(take_def(input)?),
@@ -666,6 +675,7 @@ mod tests {
             ReadKey::NameSet(package, ModuleKey::of(&ctx.modules)),
             ReadKey::Representation(a),
             ReadKey::ExecutedBody(a),
+            ReadKey::LayoutBody(a),
             ReadKey::ExecutedSignature(a),
             ReadKey::CitedText(b),
             ReadKey::DeclarationCandidates(b),
