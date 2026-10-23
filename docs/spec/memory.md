@@ -110,6 +110,30 @@ obligation, so a straight generic identity can be noalloc. The diagnostic names 
 binding, parameter, temporary or replacement that introduces the cleanup obligation, with
 notes identifying the destructor signature.
 
+A callback's `@noalloc` promise covers invocation, not destruction of its result. In
+`let output = read(); let _ = 1u64 / divisor; take output`, a failed division destroys
+`output`. An unbounded result parameter `R` has no nonallocating destruction promise.
+Where callers can meet the stronger contract, the complete helper is:
+
+```hirsel
+@noalloc
+fn relay[R: noalloc_drop](read: @noalloc fn() -> R uses {}, divisor: u64) -> R uses {} {
+  let output = read()
+  let _ = 1u64 / divisor
+  take output
+}
+@noalloc
+fn one() -> u64 uses {} { 7u64 }
+fn example() -> u64 { relay(one, 1u64) }
+```
+
+Here `u64` satisfies the bound. Adding it is not a repair for a caller whose supplier
+returns an unbounded parameter or an opaque type that does not export `noalloc_drop`.
+A helper whose entire body is `read()` transfers the result without a retained cleanup
+obligation. Keeping the division before `read()` also avoids retaining its result across
+that failure, but changes when the callback runs; use that structure only when the
+behavior permits the change. Borrowing an existing value adds no destruction obligation.
+
 Invocation, construction destination and implicit cleanup are independent obligations,
 failure paths included. A written `take` stays caller-owned until entry. A noalloc callee
 does not exempt constructing a global or retained argument or closure environment. Counted

@@ -226,3 +226,64 @@ fn true_transfer_on_every_exit_needs_no_generic_cleanup_bound() {
     assert!(ds.is_empty(), "{ds:?}");
     validate_accepted(&mut engine, true);
 }
+
+/// Adapt the before/after call-return distinction in rustc_mir_dataflow's
+/// initialized.rs:255-303 and disconnected call-block vectors in
+/// framework/tests.rs:1-68 (19833af7224424e8b53e288097d56b6af43d5bcf).
+/// The Rust Project Contributors, MIT OR Apache-2.0. These are test shapes;
+/// Hirsel's owned callback result and MEM-5 determine the expected obligation.
+#[test]
+fn callback_results_exist_only_after_successful_return() {
+    let mut count = 0;
+    for proof in [false, true] {
+        for failure in [None, Some(false), Some(true)] {
+            let mut owned = false;
+            let mut cleanup = false;
+            // Model the call's disconnected failure and successful-return edges.
+            // A failing call creates no returned value in this frame.
+            assert!(!owned);
+            if failure == Some(false) {
+                cleanup |= owned;
+            }
+            owned = true;
+            if failure == Some(true) {
+                cleanup |= owned;
+            }
+            owned = false; // successful return transfers it
+            assert!(!owned);
+            let body = match failure {
+                None => "read()",
+                Some(false) => "let _=1u64/divisor;read()",
+                Some(true) => "let output=read();let _=1u64/divisor;take output",
+            };
+            let bound = if proof { ":noalloc_drop" } else { "" };
+            // The disconnected helper body is checked universally, even though
+            // main does not call it; a separate direct caller has no obligation.
+            let source = format!(
+                "@noalloc fn caller[R{bound}](read:@noalloc fn()->R uses {{}},divisor:u64)->R uses {{}} {{{body}}}\n@noalloc fn relay[R](read:@noalloc fn()->R uses {{}})->R uses {{}} {{read()}}\npub fn main(){{}}"
+            );
+            let expected = !cleanup || proof;
+            let (mut engine, ds) = diagnostics(&source);
+            assert_eq!(ds.is_empty(), expected, "{source}\n{ds:?}");
+            if expected {
+                let input = engine.export_native_input().unwrap();
+                engine.import_native_input(input).unwrap();
+            } else {
+                assert_eq!(ds.len(), 1);
+                assert_eq!(ds[0].rule.as_str(), "MEM-5");
+                assert_eq!(engine.sources.slice(ds[0].primary), Some("output"));
+                assert!(
+                    ds[0]
+                        .secondary
+                        .iter()
+                        .any(|label| engine.sources.slice(label.span) == Some("1u64/divisor"))
+                );
+            }
+            count += 1;
+        }
+    }
+    assert_eq!(count, 6);
+    eprintln!(
+        "noalloc_cleanup_model_16: {count} callback return-edge cases matched the model and accepted V"
+    );
+}

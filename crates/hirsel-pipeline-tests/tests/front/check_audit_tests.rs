@@ -103,7 +103,7 @@ fn cleanup_diagnostics_name_the_declared_destructor() {
         ds[0]
             .notes
             .iter()
-            .any(|n| n.contains("destructor standalone@0/Token permits allocation"))
+            .any(|n| n.contains("destructor `Token` permits allocation"))
     );
     assert!(
         modes(
@@ -194,7 +194,11 @@ fn annotated_and_aliased_local_closures_keep_declared_call_effects() {
     }
     assert_eq!(
         diagnostics[0].notes,
-        ["declared destruction summary: MayAllocate"]
+        [
+            "`f` is owned here and may need destruction before it can be transferred",
+            "declared destruction may allocate; this value has no `noalloc_drop` promise",
+            "help: direct transfer avoids this cleanup obligation only when no possible failure intervenes; preserve the intended operations and their order",
+        ]
     );
 
     // An alias holds the literal's row, so it keeps the `@noalloc` evidence

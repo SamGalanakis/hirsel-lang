@@ -12,12 +12,20 @@ enum Ownership {
     /// Still owned on every path; nothing that may fail or exit ran.
     Kept,
     /// Some path may fail, exit or end with the binding still owned.
-    Exposed,
+    Exposed(Option<ExprId>),
 }
 impl Ownership {
     /// Two paths that rejoin.
     fn join(self, other: Self) -> Self {
-        if self == other { self } else { Self::Exposed }
+        if self == other {
+            self
+        } else {
+            let site = match (self, other) {
+                (Self::Exposed(site), _) | (_, Self::Exposed(site)) => site,
+                _ => None,
+            };
+            Self::Exposed(site)
+        }
     }
     /// Where the evaluation's value is received by an owner.
     fn received(self) -> Self {
@@ -29,7 +37,7 @@ impl Ownership {
     /// Where the evaluation's value is destroyed.
     fn discarded(self) -> Self {
         match self {
-            Self::Yielded => Self::Exposed,
+            Self::Yielded => Self::Exposed(None),
             other => other,
         }
     }
@@ -47,8 +55,8 @@ enum AllocationReasonKind {
     Construction,
     Mutation,
     Cleanup {
-        summary: DropAllocation,
         notes: Vec<String>,
+        boundary: Option<hirsel_span::Span>,
     },
     Fields,
 }
@@ -70,11 +78,14 @@ impl AllocationReason {
         };
         let mut diagnostic = Diagnostic::error(const { RuleId::of("MEM-5") }, self.span, message);
         match self.kind {
-            AllocationReasonKind::Cleanup { summary, notes } => {
-                diagnostic
-                    .notes
-                    .push(format!("declared destruction summary: {summary:?}"));
+            AllocationReasonKind::Cleanup { notes, boundary } => {
                 diagnostic.notes.extend(notes);
+                if let Some(span) = boundary {
+                    diagnostic.secondary.push(hirsel_diag::Label {
+                        span,
+                        message: "this operation may fail while the value is still owned; failure cleanup must destroy it".into(),
+                    });
+                }
             }
             AllocationReasonKind::Fields => diagnostic.notes.push(
                 "owned fields must satisfy noalloc_drop independently of the finalizer body".into(),
@@ -350,8 +361,33 @@ impl<'a> Audit<'a, '_> {
             }),
         }
     }
-    fn destruction_notes(&mut self, root: TypeId) -> Result<Vec<String>, QueryError> {
+    fn destruction_notes(
+        &mut self,
+        root: TypeId,
+        summary: &DropAllocation,
+    ) -> Result<Vec<String>, QueryError> {
         let mut notes = Vec::new();
+        match summary {
+            DropAllocation::DependsOn(parameters) => {
+                let declarations = &self.input.checked.resolution.generic_declarations;
+                for parameter in parameters.iter() {
+                    if let Some(GenericParameter::Type { name, bounds }) =
+                        declarations.get(*parameter)
+                        && !bounds.contains(&Bound::NoallocDrop)
+                        && !bounds.contains(&Bound::Plain)
+                    {
+                        notes.push(format!("cleanup requires `{name}: noalloc_drop`; `{name}` has no declared nonallocating destruction promise"));
+                    }
+                }
+                notes.push("help: strengthen the helper's bound only if every caller supplies a type satisfying `noalloc_drop`; an opaque supplier must export that promise".into());
+            }
+            DropAllocation::MayAllocate => notes.push(
+                "declared destruction may allocate; this value has no `noalloc_drop` promise"
+                    .into(),
+            ),
+            DropAllocation::NoAlloc => (),
+        }
+        notes.push("help: direct transfer avoids this cleanup obligation only when no possible failure intervenes; preserve the intended operations and their order".into());
         let mut todo = vec![root];
         let mut seen = std::collections::HashSet::new();
         let mut definitions = BTreeSet::new();
@@ -368,8 +404,8 @@ impl<'a> Audit<'a, '_> {
                     if matches!(&signature.kind, SignatureKind::Type(d) if d.resource && d.destructor_allocation != Allocation::NoAlloc)
                     {
                         notes.push(format!(
-                            "destructor {} permits allocation",
-                            definition.path()
+                            "destructor `{}` permits allocation",
+                            definition.path().0.name
                         ));
                     }
                     let (repr, _) = self.representation(ty)?;
@@ -437,6 +473,7 @@ impl<'a> Audit<'a, '_> {
             // intervening failure creates no cleanup obligation." A taken
             // parameter is owned from entry; a let binding from its statement
             // to the end of its block.
+            let mut boundary = None;
             if !can_fail_contract {
                 let moved = match (&binding.binding, binding.site, root) {
                     (ResolvedName::Parameter(_), _, Some(root)) => {
@@ -464,14 +501,32 @@ impl<'a> Audit<'a, '_> {
                                     rest.discarded()
                                 }
                             }
-                            None => Ownership::Exposed,
+                            None => Ownership::Exposed(None),
                         }
                     }
-                    _ => Ownership::Exposed,
+                    _ => Ownership::Exposed(None),
                 };
                 if moved == Ownership::Moved {
                     continue;
                 }
+                if let Ownership::Exposed(site) = moved {
+                    boundary = site;
+                }
+            } else {
+                boundary = self
+                    .function_syntax(owner)
+                    .and_then(|s| {
+                        s.contracts.iter().find(|c| {
+                            (matches!(binding.binding, ResolvedName::Parameter(_))
+                                || c.kind == ast::ContractKind::Ensures)
+                                && !matches!(
+                                    self.input.syntax.tree.expressions[c.expression.0 as usize]
+                                        .kind,
+                                    ast::ExprKind::Literal(ast::Literal::Bool(true))
+                                )
+                        })
+                    })
+                    .map(|c| c.expression);
             }
             // Only taken parameters own their entry values. Plain borrowed parameters
             // can be represented as Copy, and their cleanup is already NoAlloc.
@@ -498,8 +553,24 @@ impl<'a> Audit<'a, '_> {
             result.add(
                 span,
                 AllocationReasonKind::Cleanup {
-                    summary,
-                    notes: self.destruction_notes(binding.ty)?,
+                    notes: {
+                        let mut notes = self.destruction_notes(binding.ty, &summary)?;
+                        let name = match (&binding.binding, binding.site) {
+                            (ResolvedName::Parameter(p), _) => self.function_syntax(owner)
+                                .and_then(|s| s.parameters.get(p.0 as usize))
+                                .and_then(|p| p.name.as_ref()),
+                            (_, NameSite::Pattern(p)) => match &self.input.syntax.tree.patterns[p.0 as usize].kind {
+                                ast::PatternKind::Binding(name) => Some(name),
+                                _ => None,
+                            },
+                            _ => None,
+                        };
+                        if let Some(name) = name {
+                            notes.insert(0, format!("`{name}` is owned here and may need destruction before it can be transferred"));
+                        }
+                        notes
+                    },
+                    boundary: boundary.map(|e| self.input.syntax.tree.expressions[e.0 as usize].origin.span),
                 },
             );
         }
@@ -565,7 +636,7 @@ impl<'a> Audit<'a, '_> {
         {
             // A labelled block's breaks leave from inside its statements:
             // not followed here (LANG-11).
-            ast::ExprKind::Block { label: Some(_), .. } => Ownership::Exposed,
+            ast::ExprKind::Block { label: Some(_), .. } => Ownership::Exposed(None),
             ast::ExprKind::Block {
                 statements, tail, ..
             } => self.rest(name, &statements, tail),
@@ -615,18 +686,18 @@ impl<'a> Audit<'a, '_> {
                             (a.value, owned)
                         })
                         .collect();
-                    self.operands(name, operands, !constructor)
+                    self.operands(name, operands, (!constructor).then_some(e))
                 }
                 other => other.discarded(),
             },
             ast::ExprKind::Tuple(parts) | ast::ExprKind::Sequence(parts) => {
-                self.operands(name, parts.into_iter().map(|p| (p, true)).collect(), false)
+                self.operands(name, parts.into_iter().map(|p| (p, true)).collect(), None)
             }
             ast::ExprKind::Return(Some(value)) => match self.ownership(name, value).received() {
                 Ownership::Moved => Ownership::Moved,
-                _ => Ownership::Exposed,
+                _ => Ownership::Exposed(None),
             },
-            _ if self.may_fail(e) => Ownership::Exposed,
+            _ if self.may_fail(e) => Ownership::Exposed(Some(e)),
             _ => Ownership::Kept,
         }
     }
@@ -655,7 +726,7 @@ impl<'a> Audit<'a, '_> {
                 // run any number of times: neither is followed here.
                 ast::StmtKind::Assign { .. }
                 | ast::StmtKind::While { .. }
-                | ast::StmtKind::For { .. } => Ownership::Exposed,
+                | ast::StmtKind::For { .. } => Ownership::Exposed(None),
             };
             if step != Ownership::Kept {
                 return step;
@@ -670,27 +741,27 @@ impl<'a> Audit<'a, '_> {
         &mut self,
         name: &ResolvedName,
         operands: Vec<(ExprId, bool)>,
-        consumer_may_fail: bool,
+        consumer_failure: Option<ExprId>,
     ) -> Ownership {
         let mut taken = false;
         for (operand, owned) in operands {
             if taken {
                 if self.may_fail(operand) {
-                    return Ownership::Exposed;
+                    return Ownership::Exposed(Some(operand));
                 }
                 continue;
             }
             match self.ownership(name, operand) {
                 Ownership::Kept => (),
                 Ownership::Yielded if owned => taken = true,
-                Ownership::Yielded => return Ownership::Exposed,
+                Ownership::Yielded => return Ownership::Exposed(None),
                 other => return other,
             }
         }
         if taken {
             Ownership::Moved
-        } else if consumer_may_fail {
-            Ownership::Exposed
+        } else if let Some(call) = consumer_failure {
+            Ownership::Exposed(Some(call))
         } else {
             Ownership::Kept
         }
@@ -768,8 +839,8 @@ impl<'a> Audit<'a, '_> {
                         result.add(
                             self.input.syntax.tree.expressions[e.0 as usize].origin.span,
                             AllocationReasonKind::Cleanup {
-                                summary,
-                                notes: self.destruction_notes(ty)?,
+                                notes: self.destruction_notes(ty, &summary)?,
+                                boundary: None,
                             },
                         );
                     }
@@ -1093,8 +1164,11 @@ impl<'a> Audit<'a, '_> {
                 result.add(
                     span,
                     AllocationReasonKind::Cleanup {
-                        summary: self.types.get(cursor).unwrap().drop_allocation.clone(),
-                        notes: self.destruction_notes(cursor)?,
+                        notes: self.destruction_notes(
+                            cursor,
+                            &self.types.get(cursor).unwrap().drop_allocation.clone(),
+                        )?,
+                        boundary: None,
                     },
                 );
             }
