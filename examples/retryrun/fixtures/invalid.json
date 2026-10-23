@@ -1,0 +1,15 @@
+{
+  "argv": [
+    "/usr/bin/python3",
+    "-c",
+    "import sqlite3; db = sqlite3.connect(':memory:'); db.execute('select 1'); db.close()"
+  ],
+  "retryable": [
+    75
+  ],
+  "max_attempts": 99,
+  "base_ns": 500000,
+  "cap_ns": 5000000,
+  "max_elapsed_ns": 30000000000,
+  "timeout_ms": 1000
+}

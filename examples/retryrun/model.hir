@@ -1,0 +1,155 @@
+// Pure command admission and reports. Scheduling is provided by std/schedule.
+pub const INPUT_BYTES: u64 = 8192
+
+pub type InvalidInput {
+  kind: String,
+}
+
+pub type Record {
+  argv: List[String],
+  retryable: List[i32],
+  max_attempts: u64,
+  base_ns: u64,
+  cap_ns: u64,
+  max_elapsed_ns: u64,
+  timeout_ms: u64,
+}
+
+pub fn invalid(kind: String) -> InvalidInput uses {} {
+  InvalidInput(kind: unique kind)
+}
+
+fn number(fields: Map[String, json.Value], key: String, maximum: u64) -> Result[
+  u64,
+  InvalidInput
+] uses {} {
+  let Some(Number(raw)) = map.get(fields, key) else {
+    return Error(invalid(key))
+  }
+  let Ok(n) = u64.parse(raw) else {
+    return Error(invalid(key))
+  }
+  if n > maximum {
+    return Error(invalid(key))
+  }
+  Ok(n)
+}
+
+pub fn decode(take data: Bytes) -> Result[Record, InvalidInput] uses {} {
+  if bytes.len(data) > INPUT_BYTES {
+    return Error(invalid("input_bytes_limit"))
+  }
+  let Ok(source) = string.from_bytes(take data) else {
+    return Error(invalid("utf8"))
+  }
+  let Ok(Object(fields)) = json.parse(take source) else {
+    return Error(invalid("json_object"))
+  }
+  if map.len(fields) != 7 {
+    return Error(invalid("fields"))
+  }
+  let Some(Array(raw_argv)) = map.get(fields, "argv") else {
+    return Error(invalid("argv"))
+  }
+  if list.len(raw_argv) == 0 || list.len(raw_argv) > 16 {
+    return Error(invalid("argv"))
+  }
+  let mut argv: List[String] = []
+  for value in raw_argv {
+    let Text(word) = value else {
+      return Error(invalid("argv"))
+    }
+    if string.byte_len(word) > 256 || string.contains(word, "\0") {
+      return Error(invalid("argv"))
+    }
+    list.push(mut argv, unique word)
+  }
+  if !string.starts_with(argv[0], "/") {
+    return Error(invalid("program_absolute"))
+  }
+  let Some(Array(raw_codes)) = map.get(fields, "retryable") else {
+    return Error(invalid("retryable"))
+  }
+  if list.len(raw_codes) > 8 {
+    return Error(invalid("retryable"))
+  }
+  let mut codes: List[i32] = []
+  for value in raw_codes {
+    let Number(raw) = value else {
+      return Error(invalid("retryable"))
+    }
+    let Ok(n) = i32.parse(raw) else {
+      return Error(invalid("retryable"))
+    }
+    if n < 1 || n > 255 {
+      return Error(invalid("retryable"))
+    }
+    list.push(mut codes, n)
+  }
+  let attempts = number(fields, "max_attempts", 5)?
+  let timeout = number(fields, "timeout_ms", 5000)?
+  let elapsed = number(fields, "max_elapsed_ns", 30000000000)?
+  if attempts == 0 || timeout == 0 || elapsed == 0 {
+    return Error(invalid("positive_limits"))
+  }
+  Ok(
+    Record(
+      argv: take argv,
+      retryable: take codes,
+      max_attempts: attempts,
+      base_ns: number(fields, "base_ns", 20000000)?,
+      cap_ns: number(fields, "cap_ns", 20000000)?,
+      max_elapsed_ns: elapsed,
+      timeout_ms: timeout
+    )
+  )
+}
+
+pub fn command(record: Record) -> Command uses {} {
+  let mut args: List[String] = []
+  for i in 1u64..list.len(record.argv) {
+    list.push(mut args, unique record.argv[i])
+  }
+  Command(
+    program: path.of(record.argv[0]),
+    args: take args,
+    dir: None(),
+    env: None(),
+    own_group: true
+  )
+}
+
+pub fn policy(record: Record) -> schedule.Schedule uses {} {
+  schedule.max_attempts(
+    schedule.max_elapsed(
+      schedule.capped(schedule.exponential(record.base_ns, 2), record.cap_ns),
+      record.max_elapsed_ns
+    ),
+    record.max_attempts
+  )
+}
+
+pub fn retryable(record: Record, code: i32) -> bool uses {} {
+  for allowed in record.retryable {
+    if code == allowed {
+      return true
+    }
+  }
+  false
+}
+
+pub fn filename(name: String) -> bool uses {} {
+  if name == "" || name == "." || name == ".." || string.byte_len(name) > 256 {
+    return false
+  }
+  for byte in string.as_bytes(name) {
+    if byte == 0 || byte == b'/' || byte == b'\\' || byte == b':' {
+      return false
+    }
+  }
+  true
+}
+
+pub fn error_json(value: InvalidInput) -> json.Value uses {} = comptime derive.json_value(
+  shape(InvalidInput)
+)

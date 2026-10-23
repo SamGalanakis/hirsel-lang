@@ -1,0 +1,168 @@
+// Go backoff vectors (6f228bfd exponential_test.go:9-38), scaled ms to ns;
+// tokio-retry (69a8766a strategy.rs:235-264). MIT notices in LICENSES.txt.
+fn vector(c: MonotonicClock, r: Random, policy: schedule.Schedule, expected: List[u64]) -> Result[
+  (),
+  schedule.ScheduleError
+] {
+  let start = match clock.monotonic(c) {
+    Ok(at) => at,
+    Error(e) => return Error(Clock(e)),
+  }
+  let mut state = unique policy
+  for n in expected {
+    let Ok(Some(delay)) = schedule.next(c, r, mut state, start) else {
+      failure.check(false, Arithmetic())
+      return Ok(())
+    }
+    failure.check(delay.nanoseconds == int.widen(n), Arithmetic())
+  }
+  Ok(())
+}
+
+fn assert_ticks(c: MonotonicClock, expected: u64) -> () {
+  failure.check(
+    match clock.monotonic(c) {
+      Ok(now) => instant.ticks(now) == expected,
+      Error(_) => false,
+    },
+    Arithmetic()
+  )
+}
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let c = io.monotonic_clock(rt)?
+  let r = io.random(rt)?
+  let ran = fn() -> Result[(), schedule.ScheduleError] {
+    vector(
+      c,
+      r,
+      schedule.capped(schedule.exponential(500, 2), 5000),
+      [500u64, 1000, 2000, 4000, 5000, 5000, 5000, 5000, 5000, 5000]
+    )?
+    vector(c, r, schedule.fibonacci(10), [10u64, 10, 20, 30, 50, 80])?
+    vector(
+      c,
+      r,
+      schedule.capped(schedule.fibonacci(10), 50),
+      [10u64, 10, 20, 30, 50, 50]
+    )?
+    vector(
+      c,
+      r,
+      schedule.fibonacci(18446744073709551615),
+      [18446744073709551615u64, 18446744073709551615]
+    )?
+    Ok(())
+  }()
+  failure.check(ran == Ok(()), Arithmetic())
+  let single = schedule.retry(
+    c,
+    r,
+    schedule.max_attempts(schedule.spaced(500), 1),
+    fn() -> Result[(), u64] {
+      Error(7)
+    },
+    fn(e: u64) -> bool {
+      true
+    }
+  )
+  failure.check(single == Error(GiveUp(7, 1)), Arithmetic())
+  assert_ticks(c, 0)
+  // Hirsel rejects equality without sleeping: Go allows equality; deliberate deviation.
+  let equality = schedule.retry(
+    c,
+    r,
+    schedule.max_elapsed(schedule.spaced(500), 500),
+    fn() -> Result[(), u64] {
+      Error(7)
+    },
+    fn(e: u64) -> bool {
+      true
+    }
+  )
+  failure.check(equality == Error(GiveUp(7, 1)), Arithmetic())
+  assert_ticks(c, 0)
+  let below = schedule.retry(
+    c,
+    r,
+    schedule.max_elapsed(schedule.spaced(500), 501),
+    fn() -> Result[(), u64] {
+      Error(7)
+    },
+    fn(e: u64) -> bool {
+      true
+    }
+  )
+  failure.check(below == Error(GiveUp(7, 2)), Arithmetic())
+  assert_ticks(c, 500)
+  // Virtual clock: the operation spends 900 ns; 500 more cannot fit in 1000.
+  let worked = schedule.retry(
+    c,
+    r,
+    schedule.max_elapsed(schedule.spaced(500), 1000),
+    fn() -> Result[(), u64] {
+      failure.check(
+        time.sleep(c, time.Duration(nanoseconds: 900)) == Ok(()),
+        Arithmetic()
+      )
+      Error(8)
+    },
+    fn(e: u64) -> bool {
+      true
+    }
+  )
+  failure.check(worked == Error(GiveUp(8, 1)), Arithmetic())
+  assert_ticks(c, 1400)
+  let record = model.Record(
+    argv: ["/bin/true"],
+    retryable: [75i32],
+    max_attempts: 3,
+    base_ns: 500,
+    cap_ns: 5000,
+    max_elapsed_ns: 30000,
+    timeout_ms: 1000
+  )
+  failure.check(
+    model.retryable(record, 75) && !model.retryable(record, 2),
+    Arithmetic()
+  )
+  let made = model.command(record)
+  failure.check(
+    made.program == path.of("/bin/true") && list.len(made.args) == 0 && made.own_group,
+    Arithmetic()
+  )
+  failure.check(
+    match made.dir {
+      None() => true,
+      _ => false,
+    },
+    Arithmetic()
+  )
+  failure.check(
+    match made.env {
+      None() => true,
+      _ => false,
+    },
+    Arithmetic()
+  )
+  let bad = model.decode(b"{}")
+  failure.check(bad == Error(model.invalid("fields")), Arithmetic())
+  failure.check(
+    !model.filename("../escape") && model.filename("fetch.json"),
+    Arithmetic()
+  )
+  let retried = schedule.retry(
+    c,
+    r,
+    model.policy(record),
+    fn() -> Result[(), u64] {
+      Error(9)
+    },
+    fn(e: u64) -> bool {
+      true
+    }
+  )
+  failure.check(retried == Error(GiveUp(9, 3)), Arithmetic())
+  assert_ticks(c, 2900)
+  Ok(())
+}

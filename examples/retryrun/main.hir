@@ -1,0 +1,159 @@
+pub type AppError = Output(OutputError) | Json(json.JsonError)
+
+type AttemptError = Process(ProcessError) | Exit(i32) | Signal(i32) | Clock(ClockError) | AttemptTimeout | Output(
+  OutputError
+)
+
+const HELP: String = "Usage: retryrun FILE\n       retryrun --help\nRead one bounded JSON command from the read-only fixtures grant.\nAt most 5 attempts, 80 ms scheduled delay; each child has its own deadline.\nExit: 0 success/help, 1 command failed, 2 invalid input, 3 missing runtime grant.\n"
+
+fn read_record(rt: Io, args: Args) -> Result[model.Record, model.InvalidInput] {
+  if arg.len(args) != 1 {
+    return Error(model.invalid("usage"))
+  }
+  let Ok(name) = arg.text(args, 0) else {
+    return Error(model.invalid("filename"))
+  }
+  if !model.filename(name) {
+    return Error(model.invalid("filename"))
+  }
+  let Ok(dir) = io.dir(rt, path.of("fixtures")) else {
+    return Error(model.invalid("directory_grant"))
+  }
+  let mut Ok(input) = file.open(dir, path.of(name)) else {
+    return Error(model.invalid("file_open"))
+  }
+  let data = match file.read_all_bounded(dir, mut input, model.INPUT_BYTES) {
+    Ok(raw) => take raw,
+    Error(Limit()) => return Error(model.invalid("input_bytes_limit")),
+    Error(File(_)) => return Error(model.invalid("file_read")),
+  }
+  model.decode(take data)
+}
+
+fn child_attempt(p: Proc, c: MonotonicClock, tasks: Tasks, record: model.Record) -> Result[
+  (),
+  AttemptError
+] {
+  let start = clock.monotonic(c)?
+  let Some(at) = instant.checked_add(c, start, record.timeout_ms * 1000000u64) else {
+    return Error(AttemptTimeout())
+  }
+  // As in testrun: scope cancellation drops a live child. wait concurrently
+  // drains both pipes without accumulating output and consumes/reaps the child.
+  match task.scope_until(
+    tasks,
+    Deadline(clock: c, at: at),
+    fn(s: Scope) -> Result[(), AttemptError] {
+      let mut child = proc.spawn(p, model.command(record))?
+      child.close_stdin(p, mut child)
+      match child.wait(p, take child, Some(Deadline(clock: c, at: at))) {
+        Ok(Exited(0)) => Ok(()),
+        Ok(Exited(code)) => Error(Exit(code)),
+        Ok(Signaled(signal)) => Error(Signal(signal)),
+        Error(e) => Error(Process(e)),
+      }
+    }
+  ) {
+    Finished(retried) => retried,
+    Expired(_) => Error(AttemptTimeout()),
+  }
+}
+
+fn outcome(error: AttemptError) -> String uses {} {
+  match error {
+    Exit(code) => f"exit:{code}",
+    Signal(signal) => f"signal:{signal}",
+    AttemptTimeout() => "timeout",
+    Clock(_) => "clock_error",
+    Output(_) => "output_error",
+    Process(TimedOut()) => "timeout",
+    Process(NotFound()) => "spawn_not_found",
+    Process(NotGranted()) => "process_not_granted",
+    Process(_) => "process_error",
+  }
+}
+
+fn run(
+  out: Stdout,
+  p: Proc,
+  c: MonotonicClock,
+  random: Random,
+  tasks: Tasks,
+  record: model.Record
+) -> Result[std@1/process.ExitCode, AppError] {
+  // Scoped closures borrow captures; Atomic is the explicit callable state.
+  let counter = atomic.create(tasks, 0u64)
+  let retried = schedule.retry(
+    c,
+    random,
+    model.policy(record),
+    fn() -> Result[(), AttemptError] {
+      let n = atomic.load(tasks, counter) + 1
+      atomic.store(tasks, counter, n)
+      let attempted = child_attempt(p, c, tasks, record)
+      let status = match attempted {
+        Ok(()) => "success",
+        Error(e) => outcome(e),
+      }
+      out.print(out, f"{{\"attempt\":{n},\"status\":\"{status}\"}}\n")?
+      attempted
+    },
+    fn(error: AttemptError) -> bool uses {} {
+      match error {
+        Exit(code) => model.retryable(record, code),
+        _ => false,
+      }
+    }
+  )
+  let (status, count) = match retried {
+    Ok(((), n)) => ("success", n),
+    Error(GiveUp(e, n)) => (outcome(e), n),
+    Error(Interrupted(_, n, _)) => ("schedule_interrupted", n),
+  }
+  out.print(out, f"{{\"attempts\":{count},\"terminal\":\"{status}\"}}\n")?
+  Ok(
+    if status == "success" {
+      std@1/process.SUCCESS
+    } else {
+      std@1/process.FAILURE
+    }
+  )
+}
+
+pub fn main(rt: Io, args: Args) -> Result[std@1/process.ExitCode, AppError] {
+  let Ok(out) = io.stdout(rt) else {
+    return Ok(std@1/process.exit_code(3u8))
+  }
+  let Ok(errors) = io.stderr(rt) else {
+    return Ok(std@1/process.exit_code(3u8))
+  }
+  if arg.len(args) == 1 {
+    if let Ok(flag) = arg.text(args, 0) {
+      if flag == "--help" || flag == "-h" {
+        out.print(out, HELP)?
+        return Ok(std@1/process.SUCCESS)
+      }
+    }
+  }
+  let record = match read_record(rt, args) {
+    Ok(value) => take value,
+    Error(problem) => {
+      let rendered = json.stringify(model.error_json(problem))?
+      err.print(errors, f"{rendered}\n")?
+      return Ok(std@1/process.exit_code(2u8))
+    },
+  }
+  let Ok(p) = io.process(rt) else {
+    return Ok(std@1/process.exit_code(3u8))
+  }
+  let Ok(c) = io.monotonic_clock(rt) else {
+    return Ok(std@1/process.exit_code(3u8))
+  }
+  let Ok(random) = io.random(rt) else {
+    return Ok(std@1/process.exit_code(3u8))
+  }
+  let Ok(tasks) = io.tasks(rt) else {
+    return Ok(std@1/process.exit_code(3u8))
+  }
+  run(out, p, c, random, tasks, record)
+}
