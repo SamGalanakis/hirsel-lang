@@ -17,6 +17,7 @@ pub(crate) struct Service {
     rows: Mutex<BTreeMap<u64, Row>>,
     pending: AtomicUsize,
     opaque: Mutex<Option<opaque::Wake>>,
+    timers: timers::Timers,
 }
 
 struct Row {
@@ -66,6 +67,7 @@ impl Service {
                     rows: Default::default(),
                     pending: AtomicUsize::new(0),
                     opaque: Mutex::new(None),
+                    timers: Default::default(),
                 }))
                 .is_ok()
         );
@@ -82,7 +84,7 @@ impl Service {
     }
 
     pub(crate) fn pending(&self) -> bool {
-        self.pending.load(Ordering::Acquire) != 0
+        self.pending.load(Ordering::Acquire) != 0 || self.timers.pending()
     }
 
     #[cfg(test)]
@@ -144,6 +146,7 @@ impl Drop for Service {
     fn drop(&mut self) {
         // The last physical continuation released the run. No issuer or
         // home poll can still use these request-owned registrations.
+        self.timers.clear(&*self.adapter);
         for token in self.rows.get_mut().unwrap().keys() {
             self.adapter.finish(token & !CONCURRENT);
         }
@@ -305,7 +308,7 @@ pub(crate) unsafe fn service(run: *mut RunShared) -> bool {
         return false;
     }
     let idle = unsafe { crate::pool::busy(&*run) } == 0;
-    let (idle, canceled) = {
+    let (idle, canceled, scopes) = {
         let Some(_guard) = (unsafe { role::IdleGuard::try_new(run) }) else {
             return false;
         };
@@ -329,9 +332,13 @@ pub(crate) unsafe fn service(run: *mut RunShared) -> bool {
                 .then_some(token & !CONCURRENT)
             })
             .collect::<Vec<_>>();
-        (idle, canceled)
+        let scopes = io.timers.scopes(s);
+        (idle, canceled, scopes)
     };
-    let result = io.adapter.ready();
+    let result = io.adapter.ready().and_then(|ready| {
+        io.timers.poll(&*io.adapter, &ready)?;
+        Ok(ready)
+    });
     let canceled = canceled
         .into_iter()
         .filter(|&t| io.adapter.cancellable(t))
@@ -348,9 +355,10 @@ pub(crate) unsafe fn service(run: *mut RunShared) -> bool {
         }
     };
     let mut changed = false;
-    let mut waiting = false;
+    let mut waiting = io.timers.pending();
     {
         let s = unsafe { (*(*run).tasks.get()).as_deref_mut().unwrap() };
+        changed |= io.timers.expire(s, &scopes);
         for (&token, row) in io.rows.lock().unwrap().iter_mut() {
             row.ready |=
                 ready.contains(token & !CONCURRENT) || canceled.contains(&(token & !CONCURRENT));
@@ -375,6 +383,11 @@ pub(crate) unsafe fn service(run: *mut RunShared) -> bool {
                 s.unpark(task);
                 changed = true;
             }
+        }
+        // Expiry also wakes runtime-only waits (channels, joins and cleanup).
+        // Poll saved owners before retiring the last external event source.
+        if changed {
+            unsafe { super::super::super::readiness::poll_free(s) };
         }
         unsafe { super::super::publish_ready(s, run) };
     }
@@ -428,3 +441,4 @@ pub(crate) unsafe fn wait(run: *mut RunShared) -> Stopped<bool> {
 }
 
 mod opaque;
+mod timers;

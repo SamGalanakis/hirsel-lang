@@ -747,6 +747,18 @@ unsafe fn arm_here(
     at: u64,
     issuer: Option<&[u32]>,
 ) -> Stopped<Option<u64>> {
+    // Production admission moves every host grant into this service. Explicit
+    // harness mixtures can instead retain their scope clock in the home binding.
+    if unsafe { (*ctx).run_ref().free_production } {
+        let io = unsafe {
+            (*ctx)
+                .run_ref()
+                .free_io
+                .get()
+                .expect("production Free service")
+        };
+        return io.arm(scope, clock, at);
+    }
     let binding = unsafe { Binding::get(ctx) };
     if binding.adapter.wants_issuer() {
         if let Some(task) = issuer {
@@ -1091,6 +1103,17 @@ pub(crate) unsafe fn disarm(ctx: *mut TaskCtx, token: u64) {
 }
 
 unsafe fn disarm_here(ctx: *mut TaskCtx, token: u64) {
+    if unsafe { (*ctx).run_ref().free_production } {
+        let io = unsafe {
+            (*ctx)
+                .run_ref()
+                .free_io
+                .get()
+                .expect("production Free service")
+        };
+        io.disarm(token);
+        return;
+    }
     let binding = unsafe { Binding::get(ctx) };
     binding.adapter.finish(token);
     binding.waits.armed.remove(&token);

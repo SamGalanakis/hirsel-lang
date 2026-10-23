@@ -2889,7 +2889,11 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
         }
         let result = self.library.call_resolved(operation, call, cx);
         for (scope, clock, at) in self.library.take_deadlines() {
-            self.arm_deadline(scope, &clock, at, cx)?;
+            // Native Free replay has no timer request or live readiness source.
+            // Its cancellation checks and scope-exit expiry come from phases.
+            if self.free.is_none() {
+                self.arm_deadline(scope, &clock, at, cx)?;
+            }
         }
         result
     }

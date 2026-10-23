@@ -131,6 +131,45 @@ fn run(engine: &[&str], program: &Path, grants: &str, hook: &str) -> Output {
     output
 }
 
+/// Production acceptance children use the same bounded watchdog as test-channel
+/// runs. File capture also prevents a detached native runner retaining a pipe.
+fn bounded_output(command: &mut Command, program: &Path, cell: &str) -> Output {
+    use std::time::{Duration, Instant};
+    let stdout = program.with_extension("matrix.stdout");
+    let stderr = program.with_extension("matrix.stderr");
+    command
+        .process_group(0)
+        .stdout(std::fs::File::create(&stdout).unwrap())
+        .stderr(std::fs::File::create(&stderr).unwrap());
+    eprintln!("Free matrix start {cell}");
+    let mut child = command.spawn().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(120);
+    let mut timed_out = false;
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            timed_out = true;
+            stop_tree(child.id());
+            let _ = child.kill();
+            break child.wait().unwrap();
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let output = Output {
+        status,
+        stdout: std::fs::read(stdout).unwrap(),
+        stderr: std::fs::read(stderr).unwrap(),
+    };
+    assert!(
+        !timed_out,
+        "{cell}: {command:?} exceeded 120 seconds: {output:?}"
+    );
+    eprintln!("Free matrix ended {cell}: {}", output.status);
+    output
+}
+
 /// Linux child-tree traversal follows hirsel-conformance/src/bin/profile.rs's
 /// watchdog. Stop each
 /// parent before reading its children: it cannot reap/reuse their identities
@@ -759,7 +798,11 @@ fn f1_corpus_matrix_with_live(
             .env(hirsel_rt::free_replay::Report::VAR, &report);
         f1_permits(&mut command, 8);
         let stop_peer = live_peer();
-        let live = command.output().unwrap();
+        let live = bounded_output(
+            &mut command,
+            &program,
+            &format!("{name} {level} live LLVM width 8 permits 8"),
+        );
         stop_peer();
         assert_eq!(
             live.status.code(),
@@ -804,8 +847,9 @@ fn f1_corpus_matrix_with_live(
                         .args(["--cores", width])
                         .env(hirsel_rt::free_replay::Report::VAR, &report);
                     f1_permits(&mut command, permits);
-                    let replay = command.output().unwrap();
                     let cell = format!("{name} {level} {engine:?} width {width} permits {permits}");
+                    command.stdin(std::process::Stdio::null());
+                    let replay = bounded_output(&mut command, &program, &cell);
                     assert_eq!(
                         replay.status.code(),
                         live.status.code(),
@@ -2157,5 +2201,33 @@ pub fn main(rt: Io, args: Args) -> Result[(), E] {
         "telemetry-refusals",
         &source,
         |_| serde_json::json!({"tasks":"tasks.free@1","dirs":[],"telemetry":{"provider":"telemetry.null@1","seed":0}}),
+    );
+}
+
+#[test]
+fn f1_scope_deadline_phases_replay_with_exact_expiration_causes() {
+    // This matrix qualifies the native Free phase tape, enabled only in its
+    // dedicated build. Legacy Io-tape scheduling has a separate contract.
+    if !hirsel_rt::free_driver::admission_enabled() {
+        return;
+    }
+    f1_corpus_matrix_with_io(
+        "scope-deadline",
+        include_str!("free/deadline.hir"),
+        |_| serde_json::json!({"stdout":"stdout.bytes@1","tasks":"tasks.free@1","monotonic_clock":"clock.monotonic.ns@1","dirs":[]}),
+    );
+}
+
+#[test]
+fn f1_future_scope_timers_replay_cancellation_nested_expiry_and_disarm() {
+    // This matrix qualifies the native Free phase tape, enabled only in its
+    // dedicated build. Legacy Io-tape scheduling has a separate contract.
+    if !hirsel_rt::free_driver::admission_enabled() {
+        return;
+    }
+    f1_corpus_matrix_with_io(
+        "scope-deadline-future",
+        include_str!("free/deadline-future.hir"),
+        |_| serde_json::json!({"stdout":"stdout.bytes@1","tasks":"tasks.free@1","monotonic_clock":"clock.monotonic.ns@1","dirs":[]}),
     );
 }

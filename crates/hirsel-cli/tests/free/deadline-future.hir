@@ -1,0 +1,98 @@
+// Host-clock deadline patterns from cli/deadlines.rs: waits cannot finish
+// themselves, so expiry is independent of host load and replay needs no clock.
+fn after(c: MonotonicClock, start: Instant of c, ns: u64) -> Deadline {
+  let now = match clock.monotonic(c) {
+    Ok(now) => now,
+    Error(_) => return Deadline(clock: c, at: start),
+  }
+  match instant.checked_add(c, now, ns) {
+    Some(at) => Deadline(clock: c, at: at),
+    None() => Deadline(clock: c, at: now),
+  }
+}
+
+fn sleep(c: MonotonicClock) -> bool {
+  match clock.monotonic(c) {
+    Ok(now) => match instant.checked_add(c, now, 3600000000000u64) {
+      Some(at) => match clock.sleep_until(c, at) {
+        Error(Canceled(DeadlineExceeded())) => true,
+        _ => false,
+      },
+      None() => false,
+    },
+    Error(_) => false,
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let out = io.stdout(rt)?
+  let c = io.monotonic_clock(rt)?
+  let start = match clock.monotonic(c) {
+    Ok(start) => start,
+    Error(_) => return Ok(()),
+  }
+  let short = 50000000u64
+  let hour = 3600000000000u64
+
+  // An armed timer must disappear when its scope exits before the deadline.
+  let early = task.scope_until(tasks, after(c, start, hour), fn(s: Scope) -> u64 { 7u64 })
+  failure.check(match early { Finished(7u64) => true, _ => false }, Arithmetic())
+
+  let slept = task.scope_until(tasks, after(c, start, short), fn(s: Scope) -> bool { sleep(c) })
+  failure.check(match slept { Expired(true) => true, _ => false }, Arithmetic())
+
+  // No host request remains runnable here: only the scope's timer can wake us.
+  let (sender, receiver): (Sender[u64], Receiver[u64]) = channel.open(tasks)
+  let received = task.scope_until(tasks, after(c, start, short), fn(s: Scope) -> bool {
+    let mut r = take receiver
+    let received = match channel.receive(tasks, mut r) {
+      Error(Canceled(DeadlineExceeded())) => true,
+      _ => false,
+    }
+    let checked = match task.check_canceled(s) {
+      Error(Canceled(DeadlineExceeded())) => true,
+      _ => false,
+    }
+    received && checked
+  })
+  failure.check(match received { Expired(true) => true, _ => false }, Arithmetic())
+  let mut tx = take sender
+  failure.check(match channel.send(tasks, mut tx, 1u64) { Error(_) => true, _ => false }, Arithmetic())
+
+  let inner_first = task.scope_until(tasks, after(c, start, hour), fn(s: Scope) -> bool {
+    let inner = task.scope_until(tasks, after(c, start, short), fn(t: Scope) -> bool { sleep(c) })
+    match inner { Expired(true) => true, _ => false }
+  })
+  failure.check(match inner_first { Finished(true) => true, _ => false }, Arithmetic())
+
+  // The outer deadline cancels the owner. The inner scope's own timer never
+  // fires, so its result is Finished while the outer result is Expired.
+  let outer_first = task.scope_until(tasks, after(c, start, short), fn(s: Scope) -> bool {
+    let inner = task.scope_until(tasks, after(c, start, hour), fn(t: Scope) -> bool { sleep(c) })
+    match inner { Finished(true) => true, _ => false }
+  })
+  failure.check(match outer_first { Expired(true) => true, _ => false }, Arithmetic())
+
+  // A child created under an already canceled scope inherits Parent, whereas
+  // the scope owner still observes the original DeadlineExceeded cause.
+  let past = task.scope_until(tasks, after(c, start, 0u64), fn(s: Scope) -> bool {
+    let checked = match task.check_canceled(s) {
+      Error(Canceled(DeadlineExceeded())) => true,
+      _ => false,
+    }
+    let child = task.async(s, fn() -> bool {
+      match clock.monotonic(c) {
+        Ok(now) => match instant.checked_add(c, now, hour) {
+          Some(at) => match clock.sleep_until(c, at) { Error(Canceled(Parent())) => true, _ => false },
+          None() => false,
+        },
+        Error(_) => false,
+      }
+    })
+    checked && task.await(s, take child)
+  })
+  failure.check(match past { Expired(true) => true, _ => false }, Arithmetic())
+  let _ = out.print(out, "scope deadlines\n")
+  Ok(())
+}
