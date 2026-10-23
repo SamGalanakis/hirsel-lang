@@ -1,0 +1,150 @@
+[
+  {
+    "id": "tomas-fa-1",
+    "original": [
+      [
+        -42.0,
+        163.2
+      ],
+      [
+        21.2,
+        265.2
+      ],
+      [
+        -26.2,
+        188.7
+      ],
+      [
+        37.0,
+        290.7
+      ]
+    ],
+    "scaled": [
+      [
+        -420,
+        1632
+      ],
+      [
+        212,
+        2652
+      ],
+      [
+        -262,
+        1887
+      ],
+      [
+        370,
+        2907
+      ]
+    ],
+    "upstream_intersects": false,
+    "integer_intersects": true
+  },
+  {
+    "id": "tomas-fa-2",
+    "original": [
+      [
+        -5.9,
+        163.1
+      ],
+      [
+        76.1,
+        250.7
+      ],
+      [
+        14.6,
+        185.0
+      ],
+      [
+        96.6,
+        272.6
+      ]
+    ],
+    "scaled": [
+      [
+        -59,
+        1631
+      ],
+      [
+        761,
+        2507
+      ],
+      [
+        146,
+        1850
+      ],
+      [
+        966,
+        2726
+      ]
+    ],
+    "upstream_intersects": false,
+    "integer_intersects": true
+  },
+  {
+    "id": "cross",
+    "scaled": [
+      [
+        0,
+        0
+      ],
+      [
+        4,
+        4
+      ],
+      [
+        0,
+        4
+      ],
+      [
+        4,
+        0
+      ]
+    ],
+    "integer_intersects": true
+  },
+  {
+    "id": "overlap",
+    "scaled": [
+      [
+        0,
+        0
+      ],
+      [
+        4,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        8,
+        0
+      ]
+    ],
+    "integer_intersects": true
+  },
+  {
+    "id": "separated",
+    "scaled": [
+      [
+        0,
+        0
+      ],
+      [
+        4,
+        0
+      ],
+      [
+        5,
+        0
+      ],
+      [
+        8,
+        0
+      ]
+    ],
+    "integer_intersects": false
+  }
+]

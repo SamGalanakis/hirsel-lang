@@ -1,0 +1,158 @@
+// Wire bounds are checked before typed collections or geometry are admitted.
+pub const INPUT_BYTES: u64 = 32768
+
+pub const MAX_REGIONS: u64 = 4
+
+pub const MAX_HOLES: u64 = 2
+
+pub const MAX_VERTICES: u64 = 16
+
+pub const MAX_TRACKS: u64 = 4
+
+pub const MAX_SAMPLES: u64 = 16
+
+pub const COORDINATE: i64 = 1000000
+
+pub type Point[T] {
+  x: T,
+  y: T,
+}
+
+pub type Region {
+  outer: List[Point[i64]],
+  holes: List[List[Point[i64]]],
+}
+
+pub type Track {
+  samples: List[Point[i64]],
+}
+
+pub type Batch {
+  version: u64,
+  regions: List[Region],
+  tracks: List[Track],
+}
+
+fn point_from_json(value: json.Value) -> Result[unique Point[i64], String] uses {} = comptime derive.from_json(
+  shape(Point[i64])
+)
+
+fn region_from_json(value: json.Value) -> Result[unique Region, String] uses {} = comptime derive.from_json(
+  shape(Region)
+)
+
+fn track_from_json(value: json.Value) -> Result[unique Track, String] uses {} = comptime derive.from_json(
+  shape(Track)
+)
+
+fn batch_from_json(value: json.Value) -> Result[unique Batch, String] uses {} = comptime derive.from_json(
+  shape(Batch)
+)
+
+// Borrowed arrays never escape the callback. Nested rings remain under the
+// bounded DOM's root until decoding finishes; there is no copied ring view.
+fn with_array[R](
+  value: json.Value,
+  name: String,
+  limit: u64,
+  problem: report.Problem,
+  use_items: fn(List[json.Value]) -> Result[R, report.Problem] uses {}
+) -> Result[R, report.Problem] uses {} {
+  let Some(member) = json_access.member(value, name) else {
+    return Error(Shape())
+  }
+  let Some(items) = json_access.as_array(member) else {
+    return Error(Shape())
+  }
+  if list.len(items) > limit {
+    return Error(problem)
+  }
+  use_items(items)
+}
+
+fn ring_count(value: json.Value) -> Result[(), report.Problem] uses {} {
+  let Some(items) = json_access.as_array(value) else {
+    return Error(Shape())
+  }
+  // The repeated closing vertex is stored, but is not an admitted vertex.
+  if list.len(items) < 4 || list.len(items) > MAX_VERTICES + 1 {
+    return Error(Vertices())
+  }
+  Ok(())
+}
+
+pub fn decode(take data: unique Bytes) -> Result[unique Batch, report.Problem] uses {} {
+  if bytes.len(data) > INPUT_BYTES {
+    return Error(InputLimit())
+  }
+  let Ok(text) = string.from_bytes(take data) else {
+    return Error(Json())
+  }
+  let Ok(value) = json.parse(take text) else {
+    return Error(Json())
+  }
+  with_array(
+    value,
+    "regions",
+    MAX_REGIONS,
+    Regions(),
+    fn(items: List[json.Value]) -> Result[(), report.Problem] uses {} {
+      for item in items {
+        let Some(outer) = json_access.member(item, "outer") else {
+          return Error(Shape())
+        }
+        ring_count(outer)?
+        with_array(
+          item,
+          "holes",
+          MAX_HOLES,
+          Holes(),
+          fn(holes: List[json.Value]) -> Result[(), report.Problem] uses {} {
+            for hole in holes {
+              ring_count(hole)?
+            }
+            Ok(())
+          }
+        )?
+      }
+      Ok(())
+    }
+  )?
+  with_array(
+    value,
+    "tracks",
+    MAX_TRACKS,
+    Tracks(),
+    fn(items: List[json.Value]) -> Result[(), report.Problem] uses {} {
+      for item in items {
+        with_array(
+          item,
+          "samples",
+          MAX_SAMPLES,
+          Samples(),
+          fn(samples: List[json.Value]) -> Result[(), report.Problem] uses {} {
+            Ok(())
+          }
+        )?
+      }
+      Ok(())
+    }
+  )?
+  let Ok(batch) = batch_from_json(value) else {
+    return Error(Shape())
+  }
+  if batch.version != 1 {
+    return Error(Version())
+  }
+  validate.batch(batch)?
+  Ok(take batch)
+}
+
+pub fn bounded(point: Point[i64]) -> bool uses {} {
+  point.x >= -COORDINATE && point.x <= COORDINATE && point.y >= -COORDINATE && point.y <= COORDINATE
+}
+
+// Generic bounded view, with no implicit closure result escaping the ring.
+pub fn with_ring[R](ring: List[Point[i64]], use_ring: fn(List[Point[i64]]) -> R uses {}) -> R uses {} {
+  use_ring(ring)
+}

@@ -1,0 +1,91 @@
+// Stable bounded std JSON followed by an atomic publication capability.
+pub const OUTPUT_BYTES: u64 = 16384
+
+pub type Stage = Open | Read | Create | Write | Commit
+
+pub type Problem = Usage | Jobs | Json | Shape | Version | Regions | Holes | Vertices | Tracks | Samples | Coordinate | Closure | Adjacent | Area | Intersection | Topology | Arithmetic | InputLimit | OutputLimit | Assembly | Grant | File(
+  Stage,
+  FileError
+) | Canceled(CancelCause)
+
+pub type Document {
+  results: List[audit.TrackResult],
+  version: u64,
+}
+
+fn document_to_json(value: Document) -> json.Value uses {} = comptime derive.json_value(
+  shape(Document)
+)
+
+pub fn encode(values: List[audit.TrackResult]) -> Result[unique Bytes, Problem] uses {} {
+  let document = Document(results: unique values, version: 1)
+  let Ok(text) = json.stringify(document_to_json(document)) else {
+    return Error(Shape())
+  }
+  // <=4*4*16 classifications and <=4*4*15 indices; the wire bound is
+  // defensive. Include LF before allocating/copying the final output bytes.
+  if string.byte_len(text) >= OUTPUT_BYTES {
+    return Error(OutputLimit())
+  }
+  let encoded = f"{text}\n"
+  Ok(unique string.as_bytes(encoded))
+}
+
+pub fn file_error(stage: Stage, error: FileError) -> Problem {
+  match error {
+    Canceled(cause) => Canceled(cause),
+    _ => File(stage, error),
+  }
+}
+
+pub fn publish(d: Dir, output: Path, data: Bytes) -> Result[(), Problem] {
+  if bytes.len(data) > OUTPUT_BYTES {
+    return Error(OutputLimit())
+  }
+  let mut destination = match file.create_atomic(d, output) {
+    Ok(value) => take value,
+    Error(error) => return Error(file_error(Create(), error)),
+  }
+  match file.write_all(d, mut destination, data) {
+    Ok(()) => (),
+    Error(error) => return Error(file_error(Write(), error)),
+  }
+  match file.commit(d, take destination) {
+    Ok(()) => Ok(()),
+    Error(error) => Error(file_error(Commit(), error)),
+  }
+}
+
+pub fn name(problem: Problem) -> String uses {} {
+  match problem {
+    Usage() => "usage",
+    Jobs() => "jobs",
+    Json() => "json",
+    Shape() => "shape",
+    Version() => "version",
+    Regions() => "regions",
+    Holes() => "holes",
+    Vertices() => "vertices",
+    Tracks() => "tracks",
+    Samples() => "samples",
+    Coordinate() => "coordinate",
+    Closure() => "closure",
+    Adjacent() => "adjacent",
+    Area() => "area",
+    Intersection() => "intersection",
+    Topology() => "topology",
+    Arithmetic() => "arithmetic",
+    InputLimit() => "input_limit",
+    OutputLimit() => "output_limit",
+    Assembly() => "assembly",
+    Grant() => "grant",
+    Canceled(_) => "canceled",
+    File(_, NotGranted()) => "denied",
+    File(_, PermissionDenied()) => "denied",
+    File(Open(), _) => "file_open",
+    File(Read(), _) => "file_read",
+    File(Create(), _) => "file_create",
+    File(Write(), _) => "file_write",
+    File(Commit(), _) => "file_commit",
+  }
+}

@@ -1,0 +1,128 @@
+// Every result owns its classifications and sampled transition indices.
+pub type RegionResult {
+  classes: List[String],
+  transitions: List[u64],
+}
+
+pub type TrackResult {
+  regions: List[RegionResult],
+}
+
+pub fn one(regions: List[model.Region], track: model.Track) -> Result[
+  unique TrackResult,
+  report.Problem
+] uses {} {
+  let mut output: List[RegionResult] = []
+  for region in regions {
+    let mut classes: List[String] = []
+    let mut transitions: List[u64] = []
+    let mut previous: Option[geometry.Position] = None()
+    for i in 0u64..list.len(track.samples) {
+      let current = geometry.position(region, track.samples[i])?
+      if let Some(old) = previous {
+        if old != current {
+          list.push(mut transitions, i)
+        }
+      }
+      list.push(mut classes, geometry.name(current))
+      previous = Some(current)
+    }
+    list.push(
+      mut output,
+      RegionResult(classes: take classes, transitions: take transitions)
+    )
+  }
+  Ok(unique TrackResult(regions: take output))
+}
+
+// Independent child results are owned. No shared mutable accumulator; all
+// publication happens after every admitted child is joined, in query order.
+pub fn batch(
+  tasks: Tasks,
+  graph: Shared[List[model.Region]],
+  requests: List[model.Track],
+  jobs: u64
+) -> Result[unique List[TrackResult], report.Problem] {
+  if jobs == 0 || jobs > 4 {
+    return Error(Jobs())
+  }
+  let input = shared.freeze(unique requests)
+  task.scope(
+    tasks,
+    fn(s: Scope) -> Result[unique List[TrackResult], report.Problem] {
+      let count = shared.with(
+        input,
+        fn(items: List[model.Track]) -> u64 uses {} {
+          list.len(items)
+        }
+      )
+      let mut output: List[TrackResult] = []
+      let mut first = 0u64
+      while first < count {
+        let mut pending: TaskSet[Result[unique TrackResult, report.Problem]] of s = task.set(
+          s
+        )
+        let mut slots: List[Option[unique TrackResult]] = []
+        while list.len(slots) < jobs && first < count {
+          let index = first
+          list.push(mut slots, None())
+          task.add(
+            s,
+            mut pending,
+            task.async(
+              s,
+              fn() -> Result[unique TrackResult, report.Problem] {
+                shared.with(
+                  graph,
+                  fn(regions: List[model.Region]) -> Result[
+                    unique TrackResult,
+                    report.Problem
+                  ] {
+                    shared.with(
+                      input,
+                      fn(items: List[model.Track]) -> Result[
+                        unique TrackResult,
+                        report.Problem
+                      ] {
+                        one(regions, items[index])
+                      }
+                    )
+                  }
+                )
+              }
+            )
+          )
+          first += 1
+        }
+        while let Some(index) = task.await_any(s, pending) {
+          let joined = task.await_at(s, mut pending, index)
+          match take joined {
+            Ok(value) => {
+              slots[index] = Some(take value)
+            },
+            Error(problem) => {
+              task.cancel_all(s, take pending)
+              return Error(problem)
+            },
+          }
+        }
+        task.cancel_all(s, take pending)
+        for slot in take slots {
+          match take slot {
+            Some(value) => list.push(mut output, take value),
+            None() => return Error(Assembly()),
+          }
+        }
+      }
+      Ok(take output)
+    }
+  )
+}
+
+pub fn region_result_to_json(value: RegionResult) -> json.Value uses {} = comptime derive.json_value(
+  shape(RegionResult)
+)
+
+pub fn track_result_to_json(value: TrackResult) -> json.Value uses {} = comptime derive.json_value(
+  shape(TrackResult)
+)

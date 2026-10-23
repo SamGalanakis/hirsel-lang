@@ -1,0 +1,57 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "geoaudit",
+    "version": "0"
+  },
+  "entry": {
+    "module": [],
+    "name": "main"
+  },
+  "sources": [
+    {
+      "module": [],
+      "path": "main.hir"
+    },
+    {
+      "module": [
+        "model"
+      ],
+      "path": "model.hir"
+    },
+    {
+      "module": [
+        "validate"
+      ],
+      "path": "validate.hir"
+    },
+    {
+      "module": [
+        "geometry"
+      ],
+      "path": "geometry.hir"
+    },
+    {
+      "module": [
+        "audit"
+      ],
+      "path": "audit.hir"
+    },
+    {
+      "module": [
+        "report"
+      ],
+      "path": "report.hir"
+    }
+  ],
+  "dependencies": [
+    {
+      "package": {
+        "name": "std",
+        "version": "1"
+      },
+      "manifest": "../../stdlib/std@1/hirsel.json",
+      "expose": []
+    }
+  ]
+}

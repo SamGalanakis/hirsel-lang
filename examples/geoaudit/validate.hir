@@ -1,0 +1,121 @@
+// Validation finishes for the entire batch before any task or output opens.
+// Scratch is private and unique. Error unwinding drops it with the input DOM.
+fn ring(ring_value: List[model.Point[i64]], mut areas: List[i64]) -> Result[
+  (),
+  report.Problem
+] uses {} {
+  let length = list.len(ring_value)
+  if length < 4 || length > model.MAX_VERTICES + 1 {
+    return Error(Vertices())
+  }
+  let n = length - 1
+  for point in ring_value {
+    if !model.bounded(point) {
+      return Error(Coordinate())
+    }
+  }
+  if ring_value[0] != ring_value[n] {
+    return Error(Closure())
+  }
+  for i in 0u64..n {
+    if ring_value[i] == ring_value[i + 1] {
+      return Error(Adjacent())
+    }
+  }
+  let signed_area = geometry.area(ring_value)?
+  if signed_area == 0 {
+    return Error(Area())
+  }
+  for i in 0u64..n {
+    let a = ring_value[i]
+    let b = ring_value[i + 1]
+    let next = (i + 2) % n
+    let c = ring_value[next]
+    // Adjacent collinear edges may continue straight, but cannot retrace.
+    if geometry.on_segment(a, b, c)? || geometry.on_segment(b, c, a)? {
+      return Error(Intersection())
+    }
+    for j in i + 1..n {
+      if j != i + 1 && !(i == 0 && j == n - 1) {
+        if geometry.intersects(a, b, ring_value[j], ring_value[j + 1])? {
+          return Error(Intersection())
+        }
+      }
+    }
+  }
+  list.push(mut areas, signed_area)
+  Ok(())
+}
+
+fn disjoint(a: List[model.Point[i64]], b: List[model.Point[i64]]) -> Result[
+  bool,
+  report.Problem
+] uses {} {
+  for i in 0u64..list.len(a) - 1 {
+    for j in 0u64..list.len(b) - 1 {
+      if geometry.intersects(a[i], a[i + 1], b[j], b[j + 1])? {
+        return Ok(false)
+      }
+    }
+  }
+  Ok(true)
+}
+
+fn region(region_value: model.Region, mut areas: List[i64]) -> Result[
+  (),
+  report.Problem
+] uses {} {
+  ring(region_value.outer, mut areas)?
+  if list.len(region_value.holes) > model.MAX_HOLES {
+    return Error(Holes())
+  }
+  for hole in region_value.holes {
+    ring(hole, mut areas)?
+    // Simplicity + no segment contact + one strict interior vertex prove
+    // containment, including for concave outer rings and holes.
+    if !disjoint(region_value.outer, hole)? || geometry.ring_position(
+      region_value.outer,
+      hole[0]
+    )? != Inside() {
+      return Error(Topology())
+    }
+  }
+  for i in 0u64..list.len(region_value.holes) {
+    for j in i + 1..list.len(region_value.holes) {
+      let a = region_value.holes[i]
+      let b = region_value.holes[j]
+      // Test both directions: no crossings alone would admit nested holes.
+      if !disjoint(a, b)? || geometry.ring_position(a, b[0])? != Outside() || geometry.ring_position(
+        b,
+        a[0]
+      )? != Outside() {
+        return Error(Topology())
+      }
+    }
+  }
+  Ok(())
+}
+
+pub fn batch(value: model.Batch) -> Result[(), report.Problem] uses {} {
+  if list.len(value.regions) > model.MAX_REGIONS {
+    return Error(Regions())
+  }
+  if list.len(value.tracks) > model.MAX_TRACKS {
+    return Error(Tracks())
+  }
+  let mut areas: List[i64] = []
+  for region_value in value.regions {
+    region(region_value, mut areas)?
+  }
+  for track in value.tracks {
+    if list.len(track.samples) > model.MAX_SAMPLES {
+      return Error(Samples())
+    }
+    for point in track.samples {
+      if !model.bounded(point) {
+        return Error(Coordinate())
+      }
+    }
+  }
+  Ok(())
+}

@@ -1,0 +1,148 @@
+pub type AppError = Output(OutputError)
+
+type Options {
+  root: Path,
+  input: Path,
+  output: Path,
+  jobs: u64,
+  interruptible: bool,
+}
+
+fn arguments(args: Args) -> Result[Options, report.Problem] {
+  let count = arg.len(args)
+  if count != 4 && count != 5 {
+    return Error(Usage())
+  }
+  let Ok(root) = arg.path(args, 0) else {
+    return Error(Usage())
+  }
+  let Ok(input) = arg.path(args, 1) else {
+    return Error(Usage())
+  }
+  let Ok(output) = arg.path(args, 2) else {
+    return Error(Usage())
+  }
+  let Ok(value) = arg.text(args, 3) else {
+    return Error(Usage())
+  }
+  let Ok(jobs) = u64.parse(value) else {
+    return Error(Jobs())
+  }
+  if jobs == 0 || jobs > 4 {
+    return Error(Jobs())
+  }
+  if count == 5 {
+    let Ok(flag) = arg.text(args, 4) else {
+      return Error(Usage())
+    }
+    if flag != "--interruptible" {
+      return Error(Usage())
+    }
+  }
+  Ok(
+    Options(
+      root: root,
+      input: input,
+      output: output,
+      jobs: jobs,
+      interruptible: count == 5
+    )
+  )
+}
+
+fn read(d: Dir, input: Path) -> Result[unique Bytes, report.Problem] {
+  let mut handle = match file.open(d, input) {
+    Ok(value) => take value,
+    Error(error) => return Error(report.file_error(Open(), error)),
+  }
+  match file.read_all_bounded(d, mut handle, model.INPUT_BYTES) {
+    Ok(data) => Ok(take data),
+    Error(Limit()) => Error(InputLimit()),
+    Error(File(error)) => Error(report.file_error(Read(), error)),
+  }
+}
+
+fn execute(d: Dir, tasks: Tasks, options: Options) -> Result[u64, report.Problem] {
+  let batch = model.decode(read(d, options.input)?)?
+  let count = list.len(batch.tracks)
+  let graph = shared.freeze(unique batch.regions)
+  let results = audit.batch(tasks, graph, batch.tracks, options.jobs)?
+  let encoded = report.encode(results)?
+  report.publish(d, options.output, encoded)?
+  Ok(count)
+}
+
+// Interrupt is a delivered capability input. select cancels and joins the
+// losing workflow, including an opened file whose read is still Pending.
+fn interruptible(d: Dir, tasks: Tasks, signals: Signals, options: Options) -> Result[
+  u64,
+  report.Problem
+] {
+  task.scope(
+    tasks,
+    fn(s: Scope) -> Result[u64, report.Problem] {
+      let mut pending: TaskSet[Result[u64, report.Problem]] of s = task.set(s)
+      task.add(
+        s,
+        mut pending,
+        task.async(
+          s,
+          fn() -> Result[u64, report.Problem] {
+            execute(d, tasks, options)
+          }
+        )
+      )
+      task.add(
+        s,
+        mut pending,
+        task.async(
+          s,
+          fn() -> Result[u64, report.Problem] {
+            let _ = signal.wait(signals, [Interrupt()])
+            Error(Canceled(Requested()))
+          }
+        )
+      )
+      let (_, outcome) = task.select(s, take pending)
+      outcome
+    }
+  )
+}
+
+fn run(rt: Io, args: Args) -> Result[u64, report.Problem] {
+  let options = arguments(args)?
+  let d = match io.dir(rt, options.root) {
+    Ok(value) => value,
+    Error(error) => return Error(report.file_error(Open(), error)),
+  }
+  let Ok(tasks) = io.tasks(rt) else {
+    return Error(Grant())
+  }
+  if options.interruptible {
+    let Ok(signals) = io.signals(rt) else {
+      return Error(Grant())
+    }
+    interruptible(d, tasks, signals, options)
+  } else {
+    execute(d, tasks, options)
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[std@1/process.ExitCode, AppError] {
+  let Ok(output) = io.stdout(rt) else {
+    return Ok(std@1/process.exit_code(3u8))
+  }
+  let Ok(errors) = io.stderr(rt) else {
+    return Ok(std@1/process.exit_code(3u8))
+  }
+  match run(rt, args) {
+    Ok(count) => {
+      out.print(output, f"geoaudit: {count} tracks\n")?
+      Ok(std@1/process.SUCCESS)
+    },
+    Error(problem) => {
+      err.print(errors, f"geoaudit: {report.name(problem)}\n")?
+      Ok(std@1/process.exit_code(2u8))
+    },
+  }
+}

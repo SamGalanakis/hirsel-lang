@@ -1,0 +1,41 @@
+pub type AppError = File(FileError) | Read(file.ReadBoundedError) | Geo(report.Problem)
+
+fn point(x: i64, y: i64) -> model.Point[i64] uses {} {
+  model.Point(x: x, y: y)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[std@1/process.ExitCode, AppError] {
+  // Geo's TomasFa decimal vectors, scaled exactly by ten, not rounded.
+  // Exact decimal scaling makes both pairs collinear and overlapping;
+  // unlike the original binary floats, their integer intersection is true.
+  let a = geometry.intersects(
+    point(-420, 1632),
+    point(212, 2652),
+    point(-262, 1887),
+    point(370, 2907)
+  )?
+  let b = geometry.intersects(
+    point(-59, 1631),
+    point(761, 2507),
+    point(146, 1850),
+    point(966, 2726)
+  )?
+  let c = geometry.intersects(point(0, 0), point(4, 4), point(0, 4), point(4, 0))?
+  let d = geometry.intersects(point(0, 0), point(4, 0), point(2, 0), point(8, 0))?
+  let e = geometry.intersects(point(0, 0), point(4, 0), point(5, 0), point(8, 0))?
+  if !a || !b || !c || !d || e {
+    return Ok(std@1/process.exit_code(9u8))
+  }
+  let Ok(dir) = io.dir(rt, path.of("data")) else {
+    return Error(File(NotGranted()))
+  }
+  let mut f = file.open(dir, path.of("probe"))?
+  let data = file.read_all_bounded(dir, mut f, 16385)?
+  let outcome = report.publish(dir, path.of("output"), data)
+  if bytes.len(data) == 16384 {
+    outcome?
+  } else if outcome != Error(OutputLimit()) {
+    return Ok(std@1/process.exit_code(8u8))
+  }
+  Ok(std@1/process.SUCCESS)
+}

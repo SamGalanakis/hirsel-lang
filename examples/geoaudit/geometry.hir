@@ -1,0 +1,150 @@
+// Adapted from geo 0.33.1 coordinate_position.rs:399-455 and
+// line_intersection.rs:76-161, commit 889b8fb6f462a1b0448a4097a9b11f528749bc36.
+// MIT OR Apache-2.0; see LICENSES.md. Cartesian bounded integers replace
+// robust floating kernels. No approximate intersection coordinates are needed.
+pub type Position = Outside | Boundary | Inside
+
+pub fn add(a: i64, b: i64) -> Result[i64, report.Problem] uses {} {
+  let Some(value) = int.checked_add(a, b) else {
+    return Error(Arithmetic())
+  }
+  Ok(value)
+}
+
+pub fn sub(a: i64, b: i64) -> Result[i64, report.Problem] uses {} {
+  let Some(value) = int.checked_sub(a, b) else {
+    return Error(Arithmetic())
+  }
+  Ok(value)
+}
+
+pub fn mul(a: i64, b: i64) -> Result[i64, report.Problem] uses {} {
+  let Some(value) = int.checked_mul(a, b) else {
+    return Error(Arithmetic())
+  }
+  Ok(value)
+}
+
+pub fn orient(a: model.Point[i64], b: model.Point[i64], q: model.Point[i64]) -> Result[
+  i64,
+  report.Problem
+] uses {} {
+  sub(mul(sub(b.x, a.x)?, sub(q.y, a.y)?)?, mul(sub(b.y, a.y)?, sub(q.x, a.x)?)?)
+}
+
+fn between(x: i64, a: i64, b: i64) -> bool uses {} {
+  a <= x && x <= b || b <= x && x <= a
+}
+
+pub fn on_segment(a: model.Point[i64], b: model.Point[i64], q: model.Point[i64]) -> Result[
+  bool,
+  report.Problem
+] uses {} {
+  Ok(orient(a, b, q)? == 0 && between(q.x, a.x, b.x) && between(q.y, a.y, b.y))
+}
+
+fn opposite(a: i64, b: i64) -> bool uses {} {
+  a < 0 && b > 0 || a > 0 && b < 0
+}
+
+// Signs are compared, never multiplied (products of cross products can overflow).
+pub fn intersects(
+  a: model.Point[i64],
+  b: model.Point[i64],
+  c: model.Point[i64],
+  d: model.Point[i64]
+) -> Result[bool, report.Problem] uses {} {
+  let ab_c = orient(a, b, c)?
+  let ab_d = orient(a, b, d)?
+  let cd_a = orient(c, d, a)?
+  let cd_b = orient(c, d, b)?
+  if opposite(ab_c, ab_d) && opposite(cd_a, cd_b) {
+    return Ok(true)
+  }
+  Ok(
+    on_segment(a, b, c)? || on_segment(a, b, d)? || on_segment(c, d, a)? || on_segment(
+      c,
+      d,
+      b
+    )?
+  )
+}
+
+// Ring counts/coordinates have already been admitted. Each term <=2e12,
+// and <=16 terms imply |twice area|<=32e12 before this sum is computed.
+pub fn area(ring: List[model.Point[i64]]) -> Result[i64, report.Problem] uses {} {
+  let mut sum = 0i64
+  for i in 0u64..list.len(ring) - 1 {
+    let a = ring[i]
+    let b = ring[i + 1]
+    sum = add(sum, sub(mul(a.x, b.y)?, mul(a.y, b.x)?)?)?
+  }
+  Ok(sum)
+}
+
+// Upward edges include their first endpoint; downward edges their last.
+// Horizontal edges contribute only to boundary, so vertices are counted once.
+pub fn ring_position(ring: List[model.Point[i64]], q: model.Point[i64]) -> Result[
+  Position,
+  report.Problem
+] uses {} {
+  let mut winding = 0i64
+  for i in 0u64..list.len(ring) - 1 {
+    let a = ring[i]
+    let b = ring[i + 1]
+    if on_segment(a, b, q)? {
+      return Ok(Boundary())
+    }
+    let direction = orient(a, b, q)?
+    if a.y <= q.y && b.y > q.y && direction > 0 {
+      winding = add(winding, 1)?
+    } else if a.y > q.y && b.y <= q.y && direction < 0 {
+      winding = sub(winding, 1)?
+    }
+  }
+  Ok(
+    if winding == 0 {
+      Outside()
+    } else {
+      Inside()
+    }
+  )
+}
+
+pub fn position(region_value: model.Region, q: model.Point[i64]) -> Result[
+  Position,
+  report.Problem
+] uses {} {
+  let outer = model.with_ring(
+    region_value.outer,
+    fn(ring: List[model.Point[i64]]) -> Result[Position, report.Problem] uses {} {
+      ring_position(ring, q)
+    }
+  )?
+  if outer != Inside() {
+    return Ok(outer)
+  }
+  for hole in region_value.holes {
+    let inner = model.with_ring(
+      hole,
+      fn(ring: List[model.Point[i64]]) -> Result[Position, report.Problem] uses {} {
+        ring_position(ring, q)
+      }
+    )?
+    if inner == Boundary() {
+      return Ok(Boundary())
+    }
+    if inner == Inside() {
+      return Ok(Outside())
+    }
+  }
+  Ok(Inside())
+}
+
+pub fn name(value: Position) -> String uses {} {
+  match value {
+    Outside() => "outside",
+    Boundary() => "boundary",
+    Inside() => "inside",
+  }
+}
