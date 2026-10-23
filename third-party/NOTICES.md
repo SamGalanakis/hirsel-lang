@@ -1705,3 +1705,12 @@ release's Unicode 16.0.0 mappings. Unicode data licensing remains in
 `stdlib/unicode16/LICENSE.txt`. The fixture provenance describes the local-slice,
 locale-independent full casing and default folding contract; no semantic
 adaptation of the upstream answers is applied.
+
+Relative text-view bounds fixtures: `text-view-bounds-26/oracle.tsv` adapts
+Rust `library/alloctests/tests/str.rs:774-791,878-903` boundary/vector shapes and
+`library/core/src/str/traits.rs:260-284`, `str/validations.rs:146-219` at
+`f6c1107f8be13e48465e12c0fd26e6a39fe18e4f` (Copyright The Rust Project
+Developers, MIT, license above), and Go `src/unicode/utf8/utf8_test.go:31-107`,
+`utf8.go:108-128` at `ebe2feefc400f813aefdc8a036e66d2619da6649`
+(Copyright 2009 The Go Authors; BSD-3-Clause, license above). The fixture README
+records the independent Rust oracle and Hirsel relative-bound/brand policy.

@@ -353,6 +353,12 @@ impl Frame {
         for &step in indices.iter() {
             let (index, variant, indexed) = step.parts();
             let fields = match slot.as_mut() {
+                // Bytes indexing yields a scalar snapshot, not a storage slot.
+                // Origin probes still need its bounds error to retain the
+                // expression's site until the actual operand read fails.
+                Some(Value::Bytes(bytes)) if indexed && index >= bytes.len() => {
+                    return Err(AccessError::OutOfBounds);
+                }
                 Some(v)
                     if variant.is_none()
                         && !matches!(v, Value::Variant { .. } | Value::ResourceVariant { .. }) =>

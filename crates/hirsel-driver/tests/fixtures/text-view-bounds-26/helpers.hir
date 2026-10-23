@@ -1,0 +1,30 @@
+fn byte_window(s: Bytes, start: u64, end: u64) -> Bytes in s {
+  bytes.slice(s, start, end)
+}
+fn byte_at(s: Bytes, i: u64) -> u8 {
+  s[i]
+}
+fn position(s: String, i: u64) -> Option[StrPos of s] {
+  string.position(s, i)
+}
+fn text_window(s: String, start: u64, end: u64) -> String in s {
+  let Some(a) = position(s, start) else {
+    failure.check(false, TextInvariant())
+    return copy s
+  }
+  let Some(b) = position(s, end) else {
+    failure.check(false, TextInvariant())
+    return copy s
+  }
+  string.slice(s, a, b)
+}
+fn check_position(s: String, i: u64, expected: bool) -> () {
+  match position(s, i) {
+    Some(p) => {
+      failure.check(expected, TextInvariant())
+      failure.check(string.byte_offset(s, p) == i, TextInvariant())
+      failure.check(text_window(s, i, i) == "", TextInvariant())
+    },
+    None() => failure.check(!expected, TextInvariant()),
+  }
+}
