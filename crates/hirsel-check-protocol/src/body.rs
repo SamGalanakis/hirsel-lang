@@ -8,6 +8,10 @@ pub struct TryPlan {
     pub result: ast::DefPath,
     pub mapper: Option<CallTarget>,
     pub mapper_passing: Option<ast::PassingMode>,
+    /// The instantiated declared mapper result, before the enclosing error
+    /// payload receives it. A weaker receiver cannot change a call receipt.
+    #[serde(default)]
+    pub mapper_result: Option<TypeId>,
     pub success_variant: VariantId,
     pub error_variant: VariantId,
     pub propagated_error_variant: VariantId,

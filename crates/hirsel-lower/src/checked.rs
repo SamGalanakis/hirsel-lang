@@ -76,7 +76,9 @@ impl Plans {
                 None => None,
                 Some(CallTarget::Definition(path)) => Some(ErrorMapper::Definition {
                     path: path.clone(),
-                    result: *mapped,
+                    result: propagation
+                        .mapper_result
+                        .ok_or_else(|| fail(id, "missing declared mapper result"))?,
                     passing: propagation
                         .mapper_passing
                         .ok_or_else(|| fail(id, "missing error mapper passing mode"))?,

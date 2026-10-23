@@ -1580,6 +1580,7 @@ impl Checker<'_, '_> {
             return Ok(self.error());
         };
         let mut mapper_passing = None;
+        let mut mapper_result = None;
         let mapper = if let Some(path) = map {
             let r = self
                 .input
@@ -1669,11 +1670,45 @@ impl Checker<'_, '_> {
                         }
                     }
                 }
-                if !args.is_empty() {
+                // Implicit mapper calls obey the same value-versus-contract
+                // generic actual policy as ordinary calls. A bare result T
+                // receives its declared root modes, even when its input is
+                // currently unique; parametric flow proves that separately.
+                let contracts: BTreeSet<_> = self
+                    .occurrences(f.result, expected)
+                    .into_iter()
+                    .filter_map(|(parameter, _, contract)| contract.then_some(parameter.0 as usize))
+                    .collect();
+                let arguments: Vec<_> = args
+                    .into_iter()
+                    .flatten()
+                    .enumerate()
+                    .map(|(index, argument)| match argument {
+                        GenericArgument::Type(actual) if contracts.contains(&index) => {
+                            Ok(GenericArgument::Type(self.contract_type_argument(actual)))
+                        }
+                        GenericArgument::Type(actual) => {
+                            let arenas = self.arena_places(actual);
+                            generic_type_argument(self.types, actual, |origin| {
+                                arenas.contains(origin)
+                            })
+                            .map(GenericArgument::Type)
+                            .map_err(|error| {
+                                QueryError::Operational(OperationalFailure {
+                                    operation: "mapper type argument".into(),
+                                    message: format!("{error:?}"),
+                                })
+                            })
+                        }
+                        argument => Ok(argument),
+                    })
+                    .collect::<Result<_, _>>()?;
+                mapper_result = Some(self.substitute(f.result, &arguments)?);
+                if !arguments.is_empty() {
                     self.body.instantiations.push(Instantiation {
                         expression: id,
                         callee: p.clone(),
-                        arguments: args.into_iter().flatten().collect(),
+                        arguments,
                     });
                 }
                 Some(CallTarget::Definition(p))
@@ -1756,6 +1791,7 @@ impl Checker<'_, '_> {
             result,
             mapper,
             mapper_passing,
+            mapper_result,
             success_variant,
             error_variant,
             propagated_error_variant,

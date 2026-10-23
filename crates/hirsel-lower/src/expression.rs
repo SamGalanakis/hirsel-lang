@@ -207,7 +207,19 @@ impl Builder<'_, '_> {
                     == Storage::Temporary
                 && checked.modes.uniqueness == hirsel_types::Uniqueness::Unique
                 && source.modes.uniqueness != hirsel_types::Uniqueness::Unique;
-            if detached_view {
+            let physical_call = matches!(
+                self.input.syntax.tree.expressions[id.0 as usize].kind,
+                ExprKind::Call { .. }
+            ) && self.decisions.calls.get(&id).first().is_some_and(|call| {
+                matches!(call.target, hirsel_types::CallTarget::Value(_))
+                    && call.generic_arguments.is_empty()
+            });
+            if physical_call && source.kind != checked.kind {
+                // An indirect call's header owns its nested receipt contracts.
+                // Keep them through staging; payload transfers prove their own
+                // stronger evidence without retyping the enclosing Result.
+                value.checked_ty = None;
+            } else if detached_view {
                 // A composed view is still the input to its enclosing `unique`.
                 // Spilling it across a block must not claim the detached result.
                 value.checked_ty = None;
@@ -1587,7 +1599,38 @@ impl Builder<'_, '_> {
         } else {
             (Storage::Temporary, span)
         };
-        let destination = self.slot(ty, storage, at, true);
+        // A projected callable's header owns its nested result contracts.
+        // The expression judgment can carry stronger current evidence; it
+        // cannot rewrite the physical call receipt under that header.
+        let receipt = match &callee {
+            Callee::Indirect {
+                value, arguments, ..
+            } if arguments.is_empty() => {
+                let hirsel_types::TypeKind::Function(header) =
+                    &self.types.row(self.ty(value.place)).kind
+                else {
+                    return self.error(span, "indirect call has no physical header");
+                };
+                let declared = self.types.row(header.result);
+                let checked = self.types.row(ty);
+                if declared.kind == checked.kind {
+                    ty
+                } else {
+                    // Keep caller-instantiated brands, placement and capture
+                    // metadata at the root; only the declared nested contract
+                    // and its conservative root modes come from the header.
+                    let mut receipt = checked.clone();
+                    receipt.kind = declared.kind.clone();
+                    receipt.modes.uniqueness = declared.modes.uniqueness;
+                    receipt.modes.multiplicity = declared.modes.multiplicity;
+                    receipt.modes.sendability = declared.modes.sendability.clone();
+                    receipt.sendability_requirement = declared.sendability_requirement;
+                    self.types.intern(receipt)
+                }
+            }
+            _ => ty,
+        };
+        let destination = self.slot(receipt, storage, at, true);
         self.emit(InstructionKind::StorageLive(self.root(destination)), span);
         let next = self.block(span);
         let on_failure = self.cleanup();

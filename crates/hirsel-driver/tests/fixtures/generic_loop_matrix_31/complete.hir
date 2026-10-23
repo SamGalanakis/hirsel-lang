@@ -1,0 +1,8 @@
+fn need[T](take value: unique T) {}
+
+pub fn main() {
+  let source: unique List[unique Bytes] = [b"a", b"bb"]
+  for item in take producer.relay(take source) {
+    need(take item)
+  }
+}

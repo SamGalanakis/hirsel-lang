@@ -1,0 +1,4 @@
+type Problem = Issue(String)
+fn source() -> Result[u64, Problem] { Error(Issue("bad")) }
+fn consume() -> Result[u64, unique Problem] { Ok(source()?) }
+pub fn main() { let _ = consume() }

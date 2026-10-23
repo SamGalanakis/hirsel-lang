@@ -1,0 +1,12 @@
+type Problem = Stop | Other
+pub type Sample {text:String}
+type Source[T] { draw: fn(u64)->Result[unique T, Problem] uses {} }
+fn source()->Result[unique Source[Sample],Problem] uses {} {
+ Ok(Source(draw:fn(seed:u64)->Result[unique Sample,Problem] uses {} {Ok(Sample(text:"x"))}))
+}
+fn verify()->bool uses {} {
+ let Ok(generator)=source() else { return false }
+ let Ok(value)=generator.draw(0u64) else { return false }
+ string.byte_len(value.text)==1u64
+}
+pub fn main()->Result[(),()] {failure.check(verify(),Arithmetic());Ok(())}

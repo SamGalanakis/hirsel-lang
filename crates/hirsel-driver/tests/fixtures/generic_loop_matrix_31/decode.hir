@@ -1,0 +1,59 @@
+pub type Sample {number:i64, values:List[i64], text:String}
+pub type Config {seed:u64,cases:u64,jobs:u64,shrinks:u64}
+fn validate(c:Config)->Result[(),()] uses {} {Ok(())}
+fn known(s:String)->bool uses {} {true}
+fn valid(s:Sample)->bool uses {} {true}
+// Durable schema 1: exact unsigned seed spelling, strategy version, config,
+// original failure index/category, and the independently owned minimized value.
+pub const MAX_BYTES: u64 = 65536
+pub type ReplayError = Invalid(String) | File(FileError) | Limit | Canceled
+pub type Record {
+  property: String,
+  config: Config,
+  index: u64,
+  category: u64,
+  minimum: Sample,
+}
+
+pub fn invalid(kind: String) -> unique ReplayError uses {} { Invalid(unique kind) }
+
+fn number(fields: Map[String, json.Value], key: String) -> Result[u64, ReplayError] uses {} {
+  let Some(Number(raw)) = map.get(fields, key) else { return Error(invalid(key)) }
+  let Ok(n) = u64.parse(raw) else { return Error(invalid(key)) }
+  Ok(n)
+}
+
+pub fn decode(take data: Bytes) -> Result[unique Record, unique ReplayError] uses {} {
+  if bytes.len(data) > MAX_BYTES { return Error(Limit()) }
+  let Ok(source_text) = string.from_bytes(take data) else { return Error(invalid("utf8")) }
+  let Ok(Object(fields)) = json.parse(take source_text) else { return Error(invalid("json")) }
+  if map.len(fields) != 12 { return Error(invalid("fields")) }
+  if number(fields, "schema")? != 1 || number(fields, "strategy_version")? != 1u64 { return Error(invalid("version")) }
+  let Some(Text(name)) = map.get(fields, "property") else { return Error(invalid("property")) }
+  if !known(name) { return Error(invalid("property")) }
+  let Some(Text(seed_text)) = map.get(fields, "seed") else { return Error(invalid("seed")) }
+  let Ok(seed) = u64.parse(seed_text) else { return Error(invalid("seed")) }
+  if seed_text != f"{seed}" { return Error(invalid("seed")) }
+  let config = Config(seed: seed, cases: number(fields, "cases")?, jobs: number(fields, "jobs")?, shrinks: number(fields, "shrinks")?)
+  if let Error(_) = validate(config) { return Error(invalid("config")) }
+  let index = number(fields, "index")?
+  if index >= config.cases { return Error(invalid("index")) }
+  let Some(Number(raw)) = map.get(fields, "number") else { return Error(invalid("number")) }
+  let Ok(n) = i64.parse(raw) else { return Error(invalid("number")) }
+  let Some(Array(entries)) = map.get(fields, "values") else { return Error(invalid("values")) }
+  if list.len(entries) > 8 { return Error(Limit()) }
+  let mut values: List[i64] = []
+  for entry in entries {
+    let Number(item_text) = entry else { return Error(invalid("value")) }
+    let Ok(value) = i64.parse(item_text) else { return Error(invalid("value")) }
+    if value < -32 || value > 32 { return Error(Limit()) }
+    list.push(mut values, value)
+  }
+  let Some(Text(text)) = map.get(fields, "text") else { return Error(invalid("text")) }
+  let minimum = Sample(number: n, values: take values, text: unique text)
+  if !valid(minimum) { return Error(Limit()) }
+  Ok(Record(property: unique name, config: config, index: index, category: number(fields, "category")?, minimum: take minimum))
+}
+
+
+pub fn main()->Result[(),()] { let _=decode(b"{}"); Ok(()) }

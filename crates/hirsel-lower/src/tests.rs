@@ -303,6 +303,7 @@ fn body_adapter_preserves_producer_selected_propagation_tags() {
         result: path("SourceResult"),
         mapper: None,
         mapper_passing: None,
+        mapper_result: None,
         success_variant: hirsel_types::VariantId(1),
         error_variant: hirsel_types::VariantId(0),
         propagated_error_variant: hirsel_types::VariantId(2),

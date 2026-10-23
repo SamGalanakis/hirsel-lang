@@ -7605,9 +7605,6 @@ impl Checker<'_, '_> {
             return;
         };
         let property = self.properties.get(payload).copied();
-        if property.is_some_and(|p| p.plain) || self.mapper_releases(expression) {
-            return;
-        }
         let mut actual = self.value(state, value);
         if actual.invalid {
             return;
@@ -7616,6 +7613,102 @@ impl Checker<'_, '_> {
             variant: error,
             field: 0,
         }]);
+        // A fresh call receipt owns its outer variant, but not an
+        // unqualified counted error payload. A written nested unique
+        // receipt, or a currently unique whole, supplies that evidence.
+        if property.is_some_and(|p| p.plain || p.shared)
+            || actual.fresh_receipt
+                && self
+                    .t
+                    .get(payload)
+                    .is_some_and(|row| row.modes.uniqueness == Uniqueness::Unique)
+        {
+            actual.modes.uniqueness = Uniqueness::Unique;
+        }
+        let target_error = self
+            .graph
+            .result_ty
+            .and_then(|ty| match &self.t.get(ty)?.kind {
+                TypeKind::Named { arguments, .. } => match arguments.as_slice() {
+                    [_, GenericArgument::Type(error)] => Some(*error),
+                    _ => None,
+                },
+                _ => None,
+            });
+        if let Some(target) = target_error
+            && self.t.get(target).unwrap().modes.uniqueness == Uniqueness::Unique
+            && !self
+                .properties
+                .get(target)
+                .is_some_and(|p| p.plain || p.shared)
+        {
+            let mapper = self
+                .body
+                .resolution
+                .paths
+                .iter()
+                .find_map(|(site, name)| match name {
+                    ResolvedName::Definition(path) if *site == NameSite::Expression(expression) => {
+                        Some(path)
+                    }
+                    _ => None,
+                })
+                .and_then(|path| {
+                    self.signatures
+                        .cached(DefId::intern(path))
+                        .map(|signature| (path, signature))
+                });
+            let unique = if let Some((path, signature)) = mapper
+                && let SignatureKind::Function(function) = &signature.kind
+            {
+                self.t.get(function.result).unwrap().modes.uniqueness == Uniqueness::Unique
+                    || parametric_inputs(
+                        self.t,
+                        function,
+                        !path.package_is("core", "1"),
+                        &mut |d| Ok(self.signatures.cached(d)),
+                    )
+                    .is_some_and(|inputs| {
+                        inputs.iter().all(|input| match input {
+                            ParametricInput::Free => true,
+                            ParametricInput::Unique => {
+                                actual.modes.uniqueness == Uniqueness::Unique
+                            }
+                            ParametricInput::UniqueResult => {
+                                match &self.t.get(payload).unwrap().kind {
+                                    TypeKind::Function(callback) => unique_rows(
+                                        self.t,
+                                        callback.result,
+                                        &self.body.resolution.generic_declarations,
+                                        &mut |d| Ok(self.signatures.cached(d)),
+                                    ),
+                                    _ => false,
+                                }
+                            }
+                        })
+                    })
+            } else {
+                actual.modes.uniqueness == Uniqueness::Unique
+            };
+            if !unique {
+                let site = self.span_of(expression);
+                let operand = self.span_of(value);
+                self.report(
+                    const { RuleId::of("MODE-2") },
+                    site,
+                    "the propagated error does not prove the enclosing unique error contract",
+                    |_| {
+                        Explanation::default()
+                            .provided(Fact::new(Cause::Aliased, operand, &[]))
+                            .required(Fact::new(Requirement::Unique, site, &[]))
+                            .into()
+                    },
+                );
+            }
+        }
+        if property.is_some_and(|p| p.plain) || self.mapper_releases(expression) {
+            return;
+        }
         let mut result = result.clone();
         if self.environment_frame {
             result.relation = Relation::environment();

@@ -1,0 +1,9 @@
+type Problem = Limit(String)
+fn source() -> Result[(), Problem] { Error(Limit("example")) }
+fn message(problem: Problem) -> unique String uses {} {
+  match problem { Limit(text) => unique text }
+}
+pub fn main() -> Result[(), String] {
+  source()? message
+  Ok(())
+}
