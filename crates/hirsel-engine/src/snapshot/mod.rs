@@ -268,6 +268,36 @@ impl SignatureSnapshot {
         self.verifier_policy = policy;
         self
     }
+    pub(crate) fn validate_source_artifact(
+        &self,
+        definition: &hirsel_tir::Definition,
+        owner: impl FnMut(hirsel_span::Anchor) -> Option<(DefPath, u32)>,
+    ) -> (
+        hirsel_validate::Validation,
+        bool,
+        Option<hirsel_validate::AcceptedArtifact>,
+    ) {
+        let views = self.validation(&definition.path.path().0.package);
+        if let Some(cache) = &self.verifier {
+            let artifact = hirsel_validate::Artifact::new(definition, self.types.clone(), owner);
+            hirsel_validate::validate_with_receipt(
+                &artifact,
+                views,
+                ContentHash::of_parts(
+                    "hirsel.validate.frozen-source.v1",
+                    [self.verifier_policy.0.as_slice()],
+                ),
+                Some(cache),
+                &mut vec![],
+            )
+        } else {
+            (
+                hirsel_validate::validate(definition, &self.types, views, &mut vec![]),
+                true,
+                None,
+            )
+        }
+    }
     pub(crate) fn validate_private_artifact(
         &self,
         definition: &hirsel_tir::Definition,

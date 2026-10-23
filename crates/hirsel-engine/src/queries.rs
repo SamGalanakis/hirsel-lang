@@ -1401,6 +1401,18 @@ impl QueryEngine {
         if let Some(entry) = self.modes.get(&id).cloned()
             && self.memo_valid(definition, &entry, text)
         {
+            // Checking a generated declaration owns an S1 frame even when
+            // its analyzed body is retained. Preserve that request on a hit.
+            if let Some(syntax) = self
+                .items
+                .get(definition)
+                .and_then(|rows| rows.first())
+                .cloned()
+                && let Some(body) = generation::generator(&syntax)
+                && !generation::instance_bodied(&syntax)
+            {
+                self.generated_check_query(definition, syntax, body)?;
+            }
             return self.mode_result(entry);
         }
         if let Some(entry) = self.load_mode(definition) {
@@ -1987,13 +1999,26 @@ impl QueryEngine {
             self.lowered.insert(id, entry.clone());
             return entry.output();
         }
-        let modes = self.mode_query(definition)?;
-        self.register_staged(&modes.value)?;
-        let signature = self.signature_output(definition)?;
-        self.read_execution_signatures(&modes.dependencies);
-        self.lower_receipts.remove(&id);
-        timings::count(Count::Lowered);
-        self.start(definition, QueryKind::Lower)?;
+        // Include generator requests made while obtaining the analyzed body.
+        // A Lower hit must replay the same trace as computing it from source.
+        self.s1.begin_requests();
+        let front = (|| {
+            let modes = self.mode_query(definition)?;
+            self.register_staged(&modes.value)?;
+            let signature = self.signature_output(definition)?;
+            self.read_execution_signatures(&modes.dependencies);
+            self.lower_receipts.remove(&id);
+            timings::count(Count::Lowered);
+            self.start(definition, QueryKind::Lower)?;
+            Ok((modes, signature))
+        })();
+        let (modes, signature) = match front {
+            Ok(front) => front,
+            Err(error) => {
+                self.s1.finish_requests(self.depth_limit());
+                return Err(error);
+            }
+        };
         let previous = self.modes.get(&id).cloned();
         let mut reads = previous
             .as_ref()
@@ -2002,7 +2027,6 @@ impl QueryEngine {
         reads.signatures.extend(modes.dependencies.clone());
         let mut observed = Observed::inheriting(previous.as_ref().map(|c| c.reads()));
         self.execution_stack.push(ReadsBuilder::new());
-        self.s1.begin_requests();
         let prepared = self.prepare_comptime(&modes.value, &signature.value);
         let result = prepared.and_then(|comptime| match self.adapters.lowering.clone() {
             Some(adapter) => {
