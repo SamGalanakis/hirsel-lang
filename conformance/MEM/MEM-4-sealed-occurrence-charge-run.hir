@@ -1,0 +1,42 @@
+// rule: MEM-4
+// expect: run
+fn fits(cap: u64, content: Bytes, repeated: bool) -> u64 {
+  let outcome = arena.bounded(
+    cap,
+    fn(a: Arena) -> Region[u64] {
+      let first: Bytes in heap = copy_to(heap, content)
+      let second: Bytes in heap = if repeated {
+        copy first
+      } else {
+        copy_to(heap, content)
+      }
+      let retained: List[Bytes] in a = [copy first, copy second]
+      let root = 7u64
+      arena.seal(take a, take root)
+    }
+  )
+  match take outcome {
+    Ok(r) => {
+      let mut owned = take r
+      region.with(
+        mut owned,
+        fn(view: u64) -> u64 {
+          view
+        }
+      )
+    },
+    Error(e) => 0u64,
+  }
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  failure.check(fits(17u64, b"x", true) == 0u64, Bounds())
+  failure.check(fits(18u64, b"x", true) == 7u64, Bounds())
+  failure.check(fits(17u64, b"x", false) == 0u64, Bounds())
+  failure.check(fits(18u64, b"x", false) == 7u64, Bounds())
+  failure.check(fits(21u64, b"abc", true) == 0u64, Bounds())
+  failure.check(fits(22u64, b"abc", true) == 7u64, Bounds())
+  failure.check(fits(21u64, b"abc", false) == 0u64, Bounds())
+  failure.check(fits(22u64, b"abc", false) == 7u64, Bounds())
+  Ok(())
+}

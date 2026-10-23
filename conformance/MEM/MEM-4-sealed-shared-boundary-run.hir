@@ -1,0 +1,36 @@
+// rule: MEM-4
+// expect: run
+fn discard[T](take value: T) {}
+
+fn thawed(take value: Shared[Bytes]) -> bool {
+  match shared.thaw(take value) {
+    Ok(bytes) => bytes == b"abc",
+    Error(root) => false,
+  }
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let built: unique Bytes = unique b"abc"
+  let source: Shared[Bytes] = shared.freeze(take built)
+  let returned = {
+    let mut r = arena.with(
+      fn(a: Arena) -> Region[List[Shared[Bytes]]] {
+        let root: List[Shared[Bytes]] in a = [copy source]
+        arena.seal(take a, take root)
+      }
+    )
+    let copied = region.with(
+      mut r,
+      fn(view: List[Shared[Bytes]]) -> Shared[Bytes] {
+        copy view[0]
+      }
+    )
+    failure.check(!thawed(copy source), Bounds())
+    failure.check(!thawed(copy copied), Bounds())
+    copied
+  }
+  failure.check(!thawed(copy source), Bounds())
+  discard(take returned)
+  failure.check(thawed(take source), Bounds())
+  Ok(())
+}

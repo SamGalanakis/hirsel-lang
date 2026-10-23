@@ -1,0 +1,25 @@
+// rule: MEM-4
+// expect: run
+pub fn main(t: Test) -> Result[(), ()] {
+  let outcome = arena.bounded(
+    0u64,
+    fn(a: Arena) -> Region[()] {
+      let root = ()
+      arena.seal(take a, take root)
+    }
+  )
+  let got = match take outcome {
+    Ok(r) => {
+      let mut owned = take r
+      region.with(
+        mut owned,
+        fn(view: ()) -> u64 {
+          1u64
+        }
+      )
+    },
+    Error(e) => 0u64,
+  }
+  failure.check(got == 1u64, Bounds())
+  Ok(())
+}

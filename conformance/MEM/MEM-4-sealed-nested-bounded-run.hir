@@ -1,0 +1,39 @@
+// rule: MEM-4
+// expect: run
+pub fn main(t: Test) -> Result[(), ()] {
+  let outcome = arena.bounded(
+    64u64,
+    fn(outer: Arena) -> Region[u64] {
+      let inner_result = arena.bounded(
+        15u64,
+        fn(inner: Arena) -> Region[List[u64]] {
+          let root: List[u64] in heap = [1u64, 2u64]
+          arena.seal(take inner, take root)
+        }
+      )
+      let failed = match take inner_result {
+        Ok(r) => false,
+        Error(e) => true,
+      }
+      failure.check(failed, Bounds())
+      let used: List[u64] in outer = [9u64]
+      failure.check(used[0] == 9u64, Bounds())
+      let root = 7u64
+      arena.seal(take outer, take root)
+    }
+  )
+  let got = match take outcome {
+    Ok(r) => {
+      let mut owned = take r
+      region.with(
+        mut owned,
+        fn(view: u64) -> u64 {
+          view
+        }
+      )
+    },
+    Error(e) => 0u64,
+  }
+  failure.check(got == 7u64, Bounds())
+  Ok(())
+}
