@@ -114,6 +114,25 @@ impl DirStore {
 }
 
 impl ResultStore for DirStore {
+    fn lookup_product(&self, address: super::Address) -> Option<super::Association> {
+        std::iter::once(&self.root)
+            .chain(&self.read_only)
+            .find_map(|root| hirsel_artifact_store::Store::new(root.clone()).lookup(address))
+    }
+    fn associate_product(
+        &self,
+        address: super::Address,
+        action: super::Action,
+        reference: super::Reference,
+    ) {
+        let store = hirsel_artifact_store::Store::new(self.root.clone());
+        // Shared immutable roots may supply ordinary content, but local writes
+        // and GC remain in the writable root. A missing reference is a miss.
+        if self.get_content(reference).is_some() {
+            let _ = store.associate(address, action, reference);
+            self.account(152);
+        }
+    }
     fn verifier(&self) -> Option<std::sync::Arc<hirsel_validate::VerifierCache>> {
         Some(self.verifier.clone())
     }
