@@ -1472,6 +1472,10 @@ pub(super) fn build(
                             // flow derives it again from `captures`.
                             if let Some(ty) = expression_type(body, expression, rows) {
                                 result.sendability = t.get(ty).unwrap().modes.sendability.clone();
+                                // GEN-1: T may instantiate to a once callable.
+                                // The unspecialized result's Many default is
+                                // not the instantiated call's permission.
+                                result.multiplicity = t.get(ty).unwrap().modes.multiplicity;
                             }
                             children.push((*callee, Context::Invoke, false, false));
                             for (index, arg) in arguments.iter().enumerate() {

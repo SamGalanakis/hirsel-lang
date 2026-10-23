@@ -2622,6 +2622,10 @@ impl Checker<'_, '_> {
                     );
                 }
                 let mut ty = self.ty(TypeKind::Function(f));
+                // Body results name the literal's lexical parameter scope;
+                // publish them under the callable's own binder.
+                ty = abstract_parameter_scope(self.types, ty, self.site(NameSite::Expression(id)))
+                    .expect("checked literal result binder");
                 if expected.is_none() {
                     let mut row = self.types.get(ty).unwrap().clone();
                     row.modes.relation = Relation::environment();

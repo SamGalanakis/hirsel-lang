@@ -1276,7 +1276,10 @@ impl Checker<'_, '_> {
             .map(|t| self.syntax_type(t, frame))
             .transpose()?
             .unwrap_or_else(|| self.ty(TypeKind::Tuple(vec![].into())));
-        if matches!(owner, NameSite::Type(_) | NameSite::Statement(_)) {
+        if matches!(
+            owner,
+            NameSite::Type(_) | NameSite::Statement(_) | NameSite::Expression(_)
+        ) {
             for (ordinal, syntax) in s.parameters.iter().enumerate() {
                 parameters[ordinal].ty = self.callable_header_relation(
                     syntax.ty,
@@ -1287,10 +1290,12 @@ impl Checker<'_, '_> {
                 )?;
             }
         }
-        let result = if let Some(syntax) = s
-            .result
-            .filter(|_| matches!(owner, NameSite::Type(_) | NameSite::Statement(_)))
-        {
+        let result = if let Some(syntax) = s.result.filter(|_| {
+            matches!(
+                owner,
+                NameSite::Type(_) | NameSite::Statement(_) | NameSite::Expression(_)
+            )
+        }) {
             self.callable_header_relation(syntax, result, owner, &parameters, None)?
         } else {
             result
