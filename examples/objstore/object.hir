@@ -1,0 +1,130 @@
+// Git object-file.c:102-111,459-474, 47fdf2208c5b (GPL-2.0-only).
+// Framing only; std.sha256 supplies the cryptographic implementation.
+pub const BLOB: u64 = 16384
+
+pub const TOTAL: u64 = 131072
+
+pub const OBJECTS: u64 = 128
+
+pub const FILES: u64 = 32
+
+pub const LEVELS: u64 = 8
+
+pub const ENTRIES: u64 = 32
+
+pub const NAME: u64 = 1024
+
+pub const STATE: u64 = 262144
+
+// Worst-case escaped names plus fixed type/id/JSON punctuation per entry.
+pub const TREE: u64 = 200000
+
+pub const STORED: u64 = 200032
+
+pub type Problem {
+  kind: String,
+  path: String,
+}
+
+pub type Id[T] {
+  hex: String,
+}
+
+pub type Codec[T] {
+  kind: String,
+  limit: u64,
+  encode: fn(value: T) -> Result[unique Bytes, Problem] uses {},
+  decode: fn(take data: unique Bytes) -> Result[unique T, Problem] uses {},
+}
+
+pub fn issue(kind: String, name: String) -> unique Problem {
+  Problem(kind: unique kind, path: unique name)
+}
+
+pub fn valid_id(value: String) -> Result[(), Problem] {
+  if string.byte_len(value) != 64 {
+    return Error(issue("invalid_id", value))
+  }
+  for c in string.as_bytes(value) {
+    if !(c >= 48 && c <= 57 || c >= 97 && c <= 102) {
+      return Error(issue("invalid_id", value))
+    }
+  }
+  Ok(())
+}
+
+pub fn id[T](format: Codec[T], value: String) -> Result[unique Id[T], Problem] {
+  valid_id(value)?
+  Ok(Id(hex: unique value))
+}
+
+pub fn frame(kind: String, data: Bytes) -> unique Bytes {
+  let mut framed: List[u8] = []
+  text.append(mut framed, f"{kind} {bytes.len(data)}")
+  list.push(mut framed, 0u8)
+  bytes.append(mut framed, data)
+  bytes.from_list(take framed)
+}
+
+pub fn identify[T](format: Codec[T], data: Bytes) -> Result[unique Id[T], Problem] {
+  if bytes.len(data) > format.limit {
+    return Error(issue("payload_limit", format.kind))
+  }
+  let framed = frame(format.kind, data)
+  Ok(Id(hex: sha256.digest_hex(framed)))
+}
+
+// Reconstructing the header enforces canonical decimal length, type and NUL.
+// Never hand a decoder bytes until both the stored digest and header agree.
+pub fn validate[T](format: Codec[T], expected: Id[T], data: Bytes) -> Result[
+  unique Bytes,
+  Problem
+] {
+  valid_id(expected.hex)?
+  if bytes.len(data) > format.limit + 32 {
+    return Error(issue("stored_size", expected.hex))
+  }
+  if sha256.digest_hex(data) != expected.hex {
+    return Error(issue("digest", expected.hex))
+  }
+  let mut split = 0u64
+  while split < bytes.len(data) && split < 32 && data[split] != 0 {
+    split += 1
+  }
+  if split == bytes.len(data) || split == 32 {
+    return Error(issue("header", expected.hex))
+  }
+  let body = bytes.slice(data, split + 1, bytes.len(data))
+  if bytes.len(body) > format.limit || frame(format.kind, body) != data {
+    return Error(issue("header", expected.hex))
+  }
+  Ok(unique body)
+}
+
+fn blob_encode(value: Bytes) -> Result[unique Bytes, Problem] {
+  if bytes.len(value) > BLOB {
+    return Error(issue("blob_limit", ""))
+  }
+  Ok(unique value)
+}
+
+fn blob_decode(take data: unique Bytes) -> Result[unique Bytes, Problem] {
+  Ok(take data)
+}
+
+pub const blob: Codec[Bytes] = Codec(
+  kind: "blob",
+  limit: BLOB,
+  encode: blob_encode,
+  decode: blob_decode
+)
+
+pub fn error_json(problem: Problem) -> unique Bytes {
+  let mut buffer: List[u8] = []
+  text.append(mut buffer, "{\"kind\":")
+  json.write_text_into(problem.kind, mut buffer)
+  text.append(mut buffer, ",\"path\":")
+  json.write_text_into(problem.path, mut buffer)
+  text.append(mut buffer, "}\n")
+  bytes.from_list(take buffer)
+}

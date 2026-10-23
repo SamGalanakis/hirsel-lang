@@ -1,0 +1,28 @@
+{
+  "io": {
+    "stdout": "stdout.bytes@1",
+    "stderr": "stderr.bytes@1",
+    "tasks": "tasks.cooperative@1",
+    "dirs": [
+      {
+        "path": "objects",
+        "host": "/REPLACE/objects",
+        "access": "read_write"
+      },
+      {
+        "path": "roots",
+        "host": "/REPLACE/roots",
+        "access": "read_write"
+      },
+      {
+        "path": "source",
+        "host": "/REPLACE/source",
+        "access": "read"
+      }
+    ]
+  },
+  "args": [],
+  "placement": {
+    "cores": 1
+  }
+}

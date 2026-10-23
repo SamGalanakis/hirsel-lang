@@ -1,0 +1,150 @@
+// Dir arguments expose all authority; no ambient paths or global object index.
+pub fn key(name: String) -> Result[unique String, object.Problem] {
+  let raw = string.as_bytes(name)
+  if bytes.len(raw) == 0 || bytes.len(raw) > object.NAME || raw[0] == 47 {
+    return Error(object.issue("invalid_path", name))
+  }
+  for c in raw {
+    if c == 0 || c == 92 || c == 58 {
+      return Error(object.issue("invalid_path", name))
+    }
+  }
+  let mut start = 0u64
+  let mut levels = 0u64
+  let mut at = 0u64
+  while at <= bytes.len(raw) {
+    if at == bytes.len(raw) || raw[at] == 47 {
+      let width = at - start
+      if width == 0 || width == 1 && raw[start] == 46 || width == 2 && raw[start] == 46 && raw[start + 1] == 46 {
+        return Error(object.issue("invalid_path", name))
+      }
+      levels += 1
+      if levels > object.LEVELS {
+        return Error(object.issue("depth_limit", name))
+      }
+      start = at + 1
+    }
+    at += 1
+  }
+  Ok(unique name)
+}
+
+// Check each component, not just the leaf. Providers still enforce confinement
+// between calls; this is a read snapshot policy, not an adversarial FS lock.
+pub fn inspect(d: Dir, name: String) -> Result[Metadata, object.Problem] {
+  let _ = key(name)?
+  let parts = path.components(path.of(name))
+  let mut prefix = ""
+  for i in 0u64..list.len(parts) {
+    prefix = if i == 0 {
+      copy parts[i]
+    } else {
+      string.join([prefix, parts[i]], "/")
+    }
+    let info = match file.metadata(d, path.of(prefix)) {
+      Ok(value) => take value,
+      Error(Canceled(_)) => return Error(object.issue("canceled", name)),
+      Error(NotFound()) => return Error(object.issue("missing", name)),
+      Error(_) => return Error(object.issue("metadata", name)),
+    }
+    if info.kind == Symlink() {
+      return Error(object.issue("symlink", name))
+    }
+    if i + 1 < list.len(parts) && info.kind != Directory() {
+      return Error(object.issue("not_directory", name))
+    }
+    if i + 1 == list.len(parts) {
+      if info.kind != Regular() {
+        return Error(object.issue("not_regular", name))
+      }
+      return Ok(take info)
+    }
+  }
+  Error(object.issue("invalid_path", name))
+}
+
+pub fn read(d: Dir, name: String, limit: u64) -> Result[unique Bytes, object.Problem] {
+  let info = inspect(d, name)?
+  if info.size > limit {
+    return Error(object.issue("input_limit", name))
+  }
+  let mut f = match file.open(d, path.of(name)) {
+    Ok(value) => take value,
+    Error(Canceled(_)) => return Error(object.issue("canceled", name)),
+    Error(_) => return Error(object.issue("open", name)),
+  }
+  let data = match file.read_all_bounded(d, mut f, limit) {
+    Ok(value) => take value,
+    Error(Limit()) => return Error(object.issue("input_limit", name)),
+    Error(File(Canceled(_))) => return Error(object.issue("canceled", name)),
+    Error(_) => return Error(object.issue("read", name)),
+  }
+  if bytes.len(data) != info.size {
+    return Error(object.issue("input_changed", name))
+  }
+  let latest = inspect(d, name)?
+  if latest != info {
+    return Error(object.issue("input_changed", name))
+  }
+  Ok(take data)
+}
+
+pub fn load[T](d: Dir, format: object.Codec[T], expected: object.Id[T]) -> Result[
+  unique T,
+  object.Problem
+] {
+  object.valid_id(expected.hex)?
+  let stored = read(d, expected.hex, format.limit + 32)?
+  let body = object.validate(format, expected, stored)?
+  format.decode(take body)
+}
+
+pub fn insert[T](d: Dir, format: object.Codec[T], value: T) -> Result[
+  unique object.Id[T],
+  object.Problem
+] {
+  let body = format.encode(value)?
+  let identity = object.identify(format, body)?
+  let stored = object.frame(format.kind, body)
+  // No existence preflight: put_new arbitrates duplicate writers atomically.
+  match file.put_new(d, path.of(identity.hex), take stored, Durable()) {
+    Ok(()) => (),
+    Error(AlreadyExists()) => (),
+    Error(Canceled(_)) => return Error(object.issue("canceled", identity.hex)),
+    Error(_) => return Error(object.issue("put_new", identity.hex)),
+  }
+  // Even an equal-bytes success (or another winner) is read and validated.
+  let _ = load(d, format, identity)?
+  Ok(take identity)
+}
+
+pub fn publish(roots: Dir, name: String, identity: object.Id[tree.Node]) -> Result[
+  (),
+  object.Problem
+] {
+  let _ = key(name)?
+  if list.len(path.components(path.of(name))) != 1 {
+    return Error(object.issue("root_name", name))
+  }
+  let value = string.as_bytes(f"{identity.hex}\n")
+  match file.put_new(roots, path.of(name), unique value, Durable()) {
+    Ok(()) => Ok(()),
+    Error(AlreadyExists()) => Error(object.issue("root_exists", name)),
+    Error(Canceled(_)) => Error(object.issue("canceled", name)),
+    Error(_) => Error(object.issue("root_publish", name)),
+  }
+}
+
+pub fn root(roots: Dir, name: String) -> Result[
+  unique object.Id[tree.Node],
+  object.Problem
+] {
+  let data = read(roots, name, 65)?
+  if bytes.len(data) != 65 || data[64] != 10 {
+    return Error(object.issue("root_format", name))
+  }
+  let Ok(value) = string.from_bytes(unique bytes.slice(data, 0, 64)) else {
+    return Error(object.issue("root_format", name))
+  }
+  object.id(tree.codec, value)
+}

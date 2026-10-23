@@ -1,0 +1,183 @@
+// App format, not Git's binary tree format. Names compare as UTF-8 bytes.
+pub type Entry {
+  kind: String,
+  name: String,
+  id: String,
+}
+
+pub type Node {
+  entries: List[Entry],
+}
+
+pub fn component(name: String) -> Result[(), object.Problem] {
+  let _ = store.key(name)?
+  if string.contains(name, "/") {
+    return Error(object.issue("entry_name", name))
+  }
+  Ok(())
+}
+
+@noalloc
+pub fn order(a: Entry, b: Entry) -> i32 {
+  string.compare(a.name, b.name)
+}
+
+pub fn check(entries: List[Entry]) -> Result[(), object.Problem] {
+  if list.len(entries) > object.ENTRIES {
+    return Error(object.issue("entries_limit", ""))
+  }
+  let mut previous: String in {entries, previous} = ""
+  for row in entries {
+    component(row.name)?
+    object.valid_id(row.id)?
+    if row.kind != "blob" && row.kind != "tree" {
+      return Error(object.issue("entry_type", row.name))
+    }
+    if string.compare(previous, row.name) >= 0 {
+      return Error(object.issue("entry_order", row.name))
+    }
+    previous = copy row.name
+  }
+  Ok(())
+}
+
+pub fn encode(value: Node) -> Result[unique Bytes, object.Problem] {
+  check(value.entries)?
+  // Validate worst-case escaped length before growing the output builder.
+  let mut budget = 2u64
+  for row in value.entries {
+    let required = string.byte_len(row.name) * 6 + 112
+    if required > object.TREE - budget {
+      return Error(object.issue("tree_limit", row.name))
+    }
+    budget += required
+  }
+  let mut buffer: List[u8] = []
+  text.append(mut buffer, "[")
+  let mut first = true
+  for row in value.entries {
+    if !first {
+      text.append(mut buffer, ",")
+    }
+    first = false
+    text.append(mut buffer, "{\"type\":")
+    json.write_text_into(row.kind, mut buffer)
+    text.append(mut buffer, ",\"name\":")
+    json.write_text_into(row.name, mut buffer)
+    text.append(mut buffer, ",\"id\":")
+    json.write_text_into(row.id, mut buffer)
+    text.append(mut buffer, "}")
+  }
+  text.append(mut buffer, "]")
+  Ok(bytes.from_list(take buffer))
+}
+
+// Fixed schemas use the shipped pull reader, refusing extra or repeated fields.
+// Small token limits are checked before decoded-string allocation (at most
+// 6x encoded name length is already bounded by the containing input).
+pub fn token(mut cursor: json.Reader, expected: json.Token) -> Result[
+  (),
+  object.Problem
+] {
+  let Ok(actual) = json.next_token(mut cursor) else {
+    return Error(object.issue("json", ""))
+  }
+  if actual != expected {
+    return Error(object.issue("json_schema", ""))
+  }
+  Ok(())
+}
+
+pub fn field(mut cursor: json.Reader, name: String) -> Result[(), object.Problem] {
+  let value = read_text(mut cursor, 16)?
+  if value != name {
+    return Error(object.issue("json_field", name))
+  }
+  token(mut cursor, Colon())
+}
+
+pub fn read_text(mut cursor: json.Reader, limit: u64) -> Result[
+  unique String,
+  object.Problem
+] {
+  if json.peek(mut cursor) != 34 {
+    return Error(object.issue("json_text", ""))
+  }
+  let mut end = cursor.pos + 1
+  let mut escaped = false
+  while end < bytes.len(cursor.data) {
+    if end - cursor.pos > limit * 6 + 1 {
+      return Error(object.issue("name_limit", ""))
+    }
+    let c = cursor.data[end]
+    if !escaped && c == 34 {
+      break
+    }
+    escaped = !escaped && c == 92
+    end += 1
+  }
+  let Ok(view) = json.read_text(mut cursor) else {
+    return Error(object.issue("json_text", ""))
+  }
+  let value = json.text_owned(view)
+  if string.byte_len(value) > limit {
+    return Error(object.issue("name_limit", ""))
+  }
+  Ok(take value)
+}
+
+pub fn decode(take data: unique Bytes) -> Result[unique Node, object.Problem] {
+  if bytes.len(data) > object.TREE {
+    return Error(object.issue("tree_limit", ""))
+  }
+  if !json.valid_utf8(data) {
+    return Error(object.issue("tree_utf8", ""))
+  }
+  let mut cursor = json.reader(data)
+  let Ok(()) = json.begin_array(mut cursor) else {
+    return Error(object.issue("tree_json", ""))
+  }
+  let mut first = true
+  let mut entries: List[Entry] = []
+  while true {
+    let Ok(more) = json.array_next(mut cursor, mut first) else {
+      return Error(object.issue("tree_json", ""))
+    }
+    if !more {
+      break
+    }
+    if list.len(entries) == object.ENTRIES {
+      return Error(object.issue("entries_limit", ""))
+    }
+    token(mut cursor, ObjectStart())?
+    field(mut cursor, "type")?
+    let kind = read_text(mut cursor, 4)?
+    token(mut cursor, Comma())?
+    field(mut cursor, "name")?
+    let name = read_text(mut cursor, object.NAME)?
+    token(mut cursor, Comma())?
+    field(mut cursor, "id")?
+    let digest = read_text(mut cursor, 64)?
+    token(mut cursor, ObjectEnd())?
+    list.push(mut entries, Entry(kind: take kind, name: take name, id: take digest))
+  }
+  if json.finish_reader(mut cursor) != Ok(()) {
+    return Error(object.issue("tree_json", ""))
+  }
+  let node = Node(entries: take entries)
+  if encode(node)? != data {
+    return Error(object.issue("tree_canonical", ""))
+  }
+  Ok(take node)
+}
+
+pub const codec: object.Codec[Node] = object.Codec(
+  kind: "tree",
+  limit: object.TREE,
+  encode: encode,
+  decode: decode
+)
+
+pub fn entry(kind: String, name: String, digest: String) -> unique Entry {
+  Entry(kind: unique kind, name: unique name, id: unique digest)
+}

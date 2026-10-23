@@ -101,3 +101,4 @@ mod pnm_tiles_30;
 mod schema_etl_30;
 mod pubsub_relay_30;
 mod text_index_30;
+mod object_store_30;

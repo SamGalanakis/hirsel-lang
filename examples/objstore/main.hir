@@ -1,0 +1,112 @@
+pub type AppError = Output(OutputError)
+
+fn argument(args: Args, index: u64) -> Result[unique String, object.Problem] {
+  match arg.text(args, index) {
+    Ok(value) => {
+      if string.byte_len(value) > object.NAME {
+        return Error(object.issue("argument_limit", ""))
+      }
+      Ok(unique value)
+    },
+    Error(_) => Error(object.issue("arguments", "")),
+  }
+}
+
+fn execute(rt: Io, args: Args) -> Result[unique Bytes, object.Problem] {
+  let count = arg.len(args)
+  if count < 2 || count > 4 {
+    return Error(object.issue("usage", ""))
+  }
+  let verb = argument(args, 0)?
+  if verb != "put" && verb != "get" && verb != "snapshot" && verb != "list" && verb != "verify" {
+    return Error(object.issue("usage", verb))
+  }
+  if verb == "snapshot" && count != 4 || verb != "snapshot" && count != 2 {
+    return Error(object.issue("usage", verb))
+  }
+  let name = argument(args, 1)?
+  let Ok(objects) = io.dir(rt, path.of("objects")) else {
+    return Error(object.issue("objects_grant", ""))
+  }
+  if verb == "put" {
+    let Ok(source) = io.dir(rt, path.of("source")) else {
+      return Error(object.issue("source_grant", ""))
+    }
+    let data = store.read(source, name, object.BLOB)?
+    let identity = store.insert(objects, object.blob, data)?
+    return Ok(unique string.as_bytes(f"{identity.hex}\n"))
+  }
+  if verb == "get" {
+    let identity = object.id(object.blob, name)?
+    let decoded = store.load(objects, object.blob, identity)
+    return take decoded
+  }
+  let Ok(roots) = io.dir(rt, path.of("roots")) else {
+    return Error(object.issue("roots_grant", ""))
+  }
+  if verb == "snapshot" {
+    let destination = argument(args, 2)?
+    let number = argument(args, 3)?
+    let Ok(jobs) = u64.parse(number) else {
+      return Error(object.issue("jobs_limit", ""))
+    }
+    if jobs == 0 || jobs > 4 {
+      return Error(object.issue("jobs_limit", ""))
+    }
+    let Ok(source) = io.dir(rt, path.of("source")) else {
+      return Error(object.issue("source_grant", ""))
+    }
+    let Ok(tasks) = io.tasks(rt) else {
+      return Error(object.issue("tasks_grant", ""))
+    }
+    let interrupts: Option[Signals] = match io.signals(rt) {
+      Ok(signals) => Some(signals),
+      Error(NotGranted()) => None(),
+    }
+    let identity = snapshot.run(
+      source,
+      objects,
+      roots,
+      tasks,
+      interrupts,
+      name,
+      destination,
+      jobs
+    )?
+    return Ok(unique string.as_bytes(f"{identity.hex}\n"))
+  }
+  let identity = store.root(roots, name)?
+  if verb == "list" {
+    let node = store.load(objects, tree.codec, identity)?
+    let encoded = tree.encode(node)?
+    let mut line: List[u8] = []
+    bytes.append(mut line, encoded)
+    list.push(mut line, 10u8)
+    return Ok(bytes.from_list(take line))
+  }
+  let report = snapshot.verify(objects, identity)?
+  Ok(
+    unique string.as_bytes(
+      f"{{\"objects\":{report.objects},\"bytes\":{report.bytes}}}\n"
+    )
+  )
+}
+
+pub fn main(rt: Io, args: Args) -> Result[std@1/process.ExitCode, AppError] {
+  let Ok(output) = io.stdout(rt) else {
+    return Ok(std@1/process.exit_code(3u8))
+  }
+  let Ok(errors) = io.stderr(rt) else {
+    return Ok(std@1/process.exit_code(3u8))
+  }
+  match execute(rt, args) {
+    Ok(data) => {
+      out.write(output, data)?
+      Ok(std@1/process.SUCCESS)
+    },
+    Error(problem) => {
+      err.write(errors, object.error_json(problem))?
+      Ok(std@1/process.exit_code(2u8))
+    },
+  }
+}

@@ -1,0 +1,69 @@
+[
+  {
+    "name": "empty",
+    "payload": [],
+    "blob": "473a0f4c3be8a93681a267e3b1e9a7dcda1185436fe141f7749120a303721813",
+    "tree": "6ef19b41225c5369f1c104d45d8d85efa9b057b53b14b4b9b939dd74decc5321"
+  },
+  {
+    "name": "hello",
+    "payload": [
+      104,
+      101,
+      108,
+      108,
+      111,
+      10
+    ],
+    "blob": "2cf8d83d9ee29543b34a87727421fdecb7e3f3a183d337639025de576db9ebb4",
+    "tree": "ae1e4b5e47ccab8d4387bf290e90c0d2d633e15d9a929cb082d628942ddcaa51"
+  },
+  {
+    "name": "stdin-example",
+    "payload": [
+      101,
+      120,
+      97,
+      109,
+      112,
+      108,
+      101,
+      10
+    ],
+    "blob": "19bc348fcfed269b428d619dd4a4a919075363b4fc2a9faa4fe5f800b15da2a7",
+    "tree": "357cc9482edd8eec9011998ad15fcc065fea989aa4c9ff4e6d8778464c9784b0"
+  },
+  {
+    "name": "binary",
+    "payload": [
+      0,
+      255,
+      128,
+      10
+    ],
+    "blob": "45117325228071bfa14079e26499041d4f3810d92b73d66536fe2f7f49687eca",
+    "tree": "dd7f99663e1519d47e4ad9e36b5c944d718106ae2dfc44e86b9975f345467fa8"
+  },
+  {
+    "name": "multiple-foo",
+    "payload": [
+      102,
+      111,
+      111,
+      10
+    ],
+    "blob": "47d6aca82756ff2e61e53520bfdf1faa6c86d933be4854eb34840c57d12e0c85",
+    "tree": "29c37bfcd10f3c56d8482622ce570cf62e1c7b4c3149a09d2ee81de5a48eb565"
+  },
+  {
+    "name": "multiple-bar",
+    "payload": [
+      98,
+      97,
+      114,
+      10
+    ],
+    "blob": "a52e146ac2ab2d0efbb768ab8ebd1e98a6055764c81fe424fbae4522f5b4cb92",
+    "tree": "476bf2c89f901466ad481f7b3c1129f2b3d1d45802a9e3ddc30aac01245f5207"
+  }
+]

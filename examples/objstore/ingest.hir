@@ -1,0 +1,120 @@
+pub type Row {
+  path: String,
+  size: u64,
+  id: String,
+}
+
+pub type Imported {
+  path: String,
+  id: object.Id[Bytes],
+}
+
+fn one(source: Dir, objects: Dir, row: Row) -> Result[unique Imported, object.Problem] {
+  let data = store.read(source, row.path, row.size)?
+  if bytes.len(data) != row.size {
+    return Error(object.issue("input_changed", row.path))
+  }
+  let identity = object.identify(object.blob, data)?
+  if identity.hex != row.id {
+    return Error(object.issue("input_changed", row.path))
+  }
+  let stored = store.insert(objects, object.blob, data)?
+  Ok(Imported(path: unique row.path, id: take stored))
+}
+
+pub fn run(source: Dir, objects: Dir, tasks: Tasks, rows: List[Row], jobs: u64) -> Result[
+  unique List[Imported],
+  object.Problem
+] {
+  if jobs == 0 || jobs > 4 {
+    return Error(object.issue("jobs_limit", ""))
+  }
+  // Admit every input before a worker can read or publish. The manifest remains
+  // frozen behind Shared; each worker copies just its own <=1KiB path metadata.
+  let mut total = 0u64
+  if list.len(rows) > object.FILES {
+    return Error(object.issue("files_limit", ""))
+  }
+  for row in rows {
+    if row.size > object.BLOB {
+      return Error(object.issue("blob_limit", row.path))
+    }
+    if row.size > object.TOTAL - total {
+      return Error(object.issue("total_limit", row.path))
+    }
+    total += row.size
+    let info = store.inspect(source, row.path)?
+    if info.size != row.size {
+      return Error(object.issue("input_changed", row.path))
+    }
+  }
+  let manifest = shared.freeze(unique rows)
+  task.scope(
+    tasks,
+    fn(scope: Scope) -> Result[unique List[Imported], object.Problem] {
+      let length = shared.with(
+        manifest,
+        fn(value: List[Row]) -> u64 {
+          list.len(value)
+        }
+      )
+      let mut imported: List[Imported] = []
+      let mut start = 0u64
+      while start < length {
+        let count = if length - start < jobs {
+          length - start
+        } else {
+          jobs
+        }
+        let mut pending: TaskSet[Result[unique Imported, unique object.Problem]] of scope = task.set(
+          scope
+        )
+        for index in start..start + count {
+          task.add(
+            scope,
+            mut pending,
+            task.async(
+              scope,
+              fn() -> Result[unique Imported, unique object.Problem] {
+                let row = shared.with(
+                  manifest,
+                  fn(value: List[Row]) -> unique Row {
+                    unique value[index]
+                  }
+                )
+                match one(source, objects, row) {
+                  Ok(value) => Ok(take value),
+                  Error(problem) => Error(unique problem),
+                }
+              }
+            )
+          )
+        }
+        let mut ordered: List[Option[Imported]] = []
+        for index in 0u64..count {
+          list.push(mut ordered, None())
+        }
+        while let Some(slot) = task.await_any(scope, pending) {
+          let joined = task.await_at(scope, mut pending, slot)
+          match take joined {
+            Ok(value) => {
+              ordered[slot] = Some(take value)
+            },
+            Error(problem) => {
+              task.cancel_all(scope, take pending)
+              return Error(take problem)
+            },
+          }
+        }
+        task.cancel_all(scope, take pending)
+        for item in take ordered {
+          if let Some(value) = take item {
+            list.push(mut imported, take value)
+          }
+        }
+        start += count
+      }
+      Ok(take imported)
+    }
+  )
+}

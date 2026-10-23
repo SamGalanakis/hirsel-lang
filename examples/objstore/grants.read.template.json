@@ -1,0 +1,11 @@
+{
+  "io": {
+    "stdout": "stdout.bytes@1",
+    "stderr": "stderr.bytes@1",
+    "dirs": [
+      {"path": "objects", "host": "/REPLACE/objects", "access": "read"},
+      {"path": "roots", "host": "/REPLACE/roots", "access": "read"}
+    ]
+  },
+  "args": []
+}

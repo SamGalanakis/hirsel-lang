@@ -1,0 +1,328 @@
+// Explicit flat manifest with expected framed blob IDs. Directory nodes are
+// inferred, allocated within the object/state budget, and built deepest first.
+pub type Directory {
+  path: String,
+  id: String,
+}
+
+pub type Visit {
+  kind: String,
+  id: String,
+  depth: u64,
+}
+
+pub type Report {
+  objects: u64,
+  bytes: u64,
+}
+
+pub fn manifest(data: Bytes) -> Result[unique List[ingest.Row], object.Problem] {
+  if bytes.len(data) > object.STATE {
+    return Error(object.issue("manifest_limit", ""))
+  }
+  if !json.valid_utf8(data) {
+    return Error(object.issue("manifest_utf8", ""))
+  }
+  let mut cursor = json.reader(data)
+  tree.token(mut cursor, ArrayStart())?
+  let mut first = true
+  let mut rows: List[ingest.Row] = []
+  let mut total = 0u64
+  let mut state_bytes = bytes.len(data)
+  while true {
+    let Ok(more) = json.array_next(mut cursor, mut first) else {
+      return Error(object.issue("manifest_json", ""))
+    }
+    if !more {
+      break
+    }
+    if list.len(rows) == object.FILES {
+      return Error(object.issue("files_limit", ""))
+    }
+    tree.token(mut cursor, ObjectStart())?
+    tree.field(mut cursor, "path")?
+    let name = tree.read_text(mut cursor, object.NAME)?
+    let _ = store.key(name)?
+    tree.token(mut cursor, Comma())?
+    tree.field(mut cursor, "size")?
+    let Ok(NumberToken(raw)) = json.next_token(mut cursor) else {
+      return Error(object.issue("manifest_size", name))
+    }
+    if bytes.len(raw) > 5 {
+      return Error(object.issue("blob_limit", name))
+    }
+    let Ok(size) = u64.parse(json.number_text(raw)) else {
+      return Error(object.issue("manifest_size", name))
+    }
+    if size > object.BLOB {
+      return Error(object.issue("blob_limit", name))
+    }
+    if size > object.TOTAL - total {
+      return Error(object.issue("total_limit", name))
+    }
+    tree.token(mut cursor, Comma())?
+    tree.field(mut cursor, "id")?
+    let digest = tree.read_text(mut cursor, 64)?
+    object.valid_id(digest)?
+    tree.token(mut cursor, ObjectEnd())?
+    for old in rows {
+      if old.path == name {
+        return Error(object.issue("duplicate_path", name))
+      }
+      if string.starts_with(name, string.concat(old.path, "/")) || string.starts_with(
+        old.path,
+        string.concat(name, "/")
+      ) {
+        return Error(object.issue("path_collision", name))
+      }
+    }
+    let required = string.byte_len(name) + 160
+    if required > object.STATE - state_bytes {
+      return Error(object.issue("state_limit", name))
+    }
+    state_bytes += required
+    total += size
+    list.push(mut rows, ingest.Row(path: take name, size: size, id: take digest))
+  }
+  if json.finish_reader(mut cursor) != Ok(()) {
+    return Error(object.issue("manifest_json", ""))
+  }
+  Ok(take rows)
+}
+
+pub fn parent(name: String) -> unique String {
+  let parts = path.components(path.of(name))
+  let mut prefix = ""
+  for i in 0u64..list.len(parts) - 1 {
+    prefix = if i == 0 {
+      copy parts[i]
+    } else {
+      string.join([prefix, parts[i]], "/")
+    }
+  }
+  unique prefix
+}
+
+pub fn leaf(name: String) -> unique String {
+  let parts = path.components(path.of(name))
+  unique parts[list.len(parts) - 1]
+}
+
+pub fn depth(name: String) -> u64 {
+  if name == "" {
+    0
+  } else {
+    list.len(path.components(path.of(name)))
+  }
+}
+
+fn directories(rows: List[ingest.Row]) -> Result[unique List[Directory], object.Problem] {
+  let mut nodes: List[Directory] = [Directory(path: "", id: "")]
+  let mut state_bytes = 0u64
+  for row in rows {
+    state_bytes += string.byte_len(row.path) + 96
+    let parts = path.components(path.of(row.path))
+    let mut prefix = ""
+    for i in 0u64..list.len(parts) - 1 {
+      prefix = if i == 0 {
+        copy parts[i]
+      } else {
+        string.join([prefix, parts[i]], "/")
+      }
+      let mut found = false
+      for node in nodes {
+        if node.path == prefix {
+          found = true
+        }
+      }
+      if !found {
+        if list.len(nodes) + list.len(rows) == object.OBJECTS {
+          return Error(object.issue("objects_limit", prefix))
+        }
+        let required = string.byte_len(prefix) + 96
+        if required > object.STATE - state_bytes {
+          return Error(object.issue("state_limit", prefix))
+        }
+        state_bytes += required
+        list.push(mut nodes, Directory(path: unique copy prefix, id: ""))
+      }
+    }
+  }
+  // Fanout is known before reads and before any immutable object insertion.
+  for node in nodes {
+    let mut children = 0u64
+    for row in rows {
+      if parent(row.path) == node.path {
+        children += 1
+      }
+    }
+    for subtree in nodes {
+      if subtree.path != "" && parent(subtree.path) == node.path {
+        children += 1
+      }
+    }
+    if children > object.ENTRIES {
+      return Error(object.issue("entries_limit", node.path))
+    }
+  }
+  Ok(take nodes)
+}
+
+pub fn build(source: Dir, objects: Dir, tasks: Tasks, take name: String, jobs: u64) -> Result[
+  unique object.Id[tree.Node],
+  object.Problem
+] {
+  let rows = manifest(store.read(source, name, object.STATE)?)?
+  let mut nodes = directories(rows)?
+  let imported = ingest.run(source, objects, tasks, rows, jobs)?
+  let mut level = object.LEVELS
+  while level > 0 {
+    level -= 1
+    for index in 0u64..list.len(nodes) {
+      if depth(nodes[index].path) != level {
+        continue
+      }
+      let mut entries: List[tree.Entry] = []
+      for row in imported {
+        if parent(row.path) == nodes[index].path {
+          list.push(mut entries, tree.entry("blob", leaf(row.path), row.id.hex))
+        }
+      }
+      for subtree in nodes {
+        if subtree.path != "" && parent(subtree.path) == nodes[index].path {
+          list.push(mut entries, tree.entry("tree", leaf(subtree.path), subtree.id))
+        }
+      }
+      list.sort(mut entries, tree.order)
+      let identity = store.insert(objects, tree.codec, tree.Node(entries: take entries))?
+      nodes[index].id = unique identity.hex
+    }
+  }
+  let root = object.id(tree.codec, nodes[0].id)?
+  let _ = verify(objects, root)?
+  Ok(take root)
+}
+
+// Explicit-root DFS. Remember the greatest depth at which each typed ID was
+// expanded, so a DAG alias cannot hide a too-deep path behind a shallow visit.
+pub fn verify(objects: Dir, root: object.Id[tree.Node]) -> Result[
+  Report,
+  object.Problem
+] {
+  let mut pending: List[Visit] = [Visit(kind: "tree", id: unique root.hex, depth: 0)]
+  let mut visited: List[Visit] = []
+  let mut total = 0u64
+  while let Some(next) = list.pop(mut pending) {
+    let mut expand = true
+    let mut fresh = true
+    for index in 0u64..list.len(visited) {
+      if visited[index].id == next.id {
+        if visited[index].kind != next.kind {
+          return Error(object.issue("reference_type", next.id))
+        }
+        fresh = false
+        if next.depth <= visited[index].depth {
+          expand = false
+        } else {
+          visited[index].depth = next.depth
+        }
+      }
+    }
+    if next.kind == "tree" && next.depth >= object.LEVELS {
+      return Error(object.issue("depth_limit", next.id))
+    }
+    if !expand {
+      continue
+    }
+    if fresh {
+      if list.len(visited) == object.OBJECTS {
+        return Error(object.issue("objects_limit", next.id))
+      }
+      list.push(mut visited, unique copy next)
+    }
+    if next.kind == "blob" {
+      let identity = object.id(object.blob, next.id)?
+      let data = store.load(objects, object.blob, identity)?
+      if fresh {
+        if bytes.len(data) > object.TOTAL - total {
+          return Error(object.issue("total_limit", next.id))
+        }
+        total += bytes.len(data)
+      }
+    } else {
+      let identity = object.id(tree.codec, next.id)?
+      let node = store.load(objects, tree.codec, identity)?
+      for row in node.entries {
+        // DFS frontier <= 1 + 31*8; admit before copying any entry ID.
+        if list.len(pending) == 256 {
+          return Error(object.issue("frontier_limit", next.id))
+        }
+        list.push(
+          mut pending,
+          Visit(kind: unique row.kind, id: unique row.id, depth: next.depth + 1)
+        )
+      }
+    }
+  }
+  Ok(Report(objects: list.len(visited), bytes: total))
+}
+
+// Optional host Interrupt cancels and joins every ingest worker. With no signal
+// grant the exact same build path runs directly. Root publication stays last.
+pub fn run(
+  source: Dir,
+  objects: Dir,
+  roots: Dir,
+  tasks: Tasks,
+  interrupts: Option[Signals],
+  name: String,
+  destination: String,
+  jobs: u64
+) -> Result[unique object.Id[tree.Node], object.Problem] {
+  tree.component(destination)?
+  let prepared = match interrupts {
+    None() => build(source, objects, tasks, unique name, jobs),
+    Some(signals) => {
+      let declaration = unique name
+      task.scope(
+        tasks,
+        fn(scope: Scope) -> Result[unique object.Id[tree.Node], object.Problem] {
+          let mut pending: TaskSet[
+            Result[unique object.Id[tree.Node], unique object.Problem]
+          ] of scope = task.set(scope)
+          task.add(
+            scope,
+            mut pending,
+            task.async(
+              scope,
+              fn() -> Result[unique object.Id[tree.Node], unique object.Problem] {
+                match build(source, objects, tasks, take declaration, jobs) {
+                  Ok(value) => Ok(take value),
+                  Error(problem) => Error(unique problem),
+                }
+              }
+            )
+          )
+          task.add(
+            scope,
+            mut pending,
+            task.async(
+              scope,
+              fn() -> Result[unique object.Id[tree.Node], unique object.Problem] {
+                let _ = signal.wait(signals, [Interrupt()])
+                Error(object.issue("canceled", ""))
+              }
+            )
+          )
+          let (_, completed) = task.select(scope, take pending)
+          take completed
+        }
+      )
+    },
+  }
+  let identity = take prepared?
+  // The raced scope has canceled/joined its loser before publication. No
+  // cancellation branch can advertise a root and then report cancellation.
+  store.publish(roots, destination, identity)?
+  Ok(take identity)
+}
