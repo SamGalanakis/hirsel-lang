@@ -78,3 +78,12 @@ run began after all consumed Rust/Python/source/fixture/grants edits; only this
 file and README prose changed during it. Edit times, final executable-input
 hashes and both unmodified logs are retained externally. Cost metadata was
 merged from the final run without repeating unchanged execution cells.
+
+## API discovery resolution
+
+The [tested std API recipes](../../docs/std-api-recipes.md) address the API-search
+detour recorded above: `json_access.member`/`element`, contextual `Text(String)`,
+core `string.from_bytes(take data)` and manifest-registered `time.format`.
+The original attempts remain historical evidence. The production calls, required
+annotations, ownership copies and application adapters remain valid. This is
+documentation navigation for existing APIs, with no alias or resolver change.

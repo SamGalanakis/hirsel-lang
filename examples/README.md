@@ -1,5 +1,8 @@
 # Small Hirsel tools
 
+For JSON member/element access, contextual `Text`, owned UTF-8 conversion and
+`time.format`, see the [tested std API recipes](../docs/std-api-recipes.md).
+
 Each package selects `std@1` through its `hirsel.json`; a standalone source without
 a sidecar selects its toolchain's std. From the repository root:
 

@@ -133,3 +133,6 @@ checkout's `crates/jiff-tzdb/concatenated-zoneinfo.dat` (`tzname.rs:420`). Zone 
 is public-domain IANA data. `malformed.tzif` is an application-owned truncated
 header. No host `/usr/share/zoneinfo` is consulted. [FRICTION.md](FRICTION.md)
 records the observed authoring and setup repairs.
+
+See the [tested JSON, text and time recipes](../../docs/std-api-recipes.md)
+for public module names, contextual variants and ownership at each call.

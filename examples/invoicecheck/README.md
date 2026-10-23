@@ -79,3 +79,6 @@ arithmetic internals. Hirsel's arbitrary-size coefficients replace that storage
 limit, input caps bound the application, and rescale always writes the requested
 number of places. The Python oracle independently implements the application
 policy. See [FRICTION.md](FRICTION.md) for authoring repairs.
+
+See the [tested JSON, text and time recipes](../../docs/std-api-recipes.md)
+for public module names, contextual variants and ownership at each call.

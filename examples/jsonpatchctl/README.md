@@ -121,3 +121,6 @@ exact decimal equality and strict array append rules. The CLI adds an envelope,
 input bounds and capability-based I/O. Additional vector answers are small
 hand-derived RFC examples. Object equality is checked independent of member
 order, with compact encoding and byte determinism asserted separately.
+
+See the [tested JSON, text and time recipes](../../docs/std-api-recipes.md)
+for public module names, contextual variants and ownership at each call.

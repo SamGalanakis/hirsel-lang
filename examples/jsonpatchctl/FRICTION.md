@@ -76,3 +76,12 @@ bytes. The new-test baseline was 0 tests. Earlier setup failure ran 0 tests;
 the first executed harness ran 2 tests (1 passed, 1 failed due to the object-order
 oracle). The successful final measured case costs, 4.076 s and 117.547 s, were
 merged into the existing test-cost table without a wider campaign.
+
+## API discovery resolution
+
+The [tested std API recipes](../../docs/std-api-recipes.md) address the API-search
+detour recorded above: `json_access.member`/`element`, contextual `Text(String)`,
+core `string.from_bytes(take data)` and manifest-registered `time.format`.
+The original attempts remain historical evidence. The production calls, required
+annotations, ownership copies and application adapters remain valid. This is
+documentation navigation for existing APIs, with no alias or resolver change.

@@ -91,3 +91,4 @@ mod regex_subject_cost_18;
 mod regex_cache_20;
 mod regex_capture_engines_20;
 mod base64_block_20;
+mod std_api_recipes_24;

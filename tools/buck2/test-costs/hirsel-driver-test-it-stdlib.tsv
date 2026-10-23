@@ -317,3 +317,9 @@ base64_block_20::invalid_window_875	260.358
 base64_block_20::invalid_window_913	93.937
 base64_block_20::invalid_window_951	111.885
 base64_block_20::invalid_window_989	148.356
+std_api_recipes_24::array_element	0.670
+std_api_recipes_24::json_text_escaping	0.607
+std_api_recipes_24::object_member	0.466
+std_api_recipes_24::owned_invalid_utf8_preserves_bytes	0.286
+std_api_recipes_24::owned_valid_utf8	0.375
+std_api_recipes_24::supplied_civil_time	0.668

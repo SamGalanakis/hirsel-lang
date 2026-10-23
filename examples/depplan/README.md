@@ -111,3 +111,6 @@ expected success answers, with a separate precedence check. Transitive closure
 supplies blocked expectations because CPython's cycle exception is a witness,
 where Hirsel returns the complete blocked set. See [FRICTION.md](FRICTION.md) for
 the attempted forms and repairs.
+
+See the [tested JSON, text and time recipes](../../docs/std-api-recipes.md)
+for public module names, contextual variants and ownership at each call.

@@ -70,3 +70,12 @@ diagnostic:
 
 No diagnostic repair or language-rule question was needed. Upstream deviations
 and fixture provenance are listed in [README.md](README.md).
+
+## API discovery resolution
+
+The [tested std API recipes](../../docs/std-api-recipes.md) address the API-search
+detour recorded above: `json_access.member`/`element`, contextual `Text(String)`,
+core `string.from_bytes(take data)` and manifest-registered `time.format`.
+The original attempts remain historical evidence. The production calls, required
+annotations, ownership copies and application adapters remain valid. This is
+documentation navigation for existing APIs, with no alias or resolver change.

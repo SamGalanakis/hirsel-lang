@@ -2,6 +2,9 @@
 
 Browse the [full signature index](../api.md) for every public core and std declaration.
 
+For complete JSON lookup, escaping, UTF-8 and time examples, start with the
+[task-to-public-name recipes](../std-api-recipes.md).
+
 The standard library is the ordinary source package `std@1`, at
 `stdlib/hirsel.json`, pinned exactly by the selecting manifest
 ([packages](programs.md#package-selection)). Programs use short module names such as
