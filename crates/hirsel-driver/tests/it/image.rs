@@ -38,7 +38,9 @@ fn ordinary_std_precomputation_completes_through_the_query_store() {
             ..CompileConfig::for_memory_cap(None)
         });
         let started = std::time::Instant::now();
-        compiler.precompute_package(&std_manifest(), &products).unwrap();
+        compiler
+            .precompute_package(&std_manifest(), &products)
+            .unwrap();
         eprintln!("[ca40-cost] std-precompute elapsed={:?}", started.elapsed());
         let shared = compiler.with_config(CompileConfig {
             store: Arc::new(store::DirStore::new(products)),
@@ -50,14 +52,32 @@ fn ordinary_std_precomputation_completes_through_the_query_store() {
         let definitions = reader.engine.indexed_definitions();
         assert!(definitions.len() > 100);
         let started = std::time::Instant::now();
-        let checked = reader.check(hirsel_engine::LoweringPolicy::Reachable).unwrap();
+        let checked = reader
+            .check(hirsel_engine::LoweringPolicy::Reachable)
+            .unwrap();
         assert_eq!(checked.completion, hirsel_engine::CheckCompletion::Complete);
-        assert!(!checked.diagnostics.iter().any(|d| d.severity == hirsel_diag::Severity::Error));
+        assert!(
+            !checked
+                .diagnostics
+                .iter()
+                .any(|d| d.severity == hirsel_diag::Severity::Error)
+        );
         for path in definitions {
-            assert_eq!(reader.engine.recompute_count(&path, QueryKind::Check), 0, "{path}");
-            assert_eq!(reader.engine.recompute_count(&path, QueryKind::Modes), 0, "{path}");
+            assert_eq!(
+                reader.engine.recompute_count(&path, QueryKind::Check),
+                0,
+                "{path}"
+            );
+            assert_eq!(
+                reader.engine.recompute_count(&path, QueryKind::Modes),
+                0,
+                "{path}"
+            );
         }
-        eprintln!("[ca40-cost] std-reopened-check elapsed={:?}", started.elapsed());
+        eprintln!(
+            "[ca40-cost] std-reopened-check elapsed={:?}",
+            started.elapsed()
+        );
     });
 }
 
@@ -72,7 +92,9 @@ fn ordinary_std_client_semantic_and_native_products_equal_fresh_ones() {
             jobs: hirsel_intern::jobs::Jobs::new(1),
             ..CompileConfig::for_memory_cap(None)
         });
-        compiler.precompute_package(&std_manifest(), &products).unwrap();
+        compiler
+            .precompute_package(&std_manifest(), &products)
+            .unwrap();
         let shared = compiler.clone().with_config(CompileConfig {
             store: Arc::new(store::DirStore::new(products)),
             jobs: hirsel_intern::jobs::Jobs::new(1),
@@ -80,10 +102,20 @@ fn ordinary_std_client_semantic_and_native_products_equal_fresh_ones() {
         });
         // `aaa` places std after the program's own sources, exercising FileId rebasing.
         let client = f.program("aaa", STD_PROGRAM, &std_manifest(), "std");
-        let mut imaged = shared.load_program_source_with_images(&client, None, &StdImages::none()).unwrap();
-        let definitions: Vec<_> = imaged.engine.indexed_definitions().into_iter().filter(|path| path.0.package == package("std")).map(|path| DefId::intern(&path)).collect();
+        let mut imaged = shared
+            .load_program_source_with_images(&client, None, &StdImages::none())
+            .unwrap();
+        let definitions: Vec<_> = imaged
+            .engine
+            .indexed_definitions()
+            .into_iter()
+            .filter(|path| path.0.package == package("std"))
+            .map(|path| DefId::intern(&path))
+            .collect();
         assert!(definitions.len() > 100);
-        let mut reference = compiler.load_program_source_with_images(&client, None, &StdImages::none()).unwrap();
+        let mut reference = compiler
+            .load_program_source_with_images(&client, None, &StdImages::none())
+            .unwrap();
         let checked = |p: &mut LoadedProgram| {
             let output = p.check(hirsel_engine::LoweringPolicy::Reachable).unwrap();
             let rendered: Vec<_> = output
@@ -151,7 +183,9 @@ fn imaged_std_products_equal_fresh_ones() {
             jobs: hirsel_intern::jobs::Jobs::new(1),
             ..CompileConfig::for_memory_cap(None)
         });
-        compiler.precompute_package(&std_manifest(), &products).unwrap();
+        compiler
+            .precompute_package(&std_manifest(), &products)
+            .unwrap();
         let shared = compiler.clone().with_config(CompileConfig {
             store: Arc::new(store::DirStore::new(products)),
             jobs: hirsel_intern::jobs::Jobs::new(1),
@@ -159,10 +193,20 @@ fn imaged_std_products_equal_fresh_ones() {
         });
         // `aaa` places std after the program's own sources, exercising FileId rebasing.
         let client = f.program("aaa", STD_PROGRAM, &std_manifest(), "std");
-        let mut imaged = shared.load_program_source_with_images(&client, None, &StdImages::none()).unwrap();
-        let definitions: Vec<_> = imaged.engine.indexed_definitions().into_iter().filter(|path| path.0.package == package("std")).map(|path| DefId::intern(&path)).collect();
+        let mut imaged = shared
+            .load_program_source_with_images(&client, None, &StdImages::none())
+            .unwrap();
+        let definitions: Vec<_> = imaged
+            .engine
+            .indexed_definitions()
+            .into_iter()
+            .filter(|path| path.0.package == package("std"))
+            .map(|path| DefId::intern(&path))
+            .collect();
         assert!(definitions.len() > 100);
-        let mut reference = compiler.load_program_source_with_images(&client, None, &StdImages::none()).unwrap();
+        let mut reference = compiler
+            .load_program_source_with_images(&client, None, &StdImages::none())
+            .unwrap();
         let checked = |p: &mut LoadedProgram| {
             let output = p.check(hirsel_engine::LoweringPolicy::Reachable).unwrap();
             let rendered: Vec<_> = output
@@ -267,7 +311,9 @@ fn ordinary_std_definition_products_partition(partition: usize) {
             jobs: hirsel_intern::jobs::Jobs::new(1),
             ..CompileConfig::for_memory_cap(None)
         });
-        compiler.precompute_package(&std_manifest(), &products).unwrap();
+        compiler
+            .precompute_package(&std_manifest(), &products)
+            .unwrap();
         let shared = compiler.clone().with_config(CompileConfig {
             store: Arc::new(store::DirStore::new(products)),
             jobs: hirsel_intern::jobs::Jobs::new(1),
@@ -275,10 +321,20 @@ fn ordinary_std_definition_products_partition(partition: usize) {
         });
         // `aaa` places std after the program's own sources, exercising FileId rebasing.
         let client = f.program("aaa", STD_PROGRAM, &std_manifest(), "std");
-        let mut imaged = shared.load_program_source_with_images(&client, None, &StdImages::none()).unwrap();
-        let definitions: Vec<_> = imaged.engine.indexed_definitions().into_iter().filter(|path| path.0.package == package("std")).map(|path| DefId::intern(&path)).collect();
+        let mut imaged = shared
+            .load_program_source_with_images(&client, None, &StdImages::none())
+            .unwrap();
+        let definitions: Vec<_> = imaged
+            .engine
+            .indexed_definitions()
+            .into_iter()
+            .filter(|path| path.0.package == package("std"))
+            .map(|path| DefId::intern(&path))
+            .collect();
         assert!(definitions.len() > 100);
-        let mut reference = compiler.load_program_source_with_images(&client, None, &StdImages::none()).unwrap();
+        let mut reference = compiler
+            .load_program_source_with_images(&client, None, &StdImages::none())
+            .unwrap();
         let checked = |p: &mut LoadedProgram| {
             let output = p.check(hirsel_engine::LoweringPolicy::Reachable).unwrap();
             let rendered: Vec<_> = output
@@ -296,7 +352,9 @@ fn ordinary_std_definition_products_partition(partition: usize) {
         );
         let mut lowered = 0;
         for (index, path) in definitions.iter().copied().map(DefId::path).enumerate() {
-            if index % 2 != partition { continue; }
+            if index % 2 != partition {
+                continue;
+            }
             assert_eq!(
                 imaged.engine.semantic_program_revision(path).unwrap(),
                 reference.engine.semantic_program_revision(path).unwrap(),
@@ -350,9 +408,13 @@ fn ordinary_std_definition_products_partition(partition: usize) {
 }
 
 #[test]
-fn ordinary_std_definition_products_partition_even() { ordinary_std_definition_products_partition(0); }
+fn ordinary_std_definition_products_partition_even() {
+    ordinary_std_definition_products_partition(0);
+}
 #[test]
-fn ordinary_std_definition_products_partition_odd() { ordinary_std_definition_products_partition(1); }
+fn ordinary_std_definition_products_partition_odd() {
+    ordinary_std_definition_products_partition(1);
+}
 
 // Per-definition-only quarters omit the separately proven client check prefix.
 // Bounded per-definition coverage; the original complete identity above remains.
@@ -365,8 +427,13 @@ fn ordinary_std_definition_products_quarter(partition: usize) {
             ..CompileConfig::for_memory_cap(None)
         });
         let phase = std::time::Instant::now();
-        compiler.precompute_package(&std_manifest(), &products).unwrap();
-        eprintln!("[ca41-coverage] quarter={partition} precompute={:?}", phase.elapsed());
+        compiler
+            .precompute_package(&std_manifest(), &products)
+            .unwrap();
+        eprintln!(
+            "[ca41-coverage] quarter={partition} precompute={:?}",
+            phase.elapsed()
+        );
         let shared = compiler.clone().with_config(CompileConfig {
             store: Arc::new(store::DirStore::new(products)),
             jobs: hirsel_intern::jobs::Jobs::new(1),
@@ -374,10 +441,20 @@ fn ordinary_std_definition_products_quarter(partition: usize) {
         });
         // `aaa` places std after the program's own sources, exercising FileId rebasing.
         let client = f.program("aaa", STD_PROGRAM, &std_manifest(), "std");
-        let mut imaged = shared.load_program_source_with_images(&client, None, &StdImages::none()).unwrap();
-        let definitions: Vec<_> = imaged.engine.indexed_definitions().into_iter().filter(|path| path.0.package == package("std")).map(|path| DefId::intern(&path)).collect();
+        let mut imaged = shared
+            .load_program_source_with_images(&client, None, &StdImages::none())
+            .unwrap();
+        let definitions: Vec<_> = imaged
+            .engine
+            .indexed_definitions()
+            .into_iter()
+            .filter(|path| path.0.package == package("std"))
+            .map(|path| DefId::intern(&path))
+            .collect();
         assert!(definitions.len() > 100);
-        let mut reference = compiler.load_program_source_with_images(&client, None, &StdImages::none()).unwrap();
+        let mut reference = compiler
+            .load_program_source_with_images(&client, None, &StdImages::none())
+            .unwrap();
         let inventory: Vec<_> = definitions.iter().map(|id| id.path().to_string()).collect();
         assert!(inventory.windows(2).all(|pair| pair[0] < pair[1]));
         eprintln!("[ca41-coverage] quarter={partition} complete-inventory={inventory:?}");
@@ -385,7 +462,9 @@ fn ordinary_std_definition_products_quarter(partition: usize) {
         let mut lowered = 0;
         let mut compared = vec![];
         for (index, path) in definitions.iter().copied().map(DefId::path).enumerate() {
-            if index % 4 != partition { continue; }
+            if index % 4 != partition {
+                continue;
+            }
             compared.push(path.to_string());
             assert_eq!(
                 imaged.engine.semantic_program_revision(path).unwrap(),
@@ -424,7 +503,10 @@ fn ordinary_std_definition_products_quarter(partition: usize) {
             assert_eq!(actual.dependencies, expected.dependencies, "{path}");
             lowered += 1;
         }
-        eprintln!("[ca41-coverage] quarter={partition} compared={compared:?} lowered={lowered} elapsed={:?}", phase.elapsed());
+        eprintln!(
+            "[ca41-coverage] quarter={partition} compared={compared:?} lowered={lowered} elapsed={:?}",
+            phase.elapsed()
+        );
         assert!(lowered > 25, "quarter={partition} lowered={lowered}");
         for path in definitions.iter().copied().map(DefId::path) {
             for phase in [QueryKind::Check, QueryKind::Modes] {
@@ -439,13 +521,21 @@ fn ordinary_std_definition_products_quarter(partition: usize) {
 }
 
 #[test]
-fn ordinary_std_definition_products_quarter_0() { ordinary_std_definition_products_quarter(0); }
+fn ordinary_std_definition_products_quarter_0() {
+    ordinary_std_definition_products_quarter(0);
+}
 #[test]
-fn ordinary_std_definition_products_quarter_1() { ordinary_std_definition_products_quarter(1); }
+fn ordinary_std_definition_products_quarter_1() {
+    ordinary_std_definition_products_quarter(1);
+}
 #[test]
-fn ordinary_std_definition_products_quarter_2() { ordinary_std_definition_products_quarter(2); }
+fn ordinary_std_definition_products_quarter_2() {
+    ordinary_std_definition_products_quarter(2);
+}
 #[test]
-fn ordinary_std_definition_products_quarter_3() { ordinary_std_definition_products_quarter(3); }
+fn ordinary_std_definition_products_quarter_3() {
+    ordinary_std_definition_products_quarter(3);
+}
 
 const LIBRARY: &str = "pub fn value(x: u64) -> u64 {
   x + 1
@@ -938,13 +1028,17 @@ fn imaged_snapshot_reuses_signature_verdicts() {
                     .1
                     .is_empty()
             );
-            let mut independent = COMPILER.clone().with_config(CompileConfig::default())
+            let mut independent = COMPILER
+                .clone()
+                .with_config(CompileConfig::default())
                 .load_program_source_with_images(&client, None, &StdImages::of(vec![image]))
                 .unwrap();
             let before = work::read(Counter::ValidateSignatureRows);
             independent.engine.signature_snapshot();
-            assert!(work::read(Counter::ValidateSignatureRows) - before > 1,
-                "imported image bytes cannot convey local verifier authority");
+            assert!(
+                work::read(Counter::ValidateSignatureRows) - before > 1,
+                "imported image bytes cannot convey local verifier authority"
+            );
             "local".to_owned()
         })
     };
@@ -1416,6 +1510,10 @@ fn dictionary_literals_and_copied_fields_survive_package_images() {
 fn scalar_private_receipts_stay_outside_package_dependency_reads() {
     with_compiler_stack(|| {
         let f = Fixture::new();
-        library_image(&f, "pub const EARLY:u32=comptime 7u32\npub fn value(x:u64)->u64{let _=EARLY;x+1u64}\n").unwrap();
+        library_image(
+            &f,
+            "pub const EARLY:u32=comptime 7u32\npub fn value(x:u64)->u64{let _=EARLY;x+1u64}\n",
+        )
+        .unwrap();
     });
 }
