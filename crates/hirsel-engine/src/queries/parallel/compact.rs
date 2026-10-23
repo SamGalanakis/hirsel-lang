@@ -458,6 +458,7 @@ impl QueryEngine {
                 covered: vec![],
                 depth: None,
                 acceptance: None,
+                staged: vec![],
                 consistent: stage.consistent,
             }))
         } else {

@@ -856,3 +856,40 @@ fn enclosing_evaluations_replay_exact_staged_selections_before_body_free_adoptio
         }
     });
 }
+
+#[test]
+fn lower_hits_replay_exact_staged_values_and_preserve_completion_authority() {
+    with_compiler_stack(|| {
+        use hirsel_tir::TirProvider;
+        let source = "fn scaled[n:size](xs:Inline[u8,n])->u64{let _=xs;comptime (n*n)}\nfn value()->u64{comptime {let xs:Inline[u8,2]=[1,2];scaled(xs)}}\n";
+        let root = definition("value");
+        let store = Arc::new(store::MemStore::default());
+        let mut seed = signature_session(store.clone(), source, true);
+        let generic = seed.lower_to_tir(&definition("scaled")).unwrap();
+        let hidden = generic.value.bodies[generic.value.entry.0 as usize].rvalues.iter().find_map(|r| match r {
+            hirsel_tir::Rvalue::ReadConstant { definition, arguments } if !arguments.is_empty() => Some(definition.clone()), _ => None,
+        }).unwrap();
+        let expected = seed.lower_to_tir(&root).unwrap();
+        let mut fresh = signature_session(store.clone(), source, false);
+        fresh.adapters.modes = None; fresh.adapters.lowering = None;
+        let actual = fresh.lower_to_tir(&root).unwrap();
+        assert_eq!(actual.value.path, expected.value.path);
+        assert_eq!(fresh.lower_adapter_calls(&root), 0);
+        assert_eq!(fresh.recompute_count(&root, QueryKind::Modes), 0);
+        assert_eq!(fresh.constant_instance(&hidden, &[2]).unwrap().root.kind, hirsel_tir::ValueKind::Constant(hirsel_tir::Constant::Integer(4)));
+        assert!(fresh.constant_instance(&hidden, &[3]).is_err(), "unselected size stays absent");
+        fresh.lower_to_tir(&root).unwrap();
+        assert_eq!(fresh.lower_adapter_calls(&root), 0, "resident Lower replays the same ledger");
+        let copied = Arc::new(store::MemStore::default());
+        for (key, bytes) in store.take() {
+            store::ResultStore::put(&*copied, &key, &bytes);
+            store::ResultStore::put(&*store, &key, &bytes);
+        }
+        let mut remote = signature_session(copied, source, false);
+        remote.adapters.modes = None; remote.adapters.lowering = None;
+        assert!(remote.lower_to_tir(&root).is_err(), "producer ledger cannot transfer V completion");
+        let mut oracle = signature_session(store, source, true).with_verify_store(store::VerifyStore::Recompute);
+        oracle.register_staged_definition(&definition("scaled")).unwrap();
+        oracle.lower_to_tir(&root).unwrap();
+    });
+}

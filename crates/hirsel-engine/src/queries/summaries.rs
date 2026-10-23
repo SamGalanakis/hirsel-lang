@@ -278,6 +278,7 @@ impl QueryEngine {
                 covered: vec![],
                 depth: None,
                 acceptance: None,
+                staged: vec![],
                 consistent: true,
             }),
         );
@@ -374,6 +375,7 @@ impl QueryEngine {
                 covered: vec![],
                 depth: None,
                 acceptance: None,
+                staged: vec![],
                 consistent: true,
             }),
         );
