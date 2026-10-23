@@ -15,13 +15,13 @@ use hirsel_syntax::{
     PatternId, SiteRef, StmtId, TypeExprId, UnaryOp, Visibility,
 };
 use hirsel_tir::{
-    ArenaScopeGrant,
-    Block, BlockId, Body, BodyId, BorrowCursor, CallArgument, CallReturn, Callee, Cleanup,
-    CleanupAction, CleanupId, CleanupNode, CleanupNodeId, Constant, ConstructField, Constructor,
-    Definition, Instruction, InstructionKind, LoanId, Local, LocalId, MatchArm, MatchPattern,
-    MatchPatternId, MatchPatternKind, MatchTable, MatchTableId, Materialized, Operand,
-    OriginBindingKind, Place, PlaceId, Projection, ProtocolAssociationReceipt, Rvalue, RvalueId,
-    Scope, ScopeId, ScopedParameter, Storage, TailKind, TailSite, Terminator, ValueKind, ValueNode,
+    ArenaScopeGrant, Block, BlockId, Body, BodyId, BorrowCursor, CallArgument, CallReturn, Callee,
+    Cleanup, CleanupAction, CleanupId, CleanupNode, CleanupNodeId, Constant, ConstructField,
+    Constructor, Definition, Instruction, InstructionKind, LoanId, Local, LocalId, MatchArm,
+    MatchPattern, MatchPatternId, MatchPatternKind, MatchTable, MatchTableId, Materialized,
+    Operand, OriginBindingKind, Place, PlaceId, Projection, ProtocolAssociationReceipt, Rvalue,
+    RvalueId, Scope, ScopeId, ScopedParameter, Storage, TailKind, TailSite, Terminator, ValueKind,
+    ValueNode,
 };
 use hirsel_types::{
     Allocation, AllocationTarget, AuthoritySummary, AuthorityTerm, BinderRef, Brand,

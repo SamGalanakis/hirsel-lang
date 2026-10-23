@@ -28,8 +28,8 @@ use hirsel_types::{
 };
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-mod bit_rows;
 mod arena_scope;
+mod bit_rows;
 mod hashed {
     pub(super) type HashMap<K, V> = std::collections::HashMap<K, V, hirsel_intern::IdHasher>;
     pub(super) type HashSet<K> = std::collections::HashSet<K, hirsel_intern::IdHasher>;
@@ -51,9 +51,9 @@ mod protocol;
 mod scope_locals;
 mod scoped_transport;
 mod scratch;
+mod sealed;
 mod serialization;
 mod shared;
-mod sealed;
 mod static_data;
 mod tail;
 mod typing;
