@@ -1,4 +1,4 @@
-use crate::{index::*, pack::EpochLease};
+use crate::{index::*, pack::index_benchmark_epoch};
 use hirsel_syntax::ContentHash;
 use std::{fs, path::Path};
 
@@ -21,7 +21,7 @@ fn publish(root: &Path, entries: &[Entry]) -> PublishOutcome {
     publish_delta(
         root,
         build(root, entries).unwrap(),
-        &EpochLease(root.to_owned()),
+        &index_benchmark_epoch(root).unwrap(),
     )
     .unwrap()
 }
@@ -89,7 +89,7 @@ fn empty_drop_duplicate_and_root_mismatch_never_publish() {
         publish_delta(
             root,
             build(root, &[entry(2)]).unwrap(),
-            &EpochLease(other.path().to_owned())
+            &index_benchmark_epoch(other.path()).unwrap()
         )
         .is_err()
     );
@@ -107,7 +107,7 @@ fn stale_common_pin_writers_preserve_disjoint_updates_and_serialized_overwrite()
     let stale = load_pinned(root).unwrap();
     let a = build(root, &[entry(1)]).unwrap();
     let b = build(root, &[entry(2)]).unwrap();
-    let epoch = EpochLease(root.to_owned());
+    let epoch = index_benchmark_epoch(root).unwrap();
     published(publish_delta(root, a, &epoch).unwrap());
     let old_manifest = fs::read(root.join("index/MANIFEST")).unwrap();
     published(publish_delta(root, b, &epoch).unwrap());
@@ -243,7 +243,7 @@ fn lock_contention_is_bounded_and_live_staging_has_owner() {
     assert_eq!(unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) }, 0);
     assert_eq!(find(&load_pinned(root).unwrap(), entry(1).key), None);
     assert_eq!(
-        publish_delta(root, delta, &EpochLease(root.to_owned())).unwrap(),
+        publish_delta(root, delta, &index_benchmark_epoch(root).unwrap()).unwrap(),
         PublishOutcome::Skipped(SkipReason::Contended)
     );
     assert_eq!(compact(root, budget()).unwrap(), CompactOutcome::Deferred);
@@ -288,7 +288,7 @@ fn layer_installed_but_manifest_write_failure_never_changes_root_or_recovers_orp
         .path();
     // Fail create-new of the staged manifest after the completed layer link.
     fs::write(stage.join("manifest"), b"injected fault").unwrap();
-    assert!(publish_delta(root, delta, &EpochLease(root.to_owned())).is_err());
+    assert!(publish_delta(root, delta, &index_benchmark_epoch(root).unwrap()).is_err());
     assert_eq!(fs::read(root.join("index/MANIFEST")).unwrap(), original);
     assert!(!stage.exists());
     let pin = load_pinned(root).unwrap();

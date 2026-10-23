@@ -1,4 +1,4 @@
-use crate::{index::*, pack::EpochLease};
+use crate::{index::*, pack::index_benchmark_epoch};
 use hirsel_syntax::ContentHash;
 use std::os::{
     fd::AsRawFd,
@@ -30,7 +30,7 @@ fn write(root: &Path, entries: &[Entry]) {
         publish_delta(
             root,
             build(root, entries).unwrap(),
-            &EpochLease(root.to_owned())
+            &index_benchmark_epoch(root).unwrap()
         )
         .unwrap(),
         PublishOutcome::Published { .. }
@@ -48,7 +48,7 @@ fn child(root: &Path, mode: &str, id: u64) -> Command {
     c.args([
         "--ignored",
         "--exact",
-        "modules::races::cooperating_child",
+        "index::tests::races::cooperating_child",
         "--nocapture",
     ])
     .env("INDEX36_CHILD_ROOT", root)
@@ -131,6 +131,7 @@ fn cooperating_child() {
     if mode == "overwrite" {
         record.location.offset = id as u32 * 64;
     }
+    let epoch = index_benchmark_epoch(&root).unwrap();
     let delta = build(&root, &[record]).unwrap();
     let mut socket = UnixStream::connect(root.join("barrier")).unwrap();
     socket
@@ -142,7 +143,7 @@ fn cooperating_child() {
     assert_eq!(go, [1]);
     assert_eq!(find(&stale, record.key), None);
     assert!(matches!(
-        publish_delta(&root, delta, &EpochLease(root.clone())).unwrap(),
+        publish_delta(&root, delta, &epoch).unwrap(),
         PublishOutcome::Published { .. }
     ));
     socket.write_all(&[2]).unwrap();
