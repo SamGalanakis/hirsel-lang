@@ -134,7 +134,10 @@ impl NativeDiscoveryCache {
         source: &NativeDefinitionProduct,
         binders: &[(DefPath, Option<SiteRef>)],
     ) -> Option<Action> {
-        let lower = source.lower.as_ref().map(|v| v.reference());
+        let lower = source
+            .lower
+            .as_ref()
+            .map(|v| (v.reference(), v.observation_identity()));
         let representation = source
             .representation
             .as_ref()
@@ -151,7 +154,7 @@ impl NativeDiscoveryCache {
         ))
         .ok()?;
         Some(Action(ContentHash::of_parts(
-            "hirsel.native.discovery-action.v1",
+            "hirsel.native.discovery-action.v2",
             [bytes.as_slice()],
         )))
     }

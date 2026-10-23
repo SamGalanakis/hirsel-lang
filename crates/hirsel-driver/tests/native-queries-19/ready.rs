@@ -9,7 +9,9 @@ use std::sync::Arc;
 #[test]
 fn ready_query_keeps_c_authority_after_releasing_source_bodies() {
     with_compiler_stack(|| {
-        let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
+        let transport = Arc::new(MemStore::default());
+        let mut engine = QueryEngine::new(default_environment(), compiler_adapters())
+            .with_result_store(transport.clone());
         let file = engine
             .sources
             .add("ready-query.hir", "pub fn main()->u64{1u64}".into())
@@ -21,6 +23,17 @@ fn ready_query_keeps_c_authority_after_releasing_source_bodies() {
         let context = DiscoveryContext::of(&program).unwrap();
         let main = entry_path(&default_context());
         let body = program.definitions[&main].clone();
+        let source = engine.native_definition_product(&main).unwrap();
+        let source_observation = source
+            .lower
+            .as_ref()
+            .expect("actual source V output")
+            .observation_identity();
+        let original = hirsel_rc::sealed_source::SourceInput::capture(
+            source_observation,
+            source.source.implementation_revision,
+            body.clone(),
+        );
         let weak = Arc::downgrade(&body);
         program.definitions.clear();
         drop(input);
@@ -30,6 +43,13 @@ fn ready_query_keeps_c_authority_after_releasing_source_bodies() {
         let (instances, _) =
             hirsel_rc::instance::seed_instances(&program, &context, &mut layouts).unwrap();
         let id = instances.find(&program, &main, &Actuals::none()).unwrap();
+        let expected_source = original
+            .derive(&instances.view(id).key, &program.types, &[], Ok)
+            .unwrap();
+        assert_eq!(expected_source.witness().source, source_observation);
+        assert!(expected_source.events().is_empty());
+        assert!(expected_source.payloads().is_empty());
+        drop(original);
         let (mut instances, _) = hirsel_rc::instance::discover_instance(
             &program,
             &context,
@@ -50,7 +70,10 @@ fn ready_query_keeps_c_authority_after_releasing_source_bodies() {
             "Ready uses compact source contracts and the accepted Value only"
         );
         let table = layouts.finish();
-        let operations = program.operation_registry();
+        let unavailable = program.operation_registry();
+        let mut operations =
+            hirsel_rc::sealed_source::SourceDeclarations::new(program.operation_registry());
+        operations.insert(expected_source).unwrap();
         let manifest =
             hirsel_core_contract::Manifest::skeleton(program.operations.values().cloned());
         let inputs = hirsel_lir::validate::Inputs {
@@ -80,7 +103,6 @@ fn ready_query_keeps_c_authority_after_releasing_source_bodies() {
             !selected.is_same_or_derived_from(&key.instance.derived("sibling Ready test", &[]))
         );
         let action = Action(ContentHash::of_bytes(b"Ready complete component action"));
-        let transport = Arc::new(MemStore::default());
         let emission = transport
             .put_content(EMISSION_CONTEXT_DOMAIN, b"{}")
             .unwrap();
@@ -119,6 +141,17 @@ fn ready_query_keeps_c_authority_after_releasing_source_bodies() {
                 .record,
             product.product.record
         );
+        let unavailable_environment = hirsel_lir::validate::NativeEnvironment {
+            operations: &unavailable,
+            ..environment
+        };
+        assert!(
+            queries
+                .lookup(&key, action, &unavailable_environment)
+                .is_none(),
+            "independently expected-empty original source cannot become unavailable"
+        );
+        assert!(queries.lookup(&key, action, &environment).is_some());
         let summary_bytes = transport.get_content(product.unit_summary).unwrap();
         let keys = hirsel_lir::LayoutKeys::new(&table);
         let summary = hirsel_lir::fragment::UnitSummary::decode(
