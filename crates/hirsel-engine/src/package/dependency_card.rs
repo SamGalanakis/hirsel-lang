@@ -503,7 +503,6 @@ impl LoadedProgram {
                     .len()
             };
             let token_count: usize = reached.iter().map(|p| declarations[p].tokens).sum();
-            let prechecked = program.engine.imaged(&id);
             let exposure: Vec<_> = exposures
                 .iter()
                 .filter(|(p, _)| belongs(p))
@@ -526,8 +525,8 @@ impl LoadedProgram {
                     "units":{"total": graph.packages[&id].sources.iter().filter(|(_,c)| c.modules.starts_with(&modules)).count(), "reached":units(&reached)},
                     "transitive_dependencies":dependencies,
                     "cost":{"basis":"source_token_work_estimate", "reached_source_tokens":token_count,
-                        "check_source_tokens":if prechecked {0} else {token_count}, "lower_source_tokens":if prechecked {0} else {token_count}, "native_build_source_tokens":token_count,
-                        "prechecked_definitions":if prechecked {reached.len()} else {0},
+                        "check_source_tokens":token_count, "lower_source_tokens":token_count, "native_build_source_tokens":token_count,
+                        "prechecked_definitions":0,
                         "check_ms":Value::Null,"build_ms":Value::Null}},
                 "exposure":exposure,
                 "determinism":{"whole_public_api":whole_safety,"reached_by_you":reached_safety,

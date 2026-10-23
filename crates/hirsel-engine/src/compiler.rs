@@ -20,8 +20,7 @@ impl FormattedSource {
 pub struct Compiler {
     owned_engines: bool,
     phases: fn() -> Arc<dyn Phases>,
-    /// Digest of the compiler's own sources; std images record the one they
-    /// were checked under (docs/building.md, "The std image").
+    /// Digest of the compiler's own sources, bound by ordinary query products.
     identity: [u8; 32],
     /// Whether the sessions this compiler starts run V.
     verify: Verify,
@@ -81,7 +80,7 @@ impl Compiler {
     pub fn verify(&self) -> Verify {
         self.verify
     }
-    /// Compile-time limits are part of every image's checked inputs.
+    /// Compile-time limits are explicit query inputs.
     pub const fn with_comptime_limits(mut self, limits: hirsel_interp::Limits) -> Self {
         self.comptime_limits = Some(limits);
         self
@@ -148,7 +147,7 @@ impl Compiler {
         Ok((engine, file))
     }
     /// Index an explicit package and its dependency declarations without an entry
-    /// or any body checking, compile-time evaluation or image loading. The
+    /// or any body checking or compile-time evaluation. The
     /// returned engine retains this compiler's session policies for later queries.
     pub fn load_package_declarations(
         &self,
@@ -167,33 +166,20 @@ impl Compiler {
         path: &Path,
         replacement: Option<&str>,
     ) -> Result<LoadedProgram, ToolError> {
-        self.load_program_source_with_images(path, replacement, &StdImages::toolchain())
-    }
-    /// Load adopting exactly `images` (`StdImages::none()` checks every
-    /// package from source).
-    pub fn load_program_source_with_images(
-        &self,
-        path: &Path,
-        replacement: Option<&str>,
-        images: &StdImages,
-    ) -> Result<LoadedProgram, ToolError> {
-        crate::package::load_program_source_with_images(
+        crate::package::load_program_source(
             self,
             path,
             replacement,
-            images,
             crate::package::EntrySelection::Launch,
         )
     }
-    /// Load exclusively from explicit input observations and immutable image
-    /// handles. Discovery closes the package/input set without source parsing,
+    /// Load exclusively from explicit input observations. Discovery closes the package/input set without source parsing,
     /// so a syntax-error base can still be repaired. Manifest errors remain
-    /// loader errors. Unlike ordinary loading, this never rebuilds an image.
+    /// loader errors. Query products use the configured ordinary provider.
     pub fn load_program_inputs(
         &self,
         path: &Path,
         inputs: &dyn crate::loader_inputs::LoaderInputs,
-        images: &StdImages,
         parse_sources: bool,
     ) -> Result<LoadedProgram, ToolError> {
         crate::package::load_program_inputs(
@@ -202,31 +188,22 @@ impl Compiler {
             inputs,
             crate::package::Loading {
                 replacement: None,
-                images,
                 entry_selection: crate::package::EntrySelection::Launch,
                 parse_sources,
-                rebuild_images: false,
             },
         )
     }
     /// Load sources for checking, accepting a package with no launch entry.
     pub fn load_check_package(&self, path: &Path) -> Result<LoadedProgram, ToolError> {
-        crate::package::load_program_source_with_images(
-            self,
-            path,
-            None,
-            &StdImages::toolchain(),
-            crate::package::EntrySelection::Check,
-        )
+        crate::package::load_program_source(self, path, None, crate::package::EntrySelection::Check)
     }
     /// Load an explicit test package without requiring a launch entry. The root
     /// package's sources are checked in full; no function is selected as main.
     pub fn load_test_package(&self, manifest: &Path) -> Result<LoadedProgram, ToolError> {
-        crate::package::load_program_source_with_images(
+        crate::package::load_program_source(
             self,
             manifest,
             None,
-            &StdImages::toolchain(),
             crate::package::EntrySelection::Test,
         )
     }
@@ -244,11 +221,10 @@ impl Compiler {
         compiler.retention = crate::memo::Retention::Batch;
         compiler.hold_bytes = Some(0);
         with_compiler_stack(|| {
-            let mut program = crate::package::load_program_source_with_images(
+            let mut program = crate::package::load_program_source(
                 &compiler,
                 manifest,
                 None,
-                &StdImages::none(),
                 crate::package::EntrySelection::Check,
             )?;
             let checked = program
@@ -287,67 +263,6 @@ impl Compiler {
             }
             Ok(())
         })
-    }
-    /// Write to `output` the std image of the package `manifest` describes,
-    /// checked freshly as the only dependency of an empty program
-    /// (docs/building.md, "The std image"). Readers never see a partial image.
-    pub fn image_package(&self, manifest: &Path, output: &Path) -> Result<(), ToolError> {
-        // Programs trust an image's TIR as validated.
-        if self.verify == Verify::Off {
-            return Err(ToolError::Runtime("an image always runs V".into()));
-        }
-        let manifest = std::fs::canonicalize(manifest)?;
-        let value: serde_json::Value = serde_json::from_slice(&std::fs::read(&manifest)?)
-            .map_err(|e| ToolError::Runtime(format!("image: {}: {e}", manifest.display())))?;
-        let package = &value["package"];
-        let (Some(name), Some(version)) = (package["name"].as_str(), package["version"].as_str())
-        else {
-            return Err(ToolError::Runtime(format!(
-                "image: {} names no package",
-                manifest.display()
-            )));
-        };
-        let package = hirsel_syntax::PackageId {
-            name: name.into(),
-            version: version.into(),
-        };
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_nanos());
-        let dir = std::env::temp_dir().join(format!("hirsel-image-{}-{nanos}", std::process::id()));
-        std::fs::create_dir_all(&dir)?;
-        let program = dir.join("image.hir");
-        let result = (|| {
-            std::fs::write(&program, "pub fn main() -> Result[(), ()] {\n  Ok(())\n}\n")?;
-            let sidecar = serde_json::json!({
-                "schema": 1,
-                "package": {"name": "hirsel_image", "version": "1"},
-                "sources": [{"path": "image.hir", "module": []}],
-                "dependencies": [{
-                    "manifest": manifest,
-                    "package": {"name": name, "version": version},
-                    "expose": [],
-                }],
-                "entry": {"module": [], "name": "main"},
-            });
-            std::fs::write(dir.join("image.hir.json"), sidecar.to_string())?;
-            // Records spill to a scratch file beside the program, so the
-            // checked package is never held in memory.
-            let spill = std::fs::File::options()
-                .read(true)
-                .write(true)
-                .create_new(true)
-                .open(dir.join("image.records"))?;
-            let bytes = with_compiler_stack(|| {
-                let mut loaded =
-                    self.load_program_source_with_images(&program, None, &StdImages::none())?;
-                loaded.image(&package, spill)
-            })?;
-            hirsel_image::write_atomically(output, &bytes)?;
-            Ok(())
-        })();
-        let _ = std::fs::remove_dir_all(&dir);
-        result
     }
     /// A partial pipeline can produce rejection diagnostics, but never a clean acceptance.
     pub fn check_path(&self, path: &Path) -> Result<CheckOutput, ToolError> {
@@ -633,9 +548,6 @@ pub(crate) mod tests {
         assert!(engine.staged_constants.is_empty());
         assert_eq!(engine.generated_sources().count(), 0);
         assert!(engine.last_comptime_limit.is_none());
-        for (_, context) in &package.files {
-            assert!(!engine.imaged(&context.package));
-        }
     }
 
     #[test]

@@ -209,13 +209,13 @@ def native_tool_inputs():
         for name in ["arm", "qemu", "valgrind", "kit", "glibc_floor"]
     }
 
-def hirsel_test(name, crate, crate_root, srcs, features, deps, manifest_dir, package_name, version, edition, build_script = None, bin_exes = {}, data = [], runtime_archives = None, image = None, products = None, shards = 1, costs = None, opt_level = None, seeded = False, skips = []):
+def hirsel_test(name, crate, crate_root, srcs, features, deps, manifest_dir, package_name, version, edition, build_script = None, bin_exes = {}, data = [], runtime_archives = None, products = None, shards = 1, costs = None, opt_level = None, seeded = False, skips = []):
     """A libtest harness (`rustc --test`) and the test that runs it.
 
     `bin_exes` are the package's binaries, as Cargo's CARGO_BIN_EXE_<name>.
     `data` are the files the test reads at run time; `runtime_archives` the
-    native runtime archives it links programs with; `image` the std image its
-    programs load (HIRSEL_IMAGE). `shards` splits
+    native runtime archives it links programs with; `products` the ordinary
+    std query products its programs load. `shards` splits
     the cases over that many test targets `<name>-shard-<i>`, run in parallel,
     balanced by the measured seconds per case in the `costs` table.
     `seeded` binaries draw random cases and run under `TEST_SEED`.
@@ -246,9 +246,8 @@ def hirsel_test(name, crate, crate_root, srcs, features, deps, manifest_dir, pac
         bin_exes = bin_exes,
         bin_exe_dir = bin_exe_dir,
         runtime_archives = runtime_archives,
-        image = image,
-        # Large installed-product fixtures are required only by their selected tests.
-        products = products if read_root_config("hirsel", "test_products", "false") == "true" else None,
+        products = products,
+        product_definitions = read_root_config("hirsel", "product_definitions", ""),
         llvm = "root//tools/buck2/native-toolchain:llvm",
         native_tools = native_tool_inputs() if runtime_archives else {},
         cwd = manifest_dir,
@@ -285,6 +284,7 @@ def _rust_test_impl(ctx):
         "HIRSEL_TEST_TMPDIR": TEST_TMPDIR,
         # The same effective request as the executor, including focus mode.
         "HIRSEL_TEST_CPUS": ctx.attrs.request[0],
+        "HIRSEL_TEST_PRODUCT_DEFINITIONS": ctx.attrs.product_definitions,
         "LLVM_SYS_231_PREFIX": cmd_args(llvm),
         # A pool worker's action supervisor can attribute a test run's CPU to
         # these Bazel test variables. They are stable per
@@ -324,14 +324,11 @@ def _rust_test_impl(ctx):
         archives = ctx.attrs.runtime_archives[DefaultInfo].default_outputs[0]
         inputs.append(archives)
         env["HIRSEL_RUNTIME_ARCHIVES"] = cmd_args(archives)
-    if ctx.attrs.image:
-        image = ctx.attrs.image[DefaultInfo].default_outputs[0]
-        inputs.append(image)
-        env["HIRSEL_IMAGE"] = cmd_args(image)
     if ctx.attrs.products:
         products = ctx.attrs.products[DefaultInfo].default_outputs[0]
         inputs.append(products)
         env["HIRSEL_TEST_PRODUCTS"] = cmd_args(products)
+        env["HIRSEL_PRODUCTS"] = cmd_args(products)
     if ctx.attrs.native_selection:
         selection = ctx.attrs.native_selection[DefaultInfo].default_outputs[0]
         inputs.append(selection)
@@ -377,8 +374,8 @@ _rust_test = rule(
         # A pool run's `[cpu, memory_kb, cpu_class]`, for its executor (platforms.bzl).
         "request": attrs.list(attrs.string(), default = []),
         "runtime_archives": attrs.option(attrs.dep(), default = None),
-        "image": attrs.option(attrs.dep(), default = None),
         "products": attrs.option(attrs.dep(), default = None),
+        "product_definitions": attrs.string(default = ""),
         "seed": attrs.string(default = ""),
         "shard_index": attrs.int(default = 0),
         "shards": attrs.int(default = 0),
@@ -407,7 +404,7 @@ def selected_paths(key, index):
         return None
     return slices[index - 1].split("|")
 
-def hirsel_command_test(name, binary, args, data, cwd, runtime_archives = None, image = None, full = False, native_selection = None, changed_native = False, selected = None, measured_as = None):
+def hirsel_command_test(name, binary, args, data, cwd, runtime_archives = None, products = None, full = False, native_selection = None, changed_native = False, selected = None, measured_as = None):
     """A gate stage as a test: `binary args...` run from its package directory `cwd`.
 
     On the pool its result is cached by its inputs, so an unchanged corpus and
@@ -440,7 +437,7 @@ def hirsel_command_test(name, binary, args, data, cwd, runtime_archives = None, 
             slices = ["__no_changed_native_programs__"]
         for index, part in enumerate(slices):
             shard_name = name if len(slices) == 1 else name + "-shard-" + str(index + 1)
-            _native_changed_test(shard_name, binary, args, data, cwd, runtime_archives, image,
+            _native_changed_test(shard_name, binary, args, data, cwd, runtime_archives, products,
                                  native_selection, measured_as or name, part.split("|"))
         return
     _rust_test(
@@ -452,7 +449,7 @@ def hirsel_command_test(name, binary, args, data, cwd, runtime_archives = None, 
         llvm = "root//tools/buck2/native-toolchain:llvm",
         native_tools = native_tool_inputs() if runtime_archives else {},
         runtime_archives = runtime_archives,
-        image = image,
+        products = products,
         labels = ["gate"],
         exec_compatible_with = _test_platform(measured_as or _stage(name)),
         pool = not TESTS_ON_HOST,
@@ -463,7 +460,7 @@ def hirsel_command_test(name, binary, args, data, cwd, runtime_archives = None, 
         visibility = ["PUBLIC"],
     )
 
-def _native_changed_test(name, binary, args, data, cwd, runtime_archives, image, native_selection, measured_as, filters):
+def _native_changed_test(name, binary, args, data, cwd, runtime_archives, products, native_selection, measured_as, filters):
     _rust_test(
         name = name,
         harness = binary,
@@ -473,7 +470,7 @@ def _native_changed_test(name, binary, args, data, cwd, runtime_archives, image,
         llvm = "root//tools/buck2/native-toolchain:llvm",
         native_tools = native_tool_inputs() if runtime_archives else {},
         runtime_archives = runtime_archives,
-        image = image,
+        products = products,
         labels = ["gate"],
         exec_compatible_with = _test_platform(measured_as),
         pool = not TESTS_ON_HOST,
@@ -488,7 +485,7 @@ def _script_binary_impl(ctx):
 
 _script_binary = rule(impl = _script_binary_impl, attrs = {"script": attrs.source()})
 
-def hirsel_script_test(name, script, data, runtime_archives = None, full = True, args = [], bin_exes = {}, image = None, production = False, files_env = {}, sanitizer = None):
+def hirsel_script_test(name, script, data, runtime_archives = None, full = True, args = [], bin_exes = {}, products = None, production = False, files_env = {}, sanitizer = None):
     """A script harness with the same hermetic inputs as native Rust tests.
     `files_env` names further input files as environment variables."""
     if full and not FULL_GATE:
@@ -500,7 +497,7 @@ def hirsel_script_test(name, script, data, runtime_archives = None, full = True,
     _rust_test(
         name = name, harness = ":" + binary, args = args, data = data, cwd = ".",
         bin_exes = {} if production else bin_exes, release_bin_exes = bin_exes if production else {},
-        bin_exe_dir = BIN_EXE_DIR + "/" + name, image = image, files_env = files_env,
+        bin_exe_dir = BIN_EXE_DIR + "/" + name, products = products, files_env = files_env,
         llvm = "root//tools/buck2/native-toolchain:llvm",
         native_tools = native_tool_inputs() if runtime_archives else {},
         runtime_archives = runtime_archives, labels = ["gate"],
@@ -522,7 +519,7 @@ def _link_hosts_local_impl(ctx):
         "LLVM_SYS_231_PREFIX": cmd_args(tools["llvm"]),
         "HIRSEL_LINK_KIT": cmd_args(tools["kit"]),
         "HIRSEL_RUNTIME_ARCHIVES": cmd_args(tools["archives"]),
-        "HIRSEL_IMAGE": cmd_args(tools["image"]),
+        "HIRSEL_PRODUCTS": cmd_args(tools["products"]),
         "HIRSEL_QEMU_AARCH64": cmd_args(tools["qemu"], "/qemu-aarch64", delimiter = ""),
         "HIRSEL_AARCH64_SYSROOT": cmd_args(tools["arm"], "/aarch64-none-linux-gnu/libc", delimiter = ""),
     }
@@ -553,7 +550,7 @@ def hirsel_link_hosts_test(name, listing, data):
             "qemu": "root//tools/buck2/native-toolchain:qemu",
             "arm": "root//tools/buck2/native-toolchain:arm",
             "archives": "//:hirsel-rt-archives",
-            "image": "//:hirsel-std-image",
+            "products": "//:hirsel-std-products",
         },
         exec_compatible_with = ["root//tools/buck2:host"], visibility = ["PUBLIC"],
     )
@@ -569,66 +566,13 @@ def hirsel_link_hosts_test(name, listing, data):
         data = data + [listing], cwd = ".",
         llvm = "root//tools/buck2/native-toolchain:llvm",
         native_tools = native_tool_inputs(), runtime_archives = "//:hirsel-rt-archives",
-        image = "//:hirsel-std-image", labels = ["gate"],
+        products = "//:hirsel-std-products", labels = ["gate"],
         exec_compatible_with = _test_platform(name), pool = not TESTS_ON_HOST,
         request = _request(name),
         visibility = ["PUBLIC"],
     )
 
-# The std image's memory bound, a regression guard (docs/building.md, "The std
-# image"). The writer spills each definition's record as soon as its source is
-# checked and then releases its bodies, so its peak follows the largest
-# definition rather than std's size. Measured on 2026-10-21: 923 MiB peak for
-# std's sources under tools/capped. An image write that reaches it is a
-# regression to find, not a bound to raise.
-IMAGE_MEMORY_LIMIT = "2G"
-
-def _image_impl(ctx):
-    # The package's sources at their repository paths, as its manifest names them.
-    tree = ctx.actions.symlinked_dir("package", {f.short_path: f for f in ctx.attrs.srcs})
-    image = ctx.actions.declare_output(ctx.label.name + ".image")
-    scratch = ctx.actions.declare_output("scratch", dir = True)
-    script = ctx.actions.write(
-        "image.sh",
-        [
-            "set -eu",
-            'mkdir -p "$3"; TMPDIR="$(cd "$3" && pwd)" "$1" image "$2" -o "$4"',
-        ],
-    )
-    ctx.actions.run(
-        cmd_args(
-            "/bin/sh",
-            script,
-            ctx.attrs.hirsel[RunInfo],
-            cmd_args(tree, format = "{}/" + ctx.attrs.manifest),
-            scratch.as_output(),
-            image.as_output(),
-            hidden = ctx.attrs._llvm_libraries[DefaultInfo].default_outputs,
-        ),
-        env = {"HIRSEL_MEMORY_LIMIT": IMAGE_MEMORY_LIMIT},
-        category = "image",
-    )
-    return [DefaultInfo(default_output = image)]
-
-# `hirsel image <manifest>`: the package checked once into an image, for every
-# test and tool run that selects it (docs/building.md, "The std image").
-_hirsel_image = rule(
-    impl = _image_impl,
-    attrs = {
-        "hirsel": attrs.exec_dep(providers = [RunInfo]),
-        "manifest": attrs.string(),
-        "srcs": attrs.list(attrs.source()),
-        "_llvm_libraries": attrs.dep(default = "toolchains//:llvm-libraries"),
-    },
-)
-
-def hirsel_image(name, hirsel, **kwargs):
-    # exec_dep otherwise loses the caller's profile on the pool platform.
-    # Pin the executable to the same configuration as the test harnesses and
-    # CARGO_BIN_EXE tools, independent of the image action's reservation.
-    compiler = name + "-compiler"
-    native.configured_alias(name = compiler, actual = hirsel, platform = "root//tools/buck2:checked")
-    _hirsel_image(name = name, hirsel = ":" + compiler, **kwargs)
+PRODUCT_MEMORY_LIMIT = "2G"
 
 def _products_impl(ctx):
     tree = ctx.actions.symlinked_dir("package", {f.short_path: f for f in ctx.attrs.srcs})
@@ -643,7 +587,7 @@ def _products_impl(ctx):
                  cmd_args(tree, format = "{}/" + ctx.attrs.manifest),
                  scratch.as_output(), products.as_output(),
                  hidden = ctx.attrs._llvm_libraries[DefaultInfo].default_outputs),
-        env = {"HIRSEL_MEMORY_LIMIT": IMAGE_MEMORY_LIMIT, "HIRSEL_JOBS": "1", "HIRSEL_DAEMON": "off", "HIRSEL_RESULTS": "none@1", "HIRSEL_IMAGE": "none"},
+        env = {"HIRSEL_MEMORY_LIMIT": PRODUCT_MEMORY_LIMIT, "HIRSEL_JOBS": "1", "HIRSEL_DAEMON": "off", "HIRSEL_RESULTS": "none@1"},
         category = "products",
     )
     return [DefaultInfo(default_output = products)]
@@ -663,41 +607,12 @@ def hirsel_products(name, hirsel, **kwargs):
     native.configured_alias(name = compiler, actual = hirsel, platform = "root//tools/buck2:checked")
     _hirsel_products(name = name, hirsel = ":" + compiler, exec_compatible_with = [budget_constraint(pool_budget_name(*PRECHECK_REQUEST))], **kwargs)
 
-def _std_objects_impl(ctx):
-    tree = ctx.actions.symlinked_dir("package", {f.short_path: f for f in ctx.attrs.srcs})
-    objects = ctx.actions.declare_output("hirsel-std.objects", dir = True)
-    ctx.actions.run(
-        cmd_args(ctx.attrs.hirsel[RunInfo], "seed-objects",
-                 cmd_args(tree, format = "{}/" + ctx.attrs.manifest),
-                 "-o", objects.as_output(),
-                 hidden = ctx.attrs._llvm_libraries[DefaultInfo].default_outputs),
-        env = {"HIRSEL_MEMORY_LIMIT": IMAGE_MEMORY_LIMIT, "HIRSEL_STD_OBJECTS": "none"},
-        category = "std_objects",
-    )
-    return [DefaultInfo(default_output = objects)]
-
-_hirsel_std_objects = rule(
-    impl = _std_objects_impl,
-    attrs = {
-        "hirsel": attrs.exec_dep(providers = [RunInfo]),
-        "manifest": attrs.string(),
-        "srcs": attrs.list(attrs.source()),
-        "_llvm_libraries": attrs.dep(default = "toolchains//:llvm-libraries"),
-    },
-)
-
-def hirsel_std_objects(name, hirsel, **kwargs):
-    compiler = name + "-compiler"
-    native.configured_alias(name = compiler, actual = hirsel, platform = "root//tools/buck2:checked")
-    _hirsel_std_objects(name = name, hirsel = ":" + compiler, exec_compatible_with = [budget_constraint(pool_budget_name(*PRECHECK_REQUEST))], **kwargs)
-
 def _toolchain_bundle_impl(ctx):
     # Copy the executable: a symlink would make current_exe resolve outside the
-    # bundle, away from the sibling image it discovers automatically.
+    # bundle, away from the sibling ordinary products it discovers automatically.
     bundle = ctx.actions.copied_dir("hirsel-toolchain", {
         "hirsel": ctx.attrs.hirsel[DefaultInfo].default_outputs[0],
-        "hirsel-std.image": ctx.attrs.image[DefaultInfo].default_outputs[0],
-        "hirsel-std.objects": ctx.attrs.objects[DefaultInfo].default_outputs[0],
+        "hirsel-std.products": ctx.attrs.products[DefaultInfo].default_outputs[0],
         "stdlib/std@1": ctx.actions.copied_dir("std@1", {src.short_path.removeprefix("stdlib/std@1/"): src for src in ctx.attrs.std}),
     })
     return [
@@ -709,8 +624,7 @@ hirsel_toolchain_bundle = rule(
     impl = _toolchain_bundle_impl,
     attrs = {
         "hirsel": attrs.dep(),
-        "image": attrs.dep(),
-        "objects": attrs.dep(),
+        "products": attrs.dep(),
         "std": attrs.list(attrs.source()),
     },
 )

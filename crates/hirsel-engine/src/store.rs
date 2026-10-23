@@ -576,3 +576,10 @@ pub fn store_by_name(
 
 #[cfg(test)]
 mod tests;
+
+/// Release shared result handles when reporting measured compiler memory.
+pub fn release_shared_caches() {
+    if hirsel_intern::memory::metered() {
+        hirsel_intern::memory::released("result store: mem@1", MemStore::shared().take());
+    }
+}

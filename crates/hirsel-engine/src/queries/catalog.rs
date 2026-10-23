@@ -431,7 +431,7 @@ impl QueryEngine {
             return result.as_ref().map(|_| ()).map_err(Clone::clone);
         }
         if self.catalog.files.contains_key(&file) {
-            self.materialize_catalog_file(file)?;
+            self.materialize_source(file)?;
             self.catalog.candidates.retain(|_, candidates| {
                 candidates.retain(|candidate| candidate.file != file);
                 !candidates.is_empty()
@@ -639,7 +639,7 @@ impl QueryEngine {
         self.published_manifest = Some(revision);
         self.retire_snapshot();
     }
-    pub(super) fn materialize_catalog(&mut self, path: &DefPath) -> Result<(), QueryError> {
+    pub(crate) fn materialize(&mut self, path: &DefPath) -> Result<(), QueryError> {
         let files: BTreeSet<_> = self
             .catalog
             .candidates
@@ -649,11 +649,11 @@ impl QueryEngine {
             .map(|c| c.file)
             .collect();
         for file in files {
-            self.materialize_catalog_file(file)?;
+            self.materialize_source(file)?;
         }
         Ok(())
     }
-    pub(super) fn materialize_catalog_file(&mut self, file: FileId) -> Result<(), QueryError> {
+    pub(crate) fn materialize_source(&mut self, file: FileId) -> Result<(), QueryError> {
         let Some(context) = self.catalog.files.get(&file).cloned() else {
             return Ok(());
         };
@@ -747,7 +747,7 @@ impl QueryEngine {
             .map(|(p, _)| p.clone())
             .collect();
         for path in &affected {
-            self.materialize_catalog(path)?;
+            self.materialize(path)?;
         }
         self.catalog.candidates.retain(|_, candidates| {
             candidates.retain(|c| !old.contains(&c.file));
@@ -843,5 +843,20 @@ mod tests {
                 assert_eq!(engine.work.parsed_definitions, 0);
             }
         });
+    }
+}
+
+impl QueryEngine {
+    pub(crate) fn declared(&self, path: &DefPath) -> bool {
+        self.items.contains_key(path) || self.catalog.body(path).is_some()
+    }
+    pub(crate) fn source_paths(&self) -> Vec<DefPath> {
+        self.items
+            .keys()
+            .cloned()
+            .chain(self.catalog.paths().cloned())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
     }
 }

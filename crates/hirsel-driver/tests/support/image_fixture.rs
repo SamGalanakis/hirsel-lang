@@ -1,5 +1,4 @@
-//! The image tests' fixture: a temporary directory of packages and loading
-//! with a chosen set of std images.
+//! Temporary packages loaded through the ordinary product provider.
 use hirsel_driver::*;
 use hirsel_engine::*;
 use hirsel_syntax::PackageId;
@@ -13,7 +12,7 @@ impl Fixture {
     pub fn new() -> Self {
         static NEXT: AtomicU64 = AtomicU64::new(0);
         let dir = std::env::temp_dir().join(format!(
-            "hirsel-image-test-{}-{}",
+            "hirsel-products-test-{}-{}",
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
@@ -62,13 +61,35 @@ pub fn std_manifest() -> PathBuf {
         .canonicalize()
         .unwrap()
 }
-pub fn load(path: &Path, images: &StdImages) -> LoadedProgram {
-    load_program_source_with_images(path, None, images).unwrap()
+/// Load with an optional ordinary product root and a fresh local authority.
+pub fn load(path: &Path, products: Option<&Path>) -> LoadedProgram {
+    let store: std::sync::Arc<dyn store::ResultStore> = match products {
+        Some(products) => {
+            static NEXT: AtomicU64 = AtomicU64::new(0);
+            let local = products
+                .parent()
+                .unwrap()
+                .join(format!("reader-{}", NEXT.fetch_add(1, Ordering::Relaxed)));
+            std::sync::Arc::new(
+                store::DirStore::new(local).with_read_only_root(products.to_path_buf()),
+            )
+        }
+        None => std::sync::Arc::new(store::NoneStore),
+    };
+    COMPILER
+        .clone()
+        .with_config(CompileConfig {
+            store,
+            jobs: hirsel_intern::jobs::Jobs::new(1),
+            ..CompileConfig::for_memory_cap(None)
+        })
+        .load_program(path)
+        .unwrap()
 }
-/// The toolchain's std image: Buck2 writes it once for all tests; Cargo users
-/// write it with the documented `hirsel image` command and set HIRSEL_IMAGE.
-pub fn std_image() -> std::sync::Arc<StdImage> {
-    let path =
-        std::env::var_os("HIRSEL_IMAGE").expect("set HIRSEL_IMAGE to the toolchain's std image");
-    StdImage::open(Path::new(&path)).unwrap()
+#[allow(dead_code)]
+pub fn std_products() -> PathBuf {
+    std::env::var_os("HIRSEL_TEST_PRODUCTS")
+        .or_else(|| std::env::var_os("HIRSEL_PRODUCTS"))
+        .map(PathBuf::from)
+        .expect("the harness supplies ordinary std products")
 }

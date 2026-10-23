@@ -40,17 +40,7 @@ pub(super) fn serve(
     // One active candidate consumes the entire existing per-definition budget.
     // NoneStore bounds store retention; no unbounded shared MemStore is added.
     config.store = std::sync::Arc::new(hirsel_engine::store::NoneStore);
-    let images = std::env::var_os("HIRSEL_IMAGE")
-        .map(PathBuf::from)
-        .or_else(|| {
-            std::env::current_exe()
-                .ok()
-                .map(|p| p.with_file_name("hirsel-std.image"))
-        })
-        .and_then(|path| hirsel_engine::StdImage::open(&path).ok())
-        .into_iter()
-        .collect();
-    let workspace = CandidateWorkspace::new(config, images, Default::default(), Limits::default())
+    let workspace = CandidateWorkspace::new(config, Default::default(), Limits::default())
         .map_err(|_| ())?;
     let mut connection = Connection::new(workspace, root.to_owned()).map_err(|_| ())?;
     let mut value = first;

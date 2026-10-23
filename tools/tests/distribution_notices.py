@@ -32,8 +32,8 @@ class Notices(unittest.TestCase):
         self.bundle = self.root / 'bundle'
         self.bundle.mkdir()
         (self.bundle / 'hirsel').write_bytes(b'compiler object bytes')
-        (self.bundle / 'hirsel-std.objects').mkdir()
-        (self.bundle / 'hirsel-std.objects/std.o').write_bytes(b'std object bytes')
+        (self.bundle / 'hirsel-std.products').mkdir()
+        (self.bundle / 'hirsel-std.products/query-product').write_bytes(b'ordinary query bytes')
         self.home = self.root / 'cargo'
         self.crate = self.home / 'registry/cache/test/example-1.0.crate'
         self.crate.parent.mkdir(parents=True)
@@ -46,7 +46,7 @@ class Notices(unittest.TestCase):
                             manifest_path='/irrelevant/cache/example-1.0/Cargo.toml')
         self.metadata = dict(packages=[self.package])
         self.write_lock()
-        self.sources = dict(root='root//:compiler', scope='fixture', bundle_entries=['hirsel', 'hirsel-std.objects'],
+        self.sources = dict(root='root//:compiler', scope='fixture', bundle_entries=['hirsel', 'hirsel-std.products'],
                             rust_lock='rust-pin.json', rust_tree='rust',
                             required_texts={}, adapted_source_notices=['third-party/NOTICES.md'], external=[])
         self.graph = {

@@ -677,7 +677,6 @@ dependencies = [
  "hirsel-fmt",
  "hirsel-graph",
  "hirsel-guard",
- "hirsel-image",
  "hirsel-intern",
  "hirsel-interp",
  "hirsel-lexer",
@@ -741,21 +740,6 @@ dependencies = [
  "hirsel-guard",
  "hirsel-lir",
  "hirsel-syntax",
-]
-
-[[package]]
-name = "hirsel-image"
-version = "0.1.0"
-dependencies = [
- "bincode",
- "hirsel-guard",
- "hirsel-intern",
- "hirsel-span",
- "hirsel-syntax",
- "hirsel-types",
- "libc",
- "serde",
- "tempfile",
 ]
 
 [[package]]

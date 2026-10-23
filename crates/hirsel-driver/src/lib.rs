@@ -8,7 +8,7 @@ hirsel_guard::install!();
 
 use hirsel_engine::{
     CheckOutput, Compiler, DefinitionQueries, LoadedProgram, NotImplemented, PhaseAdapters,
-    RunOutcome, SimulationConfig, StdImages, ToolError,
+    RunOutcome, SimulationConfig, ToolError,
 };
 pub mod api_index;
 pub mod candidate;
@@ -43,14 +43,6 @@ pub fn load_program_source(
     replacement: Option<&str>,
 ) -> Result<LoadedProgram, ToolError> {
     COMPILER.load_program_source(path, replacement)
-}
-/// Load adopting exactly `images` (`StdImages::none()` checks every package from source).
-pub fn load_program_source_with_images(
-    path: &Path,
-    replacement: Option<&str>,
-    images: &StdImages,
-) -> Result<LoadedProgram, ToolError> {
-    COMPILER.load_program_source_with_images(path, replacement, images)
 }
 /// A partial pipeline can produce rejection diagnostics, but never a clean acceptance.
 pub fn check_path(path: &Path) -> Result<CheckOutput, ToolError> {

@@ -869,9 +869,7 @@ impl QueryEngine {
         path: &DefPath,
     ) -> Result<EvaluatedConstant, QueryError> {
         self.prepare_materialization_environment();
-        if let Some(value) = self.image_constant(path) {
-            return Ok(value);
-        }
+
         if self.s1.is_empty() {
             self.last_comptime_limit = None;
         }
@@ -906,13 +904,7 @@ impl QueryEngine {
         path: &DefPath,
         reference: Span,
     ) -> Result<EvaluatedConstant, QueryError> {
-        if let Some(value) = self.image_constant(path) {
-            self.depth_admit(&value.depth, reference)?;
-            self.merge_execution(&value.executed);
-            self.merge_evaluation_validation(&value);
-            self.depth_requested(&value.depth, reference);
-            return Ok(value);
-        }
+
         if let Some(value) = self.registry_dictionary_value(path)? {
             return Ok(EvaluatedConstant {
                 value,
@@ -1615,7 +1607,6 @@ impl QueryEngine {
         let roots: Vec<_> = self
             .items
             .iter()
-            .filter(|(path, _)| !self.imaged(&path.0.package))
             .filter_map(|(path, items)| {
                 items
                     .first()
@@ -1745,14 +1736,7 @@ impl QueryEngine {
                         }
                         // An image is closed over its own package graph. Without
                         // staged declarations there, its calls need no new walk.
-                        if self.imaged(&callee.0.package)
-                            && !self
-                                .staged_constants
-                                .values()
-                                .any(|constant| constant.owner.0.package == callee.0.package)
-                        {
-                            continue;
-                        }
+
                         (callee, NameSite::Item, BTreeMap::new())
                     }
                     Some(_) => (path.clone(), call.binder.site, bindings.clone()),

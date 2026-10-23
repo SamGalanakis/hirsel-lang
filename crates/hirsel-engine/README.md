@@ -26,7 +26,7 @@ holds a file offset, so no cached signature, resolution, body, mode result,
 TIR or diagnostic is rewritten after an edit: inserting or removing other items,
 or moving an item to another file, leaves every memo of the item in place.
 Items removed from one file wait in a detached pool until the next parse, so a
-cross-file move keeps the same syntax. Package images, imaged records and
+cross-file move keeps the same syntax. Ordinary stored products and
 artifacts carry anchors as (source ordinal, base) and are placed on load, never
 rebased.
 
@@ -70,7 +70,7 @@ report the same diagnostics; the conformance harness checks each corpus file
 under both and requires them equal. `Verify` is the session's one V switch:
 `Compiler::with_verify` sets it, and `QueryEngine::run_v` is the only place V
 runs or is skipped. Sessions without V use their own shared package cache, and
-`image_package` refuses them.
+`precompute_package` refuses them.
 
 `QueryEngine::semantic_program_revision(entry)` produces the shared run-config
 `ProgramRevision` for interpreter, heap and native launch. It follows checked
@@ -94,7 +94,7 @@ executes must be in the program its identity names.
 its LANG-6 definition hash, and each definition with TIR its call sites with
 their callees' hashes (`definition_hash`, `package_definition_hashes` and
 `hirsel hash` read it). A definition with TIR hashes its signature and TIR, a
-source or imaged type its owner view, and a registry operation, extern,
+source or stored type its owner view, and a registry operation, extern,
 signature fragment or generic generated declaration its path, signature,
 semantic tokens and reads. It is a query over existing TIR; nothing is cached
 across calls. `definition_groups(roots)` returns the same closure's recursive
@@ -446,26 +446,25 @@ padded to the declaration's lines; the semantic program and lowering repeat the
 walk until no instance is new. At most `MAX_GENERATED_INSTANCES` (256) per
 declaration, then CT-1. Re-indexing a declaration's source retires its instances.
 
-The std image (`image.rs`, `queries/image.rs`) is a dependency package checked
-once at toolchain build time. `LoadedProgram::image` refuses diagnostics and
-queries that read outside the package's closure. The mapped file holds declaration
-rows, normalized signatures and private views, canonical type rows, and lazy
-per-definition semantic nodes, validated TIR, audits, constants, execution reads,
-and published final-mode summaries with growth edges. Successful signature-view
-receipts are imported as candidates: V independently computes current digests
-and checks every contextual read before reuse; source/image signatures remain
-authoritative. Summary seeds check their complete body key and reads and restore
-reverse subscriptions without reconstructing checked or mode bodies.
-`StdImage::open` eagerly decodes the declaration index and type base; `OnceLock`
-slots share each decoded record across sessions without a decode-map mutex.
-`StdImages::toolchain()` selects `$HIRSEL_IMAGE` or the executable's sibling
-`hirsel-std.image`; `StdImages::at` selects a replaceable file, `StdImages::of`
-supplies explicit immutable images, and `StdImages::none()` checks from source.
-The compiler identity, sources, closure manifests, registry revision and compile-time
-limits key the image. Stale selected files are rebuilt atomically. Syntax is
-materialized only when needed; editing an imaged source releases the image and
-resumes normal invalidation. The choice changes compilation work, preserving
-diagnostics, TIR and semantic revisions.
+Toolchain packaging uses `Compiler::precompute_package` to populate the same
+ordinary query provider used for user packages. The content store maps bounded,
+checked chunks and restores canonical type rows and declaration heads on demand.
+Logical addresses select candidates; action keys bind the complete observed reads,
+compiler, schema, target and policy, and output identities describe canonical results.
+A hit validates its previous dependency outputs before reconstructing a demanded body.
+Published summaries restore reverse subscriptions without checked or mode bodies.
+
+`DirStore::default_location` adds `$HIRSEL_PRODUCTS`, or the executable's sibling
+`hirsel-std.products`, as a read-only product root. Each compiler session retains
+its configured writable provider. Missing or stale records are ordinary misses;
+there is no package image codec, admission path or rebuild command. Source bytes
+and placement remain explicit inputs. The compiler parses syntax only on demand.
+
+Stored products carry data, not verification authority. V independently checks
+signatures and artifacts; only verifier-owned receipts bound to the complete
+content, environment and policy can reuse success. A read-only installation or
+copied producer record cannot supply local execution authority. Package precomputation
+uses batch retention and releases intermediate bodies as each demand finishes.
 
 The single-threaded engine lives on a compiler thread. Use
 `with_compiler_stack(|| { ... })` to construct the engine and keep its complete
@@ -650,7 +649,7 @@ owner-credit changes to H.
 PROG-1 package loading is in `package.rs`. `load_program` indexes the selected
 JSON graph before checks, retaining all source FileContexts and a declared entry.
 `LoadedProgram.check` checks each package through per-definition queries unless a
-std image already covers it. The configured lowering policy selects the root
+current ordinary query products cover it. The configured lowering policy selects the root
 package's bodies: `Comptime` lowers compile-time evaluation, while `Reachable`
 also lowers its executable bodies and the dependency bodies they reach.
 Dependencies otherwise use `Comptime`; their cached checked results live in the
@@ -705,7 +704,7 @@ A request at stack length n fails at its own site when n ≥ L =
 computed or reused, so the verdict and site equal a cache-free serial
 evaluation. Limit failures are operational and never cached.
 
-Dependency packages are checked in each engine unless a std image covers them;
+Dependency packages are checked in each engine unless ordinary query records cover them;
 cross-program reuse of checked results goes through the result store
 (`store.rs`: `none@1`, `mem@1`, `dir@1`, `sim@1`).
 
@@ -805,7 +804,7 @@ policy; test discovery selects ordinary functions after checking the package.
 `Compiler::load_package_declarations` loads the validated manifest graph for
 signature tools, including libraries without an entry. It parses/indexes source
 and resolves header paths through the selected dependency aliases and PROG-2
-access rules, without checking, lowering or evaluating bodies or loading std images.
+access rules, without checking, lowering or evaluating bodies or consulting stored bodies.
 
 Size-dependent inline comptime expressions publish hidden size-generic constant
 signatures. Generic TIR reads those constants with lexical size actuals; each
@@ -864,7 +863,7 @@ receipts. Unconsumed receipt candidates survive deferred snapshot extensions,
 and initialization releases the preceding universe after reusing its receipts.
 
 `frontier_changes` starts change tracking for a retained program aggregate. Its
-first call returns indexed definitions outside prechecked images; subsequent
+first call returns indexed definitions from the declaration catalog; subsequent
 calls retain direct changes, removals and actual reverse subscribers until
 `acknowledge_frontier` accepts their observed per-definition generations.
 A query that recomputes a memo early cannot erase the aggregate notification,
@@ -903,7 +902,7 @@ error digest alone cannot prove a private evaluation overlay valid.
 The appended durable read tag encodes the package spelling, never its session ID.
 Signature changes mark its live subscribers through a separate small graph index;
 body-only changes do not mark this broad input. This global input has Low
-durability and cannot establish a dependency image's closure-local receipt.
+durability and cannot establish a verifier-owned execution receipt.
 
 CT-5 root and call traversal consume retained final summaries, merging their
 complete execution reads on hits too. The dead-error-arm lint retains only
@@ -933,7 +932,7 @@ scalar and worker Lower adapter calls, including discarded speculative work;
 Image construction withholds production worker admission while producing
 portable receipts; the prior admission purpose is restored on success or error.
 This preserves imported constants without body recomputation while whole-universe
-worker receipts remain unsuitable as portable image evidence.
+worker receipts remain unsuitable as portable verification evidence.
 
 Retained TIR hold weights use structural allocation accounting: Vec capacities,
 owned strings and literals, Arc headers/alignment and deduplicated shared path or

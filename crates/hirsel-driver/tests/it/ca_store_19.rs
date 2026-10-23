@@ -1997,9 +1997,7 @@ fn ordinary_program_loading_reuses_source_heads_and_observes_changed_bytes() {
                 ..CompileConfig::for_memory_cap(None)
             };
             let compiler = COMPILER.clone().with_config(config);
-            let mut writer = compiler
-                .load_program_source_with_images(&manifest, None, &StdImages::none())
-                .unwrap();
+            let mut writer = compiler.load_program_source(&manifest, None).unwrap();
             assert_eq!(
                 writer.engine.work_stats().parsed_bytes,
                 (main.len() + helper.len()) as u64
@@ -2007,9 +2005,7 @@ fn ordinary_program_loading_reuses_source_heads_and_observes_changed_bytes() {
             let first = writer.check(LoweringPolicy::Reachable).unwrap();
             assert_eq!(first.completion, CheckCompletion::Complete);
             assert!(first.diagnostics.is_empty(), "{:?}", first.diagnostics);
-            let mut reader = compiler
-                .load_program_source_with_images(&manifest, None, &StdImages::none())
-                .unwrap();
+            let mut reader = compiler.load_program_source(&manifest, None).unwrap();
             assert_eq!(reader.engine.work_stats().parsed_bytes, 0);
             reader.parse_sources().unwrap();
             assert_eq!(reader.engine.work_stats().parsed_bytes, 0);
@@ -2022,19 +2018,13 @@ fn ordinary_program_loading_reuses_source_heads_and_observes_changed_bytes() {
                 writer.engine.definition_summary_identity(id).unwrap()
             );
             assert_eq!(reader.engine.work_stats().parsed_bytes, 0);
-            let mut checked = compiler
-                .load_program_source_with_images(&manifest, None, &StdImages::none())
-                .unwrap();
+            let mut checked = compiler.load_program_source(&manifest, None).unwrap();
             let output = checked.check(LoweringPolicy::Reachable).unwrap();
             assert_eq!(output.completion, first.completion);
             assert_eq!(output.diagnostics, first.diagnostics);
             // Equal length and same path do not hide changed source bytes.
             std::fs::write(dir.join("helper.hir"), helper.replacen("1u32", "?u32", 1)).unwrap();
-            assert!(
-                compiler
-                    .load_program_source_with_images(&manifest, None, &StdImages::none())
-                    .is_err()
-            );
+            assert!(compiler.load_program_source(&manifest, None).is_err());
             std::fs::write(dir.join("helper.hir"), helper).unwrap();
         }
     });
@@ -2058,16 +2048,12 @@ fn ordinary_program_check_restores_lint_and_completion_without_syntax() {
                 jobs: hirsel_intern::jobs::Jobs::new(jobs),
                 ..CompileConfig::for_memory_cap(None)
             });
-            let mut writer = compiler
-                .load_program_source_with_images(&manifest, None, &StdImages::none())
-                .unwrap();
+            let mut writer = compiler.load_program_source(&manifest, None).unwrap();
             let expected = writer.check(LoweringPolicy::Comptime).unwrap();
             assert_eq!(expected.completion, CheckCompletion::Complete);
             assert_eq!(expected.diagnostics.len(), 1, "{:?}", expected.diagnostics);
             assert!(expected.diagnostics[0].message.contains("`Stale`"));
-            let mut reader = compiler
-                .load_program_source_with_images(&manifest, None, &StdImages::none())
-                .unwrap();
+            let mut reader = compiler.load_program_source(&manifest, None).unwrap();
             reader.engine.adapters.parser = None;
             reader.engine.adapters.lexer = None;
             reader.engine.adapters.signature = None;
@@ -2511,9 +2497,7 @@ fn ordinary_precomputed_dependency_products_do_not_recheck_bodies_during_native_
             jobs: hirsel_intern::jobs::Jobs::new(1),
             ..CompileConfig::for_memory_cap(None)
         });
-        let mut cached = shared
-            .load_program_source_with_images(&manifest, None, &StdImages::none())
-            .unwrap();
+        let mut cached = shared.load_program_source(&manifest, None).unwrap();
         let paths: Vec<_> = cached
             .engine
             .indexed_definitions()
@@ -2582,9 +2566,7 @@ fn ordinary_actor_generic_products_do_not_recheck_bodies_during_native_export() 
             jobs: hirsel_intern::jobs::Jobs::new(1),
             ..CompileConfig::for_memory_cap(None)
         });
-        let mut cached = shared
-            .load_program_source_with_images(&manifest, None, &StdImages::none())
-            .unwrap();
+        let mut cached = shared.load_program_source(&manifest, None).unwrap();
         let paths: Vec<_> = cached
             .engine
             .indexed_definitions()

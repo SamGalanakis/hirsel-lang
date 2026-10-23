@@ -36,7 +36,6 @@ fn workspace() -> CandidateWorkspace {
             jobs: hirsel_intern::jobs::Jobs::new(1),
             ..CompileConfig::for_memory_cap(None)
         },
-        vec![],
         hirsel_interp::Limits::default(),
         Limits {
             retain_canonical_export: true,
@@ -316,7 +315,6 @@ fn candidate_exhaustion_and_quota_never_become_success_or_cached_verdicts() {
     };
     let w = CandidateWorkspace::new(
         config.clone(),
-        vec![],
         hirsel_interp::Limits {
             steps: Some(1),
             call_depth: 64,
@@ -345,7 +343,6 @@ fn candidate_exhaustion_and_quota_never_become_success_or_cached_verdicts() {
     );
     let tiny = CandidateWorkspace::new(
         config.clone(),
-        vec![],
         hirsel_interp::Limits::default(),
         Limits {
             bytes: 0,
@@ -359,7 +356,6 @@ fn candidate_exhaustion_and_quota_never_become_success_or_cached_verdicts() {
     ));
     let limited = CandidateWorkspace::new(
         config,
-        vec![],
         hirsel_interp::Limits::default(),
         Limits {
             leases: 1,
@@ -681,13 +677,7 @@ fn store_fault_checks(candidate: bool) -> String {
                 .clone()
                 .with_config(config)
                 .with_owned_engines();
-            let mut program = compiler
-                .load_program_source_with_images(
-                    &f.entry(),
-                    None,
-                    &hirsel_engine::StdImages::none(),
-                )
-                .unwrap();
+            let mut program = compiler.load_program_source(&f.entry(), None).unwrap();
             let output = program.check(LoweringPolicy::Comptime).unwrap();
             let products = program.engine.checked_products(&program.entry).unwrap();
             (output, products, program.engine.store_adoptions())
@@ -744,7 +734,6 @@ fn store_fault_checks(candidate: bool) -> String {
                     let (output, actual, adoptions) = if candidate {
                         let w = CandidateWorkspace::new(
                             config,
-                            vec![],
                             hirsel_interp::Limits::default(),
                             Limits {
                                 retain_canonical_export: true,
@@ -864,7 +853,7 @@ fn candidate_eight_results_release_unused_reserves_and_old_observations_have_bac
     assert_eq!(w.counters().dropped_engines, w.counters().frozen_loads);
 }
 #[test]
-fn candidate_immutable_image_selection_keeps_fallback_frozen_and_rejects_image_source_edits() {
+fn candidate_ordinary_products_keep_snapshots_frozen_and_allow_library_edits() {
     hirsel_engine::with_compiler_stack(|| {
         let f = Fixture::new("pub fn main()->u64{lib.value(1)}\n");
         let library = f.0.join("lib.hir");
@@ -873,16 +862,19 @@ fn candidate_immutable_image_selection_keeps_fallback_frozen_and_rejects_image_s
         std::fs::write(&lib_manifest,r#"{"schema":1,"package":{"name":"lib","version":"1"},"sources":[{"path":"lib.hir","module":["lib"]}],"dependencies":[]}"#).unwrap();
         let entry = f.0.join("hirsel.json");
         std::fs::write(&entry,serde_json::json!({"schema":1,"package":{"name":"app","version":"1"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[{"manifest":"lib.json","package":{"name":"lib","version":"1"},"expose":[]}],"entry":{"module":[],"name":"main"}}).to_string()).unwrap();
-        let image_path = f.0.join("lib.image");
+        let products = f.0.join("lib.products");
         hirsel_driver::COMPILER
-            .image_package(&lib_manifest, &image_path)
+            .precompute_package(&lib_manifest, &products)
             .unwrap();
-        let image = hirsel_engine::StdImage::open(&image_path).unwrap();
-        let original_image = std::fs::read(&image_path).unwrap();
-        let config = CompileConfig::for_memory_cap(None);
+        let config = CompileConfig {
+            store: std::sync::Arc::new(
+                hirsel_engine::store::DirStore::new(f.0.join("reader"))
+                    .with_read_only_root(products),
+            ),
+            ..CompileConfig::for_memory_cap(None)
+        };
         let w = CandidateWorkspace::new(
             config.clone(),
-            vec![image.clone()],
             hirsel_interp::Limits::default(),
             Limits::default(),
         )
@@ -892,13 +884,13 @@ fn candidate_immutable_image_selection_keeps_fallback_frozen_and_rejects_image_s
             .sources()
             .find(|(key, _, _)| base.source_path(key) == Some(library.as_path()))
             .unwrap();
-        assert!(matches!(
-            w.submit(
+        let edited = w
+            .submit(
                 &base,
                 CandidateRequest {
                     id: CandidateId {
                         client: 1,
-                        nonce: 1
+                        nonce: 1,
                     },
                     base: base.token().clone(),
                     priority: Priority::Selected,
@@ -908,13 +900,13 @@ fn candidate_immutable_image_selection_keeps_fallback_frozen_and_rejects_image_s
                         edits: vec![ByteEdit {
                             start: 0,
                             end: text.len() as u32,
-                            replacement: text.replace("x+1", "x+2")
-                        }]
-                    }]
-                }
-            ),
-            Err(RequestError::UnsupportedEdit)
-        ));
+                            replacement: text.replace("x+1", "x+2"),
+                        }],
+                    }],
+                },
+            )
+            .unwrap();
+        assert_eq!(result(&w, &edited).verdict, Verdict::Pass);
         let candidate = w
             .submit(
                 &base,
@@ -935,14 +927,7 @@ fn candidate_immutable_image_selection_keeps_fallback_frozen_and_rejects_image_s
             .clone()
             .with_config(config.clone())
             .with_owned_engines();
-        let images = hirsel_engine::StdImages::of(vec![image]);
-        let mut cold = compiler
-            .load_program_source_with_images(&entry, None, &images)
-            .unwrap();
-        assert!(cold.engine.imaged(&hirsel_syntax::PackageId {
-            name: "lib".into(),
-            version: "1".into()
-        }));
+        let mut cold = compiler.load_program_source(&entry, None).unwrap();
         assert!(
             cold.check(LoweringPolicy::Comptime)
                 .unwrap()
@@ -974,7 +959,7 @@ fn candidate_immutable_image_selection_keeps_fallback_frozen_and_rejects_image_s
             .unwrap();
         std::fs::write(&library, "pub fn value(x:u64)->u64{false}\n").unwrap();
         assert_eq!(result(&w, &candidate).verdict, Verdict::Pass);
-        assert_eq!(std::fs::read(&image_path).unwrap(), original_image);
+        assert_eq!(result(&w, &candidate).verdict, Verdict::Pass);
     });
 }
 
@@ -989,7 +974,6 @@ fn candidate_digest_only_receipt_commits_to_the_same_optional_full_export() {
     assert!(full.checked_products.as_ref().unwrap().canonical.is_some());
     let compact = CandidateWorkspace::new(
         CompileConfig::for_memory_cap(None),
-        vec![],
         hirsel_interp::Limits::default(),
         Limits::default(),
     )
@@ -1081,9 +1065,7 @@ fn cold_products(entry: &std::path::Path, jobs: usize) -> hirsel_engine::Checked
                 ..CompileConfig::for_memory_cap(None)
             })
             .with_owned_engines();
-        let mut program = compiler
-            .load_program_source_with_images(entry, None, &hirsel_engine::StdImages::none())
-            .unwrap();
+        let mut program = compiler.load_program_source(entry, None).unwrap();
         let output = program.check(LoweringPolicy::Comptime).unwrap();
         assert_eq!(output.completion, hirsel_engine::CheckCompletion::Complete);
         program.engine.checked_products(&program.entry).unwrap()
@@ -1231,7 +1213,6 @@ fn candidate_checked_read_delta_exact_jobs_salts_and_cold_reads() {
                             jobs: hirsel_intern::jobs::Jobs::new(jobs),
                             ..CompileConfig::for_memory_cap(None)
                         },
-                        vec![],
                         hirsel_interp::Limits::default(),
                         Limits::default(),
                     )

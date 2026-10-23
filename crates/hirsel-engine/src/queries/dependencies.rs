@@ -54,10 +54,7 @@ impl QueryEngine {
     pub(crate) fn implementation_hash(&self, path: &DefPath) -> Option<ContentHash> {
         match self.items.get(path) {
             Some(items) => Some(items.first()?.text_hash),
-            None => self
-                .catalog
-                .body(path)
-                .or_else(|| Some(self.image_inputs(path)?.body)),
+            None => self.catalog.body(path),
         }
     }
     /// Every open evaluation frame read these views by reflecting or

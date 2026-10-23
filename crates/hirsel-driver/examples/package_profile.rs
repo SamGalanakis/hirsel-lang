@@ -25,12 +25,9 @@ fn main() {
         with_compiler_stack(|| {
             for path in paths {
                 eprintln!("{path}");
-                let cache = StdImages::none();
                 for name in ["cold", "warm"] {
                     timed(name, || {
-                        let mut program =
-                            load_program_source_with_images(Path::new(&path), None, &cache)
-                                .unwrap();
+                        let mut program = load_program_source(Path::new(&path), None).unwrap();
                         let output = program
                             .check(hirsel_engine::LoweringPolicy::Reachable)
                             .unwrap();
@@ -44,9 +41,8 @@ fn main() {
     }
     let path = &paths[0];
     with_compiler_stack(|| {
-        let cache = StdImages::none();
         let mut program = timed("load, lex, parse and index", || {
-            load_program_source_with_images(Path::new(&path), None, &cache).unwrap()
+            load_program_source(Path::new(&path), None).unwrap()
         });
         let mut roots = vec![];
         for (file, context) in program.files.clone() {
@@ -119,7 +115,7 @@ fn main() {
         eprintln!("{} executable roots lowered", lowered(&program));
         drop(program);
         let mut warm = timed("reused load and transport", || {
-            load_program_source_with_images(Path::new(&path), None, &cache).unwrap()
+            load_program_source(Path::new(&path), None).unwrap()
         });
         timed("reused check and program audits", || {
             let output = warm

@@ -162,8 +162,8 @@ pub fn probe(source: &str) -> Result<Probed, String> {
 /// `evaluation`.
 fn observe(path: &Path, expect: &Expect, native: bool) -> Artifacts {
     let config = Config::default();
-    let mut artifacts = super::produce(path, &config, &super::fresh_images())
-        .expect("the default configuration needs no switch");
+    let mut artifacts =
+        super::produce(path, &config).expect("the default configuration needs no switch");
     if let Some(text) = artifacts.get("tir").cloned() {
         let text = String::from_utf8_lossy(&text).into_owned();
         match split_export(&text) {
@@ -265,11 +265,7 @@ fn native_runs(path: &Path) -> String {
 /// LANG-6 definition hashes of `roots`, one `path hash` line each.
 fn hashes(path: &Path, roots: Vec<DefPath>) -> String {
     hirsel_engine::with_compiler_stack(|| {
-        let mut program = match hirsel_driver::load_program_source_with_images(
-            path,
-            None,
-            &super::fresh_images(),
-        ) {
+        let mut program = match hirsel_driver::load_program_source(path, None) {
             Ok(program) => program,
             Err(error) => return format!("load: {error}\n"),
         };

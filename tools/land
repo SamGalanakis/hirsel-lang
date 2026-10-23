@@ -48,11 +48,11 @@ CONFIG = ['-c', 'hirsel.clippy=true', '-c', 'hirsel.priority=75']
 ENV = {'HIRSEL_BUCK2_CONFIG': ' '.join(CONFIG), 'GIT_EDITOR': 'true',
        'HIRSEL_VALIDATE_STAGES': '1'}
 # The workspace without tests, Clippy twins, campaign targets, the two-host
-# link build (it holds a host-wide lock), std image and std native object
-# generation (integration artifacts, not workspace compilation).
+# link build (it holds a host-wide lock), ordinary std product
+# precomputation (integration artifacts, not workspace compilation).
 BUILD_SET = ('root//: - kind("_rust_test", root//:) - attrregexfilter(name, "-clippy$", root//:)'
              ' - attrfilter(labels, gate, root//:) - kind("_link_hosts_local", root//:)'
-             ' - rdeps(root//:, kind("_hirsel_image", root//:) + kind("_hirsel_std_objects", root//:))')
+             ' - rdeps(root//:, kind("_hirsel_products", root//:))')
 REJECTED = ('[rejected]', 'fetch first', 'non-fast-forward', 'failed to update ref', 'cannot lock ref')
 LANDINGS = 'hirsel-landings.jsonl'
 # This process's own code, read before any rebase rewrites the file it was started from.

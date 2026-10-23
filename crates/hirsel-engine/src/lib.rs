@@ -49,10 +49,9 @@ pub use snapshot::{
 mod adapters;
 mod facts;
 pub use adapters::*;
-pub mod image;
 pub mod loader_inputs;
 mod package;
-pub use image::{ImageRecord, StdImage, StdImages, release_shared_caches, report_images};
+pub use store::release_shared_caches;
 mod policy;
 pub use policy::{
     LoweringPolicy, Verify, free_sessions, persistent_results, verify_cached_results,

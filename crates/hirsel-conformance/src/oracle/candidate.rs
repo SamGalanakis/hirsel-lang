@@ -36,7 +36,7 @@ pub fn cold(path: &Path, config: &Config) -> Result<Artifacts, String> {
     let compiler = compiler(config);
     hirsel_engine::with_compiler_stack(|| {
         let mut program = compiler
-            .load_program_source_with_images(path, None, &hirsel_engine::StdImages::none())
+            .load_program_source(path, None)
             .map_err(|e| format!("load: {e}"))?;
         let scope: Vec<_> = program
             .files
@@ -82,7 +82,6 @@ pub fn cold(path: &Path, config: &Config) -> Result<Artifacts, String> {
 pub fn workspace(config: &Config) -> Result<CandidateWorkspace, String> {
     CandidateWorkspace::new(
         compile_config(config),
-        vec![],
         limits(config),
         TransactionLimits {
             retain_canonical_export: true,

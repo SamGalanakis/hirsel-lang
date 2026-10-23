@@ -7,7 +7,7 @@ use hirsel_cli_args::lexopt::{self, Arg::*, Parser};
 use hirsel_engine::{QueryError, RunOutcome, ToolError, Verify};
 use std::{env, ffi::OsString, path::Path, process::ExitCode};
 
-const USAGE: &str = "usage: hirsel [--verbose] [--timings[=json]] [--mem-usage] check [--verify-cache] [--watch] [--json | --safe] <source|manifest.json> | serve [--workspace <dir>] [--idle <seconds>] | test [--no-verify] [--json] [--seed <u64>] [--scheduler <name@1:seed> | --explore <n> [--scheduler <name@1>]] [--race] [--sim-points <root-release,atomic-store>] [--bless | --bench [--bench-time <ms>]] [--max-steps <n|unbounded> | --native [--backend llvm|cranelift]] <source|manifest.json> [filter...] | run [--verify-cache] [--validate-stages] [--no-verify] [--json] [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [--cores <n>] [--trace-events <jsonl>] [-- args...] | build [--verify-cache] [--validate-stages] [--no-verify] [--release | --debug] [--lto] [--backend llvm|cranelift] [--fuel] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | new <dir> [--lib] | fmt [--check] <source|manifest.json> | expand <source|manifest.json> | hash <source|manifest.json> | export --tir|--run <source|manifest.json> -o <file> | deps card <manifest.json> [--package name@ver[/module]] [--code-store config.json] [--json] | explain RULE [--json] | explain --list [--json] (docs/rule-explain.md) | doc <source|manifest.json> [-o <out.md>] [--json] | view <tape> --capture <id> -o <file> [--perfetto | --source <program> --analysis <id>] [--timing <sidecar>] | precompute <package manifest.json> -o <directory> | image <package manifest.json> -o <file> | seed-objects <package manifest.json> -o <directory> | tapes check <tape>... | tapes trial <candidate manifest.json> --grants <json> [--from <n>] <tape> | ctl <socket> (cores <n> | metrics) | serve [--no-verify] <source|manifest.json> --host <json>";
+const USAGE: &str = "usage: hirsel [--verbose] [--timings[=json]] [--mem-usage] check [--verify-cache] [--watch] [--json | --safe] <source|manifest.json> | serve [--workspace <dir>] [--idle <seconds>] | test [--no-verify] [--json] [--seed <u64>] [--scheduler <name@1:seed> | --explore <n> [--scheduler <name@1>]] [--race] [--sim-points <root-release,atomic-store>] [--bless | --bench [--bench-time <ms>]] [--max-steps <n|unbounded> | --native [--backend llvm|cranelift]] <source|manifest.json> [filter...] | run [--verify-cache] [--validate-stages] [--no-verify] [--json] [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [--cores <n>] [--trace-events <jsonl>] [-- args...] | build [--verify-cache] [--validate-stages] [--no-verify] [--release | --debug] [--lto] [--backend llvm|cranelift] [--fuel] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | new <dir> [--lib] | fmt [--check] <source|manifest.json> | expand <source|manifest.json> | hash <source|manifest.json> | export --tir|--run <source|manifest.json> -o <file> | deps card <manifest.json> [--package name@ver[/module]] [--code-store config.json] [--json] | explain RULE [--json] | explain --list [--json] (docs/rule-explain.md) | doc <source|manifest.json> [-o <out.md>] [--json] | view <tape> --capture <id> -o <file> [--perfetto | --source <program> --analysis <id>] [--timing <sidecar>] | precompute <package manifest.json> -o <directory> | tapes check <tape>... | tapes trial <candidate manifest.json> --grants <json> [--from <n>] <tape> | ctl <socket> (cores <n> | metrics) | serve [--no-verify] <source|manifest.json> --host <json>";
 
 const FMT_HELP: &str = "usage: hirsel fmt [--check] <source|manifest.json>\n\nFormat a source file or a package's direct sources.\nExample: hirsel fmt examples/configctl/hirsel.json\n--check reports differences without writing (exit 1; unchanged: 0).\nAll sources are prepared before writing; unchanged files are skipped.\nWrite errors are reported; writes across files are not atomic.";
 
@@ -170,18 +170,11 @@ enum Command {
         schedules: hirsel_driver::testing::Schedules,
         simulation_debug: hirsel_driver::testing::SimulationDebug,
     },
-    Image {
-        manifest: OsString,
-        output: OsString,
-    },
     Precompute {
         manifest: OsString,
         output: OsString,
     },
-    SeedObjects {
-        manifest: OsString,
-        output: OsString,
-    },
+
     /// `tapes check <tape>...`: the joined check over linked tapes (RUN-11).
     Tapes {
         tapes: Vec<OsString>,
@@ -638,32 +631,12 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
                 validation: validation(validate_stages),
             }
         }
-        Some(Value(command)) if command == "seed-objects" => {
-            let manifest = args.value()?;
-            if !matches!(args.next()?, Some(Short('o'))) {
-                return Err("seed-objects requires -o".into());
-            }
-            Command::SeedObjects {
-                manifest,
-                output: args.value()?,
-            }
-        }
         Some(Value(command)) if command == "precompute" => {
             let manifest = args.value()?;
             if !matches!(args.next()?, Some(Short('o'))) {
                 return Err("precompute requires -o".into());
             }
             Command::Precompute {
-                manifest,
-                output: args.value()?,
-            }
-        }
-        Some(Value(command)) if command == "image" => {
-            let manifest = args.value()?;
-            if !matches!(args.next()?, Some(Short('o'))) {
-                return Err("image requires -o".into());
-            }
-            Command::Image {
                 manifest,
                 output: args.value()?,
             }
@@ -1098,7 +1071,7 @@ fn execute(mut args: Vec<OsString>, start: std::time::Instant) -> u8 {
     hirsel_engine::free_sessions(false);
     // `--verbose` reports how dependency packages were checked (a missing or
     // stale std image) on stderr.
-    hirsel_engine::report_images(take_flag(&mut args, "--verbose"));
+    let _verbose = take_flag(&mut args, "--verbose");
     // `--no-verify` skips V, the second checker, where it costs most.
     let verify = if take_flag(&mut args, "--no-verify") {
         Verify::Off
@@ -1126,7 +1099,7 @@ fn execute(mut args: Vec<OsString>, start: std::time::Instant) -> u8 {
 /// Run one command in a process that keeps its sessions (`serve`, `check
 /// --watch`): the global flags `execute` takes, without measurement.
 fn execute_resident(mut args: Vec<OsString>) -> u8 {
-    hirsel_engine::report_images(take_flag(&mut args, "--verbose"));
+    let _verbose = take_flag(&mut args, "--verbose");
     let verify = if take_flag(&mut args, "--no-verify") {
         Verify::Off
     } else {
@@ -1552,35 +1525,9 @@ fn execute_command(args: Vec<OsString>, verify: Verify) -> u8 {
                 Err(error) => tool_error(error, false),
             };
         }
-        Command::SeedObjects { manifest, output } => {
-            return match hirsel_driver::native::seed_objects(
-                Path::new(&manifest),
-                Path::new(&output),
-            ) {
-                Ok(report) => {
-                    println!(
-                        "seeded {} objects; {} roots, {} units, {} generic instances",
-                        report.objects, report.roots, report.units, report.generic_units
-                    );
-                    0
-                }
-                Err(error) => {
-                    eprintln!("hirsel: seed-objects: {error}");
-                    2
-                }
-            };
-        }
         Command::Precompute { manifest, output } => {
             return match hirsel_driver::COMPILER
                 .precompute_package(Path::new(&manifest), Path::new(&output))
-            {
-                Ok(()) => 0,
-                Err(error) => tool_error(error, false),
-            };
-        }
-        Command::Image { manifest, output } => {
-            return match hirsel_driver::COMPILER
-                .image_package(Path::new(&manifest), Path::new(&output))
             {
                 Ok(()) => 0,
                 Err(error) => tool_error(error, false),

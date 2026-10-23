@@ -166,7 +166,7 @@ fn produce(options: Options) -> ExitCode {
     if let Some(seed) = options.config.salt {
         hirsel_intern::salt_ids(seed);
     }
-    match oracle::produce(&program, &options.config, &oracle::fresh_images()) {
+    match oracle::produce(&program, &options.config) {
         Ok(artifacts) => match write_artifacts(&out, &artifacts) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {

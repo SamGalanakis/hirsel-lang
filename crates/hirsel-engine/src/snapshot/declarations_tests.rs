@@ -1,7 +1,7 @@
 use super::*;
 
-fn row(path: &DefPath, anchor: Anchor) -> RowImage {
-    RowImage {
+fn row(path: &DefPath, anchor: Anchor) -> DeclarationRow {
+    DeclarationRow {
         definition: DefId::intern(path),
         types: true,
         visibility: Visibility::PublicOpaque,
@@ -36,16 +36,16 @@ fn row(path: &DefPath, anchor: Anchor) -> RowImage {
 }
 
 #[test]
-fn image_rows_share_ownership_and_materialize_sites_only_on_demand() {
+fn declaration_rows_share_ownership_and_materialize_sites_only_on_demand() {
     crate::with_compiler_stack(|| {
-        let path = DefPath::core("compact_image_declaration");
+        let path = DefPath::core("compact_declaration");
         let id = DefId::intern(&path);
         let anchor = Anchor::fresh();
         let expected = row(&path, anchor);
         let mut image = DeclarationIndex::default();
-        image.adopt_row(&path, expected.clone());
+        image.replace_row(&path, Some(Arc::new(Row::from(expected.clone()))));
         let mut session = DeclarationIndex::default();
-        session.adopt_rows(&image);
+        session.adopt(&image);
         assert!(Arc::ptr_eq(&image.rows[&id], &session.rows[&id]));
         assert!(image.rows[&id].sites.get().is_none());
         let frozen = session.frozen();
@@ -65,11 +65,11 @@ fn image_rows_share_ownership_and_materialize_sites_only_on_demand() {
         assert!(sites.iter().all(|s| s.definition == path));
         assert!(Arc::ptr_eq(&sites, image.rows[&id].sites()));
         assert!(Arc::ptr_eq(&sites, &frozen.sites(&path)));
-        let missing = DefPath::core("absent_compact_image_declaration");
+        let missing = DefPath::core("absent_compact_declaration");
         assert!(session.candidates(&missing).is_none());
         assert!(frozen.sites(&missing).is_empty());
         let replacement = row(&path, Anchor::fresh());
-        session.adopt_row(&path, replacement.clone());
+        session.replace_row(&path, Some(Arc::new(Row::from(replacement.clone()))));
         assert!(!Arc::ptr_eq(&image.rows[&id], &session.rows[&id]));
         assert_eq!(frozen.sites(&path)[0].name_span.anchor, anchor);
         assert_eq!(
@@ -82,29 +82,28 @@ fn image_rows_share_ownership_and_materialize_sites_only_on_demand() {
 #[test]
 fn compact_row_roundtrip_preserves_order_visibility_and_exact_anchors() {
     crate::with_compiler_stack(|| {
-        let path = DefPath::core("compact_image_roundtrip");
+        let path = DefPath::core("compact_row_roundtrip");
         let id = DefId::intern(&path);
         let anchor = Anchor::fresh();
         let expected = row(&path, anchor);
-        let mut writer = hirsel_image::ImageWriter::new(
-            ContentHash::of_bytes(b"compact"),
+        let records = hirsel_product_codec::TypeRecords::new(
             hirsel_types::TypeInterner::new(None),
+            Arc::new(hirsel_artifact_store::Memory::default()),
         );
-        writer.anchors([(anchor, 0, 23)]);
-        writer.entry(
-            crate::image::ROWS,
-            id,
-            Box::new(crate::image::Whole(expected.clone())),
-        );
-        let image = hirsel_image::Image::from_bytes(writer.finish().unwrap().bytes).unwrap();
-        let actual: RowImage = image.decode(crate::image::ROWS, 0).unwrap();
+        let bytes = records
+            .encode_record(&expected, |a| (a == anchor).then(|| (path.clone(), 0)))
+            .unwrap();
+        let decoded_anchor = Anchor::fresh();
+        let actual: DeclarationRow = records
+            .decode_record(&bytes, |p, occurrence| {
+                (p == &path && occurrence == 0).then_some(decoded_anchor)
+            })
+            .unwrap();
         assert_eq!(actual.definition, id);
         assert_eq!(actual.visibility, expected.visibility);
         assert_eq!(actual.headers, expected.headers);
         assert_eq!(actual.candidates, expected.candidates);
         assert_eq!(actual.identity, expected.identity);
-        let decoded_anchor = image.anchors()[0].0;
-        assert_eq!((image.anchors()[0].1, image.anchors()[0].2), (0, 23));
         for (actual, expected) in actual.site_spans.iter().zip(&expected.site_spans) {
             assert_eq!(actual.anchor, decoded_anchor);
             assert_eq!((actual.start, actual.end), (expected.start, expected.end));

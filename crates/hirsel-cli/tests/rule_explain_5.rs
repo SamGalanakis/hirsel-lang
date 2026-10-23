@@ -33,7 +33,7 @@ impl EmptyCwd {
             .env("XDG_CACHE_HOME", &missing)
             .env("HIRSEL_CACHE", &missing)
             .env("HIRSEL_NATIVE_CACHE", &missing)
-            .env("HIRSEL_IMAGE", &missing)
+            .env("HIRSEL_PRODUCTS", &missing)
             .env("HIRSEL_STD_OBJECTS", &missing)
             .args(args)
             .output()
