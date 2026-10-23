@@ -47,7 +47,7 @@ pub fn dfa_test_main() -> Result[(), DfaTestFailure] uses {} {
       if !dfa_test_case(pattern, src) { return Error(DfaTestFailure(pattern: pattern, src: src, stage: 1)) }
       bits += 1
     }
-    let samples: List[String] = ["a\nb\na", " a_a a ", "éa", "a😀b", "Kkſs", "\u{80}a", "aaaabbb", "aba abb abba"]
+    let samples: List[String] = ["a\nb\na", " a_a a ", "éa", "a😀b", "Kkſs", "\u{80}a", "aaaabbb", "aba abb abba", "0123456789aéab", "0123456789a\u{80}ab", "ab\u{0}ab", "xyzab😀ab", "0123456789ab\n"]
     for src in samples {
       if !dfa_test_case(pattern, src) { return Error(DfaTestFailure(pattern: pattern, src: src, stage: 1)) }
     }

@@ -147,7 +147,14 @@ pub fn capture_engines_random() -> Result[(), CaptureEngineFailure] uses {} {
   Ok(())
 }
 
+// Keep the original aggregate and its complete ordered checks. The two
+// independent loops also have bounded native entry points.
 pub fn capture_engines_plan_limits() -> Result[(), CaptureEngineFailure] uses {} {
+  capture_engines_plan_patterns()?
+  capture_engines_plan_slots()
+}
+
+pub fn capture_engines_plan_patterns() -> Result[(), CaptureEngineFailure] uses {} {
   for (pattern, supported) in [
     ("a{127}", true),
     ("a{128}", false),
@@ -164,6 +171,10 @@ pub fn capture_engines_plan_limits() -> Result[(), CaptureEngineFailure] uses {}
       Bounds()
     )
   }
+  Ok(())
+}
+
+pub fn capture_engines_plan_slots() -> Result[(), CaptureEngineFailure] uses {} {
   for i in 0u64..16 {
     let mut pattern: List[u8] = []
     for j in 0u64..i + 1 {

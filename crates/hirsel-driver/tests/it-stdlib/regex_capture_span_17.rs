@@ -305,3 +305,43 @@ fn capture_span_wrapper_smoke() {
 fn capture_replacements_ambiguous_interpreter_budget() {
     check_capture(None, &["capture_replacements_1_0"]);
 }
+
+// Keep the original complete matrices above. These bounded native entries
+// let a lane complete only the missing part of a capped matrix process.
+#[test]
+fn capture_span_cranelift_context_and_retention() {
+    check_capture(
+        Some(native::Backend::Cranelift),
+        &["capture_context_and_retention"],
+    );
+}
+#[test]
+fn capture_span_cranelift_expand_partial() {
+    check_capture(
+        Some(native::Backend::Cranelift),
+        &["capture_expand_partial"],
+    );
+}
+#[test]
+fn capture_span_cranelift_forced_limits() {
+    check_capture(Some(native::Backend::Cranelift), &["capture_forced_limits"]);
+}
+#[test]
+fn capture_span_llvm_goldens() {
+    check_capture(Some(native::Backend::Llvm), &["capture_goldens"]);
+}
+#[test]
+fn capture_span_llvm_context_and_retention() {
+    check_capture(
+        Some(native::Backend::Llvm),
+        &["capture_context_and_retention"],
+    );
+}
+#[test]
+fn capture_span_llvm_expand_partial() {
+    check_capture(Some(native::Backend::Llvm), &["capture_expand_partial"]);
+}
+#[test]
+fn capture_span_llvm_forced_limits() {
+    check_capture(Some(native::Backend::Llvm), &["capture_forced_limits"]);
+}

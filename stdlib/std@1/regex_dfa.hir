@@ -379,7 +379,11 @@ fn dfa_scalar_step(re: VmProgram, subject: Subject, cursor: u64, reverse: bool,
 fn dfa_search(re: Regex, subject: Subject, start: u64, haystack: Bytes, mut cache: DfaCache) -> DfaResult uses {} {
   if cache.disabled { return DfaQuit() }
   let program = vm_program(re)
-  let previous = if start == 0 { 128u64 } else { dfa_byte(subject, subject_before(subject, start)) }
+  let bytes = subject.bytes
+  let size = core@1/bytes.len(bytes)
+  let previous = if start == 0 { 128u64 } else if subject.ascii {
+    core@1/int.widen(bytes[start - 1])
+  } else { dfa_byte(subject, subject_before(subject, start)) }
   let mut state = dfa_intern(mut cache, 0, dfa_category(previous))
   if state == 0 { return DfaQuit() }
   let mut cursor = start
@@ -403,7 +407,13 @@ fn dfa_search(re: Regex, subject: Subject, start: u64, haystack: Bytes, mut cach
         seeds = 0
       }
     }
-    let byte = dfa_byte(subject, cursor)
+    // hybrid/search.rs:63-70,95-110: load the byte and follow a known
+    // transition in the same loop. A non-ASCII byte transfers the current
+    // frontier to the existing scalar engine before advancing the cursor.
+    let byte: u64 = if cursor == size { 128u64 } else {
+      let value: u64 = core@1/int.widen(bytes[cursor])
+      if value < 128 { value } else { 129u64 }
+    }
     let transition = if scalar || byte > 128 { 0u64 } else {
       // hybrid/search.rs:63-70,95-110: keep known transitions in the loop.
       let hit = cache.data[state + 3 + byte]
@@ -432,7 +442,7 @@ fn dfa_search(re: Regex, subject: Subject, start: u64, haystack: Bytes, mut cach
     }
     if matched { end = Some(cursor) }
     if stop { break }
-    cursor = subject_next(subject, cursor)
+    cursor = if scalar { subject_next(subject, cursor) } else { cursor + 1 }
   }
   let Some(end_at) = end else { return DfaMiss() }
   if end_at == start { return DfaMatch(Span(start: start, end: end_at)) }
@@ -452,7 +462,10 @@ fn dfa_search(re: Regex, subject: Subject, start: u64, haystack: Bytes, mut cach
   cursor = end_at
   let mut found: Option[u64] = None()
   while true {
-    let byte = if cursor == 0 { 128u64 } else { dfa_byte(subject, subject_before(subject, cursor)) }
+    let byte: u64 = if cursor == 0 { 128u64 } else {
+      let value: u64 = core@1/int.widen(bytes[cursor - 1])
+      if value < 128 { value } else { 129u64 }
+    }
     let transition = if scalar || byte > 128 { 0u64 } else {
       // hybrid/search.rs:63-70,95-110: keep known transitions in the loop.
       let hit = cache.data[state + 3 + byte]
@@ -481,7 +494,7 @@ fn dfa_search(re: Regex, subject: Subject, start: u64, haystack: Bytes, mut cach
     }
     if matched { found = Some(cursor) }
     if cursor == start || stop { break }
-    cursor = subject_before(subject, cursor)
+    cursor = if scalar { subject_before(subject, cursor) } else { cursor - 1 }
   }
   match found {
     Some(from) => DfaMatch(Span(start: from, end: end_at)),

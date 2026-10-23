@@ -105,9 +105,24 @@ fn capture_engines_composed_all_four() {
     }
 }
 
+// Each original entry already owns a fresh interpreter and an independent
+// 200M-step budget. Keep plain/checked observation parity within each entry,
+// while bounding each test process separately.
 #[test]
-fn capture_engines_interpreter_and_checked_h() {
-    engines(None);
+fn capture_engines_interpreter_edges() {
+    engines_for(None, &["capture_engines_edges"]);
+}
+#[test]
+fn capture_engines_interpreter_random() {
+    engines_for(None, &["capture_engines_random"]);
+}
+#[test]
+fn capture_engines_interpreter_limits() {
+    engines_for(None, &["capture_engines_limits"]);
+}
+#[test]
+fn capture_engines_interpreter_plan_limits() {
+    engines_for(None, &["capture_engines_plan_limits"]);
 }
 #[test]
 fn capture_engines_llvm() {
@@ -116,4 +131,18 @@ fn capture_engines_llvm() {
 #[test]
 fn capture_engines_cranelift() {
     engines(Some(native::Backend::Cranelift));
+}
+
+// A bounded entry selector also supports completing an interrupted matrix
+// without repeating the entries whose native verdicts already returned.
+#[test]
+fn capture_engines_llvm_plan_patterns() {
+    engines_for(
+        Some(native::Backend::Llvm),
+        &["capture_engines_plan_patterns"],
+    );
+}
+#[test]
+fn capture_engines_llvm_plan_slots() {
+    engines_for(Some(native::Backend::Llvm), &["capture_engines_plan_slots"]);
 }

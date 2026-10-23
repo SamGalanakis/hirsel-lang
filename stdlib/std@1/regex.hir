@@ -1306,7 +1306,14 @@ pub fn find_all(re: Regex, text: String, max_matches: u64, work_limit: u64) -> R
       }
       // Advance one scalar boundary, including EOF+1.
       spend(mut work)?
-      pos = subject_next(subject, pos)
+      pos = if subject.ascii { pos + 1 } else { subject_next(subject, pos) }
+    } else if subject.ascii {
+      // One historical spend per crossed scalar, with the same exhaustion
+      // result. ASCII byte and scalar distances coincide.
+      let count = span.end - pos
+      if count > work { work = 0; return Error(WorkLimit()) }
+      work -= count
+      pos = span.end
     } else {
       while pos < span.end {
         spend(mut work)?

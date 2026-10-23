@@ -241,9 +241,18 @@ fn next_candidate(plan: PrefixPlan, haystack: Bytes, subject: Subject, from: u64
     target = found
     cursor = target
   }
-  while cursor < subject_len(subject) {
+  let bytes = subject.bytes
+  let size = core@1/bytes.len(bytes)
+  while cursor < size {
     let byte = cursor
-    if boundary(haystack, byte) && byte >= target && prefix_has(plan, core@1/char.to_u32(subject_scalar(subject, cursor))) && prefix_at(
+    let first = bytes[cursor]
+    let is_boundary = first < 128 || first >= 192
+    // Fuse ASCII scalar decoding and cursor advance. Substring searches may
+    // land on a continuation byte; keep the boundary check before decoding.
+    let cp: u32 = if first < 128 { core@1/int.widen(first) } else if is_boundary {
+      core@1/char.to_u32(subject_scalar(subject, cursor))
+    } else { 0u32 }
+    if is_boundary && byte >= target && prefix_has(plan, cp) && prefix_at(
       plan,
       haystack,
       byte
@@ -260,7 +269,7 @@ fn next_candidate(plan: PrefixPlan, haystack: Bytes, subject: Subject, from: u64
         )
       )
     }
-    cursor = if boundary(haystack, cursor) { subject_next(subject, cursor) } else { cursor + 1 }
+    cursor = if first < 128 || !is_boundary { cursor + 1 } else { subject_next(subject, cursor) }
   }
   None()
 }
