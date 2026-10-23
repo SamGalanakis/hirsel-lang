@@ -2051,6 +2051,13 @@ impl QueryEngine {
         let mut result = result.map(shared_output);
         let mut vreads = vec![];
         if let Ok(lowered) = &result {
+            if self.verify == Verify::On
+                && self.lower_requires_execution(definition, &Reads::empty())
+            {
+                let package = definition.0.package.clone();
+                let digest = self.signature_snapshot().validation_input_digest(&package);
+                self.record_evaluation_validation(package, digest);
+            }
             let report = self.validate_lowered_artifact(&lowered.value, &mut vreads);
             if let Some(error) = hirsel_validate::tooling_limit_error(&report) {
                 result = Err(error);

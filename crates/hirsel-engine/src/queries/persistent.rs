@@ -942,7 +942,25 @@ impl QueryEngine {
             .variants
             .retain(|variant| variant.inputs == key.1 && variant.valid(key));
         let hit = entry
-            .hit(|read| self.observe(owner, read))
+            .hit(|read| {
+                // A Lower's own hidden declarations are a separate ordinary
+                // query. Demand that product before observing its signature,
+                // without restoring the enclosing analyzed body.
+                if key.2 == QueryKind::Lower
+                    && let ReadKey::Signature(id) | ReadKey::ExecutedSignature(id) = read
+                    && id.path().0.package == owner.0.package
+                    && id.path().0.modules == owner.0.modules
+                    && id
+                        .path()
+                        .0
+                        .name
+                        .starts_with(&format!("$comptime:{}:", owner.0.name))
+                    && !self.staged_constants.contains_key(id.path())
+                {
+                    self.load_registrations(owner)?;
+                }
+                self.observe(owner, read)
+            })
             .and_then(|variant| variant.resolve(&*store, key));
         if hit.is_none() {
             timings::count(Count::StoreMisses);
@@ -1229,6 +1247,44 @@ impl QueryEngine {
             })
         })
     }
+    fn portable_lower_reads(&self, owner: &DefPath, reads: &Reads) -> bool {
+        reads.iter().all(|(read, _)| {
+            let Some(id) = read.definition() else {
+                return true;
+            };
+            let path = id.path();
+            if matches!(read, ReadKey::Signature(_) | ReadKey::ExecutedSignature(_))
+                && self
+                    .staged_constants
+                    .get(path)
+                    .is_some_and(|constant| constant.owner == *owner)
+            {
+                return true;
+            }
+            !path.0.name.starts_with('$')
+                && !self.generated.contains_key(path)
+                && !self.staged_constants.contains_key(path)
+        })
+    }
+    fn valid_staged_lowering(&self, owner: &DefPath, definition: &hirsel_tir::Definition) -> bool {
+        definition
+            .bodies
+            .iter()
+            .flat_map(|body| &body.rvalues)
+            .all(|value| match value {
+                hirsel_tir::Rvalue::ReadConstant {
+                    definition,
+                    arguments,
+                } if !arguments.is_empty() => {
+                    self.staged_constants
+                        .get(definition)
+                        .is_some_and(|constant| {
+                            constant.owner == *owner && constant.inputs.len() == arguments.len()
+                        })
+                }
+                _ => true,
+            })
+    }
     pub(super) fn load_lower(
         &mut self,
         path: &DefPath,
@@ -1237,8 +1293,9 @@ impl QueryEngine {
             return None;
         }
         let variant = self.stored_variant(path, QueryKind::Lower)?;
-        // Declaration transactions still require portable ordered replay.
-        if !self.portable_execution_reads(&variant.reads) {
+        // Other owners' selections and generated declaration transactions still
+        // require their full ordered replay. Own registrations are demandable.
+        if !self.portable_lower_reads(path, &variant.reads) {
             return None;
         }
         let record: LowerRecord = self.decode_record(&variant.payload)?;
@@ -1254,7 +1311,10 @@ impl QueryEngine {
             return None;
         }
         if crate::comptime::has_staged_reads(&record.output.value) {
-            return None;
+            self.load_registrations(path)?;
+            if !self.valid_staged_lowering(path, &record.output.value) {
+                return None;
+            }
         }
         let acceptance =
             if self.verify == Verify::On && self.lower_requires_execution(path, &variant.reads) {
@@ -1634,7 +1694,7 @@ impl QueryEngine {
         {
             return Ok(());
         }
-        if !self.portable_execution_reads(entry.reads()) {
+        if !self.portable_lower_reads(path, entry.reads()) {
             return Ok(());
         }
         let Ok(output) = entry.output() else {
@@ -1644,7 +1704,10 @@ impl QueryEngine {
             return Ok(());
         };
         if crate::comptime::has_staged_reads(&output.value) {
-            return Ok(());
+            if !self.valid_staged_lowering(path, &output.value) {
+                return Ok(());
+            }
+            self.store_registrations(path)?;
         }
         let Some(key) = self.store_key(path, QueryKind::Lower) else {
             return Ok(());
