@@ -1403,6 +1403,7 @@ unsafe fn poll_binding_observed(
     ready: bool,
     mut observed: Option<&mut Option<Result<Completion, AdapterError>>>,
 ) -> Stopped<bool> {
+    let _poll = crate::io_home::Poll::new();
     let request = match binding.waits.parked.get(&token) {
         Some(parked) => parked.request.clone(),
         None => crate::fault("a poll of an unknown host wait"),

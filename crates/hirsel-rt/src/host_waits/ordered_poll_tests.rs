@@ -181,3 +181,69 @@ fn ordered_mixed_home_every_keeps_armed_deadlines_for_expiry_with_concurrent_wai
     assert_eq!(expired_binding(&mut binding, &ready).unwrap(), [42]);
     assert!(binding.waits.armed.is_empty());
 }
+
+#[test]
+fn ordered_home_poll_does_not_retain_another_tasks_result_under_the_running_caller() {
+    struct Home;
+    impl Adapter for Home {
+        fn preflight(&self, _: &Request) -> Result<Option<Completion>, AdapterError> {
+            Ok(None)
+        }
+        fn call(&mut self, request: Request) -> Result<Completion, AdapterError> {
+            match request {
+                Request::ReadStdin { .. } => Ok(Completion::Input(Ok(vec![1, 2, 3]))),
+                Request::Close { .. } => Ok(Completion::Unit(Ok(()))),
+                _ => panic!("unexpected request {request:?}"),
+            }
+        }
+    }
+    let mut run = crate::host::BodyRun::new(1, false);
+    run.adapter = Some(Box::new(Home));
+    unsafe { run.use_ordered_home_dispatch() };
+    let outcome = run.run(
+        |ctx| unsafe {
+            crate::tasks::ordered::engine::enable(
+                ctx,
+                crate::ordered::Policy::admit(&Default::default(), None),
+            );
+            crate::tasks::ordered::events::enable(ctx);
+            crate::tasks::ordered::events::initial_host(ctx, Some(1), None);
+        },
+        |ctx| unsafe {
+            let _role = crate::tasks::role::Guard::new(ctx);
+            let run = (*ctx).run_ptr();
+            // A saved peer's poll runs synchronously on width-one home, while
+            // the caller's TLS task remains installed. Its owned completion
+            // belongs to the peer, never to the caller's initial-result slot.
+            Binding::get(ctx).waits.parked.insert(
+                7,
+                Parked {
+                    request: Request::ReadStdin { stdin: 12, max: 3 },
+                    borrowed: None,
+                    task: Some(42),
+                    completion: None,
+                },
+            );
+            let (done, completed) = poll_observed_home(run, 7, None, true).unwrap();
+            let completed = completed.unwrap();
+            assert!(done);
+            assert_eq!(completed.task, 42);
+            assert_eq!(completed.result, Ok(Completion::Input(Ok(vec![1, 2, 3]))));
+            assert!(
+                (*run).ordered_home_results.lock().unwrap().is_empty(),
+                "a scheduler poll must not create an issuing-task snapshot"
+            );
+            Binding::get(ctx).waits.parked.remove(&7);
+            // A subsequent real cleanup must still be observed and taken
+            // normally, retaining the strict duplicate-snapshot assertion.
+            assert_eq!(
+                crate::io::hirsel_rt_v2_io_close(ctx, 12, 0, 0),
+                crate::STATUS_OK
+            );
+            assert!((*run).ordered_home_results.lock().unwrap().is_empty());
+            crate::STATUS_OK
+        },
+    );
+    assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
+    assert_eq!(outcome.pending, 0);
+}

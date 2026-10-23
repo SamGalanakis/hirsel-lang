@@ -5,6 +5,33 @@
 use crate::context::RunShared;
 use crate::io::*;
 
+thread_local! {
+    static POLLING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// A saved request's poll owns its own evidence, even when width-one home
+/// still has the suspended caller's task installed in thread-local storage.
+/// Poll callbacks do not suspend; restore attribution before returning to code.
+pub(crate) struct Poll {
+    previous: bool,
+    _local: std::marker::PhantomData<std::rc::Rc<()>>,
+}
+
+impl Poll {
+    pub(crate) fn new() -> Self {
+        Self {
+            previous: POLLING.with(|polling| polling.replace(true)),
+            _local: std::marker::PhantomData,
+        }
+    }
+}
+
+impl Drop for Poll {
+    fn drop(&mut self) {
+        POLLING.with(|polling| polling.set(self.previous));
+    }
+}
+
 pub(crate) struct Snapshot {
     pub(crate) result: Result<Completion, AdapterError>,
     pub(crate) discovery: Option<Result<crate::host_waits::Discovery, &'static str>>,
@@ -19,7 +46,10 @@ impl HomeAdapter {
     fn observer(&self) -> Option<u32> {
         let ctx = crate::stop::running();
         // Home poll callbacks already have their own source-free observer.
-        if ctx.is_null() || unsafe { (*self.run).ordered_roots.get().is_none() } {
+        if ctx.is_null()
+            || unsafe { (*self.run).ordered_roots.get().is_none() }
+            || POLLING.with(std::cell::Cell::get)
+        {
             return None;
         }
         Some(unsafe { (*ctx).task_id })
