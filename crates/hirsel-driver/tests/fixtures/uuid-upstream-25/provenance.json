@@ -1,0 +1,145 @@
+{
+  "seed": 2026102513,
+  "selected_ids": 444,
+  "matrix": {
+    "parse": 256,
+    "mutations": 32,
+    "v4": 64,
+    "v7": 64,
+    "controls": 12,
+    "providers": 16
+  },
+  "oracles": {
+    "google_uuid": {
+      "revision": "2d3c2a9cc518326daf99a383f07c4d3c44317e4d",
+      "files": [
+        "uuid.go:95-155",
+        "uuid_test.go:28-82"
+      ]
+    },
+    "uuid_rs": {
+      "revision": "276c23628a669ca9fca637f3326c21b114e88049",
+      "files": [
+        "src/builder.rs:515-538",
+        "src/builder.rs:552-596",
+        "src/parser.rs:337-382",
+        "src/v7.rs:135-151"
+      ]
+    },
+    "rfc": "RFC 9562 Appendix A.3 and A.6"
+  },
+  "oracle_source_sha256": {
+    "generate.py": "5d9e662d290d98bba130e457dca70cbbd658987dfbf1f39a6e794094356588a3",
+    "setup-oracles.py": "e83a7ab01cecf45920bee352e128c6d04f9683756caf9c2224a77903bcc06cd1",
+    "google-oracle": "6ee1866bd8c556d8f3fb843ba71dfc007ed0f7de6b21fe553bd87a924ebf9d6c",
+    "go-oracle/main.go": "9a9e3d2639b7d2016f3b64d9742164072fac0a1e8c99ce4a7caec95ff58466d4",
+    "go-oracle/go.mod": "b66712595a2278628647abdd3ad8a972cb638af25e6de47a65652e941fa83567",
+    "rust-oracle/src/main.rs": "82d1e8923e7d743725856a519a37044f97e40f6858feff82b2985e411a170d2e",
+    "rust-oracle/Cargo.toml": "cfe0802f43a264c3624489efe5d9404ed764fa81f4ebd565a5ab179953f3c1ca",
+    "rust-oracle/Cargo.lock": "fc1041820aee4d9b2e43aaba2024bb976fcc27a48cf490a39fb8ef93089bb3aa",
+    "rust-oracle/target/release/uuid-oracle": "e0133c863c7ceb9b2eb454e4beb2b517283a31e3d1cff5e5f27418964dad15f9",
+    "google-uuid/uuid.go": "00d93a3f65d8b0063266e63ff0e16ac543e30a911fd35119bcf1a66437161360",
+    "google-uuid/uuid_test.go": "6d23625e6a86f809d76fcabfdddffd16fc438e60c610f71bdb1a2c0ccc7f942e",
+    "google-uuid/version4.go": "f252aeb4028659d83cbf7b037d4524f7c9b76cde1fdca1f6f7de310dab6f4dcd",
+    "uuid-rs/src/builder.rs": "d332dbf9380bd6275f8c416758a8971db875ce2a661440c8e476cc6f827736c9",
+    "uuid-rs/src/parser.rs": "e38573547b03d88764270ee5bd5347af380c4a331d7eb9175dcd0037a51af922",
+    "uuid-rs/src/timestamp.rs": "ba55182bef43450ed69dfb18a94fcee70eb7a0e9c0fcafbfeb47407780739350",
+    "uuid-rs/src/v7.rs": "e16d4942f62f1d118e776ae920464e5aa8a226bd178274bef3e9e0ca5803483e"
+  },
+  "spec_sha256": "08bfea2ffa8076c6f04ef5018844a425d547a73aee173a2679dc382e8bb75666",
+  "deviations": [
+    {
+      "id": "hirsel-braces",
+      "ids": [
+        "m24",
+        "m25"
+      ],
+      "reason": "google/uuid accepts arbitrary outer bytes at length 38; Hirsel requires braces. uuid-rs agrees with Hirsel.",
+      "spec": "`bits` holds the 16 bytes most significant first, so comparing `bits` orders\nversion 7 UUIDs by time. `parse` accepts, as Go google/uuid and uuid-rs, the\nhyphenated form `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`, the same in braces or\nafter `urn:uuid:` in any case, and 32 bare hex digits, in either case; the byte\nlength selects the form, so any other length is `Length(n)` and the first\ncharacter that does not fit is `Char(offset)`. `to_string` and `@format` write\nthe lowercase hyphenated form. `version` is the top four bits of byte 6 and\n`variant` the top bits of byte 8, whatever their values; `unix_ms` is the\n48-bit timestamp of a version 7 UUID of the RFC 9562 variant."
+    },
+    {
+      "id": "hirsel-byte-diagnostics",
+      "ids": [
+        "m00",
+        "m01",
+        "m02",
+        "m03",
+        "m04",
+        "m05",
+        "m06",
+        "m07",
+        "m08",
+        "m09",
+        "m10",
+        "m11",
+        "m12",
+        "m13",
+        "m14",
+        "m15",
+        "m16",
+        "m17",
+        "m18",
+        "m19",
+        "m20",
+        "m21",
+        "m22",
+        "m23",
+        "m24",
+        "m25",
+        "m26",
+        "m27",
+        "m28",
+        "m29",
+        "m30",
+        "m31"
+      ],
+      "reason": "Upstream error text and indices are retained raw. Hirsel length-first and first invalid byte diagnostics are expected from each deliberately positioned mutation, not translated from observed Hirsel results.",
+      "spec": "`bits` holds the 16 bytes most significant first, so comparing `bits` orders\nversion 7 UUIDs by time. `parse` accepts, as Go google/uuid and uuid-rs, the\nhyphenated form `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`, the same in braces or\nafter `urn:uuid:` in any case, and 32 bare hex digits, in either case; the byte\nlength selects the form, so any other length is `Length(n)` and the first\ncharacter that does not fit is `Char(offset)`. `to_string` and `@format` write\nthe lowercase hyphenated form. `version` is the top four bits of byte 6 and\n`variant` the top bits of byte 8, whatever their values; `unix_ms` is the\n48-bit timestamp of a version 7 UUID of the RFC 9562 variant."
+    },
+    {
+      "id": "hirsel-constructor-domain",
+      "ids": [
+        "length-0",
+        "length-1",
+        "length-2",
+        "length-3",
+        "length-4",
+        "length-5",
+        "length-6",
+        "length-7"
+      ],
+      "reason": "Rust builders take fixed-size arrays and truncate timestamps; Hirsel returns None for other lengths or millis >= 2^48.",
+      "spec": "`v4_from` stamps the version 4 and variant bits onto 16 bytes, keeping the other\n122. `v7_from` puts a millisecond Unix timestamp below 2^48 in the top 48 bits\nand 10 bytes below it, the version replacing the first byte's top four bits and\nthe variant the third byte's top two, as uuid-rs\n`Builder::from_unix_timestamp_millis`; other lengths or a larger timestamp are\n`None()`. `v4` draws 16 bytes from `Random` and `v7` reads the wall clock,\nrounding its nanoseconds down to milliseconds, then draws 10 bytes; a reading\nbefore 1970 is `BeforeEpoch()`. No state is kept between calls, so two version 7\nUUIDs of one millisecond are unordered (RFC 9562 section 6.2 makes the counter\noptional)."
+    },
+    {
+      "id": "hirsel-provider-contract",
+      "ids": [
+        "effect-00",
+        "effect-01",
+        "effect-02",
+        "effect-03",
+        "effect-04",
+        "effect-05",
+        "effect-06",
+        "effect-07",
+        "effect-08",
+        "effect-09",
+        "effect-10",
+        "effect-11",
+        "effect-12",
+        "effect-13",
+        "effect-14",
+        "effect-15"
+      ],
+      "reason": "Fixed scripted reads; negative wall and errors return before random. No ambient sources, counter or monotonic ordering requirement.",
+      "spec": "`v4_from` stamps the version 4 and variant bits onto 16 bytes, keeping the other\n122. `v7_from` puts a millisecond Unix timestamp below 2^48 in the top 48 bits\nand 10 bytes below it, the version replacing the first byte's top four bits and\nthe variant the third byte's top two, as uuid-rs\n`Builder::from_unix_timestamp_millis`; other lengths or a larger timestamp are\n`None()`. `v4` draws 16 bytes from `Random` and `v7` reads the wall clock,\nrounding its nanoseconds down to milliseconds, then draws 10 bytes; a reading\nbefore 1970 is `BeforeEpoch()`. No state is kept between calls, so two version 7\nUUIDs of one millisecond are unordered (RFC 9562 section 6.2 makes the counter\noptional).",
+      "core_clock": "`clock.monotonic` samples an `Instant` of its clock. Its `instant.ticks` are nanoseconds\nsince an origin fixed for the run (`clock.monotonic.ns@1`), and later samples never\ndecrease. `instant.checked_add(clock, start, n)` advances an `Instant of clock` by `n`\nnanoseconds, or returns `None()` when the ticks would pass `u64` MAX; it reads no clock\nand records nothing. `clock.wall` returns signed Unix nanoseconds. A failed sample returns\n`Unavailable()`, or `OutOfRange()` when the reading does not fit.",
+      "core_random": "`random.bytes(r, count)` returns exactly `count` bytes from the run's Random provider,\nor `Unavailable()` with no bytes; it never publishes a partial draw. A zero count returns\nempty `Bytes` without consulting the provider. A draw is nonblocking, like clock sampling,\nso it is not a cancellation point ([CONC-3](concurrency.md#conc-3-cancellation)), and each\ndraw is a recorded capability input. The provider is chosen at launch\n([providers](determinism.md#run-configuration)): `random.splitmix64@1` is a deterministic\nsimulation, predictable from the run's Random seed, and never protects a secret;\n`random.system@1` reads the host's cryptographically secure generator."
+    }
+  ],
+  "observation": "Every row compares raw u128 bits, canonical lowercase text, version, variant and unix_ms. Successful pure rows also check to_bytes/from_bytes and @format. Provider tapes enforce exact request order/count and short-circuit failures; same completion bytes reach every engine. Normal source/V check and runtime/tool failures are failed obligations.",
+  "rfc_sha256": "041870106b8701d9fa9261dcbc1679a6b7ab18cb179b37b69d7232431eac8042",
+  "rfc_url": "https://www.rfc-editor.org/rfc/rfc9562.txt",
+  "input_hash_format": "SHA256 of the UTF-8 canonical JSON input object (sorted keys, compact separators); text values encode the exact UTF-8 parser bytes; random_hex supplies exact provider bytes.",
+  "output_projection": "pipe-separated raw u128 decimal, canonical lowercase spelling, raw version nibble, variant ordinal (Ncs=0/Rfc9562=1/Microsoft=2/Future=3), optional millisecond timestamp; upstream RFC4122/NCS names are renamed to the public Hirsel variant names."
+}

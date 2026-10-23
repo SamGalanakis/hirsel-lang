@@ -1,0 +1,29 @@
+// Inputs and expected bytes are host-built literals; no expected UUID is parsed.
+fn project(id: uuid.Uuid) -> unique String {
+  let variant: u8 = match uuid.variant(id) {
+    Ncs() => 0, Rfc9562() => 1, Microsoft() => 2, Future() => 3,
+  }
+  let millis = match uuid.unix_ms(id) { Some(n) => f"{n}", None() => "-" }
+  f"{id.bits}|{uuid.to_string(id)}|{uuid.version(id)}|{variant}|{millis}"
+}
+fn append_id(label: String, id: uuid.Uuid, expected_bytes: Bytes, mut out: List[u8]) {
+  failure.check(uuid.to_bytes(id) == expected_bytes, Arithmetic())
+  failure.check(uuid.from_bytes(expected_bytes) == Some(id), Arithmetic())
+  failure.check(f"{id}" == uuid.to_string(id), Arithmetic())
+  text.append(mut out, f"{label}|{project(id)}\n")
+}
+fn parse_case(label: String, spelling: String, expected_bytes: Bytes, mut out: List[u8]) {
+  match uuid.parse(spelling) {
+    Ok(id) => append_id(label, id, expected_bytes, mut out),
+    Error(Length(n)) => text.append(mut out, f"{label}|Length|{n}\n"),
+    Error(Char(n)) => text.append(mut out, f"{label}|Char|{n}\n"),
+  }
+}
+fn build_case(label: String, seven: bool, millis: u64, random: Bytes, expected_bytes: Bytes, mut out: List[u8]) {
+  let found = if seven { uuid.v7_from(millis, random) } else { uuid.v4_from(random) }
+  match found {
+    Some(id) => append_id(label, id, expected_bytes, mut out),
+    None() => text.append(mut out, f"{label}|None\n"),
+  }
+}
+fn grant_error(e: GrantError) -> OutputError { OutputFault(1) }
