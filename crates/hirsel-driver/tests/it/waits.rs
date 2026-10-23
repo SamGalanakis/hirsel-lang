@@ -497,3 +497,173 @@ pub fn main(rt: Io) -> Result[(), AppError] {
         1
     );
 }
+
+/// A final check can wait after a mapped callback has already returned. Its
+/// callback result and the borrowed operation frame must survive that park.
+#[test]
+fn suspended_callback_checks_preserve_result_and_run_body_once() {
+    use hirsel_interp::{
+        Error, OperationContext, OperationResult, Operations, OperationsAdapter, Value,
+        library::Library,
+    };
+    struct DelayedCheck {
+        library: Library,
+        waiting: Option<(u64, OperationResult, usize, bool)>,
+        mapped: Option<u64>,
+        checks: usize,
+        polls: usize,
+        progressed: bool,
+    }
+    impl OperationsAdapter for DelayedCheck {
+        fn operations(&self) -> &dyn Operations {
+            &self.library
+        }
+        fn operations_mut(&mut self) -> &mut dyn Operations {
+            &mut self.library
+        }
+        fn call_resolved(
+            &mut self,
+            operation: hirsel_interp::OperationId,
+            call: hirsel_interp::OperationCall<'_>,
+            cx: &mut OperationContext<'_>,
+        ) -> Result<Option<OperationResult>, Error> {
+            let mapped = operation.name == "mapped.with";
+            let result = self.library.call_resolved(operation, call, cx)?;
+            if mapped {
+                let Some(OperationResult::Call { continuation, .. }) = &result else {
+                    panic!("mapped callback expected")
+                };
+                assert!(self.mapped.replace(*continuation).is_none());
+            }
+            Ok(result)
+        }
+        fn resume(
+            &mut self,
+            token: u64,
+            result: OperationResult,
+            arguments: &mut [Value],
+            cx: &mut OperationContext<'_>,
+        ) -> Result<OperationResult, Error> {
+            let checked = self.library.resume(token, result, arguments, cx)?;
+            if self.mapped != Some(token) {
+                return Ok(checked);
+            }
+            self.mapped = None;
+            assert!(self.waiting.is_none());
+            self.checks += 1;
+            let wait = 1 << 60;
+            self.waiting = Some((wait, checked, cx.stdout.len(), false));
+            Ok(OperationResult::Park {
+                token: wait,
+                wait: hirsel_interp::BlockedWait {
+                    spawn_path: self.library.task_path(),
+                    anchor: cx.anchor().unwrap().clone(),
+                    kind: "test.delayed.map_check".into(),
+                    targets: vec![],
+                },
+            })
+        }
+        fn poll(
+            &mut self,
+            token: u64,
+            cx: &mut OperationContext<'_>,
+        ) -> Result<Option<OperationResult>, Error> {
+            let Some((expected, _, start, polled)) = self.waiting.as_mut() else {
+                return self.library.poll(token, cx);
+            };
+            if token != *expected {
+                return self.library.poll(token, cx);
+            }
+            self.polls += 1;
+            if !*polled {
+                *polled = true;
+                return Ok(None);
+            }
+            self.progressed = cx.stdout.len() > *start;
+            Ok(Some(self.waiting.take().unwrap().1))
+        }
+    }
+    let source = r#"pub type E = Grant(GrantError) | Files(FileError)
+pub fn main(rt: Io) -> Result[(), E] {
+  let tasks = io.tasks(rt) ? Grant
+  let out = io.stdout(rt) ? Grant
+  let d = io.dir(rt, path.of("")) ? Files
+  file.write_bytes(d, path.of("mapped"), b"abc") ? Files
+  task.scope(tasks, fn(s: Scope) -> Result[(), E] {
+    let child = task.async(s, fn() -> Result[(), E] {
+      let mapping = file.map(d, path.of("mapped")) ? Files
+      let bytes = mapped.with(d, mapping, fn(view: Bytes) -> Bytes {
+        let _ = out.print(out, "callback once\n")
+        unique view
+      }) ? Files
+      failure.check(bytes == b"abc", Arithmetic())
+      let _ = out.print(out, "checked result\n")
+      Ok(())
+    })
+    for i in 0u64..32u64 { let _ = out.print(out, "sibling\n") }
+    task.await(s, take child)
+  })
+}
+"#;
+    let mut engine = source_std::engine();
+    let file = engine
+        .sources
+        .add("callback-check-waits.hir", source.into())
+        .unwrap();
+    let checked = check_progress(&mut engine, file, &default_context()).unwrap();
+    assert!(checked.diagnostics.is_empty(), "{:?}", checked.diagnostics);
+    let runtime = engine.runtime_types().unwrap();
+    let sources = engine.sources.clone();
+    let run = RunConfiguration {
+        entry: entry_path(&default_context()),
+        hash_seed: 0,
+        inputs: vec![],
+    };
+    let mut host = DelayedCheck {
+        library: Library::new(&run, SimulationConfig::default()).unwrap(),
+        waiting: None,
+        mapped: None,
+        checks: 0,
+        polls: 0,
+        progressed: false,
+    };
+    let root = host.library.simulation.grant_root("Io").unwrap();
+    let execution = hirsel_interp::run_with_runtime(
+        &mut engine,
+        &sources,
+        &run,
+        vec![root],
+        Default::default(),
+        &mut host,
+        &runtime,
+    )
+    .unwrap();
+    assert!(
+        matches!(
+            execution.outcome,
+            hirsel_interp::Outcome::Returned { exit_code: 0, .. }
+        ),
+        "{:?}",
+        execution.outcome
+    );
+    assert_eq!(host.checks, 1, "one final callback check");
+    assert!(host.polls >= 2, "check actually returned Pending");
+    assert!(
+        host.progressed,
+        "sibling ran while checked result was retained"
+    );
+    assert!(host.waiting.is_none());
+    for expected in [
+        b"callback once\n".as_slice(),
+        b"checked result\n".as_slice(),
+    ] {
+        assert_eq!(
+            execution
+                .stdout
+                .windows(expected.len())
+                .filter(|part| *part == expected)
+                .count(),
+            1
+        );
+    }
+}

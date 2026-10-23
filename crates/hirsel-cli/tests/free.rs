@@ -1954,3 +1954,123 @@ fn f1_canceled_network_requests_replay_checked_precedence() {
         },
     );
 }
+
+#[test]
+fn f1_mapped_callbacks_and_atomic_files_replay_without_the_grant_tree() {
+    f1_corpus_matrix_with_io(
+        "mapped-callbacks",
+        r#"pub type E = Grant(GrantError) | Files(FileError)
+pub fn main(rt: Io, args: Args) -> Result[(), E] {
+  let tasks = io.tasks(rt) ? Grant
+  let d = io.dir(rt, path.of("data")) ? Files
+  file.write_bytes(d, path.of("mapped"), b"abc") ? Files
+  let mapping = file.map(d, path.of("mapped")) ? Files
+  let alias = take mapping
+  let copied = mapped.with(d, alias, fn(view: Bytes) -> Result[Bytes, FileError] {
+    failure.check(view == b"abc", Arithmetic())
+    let mut atomic = file.create_atomic(d, path.of("saved"))?
+    file.write_all(d, mut atomic, view)?
+    file.commit(d, take atomic)?
+    Ok(bytes.from_list([view[0u64], view[1u64], view[2u64]]))
+  }) ? Files
+  failure.check(copied == Ok(b"abc"), Arithmetic())
+  let saved = file.read_bytes(d, path.of("saved")) ? Files
+  failure.check(saved == b"abc", Arithmetic())
+  let checked = mapped.with(d, alias, fn(view: Bytes) -> Result[u64, FileError] {
+    let count = bytes.len(view)
+    let mut shortened = file.create(d, path.of("mapped"))?
+    file.append(d, mut shortened, b"x")?
+    Ok(count)
+  })
+  failure.check(match checked { Error(Truncated()) => true, _ => false }, Arithmetic())
+  let mut abandoned = file.create_atomic(d, path.of("abandoned")) ? Files
+  file.write_all(d, mut abandoned, b"pending") ? Files
+  Ok(())
+}
+"#,
+        |scratch| {
+            let host = scratch.path("data");
+            std::fs::create_dir(&host).unwrap();
+            serde_json::json!({"tasks":"tasks.free@1","dirs":[{"path":"data","host":host,"access":"read_write"}]})
+        },
+    );
+}
+
+#[test]
+fn f1_watch_events_and_owned_close_replay_without_a_watcher() {
+    f1_corpus_matrix_with_io(
+        "watch-events",
+        r#"pub type E = Grant(GrantError) | Files(FileError)
+pub fn main(rt: Io, args: Args) -> Result[(), E] {
+  let tasks = io.tasks(rt) ? Grant
+  let d = io.dir(rt, path.of("data")) ? Files
+  let mut watch = file.watch(d, path.of(""), false) ? Files
+  let mut opened = file.create(d, path.of("created")) ? Files
+  file.append(d, mut opened, b"x") ? Files
+  file.rename(d, path.of("created"), path.of("renamed")) ? Files
+  file.remove(d, path.of("renamed")) ? Files
+  failure.check(match watcher.next(d, mut watch) ? Files { Created(p) => path.text(p) == "created", _ => false }, Arithmetic())
+  failure.check(match watcher.next(d, mut watch) ? Files { Modified(p) => path.text(p) == "created", _ => false }, Arithmetic())
+  failure.check(match watcher.next(d, mut watch) ? Files { Renamed(a,b) => path.text(a) == "created" && path.text(b) == "renamed", _ => false }, Arithmetic())
+  failure.check(match watcher.next(d, mut watch) ? Files { Removed(p) => path.text(p) == "renamed", _ => false }, Arithmetic())
+  task.scope(tasks, fn(s: Scope) -> Result[(), E] {
+    let mut owned = take watch
+    let creating = task.async(s, fn() -> bool {
+      match file.create(d, path.of("wake")) { Ok(_) => true, Error(_) => false }
+    })
+    failure.check(match watcher.next(d, mut owned) ? Files { Created(p) => path.text(p) == "wake", _ => false }, Arithmetic())
+    failure.check(task.await(s, take creating), Arithmetic())
+    file.remove(d, path.of("wake")) ? Files
+    Ok(())
+  })?
+  Ok(())
+}
+"#,
+        |scratch| {
+            let host = scratch.path("data");
+            std::fs::create_dir(&host).unwrap();
+            serde_json::json!({"tasks":"tasks.free@1","dirs":[{"path":"data","host":host,"access":"read_write"}]})
+        },
+    );
+}
+
+#[test]
+fn f1_canceled_watcher_completions_replay_without_notifications() {
+    f1_corpus_matrix_with_io(
+        "canceled-watcher",
+        r#"pub type E = Grant(GrantError) | Files(FileError)
+pub fn main(rt: Io, args: Args) -> Result[(), E] {
+  let tasks = io.tasks(rt) ? Grant
+  let d = io.dir(rt, path.of("data")) ? Files
+  task.scope(tasks, fn(s: Scope) {
+    let (ready, observed): (Sender[bool], Receiver[bool]) = channel.open(tasks)
+    let (release, released): (Sender[bool], Receiver[bool]) = channel.open(tasks)
+    let mut rx = take observed
+    let mut tx = take release
+    let child = task.async(s, fn() -> bool {
+      let mut ready_tx = take ready
+      let mut release_rx = take released
+      let mut watch = match file.watch(d, path.of(""), false) { Ok(value) => take value, Error(_) => return false }
+      let _ = channel.send(tasks, mut ready_tx, true)
+      let _ = channel.receive(tasks, mut release_rx)
+      let first = watcher.next(d, mut watch) == Error(Canceled(Requested()))
+      let second = watcher.next(d, mut watch) == Error(Canceled(Requested()))
+      let invalid = match file.watch(d, path.of("../outside"), false) { Error(FileFault(_)) => true, _ => false }
+      let canceled = match file.watch(d, path.of(""), false) { Error(Canceled(Requested())) => true, _ => false }
+      first && second && invalid && canceled
+    })
+    let _ = channel.receive(tasks, mut rx)
+    task.cancel(s, child)
+    let _ = channel.send(tasks, mut tx, true)
+    failure.check(task.await(s, take child), Arithmetic())
+  })
+  Ok(())
+}
+"#,
+        |scratch| {
+            let host = scratch.path("data");
+            std::fs::create_dir(&host).unwrap();
+            serde_json::json!({"tasks":"tasks.free@1","dirs":[{"path":"data","host":host,"access":"read_write"}]})
+        },
+    );
+}

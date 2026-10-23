@@ -12,6 +12,10 @@ pub(super) struct Drop {
     id: u64,
     kind: String,
 }
+pub(super) struct Check {
+    request: Option<Call>,
+    result: OperationResult,
+}
 struct OwnedCall {
     runtime: hirsel_interp::aggregate::RuntimeTypes,
     path: DefPath,
@@ -54,6 +58,11 @@ impl HostLibrary {
             "io.signals" => R::Signals { io: 1 },
             "env.get" | "env.narrow" | "stdin.read" => self.input_request(name, a)?,
             "signal.wait" => self.signal_request(a)?,
+            "watcher.next" => self.watch_host_request(a)?,
+            "mapped.with" => R::MapView {
+                directory: self.id(&a[0])?,
+                mapped: self.id(&a[1])?,
+            },
             "random.bytes" if word(&a[1])? != 0 => R::RandomBytes {
                 random: self.id(&a[0])?,
                 count: word(&a[1])?,
@@ -201,6 +210,88 @@ impl HostLibrary {
                     cx,
                 )
                 .map(Some),
+        }
+    }
+    /// The callback result remains owned while the final map check is pending.
+    pub(super) fn free_mapped_check(
+        &mut self,
+        directory: u64,
+        mapped: u64,
+        result: OperationResult,
+        cx: &mut OperationContext<'_>,
+    ) -> Result<OperationResult, Error> {
+        let entered = self.library.begin_native_host()?;
+        let request = if entered {
+            Some(
+                Call::new(
+                    self.free.as_ref().unwrap(),
+                    R::MapCheck { directory, mapped },
+                )
+                .map_err(Error::InvalidTir)?,
+            )
+        } else {
+            None
+        };
+        let token = self.next_wait;
+        self.next_wait += 1;
+        self.free_checks.insert(token, Check { request, result });
+        if !entered {
+            return Ok(self.library.native_free_cut(cx));
+        }
+        Ok(self
+            .free_poll_check(token, cx)?
+            .unwrap_or(OperationResult::Park {
+                token,
+                wait: hirsel_interp::BlockedWait {
+                    spawn_path: self.library.task_path(),
+                    anchor: cx.anchor().cloned().ok_or_else(invalid)?,
+                    kind: "free.host.map_check".into(),
+                    targets: vec![],
+                },
+            }))
+    }
+    pub(super) fn free_poll_check(
+        &mut self,
+        token: u64,
+        cx: &mut OperationContext<'_>,
+    ) -> Result<Option<OperationResult>, Error> {
+        let mut check = self.free_checks.remove(&token).unwrap();
+        let Some(request) = &mut check.request else {
+            self.free_checks.insert(token, check);
+            return Ok(Some(self.library.native_free_cut(cx)));
+        };
+        match self.free_advance(request)? {
+            Poll::Pending => {
+                self.free_checks.insert(token, check);
+                Ok(None)
+            }
+            Poll::Cut => {
+                self.free_checks.insert(token, check);
+                Ok(Some(self.library.native_free_cut(cx)))
+            }
+            Poll::Complete(completion) => {
+                let result = mapped_checked(
+                    check.result,
+                    completion.map_err(|e| Error::Unavailable(format!("Free map check: {e:?}")))?,
+                )?;
+                let path = self.library.task_path();
+                if self
+                    .library
+                    .with_free_session(|session| Ok(session.at_cut(&path)))?
+                {
+                    // Retain the result until the cut ends the run, as native frames do.
+                    self.free_checks.insert(
+                        token,
+                        Check {
+                            request: None,
+                            result,
+                        },
+                    );
+                    Ok(Some(self.library.native_free_cut(cx)))
+                } else {
+                    Ok(Some(result))
+                }
+            }
         }
     }
     pub(super) fn free_drop(

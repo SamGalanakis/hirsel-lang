@@ -243,6 +243,32 @@ impl TlsSetup {
     }
 }
 
+fn mapped_checked(result: OperationResult, completion: C) -> Result<OperationResult, Error> {
+    let OperationResult::Complete {
+        value,
+        mut released,
+        ..
+    } = result
+    else {
+        return Err(invalid());
+    };
+    // A truncated mapping's body result is dropped after the check.
+    let value = match completion {
+        C::Unit(Ok(())) => ok(value),
+        C::Unit(Err(e)) => {
+            released.push(value);
+            file_error(e)
+        }
+        _ => return Err(invalid()),
+    };
+    Ok(OperationResult::Complete {
+        value,
+        arguments: vec![],
+        consumed: vec![],
+        released,
+    })
+}
+
 /// The interpreter's host Io: the admitted real adapter, which writes the process's
 /// standard streams itself and may stream a tape, or a recording's replay.
 pub(crate) enum HostIo {
@@ -335,6 +361,7 @@ pub(crate) struct HostLibrary {
     free_report: Option<hirsel_rt::free_replay::Report>,
     free_waits: BTreeMap<u64, free::Wait>,
     free_drops: BTreeMap<u64, free::Drop>,
+    free_checks: BTreeMap<u64, free::Check>,
     pending_free_drop: Option<OperationResult>,
     free_ready: Option<(R, Result<C, hirsel_rt::io::AdapterError>)>,
     pub io: HostIo,
@@ -439,6 +466,7 @@ impl HostLibrary {
             free,
             free_waits: BTreeMap::new(),
             free_drops: BTreeMap::new(),
+            free_checks: BTreeMap::new(),
             pending_free_drop: None,
             free_ready: None,
             next_wait: 1 << 62,
@@ -492,6 +520,10 @@ impl HostLibrary {
         a: &[Value],
         cx: &mut OperationContext<'_>,
     ) -> Result<OperationResult, Error> {
+        if self.free_ready.is_some() {
+            self.yield_now = true;
+            return self.watch_request(a, 0);
+        }
         let token = self.next_wait;
         self.next_wait += 1;
         match self.watch_request(a, token) {
@@ -518,15 +550,21 @@ impl HostLibrary {
             },
         })
     }
-    /// Issue `watcher.next` under `token`: its event, or Blocked while none has arrived.
-    fn watch_request(&mut self, a: &[Value], token: u64) -> Result<OperationResult, Error> {
-        let request = R::WatchNext {
+    fn watch_host_request(&self, a: &[Value]) -> Result<R, Error> {
+        Ok(R::WatchNext {
             directory: self.id(&a[0])?,
             watcher: self.id(&a[1])?,
-        };
-        self.io.adapter().enter(token);
+        })
+    }
+    /// Issue `watcher.next` under `token`: its event, or Blocked while none has arrived.
+    fn watch_request(&mut self, a: &[Value], token: u64) -> Result<OperationResult, Error> {
+        let request = self.watch_host_request(a)?;
+        let checked = self.free_ready.is_some();
+        if !checked {
+            self.io.adapter().enter(token);
+        }
         let completion = self.host(request);
-        if !matches!(completion, Err(Error::Blocked(_))) {
+        if !checked && !matches!(completion, Err(Error::Blocked(_))) {
             self.io.adapter().finish(token);
         }
         let C::Watch(result) = completion? else {
@@ -2366,30 +2404,15 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
                 .library
                 .resume(continuation, result, arguments, context);
         };
-        let OperationResult::Complete {
-            value,
-            mut released,
-            ..
-        } = result
-        else {
+        if !matches!(result, OperationResult::Complete { .. }) {
             return Ok(result);
-        };
+        }
         self.yield_now = true;
-        // A truncated mapping's body result is dropped after the check.
-        let value = match self.host(R::MapCheck { directory, mapped })? {
-            C::Unit(Ok(())) => ok(value),
-            C::Unit(Err(e)) => {
-                released.push(value);
-                file_error(e)
-            }
-            _ => return Err(invalid()),
-        };
-        Ok(OperationResult::Complete {
-            value,
-            arguments: vec![],
-            consumed: vec![],
-            released,
-        })
+        if self.free.is_some() {
+            return self.free_mapped_check(directory, mapped, result, context);
+        }
+        let completion = self.host(R::MapCheck { directory, mapped })?;
+        mapped_checked(result, completion)
     }
     fn entry_returned(
         &mut self,
@@ -2577,6 +2600,9 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
     ) -> Result<Option<OperationResult>, Error> {
         if self.free_drops.contains_key(&token) {
             return self.free_poll_drop(token, cx);
+        }
+        if self.free_checks.contains_key(&token) {
+            return self.free_poll_check(token, cx);
         }
         if self.free_waits.contains_key(&token) {
             return self.free_poll(token, cx);
