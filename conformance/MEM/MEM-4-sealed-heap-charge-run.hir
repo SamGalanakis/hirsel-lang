@@ -1,0 +1,30 @@
+// rule: MEM-4
+// expect: run
+fn fits(cap: u64) -> u64 {
+  let outcome = arena.bounded(
+    cap,
+    fn(a: Arena) -> Region[List[u64]] {
+      let root: List[u64] in heap = [1u64, 2u64]
+      arena.seal(take a, take root)
+    }
+  )
+  match take outcome {
+    Ok(r) => {
+      let mut owned = take r
+      region.with(
+        mut owned,
+        fn(root: List[u64]) -> u64 {
+          list.len(root)
+        }
+      )
+    },
+    Error(e) => 0u64,
+  }
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  failure.check(fits(15u64) == 0u64, Bounds())
+  failure.check(fits(16u64) == 2u64, Bounds())
+  failure.check(fits(17u64) == 2u64, Bounds())
+  Ok(())
+}

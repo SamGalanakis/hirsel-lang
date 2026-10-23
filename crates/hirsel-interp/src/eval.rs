@@ -781,6 +781,83 @@ pub(crate) async fn execute_frames<O: crate::ownership_trace::Observer>(
         {
             let frame = frames.last_mut().unwrap();
             match result {
+                OperationResult::SealArena { arena, root_type } => {
+                    if !state.taken.contains(&0)
+                        || !state.taken.contains(&1)
+                        || !matches!(state.arguments.first(), Some(Value::Handle { kind, id })
+                            if kind == crate::checked::ARENA_HANDLE && *id == arena)
+                    {
+                        return Err(invalid("seal request does not own its grant and root"));
+                    }
+                    let root = state
+                        .arguments
+                        .get(1)
+                        .ok_or_else(|| invalid("missing seal root"))?;
+                    let charge = budgets
+                        .storage
+                        .seal_charge(runtime, arena, root_type, root)?;
+                    let charged = match charge {
+                        crate::inventory::Charge::Bytes(bytes) => budgets.charge(arena, bytes),
+                        crate::inventory::Charge::Overflow if budgets.bounded(arena) => Err(arena),
+                        crate::inventory::Charge::Overflow => Ok(()),
+                    };
+                    let result = if let Err(arena) = charged {
+                        budgets.exhausted(arena, execution.failures.len());
+                        OperationResult::Failed(failure(
+                            sources,
+                            state.anchor.site,
+                            "MEM-6",
+                            "OutOfSpace",
+                        )?)
+                    } else {
+                        let prepared = budgets.storage.prepare_owner(
+                            runtime,
+                            arena,
+                            root_type,
+                            root,
+                            &operation_allocation_site(frame, &state.anchor)?,
+                        )?;
+                        let id = budgets.storage.commit_owner(prepared)?;
+                        if let Some(check) = &frame.check {
+                            check.state.borrow_mut().constructed += 1;
+                        }
+                        OperationResult::returned(Value::Handle {
+                            kind: "Region".into(),
+                            id,
+                        })
+                        .transferring([0, 1])
+                    };
+                    frame.operation = Some(Box::new((result, state)));
+                }
+                OperationResult::BorrowRegion {
+                    owner,
+                    root_type,
+                    mut result,
+                } => {
+                    if state.root_loan.is_some() {
+                        return Err(invalid("duplicate Region read request"));
+                    }
+                    if !state.mut_places.iter().any(|(index, _)| *index == 0)
+                        || !matches!(state.arguments.first(), Some(Value::Handle { kind, id })
+                            if kind == "Region" && *id == owner)
+                    {
+                        return Err(invalid("Region read request lacks exclusive owner custody"));
+                    }
+                    let OperationResult::Call { arguments, .. } = result.as_mut() else {
+                        return Err(invalid("Region read did not schedule a callback"));
+                    };
+                    if arguments.len() != 1 {
+                        return Err(invalid("Region root callback arity"));
+                    }
+                    let (root, loan) = budgets.storage.borrow_owner(
+                        owner,
+                        root_type,
+                        frame.check.as_ref().map(|c| &c.state),
+                    )?;
+                    arguments[0] = root;
+                    state.root_loan = Some(loan);
+                    frame.operation = Some(Box::new((*result, state)));
+                }
                 OperationResult::Park { token, wait } => {
                     frame.operation =
                         Some(Box::new((OperationResult::Park { token, wait }, state)));
@@ -905,7 +982,9 @@ pub(crate) async fn execute_frames<O: crate::ownership_trace::Observer>(
                                     // A lent slot has an exact origin. Structural
                                     // equality can also match the lookup key or
                                     // another argument with a shorter lifetime.
-                                    let shadow = if let Some(target) = writebacks
+                                    let shadow = if parameter == 0 && state.root_loan.is_some() {
+                                        state.root_loan.as_ref().unwrap().shadow()
+                                    } else if let Some(target) = writebacks
                                         .iter()
                                         .find(|target| target.parameter == parameter)
                                     {
@@ -1131,6 +1210,7 @@ pub(crate) async fn execute_frames<O: crate::ownership_trace::Observer>(
                                         writebacks,
                                     })),
                                     callback_mut_arguments: mut_arguments,
+                                    root_loan: None,
                                     bounds: frame.check.as_ref().map(|check| {
                                         operation_bounds(
                                             &runtime.types,
@@ -1559,6 +1639,29 @@ pub(crate) async fn execute_frames<O: crate::ownership_trace::Observer>(
                 crate::resources::Work::Release(mut value, anchor, caller) => {
                     if value.enrolled_arena_block() {
                         value.discard();
+                        continue;
+                    }
+                    if let Value::Handle { kind, id } = &value
+                        && kind == "Region"
+                    {
+                        let mut owner = budgets.storage.release_owner(*id)?;
+                        if let Some(check) = &frame.check {
+                            check.state.borrow_mut().released += 1;
+                        }
+                        frame.work.push_back(crate::resources::Work::Release(
+                            std::mem::replace(&mut owner.root, Value::Unit),
+                            anchor.clone(),
+                            caller.clone(),
+                        ));
+                        for (_, mut retained) in std::mem::take(&mut owner.retained) {
+                            release_fields(
+                                frame,
+                                &mut retained.value,
+                                retained.source.anchor,
+                                caller.clone(),
+                            )?;
+                            retained.value.discard();
+                        }
                         continue;
                     }
                     // The lexical scope guard owns arena storage. Consuming a
@@ -2607,6 +2710,7 @@ pub(crate) async fn execute_frames<O: crate::ownership_trace::Observer>(
                                     already_failed: false,
                                     callback: None,
                                     callback_mut_arguments: vec![],
+                                    root_loan: None,
                                     bounds: None,
                                 },
                             )));
@@ -2951,6 +3055,7 @@ pub(crate) async fn execute_frames<O: crate::ownership_trace::Observer>(
                                     already_failed: false,
                                     callback: None,
                                     callback_mut_arguments: vec![],
+                                    root_loan: None,
                                     bounds,
                                 },
                             )));
@@ -5444,6 +5549,7 @@ fn enqueue_owned(frame: &mut Frame, state: &mut crate::resources::OperationState
 }
 
 fn retire_operation(frame: &mut Frame, state: &mut crate::resources::OperationState) {
+    state.root_loan.take();
     if let Some(activation) = state.activation.take() {
         frame
             .work
@@ -5500,7 +5606,9 @@ fn release_operation_result(
                 ));
             }
         }
-        OperationResult::ArenaCharge { result, .. } => crate::resources::discard_result(*result),
+        OperationResult::ArenaCharge { result, .. }
+        | OperationResult::BorrowRegion { result, .. } => crate::resources::discard_result(*result),
+        OperationResult::SealArena { .. } => (),
         OperationResult::Failed(_)
         | OperationResult::UndefinedBehavior(_)
         | OperationResult::Park { .. }

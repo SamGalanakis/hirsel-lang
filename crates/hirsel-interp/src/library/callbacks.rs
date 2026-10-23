@@ -106,7 +106,7 @@ fn comparator(by: &Value) -> Result<Value, Error> {
     fields[0].clone().ok_or_else(|| invalid("dead comparator"))
 }
 impl Library {
-    fn schedule(
+    pub(super) fn schedule(
         &mut self,
         pending: Pending,
         callee: Value,

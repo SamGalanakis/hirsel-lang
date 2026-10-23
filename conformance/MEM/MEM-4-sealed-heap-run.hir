@@ -1,0 +1,26 @@
+// rule: MEM-4
+// expect: run
+// The owner survives its arena callback and two independent read invocations.
+pub fn main(t: Test) -> Result[(), ()] {
+  let mut r: Region[List[u64]] = arena.with(
+    fn(a: Arena) -> Region[List[u64]] {
+      let root: List[u64] in heap = [11u64, 12u64]
+      arena.seal(take a, take root)
+    }
+  )
+  let first = region.with(
+    mut r,
+    fn(root: List[u64]) -> u64 {
+      list.len(root)
+    }
+  )
+  let second = region.with(
+    mut r,
+    fn(root: List[u64]) -> u64 {
+      root[1]
+    }
+  )
+  failure.check(first == 2u64, Bounds())
+  failure.check(second == 12u64, Bounds())
+  Ok(())
+}

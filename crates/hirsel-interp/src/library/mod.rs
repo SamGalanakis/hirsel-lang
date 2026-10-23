@@ -24,6 +24,7 @@ pub use launch::{
 mod callbacks;
 pub mod race;
 mod root_trace;
+mod sealed;
 mod shared;
 mod slots;
 pub mod walk;

@@ -2098,7 +2098,8 @@ primary_operations! { library, call, context, name, a, value;
         let result = library.synchronization_call(name, &call, context);
         if result.is_err() && let Some(saved) = saved { library.synchronizers = saved; }
         return result.map(Some); },
-    Unavailable: "arena.seal" | "region.with" => { return Err(Error::Unavailable(format!("{name} requires M2 runtime"))); },
+    Primitive: "arena.seal" => { return super::sealed::seal(call).map(Some); },
+    Primitive: "region.with" => { return library.region_with(call).map(Some); },
     Capability: "net.narrow" | "net.resolve" | "net.connect" | "net.connect_addr" | "net.read" | "net.read_into" | "net.write" | "net.write_all" | "net.shutdown" | "net.set_read_timeout" | "net.set_write_timeout" | "net.peer_addr" | "net.close" | "net.split" | "net.join" | "read_half.read" | "read_half.read_into" | "read_half.set_timeout" | "read_half.close" | "write_half.write" | "write_half.write_all" | "write_half.shutdown" | "write_half.set_timeout" | "write_half.close" | "tls.connect" | "tls.connect_as" | "tls.connect_with" | "tls.accept" | "tls.peer" | "tls.negotiated_protocol" | "tls.close" | "test.net" | "net.listen" | "net.unix_connect" | "net.unix_listen" | "net.accept" | "net.local_addr" | "net.udp_bind" | "udp.send_to" | "udp.recv_from" | "udp.close" => {
         return library.network_call(name, &call, context).map(Some);
     },

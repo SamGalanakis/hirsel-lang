@@ -653,10 +653,9 @@ fn same_seed_configuration_events_replay_and_explicit_clock_env() {
     assert_eq!(lib.simulation.events, events);
 }
 #[test]
-fn m2_and_unknown_nominal_paths_have_distinct_unavailable_outcomes() {
+fn unknown_nominal_paths_are_not_library_operations() {
     let mut h = Harness::new(Default::default());
     let t = h.types.intern(ty(TypeKind::Tuple(vec![].into())));
-    let path = hirsel_syntax::DefPath::core("arena.seal");
     let mut context = OperationContext {
         trace_mode: Default::default(),
         anchor: None,
@@ -665,21 +664,6 @@ fn m2_and_unknown_nominal_paths_have_distinct_unavailable_outcomes() {
         stdout: &mut h.stdout,
         trace: &mut h.trace,
     };
-    assert!(matches!(
-        h.library.call(
-            OperationCall {
-                runtime: &crate::support::runtime(),
-                path: &path,
-                generics: &[],
-                arguments: &mut [],
-                result_type: t,
-                types: &h.types,
-                site: Span::default()
-            },
-            &mut context
-        ),
-        Err(Error::Unavailable(_))
-    ));
     let path = support::path("out.print");
     assert_eq!(
         h.library

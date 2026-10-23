@@ -21,6 +21,7 @@ pub(crate) enum Ending {
 pub(crate) struct OperationState {
     pub activation: Option<crate::depth::Guard>,
     pub caller: Option<crate::frame::CallerSite>,
+    pub root_loan: Option<crate::sealed_storage::RootLoan>,
     pub arguments: Vec<Value>,
     pub owned: Vec<Value>,
     /// Incoming owners remain live until a completion explicitly transfers them.
@@ -88,7 +89,8 @@ pub(crate) fn result_bytes(result: &crate::OperationResult) -> u64 {
             .fold(0u64, u64::saturating_add)
     };
     match result {
-        ArenaCharge { result, .. } => result_bytes(result),
+        ArenaCharge { result, .. } | BorrowRegion { result, .. } => result_bytes(result),
+        SealArena { .. } => 0,
         Complete {
             value,
             arguments,
@@ -113,7 +115,9 @@ pub(crate) fn result_bytes(result: &crate::OperationResult) -> u64 {
 }
 pub(crate) fn discard_result(result: crate::OperationResult) {
     match result {
-        crate::OperationResult::ArenaCharge { result, .. } => discard_result(*result),
+        crate::OperationResult::ArenaCharge { result, .. }
+        | crate::OperationResult::BorrowRegion { result, .. } => discard_result(*result),
+        crate::OperationResult::SealArena { .. } => (),
         crate::OperationResult::Complete {
             value,
             arguments,

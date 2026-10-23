@@ -1,0 +1,33 @@
+// rule: MEM-4
+// expect: run
+// Private owner and loan bookkeeping adds no MEM-6 logical allocation charge.
+pub fn main(t: Test) -> Result[(), ()] {
+  let outcome = arena.bounded(
+    0u64,
+    fn(a: Arena) -> Region[u64] {
+      let root = 7u64
+      arena.seal(take a, take root)
+    }
+  )
+  let value = match take outcome {
+    Ok(r) => {
+      let mut owned = take r
+      let first = region.with(
+        mut owned,
+        fn(root: u64) -> u64 {
+          root
+        }
+      )
+      let second = region.with(
+        mut owned,
+        fn(root: u64) -> u64 {
+          root
+        }
+      )
+      first + second
+    },
+    Error(e) => 0u64,
+  }
+  failure.check(value == 14u64, Bounds())
+  Ok(())
+}

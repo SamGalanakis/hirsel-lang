@@ -23,9 +23,9 @@ mod parked;
 mod profile;
 mod provider;
 mod resources;
-mod sealed_storage;
 mod runs;
 pub mod scalar;
+mod sealed_storage;
 pub mod structural;
 pub mod type_arguments;
 pub mod value;
@@ -588,6 +588,17 @@ pub struct CallbackWriteback {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum OperationResult {
+    /// The evaluator prepares/commits the already-admitted taken grant/root.
+    SealArena {
+        arena: u64,
+        root_type: TypeId,
+    },
+    /// The evaluator fills the scheduled callback's root and retains its loan.
+    BorrowRegion {
+        owner: u64,
+        root_type: TypeId,
+        result: Box<OperationResult>,
+    },
     /// Deferred arena charge, before transferring any incoming owners.
     ArenaCharge {
         arena: u64,

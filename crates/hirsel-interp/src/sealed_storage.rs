@@ -4,6 +4,8 @@ use crate::inventory::{ArenaInventory, Charge, ChargeRoot, heap_charge, value_re
 use crate::{Error, Value, aggregate::RuntimeTypes, invalid};
 use hirsel_types::{BuiltinType, GenericArgument, TypeId, TypeKind};
 use std::collections::BTreeMap;
+mod owner;
+pub(crate) use owner::RootLoan;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct AllocationSite {
@@ -44,6 +46,7 @@ pub(crate) struct Retained {
 #[derive(Default, Debug)]
 pub(crate) struct Storage {
     arenas: BTreeMap<u64, ArenaInventory<Retained>>,
+    owners: Vec<Option<owner::Owner>>,
 }
 
 impl Storage {
@@ -276,6 +279,12 @@ impl Storage {
             .values()
             .flat_map(|a| a.entries().values())
             .map(|entry| entry.payload.value.logical_bytes())
+            .chain(
+                self.owners
+                    .iter()
+                    .flatten()
+                    .map(owner::Owner::logical_bytes),
+            )
             .fold(0, u64::saturating_add)
     }
 

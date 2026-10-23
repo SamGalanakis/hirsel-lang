@@ -799,7 +799,9 @@ pub(crate) fn resources_in(value: &Value) -> u64 {
     let mut count = 0;
     let mut work = vec![value];
     while let Some(v) = work.pop() {
-        if matches!(v, Value::Resource { .. } | Value::ResourceVariant { .. }) {
+        if matches!(v, Value::Resource { .. } | Value::ResourceVariant { .. })
+            || matches!(v, Value::Handle { kind, .. } if kind == "Region")
+        {
             count += 1;
         }
         if let Some(fields) = v.fields() {
@@ -897,6 +899,9 @@ impl State {
             })
             .collect::<Vec<_>>();
         shadow.substitute(&map);
+    }
+    pub fn sealed_view(&mut self) -> u32 {
+        self.instance(Kind::Region)
     }
     pub fn arena(&mut self) -> u32 {
         self.instance(Kind::Arena)
