@@ -605,13 +605,17 @@ impl Importer<'_> {
                         // A view temporary owns nothing.
                         return Ok(Step2::Skip);
                     }
+                    let unprojected_root = tp.projection.is_empty().then_some(tp.root);
                     let p = self.place(*place)?;
-                    if tp.projection.is_empty()
+                    if unprojected_root.is_some()
                         && self.borrowed_storage(p.slot)
                         && self.out.types[p.ty.index()].repr == ValueRepr::Arena
                         && self.body.arena_scope_grant.as_ref().is_some_and(|grant| {
-                            self.body.parameters.get(grant.arena_parameter.0 as usize)
-                                == Some(&tp.root)
+                            self.body
+                                .parameters
+                                .get(grant.arena_parameter.0 as usize)
+                                .copied()
+                                == unprojected_root
                                 && hirsel_types::core_roles::arena_scope_callback(&grant.intrinsic)
                                     == Some(grant.callback_parameter.0)
                         })
