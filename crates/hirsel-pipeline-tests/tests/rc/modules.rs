@@ -63,3 +63,4 @@ mod placement_boundary_21;
 mod failure_cleanup_21;
 mod plain_contract_22;
 mod dictionary_identity_22;
+mod match_lowering_22;
