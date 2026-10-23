@@ -449,7 +449,7 @@ pub fn main() -> Result[(), ()] {{
         let frozen = measured(
             &source(
                 "parse_owned",
-                "let root = shared.freeze(take rows)\nfailure.check(shared.with(root, fn(rows: List[List[String]]) -> bool uses {} { rows[1][0] == \"alpha\" }), TextInvariant())",
+                "let root = shared.freeze(take rows)\nfailure.check(shared.with(root, fn(table: List[List[String]]) -> bool uses {} { table[1][0] == \"alpha\" }), TextInvariant())",
             ),
             "frozen",
         );
