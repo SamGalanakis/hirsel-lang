@@ -1,0 +1,2 @@
+fn need[T](take x:unique List[unique T]){}
+pub fn main()->Result[(),()] {let xs:unique List[unique String]=["x"];let f:once fn()->()=fn()->() {need(take xs)};f();Ok(())}

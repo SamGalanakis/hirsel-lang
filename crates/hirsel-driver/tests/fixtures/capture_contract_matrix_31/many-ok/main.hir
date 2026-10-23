@@ -1,0 +1,2 @@
+fn make()->fn()->String {let payload:String in heap="ab";fn()->String {copy payload}}
+pub fn main()->Result[(),()] {Ok(())}
