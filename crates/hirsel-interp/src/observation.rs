@@ -191,11 +191,11 @@ impl ObservedValue {
                     }));
                     continue;
                 }
-                Value::String(v) => {
+                Value::String(v) | Value::ArenaString { text: v, .. } => {
                     nodes.push(O::String(v.clone()));
                     continue;
                 }
-                Value::Bytes(v) => {
+                Value::Bytes(v) | Value::ArenaBytes { bytes: v, .. } => {
                     nodes.push(O::Bytes(v.clone()));
                     continue;
                 }
@@ -244,7 +244,7 @@ impl ObservedValue {
                 Value::Map { entries: f, .. } => (A::Map, &**f),
                 Value::Set { entries: f, .. } => (A::Set, &**f),
                 Value::Tuple(f) => (A::Tuple, f),
-                Value::Box(f) => (A::Box, f),
+                Value::Box(f) | Value::ArenaBox { fields: f, .. } => (A::Box, f),
                 Value::Record { definition, fields } => {
                     (A::Record(definition.path().clone()), fields)
                 }

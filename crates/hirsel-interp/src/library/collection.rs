@@ -192,7 +192,11 @@ pub fn data_equal(a: &Value, b: &Value) -> bool {
     match (a, b) {
         (Value::F32(a), Value::F32(b)) => f32::from_bits(*a) == f32::from_bits(*b),
         (Value::F64(a), Value::F64(b)) => f64::from_bits(*a) == f64::from_bits(*b),
-        (Value::Tuple(a), Value::Tuple(b)) | (Value::Box(a), Value::Box(b)) => fields(a, b),
+        (Value::Tuple(a), Value::Tuple(b))
+        | (
+            Value::Box(a) | Value::ArenaBox { fields: a, .. },
+            Value::Box(b) | Value::ArenaBox { fields: b, .. },
+        ) => fields(a, b),
         (
             Value::Variant {
                 variant: a,
@@ -261,8 +265,14 @@ pub fn data_equal(a: &Value, b: &Value) -> bool {
         (Value::Bool(a), Value::Bool(b)) => a == b,
         (Value::Integer(a), Value::Integer(b)) => a == b,
         (Value::Char(a), Value::Char(b)) => a == b,
-        (Value::String(a), Value::String(b)) => a == b,
-        (Value::Bytes(a), Value::Bytes(b)) => a == b,
+        (
+            Value::String(a) | Value::ArenaString { text: a, .. },
+            Value::String(b) | Value::ArenaString { text: b, .. },
+        ) => a == b,
+        (
+            Value::Bytes(a) | Value::ArenaBytes { bytes: a, .. },
+            Value::Bytes(b) | Value::ArenaBytes { bytes: b, .. },
+        ) => a == b,
         // Functions/capabilities/resources are not data, even if handles match.
         _ => false,
     }

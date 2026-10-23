@@ -1247,6 +1247,8 @@ fn dead_mutex_releases_updated_payload_and_preserves_original_failure() {
         body: BodyId(0),
         captures: vec![],
         environment: Box::new(hirsel_interp::value::Environment {
+            storage: None,
+            capture_types: vec![],
             owned_captures: vec![],
             sizes: Default::default(),
             type_arguments: Default::default(),

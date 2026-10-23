@@ -94,6 +94,8 @@ pub(super) fn call(name: &str, args: &[Value]) -> Result<Option<OperationResult>
                 body: BodyId(0),
                 captures: vec![Some(source.clone()), Some(u64_value(0))],
                 environment: Box::new(crate::value::Environment {
+                    storage: None,
+                    capture_types: vec![],
                     owned_captures: vec![false, true],
                     sizes: Default::default(),
                     type_arguments: Default::default(),
@@ -204,6 +206,8 @@ fn consuming(name: &str, args: &[Value]) -> Result<Option<OperationResult>, Erro
                     body: BodyId(0),
                     captures: vec![Some(argument.clone()), Some(u64_value(0))],
                     environment: Box::new(crate::value::Environment {
+                        storage: None,
+                        capture_types: vec![],
                         owned_captures: vec![true, true],
                         sizes: Default::default(),
                         type_arguments: Default::default(),

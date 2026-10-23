@@ -140,6 +140,8 @@ fn run_repeat(failing: bool, mutating: bool, limits: Limits) -> (Execution, u64)
             body: BodyId(1),
             captures: vec![],
             environment: Box::new(hirsel_interp::value::Environment {
+                storage: None,
+                capture_types: vec![],
                 owned_captures: vec![],
                 sizes: Default::default(),
                 type_arguments: Default::default(),

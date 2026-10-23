@@ -61,7 +61,9 @@ pub fn pull(
             let Value::Tuple(pair) = entry else {
                 return Err(invalid("walk entry"));
             };
-            let Value::String(path) = pair[0].as_ref().unwrap() else {
+            let (Value::String(path) | Value::ArenaString { text: path, .. }) =
+                pair[0].as_ref().unwrap()
+            else {
                 return Err(invalid("walk path"));
             };
             entries.push_back(Entry {

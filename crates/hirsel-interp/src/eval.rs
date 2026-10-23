@@ -1227,11 +1227,21 @@ pub(crate) async fn execute_frames<O: crate::ownership_trace::Observer>(
                     frame.operation = Some(Box::new((result, state)));
                 }
                 OperationResult::Complete {
-                    value,
+                    mut value,
                     arguments,
                     consumed,
                     released,
                 } => {
+                    if let Some(returns) = state.returns {
+                        let ty = closed_storage_type(
+                            frame,
+                            runtime,
+                            frame.place(returns.destination)?.ty,
+                        )?;
+                        budgets
+                            .storage
+                            .record(runtime, ty, &mut value, &state.anchor, false)?;
+                    }
                     if budgets.run.metered() {
                         // What the result holds beyond the owners it took or updated.
                         let held = std::iter::once(&value)
@@ -1332,6 +1342,7 @@ pub(crate) async fn execute_frames<O: crate::ownership_trace::Observer>(
                     } else {
                         transfer_operation(&mut state, consumed)?;
                         update_operation(&mut state, arguments)?;
+                        record_operation_storage(frame, &mut state, runtime, &mut budgets)?;
                         restore_operation(frame, &mut state)?;
                         state.finishing = Some(execution.failures.len());
                         frame.ending = Some(crate::resources::Ending::Failed);
@@ -1347,6 +1358,7 @@ pub(crate) async fn execute_frames<O: crate::ownership_trace::Observer>(
                     }
                 }
                 OperationResult::Failed(failure) => {
+                    record_operation_storage(frame, &mut state, runtime, &mut budgets)?;
                     restore_operation(frame, &mut state)?;
                     if !state.already_failed {
                         record_failure(
@@ -1528,6 +1540,13 @@ pub(crate) async fn execute_frames<O: crate::ownership_trace::Observer>(
                     if matches!(&value, Value::Handle { kind, .. }
                         if kind == crate::checked::ARENA_HANDLE)
                     {
+                        continue;
+                    }
+                    if value
+                        .arena_storage()
+                        .is_some_and(|s| s.logical_block.is_some())
+                    {
+                        value.discard();
                         continue;
                     }
                     if let Some(check) = &frame.check {
@@ -1860,6 +1879,27 @@ pub(crate) async fn execute_frames<O: crate::ownership_trace::Observer>(
             operations.enter_task(task, frames.iter().any(|f| f.finalized.is_some()));
             continue;
         }
+        if frames.last().unwrap().ending.is_some() {
+            let frame = frames.last_mut().unwrap();
+            if let Some(arena) = frame.arena_scope.take() {
+                if let Some(inventory) = budgets.storage.close(arena) {
+                    for (_, entry) in inventory.into_entries() {
+                        let mut retained = entry.payload;
+                        release_fields(
+                            frame,
+                            &mut retained.value,
+                            retained.source,
+                            frame.caller.clone(),
+                        )?;
+                        retained.value.discard();
+                    }
+                }
+                // Drain outgoing owners before retiring the lexical arena guard.
+                if !frame.work.is_empty() {
+                    continue;
+                }
+            }
+        }
         if frames.last().unwrap().ending.is_some()
             && let Some(ending) = frames.last_mut().unwrap().ending.take()
         {
@@ -2162,7 +2202,12 @@ pub(crate) async fn execute_frames<O: crate::ownership_trace::Observer>(
                 .chain(parked.iter().flat_map(|(_, stack, _)| stack))
                 .chain(hand_offs.iter().flat_map(|h| &h.frames))
                 .map(Frame::logical_bytes)
-                .fold(operations.retained_bytes(), u64::saturating_add);
+                .fold(
+                    operations
+                        .retained_bytes()
+                        .saturating_add(budgets.storage.logical_bytes()),
+                    u64::saturating_add,
+                );
             budgets.run.measured(live).map_err(Error::BudgetExceeded)?;
         }
         let frame = frames.last_mut().unwrap();
@@ -2988,6 +3033,7 @@ pub(crate) async fn execute_frames<O: crate::ownership_trace::Observer>(
                     entered.closes_arena = closes_arena;
                     callee.check = Some(entered);
                 }
+                callee.arena_scope = closes_arena.map(u64::from);
                 // MEM-6: the callback never runs with an unbounded arena.
                 callee.bounded = bounded.map(|(arena, cap)| {
                     budgets.open(arena, cap);
@@ -3083,6 +3129,13 @@ fn dispatch(
                 }
             }
             OpKind::Constant { slot, value } => {
+                if value.is_block()
+                    && frame
+                        .placed_arena(frame.body().locals[*slot as usize].ty)
+                        .is_some()
+                {
+                    return true;
+                }
                 if frame.slots[*slot as usize].is_some() {
                     return true;
                 }
@@ -3488,6 +3541,7 @@ async fn rvalue(
     frame: &mut Frame,
     id: RvalueId,
     destination: PlaceId,
+    site: Span,
     runtime: &crate::aggregate::RuntimeTypes,
     provider: &mut (impl AsyncTirProvider + ?Sized),
     constants: &mut crate::constants::Constants,
@@ -3507,7 +3561,10 @@ async fn rvalue(
                 .get(ty)
                 .ok_or_else(|| invalid("type out of range"))?
                 .kind;
-            let value = scalar::constant(c, ty)?;
+            let mut value = scalar::constant(c, ty)?;
+            if let Some(arena) = frame.placed_arena(frame.place(destination)?.ty) {
+                value.retag_own_block(Some(crate::value::ArenaStorage::fresh(arena.into(), 0)));
+            }
             if frame.check.is_some() {
                 shadow = shadow.ownership(&value, true);
             }
@@ -3609,6 +3666,7 @@ async fn rvalue(
             if let Some(check) = &frame.check {
                 shadow = bound.fresh_copy(&check.state.borrow());
             }
+            value.acquire_arena_roots();
             value.fresh_arena_storage();
             value
         }
@@ -3743,6 +3801,9 @@ async fn rvalue(
                     }
                     _ => None,
                 };
+                if kind.is_none() && value.is_block() {
+                    value.retag_own_block(Some(crate::value::ArenaStorage::fresh(arena.into(), 0)));
+                }
                 if let Some(kind) = kind {
                     let arena = u64::from(arena);
                     let storage = crate::bounded::storage(
@@ -3783,6 +3844,32 @@ async fn rvalue(
                     .charge(arena, bytes)
                     .map_err(EvalError::OutOfSpace)?;
             }
+            let capture_arguments = captures
+                .iter()
+                .map(|capture| {
+                    frame
+                        .place(capture.place)
+                        .map(|place| hirsel_types::GenericArgument::Type(place.ty))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let capture_types = crate::type_arguments::concrete(
+                runtime,
+                &capture_arguments,
+                &frame.type_arguments,
+            )?
+            .arguments
+            .into_iter()
+            .map(|argument| match argument {
+                hirsel_types::GenericArgument::Type(ty) => Ok(ty),
+                _ => Err(invalid("closed capture type")),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+            let storage = match placement {
+                Destination::Arena(origin) => frame
+                    .arena_of(origin)
+                    .map(|arena| crate::value::ArenaStorage::fresh(arena.into(), 0)),
+                _ => None,
+            };
             let owned_captures = captures
                 .iter()
                 .map(|o| {
@@ -3837,6 +3924,8 @@ async fn rvalue(
                 body,
                 captures,
                 environment: Box::new(crate::value::Environment {
+                    storage,
+                    capture_types,
                     owned_captures,
                     sizes: frame.sizes.clone(),
                     type_arguments: frame.type_arguments.clone(),
@@ -3850,7 +3939,47 @@ async fn rvalue(
     } else {
         Shadow::default()
     };
+    let mut value = value;
+    let ty = closed_storage_type(frame, runtime, frame.place(destination)?.ty)?;
+    budgets
+        .storage
+        .record(runtime, ty, &mut value, &anchor(frame, site), false)?;
     Ok((value, shadow))
+}
+
+fn closed_storage_type(
+    frame: &Frame,
+    runtime: &crate::aggregate::RuntimeTypes,
+    ty: hirsel_types::TypeId,
+) -> Result<hirsel_types::TypeId, Error> {
+    let actuals = crate::type_arguments::concrete(
+        runtime,
+        &[hirsel_types::GenericArgument::Type(ty)],
+        &frame.type_arguments,
+    )?;
+    match actuals.arguments.as_slice() {
+        [hirsel_types::GenericArgument::Type(ty)] => Ok(*ty),
+        _ => Err(invalid("closed storage type")),
+    }
+}
+
+fn record_operation_storage(
+    frame: &Frame,
+    state: &mut crate::resources::OperationState,
+    runtime: &crate::aggregate::RuntimeTypes,
+    budgets: &mut crate::bounded::Budgets,
+) -> Result<(), Error> {
+    for (index, place) in &state.mut_places {
+        let ty = closed_storage_type(frame, runtime, frame.place(*place)?.ty)?;
+        budgets.storage.record(
+            runtime,
+            ty,
+            &mut state.arguments[*index],
+            &state.anchor,
+            true,
+        )?;
+    }
+    Ok(())
 }
 /// MEM-6: `copy_to(a, x)` charges a bounded arena `x`'s whole tree, then retags the
 /// copied value's Lists and Arrays as fresh storage of `a` (of the heap for
@@ -3922,7 +4051,7 @@ fn list_write(
         if let Err(arena) = budgets.charge(storage.arena, bytes) {
             return Some(arena);
         }
-        *storage = crate::value::ArenaStorage::fresh(storage.arena, storage.element);
+        *storage = storage.detached();
         // The original and the copy both hold every element.
         elements
             .iter()
@@ -3949,7 +4078,8 @@ fn read_write(
         let Some(Value::Integer(start)) = arguments.get(1) else {
             return None;
         };
-        let Some(Value::Bytes(data)) = arguments.get(2) else {
+        let Some(Value::Bytes(data) | Value::ArenaBytes { bytes: data, .. }) = arguments.get(2)
+        else {
             return None;
         };
         let start = u64::try_from(start.bits()).ok()?;
@@ -3983,7 +4113,8 @@ fn read_write(
         }
         (0, count)
     } else if name == "bytes.append" {
-        let Some(Value::Bytes(data)) = arguments.get(1) else {
+        let Some(Value::Bytes(data) | Value::ArenaBytes { bytes: data, .. }) = arguments.get(1)
+        else {
             return None;
         };
         if data.is_empty() {
@@ -4029,7 +4160,7 @@ fn read_write(
         return Some(arena);
     }
     if storage.shared() {
-        *storage = crate::value::ArenaStorage::fresh(storage.arena, storage.element);
+        *storage = storage.detached();
     }
     None
 }
@@ -4080,7 +4211,7 @@ fn keyed_write(
         if let Err(arena) = budgets.charge(storage.arena, bytes) {
             return Some(arena);
         }
-        *storage = crate::value::ArenaStorage::fresh(storage.arena, storage.element);
+        *storage = storage.detached();
         // The original and the copy both hold every entry.
         entries
             .iter()
@@ -4340,6 +4471,12 @@ async fn execute_instruction(
             if let Some(old) = old {
                 frame.assign_shadow(displaced, old, old_shadow)?;
             }
+            frame.record_storage(
+                destination,
+                runtime,
+                &mut budgets.storage,
+                &anchor(frame, site),
+            )?;
         }
         InstructionKind::Assign { destination, value } => {
             let created = matches!(
@@ -4379,6 +4516,7 @@ async fn execute_instruction(
                 frame,
                 value,
                 destination,
+                site,
                 runtime,
                 provider,
                 constants,
@@ -4404,6 +4542,14 @@ async fn execute_instruction(
             arena_write(frame, destination, false, budgets)?;
             frame.write_access(destination)?;
             frame.assign_shadow(destination, value, shadow)?;
+            if !frame.place(destination)?.projection.is_empty() {
+                frame.record_storage(
+                    destination,
+                    runtime,
+                    &mut budgets.storage,
+                    &anchor(frame, site),
+                )?;
+            }
             if borrowed {
                 let place = frame.place(destination)?;
                 if place.projection.is_empty() {
@@ -4873,7 +5019,8 @@ fn checked_callee(
         }
         let cap = bounded.then(|| bounded_capacity(arguments)).transpose()?;
         let (definition, body, captures, _, sizes, type_arguments) = arena_callback(arguments)?;
-        let id = if bounded { budgets.issue() } else { 0 };
+        let id = budgets.issue();
+        budgets.storage.open(id)?;
         *arguments = vec![Value::Handle {
             kind: crate::checked::ARENA_HANDLE.into(),
             id,
@@ -4888,7 +5035,11 @@ fn checked_callee(
             type_arguments,
             check: None,
         };
-        return Ok((callee, None, cap.map(|cap| (id, cap))));
+        return Ok((
+            callee,
+            Some(u32::try_from(id).map_err(|_| invalid("arena identity exhausted"))?),
+            cap.map(|cap| (id, cap)),
+        ));
     };
     let mut state = check.state.borrow_mut();
     if check.noalloc && !state.config.noalloc.contains(path) {
@@ -4904,6 +5055,7 @@ fn checked_callee(
     let (definition, body, captures, owned_captures, sizes, type_arguments) =
         arena_callback(arguments)?;
     let arena = state.arena();
+    budgets.storage.open(arena.into())?;
     let shadow = checks.pop().unwrap_or_default().shadow;
     let check = crate::checked::Callee {
         captures: (0..captures.len()).map(|i| shadow.capture(i)).collect(),
@@ -4975,6 +5127,7 @@ fn arena_callback(arguments: &mut Vec<Value>) -> Result<Callback, Error> {
         owned_captures,
         sizes,
         type_arguments,
+        ..
     } = *environment;
     Ok((
         definition,

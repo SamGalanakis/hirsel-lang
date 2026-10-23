@@ -112,13 +112,17 @@ pub fn heap_charge_with(
         // The block's own logical extent. None means inline storage, including
         // independent Shared handles whose frozen graph is not an owned edge.
         let own = match (&row.kind, value) {
-            (TypeKind::Primitive(Primitive::Bytes), Value::Bytes(bytes)) => {
-                Some(Charge::Bytes(bytes.len() as u64))
+            (
+                TypeKind::Primitive(Primitive::Bytes),
+                Value::Bytes(bytes) | Value::ArenaBytes { bytes, .. },
+            ) => Some(Charge::Bytes(bytes.len() as u64)),
+            (
+                TypeKind::Primitive(Primitive::String),
+                Value::String(text) | Value::ArenaString { text, .. },
+            ) => Some(Charge::Bytes(text.len() as u64)),
+            (TypeKind::Box(payload), Value::Box(_) | Value::ArenaBox { .. }) => {
+                Some(size(*payload)?)
             }
-            (TypeKind::Primitive(Primitive::String), Value::String(text)) => {
-                Some(Charge::Bytes(text.len() as u64))
-            }
-            (TypeKind::Box(payload), Value::Box(_)) => Some(size(*payload)?),
             (
                 TypeKind::Builtin {
                     kind: BuiltinType::List | BuiltinType::Array,
@@ -231,10 +235,13 @@ pub fn heap_charge_with(
             }};
         }
         match (&row.kind, value) {
-            (TypeKind::Primitive(Primitive::Bytes), Value::Bytes(_))
-            | (TypeKind::Primitive(Primitive::String), Value::String(_)) => {}
+            (TypeKind::Primitive(Primitive::Bytes), Value::Bytes(_) | Value::ArenaBytes { .. })
+            | (
+                TypeKind::Primitive(Primitive::String),
+                Value::String(_) | Value::ArenaString { .. },
+            ) => {}
             (TypeKind::Primitive(p), value) if scalar_matches(*p, value) => {}
-            (TypeKind::Box(payload), Value::Box(fields)) => {
+            (TypeKind::Box(payload), Value::Box(fields) | Value::ArenaBox { fields, .. }) => {
                 let [Some(child)] = fields.as_slice() else {
                     return Err(mismatch());
                 };
@@ -379,4 +386,54 @@ fn scalar_matches(ty: Primitive, value: &Value) -> bool {
         (ty, Value::Integer(integer)) => integer.kind() == ty,
         _ => false,
     }
+}
+
+/// Recover the explicit reference placement receipt from value-carried tags.
+/// Heap variants are semantic heap values, not an inference from host pointers.
+/// Arena tags without an enrolled semantic identity are incomplete evidence.
+pub(crate) fn value_receipt(value: &Value) -> Result<PlacementReceipt, Error> {
+    let mut receipt = PlacementReceipt::default();
+    let mut pending = vec![(value, Vec::new())];
+    while let Some((value, path)) = pending.pop() {
+        if matches!(value, Value::Shared(_)) {
+            continue;
+        }
+        if value.is_block() {
+            let placement = match value.arena_storage() {
+                Some(storage) => BlockPlacement::Arena {
+                    arena: storage.arena,
+                    block: storage
+                        .logical_block
+                        .ok_or_else(|| invalid("unenrolled arena allocation"))?,
+                },
+                None => BlockPlacement::Heap,
+            };
+            receipt.blocks.insert(path.clone(), placement);
+        }
+        if let Value::Closure {
+            captures,
+            environment,
+            ..
+        } = value
+        {
+            if environment.capture_types.len() != captures.len()
+                || environment.owned_captures.len() != captures.len()
+            {
+                return Err(invalid("incomplete closed capture metadata"));
+            }
+            receipt
+                .captures
+                .insert(path.clone(), environment.capture_types.clone());
+        }
+        for (index, child) in value.fields().into_iter().flatten().enumerate() {
+            if let Some(child) = child {
+                let mut child_path = path.clone();
+                child_path.push(
+                    u32::try_from(index).map_err(|_| invalid("sealed field ordinal overflow"))?,
+                );
+                pending.push((child, child_path));
+            }
+        }
+    }
+    Ok(receipt)
 }

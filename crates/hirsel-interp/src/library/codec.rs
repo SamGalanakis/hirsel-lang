@@ -38,7 +38,7 @@ pub(super) fn call(
             .map(|bytes| OperationResult::returned(Value::Bytes(bytes)))
             .map_err(codec_error);
     }
-    let Value::Bytes(bytes) = value else {
+    let (Value::Bytes(bytes) | Value::ArenaBytes { bytes, .. }) = value else {
         return Err(invalid("codec.decode expects Bytes"));
     };
     match codec.decode(bytes, wire::Limits::default()) {
@@ -189,10 +189,14 @@ fn to_wire(schema: &SerializableSchema, root: &Value) -> R<wire::Value> {
             (SchemaNode::Scalar(_), Value::Integer(v)) => ValueNode::Unsigned(v.bits()),
             (SchemaNode::Scalar(Primitive::F32), Value::F32(v)) => ValueNode::F32(*v),
             (SchemaNode::Scalar(Primitive::F64), Value::F64(v)) => ValueNode::F64(*v),
-            (SchemaNode::Scalar(Primitive::String), Value::String(v)) => {
-                ValueNode::String(v.clone())
-            }
-            (SchemaNode::Scalar(Primitive::Bytes), Value::Bytes(v)) => ValueNode::Bytes(v.clone()),
+            (
+                SchemaNode::Scalar(Primitive::String),
+                Value::String(v) | Value::ArenaString { text: v, .. },
+            ) => ValueNode::String(v.clone()),
+            (
+                SchemaNode::Scalar(Primitive::Bytes),
+                Value::Bytes(v) | Value::ArenaBytes { bytes: v, .. },
+            ) => ValueNode::Bytes(v.clone()),
             (SchemaNode::Tuple(ts), _) => {
                 let values = fields(value)?;
                 if values.len() != ts.len() {
@@ -258,7 +262,7 @@ fn to_wire(schema: &SerializableSchema, root: &Value) -> R<wire::Value> {
                 children.push((*representation, inner));
                 ValueNode::Wrapper(ValueId(0))
             }
-            (SchemaNode::Box(t), Value::Box(_)) => {
+            (SchemaNode::Box(t), Value::Box(_) | Value::ArenaBox { .. }) => {
                 let values = fields(value)?;
                 if values.len() != 1 {
                     return Err(invalid("codec box arity"));

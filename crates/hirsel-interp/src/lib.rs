@@ -23,6 +23,7 @@ mod parked;
 mod profile;
 mod provider;
 mod resources;
+mod sealed_storage;
 mod runs;
 pub mod scalar;
 pub mod structural;

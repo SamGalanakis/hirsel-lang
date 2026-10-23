@@ -53,6 +53,7 @@ fn children(v: &Value) -> Option<&[Option<Value>]> {
         | Value::Sequence { elements: f, .. } => Some(f),
         Value::Tuple(f)
         | Value::Box(f)
+        | Value::ArenaBox { fields: f, .. }
         | Value::Record { fields: f, .. }
         | Value::Variant { fields: f, .. }
         | Value::Distinct { fields: f, .. } => Some(f),
@@ -64,7 +65,9 @@ fn identity(a: &Value, b: &Value) -> Result<Ordering, StructuralError> {
         (Value::Map { .. }, Value::Map { .. })
         | (Value::Set { .. }, Value::Set { .. })
         | (Value::Tuple(_), Value::Tuple(_))
-        | (Value::Box(_), Value::Box(_)) => Ok(Ordering::Equal),
+        | (Value::Box(_) | Value::ArenaBox { .. }, Value::Box(_) | Value::ArenaBox { .. }) => {
+            Ok(Ordering::Equal)
+        }
         (Value::Record { definition: a, .. }, Value::Record { definition: b, .. })
         | (Value::Distinct { definition: a, .. }, Value::Distinct { definition: b, .. })
             if a == b =>
@@ -272,13 +275,13 @@ fn encoding(value: &Value, depth: usize) -> Result<Vec<u8>, StructuralError> {
                     Value::Unit => 0,
                     Value::Bool(_) => 1,
                     Value::Integer(_) => 2,
-                    Value::String(_) => 3,
-                    Value::Bytes(_) => 4,
+                    Value::String(_) | Value::ArenaString { .. } => 3,
+                    Value::Bytes(_) | Value::ArenaBytes { .. } => 4,
                     Value::Tuple(_) => 5,
                     Value::Variant { .. } => 6,
                     Value::Record { .. } => 7,
                     Value::Distinct { .. } => 8,
-                    Value::Box(_) => 9,
+                    Value::Box(_) | Value::ArenaBox { .. } => 9,
                     Value::Sequence { .. } => 10,
                     Value::Map { .. } => 11,
                     Value::Set { .. } => 12,
@@ -294,8 +297,10 @@ fn encoding(value: &Value, depth: usize) -> Result<Vec<u8>, StructuralError> {
                         bytes.push(u8::from(i.is_signed()));
                         bytes.extend_from_slice(&i.bits().to_le_bytes());
                     }
-                    Value::String(s) => framed(&mut bytes, s.as_bytes()),
-                    Value::Bytes(b) => framed(&mut bytes, b),
+                    Value::String(s) | Value::ArenaString { text: s, .. } => {
+                        framed(&mut bytes, s.as_bytes())
+                    }
+                    Value::Bytes(b) | Value::ArenaBytes { bytes: b, .. } => framed(&mut bytes, b),
                     Value::Variant { variant, .. } => {
                         bytes.extend_from_slice(&variant.to_le_bytes())
                     }

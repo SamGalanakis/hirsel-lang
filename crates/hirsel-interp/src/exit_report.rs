@@ -89,9 +89,11 @@ pub fn returned_error(
             Value::Char(v) => out.push_str(&u32::from(*v).to_string()),
             Value::F32(v) => out.push_str(&format!("{:?}", f32::from_bits(*v))),
             Value::F64(v) => out.push_str(&format!("{:?}", f64::from_bits(*v))),
-            Value::String(v) if top => out.push_str(v),
-            Value::String(v) => out.push_str(&format!("{v:?}")),
-            Value::Bytes(v) => out.push_str(&format!("{v:?}")),
+            Value::String(v) | Value::ArenaString { text: v, .. } if top => out.push_str(v),
+            Value::String(v) | Value::ArenaString { text: v, .. } => {
+                out.push_str(&format!("{v:?}"))
+            }
+            Value::Bytes(v) | Value::ArenaBytes { bytes: v, .. } => out.push_str(&format!("{v:?}")),
             Value::Handle { kind, .. } => out.push_str(&format!("<{kind}>")),
             Value::FunctionReference(_) | Value::Closure { .. } => out.push_str("<function>"),
             _ => {

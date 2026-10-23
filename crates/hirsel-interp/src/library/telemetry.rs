@@ -10,7 +10,7 @@ use hirsel_kernels::telemetry as kernel;
 
 fn payload(v: &Value) -> Result<&[u8], Error> {
     match v {
-        Value::Bytes(bytes) => Ok(bytes),
+        Value::Bytes(bytes) | Value::ArenaBytes { bytes, .. } => Ok(bytes),
         _ => Err(invalid("telemetry payload")),
     }
 }

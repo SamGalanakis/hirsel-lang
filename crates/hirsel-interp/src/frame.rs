@@ -133,6 +133,7 @@ pub(crate) struct Frame {
     pub check: Option<crate::checked::FrameCheck>,
     /// An `arena.bounded` callback's boundary (MEM-6).
     pub bounded: Option<crate::bounded::Boundary>,
+    pub arena_scope: Option<u64>,
     /// The next block start charges fuel: the frame was entered or jumped back.
     pub fuel_due: bool,
     /// This body's dispatch form in the run's `Codes`, resolved at its first step.
@@ -276,6 +277,7 @@ impl Frame {
             place_failure_site: None,
             check: None,
             bounded: None,
+            arena_scope: None,
             fuel_due: true,
             code: None,
             places: None,
@@ -398,7 +400,9 @@ impl Frame {
                 // Bytes indexing yields a scalar snapshot, not a storage slot.
                 // Origin probes still need its bounds error to retain the
                 // expression's site until the actual operand read fails.
-                Some(Value::Bytes(bytes)) if indexed && index >= bytes.len() => {
+                Some(Value::Bytes(bytes) | Value::ArenaBytes { bytes, .. })
+                    if indexed && index >= bytes.len() =>
+                {
                     return Err(AccessError::OutOfBounds);
                 }
                 Some(v)
@@ -533,7 +537,7 @@ impl Frame {
                     if let Err(arena) = charge(storage.arena, bytes) {
                         return Ok(Some(arena));
                     }
-                    *storage = crate::value::ArenaStorage::fresh(storage.arena, storage.element);
+                    *storage = storage.detached();
                     // The original and the copy both hold every element.
                     elements
                         .iter()
@@ -576,8 +580,14 @@ impl Frame {
                         (Constant::F64(a), Value::F64(b)) => {
                             f64::from_bits(*a) == f64::from_bits(*b)
                         }
-                        (Constant::String(a), Value::String(b)) => a == b,
-                        (Constant::Bytes(a), Value::Bytes(b)) => a == b,
+                        (
+                            Constant::String(a),
+                            Value::String(b) | Value::ArenaString { text: b, .. },
+                        ) => a == b,
+                        (
+                            Constant::Bytes(a),
+                            Value::Bytes(b) | Value::ArenaBytes { bytes: b, .. },
+                        ) => a == b,
                         _ => false,
                     };
                     if !matches {
@@ -725,7 +735,11 @@ impl Frame {
         let steps = self.indices(operand.place, &self.steps)?;
         let mut source = self.slots[place.root.0 as usize].as_ref();
         for (depth, step) in steps.iter().enumerate() {
-            if let (Some(Value::Bytes(bytes)), AccessStep::Index(index)) = (source, step) {
+            if let (
+                Some(Value::Bytes(bytes) | Value::ArenaBytes { bytes, .. }),
+                AccessStep::Index(index),
+            ) = (source, step)
+            {
                 if depth + 1 != steps.len() || operand.usage == UseKind::Mut {
                     return Err(invalid("mutable byte projection").into());
                 }
@@ -1081,6 +1095,34 @@ impl Frame {
     }
     pub fn arena_of(&self, origin: &hirsel_types::Origin) -> Option<u32> {
         arena_of(self.body(), &self.slots, origin)
+    }
+    pub fn record_storage(
+        &mut self,
+        place: PlaceId,
+        runtime: &crate::aggregate::RuntimeTypes,
+        storage: &mut crate::sealed_storage::Storage,
+        source: &crate::observation::Anchor,
+    ) -> Result<(), AccessError> {
+        let place_root = self.place(place)?.root;
+        let path = self
+            .indices(place, &self.steps)?
+            .iter()
+            .map(|step| step.parts().0)
+            .collect::<Vec<_>>();
+        let ty = self.body().locals[place_root.0 as usize].ty;
+        let actuals = crate::type_arguments::concrete(
+            runtime,
+            &[hirsel_types::GenericArgument::Type(ty)],
+            &self.type_arguments,
+        )?;
+        let [hirsel_types::GenericArgument::Type(ty)] = actuals.arguments.as_slice() else {
+            return Err(invalid("closed retained root type").into());
+        };
+        let value = self.slots[place_root.0 as usize]
+            .as_mut()
+            .ok_or_else(|| invalid("dead retained update root"))?;
+        storage.record_path(runtime, *ty, value, &path, source)?;
+        Ok(())
     }
     pub fn goto(&mut self, block: BlockId) {
         // A jump to this block or an earlier one may close a loop: it charges fuel.

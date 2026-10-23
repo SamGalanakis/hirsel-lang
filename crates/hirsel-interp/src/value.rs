@@ -179,6 +179,7 @@ pub struct ArenaStorage {
     /// Semantic allocation receipt, filled by the retained-storage recorder.
     /// A shallow copy preserves it; growth preserves it; COW replaces it.
     pub logical_block: Option<crate::inventory::LogicalBlockId>,
+    pub(crate) copied_from: Option<crate::inventory::LogicalBlockId>,
     /// The logical bytes of one element: a push's charge (0 in an unbounded arena).
     pub element: u64,
     shared: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -189,9 +190,16 @@ impl ArenaStorage {
         Self {
             arena,
             logical_block: None,
+            copied_from: None,
             element,
             shared: Default::default(),
         }
+    }
+    /// The COW payload acquires its outgoing credits only after preflight.
+    pub(crate) fn detached(&self) -> Self {
+        let mut fresh = Self::fresh(self.arena, self.element);
+        fresh.copied_from = self.logical_block;
+        fresh
     }
     pub fn shared(&self) -> bool {
         self.shared.load(std::sync::atomic::Ordering::Relaxed)
@@ -351,7 +359,7 @@ impl std::fmt::Debug for Block {
     }
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Eq)]
 pub enum Value {
     FunctionReference(Box<NamedFunction>),
     Shared(SharedRoot),
@@ -370,6 +378,19 @@ pub enum Value {
     Char(char),
     String(String),
     Bytes(Vec<u8>),
+    /// A materialized byte/string view retains its semantic allocation identity.
+    ArenaBytes {
+        bytes: Vec<u8>,
+        storage: ArenaStorage,
+    },
+    ArenaString {
+        text: String,
+        storage: ArenaStorage,
+    },
+    ArenaBox {
+        fields: Vec<Option<Value>>,
+        storage: ArenaStorage,
+    },
     /// A Map's entries in insertion order; `arena` as for a Sequence (MEM-6):
     /// a Map built in an arena, None elsewhere. Its element charge is one
     /// entry's.
@@ -428,6 +449,10 @@ pub enum Value {
 /// A closure environment's ownership and lexical bindings, apart from its captures.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Environment {
+    /// Semantic environment allocation; snapshots acquire no outgoing credits.
+    pub storage: Option<ArenaStorage>,
+    /// Closed runtime types of captures, in the same order as captures.
+    pub capture_types: Vec<hirsel_types::TypeId>,
     /// Borrow/mut captures are snapshots owned by the enclosing frame.
     pub owned_captures: Vec<bool>,
     /// Lexical size bindings travel with the environment, including callbacks.
@@ -453,6 +478,7 @@ impl Value {
             | Self::Sequence { elements: f, .. } => Some(f),
             Self::Tuple(f)
             | Self::Box(f)
+            | Self::ArenaBox { fields: f, .. }
             | Self::Record { fields: f, .. }
             | Self::Variant { fields: f, .. }
             | Self::Resource { fields: f, .. }
@@ -607,6 +633,18 @@ impl Value {
                 // cloning copies their viewed bytes, never an owner's backing extent.
                 Value::String(x) => Value::String(x.clone()),
                 Value::Bytes(x) => Value::Bytes(x.clone()),
+                Value::ArenaBytes { bytes, storage } => Value::ArenaBytes {
+                    bytes: bytes.clone(),
+                    storage: storage.clone(),
+                },
+                Value::ArenaString { text, storage } => Value::ArenaString {
+                    text: text.clone(),
+                    storage: storage.clone(),
+                },
+                Value::ArenaBox { fields, storage } => Value::ArenaBox {
+                    fields: vec![None; fields.len()],
+                    storage: storage.clone(),
+                },
                 Value::Handle { kind, id } => Value::Handle {
                     kind: kind.clone(),
                     id: *id,
@@ -733,6 +771,12 @@ impl Value {
         }
         let mut work = vec![self];
         while let Some(value) = work.pop() {
+            if value
+                .arena_storage()
+                .is_some_and(|s| s.logical_block.is_some())
+            {
+                continue;
+            }
             match value {
                 Value::Shared(root) => root.acquire(),
                 Value::Mutex(root) => root.acquire(),
@@ -750,6 +794,59 @@ impl Value {
             }
         }
     }
+    pub(crate) fn acquire_arena_roots(&self) {
+        let mut pending = vec![(self, false)];
+        while let Some((value, inside)) = pending.pop() {
+            let inside = inside
+                || value
+                    .arena_storage()
+                    .is_some_and(|s| s.logical_block.is_some());
+            match value {
+                Value::Shared(root) if inside => root.acquire(),
+                Value::Shared(_) => (),
+                Value::Mutex(root) if inside => root.acquire(),
+                Value::Closure {
+                    captures,
+                    environment,
+                    ..
+                } => {
+                    pending.extend(captures.iter().zip(&environment.owned_captures).filter_map(
+                        |(value, owned)| {
+                            owned.then(|| value.as_ref()).flatten().map(|v| (v, inside))
+                        },
+                    ));
+                }
+                _ => pending.extend(
+                    value
+                        .fields()
+                        .into_iter()
+                        .flatten()
+                        .flatten()
+                        .map(|v| (v, inside)),
+                ),
+            }
+        }
+    }
+    pub(crate) fn acquire_payload_roots(&self) {
+        match self {
+            Value::Closure {
+                captures,
+                environment,
+                ..
+            } => {
+                for (value, owned) in captures.iter().zip(&environment.owned_captures) {
+                    if *owned && let Some(value) = value {
+                        value.acquire_roots();
+                    }
+                }
+            }
+            _ => {
+                for value in self.fields().into_iter().flatten().flatten() {
+                    value.acquire_roots();
+                }
+            }
+        }
+    }
     pub(crate) fn fields(&self) -> Option<&[Option<Value>]> {
         match self {
             Self::Closure {
@@ -761,6 +858,7 @@ impl Value {
             | Self::Sequence { elements: f, .. } => Some(f),
             Self::Tuple(f)
             | Self::Box(f)
+            | Self::ArenaBox { fields: f, .. }
             | Self::Record { fields: f, .. }
             | Self::Distinct { fields: f, .. }
             | Self::Resource { fields: f, .. }
@@ -801,8 +899,12 @@ impl Value {
         let mut work = vec![self];
         while let Some(value) = work.pop() {
             total = total.saturating_add(match value {
-                Self::String(text) => NODE_BYTES.saturating_add(text.len() as u64),
-                Self::Bytes(bytes) => NODE_BYTES.saturating_add(bytes.len() as u64),
+                Self::String(text) | Self::ArenaString { text, .. } => {
+                    NODE_BYTES.saturating_add(text.len() as u64)
+                }
+                Self::Bytes(bytes) | Self::ArenaBytes { bytes, .. } => {
+                    NODE_BYTES.saturating_add(bytes.len() as u64)
+                }
                 _ => NODE_BYTES,
             });
             if let Some(fields) = value.fields() {
@@ -816,8 +918,12 @@ impl Value {
     /// before the model is next measured.
     pub(crate) fn shallow_bytes(&self) -> u64 {
         match self {
-            Self::String(text) => NODE_BYTES.saturating_add(text.len() as u64),
-            Self::Bytes(bytes) => NODE_BYTES.saturating_add(bytes.len() as u64),
+            Self::String(text) | Self::ArenaString { text, .. } => {
+                NODE_BYTES.saturating_add(text.len() as u64)
+            }
+            Self::Bytes(bytes) | Self::ArenaBytes { bytes, .. } => {
+                NODE_BYTES.saturating_add(bytes.len() as u64)
+            }
             _ => NODE_BYTES.saturating_add(
                 NODE_BYTES.saturating_mul(self.fields().map_or(0, |f| f.len()) as u64),
             ),
@@ -855,12 +961,108 @@ impl Value {
             Self::Sequence { arena, .. } | Self::Map { arena, .. } | Self::Set { arena, .. } => {
                 arena.as_ref()
             }
+            Self::ArenaBytes { storage, .. }
+            | Self::ArenaString { storage, .. }
+            | Self::ArenaBox { storage, .. } => Some(storage),
+            Self::Closure { environment, .. } => environment.storage.as_ref(),
             Self::Record { definition, fields } if definition.is_core("SortedMap") => {
                 fields.get(1)?.as_ref()?.arena_storage()
             }
             _ => None,
         }
     }
+    /// Install the recorder's semantic allocation identity without changing
+    /// placement, extent or the collection's sharing state.
+    pub(crate) fn enroll_block(
+        &mut self,
+        block: crate::inventory::LogicalBlockId,
+    ) -> Result<(), crate::Error> {
+        let storage = match self {
+            Self::Sequence { arena, .. } | Self::Map { arena, .. } | Self::Set { arena, .. } => {
+                arena.as_mut()
+            }
+            Self::ArenaBytes { storage, .. }
+            | Self::ArenaString { storage, .. }
+            | Self::ArenaBox { storage, .. } => Some(storage),
+            Self::Closure { environment, .. } => environment.storage.as_mut(),
+            _ => None,
+        }
+        .ok_or_else(|| crate::invalid("enrolling a non-arena block"))?;
+        storage.copied_from = None;
+        if storage.logical_block.replace(block).is_some() {
+            return Err(crate::invalid("enrolling an arena block twice"));
+        }
+        Ok(())
+    }
+    /// A materialized view of this byte owner keeps its semantic placement.
+    pub(crate) fn byte_view(&self, bytes: Vec<u8>) -> Self {
+        match self.arena_storage() {
+            Some(storage) => Self::ArenaBytes {
+                bytes,
+                storage: storage.clone(),
+            },
+            None => Self::Bytes(bytes),
+        }
+    }
+    pub(crate) fn string_view(&self, text: String) -> Self {
+        match self.arena_storage() {
+            Some(storage) => Self::ArenaString {
+                text,
+                storage: storage.clone(),
+            },
+            None => Self::String(text),
+        }
+    }
+
+    /// Retag this block after a semantic deep copy. Inline fields are handled
+    /// by the caller's iterative type walk; Shared payloads remain boundaries.
+    pub(crate) fn retag_own_block(&mut self, storage: Option<ArenaStorage>) {
+        match self {
+            Self::Bytes(_) | Self::ArenaBytes { .. } => {
+                let old = std::mem::replace(self, Self::Unit);
+                let bytes = match old {
+                    Self::Bytes(bytes) | Self::ArenaBytes { bytes, .. } => bytes,
+                    _ => unreachable!(),
+                };
+                *self = match storage {
+                    Some(storage) => Self::ArenaBytes { bytes, storage },
+                    None => Self::Bytes(bytes),
+                };
+            }
+            Self::String(_) | Self::ArenaString { .. } => {
+                let old = std::mem::replace(self, Self::Unit);
+                let text = match old {
+                    Self::String(text) | Self::ArenaString { text, .. } => text,
+                    _ => unreachable!(),
+                };
+                *self = match storage {
+                    Some(storage) => Self::ArenaString { text, storage },
+                    None => Self::String(text),
+                };
+            }
+            Self::Box(_) | Self::ArenaBox { .. } => {
+                let old = std::mem::replace(self, Self::Unit);
+                let fields = match old {
+                    Self::Box(fields) | Self::ArenaBox { fields, .. } => fields,
+                    _ => unreachable!(),
+                };
+                *self = match storage {
+                    Some(storage) => Self::ArenaBox { fields, storage },
+                    None => Self::Box(fields),
+                };
+            }
+            Self::Closure { environment, .. } => environment.storage = storage,
+            Self::Sequence {
+                kind: BuiltinType::List | BuiltinType::Array,
+                arena,
+                ..
+            }
+            | Self::Map { arena, .. }
+            | Self::Set { arena, .. } => *arena = storage,
+            _ => (),
+        }
+    }
+
     pub(crate) fn arena_storage_mut(&mut self) -> Option<&mut Option<ArenaStorage>> {
         match self {
             Self::Sequence { arena, .. } | Self::Map { arena, .. } | Self::Set { arena, .. } => {
@@ -897,8 +1099,9 @@ impl Value {
     pub(crate) fn fresh_arena_storage(&mut self) {
         let mut work = vec![self];
         while let Some(v) = work.pop() {
-            if let Some(Some(storage)) = v.arena_storage_mut() {
-                *storage = ArenaStorage::fresh(storage.arena, storage.element);
+            if let Some(storage) = v.arena_storage() {
+                let fresh = ArenaStorage::fresh(storage.arena, storage.element);
+                v.retag_own_block(Some(fresh));
             }
             if let Some(fields) = v.fields_mut() {
                 work.extend(fields.iter_mut().flatten());
@@ -910,6 +1113,9 @@ impl Value {
         match self {
             Self::Sequence { kind, .. } => !matches!(kind, BuiltinType::Inline | BuiltinType::Simd),
             Self::Box(_)
+            | Self::ArenaBox { .. }
+            | Self::ArenaBytes { .. }
+            | Self::ArenaString { .. }
             | Self::Map { .. }
             | Self::Set { .. }
             | Self::Closure { .. }
@@ -931,6 +1137,8 @@ impl Value {
                 | Self::Char(_)
                 | Self::String(_)
                 | Self::Bytes(_)
+                | Self::ArenaBytes { .. }
+                | Self::ArenaString { .. }
         )
     }
     pub(crate) fn inline_bits(&self) -> bool {
@@ -987,5 +1195,198 @@ mod mutex_tests {
         let _copy = value.copied();
         assert!(!root.release().unwrap());
         assert!(root.release().unwrap());
+    }
+}
+
+impl PartialEq for Value {
+    fn eq(&self, other: &Self) -> bool {
+        use Value::*;
+        match (self, other) {
+            (Unit, Unit) => true,
+            (Bool(a), Bool(b)) => a == b,
+            (Integer(a), Integer(b)) => a == b,
+            (F32(a), F32(b)) => a == b,
+            (F64(a), F64(b)) => a == b,
+            (Char(a), Char(b)) => a == b,
+            (String(a) | ArenaString { text: a, .. }, String(b) | ArenaString { text: b, .. }) => {
+                a == b
+            }
+            (Bytes(a) | ArenaBytes { bytes: a, .. }, Bytes(b) | ArenaBytes { bytes: b, .. }) => {
+                a == b
+            }
+            (Box(a) | ArenaBox { fields: a, .. }, Box(b) | ArenaBox { fields: b, .. }) => a == b,
+            (FunctionReference(a), FunctionReference(b)) => a == b,
+            (Shared(a), Shared(b)) => a == b,
+            (Mutex(a), Mutex(b)) => a == b,
+            (Handle { kind: a, id: x }, Handle { kind: b, id: y }) => a == b && x == y,
+            (Tuple(a), Tuple(b)) => a == b,
+            (Map { entries: a, .. }, Map { entries: b, .. })
+            | (Set { entries: a, .. }, Set { entries: b, .. }) => a == b,
+            (
+                Sequence {
+                    kind: a,
+                    elements: x,
+                    ..
+                },
+                Sequence {
+                    kind: b,
+                    elements: y,
+                    ..
+                },
+            ) => a == b && x == y,
+            (
+                Record {
+                    definition: a,
+                    fields: x,
+                },
+                Record {
+                    definition: b,
+                    fields: y,
+                },
+            )
+            | (
+                Distinct {
+                    definition: a,
+                    fields: x,
+                },
+                Distinct {
+                    definition: b,
+                    fields: y,
+                },
+            ) => a == b && x == y,
+            (
+                Variant {
+                    variant: a,
+                    fields: x,
+                },
+                Variant {
+                    variant: b,
+                    fields: y,
+                },
+            ) => a == b && x == y,
+            (
+                Resource {
+                    sizes: a,
+                    definition: x,
+                    fields: f,
+                },
+                Resource {
+                    sizes: b,
+                    definition: y,
+                    fields: g,
+                },
+            ) => a == b && x == y && f == g,
+            (
+                ResourceVariant {
+                    sizes: a,
+                    definition: x,
+                    variant: i,
+                    fields: f,
+                },
+                ResourceVariant {
+                    sizes: b,
+                    definition: y,
+                    variant: j,
+                    fields: g,
+                },
+            ) => a == b && x == y && i == j && f == g,
+            (
+                Closure {
+                    invoked: a,
+                    definition: x,
+                    body: i,
+                    captures: f,
+                    environment: e,
+                },
+                Closure {
+                    invoked: b,
+                    definition: y,
+                    body: j,
+                    captures: g,
+                    environment: h,
+                },
+            ) => a == b && x == y && i == j && f == g && e == h,
+            _ => false,
+        }
+    }
+}
+
+#[cfg(test)]
+mod sealed_value_tests {
+    use super::*;
+
+    #[test]
+    fn sealed_regions_33_placement_is_unobservable_to_equality_and_hash() {
+        let storage = ArenaStorage::fresh(19, 0);
+        for (heap, arena) in [
+            (
+                Value::Bytes(b"abc".to_vec()),
+                Value::ArenaBytes {
+                    bytes: b"abc".to_vec(),
+                    storage: storage.clone(),
+                },
+            ),
+            (
+                Value::String("abc".into()),
+                Value::ArenaString {
+                    text: "abc".into(),
+                    storage: storage.clone(),
+                },
+            ),
+            (
+                Value::Box(vec![Some(Value::Bool(true))]),
+                Value::ArenaBox {
+                    fields: vec![Some(Value::Bool(true))],
+                    storage,
+                },
+            ),
+        ] {
+            assert_eq!(heap, arena);
+            assert!(crate::library::collection::data_equal(&heap, &arena));
+            assert_eq!(
+                crate::structural::hash(&heap, 0),
+                crate::structural::hash(&arena, 0)
+            );
+        }
+    }
+
+    #[test]
+    fn sealed_regions_33_views_keep_identity_and_deep_copy_retags_it() {
+        let mut storage = ArenaStorage::fresh(19, 0);
+        storage.logical_block = Some(crate::inventory::LogicalBlockId(3));
+        let mut value = Value::ArenaBytes {
+            bytes: b"abcdef".to_vec(),
+            storage,
+        };
+        let view = value.byte_view(b"bcd".to_vec());
+        let snapshot = value.clone();
+        assert_eq!(
+            view.arena_storage().unwrap().logical_block,
+            Some(crate::inventory::LogicalBlockId(3))
+        );
+        value.fresh_arena_storage();
+        assert_eq!(value.arena_storage().unwrap().logical_block, None);
+        assert_eq!(
+            snapshot.arena_storage().unwrap().logical_block,
+            Some(crate::inventory::LogicalBlockId(3))
+        );
+        value.retag_own_block(None);
+        assert!(matches!(value, Value::Bytes(_)));
+        assert_eq!(view, Value::Bytes(b"bcd".to_vec()));
+    }
+
+    #[test]
+    fn sealed_regions_33_arena_box_snapshot_acquires_no_shared_credit() {
+        let root = SharedRoot::freeze(7, Value::Unit);
+        let value = Value::ArenaBox {
+            fields: vec![Some(Value::Shared(root.clone()))],
+            storage: ArenaStorage::fresh(19, 0),
+        };
+        let snapshot = value.clone();
+        assert_eq!(root.count(), 1);
+        snapshot.discard();
+        assert_eq!(root.count(), 1);
+        value.discard();
+        assert!(root.release().unwrap().is_some());
     }
 }

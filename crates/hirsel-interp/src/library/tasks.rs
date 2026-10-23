@@ -1540,7 +1540,13 @@ pub(super) fn failure_value(
     let Value::Variant { mut fields, .. } = cause else {
         return Err(invalid("empty isolated failure"));
     };
-    let Some(Value::Box(mut boxed)) = fields.pop().flatten() else {
+    let Some(
+        Value::Box(mut boxed)
+        | Value::ArenaBox {
+            fields: mut boxed, ..
+        },
+    ) = fields.pop().flatten()
+    else {
         return Err(invalid("invalid failure cause"));
     };
     boxed
@@ -1638,6 +1644,8 @@ mod tests {
                     invoked: Some(Default::default()),
                     captures: vec![],
                     environment: Box::new(crate::value::Environment {
+                        storage: None,
+                        capture_types: vec![],
                         owned_captures: vec![],
                         sizes: Default::default(),
                         type_arguments: Default::default(),
@@ -1776,6 +1784,8 @@ mod tests {
                 invoked: Some(Default::default()),
                 captures: vec![],
                 environment: Box::new(crate::value::Environment {
+                    storage: None,
+                    capture_types: vec![],
                     owned_captures: vec![],
                     sizes: Default::default(),
                     type_arguments: Default::default(),
@@ -1835,6 +1845,8 @@ mod tests {
                 invoked: Some(Default::default()),
                 captures: vec![],
                 environment: Box::new(crate::value::Environment {
+                    storage: None,
+                    capture_types: vec![],
                     owned_captures: vec![],
                     sizes: Default::default(),
                     type_arguments: Default::default(),

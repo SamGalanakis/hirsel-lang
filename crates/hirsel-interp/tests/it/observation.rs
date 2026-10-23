@@ -88,6 +88,8 @@ fn values_preserve_width_and_float_bits_and_name_function_disposition() {
             body: BodyId(2),
             captures: vec![],
             environment: Box::new(hirsel_interp::value::Environment {
+                storage: None,
+                capture_types: vec![],
                 owned_captures: vec![],
                 sizes: Default::default(),
                 type_arguments: Default::default(),

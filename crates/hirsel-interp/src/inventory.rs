@@ -8,6 +8,7 @@
 use std::collections::BTreeMap;
 
 mod typed;
+pub(crate) use typed::value_receipt;
 pub use typed::{BlockPlacement, ChargeRoot, PlacementReceipt, heap_charge, heap_charge_with};
 
 /// Identity within one arena's inventory; independent of host addresses.

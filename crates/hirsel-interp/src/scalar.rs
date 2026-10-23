@@ -175,13 +175,15 @@ pub fn binary(op: BinaryOp, left: Value, right: Value) -> Result<Value, ScalarEr
         (Value::Bool(a), Value::Bool(b)) => {
             comparison(op, Some(a.cmp(&b))).ok_or(ScalarError::InvalidOperation)
         }
-        (Value::String(a), Value::String(b)) => {
-            comparison(op, Some(a.as_bytes().cmp(b.as_bytes())))
-                .ok_or(ScalarError::InvalidOperation)
-        }
-        (Value::Bytes(a), Value::Bytes(b)) => {
-            comparison(op, Some(a.cmp(&b))).ok_or(ScalarError::InvalidOperation)
-        }
+        (
+            Value::String(a) | Value::ArenaString { text: a, .. },
+            Value::String(b) | Value::ArenaString { text: b, .. },
+        ) => comparison(op, Some(a.as_bytes().cmp(b.as_bytes())))
+            .ok_or(ScalarError::InvalidOperation),
+        (
+            Value::Bytes(a) | Value::ArenaBytes { bytes: a, .. },
+            Value::Bytes(b) | Value::ArenaBytes { bytes: b, .. },
+        ) => comparison(op, Some(a.cmp(&b))).ok_or(ScalarError::InvalidOperation),
         (Value::Unit, Value::Unit) => {
             comparison(op, Some(Ordering::Equal)).ok_or(ScalarError::InvalidOperation)
         }

@@ -22,6 +22,7 @@ pub(crate) struct Budgets {
     issued: u64,
     open: BTreeMap<u64, Budget>,
     pub run: crate::budget::Meter,
+    pub storage: crate::sealed_storage::Storage,
 }
 
 struct Budget {
@@ -42,11 +43,12 @@ impl Budgets {
     pub fn new(run: crate::RunBudgets) -> Self {
         Self {
             issued: 0,
+            storage: Default::default(),
             open: BTreeMap::new(),
             run: crate::budget::Meter::new(run),
         }
     }
-    /// A handle id for a bounded arena of unchecked execution; `arena.with` keeps 0.
+    /// Every scope, bounded or unbounded, receives a fresh semantic identity.
     pub fn issue(&mut self) -> u64 {
         self.issued += 1;
         self.issued
@@ -195,9 +197,7 @@ pub(crate) fn retag<'a>(
     let Some((arena, bounded)) = arena else {
         let mut work = vec![value];
         while let Some(value) = work.pop() {
-            if let Some(arena) = value.arena_storage_mut() {
-                *arena = None;
-            }
+            value.retag_own_block(None);
             if let Some(fields) = value.fields_mut() {
                 work.extend(fields.iter_mut().flatten());
             }
@@ -207,16 +207,7 @@ pub(crate) fn retag<'a>(
     if !bounded {
         let mut work = vec![value];
         while let Some(value) = work.pop() {
-            if let Value::Sequence {
-                kind: BuiltinType::List | BuiltinType::Array,
-                arena: tag,
-                ..
-            }
-            | Value::Map { arena: tag, .. }
-            | Value::Set { arena: tag, .. } = value
-            {
-                *tag = Some(ArenaStorage::fresh(arena, 0));
-            }
+            value.retag_own_block(Some(ArenaStorage::fresh(arena, 0)));
             if let Some(fields) = value.fields_mut() {
                 work.extend(fields.iter_mut().flatten());
             }
@@ -250,8 +241,20 @@ pub(crate) fn retag<'a>(
         } else {
             value
         };
+        if matches!(
+            value,
+            Value::Bytes(_)
+                | Value::ArenaBytes { .. }
+                | Value::String(_)
+                | Value::ArenaString { .. }
+                | Value::Box(_)
+                | Value::ArenaBox { .. }
+                | Value::Closure { .. }
+        ) {
+            value.retag_own_block(Some(ArenaStorage::fresh(arena, 0)));
+        }
         match (&row.kind, value) {
-            (TypeKind::Box(payload), Value::Box(fields)) => {
+            (TypeKind::Box(payload), Value::Box(fields) | Value::ArenaBox { fields, .. }) => {
                 for field in fields.iter_mut().flatten() {
                     work.push((field, *payload, scope.clone()));
                 }
@@ -329,6 +332,29 @@ pub(crate) fn retag<'a>(
                         work.push((value, *element, scope.clone()));
                     }
                     _ => {}
+                }
+            }
+            (
+                TypeKind::Function(_),
+                Value::Closure {
+                    captures,
+                    environment,
+                    ..
+                },
+            ) => {
+                if captures.len() != environment.capture_types.len()
+                    || captures.len() != environment.owned_captures.len()
+                {
+                    return Err(invalid("unclosed copied environment"));
+                }
+                for ((value, ty), owned) in captures
+                    .iter_mut()
+                    .zip(&environment.capture_types)
+                    .zip(&environment.owned_captures)
+                {
+                    if *owned && let Some(value) = value {
+                        work.push((value, *ty, Scope::root(&runtime.types)));
+                    }
                 }
             }
             (TypeKind::Tuple(items), Value::Tuple(fields)) => {
@@ -413,14 +439,20 @@ pub(crate) fn copy<'a>(
             value
         };
         match (&row.kind, value) {
-            (TypeKind::Primitive(Primitive::String), Value::String(text)) => {
+            (
+                TypeKind::Primitive(Primitive::String),
+                Value::String(text) | Value::ArenaString { text, .. },
+            ) => {
                 total = total.saturating_add(text.len() as u64);
             }
-            (TypeKind::Primitive(Primitive::Bytes), Value::Bytes(bytes)) => {
+            (
+                TypeKind::Primitive(Primitive::Bytes),
+                Value::Bytes(bytes) | Value::ArenaBytes { bytes, .. },
+            ) => {
                 total = total.saturating_add(bytes.len() as u64);
             }
             (TypeKind::Primitive(_), _) => {}
-            (TypeKind::Box(payload), Value::Box(fields)) => {
+            (TypeKind::Box(payload), Value::Box(fields) | Value::ArenaBox { fields, .. }) => {
                 total = total.saturating_add(size(*payload)?);
                 for field in fields.iter().flatten() {
                     work.push((field, *payload, scope.clone()));
@@ -527,10 +559,34 @@ pub(crate) fn copy<'a>(
                     }
                 }
             }
-            (TypeKind::Function(_), _) => {
-                return Err(Error::Unavailable(
-                    "a bounded-arena copy of a callable".into(),
-                ));
+            (TypeKind::Function(_), Value::FunctionReference(_)) => (),
+            (
+                TypeKind::Function(_),
+                Value::Closure {
+                    captures,
+                    environment,
+                    ..
+                },
+            ) => {
+                if captures.len() != environment.capture_types.len()
+                    || captures.len() != environment.owned_captures.len()
+                {
+                    return Err(invalid("unclosed copied environment"));
+                }
+                for ((value, ty), owned) in captures
+                    .iter()
+                    .zip(&environment.capture_types)
+                    .zip(&environment.owned_captures)
+                {
+                    if *owned && let Some(value) = value {
+                        total = total.saturating_add(
+                            logical
+                                .size(*ty, &Scope::root(&runtime.types))
+                                .map_err(logical_error)?,
+                        );
+                        work.push((value, *ty, Scope::root(&runtime.types)));
+                    }
+                }
             }
             _ => return Err(mismatch()),
         }

@@ -2442,7 +2442,7 @@ primary_operations! { library, call, context, name, a, value;
         }
         Value::Unit
     },
-    Primitive: "string.as_bytes" => Value::Bytes(text(arg(a, 0)?)?.as_bytes().to_vec()),
+    Primitive: "string.as_bytes" => arg(a, 0)?.byte_view(text(arg(a, 0)?)?.as_bytes().to_vec()),
     Primitive: "bytes.len" => u64_value(bytes(arg(a, 0)?)?.len() as u64),
     Primitive: "bytes.replace_range" => {
         let (list, rest) = call.arguments.split_first_mut().ok_or_else(|| invalid("missing replacement arguments"))?;
@@ -2498,8 +2498,8 @@ primary_operations! { library, call, context, name, a, value;
             result.push(i.bits() as u8);
         }
         return Ok(Some(OperationResult::Complete { value: if call.path.is_core("$intrinsic.TextFinish") {
-            Value::String(String::from_utf8(result).map_err(|_| invalid("compiler text invariant"))?)
-        } else { Value::Bytes(result) }, arguments: vec![], consumed: vec![0], released: vec![] }));
+            arg(a, 0)?.string_view(String::from_utf8(result).map_err(|_| invalid("compiler text invariant"))?)
+        } else { arg(a, 0)?.byte_view(result) }, arguments: vec![], consumed: vec![0], released: vec![] }));
     },
     Primitive: "bytes.slice" => {
         let src = bytes(arg(a, 0)?)?;
@@ -2508,13 +2508,13 @@ primary_operations! { library, call, context, name, a, value;
         if start > end || end > src.len() {
             return Ok(Some(OperationResult::Failed(fail(&call, context, "SEM-3", "invalid byte interval"))));
         }
-        Value::Bytes(src[start..end].to_vec())
+        arg(a, 0)?.byte_view(src[start..end].to_vec())
     },
     Primitive: "string.position" => {
         let s = text(arg(a, 0)?)?;
         let offset = index(arg(a, 1)?)?;
         if s.is_char_boundary(offset) {
-            some(Value::Record { definition: (&hirsel_syntax::DefPath::core("StrPos")).into(), fields: vec![Some(Value::String(s.into())), Some(u64_value(offset as u64))] })
+            some(Value::Record { definition: (&hirsel_syntax::DefPath::core("StrPos")).into(), fields: vec![Some(arg(a, 0)?.string_view(s.into())), Some(u64_value(offset as u64))] })
         } else { none() }
     },
     Primitive: "string.byte_offset" => u64_value(position(arg(a, 1)?, text(arg(a, 0)?)?)? as u64),
@@ -2678,14 +2678,14 @@ fn take_arg(a: &mut [Value], i: usize) -> Result<Value, Error> {
     Ok(std::mem::replace(arg_mut(a, i)?, Value::Unit))
 }
 pub(super) fn text(v: &Value) -> Result<&str, Error> {
-    if let Value::String(s) = v {
+    if let Value::String(s) | Value::ArenaString { text: s, .. } = v {
         Ok(s)
     } else {
         Err(invalid("expected String"))
     }
 }
 pub(super) fn bytes(v: &Value) -> Result<&[u8], Error> {
-    if let Value::Bytes(s) = v {
+    if let Value::Bytes(s) | Value::ArenaBytes { bytes: s, .. } = v {
         Ok(s)
     } else {
         Err(invalid("expected Bytes"))
@@ -2908,11 +2908,11 @@ pub(super) fn encode_value(value: &Value) -> Vec<u8> {
                 out.extend_from_slice(&[n.width() as u8, u8::from(n.is_signed())]);
                 out.extend_from_slice(&n.bits().to_le_bytes());
             }
-            Value::String(s) => {
+            Value::String(s) | Value::ArenaString { text: s, .. } => {
                 out.push(3);
                 atom(&mut out, s.as_bytes());
             }
-            Value::Bytes(b) => {
+            Value::Bytes(b) | Value::ArenaBytes { bytes: b, .. } => {
                 out.push(4);
                 atom(&mut out, b);
             }
@@ -2988,7 +2988,7 @@ pub(super) fn encode_value(value: &Value) -> Vec<u8> {
                 out.push(11);
                 out.extend_from_slice(&b.to_le_bytes());
             }
-            Value::Box(items) => {
+            Value::Box(items) | Value::ArenaBox { fields: items, .. } => {
                 out.push(12);
                 fields(&mut out, &mut work, items);
             }

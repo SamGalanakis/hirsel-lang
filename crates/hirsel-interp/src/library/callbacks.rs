@@ -278,7 +278,7 @@ impl Library {
                         .iter()
                         .flatten()
                         .for_each(Value::share_arena_storage);
-                    *storage = crate::value::ArenaStorage::fresh(storage.arena, storage.element);
+                    *storage = storage.detached();
                 }
                 charge
             });
@@ -660,7 +660,7 @@ fn finish_comparison(
         );
         if storage.shared() {
             entries.iter().for_each(Value::share_arena_storage);
-            *storage = crate::value::ArenaStorage::fresh(storage.arena, storage.element);
+            *storage = storage.detached();
         }
         charge
     });

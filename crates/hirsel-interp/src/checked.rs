@@ -726,10 +726,13 @@ pub(crate) fn holds_storage(value: &Value) -> bool {
     while let Some(v) = work.pop() {
         match v {
             Value::String(_)
+            | Value::ArenaString { .. }
             | Value::Bytes(_)
+            | Value::ArenaBytes { .. }
             | Value::Map { .. }
             | Value::Set { .. }
-            | Value::Box(_) => {
+            | Value::Box(_)
+            | Value::ArenaBox { .. } => {
                 return true;
             }
             Value::Handle { kind, .. } => {

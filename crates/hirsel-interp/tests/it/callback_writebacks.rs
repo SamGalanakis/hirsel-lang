@@ -307,6 +307,8 @@ fn execute_writeback_target(
                 body: BodyId(0),
                 captures: vec![],
                 environment: Box::new(hirsel_interp::value::Environment {
+                    storage: None,
+                    capture_types: vec![],
                     owned_captures: vec![],
                     sizes: Default::default(),
                     type_arguments: Default::default(),
