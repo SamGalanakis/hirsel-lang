@@ -107,3 +107,4 @@ mod cbor_upstream_25;
 mod unicode_case_upstream_25;
 mod yaml_upstream_25;
 mod msgpack_upstream_25;
+mod utf8_stream_histories_26;
