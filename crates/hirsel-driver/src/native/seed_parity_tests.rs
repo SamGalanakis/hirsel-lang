@@ -1,10 +1,11 @@
 //! Cross-open and fresh-compilation vectors from Go cache_test.go:22–60,
-//! 99–128 and Cranelift incremental_cache.rs:39–95, with a read-only donor.
+//! 99–128 and Cranelift incremental_cache.rs:39–95, with an ordinary local donor.
 use super::tests::{count, options};
 use super::*;
 use crate::native::{Backend, stages};
+use hirsel_engine::DefinitionQueries;
 use hirsel_intern::timings::{self, Count};
-use hirsel_lir::objects::{DirObjects, ReadOnlyObjects, SeededObjects};
+use hirsel_lir::objects::{DirObjects, NoObjects, ObjectStore, UnitKey};
 use std::sync::Arc;
 
 const NEXT_STREAM: &str = "pub fn main()->Result[(),()]{let f=std@1/http.next_stream;Ok(())}";
@@ -27,16 +28,15 @@ fn next_stream(backend: Backend, jobs: usize) -> String {
         let scratch = crate::native::executable::Scratch::new().unwrap();
         let source = scratch.0.join("next-stream.hir");
         std::fs::write(&source, NEXT_STREAM).unwrap();
-        let seed = scratch.0.join("seed");
-        // Produce legacy fragments without Ready-call sidecars in a distinct
-        // program. Its extra tuple shifts layout numbering before the HTTP
-        // resource closure, like the larger std seed producer.
+        let shared = scratch.0.join("shared");
+        // Produce ordinary fragments in a distinct program. Its extra tuple
+        // shifts layout numbering before the HTTP resource closure.
         {
             let donor = scratch.0.join("donor.hir");
             std::fs::write(&donor,
                 "fn aaa()->(bool,u32){(true,0u32)}\npub fn main()->Result[(),()]{let _=aaa();let f=std@1/http.next_stream;Ok(())}").unwrap();
             let input = consumer(&donor);
-            let mut opts = options(Arc::new(DirObjects::new(seed.clone())), 1);
+            let mut opts = options(Arc::new(DirObjects::new(shared.clone())), 1);
             let objects = opts.objects.as_mut().unwrap();
             objects.backend = backend;
             objects.debug = true;
@@ -53,7 +53,7 @@ fn next_stream(backend: Backend, jobs: usize) -> String {
             let expected = cold.ready.unit_objects.as_ref().unwrap().objects.clone();
             let summaries = cold.ready.summaries.clone();
             drop(cold);
-            // Warm source imports without a seed must agree too.
+            // Warm source imports in an independent cache must agree too.
             let warm = prepare_in(&consumer(&source), &opts, Mode::Reuse).unwrap();
             assert_eq!(summaries, warm.ready.summaries);
             assert_eq!(
@@ -61,11 +61,7 @@ fn next_stream(backend: Backend, jobs: usize) -> String {
                 &warm.ready.unit_objects.as_ref().unwrap().objects
             );
             drop(warm);
-            let writable = Arc::new(DirObjects::new(scratch.0.join("writable")));
-            opts.objects.as_mut().unwrap().store = Arc::new(SeededObjects {
-                writable,
-                seed: Arc::new(ReadOnlyObjects(seed.clone())),
-            });
+            opts.objects.as_mut().unwrap().store = Arc::new(DirObjects::new(shared.clone()));
             let ordinary = prepare_in(&consumer(&source), &opts, Mode::Disabled).unwrap();
             assert!(ordinary.ready.unit_objects.as_ref().unwrap().hits > 0);
             assert_eq!(
@@ -129,55 +125,219 @@ fn salted(test: &str, backend: Backend, jobs: usize) {
 }
 
 #[test]
-fn installed_next_stream_cranelift_jobs1() {
+fn ordinary_next_stream_cranelift_jobs1() {
     salted(
-        "native::plan::seed_parity_tests::installed_next_stream_cranelift_jobs1",
+        "native::plan::seed_parity_tests::ordinary_next_stream_cranelift_jobs1",
         Backend::Cranelift,
         1,
     );
 }
 
 #[test]
-fn installed_next_stream_cranelift_jobs2() {
+fn ordinary_next_stream_cranelift_jobs2() {
     salted(
-        "native::plan::seed_parity_tests::installed_next_stream_cranelift_jobs2",
+        "native::plan::seed_parity_tests::ordinary_next_stream_cranelift_jobs2",
         Backend::Cranelift,
         2,
     );
 }
 
 #[test]
-fn installed_next_stream_cranelift_jobs8() {
+fn ordinary_next_stream_cranelift_jobs8() {
     salted(
-        "native::plan::seed_parity_tests::installed_next_stream_cranelift_jobs8",
+        "native::plan::seed_parity_tests::ordinary_next_stream_cranelift_jobs8",
         Backend::Cranelift,
         8,
     );
 }
 
 #[test]
-fn installed_next_stream_llvm_jobs1() {
+fn ordinary_next_stream_llvm_jobs1() {
     salted(
-        "native::plan::seed_parity_tests::installed_next_stream_llvm_jobs1",
+        "native::plan::seed_parity_tests::ordinary_next_stream_llvm_jobs1",
         Backend::Llvm,
         1,
     );
 }
 
 #[test]
-fn installed_next_stream_llvm_jobs2() {
+fn ordinary_next_stream_llvm_jobs2() {
     salted(
-        "native::plan::seed_parity_tests::installed_next_stream_llvm_jobs2",
+        "native::plan::seed_parity_tests::ordinary_next_stream_llvm_jobs2",
         Backend::Llvm,
         2,
     );
 }
 
 #[test]
-fn installed_next_stream_llvm_jobs8() {
+fn ordinary_next_stream_llvm_jobs8() {
     salted(
-        "native::plan::seed_parity_tests::installed_next_stream_llvm_jobs8",
+        "native::plan::seed_parity_tests::ordinary_next_stream_llvm_jobs8",
         Backend::Llvm,
         8,
     );
+}
+
+// Ordinary local publication replaces the former dedicated seed builder. Each
+// consumer opens a fresh compiler and cache handle; neither V nor import/Ready
+// validation is supplied by the fragment provider.
+fn ordinary_provider(backend: Backend) {
+    hirsel_engine::with_compiler_stack(|| {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        std::fs::write(root.join("library.hir"), "type Payload { n:u64 }\npub fn aaa()->(bool,u32) { (true,0u32) }\npub fn answer(x:u64)->u64 { let p=Payload(n:x); let get=fn()->u64 { p.n }; get()+1u64 }\n").unwrap();
+        let library = root.join("library.json");
+        std::fs::write(
+            &library,
+            serde_json::json!({
+                "schema":1,"package":{"name":"ordinary","version":"1"},
+                "sources":[{"path":"library.hir","module":[]}],"dependencies":[]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        std::fs::write(root.join("main.hir"), "pub fn main()->Result[(),()] { failure.check(lib.answer(3u64)==4u64, Arithmetic()); Ok(()) }\n").unwrap();
+        let application = root.join("application.json");
+        std::fs::write(&application, serde_json::json!({
+            "schema":1,"package":{"name":"consumer","version":"1"},
+            "sources":[{"path":"main.hir","module":[]}],
+            "dependencies":[{"manifest":"library.json","package":{"name":"ordinary","version":"1"},"expose":[{"head":"lib","module":[]}]}],
+            "entry":{"module":[],"name":"main"}
+        }).to_string()).unwrap();
+        let cache = root.join("objects");
+        let mut opts = options(Arc::new(DirObjects::new(cache.clone())), 1);
+        opts.objects.as_mut().unwrap().backend = backend;
+        let donor = {
+            let mut package = crate::COMPILER
+                .with_owned_engines()
+                .load_package_declarations(&library)
+                .unwrap();
+            let roots = ["aaa", "answer"].map(|name| {
+                DefPath(hirsel_syntax::ItemPath {
+                    package: package.package.clone(),
+                    modules: vec![],
+                    name: name.into(),
+                })
+            });
+            package.engine.native_input_for(&roots).unwrap()
+        };
+        let published = stages::build_full(&donor, &opts).unwrap();
+        assert!(!published.unit_objects.as_ref().unwrap().objects.is_empty());
+        drop(published);
+        drop(donor);
+        opts.objects.as_mut().unwrap().store = Arc::new(DirObjects::new(cache.clone()));
+        let first = prepare_in(&consumer(&application), &opts, Mode::Disabled).unwrap();
+        assert!(
+            first.ready.unit_objects.as_ref().unwrap().hits > 0,
+            "{backend:?}: no ordinary donor hit"
+        );
+        let expected = first.ready.unit_objects.as_ref().unwrap().objects.clone();
+        let summaries = first.ready.summaries.clone();
+        drop(first);
+        // Full reference computation imports, checks strict C and Ready, and
+        // independently compares every cached fragment with fresh emission.
+        let verified = prepare_in(&consumer(&application), &opts, Mode::VerifyReuse).unwrap();
+        assert_eq!(
+            expected,
+            verified.ready.unit_objects.as_ref().unwrap().objects
+        );
+        assert_eq!(summaries, verified.ready.summaries);
+        drop(verified);
+        let warm = prepare_in(&consumer(&application), &opts, Mode::Reuse).unwrap();
+        assert!(warm.stats.hit, "{backend:?}: {:?}", warm.stats);
+        assert_eq!(expected, warm.ready.unit_objects.as_ref().unwrap().objects);
+        drop(warm);
+        struct Imported(DirObjects);
+        impl ObjectStore for Imported {
+            fn get(&self, key: &UnitKey) -> Option<Arc<[u8]>> {
+                self.0.get(key)
+            }
+            fn put(&self, _: &UnitKey, _: &[u8]) {}
+        }
+        let imported = Arc::new(Imported(DirObjects::new(cache)));
+        assert!(!imported.production_enabled());
+        opts.objects.as_mut().unwrap().store = imported;
+        let imported = prepare_in(&consumer(&application), &opts, Mode::Reuse).unwrap();
+        assert!(
+            !imported.stats.hit,
+            "copied bytes gained local producer authority"
+        );
+        assert_eq!(imported.stats.fallback, Some("store-disabled"));
+        assert_eq!(
+            expected,
+            imported.ready.unit_objects.as_ref().unwrap().objects
+        );
+        drop(imported);
+        opts.objects.as_mut().unwrap().store = Arc::new(NoObjects);
+        let fresh = stages::build_full(&consumer(&application), &opts).unwrap();
+        assert_eq!(expected, fresh.unit_objects.as_ref().unwrap().objects);
+    });
+}
+
+#[test]
+fn ordinary_provider_cranelift() {
+    ordinary_provider(Backend::Cranelift);
+}
+#[test]
+fn ordinary_provider_llvm() {
+    ordinary_provider(Backend::Llvm);
+}
+
+#[test]
+fn http_reject_lowering_has_valid_projections() {
+    hirsel_engine::with_compiler_stack(|| {
+        let manifest =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../stdlib/std@1/hirsel.json");
+        let mut package = crate::COMPILER
+            .load_package_declarations(&manifest)
+            .unwrap();
+        let root = hirsel_syntax::DefPath(hirsel_syntax::ItemPath {
+            package: package.package.clone(),
+            modules: vec!["http".into()],
+            name: "http_server_reject".into(),
+        });
+        // This private root is absent from ordinary program reachability.
+        // Keep its independent V projection regression covered.
+        package.engine.lower_to_tir(&root).unwrap();
+    });
+}
+
+// A contract helper's closure is addressed and called in the same singleton
+// object. An untyped LLVM address declaration conflicts with the bound call.
+#[test]
+fn ordinary_store_delete_has_one_consistent_entry_abi() {
+    hirsel_engine::with_compiler_stack(|| {
+        let manifest =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../stdlib/std@1/hirsel.json");
+        let mut package = crate::COMPILER
+            .load_package_declarations(&manifest)
+            .unwrap();
+        let root = hirsel_syntax::DefPath(hirsel_syntax::ItemPath {
+            package: package.package.clone(),
+            modules: vec!["store".into()],
+            name: "tx_delete".into(),
+        });
+        let input = package.engine.native_input_for(&[root]).unwrap();
+        for backend in [Backend::Cranelift, Backend::Llvm] {
+            for opt in [
+                hirsel_lir::emission::OptLevel::None,
+                hirsel_lir::emission::OptLevel::Default,
+                hirsel_lir::emission::OptLevel::Speed,
+            ] {
+                let mut options =
+                    super::super::Options::new(hirsel_lir::TargetSpec::x86_64_unknown_linux_gnu());
+                options.objects = Some(super::super::UnitObjects {
+                    store: Arc::new(NoObjects),
+                    backend,
+                    opt,
+                    debug: opt == hirsel_lir::emission::OptLevel::None,
+                    fuel: false,
+                    jobs: hirsel_intern::jobs::Jobs::ONE,
+                    byte_budget: None,
+                });
+                stages::build_full(&input, &options)
+                    .unwrap_or_else(|e| panic!("{backend:?} {opt:?}: {e}"));
+            }
+        }
+    });
 }

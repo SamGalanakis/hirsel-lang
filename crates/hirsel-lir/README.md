@@ -776,6 +776,7 @@ ordinal from `FOREIGN_PACKAGE_SHIFT`), which emission reads from `EmitInputs::fo
 caller-owned interval record grows to `FOREIGN_SCOPE_BYTES` 40; and callback thunks call
 `hirsel_rt_v2_callback_leave` before returning to C. The LIR vocabulary is unchanged.
 
-`objects::SeededObjects` layers a configured writable store over a read-only
-seed. `ReadOnlyObjects` checks framing without refreshing mtimes or removing
-corrupt entries, allowing shared toolchain installations to remain read-only.
+`objects::DirObjects` adapts the common artifact store: typed native action
+associations refer to checked immutable outputs. Only the configured local
+writable provider supplies `ProducedBytes`; imported content supplies integrity
+without production authority. The v3 directory reset has no old-format reader.

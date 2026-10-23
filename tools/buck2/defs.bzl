@@ -607,41 +607,12 @@ def hirsel_products(name, hirsel, **kwargs):
     native.configured_alias(name = compiler, actual = hirsel, platform = "root//tools/buck2:checked")
     _hirsel_products(name = name, hirsel = ":" + compiler, exec_compatible_with = [budget_constraint(pool_budget_name(*PRECHECK_REQUEST))], **kwargs)
 
-def _std_objects_impl(ctx):
-    tree = ctx.actions.symlinked_dir("package", {f.short_path: f for f in ctx.attrs.srcs})
-    objects = ctx.actions.declare_output("hirsel-std.objects", dir = True)
-    ctx.actions.run(
-        cmd_args(ctx.attrs.hirsel[RunInfo], "seed-objects",
-                 cmd_args(tree, format = "{}/" + ctx.attrs.manifest),
-                 "-o", objects.as_output(),
-                 hidden = ctx.attrs._llvm_libraries[DefaultInfo].default_outputs),
-        env = {"HIRSEL_MEMORY_LIMIT": PRODUCT_MEMORY_LIMIT, "HIRSEL_STD_OBJECTS": "none"},
-        category = "std_objects",
-    )
-    return [DefaultInfo(default_output = objects)]
-
-_hirsel_std_objects = rule(
-    impl = _std_objects_impl,
-    attrs = {
-        "hirsel": attrs.exec_dep(providers = [RunInfo]),
-        "manifest": attrs.string(),
-        "srcs": attrs.list(attrs.source()),
-        "_llvm_libraries": attrs.dep(default = "toolchains//:llvm-libraries"),
-    },
-)
-
-def hirsel_std_objects(name, hirsel, **kwargs):
-    compiler = name + "-compiler"
-    native.configured_alias(name = compiler, actual = hirsel, platform = "root//tools/buck2:checked")
-    _hirsel_std_objects(name = name, hirsel = ":" + compiler, exec_compatible_with = [budget_constraint(pool_budget_name(*PRECHECK_REQUEST))], **kwargs)
-
 def _toolchain_bundle_impl(ctx):
     # Copy the executable: a symlink would make current_exe resolve outside the
     # bundle, away from the sibling ordinary products it discovers automatically.
     bundle = ctx.actions.copied_dir("hirsel-toolchain", {
         "hirsel": ctx.attrs.hirsel[DefaultInfo].default_outputs[0],
         "hirsel-std.products": ctx.attrs.products[DefaultInfo].default_outputs[0],
-        "hirsel-std.objects": ctx.attrs.objects[DefaultInfo].default_outputs[0],
         "stdlib/std@1": ctx.actions.copied_dir("std@1", {src.short_path.removeprefix("stdlib/std@1/"): src for src in ctx.attrs.std}),
     })
     return [
@@ -654,7 +625,6 @@ hirsel_toolchain_bundle = rule(
     attrs = {
         "hirsel": attrs.dep(),
         "products": attrs.dep(),
-        "objects": attrs.dep(),
         "std": attrs.list(attrs.source()),
     },
 )
