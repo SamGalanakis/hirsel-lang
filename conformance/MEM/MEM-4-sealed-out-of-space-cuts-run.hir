@@ -1,0 +1,126 @@
+// rule: MEM-4
+// expect: run
+// These cuts require Error; an incorrectly published empty Region is not exhaustion.
+fn heap_cut(cap: u64) -> bool {
+  let outcome = arena.bounded(
+    cap,
+    fn(a: Arena) -> Region[List[u64]] {
+      let root: List[u64] in heap = [1u64, 2u64]
+      arena.seal(take a, take root)
+    }
+  )
+  match take outcome {
+    Ok(owner) => false,
+    Error(_) => true,
+  }
+}
+
+fn child_cut(cap: u64) -> bool {
+  let outcome = arena.bounded(
+    cap,
+    fn(a: Arena) -> Region[List[List[u64]]] {
+      let leaf: List[u64] in heap = [7u64]
+      let root: List[List[u64]] in a = [copy leaf]
+      arena.seal(take a, take root)
+    }
+  )
+  match take outcome {
+    Ok(owner) => false,
+    Error(_) => true,
+  }
+}
+
+fn retained_cut(cap: u64) -> bool {
+  let outcome = arena.bounded(
+    cap,
+    fn(a: Arena) -> Region[u64] {
+      let h: Bytes in heap = copy_to(heap, b"abc")
+      let retained: List[Bytes] in a = [copy h, copy h]
+      let root = 7u64
+      arena.seal(take a, take root)
+    }
+  )
+  match take outcome {
+    Ok(owner) => false,
+    Error(_) => true,
+  }
+}
+
+fn live_cut(cap: u64) -> bool {
+  let outcome = arena.bounded(
+    cap,
+    fn(a: Arena) -> Region[List[Bytes]] {
+      let h: Bytes in heap = copy_to(heap, b"abc")
+      let retained: List[Bytes] in a = [copy h, copy h]
+      arena.seal(take a, take retained)
+    }
+  )
+  match take outcome {
+    Ok(owner) => false,
+    Error(_) => true,
+  }
+}
+
+fn occurrence_cut(cap: u64, content: Bytes, repeated: bool) -> bool {
+  let outcome = arena.bounded(
+    cap,
+    fn(a: Arena) -> Region[u64] {
+      let first = copy_to(heap, content)
+      let second = if repeated {
+        copy first
+      } else {
+        copy_to(heap, content)
+      }
+      let retained: List[Bytes] in a = [copy first, copy second]
+      let root = 7u64
+      arena.seal(take a, take root)
+    }
+  )
+  match take outcome {
+    Ok(owner) => false,
+    Error(_) => true,
+  }
+}
+
+fn growth_cut(cap: u64, copied: bool) -> bool {
+  let outcome = arena.bounded(
+    cap,
+    fn(a: Arena) -> Region[List[Bytes]] {
+      let h: Bytes in heap = copy_to(heap, b"abc")
+      let mut root: List[Bytes] in a = []
+      list.push(mut root, copy h)
+      if copied {
+        let old = copy root
+        list.push(mut root, copy h)
+        failure.check(list.len(old) == 1u64, Bounds())
+      } else {
+        list.push(mut root, copy h)
+      }
+      arena.seal(take a, take root)
+    }
+  )
+  match take outcome {
+    Ok(owner) => false,
+    Error(_) => true,
+  }
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  failure.check(heap_cut(15u64), Bounds())
+  failure.check(child_cut(7u64), Bounds())
+  failure.check(child_cut(8u64), Bounds())
+  failure.check(child_cut(15u64), Bounds())
+  failure.check(retained_cut(15u64), Bounds())
+  failure.check(retained_cut(16u64), Bounds())
+  failure.check(retained_cut(21u64), Bounds())
+  failure.check(live_cut(15u64), Bounds())
+  failure.check(live_cut(16u64), Bounds())
+  failure.check(live_cut(21u64), Bounds())
+  failure.check(occurrence_cut(17u64, b"x", true), Bounds())
+  failure.check(occurrence_cut(17u64, b"x", false), Bounds())
+  failure.check(occurrence_cut(21u64, b"abc", true), Bounds())
+  failure.check(occurrence_cut(21u64, b"abc", false), Bounds())
+  failure.check(growth_cut(21u64, false), Bounds())
+  failure.check(growth_cut(32u64, true), Bounds())
+  Ok(())
+}
