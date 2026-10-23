@@ -131,3 +131,10 @@ The owner validated the exact witness and shrink/forgery controls across four
 engines. The table's open disposition describes the original qualification pin;
 the compiler defect is now fixed. This app retains its tested bounded-copy
 workaround, with no new engine campaign or ownership-rule change.
+
+Final evidence-helper review found that the test launcher supplies a relative CLI
+path. Outer pre-test seals retain tool hashes, but individual consumer seals
+previously scanned only absolute argv paths. The helper now resolves file argv
+against the actual cwd and always hashes its own executed source. Original
+individual relative-CLI seals remain incomplete; this repair is not retroactive
+execution credit and causes no repeated semantic campaign.

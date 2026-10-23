@@ -38,16 +38,18 @@ def package(path):
 package(root/'hirsel.json')
 for name in ['vectors.py','child.py','capped','seal.py']:file(root/name)
 file(sys.executable)
+file(Path(__file__).resolve())
 for arg in argv:
-    if arg.startswith('/'):
-        p=Path(arg)
-        if p.is_file():
-            file(p)
-            if p.suffix=='.json':
-                try:config=json.loads(p.read_text())
-                except (ValueError,UnicodeError):continue
-                if isinstance(config,dict):
-                    for mount in config.get('io',{}).get('dirs',[]):tree(mount['host'])
+    p=Path(arg)
+    if not p.is_absolute():p=Path.cwd()/p
+    if p.is_file():
+        file(p.resolve())
+        if p.suffix=='.json':
+            try:config=json.loads(p.read_text())
+            except (ValueError,UnicodeError):continue
+            if isinstance(config,dict):
+                for mount in config.get('io',{}).get('dirs',[]):tree(mount['host'])
+
 env={name:value for name,value in os.environ.items() if name.startswith(('HIRSEL_','LLVM_')) or name in ['PATH','LD_LIBRARY_PATH']}
 for name in ['HIRSEL_IMAGE','HIRSEL_RUNTIME_ARCHIVES','HIRSEL_LINK_KIT','HIRSEL_GLIBC_FLOOR','LLVM_SYS_231_PREFIX']:
     if name in os.environ:tree(os.environ[name],immutable=True)
