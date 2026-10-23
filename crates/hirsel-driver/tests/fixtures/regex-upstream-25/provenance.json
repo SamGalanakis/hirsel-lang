@@ -1,0 +1,57 @@
+{
+  "schema": 1,
+  "seed": 2026102502,
+  "pairs": 53,
+  "selection": "13 fixed iter.toml rows, one rust regex documentation golden, 22 contract controls, 8 seeded bounded grammar pairs, 6 length/fallback controls, 3 syntax errors; no target-derived expectations",
+  "rust": {
+    "repository": "https://github.com/rust-lang/regex",
+    "revision": "80b9d14e4be9f0b703a742d11c064abce05f210b",
+    "version": "1.13.1",
+    "files": {
+      "src/regex/string.rs:280-320": "93bcceb4b9fb1f6240c792fd81eeb53f82624cc5cb16401cbaec96e69753fd85",
+      "testdata/iter.toml:1-77": "6875460302974a5b3073a7304a865c45aba9653c54afea2c4d26e1ea248a81f7"
+    },
+    "sanity": "All first 13 iter.toml goldens and the 13-character-word documentation golden matched the reference binary before expectation generation.",
+    "license": "MIT; third-party/LICENSE.regex"
+  },
+  "go": {
+    "repository": "https://github.com/golang/go",
+    "revision": "ebe2feefc400f813aefdc8a036e66d2619da6649",
+    "compiler": "go1.26.1 linux/amd64",
+    "regexp_source_sha256": "2a45b47123bd2c645f618551a272bb23d0f730c9b8da78c099c1d7b78e656957",
+    "implementation": "Pinned regexp, regexp/syntax and unicode production .go files, relocated to module oracle; only import paths regexp/syntax and unicode changed. FindStringIndex, FindAllStringIndex, submatch variants, MatchString and ReplaceAllString are called directly.",
+    "unicode_tables_sha256": "ac0e5d5d1b58ed4b02d7cb4a0085bdefbdb4f7aae6fadddbc9477f8463da8bd8",
+    "iteration_contract": "src/regexp/regexp.go:753-795, suppress adjacent empty matches and advance by UTF-8 scalar",
+    "license": "BSD-3-Clause (Go), third-party/NOTICES.md"
+  },
+  "contracts": {
+    "ASCII-classes-and-boundaries": {
+      "spec": "docs/spec/std-library.md, Bounded regular expressions, paragraph beginning `\\d` is ASCII 0–9",
+      "quote": "`\\d` is ASCII 0–9; `\\w` is ASCII letters, digits and underscore; `\\s` is HT, LF, FF, CR and space (excluding VT, following Go regexp). ... `\\b` and `\\B` assert an ASCII word boundary or its absence outside brackets.",
+      "adaptation": "Rust configured pattern replaces each selected shorthand with its explicit ASCII class; boundaries use (?-u:\\b) or (?-u:\\B). Matching remains scalar Unicode. Rust default and configured raw outputs are retained separately. No class contains a shorthand in this selected matrix. Go uses the unmodified pattern."
+    },
+    "syntax-category-and-Hirsel-byte-offset": {
+      "spec": "docs/spec/std-library.md, Bounded regular expressions, paragraph beginning `Syntax` reports",
+      "quote": "`Syntax` reports the unexpected scalar's UTF-8 byte offset, or pattern byte length for unexpected EOF. A repeated quantifier reports the second operator; a bad range reports its upper endpoint; reversed repetition bounds report the byte after the closing brace.",
+      "adaptation": "Go error and Hirsel error have different representation. Hirsel offsets are independently specified, not parsed out of upstream diagnostic strings. syntax-repeat retains Rust's successful a** result and Go's rejection: expected Hirsel Syntax(2), by the quoted repeated-quantifier sentence. It is not two-oracle agreement. Other syntax rows are rejected by both upstream oracles."
+    },
+    "span-and-capture-representation": {
+      "spec": "docs/spec/std-library.md, Bounded regular expressions, paragraphs beginning Captures use and `find` returns",
+      "quote": "Captures use original-input byte offsets. Submatch zero is the whole match; unmatched groups are `None()`, distinct from a participating empty span. ... `Span.start` is inclusive, `end` exclusive; both are byte offsets relative to the supplied String, on scalar boundaries.",
+      "adaptation": "Go nil match/list maps to None/empty list; flattened signed indices map to optional Span pairs, -1 to None. Rust span pairs already have the adapted shape. All valid selected operations agree between configured Rust and adapted Go."
+    },
+    "enumeration": {
+      "spec": "docs/spec/std-library.md, Bounded regular expressions, paragraphs beginning `find_all` returns and Empty-match progression follows",
+      "quote": "Offsets always refer to the original supplied String, including when it is itself a slice. Anchors and ASCII word boundaries retain that original context across restarts. ... Empty-match progression follows Go `FindAllStringIndex`: an empty match that starts where the preceding match ended is suppressed.",
+      "adaptation": "Go is the iteration contract oracle; configured Rust results are retained and agree for every selected valid pair. Slice expectations use the supplied slice as the original subject, not its backing owner."
+    },
+    "WorkLimit": {
+      "spec": "docs/spec/std-library.md, Bounded regular expressions, paragraphs beginning `find` returns and The ordered Pike VM",
+      "quote": "Searches never change Regex and own their queues; a WorkLimit error leaves it reusable. ... This accounting is deterministic and independent of wall time or host regex behavior.",
+      "adaptation": "A separate policy fixture checks zero-work errors, zero-match-limit success and reuse. There is no upstream timing/operation-budget equivalence claim."
+    }
+  },
+  "unicode": "No case-fold flag or Unicode property/class is selected. Literal é, δ, ☃ and scalar dot use encoding/scalar semantics, not versioned classification. All classified characters use explicit ASCII classes. Pinned Go Unicode 17 does not borrow std Unicode 16.",
+  "hash_format": "Per-row input SHA256 is UTF-8 JSON with sorted keys, compact separators and unescaped Unicode over pattern,subject,sliced. Expected SHA256 uses the same canonical encoding over expected. Raw results are never overwritten by adapted expectations.",
+  "execution": "Each successful pair checks find,is_match,find_all,find_captures,find_all_captures,replace_all at finite work 1000000 and maximum work. Syntax cases check Result category and byte offset. 14 fixed partitions plus one policy partition, separately exposed for interpreter, checked-H, LLVM and Cranelift. Expected HIR literals are built on the host from vectors.json. No Hirsel parser constructs expected data. Every listed pair is called from main at runtime. A successful entry proves all comparisons; traps/rejections/tooling/timeouts fail. The two unfinished checked-H partitions 03 and 11 are exposed as four single-pair tests each after the 60-second test cap was reached. Other engine partitions retain their completed receipts; the pair/operation/budget union is unchanged. The unfinished rust-doc-13 checked-H pair is further split into its twelve original operation/budget combinations, because that single-pair process also reached the same cap. There are 77 final libtest identities, with the original 2412 core operation observations unchanged."
+}

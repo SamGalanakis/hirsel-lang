@@ -1,0 +1,85 @@
+// Expected spans are host-built literals from pinned independent oracle data.
+type Expected {
+  first: Option[regex.Span],
+  matched: bool,
+  all: List[regex.Span],
+  captures: Option[regex.Captures],
+  all_captures: List[regex.Captures],
+  replacement: String,
+}
+
+@serializable
+pub type Mismatch {
+  id: String,
+  operation: String,
+  work: u64,
+}
+
+fn check_case(id: String, pattern: String, src: String, expected: Expected) -> Result[(), Mismatch] uses {} {
+  let Ok(re) = regex.compile(pattern, 10000) else {
+    return Error(Mismatch(id: unique id, operation: "compile", work: 0))
+  }
+  // Finite budget selects the scalar VM; maximum budget admits the DFA and
+  // capture resolvers. Both paths must satisfy the independent expectations.
+  for work in [1000000u64, 18446744073709551615u64] {
+    if regex.find(re, src, work) != Ok(expected.first) {
+      return Error(Mismatch(id: unique id, operation: "find", work: work))
+    }
+    if regex.is_match(re, src, work) != Ok(expected.matched) {
+      return Error(Mismatch(id: unique id, operation: "is_match", work: work))
+    }
+    if regex.find_all(re, src, 256, work) != Ok(expected.all) {
+      return Error(Mismatch(id: unique id, operation: "find_all", work: work))
+    }
+    if regex.find_captures(re, src, work) != Ok(expected.captures) {
+      return Error(Mismatch(id: unique id, operation: "find_captures", work: work))
+    }
+    if regex.find_all_captures(re, src, 256, work) != Ok(expected.all_captures) {
+      return Error(Mismatch(id: unique id, operation: "find_all_captures", work: work))
+    }
+    if regex.replace_all(re, src, "<$0>", work) != Ok(expected.replacement) {
+      return Error(Mismatch(id: unique id, operation: "replace_all", work: work))
+    }
+  }
+  Ok(())
+}
+
+fn syntax_case(id: String, pattern: String, offset: u64) -> Result[(), Mismatch] uses {} {
+  match regex.compile(pattern, 10000) {
+    Error(Syntax(actual)) => if actual == offset { Ok(()) } else {
+      Error(Mismatch(id: unique id, operation: "syntax_offset", work: 0))
+    },
+    _ => Error(Mismatch(id: unique id, operation: "syntax_category", work: 0)),
+  }
+}
+
+pub fn policy() -> Result[(), Mismatch] uses {} {
+  let Ok(re) = regex.compile("a", 100) else {
+    return Error(Mismatch(id: "policy", operation: "compile", work: 0))
+  }
+  let limited = regex.find(re, "a", 0) == Error(WorkLimit()) &&
+    regex.is_match(re, "a", 0) == Error(WorkLimit()) &&
+    regex.find_all(re, "a", 1, 0) == Error(WorkLimit()) &&
+    regex.find_captures(re, "a", 0) == Error(WorkLimit()) &&
+    regex.find_all_captures(re, "a", 1, 0) == Error(WorkLimit()) &&
+    regex.replace_all(re, "a", "<$0>", 0) == Error(WorkLimit())
+  if !limited {
+    return Error(Mismatch(id: "policy", operation: "tiny_work", work: 0))
+  }
+  if regex.find_all(re, "a", 0, 0) != Ok([]) ||
+    regex.find_all_captures(re, "a", 0, 0) != Ok([]) {
+    return Error(Mismatch(id: "policy", operation: "zero_matches", work: 0))
+  }
+  check_case("policy-reuse", "a", "a", Expected(
+    first: Some(regex.Span(start: 0, end: 1)), matched: true,
+    all: [regex.Span(start: 0, end: 1)],
+    captures: Some(regex.Captures(spans: [Some(regex.Span(start: 0, end: 1))])),
+    all_captures: [regex.Captures(spans: [Some(regex.Span(start: 0, end: 1))])],
+    replacement: "<a>"
+  ))?
+  // Reuse the exact object on which the preceding WorkLimit calls ran.
+  if regex.find(re, "a", 1000) != Ok(Some(regex.Span(start: 0, end: 1))) {
+    return Error(Mismatch(id: "policy", operation: "reuse", work: 1000))
+  }
+  Ok(())
+}

@@ -1675,3 +1675,13 @@ license above. Generated independent strict-Go expectations and Hirsel policy
 dispositions are described in the fixture's `provenance.json`.
 
 CSV upstream fixtures: `crates/hirsel-driver/tests/fixtures/csv-upstream-25/` adapts Go `src/encoding/csv/reader_test.go:40-90,134-153,248-309` and `writer_test.go` at `ebe2feefc400f813aefdc8a036e66d2619da6649` (Copyright 2011 The Go Authors, BSD-3-Clause, license above), and csv-core `csv-core/src/reader.rs:1476-1555,1598-1599` at `05612e87e6e92910d40d7214b70952b8434fef9b` (Copyright (c) 2015 Andrew Gallant, MIT/Unlicense; `third-party/LICENSE.csv-core`). The fixture provenance records strict-error, normalized-limit, UTF-8 and writer-policy adaptations.
+
+Independent regex fixture goldens: `crates/hirsel-driver/tests/fixtures/regex-upstream-25/`
+adapts rust-lang/regex `80b9d14e4be9f0b703a742d11c064abce05f210b`,
+`testdata/iter.toml:1-77` and `src/regex/string.rs:280-320`.
+Copyright (c) 2014 The Rust Project Developers; MIT, full text in
+`third-party/LICENSE.regex`. The independent Go span/capture oracle uses
+Go `ebe2feefc400f813aefdc8a036e66d2619da6649`,
+`src/regexp/regexp.go:753-795`, Copyright 2010-2011 The Go Authors,
+BSD-3-Clause (Go), full license above. The fixture provenance records ASCII
+class configuration, optional-span representation and syntax dispositions.
