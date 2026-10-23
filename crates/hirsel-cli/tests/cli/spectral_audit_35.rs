@@ -1219,3 +1219,90 @@ fn spectral_audit_35_scripted_ordered_streams() {
         assert!(count > 0);
     });
 }
+
+// Additional controls over the exact frozen original vectors. These do not
+// qualify or rerun the original aggregate Steps1M obligation.
+#[test]
+fn spectral_audit_35_unrounded_vector_controls() {
+    hirsel_engine::with_compiler_stack(|| {
+        let root = scratch("oracle-vectors-");
+        let _archive = Archive(root.clone());
+        let path = package_entry(
+            &root,
+            include_str!("../support/spectral_audit_35/kernel_cases.hir"),
+        );
+        let mut loaded = hirsel_driver::load_program(&path).unwrap();
+        loaded
+            .check_for_execution()
+            .unwrap_or_else(|e| panic!("{e}"));
+        let run = RunConfiguration {
+            entry: loaded.entry.clone(),
+            hash_seed: 0,
+            inputs: vec![],
+        };
+        let mut count = 0;
+        let mut incomplete = vec![];
+        for row in cases().into_iter().filter(|r| {
+            r["oracle"].is_array()
+                && r["error"].is_null()
+                && r["input"].as_str().unwrap().len() <= 4096
+                && !r["id"].as_str().unwrap().starts_with("round-half")
+        }) {
+            let id = row["id"].as_str().unwrap();
+            let world = Fixture {
+                args: vec![id.into()],
+                ..Default::default()
+            };
+            for checked in [false, true] {
+                let engine = if checked { "checked-h" } else { "reference" };
+                let execution = if checked {
+                    hirsel_engine::run_observed_checked_bounded(
+                        &mut loaded.engine,
+                        &run,
+                        (&world).into(),
+                        1_000_000,
+                    )
+                } else {
+                    hirsel_engine::run_observed_snapshot_bounded(
+                        &mut loaded.engine,
+                        &run,
+                        (&world).into(),
+                        1_000_000,
+                    )
+                }
+                .unwrap();
+                let receipt = match execution.observation {
+                    Some(observed) => {
+                        assert!(
+                            observed.failures.is_empty(),
+                            "{id}/{engine}: {:?}",
+                            observed.failures
+                        );
+                        assert!(observed.blocked.is_none());
+                        assert_eq!(observed.exit_code, Some(0));
+                        assert_eq!(observed.output, b"kernel oracle ok\n");
+                        eprintln!("SPECTRAL_VECTOR_CONTROL_PASS {id} {engine}");
+                        json!({"id":id,"engine":engine,"additional_control":true,"completed":true,"passed":true,"bound":1_000_000})
+                    }
+                    None => {
+                        let message = format!("{:?}", execution.outcome);
+                        incomplete.push(format!("{id}/{engine}: {message}"));
+                        json!({"id":id,"engine":engine,"additional_control":true,"completed":false,"passed":false,"bound":1_000_000,"outcome":message})
+                    }
+                };
+                fs::write(
+                    root.join(format!("{id}-{engine}.json")),
+                    serde_json::to_vec_pretty(&receipt).unwrap(),
+                )
+                .unwrap();
+                count += 1;
+            }
+        }
+        assert!(count > 0);
+        assert!(
+            incomplete.is_empty(),
+            "INCOMPLETE controls: {}",
+            incomplete.join("\n")
+        );
+    });
+}

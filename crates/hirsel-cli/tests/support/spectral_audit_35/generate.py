@@ -77,3 +77,24 @@ def main():
     out.with_name('kernel.hir').write_text('\n'.join(kernel)+'\n')
 if __name__=='__main__':
     with localcontext() as c:c.prec=95;main()
+
+# Additional per-vector controls preserve, rather than replace, the original
+# aggregate kernel and its stopped execution identity. Reuse its exact checks.
+if __name__ == '__main__':
+    original=pathlib.Path(__file__).with_name('kernel.hir').read_text().splitlines()
+    blocks=[]
+    for line in original[3:-3]:
+        if line.strip().startswith('let Ok(manifest'):
+            blocks.append([])
+        blocks[-1].append(line)
+    rows=json.loads(pathlib.Path(__file__).with_name('cases.json').read_text())
+    names=[r['id'] for r in rows if 'oracle' in r and not r.get('error') and len(r['input'])<=4096]
+    assert len(names)==len(blocks)
+    lines=['pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {',
+           '  let output = io.stdout(rt)?',
+           '  let Ok(name) = arg.text(args, 0) else { failure.check(false, Arithmetic()); return Ok(()) }']
+    for name,block in zip(names,blocks):
+        lines += ['  if name == '+json.dumps(name)+' {']+['  '+line for line in block]
+        lines += ['    let _ = out.print(output, "kernel oracle ok\\n")','    return Ok(())','  }']
+    lines += ['  failure.check(false, Arithmetic())','  Ok(())','}']
+    pathlib.Path(__file__).with_name('kernel_cases.hir').write_text('\n'.join(lines)+'\n')

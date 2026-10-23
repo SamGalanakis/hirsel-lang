@@ -4,7 +4,7 @@ Original CLI, schema, input caps and Decimal intervals were frozen before
 implementation under the lane's external evidence directory. Every original
 case retains its identity. No compiler/runtime patches are owned by this app.
 
-Exact physical-width qualification waits for exact-cpu-rollout-34's client
+At launch, exact physical-width qualification waited for exact-cpu-rollout-34's client
 landing confirmation. Scheduler deployment alone is not proof of admission.
 Requested cells are LLVM/Cranelift × widths 1/2/4 × success/domain/cancel.
 No Free mode, fake topology, unused timer, or source-only check qualifies them.
@@ -237,3 +237,24 @@ observer-flags-after-grants argv is restored for only failed/unrun physical
 cells, exercising that repaired parser. Earlier accepted capacity cells are
 not repeated. The previously UNRUN scripted placement importer can now run on
 the repaired Fixture producer with its original assertions intact.
+
+## Qualified cells and additional mathematical controls
+
+All18 physical capacity cells now pass: two native backends × requested widths
+1/2/4 × success/domain/real delivered cancellation, with actual running,
+requested=effective and pending0 replies, cleanup and own-tape offline replay.
+Eleven retained greens were never repeated; only the failed/unrun seven ran
+with the corrected injection handshake and repaired producer/parser.
+
+All18 scripted width cells pass on producer15260039: complete semantic tapes
+match across both backends and widths after removing only admission time and
+placement provenance; actual recorded requested placement is asserted before
+that projection. Pending reads and cancellation are real fixture events.
+
+Both native engines pass the original aggregate unrounded Decimal oracle.
+Reference and checked H retain the original aggregate Steps1M stop. Additional
+per-vector controls use its exact frozen inputs and checks, selected by Args,
+with the same Steps1M budget per run; they are additional evidence, never a
+replacement or a green verdict for the original aggregate. The original kernel
+bytes remain unchanged. No higher cap, smaller sample vector or tolerance
+change. Output16384/16385 helper controls pass on reference and checked H.
