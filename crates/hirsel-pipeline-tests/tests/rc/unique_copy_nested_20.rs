@@ -121,11 +121,15 @@ fn copied_nested_unique_witness() {
             .any(|s| s.message.contains("parameter mode requirement")),
         "{diagnostic:?}"
     );
+    // 9bbdbd6f corrected the alias-ending repair; retain the persistent-sharing
+    // contract and the allocation/placement conditions on an independent copy.
     assert!(
-        diagnostic
-            .notes
-            .iter()
-            .any(|s| s.contains("unique element") && s.contains("snapshot")),
+        diagnostic.notes.iter().any(|s| {
+            s.contains("nested uniqueness proof")
+                && s.contains("dropping the alias does not restore it")
+                && s.contains("copyable data, permitted allocation and compatible placement")
+                && s.contains("supplier to be already unique")
+        }),
         "{diagnostic:?}"
     );
 }

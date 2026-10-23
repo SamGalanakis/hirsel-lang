@@ -424,14 +424,14 @@ fn a_native_gap_is_a_tool_outcome_not_a_source_verdict() {
     });
 }
 
-/// Every operation the runtime classifies as a runtime primitive names only
-/// symbols exported at the Hirsel ABI, and each such call a program makes has
-/// exactly its export's physical signature, on both targets.
+/// Every runtime primitive names an ABI export. Each export has a registered
+/// primitive or an explicit compatibility contract, and emitted calls match its
+/// physical signature on both targets.
 #[test]
 fn every_runtime_primitive_row_matches_its_export() {
     use hirsel_core_contract::{Disposition, Engine as ManifestEngine};
     use hirsel_lir::layout_types::ScalarKind;
-    use hirsel_rt_operations::HIRSEL_ABI_EXPORTS;
+    use hirsel_rt_operations::{AbiExport, HIRSEL_ABI_EXPORTS, Physical};
     with_compiler_stack(|| {
         let program = checked(HELLO);
         let manifest = hirsel_driver::native::manifest(program.validated.snapshot()).unwrap();
@@ -490,17 +490,34 @@ fn every_runtime_primitive_row_matches_its_export() {
                 used_exports.insert(symbol);
             }
         }
+        // aebd8629 retained the old clock entry for ABI compatibility while
+        // generated calls moved to the export carrying their source site.
+        let legacy_sleep = AbiExport {
+            caller_site: false,
+            symbol: "hirsel_rt_v2_clock_sleep_until",
+            destination: true,
+            result: Some((12, 4)),
+            parameters: &[Physical::Pointer, Physical::Pointer],
+        };
+        assert_eq!(
+            HIRSEL_ABI_EXPORTS
+                .iter()
+                .find(|export| export.symbol == legacy_sleep.symbol),
+            Some(&legacy_sleep)
+        );
+        assert!(used_exports.contains("hirsel_rt_v2_clock_sleep_until_at_site"));
+        assert!(used_exports.insert(legacy_sleep.symbol.into()));
         assert_eq!(
             used_exports
                 .iter()
                 .map(String::as_str)
                 .collect::<std::collections::BTreeSet<_>>(),
             exports,
-            "every Hirsel ABI export has a registered runtime primitive"
+            "every Hirsel ABI export has a registered primitive or compatibility contract"
         );
         // Calls of each, with each float family, on both targets.
         let calls = checked(
-            "pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {\n  let xs: Array[f64] = [1.0f64, 2.0f64]\n  let ys: Array[f32] = [1.0f32, 2.0f32]\n  let a = std@1/f64.sum(xs) + std@1/f64.sum_exact(xs)\n  let b = std@1/f32.sum(ys) + std@1/f32.sum_exact(ys)\n  let text = std@1/u64.to_string(4u64)\n  let decoded = string.from_bytes(b\"abc\")\n  let replaced = std@1/bytes.replace(b\"abc\", b\"b\", b\"x\")\n  for pos in string.positions(text) {\n    let part = string.slice(text, pos, pos)\n  }\n  let _ = out.print(io.stdout(rt)?, \"x\")\n  Ok(())\n}\n",
+            "pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {\n  let xs: Array[f64] = [1.0f64, 2.0f64]\n  let ys: Array[f32] = [1.0f32, 2.0f32]\n  let a = std@1/f64.sum(xs) + std@1/f64.sum_exact(xs)\n  let b = std@1/f32.sum(ys) + std@1/f32.sum_exact(ys)\n  let text = std@1/u64.to_string(4u64)\n  let decoded = string.from_bytes(b\"abc\")\n  let replaced = std@1/bytes.replace(b\"abc\", b\"b\", b\"x\")\n  for pos in string.positions(text) {\n    let part = string.slice(text, pos, pos)\n  }\n  let c = io.monotonic_clock(rt)?\n  match clock.monotonic(c) { Ok(now) => { let _ = clock.sleep_until(c, now) }, Error(_) => () }\n  let _ = out.print(io.stdout(rt)?, \"x\")\n  Ok(())\n}\n",
         );
         for target in [x86(), TargetSpec::aarch64_unknown_linux_gnu()] {
             let ready = build(&calls.validated, &Options::new(target)).unwrap();
