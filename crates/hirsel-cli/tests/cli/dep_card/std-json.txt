@@ -3,11 +3,11 @@ Dependency cards for card_json@1 (reach: entry)
 std@1/json
   Authority (whole public API): none
     operations: none
-    unresolved authority: core@1/bytes/append, core@1/bytes/from_list, core@1/bytes/len, core@1/bytes/slice, core@1/char/from_u32, core@1/char/to_u32, core@1/int/narrow, core@1/int/widen, core@1/list/len, core@1/list/push, core@1/list/reserve, core@1/map/empty, core@1/map/get, core@1/map/insert, core@1/set/contains, core@1/set/empty, core@1/set/insert, core@1/string/as_bytes, core@1/string/byte_len, core@1/string/from_bytes
+    unresolved authority: core@1/bytes/append, core@1/bytes/from_list, core@1/bytes/len, core@1/bytes/slice, core@1/char/from_u32, core@1/char/to_u32, core@1/int/narrow, core@1/int/widen, core@1/list/len, core@1/list/push, core@1/list/reserve, core@1/map/empty, core@1/map/get, core@1/map/insert, core@1/replace, core@1/set/contains, core@1/set/empty, core@1/set/insert, core@1/string/as_bytes, core@1/string/byte_len, core@1/string/from_bytes, std@1/option/remove
   Authority (reached by you): none
     operations: none
     unresolved authority: core@1/bytes/append, core@1/bytes/from_list, core@1/bytes/len, core@1/bytes/slice, core@1/char/from_u32, core@1/char/to_u32, core@1/int/narrow, core@1/int/widen, core@1/list/push, core@1/map/empty, core@1/map/get, core@1/map/insert, core@1/string/as_bytes, core@1/string/from_bytes
-  Weight: 14 / 43 definitions, 1 / 1 source units reached
+  Weight: 14 / 45 definitions, 1 / 1 source units reached
     dependencies: none
     cost estimate: 2399 source tokens; check 0, lower 0, native build 2399; 14 prechecked definitions (timings unavailable)
   Exposure: none
