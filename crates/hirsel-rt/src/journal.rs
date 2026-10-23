@@ -649,8 +649,10 @@ pub fn recover(bytes: &[u8]) -> Result<Recovered, Unrecoverable> {
                     if record.request != event.request {
                         return Err(corrupt(at, "an event of another request".into()));
                     }
-                    if !matches!(event.completion, Completion::Blocked { .. })
-                        && open.remove(&id).is_none()
+                    if !matches!(
+                        event.completion,
+                        Completion::Blocked { .. } | Completion::Held
+                    ) && open.remove(&id).is_none()
                     {
                         return Err(corrupt(at, "a request completed twice".into()));
                     }
@@ -921,8 +923,10 @@ impl<J: Journal> Journaled<J> {
         );
         if self.batch >= BATCH_RECORDS || self.journal.pending() >= BATCH_BYTES {
             self.barrier()?;
-            return Ok(Gate::Issue);
         }
+        // Every newly prepared parkable request reports Held, even when this
+        // request closed the batch. Thus new journals containing an issued
+        // Blocked wait always identify their pre-issue parks explicitly.
         self.tickets.get_mut(&token).expect("the ticket").held = true;
         Ok(Gate::Hold)
     }
@@ -939,7 +943,12 @@ impl<J: Journal> Journaled<J> {
         );
         let id = if ready { None } else { self.current };
         self.journal.event(id, event)?;
-        if ready || matches!(event.completion, Completion::Blocked { .. }) {
+        if ready
+            || matches!(
+                event.completion,
+                Completion::Blocked { .. } | Completion::Held
+            )
+        {
             return Ok(());
         }
         self.current = None;
@@ -1066,7 +1075,7 @@ mod tests {
         assert_eq!(gate.before(&read, Some(9)).unwrap(), Gate::Hold);
         gate.record(&Event {
             request: read.clone(),
-            completion: Completion::Blocked { committed: false },
+            completion: Completion::Held,
             fault: None,
         })
         .unwrap();
@@ -1263,7 +1272,7 @@ mod tests {
         // Nothing reached the file: the batch is still open.
         assert_eq!(file.lock().unwrap().bytes().len(), durable);
         let last = BATCH_RECORDS as u64 - 1;
-        assert_eq!(gate.before(&read(last), Some(last)).unwrap(), Gate::Issue);
+        assert_eq!(gate.before(&read(last), Some(last)).unwrap(), Gate::Hold);
         assert!(file.lock().unwrap().bytes().len() > durable);
         // Only the requests that were held and whose tasks parked are released.
         for token in 0..last {

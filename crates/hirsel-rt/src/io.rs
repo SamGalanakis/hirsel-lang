@@ -752,7 +752,9 @@ pub enum Completion {
     ChildExit(Result<hirsel_run_schema::ExitStatus, hirsel_run_schema::ProcessFailure>),
     /// `proc.wait_group`.
     GroupExit(Result<hirsel_run_schema::GroupOutput, hirsel_run_schema::ProcessFailure>),
-    /// The request would block and its task parked; `committed` when it already made part
+    /// A durable journal barrier parked the request before provider issue.
+    Held,
+    /// The issued request would block and its task parked; `committed` when it already made part
     /// of its effect, so cancellation no longer completes it.
     Blocked {
         committed: bool,

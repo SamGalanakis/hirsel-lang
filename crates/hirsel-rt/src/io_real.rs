@@ -951,7 +951,7 @@ impl<S: Streams> Adapter for RealCore<S> {
             log.park(false);
             self.record(Event {
                 request,
-                completion: Completion::Blocked { committed: false },
+                completion: Completion::Held,
                 fault: None,
             })?;
             return Err(AdapterError::Blocked);

@@ -104,3 +104,4 @@ mod text_index_30;
 mod object_store_30;
 mod rpc_gateway_30;
 mod cron_state_30;
+mod replay_scripted_net_30;

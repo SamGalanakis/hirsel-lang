@@ -444,7 +444,7 @@ fn accepted_bytes(event: &Event) -> Option<u64> {
         return match &event.completion {
             C::Unit(Ok(())) | C::NetUnit(Ok(())) => Some(bytes.len() as u64),
             C::Count(Ok(n)) | C::Size(Ok(n)) => Some(*n),
-            C::Blocked { .. } => None,
+            C::Blocked { .. } | C::Held => None,
             _ => Some(0),
         };
     }

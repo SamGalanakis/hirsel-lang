@@ -496,6 +496,21 @@ completion boundary still materializes the consumed completion; no second owned
 event corpus is retained. Durable recovery retains the semantic preparation and
 event records needed to report in-doubt work.
 
+A journal barrier's `Held` completion (additive tag 44) means the request has
+not reached its provider. `Blocked` means it was issued and parked; an unanswered
+scripted connect has consumed exactly one connection at that point. Replay applies
+that scripted transition once per wait token, including when another connect runs
+before the unanswered wait ends. A `Held` request advances no provider state.
+Existing tags and frame versions remain unchanged (ordinary v8, journal v2);
+readers that do not know tag 44 refuse it.
+
+Old journals without any `Held` completion used `Blocked` for both cases. They
+retain their pre-issue interpretation for barrier waits. A blocked scripted connect
+in such a journal is ambiguous and replay refuses it with a diagnostic asking for
+a new recording, rather than guessing which request consumed a scripted attempt.
+Old ordinary tapes have no journal barriers: their `Blocked` connects retain the
+issued interpretation. Request, run binding and completion matching stay exact.
+
 The text renderer is an inspection representation, retained for `tapes check`,
 `view` and fixture assertions. Legacy v6/v7 text can still be inspected and
 replayed, but old v1 durable journals require regeneration. Both engines write
@@ -522,9 +537,11 @@ events in the tape's order, so the journal's events replay as a tape.
 
 **Group commit.** A prepared request that may park its task (a stdin read, a timer wait, a
 process or child request, or a network request) under cooperative scheduling is held: its
-task parks as for a host wait, recorded as an uncommitted `blocked` park, and other tasks
+task parks as for a host wait, recorded as a `held` completion before provider issue, and other tasks
 run and prepare theirs. One barrier (a single write and `fdatasync`) makes the batch durable
-and releases every held request. A batch closes at the first of: the run would otherwise
+and releases every held request. The request that closes a batch also parks as
+`Held` before issue, so every new journal with issued blocked waits explicitly
+identifies its barrier parks. A batch closes at the first of: the run would otherwise
 wait for the host (no runnable task); 64 records; 1 MiB of record bytes; a scheduling
 point 1 ms or more after the batch's first record. A released request is ready at the next
 scheduling point after its task parked, and its `ready` event is recorded like any other,

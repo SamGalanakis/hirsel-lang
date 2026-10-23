@@ -267,6 +267,7 @@ pub(crate) fn render_completion(completion: &Completion) -> Option<String> {
             trace,
             span,
         } => format!("span {handle} {} {}", hex(trace), hex(span)),
+        Completion::Held => "held".into(),
         Completion::Blocked { committed } => format!("blocked {}", u8::from(*committed)),
         Completion::Runner(completion) => {
             use hirsel_run_schema::CallOutcome::*;
@@ -730,6 +731,7 @@ pub(crate) fn parse_completion(words: &[&str]) -> Result<Option<Completion>, Str
             trace: fixed(trace)?,
             span: fixed(span)?,
         },
+        ["held"] => Completion::Held,
         ["blocked", "0"] => Completion::Blocked { committed: false },
         ["blocked", "1"] => Completion::Blocked { committed: true },
         ["ready"] => Completion::Ready,

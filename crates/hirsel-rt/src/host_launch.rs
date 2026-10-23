@@ -171,6 +171,7 @@ pub fn replay(path: &Path) -> Result<(SimIo, ValidatedRun), RunRefusal> {
         detail: e.to_string(),
     })?;
     let mut free = None;
+    let journal = crate::journal::is_journal(&bytes);
     let (recording, binary) = if bytes.starts_with(hirsel_free::tape::MAGIC) {
         let header = crate::free_launch::header(&bytes).map_err(|detail| RunRefusal::Invalid {
             field: "recording".into(),
@@ -186,12 +187,19 @@ pub fn replay(path: &Path) -> Result<(SimIo, ValidatedRun), RunRefusal> {
             detail,
         })?
     };
+    let has_held = recording
+        .events
+        .iter()
+        .any(|event| event.completion == crate::io::Completion::Held);
     let run = recording.bound_run()?;
+    let legacy_barriers = !has_held
+        && (journal || run.record().recording == Some(hirsel_run_schema::RecordingLevel::Durable));
     let instance = recording.binding.as_ref().and_then(|b| b.instance);
     let mut io = match binary {
         Some(tape) => SimIo::from_binary(recording.tree, tape),
         None => SimIo::new(recording.tree, recording.events),
     };
+    io.legacy_barrier_waits(legacy_barriers);
     io.free_tape = free;
     io.instance = instance;
     io.set_projections(run.io_projections());

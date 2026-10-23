@@ -709,3 +709,189 @@ fn unanswered_connect_retry_keeps_the_same_scripted_attempt() {
     assert_eq!(real.call(connect), Ok(C::NetHandle(Ok(3))));
     real.finish(11);
 }
+
+#[test]
+fn blocked_scripted_connect_advances_replay_before_next_attempt() {
+    use hirsel_rt::io::{Adapter, Completion as C, Request as R, Tree};
+    use hirsel_rt::io_sim::SimIo;
+    let peers = vec![peer(vec![
+        NetConnection::Unanswered,
+        NetConnection::Refused,
+        NetConnection::Open(vec![]),
+    ])];
+    let rules = [NetRule {
+        address: "example.com".into(),
+        port: 80,
+        operation: NetOperation::Connect,
+    }]
+    .into();
+    let mut real = script_adapter();
+    real.set_cooperative(hirsel_rt::readiness::Readiness::default());
+    real.set_net_script(peers.clone(), vec![]).unwrap();
+    real.set_net_rules(rules);
+    let connect = R::Connect {
+        net: 2,
+        host: "example.com".into(),
+        port: 80,
+        timeout: NetTimeout::Unbounded,
+    };
+    assert_eq!(real.call(R::Net { io: 1 }), Ok(C::Handle(Ok(2))));
+    real.enter(10);
+    assert_eq!(real.call(connect.clone()), Err(AdapterError::Blocked));
+    real.parked(10);
+    real.enter(10);
+    assert_eq!(real.call(connect.clone()), Err(AdapterError::Blocked));
+    // Nonparking calls do not enter a new wait token (as clock.monotonic does).
+    let close = R::Close { handle: 999 };
+    let closed = real.call(close.clone());
+    assert_eq!(closed, Err(AdapterError::InvalidHandle(999)));
+    real.enter(11);
+    assert_eq!(
+        real.call(connect.clone()),
+        Ok(C::NetHandle(Err(NetError::ConnectionRefused)))
+    );
+    real.finish(10);
+    real.finish(11);
+    real.enter(12);
+    assert_eq!(real.call(connect.clone()), Ok(C::NetHandle(Ok(3))));
+    let mut sim = SimIo::new(Tree::default(), real.tape().to_vec());
+    crate::support::host(&mut sim);
+    sim.set_net_script(peers, vec![]).unwrap();
+    sim.set_net_rules(
+        [NetRule {
+            address: "example.com".into(),
+            port: 80,
+            operation: NetOperation::Connect,
+        }]
+        .into(),
+    );
+    assert_eq!(sim.call(R::Net { io: 1 }), Ok(C::Handle(Ok(2))));
+    sim.enter(10);
+    assert_eq!(sim.call(connect.clone()), Err(AdapterError::Blocked));
+    sim.parked(10);
+    sim.enter(10);
+    assert_eq!(sim.call(connect.clone()), Err(AdapterError::Blocked));
+    assert_eq!(sim.call(close), closed);
+    sim.enter(11);
+    assert_eq!(
+        sim.call(connect.clone()),
+        Ok(C::NetHandle(Err(NetError::ConnectionRefused)))
+    );
+    Adapter::finish(&mut sim, 10);
+    Adapter::finish(&mut sim, 11);
+    sim.enter(12);
+    assert_eq!(sim.call(connect), Ok(C::NetHandle(Ok(3))));
+    sim.finish().unwrap();
+}
+
+#[test]
+fn journal_held_connects_replay_in_issue_order_after_reversed_release() {
+    use hirsel_rt::io::{Adapter, Completion as C, Request as R, Tree};
+    use hirsel_rt::io_sim::SimIo;
+    use hirsel_rt::journal::{DurableJournal, SimJournalFile};
+    use std::sync::{Arc, Mutex};
+    let peers = vec![peer(vec![
+        NetConnection::Unanswered,
+        NetConnection::Refused,
+    ])];
+    let rules = [NetRule {
+        address: "example.com".into(),
+        port: 80,
+        operation: NetOperation::Connect,
+    }]
+    .into();
+    let mut real = script_adapter();
+    real.set_cooperative(hirsel_rt::readiness::Readiness::default());
+    real.set_net_script(peers.clone(), vec![]).unwrap();
+    real.set_net_rules(rules);
+    assert_eq!(real.call(R::Net { io: 1 }), Ok(C::Handle(Ok(2))));
+    let header = hirsel_rt::launch::Recording {
+        arguments: vec![],
+        run_identity: [0; 32],
+        hash_seed: 0,
+        random_seed: 0,
+        test_seed: 0,
+        binding: None,
+        tree: Tree::new(Default::default()).unwrap(),
+        events: vec![],
+    };
+    let file = Arc::new(Mutex::new(SimJournalFile::default()));
+    real.journal_to(Box::new(
+        DurableJournal::create(file.clone(), &header).unwrap(),
+    ));
+    let connect = R::Connect {
+        net: 2,
+        host: "example.com".into(),
+        port: 80,
+        timeout: NetTimeout::Unbounded,
+    };
+    for token in [10, 11] {
+        real.enter(token);
+        assert_eq!(real.call(connect.clone()), Err(AdapterError::Blocked));
+        assert_eq!(real.tape().last().unwrap().completion, C::Held);
+        real.parked(token);
+    }
+    assert_eq!(real.wait(), Ok(true));
+    assert_eq!(real.ready(), Ok(hirsel_rt::io::Ready::Tokens(vec![10, 11])));
+    // Task 11 issues first, so it owns Unanswered, regardless of preparation order.
+    real.enter(11);
+    assert_eq!(real.call(connect.clone()), Err(AdapterError::Blocked));
+    assert_eq!(
+        real.tape().last().unwrap().completion,
+        C::Blocked { committed: false }
+    );
+    real.parked(11);
+    real.enter(10);
+    assert_eq!(
+        real.call(connect.clone()),
+        Ok(C::NetHandle(Err(NetError::ConnectionRefused)))
+    );
+    real.finish(10);
+    real.finish(11);
+    real.finish_recording(&hirsel_run_schema::RunOutcome::Returned(
+        hirsel_run_schema::Returned::Ok,
+    ))
+    .unwrap();
+    let recovered = hirsel_rt::journal::recover(&file.lock().unwrap().bytes()).unwrap();
+    assert!(recovered.complete());
+    assert_eq!(
+        recovered
+            .recording
+            .events
+            .iter()
+            .filter(|event| event.completion == C::Held)
+            .count(),
+        2
+    );
+    let tape = real.tape().to_vec();
+    // Both wire representations carry the new distinction without any renumbering.
+    let text = hirsel_rt::launch::render_tape(&tape).unwrap();
+    assert_eq!(hirsel_rt::launch::parse_tape(&text).unwrap(), tape);
+    let mut sim = SimIo::new(Tree::default(), tape);
+    crate::support::host(&mut sim);
+    sim.set_net_script(peers, vec![]).unwrap();
+    sim.set_net_rules(
+        [NetRule {
+            address: "example.com".into(),
+            port: 80,
+            operation: NetOperation::Connect,
+        }]
+        .into(),
+    );
+    assert_eq!(sim.call(R::Net { io: 1 }), Ok(C::Handle(Ok(2))));
+    for token in [10, 11] {
+        sim.enter(token);
+        assert_eq!(sim.call(connect.clone()), Err(AdapterError::Blocked));
+        sim.parked(token);
+    }
+    assert_eq!(sim.ready(), Ok(hirsel_rt::io::Ready::Tokens(vec![10, 11])));
+    sim.enter(11);
+    assert_eq!(sim.call(connect.clone()), Err(AdapterError::Blocked));
+    sim.parked(11);
+    sim.enter(10);
+    assert_eq!(
+        sim.call(connect),
+        Ok(C::NetHandle(Err(NetError::ConnectionRefused)))
+    );
+    sim.finish().unwrap();
+}

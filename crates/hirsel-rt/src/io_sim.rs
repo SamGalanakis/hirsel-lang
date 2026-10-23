@@ -130,6 +130,10 @@ pub struct SimIo {
     runner_waits: std::collections::BTreeSet<u64>,
     /// Scripted regular-file waits also have no source when their release never occurs.
     file_waits: std::collections::BTreeSet<u64>,
+    /// Old durable tapes cannot distinguish barrier holds from issued waits.
+    legacy_barrier_waits: bool,
+    /// Scripted unanswered attempts consumed by a blocked request, until its token ends.
+    unanswered_connects: std::collections::BTreeSet<u64>,
     /// The recorded run instance (RUN-11).
     pub(crate) instance: Option<[u8; 16]>,
 }
@@ -182,6 +186,8 @@ impl SimIo {
             waits: Default::default(),
             runner_waits: Default::default(),
             file_waits: Default::default(),
+            unanswered_connects: Default::default(),
+            legacy_barrier_waits: false,
             instance: None,
         }
     }
@@ -193,6 +199,10 @@ impl SimIo {
             previous: None,
         };
         io
+    }
+    /// Refuse ambiguous old durable scripted parks rather than guessing issue order.
+    pub(crate) fn legacy_barrier_waits(&mut self, legacy: bool) {
+        self.legacy_barrier_waits = legacy;
     }
     /// The run instance the recording's header names, for a run that calls runners.
     pub fn instance(&self) -> Option<[u8; 16]> {
@@ -341,6 +351,7 @@ impl Adapter for SimIo {
         self.waits.finish(token);
         self.runner_waits.remove(&token);
         self.file_waits.remove(&token);
+        self.unanswered_connects.remove(&token);
     }
     fn parked(&mut self, token: u64) {
         self.waits.parked(token);
@@ -477,8 +488,44 @@ impl Adapter for SimIo {
         } else {
             event
         };
+        if event.completion == Completion::Held
+            && (event.fault.is_some()
+                || !crate::host_waits::may_park(&request)
+                || self.unanswered_connects.contains(&self.waits.current()))
+        {
+            return Err(AdapterError::InvalidCompletion);
+        }
         // The recorded run parked this request: its task parks again (DET-1).
-        if let Completion::Blocked { committed } = event.completion {
+        if matches!(
+            event.completion,
+            Completion::Blocked { .. } | Completion::Held
+        ) {
+            let committed = matches!(event.completion, Completion::Blocked { committed: true });
+            // An unanswered scripted connect consumes one peer attempt before it
+            // parks. Reconstruct that transition once per request token; retries
+            // of the same wait must not consume another connection (DET-1).
+            let token = self.waits.current();
+            if event.completion != Completion::Held
+                && self.state.scripted(&request)
+                && matches!(
+                    request,
+                    Request::Connect { .. }
+                        | Request::ConnectAddr { .. }
+                        | Request::UnixConnect { .. }
+                )
+                && !self.unanswered_connects.contains(&token)
+            {
+                if self.legacy_barrier_waits {
+                    return Err(AdapterError::Unsupported("legacy durable scripted connect has an ambiguous Blocked completion (barrier hold or issued wait); re-record with Held completions".into()));
+                }
+                let mut state = self.state.clone();
+                if state.execute_net(&mut crate::net::NoNet, &request) != Err(AdapterError::Blocked)
+                {
+                    return Err(AdapterError::ReplayMismatch(self.position));
+                }
+                self.state = state;
+                self.unanswered_connects.insert(token);
+            }
             self.position += 1;
             self.waits.park(committed);
             if matches!(request, Request::RunnerCall(_)) {
@@ -488,6 +535,14 @@ impl Adapter for SimIo {
                 self.file_waits.insert(self.waits.current());
             }
             return Err(AdapterError::Blocked);
+        }
+        // An unanswered attempt cannot later acquire the next scripted connection.
+        if matches!(
+            request,
+            Request::Connect { .. } | Request::ConnectAddr { .. } | Request::UnixConnect { .. }
+        ) && self.unanswered_connects.contains(&self.waits.current())
+        {
+            return Err(AdapterError::InvalidCompletion);
         }
         // A runner call's recorded outcome stands in for its place; no callee runs.
         match (&request, &event.completion) {
@@ -1832,4 +1887,67 @@ impl NetProvider for Recorded<'_> {
         self.address()
     }
     fn close(&mut self, _: u64) {}
+}
+
+#[cfg(test)]
+mod scripted_connect_tests {
+    use super::*;
+    use crate::net::{NetOperation, NetRule, NetTimeout};
+    #[test]
+    fn legacy_durable_blocked_connect_refuses_ambiguous_issue_order() {
+        let connect = Request::Connect {
+            net: 2,
+            host: "example.com".into(),
+            port: 80,
+            timeout: NetTimeout::Unbounded,
+        };
+        let mut io = SimIo::new(
+            Tree::default(),
+            vec![
+                Event {
+                    request: Request::Net { io: 1 },
+                    completion: Completion::Handle(Ok(2)),
+                    fault: None,
+                },
+                Event {
+                    request: connect.clone(),
+                    completion: Completion::Blocked { committed: false },
+                    fault: None,
+                },
+            ],
+        );
+        io.set_projections(["net".into()].into());
+        io.set_net_rules(
+            [NetRule {
+                address: "example.com".into(),
+                port: 80,
+                operation: NetOperation::Connect,
+            }]
+            .into(),
+        );
+        io.set_net_script(
+            vec![hirsel_run_schema::NetPeer {
+                address: "example.com".into(),
+                port: 80,
+                resolves_to: vec![],
+                tls: hirsel_run_schema::PeerTls::Plain,
+                connections: vec![
+                    hirsel_run_schema::NetConnection::Unanswered,
+                    hirsel_run_schema::NetConnection::Refused,
+                ],
+            }],
+            vec![],
+        )
+        .unwrap();
+        io.legacy_barrier_waits(true);
+        assert_eq!(
+            io.call(Request::Net { io: 1 }),
+            Ok(Completion::Handle(Ok(2)))
+        );
+        io.enter(10);
+        assert!(
+            matches!(io.call(connect), Err(AdapterError::Unsupported(detail)) if detail.contains("ambiguous Blocked") && detail.contains("re-record with Held"))
+        );
+        assert_eq!(io.position, 1);
+    }
 }

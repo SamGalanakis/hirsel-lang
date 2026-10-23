@@ -492,7 +492,8 @@ wire_enum!(crate::io::Completion {
     40 => View(v0),
     41 => Watch(v0),
     42 => Span{ handle, trace, span },
-    43 => FileInput(v0)
+    43 => FileInput(v0),
+    44 => Held
 });
 
 wire_struct!(crate::io::Fault { error, partial });

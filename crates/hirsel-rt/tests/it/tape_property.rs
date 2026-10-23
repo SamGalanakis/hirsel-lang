@@ -404,6 +404,7 @@ fn completions(n: u64) -> Vec<Completion> {
             span: [!(n as u8); 8],
         },
         Completion::Ready,
+        Completion::Held,
         Completion::FileInput(FileInput::Opened(n)),
         Completion::FileInput(FileInput::Size(n)),
         Completion::FileInput(FileInput::Bytes(bytes.clone())),
@@ -452,7 +453,7 @@ fn completions(n: u64) -> Vec<Completion> {
             Completion::View(_) => (),
             Completion::Watch(_) => (),
             Completion::Blocked { .. } => (),
-            Completion::Ready => (),
+            Completion::Ready | Completion::Held => (),
             Completion::Span { .. } => (),
         }
     }
