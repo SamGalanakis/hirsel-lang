@@ -1,0 +1,105 @@
+// SQLite destination ordering adapted to typed rows and atomic CSV files.
+@noalloc
+fn compare(
+  a: schema.Row[schema.Scalar],
+  b: schema.Row[schema.Scalar],
+  keys: List[u64],
+  descending: bool
+) -> i32 uses {} {
+  for i in keys {
+    let compared = schema.compare(a.cells[i], b.cells[i])
+    if compared != 0 {
+      return if descending {
+        -compared
+      } else {
+        compared
+      }
+    }
+  }
+  if a.ordinal < b.ordinal {
+    -1
+  } else if a.ordinal > b.ordinal {
+    1
+  } else {
+    0
+  }
+}
+
+pub fn order(
+  take rows: List[schema.Row[schema.Scalar]],
+  keys: List[u64],
+  descending: bool
+) -> List[schema.Row[schema.Scalar]] uses {} {
+  let mut sorted = unique rows
+  list.sort(
+    mut sorted,
+    fn(a: schema.Row[schema.Scalar], b: schema.Row[schema.Scalar]) -> i32 uses {} {
+      compare(a, b, keys, descending)
+    }
+  )
+  // A later order's tie-breaker is this operator's input ordinal.
+  for i in 0u64..list.len(sorted) {
+    sorted[i].ordinal = i
+  }
+  take sorted
+}
+
+fn record(fields: List[String], mut out: List[u8]) -> Result[(), schema.Problem] uses {} {
+  let mut encoded: List[u8] = []
+  let Ok(()) = csv.write_record_with(
+    fields,
+    csv.WriteConfig(delimiter: b',', preserve_single_empty: true),
+    mut encoded
+  ) else {
+    return Error(Invalid(Csv()))
+  }
+  if list.len(encoded) > 65536 - list.len(out) {
+    return Error(Invalid(OutputLimit()))
+  }
+  for byte in encoded {
+    list.push(mut out, byte)
+  }
+  Ok(())
+}
+
+pub fn encode(relation: schema.Relation) -> Result[Bytes, schema.Problem] uses {} {
+  let mut encoded: List[u8] = []
+  let mut names: List[String] = []
+  for c in relation.columns {
+    list.push(mut names, unique c.name)
+  }
+  record(names, mut encoded)?
+  for row in relation.rows {
+    let mut fields: List[String] = []
+    for cell in row.cells {
+      list.push(mut fields, schema.display(cell))
+    }
+    record(fields, mut encoded)?
+  }
+  Ok(bytes.from_list(take encoded))
+}
+
+pub type Published {
+  name: String,
+  data: Bytes,
+}
+
+pub fn compute(work: execute.Work) -> Result[Published, schema.Problem] uses {} {
+  let relation = execute.run(work)?
+  Ok(Published(name: unique work.query.name, data: encode(relation)?))
+}
+
+pub fn publish(d: Dir, outcome: Published) -> Result[(), schema.Problem] {
+  let mut destination = match file.create_atomic(d, path.of(f"{outcome.name}.csv")) {
+    Ok(value) => take value,
+    Error(e) => return Error(schema.file_error(e)),
+  }
+  match file.write_all(d, mut destination, outcome.data) {
+    Ok(()) => (),
+    Error(e) => return Error(schema.file_error(e)),
+  }
+  match file.commit(d, take destination) {
+    Ok(()) => Ok(()),
+    Error(e) => Error(schema.file_error(e)),
+  }
+}

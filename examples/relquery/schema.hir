@@ -1,0 +1,195 @@
+// Non-null domains; schema names are resolved once before any row is scanned.
+pub type Kind = IntegerType | TextType
+
+pub type Scalar = Integer(i64) | Text(String)
+
+pub type Reason = Utf8 | Array | Column | Columns | Csv | Destination | Duplicate | Fields | Header | InputLimit | Integer | Jobs | Join | Json | Name | Nodes | Object | Operator | OutputLimit | Pairs | Path | Queries | Rows | Scan | Table | Tables | Text | Type | Usage | Version | Width
+
+pub type Problem = Invalid(Reason) | Overflow | Files(FileError) | Grant | Canceled(
+  CancelCause
+)
+
+pub type Column {
+  name: String,
+  kind: Kind,
+}
+
+pub type Row[T] {
+  ordinal: u64,
+  cells: List[T],
+}
+
+pub type Relation {
+  columns: List[Column],
+  rows: List[Row[Scalar]],
+}
+
+pub type Table {
+  name: String,
+  path: String,
+  columns: List[Column],
+}
+
+pub fn identifier(name: String) -> bool uses {} {
+  let data = string.as_bytes(name)
+  if bytes.len(data) == 0 || bytes.len(data) > 48 {
+    return false
+  }
+  for c in data {
+    if !(c >= b'a' && c <= b'z') && !(c >= b'A' && c <= b'Z') && !(c >= b'0' && c <= b'9') && c != b'_' {
+      return false
+    }
+  }
+  true
+}
+
+pub fn integer(value: String) -> Result[i64, Problem] uses {} {
+  let raw = string.as_bytes(value)
+  let mut at: u64 = 0
+  if bytes.len(raw) > 0 && raw[0] == b'-' {
+    at = 1
+  }
+  if at == bytes.len(raw) {
+    return Error(Invalid(Integer()))
+  }
+  while at < bytes.len(raw) {
+    if raw[at] < b'0' || raw[at] > b'9' {
+      return Error(Invalid(Integer()))
+    }
+    at += 1
+  }
+  match i64.parse(value) {
+    Ok(n) => Ok(n),
+    Error(_) => Error(Invalid(Integer())),
+  }
+}
+
+pub fn decode(value: String, expected: Kind) -> Result[Scalar, Problem] uses {} {
+  match expected {
+    IntegerType() => Ok(Integer(integer(value)?)),
+    TextType() => Ok(Text(unique value)),
+  }
+}
+
+pub fn literal(value: json.Value) -> Result[Scalar, Problem] uses {} {
+  match value {
+    Number(raw) => Ok(Integer(integer(raw)?)),
+    Text(raw) => Ok(Text(unique raw)),
+    _ => Error(Invalid(Type())),
+  }
+}
+
+pub fn kind(value: Scalar) -> Kind uses {} {
+  match value {
+    Integer(_) => IntegerType(),
+    Text(_) => TextType(),
+  }
+}
+
+pub fn names(columns: List[Column]) -> Result[(), Problem] uses {} {
+  if list.len(columns) == 0 || list.len(columns) > 8 {
+    return Error(Invalid(Columns()))
+  }
+  let mut seen: Set[String] = set.empty()
+  for column in columns {
+    if set.contains(seen, column.name) {
+      return Error(Invalid(Duplicate()))
+    }
+    set.insert(mut seen, unique column.name)
+  }
+  Ok(())
+}
+
+pub fn index(columns: List[Column], name: String) -> Result[u64, Problem] uses {} {
+  for i in 0u64..list.len(columns) {
+    if columns[i].name == name {
+      return Ok(i)
+    }
+  }
+  Error(Invalid(Column()))
+}
+
+pub fn qualified(source_table: Table) -> List[Column] uses {} {
+  let mut columns: List[Column] = []
+  for column in source_table.columns {
+    list.push(
+      mut columns,
+      Column(name: f"{source_table.name}.{column.name}", kind: column.kind)
+    )
+  }
+  take columns
+}
+
+@noalloc
+pub fn compare(a: Scalar, b: Scalar) -> i32 uses {} {
+  match (a, b) {
+    (Integer(x), Integer(y)) => if x < y {
+      -1
+    } else if x > y {
+      1
+    } else {
+      0
+    },
+    (Text(x), Text(y)) => string.compare(x, y),
+    (Integer(_), Text(_)) => -1,
+    (Text(_), Integer(_)) => 1,
+  }
+}
+
+pub fn display(value: Scalar) -> String uses {} {
+  match value {
+    Integer(n) => i64.to_string(n),
+    Text(s) => unique s,
+  }
+}
+
+pub fn file_error(error: FileError) -> Problem uses {} {
+  match error {
+    Canceled(cause) => Canceled(cause),
+    _ => Files(error),
+  }
+}
+
+pub fn describe(problem: Problem) -> String uses {} {
+  match problem {
+    Invalid(reason) => match reason {
+      Utf8() => "utf8",
+      Array() => "array",
+      Column() => "column",
+      Columns() => "columns",
+      Csv() => "csv",
+      Destination() => "destination",
+      Duplicate() => "duplicate",
+      Fields() => "fields",
+      Header() => "header",
+      InputLimit() => "input_limit",
+      Integer() => "integer",
+      Jobs() => "jobs",
+      Join() => "join",
+      Json() => "json",
+      Name() => "name",
+      Nodes() => "nodes",
+      Object() => "object",
+      Operator() => "operator",
+      OutputLimit() => "output_limit",
+      Pairs() => "pairs",
+      Path() => "path",
+      Queries() => "queries",
+      Rows() => "rows",
+      Scan() => "scan",
+      Table() => "table",
+      Tables() => "tables",
+      Text() => "text",
+      Type() => "type",
+      Usage() => "usage",
+      Version() => "version",
+      Width() => "width",
+    },
+    Overflow() => "overflow",
+    Files(NotGranted()) => "denied",
+    Files(PermissionDenied()) => "denied",
+    Files(_) => "file",
+    Grant() => "grant",
+    Canceled(_) => "canceled",
+  }
+}

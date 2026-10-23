@@ -1,0 +1,172 @@
+pub type AppError = Output(OutputError)
+
+type Options {
+  root: Path,
+  input: Path,
+  jobs: u64,
+  explain: bool,
+  interruptible: bool,
+}
+
+fn arguments(args: Args) -> Result[Options, schema.Problem] {
+  let count = arg.len(args)
+  if count != 4 && count != 5 {
+    return Error(Invalid(Usage()))
+  }
+  let Ok(command) = arg.text(args, 0) else {
+    return Error(Invalid(Usage()))
+  }
+  if command != "run" && command != "explain" {
+    return Error(Invalid(Usage()))
+  }
+  let Ok(root) = arg.path(args, 1) else {
+    return Error(Invalid(Usage()))
+  }
+  let Ok(input) = arg.path(args, 2) else {
+    return Error(Invalid(Usage()))
+  }
+  let Ok(raw) = arg.text(args, 3) else {
+    return Error(Invalid(Usage()))
+  }
+  let Ok(jobs) = u64.parse(raw) else {
+    return Error(Invalid(Jobs()))
+  }
+  if jobs < 1 || jobs > 4 {
+    return Error(Invalid(Jobs()))
+  }
+  if count == 5 {
+    let Ok(flag) = arg.text(args, 4) else {
+      return Error(Invalid(Usage()))
+    }
+    if flag != "--interruptible" {
+      return Error(Invalid(Usage()))
+    }
+  }
+  Ok(
+    Options(
+      root: root,
+      input: input,
+      jobs: jobs,
+      explain: command == "explain",
+      interruptible: count == 5
+    )
+  )
+}
+
+fn execute(d: Dir, tasks: Tasks, options: Options) -> Result[Bytes, schema.Problem] {
+  let mut used: u64 = 0
+  let data = execute.read(d, options.input, mut used)?
+  let p = plan.parse(data)?
+  if options.explain {
+    let explanation = plan.explain(p)
+    if bytes.len(explanation) > 65536 {
+      return Error(Invalid(OutputLimit()))
+    }
+    return Ok(take explanation)
+  }
+  let mut tables: List[schema.Relation] = []
+  for source_table in p.tables {
+    let table_bytes = execute.read(d, path.of(source_table.path), mut used)?
+    list.push(mut tables, execute.scan(table_bytes, source_table)?)
+  }
+  let mut results: List[output.Published] = []
+  let mut index: u64 = 0
+  let mut output_bytes: u64 = 0
+  while index < list.len(p.queries) {
+    let mut batch: List[execute.Work] = []
+    while index < list.len(p.queries) && list.len(batch) < options.jobs {
+      list.push(
+        mut batch,
+        execute.Work(query: unique p.queries[index], tables: copy tables)
+      )
+      index += 1
+    }
+    let partials = task.map_all(tasks, take batch, 1, output.compute)?
+    for partial in take partials {
+      if bytes.len(partial.data) > 65536 - output_bytes {
+        return Error(Invalid(OutputLimit()))
+      }
+      output_bytes += bytes.len(partial.data)
+      list.push(mut results, take partial)
+    }
+  }
+  for outcome in results {
+    output.publish(d, outcome)?
+  }
+  let count = list.len(results)
+  let summary = f"published {count}\n"
+  Ok(unique string.as_bytes(summary))
+}
+
+fn interruptible(d: Dir, tasks: Tasks, signals: Signals, options: Options) -> Result[
+  Bytes,
+  schema.Problem
+] {
+  task.scope(
+    tasks,
+    fn(s: Scope) -> Result[Bytes, schema.Problem] {
+      let mut pending: TaskSet[Result[Bytes, schema.Problem]] of s = task.set(s)
+      task.add(
+        s,
+        mut pending,
+        task.async(
+          s,
+          fn() -> unique Result[Bytes, schema.Problem] {
+            unique execute(d, tasks, options)
+          }
+        )
+      )
+      task.add(
+        s,
+        mut pending,
+        task.async(
+          s,
+          fn() -> unique Result[Bytes, schema.Problem] {
+            let _ = signal.wait(signals, [Interrupt()])
+            Error(Canceled(Requested()))
+          }
+        )
+      )
+      let (_, outcome) = task.select(s, take pending)
+      outcome
+    }
+  )
+}
+
+fn run(rt: Io, args: Args) -> Result[Bytes, schema.Problem] {
+  let options = arguments(args)?
+  let d = match io.dir(rt, options.root) {
+    Ok(value) => value,
+    Error(e) => return Error(schema.file_error(e)),
+  }
+  let Ok(tasks) = io.tasks(rt) else {
+    return Error(Grant())
+  }
+  if options.interruptible {
+    let Ok(signals) = io.signals(rt) else {
+      return Error(Grant())
+    }
+    interruptible(d, tasks, signals, options)
+  } else {
+    execute(d, tasks, options)
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[std@1/process.ExitCode, AppError] {
+  let Ok(stdout) = io.stdout(rt) else {
+    return Ok(std@1/process.exit_code(3u8))
+  }
+  let Ok(stderr) = io.stderr(rt) else {
+    return Ok(std@1/process.exit_code(3u8))
+  }
+  match run(rt, args) {
+    Ok(summary) => {
+      out.write(stdout, summary)?
+      Ok(std@1/process.SUCCESS)
+    },
+    Error(problem) => {
+      err.print(stderr, f"relquery: {schema.describe(problem)}\n")?
+      Ok(std@1/process.exit_code(2u8))
+    },
+  }
+}

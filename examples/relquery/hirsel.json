@@ -1,0 +1,57 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "relquery",
+    "version": "0"
+  },
+  "entry": {
+    "module": [],
+    "name": "main"
+  },
+  "dependencies": [
+    {
+      "expose": [],
+      "manifest": "../../stdlib/std@1/hirsel.json",
+      "package": {
+        "name": "std",
+        "version": "1"
+      }
+    }
+  ],
+  "sources": [
+    {
+      "module": [],
+      "path": "main.hir"
+    },
+    {
+      "module": [
+        "schema"
+      ],
+      "path": "schema.hir"
+    },
+    {
+      "module": [
+        "plan"
+      ],
+      "path": "plan.hir"
+    },
+    {
+      "module": [
+        "execute"
+      ],
+      "path": "execute.hir"
+    },
+    {
+      "module": [
+        "aggregate"
+      ],
+      "path": "aggregate.hir"
+    },
+    {
+      "module": [
+        "output"
+      ],
+      "path": "output.hir"
+    }
+  ]
+}

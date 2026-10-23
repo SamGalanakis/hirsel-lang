@@ -1,0 +1,176 @@
+// SQLite selectInnerLoop: projection follows resolved column order.
+// Joins deliberately use a bounded nested loop rather than VDBE/index machinery.
+type Cursor[T] {
+  slots: List[Option[T]],
+  at: u64,
+}
+
+pub fn cursor[T: inert](take rows: List[T]) -> Iter[T] uses {} {
+  let mut slots: List[Option[T]] = []
+  for row in take rows {
+    list.push(mut slots, Some(take row))
+  }
+  iter.from(
+    take Cursor(slots: take slots, at: 0),
+    fn(mut state: Cursor[T]) -> Option[T] uses {} {
+      if state.at == list.len(state.slots) {
+        return None()
+      }
+      let value = replace(mut state.slots[state.at], take None())
+      state.at += 1
+      take value
+    }
+  )
+}
+
+// The predicate is borrowed for this call and cannot escape into the cursor.
+pub fn select[T: inert](
+  take rows: Iter[schema.Row[T]],
+  predicate: fn(schema.Row[T]) -> bool uses {}
+) -> List[schema.Row[T]] uses {} {
+  let mut out: List[schema.Row[T]] = []
+  for row in take rows {
+    if predicate(row) {
+      list.push(mut out, take row)
+    }
+  }
+  take out
+}
+
+pub fn project[T: copyable + inert](take row: schema.Row[T], indexes: List[u64]) -> schema.Row[
+  T
+] uses {} {
+  let mut cells: List[T] = []
+  for i in indexes {
+    list.push(mut cells, copy row.cells[i])
+  }
+  schema.Row(ordinal: row.ordinal, cells: take cells)
+}
+
+pub fn read(d: Dir, input: Path, mut used: u64) -> Result[Bytes, schema.Problem] {
+  let mut f = match file.open(d, input) {
+    Ok(value) => take value,
+    Error(e) => return Error(schema.file_error(e)),
+  }
+  let data = match file.read_all_bounded(d, mut f, 65536 - used) {
+    Ok(value) => take value,
+    Error(Limit()) => return Error(Invalid(InputLimit())),
+    Error(File(e)) => return Error(schema.file_error(e)),
+  }
+  used += bytes.len(data)
+  Ok(take data)
+}
+
+pub fn scan(data: Bytes, source_table: schema.Table) -> Result[
+  schema.Relation,
+  schema.Problem
+] uses {} {
+  let Ok(raw) = string.from_bytes(unique data) else {
+    return Error(Invalid(Utf8()))
+  }
+  let Ok(records) = csv.parse(
+    take raw,
+    csv.Config(delimiter: b',', fields_per_record: None(), max_record_bytes: 65536)
+  ) else {
+    return Error(Invalid(Csv()))
+  }
+  if list.len(records) == 0 {
+    return Error(Invalid(Header()))
+  }
+  if list.len(records[0]) != list.len(source_table.columns) {
+    return Error(Invalid(Header()))
+  }
+  for i in 0u64..list.len(source_table.columns) {
+    if records[0][i] != source_table.columns[i].name {
+      return Error(Invalid(Header()))
+    }
+  }
+  if list.len(records) > 65 {
+    return Error(Invalid(Rows()))
+  }
+  let mut rows: List[schema.Row[schema.Scalar]] = []
+  for at in 1u64..list.len(records) {
+    let wire = schema.Row(ordinal: at - 1, cells: unique records[at])
+    if list.len(wire.cells) != list.len(source_table.columns) {
+      return Error(Invalid(Width()))
+    }
+    let mut values: List[schema.Scalar] = []
+    for i in 0u64..list.len(source_table.columns) {
+      list.push(mut values, schema.decode(wire.cells[i], source_table.columns[i].kind)?)
+    }
+    list.push(mut rows, schema.Row(ordinal: wire.ordinal, cells: take values))
+  }
+  Ok(schema.Relation(columns: schema.qualified(source_table), rows: take rows))
+}
+
+pub fn pairs(left: u64, right: u64) -> Result[(), schema.Problem] uses {} {
+  if left > 0 && right > 4096 / left {
+    return Error(Invalid(Pairs()))
+  }
+  Ok(())
+}
+
+fn join(
+  take rows: List[schema.Row[schema.Scalar]],
+  right: schema.Relation,
+  a: u64,
+  b: u64
+) -> Result[List[schema.Row[schema.Scalar]], schema.Problem] uses {} {
+  pairs(list.len(rows), list.len(right.rows))?
+  let mut joined: List[schema.Row[schema.Scalar]] = []
+  let mut ordinal: u64 = 0
+  for left in take rows {
+    for row in right.rows {
+      if left.cells[a] == row.cells[b] {
+        let mut cells = unique left.cells
+        for cell in row.cells {
+          list.push(mut cells, unique cell)
+        }
+        list.push(mut joined, schema.Row(ordinal: ordinal, cells: take cells))
+        ordinal += 1
+      }
+    }
+  }
+  Ok(take joined)
+}
+
+pub type Work {
+  query: plan.Query,
+  tables: List[schema.Relation],
+}
+
+pub fn run(work: Work) -> Result[schema.Relation, schema.Problem] uses {} {
+  let mut rows: List[schema.Row[schema.Scalar]] = []
+  let mut columns: List[schema.Column] = []
+  for node in work.query.nodes {
+    rows = match node.operator {
+      Scan(t) => unique work.tables[t].rows,
+      Join(t, a, b) => join(take rows, work.tables[t], a, b)?,
+      Select(i, value) => select(
+        cursor(take rows),
+        fn(row: schema.Row[schema.Scalar]) -> bool uses {} {
+          row.cells[i] == value
+        }
+      ),
+      Project(keys) => {
+        let mut projected: List[schema.Row[schema.Scalar]] = []
+        let projected_rows = cursor(take rows)
+        for row in take projected_rows {
+          list.push(mut projected, project(unique row, keys))
+        }
+        take projected
+      },
+      Group(keys, sum) => aggregate.group(take rows, keys, sum)?,
+      Order(keys, descending) => output.order(take rows, keys, descending),
+    }
+    columns = unique node.columns
+  }
+  Ok(schema.Relation(columns: take columns, rows: take rows))
+}
+
+@test
+fn candidate_bound(t: Test) {
+  test.check(t, pairs(64, 64) == Ok(()))
+  test.check(t, pairs(17, 241) == Error(Invalid(Pairs())))
+  test.check(t, pairs(0, 18446744073709551615u64) == Ok(()))
+}

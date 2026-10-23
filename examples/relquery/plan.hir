@@ -1,0 +1,358 @@
+// SQLite select.c:1193–1250: resolve projection before choosing its destination.
+// The admitted language is deliberately linear and bounded, with no SQL coercion.
+pub type Operator = Scan(u64) | Join(u64, u64, u64) | Select(u64, schema.Scalar) | Project(
+  List[u64]
+) | Group(List[u64], u64) | Order(List[u64], bool)
+
+pub type Node {
+  operator: Operator,
+  columns: List[schema.Column],
+}
+
+pub type Query {
+  name: String,
+  nodes: List[Node],
+}
+
+pub type Plan {
+  tables: List[schema.Table],
+  queries: List[Query],
+}
+
+fn object(value: json.Value, allowed: List[String]) -> Result[
+  Map[String, json.Value],
+  schema.Problem
+] uses {} {
+  let Object(items) = value else {
+    return Error(Invalid(Object()))
+  }
+  if map.len(items) != list.len(allowed) {
+    return Error(Invalid(Fields()))
+  }
+  for (key, _) in items {
+    if !list.any(
+      allowed,
+      fn(allowed_name: String) -> bool uses {} {
+        allowed_name == key
+      }
+    ) {
+      return Error(Invalid(Fields()))
+    }
+  }
+  Ok(unique items)
+}
+
+fn field(items: Map[String, json.Value], key: String) -> Result[
+  json.Value,
+  schema.Problem
+] uses {} {
+  match map.get(items, key) {
+    Some(value) => Ok(unique value),
+    None() => Error(Invalid(Fields())),
+  }
+}
+
+fn array(value: json.Value) -> Result[List[json.Value], schema.Problem] uses {} {
+  match value {
+    Array(items) => Ok(unique items),
+    _ => Error(Invalid(Array())),
+  }
+}
+
+fn text(value: json.Value) -> Result[String, schema.Problem] uses {} {
+  match value {
+    Text(s) => Ok(unique s),
+    _ => Error(Invalid(Text())),
+  }
+}
+
+fn name(value: json.Value) -> Result[String, schema.Problem] uses {} {
+  let s = text(value)?
+  if !schema.identifier(s) {
+    return Error(Invalid(Name()))
+  }
+  Ok(take s)
+}
+
+fn table(value: json.Value) -> Result[schema.Table, schema.Problem] uses {} {
+  let fields = object(value, ["name", "path", "columns"])?
+  let table_name = name(field(fields, "name")?)?
+  let file_name = text(field(fields, "path")?)?
+  // Paths use the same identifier as their table, plus a fixed suffix.
+  if file_name != f"{table_name}.csv" {
+    return Error(Invalid(Path()))
+  }
+  let raw = array(field(fields, "columns")?)?
+  if list.len(raw) == 0 || list.len(raw) > 8 {
+    return Error(Invalid(Columns()))
+  }
+  let mut columns: List[schema.Column] = []
+  for item in raw {
+    let c = object(item, ["name", "type"])?
+    let kind: schema.Kind = match text(field(c, "type")?)? {
+      "integer" => IntegerType(),
+      "text" => TextType(),
+      _ => return Error(Invalid(Type())),
+    }
+    list.push(mut columns, schema.Column(name: name(field(c, "name")?)?, kind: kind))
+  }
+  schema.names(columns)?
+  Ok(schema.Table(name: take table_name, path: take file_name, columns: take columns))
+}
+
+fn table_index(tables: List[schema.Table], value: json.Value) -> Result[
+  u64,
+  schema.Problem
+] uses {} {
+  let wanted = text(value)?
+  for i in 0u64..list.len(tables) {
+    if tables[i].name == wanted {
+      return Ok(i)
+    }
+  }
+  Error(Invalid(Table()))
+}
+
+fn indexes(value: json.Value, columns: List[schema.Column], minimum: u64, maximum: u64) -> Result[
+  List[u64],
+  schema.Problem
+] uses {} {
+  let raw = array(value)?
+  if list.len(raw) < minimum || list.len(raw) > maximum {
+    return Error(Invalid(Columns()))
+  }
+  let mut out: List[u64] = []
+  for item in raw {
+    let i = schema.index(columns, text(item)?)?
+    for old in out {
+      if old == i {
+        return Error(Invalid(Duplicate()))
+      }
+    }
+    list.push(mut out, i)
+  }
+  Ok(take out)
+}
+
+fn node(
+  value: json.Value,
+  columns: List[schema.Column],
+  tables: List[schema.Table],
+  first: bool,
+  mut joined: bool
+) -> Result[Node, schema.Problem] uses {} {
+  let Object(fields) = value else {
+    return Error(Invalid(Object()))
+  }
+  let op = text(field(fields, "op")?)?
+  if first != (op == "scan") {
+    return Error(Invalid(Scan()))
+  }
+  match op {
+    "scan" => {
+      let f = object(value, ["op", "table"])?
+      let t = table_index(tables, field(f, "table")?)?
+      Ok(Node(operator: Scan(t), columns: schema.qualified(tables[t])))
+    },
+    "join" => {
+      let f = object(value, ["op", "table", "left", "right"])?
+      if joined {
+        return Error(Invalid(Join()))
+      }
+      joined = true
+      let t = table_index(tables, field(f, "table")?)?
+      let right = schema.qualified(tables[t])
+      let a = schema.index(columns, text(field(f, "left")?)?)?
+      let b = schema.index(right, text(field(f, "right")?)?)?
+      if columns[a].kind != right[b].kind {
+        return Error(Invalid(Type()))
+      }
+      let mut next = unique columns
+      for c in right {
+        list.push(mut next, unique c)
+      }
+      schema.names(next)?
+      Ok(Node(operator: Join(t, a, b), columns: take next))
+    },
+    "select" => {
+      let f = object(value, ["op", "column", "value"])?
+      let i = schema.index(columns, text(field(f, "column")?)?)?
+      let v = schema.literal(field(f, "value")?)?
+      if columns[i].kind != schema.kind(v) {
+        return Error(Invalid(Type()))
+      }
+      Ok(Node(operator: Select(i, take v), columns: unique columns))
+    },
+    "project" => {
+      let f = object(value, ["op", "columns"])?
+      let raw = array(field(f, "columns")?)?
+      if list.len(raw) == 0 || list.len(raw) > 8 {
+        return Error(Invalid(Columns()))
+      }
+      let mut positions: List[u64] = []
+      let mut next: List[schema.Column] = []
+      for entry in raw {
+        let c = object(entry, ["column", "name"])?
+        let i = schema.index(columns, text(field(c, "column")?)?)?
+        list.push(mut positions, i)
+        list.push(
+          mut next,
+          schema.Column(name: name(field(c, "name")?)?, kind: columns[i].kind)
+        )
+      }
+      schema.names(next)?
+      Ok(Node(operator: Project(take positions), columns: take next))
+    },
+    "group" => {
+      let f = object(value, ["op", "keys", "sum", "count", "total"])?
+      let keys = indexes(field(f, "keys")?, columns, 0, 6)?
+      let sum = schema.index(columns, text(field(f, "sum")?)?)?
+      if columns[sum].kind != IntegerType() {
+        return Error(Invalid(Type()))
+      }
+      let mut next: List[schema.Column] = []
+      for i in keys {
+        list.push(mut next, unique columns[i])
+      }
+      list.push(
+        mut next,
+        schema.Column(name: name(field(f, "count")?)?, kind: IntegerType())
+      )
+      list.push(
+        mut next,
+        schema.Column(name: name(field(f, "total")?)?, kind: IntegerType())
+      )
+      schema.names(next)?
+      Ok(Node(operator: Group(take keys, sum), columns: take next))
+    },
+    "order" => {
+      let f = object(value, ["op", "columns", "descending"])?
+      let keys = indexes(field(f, "columns")?, columns, 1, 8)?
+      let Bool(descending) = field(f, "descending")? else {
+        return Error(Invalid(Type()))
+      }
+      Ok(Node(operator: Order(take keys, descending), columns: unique columns))
+    },
+    _ => Error(Invalid(Operator())),
+  }
+}
+
+fn query(value: json.Value, tables: List[schema.Table]) -> Result[Query, schema.Problem] uses {} {
+  let fields = object(value, ["name", "nodes"])?
+  let query_name = name(field(fields, "name")?)?
+  let raw = array(field(fields, "nodes")?)?
+  if list.len(raw) == 0 || list.len(raw) > 32 {
+    return Error(Invalid(Nodes()))
+  }
+  let mut nodes: List[Node] = []
+  let mut columns: List[schema.Column] = []
+  let mut joined = false
+  for v in raw {
+    let n = node(v, columns, tables, list.len(nodes) == 0, mut joined)?
+    columns = copy n.columns
+    list.push(mut nodes, take n)
+  }
+  Ok(Query(name: take query_name, nodes: take nodes))
+}
+
+pub fn parse(data: Bytes) -> Result[Plan, schema.Problem] uses {} {
+  let Ok(wire_text) = string.from_bytes(unique data) else {
+    return Error(Invalid(Utf8()))
+  }
+  let Ok(value) = json.parse(take wire_text) else {
+    return Error(Invalid(Json()))
+  }
+  let fields = object(value, ["version", "tables", "queries"])?
+  let expected_version: json.Value = Number("1")
+  if field(fields, "version")? != expected_version {
+    return Error(Invalid(Version()))
+  }
+  let raw_tables = array(field(fields, "tables")?)?
+  if list.len(raw_tables) == 0 || list.len(raw_tables) > 4 {
+    return Error(Invalid(Tables()))
+  }
+  let mut tables: List[schema.Table] = []
+  let mut seen: Set[String] = set.empty()
+  for raw in raw_tables {
+    let t = table(raw)?
+    if set.contains(seen, t.name) {
+      return Error(Invalid(Duplicate()))
+    }
+    set.insert(mut seen, copy t.name)
+    list.push(mut tables, take t)
+  }
+  let raw_queries = array(field(fields, "queries")?)?
+  if list.len(raw_queries) == 0 || list.len(raw_queries) > 8 {
+    return Error(Invalid(Queries()))
+  }
+  let mut queries: List[Query] = []
+  let mut outputs: Set[String] = set.empty()
+  let mut node_count: u64 = 0
+  for raw in raw_queries {
+    let q = query(raw, tables)?
+    if list.len(q.nodes) > 32 - node_count {
+      return Error(Invalid(Nodes()))
+    }
+    node_count += list.len(q.nodes)
+    if set.contains(outputs, q.name) {
+      return Error(Invalid(Duplicate()))
+    }
+    for t in tables {
+      if q.name == t.name {
+        return Error(Invalid(Destination()))
+      }
+    }
+    set.insert(mut outputs, copy q.name)
+    list.push(mut queries, take q)
+  }
+  Ok(Plan(tables: take tables, queries: take queries))
+}
+
+pub fn explain(p: Plan) -> Bytes uses {} {
+  let mut bytes: List[u8] = []
+  for q in p.queries {
+    bytes.append(mut bytes, string.as_bytes(f"query {q.name}\n"))
+    for n in q.nodes {
+      let label = match n.operator {
+        Scan(t) => f"scan {t}",
+        Join(t, a, b) => f"join {t} {a}={b}",
+        Select(i, v) => {
+          let raw: json.Value = match v {
+            Integer(x) => Number(i64.to_string(x)),
+            Text(s) => Text(unique s),
+          }
+          let Ok(rendered) = json.stringify(raw) else {
+            return b"explain error\n"
+          }
+          f"select {i}={rendered}"
+        },
+        Project(keys) => f"project {render_positions(keys)}",
+        Group(keys, sum) => f"group {render_positions(keys)} sum={sum}",
+        Order(keys, desc) => f"order {render_positions(keys)} descending={desc}",
+      }
+      bytes.append(mut bytes, string.as_bytes(f"  {label}:"))
+      for c in n.columns {
+        let type_name = match c.kind {
+          IntegerType() => "integer",
+          TextType() => "text",
+        }
+        bytes.append(mut bytes, string.as_bytes(f" {c.name}:{type_name}"))
+      }
+      list.push(mut bytes, b'\n')
+    }
+  }
+  bytes.from_list(take bytes)
+}
+
+fn render_positions(keys: List[u64]) -> String uses {} {
+  let mut out: List[u8] = []
+  list.push(mut out, b'[')
+  for i in 0u64..list.len(keys) {
+    if i != 0 {
+      list.push(mut out, b',')
+    }
+    u64.format_into(keys[i], mut out)
+  }
+  list.push(mut out, b']')
+  text.finish_valid(take out)
+}

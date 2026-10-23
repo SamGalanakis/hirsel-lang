@@ -1,0 +1,93 @@
+{
+  "version": 1,
+  "tables": [
+    {
+      "name": "a",
+      "path": "a.csv",
+      "columns": [
+        {
+          "name": "k",
+          "type": "integer"
+        },
+        {
+          "name": "v",
+          "type": "integer"
+        },
+        {
+          "name": "tag",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "name": "b",
+      "path": "b.csv",
+      "columns": [
+        {
+          "name": "k",
+          "type": "integer"
+        },
+        {
+          "name": "label",
+          "type": "text"
+        }
+      ]
+    }
+  ],
+  "queries": [
+    {
+      "name": "q",
+      "nodes": [
+        {
+          "op": "scan",
+          "table": "a"
+        },
+        {
+          "op": "join",
+          "table": "b",
+          "left": "a.k",
+          "right": "b.k"
+        },
+        {
+          "op": "group",
+          "keys": [
+            "b.label"
+          ],
+          "sum": "a.v",
+          "count": "n",
+          "total": "s"
+        },
+        {
+          "op": "order",
+          "columns": [
+            "s"
+          ],
+          "descending": true
+        }
+      ]
+    },
+    {
+      "name": "text",
+      "nodes": [
+        {
+          "op": "scan",
+          "table": "a"
+        },
+        {
+          "op": "select",
+          "column": "a.tag",
+          "value": "01"
+        },
+        {
+          "op": "project",
+          "columns": [
+            {
+              "column": "a.v",
+              "name": "value"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

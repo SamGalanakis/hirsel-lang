@@ -1,0 +1,25 @@
+{
+  "args": [
+    "run",
+    "data",
+    "plan.json",
+    "2"
+  ],
+  "io": {
+    "stdout": "stdout.bytes@1",
+    "stderr": "stderr.bytes@1",
+    "tasks": "tasks.cooperative@1",
+    "dirs": [
+      {
+        "path": "data",
+        "access": "read_write",
+        "host": "fixtures"
+      }
+    ]
+  },
+  "placement": {
+    "cores": 1,
+    "commit": "shared",
+    "reorder": "off"
+  }
+}

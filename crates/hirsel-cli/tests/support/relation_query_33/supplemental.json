@@ -1,0 +1,560 @@
+{
+  "schema": 1,
+  "sqlite_source": "014644d8f25501d0526c65f1024154ba182f6899",
+  "scope": "supplemental; original preimplementation cases unchanged",
+  "cases": [
+    {
+      "id": "supplement-integer-group",
+      "plan": {
+        "version": 1,
+        "tables": [
+          {
+            "name": "a",
+            "path": "a.csv",
+            "columns": [
+              {
+                "name": "k",
+                "type": "integer"
+              },
+              {
+                "name": "v",
+                "type": "integer"
+              },
+              {
+                "name": "tag",
+                "type": "text"
+              }
+            ]
+          },
+          {
+            "name": "b",
+            "path": "b.csv",
+            "columns": [
+              {
+                "name": "k",
+                "type": "integer"
+              },
+              {
+                "name": "label",
+                "type": "text"
+              }
+            ]
+          }
+        ],
+        "queries": [
+          {
+            "name": "q",
+            "nodes": [
+              {
+                "op": "scan",
+                "table": "a"
+              },
+              {
+                "op": "group",
+                "keys": [
+                  "a.k"
+                ],
+                "sum": "a.v",
+                "count": "n",
+                "total": "s"
+              },
+              {
+                "op": "order",
+                "columns": [
+                  "a.k"
+                ],
+                "descending": false
+              }
+            ]
+          }
+        ]
+      },
+      "files": {
+        "a.csv": "k,v,tag\n1,11,z\n1,-2,a\n2,5,01\n",
+        "b.csv": "k,label\n1,B\n1,A\n3,C\n"
+      },
+      "exit": 0,
+      "stderr": "",
+      "stdout": "published 1\n",
+      "expected": {
+        "q.csv": "a.k,n,s\n1,2,9\n2,1,5\n"
+      }
+    },
+    {
+      "id": "supplement-mixed-group",
+      "plan": {
+        "version": 1,
+        "tables": [
+          {
+            "name": "a",
+            "path": "a.csv",
+            "columns": [
+              {
+                "name": "k",
+                "type": "integer"
+              },
+              {
+                "name": "v",
+                "type": "integer"
+              },
+              {
+                "name": "tag",
+                "type": "text"
+              }
+            ]
+          },
+          {
+            "name": "b",
+            "path": "b.csv",
+            "columns": [
+              {
+                "name": "k",
+                "type": "integer"
+              },
+              {
+                "name": "label",
+                "type": "text"
+              }
+            ]
+          }
+        ],
+        "queries": [
+          {
+            "name": "q",
+            "nodes": [
+              {
+                "op": "scan",
+                "table": "a"
+              },
+              {
+                "op": "group",
+                "keys": [
+                  "a.k",
+                  "a.tag"
+                ],
+                "sum": "a.v",
+                "count": "n",
+                "total": "s"
+              },
+              {
+                "op": "select",
+                "column": "n",
+                "value": 1
+              },
+              {
+                "op": "project",
+                "columns": [
+                  {
+                    "column": "s",
+                    "name": "total"
+                  },
+                  {
+                    "column": "a.tag",
+                    "name": "tag"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "files": {
+        "a.csv": "k,v,tag\n1,11,z\n1,-2,a\n2,5,01\n",
+        "b.csv": "k,label\n1,B\n1,A\n3,C\n"
+      },
+      "exit": 0,
+      "stderr": "",
+      "stdout": "published 1\n",
+      "expected": {
+        "q.csv": "total,tag\n11,z\n-2,a\n5,01\n"
+      }
+    },
+    {
+      "id": "supplement-text-join",
+      "plan": {
+        "version": 1,
+        "tables": [
+          {
+            "name": "a",
+            "path": "a.csv",
+            "columns": [
+              {
+                "name": "k",
+                "type": "text"
+              },
+              {
+                "name": "v",
+                "type": "integer"
+              }
+            ]
+          },
+          {
+            "name": "b",
+            "path": "b.csv",
+            "columns": [
+              {
+                "name": "k",
+                "type": "text"
+              }
+            ]
+          }
+        ],
+        "queries": [
+          {
+            "name": "q",
+            "nodes": [
+              {
+                "op": "scan",
+                "table": "a"
+              },
+              {
+                "op": "join",
+                "table": "b",
+                "left": "a.k",
+                "right": "b.k"
+              },
+              {
+                "op": "group",
+                "keys": [
+                  "a.k"
+                ],
+                "sum": "a.v",
+                "count": "n",
+                "total": "s"
+              },
+              {
+                "op": "order",
+                "columns": [
+                  "a.k"
+                ],
+                "descending": false
+              }
+            ]
+          }
+        ]
+      },
+      "files": {
+        "a.csv": "k,v\n\"a,\"\"\",5\n\"a,\"\"\",-1\n\"\u03b2\n\",9\n01,1\n",
+        "b.csv": "k\n\"a,\"\"\"\n\"a,\"\"\"\n\"\u03b2\n\"\n"
+      },
+      "exit": 0,
+      "stderr": "",
+      "stdout": "published 1\n",
+      "expected": {
+        "q.csv": "a.k,n,s\n\"a,\"\"\",4,8\n\"\u03b2\n\",1,9\n"
+      }
+    },
+    {
+      "id": "supplement-jobs-0",
+      "plan": {
+        "version": 1,
+        "tables": [
+          {
+            "name": "a",
+            "path": "a.csv",
+            "columns": [
+              {
+                "name": "k",
+                "type": "integer"
+              },
+              {
+                "name": "v",
+                "type": "integer"
+              },
+              {
+                "name": "tag",
+                "type": "text"
+              }
+            ]
+          },
+          {
+            "name": "b",
+            "path": "b.csv",
+            "columns": [
+              {
+                "name": "k",
+                "type": "integer"
+              },
+              {
+                "name": "label",
+                "type": "text"
+              }
+            ]
+          }
+        ],
+        "queries": [
+          {
+            "name": "q",
+            "nodes": [
+              {
+                "op": "scan",
+                "table": "a"
+              },
+              {
+                "op": "join",
+                "table": "b",
+                "left": "a.k",
+                "right": "b.k"
+              },
+              {
+                "op": "group",
+                "keys": [
+                  "b.label"
+                ],
+                "sum": "a.v",
+                "count": "n",
+                "total": "s"
+              },
+              {
+                "op": "order",
+                "columns": [
+                  "s"
+                ],
+                "descending": true
+              }
+            ]
+          },
+          {
+            "name": "text",
+            "nodes": [
+              {
+                "op": "scan",
+                "table": "a"
+              },
+              {
+                "op": "select",
+                "column": "a.tag",
+                "value": "01"
+              },
+              {
+                "op": "project",
+                "columns": [
+                  {
+                    "column": "a.v",
+                    "name": "value"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "files": {
+        "a.csv": "k,v,tag\n1,11,z\n1,-2,a\n2,5,01\n",
+        "b.csv": "k,label\n1,B\n1,A\n3,C\n"
+      },
+      "exit": 2,
+      "stderr": "relquery: jobs\n",
+      "stdout": "",
+      "expected": {},
+      "jobs": 0
+    },
+    {
+      "id": "supplement-jobs-5",
+      "plan": {
+        "version": 1,
+        "tables": [
+          {
+            "name": "a",
+            "path": "a.csv",
+            "columns": [
+              {
+                "name": "k",
+                "type": "integer"
+              },
+              {
+                "name": "v",
+                "type": "integer"
+              },
+              {
+                "name": "tag",
+                "type": "text"
+              }
+            ]
+          },
+          {
+            "name": "b",
+            "path": "b.csv",
+            "columns": [
+              {
+                "name": "k",
+                "type": "integer"
+              },
+              {
+                "name": "label",
+                "type": "text"
+              }
+            ]
+          }
+        ],
+        "queries": [
+          {
+            "name": "q",
+            "nodes": [
+              {
+                "op": "scan",
+                "table": "a"
+              },
+              {
+                "op": "join",
+                "table": "b",
+                "left": "a.k",
+                "right": "b.k"
+              },
+              {
+                "op": "group",
+                "keys": [
+                  "b.label"
+                ],
+                "sum": "a.v",
+                "count": "n",
+                "total": "s"
+              },
+              {
+                "op": "order",
+                "columns": [
+                  "s"
+                ],
+                "descending": true
+              }
+            ]
+          },
+          {
+            "name": "text",
+            "nodes": [
+              {
+                "op": "scan",
+                "table": "a"
+              },
+              {
+                "op": "select",
+                "column": "a.tag",
+                "value": "01"
+              },
+              {
+                "op": "project",
+                "columns": [
+                  {
+                    "column": "a.v",
+                    "name": "value"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "files": {
+        "a.csv": "k,v,tag\n1,11,z\n1,-2,a\n2,5,01\n",
+        "b.csv": "k,label\n1,B\n1,A\n3,C\n"
+      },
+      "exit": 2,
+      "stderr": "relquery: jobs\n",
+      "stdout": "",
+      "expected": {},
+      "jobs": 5
+    },
+    {
+      "id": "supplement-explain",
+      "plan": {
+        "version": 1,
+        "tables": [
+          {
+            "name": "a",
+            "path": "a.csv",
+            "columns": [
+              {
+                "name": "k",
+                "type": "integer"
+              },
+              {
+                "name": "v",
+                "type": "integer"
+              },
+              {
+                "name": "tag",
+                "type": "text"
+              }
+            ]
+          },
+          {
+            "name": "b",
+            "path": "b.csv",
+            "columns": [
+              {
+                "name": "k",
+                "type": "integer"
+              },
+              {
+                "name": "label",
+                "type": "text"
+              }
+            ]
+          }
+        ],
+        "queries": [
+          {
+            "name": "q",
+            "nodes": [
+              {
+                "op": "scan",
+                "table": "a"
+              },
+              {
+                "op": "join",
+                "table": "b",
+                "left": "a.k",
+                "right": "b.k"
+              },
+              {
+                "op": "group",
+                "keys": [
+                  "b.label"
+                ],
+                "sum": "a.v",
+                "count": "n",
+                "total": "s"
+              },
+              {
+                "op": "order",
+                "columns": [
+                  "s"
+                ],
+                "descending": true
+              }
+            ]
+          },
+          {
+            "name": "text",
+            "nodes": [
+              {
+                "op": "scan",
+                "table": "a"
+              },
+              {
+                "op": "select",
+                "column": "a.tag",
+                "value": "01"
+              },
+              {
+                "op": "project",
+                "columns": [
+                  {
+                    "column": "a.v",
+                    "name": "value"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "files": {},
+      "exit": 0,
+      "stderr": "",
+      "stdout": "query q\n  scan 0: a.k:integer a.v:integer a.tag:text\n  join 1 0=0: a.k:integer a.v:integer a.tag:text b.k:integer b.label:text\n  group [4] sum=1: b.label:text n:integer s:integer\n  order [2] descending=true: b.label:text n:integer s:integer\nquery text\n  scan 0: a.k:integer a.v:integer a.tag:text\n  select 2=\"01\": a.k:integer a.v:integer a.tag:text\n  project [1]: value:integer\n",
+      "expected": {},
+      "command": "explain"
+    }
+  ]
+}

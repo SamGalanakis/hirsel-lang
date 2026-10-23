@@ -1,0 +1,126 @@
+// Typed group keys retain integer/text identity; unique state is never shared.
+pub type State[T] {
+  key: List[T],
+  count: i64,
+  sum: i64,
+  ordinal: u64,
+}
+
+fn advance[T](mut state: unique State[T], value: i64) -> Result[(), schema.Problem] uses {} {
+  let Some(count) = int.checked_add(state.count, 1i64) else {
+    return Error(Overflow())
+  }
+  let Some(total) = int.checked_add(state.sum, value) else {
+    return Error(Overflow())
+  }
+  state.count = count
+  state.sum = total
+  Ok(())
+}
+
+// Both Row[i64]/State[i64] and Row[String]/State[String] are real group-key
+// instantiations. Mixed keys use the same reducer with Scalar, without coercion.
+fn reduce[T: key + inert](
+  rows: List[schema.Row[schema.Scalar]],
+  keys: List[u64],
+  sum: u64,
+  decode: fn(schema.Scalar) -> Result[T, schema.Problem] uses {},
+  encode: fn(T) -> schema.Scalar uses {}
+) -> Result[List[schema.Row[schema.Scalar]], schema.Problem] uses {} {
+  let mut states: unique List[unique State[T]] = []
+  let mut index: Map[List[T], u64] = map.empty()
+  if list.len(keys) == 0 {
+    list.push(mut states, State(key: [], count: 0, sum: 0, ordinal: 0))
+    map.insert(mut index, [], 0)
+  }
+  for row in rows {
+    let mut key_cells: List[T] = []
+    for i in keys {
+      list.push(mut key_cells, decode(row.cells[i])?)
+    }
+    let key_row = schema.Row(ordinal: row.ordinal, cells: take key_cells)
+    let Integer(value) = row.cells[sum] else {
+      return Error(Invalid(Type()))
+    }
+    let at = match map.get(index, key_row.cells) {
+      Some(i) => i,
+      None() => {
+        let i = list.len(states)
+        list.push(
+          mut states,
+          State(key: unique key_row.cells, count: 0, sum: 0, ordinal: key_row.ordinal)
+        )
+        map.insert(mut index, unique key_row.cells, i)
+        i
+      },
+    }
+    advance(mut states[at], value)?
+  }
+  let mut out: List[schema.Row[schema.Scalar]] = []
+  for state in take states {
+    let State(key: cells, count: count, sum: total, ordinal: ordinal) = take state
+    let mut values: List[schema.Scalar] = []
+    for cell in take cells {
+      list.push(mut values, encode(cell))
+    }
+    list.push(mut values, Integer(count))
+    list.push(mut values, Integer(total))
+    list.push(mut out, schema.Row(ordinal: ordinal, cells: take values))
+  }
+  Ok(take out)
+}
+
+fn integer_key(value: schema.Scalar) -> Result[i64, schema.Problem] uses {} {
+  match value {
+    Integer(n) => Ok(n),
+    _ => Error(Invalid(Type())),
+  }
+}
+
+fn text_key(value: schema.Scalar) -> Result[String, schema.Problem] uses {} {
+  match value {
+    Text(s) => Ok(unique s),
+    _ => Error(Invalid(Type())),
+  }
+}
+
+fn scalar_key(value: schema.Scalar) -> Result[schema.Scalar, schema.Problem] uses {} {
+  Ok(unique value)
+}
+
+fn integer_scalar(value: i64) -> schema.Scalar uses {} {
+  Integer(value)
+}
+
+fn text_scalar(value: String) -> schema.Scalar uses {} {
+  Text(unique value)
+}
+
+fn scalar(value: schema.Scalar) -> schema.Scalar uses {} {
+  unique value
+}
+
+pub fn group(take rows: List[schema.Row[schema.Scalar]], keys: List[u64], sum: u64) -> Result[
+  List[schema.Row[schema.Scalar]],
+  schema.Problem
+] uses {} {
+  let mut all_integers = list.len(keys) > 0 && list.len(rows) > 0
+  let mut all_text = all_integers
+  if list.len(rows) > 0 {
+    for i in keys {
+      if schema.kind(rows[0].cells[i]) != IntegerType() {
+        all_integers = false
+      }
+      if schema.kind(rows[0].cells[i]) != TextType() {
+        all_text = false
+      }
+    }
+  }
+  if all_integers {
+    return reduce(rows, keys, sum, integer_key, integer_scalar)
+  }
+  if all_text {
+    return reduce(rows, keys, sum, text_key, text_scalar)
+  }
+  reduce(rows, keys, sum, scalar_key, scalar)
+}

@@ -1,0 +1,450 @@
+{
+  "schema": 1,
+  "scope": "supplemental global-node interpretation correction; frozen before implementation of total guard",
+  "cases": [
+    {
+      "id": "supplement-total-nodes-32",
+      "plan": {
+        "version": 1,
+        "tables": [
+          {
+            "name": "a",
+            "path": "a.csv",
+            "columns": [
+              {
+                "name": "k",
+                "type": "integer"
+              },
+              {
+                "name": "v",
+                "type": "integer"
+              },
+              {
+                "name": "tag",
+                "type": "text"
+              }
+            ]
+          },
+          {
+            "name": "b",
+            "path": "b.csv",
+            "columns": [
+              {
+                "name": "k",
+                "type": "integer"
+              },
+              {
+                "name": "label",
+                "type": "text"
+              }
+            ]
+          }
+        ],
+        "queries": [
+          {
+            "name": "q0",
+            "nodes": [
+              {
+                "op": "scan",
+                "table": "a"
+              },
+              {
+                "op": "select",
+                "column": "a.k",
+                "value": 1
+              },
+              {
+                "op": "select",
+                "column": "a.k",
+                "value": 1
+              },
+              {
+                "op": "select",
+                "column": "a.k",
+                "value": 1
+              },
+              {
+                "op": "select",
+                "column": "a.k",
+                "value": 1
+              },
+              {
+                "op": "select",
+                "column": "a.k",
+                "value": 1
+              },
+              {
+                "op": "select",
+                "column": "a.k",
+                "value": 1
+              },
+              {
+                "op": "select",
+                "column": "a.k",
+                "value": 1
+              },
+              {
+                "op": "select",
+                "column": "a.k",
+                "value": 1
+              },
+              {
+                "op": "select",
+                "column": "a.k",
+                "value": 1
+              },
+              {
+                "op": "select",
+                "column": "a.k",
+                "value": 1
+              },
+              {
+                "op": "select",
+                "column": "a.k",
+                "value": 1
+              },
+              {
+                "op": "select",
+                "column": "a.k",
+                "value": 1
+              },
+              {
+                "op": "select",
+                "column": "a.k",
+                "value": 1
+              },
+              {
+                "op": "select",
+                "column": "a.k",
+                "value": 1
+              },
+              {
+                "op": "select",
+                "column": "a.k",
+                "value": 1
+              }
+            ]
+          },
+          {
+            "name": "q1",
+            "nodes": [
+              {
+                "op": "scan",
+                "table": "a"
+              },
+              {
+                "op": "select",
+                "column": "a.k",
+                "value": 1
+              },
+              {
+                "op": "select",
+                "column": "a.k",
+                "value": 1
+              },
+              {
+                "op": "select",
+                "column": "a.k",
+                "value": 1
+              },
+              {
+                "op": "select",
+                "column": "a.k",
+                "value": 1
+              },
+              {
+                "op": "select",
+                "column": "a.k",
+                "value": 1
+              },
+              {
+                "op": "select",
+                "column": "a.k",
+                "value": 1
+              },
+              {
+                "op": "select",
+                "column": "a.k",
+                "value": 1
+              },
+              {
+                "op": "select",
+                "column": "a.k",
+                "value": 1
+              },
+              {
+                "op": "select",
+                "column": "a.k",
+                "value": 1
+              },
+              {
+                "op": "select",
+                "column": "a.k",
+                "value": 1
+              },
+              {
+                "op": "select",
+                "column": "a.k",
+                "value": 1
+              },
+              {
+                "op": "select",
+                "column": "a.k",
+                "value": 1
+              },
+              {
+                "op": "select",
+                "column": "a.k",
+                "value": 1
+              },
+              {
+                "op": "select",
+                "column": "a.k",
+                "value": 1
+              },
+              {
+                "op": "select",
+                "column": "a.k",
+                "value": 1
+              }
+            ]
+          }
+        ]
+      },
+      "files": {
+        "a.csv": "k,v,tag\n1,11,z\n1,-2,a\n2,5,01\n",
+        "b.csv": "k,label\n1,B\n1,A\n3,C\n"
+      },
+      "exit": 0,
+      "stderr": "",
+      "stdout": "published 2\n",
+      "expected": {
+        "q0.csv": "a.k,a.v,a.tag\n1,11,z\n1,-2,a\n",
+        "q1.csv": "a.k,a.v,a.tag\n1,11,z\n1,-2,a\n"
+      }
+    },
+    {
+      "id": "supplement-total-nodes-33",
+      "plan": {
+        "version": 1,
+        "tables": [
+          {
+            "name": "a",
+            "path": "a.csv",
+            "columns": [
+              {
+                "name": "k",
+                "type": "integer"
+              },
+              {
+                "name": "v",
+                "type": "integer"
+              },
+              {
+                "name": "tag",
+                "type": "text"
+              }
+            ]
+          },
+          {
+            "name": "b",
+            "path": "b.csv",
+            "columns": [
+              {
+                "name": "k",
+                "type": "integer"
+              },
+              {
+                "name": "label",
+                "type": "text"
+              }
+            ]
+          }
+        ],
+        "queries": [
+          {
+            "name": "q0",
+            "nodes": [
+              {
+                "op": "scan",
+                "table": "a"
+              },
+              {
+                "op": "select",
+                "column": "a.k",
+                "value": 1
+              },
+              {
+                "op": "select",
+                "column": "a.k",
+                "value": 1
+              },
+              {
+                "op": "select",
+                "column": "a.k",
+                "value": 1
+              },
+              {
+                "op": "select",
+                "column": "a.k",
+                "value": 1
+              },
+              {
+                "op": "select",
+                "column": "a.k",
+                "value": 1
+              },
+              {
+                "op": "select",
+                "column": "a.k",
+                "value": 1
+              },
+              {
+                "op": "select",
+                "column": "a.k",
+                "value": 1
+              },
+              {
+                "op": "select",
+                "column": "a.k",
+                "value": 1
+              },
+              {
+                "op": "select",
+                "column": "a.k",
+                "value": 1
+              },
+              {
+                "op": "select",
+                "column": "a.k",
+                "value": 1
+              },
+              {
+                "op": "select",
+                "column": "a.k",
+                "value": 1
+              },
+              {
+                "op": "select",
+                "column": "a.k",
+                "value": 1
+              },
+              {
+                "op": "select",
+                "column": "a.k",
+                "value": 1
+              },
+              {
+                "op": "select",
+                "column": "a.k",
+                "value": 1
+              },
+              {
+                "op": "select",
+                "column": "a.k",
+                "value": 1
+              }
+            ]
+          },
+          {
+            "name": "q1",
+            "nodes": [
+              {
+                "op": "scan",
+                "table": "a"
+              },
+              {
+                "op": "select",
+                "column": "a.k",
+                "value": 1
+              },
+              {
+                "op": "select",
+                "column": "a.k",
+                "value": 1
+              },
+              {
+                "op": "select",
+                "column": "a.k",
+                "value": 1
+              },
+              {
+                "op": "select",
+                "column": "a.k",
+                "value": 1
+              },
+              {
+                "op": "select",
+                "column": "a.k",
+                "value": 1
+              },
+              {
+                "op": "select",
+                "column": "a.k",
+                "value": 1
+              },
+              {
+                "op": "select",
+                "column": "a.k",
+                "value": 1
+              },
+              {
+                "op": "select",
+                "column": "a.k",
+                "value": 1
+              },
+              {
+                "op": "select",
+                "column": "a.k",
+                "value": 1
+              },
+              {
+                "op": "select",
+                "column": "a.k",
+                "value": 1
+              },
+              {
+                "op": "select",
+                "column": "a.k",
+                "value": 1
+              },
+              {
+                "op": "select",
+                "column": "a.k",
+                "value": 1
+              },
+              {
+                "op": "select",
+                "column": "a.k",
+                "value": 1
+              },
+              {
+                "op": "select",
+                "column": "a.k",
+                "value": 1
+              },
+              {
+                "op": "select",
+                "column": "a.k",
+                "value": 1
+              },
+              {
+                "op": "select",
+                "column": "a.k",
+                "value": 1
+              }
+            ]
+          }
+        ]
+      },
+      "files": {
+        "a.csv": "k,v,tag\n1,11,z\n1,-2,a\n2,5,01\n",
+        "b.csv": "k,label\n1,B\n1,A\n3,C\n"
+      },
+      "exit": 2,
+      "stderr": "relquery: nodes\n",
+      "stdout": "",
+      "expected": {}
+    }
+  ]
+}
