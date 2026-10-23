@@ -80,6 +80,13 @@ impl Default for InterpreterAdapter {
     }
 }
 impl InterpreterPhase for InterpreterAdapter {
+    fn replace_step_limit(
+        &mut self,
+        limit: Option<u64>,
+    ) -> Result<Option<u64>, crate::NotImplemented> {
+        Ok(std::mem::replace(&mut self.limits.steps, limit))
+    }
+
     fn prepare(
         &mut self,
         signature: hirsel_types::SignatureRef,
@@ -179,6 +186,7 @@ impl InterpreterPhase for InterpreterAdapter {
             Ok(execution) => execution,
             Err((error, Some(stdout))) => {
                 return Ok(ObservedExecution {
+                    step_usage: None,
                     race_candidates: vec![],
                     exit_report: None,
                     tooling_stderr: vec![],
@@ -189,6 +197,10 @@ impl InterpreterPhase for InterpreterAdapter {
             }
             Err((error, None)) => return Err(error),
         };
+        let step_usage = Some(crate::StepUsage {
+            limit: self.limits.steps,
+            consumed: execution.steps,
+        });
         let mut observation = execution.observable(sources);
         if let Some(observation) = &mut observation {
             observation.final_state = final_state.take();
@@ -201,6 +213,7 @@ impl InterpreterPhase for InterpreterAdapter {
                         Ok(encoded) => observation.returned_type = Some(encoded),
                         Err(error) => {
                             return Ok(ObservedExecution {
+                                step_usage,
                                 race_candidates: vec![],
                                 exit_report: None,
                                 tooling_stderr: vec![],
@@ -225,6 +238,7 @@ impl InterpreterPhase for InterpreterAdapter {
             })
             .collect();
         Ok(ObservedExecution {
+            step_usage,
             race_candidates,
             exit_report,
             tooling_stderr: final_state.map(|s| s.stderr).unwrap_or_default(),

@@ -213,6 +213,24 @@ step budget. Simulated CLI runs default to 1,000,000,000 steps. An explicit
 `--max-steps <n>` selects a nonnegative u64 bound; `--max-steps unbounded` removes
 the step bound. These are tooling policies, not language failures or authority.
 
+Reference interpreter fixtures default to 1,000,000 TIR steps and call depth 256.
+An instruction or terminator charges one step; an operation implemented by the
+host completes within its call's charge. Source std functions execute ordinary
+TIR and receive no discount. Dispatch specialization and checked execution keep
+the same charges. Counts describe a particular lowered program, not a stable
+source-level complexity measure or the host `budgets.limits@2` fuel unit.
+
+Application tests that need more work must declare a finite bound per fixture
+and pass it explicitly (Rust: `run_observed_snapshot_bounded` or
+`run_observed_checked_bounded`). The returned `step_usage` records the requested
+limit and consumed steps, including a tooling stop. It stays outside semantic
+observations and tapes. The bounded helper restores the previous adapter policy
+after success, tooling stops and API errors; it never changes the default.
+Application bounds below the default are refused. Lower-level `Limits` may select
+zero for an evaluator test; a run completing in exactly its bound succeeds.
+A tooling stop has no completed observation and cannot count as a semantic pass.
+Keep host CPU and memory caps independent of the step bound.
+
 ### PROG-4: Interop
 
 `extern "c" fn` definitions require `Unsafe` and use parameter modes: a borrow means C does

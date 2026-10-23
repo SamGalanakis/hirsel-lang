@@ -1766,7 +1766,7 @@ impl HostLibrary {
             _ => return Err(invalid()),
         })
     }
-    fn storage(&mut self, name: &str, a: &[Value]) -> Result<OperationResult, Error> {
+    fn storage(&mut self, name: &str, a: &mut [Value]) -> Result<OperationResult, Error> {
         self.yield_now = true;
         let request = self.storage_request(name, a)?;
         let completion = self.host(request)?;
@@ -1800,7 +1800,7 @@ impl HostLibrary {
             C::Bytes(r) => match r {
                 Ok(b) if name == "file.read" => {
                     let n = b.len() as u64;
-                    let mut buffer = a[2].clone();
+                    let mut buffer = std::mem::replace(&mut a[2], Value::Unit);
                     let Value::Sequence { elements, .. } = &mut buffer else {
                         return Err(invalid());
                     };

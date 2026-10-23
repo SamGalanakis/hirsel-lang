@@ -90,6 +90,9 @@ pub use hirsel_run_schema::RunOutcome;
 /// Rich execution export. Execution API errors retain output beside their cause.
 #[derive(Debug)]
 pub struct ObservedExecution {
+    /// Reference tooling accounting, outside semantic observations and the Io tape.
+    /// Absent when execution could not produce an accounting result.
+    pub step_usage: Option<StepUsage>,
     /// Simulator tooling, outside semantic observations.
     pub race_candidates: Vec<hirsel_interp::library::race::RaceCandidate>,
     pub outcome: Result<RunOutcome, RuntimeError>,
@@ -99,6 +102,12 @@ pub struct ObservedExecution {
     pub tooling_stderr: Vec<u8>,
     /// PROG-3 host text and its position, outside semantic observations and Io tape.
     pub exit_report: Option<hirsel_interp::exit_report::Report>,
+}
+/// The requested interpreter policy and the actual number of charged TIR steps.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct StepUsage {
+    pub limit: Option<u64>,
+    pub consumed: u64,
 }
 /// Diagnostics own their source snapshot, so locations cannot silently drift (FAIL-1).
 #[derive(Clone, Debug, Default)]
@@ -343,6 +352,12 @@ pub trait LoweringPhase: Send + Sync {
 }
 /// Runtime output includes failure cause data; stdout is delivered as exact bytes (FAIL-2; issue #12).
 pub trait InterpreterPhase: Send {
+    /// Replace only the tooling step bound, returning the previous policy.
+    /// Adapters without reference step accounting refuse bounded execution.
+    fn replace_step_limit(&mut self, _limit: Option<u64>) -> Result<Option<u64>, NotImplemented> {
+        Err(NotImplemented)
+    }
+
     fn prepare(
         &mut self,
         _signature: hirsel_types::SignatureRef,

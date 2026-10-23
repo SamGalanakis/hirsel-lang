@@ -775,6 +775,58 @@ pub fn run_observed_checked(
 ) -> Result<ObservedExecution, ToolError> {
     run_observed(engine, config, simulation, true)
 }
+/// Execute a reference fixture with a finite, explicit per-run step bound.
+/// Bounds below `hirsel_interp::DEFAULT_STEP_LIMIT` are refused.
+/// The result records the requested bound and consumed steps in `step_usage`.
+/// The adapter's previous policy is restored even when execution returns an error.
+pub fn run_observed_snapshot_bounded(
+    engine: &mut QueryEngine,
+    config: &RunConfiguration,
+    simulation: SimulationConfig,
+    step_limit: u64,
+) -> Result<ObservedExecution, ToolError> {
+    run_observed_bounded(engine, config, simulation, step_limit, false)
+}
+/// Checked counterpart of `run_observed_snapshot_bounded`, with identical charges.
+pub fn run_observed_checked_bounded(
+    engine: &mut QueryEngine,
+    config: &RunConfiguration,
+    simulation: SimulationConfig,
+    step_limit: u64,
+) -> Result<ObservedExecution, ToolError> {
+    run_observed_bounded(engine, config, simulation, step_limit, true)
+}
+fn run_observed_bounded(
+    engine: &mut QueryEngine,
+    config: &RunConfiguration,
+    simulation: SimulationConfig,
+    step_limit: u64,
+    checked: bool,
+) -> Result<ObservedExecution, ToolError> {
+    if step_limit < hirsel_interp::DEFAULT_STEP_LIMIT {
+        return Err(ToolError::Runtime(format!(
+            "application step bound {step_limit} must be at least {}",
+            hirsel_interp::DEFAULT_STEP_LIMIT
+        )));
+    }
+    let interpreter = engine.adapters.interpreter.as_mut().ok_or_else(|| {
+        ToolError::Runtime("bounded reference execution requires an interpreter".into())
+    })?;
+    let previous = interpreter
+        .replace_step_limit(Some(step_limit))
+        .map_err(|_| {
+            ToolError::Runtime("interpreter does not support explicit step limits".into())
+        })?;
+    let result = run_observed(engine, config, simulation, checked);
+    engine
+        .adapters
+        .interpreter
+        .as_mut()
+        .expect("run restores interpreter")
+        .replace_step_limit(previous)
+        .expect("adapter accepted step limit");
+    result
+}
 fn run_observed(
     engine: &mut QueryEngine,
     config: &RunConfiguration,

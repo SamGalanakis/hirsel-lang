@@ -11,7 +11,7 @@ impl Library {
     pub(super) fn file_stream(
         &mut self,
         name: &str,
-        a: &[Value],
+        a: &mut [Value],
         context: &mut OperationContext<'_>,
     ) -> Result<OperationResult, Error> {
         let (tree, _, dir) = self.simulation.directory(arg(a, 0)?)?;
@@ -44,6 +44,13 @@ impl Library {
                 .canceled()
                 .map(Fault::Canceled)
                 .or_else(|| self.simulation.fault(name))
+        };
+        // A FileRead request is (directory, file, max), as in the host/native
+        // protocol. The caller's accumulated output buffer is not an input.
+        let request = if name == "file.read" {
+            encode_arguments(&[a[0].clone(), a[1].clone(), a[3].clone()])
+        } else {
+            encode_arguments(a)
         };
         let mut updates = vec![];
         let value = if denied {
@@ -104,33 +111,40 @@ impl Library {
             let start = position.min(data.len() as u64) as usize;
             let n = max.min(65536).min((data.len() - start) as u64) as usize;
             let delivered = &data[start..start + n];
-            let mut buffer = arg(a, 2)?.clone();
-            let Value::Sequence {
-                kind: BuiltinType::List,
-                elements,
-                ..
-            } = &mut buffer
-            else {
+            if !matches!(
+                arg(a, 2)?,
+                Value::Sequence {
+                    kind: BuiltinType::List,
+                    ..
+                }
+            ) {
                 return Err(invalid("file read buffer"));
-            };
-            elements.extend(delivered.iter().map(|b| {
-                Some(Value::Integer(
-                    Integer::new(Primitive::U8, (*b).into()).unwrap(),
-                ))
-            }));
+            }
             let bytes = delivered.to_vec();
             if let Some(Grant::File { position, .. }) = self.simulation.grants.get_mut(&id) {
                 *position += n as u64;
             }
-            updates.push((2, buffer));
             // DET-1 records the bytes, not merely their count.
             self.simulation.record(
                 "Dir",
                 name,
-                encode_arguments(a),
-                encode_value(&ok(Value::Bytes(bytes))),
+                request,
+                encode_value(&ok(Value::Bytes(bytes.clone()))),
                 context,
             )?;
+            // Mut arguments have already moved out of the caller. Move the
+            // block into the writeback rather than forcing a COW copy per read.
+            // Replay validation above completes before touching the buffer.
+            let mut buffer = std::mem::replace(&mut a[2], Value::Unit);
+            let Value::Sequence { elements, .. } = &mut buffer else {
+                unreachable!()
+            };
+            elements.extend(bytes.into_iter().map(|b| {
+                Some(Value::Integer(
+                    Integer::new(Primitive::U8, b.into()).unwrap(),
+                ))
+            }));
+            updates.push((2, buffer));
             return Ok(OperationResult::Complete {
                 value: ok(u64_value(n as u64)),
                 arguments: updates,
@@ -138,13 +152,8 @@ impl Library {
                 released: vec![],
             });
         };
-        self.simulation.record(
-            "Dir",
-            name,
-            encode_arguments(a),
-            encode_value(&value),
-            context,
-        )?;
+        self.simulation
+            .record("Dir", name, request, encode_value(&value), context)?;
         Ok(OperationResult::returned(value))
     }
 }

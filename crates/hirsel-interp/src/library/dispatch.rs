@@ -154,17 +154,17 @@ impl Library {
     fn capability(
         &mut self,
         name: &str,
-        call: &OperationCall<'_>,
+        call: OperationCall<'_>,
         context: &mut OperationContext<'_>,
     ) -> Result<Option<OperationResult>, Error> {
         self.tasks.yield_now = true;
-        let a = &*call.arguments;
         if matches!(
             name,
             "file.read" | "file.seek" | "file.write" | "file.append" | "file.sync"
         ) {
-            return self.file_stream(name, a, context).map(Some);
+            return self.file_stream(name, call.arguments, context).map(Some);
         }
+        let a = &*call.arguments;
         if name == "random.bytes" {
             return self.random_bytes(a, context).map(Some);
         }
@@ -429,7 +429,7 @@ impl Library {
                             format!("test failure: seed={seed} case={case}\n").as_bytes(),
                         );
                     }
-                    let failure = fail(call, context, "LANG-9", "test.check(false)");
+                    let failure = fail(&call, context, "LANG-9", "test.check(false)");
                     self.simulation.record(
                         "Test",
                         name,
@@ -445,7 +445,7 @@ impl Library {
             // call's failure edge. It never completes (TIR v3 diverging call).
             "test.fail" => {
                 self.simulation.id(arg(a, 0)?, "Test")?;
-                let failure = fail(call, context, "LANG-9", "test.fail");
+                let failure = fail(&call, context, "LANG-9", "test.fail");
                 self.simulation.record(
                     "Test",
                     name,
@@ -478,7 +478,7 @@ impl Library {
                 } else {
                     let snapshot = text(arg(a, 1)?)?;
                     if !hirsel_kernels::report::snapshot_name(snapshot) {
-                        let failure = fail(call, context, "LANG-9", "test.expect_snapshot name");
+                        let failure = fail(&call, context, "LANG-9", "test.expect_snapshot name");
                         self.simulation.record(
                             "Test",
                             name,
@@ -501,7 +501,7 @@ impl Library {
                 };
                 let seed = u64::try_from(seed.bits()).map_err(|_| invalid("test.crash seed"))?;
                 if !self.simulation.durable.contains_key(&tree) {
-                    let failure = fail(call, context, "LANG-9", "test.crash");
+                    let failure = fail(&call, context, "LANG-9", "test.crash");
                     self.simulation.record(
                         "Test",
                         name,
@@ -550,7 +550,7 @@ impl Library {
                     },
                 )
             }
-            n if n.starts_with("file.") || n == "dir.remove_all" => self.file(name, call)?,
+            n if n.starts_with("file.") || n == "dir.remove_all" => self.file(name, &call)?,
             _ => return Ok(None),
         };
         let cap = if name.starts_with("io.") {
@@ -1903,7 +1903,7 @@ primary_operations! { library, call, context, name, a, value;
                 let saved = library.simulation.clone();
                 let out_len = context.stdout.len();
                 let trace_len = context.trace.len();
-                let result = library.capability(name, &call, context);
+                let result = library.capability(name, call, context);
                 if result.is_err() {
                     library.simulation = saved;
                     context.stdout.truncate(out_len);
@@ -1911,7 +1911,7 @@ primary_operations! { library, call, context, name, a, value;
                 }
                 return result;
             }
-            return library.capability(name, &call, context);
+            return library.capability(name, call, context);
             },
     Capability: "task.scope" | "task.scope_until" | "task.async" | "task.await" | "task.cancel" | "task.detach" | "task.set" | "task.add" | "task.await_any" | "task.await_at" | "task.cancel_all" | "task.detach_all" | "task.check_canceled" | "task.isolate" => { return library.task_call(name, &call, context).map(Some); },
     Capability: "channel.open" | "channel.send" | "channel.receive" | "sender.dup" => { let saved = (!context.configuration.inputs.is_empty()).then(|| library.channels.clone());

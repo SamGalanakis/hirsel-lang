@@ -33,6 +33,8 @@ use hirsel_tir::{BlockId, CleanupAction, RunConfiguration};
 use hirsel_types::{GenericArgument, QueryError, TypeId, TypeInterner};
 pub use value::{Integer, Value};
 
+/// Default tooling step bound for the reference evaluator and corpus fixtures.
+pub const DEFAULT_STEP_LIMIT: u64 = 1_000_000;
 /// Limits are explicit inputs, independent of host stack size or wall time.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Limits {
@@ -43,7 +45,7 @@ pub struct Limits {
 impl Default for Limits {
     fn default() -> Self {
         Self {
-            steps: Some(1_000_000),
+            steps: Some(DEFAULT_STEP_LIMIT),
             call_depth: 256,
         }
     }

@@ -106,7 +106,21 @@ reported explicitly, never silently approximated.
 
 ## Explicit limit and exit policies
 
-`Limits` defaults to `Some(1_000_000)` steps and 256 calls. `steps: None`
+`Limits` defaults to `Some(1_000_000)` steps and 256 calls.
+Application fixtures that exceed this default declare a finite bound of at least
+1,000,000 as the last argument to `hirsel_engine::run_observed_snapshot_bounded`
+or `run_observed_checked_bounded`. Each result's `step_usage` records both
+`limit` and `consumed`; print or retain it with the test receipt. Require a
+completed observation and expected outcome: exhaustion must fail the test.
+These helpers restore the prior policy after every result, including errors.
+Do not increase CPU or memory caps when choosing a fixture's step bound.
+
+For example, a test may pass `2_000_000`, assert that `step_usage.limit` is
+`Some(2_000_000)`, and check the complete output against its oracle. The default
+and corpus policy remain unchanged. Lower-level evaluator tests can still use
+smaller bounds to test exact stop behavior.
+
+At the lower-level evaluator API, `steps: None`
 removes only the step bound; call depth is still checked. Step accounting saturates
 at u64::MAX for unbounded runs. One instruction or terminator
 costs one step; entering a frame and mandatory cleanup cost no steps. Exhaustion

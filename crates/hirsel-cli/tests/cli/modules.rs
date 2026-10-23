@@ -86,3 +86,4 @@ mod e1_replay_liveness_28;
 mod journal_kv_29;
 mod suite_runner_29;
 mod packtree_29;
+mod interp_step_budget_29;

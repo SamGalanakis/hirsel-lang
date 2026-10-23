@@ -40,7 +40,7 @@ impl Harness {
     fn try_call(
         &mut self,
         name: &str,
-        args: Vec<Value>,
+        mut args: Vec<Value>,
         result: TypeKind,
     ) -> Result<OperationResult, Error> {
         let result = self.types.intern(ty(result));
@@ -52,7 +52,7 @@ impl Harness {
                     runtime: &crate::support::runtime(),
                     path: &path,
                     generics: &[],
-                    arguments: &mut args.to_vec(),
+                    arguments: &mut args,
                     result_type: result,
                     types: &self.types,
                     site: support::site(7),
@@ -1878,4 +1878,114 @@ fn walk_stream_replay_refusal_preserves_cursor_faults_and_prior_events() {
             replay.library.simulation.finish_replay().unwrap();
         }
     }
+}
+
+#[test]
+fn accumulated_file_reads_record_only_the_request_and_new_bytes() {
+    for reads in [2, 4, 8] {
+        let mut h = Harness::new(SimulationConfig {
+            files: [("root/input".into(), vec![42; reads * 64])].into(),
+            ..Default::default()
+        });
+        let io = h.root("Io");
+        let dir = unok(h.value("io.dir", vec![io, path("root")]));
+        let file = unok(h.value("file.open", vec![dir.clone(), path("input")]));
+        let storage = Vec::with_capacity(reads * 64);
+        let expected_storage = storage.as_ptr();
+        let mut buffer = Value::Sequence {
+            kind: BuiltinType::List,
+            elements: storage.into(),
+            arena: None,
+        };
+        let mut input_sizes = vec![];
+        for _ in 0..reads {
+            let result = h.call(
+                "file.read",
+                vec![dir.clone(), file.clone(), buffer, u64_value(64)],
+                TypeKind::Tuple(vec![].into()),
+            );
+            let OperationResult::Complete {
+                value,
+                mut arguments,
+                ..
+            } = result
+            else {
+                panic!("{result:?}")
+            };
+            assert_eq!(value, ok(u64_value(64)));
+            buffer = arguments.remove(0).1;
+            let Value::Sequence { elements, .. } = &buffer else {
+                unreachable!()
+            };
+            assert_eq!(
+                elements.as_ptr(),
+                expected_storage,
+                "file.read cloned the accumulated buffer"
+            );
+            input_sizes.push(h.library.simulation.events.last().unwrap().input.len());
+        }
+        assert_eq!(collection::len(&buffer).unwrap(), reads as u64 * 64);
+        assert!(
+            input_sizes.windows(2).all(|pair| pair[0] == pair[1]),
+            "accumulated buffers leaked into recorded requests: {input_sizes:?}"
+        );
+    }
+}
+
+#[test]
+fn accumulated_file_reads_replay_exactly_and_preserve_shared_prefixes() {
+    let config = SimulationConfig {
+        files: [("input".into(), vec![1, 2, 3, 4])].into(),
+        ..Default::default()
+    };
+    let execute = |h: &mut Harness| {
+        let io = h.root("Io");
+        let dir = unok(h.value("io.dir", vec![io, path(".")]));
+        let file = unok(h.value("file.open", vec![dir.clone(), path("input")]));
+        let mut buffer =
+            collection::sequence(BuiltinType::List, [Value::Integer(n(Primitive::U8, 9))]);
+        for expected in [2, 2, 0] {
+            let prefix = buffer.clone();
+            let OperationResult::Complete {
+                value,
+                mut arguments,
+                ..
+            } = h.call(
+                "file.read",
+                vec![dir.clone(), file.clone(), buffer, u64_value(2)],
+                TypeKind::Tuple(vec![].into()),
+            )
+            else {
+                panic!("file read result")
+            };
+            assert_eq!(value, ok(u64_value(expected)));
+            buffer = arguments.remove(0).1;
+            let Value::Sequence {
+                elements: before, ..
+            } = &prefix
+            else {
+                unreachable!()
+            };
+            let Value::Sequence {
+                elements: after, ..
+            } = &buffer
+            else {
+                unreachable!()
+            };
+            assert_eq!(&after[..before.len()], &before[..]);
+        }
+        assert_eq!(collection::len(&buffer).unwrap(), 5);
+        buffer
+    };
+    let mut live = Harness::new(config.clone());
+    let expected = execute(&mut live);
+    let mut replay = Harness::new(config);
+    replay.run.inputs = live.library.simulation.events.clone();
+    replay.library = Library::new(&replay.run, replay.library.simulation.config.clone()).unwrap();
+    assert_eq!(execute(&mut replay), expected);
+    replay.library.simulation.finish_replay().unwrap();
+    assert_eq!(
+        live.library.simulation.events,
+        replay.library.simulation.events
+    );
 }

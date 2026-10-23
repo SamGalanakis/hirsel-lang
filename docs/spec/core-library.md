@@ -793,6 +793,13 @@ the buffer and position unchanged; non-canceled write errors may follow a prefix
 Narrowing preserves a File's mode and position. An opened handle continues to refer
 to its file after unlink or replacement; it does not reopen the stored path.
 
+The reference simulator records a read request as directory, file and maximum
+count, and its completion as the newly delivered bytes (or error). The existing
+contents of the caller's append buffer are not a capability input and are not
+serialized into each request. This matches the host `FileRead` request. Appending
+moves the mutable buffer into its writeback without copying accumulated bytes;
+retained read events grow with delivered data, not its cumulative prefixes.
+
 The ordinary `std@1/test` assertion helpers (`equal`, `approx`, `assert_eq`,
 `expect_error`, `expect_ok`, `property` and `property_cases`) and `std@1/text.finish_valid` are
 `@track_caller`: a failing check identifies their application call, while reports retain
