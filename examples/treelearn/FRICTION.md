@@ -169,3 +169,31 @@ count components independently64, largest index/number spellings,31 nodes,
 16 depth4 paths per job,4 jobs). An admitted32769-byte output is unreachable;
 no fabricated over-cap output replaces a legal input boundary. The32KiB guard
 remains defensive. Derivation retained as output-bound.json in lane evidence.
+
+## Pool transport and minimum regression recovery
+
+The first physical LLVM width1/success archive was refused at4764496 encoded
+bytes against the unchanged4194304 cap. No runtime/capacity credit. Its raw
+streams/tape were not exported; tape creation is unproved. Attempt2 used zstd
+when available and stdlib LZMA otherwise, retained all program bytes inside the
+cap, and extracted with3078 external tool inputs verified. It exposed the
+standalone option-order defect: original grants-before-record argv produced
+usage/exit2 and no recording. Both this producer repair and explicit Fixture
+placement are owned by width-reruns-36; no local runtime patch or flag reorder.
+The producer repair landed15260039, with pending importers resumed only after
+a reader boundary. First-attempt missing artifacts remain explicit.
+
+One combined pool regression action reached its unchanged RE600s timeout with
+no completed receipts. Exact serial oracle45 then passed. The minimum fixture
+was partitioned by adapter, preserving its original row/input/expected output,
+1M steps,60CPU-s and2GiB. Setup now binds immutable SDK bytes by digest rather
+than copying/recompressing the full SDK. Reference and checked adapters passed
+separately with verified archives and3302 external input bindings. No accepted
+inner cell was repeated to recover the failed aggregate.
+
+Archive fallback now excludes already-external files from omission candidates
+and binds qualified.image as a common compiler input. The prior fallback could
+recompress the same98MiB image while omitting files already excluded from the
+tar; that setup cost was unnecessary. Missing input bytes or oversized partial
+capsules remain INCOMPLETE, not smaller accepted fixtures. Test-only cost;
+owner decision-tree-35, fixed. The original600s action remains retained.

@@ -744,7 +744,7 @@ fn campaign_selected(phase: &str, only: Option<&str>) {
         )
         .unwrap();
     }
-    if phase == "scripted" {
+    if phase == "scripted" || std::env::var_os("DECISION_TREE_35_TRANSPORT").is_some() {
         let archive = Command::new("python3")
             .arg(root.join("archive.py"))
             .arg(&root)
@@ -774,7 +774,11 @@ fn decision_tree_35_frozen_oracle() {
         .output()
         .unwrap();
     assert!(output.status.success(), "{output:?}");
-    assert!(String::from_utf8_lossy(&output.stdout).contains("frozen independent vectors"));
+    assert!(!cases().is_empty());
+    assert!(
+        String::from_utf8_lossy(&output.stdout)
+            .contains(&format!("{} frozen independent vectors", cases().len()))
+    );
 }
 
 #[test]
@@ -935,7 +939,84 @@ for f in sorted(r.rglob('*')):
 
 #[test]
 fn decision_tree_35_minimum_bounds_full_main() {
-    campaign_selected("simulation", Some("minimum-row"));
+    let root = scratch("minimum");
+    package(&root);
+    let row = cases()
+        .into_iter()
+        .find(|r| r["id"] == "minimum-row")
+        .unwrap();
+    // The pool's prepared image is already an immutable input. Bind the exact
+    // external bytes instead of copying and recompressing the full SDK.
+    let seal = Command::new("python3").arg("-c").arg(r#"
+import hashlib,json,os,sys
+from pathlib import Path
+r=Path(sys.argv[1]);roots={'harness':Path(sys.argv[2]),'cli':Path(sys.argv[3]),'stdlib':Path(sys.argv[4])/'../../stdlib/std@1'}
+for k in ['HIRSEL_IMAGE','HIRSEL_RUNTIME_ARCHIVES','LLVM_SYS_231_PREFIX','HIRSEL_LINK_KIT','HIRSEL_GLIBC_FLOOR']:
+ if k in os.environ:roots[k]=Path(os.environ[k])
+rows=[]
+for key,p in roots.items():
+ p=p.resolve(strict=True)
+ for f in ([p] if p.is_file() else sorted(x for x in p.rglob('*') if x.is_file())):
+  h=hashlib.sha256()
+  with f.open('rb') as inp:
+   for b in iter(lambda:inp.read(1024*1024),b''):h.update(b)
+  rows.append(dict(name=key,path=str(f),sha256=h.hexdigest(),bytes=f.stat().st_size))
+(r/'consumer-inputs.json').write_text(json.dumps(rows,indent=2)+'\n')
+(r/'effective-env.json').write_text(json.dumps({k:v for k,v in os.environ.items() if k.startswith(('HIRSEL_','LLVM_','DECISION_TREE_35_'))},indent=2)+'\n')
+"#).arg(&root).arg(std::env::current_exe().unwrap()).arg(env!("CARGO_BIN_EXE_hirsel")).arg(env!("CARGO_MANIFEST_DIR")).output().unwrap();
+    fs::write(root.join("seal-stderr"), &seal.stderr).unwrap();
+    assert!(seal.status.success(), "{seal:?}");
+    let mut receipts = Vec::new();
+    for engine in ["reference", "checked-h"] {
+        if std::env::var("DECISION_TREE_35_ENGINE").is_ok_and(|selected| selected != engine) {
+            continue;
+        }
+        let cell = root.join(engine);
+        fs::create_dir_all(&cell).unwrap();
+        fs::write(cell.join("row.json"), row.to_string()).unwrap();
+        eprintln!("DT35_MINIMUM_STARTED {engine}");
+        let output = Command::new("python3")
+            .arg(root.join("capped"))
+            .args(["--timeout", "120", "prlimit", "--cpu=60:61"])
+            .arg(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "decision_tree_35::decision_tree_35_cell",
+                "--ignored",
+                "--nocapture",
+            ])
+            .env("HIRSEL_MEMORY_LIMIT", "2G")
+            .env("DECISION_TREE_35_ROOT", &cell)
+            .env("DECISION_TREE_35_ROW_FILE", cell.join("row.json"))
+            .env("DECISION_TREE_35_PHASE", "simulation")
+            .env("DECISION_TREE_35_ENGINE", engine)
+            .output()
+            .unwrap();
+        fs::write(cell.join("stdout"), &output.stdout).unwrap();
+        fs::write(cell.join("stderr"), &output.stderr).unwrap();
+        let passed = output.status.success() && !cell.join("incomplete.json").exists();
+        receipts.push(json!({"engine":engine,"id":"minimum-row","selected":true,"started":true,"completed":passed,"passed":passed,"status":output.status.code()}));
+        fs::write(
+            root.join("receipts.json"),
+            serde_json::to_vec_pretty(&receipts).unwrap(),
+        )
+        .unwrap();
+    }
+    if std::env::var_os("DECISION_TREE_35_TRANSPORT").is_some() {
+        let archive = Command::new("python3")
+            .arg(root.join("archive.py"))
+            .arg(&root)
+            .output()
+            .unwrap();
+        print!("{}", String::from_utf8_lossy(&archive.stdout));
+        assert!(
+            archive.status.success(),
+            "{}",
+            String::from_utf8_lossy(&archive.stderr)
+        );
+    }
+    assert!(!receipts.is_empty());
+    assert!(receipts.iter().all(|r| r["passed"] == true), "{receipts:?}");
 }
 
 #[test]
