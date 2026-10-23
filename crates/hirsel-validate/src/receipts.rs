@@ -14,6 +14,17 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+const VIEW_DOMAIN: Domain = Domain {
+    kind: 0x5600_0003,
+    schema: 1,
+};
+fn view_key(digest: crate::ValidationDigest, policy: ContentHash) -> ContentHash {
+    ContentHash::of_parts(
+        "hirsel.validate.signature-receipt.v1",
+        [digest.0.0.as_slice(), policy.0.as_slice()],
+    )
+}
+
 const DOMAIN: Domain = Domain {
     kind: 0x5600_0001,
     schema: 1,
@@ -45,6 +56,12 @@ impl<'a> Artifact<'a> {
 #[derive(Clone, Serialize, Deserialize)]
 struct Receipt {
     artifact: ContentHash,
+    policy: ContentHash,
+    reads: Vec<VRead>,
+}
+#[derive(Serialize, Deserialize)]
+struct ViewReceipt {
+    digest: crate::ValidationDigest,
     policy: ContentHash,
     reads: Vec<VRead>,
 }
@@ -117,6 +134,48 @@ impl VerifierCache {
                 }
             }
         }
+    }
+    /// Only V publishes terminal successful signature checks. A local hit
+    /// independently observes the exact view digest and every contextual read.
+    pub(crate) fn view_verdict(
+        &self,
+        types: &TypeInterner,
+        definition: hirsel_syntax::DefId,
+        signature: &hirsel_types::Signature,
+        digest: crate::ValidationDigest,
+        signatures: &dyn SignatureLookup,
+        policy: ContentHash,
+    ) -> Arc<crate::ViewVerdict> {
+        if digest != crate::digest(types, signature) {
+            return Arc::new(crate::check_view(types, definition, signature, signatures));
+        }
+        let key = view_key(digest, policy);
+        if let Some(receipt) = self.load::<ViewReceipt>(key, VIEW_DOMAIN)
+            && receipt.digest == digest
+            && receipt.policy == policy
+            && receipt
+                .reads
+                .iter()
+                .all(|read| read_holds(read, signatures))
+        {
+            return Arc::new(crate::ViewVerdict {
+                error: None,
+                reads: receipt.reads,
+            });
+        }
+        let verdict = crate::check_view(types, definition, signature, signatures);
+        if verdict.error.is_none() {
+            self.publish(
+                key,
+                VIEW_DOMAIN,
+                &ViewReceipt {
+                    digest,
+                    policy,
+                    reads: verdict.reads.clone(),
+                },
+            );
+        }
+        Arc::new(verdict)
     }
     /// Bind an ordinary evaluation output to evidence minted by V. The opaque
     /// receipt cannot be constructed or decoded by an ordinary producer.
@@ -336,6 +395,112 @@ mod tests {
             "hirsel.validate.receipt.v1",
             [artifact.identity.unwrap().0.as_slice(), policy.0.as_slice()],
         )
+    }
+
+    fn view(f: &Fixture, cache: &VerifierCache, policy: ContentHash) -> Arc<crate::ViewVerdict> {
+        let definition = f.definition.path;
+        let signature = f.signatures.get(definition).unwrap();
+        cache.view_verdict(
+            &session(),
+            definition,
+            signature,
+            crate::digest(&session(), signature),
+            &f.signatures,
+            policy,
+        )
+    }
+
+    #[test]
+    fn signature_receipts_reopen_bind_policy_and_refuse_corrupt_or_imported_content() {
+        use hirsel_intern::work::{self, Counter};
+        let mut f = Fixture::unit();
+        owner_sig(&mut f, &[]);
+        let directory = Directory::new();
+        let policy = ContentHash::default();
+        let before = work::read(Counter::ValidateSignatureRows);
+        assert!(
+            view(&f, &VerifierCache::directory(directory.0.clone()), policy)
+                .error
+                .is_none()
+        );
+        assert_eq!(work::read(Counter::ValidateSignatureRows), before + 1);
+        let reopened = VerifierCache::directory(directory.0.clone());
+        assert!(view(&f, &reopened, policy).error.is_none());
+        assert_eq!(work::read(Counter::ValidateSignatureRows), before + 1);
+        assert!(
+            view(&f, &reopened, ContentHash::of_bytes(b"changed policy"))
+                .error
+                .is_none()
+        );
+        assert_eq!(work::read(Counter::ValidateSignatureRows), before + 2);
+        let signature = f.signatures.get(f.definition.path).unwrap();
+        let key = view_key(crate::digest(&session(), signature), policy);
+        let store = Store::new(directory.0.clone());
+        let association = store.lookup(Address(key)).unwrap();
+        let bytes = store.get(association.reference).unwrap();
+        let imported = Directory::new();
+        Store::new(imported.0.clone())
+            .put(VIEW_DOMAIN, &bytes)
+            .unwrap();
+        assert!(
+            view(&f, &VerifierCache::directory(imported.0.clone()), policy)
+                .error
+                .is_none()
+        );
+        assert_eq!(work::read(Counter::ValidateSignatureRows), before + 3);
+        std::fs::write(store.output_path(association.reference), b"truncated").unwrap();
+        assert!(view(&f, &reopened, policy).error.is_none());
+        assert_eq!(work::read(Counter::ValidateSignatureRows), before + 4);
+    }
+
+    #[test]
+    fn signature_receipts_never_accept_producer_digests_or_publish_failure() {
+        use hirsel_intern::work::{self, Counter};
+        let mut f = Fixture::unit();
+        owner_sig(&mut f, &[]);
+        let directory = Directory::new();
+        let cache = VerifierCache::directory(directory.0.clone());
+        let policy = ContentHash::default();
+        assert!(view(&f, &cache, policy).error.is_none());
+        let signature = f.signatures.get(f.definition.path).unwrap().clone();
+        let good_digest = crate::digest(&session(), &signature);
+        let mut broken = signature;
+        let hirsel_types::SignatureKind::Function(function) = &mut broken.kind else {
+            unreachable!()
+        };
+        function.result =
+            session().intern(hirsel_types::Type::with_kind(hirsel_types::TypeKind::Error));
+        let before = work::read(Counter::ValidateSignatureRows);
+        for _ in 0..2 {
+            let verdict = cache.view_verdict(
+                &session(),
+                f.definition.path,
+                &broken,
+                good_digest,
+                &f.signatures,
+                policy,
+            );
+            assert!(verdict.error.is_some());
+        }
+        let bad_digest = crate::digest(&session(), &broken);
+        assert_ne!(bad_digest, good_digest);
+        for _ in 0..2 {
+            let verdict = cache.view_verdict(
+                &session(),
+                f.definition.path,
+                &broken,
+                bad_digest,
+                &f.signatures,
+                policy,
+            );
+            assert!(verdict.error.is_some());
+        }
+        assert_eq!(work::read(Counter::ValidateSignatureRows), before + 4);
+        assert!(
+            Store::new(directory.0.clone())
+                .lookup(Address(view_key(bad_digest, policy)))
+                .is_none()
+        );
     }
 
     #[test]

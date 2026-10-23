@@ -224,10 +224,11 @@ impl UniverseErrors {
 #[derive(Clone, Default)]
 pub struct ValidatedSignatures {
     verdicts: HashMap<ValidationDigest, Vec<Arc<ViewVerdict>>>,
+    cache: Option<Arc<crate::VerifierCache>>,
+    policy: ContentHash,
 }
 impl ValidatedSignatures {
-    /// Successful per-view receipts, for durable snapshot publication. The
-    /// consumer recomputes each view's digest and checks every contextual read.
+    /// Successful locally checked per-view reads, for inspection only.
     pub fn successful(&self) -> impl Iterator<Item = (ValidationDigest, &[VRead])> {
         self.verdicts.iter().flat_map(|(digest, verdicts)| {
             verdicts
@@ -236,18 +237,13 @@ impl ValidatedSignatures {
                 .map(move |verdict| (*digest, verdict.reads.as_slice()))
         })
     }
-    /// Restore a successful view receipt. This supplies a candidate only:
-    /// `verdict_from` still requires V's independently computed view digest
-    /// and every observed read to agree with the current universe.
-    pub fn seed_success(&mut self, digest: ValidationDigest, mut reads: Vec<VRead>) {
-        reads.sort_unstable();
-        reads.dedup();
-        let kept = self.verdicts.entry(digest).or_default();
-        if !kept
-            .iter()
-            .any(|verdict| verdict.error.is_none() && verdict.reads == reads)
-        {
-            kept.push(Arc::new(ViewVerdict { error: None, reads }));
+    /// Local verifier authority. Product deserialization cannot construct this
+    /// capability or import successful-looking read lists into it.
+    pub fn with_cache(cache: Option<Arc<crate::VerifierCache>>, policy: ContentHash) -> Self {
+        Self {
+            cache,
+            policy,
+            ..Self::default()
         }
     }
     /// The verdict on view `d` of `signatures`, reused or computed.
@@ -280,7 +276,12 @@ impl ValidatedSignatures {
         let verdict = previous
             .and_then(|previous| previous.verdicts.get(&digest))
             .and_then(|kept| kept.iter().find(holds).cloned())
-            .unwrap_or_else(|| Arc::new(check_view(t, d, signature, signatures)));
+            .unwrap_or_else(|| {
+                self.cache.as_ref().map_or_else(
+                    || Arc::new(check_view(t, d, signature, signatures)),
+                    |cache| cache.view_verdict(t, d, signature, digest, signatures, self.policy),
+                )
+            });
         self.verdicts
             .entry(digest)
             .or_default()

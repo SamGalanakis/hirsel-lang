@@ -592,18 +592,30 @@ fn imaged_summary_equals_source_without_body_recomputation() {
     });
 }
 
-/// Only the new program signature needs a V declaration check: core and image
-/// views carry successful receipts checked against independently derived digests.
+/// Only a shared local verifier cache reuses successful view checks. An image
+/// carries ordinary data and cannot convey acceptance to a separate cache.
 #[test]
 fn imaged_snapshot_reuses_signature_verdicts() {
     let run = || {
         with_compiler_stack(|| {
             use hirsel_intern::work::{self, Counter};
             let f = Fixture::new();
-            let image = library_image(&f, LIBRARY).unwrap();
-            let library = f.0.join("lib.json");
+            let store = Arc::new(store::MemStore::default());
+            let compiler = COMPILER.clone().with_config(CompileConfig {
+                store,
+                ..CompileConfig::default()
+            });
+            let library = f.library(LIBRARY);
+            let producer = f.program("imager", CLIENT, &library, "lib");
+            let mut producer = compiler
+                .load_program_source_with_images(&producer, None, &StdImages::none())
+                .unwrap();
+            let image = StdImage::from_bytes(image(&f, &mut producer, "lib").unwrap()).unwrap();
+            drop(producer);
             let client = f.program("zzz", CLIENT, &library, "lib");
-            let mut cached = load(&client, &StdImages::of(vec![image]));
+            let mut cached = compiler
+                .load_program_source_with_images(&client, None, &StdImages::of(vec![image.clone()]))
+                .unwrap();
             assert!(cached.engine.imaged(&package("lib")));
             let before = work::read(Counter::ValidateSignatureRows);
             let snapshot = cached.engine.signature_snapshot();
@@ -619,7 +631,14 @@ fn imaged_snapshot_reuses_signature_verdicts() {
                     .1
                     .is_empty()
             );
-            "seeded".to_owned()
+            let mut independent = COMPILER.clone().with_config(CompileConfig::default())
+                .load_program_source_with_images(&client, None, &StdImages::of(vec![image]))
+                .unwrap();
+            let before = work::read(Counter::ValidateSignatureRows);
+            independent.engine.signature_snapshot();
+            assert!(work::read(Counter::ValidateSignatureRows) - before > 1,
+                "imported image bytes cannot convey local verifier authority");
+            "local".to_owned()
         })
     };
     if let Some(outputs) = hirsel_intern::under_salts(
@@ -627,7 +646,7 @@ fn imaged_snapshot_reuses_signature_verdicts() {
         &[1],
         run,
     ) {
-        assert_eq!(outputs, ["seeded"]);
+        assert_eq!(outputs, ["local"]);
     }
 }
 
