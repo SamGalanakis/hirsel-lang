@@ -311,6 +311,7 @@ impl QueryEngine {
             return Err(error);
         }
         self.execution_stack.push(ReadsBuilder::new());
+        self.read_implementation(definition);
         self.begin_evaluation_validation();
         let timing = timings::phase(Phase::Comptime);
         let result = self.generate(definition, &snapshot, body, &signature.value, &mut reads);
@@ -457,6 +458,32 @@ impl QueryEngine {
         let site = product.syntax.tree.expressions[product.body.0 as usize]
             .origin
             .span;
+        let mut generation_detail = product.detail.clone();
+        let mut generation_signatures = signature.dependencies.clone();
+        generation_signatures.push(SignatureDependency {
+            definition: DefId::intern(definition),
+            fingerprint: signature.value.fingerprint,
+        });
+        generation_signatures.append(&mut generation_detail.signatures);
+        generation_detail.signatures = generation_signatures;
+        if let Ok(text) = &product.text {
+            let observed = Observed::inheriting(Some(&product.reads));
+            if let Ok(reads) = self.typed_reads(definition, &generation_detail, &observed) {
+                self.store_generation(
+                    definition,
+                    &reads,
+                    persistent::GenerationRecord {
+                        owner: DefId::intern(definition),
+                        body: product.body,
+                        text: text.clone(),
+                        detail: generation_detail.clone(),
+                        depth: product.depth.clone(),
+                        acceptance: product.acceptance.clone(),
+                        staged: product.staged.clone(),
+                    },
+                )?;
+            }
+        }
         if self.s1.enter(definition.clone(), site) == Entered::Settled {
             return Err(QueryError::NotImplemented);
         }
@@ -467,17 +494,10 @@ impl QueryEngine {
             return Err(error);
         }
         let mut reads = Recording {
-            reads: product.detail,
+            reads: generation_detail,
             observed: Observed::inheriting(Some(&product.reads)),
         };
         reads.observed.products = product.products;
-        let mut signatures = signature.dependencies.clone();
-        signatures.push(SignatureDependency {
-            definition: DefId::intern(definition),
-            fingerprint: signature.value.fingerprint,
-        });
-        signatures.append(&mut reads.reads.signatures);
-        reads.reads.signatures = signatures;
         self.execution_stack.push(ReadsBuilder::new());
         let result = self
             .s1
@@ -514,6 +534,8 @@ impl QueryEngine {
             reads.observed,
         );
         entry.depth = Some(depth);
+        entry.acceptance = product.acceptance;
+        entry.staged = product.staged;
         let retry = entry.result().err().filter(|error| !error.cacheable());
         let own = self.s1.failure_is_own();
         keep(&mut self.checked, &mut self.graph, Arc::new(entry), own);
@@ -575,6 +597,9 @@ impl QueryEngine {
             signature: constant,
             ty,
         } = prepared;
+        if let Some(resolution) = &reads.observed.products.resolution {
+            reads.reads.resolver = resolution.reads.clone();
+        }
         self.prepare_materialization_environment();
         let constants = self.prepare_values(&analyzed, &[], &constant)?;
         let (result, _) =

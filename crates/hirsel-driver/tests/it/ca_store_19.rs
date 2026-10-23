@@ -936,3 +936,28 @@ fn generated_source_products_require_local_completion_and_skip_generator_executi
         assert_eq!(oracle.generated_source(&path).unwrap().text, expected);
     });
 }
+
+#[test]
+fn worker_generated_text_persists_only_admitted_roots_and_matches_scalar_records() {
+    with_compiler_stack(|| {
+        let source = "fn text()->String{\"fn()->u32 uses {}{7u32}\"}\nfn value()->u32 uses {}=comptime Ok(codegen.body(text()))\nconst FIRST:u32=comptime value()\nfn BAD()->u32{comptime {let zero=0u32;1u32/zero}}\nfn later()->u32 uses {}=comptime Ok(codegen.body(\"fn()->u32 uses {}{9u32}\"))\n";
+        for jobs in [1, 2, 4, 8] {
+            let store = Arc::new(store::MemStore::default());
+            let mut seed = signature_session(store.clone(), source, true);
+            let outcomes = seed.check_lower_definition_prefix(vec![definition("FIRST"), definition("BAD"), definition("later")], hirsel_intern::jobs::Jobs::new(jobs));
+            assert_eq!(outcomes.len(), 2, "jobs={jobs}");
+            assert!(outcomes[0].result.is_ok(), "jobs={jobs}: {:?}", outcomes[0].result);
+            assert!(outcomes[1].result.is_err());
+            assert!(seed.generated_source(&definition("later")).is_none(), "speculative suffix remains unpublished");
+            let expected = seed.generated_source(&definition("value")).unwrap().text.clone();
+            let mut fresh = signature_session(store.clone(), source, true);
+            fresh.adapters.modes = None; fresh.adapters.lowering = None;
+            fresh.check_definition(&definition("value")).unwrap();
+            assert_eq!(fresh.generated_source(&definition("value")).unwrap().text, expected);
+            assert!(fresh.check_definition(&definition("later")).is_err(), "suffix text not persisted at jobs={jobs}");
+            let mut oracle = signature_session(store, source, true).with_verify_store(store::VerifyStore::Recompute);
+            oracle.check_definition(&definition("value")).unwrap();
+            assert_eq!(oracle.generated_source(&definition("value")).unwrap().text, expected);
+        }
+    });
+}
