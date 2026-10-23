@@ -86,7 +86,10 @@ pub fn plan(
     facts: &mut dyn FnMut(hirsel_types::TypeId) -> Facts,
 ) -> Result<(Option<LoopPlan>, Vec<Declined>), NormalizeError> {
     let view = instances.view(id);
-    let def: &tir::Definition = &view.definition;
+    let def: &tir::Definition = view
+        .definition()
+        .map_err(InstanceError::from)
+        .map_err(NormalizeError::Instance)?;
     let body = &def.bodies[view.body.0 as usize];
     let mut sites = Vec::new();
     let mut declined = Vec::new();
@@ -104,7 +107,7 @@ pub fn plan(
         let verdict = if !seen.insert(site.call_block.0) {
             Err("published twice")
         } else {
-            verify(program, instances, id, site, passing, facts)
+            verify(program, instances, id, def, site, passing, facts)
         };
         match verdict {
             Ok(s) => sites.push(s),
@@ -149,12 +152,12 @@ fn verify(
     program: &Program,
     instances: &Instances,
     id: InstanceId,
+    def: &tir::Definition,
     site: &tir::TailSite,
     passing: &[Passing],
     facts: &mut dyn FnMut(hirsel_types::TypeId) -> Facts,
 ) -> Result<LoopSite, &'static str> {
     let view = instances.view(id);
-    let def: &tir::Definition = &view.definition;
     let body = &def.bodies[view.body.0 as usize];
     if matches!(instances.roles[id.index()], InstanceRole::Closure { .. }) || view.body != def.entry
     {

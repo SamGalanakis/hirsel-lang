@@ -1890,6 +1890,82 @@ mod instance_keys {
     }
 
     #[test]
+    fn instance_view_body_retention_is_explicit_and_reattachment_checks_declaration() {
+        use hirsel_layout::instance::{InstanceBodyError, InstanceDeclaration};
+        use std::sync::Arc;
+
+        let store = crate::support::session();
+        let definition = Arc::new(hirsel_tir::Definition {
+            caller_bodies: vec![hirsel_tir::BodyId(0)],
+            protocol_associations: vec![],
+            types: vec![store.intern(Type::unit())].into(),
+            path: hirsel_syntax::DefId::intern(&path("f")),
+            signature_hash: hash("f signature"),
+            bodies: vec![super::tir_coverage_body()],
+            entry: hirsel_tir::BodyId(0),
+            contracts: Vec::new(),
+        });
+        let key = InstanceKey::new(&path("f"), 0, &[], &store, None, None).unwrap();
+        let mut view = InstanceView::from_declaration(
+            key.clone(),
+            Arc::new(InstanceDeclaration::of(&definition)),
+            hirsel_tir::BodyId(0),
+            CallableShape::Definition,
+            Substitution {
+                types: vec![],
+                sizes: vec![],
+            },
+            vec![],
+            vec![],
+            false,
+        );
+        assert!(view.tracks_caller());
+        assert!(matches!(
+            view.definition(),
+            Err(InstanceBodyError::Missing { .. })
+        ));
+        assert!(matches!(
+            view.check_identity(&store),
+            Err(SchemaError::Stale(_))
+        ));
+        view.attach_definition(definition.clone()).unwrap();
+        assert!(Arc::ptr_eq(view.definition().unwrap(), &definition));
+        assert_eq!(view.check_identity(&store), Ok(()));
+        view.release_definition();
+        assert_eq!(view.key, key);
+        assert!(view.tracks_caller());
+        assert!(matches!(
+            view.definition(),
+            Err(InstanceBodyError::Missing { .. })
+        ));
+
+        let mut other = (*definition).clone();
+        other.signature_hash = hash("changed signature");
+        assert!(matches!(
+            view.attach_definition(Arc::new(other)),
+            Err(InstanceBodyError::Mismatch { .. })
+        ));
+        let mut other = (*definition).clone();
+        other.caller_bodies.clear();
+        assert!(matches!(
+            view.attach_definition(Arc::new(other)),
+            Err(InstanceBodyError::Mismatch { .. })
+        ));
+        let mut other = (*definition).clone();
+        other.path = hirsel_syntax::DefId::intern(&path("g"));
+        assert!(matches!(
+            view.attach_definition(Arc::new(other)),
+            Err(InstanceBodyError::Mismatch { .. })
+        ));
+        assert!(matches!(
+            view.definition(),
+            Err(InstanceBodyError::Missing { .. })
+        ));
+        view.attach_definition(definition).unwrap();
+        assert_eq!(view.check_identity(&store), Ok(()));
+    }
+
+    #[test]
     fn instance_views_reject_foreign_type_ids_and_non_bijective_remaps() {
         let store = crate::support::session();
         let unit_ty = store.intern(Type::unit());
@@ -1904,16 +1980,16 @@ mod instance_keys {
             contracts: Vec::new(),
         });
         let key = InstanceKey::new(&path("f"), 0, &[], &store, None, None).unwrap();
-        let view = InstanceView {
+        let view = InstanceView::from_definition(
             key,
             definition,
-            body: hirsel_tir::BodyId(0),
-            owner: CallableShape::Definition,
-            substitution: Substitution {
+            hirsel_tir::BodyId(0),
+            CallableShape::Definition,
+            Substitution {
                 types: vec![(TypeParameterRef::bound(TypeParamId(0)), unit_ty)],
                 sizes: vec![(SizeParameterRef::bound(SizeParamId(0)), 8)],
             },
-            parameters: vec![
+            vec![
                 ParameterView {
                     source: 0,
                     instance: 1,
@@ -1925,13 +2001,13 @@ mod instance_keys {
                     passing: Passing::Take,
                 },
             ],
-            captures: vec![CaptureView {
+            vec![CaptureView {
                 scoped: false,
                 ordinal: 0,
                 usage: CaptureUse::Borrow,
             }],
-            caller_destination: false,
-        };
+            false,
+        );
         assert_eq!(view.check_identity(&store), Ok(()));
         let mut foreign = view.clone();
         foreign.substitution.types[0].1 = hirsel_types::TypeId::DANGLING;

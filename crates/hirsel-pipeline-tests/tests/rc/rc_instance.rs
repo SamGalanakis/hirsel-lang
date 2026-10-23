@@ -52,8 +52,8 @@ fn generic_functions_get_one_instance_per_type_actual() {
     // One generic TIR body shared by both views.
     let ks = instances_of(&lowered, "keep");
     assert!(std::sync::Arc::ptr_eq(
-        &lowered.instances.view(ks[0]).definition,
-        &lowered.instances.view(ks[1]).definition
+        lowered.instances.view(ks[0]).definition().unwrap(),
+        lowered.instances.view(ks[1]).definition().unwrap()
     ));
     // Each instance's ABI is its own actual's layout.
     let layouts: Vec<_> = ks

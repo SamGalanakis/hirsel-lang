@@ -156,6 +156,7 @@ impl InstanceRole {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum InstanceError {
     MissingDefinition(DefPath),
+    Body(hirsel_layout::instance::InstanceBodyError),
     MissingSignature(DefPath),
     MissingBinder(DefPath),
     MissingRevision(DefPath),
@@ -169,6 +170,12 @@ pub enum InstanceError {
     /// More than `MAX_INSTANCES` instances: a tooling limit.
     Limit,
     Malformed(String),
+}
+
+impl From<hirsel_layout::instance::InstanceBodyError> for InstanceError {
+    fn from(error: hirsel_layout::instance::InstanceBodyError) -> Self {
+        Self::Body(error)
+    }
 }
 
 /// The expanded program: instance views in discovery order, their roles, the
@@ -283,23 +290,15 @@ impl Instances {
             })
             .collect::<Vec<_>>();
         let parameters = view
-            .definition
-            .bodies
+            .declaration()
+            .scoped_parameters
             .get(view.body.0 as usize)
-            .map(|b| {
-                b.scoped_parameters
-                    .iter()
-                    .map(|p| hirsel_lir::abi_types::ParameterPath {
-                        parameter: p.parameter,
-                        fields: p.fields.clone(),
-                    })
-                    .collect()
-            })
+            .cloned()
             .unwrap_or_else(|| layouts.table().fn_abis[abi.0 as usize].nonretaining.clone());
         let abi = layouts
             .with_scoped_contract(abi, parameters, capture_paths)
             .map_err(|e| InstanceError::Layout(view.key.definition().clone(), e))?;
-        let abi = if role.is_library() || view.definition.tracks_caller(view.body) {
+        let abi = if role.is_library() || view.tracks_caller() {
             layouts
                 .with_caller_site(abi)
                 .map_err(|e| InstanceError::Layout(view.key.definition().clone(), e))?
@@ -772,16 +771,16 @@ impl Expander<'_, '_, '_> {
         )
         .map_err(|e| InstanceError::Substitution(path.clone(), e))?;
         let parameters = parameter_views(&program.types, callable);
-        let view = InstanceView {
+        let view = InstanceView::from_definition(
             key,
-            body: definition.entry,
-            definition,
-            owner: CallableShape::Definition,
-            substitution: actuals.substitution(path)?,
+            definition.clone(),
+            definition.entry,
+            CallableShape::Definition,
+            actuals.substitution(path)?,
             parameters,
-            captures: Vec::new(),
-            caller_destination: false,
-        };
+            Vec::new(),
+            false,
+        );
         self.insert(
             view,
             InstanceRole::Function,
@@ -870,16 +869,16 @@ impl Expander<'_, '_, '_> {
             incomplete: false,
             foreign: None,
         })));
-        let view = InstanceView {
+        let view = InstanceView::from_definition(
             key,
-            body: definition.entry,
-            definition,
-            owner: CallableShape::Definition,
-            substitution: actuals.substitution(finalizer)?,
-            parameters: parameter_views(types, callable),
-            captures: Vec::new(),
-            caller_destination: false,
-        };
+            definition.clone(),
+            definition.entry,
+            CallableShape::Definition,
+            actuals.substitution(finalizer)?,
+            parameter_views(types, callable),
+            Vec::new(),
+            false,
+        );
         self.insert(
             view,
             InstanceRole::Finalizer,
@@ -902,19 +901,16 @@ impl Expander<'_, '_, '_> {
         let view = self.out.views[id.index()].clone();
         let actuals = self.out.actuals[id.index()].clone();
         let path = view.key.definition().clone();
-        let body = &view.definition.bodies[view.body.0 as usize];
-        let elided = body
-            .locals
-            .iter()
-            .enumerate()
-            .filter_map(|(local, row)| {
-                let local = hirsel_tir::LocalId(local as u32);
-                (generic_function(types, row.ty)
-                    && nested_function(&self.out, id, local)
-                        .is_some_and(|(_, _, _, _, empty)| empty))
-                .then_some(local)
-            })
-            .collect();
+        let body = &view.definition()?.bodies[view.body.0 as usize];
+        let mut elided = std::collections::HashSet::new();
+        for (local, row) in body.locals.iter().enumerate() {
+            let local = hirsel_tir::LocalId(local as u32);
+            if generic_function(types, row.ty)
+                && nested_function(&self.out, id, local)?.is_some_and(|(_, _, _, _, empty)| empty)
+            {
+                elided.insert(local);
+            }
+        }
         self.out.elided.insert(id, elided);
         for (i, local) in body.locals.iter().enumerate() {
             let local_id = hirsel_tir::LocalId(i as u32);
@@ -983,10 +979,12 @@ impl Expander<'_, '_, '_> {
                 continue;
             }
             let local = body.places[value.place.0 as usize].root;
-            let (producer, closure, ty, captures, empty) = nested_function(&self.out, id, local)
-                .ok_or_else(|| InstanceError::Malformed(format!(
+            let (producer, closure, ty, captures, empty) = nested_function(&self.out, id, local)?
+                .ok_or_else(|| {
+                InstanceError::Malformed(format!(
                     "{path:?}: a generic callee with no lexical nested-function producer (spec #42)"
-                )))?;
+                ))
+            })?;
             let captures = captures.to_vec();
             let producer_view = self.out.view(producer).clone();
             let producer_actuals = self.out.actuals[producer.index()].clone();
@@ -1016,8 +1014,8 @@ impl Expander<'_, '_, '_> {
         if let Some(&layout) = self.out.data_locals.get(&(id, local)) {
             return Ok(layout);
         }
-        let (parent, body, _, captures, empty) =
-            nested_function(&self.out, id, local).ok_or_else(|| {
+        let (parent, body, _, captures, empty) = nested_function(&self.out, id, local)?
+            .ok_or_else(|| {
                 InstanceError::Malformed("generic environment has no lexical producer".into())
             })?;
         if empty {
@@ -1055,7 +1053,7 @@ impl Expander<'_, '_, '_> {
     ) -> Result<(LayoutId, ContentHash, Vec<CaptureView>), InstanceError> {
         let program = self.program;
         let types = &*program.types;
-        let definition = &parent_view.definition;
+        let definition = parent_view.definition()?;
         let path = definition.path.path().clone();
         let body = definition
             .bodies
@@ -1080,11 +1078,11 @@ impl Expander<'_, '_, '_> {
         let mut views = Vec::new();
         let mut shape = Vec::new();
         for (source_ordinal, (local, operand)) in capture_locals.iter().zip(captures).enumerate() {
-            let source = parent_view.definition.bodies[parent_view.body.0 as usize].places
+            let source = parent_view.definition()?.bodies[parent_view.body.0 as usize].places
                 [operand.place.0 as usize]
                 .root;
             if generic_function(types, local.ty)
-                && nested_function(&self.out, parent, source)
+                && nested_function(&self.out, parent, source)?
                     .is_some_and(|(_, _, _, _, empty)| empty)
             {
                 continue;
@@ -1163,7 +1161,7 @@ impl Expander<'_, '_, '_> {
     ) -> Result<InstanceId, InstanceError> {
         let program = self.program;
         let types = &*program.types;
-        let definition = parent_view.definition.clone();
+        let definition = parent_view.definition()?.clone();
         let path = definition.path.path().clone();
         let scope = definition
             .bodies
@@ -1201,16 +1199,16 @@ impl Expander<'_, '_, '_> {
             return Ok(id);
         }
         let shape = CallableShape::Definition;
-        let view = InstanceView {
+        let view = InstanceView::from_definition(
             key,
-            body: body_id,
             definition,
-            owner: shape,
-            substitution: actuals.substitution(&path)?,
-            parameters: parameter_views(types, callable),
-            captures: views,
-            caller_destination: false,
-        };
+            body_id,
+            shape,
+            actuals.substitution(&path)?,
+            parameter_views(types, callable),
+            views,
+            false,
+        );
         let id = self.insert(
             view,
             InstanceRole::Closure { parent },
@@ -1220,7 +1218,7 @@ impl Expander<'_, '_, '_> {
             None,
         )?;
         if let Some(environment) = environment {
-            let body = &self.out.view(id).definition.bodies[body_id.0 as usize];
+            let body = &self.out.view(id).definition()?.bodies[body_id.0 as usize];
             let locals: Vec<_> = body
                 .locals
                 .iter()
@@ -1229,12 +1227,14 @@ impl Expander<'_, '_, '_> {
                 .map(|(i, _)| hirsel_tir::LocalId(i as u32))
                 .collect();
             // Static generic names have no field in this record.
-            let locals: Vec<_> = locals
-                .into_iter()
-                .filter(|local| {
-                    !nested_function(&self.out, id, *local).is_some_and(|(_, _, _, _, empty)| empty)
-                })
-                .collect();
+            let mut retained = Vec::new();
+            for local in locals {
+                if !nested_function(&self.out, id, local)?.is_some_and(|(_, _, _, _, empty)| empty)
+                {
+                    retained.push(local);
+                }
+            }
+            let locals = retained;
             let fields = self.layouts.record(environment).fields.clone();
             let mut explicit = Vec::new();
             let mut parameters = Vec::new();
@@ -1266,7 +1266,7 @@ impl Expander<'_, '_, '_> {
     ) -> Result<InstanceId, InstanceError> {
         let program = self.program;
         let types = &*program.types;
-        let definition = parent_view.definition.clone();
+        let definition = parent_view.definition()?.clone();
         let path = definition.path.path().clone();
         let actuals = parent_actuals.clone();
         let callable = substitute(types, &program.memo, ty, &actuals, false)
@@ -1284,16 +1284,16 @@ impl Expander<'_, '_, '_> {
             Some(&convention),
             Some(digest),
         )?;
-        let view = InstanceView {
+        let view = InstanceView::from_definition(
             key,
-            body: body_id,
-            definition: definition.clone(),
-            owner: CallableShape::Closure,
-            substitution: actuals.substitution(&path)?,
-            parameters: parameter_views(types, callable),
-            captures: views,
-            caller_destination: false,
-        };
+            definition.clone(),
+            body_id,
+            CallableShape::Closure,
+            actuals.substitution(&path)?,
+            parameter_views(types, callable),
+            views,
+            false,
+        );
         self.insert(
             view,
             InstanceRole::Closure { parent },
@@ -1559,25 +1559,34 @@ fn nested_function(
     instances: &Instances,
     mut instance: InstanceId,
     local: hirsel_tir::LocalId,
-) -> Option<(InstanceId, BodyId, TypeId, &[hirsel_tir::Operand], bool)> {
+) -> Result<Option<(InstanceId, BodyId, TypeId, &[hirsel_tir::Operand], bool)>, InstanceError> {
     let view = instances.view(instance);
-    let producer = instances
+    let Some(producer) = instances
         .producers
-        .get(&(view.definition.path.path().clone(), view.body, local))
+        .get(&(view.key.definition().clone(), view.body, local))
         .copied()
-        .flatten()?;
+        .flatten()
+    else {
+        return Ok(None);
+    };
     loop {
         let view = instances.view(instance);
         if view.body == producer.owner {
-            let body = &view.definition.bodies[producer.owner.0 as usize];
+            let body = &view.definition()?.bodies[producer.owner.0 as usize];
             let Rvalue::Closure { body, captures, .. } = &body.rvalues[producer.value.0 as usize]
             else {
-                return None;
+                return Ok(None);
             };
-            return Some((instance, *body, producer.ty, captures, producer.empty));
+            return Ok(Some((
+                instance,
+                *body,
+                producer.ty,
+                captures,
+                producer.empty,
+            )));
         }
         let InstanceRole::Closure { parent } = instances.roles[instance.index()] else {
-            return None;
+            return Ok(None);
         };
         instance = parent;
     }

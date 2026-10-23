@@ -273,7 +273,7 @@ pub fn lower_cached(
         let id = InstanceId(next as u32);
         next += 1;
         let own_environment = instances.environments[id.index()];
-        let definition = instances.view(id).definition.path.path().clone();
+        let definition = instances.view(id).key.definition().clone();
         let origin = origins.get(&definition);
         let proof_owner = origin.map_or(&definition, |o| &o.definition);
         let sites = discharge.sites(proof_owner);
@@ -581,7 +581,7 @@ fn statics(
                             if arguments.is_empty() {
                                 instances
                                     .ids()
-                                    .find(|id| instances.view(*id).definition.path.path() == path)
+                                    .find(|id| instances.view(*id).key.definition() == path)
                                     .ok_or(error)
                             } else {
                                 Err(error)
@@ -609,7 +609,6 @@ pub fn plan_instance(
     id: InstanceId,
     layouts: &mut dyn crate::library::builder::Layouts,
 ) -> Result<(Option<LoopPlan>, Vec<Declined>), NormalizeError> {
-    let view = instances.view(id);
     let actuals = &instances.actuals[id.index()];
     let types = &*program.types;
     let abi = &layouts.table().fn_abis[instances.abis[id.index()].0 as usize];
@@ -1171,7 +1170,7 @@ fn import_mapped(
     required: &mut Vec<crate::library::Request>,
 ) -> R<LirUnit<Value>> {
     let view = instances.view(id);
-    let def: &tir::Definition = &view.definition;
+    let def: &tir::Definition = view.definition()?;
     let body = &def.bodies[view.body.0 as usize];
     let actuals = &instances.actuals[id.index()];
     let types = &*program.types;

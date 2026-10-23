@@ -21,6 +21,12 @@ impl From<InstanceError> for PassError {
     }
 }
 
+impl From<hirsel_layout::instance::InstanceBodyError> for PassError {
+    fn from(error: hirsel_layout::instance::InstanceBodyError) -> Self {
+        Self::Instance(error.into())
+    }
+}
+
 impl fmt::Display for PassError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

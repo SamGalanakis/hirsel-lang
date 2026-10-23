@@ -453,19 +453,6 @@ impl Request {
 
 /// The view's definition of a library instance: a declaration with no TIR
 /// body. Nothing reads a body through it; `Cx` builds the unit.
-fn declaration(path: &DefPath) -> tir::DefinitionRef {
-    std::sync::Arc::new(tir::Definition {
-        caller_bodies: vec![],
-        protocol_associations: vec![],
-        types: Default::default(),
-        path: DefId::intern(path),
-        signature_hash: revision(path),
-        bodies: Vec::new(),
-        entry: tir::BodyId(0),
-        contracts: Vec::new(),
-    })
-}
-
 /// Register the instance a request names, or find it.
 pub fn instantiate(
     layouts: &mut dyn builder::Layouts,
@@ -476,16 +463,22 @@ pub fn instantiate(
     if let Some(id) = instances.get(&key) {
         return Ok(id);
     }
-    let view = InstanceView {
+    let view = InstanceView::from_declaration(
         key,
-        definition: declaration(&request.path),
-        body: tir::BodyId(0),
-        owner: request.shape,
-        substitution: request.actuals.substitution(&request.path)?,
-        parameters: crate::instance::parameter_views(&instances.types, request.callable),
-        captures: Vec::new(),
-        caller_destination: false,
-    };
+        std::sync::Arc::new(hirsel_layout::instance::InstanceDeclaration {
+            definition: request.path.clone(),
+            signature: revision(&request.path),
+            body_count: 0,
+            caller_bodies: Vec::new(),
+            scoped_parameters: Vec::new(),
+        }),
+        tir::BodyId(0),
+        request.shape,
+        request.actuals.substitution(&request.path)?,
+        crate::instance::parameter_views(&instances.types, request.callable),
+        Vec::new(),
+        false,
+    );
     let (id, _) = instances.push(
         layouts,
         view,
