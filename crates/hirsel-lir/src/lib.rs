@@ -33,6 +33,7 @@ pub mod products;
 pub mod profile;
 pub mod rt_program;
 pub mod runtime_abi;
+pub mod sealed_payload_source;
 pub mod snapshot;
 pub mod stage;
 pub mod statics;
