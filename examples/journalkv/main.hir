@@ -1,0 +1,81 @@
+pub type Command = Get(String) | Scan | Apply(Path) | Compact
+
+fn arguments(args: Args) -> Result[unique Command, record.Error] {
+  let count = arg.len(args)
+  if count < 1 || count > 2 {
+    return Error(Usage("get KEY | scan | apply COMMAND_FILE | compact"))
+  }
+  let verb = match arg.text(args, 0) {
+    Ok(value) => take value,
+    Error(_) => return Error(Usage("command must be UTF-8")),
+  }
+  if verb == "scan" && count == 1 {
+    return Ok(Scan())
+  }
+  if verb == "compact" && count == 1 {
+    return Ok(Compact())
+  }
+  if verb == "get" && count == 2 {
+    let name = match arg.text(args, 1) {
+      Ok(value) => take value,
+      Error(_) => return Error(Usage("key must be UTF-8")),
+    }
+    record.key(name)?
+    return Ok(Get(unique name))
+  }
+  if verb == "apply" && count == 2 {
+    let path = match arg.path(args, 1) {
+      Ok(value) => value,
+      Error(_) => return Error(Usage("command file path must be UTF-8")),
+    }
+    return Ok(Apply(path))
+  }
+  Error(Usage("get KEY | scan | apply COMMAND_FILE | compact"))
+}
+
+fn print_json(output: Stdout, value: json.Value) -> Result[(), record.Error] {
+  let line = match json.stringify(value) {
+    Ok(encoded_text) => take encoded_text,
+    Error(_) => return Error(Usage("could not encode output")),
+  }
+  out.print(output, f"{line}\n")?
+  Ok(())
+}
+
+// One process owns this database directory for the whole command. There is no
+// interprocess lock: another reader/writer modifying it violates the contract.
+pub fn main(rt: Io, args: Args) -> Result[(), record.Error] {
+  let command = arguments(args)?
+  let d = io.dir(rt, path.of("data"))?
+  let tasks = io.tasks(rt)?
+  let output = io.stdout(rt)?
+  match command {
+    Apply(path) => {
+      let commands_dir = io.dir(rt, path.of("commands"))?
+      let prepared = session.prepare(tasks, d, commands_dir, path)?
+      session.apply(d, output, take prepared)?
+    },
+    Compact() => {
+      let interrupts: Option[Signals] = match io.signals(rt) {
+        Ok(granted) => Some(granted),
+        Error(NotGranted()) => None(),
+      }
+      let recovered = recover.load(d)?
+      compact.run(tasks, d, interrupts, take recovered)?
+      out.print(output, "COMPACTED\n")?
+    },
+    Get(name) => {
+      let recovered = recover.load(d)?
+      let value: unique json.Value = match index.get(recovered.state, name) {
+        Some(text) => Text(unique text),
+        None() => Null(),
+      }
+      print_json(output, value)?
+    },
+    Scan() => {
+      let recovered = recover.load(d)?
+      print_json(output, index.object(recovered.state))?
+    },
+  }
+  Ok(())
+}

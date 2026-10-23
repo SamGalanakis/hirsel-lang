@@ -1,0 +1,129 @@
+@test
+pub fn crash_append_and_compaction(t: Test) -> Result[(), record.Error] {
+  let tasks = test.tasks(t)
+  let first = record.frame(record.encode(Put("a", "one"))?, 0)?
+  let second = record.frame(record.encode(Put("a", "two"))?, bytes.len(first))?
+  for seed in [0u64, 1u64, 2u64, 3u64] {
+    let d = test.dir(t, [(path.of("journal.log"), copy first)])
+    let mut writer = file.open_append(d, path.of("journal.log"))?
+    file.append(d, mut writer, second)?
+    test.crash(t, d, seed)
+    match file.append(d, mut writer, b"stale") {
+      Error(FileFault(1)) => {},
+      _ => test.fail(t),
+    }
+    let None() = file.narrow(d, take writer) else { test.fail(t) }
+    let recovered = recover.load(d)?
+    let value = index.get(recovered.state, "a")
+    test.check(t, value == Some("one") || value == Some("two"))
+    let prior_state = index.object(recovered.state)
+    compact.run(tasks, d, None(), unique recovered)?
+    test.crash(t, d, seed)
+    let reopened = recover.load(d)?
+    test.check(t, index.object(reopened.state) == prior_state)
+    test.check(t, reopened.tail == Clean())
+  }
+  let durable = test.dir(t, [(path.of("journal.log"), copy first)])
+  let mut synced = file.open_append(durable, path.of("journal.log"))?
+  file.append(durable, mut synced, second)?
+  file.sync(durable, mut synced)?
+  test.crash(t, durable, 0)
+  let recovered = recover.load(durable)?
+  test.check(t, recovered.records == 2)
+  test.check(t, index.get(recovered.state, "a") == Some("two"))
+  Ok(())
+}
+
+@test
+pub fn atomic_checkpoints(t: Test) -> Result[(), record.Error] {
+  let first = record.frame(record.encode(Put("a", "one"))?, 0)?
+  let second = record.frame(record.encode(Put("a", "two"))?, bytes.len(first))?
+  let mut history: List[u8] = []
+  bytes.append(mut history, first)
+  bytes.append(mut history, second)
+  let original = bytes.from_list(take history)
+  let replacement = record.frame(record.encode(Put("a", "two"))?, 0)?
+  let d = test.dir(t, [(path.of("journal.log"), copy original)])
+  let mut stale = file.create_atomic(d, path.of("journal.log"))?
+  file.write_all(d, mut stale, replacement)?
+  test.crash(t, d, 0)
+  match file.commit(d, take stale) {
+    Error(FileFault(1)) => {},
+    _ => test.fail(t),
+  }
+  test.check(t, file.read_bytes(d, path.of("journal.log"))? == original)
+  {
+    let mut aborted = file.create_atomic(d, path.of("journal.log"))?
+    file.write_all(d, mut aborted, replacement)?
+  }
+  test.check(t, file.read_bytes(d, path.of("journal.log"))? == original)
+  let mut committed = file.create_atomic(d, path.of("journal.log"))?
+  file.write_all(d, mut committed, replacement)?
+  file.commit(d, take committed)?
+  test.crash(t, d, 1)
+  let after_commit = recover.load(d)?
+  test.check(t, index.get(after_commit.state, "a") == Some("two"))
+  compact.publish(d, replacement)?
+  test.crash(t, d, 2)
+  test.check(t, file.read_bytes(d, path.of("journal.log"))? == replacement)
+  let recovered = recover.load(d)?
+  test.check(t, recovered.records == 1)
+  test.check(t, index.get(recovered.state, "a") == Some("two"))
+  Ok(())
+}
+
+@test
+pub fn canceled_preparation(t: Test) -> Result[(), record.Error] {
+  let tasks = test.tasks(t)
+  let d = test.dir(t, [])
+  let mut snapshot: unique index.Latest[String] = index.empty()
+  index.put(mut snapshot, index.make_entry("a", "one", false))?
+  let admitted = take snapshot
+  task.scope(tasks, fn(parent: Scope) -> Result[(), record.Error] {
+    let (ready_tx, ready_rx): (Sender[u64], Receiver[u64]) = channel.open(tasks)
+    let (gate_tx, gate_rx): (Sender[u64], Receiver[u64]) = channel.open(tasks)
+    let child: Task[unique Result[unique Bytes, record.Error]] of parent = task.async(
+      parent, fn() -> unique Result[unique Bytes, record.Error] {
+        let mut ready_sender = take ready_tx
+        let mut gate_receiver = take gate_rx
+        let _ = channel.send(tasks, mut ready_sender, 1u64)
+        let _ = channel.receive(tasks, mut gate_receiver)
+        unique compact.prepare(tasks, None(), take admitted)
+      }
+    )
+    let mut parent_ready = take ready_rx
+    test.check(t, channel.receive(tasks, mut parent_ready) == Ok(1u64))
+    task.cancel(parent, child)
+    let outcome = task.await(parent, take child)
+    match outcome {
+      Error(Canceled(_)) => {},
+      _ => test.fail(t),
+    }
+    Ok(())
+  })?
+  test.check(t, results.is_error(file.size(d, path.of("journal.log"))))
+  Ok(())
+}
+
+@test
+pub fn reopen_before_sync(t: Test) -> Result[(), record.Error] {
+  let original = record.frame(record.encode(Put("a", "one"))?, 0)?
+  let replacement = record.frame(record.encode(Put("a", "two"))?, 0)?
+  let d = test.dir(t, [(path.of("journal.log"), copy original)])
+  let mut pending = file.create_atomic(d, path.of("journal.log"))?
+  file.write_all(d, mut pending, replacement)?
+  file.commit(d, take pending)?
+  let mut reopened = file.open_append(d, path.of("journal.log"))?
+  test.crash(t, d, 3)
+  match file.sync(d, mut reopened) {
+    Error(FileFault(1)) => {},
+    _ => test.fail(t),
+  }
+  // Commit/reopen alone is not an acknowledgement. The original durable
+  // generation survives this checkpoint; reacquire before final publication.
+  test.check(t, file.read_bytes(d, path.of("journal.log"))? == original)
+  compact.publish(d, replacement)?
+  test.crash(t, d, 4)
+  test.check(t, file.read_bytes(d, path.of("journal.log"))? == replacement)
+  Ok(())
+}

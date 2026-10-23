@@ -1,0 +1,214 @@
+// Physical record structure from LevelDB db/log_writer.cc:33-103 at
+// bb74ef739973a70ca9f0d90788a1da89b788c0ad. BSD-3-Clause; see LICENSE.leveldb.
+// FULL-only records; pad to a new block rather than fragment. Payloads use the
+// existing SER-2 canonical codec, never native layout or a private wire codec.
+pub const BLOCK: u64 = 32768
+
+pub const HEADER: u64 = 7
+
+pub const MAX_LOG: u64 = 1048576
+
+pub const MAX_RECORDS: u64 = 256
+
+pub const MAX_LIVE: u64 = 64
+
+pub const MAX_KEY: u64 = 128
+
+pub const MAX_VALUE: u64 = 4096
+
+pub const MAX_PAYLOAD: u64 = 8192
+
+pub const MAX_COMMANDS: u64 = 64
+
+pub const MAX_BATCH: u64 = 1048576
+
+pub type Cap = LogBytes | Records | LiveKeys | IndexKeys | KeyBytes | ValueBytes | PayloadBytes | Commands | BatchBytes
+
+pub type Damage = Header | Checksum | Kind | Payload | Padding | BlockLength
+
+pub type Error = Json(json.JsonError) | Files(FileError) | Grant(GrantError) | Output(
+  OutputError
+) | Canceled(CancelError) | Limit(Cap) | Corrupt(u64, Damage) | Torn(u64) | Usage(
+  String
+) | Signals(SignalError)
+
+@serializable
+pub type Mutation = Put(String, String) | Delete(String)
+
+pub type Header {
+  checksum: u32,
+  length: u64,
+  padding: bool,
+}
+
+pub fn key(text: String) -> Result[(), Error] uses {} {
+  if string.byte_len(text) == 0 {
+    return Error(Usage("empty key"))
+  }
+  if string.byte_len(text) > MAX_KEY {
+    return Error(Limit(KeyBytes()))
+  }
+  Ok(())
+}
+
+pub fn validate(change: Mutation) -> Result[(), Error] uses {} {
+  match change {
+    Put(name, value) => {
+      key(name)?
+      if string.byte_len(value) > MAX_VALUE {
+        return Error(Limit(ValueBytes()))
+      }
+    },
+    Delete(name) => key(name)?,
+  }
+  Ok(())
+}
+
+pub fn to_entry(change: Mutation) -> unique index.Entry[String] uses {} {
+  match change {
+    Put(name, value) => index.make_entry(name, value, false),
+    Delete(name) => index.make_entry(name, "", true),
+  }
+}
+
+pub fn from_entry(row: index.Entry[String]) -> unique Mutation uses {} {
+  if row.deleted {
+    Delete(unique row.key)
+  } else {
+    Put(unique row.key, unique row.value)
+  }
+}
+
+// LevelDB util/crc32c.h Mask: rotate right 15, then add a fixed delta.
+pub fn checksum(payload: Bytes) -> u32 uses {} {
+  let mut crc = crc32c.new()
+  crc32c.update(mut crc, b"\x01")
+  crc32c.update(mut crc, payload)
+  let raw = crc32c.finish(take crc)
+  int.wrapping_add(raw >> 15 | raw << 17, 0xa282ead8u32)
+}
+
+pub fn encode(change: Mutation) -> Result[unique Bytes, Error] uses {} {
+  validate(change)?
+  let encoded = codec.encode(change)
+  if bytes.len(encoded) > MAX_PAYLOAD {
+    return Error(Limit(PayloadBytes()))
+  }
+  Ok(unique encoded)
+}
+
+// Inspect the standard SER-2 envelope extents *before* codec.decode allocates
+// Strings. The codec still validates its own magic, schema, scalar tags, UTF-8
+// and canonical exact lengths; this preflight only adds application bounds.
+fn bounded_fields(data: Bytes, offset: u64) -> Result[(), Error] uses {} {
+  let length = bytes.len(data)
+  if length < 24 {
+    return Error(Corrupt(offset, Payload()))
+  }
+  let descriptor_size = match binary.read_u64(data, 8, LittleEndian()) {
+    Ok(value) => value,
+    Error(_) => return Error(Corrupt(offset, Payload())),
+  }
+  if descriptor_size > length - 24 {
+    return Error(Corrupt(offset, Payload()))
+  }
+  let start = 24 + descriptor_size
+  let kind = match binary.read_u32(data, start, LittleEndian()) {
+    Ok(value) => value,
+    Error(_) => return Error(Corrupt(offset, Payload())),
+  }
+  if kind > 1u32 {
+    return Error(Corrupt(offset, Payload()))
+  }
+  let key_size = match binary.read_u64(data, start + 4, LittleEndian()) {
+    Ok(value) => value,
+    Error(_) => return Error(Corrupt(offset, Payload())),
+  }
+  if key_size == 0 || key_size > MAX_KEY {
+    return Error(Corrupt(offset, Payload()))
+  }
+  if start + 12 > length || key_size > length - start - 12 {
+    return Error(Corrupt(offset, Payload()))
+  }
+  if kind == 0u32 {
+    let value_size = match binary.read_u64(data, start + 12 + key_size, LittleEndian()) {
+      Ok(value) => value,
+      Error(_) => return Error(Corrupt(offset, Payload())),
+    }
+    if value_size > MAX_VALUE {
+      return Error(Corrupt(offset, Payload()))
+    }
+  }
+  Ok(())
+}
+
+pub fn decode(payload: Bytes, offset: u64) -> Result[unique Mutation, Error] uses {} {
+  if bytes.len(payload) > MAX_PAYLOAD {
+    return Error(Limit(PayloadBytes()))
+  }
+  bounded_fields(payload, offset)?
+  let decoded: Result[Mutation, DecodeError] = codec.decode(payload)
+  let change = match take decoded {
+    Ok(value) => take value,
+    Error(_) => return Error(Corrupt(offset, Payload())),
+  }
+  match validate(change) {
+    Ok(()) => Ok(unique change),
+    Error(_) => Error(Corrupt(offset, Payload())),
+  }
+}
+
+pub fn header(raw: Bytes, offset: u64) -> Result[Header, Error] uses {} {
+  if bytes.len(raw) != HEADER {
+    return Error(Corrupt(offset, Header()))
+  }
+  let crc = match binary.read_u32(raw, 0, LittleEndian()) {
+    Ok(value) => value,
+    Error(_) => return Error(Corrupt(offset, Header())),
+  }
+  let length: u64 = match binary.read_u16(raw, 4, LittleEndian()) {
+    Ok(value) => int.widen(value),
+    Error(_) => return Error(Corrupt(offset, Header())),
+  }
+  if crc == 0u32 && length == 0 && raw[6] == 0u8 {
+    return Ok(Header(checksum: crc, length: 0, padding: true))
+  }
+  if length > MAX_PAYLOAD {
+    return Error(Limit(PayloadBytes()))
+  }
+  if raw[6] != 1u8 {
+    return Error(Corrupt(offset, Kind()))
+  }
+  if HEADER + length > BLOCK - offset % BLOCK {
+    return Error(Corrupt(offset, BlockLength()))
+  }
+  Ok(Header(checksum: crc, length: length, padding: false))
+}
+
+pub fn frame(payload: Bytes, offset: u64) -> Result[unique Bytes, Error] uses {} {
+  let size = bytes.len(payload)
+  if size > MAX_PAYLOAD {
+    return Error(Limit(PayloadBytes()))
+  }
+  let remaining = BLOCK - offset % BLOCK
+  let padding = if remaining < HEADER + size {
+    remaining
+  } else {
+    0
+  }
+  let length = padding + HEADER + size
+  if offset > MAX_LOG || length > MAX_LOG - offset {
+    return Error(Limit(LogBytes()))
+  }
+  let mut output: List[u8] = []
+  let mut i = 0u64
+  while i < padding {
+    list.push(mut output, 0u8)
+    i += 1
+  }
+  binary.append_u32(checksum(payload), LittleEndian(), mut output)
+  binary.append_u16(int.narrow(size), LittleEndian(), mut output)
+  list.push(mut output, 1u8)
+  bytes.append(mut output, payload)
+  Ok(bytes.from_list(take output))
+}

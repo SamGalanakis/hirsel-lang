@@ -1,0 +1,100 @@
+// Ordered latest state. Lower-bound loop follows Go src/sort/search.go:58-73
+// at ebe2feefc400f813aefdc8a036e66d2619da6649 (BSD-3-Clause). Checked
+// indexing and explicit string comparison replace the predicate; retain tombstones.
+pub type Entry[T] {
+  key: String,
+  value: T,
+  deleted: bool,
+}
+
+pub type Latest[T] {
+  entries: List[Entry[T]],
+  live: u64,
+}
+
+pub fn empty[T]() -> unique Latest[T] uses {} {
+  Latest(entries: [], live: 0)
+}
+
+// Return the insertion point and whether this key already has a version.
+pub fn locate[T](latest_state: Latest[T], key: String) -> (u64, bool) uses {} {
+  let mut low = 0u64
+  let mut high = list.len(latest_state.entries)
+  while low < high {
+    let middle = low + (high - low) / 2
+    if string.compare(latest_state.entries[middle].key, key) < 0 {
+      low = middle + 1
+    } else {
+      high = middle
+    }
+  }
+  (low, low < list.len(latest_state.entries) && latest_state.entries[low].key == key)
+}
+
+pub fn admit[T](latest_state: Latest[T], key: String, deleted: bool) -> Result[
+  (),
+  record.Error
+] uses {} {
+  let (position, exists) = locate(latest_state, key)
+  if !exists && list.len(latest_state.entries) >= record.MAX_RECORDS {
+    return Error(Limit(IndexKeys()))
+  }
+  let was_live = exists && !latest_state.entries[position].deleted
+  if !deleted && !was_live && latest_state.live >= record.MAX_LIVE {
+    return Error(Limit(LiveKeys()))
+  }
+  Ok(())
+}
+
+// Taken payloads need no copyable bound; both decoded Strings and prepared
+// encoded Bytes use this exact insertion/update seam.
+@preserves_unique(latest_state)
+pub fn put[T](mut latest_state: unique Latest[T], take entry: unique Entry[T]) -> Result[
+  (),
+  record.Error
+] uses {} {
+  admit(latest_state, entry.key, entry.deleted)?
+  let (position, exists) = locate(latest_state, entry.key)
+  let was_live = exists && !latest_state.entries[position].deleted
+  let now_live = !entry.deleted
+  if was_live && !now_live {
+    latest_state.live -= 1
+  }
+  if !was_live && now_live {
+    latest_state.live += 1
+  }
+  if exists {
+    latest_state.entries[position] = take entry
+  } else {
+    list.push(mut latest_state.entries, take entry)
+    let mut moving = list.len(latest_state.entries) - 1
+    while moving > position {
+      list.swap(mut latest_state.entries, moving, moving - 1)
+      moving -= 1
+    }
+  }
+  Ok(())
+}
+
+pub fn get[T](latest_state: Latest[T], key: String) -> Option[T] in latest_state uses {} {
+  let (position, exists) = locate(latest_state, key)
+  if exists && !latest_state.entries[position].deleted {
+    Some(latest_state.entries[position].value)
+  } else {
+    None()
+  }
+}
+
+pub fn make_entry(key: String, value: String, deleted: bool) -> unique Entry[String] uses {} {
+  Entry(key: unique key, value: unique value, deleted: deleted)
+}
+
+pub fn object(latest_state: Latest[String]) -> unique json.Value uses {} {
+  let mut fields: Map[String, json.Value] = map.empty()
+  for row in latest_state.entries {
+    if !row.deleted {
+      map.insert(mut fields, unique row.key, Text(unique row.value))
+    }
+  }
+  Object(take fields)
+}

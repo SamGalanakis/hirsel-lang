@@ -1,0 +1,103 @@
+// Latest-per-key selection follows LevelDB db/db_impl.cc:943-987 at
+// bb74ef739973a70ca9f0d90788a1da89b788c0ad. Unlike LevelDB, retain all latest
+// tombstones: this format has one generation and no base-level proof.
+fn encode(scope: Scope, snapshot: index.Latest[String]) -> Result[
+  unique Bytes,
+  record.Error
+] {
+  let mut encoded: unique index.Latest[Bytes] = index.empty()
+  for row in snapshot.entries {
+    task.check_canceled(scope)?
+    let change = record.from_entry(row)
+    let payload = record.encode(change)?
+    index.put(
+      mut encoded,
+      index.Entry(key: unique row.key, value: take payload, deleted: row.deleted)
+    )?
+  }
+  let mut output: List[u8] = []
+  for row in encoded.entries {
+    task.check_canceled(scope)?
+    let framed = record.frame(row.value, list.len(output))?
+    bytes.append(mut output, framed)
+  }
+  Ok(bytes.from_list(take output))
+}
+
+// The frozen payload is lent only inside shared.with. Its prepared result owns
+// every output byte; no snapshot loan crosses the child return boundary.
+pub fn prepare(
+  tasks: Tasks,
+  signals: Option[Signals],
+  take snapshot: unique index.Latest[String]
+) -> Result[unique Bytes, record.Error] {
+  let frozen = shared.freeze(take snapshot)
+  task.scope(
+    tasks,
+    fn(parent: Scope) -> Result[unique Bytes, record.Error] {
+      let child: Task[unique Result[unique Bytes, record.Error]] of parent = task.async(
+        parent,
+        fn() -> unique Result[unique Bytes, record.Error] {
+          unique task.scope(
+            tasks,
+            fn(scope: Scope) -> Result[unique Bytes, record.Error] {
+              shared.with(
+                frozen,
+                fn(latest_state: index.Latest[String]) -> Result[
+                  unique Bytes,
+                  record.Error
+                ] {
+                  encode(scope, latest_state)
+                }
+              )
+            }
+          )
+        }
+      )
+      let mut pending: TaskSet[unique Result[unique Bytes, record.Error]] of parent = task.set(
+        parent
+      )
+      task.add(parent, mut pending, take child)
+      if let Some(interrupts) = signals {
+        let watcher: Task[unique Result[unique Bytes, record.Error]] of parent = task.async(
+          parent,
+          fn() -> unique Result[unique Bytes, record.Error] {
+            let _ = signal.wait(interrupts, [Interrupt()]) ? Signals
+            Error(Canceled(Canceled(Requested())))
+          }
+        )
+        task.add(parent, mut pending, take watcher)
+      }
+      let (_, outcome) = task.select(parent, take pending)
+      take outcome
+    }
+  )
+}
+
+// Writer admission is stopped by the single-owner call graph. The old writer
+// has left its scope before entering this function, so no handle can append to
+// the unlinked old inode. AtomicFile aborts its temp on every precommit exit.
+pub fn publish(d: Dir, bytes: Bytes) -> Result[(), record.Error] {
+  if bytes.len(bytes) > record.MAX_LOG {
+    return Error(Limit(LogBytes()))
+  }
+  let mut replacement = file.create_atomic(d, path.of("journal.log"))?
+  file.write_all(d, mut replacement, bytes)?
+  file.commit(d, take replacement)?
+  // Atomic publication alone has no crash durability promise. Reacquire the
+  // newly published inode and synchronize both bytes and its directory chain.
+  let mut reopened = file.open_append(d, path.of("journal.log"))?
+  file.sync(d, mut reopened)?
+  Ok(())
+}
+
+pub fn run(
+  tasks: Tasks,
+  d: Dir,
+  signals: Option[Signals],
+  take recovered: unique recover.Recovered
+) -> Result[(), record.Error] {
+  let snapshot = recover.into_state(take recovered)
+  let bytes = prepare(tasks, signals, take snapshot)?
+  publish(d, bytes)
+}

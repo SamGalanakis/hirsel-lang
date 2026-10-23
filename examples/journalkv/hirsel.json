@@ -1,0 +1,57 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "journalkv",
+    "version": "1"
+  },
+  "entry": {
+    "module": [],
+    "name": "main"
+  },
+  "sources": [
+    {
+      "path": "main.hir",
+      "module": []
+    },
+    {
+      "path": "record.hir",
+      "module": [
+        "record"
+      ]
+    },
+    {
+      "path": "recover.hir",
+      "module": [
+        "recover"
+      ]
+    },
+    {
+      "path": "index.hir",
+      "module": [
+        "index"
+      ]
+    },
+    {
+      "path": "compact.hir",
+      "module": [
+        "compact"
+      ]
+    },
+    {
+      "path": "session.hir",
+      "module": [
+        "session"
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "manifest": "../../stdlib/std@1/hirsel.json",
+      "package": {
+        "name": "std",
+        "version": "1"
+      },
+      "expose": []
+    }
+  ]
+}

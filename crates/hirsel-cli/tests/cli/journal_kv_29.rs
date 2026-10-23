@@ -226,3 +226,646 @@ fn journal_kv_29_open_append_crash_modes_checked() {
         }
     });
 }
+
+fn app_package(root: &std::path::Path) -> PathBuf {
+    for (name, source) in [
+        (
+            "main",
+            include_str!("../../../../examples/journalkv/main.hir"),
+        ),
+        (
+            "record",
+            include_str!("../../../../examples/journalkv/record.hir"),
+        ),
+        (
+            "recover",
+            include_str!("../../../../examples/journalkv/recover.hir"),
+        ),
+        (
+            "index",
+            include_str!("../../../../examples/journalkv/index.hir"),
+        ),
+        (
+            "compact",
+            include_str!("../../../../examples/journalkv/compact.hir"),
+        ),
+        (
+            "session",
+            include_str!("../../../../examples/journalkv/session.hir"),
+        ),
+    ] {
+        fs::write(root.join(format!("{name}.hir")), source).unwrap();
+    }
+    let mut manifest: serde_json::Value =
+        serde_json::from_str(include_str!("../../../../examples/journalkv/hirsel.json")).unwrap();
+    manifest["dependencies"][0]["manifest"] = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../stdlib/std@1/hirsel.json")
+        .canonicalize()
+        .unwrap()
+        .to_string_lossy()
+        .as_ref()
+        .into();
+    let path = root.join("hirsel.json");
+    fs::write(&path, manifest.to_string()).unwrap();
+    path
+}
+fn unhex(text: &str) -> Vec<u8> {
+    assert!(text.len() % 2 == 0);
+    (0..text.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&text[i..i + 2], 16).unwrap())
+        .collect()
+}
+fn fixture_bytes(value: &serde_json::Value) -> Vec<u8> {
+    if let Some(text) = value.as_str() {
+        return unhex(text);
+    }
+    let mut bytes = value["prefix"].as_str().map(unhex).unwrap_or_default();
+    if let Some(frame) = value["frame"].as_str() {
+        let frame = unhex(frame);
+        let count = value["repeat"].as_u64().unwrap();
+        assert!(count <= 257 && frame.len() <= 8199);
+        for _ in 0..count {
+            let remaining = 32768 - bytes.len() % 32768;
+            if remaining < frame.len() {
+                bytes.resize(bytes.len() + remaining, 0);
+            }
+            bytes.extend_from_slice(&frame);
+        }
+    } else {
+        let count = value["count"].as_u64().unwrap() as usize;
+        assert!(count <= 1048577);
+        bytes.resize(
+            bytes.len() + count,
+            value["byte"].as_u64().unwrap().try_into().unwrap(),
+        );
+    }
+    assert!(bytes.len() <= 1048577);
+    bytes
+}
+fn cases() -> Vec<serde_json::Value> {
+    serde_json::from_str(include_str!("../support/journal_kv_29/cases.json")).unwrap()
+}
+fn fixture_world(case: &serde_json::Value) -> hirsel_engine::SimulationConfig {
+    let mut world = hirsel_engine::SimulationConfig::default();
+    world.args = case["args"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap().into())
+        .collect();
+    world.mounts = [
+        ("commands".into(), hirsel_run_schema::Access::Read),
+        ("data".into(), hirsel_run_schema::Access::ReadWrite),
+    ]
+    .into();
+    world.directories.extend(["data".into(), "commands".into()]);
+    world.projections = ["dir", "stdout", "tasks", "signals"]
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+    world.files = case["files"]
+        .as_object()
+        .unwrap()
+        .iter()
+        .map(|(k, v)| (k.clone(), fixture_bytes(v)))
+        .collect();
+    if let Some(faults) = case["fault"].as_object() {
+        for (operation, value) in faults {
+            let fault = if let Some(cause) = value["canceled"].as_u64() {
+                hirsel_interp::library::simulation::Fault::Canceled(cause as u32)
+            } else {
+                hirsel_interp::library::simulation::Fault::Fault {
+                    code: value["code"].as_u64().unwrap() as u32,
+                    partial: value["partial"].as_u64().unwrap() as usize,
+                }
+            };
+            world.faults.insert(operation.clone(), [fault].into());
+        }
+    }
+    world
+}
+fn assert_error_class(
+    observation: &hirsel_interp::observation::Observable,
+    expected: Option<&str>,
+) {
+    use hirsel_interp::observation::{ObservedAggregate as A, ObservedNode as N};
+    let returned = observation.returned.as_ref().unwrap();
+    let N::Aggregate {
+        kind: A::Variant(result),
+        fields,
+    } = &returned.nodes[0]
+    else {
+        panic!("{returned:?}")
+    };
+    assert_eq!(*result, if expected.is_some() { 1 } else { 0 });
+    if let Some(name) = expected {
+        let tags = [
+            "Json", "Files", "Grant", "Output", "Canceled", "Limit", "Corrupt", "Torn", "Usage",
+            "Signals",
+        ];
+        let N::Aggregate {
+            kind: A::Variant(tag),
+            ..
+        } = &returned.nodes[fields[0].unwrap()]
+        else {
+            panic!("{returned:?}")
+        };
+        assert_eq!(tags[*tag as usize], name, "{returned:?}");
+    }
+}
+#[test]
+fn journal_kv_29_application_reference_checked() {
+    reference_cases(cases(), false);
+}
+#[test]
+#[ignore = "large boundary disposition matrix; isolate with tools/capped at 2 GiB"]
+fn journal_kv_29_boundaries_reference_checked() {
+    reference_cases(
+        serde_json::from_str(include_str!("../support/journal_kv_29/caps.json")).unwrap(),
+        true,
+    );
+}
+fn reference_cases(mut selected: Vec<serde_json::Value>, boundaries: bool) {
+    hirsel_engine::with_compiler_stack(|| {
+        let root = Scratch::new();
+        let selection = app_package(root.path());
+        let mut loaded = hirsel_driver::load_program(&selection).unwrap();
+        loaded.check_for_execution().unwrap();
+        let config = hirsel_engine::RunConfiguration {
+            entry: loaded.entry.clone(),
+            hash_seed: 0,
+            inputs: vec![],
+        };
+        if let Ok(filter) = std::env::var("JOURNAL_KV_29_CASE") {
+            selected.retain(|c| filter.split(',').any(|id| c["id"] == id));
+        }
+        assert!(!selected.is_empty());
+        let count = selected.len();
+        let mut completed = 0;
+        for case in selected {
+            let id = case["id"].as_str().unwrap();
+            let world = fixture_world(&case);
+            let mut previous = None;
+            for checked in [false, true] {
+                let engine = if checked { "checked-h" } else { "reference" };
+                if std::env::var("JOURNAL_KV_29_ENGINE").is_ok_and(|selected| selected != engine) {
+                    continue;
+                }
+                eprintln!("JOURNAL_KV_29_STARTED {id} {engine}");
+                let execution = if checked {
+                    hirsel_engine::run_observed_checked(&mut loaded.engine, &config, world.clone())
+                } else {
+                    hirsel_engine::run_observed_snapshot(&mut loaded.engine, &config, world.clone())
+                }
+                .unwrap();
+                fs::write(
+                    root.path().join(format!("{id}-{engine}.observation")),
+                    format!("{execution:?}"),
+                )
+                .unwrap();
+                if boundaries
+                    && matches!(
+                        execution.outcome,
+                        Ok(hirsel_engine::RunOutcome::ToolingLimit(_))
+                    )
+                {
+                    eprintln!(
+                        "JOURNAL_KV_29_INCOMPLETE {id} {engine}: {:?}",
+                        execution.outcome
+                    );
+                    completed += 1;
+                    continue;
+                }
+                let obs = execution
+                    .observation
+                    .as_ref()
+                    .unwrap_or_else(|| panic!("{id}/{engine}: {execution:?}"));
+                assert_eq!(
+                    obs.exit_code,
+                    Some(case["exit"].as_i64().unwrap() as i32),
+                    "{id}/{engine}: {execution:?}"
+                );
+                assert_eq!(
+                    obs.output,
+                    case["stdout"].as_str().unwrap().as_bytes(),
+                    "{id}/{engine}"
+                );
+                assert!(
+                    obs.failures.is_empty() && obs.blocked.is_none() && obs.signaled.is_none(),
+                    "{id}/{engine}: {obs:?}"
+                );
+                assert_error_class(obs, case["error"].as_str());
+                let expected: std::collections::BTreeMap<_, _> = case["expected_files"]
+                    .as_object()
+                    .unwrap()
+                    .iter()
+                    .map(|(k, v)| (k.clone(), fixture_bytes(v)))
+                    .collect();
+                assert_eq!(
+                    obs.final_state.as_ref().unwrap().trees[&0].1,
+                    expected,
+                    "{id}/{engine}"
+                );
+                let operations: Vec<&str> = obs
+                    .effects
+                    .iter()
+                    .filter_map(|e| match &e.effect {
+                        hirsel_interp::observation::Effect::CapabilityConsumed(event) => {
+                            Some(event.operation.as_str())
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                if case["args"][0] == "apply" && case["exit"] == 0 && case["stdout"] != "" {
+                    let mut append = None;
+                    let mut sync = None;
+                    let mut acks = 0;
+                    for (n, op) in operations.iter().enumerate() {
+                        match *op {
+                            "file.append" => append = Some(n),
+                            "file.sync" => sync = Some(n),
+                            "out.print" => {
+                                assert!(
+                                    sync > append && append.is_some(),
+                                    "{id}: ack before sync {operations:?}"
+                                );
+                                acks += 1;
+                            }
+                            _ => {}
+                        }
+                    }
+                    assert_eq!(acks, case["stdout"].as_str().unwrap().lines().count());
+                }
+                if id == "oversized-length" {
+                    assert_eq!(
+                        operations.iter().filter(|&&op| op == "file.read").count(),
+                        1
+                    );
+                }
+                if let Some(previous) = previous {
+                    assert_eq!(
+                        *obs, previous,
+                        "{id}: semantic order, ownership and effects"
+                    );
+                }
+                previous = Some(obs.clone());
+                completed += 1;
+                eprintln!("JOURNAL_KV_29_PASS {id} {engine}");
+            }
+        }
+        let engines = if std::env::var_os("JOURNAL_KV_29_ENGINE").is_some() {
+            1
+        } else {
+            2
+        };
+        assert_eq!(completed, count * engines);
+    });
+}
+#[test]
+fn journal_kv_29_application_native_replay() {
+    let root = Scratch::new();
+    app_package(root.path());
+    fs::write(
+        root.path().join("cases.json"),
+        include_str!("../support/journal_kv_29/cases.json"),
+    )
+    .unwrap();
+    fs::write(
+        root.path().join("verify.py"),
+        include_str!("../support/journal_kv_29/verify.py"),
+    )
+    .unwrap();
+    fs::write(
+        root.path().join("capped"),
+        include_str!("../../../../tools/capped"),
+    )
+    .unwrap();
+    let mut command = Command::new("python3");
+    command.arg(root.path().join("verify.py"));
+    command
+        .arg("--hirsel")
+        .arg(env!("CARGO_BIN_EXE_hirsel"))
+        .arg("--root")
+        .arg(root.path());
+    if let Ok(filter) = std::env::var("JOURNAL_KV_29_CASE") {
+        for id in filter.split(',') {
+            command.arg("--case").arg(id);
+        }
+    }
+    let done = command.output().unwrap();
+    fs::write(root.path().join("native.stdout"), &done.stdout).unwrap();
+    fs::write(root.path().join("native.stderr"), &done.stderr).unwrap();
+    assert!(
+        done.status.success(),
+        "evidence {}: {}\n{}",
+        root.path().display(),
+        String::from_utf8_lossy(&done.stdout),
+        String::from_utf8_lossy(&done.stderr)
+    );
+    let last = String::from_utf8(done.stdout).unwrap();
+    let report: serde_json::Value = serde_json::from_str(last.lines().last().unwrap()).unwrap();
+    assert!(report["completed"].as_u64().unwrap() > 0);
+    assert_eq!(report["completed"], report["passed"]);
+    eprintln!("JOURNAL_KV_29_NATIVE {report}");
+}
+
+#[test]
+fn journal_kv_29_crash_cancellation_integration() {
+    hirsel_engine::with_compiler_stack(|| {
+        let root = Scratch::new();
+        let selection = app_package(root.path());
+        fs::write(
+            root.path().join("integration.hir"),
+            include_str!("../support/journal_kv_29/integration.hir"),
+        )
+        .unwrap();
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(&selection).unwrap()).unwrap();
+        manifest["sources"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"path":"integration.hir","module":["checks"]}));
+        fs::write(&selection, manifest.to_string()).unwrap();
+        let mut loaded = hirsel_driver::load_program(&selection).unwrap();
+        loaded.check_for_execution().unwrap();
+        for name in [
+            "crash_append_and_compaction",
+            "atomic_checkpoints",
+            "canceled_preparation",
+            "reopen_before_sync",
+        ] {
+            if std::env::var("JOURNAL_KV_29_INTEGRATION").is_ok_and(|selected| selected != name) {
+                continue;
+            }
+            let mut entry = loaded.entry.clone();
+            entry.0.modules = vec!["checks".into()];
+            entry.0.name = name.into();
+            let config = hirsel_engine::RunConfiguration {
+                entry,
+                hash_seed: 0,
+                inputs: vec![],
+            };
+            for checked in [false, true] {
+                let mut world = hirsel_engine::SimulationConfig::default();
+                world.grants.insert("Test".into());
+                let execution = if checked {
+                    hirsel_engine::run_observed_checked(&mut loaded.engine, &config, world)
+                } else {
+                    hirsel_engine::run_observed_snapshot(&mut loaded.engine, &config, world)
+                }
+                .unwrap();
+                fs::write(
+                    root.path().join(format!("{name}-{checked}.observation")),
+                    format!("{execution:?}"),
+                )
+                .unwrap();
+                let obs = execution.observation.as_ref().unwrap();
+                assert_eq!(obs.exit_code, Some(0), "{name}/{checked}: {execution:?}");
+                assert!(obs.failures.is_empty(), "{name}/{checked}: {execution:?}");
+                eprintln!("JOURNAL_KV_29_PASS integration {name} checked={checked}");
+            }
+        }
+    });
+}
+
+// Audits a retained full-app campaign without rebuilding or reissuing its real
+// providers. Explicit opt-in keeps raw tapes outside the permanent source tree.
+#[test]
+#[ignore = "requires JOURNAL_KV_29_AUDIT_ROOT with retained Ordered campaign"]
+fn journal_kv_29_recording_audit() {
+    let root = PathBuf::from(std::env::var_os("JOURNAL_KV_29_AUDIT_ROOT").unwrap());
+    let mut equal = 0;
+    for backend in ["llvm", "cranelift"] {
+        for kind in ["success", "domain"] {
+            let mut baseline = None;
+            for width in [1, 2, 4] {
+                let path = root.join(format!("{backend}-{width}-{kind}/run.tape"));
+                let mut recording = hirsel_rt::host_launch::read_recording(&path).unwrap();
+                let binding = recording.binding.as_mut().unwrap();
+                binding.admitted_at = 0;
+                binding.placement = None;
+                let rendered = hirsel_rt::launch::render_recording(&recording).unwrap();
+                fs::write(path.with_extension("normalized"), &rendered).unwrap();
+                if let Some(baseline) = &baseline {
+                    if baseline == &recording {
+                        equal += 1;
+                        eprintln!("JOURNAL_KV_29_PASS tape equality {backend}/{kind}/{width}");
+                    } else {
+                        eprintln!(
+                            "JOURNAL_KV_29_INCOMPLETE tape equality {backend}/{kind}/{width}: full recordings differ; no further normalization"
+                        );
+                    }
+                } else {
+                    baseline = Some(recording);
+                }
+            }
+        }
+    }
+    eprintln!("JOURNAL_KV_29_TAPE_EQUALITY {equal}/8; mismatches retain INCOMPLETE disposition");
+    if std::env::var_os("JOURNAL_KV_29_COMPARE_ONLY").is_some() {
+        return;
+    }
+    let seed = root.join("llvm-1-domain/run.tape");
+    let original = fs::read(&seed).unwrap();
+    let recording = hirsel_rt::host_launch::read_recording(&seed).unwrap();
+    let controls = root.join("controls");
+    fs::create_dir_all(&controls).unwrap();
+    let mut changed = recording.clone();
+    changed.arguments = vec!["scan".into()];
+    fs::write(
+        controls.join("changed-input.tape"),
+        hirsel_rt::launch::render_recording(&changed).unwrap(),
+    )
+    .unwrap();
+    let mut changed = recording.clone();
+    let mut canonical: serde_json::Value =
+        serde_json::from_slice(&changed.binding.as_ref().unwrap().canonical).unwrap();
+    canonical["io"]["stdout"] = serde_json::Value::Null;
+    changed.binding.as_mut().unwrap().canonical = serde_json::to_vec(&canonical).unwrap();
+    fs::write(
+        controls.join("changed-config.tape"),
+        hirsel_rt::launch::render_recording(&changed).unwrap(),
+    )
+    .unwrap();
+    let mut corrupt = original.clone();
+    *corrupt.last_mut().unwrap() ^= 1;
+    fs::write(controls.join("bad-crc.tape"), corrupt).unwrap();
+    let mut changed = recording.clone();
+    changed.events.pop().unwrap();
+    fs::write(
+        controls.join("missing-event.tape"),
+        hirsel_rt::launch::render_recording(&changed).unwrap(),
+    )
+    .unwrap();
+    // Program revision refusal uses a changed actual app, including its manifest.
+    let source = app_package(&controls);
+    let main = controls.join("main.hir");
+    fs::write(
+        &main,
+        fs::read_to_string(&main)
+            .unwrap()
+            .replace("COMPACTED", "CHANGED"),
+    )
+    .unwrap();
+    let binaries = PathBuf::from(std::env::var_os("JOURNAL_KV_29_AUDIT_BINARIES").unwrap());
+    for name in [
+        "changed-input",
+        "changed-config",
+        "bad-crc",
+        "missing-event",
+        "changed-source",
+    ] {
+        let tape = if name == "changed-source" {
+            seed.clone()
+        } else {
+            controls.join(format!("{name}.tape"))
+        };
+        for engine in ["reference", "llvm", "cranelift"] {
+            let mut cmd = Command::new("python3");
+            cmd.arg(binaries.join("capped"))
+                .args(["--timeout", "60", "prlimit", "--cpu=60:61"]);
+            if engine == "reference" {
+                cmd.arg(env!("CARGO_BIN_EXE_hirsel")).arg("run");
+                let program = if name == "changed-source" {
+                    source.clone()
+                } else {
+                    binaries.join("hirsel.json")
+                };
+                cmd.arg(program).arg("--replay");
+            } else {
+                // An existing different-source append prerequisite executable
+                // verifies native revision refusal without another app build.
+                let binary = if name == "changed-source" {
+                    PathBuf::from(std::env::var_os("JOURNAL_KV_29_OTHER_BINARY").unwrap())
+                } else {
+                    binaries.join(format!("app-{engine}"))
+                };
+                cmd.arg(binary).arg("--hirsel-replay");
+            }
+            let done = cmd
+                .arg(&tape)
+                .env("HIRSEL_JOBS", "4")
+                .env("HIRSEL_MEMORY_LIMIT", "2G")
+                .output()
+                .unwrap();
+            fs::write(
+                controls.join(format!("{name}-{engine}.stdout")),
+                &done.stdout,
+            )
+            .unwrap();
+            fs::write(
+                controls.join(format!("{name}-{engine}.stderr")),
+                &done.stderr,
+            )
+            .unwrap();
+            assert_eq!(done.status.code(), Some(3), "{name}/{engine}: {done:?}");
+            assert!(done.stdout.is_empty(), "{name}/{engine}: {done:?}");
+            assert_eq!(fs::read(&seed).unwrap(), original);
+            eprintln!("JOURNAL_KV_29_PASS refusal {name}/{engine}");
+        }
+    }
+}
+
+#[test]
+fn journal_kv_29_native_crash_helpers() {
+    let root = Scratch::new();
+    let selection = app_package(root.path());
+    fs::write(
+        root.path().join("integration.hir"),
+        include_str!("../support/journal_kv_29/integration.hir"),
+    )
+    .unwrap();
+    let mut manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(&selection).unwrap()).unwrap();
+    manifest["sources"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"path":"integration.hir","module":["checks"]}));
+    fs::write(&selection, manifest.to_string()).unwrap();
+    fs::write(
+        root.path().join("capped"),
+        include_str!("../../../../tools/capped"),
+    )
+    .unwrap();
+    for backend in ["llvm", "cranelift"] {
+        let done = Command::new("python3")
+            .arg(root.path().join("capped"))
+            .args(["--timeout", "60", "prlimit", "--cpu=60:61"])
+            .arg(env!("CARGO_BIN_EXE_hirsel"))
+            .args(["test", "--native", "--backend", backend])
+            .arg(&selection)
+            .env("HIRSEL_MEMORY_LIMIT", "2G")
+            .env("HIRSEL_JOBS", "4")
+            .output()
+            .unwrap();
+        fs::write(root.path().join(format!("{backend}.stdout")), &done.stdout).unwrap();
+        fs::write(root.path().join(format!("{backend}.stderr")), &done.stderr).unwrap();
+        assert!(done.status.success(), "{backend}: {done:?}");
+        assert!(
+            String::from_utf8_lossy(&done.stdout).contains("4 passed"),
+            "{backend}: {done:?}"
+        );
+        eprintln!("JOURNAL_KV_29_PASS 4 native crash/cancellation helpers {backend}");
+    }
+}
+
+#[test]
+#[ignore = "requires retained tapes and binaries outside source tree"]
+fn journal_kv_29_canonical_binding_refusal() {
+    let root = PathBuf::from(std::env::var_os("JOURNAL_KV_29_AUDIT_ROOT").unwrap());
+    let binaries = PathBuf::from(std::env::var_os("JOURNAL_KV_29_AUDIT_BINARIES").unwrap());
+    let other = PathBuf::from(std::env::var_os("JOURNAL_KV_29_OTHER_BINARY").unwrap());
+    let seed = root.join("llvm-1-domain/run.tape");
+    let original = fs::read(&seed).unwrap();
+    let mut recording = hirsel_rt::host_launch::read_recording(&seed).unwrap();
+    let mut config = recording.bound_run().unwrap().record().clone();
+    config.io.as_mut().unwrap().stdout = None;
+    let changed = config.validated().unwrap();
+    recording.binding.as_mut().unwrap().canonical = changed.canonical().to_vec();
+    let tape = root.join("controls/canonical-config.tape");
+    fs::write(
+        &tape,
+        hirsel_rt::launch::render_recording(&recording).unwrap(),
+    )
+    .unwrap();
+    for engine in ["reference", "llvm", "cranelift", "other-cranelift"] {
+        let mut cmd = Command::new("python3");
+        cmd.arg(binaries.join("capped"))
+            .args(["--timeout", "60", "prlimit", "--cpu=60:61"]);
+        if engine == "reference" {
+            cmd.arg(env!("CARGO_BIN_EXE_hirsel"))
+                .arg("run")
+                .arg(binaries.join("hirsel.json"))
+                .arg("--replay")
+                .arg(&tape);
+        } else if engine == "other-cranelift" {
+            cmd.arg(&other).arg("--hirsel-replay").arg(&seed);
+        } else {
+            cmd.arg(binaries.join(format!("app-{engine}")))
+                .arg("--hirsel-replay")
+                .arg(&tape);
+        }
+        let done = cmd
+            .env("HIRSEL_MEMORY_LIMIT", "2G")
+            .env("HIRSEL_JOBS", "4")
+            .output()
+            .unwrap();
+        fs::write(
+            root.join(format!("controls/canonical-{engine}.stdout")),
+            &done.stdout,
+        )
+        .unwrap();
+        fs::write(
+            root.join(format!("controls/canonical-{engine}.stderr")),
+            &done.stderr,
+        )
+        .unwrap();
+        assert_eq!(done.status.code(), Some(3), "{engine}: {done:?}");
+        assert!(done.stdout.is_empty());
+        let stderr = String::from_utf8_lossy(&done.stderr);
+        assert!(!stderr.contains("noncanonical"), "{engine}: {stderr}");
+        assert_eq!(fs::read(&seed).unwrap(), original);
+        eprintln!("JOURNAL_KV_29_PASS canonical-binding refusal {engine}");
+    }
+}

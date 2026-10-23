@@ -1,0 +1,122 @@
+// LevelDB log_test.cc:384-419: terminal short header/payload is torn;
+// an invalid complete physical record is corruption. Never skip damaged bytes.
+pub type Tail = Clean | TornAt(u64)
+
+pub type Recovered {
+  state: index.Latest[String],
+  records: u64,
+  size: u64,
+  tail: Tail,
+}
+
+pub fn empty() -> unique Recovered uses {} {
+  Recovered(state: index.empty(), records: 0, size: 0, tail: Clean())
+}
+
+// All callers bound max before allocation; short reads are accumulated. EOF
+// returns a short owned interval so recovery can classify terminal truncation.
+pub fn read(d: Dir, mut opened: File of d, max: u64) -> Result[
+  unique Bytes,
+  record.Error
+] {
+  if max > record.BLOCK {
+    return Error(Limit(PayloadBytes()))
+  }
+  let mut buffer: List[u8] = []
+  while list.len(buffer) < max {
+    let count = file.read(d, mut opened, mut buffer, max - list.len(buffer))?
+    if count == 0 {
+      break
+    }
+  }
+  Ok(bytes.from_list(take buffer))
+}
+
+fn zeros(data: Bytes) -> bool uses {} {
+  let mut i = 0u64
+  while i < bytes.len(data) {
+    if data[i] != 0u8 {
+      return false
+    }
+    i += 1
+  }
+  true
+}
+
+fn scan(d: Dir, mut opened: File of d, size: u64) -> Result[
+  unique Recovered,
+  record.Error
+] {
+  let mut recovered = empty()
+  recovered.size = size
+  let mut offset = 0u64
+  while offset < size {
+    let remaining = record.BLOCK - offset % record.BLOCK
+    if remaining < record.HEADER {
+      let trailer = read(d, mut opened, remaining)?
+      if !zeros(trailer) {
+        return Error(Corrupt(offset, Padding()))
+      }
+      if bytes.len(trailer) != remaining {
+        recovered.tail = TornAt(offset)
+        return Ok(take recovered)
+      }
+      offset += remaining
+      continue
+    }
+    let raw = read(d, mut opened, record.HEADER)?
+    if bytes.len(raw) < record.HEADER {
+      recovered.tail = TornAt(offset)
+      return Ok(take recovered)
+    }
+    let header = record.header(raw, offset)?
+    if header.padding {
+      let padding = read(d, mut opened, remaining - record.HEADER)?
+      if !zeros(padding) {
+        return Error(Corrupt(offset, Padding()))
+      }
+      if bytes.len(padding) != remaining - record.HEADER {
+        recovered.tail = TornAt(offset)
+        return Ok(take recovered)
+      }
+      offset += remaining
+      continue
+    }
+    if recovered.records >= record.MAX_RECORDS {
+      return Error(Limit(Records()))
+    }
+    let payload = read(d, mut opened, header.length)?
+    if bytes.len(payload) != header.length {
+      recovered.tail = TornAt(offset)
+      return Ok(take recovered)
+    }
+    if record.checksum(payload) != header.checksum {
+      return Error(Corrupt(offset, Checksum()))
+    }
+    let decoded = record.decode(payload, offset)?
+    let row = record.to_entry(decoded)
+    index.put(mut recovered.state, take row)?
+    recovered.records += 1
+    offset += record.HEADER + header.length
+  }
+  Ok(take recovered)
+}
+
+pub fn load(d: Dir) -> Result[unique Recovered, record.Error] {
+  let size = match file.size(d, path.of("journal.log")) {
+    Ok(value) => value,
+    Error(NotFound()) => return Ok(empty()),
+    Error(error) => return Error(Files(error)),
+  }
+  if size > record.MAX_LOG {
+    return Error(Limit(LogBytes()))
+  }
+  let mut opened = file.open(d, path.of("journal.log"))?
+  scan(d, mut opened, size)
+}
+
+// Destructure in the type's defining module; callers move the complete owner.
+pub fn into_state(take recovered: unique Recovered) -> unique index.Latest[String] uses {} {
+  let Recovered(state: snapshot, records: _, size: _, tail: _) = take recovered
+  take snapshot
+}

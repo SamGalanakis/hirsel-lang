@@ -1,0 +1,30 @@
+{
+  "args": [],
+  "io": {
+    "stdout": "stdout.bytes@1",
+    "tasks": "tasks.cooperative@1",
+    "dirs": [
+      {
+        "path": "commands",
+        "host": "commands",
+        "access": "read"
+      },
+      {
+        "path": "data",
+        "host": "data",
+        "access": "read_write"
+      }
+    ],
+    "signals": {
+      "provider": "signals.host@1",
+      "kinds": [
+        "interrupt"
+      ]
+    }
+  },
+  "placement": {
+    "cores": 1,
+    "commit": "shared",
+    "reorder": "auto"
+  }
+}

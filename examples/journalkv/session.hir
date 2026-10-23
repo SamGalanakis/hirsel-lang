@@ -1,0 +1,189 @@
+// Admission and durable writes stay in the caller. At most two preparation
+// children run: independent recovery and bounded command-file decoding.
+pub type Prepared {
+  recovered: recover.Recovered,
+  commands: List[record.Mutation],
+}
+
+// Borrowed pull-reader tokens avoid building an unbounded command DOM. A JSON
+// escaped token may use std scratch of at most six times its decoded byte cap.
+fn field(mut cursor: json.Reader, limit: u64, cap: record.Cap) -> Result[
+  unique String,
+  record.Error
+] uses {} {
+  if json.peek(mut cursor) != 34u8 {
+    return Error(Usage("expected JSON string"))
+  }
+  let start = cursor.pos + 1
+  let mut stop = start
+  let mut escaped = false
+  while stop < bytes.len(cursor.data) {
+    let byte = cursor.data[stop]
+    if !escaped && byte == 34u8 {
+      break
+    }
+    if stop - start >= limit * 6 {
+      return Error(Limit(cap))
+    }
+    if escaped {
+      escaped = false
+    } else if byte == 92u8 {
+      escaped = true
+    }
+    stop += 1
+  }
+  let view = json.read_text(mut cursor)?
+  let length = match view {
+    Unescaped(raw) => bytes.len(raw),
+    Escaped(decoded) => string.byte_len(decoded),
+  }
+  if length > limit {
+    return Error(Limit(cap))
+  }
+  Ok(json.text_owned(view))
+}
+
+fn required(mut cursor: json.Reader, mut first: bool) -> Result[(), record.Error] uses {} {
+  if !json.array_next(mut cursor, mut first)? {
+    return Error(Usage("missing command field"))
+  }
+  Ok(())
+}
+
+fn command(mut cursor: json.Reader) -> Result[unique record.Mutation, record.Error] uses {} {
+  json.begin_array(mut cursor)?
+  let mut first = true
+  required(mut cursor, mut first)?
+  let verb = field(mut cursor, 6, KeyBytes())?
+  required(mut cursor, mut first)?
+  let name = field(mut cursor, record.MAX_KEY, KeyBytes())?
+  record.key(name)?
+  let change: unique record.Mutation = if verb == "put" {
+    required(mut cursor, mut first)?
+    let contents = field(mut cursor, record.MAX_VALUE, ValueBytes())?
+    Put(take name, take contents)
+  } else if verb == "delete" {
+    Delete(take name)
+  } else {
+    return Error(Usage("unknown command"))
+  }
+  if json.array_next(mut cursor, mut first)? {
+    return Error(Usage("extra command field"))
+  }
+  Ok(take change)
+}
+
+pub fn parse(raw: Bytes) -> Result[unique List[record.Mutation], record.Error] uses {} {
+  if bytes.len(raw) > record.MAX_BATCH {
+    return Error(Limit(BatchBytes()))
+  }
+  if !json.valid_utf8(raw) {
+    return Error(Usage("command file must be UTF-8"))
+  }
+  let mut cursor = json.reader(raw)
+  json.begin_array(mut cursor)?
+  let mut first = true
+  let mut commands: List[record.Mutation] = []
+  while json.array_next(mut cursor, mut first)? {
+    if list.len(commands) >= record.MAX_COMMANDS {
+      return Error(Limit(Commands()))
+    }
+    list.push(mut commands, command(mut cursor)?)
+  }
+  json.finish_reader(mut cursor)?
+  Ok(take commands)
+}
+
+pub fn read_commands(d: Dir, path: Path) -> Result[
+  unique List[record.Mutation],
+  record.Error
+] {
+  if file.size(d, path)? > record.MAX_BATCH {
+    return Error(Limit(BatchBytes()))
+  }
+  let mut opened = file.open(d, path)?
+  let raw = match file.read_all_bounded(d, mut opened, record.MAX_BATCH) {
+    Ok(value) => take value,
+    Error(Limit()) => return Error(Limit(BatchBytes())),
+    Error(File(error)) => return Error(Files(error)),
+  }
+  parse(raw)
+}
+
+pub fn prepare(tasks: Tasks, d: Dir, commands_dir: Dir, path: Path) -> Result[
+  unique Prepared,
+  record.Error
+] {
+  task.scope(
+    tasks,
+    fn(scope: Scope) -> Result[unique Prepared, record.Error] {
+      let recovery = task.async(
+        scope,
+        fn() -> unique Result[unique recover.Recovered, record.Error] {
+          unique recover.load(d)
+        }
+      )
+      let batch = task.async(
+        scope,
+        fn() -> unique Result[unique List[record.Mutation], record.Error] {
+          unique read_commands(commands_dir, path)
+        }
+      )
+      let recovered = task.await(scope, take recovery)
+      let commands = task.await(scope, take batch)
+      // Both handles joined before either expected error propagates.
+      let recovered_state = take recovered?
+      let decoded_commands = take commands?
+      Ok(Prepared(recovered: take recovered_state, commands: take decoded_commands))
+    }
+  )
+}
+
+// Preflight the *entire* batch against a bounded private state, including
+// intermediate live-key counts and physical padding. This is admission only.
+fn admit(recovered: recover.Recovered, commands: List[record.Mutation]) -> Result[
+  (),
+  record.Error
+] uses {} {
+  match recovered.tail {
+    TornAt(offset) => return Error(Torn(offset)),
+    Clean() => {},
+  }
+  let mut latest_state = unique recovered.state
+  let mut count = recovered.records
+  let mut offset = recovered.size
+  for change in commands {
+    if count >= record.MAX_RECORDS {
+      return Error(Limit(Records()))
+    }
+    let row = record.to_entry(change)
+    index.put(mut latest_state, take row)?
+    let payload = record.encode(change)?
+    let framed = record.frame(payload, offset)?
+    offset += bytes.len(framed)
+    count += 1
+  }
+  Ok(())
+}
+
+pub fn apply(d: Dir, output: Stdout, take prepared: unique Prepared) -> Result[
+  (),
+  record.Error
+] {
+  admit(prepared.recovered, prepared.commands)?
+  if list.len(prepared.commands) == 0 {
+    return Ok(())
+  }
+  let mut writer = file.open_append(d, path.of("journal.log"))?
+  let mut offset = prepared.recovered.size
+  for change in prepared.commands {
+    let payload = record.encode(change)?
+    let framed = record.frame(payload, offset)?
+    file.append(d, mut writer, framed)?
+    file.sync(d, mut writer)?
+    // No externally visible successful response precedes this barrier.
+    out.print(output, "OK\n")?
+    offset += bytes.len(framed)
+  }
+  Ok(())
+}
