@@ -70,9 +70,10 @@ complete digest after the read; pure hashing has no cancellation point. A slow
 regular-file provider has no application deadline. The waiting-file cancellation
 acceptance cell is explicitly incomplete until a supported provider can exercise it.
 
-Canonical event tracing is a separate acceptance lane; see FRICTION.md for the
-retained observer failure and its owner. Ordinary tape recording/replay works
-without that diagnostic observer.
+Add `--trace-events /tmp/parhash.jsonl` for a complete canonical event stream.
+FRICTION.md retains the initial observer failure and the runtime owner repair;
+all 24 production trace cells pass with that repair. Ordinary tape recording
+and replay also work without the diagnostic observer.
 
 Build once for repeated runs: `"$HIRSEL" build examples/parhash/hirsel.json
 --backend llvm -o /tmp/parhash`. Run `/tmp/parhash --hirsel-record /tmp/run.tape

@@ -165,3 +165,18 @@ endpoint until the requested width appeared, without an artificial app wait.
 All five now observe requested=effective1/4, complementing the prior1/2/4
 samples; original startup0/2/3 samples remain unchanged. The canonical observer
 failure is still owned independently.
+
+## Canonical trace resolution
+
+Runtime owner repair `09983c03472fd0e89adb5a04f506db489d63070a` supplies
+missing Args evidence; no app/runtime change was needed here. Matching
+compiler/std/runtime artifacts on the landed app reran only the24 retained
+trace failures:24/24 now pass. Complete canonical traces agree byte for byte
+across LLVM/Cranelift and requested widths1/2/4. Eight repaired recordings
+also pass24 native trace replays at widths1/2/4 and6 reference replays with the
+original host mount unavailable. Original exit3 receipts remain retained.
+
+Timing-04's full seal did change: only `.buck2/sync-stamp.json` caught up with
+the already-frozen copy-test source hash. Generated output bytes, app sources,
+measured executables and frozen timing driver stayed equal. The full input
+union is not described as unchanged, and no completed timing cell was repeated.
