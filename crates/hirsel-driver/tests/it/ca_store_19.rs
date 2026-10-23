@@ -1235,3 +1235,48 @@ fn ordinary_parse_heads_preserve_duplicate_order_when_cached_and_new_files_mix()
         }
     });
 }
+
+#[test]
+fn ordinary_summary_demands_restore_compact_facts_without_syntax() {
+    with_compiler_stack(|| {
+        for jobs in [1, 2, 4, 8] {
+            let store = Arc::new(Observed::default());
+            let source = "fn value(x:u32)->u32{x+1u32}\nfn caller()->u32{value(4u32)}\n";
+            let context = default_context();
+            let paths: Vec<_> = ["value", "caller"].map(|name| { let mut path = entry_path(&context); path.0.name = name.into(); path }).into();
+            let mut writer = QueryEngine::new(default_environment(), compiler_adapters()).with_result_store(store.clone());
+            let file = writer.sources.add("summary-heads.hir", source.into()).unwrap();
+            writer.index_source(file, &context).unwrap();
+            let outcomes = writer.publish_definitions(paths.clone(), hirsel_intern::jobs::Jobs::new(jobs), memo::Retention::Batch);
+            assert!(outcomes.iter().all(|o| o.result.is_ok()), "{outcomes:?}");
+            let expected: Vec<_> = paths.iter().map(|path| writer.definition_summary_identity(hirsel_syntax::DefId::intern(path)).unwrap().unwrap()).collect();
+            store.mode_reads.store(0, Ordering::Relaxed);
+            let mut reader = QueryEngine::new(default_environment(), compiler_adapters()).with_result_store(store.clone());
+            reader.adapters.parser = None;
+            reader.adapters.lexer = None;
+            reader.adapters.signature = None;
+            reader.adapters.modes = None;
+            reader.sources.add("padding.hir", "\n".into()).unwrap();
+            let file = reader.sources.add("summary-heads.hir", source.into()).unwrap();
+            reader.index_source(file, &context).unwrap();
+            for (path, identity) in paths.iter().zip(expected) {
+                let id = hirsel_syntax::DefId::intern(path);
+                assert_eq!(reader.definition_summary_identity(id).unwrap(), Some(identity));
+                assert!(reader.definition_summary(id).unwrap().checked.is_some());
+                assert_eq!(reader.recompute_count(path, QueryKind::Check), 0);
+                assert_eq!(reader.recompute_count(path, QueryKind::Modes), 0);
+                assert_eq!(reader.recompute_count(path, QueryKind::Summary), 0);
+                assert!(reader.definition_items(path).is_err());
+            }
+            assert_eq!(reader.work_stats().parsed_bytes, 0);
+            assert_eq!(store.mode_reads.load(Ordering::Relaxed), 0);
+            // Recompute mode remains an independent oracle, not a cache admission.
+            let mut oracle = QueryEngine::new(default_environment(), compiler_adapters()).with_result_store(store.clone()).with_verify_store(store::VerifyStore::Recompute);
+            let file = oracle.sources.add("summary-heads.hir", source.into()).unwrap();
+            oracle.index_source(file, &context).unwrap();
+            let checked = oracle.publish_definitions(paths, hirsel_intern::jobs::Jobs::new(jobs), memo::Retention::Batch);
+            assert!(checked.iter().all(|o| o.result.is_ok()), "{checked:?}");
+            assert!(oracle.work_stats().parsed_bytes > 0);
+        }
+    });
+}

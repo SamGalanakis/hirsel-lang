@@ -5,6 +5,34 @@ use crate::snapshot::DeclarationHead;
 use bincode::Options;
 use serde::{Deserialize, Serialize};
 
+/// Bounds for item-local lexical identities, independent of expression data.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub(super) struct LexicalShape {
+    expressions: u64,
+    statements: u64,
+    patterns: u64,
+    types: u64,
+}
+impl LexicalShape {
+    pub(super) fn capture(syntax: &ItemSyntax) -> Self {
+        Self {
+            expressions: syntax.tree.expressions.len() as u64,
+            statements: syntax.tree.statements.len() as u64,
+            patterns: syntax.tree.patterns.len() as u64,
+            types: syntax.tree.types.len() as u64,
+        }
+    }
+    pub(super) fn valid_site(self, site: hirsel_types::NameSite) -> bool {
+        use hirsel_types::NameSite;
+        match site {
+            NameSite::Expression(id) => u64::from(id.0) < self.expressions,
+            NameSite::Statement(id) => u64::from(id.0) < self.statements,
+            NameSite::Pattern(id) => u64::from(id.0) < self.patterns,
+            NameSite::Type(id) => u64::from(id.0) < self.types,
+            NameSite::Item => true,
+        }
+    }
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct Head {
     definition: DefId,
@@ -16,6 +44,7 @@ struct Head {
     header: ContentHash,
     body: ContentHash,
     generator: bool,
+    lexical: LexicalShape,
 }
 #[derive(Serialize, Deserialize)]
 struct FileHeads {
@@ -30,6 +59,7 @@ struct Candidate {
     file: FileId,
     base: u32,
     generator: bool,
+    lexical: LexicalShape,
     occurrence: u32,
 }
 #[derive(Default)]
@@ -38,6 +68,19 @@ pub(crate) struct Catalog {
     candidates: BTreeMap<DefPath, Vec<Candidate>>,
 }
 impl Catalog {
+    pub(super) fn lexical(
+        &self,
+        path: &DefPath,
+    ) -> Option<(hirsel_syntax::LexicalOwner, LexicalShape)> {
+        let candidate = self.candidates.get(path)?.first()?;
+        Some((
+            hirsel_syntax::LexicalOwner {
+                def: candidate.head.definition,
+                occurrence: candidate.occurrence,
+            },
+            candidate.lexical,
+        ))
+    }
     pub(crate) fn paths(&self) -> impl Iterator<Item = &DefPath> {
         self.candidates.keys()
     }
@@ -224,12 +267,13 @@ impl QueryEngine {
                     header: head.header,
                     body: head.body,
                     generator: generation::generator(syntax).is_some(),
+                    lexical: LexicalShape::capture(syntax),
                 })
             })
             .collect();
         heads.sort_by_key(|h| (h.base, h.definition.path().clone()));
         FileHeads {
-            schema: 1,
+            schema: 2,
             context: context.clone(),
             source: ContentHash::of_bytes(self.sources.file(file).unwrap().text().as_bytes()),
             heads,
@@ -239,7 +283,7 @@ impl QueryEngine {
         let Some(source) = self.sources.file(file) else {
             return false;
         };
-        record.schema == 1
+        record.schema == 2
             && record.context == *context
             && record.source == ContentHash::of_bytes(source.text().as_bytes())
             && record
@@ -281,6 +325,7 @@ impl QueryEngine {
                     file,
                     base: head.base,
                     generator: head.generator,
+                    lexical: head.lexical,
                     occurrence: 0,
                     head: DeclarationHead {
                         definition: head.definition,
@@ -376,6 +421,7 @@ impl QueryEngine {
             let occurrence = candidate.occurrence;
             if syntax.text_hash != candidate.head.body
                 || self.header_hash(syntax) != candidate.head.header
+                || LexicalShape::capture(syntax) != candidate.lexical
             {
                 return Err(QueryError::NotImplemented);
             }
@@ -477,7 +523,7 @@ mod tests {
                 let file = engine.sources.add("heads.hir", source.into()).unwrap();
                 let key = engine.catalog_key(file, &context).unwrap();
                 let mut record = FileHeads {
-                    schema: 1,
+                    schema: 2,
                     context: context.clone(),
                     source: ContentHash::of_bytes(source.as_bytes()),
                     heads: vec![Head {
@@ -490,6 +536,12 @@ mod tests {
                         header: ContentHash::default(),
                         body: ContentHash::default(),
                         generator: false,
+                        lexical: LexicalShape {
+                            expressions: 0,
+                            statements: 0,
+                            patterns: 0,
+                            types: 0,
+                        },
                     }],
                 };
                 assert!(engine.valid_heads(file, &context, &record));
