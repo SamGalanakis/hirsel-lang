@@ -165,6 +165,16 @@ diagnostic is selected: the member of the group that the ordering selects first 
 and the others become its notes. Diagnostics with different root causes never fold, so
 folding cannot change which diagnostic is first.
 
+An inline closure immediately after postfix `?` on the same line remains a
+LANG-1 syntax rejection at `fn`, with the separator diagnostic's primary span.
+Its notes explain the unary named-path rule and the capturing
+`results.map_error(operation(), fn(take error: SourceError) -> ContextError { ... })?`
+recipe. Snapshot row/line context in an immutable local; keep a match for branch
+control flow, outer mutation or stronger payload modes. These notes do not
+claim type checking of the unsupported mapper and supply no machine edit.
+A newline (including one in a comment) or explicit separator ends the statement;
+ordinary closure arguments and unrelated missing separators keep their diagnostics.
+
 ## Primary sites
 
 Runtime failure reports, including LANG-9 test-check failures, identify the complete

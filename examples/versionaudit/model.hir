@@ -93,14 +93,19 @@ pub fn audit(data: Bytes) -> Result[Report, InputError] uses {} {
       return Error(DuplicateName(checked))
     }
     map.insert(mut names, unique item.name, checked)
-    let parsed_requirement = match semver.parse_cargo(item.requirement) {
-      Ok(parsed) => parsed,
-      Error(error) => return Error(Requirement(checked, error)),
-    }
-    let parsed_version = match semver.parse(item.version) {
-      Ok(parsed) => parsed,
-      Error(error) => return Error(Version(checked, error)),
-    }
+    let index = checked
+    let parsed_requirement = results.map_error(
+      semver.parse_cargo(item.requirement),
+      fn(take error: semver.SemverError) -> InputError uses {} {
+        Requirement(index, take error)
+      }
+    )?
+    let parsed_version = results.map_error(
+      semver.parse(item.version),
+      fn(take error: semver.SemverError) -> InputError uses {} {
+        Version(index, take error)
+      }
+    )?
     if !semver.matches(parsed_requirement, parsed_version) {
       list.push(mut mismatches, take item)
     }

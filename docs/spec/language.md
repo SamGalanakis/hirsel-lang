@@ -433,6 +433,45 @@ helper, for example `fn invalid_json(error: json.JsonError) -> CommandError uses
 { InvalidJson() }`, and write `json.stringify(candidate) ? invalid_json`. The form
 after `?` is a path, so a closure literal cannot be substituted there.
 
+For call-site context, map the Result with the existing `results.map_error` before
+applying bare `?`. This complete example returns exactly `Result[u64, RowError]`:
+
+```hirsel
+// contextual-error recipe
+pub type RowError { row: u64, cause: scalar.ParseError }
+
+fn parse_row(text: String, row: u64) -> Result[u64, RowError] uses {} {
+  let index = row
+  let parsed: Result[u64, RowError] = results.map_error(
+    u64.parse(text),
+    fn(take error: scalar.ParseError) -> RowError uses {} {
+      RowError(row: index, cause: take error)
+    }
+  )
+  Ok(parsed?)
+}
+
+pub fn main() -> Result[(), ()] uses {} {
+  failure.check(parse_row("7", 1) == Ok(7u64), Arithmetic())
+  for row in [2u64, 5u64] {
+    let Error(error) = parse_row("bad", row) else {
+      failure.check(false, Arithmetic())
+      return Error(())
+    }
+    failure.check(error.row == row, Arithmetic())
+  }
+  Ok(())
+}
+```
+
+The closure takes the error payload and captures the immutable `index` value at
+construction. When a loop advances a mutable row/line counter, first snapshot its
+current value in a `let`; the closure cannot mutate the outer counter. Evaluation
+of the operation happens once, before the helper calls the mapper on failure.
+An explicit `match` is clearer when an error must increment an outer counter or
+continue a loop; keep it when branches require stronger payload modes. See the
+[Result helpers](std-library.md#option-and-result-helpers) for that form.
+
 A plain `e?` propagates an error identical to the enclosing function's or closure literal's
 error type unchanged. Otherwise it injects the error through an arm of the enclosing error
 type: the one arm of its variant with exactly one field whose type is identical to the

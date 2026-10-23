@@ -49,7 +49,7 @@ def oracle(text):
                                                  mismatches=mismatches)), b'')
 
 
-def verify(hirsel, root, output):
+def verify(hirsel, root, output, selected=None):
     output.mkdir(parents=True, exist_ok=False)
     data = root / 'fixtures'
     selection = root / 'hirsel.json'
@@ -88,7 +88,7 @@ def verify(hirsel, root, output):
     assert run('export', [hirsel, 'export', '--tir', selection, '-o', output / 'app.tir']) == (0, b'', b'')
     assert (output / 'app.tir').stat().st_size > 0
     # Native test commands include compilation as setup under ordinary build limits.
-    for engine in ('h', 'llvm', 'cranelift'):
+    for engine in (() if selected else ('h', 'llvm', 'cranelift')):
         command = [hirsel, 'test', '--json', selection]
         if engine != 'h':
             command += ['--native', '--backend', engine]
@@ -145,6 +145,8 @@ def verify(hirsel, root, output):
     invalid('header', 'id,quantity,unit_price,expected_total\n', 0, 'header')
     invalid('no-header', '', 0, 'header')
     invalid('width', HEADER + 'a,1,1\n', 1, 'csv')
+    if selected:
+        invalid('width-row2', HEADER + 'a,1,1,1\n' + 'b,1,1\n', 2, 'csv')
     invalid('malformed', HEADER + 'a,1,"1,1\n', 1, 'csv')
     invalid('record-bytes', HEADER + 'a' * 513 + ',1,1,1\n', 1, 'record_bytes_limit')
     invalid('record-over', HEADER + 'a,1,1,1\n' * 65, 65, 'record_limit')
@@ -157,6 +159,9 @@ def verify(hirsel, root, output):
         ('missing-file', ['absent.csv'], (2, canonical(dict(error=dict(record=0, reason='file_open'))), b''), 'normal'),
         ('path', ['../success.csv'], (2, canonical(dict(error=dict(record=0, reason='filename'))), b''), 'normal'),
     ])
+    if selected:
+        cases = [case for case in cases if case[0] in selected]
+        assert {case[0] for case in cases} == selected, selected
     grants = output / 'grants.json'
     frozen = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in data.iterdir()}
     observations = 0
@@ -173,7 +178,7 @@ def verify(hirsel, root, output):
     # Repeat a successful run byte-for-byte to control output determinism.
     grants.write_text(json.dumps(dict(io=dict(stdout='stdout.bytes@1', dirs=[
         dict(path='fixtures', host=str(data), access='read')]), args=['success.csv'])))
-    for engine in ('h', 'llvm', 'cranelift'):
+    for engine in (() if selected else ('h', 'llvm', 'cranelift')):
         command = ([hirsel, 'run', selection, '--grants', grants] if engine == 'h' else
                    [binaries[engine], '--hirsel-grants', grants, 'success.csv'])
         assert run('repeat-' + engine, command, runtime=True) == oracle((data / 'success.csv').read_text())
@@ -201,5 +206,6 @@ if __name__ == '__main__':
         parser.add_argument('--hirsel', required=True, type=Path)
         parser.add_argument('--root', required=True, type=Path)
         parser.add_argument('--output', required=True, type=Path)
+        parser.add_argument('--cases', help='Comma-separated affected cells; omit for the full original matrix')
         args = parser.parse_args()
-        verify(args.hirsel.resolve(), args.root.resolve(), args.output.resolve())
+        verify(args.hirsel.resolve(), args.root.resolve(), args.output.resolve(), set(args.cases.split(',')) if args.cases else None)

@@ -60,7 +60,7 @@ def vectors():
     return rows, answers
 
 
-def verify(hirsel, root, output):
+def verify(hirsel, root, output, selected=None):
     output.mkdir(parents=True, exist_ok=False)
     data = output / 'data'
     data.mkdir()
@@ -139,6 +139,9 @@ def verify(hirsel, root, output):
         ('unknown-field', {'extra': ''}, error('fields', 1)),
     ]:
         fixture(label, canonical([one | changes]), expected, 2)
+    if selected:
+        fixture('bad-requirement-row2', canonical([one, one | {'name': 'b', 'requirement': '||'}]), error('requirement', 2, 'Syntax', 0), 2)
+        fixture('bad-version-row2', canonical([one, one | {'name': 'b', 'version': '01.0.0'}]), error('version', 2, 'LeadingZero', 0), 2)
     boundary = [one | {'name': str(n)} for n in range(64)]
     fixture('rows-exact', canonical(boundary), canonical(report(boundary, [True] * 64)))
     fixture('rows-over', canonical(boundary + [one]), error('row_limit', 65), 2)
@@ -161,6 +164,9 @@ def verify(hirsel, root, output):
               ('missing-grant', ['success.json'], (2, error('directory_grant'), b''), 'dir'),
               ('missing-stdout', ['success.json'], (2, b'', b''), 'stdout'),
               ('path', ['../success.json'], (2, error('path'), b''), None)]
+    if selected:
+        cases = [case for case in cases if case[0] in selected]
+        assert {case[0] for case in cases} == selected, selected
     frozen = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in data.iterdir()}
     grants = output / 'grants.json'
     observations = 0
@@ -200,8 +206,9 @@ if __name__ == '__main__':
     parser.add_argument('--root', type=Path)
     parser.add_argument('--output', type=Path)
     parser.add_argument('--child', type=Path)
+    parser.add_argument('--cases', help='Comma-separated affected cells; omit for the full original matrix')
     args = parser.parse_args()
     if args.child:
         child(args.child)
     else:
-        verify(args.hirsel.resolve(), args.root.resolve(), args.output.resolve())
+        verify(args.hirsel.resolve(), args.root.resolve(), args.output.resolve(), set(args.cases.split(',')) if args.cases else None)

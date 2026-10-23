@@ -126,10 +126,12 @@ pub fn reconcile(source: String) -> Result[Report, InvalidInput] uses {} {
     Ok(value) => take value,
     Error(e) => return Error(InvalidInput(record: 0, reason: Csv(e))),
   }
-  let header = match csv.next_record(mut reader) {
-    Ok(value) => value,
-    Error(e) => return Error(InvalidInput(record: 0, reason: Csv(e))),
-  }
+  let header = results.map_error(
+    csv.next_record(mut reader),
+    fn(take e: csv.CsvError) -> InvalidInput uses {} {
+      InvalidInput(record: 0, reason: Csv(take e))
+    }
+  )?
   if !header || csv.get_field(reader, 0) != Some("invoice_id") || csv.get_field(
     reader,
     1
@@ -143,10 +145,13 @@ pub fn reconcile(source: String) -> Result[Report, InvalidInput] uses {} {
   let mut groups: List[Accumulator] = []
   let mut mismatches: List[u64] = []
   while true {
-    let next = match csv.next_record(mut reader) {
-      Ok(value) => value,
-      Error(e) => return Error(InvalidInput(record: records + 1, reason: Csv(e))),
-    }
+    let record = records + 1
+    let next = results.map_error(
+      csv.next_record(mut reader),
+      fn(take e: csv.CsvError) -> InvalidInput uses {} {
+        InvalidInput(record: record, reason: Csv(take e))
+      }
+    )?
     if !next {
       break
     }

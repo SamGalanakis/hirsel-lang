@@ -82,3 +82,8 @@ policy. See [FRICTION.md](FRICTION.md) for authoring repairs.
 
 See the [tested JSON, text and time recipes](../../docs/std-api-recipes.md)
 for public module names, contextual variants and ownership at each call.
+
+CSV row-advance errors use `results.map_error` with a taken CSV error and an
+immutable record snapshot. The reader construction and typed `Line` extraction
+keep explicit matches so their payload modes remain visible. See
+[LANG-8](../../docs/spec/language.md#lang-8-errors) for the complete recipe.

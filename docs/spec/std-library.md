@@ -331,6 +331,42 @@ except `filter`, which lends its payload to the predicate. Rust `is_err` / `err`
 `Option::take`: it returns the current option and leaves `None` in its place,
 using core `replace`. A unique payload remains unique.
 
+`results.map_error[T, E, F](take value: Result[T, E], take f: once fn(take E) -> F)`
+returns exactly `Result[T, F]`: `Ok` preserves its payload and never calls `f`;
+`Error` calls `f` exactly once with the taken error. Captured context uses an
+ordinary closure argument, followed by `?`, rather than `operation()? fn(...)`.
+The [complete row recipe](language.md#lang-8-errors) snapshots an immutable row
+index and returns `Result[u64, RowError]`. Captures observe the value at closure
+construction and cannot assign an outer counter. The helper does not add a
+mutable-capture facility or infer a stronger result contract.
+
+When recovery updates outer state or skips a row, use an explicit match. This
+complete example counts failures and continues; its result is exactly `(u64, u64)`:
+
+```hirsel
+// contextual-error recovery
+fn totals(rows: List[String]) -> (u64, u64) uses {} {
+  let mut total = 0u64
+  let mut rejected = 0u64
+  for text in rows {
+    let value = match u64.parse(text) {
+      Ok(value) => value,
+      Error(_) => {
+        rejected += 1
+        continue
+      },
+    }
+    total += value
+  }
+  (total, rejected)
+}
+
+pub fn main() -> Result[(), ()] uses {} {
+  failure.check(totals(["2", "bad", "3"]) == (5u64, 1u64), Arithmetic())
+  Ok(())
+}
+```
+
 ## Task combinators
 
 `task.all` and `task.select` (module `task`) are ordinary source over the core task-set

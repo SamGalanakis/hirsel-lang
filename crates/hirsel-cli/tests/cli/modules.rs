@@ -64,3 +64,4 @@ mod jsonpatchctl_23;
 mod retryrun_23;
 mod groupmap_23;
 mod bininspect_23;
+mod contextual_error_guidance_24;

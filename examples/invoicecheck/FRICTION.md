@@ -95,3 +95,17 @@ annotations, ownership copies and application adapters remain valid. This is
 documentation navigation for existing APIs, with no alias or resolver change.
 
 Addressed by the executable recipe documentation landed in `36879d8e307bb032944a618df036327bff837fe5`.
+
+## Contextual-error guidance resolution
+
+The original four `? fn` failures above remain syntax errors; LANG-8 still
+requires a unary named path. Same-line inline closures now receive a LANG-1
+note pointing to `results.map_error(operation(), closure)?`, without a machine
+edit. `reconcile` uses that existing helper for the header and next-record
+boolean results, taking the CSV cause and snapshotting the immutable data-record
+index before the call. Reader construction and typed `Line` extraction retain
+explicit matches with their original payload modes; no nested unique-result
+change is included. The affected success, invalid, header, width and quoting
+cells, including CSV failures at records 1 and 2, preserve exact stdout, stderr
+and status through H, LLVM and Cranelift. The original errors and investigation
+notes above are historical evidence and have been preserved.

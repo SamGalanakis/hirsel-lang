@@ -70,6 +70,24 @@ impl Parser<'_> {
                     continue;
                 }
                 if self.eat("?") {
+                    if !self.newline() && self.at("fn") && self.text_at(1) == "(" {
+                        let mut diagnostic = Diagnostic::error(
+                            const { RuleId::of("LANG-1") },
+                            self.span(),
+                            "expected newline or semicolon after complete statement/item",
+                        );
+                        diagnostic.notes.push(
+                            "help: `?` accepts a unary named path (`operation()? convert`), not an inline closure".into(),
+                        );
+                        diagnostic.notes.push(
+                            "help: for captured context, use `results.map_error(operation(), fn(take error: SourceError) -> ContextError { ... })?`; snapshot the current row/line in an immutable local and take the error payload".into(),
+                        );
+                        diagnostic.notes.push(
+                            "help: keep an explicit match when branches change outer state, control flow or require stronger payload modes; no automatic edit preserves all evaluation and capture modes".into(),
+                        );
+                        self.diagnostics.push(diagnostic);
+                        return Err(());
+                    }
                     let map_error = if !self.newline() && self.ident(0) {
                         Some(self.path(false)?)
                     } else {

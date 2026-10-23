@@ -119,3 +119,15 @@ No other workaround was observed in these enumerated scenarios. This does not
 claim universal ergonomic or semantic-version coverage. Std's parsed `Req` and
 `Version` are transparent types on this pin; this application treats them only
 through parse/matches APIs and makes no opaque-representation coverage claim.
+
+## Contextual-error guidance resolution
+
+The two semver matches described above now use the shipped `results.map_error`.
+Both callbacks take the semver cause and capture an immutable snapshot of the
+current row. They return exactly `InputError`, choosing `Requirement(index,
+take error)` or `Version(index, take error)` explicitly, so bare `?` propagates
+the already contextual error. No Result API or unique `Row` contract changed.
+Affected success/order and requirement/version failures at rows 1 and 2 retain
+exact report bytes, semantic role, row and cause offset through H, LLVM and
+Cranelift. The original authoring errors above remain preserved; the closure
+recipe resolves the manual-context plumbing, not the intentional error-arm rule.
