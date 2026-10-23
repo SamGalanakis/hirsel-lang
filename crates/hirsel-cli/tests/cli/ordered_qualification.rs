@@ -95,6 +95,10 @@ fn semantic_tape(path: &std::path::Path) -> hirsel_rt::launch::Recording {
 }
 
 fn corpus(program: &str, expected: &[u8]) {
+    corpus_backends(program, expected, &["llvm", "cranelift"]);
+}
+
+fn corpus_backends(program: &str, expected: &[u8], backends: &[&str]) {
     let scratch = tempfile::tempdir().unwrap();
     let source = scratch.path().join("main.hir");
     std::fs::write(&source, program).unwrap();
@@ -113,7 +117,7 @@ fn corpus(program: &str, expected: &[u8]) {
         "interpreter: {interpreted:?}"
     );
     assert_eq!(interpreted.stdout, expected);
-    for backend in ["llvm", "cranelift"] {
+    for &backend in backends {
         let executable = scratch.path().join(backend);
         let built = Command::new(env!("CARGO_BIN_EXE_hirsel"))
             .args(["build", "--backend", backend])
@@ -590,4 +594,177 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
 #[ignore = "requires -c hirsel.ordered_qualification=true"]
 fn ordered_qualification_corpus_thaw_precedes_younger_root_release() {
     corpus(THAW_BEFORE_YOUNGER_RELEASE, b"refused\n");
+}
+
+const CALLABLE_CHANNEL: &str = r#"fn shuttle[T: sendable](tasks: Tasks, take value: T) -> Option[T] {
+  let (tx, rx): (Sender[T], Receiver[T]) = channel.open(tasks)
+  let mut sender = take tx
+  let mut receiver = take rx
+  let _ = channel.send(tasks, mut sender, take value)
+  match channel.receive(tasks, mut receiver) { Ok(item) => Some(take item), Error(_) => None }
+}
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let output = io.stdout(rt)?
+  let action: unique sendable fn() -> u64 uses {} = fn() -> u64 { 42u64 }
+  let Some(called) = shuttle(tasks, take action) else { return Ok(()) }
+  failure.check(called() == 42u64, Arithmetic())
+  let _ = out.print(output, "callable\n")
+  Ok(())
+}"#;
+
+#[test]
+#[ignore = "requires -c hirsel.ordered_qualification=true"]
+fn ordered_qualification_corpus_callable_channel_carrier_llvm() {
+    corpus_backends(CALLABLE_CHANNEL, b"callable\n", &["llvm"]);
+}
+
+#[test]
+#[ignore = "requires -c hirsel.ordered_qualification=true"]
+fn ordered_qualification_corpus_callable_channel_carrier_cranelift() {
+    corpus_backends(CALLABLE_CHANNEL, b"callable\n", &["cranelift"]);
+}
+
+#[test]
+#[ignore = "requires -c hirsel.ordered_qualification=true"]
+fn ordered_qualification_corpus_captured_value_carrier() {
+    corpus(
+        r#"fn shuttle[T: sendable](tasks: Tasks, take value: T) -> Option[T] {
+  let (tx, rx): (Sender[T], Receiver[T]) = channel.open(tasks)
+  let mut sender = take tx
+  let mut receiver = take rx
+  let _ = channel.send(tasks, mut sender, take value)
+  match channel.receive(tasks, mut receiver) { Ok(item) => Some(take item), Error(_) => None }
+}
+pub fn main(rt: Io) -> Result[(), GrantError] {
+ let tasks=io.tasks(rt)?
+ let output=io.stdout(rt)?
+ let n = 8u64
+ let action: unique sendable fn() -> u64 uses {} = fn() -> u64 { n }
+ let Some(called) = shuttle(tasks, take action) else { return Ok(()) }
+ failure.check(called() == 8u64, Arithmetic())
+ let _ = out.print(output, "captured\n")
+ Ok(())
+}
+"#,
+        b"captured\n",
+    );
+}
+
+#[test]
+#[ignore = "requires -c hirsel.ordered_qualification=true"]
+fn ordered_qualification_corpus_iterator_value_carrier() {
+    corpus(
+        r#"fn shuttle[T: sendable](tasks: Tasks, take value: T) -> Option[T] {
+  let (tx, rx): (Sender[T], Receiver[T]) = channel.open(tasks)
+  let mut sender = take tx
+  let mut receiver = take rx
+  let _ = channel.send(tasks, mut sender, take value)
+  match channel.receive(tasks, mut receiver) { Ok(item) => Some(take item), Error(_) => None }
+}
+fn count(mut n: u64) -> Option[u64] uses {} { let v=n; n+=1; if v<3u64 { Some(v) } else { None } }
+pub fn main(rt: Io) -> Result[(), GrantError] {
+ let tasks=io.tasks(rt)?
+ let output=io.stdout(rt)?
+ let values = iter.from(0u64, count)
+ let Some(received) = shuttle(tasks, take values) else { return Ok(()) }
+ let mut total=0u64
+ for n in take received { total+=n }
+ failure.check(total==3u64, Arithmetic())
+ let _ = out.print(output, "iterator\n")
+ Ok(())
+}
+"#,
+        b"iterator\n",
+    );
+}
+
+#[test]
+#[ignore = "requires -c hirsel.ordered_qualification=true"]
+fn ordered_qualification_corpus_flat_value_carrier() {
+    corpus(
+        r#"fn shuttle[T: sendable](tasks: Tasks, take value: T) -> Option[T] {
+  let (tx, rx): (Sender[T], Receiver[T]) = channel.open(tasks)
+  let mut sender = take tx
+  let mut receiver = take rx
+  let _ = channel.send(tasks, mut sender, take value)
+  match channel.receive(tasks, mut receiver) { Ok(item) => Some(take item), Error(_) => None }
+}
+flat type Item { text: String, n: u64 }
+flat type Batch { items: List[Item] @ growable }
+pub fn main(rt: Io) -> Result[(), GrantError] {
+ let tasks=io.tasks(rt)?
+ let output=io.stdout(rt)?
+ let value=Batch(items: [Item(text:"",n:1u64), Item(text:"abc",n:2u64)])
+ let Some(received) = shuttle(tasks, take value) else { return Ok(()) }
+ let mut total = list.len(received.items)
+ for item in received.items { total += item.n + string.byte_len(item.text) }
+ failure.check(total == 8u64, Arithmetic())
+ let _ = out.print(output, "flat\n")
+ Ok(())
+}
+"#,
+        b"flat\n",
+    );
+}
+
+#[test]
+#[ignore = "requires -c hirsel.ordered_qualification=true"]
+fn ordered_qualification_corpus_packed_value_carrier() {
+    corpus(
+        r#"fn shuttle[T: sendable](tasks: Tasks, take value: T) -> Option[T] {
+  let (tx, rx): (Sender[T], Receiver[T]) = channel.open(tasks)
+  let mut sender = take tx
+  let mut receiver = take rx
+  let _ = channel.send(tasks, mut sender, take value)
+  match channel.receive(tasks, mut receiver) { Ok(item) => Some(take item), Error(_) => None }
+}
+type Choice = Small(value: u64) | Large(value: u64, extra: u64)
+fn score(x: Packed[Choice], large: bool) -> u64 { if large { x.Large.value * x.Large.extra } else { x.Small.value } }
+pub fn main(rt: Io) -> Result[(), GrantError] {
+ let tasks=io.tasks(rt)?
+ let output=io.stdout(rt)?
+ let values: List[Packed[Choice]] = [Small(value:1u64), Large(value:2u64,extra:3u64)]
+ let Some(received) = shuttle(tasks, take values) else { return Ok(()) }
+ let mut total=0u64
+ let mut index=0u64
+ for item in received { total += score(item, index == 1u64); index += 1u64 }
+ let single: Packed[Choice] = Large(value:4u64,extra:5u64)
+ let Some(one) = shuttle(tasks, take single) else { return Ok(()) }
+ failure.check(total == 7u64 && score(one, true) == 20u64, Arithmetic())
+ let _ = out.print(output, "packed\n")
+ Ok(())
+}
+"#,
+        b"packed\n",
+    );
+}
+
+#[test]
+#[ignore = "requires -c hirsel.ordered_qualification=true"]
+fn ordered_qualification_corpus_soa_value_carrier() {
+    corpus(
+        r#"fn shuttle[T: sendable](tasks: Tasks, take value: T) -> Option[T] {
+  let (tx, rx): (Sender[T], Receiver[T]) = channel.open(tasks)
+  let mut sender = take tx
+  let mut receiver = take rx
+  let _ = channel.send(tasks, mut sender, take value)
+  match channel.receive(tasks, mut receiver) { Ok(item) => Some(take item), Error(_) => None }
+}
+@soa
+type Row { small: u8, n: u64, text: String, flag: bool }
+pub fn main(rt: Io) -> Result[(), GrantError] {
+ let tasks=io.tasks(rt)?
+ let output=io.stdout(rt)?
+ let mut values: List[Row] = [Row(small:1,n:2u64,text:"abc",flag:true)]
+ list.reserve(mut values, 8u64)
+ list.push(mut values, Row(small:3,n:4u64,text:"",flag:false))
+ let Some(received) = shuttle(tasks, take values) else { return Ok(()) }
+ failure.check(list.len(received)==2u64 && received[0].text=="abc" && received[1].n==4u64 && !received[1].flag, Arithmetic())
+ let _ = out.print(output, "soa\n")
+ Ok(())
+}
+"#,
+        b"soa\n",
+    );
 }

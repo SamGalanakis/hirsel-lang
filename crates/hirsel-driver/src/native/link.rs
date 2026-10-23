@@ -1469,6 +1469,21 @@ done:
     }
     let table = failure_table(program)?;
     let name = revision.entry().as_bytes();
+    // Existing unit summaries retain code identities even for cached units.
+    // These diagnostic relocations do not extend the RUN-3 entries table.
+    let mut value_codes = std::collections::BTreeSet::new();
+    for unit in &program.summaries {
+        value_codes.insert(hirsel_lir::emission::symbol_name(
+            &unit.definition,
+            Some(&unit.instance),
+        ));
+        for (path, instance) in &unit.glue.entries {
+            value_codes.insert(hirsel_lir::emission::function_thunk_name(
+                path,
+                instance.as_ref(),
+            ));
+        }
+    }
     // The launcher object comes from the backend that emitted the program's objects, so a
     // Cranelift build never runs LLVM.
     let main = if cranelift_objects(objects) {
@@ -1497,6 +1512,13 @@ done:
             F::U64(program.entries.len() as u64),
             F::U64(return_kind),
             F::U64(success_offset),
+            F::Entries(
+                value_codes
+                    .iter()
+                    .map(|name| (name.clone(), name.as_bytes().to_vec()))
+                    .collect(),
+            ),
+            F::U64(value_codes.len() as u64),
         ];
         let words: Vec<u64> = roots.iter().map(|r| root_index(*r) as u64).collect();
         let report = hirsel_cranelift::ExitReport {
@@ -1544,14 +1566,39 @@ done:
             rows.len(),
             rows.join(", ")
         ));
+        let mut code_ir = String::new();
+        let mut code_rows = Vec::new();
+        for (index, code) in value_codes.iter().enumerate() {
+            code_ir.push_str(&format!(
+                "@hirsel.value.code.{index} = private constant [{} x i8] [{}]\n",
+                code.len(),
+                bytes(code.as_bytes())
+            ));
+            let declaration = format!("@\"{code}\"(");
+            if code != &symbol
+                && !entry_ir.contains(&declaration)
+                && !report_declarations.contains(&declaration)
+            {
+                code_ir.push_str(&format!("declare void @\"{code}\"()\n"));
+            }
+            code_rows.push(format!(
+                "{{ ptr, ptr, i64 }} {{ ptr @\"{code}\", ptr @hirsel.value.code.{index}, i64 {} }}",
+                code.len()
+            ));
+        }
+        code_ir.push_str(&format!(
+            "@hirsel.value.codes = private constant [{} x {{ ptr, ptr, i64 }}] [{}]\n",
+            code_rows.len(),
+            code_rows.join(", ")
+        ));
         let program_ir = format!(
             "@hirsel.failure.table = private constant [{table_len} x i8] c\"{text}\"\n\
              @hirsel.entry.name = private constant [{name_len} x i8] [{name_bytes}]\n\
-             {entry_ir}\
-             @hirsel.program = private constant {{ i32, i32, i32, i32, ptr, i64, ptr, ptr, i64, ptr, i64, [32 x i8], [56 x i8], ptr, i64, i64, i64 }} \
+             {entry_ir}{code_ir}\
+             @hirsel.program = private constant {{ i32, i32, i32, i32, ptr, i64, ptr, ptr, i64, ptr, i64, [32 x i8], [56 x i8], ptr, i64, i64, i64, ptr, i64 }} \
              {{ i32 {abi}, i32 {flags}, i32 {roots_mask}, i32 {layout_count}, ptr @hirsel.entry, i64 {result_size}, \
              ptr @\"{registry_symbol}\", ptr @hirsel.failure.table, i64 {table_len}, ptr @hirsel.entry.name, i64 {name_len}, \
-             [32 x i8] [{digest}], [56 x i8] [{config}], ptr @hirsel.entries, i64 {entry_count}, i64 {return_kind}, i64 {success_offset} }}\n\
+             [32 x i8] [{digest}], [56 x i8] [{config}], ptr @hirsel.entries, i64 {entry_count}, i64 {return_kind}, i64 {success_offset}, ptr @hirsel.value.codes, i64 {value_code_count} }}\n\
              declare i32 @hirsel_rt_v2_main(ptr, i32, ptr)\n",
             table_len = table.len(),
             name_len = name.len(),
@@ -1562,6 +1609,7 @@ done:
             digest = bytes(&revision.digest()),
             config = bytes(&config_bytes),
             entry_count = program.entries.len(),
+            value_code_count = value_codes.len(),
         );
         let shim = format!(
             "target triple = \"{}\"\n{registry_declaration}\n{declaration}\n{program_ir}declare ptr @signal(i32, ptr)\ndefine i32 @{main_symbol}(i32 %argc, ptr %argv) {{\n %old_sigpipe = call ptr @signal(i32 13, ptr inttoptr (i64 1 to ptr))\n %r = call i32 @hirsel_rt_v2_main(ptr @hirsel.program, i32 %argc, ptr %argv)\n ret i32 %r\n}}\n",

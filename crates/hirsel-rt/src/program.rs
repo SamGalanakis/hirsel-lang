@@ -53,6 +53,10 @@ pub struct ProgramDescriptor {
     pub return_kind: u64,
     /// Offset of the unsigned status byte for return kinds 1 and 2.
     pub success_offset: u64,
+    /// ABI 48: stable identities for callable/iterator code, separate from
+    /// RUN-3 Entry authority. These rows never grant runner entry admission.
+    pub value_codes: *const EntryRow,
+    pub value_code_count: u64,
 }
 
 /// One row of [`ProgramDescriptor::entries`].
@@ -109,6 +113,7 @@ pub struct Program {
     pub(crate) config: Config,
     /// Each Entry's code word and its definition's full path.
     pub(crate) entries: Vec<(usize, String)>,
+    pub(crate) value_codes: std::sync::Arc<std::collections::BTreeMap<usize, String>>,
 }
 
 impl Program {
@@ -165,6 +170,7 @@ impl Program {
                 .map_err(|_| "invalid entry path")?;
             entries.push((row.code as usize, path.to_owned()));
         }
+        let value_codes = unsafe { load_value_codes(d.value_codes, d.value_code_count) }?;
         Ok(Program {
             code: Code::Roots(d.entry, roots),
             result_size: d.result_size,
@@ -178,6 +184,7 @@ impl Program {
             flags: d.flags,
             config: d.config,
             entries,
+            value_codes: std::sync::Arc::new(value_codes),
         })
     }
 
@@ -202,6 +209,7 @@ impl Program {
             flags: 0,
             config,
             entries: Vec::new(),
+            value_codes: Default::default(),
         }
     }
 
@@ -216,5 +224,99 @@ impl Program {
     }
     pub(crate) fn fueled(&self) -> bool {
         self.flags & FUELED != 0
+    }
+}
+
+/// # Safety
+/// `rows` names `length` immutable rows and their name bytes for this program.
+unsafe fn load_value_codes(
+    rows: *const EntryRow,
+    length: u64,
+) -> Result<std::collections::BTreeMap<usize, String>, String> {
+    let count = usize::try_from(length).map_err(|_| "too many value code identities")?;
+    if count > 65_536 || (count != 0 && rows.is_null()) {
+        return Err("invalid value code identity table".into());
+    }
+    let mut value_codes = std::collections::BTreeMap::new();
+    let mut identity_bytes = 0u64;
+    for index in 0..count {
+        let row = unsafe { &*rows.add(index) };
+        if row.code.is_null() || row.path_length == 0 || row.path_length > 1 << 20 {
+            return Err("invalid value code identity".into());
+        }
+        identity_bytes = identity_bytes
+            .checked_add(row.path_length)
+            .ok_or("value code identity limit")?;
+        if identity_bytes > 16 << 20 {
+            return Err("value code identity limit".into());
+        }
+        if row.path.is_null() {
+            return Err("invalid value code identity data".into());
+        }
+        let name = std::str::from_utf8(unsafe {
+            std::slice::from_raw_parts(row.path, row.path_length as usize)
+        })
+        .map_err(|_| "invalid value code identity text")?;
+        // Linkers may coalesce equivalent code. The table is sorted by
+        // identity, so one address always keeps its first stable name.
+        value_codes
+            .entry(row.code as usize)
+            .or_insert_with(|| name.to_owned());
+    }
+    Ok(value_codes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn value_code_table_is_bounded_text_and_never_runner_entry_authority() {
+        let row = |code: usize, name: &'static [u8]| EntryRow {
+            code: code as *const std::ffi::c_void,
+            path: name.as_ptr(),
+            path_length: name.len() as u64,
+        };
+        let rows = [row(7, b"a"), row(7, b"b"), row(9, b"different")];
+        let codes = unsafe { load_value_codes(rows.as_ptr(), rows.len() as u64) }.unwrap();
+        assert_eq!(
+            codes,
+            std::collections::BTreeMap::from([(7, "a".into()), (9, "different".into())])
+        );
+        let mut program =
+            Program::harness(Code::Zero(noop), 0, std::ptr::null(), 0, Config::default());
+        program.value_codes = codes.into();
+        assert!(
+            program.entries.is_empty(),
+            "code identities grant no RUN-3 authority"
+        );
+        assert!(
+            unsafe { load_value_codes(std::ptr::null(), 0) }
+                .unwrap()
+                .is_empty()
+        );
+        assert!(unsafe { load_value_codes(std::ptr::null(), 1) }.is_err());
+        assert!(unsafe { load_value_codes(std::ptr::null(), 65_537) }.is_err());
+        for row in [
+            row(0, b"code"),
+            row(1, b""),
+            row(1, b"\xff"),
+            EntryRow {
+                code: 1usize as *const _,
+                path: std::ptr::null(),
+                path_length: 1,
+            },
+            EntryRow {
+                code: 1usize as *const _,
+                path: std::ptr::null(),
+                path_length: (1 << 20) + 1,
+            },
+        ] {
+            assert!(unsafe { load_value_codes(&row, 1) }.is_err());
+        }
+    }
+
+    unsafe extern "C" fn noop(_: *mut crate::TaskCtx, _: *mut u8, _: *mut u8) -> u8 {
+        crate::STATUS_OK
     }
 }

@@ -301,6 +301,9 @@ pub(crate) struct RunShared {
     /// Fast allocation preflight selector; MAX means no physical allowance cap.
     pub(crate) ordered_allowance: std::sync::atomic::AtomicU64,
     pub(crate) ordered_memory: std::sync::atomic::AtomicBool,
+    /// Immutable compiler code identities, installed before dispatch. No
+    /// pointer value is ever included in canonical initialized-field output.
+    pub(crate) value_codes: std::sync::Arc<std::collections::BTreeMap<usize, String>>,
     /// The exact counts of roots past the finite maximum (`crate::roots`).
     pub(crate) root_overflow: crate::roots::Overflow,
     /// Every worker's heap, until the run ends (`crate::heaps`).
@@ -883,6 +886,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_ctx_create(
         ordered_mode: Default::default(),
         ordered_allowance: std::sync::atomic::AtomicU64::new(u64::MAX),
         ordered_memory: Default::default(),
+        value_codes: Default::default(),
         root_overflow: Default::default(),
         heaps,
         fuel: Default::default(),

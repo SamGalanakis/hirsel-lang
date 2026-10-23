@@ -297,7 +297,7 @@ fn descriptor_with_storage(
         None => (logical, None),
     };
     Ok(Descriptor {
-        scan: crate::handle_scan::Program::lower(record),
+        scan: crate::handle_scan::Program::lower_in(table, record),
         logical_count,
         layout: id,
         size,
@@ -513,7 +513,10 @@ fn field_count(fields: &[FieldLayout]) -> u32 {
 }
 
 /// The bytes every value of a dynamic layout has: its tag and fixed-size fields.
-fn minimum_extent(table: &LayoutTable, record: &LayoutRecord) -> Result<u64, DescriptorError> {
+pub(crate) fn minimum_extent(
+    table: &LayoutTable,
+    record: &LayoutRecord,
+) -> Result<u64, DescriptorError> {
     let mut extent = record
         .tag
         .as_ref()

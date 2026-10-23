@@ -969,9 +969,18 @@ pub fn named_launch_object(
                 let mut words = Vec::with_capacity(rows.len() * 24);
                 for (index, (function, path)) in rows.iter().enumerate() {
                     let row = (index * 24) as u32;
-                    let code = module
-                        .declare_function(function, Linkage::Import, &ir::Signature::new(call_conv))
-                        .map_err(refuse(function))?;
+                    // A table row takes the address; it never calls through
+                    // this declaration. Retain an existing entry/report ABI.
+                    let code = match module.declarations().get_name(function) {
+                        Some(cranelift_module::FuncOrDataId::Func(id)) => id,
+                        _ => module
+                            .declare_function(
+                                function,
+                                Linkage::Import,
+                                &ir::Signature::new(call_conv),
+                            )
+                            .map_err(refuse(function))?,
+                    };
                     let code = module.declare_func_in_data(code, &mut table);
                     table.write_function_addr(row, code);
                     let name = format!("hirsel.program.{ordinal}.{index}");

@@ -85,7 +85,8 @@ unsafe fn types_with(count: u32, descriptor: impl Fn(u32) -> *const Layout) -> T
                     COLUMN => {
                         edges.insert(op[6] as u32);
                     }
-                    BLOCK | ROOT | TAG | NONNULL | LIVE_BIT | VALUE | VALUE_FIELD => {}
+                    BLOCK | ROOT | TAG | NONNULL | LIVE_BIT | VALUE | VALUE_FIELD
+                    | VALUE_COLUMN => {}
                     _ => known = false,
                 }
             }
@@ -233,7 +234,7 @@ unsafe fn scan_with(
                         }
                     }
                     UNKNOWN => out.unknown = true,
-                    TYPE_EDGE | TYPE_UNKNOWN | VALUE | VALUE_FIELD => {}
+                    TYPE_EDGE | TYPE_UNKNOWN | VALUE | VALUE_FIELD | VALUE_COLUMN => {}
                     _ => {
                         out.unknown = true;
                         return out;
@@ -263,6 +264,14 @@ mod tests {
             VALUE_FIELD,
             0,
             0,
+            u64::MAX,
+            0,
+            0,
+            0,
+            0,
+            VALUE_COLUMN,
+            u64::MAX,
+            u64::MAX,
             u64::MAX,
             0,
             0,

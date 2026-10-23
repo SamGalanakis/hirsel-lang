@@ -424,3 +424,31 @@ Production qualification remains disabled pending the remaining acceptance gates
 The tests also found an empty-ring growth error in the existing channel ring:
 `at(0)` evaluated `capacity - 1` before the first allocation. Growth now skips
 copying the absent old buffer; nonempty ring copying is unchanged.
+
+
+Runtime ABI 48 appends a bounded callable-code identity table to the compiled
+program descriptor. It is separate from RUN-3's admitted Entry definitions and
+adds no runner authority. Both emitters retain the stable symbols from unit
+summaries, including cached units. Canonical values resolve code addresses to
+those names, and erased environments through their actual linked descriptor.
+Unknown code or missing value metadata still refuses the whole observation.
+
+Initialized-value decoding now includes callable pairs, iterator triples and
+once environments. Environment live bits select only present captures; moved
+fields and padding are never read. Runtime file-walk iterators have a fixed
+built-in code identity and encode only unread results, resolving Path words to
+text and reading only active FileError fields. The cursor and consumed rows
+are private storage. Generic nested functions with a null code word use the compiler's concrete
+closure key, which includes definition, body and capture types. An erased null
+code without that key still refuses; environment bytes cannot establish code
+identity.
+
+The variable-layout walk follows the existing codec's FlatFormatV0 cursor,
+Packed active-arm extents, Sequential used-byte prefix and declaration-order
+SoA rows (`codec.rs`, `flat_extent` and `encode`). Linked value metadata retains
+all SoA fields, including scalars absent from holder scans. Checked allocation
+bounds, framing, live counts, tags, work and output limits reject incomplete
+images. Spare capacity, inactive arms, native addresses, count words and
+padding never enter canonical values. This does not expand holder/type
+admission or change the four early-retirement rules. Production qualification
+remains a separate gate.

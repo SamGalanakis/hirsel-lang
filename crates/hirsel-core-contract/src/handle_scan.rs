@@ -52,3 +52,25 @@ pub const VALUE_PATH: u64 = 9;
 /// operands: kind, extent, entries-offset, linked entries-layout, live-offset,
 /// linked live-count layout, zero. Hash/index fields are not value metadata.
 pub const VALUE_ENTRIES: u64 = 10;
+
+/// ABI 48: closure environment; extent, live-word offset, movable count.
+/// VALUE_FIELD operand3 is the live-bit index, or MAX for an always-live field.
+pub const VALUE_ENVIRONMENT: u64 = 11;
+/// ABI 48: callable pair (code at0, counted environment at8). Operand3=1
+/// supplies the concrete closure key in operands4..7 for generic null code.
+pub const VALUE_CALLABLE: u64 = 12;
+/// ABI 48: iterator triple (environment at0, next at8, optional drop at16).
+pub const VALUE_ITERATOR: u64 = 13;
+
+/// ABI 48: declaration-order flat fields, placed after previous active extents.
+pub const VALUE_FLAT_FIELDS: u64 = 14;
+/// ABI 48: length-prefixed content; operand3=start (8/16), operand4=child.
+pub const VALUE_FLAT_SEQUENCE: u64 = 15;
+/// ABI 48: Packed active arm; operand3=alignment, operand4=flat, operand6=arms.
+pub const VALUE_PACKED: u64 = 16;
+/// ABI 48: packed sequence payload; operand3=start, operand4=child.
+pub const VALUE_SEQUENTIAL: u64 = 17;
+/// ABI 48: SoA payload; operand3=data, operand4=quantum.
+pub const VALUE_COLUMNS: u64 = 18;
+/// Value-only column: prefix, stride, linked child layout; remaining words zero.
+pub const VALUE_COLUMN: u64 = 17;

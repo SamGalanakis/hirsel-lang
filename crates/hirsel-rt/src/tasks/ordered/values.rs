@@ -153,6 +153,43 @@ pub(super) enum Node {
         entries: Field,
         live: Field,
     },
+    Environment {
+        extent: usize,
+        live: usize,
+        movable: u8,
+        fields: Vec<(Field, Option<u8>)>,
+    },
+    Callable {
+        iterator: bool,
+        generic: Option<String>,
+    },
+    FlatFields {
+        minimum: usize,
+        fields: Vec<usize>,
+    },
+    FlatPrefix {
+        offset: usize,
+        node: usize,
+        framed: bool,
+        stride: usize,
+    },
+    Packed {
+        align: usize,
+        flat: bool,
+        storage: Option<usize>,
+        arms: Vec<Vec<Field>>,
+    },
+    Sequential {
+        minimum: usize,
+        offset: usize,
+        node: usize,
+    },
+    Columns {
+        minimum: usize,
+        data: usize,
+        quantum: usize,
+        columns: Vec<(usize, usize, usize)>,
+    },
     /// Missing metadata is never permission to inspect arbitrary bytes.
     Unsupported {
         extent: usize,
@@ -166,11 +203,24 @@ impl Node {
             Self::Bool => 1,
             Self::Slice { .. } => 24,
             Self::Handle(_) | Self::Path | Self::Indirect { .. } => 8,
-            Self::Sequence { minimum, .. } => *minimum,
+            Self::Sequence { minimum, .. }
+            | Self::FlatFields { minimum, .. }
+            | Self::Sequential { minimum, .. }
+            | Self::Columns { minimum, .. } => *minimum,
+            Self::FlatPrefix { offset, .. } => *offset,
+            Self::Packed { .. } => 4,
             Self::Entries { extent, .. }
+            | Self::Environment { extent, .. }
             | Self::Fields { extent, .. }
             | Self::Variant { extent, .. }
             | Self::Unsupported { extent } => *extent,
+            Self::Callable { iterator, .. } => {
+                if *iterator {
+                    24
+                } else {
+                    16
+                }
+            }
         }
     }
 }
@@ -192,6 +242,8 @@ pub(super) struct Program {
     /// Copy immutable extent facts only; no worker/heap borrow spans encoding.
     owners: Vec<OwnerBounds>,
     names: Option<std::sync::Arc<crate::paths::Names>>,
+    descriptors: BTreeMap<u32, usize>,
+    codes: std::sync::Arc<BTreeMap<usize, String>>,
 }
 
 impl std::fmt::Debug for Program {
@@ -219,6 +271,11 @@ impl OwnerBounds {
     /// The live owner has this linked layout and matching allocation metadata.
     unsafe fn capacity(self, owner: *const crate::Header) -> Result<usize, Error> {
         let header = unsafe { &*owner };
+        if self.flags & (crate::LAYOUT_NO_EXTENT | crate::release::LAYOUT_WIDE_CURSOR)
+            == crate::LAYOUT_NO_EXTENT
+        {
+            return usize::try_from(self.size).map_err(|_| Error::Value);
+        }
         let bytes = match header.kind() {
             #[cfg(feature = "system-allocator")]
             crate::alloc::KIND_SMALL => {
@@ -247,9 +304,14 @@ impl Program {
             let mut program = Self::from_layouts(root, (*ctx).heap_ref().layout_count(), |id| {
                 (*ctx).descriptor(id)
             })?;
-            if program.nodes.iter().any(|node| matches!(node, Node::Path)) {
+            if program
+                .nodes
+                .iter()
+                .any(|node| matches!(node, Node::Path | Node::Callable { .. }))
+            {
                 program.names = (*ctx).run_ref().names.clone();
             }
+            program.codes = (*ctx).run_ref().value_codes.clone();
             Ok(program)
         }
     }
@@ -275,7 +337,13 @@ impl Program {
                 || layout.scan_words > (WORK_MAX * WORDS) as u64
                 || layout.scan.is_null()
             {
-                return Err(Error::Unsupported);
+                if id == root {
+                    return Err(Error::Unsupported);
+                }
+                nodes.push(Node::Unsupported {
+                    extent: layout.size as usize,
+                });
+                continue;
             }
             let words =
                 unsafe { std::slice::from_raw_parts(layout.scan, layout.scan_words as usize) };
@@ -346,6 +414,105 @@ impl Program {
                     entries: field(&[VALUE_FIELD, header[3], header[4], u64::MAX, 0, 0, 0, 0])?,
                     live: field(&[VALUE_FIELD, header[5], header[6], u64::MAX, 0, 0, 0, 0])?,
                 },
+                VALUE_ENVIRONMENT => Node::Environment {
+                    extent,
+                    live: usize::try_from(header[3]).map_err(|_| Error::Program)?,
+                    movable: u8::try_from(header[4]).map_err(|_| Error::Program)?,
+                    fields: value_fields
+                        .map(|op| {
+                            let bit = if op[3] == u64::MAX {
+                                None
+                            } else {
+                                Some(u8::try_from(op[3]).map_err(|_| Error::Program)?)
+                            };
+                            Ok((field(op)?, bit))
+                        })
+                        .collect::<Result<_, Error>>()?,
+                },
+                VALUE_CALLABLE | VALUE_ITERATOR => {
+                    // Erased environments use their immutable actual header
+                    // descriptor. Decode this bounded graph once; selected
+                    // unsupported values still refuse without reading bytes.
+                    if count as usize > WORK_MAX {
+                        return Err(Error::Limit);
+                    }
+                    for descriptor in 0..count {
+                        if !ids.contains_key(&descriptor) {
+                            ids.insert(descriptor, queue.len());
+                            queue.push(descriptor);
+                        }
+                    }
+                    let generic = if header[1] == VALUE_CALLABLE && header[3] == 1 {
+                        let mut name = String::from("generic.");
+                        for word in &header[4..8] {
+                            for byte in word.to_le_bytes() {
+                                use std::fmt::Write;
+                                write!(&mut name, "{byte:02x}").map_err(|_| Error::Program)?;
+                            }
+                        }
+                        Some(name)
+                    } else {
+                        None
+                    };
+                    Node::Callable {
+                        iterator: header[1] == VALUE_ITERATOR,
+                        generic,
+                    }
+                }
+                VALUE_FLAT_FIELDS => Node::FlatFields {
+                    minimum: extent,
+                    fields: value_fields
+                        .map(|op| field(op).map(|f| f.node))
+                        .collect::<Result<_, _>>()?,
+                },
+                VALUE_FLAT_SEQUENCE => Node::FlatPrefix {
+                    offset: usize::try_from(header[3]).map_err(|_| Error::Program)?,
+                    node: field(&[VALUE_FIELD, 0, header[4], u64::MAX, 0, 0, 0, 0])?.node,
+                    framed: header[5] == 1,
+                    stride: usize::try_from(header[6]).map_err(|_| Error::Program)?,
+                },
+                VALUE_PACKED => {
+                    let n = usize::try_from(header[6]).map_err(|_| Error::Program)?;
+                    if n == 0 || n > WORK_MAX {
+                        return Err(Error::Program);
+                    }
+                    let mut arms = vec![Vec::new(); n];
+                    for op in value_fields {
+                        let arm = usize::try_from(op[3]).map_err(|_| Error::Program)?;
+                        arms.get_mut(arm).ok_or(Error::Program)?.push(field(op)?);
+                    }
+                    Node::Packed {
+                        align: usize::try_from(header[3]).map_err(|_| Error::Program)?,
+                        flat: header[4] == 1,
+                        storage: if header[5] == u64::MAX {
+                            None
+                        } else {
+                            Some(usize::try_from(header[5]).map_err(|_| Error::Program)?)
+                        },
+                        arms,
+                    }
+                }
+                VALUE_SEQUENTIAL => Node::Sequential {
+                    minimum: extent,
+                    offset: usize::try_from(header[3]).map_err(|_| Error::Program)?,
+                    node: field(&[VALUE_FIELD, 0, header[4], u64::MAX, 0, 0, 0, 0])?.node,
+                },
+                VALUE_COLUMNS => {
+                    let mut columns = Vec::new();
+                    for op in ops.iter().filter(|op| op[0] == VALUE_COLUMN) {
+                        columns.push((
+                            usize::try_from(op[1]).map_err(|_| Error::Program)?,
+                            usize::try_from(op[2]).map_err(|_| Error::Program)?,
+                            field(&[VALUE_FIELD, 0, op[3], u64::MAX, 0, 0, 0, 0])?.node,
+                        ));
+                    }
+                    Node::Columns {
+                        minimum: extent,
+                        data: usize::try_from(header[3]).map_err(|_| Error::Program)?,
+                        quantum: usize::try_from(header[4]).map_err(|_| Error::Program)?,
+                        columns,
+                    }
+                }
                 VALUE_PATH if extent == 8 => Node::Path,
                 VALUE_HANDLE if extent == 8 => {
                     Node::Handle(Kind::from_code(header[3]).ok_or(Error::Program)?)
@@ -373,8 +540,14 @@ impl Program {
             };
             nodes.push(node);
         }
-        let needs_owners = nodes.iter().any(|node| matches!(node, Node::Slice { .. }));
+        let needs_owners = nodes.iter().any(|node| {
+            matches!(
+                node,
+                Node::Slice { .. } | Node::Callable { .. } | Node::Indirect { .. }
+            )
+        });
         let mut program = Self::new(nodes, 0)?;
+        program.descriptors = ids;
         if needs_owners {
             if count as usize > WORK_MAX {
                 return Err(Error::Limit);
@@ -449,6 +622,89 @@ impl Program {
                     }
                     entry_walk(&nodes, entries.node)?;
                 }
+                Node::Environment {
+                    live,
+                    movable,
+                    fields,
+                    ..
+                } => {
+                    if *movable == 0
+                        || *movable > 64
+                        || live.checked_add(8).is_none_or(|end| end > extent)
+                    {
+                        return Err(Error::Program);
+                    }
+                    check_fields(&fields.iter().map(|(f, _)| f.clone()).collect::<Vec<_>>())?;
+                    if fields
+                        .iter()
+                        .any(|(_, bit)| bit.is_some_and(|bit| bit >= *movable))
+                    {
+                        return Err(Error::Program);
+                    }
+                }
+                Node::FlatFields { fields, .. } => {
+                    if fields.len() > WORK_MAX || fields.iter().any(|&n| n >= nodes.len()) {
+                        return Err(Error::Program);
+                    }
+                }
+                Node::FlatPrefix {
+                    offset,
+                    node,
+                    framed,
+                    stride,
+                    ..
+                } => {
+                    let child = nodes.get(*node).ok_or(Error::Program)?;
+                    if !matches!(offset, 8 | 16)
+                        || (*framed && *offset != 8)
+                        || (!framed && *offset == 8 && (*stride == 0 || child.extent() > *stride))
+                    {
+                        return Err(Error::Program);
+                    }
+                }
+                Node::Packed {
+                    align, flat, arms, ..
+                } => {
+                    if !align.is_power_of_two() || (*flat && *align != 1) || arms.len() > WORK_MAX {
+                        return Err(Error::Program);
+                    }
+                    for field in arms.iter().flatten() {
+                        if field.node >= nodes.len()
+                            || field
+                                .offset
+                                .checked_add(nodes[field.node].extent())
+                                .is_none()
+                        {
+                            return Err(Error::Program);
+                        }
+                    }
+                }
+                Node::Sequential {
+                    minimum,
+                    offset,
+                    node,
+                } => {
+                    if *minimum < 16 || *offset < *minimum || *node >= nodes.len() {
+                        return Err(Error::Program);
+                    }
+                }
+                Node::Columns {
+                    minimum,
+                    data,
+                    quantum,
+                    columns,
+                } => {
+                    if *minimum < 16 || *data < *minimum || !quantum.is_power_of_two() {
+                        return Err(Error::Program);
+                    }
+                    let mut end = 0;
+                    for &(prefix, stride, child) in columns {
+                        if prefix != end || nodes.get(child).is_none_or(|n| n.extent() > stride) {
+                            return Err(Error::Program);
+                        }
+                        end = end.checked_add(stride).ok_or(Error::Program)?;
+                    }
+                }
                 Node::Fields { fields, .. } => check_fields(fields)?,
                 Node::Variant { tag, arms, .. } => {
                     if arms.is_empty() || arms.len() > WORK_MAX {
@@ -478,11 +734,155 @@ impl Program {
             root,
             owners: Vec::new(),
             names: None,
+            descriptors: BTreeMap::new(),
+            codes: Default::default(),
         })
+    }
+
+    /// # Safety
+    /// The counted live owner has the supplied actual linked descriptor.
+    unsafe fn owner_capacity(
+        &self,
+        descriptor: u32,
+        block: *const crate::Header,
+    ) -> Result<usize, Error> {
+        match self.owners.get(descriptor as usize) {
+            Some(bounds) => unsafe { bounds.capacity(block) },
+            None => usize::try_from(unsafe { (*block).capacity() }).map_err(|_| Error::Value),
+        }
     }
 
     pub(super) fn extent(&self) -> usize {
         self.nodes[self.root].extent()
+    }
+
+    /// The runtime walk owns initialized Result[Path,FileError] rows after
+    /// position. Private cursor history, intern IDs and union padding are omitted.
+    unsafe fn walk_values(
+        &self,
+        block: *const crate::Header,
+        out: &mut Vec<u8>,
+        fuel: &mut usize,
+    ) -> Result<(), Error> {
+        let capacity = unsafe { self.owner_capacity(1, block) }?;
+        if capacity < 16 {
+            return Err(Error::Value);
+        }
+        let at = unsafe { block.add(1).cast::<u8>() };
+        let position = usize::try_from(unsafe { at.cast::<u64>().read_unaligned() })
+            .map_err(|_| Error::Value)?;
+        let count = usize::try_from(unsafe { at.add(8).cast::<u64>().read_unaligned() })
+            .map_err(|_| Error::Value)?;
+        if position > count
+            || count
+                .checked_mul(16)
+                .and_then(|n| n.checked_add(16))
+                .is_none_or(|n| n > capacity)
+        {
+            return Err(Error::Value);
+        }
+        *fuel = fuel.checked_sub(count - position).ok_or(Error::Limit)?;
+        out.extend_from_slice(&((count - position) as u64).to_le_bytes());
+        let names = self.names.as_ref().ok_or(Error::Unsupported)?;
+        for i in position..count {
+            let item = unsafe { at.add(16 + i * 16) };
+            let tag = unsafe { item.cast::<u32>().read_unaligned() };
+            out.extend_from_slice(&tag.to_le_bytes());
+            match tag {
+                0 => {
+                    let word = unsafe { item.add(8).cast::<u64>().read_unaligned() };
+                    let text = names.paths.text(word).ok_or(Error::Value)?;
+                    if out.len().saturating_add(8).saturating_add(text.len()) > BYTES_MAX {
+                        return Err(Error::Limit);
+                    }
+                    out.extend_from_slice(&(text.len() as u64).to_le_bytes());
+                    out.extend_from_slice(text.as_bytes());
+                }
+                1 => {
+                    let tag = unsafe { item.add(8).cast::<u32>().read_unaligned() };
+                    if tag > 10 {
+                        return Err(Error::Value);
+                    }
+                    out.extend_from_slice(&tag.to_le_bytes());
+                    if tag <= 1 {
+                        let code = unsafe { item.add(12).cast::<u32>().read_unaligned() };
+                        out.extend_from_slice(&code.to_le_bytes());
+                    }
+                }
+                _ => return Err(Error::Value),
+            }
+            if out.len() > BYTES_MAX {
+                return Err(Error::Limit);
+            }
+        }
+        Ok(())
+    }
+
+    /// Codec::flat_extent's iterative cursor, with checked bounds at every
+    /// header read and one shared work budget for the whole observation.
+    unsafe fn active_extent(
+        &self,
+        root: usize,
+        at: *const u8,
+        capacity: usize,
+        fuel: &mut usize,
+    ) -> Result<usize, Error> {
+        let mut cursor = 0usize;
+        let mut work = vec![root];
+        while let Some(index) = work.pop() {
+            *fuel = fuel.checked_sub(1).ok_or(Error::Limit)?;
+            let remaining = capacity.checked_sub(cursor).ok_or(Error::Value)?;
+            let node = &self.nodes[index];
+            if node.extent() > remaining {
+                return Err(Error::Value);
+            }
+            let p = unsafe { at.add(cursor) };
+            let size = match node {
+                Node::FlatFields { fields, .. } => {
+                    work.extend(fields.iter().rev());
+                    0
+                }
+                Node::FlatPrefix { .. } => {
+                    if remaining < 8 {
+                        return Err(Error::Value);
+                    }
+                    let length = usize::try_from(unsafe { p.cast::<u64>().read_unaligned() })
+                        .map_err(|_| Error::Value)?;
+                    length.checked_add(8).ok_or(Error::Value)?
+                }
+                Node::Packed {
+                    flat, align, arms, ..
+                } => {
+                    let ordinal = unsafe { p.cast::<u32>().read_unaligned() } as usize;
+                    let fields = arms.get(ordinal).ok_or(Error::Value)?;
+                    if *flat {
+                        work.extend(fields.iter().rev().map(|f| f.node));
+                        4
+                    } else {
+                        let end = fields.iter().try_fold(4usize, |end, f| {
+                            f.offset
+                                .checked_add(self.nodes[f.node].extent())
+                                .map(|n| end.max(n))
+                                .ok_or(Error::Value)
+                        })?;
+                        end.checked_add(align - 1).ok_or(Error::Value)? & !(align - 1)
+                    }
+                }
+                Node::Unsupported { .. } => return Err(Error::Unsupported),
+                Node::Sequential { .. } | Node::Columns { .. } | Node::Sequence { .. } => {
+                    return Err(Error::Program);
+                }
+                _ => node.extent(),
+            };
+            cursor = cursor.checked_add(size).ok_or(Error::Value)?;
+            if cursor > capacity || cursor > isize::MAX as usize {
+                return Err(Error::Value);
+            }
+            if work.len() > WORK_MAX {
+                return Err(Error::Limit);
+            }
+        }
+        Ok(cursor)
     }
 
     /// # Safety
@@ -500,12 +900,289 @@ impl Program {
         let mut work = vec![(self.root, value, None)];
         let mut out = Vec::new();
         let mut visited = 0;
+        let mut extent_fuel = WORK_MAX;
         while let Some((index, at, capacity)) = work.pop() {
             visited += 1;
             if visited > WORK_MAX {
                 return Err(Error::Limit);
             }
+            if capacity.is_some_and(|capacity| self.nodes[index].extent() > capacity) {
+                return Err(Error::Value);
+            }
             let fields = match &self.nodes[index] {
+                Node::FlatFields { fields, .. } => {
+                    let capacity = capacity.ok_or(Error::Value)?;
+                    let mut cursor = 0usize;
+                    let mut children = Vec::new();
+                    for &node in fields {
+                        let extent = unsafe {
+                            self.active_extent(
+                                node,
+                                at.add(cursor),
+                                capacity.checked_sub(cursor).ok_or(Error::Value)?,
+                                &mut extent_fuel,
+                            )
+                        }?;
+                        children.push((node, unsafe { at.add(cursor) }, Some(extent)));
+                        cursor = cursor.checked_add(extent).ok_or(Error::Value)?;
+                    }
+                    work.extend(children.into_iter().rev());
+                    continue;
+                }
+                Node::FlatPrefix {
+                    offset,
+                    node,
+                    framed,
+                    stride,
+                    ..
+                } => {
+                    let capacity = capacity.ok_or(Error::Value)?;
+                    if capacity < *offset {
+                        return Err(Error::Value);
+                    }
+                    let length = usize::try_from(unsafe { at.cast::<u64>().read_unaligned() })
+                        .map_err(|_| Error::Value)?;
+                    let end = length
+                        .checked_add(8)
+                        .filter(|&n| n <= capacity && n >= *offset)
+                        .ok_or(Error::Value)?;
+                    if *framed {
+                        let extent = unsafe {
+                            self.active_extent(*node, at.add(8), end - 8, &mut extent_fuel)
+                        }?;
+                        if extent != end - 8 {
+                            return Err(Error::Value);
+                        }
+                        work.push((*node, unsafe { at.add(8) }, Some(extent)));
+                    } else {
+                        let count = if *offset == 16 {
+                            usize::try_from(unsafe { at.add(8).cast::<u64>().read_unaligned() })
+                                .map_err(|_| Error::Value)?
+                        } else {
+                            if !length.is_multiple_of(*stride) {
+                                return Err(Error::Value);
+                            }
+                            length / stride
+                        };
+                        if count > WORK_MAX.saturating_sub(visited + work.len()) {
+                            return Err(Error::Limit);
+                        }
+                        out.extend_from_slice(&(count as u64).to_le_bytes());
+                        let mut cursor = *offset;
+                        let mut children = Vec::new();
+                        for _ in 0..count {
+                            let extent = unsafe {
+                                self.active_extent(
+                                    *node,
+                                    at.add(cursor),
+                                    end.checked_sub(cursor).ok_or(Error::Value)?,
+                                    &mut extent_fuel,
+                                )
+                            }?;
+                            children.push((*node, unsafe { at.add(cursor) }, Some(extent)));
+                            cursor = cursor.checked_add(extent).ok_or(Error::Value)?;
+                        }
+                        if cursor != end {
+                            return Err(Error::Value);
+                        }
+                        work.extend(children.into_iter().rev());
+                    }
+                    continue;
+                }
+                Node::Packed {
+                    flat,
+                    arms,
+                    storage,
+                    ..
+                } => {
+                    let capacity = capacity.or(*storage).ok_or(Error::Value)?;
+                    let extent =
+                        unsafe { self.active_extent(index, at, capacity, &mut extent_fuel) }?;
+                    let ordinal = unsafe { at.cast::<u32>().read_unaligned() };
+                    out.extend_from_slice(&ordinal.to_le_bytes());
+                    let mut cursor = 4usize;
+                    let mut children = Vec::new();
+                    for f in &arms[ordinal as usize] {
+                        let offset = if *flat { cursor } else { f.offset };
+                        let remaining = extent.checked_sub(offset).ok_or(Error::Value)?;
+                        let size = unsafe {
+                            self.active_extent(f.node, at.add(offset), remaining, &mut extent_fuel)
+                        }?;
+                        children.push((f.node, unsafe { at.add(offset) }, Some(size)));
+                        cursor = offset.checked_add(size).ok_or(Error::Value)?;
+                    }
+                    work.extend(children.into_iter().rev());
+                    continue;
+                }
+                Node::Sequential { offset, node, .. } => {
+                    let capacity = capacity.ok_or(Error::Value)?;
+                    let count = usize::try_from(unsafe { at.cast::<u64>().read_unaligned() })
+                        .map_err(|_| Error::Value)?;
+                    let used = usize::try_from(unsafe { at.add(8).cast::<u64>().read_unaligned() })
+                        .map_err(|_| Error::Value)?;
+                    let end = offset
+                        .checked_add(used)
+                        .filter(|&n| n <= capacity)
+                        .ok_or(Error::Value)?;
+                    if count > WORK_MAX.saturating_sub(visited + work.len()) {
+                        return Err(Error::Limit);
+                    }
+                    out.extend_from_slice(&(count as u64).to_le_bytes());
+                    let mut cursor = *offset;
+                    let mut children = Vec::new();
+                    for _ in 0..count {
+                        let extent = unsafe {
+                            self.active_extent(
+                                *node,
+                                at.add(cursor),
+                                end.checked_sub(cursor).ok_or(Error::Value)?,
+                                &mut extent_fuel,
+                            )
+                        }?;
+                        children.push((*node, unsafe { at.add(cursor) }, Some(extent)));
+                        cursor = cursor.checked_add(extent).ok_or(Error::Value)?;
+                    }
+                    if cursor != end {
+                        return Err(Error::Value);
+                    }
+                    work.extend(children.into_iter().rev());
+                    continue;
+                }
+                Node::Columns {
+                    data,
+                    quantum,
+                    columns,
+                    ..
+                } => {
+                    let capacity = capacity.ok_or(Error::Value)?;
+                    let count = usize::try_from(unsafe { at.cast::<u64>().read_unaligned() })
+                        .map_err(|_| Error::Value)?;
+                    let reserved =
+                        usize::try_from(unsafe { at.add(8).cast::<u64>().read_unaligned() })
+                            .map_err(|_| Error::Value)?;
+                    if count > reserved || !reserved.is_multiple_of(*quantum) {
+                        return Err(Error::Value);
+                    }
+                    if count
+                        .checked_mul(columns.len().max(1))
+                        .is_none_or(|n| n > WORK_MAX.saturating_sub(visited + work.len()))
+                    {
+                        return Err(Error::Limit);
+                    }
+                    let mut starts = Vec::new();
+                    for &(prefix, stride, node) in columns {
+                        let start = reserved
+                            .checked_mul(prefix)
+                            .and_then(|n| data.checked_add(n))
+                            .ok_or(Error::Value)?;
+                        let end = reserved
+                            .checked_mul(stride)
+                            .and_then(|n| start.checked_add(n))
+                            .ok_or(Error::Value)?;
+                        if end > capacity {
+                            return Err(Error::Value);
+                        }
+                        starts.push((start, stride, node));
+                    }
+                    out.extend_from_slice(&(count as u64).to_le_bytes());
+                    for row in (0..count).rev() {
+                        for &(start, stride, node) in starts.iter().rev() {
+                            work.push((
+                                node,
+                                unsafe { at.add(start + row * stride) },
+                                Some(stride),
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                Node::Environment {
+                    live,
+                    movable,
+                    fields,
+                    ..
+                } => {
+                    let bits = unsafe { at.add(*live).cast::<u64>().read_unaligned() };
+                    if *movable < 64 && bits >> movable != 0 {
+                        return Err(Error::Value);
+                    }
+                    let mut initialized = Vec::new();
+                    for (field, bit) in fields {
+                        let present = bit.is_none_or(|bit| bits & (1u64 << bit) != 0);
+                        out.push(u8::from(present));
+                        if present {
+                            initialized.push(field);
+                        }
+                    }
+                    if work.len() + initialized.len() > WORK_MAX {
+                        return Err(Error::Limit);
+                    }
+                    for field in initialized.into_iter().rev() {
+                        work.push((
+                            field.node,
+                            unsafe { at.add(field.offset) },
+                            capacity.map(|n| n - field.offset),
+                        ));
+                    }
+                    continue;
+                }
+                Node::Callable { iterator, generic } => {
+                    let walk = *iterator
+                        && unsafe { at.add(8).cast::<usize>().read_unaligned() }
+                            == crate::io::hirsel_rt_v2_file_walk_step as *const () as usize;
+                    let code_offsets: &[usize] = if *iterator { &[8, 16] } else { &[0] };
+                    for (ordinal, offset) in code_offsets.iter().enumerate() {
+                        let code = unsafe { at.add(*offset).cast::<usize>().read_unaligned() };
+                        if *iterator && ordinal == 1 && code == 0 {
+                            out.extend_from_slice(&0u64.to_le_bytes());
+                            continue;
+                        }
+                        let name = if !iterator && code == 0 {
+                            generic.as_deref().ok_or(Error::Unsupported)?
+                        } else if walk && ordinal == 0 {
+                            "hirsel.runtime.file_walk.next.v1"
+                        } else {
+                            self.codes.get(&code).ok_or(Error::Unsupported)?.as_str()
+                        };
+                        if out.len().saturating_add(8).saturating_add(name.len()) > BYTES_MAX {
+                            return Err(Error::Limit);
+                        }
+                        out.extend_from_slice(&(name.len() as u64).to_le_bytes());
+                        out.extend_from_slice(name.as_bytes());
+                    }
+                    let offset = if *iterator { 0 } else { 8 };
+                    let block = unsafe {
+                        at.add(offset)
+                            .cast::<*const crate::Header>()
+                            .read_unaligned()
+                    };
+                    if block.is_null() {
+                        return Err(Error::Value);
+                    }
+                    let descriptor = unsafe { (*block).index() };
+                    if walk {
+                        if descriptor != 1
+                            || unsafe { at.add(16).cast::<usize>().read_unaligned() } != 0
+                        {
+                            return Err(Error::Value);
+                        }
+                        out.push(2); // Runtime-owned walk environment, not a compiler layout.
+                        unsafe { self.walk_values(block, &mut out, &mut extent_fuel) }?;
+                        continue;
+                    }
+                    if descriptor == 2 {
+                        out.push(0); // The runtime's fixed empty environment.
+                        continue;
+                    }
+                    out.push(1);
+                    let node = *self
+                        .descriptors
+                        .get(&descriptor)
+                        .ok_or(Error::Unsupported)?;
+                    let capacity = unsafe { self.owner_capacity(descriptor, block) }?;
+                    work.push((node, unsafe { block.add(1).cast() }, Some(capacity)));
+                    continue;
+                }
                 Node::Bits(bytes) => {
                     // Read exactly the scalar, never its containing carrier.
                     let bits = unsafe {
@@ -678,14 +1355,7 @@ impl Program {
                     }
                     // The typed live carrier owns this counted payload; only
                     // initialized fields of its linked layout are traversed.
-                    let capacity = if matches!(self.nodes[*node], Node::Sequence { .. }) {
-                        Some(
-                            usize::try_from(unsafe { (*block).capacity() })
-                                .map_err(|_| Error::Value)?,
-                        )
-                    } else {
-                        None
-                    };
+                    let capacity = Some(unsafe { self.owner_capacity(*descriptor, block) }?);
                     work.push((*node, unsafe { block.add(1).cast() }, capacity));
                     continue;
                 }
@@ -708,7 +1378,7 @@ impl Program {
                     };
                     out.extend_from_slice(&(count as u64).to_le_bytes());
                     for i in (0..count).rev() {
-                        work.push((*node, unsafe { at.add(offset + i * stride) }, None));
+                        work.push((*node, unsafe { at.add(offset + i * stride) }, Some(*stride)));
                     }
                     continue;
                 }
@@ -725,7 +1395,11 @@ impl Program {
                 return Err(Error::Limit);
             }
             for field in fields.iter().rev() {
-                work.push((field.node, unsafe { at.add(field.offset) }, None));
+                work.push((
+                    field.node,
+                    unsafe { at.add(field.offset) },
+                    capacity.map(|n| n - field.offset),
+                ));
             }
         }
         if out.len() > BYTES_MAX {
@@ -739,6 +1413,525 @@ impl Program {
 mod tests {
     use super::*;
     use std::mem::MaybeUninit;
+
+    #[test]
+    fn linked_generic_callable_identity_survives_registry_reordering_and_distinguishes_bodies() {
+        use hirsel_layout::layout::{EnvironmentShape, LayoutBuilder, Owners};
+        use hirsel_lir::{abi_types::CallMultiplicity, layout_types::TargetSpec};
+        use hirsel_syntax::DefPath;
+        use hirsel_types::testing::Types;
+        for target in TargetSpec::executed() {
+            let types = Types::default();
+            let owners = Owners::default();
+            let mut builder = LayoutBuilder::new(&target, &owners);
+            let mut roots = Vec::new();
+            for body in [1, 2] {
+                let environment = builder
+                    .environment(
+                        &types.store,
+                        &EnvironmentShape {
+                            definition: DefPath::core("generic_value").into(),
+                            body,
+                            captures: &[],
+                            sizes: &[],
+                            movable: &[],
+                        },
+                    )
+                    .unwrap();
+                roots.push(builder.closure(environment, CallMultiplicity::Many));
+            }
+            let table = builder.finish();
+            let mut expected = None;
+            for rotation in [0, 1] {
+                let count = table.layouts.len();
+                let (_words, layouts) = native_layouts(&table, rotation);
+                let mut outputs = Vec::new();
+                for root in &roots {
+                    let linked = ((root.0 as usize + rotation) % count + 2) as u32;
+                    let program = unsafe {
+                        Program::from_layouts(linked, count as u32 + 2, |id| {
+                            &layouts[((id as usize).saturating_sub(2) + count - rotation) % count]
+                        })
+                    }
+                    .unwrap();
+                    let empty = crate::Header {
+                        count: 0,
+                        descriptor: 2,
+                    };
+                    let carrier = [0usize, &empty as *const _ as usize];
+                    outputs.push(
+                        unsafe { program.encode(carrier.as_ptr().cast(), |_, _| None) }.unwrap(),
+                    );
+                }
+                assert_ne!(outputs[0], outputs[1]);
+                if let Some(expected) = &expected {
+                    assert_eq!(&outputs, expected);
+                } else {
+                    expected = Some(outputs);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn generic_callable_values_require_the_concrete_closure_identity() {
+        let empty = crate::Header {
+            count: 0,
+            descriptor: 2,
+        };
+        let carrier = [0usize, &empty as *const _ as usize];
+        let encode = |name| {
+            let program = Program::new(
+                vec![Node::Callable {
+                    iterator: false,
+                    generic: name,
+                }],
+                0,
+            )
+            .unwrap();
+            unsafe { program.encode(carrier.as_ptr().cast(), |_, _| None) }
+        };
+        assert_eq!(encode(None), Err(Error::Unsupported));
+        let first = encode(Some("generic.definition.body.1".into())).unwrap();
+        assert_eq!(
+            encode(Some("generic.definition.body.1".into())).unwrap(),
+            first
+        );
+        assert_ne!(
+            encode(Some("generic.definition.body.2".into())).unwrap(),
+            first
+        );
+    }
+
+    #[test]
+    fn runtime_walk_iterator_values_skip_consumed_rows_and_normalize_path_words() {
+        let mut reference = None;
+        for noise in [0, 7] {
+            let mut program = Program::new(
+                vec![Node::Callable {
+                    iterator: true,
+                    generic: None,
+                }],
+                0,
+            )
+            .unwrap();
+            let names = std::sync::Arc::new(crate::paths::Names::default());
+            for i in 0..noise {
+                names.paths.intern(&format!("/noise/{i}"));
+            }
+            let path = names.paths.intern("/same/path");
+            program.names = Some(names);
+            program.owners = vec![
+                OwnerBounds {
+                    size: 64,
+                    flags: crate::LAYOUT_NO_EXTENT,
+                    #[cfg(feature = "system-allocator")]
+                    align: 8,
+                };
+                2
+            ];
+            let mut storage = MaybeUninit::<[u64; 9]>::uninit();
+            let owner = storage.as_mut_ptr().cast::<crate::Header>();
+            unsafe {
+                owner.write(crate::Header {
+                    count: 1,
+                    descriptor: 1,
+                });
+                let at = owner.add(1).cast::<u8>();
+                at.cast::<u64>().write(1);
+                at.add(8).cast::<u64>().write(3);
+                // First row and every padding word remain uninitialized.
+                at.add(32).cast::<u32>().write(0);
+                at.add(40).cast::<u64>().write(path);
+                at.add(48).cast::<u32>().write(1);
+                at.add(56).cast::<u32>().write(3); // FileError::NotFound, no payload.
+                let iterator = [
+                    owner as usize,
+                    crate::io::hirsel_rt_v2_file_walk_step as *const () as usize,
+                    0,
+                ];
+                let bytes = program
+                    .encode(iterator.as_ptr().cast(), |_, _| None)
+                    .unwrap();
+                if let Some(reference) = &reference {
+                    assert_eq!(&bytes, reference);
+                } else {
+                    reference = Some(bytes.clone());
+                }
+                assert!(bytes.windows(10).any(|w| w == b"/same/path"));
+                at.cast::<u64>().write(4);
+                assert_eq!(
+                    program.encode(iterator.as_ptr().cast(), |_, _| None),
+                    Err(Error::Value)
+                );
+                at.cast::<u64>().write(1);
+                at.add(56).cast::<u32>().write(11);
+                assert_eq!(
+                    program.encode(iterator.as_ptr().cast(), |_, _| None),
+                    Err(Error::Value)
+                );
+                at.add(56).cast::<u32>().write(3);
+                program.owners[1].size = 63;
+                assert_eq!(
+                    program.encode(iterator.as_ptr().cast(), |_, _| None),
+                    Err(Error::Value)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn linked_flat_values_follow_variable_prefixes_and_reject_truncation() {
+        use hirsel_layout::layout::{LayoutBuilder, Owners};
+        use hirsel_lir::layout_types::TargetSpec;
+        use hirsel_types::{Primitive, testing::Types};
+        for target in TargetSpec::executed() {
+            let mut types = Types::default();
+            let boolean = types.p(Primitive::Bool);
+            let text = types.p(Primitive::String);
+            let number = types.p(Primitive::U64);
+            let record = types.record(&[boolean, text, number]);
+            let owners = Owners::default();
+            let mut builder = LayoutBuilder::new(&target, &owners);
+            let root = builder.flat(&types.store, record).unwrap();
+            let table = builder.finish();
+            let (_words, layouts) = native_layouts(&table, 0);
+            let pointers: Vec<_> = [
+                vec![&layouts[0] as *const crate::Layout; 2],
+                layouts.iter().map(|r| r as *const crate::Layout).collect(),
+            ]
+            .concat();
+            let mut program = unsafe {
+                Program::from_layouts(root.0 + 2, pointers.len() as u32, |id| {
+                    pointers[id as usize]
+                })
+            }
+            .unwrap();
+            program.nodes.push(Node::Indirect {
+                node: program.root,
+                descriptor: root.0 + 2,
+            });
+            program.root = program.nodes.len() - 1;
+            let mut heap = crate::alloc::Heap::new(pointers.into_boxed_slice(), false, 0);
+            let mut view = crate::alloc::View::new();
+            unsafe {
+                heap.bind(&mut view);
+                let (block, _) = heap.allocate(root.0 + 2, 20, 1);
+                let at = block.add(1).cast::<u8>();
+                at.write(1);
+                at.add(1).cast::<u64>().write_unaligned(3);
+                std::ptr::copy_nonoverlapping(b"abc".as_ptr(), at.add(9), 3);
+                at.add(12).cast::<u64>().write_unaligned(42);
+                let expected =
+                    [&[1][..], &3u64.to_le_bytes(), b"abc", &42u64.to_le_bytes()].concat();
+                assert_eq!(
+                    program.encode((&block as *const *mut crate::Header).cast(), |_, _| None),
+                    Ok(expected)
+                );
+                at.add(1).cast::<u64>().write_unaligned(u64::MAX);
+                assert_eq!(
+                    program.encode((&block as *const *mut crate::Header).cast(), |_, _| None),
+                    Err(Error::Value)
+                );
+                heap.free(block);
+            }
+        }
+    }
+
+    #[test]
+    fn linked_sequential_packed_values_read_only_active_arms_and_used_bytes() {
+        use hirsel_layout::layout::{LayoutBuilder, Owners};
+        use hirsel_lir::layout_types::{LayoutKind, TargetSpec};
+        use hirsel_types::{BuiltinType, GenericArgument, Primitive, testing::Types};
+        for target in TargetSpec::executed() {
+            let mut types = Types::default();
+            let number = types.p(Primitive::U64);
+            let option = types.variant(&[&[], &[number]]);
+            let packed = types.builtin(BuiltinType::Packed, vec![GenericArgument::Type(option)]);
+            let list = types.list(packed);
+            let owners = Owners::default();
+            let mut builder = LayoutBuilder::new(&target, &owners);
+            let root = builder.layout(&types.store, list).unwrap();
+            let table = builder.finish();
+            let LayoutKind::Block { payload } = table.layouts[root.0 as usize].kind else {
+                panic!("list")
+            };
+            let LayoutKind::Sequential { element } = table.layouts[payload.0 as usize].kind else {
+                panic!("sequential")
+            };
+            let packed = &table.layouts[element.0 as usize];
+            let value_offset = packed.tag.as_ref().unwrap().variants[1].fields[0].offset as usize;
+            let align = packed.align as usize;
+            let absent = (4 + align - 1) & !(align - 1);
+            let present = (value_offset + 8 + align - 1) & !(align - 1);
+            let used = absent + present;
+            let (_words, layouts) = native_layouts(&table, 0);
+            let pointers: Vec<_> = [
+                vec![&layouts[0] as *const crate::Layout; 2],
+                layouts.iter().map(|r| r as *const crate::Layout).collect(),
+            ]
+            .concat();
+            let program = unsafe {
+                Program::from_layouts(root.0 + 2, pointers.len() as u32, |id| {
+                    pointers[id as usize]
+                })
+            }
+            .unwrap();
+            let mut heap = crate::alloc::Heap::new(pointers.into_boxed_slice(), false, 0);
+            let mut view = crate::alloc::View::new();
+            unsafe {
+                heap.bind(&mut view);
+                let (block, _) = heap.allocate(payload.0 + 2, (16 + used + 64) as u64, 8);
+                let at = block.add(1).cast::<u8>();
+                at.cast::<u64>().write(2);
+                at.add(8).cast::<u64>().write(used as u64);
+                at.add(16).cast::<u32>().write(0);
+                at.add(16 + absent).cast::<u32>().write(1);
+                at.add(16 + absent + value_offset).cast::<u64>().write(42);
+                let expected = [
+                    &2u64.to_le_bytes()[..],
+                    &0u32.to_le_bytes(),
+                    &1u32.to_le_bytes(),
+                    &42u64.to_le_bytes(),
+                ]
+                .concat();
+                assert_eq!(
+                    program.encode((&block as *const *mut crate::Header).cast(), |_, _| None),
+                    Ok(expected)
+                );
+                at.add(8).cast::<u64>().write((used - 1) as u64);
+                assert_eq!(
+                    program.encode((&block as *const *mut crate::Header).cast(), |_, _| None),
+                    Err(Error::Value)
+                );
+                at.add(8).cast::<u64>().write(used as u64);
+                at.add(16 + absent).cast::<u32>().write(9);
+                assert_eq!(
+                    program.encode((&block as *const *mut crate::Header).cast(), |_, _| None),
+                    Err(Error::Value)
+                );
+                heap.free(block);
+            }
+        }
+    }
+
+    #[test]
+    fn column_values_follow_rows_and_ignore_reserved_slots() {
+        let mut program = Program::new(
+            vec![
+                Node::Columns {
+                    minimum: 16,
+                    data: 16,
+                    quantum: 8,
+                    columns: vec![(0, 1, 1), (1, 8, 2)],
+                },
+                Node::Bool,
+                Node::Bits(8),
+            ],
+            0,
+        )
+        .unwrap();
+        // Supply an allocation bound through the same counted-owner route.
+        program.nodes.push(Node::Indirect {
+            descriptor: 5,
+            node: 0,
+        });
+        program.root = 3;
+        program.owners = vec![
+            OwnerBounds {
+                size: 16 + 8 * 9,
+                flags: crate::LAYOUT_NO_EXTENT,
+                #[cfg(feature = "system-allocator")]
+                align: 8,
+            };
+            6
+        ];
+        let mut block = MaybeUninit::<[u64; 12]>::uninit();
+        let owner = block.as_mut_ptr().cast::<crate::Header>();
+        unsafe {
+            owner.write(crate::Header {
+                count: 1,
+                descriptor: 5,
+            });
+            let at = owner.add(1).cast::<u8>();
+            at.cast::<u64>().write(2);
+            at.add(8).cast::<u64>().write(8);
+            at.add(16).write(1);
+            at.add(17).write(0);
+            at.add(24).cast::<u64>().write(42);
+            at.add(32).cast::<u64>().write(99);
+            let expected = [
+                &2u64.to_le_bytes()[..],
+                &[1],
+                &42u64.to_le_bytes(),
+                &[0],
+                &99u64.to_le_bytes(),
+            ]
+            .concat();
+            assert_eq!(
+                program.encode((&owner as *const *mut crate::Header).cast(), |_, _| None),
+                Ok(expected)
+            );
+            at.cast::<u64>().write(9);
+            assert_eq!(
+                program.encode((&owner as *const *mut crate::Header).cast(), |_, _| None),
+                Err(Error::Value)
+            );
+            at.cast::<u64>().write(2);
+            at.add(8).cast::<u64>().write(7);
+            assert_eq!(
+                program.encode((&owner as *const *mut crate::Header).cast(), |_, _| None),
+                Err(Error::Value)
+            );
+        }
+    }
+
+    #[test]
+    fn callable_and_iterator_values_normalize_code_addresses_and_live_captures() {
+        // Deliberately leave the moved capture and native padding uninitialized.
+        // Both allocation identity and code addresses differ across recordings.
+        let mut reference = None;
+        for iterator in [false, true] {
+            for (address, descriptor) in [(0x1000usize, 5u32), (0x7000, 9)] {
+                let mut program = Program::new(
+                    vec![
+                        Node::Callable {
+                            iterator,
+                            generic: None,
+                        },
+                        Node::Environment {
+                            extent: 24,
+                            live: 16,
+                            movable: 2,
+                            fields: vec![
+                                (Field { offset: 0, node: 2 }, Some(0)),
+                                (Field { offset: 8, node: 2 }, Some(1)),
+                            ],
+                        },
+                        Node::Bits(8),
+                    ],
+                    0,
+                )
+                .unwrap();
+                program.descriptors.insert(descriptor, 1);
+                program.codes = BTreeMap::from([(address, "stable.next".into())]).into();
+                program.owners = vec![
+                    OwnerBounds {
+                        size: 24,
+                        flags: crate::LAYOUT_NO_EXTENT,
+                        #[cfg(feature = "system-allocator")]
+                        align: 8,
+                    };
+                    10
+                ];
+                let mut storage = MaybeUninit::<[u64; 4]>::uninit();
+                let block = storage.as_mut_ptr().cast::<crate::Header>();
+                unsafe {
+                    block.write(crate::Header {
+                        count: 1,
+                        descriptor,
+                    });
+                    let payload = block.add(1).cast::<u8>();
+                    payload.cast::<u64>().write(42);
+                    payload.add(16).cast::<u64>().write(1);
+                    let carrier = if iterator {
+                        [block as usize, address, 0]
+                    } else {
+                        [address, block as usize, 0]
+                    };
+                    let bytes = program
+                        .encode(carrier.as_ptr().cast(), |_, _| None)
+                        .unwrap();
+                    let mut expected = [11u64.to_le_bytes().as_slice(), b"stable.next"].concat();
+                    if iterator {
+                        expected.extend_from_slice(&0u64.to_le_bytes());
+                    }
+                    expected.extend([1, 1, 0]);
+                    expected.extend(42u64.to_le_bytes());
+                    assert_eq!(bytes, expected);
+                    if !iterator {
+                        if let Some(reference) = &reference {
+                            assert_eq!(&bytes, reference);
+                        } else {
+                            reference = Some(bytes.clone());
+                        }
+                    }
+                    // Snapshot owns fields; the move mask and value can change later.
+                    payload.cast::<u64>().write(99);
+                    assert_eq!(bytes, expected);
+                    let unknown = if iterator {
+                        [block as usize, address + 1, 0]
+                    } else {
+                        [address + 1, block as usize, 0]
+                    };
+                    assert_eq!(
+                        program.encode(unknown.as_ptr().cast(), |_, _| None),
+                        Err(Error::Unsupported)
+                    );
+                    payload.add(16).cast::<u64>().write(4);
+                    assert_eq!(
+                        program.encode(carrier.as_ptr().cast(), |_, _| None),
+                        Err(Error::Value)
+                    );
+                    payload.add(16).cast::<u64>().write(1);
+                    program.owners[descriptor as usize].size = 8;
+                    assert_eq!(
+                        program.encode(carrier.as_ptr().cast(), |_, _| None),
+                        Err(Error::Value)
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn callable_values_require_known_code_and_actual_environment_metadata() {
+        let mut program = Program::new(
+            vec![Node::Callable {
+                iterator: false,
+                generic: None,
+            }],
+            0,
+        )
+        .unwrap();
+        program.codes = BTreeMap::from([(7usize, "function".into())]).into();
+        let empty = crate::Header {
+            count: 0,
+            descriptor: 2,
+        };
+        let carrier = [7usize, &empty as *const _ as usize];
+        let expected = [8u64.to_le_bytes().as_slice(), b"function", &[0]].concat();
+        assert_eq!(
+            unsafe { program.encode(carrier.as_ptr().cast(), |_, _| None) },
+            Ok(expected)
+        );
+        let missing = crate::Header {
+            count: 1,
+            descriptor: 8,
+        };
+        for (carrier, error) in [
+            ([7, &missing as *const _ as usize], Error::Unsupported),
+            ([8, &empty as *const _ as usize], Error::Unsupported),
+            ([7, 0], Error::Value),
+        ] {
+            assert_eq!(
+                unsafe { program.encode(carrier.as_ptr().cast(), |_, _| None) },
+                Err(error)
+            );
+        }
+        assert!(
+            Program::new(
+                vec![Node::Environment {
+                    extent: 8,
+                    live: 8,
+                    movable: 1,
+                    fields: vec![],
+                }],
+                0
+            )
+            .is_err()
+        );
+    }
 
     #[test]
     fn derived_layout_metadata_decodes_active_fields_independently_of_link_indices() {
@@ -764,7 +1957,7 @@ mod tests {
                     .layouts
                     .iter()
                     .map(|record| {
-                        hirsel_lir::handle_scan::Program::lower(record)
+                        hirsel_lir::handle_scan::Program::lower_in(&table, record)
                             .linked(|id| Some(linked(id)))
                             .unwrap()
                     })
@@ -835,7 +2028,7 @@ mod tests {
             .layouts
             .iter()
             .map(|record| {
-                hirsel_lir::handle_scan::Program::lower(record)
+                hirsel_lir::handle_scan::Program::lower_in(table, record)
                     .linked(|id| Some(linked(id)))
                     .unwrap()
             })
@@ -902,7 +2095,7 @@ mod tests {
                 let (_words, layouts) = native_layouts(&table, rotation);
                 let program = unsafe {
                     Program::from_layouts(linked(root), count as u32 + 2, |id| {
-                        &layouts[((id as usize - 2) + count - rotation) % count]
+                        &layouts[((id as usize).saturating_sub(2) + count - rotation) % count]
                     })
                 }
                 .unwrap();
@@ -978,7 +2171,7 @@ mod tests {
                     |id: hirsel_lir::LayoutId| ((id.0 as usize + rotation) % count + 2) as u32;
                 let (_words, layouts) = native_layouts(&table, rotation);
                 let descriptor = |id: u32| -> *const crate::Layout {
-                    &layouts[((id as usize - 2) + count - rotation) % count]
+                    &layouts[((id as usize).saturating_sub(2) + count - rotation) % count]
                 };
                 let program =
                     unsafe { Program::from_layouts(linked(root), count as u32 + 2, descriptor) }
@@ -1715,7 +2908,7 @@ mod tests {
                 let (_words, layouts) = native_layouts(&table, rotation);
                 let mut program = unsafe {
                     Program::from_layouts(linked(root), count as u32 + 2, |id| {
-                        &layouts[((id as usize - 2) + count - rotation) % count]
+                        &layouts[((id as usize).saturating_sub(2) + count - rotation) % count]
                     })
                 }
                 .unwrap();
@@ -1951,7 +3144,7 @@ mod tests {
                 for (case, root) in roots.into_iter().enumerate() {
                     let program = unsafe {
                         Program::from_layouts(linked(root), count as u32 + 2, |id| {
-                            &layouts[((id as usize - 2) + count - rotation) % count]
+                            &layouts[((id as usize).saturating_sub(2) + count - rotation) % count]
                         })
                     }
                     .unwrap();
@@ -2449,7 +3642,7 @@ mod tests {
         let (_words, layouts) = native_layouts(&table, 0);
         let program = unsafe {
             Program::from_layouts(linked(shape.root), count as u32 + 2, |id| {
-                &layouts[id as usize - 2]
+                &layouts[(id as usize).saturating_sub(2)]
             })
         }
         .unwrap();

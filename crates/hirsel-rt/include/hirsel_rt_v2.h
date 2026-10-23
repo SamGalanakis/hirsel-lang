@@ -17,7 +17,7 @@
 extern "C" {
 #endif
 
-#define HIRSEL_RT_V2_ABI_VERSION 47
+#define HIRSEL_RT_V2_ABI_VERSION 48
 /* TaskSpawn trailing flags: compiler proofs, ignored in ordered execution and replay. */
 #define HIRSEL_RT_V2_SPAWN_IMMEDIATE_AWAIT 1
 #define HIRSEL_RT_V2_SPAWN_OP_FREE 2
@@ -433,8 +433,11 @@ typedef struct {
     uint64_t entry_count;
     /* ABI 45: 0 = Result[(), E], 1 = ExitCode, 2 = Result[ExitCode, E]. */
     uint64_t return_kind, success_offset;
+    /* ABI 48: initialized callable values; separate from RUN-3 Entry admission. */
+    const hirsel_rt_v2_entry_row *value_codes;
+    uint64_t value_code_count;
 } hirsel_rt_v2_program_descriptor;
-HIRSEL_RT_V2_ASSERT_SIZE(hirsel_rt_v2_program_descriptor, 192);
+HIRSEL_RT_V2_ASSERT_SIZE(hirsel_rt_v2_program_descriptor, 208);
 /* Load the program and launch the run argv (argv[0] names the program) selects; returns the
  * exit status of its outcome. No other process arguments are read. */
 int32_t hirsel_rt_v2_main(const hirsel_rt_v2_program_descriptor *program, int32_t argc, const char *const *argv);
