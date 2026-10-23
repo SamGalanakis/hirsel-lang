@@ -181,6 +181,7 @@ fn discover(
 /// signature proofs), and source units replicated for partition-independent inlining.
 pub struct Specializations {
     pub origins: Vec<InstanceId>,
+    pub keys: Vec<hirsel_layout::instance::InstanceKey>,
     pub inline: BTreeSet<ContentHash>,
 }
 
@@ -197,10 +198,13 @@ impl Specializations {
         assert_eq!(instances.actuals.len(), n);
         assert_eq!(instances.environments.len(), n);
         assert_eq!(self.origins.len(), lowered.units.len());
-        for (unit, &origin) in lowered.units.iter().zip(&self.origins) {
+        assert_eq!(self.keys.len(), lowered.units.len());
+        for ((unit, &origin), key) in lowered.units.iter().zip(&self.origins).zip(&self.keys) {
             let view = instances.view(origin);
             instances.callable(origin);
             assert_eq!(&unit.header.definition, view.key.definition());
+            assert_eq!(unit.header.instance, key.digest());
+            assert_eq!(&unit.header.definition, key.definition());
         }
         for id in instances.ids() {
             assert_eq!(self.origins[id.index()], id);
@@ -240,6 +244,10 @@ pub fn specialize(lowered: &mut Lowered) -> Specializations {
         })
         .collect();
     let mut origins: Vec<_> = (0..originals.len()).map(|i| InstanceId(i as u32)).collect();
+    let mut keys: Vec<_> = origins
+        .iter()
+        .map(|&id| lowered.instances.view(id).key.clone())
+        .collect();
     let mut inline = BTreeSet::new();
     let mut counts = vec![0; originals.len()];
     let mut cache = BTreeMap::new();
@@ -364,10 +372,11 @@ pub fn specialize(lowered: &mut Lowered) -> Specializations {
                     if spawn {
                         encoded.extend(flags.to_le_bytes());
                     }
-                    let digest = ContentHash::of_parts(
+                    let effective = keys[original].derived(
                         "hirsel.callable-target-specialization.v1",
-                        [source.header.instance.0.as_slice(), encoded.as_slice()],
+                        &[encoded.as_slice()],
                     );
+                    let digest = effective.digest();
                     let key = (original, digest);
                     let specialized = if let Some(&i) = cache.get(&key) {
                         i
@@ -383,6 +392,7 @@ pub fn specialize(lowered: &mut Lowered) -> Specializations {
                         u.header.instance = digest;
                         lowered.units.push(u);
                         origins.push(InstanceId(original as u32));
+                        keys.push(effective);
                         seeds.push(bound);
                         spawn_flags.push(flags);
                         inline.insert(digest);
@@ -402,5 +412,9 @@ pub fn specialize(lowered: &mut Lowered) -> Specializations {
         }
         at += 1;
     }
-    Specializations { origins, inline }
+    Specializations {
+        origins,
+        keys,
+        inline,
+    }
 }
