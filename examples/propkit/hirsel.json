@@ -1,0 +1,57 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "propkit",
+    "version": "1"
+  },
+  "entry": {
+    "module": [],
+    "name": "main"
+  },
+  "sources": [
+    {
+      "path": "main.hir",
+      "module": []
+    },
+    {
+      "path": "strategy.hir",
+      "module": [
+        "strategy"
+      ]
+    },
+    {
+      "path": "shrink.hir",
+      "module": [
+        "shrink"
+      ]
+    },
+    {
+      "path": "runner.hir",
+      "module": [
+        "runner"
+      ]
+    },
+    {
+      "path": "replay.hir",
+      "module": [
+        "replay"
+      ]
+    },
+    {
+      "path": "properties.hir",
+      "module": [
+        "properties"
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "manifest": "../../stdlib/std@1/hirsel.json",
+      "package": {
+        "name": "std",
+        "version": "1"
+      },
+      "expose": []
+    }
+  ]
+}

@@ -1,0 +1,248 @@
+// Shipped suite: callbacks are closed, pure and statically selected.
+@serializable
+pub type Sample {
+  number: i64,
+  values: List[i64],
+  text: String,
+}
+
+pub fn from_integer(value: i64) -> unique Sample uses {} {
+  Sample(number: value, values: [], text: "")
+}
+
+pub fn from_list(values: List[i64]) -> unique Sample uses {} {
+  let mut text: List[u8] = []
+  std@1/text.append(mut text, "羊\n\"\\")
+  for value in values {
+    std@1/text.append(mut text, f"{value},")
+  }
+  let rendered = match std@1/text.finish(take text) {
+    Ok(s) => take s,
+    Error(_) => "",
+  }
+  Sample(number: 0, values: unique values, text: take rendered)
+}
+
+pub fn integer_candidates(value: Sample) -> unique List[unique Sample] uses {} {
+  let mut out: unique List[unique Sample] = []
+  let choices = shrink.integers(value.number)
+  for candidate in choices {
+    list.push(mut out, from_integer(candidate))
+  }
+  take out
+}
+
+pub fn list_candidates(value: Sample) -> unique List[unique Sample] uses {} {
+  let choices = shrink.lists(value.values)
+  let mut out: unique List[unique Sample] = []
+  for candidate in choices {
+    list.push(mut out, from_list(candidate))
+  }
+  take out
+}
+
+pub fn known(name: String) -> bool uses {} {
+  name == "reverse" || name == "reverse-nonempty" || name == "sort" || name == "codec" || name == "deliberate-faulty" || name == "reject" || name == "exhaust" || name == "error"
+}
+
+pub fn source(name: String) -> Result[
+  unique strategy.Strategy[Sample],
+  strategy.GenError
+] uses {} {
+  if name == "deliberate-faulty" {
+    let ints = strategy.integers(-32, 32)?
+    return strategy.map(
+      take ints,
+      fn(value: i64) -> unique Sample uses {} {
+        from_integer(value)
+      },
+      fn(value: Sample) -> unique List[unique Sample] uses {} {
+        integer_candidates(value)
+      }
+    )
+  }
+  let lists = strategy.lists(8)?
+  let samples: unique strategy.Strategy[Sample] = strategy.map(
+    take lists,
+    fn(value: List[i64]) -> unique Sample uses {} {
+      from_list(value)
+    },
+    fn(value: Sample) -> unique List[unique Sample] uses {} {
+      list_candidates(value)
+    }
+  )?
+  if name == "reverse-nonempty" {
+    return strategy.filter(
+      take samples,
+      32,
+      fn(value: Sample) -> bool uses {} {
+        list.len(value.values) > 0
+      }
+    )
+  }
+  if name == "exhaust" {
+    return strategy.filter(
+      take samples,
+      32,
+      fn(value: Sample) -> bool uses {} {
+        false
+      }
+    )
+  }
+  Ok(take samples)
+}
+
+pub fn valid(value: Sample) -> bool uses {} {
+  if value.number < -32 || value.number > 32 || list.len(value.values) > 8 || string.byte_len(
+    value.text
+  ) > 128 {
+    return false
+  }
+  for item in value.values {
+    if item < -32 || item > 32 {
+      return false
+    }
+  }
+  true
+}
+
+@noalloc
+fn compare(a: i64, b: i64) -> i32 uses {} {
+  if a < b {
+    -1
+  } else if a > b {
+    1
+  } else {
+    0
+  }
+}
+
+fn reversal(value: Sample) -> runner.Outcome uses {} {
+  let mut reversed = unique value.values
+  std@1/list.reverse(mut reversed)
+  if list.len(reversed) != list.len(value.values) {
+    return Fail(10)
+  }
+  for i in 0u64..list.len(reversed) {
+    if reversed[i] != value.values[list.len(reversed) - i - 1] {
+      return Fail(11)
+    }
+  }
+  std@1/list.reverse(mut reversed)
+  if reversed == value.values {
+    Pass()
+  } else {
+    Fail(12)
+  }
+}
+
+fn sorting(value: Sample) -> runner.Outcome uses {} {
+  let mut sorted = unique value.values
+  std@1/list.sort(mut sorted, compare)
+  if list.len(sorted) != list.len(value.values) {
+    return Fail(20)
+  }
+  for i in 1u64..list.len(sorted) {
+    if sorted[i - 1] > sorted[i] {
+      return Fail(21)
+    }
+  }
+  // Count every bounded value, independently of sort's implementation.
+  for item in -32i64..33i64 {
+    let mut original_count = 0u64
+    let mut after = 0u64
+    for original in value.values {
+      if original == item {
+        original_count += 1
+      }
+    }
+    for ordered in sorted {
+      if ordered == item {
+        after += 1
+      }
+    }
+    if original_count != after {
+      return Fail(22)
+    }
+  }
+  let mut twice = unique sorted
+  std@1/list.sort(mut twice, compare)
+  if sorted == twice {
+    Pass()
+  } else {
+    Fail(23)
+  }
+}
+
+fn roundtrip(value: Sample) -> runner.Outcome uses {} {
+  let encoded = codec.encode(value)
+  let decoded: Result[Sample, DecodeError] = codec.decode(encoded)
+  if decoded != Ok(value) {
+    return Fail(30)
+  }
+  let node: json.Value = Text(unique value.text)
+  let Ok(text) = json.stringify(node) else {
+    return Fail(31)
+  }
+  let Ok(decoded_text) = json.parse(take text) else {
+    return Fail(32)
+  }
+  if node == decoded_text {
+    Pass()
+  } else {
+    Fail(33)
+  }
+}
+
+pub fn evaluate(name: String, value: Sample) -> Result[
+  runner.Outcome,
+  runner.PropertyError
+] uses {} {
+  if name == "reverse" || name == "reverse-nonempty" {
+    return Ok(reversal(value))
+  }
+  if name == "sort" {
+    return Ok(sorting(value))
+  }
+  if name == "codec" {
+    return Ok(roundtrip(value))
+  }
+  if name == "reject" {
+    return Ok(Reject())
+  }
+  if name == "error" {
+    return Error(Fault(90))
+  }
+  if name == "exhaust" {
+    return Ok(Pass())
+  }
+  if name == "deliberate-faulty" {
+    // Zero is a DIFFERENT failure: shrinking must retain category 7.
+    if value.number == 0 {
+      return Ok(Fail(99))
+    }
+    return Ok(
+      if value.number >= 7 {
+        Fail(7)
+      } else {
+        Pass()
+      }
+    )
+  }
+  Error(Fault(91))
+}
+
+pub fn callback(name: String) -> unique fn(Sample) -> Result[
+  runner.Outcome,
+  runner.PropertyError
+] uses {} uses {} {
+  let owned = shared.freeze(unique name)
+  fn(value: Sample) -> Result[runner.Outcome, runner.PropertyError] uses {} {
+    shared.with(
+      owned,
+      fn(selected: String) -> Result[runner.Outcome, runner.PropertyError] uses {} {
+        evaluate(selected, value)
+      }
+    )
+  }
+}

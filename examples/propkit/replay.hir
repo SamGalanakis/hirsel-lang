@@ -1,0 +1,282 @@
+// Durable schema 1: exact unsigned seed spelling, strategy version, config,
+// original failure index/category, and the independently owned minimized value.
+pub const MAX_BYTES: u64 = 65536
+
+pub type ReplayError = Invalid(String) | File(FileError) | Limit | Canceled
+
+pub type Record {
+  property: String,
+  config: runner.Config,
+  index: u64,
+  category: u64,
+  minimum: properties.Sample,
+}
+
+pub fn invalid(kind: String) -> unique ReplayError uses {} {
+  Invalid(unique kind)
+}
+
+fn number(fields: Map[String, json.Value], key: String) -> Result[
+  u64,
+  unique ReplayError
+] uses {} {
+  let Some(Number(raw)) = map.get(fields, key) else {
+    return Error(invalid(key))
+  }
+  let Ok(n) = u64.parse(raw) else {
+    return Error(invalid(key))
+  }
+  Ok(n)
+}
+
+pub fn encode(record: Record) -> Result[unique String, ReplayError] uses {} {
+  let mut values: List[json.Value] = []
+  for value in record.minimum.values {
+    list.push(mut values, Number(f"{value}"))
+  }
+  let mut fields: Map[String, json.Value] = map.empty()
+  map.insert(mut fields, "schema", Number("1"))
+  map.insert(mut fields, "strategy_version", Number("1"))
+  map.insert(mut fields, "property", Text(unique record.property))
+  map.insert(mut fields, "seed", Text(f"{record.config.seed}"))
+  map.insert(mut fields, "cases", Number(f"{record.config.cases}"))
+  map.insert(mut fields, "jobs", Number(f"{record.config.jobs}"))
+  map.insert(mut fields, "shrinks", Number(f"{record.config.shrinks}"))
+  map.insert(mut fields, "index", Number(f"{record.index}"))
+  map.insert(mut fields, "category", Number(f"{record.category}"))
+  map.insert(mut fields, "number", Number(f"{record.minimum.number}"))
+  map.insert(mut fields, "values", Array(take values))
+  map.insert(mut fields, "text", Text(unique record.minimum.text))
+  let node: json.Value = Object(take fields)
+  let Ok(text) = json.stringify(node) else {
+    return Error(invalid("encode"))
+  }
+  if string.byte_len(text) > MAX_BYTES {
+    return Error(Limit())
+  }
+  Ok(take text)
+}
+
+pub fn decode(take data: Bytes) -> Result[unique Record, unique ReplayError] uses {} {
+  if bytes.len(data) > MAX_BYTES {
+    return Error(Limit())
+  }
+  let Ok(source_text) = string.from_bytes(take data) else {
+    return Error(invalid("utf8"))
+  }
+  let Ok(Object(fields)) = json.parse(take source_text) else {
+    return Error(invalid("json"))
+  }
+  if map.len(fields) != 12 {
+    return Error(invalid("fields"))
+  }
+  if number(fields, "schema")? != 1 || number(fields, "strategy_version")? != strategy.VERSION {
+    return Error(invalid("version"))
+  }
+  let Some(Text(name)) = map.get(fields, "property") else {
+    return Error(invalid("property"))
+  }
+  if !properties.known(name) {
+    return Error(invalid("property"))
+  }
+  let Some(Text(seed_text)) = map.get(fields, "seed") else {
+    return Error(invalid("seed"))
+  }
+  let Ok(seed) = u64.parse(seed_text) else {
+    return Error(invalid("seed"))
+  }
+  if seed_text != f"{seed}" {
+    return Error(invalid("seed"))
+  }
+  let config = runner.Config(
+    seed: seed,
+    cases: number(fields, "cases")?,
+    jobs: number(fields, "jobs")?,
+    shrinks: number(fields, "shrinks")?
+  )
+  if let Error(_) = runner.validate(config) {
+    return Error(invalid("config"))
+  }
+  let index = number(fields, "index")?
+  if index >= config.cases {
+    return Error(invalid("index"))
+  }
+  let Some(Number(raw)) = map.get(fields, "number") else {
+    return Error(invalid("number"))
+  }
+  let Ok(n) = i64.parse(raw) else {
+    return Error(invalid("number"))
+  }
+  let Some(Array(entries)) = map.get(fields, "values") else {
+    return Error(invalid("values"))
+  }
+  if list.len(entries) > 8 {
+    return Error(Limit())
+  }
+  let mut values: List[i64] = []
+  for entry in entries {
+    let Number(item_text) = entry else {
+      return Error(invalid("value"))
+    }
+    let Ok(value) = i64.parse(item_text) else {
+      return Error(invalid("value"))
+    }
+    if value < -32 || value > 32 {
+      return Error(Limit())
+    }
+    list.push(mut values, value)
+  }
+  let Some(Text(text)) = map.get(fields, "text") else {
+    return Error(invalid("text"))
+  }
+  let minimum = properties.Sample(number: n, values: take values, text: unique text)
+  if !properties.valid(minimum) {
+    return Error(Limit())
+  }
+  Ok(
+    Record(
+      property: unique name,
+      config: config,
+      index: index,
+      category: number(fields, "category")?,
+      minimum: take minimum
+    )
+  )
+}
+
+pub fn read(dir: Dir) -> Result[unique Record, unique ReplayError] {
+  let mut input = file.open(dir, path.of("failure.json")) ? file_error
+  let data = match std@1/file.read_all_bounded(dir, mut input, MAX_BYTES) {
+    Ok(data) => take data,
+    Error(Limit()) => return Error(Limit()),
+    Error(File(Canceled(_))) => return Error(Canceled()),
+    Error(File(e)) => return Error(File(e)),
+  }
+  decode(take data)
+}
+
+pub fn verify(record: Record) -> Result[runner.Outcome, ReplayError] uses {} {
+  let Ok(verdict) = properties.evaluate(record.property, record.minimum) else {
+    return Error(invalid("property_error"))
+  }
+  if verdict != Fail(record.category) {
+    return Error(invalid("changed_failure"))
+  }
+  // Regenerate the indexed original too: a seed/config record is not just a
+  // convenient container for an arbitrary passing or unrelated minimum.
+  let Ok(source) = properties.source(record.property) else {
+    return Error(invalid("strategy"))
+  }
+  let drawn = strategy.draw(
+    source,
+    strategy.case_seed(record.config.seed, record.index)
+  )
+  let Ok(original) = take drawn else {
+    return Error(invalid("generation"))
+  }
+  if properties.evaluate(record.property, original) != Ok(Fail(record.category)) {
+    return Error(invalid("seed_failure"))
+  }
+  Ok(verdict)
+}
+
+resource type Joined {
+  dir: Dir,
+}
+drop(value) {
+  let _ = file.write_bytes(value.dir, path.of("joined"), b"joined")
+}
+
+// Interruptible replay loading. The first completed branch either releases or
+// cancels the actual pending read; every exit joins and runs the guard.
+pub fn staged(tasks: Tasks, input: Dir, output: Dir, release: bool) -> Result[
+  unique Option[Record],
+  unique ReplayError
+] {
+  task.scope(
+    tasks,
+    fn(s: Scope) -> Result[unique Option[Record], unique ReplayError] {
+      let mut set: TaskSet[Result[unique Option[Record], unique ReplayError]] of s = task.set(
+        s
+      )
+      task.add(
+        s,
+        mut set,
+        task.async(
+          s,
+          fn() -> Result[unique Option[Record], unique ReplayError] {
+            let guard = Joined(dir: output)
+            match read(input) {
+              Ok(record) => Ok(Some(take record)),
+              Error(Canceled()) => Ok(None()),
+              Error(error) => Error(error),
+            }
+          }
+        )
+      )
+      task.add(
+        s,
+        mut set,
+        task.async(
+          s,
+          fn() -> Result[unique Option[Record], unique ReplayError] {
+            // These operations permit the admitted reader to park before release.
+            let _ = file.metadata(input, path.of("failure.json")) ? file_error
+            let _ = file.metadata(input, path.of("failure.json")) ? file_error
+            if release {
+              file.write_bytes(output, path.of("release"), b"go") ? file_error
+            }
+            Ok(None())
+          }
+        )
+      )
+      if release {
+        let completed = task.await_at(s, mut set, 0)
+        task.cancel_all(s, take set)
+        return completed
+      }
+      let Some(first) = task.await_any(s, set) else {
+        task.cancel_all(s, take set)
+        return Error(invalid("empty_stage"))
+      }
+      let completed = task.await_at(s, mut set, first)
+      task.cancel_all(s, take set)
+      completed
+    }
+  )
+}
+
+fn file_error(error: FileError) -> unique ReplayError uses {} {
+  File(error)
+}
+
+// Real stream cancellation complements scripted file readiness. A pending
+// stdin read owns a guard; joining it proves cleanup before returning.
+pub fn cancel_input(tasks: Tasks, input: Stdin, output: Dir) -> bool {
+  task.scope(
+    tasks,
+    fn(s: Scope) -> bool {
+      let pending = task.async(
+        s,
+        fn() -> bool {
+          let guard = Joined(dir: output)
+          let mut data: List[u8] = []
+          match stdin.read(input, mut data, 1) {
+            Error(Canceled(_)) => list.len(data) == 0,
+            _ => false,
+          }
+        }
+      )
+      let release = task.async(
+        s,
+        fn() -> bool {
+          file.write_bytes(output, path.of("cancel"), b"cancel") == Ok(())
+        }
+      )
+      let released = task.await(s, take release)
+      task.cancel(s, pending)
+      let canceled = task.await(s, take pending)
+      released && canceled
+    }
+  )
+}

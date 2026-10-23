@@ -1,0 +1,1 @@
+{"args":["run","reverse","0","8","4","64"],"io":{"stdout":"stdout.bytes@1","stdin":"stdin.bytes@1","tasks":"tasks.cooperative@1","dirs":[{"path":"records","host":"REPLACE_WITH_ABSOLUTE_RECORDS_DIRECTORY","access":"read"},{"path":"output","host":"REPLACE_WITH_ABSOLUTE_OUTPUT_DIRECTORY","access":"read_write"}]},"placement":{"cores":4,"commit":"shared","reorder":"off"}}

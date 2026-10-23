@@ -1,0 +1,228 @@
+// All semantic selection follows add order, even when later cases finish first.
+pub type Outcome = Pass | Fail(u64) | Reject
+
+pub type PropertyError = Fault(u64)
+
+pub type RunError = Config | Generation(strategy.GenError) | Property(PropertyError) | Canceled
+
+pub type Config {
+  seed: u64,
+  cases: u64,
+  jobs: u64,
+  shrinks: u64,
+}
+
+pub type Case[T] {
+  value: Option[Shared[T]],
+  verdict: Outcome,
+}
+
+pub type Report[T] {
+  passed: u64,
+  rejected: u64,
+  exhausted: u64,
+  index: Option[u64],
+  category: u64,
+  value: Option[T],
+  candidates: u64,
+}
+
+pub fn validate(config: Config) -> Result[(), RunError] uses {} {
+  if config.cases == 0 || config.cases > 64 || config.jobs == 0 || config.jobs > 4 || config.shrinks > 64 {
+    return Error(Config())
+  }
+  Ok(())
+}
+
+fn generate[T: copyable + inert](source: Shared[strategy.Strategy[T]], seed: u64) -> Result[
+  unique T,
+  strategy.GenError
+] uses {} {
+  shared.with(
+    source,
+    fn(s: strategy.Strategy[T]) -> Result[unique T, strategy.GenError] uses {} {
+      s.draw(seed)
+    }
+  )
+}
+
+fn judge[T: inert](
+  property: Shared[fn(T) -> Result[Outcome, PropertyError] uses {}],
+  value: T
+) -> Result[Outcome, PropertyError] uses {} {
+  shared.with(
+    property,
+    fn(f: fn(T) -> Result[Outcome, PropertyError] uses {}) -> Result[
+      Outcome,
+      PropertyError
+    ] uses {} {
+      f(value)
+    }
+  )
+}
+
+fn execute[T: copyable + inert](
+  source: Shared[strategy.Strategy[T]],
+  property: Shared[fn(T) -> Result[Outcome, PropertyError] uses {}],
+  seed: u64
+) -> Result[Case[T], RunError] uses {} {
+  let value = match generate(source, seed) {
+    Ok(value) => take value,
+    Error(Exhausted()) => return Ok(Case(value: None(), verdict: Reject())),
+    Error(error) => return Error(Generation(error)),
+  }
+  let verdict = judge(property, value) ? property_error
+  Ok(Case(value: Some(shared.freeze(take value)), verdict: verdict))
+}
+
+fn minimize[T: copyable + inert](
+  source: Shared[strategy.Strategy[T]],
+  property: Shared[fn(T) -> Result[Outcome, PropertyError] uses {}],
+  take initial: unique T,
+  category: u64,
+  budget: u64
+) -> Result[(unique T, u64), RunError] uses {} {
+  let frontier = reductions(source, initial)
+  let mut state = shrink.tree(take initial, take frontier)
+  let mut tested = 0u64
+  while tested < budget && shrink.simplify(mut state) {
+    tested += 1
+    let verdict = judge(property, state.current) ? property_error
+    if verdict == Fail(category) {
+      let next = reductions(source, state.current)
+      let current = unique state.current
+      state = shrink.tree(take current, take next)
+    } else {
+      let _ = shrink.complicate(mut state)
+    }
+  }
+  Ok((unique state.current, tested))
+}
+
+pub fn run[T: copyable + inert](
+  tasks: Tasks,
+  take source: unique strategy.Strategy[T],
+  take property: unique fn(T) -> Result[Outcome, PropertyError] uses {},
+  config: Config
+) -> Result[Report[T], RunError] {
+  validate(config)?
+  if source.depth == 0 || source.depth > 4 {
+    return Error(Config())
+  }
+  let generator = shared.freeze(take source)
+  let callback = shared.freeze(take property)
+  task.scope(
+    tasks,
+    fn(s: Scope) -> Result[Report[T], RunError] {
+      let mut report: Report[T] = Report(
+        passed: 0,
+        rejected: 0,
+        exhausted: 0,
+        index: None(),
+        category: 0,
+        value: None(),
+        candidates: 0
+      )
+      let mut next = 0u64
+      while next < config.cases {
+        task.check_canceled(s) ? cancel_error
+        let width = if config.jobs < config.cases - next {
+          config.jobs
+        } else {
+          config.cases - next
+        }
+        let mut set: TaskSet[Result[Case[T], RunError]] of s = task.set(s)
+        for offset in 0u64..width {
+          let seed = strategy.case_seed(config.seed, next + offset)
+          task.add(
+            s,
+            mut set,
+            task.async(
+              s,
+              fn() -> Result[Case[T], RunError] {
+                execute(generator, callback, seed)
+              }
+            )
+          )
+        }
+        for offset in 0u64..width {
+          let pending_result = task.await_at(s, mut set, offset)
+          let completed = match take pending_result {
+            Ok(value) => take value,
+            Error(error) => {
+              task.cancel_all(s, take set)
+              return Error(error)
+            },
+          }
+          match completed.verdict {
+            Pass() => {
+              report.passed += 1
+            },
+            Reject() => {
+              if let None() = completed.value {
+                report.exhausted += 1
+              } else {
+                report.rejected += 1
+              }
+            },
+            Fail(category) => {
+              task.cancel_all(s, take set)
+              let Case(value: maybe, verdict: _) = take completed
+              let Some(value) = take maybe else {
+                return Error(Config())
+              }
+              let initial = match shared.thaw(take value) {
+                Ok(owned) => take owned,
+                Error(_) => {
+                  let redrawn = generate(
+                    generator,
+                    strategy.case_seed(config.seed, next + offset)
+                  ) ? generation_error
+                  take redrawn
+                },
+              }
+              let (minimum, count) = minimize(
+                generator,
+                callback,
+                take initial,
+                category,
+                config.shrinks
+              )?
+              report.index = Some(next + offset)
+              report.category = category
+              report.value = Some(take minimum)
+              report.candidates = count
+              return Ok(take report)
+            },
+          }
+        }
+        task.cancel_all(s, take set)
+        next += width
+      }
+      Ok(take report)
+    }
+  )
+}
+
+fn property_error(error: PropertyError) -> RunError uses {} {
+  Property(error)
+}
+
+fn cancel_error(error: CancelError) -> RunError uses {} {
+  Canceled()
+}
+
+fn generation_error(error: strategy.GenError) -> RunError uses {} {
+  Generation(error)
+}
+
+fn reductions[T: copyable + inert](source: Shared[strategy.Strategy[T]], value: T) -> unique List[
+  unique T
+] uses {} {
+  shared.with(
+    source,
+    fn(s: strategy.Strategy[T]) -> unique List[unique T] uses {} {
+      s.reduce(value)
+    }
+  )
+}

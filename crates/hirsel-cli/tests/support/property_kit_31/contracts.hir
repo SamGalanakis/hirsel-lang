@@ -1,0 +1,65 @@
+// Independent fixed vectors: proptest signed convergence shape, bounded to this
+// application's integer domain. No expected value is obtained from the runner.
+pub fn main() -> Result[(), strategy.GenError] {
+  let seeds: List[u64] = [0, 11400714819323198485, 4354685564936845354, 15755400384260043839]
+  let draws: List[i64] = [-11, -10, -26, 11]
+  let source = strategy.integers(-32, 32)?
+  for i in 0u64..4u64 {
+    failure.check(strategy.case_seed(0, i) == seeds[i], Arithmetic())
+    failure.check(source.draw(seeds[i]) == Ok(draws[i]), Arithmetic())
+  }
+  failure.check(strategy.case_seed(18446744073709551615, 1) == 11400714819323198484, Arithmetic())
+  let low = strategy.integers(-32, -32)?
+  let high = strategy.integers(32, 32)?
+  failure.check(low.draw(0) == Ok(-32) && high.draw(0) == Ok(32), Arithmetic())
+  failure.check(match strategy.integers(-33, 32) { Error(Bounds()) => true, _ => false }, Arithmetic())
+  failure.check(match strategy.integers(-32, 33) { Error(Bounds()) => true, _ => false }, Arithmetic())
+  failure.check(match strategy.lists(9) { Error(Bounds()) => true, _ => false }, Arithmetic())
+  let lists = strategy.lists(8)?
+  let Ok(values) = strategy.draw(lists, 0) else { return Error(Bounds()) }
+  failure.check(list.len(values) <= 8, Arithmetic())
+  for initial in -32i64..33i64 {
+    let mut goal = if initial < 0 { initial } else { 0i64 }
+    let end = if initial < 0 { -1i64 } else { initial }
+    while goal <= end {
+      let mut cursor = shrink.binary(initial)
+      let mut attempts = 0u64
+      while attempts < 64 {
+        attempts += 1
+        let failed = if initial < 0 { cursor.current <= goal } else { cursor.current >= goal }
+        let changed = if failed { shrink.simplify_integer(mut cursor) } else { shrink.complicate_integer(mut cursor) }
+        if !changed { break }
+      }
+      failure.check(attempts < 64 && cursor.current == goal, Arithmetic())
+      goal += 1
+    }
+  }
+  let mut integer_tree = shrink.tree(11i64, shrink.integers(11))
+  failure.check(shrink.simplify(mut integer_tree) && integer_tree.current == 0, Arithmetic())
+  failure.check(shrink.complicate(mut integer_tree) && integer_tree.current == 11, Arithmetic())
+  failure.check(!shrink.complicate(mut integer_tree), Arithmetic())
+  let mut list_tree: unique shrink.Tree[List[i64]] = shrink.tree([7i64, 8i64], shrink.lists([7i64, 8i64]))
+  failure.check(shrink.simplify(mut list_tree) && list.len(list_tree.current) == 0, Arithmetic())
+  failure.check(shrink.complicate(mut list_tree) && list_tree.current == [7i64, 8i64], Arithmetic())
+  let ints = strategy.integers(-32, 32)?
+  let mapped: unique strategy.Strategy[properties.Sample] = strategy.map(take ints,
+    fn(n: i64) -> unique properties.Sample uses {} { properties.from_integer(n) },
+    fn(v: properties.Sample) -> unique List[unique properties.Sample] uses {} { properties.integer_candidates(v) })?
+  let filtered = strategy.filter(take mapped, 32, fn(v: properties.Sample) -> bool uses {} { v.number >= 7 })?
+  let sample = strategy.draw(filtered, 0)?
+  failure.check(sample.number >= 7, Arithmetic())
+  let candidates = reduce(filtered, sample)
+  for candidate in candidates { failure.check(candidate.number >= 7, Arithmetic()) }
+  let depth4 = strategy.filter(take filtered, 1, fn(v: properties.Sample) -> bool uses {} { true })?
+  failure.check(depth4.depth == 4, Arithmetic())
+  failure.check(match strategy.filter(take depth4, 1, fn(v: properties.Sample) -> bool uses {} { true }) { Error(Depth()) => true, _ => false }, Arithmetic())
+  let ints2 = strategy.integers(-32, 32)?
+  failure.check(match strategy.filter(take ints2, 33, fn(v: i64) -> bool uses {} { true }) { Error(Attempts()) => true, _ => false }, Arithmetic())
+  failure.check(runner.validate(runner.Config(seed: 0, cases: 64, jobs: 4, shrinks: 64)) == Ok(()), Arithmetic())
+  failure.check(runner.validate(runner.Config(seed: 0, cases: 65, jobs: 4, shrinks: 64)) == Error(Config()), Arithmetic())
+  failure.check(runner.validate(runner.Config(seed: 0, cases: 64, jobs: 5, shrinks: 64)) == Error(Config()), Arithmetic())
+  failure.check(runner.validate(runner.Config(seed: 0, cases: 64, jobs: 4, shrinks: 65)) == Error(Config()), Arithmetic())
+  Ok(())
+}
+
+fn reduce[T: copyable + inert](source: strategy.Strategy[T], value: T) -> unique List[unique T] uses {} { source.reduce(value) }

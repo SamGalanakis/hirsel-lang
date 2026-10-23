@@ -1,0 +1,205 @@
+pub type AppError = Output(OutputError)
+
+const HELP: String = "propkit run PROPERTY SEED CASES JOBS SHRINKS\npropkit replay | replay-cancel | replay-release | cancel\nProperties: reverse reverse-nonempty sort codec deliberate-faulty reject exhaust error\nOptional final --ready prints ready and waits for one stdin byte.\nReplay reads records/failure.json. Failed runs print a JSON replay record.\nLimits: cases 1..64, jobs 1..4, shrinks 0..64, list 8, integers -32..32.\nExit: 0 passed, 1 falsified, 2 invalid/resource refusal, 3 property/I/O error, 4 rejected/exhausted, 5 canceled.\n"
+
+fn usage(out: Stdout, reason: String) -> Result[std@1/process.ExitCode, AppError] {
+  out.print(out, f"invalid:{reason}\n")?
+  Ok(std@1/process.exit_code(2u8))
+}
+
+fn numeric(args: Args, index: u64) -> Option[u64] {
+  let Ok(text) = arg.text(args, index) else {
+    return None()
+  }
+  let Ok(value) = u64.parse(text) else {
+    return None()
+  }
+  if text != f"{value}" {
+    return None()
+  }
+  Some(value)
+}
+
+fn render(
+  out: Stdout,
+  name: String,
+  config: runner.Config,
+  take report: runner.Report[properties.Sample]
+) -> Result[std@1/process.ExitCode, AppError] {
+  if let Some(index) = report.index {
+    let Some(value) = report.value else {
+      return usage(out, "missing_value")
+    }
+    let record = replay.Record(
+      property: unique name,
+      config: config,
+      index: index,
+      category: report.category,
+      minimum: unique value
+    )
+    let Ok(encoded) = replay.encode(record) else {
+      return usage(out, "record_limit")
+    }
+    out.print(out, f"{encoded}\n")?
+    return Ok(std@1/process.FAILURE)
+  }
+  out.print(
+    out,
+    f"passed={report.passed} rejected={report.rejected} exhausted={report.exhausted}\n"
+  )?
+  Ok(
+    std@1/process.exit_code(
+      if report.rejected > 0 || report.exhausted > 0 {
+        4u8
+      } else {
+        0u8
+      }
+    )
+  )
+}
+
+pub fn main(rt: Io, args: Args) -> Result[std@1/process.ExitCode, AppError] {
+  let Ok(out) = io.stdout(rt) else {
+    return Ok(std@1/process.exit_code(3u8))
+  }
+  let mut count = arg.len(args)
+  if count > 8 {
+    return usage(out, "argv")
+  }
+  if count == 1 && arg.text(args, 0) == Ok("--help") {
+    out.print(out, HELP)?
+    return Ok(std@1/process.SUCCESS)
+  }
+  if count == 0 {
+    return usage(out, "usage")
+  }
+  if arg.text(args, count - 1) == Ok("--ready") {
+    let Ok(input) = io.stdin(rt) else {
+      return Ok(std@1/process.exit_code(3u8))
+    }
+    out.print(out, "ready\n")?
+    let mut byte: List[u8] = []
+    if stdin.read(input, mut byte, 1) != Ok(1) {
+      return Ok(std@1/process.exit_code(3u8))
+    }
+    count -= 1
+  }
+  let Ok(command) = arg.text(args, 0) else {
+    return usage(out, "command")
+  }
+  let Ok(tasks) = io.tasks(rt) else {
+    return Ok(std@1/process.exit_code(3u8))
+  }
+  if command == "run" {
+    if count != 6 {
+      return usage(out, "usage")
+    }
+    let Ok(name) = arg.text(args, 1) else {
+      return usage(out, "property")
+    }
+    if string.byte_len(name) > 32 || !properties.known(name) {
+      return usage(out, "property")
+    }
+    let Some(seed) = numeric(args, 2) else {
+      return usage(out, "seed")
+    }
+    let Some(cases) = numeric(args, 3) else {
+      return usage(out, "cases")
+    }
+    let Some(jobs) = numeric(args, 4) else {
+      return usage(out, "jobs")
+    }
+    let Some(shrinks) = numeric(args, 5) else {
+      return usage(out, "shrinks")
+    }
+    let config = runner.Config(seed: seed, cases: cases, jobs: jobs, shrinks: shrinks)
+    if let Error(_) = runner.validate(config) {
+      return usage(out, "config")
+    }
+    let Ok(source) = properties.source(name) else {
+      return usage(out, "strategy")
+    }
+    let callback = properties.callback(name)
+    let completed = runner.run(tasks, take source, take callback, config)
+    return match take completed {
+      Ok(report) => render(out, name, config, take report),
+      Error(Property(Fault(code))) => {
+        out.print(out, f"property_error={code}\n")?
+        Ok(std@1/process.exit_code(3u8))
+      },
+      Error(Canceled()) => {
+        out.print(out, "canceled\n")?
+        Ok(std@1/process.exit_code(5u8))
+      },
+      Error(_) => usage(out, "runner"),
+    }
+  }
+  if command == "cancel" && count == 1 {
+    let Ok(input) = io.stdin(rt) else {
+      return Ok(std@1/process.exit_code(3u8))
+    }
+    let Ok(output) = io.dir(rt, path.of("output")) else {
+      return Ok(std@1/process.exit_code(3u8))
+    }
+    if !replay.cancel_input(tasks, input, output) || file.read_bytes(
+      output,
+      path.of("joined")
+    ) != Ok(b"joined") {
+      return usage(out, "cancel_cleanup")
+    }
+    out.print(out, "canceled; joined\n")?
+    return Ok(std@1/process.exit_code(5u8))
+  }
+  if count != 1 {
+    return usage(out, "usage")
+  }
+  if command != "replay" && command != "replay-cancel" && command != "replay-release" {
+    return usage(out, "command")
+  }
+  let input = match io.dir(rt, path.of("records")) {
+    Ok(dir) => dir,
+    Error(_) => {
+      out.print(out, "replay_io_error\n")?
+      return Ok(std@1/process.exit_code(3u8))
+    },
+  }
+  let completed: Result[unique Option[replay.Record], unique replay.ReplayError] = if command == "replay" {
+    match replay.read(input) {
+      Ok(record) => Ok(Some(take record)),
+      Error(e) => Error(e),
+    }
+  } else {
+    let Ok(output) = io.dir(rt, path.of("output")) else {
+      return Ok(std@1/process.exit_code(3u8))
+    }
+    let completed = replay.staged(tasks, input, output, command == "replay-release")
+    // The guard's write is visible only after the canceled reader was joined.
+    if file.read_bytes(output, path.of("joined")) != Ok(b"joined") {
+      return usage(out, "cleanup")
+    }
+    completed
+  }
+  match take completed {
+    Ok(Some(record)) => {
+      match replay.verify(record) {
+        Ok(Fail(category)) => {
+          out.print(
+            out,
+            f"replayed category={category} minimum={record.minimum.number}\n"
+          )?
+          Ok(std@1/process.FAILURE)
+        },
+        _ => usage(out, "changed_failure"),
+      }
+    },
+    Ok(None()) => {
+      out.print(out, "canceled; joined\n")?
+      Ok(std@1/process.exit_code(5u8))
+    },
+    Error(File(_)) => {
+      out.print(out, "replay_io_error\n")?
+      Ok(std@1/process.exit_code(3u8))
+    },
+    Error(_) => usage(out, "replay_record"),
+  }
+}

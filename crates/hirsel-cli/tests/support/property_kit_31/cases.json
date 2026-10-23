@@ -1,0 +1,506 @@
+[
+  {
+    "id": "reverse",
+    "args": [
+      "run",
+      "reverse",
+      "0",
+      "2",
+      "1",
+      "64"
+    ],
+    "output": "passed=2 rejected=0 exhausted=0\n",
+    "exit": 0
+  },
+  {
+    "id": "reverse-nonempty",
+    "args": [
+      "run",
+      "reverse-nonempty",
+      "0",
+      "2",
+      "4",
+      "64"
+    ],
+    "output": "passed=2 rejected=0 exhausted=0\n",
+    "exit": 0
+  },
+  {
+    "id": "sort",
+    "args": [
+      "run",
+      "sort",
+      "0",
+      "2",
+      "4",
+      "64"
+    ],
+    "output": "passed=2 rejected=0 exhausted=0\n",
+    "exit": 0
+  },
+  {
+    "id": "codec",
+    "args": [
+      "run",
+      "codec",
+      "1",
+      "2",
+      "4",
+      "64"
+    ],
+    "output": "passed=2 rejected=0 exhausted=0\n",
+    "exit": 0
+  },
+  {
+    "id": "deliberate-j1",
+    "args": [
+      "run",
+      "deliberate-faulty",
+      "0",
+      "8",
+      "1",
+      "64"
+    ],
+    "output": "{\"schema\":1,\"strategy_version\":1,\"property\":\"deliberate-faulty\",\"seed\":\"0\",\"cases\":8,\"jobs\":1,\"shrinks\":64,\"index\":3,\"category\":7,\"number\":7,\"values\":[],\"text\":\"\"}\n",
+    "exit": 1,
+    "json_output": true
+  },
+  {
+    "id": "deliberate-j4",
+    "args": [
+      "run",
+      "deliberate-faulty",
+      "0",
+      "8",
+      "4",
+      "64"
+    ],
+    "output": "{\"schema\":1,\"strategy_version\":1,\"property\":\"deliberate-faulty\",\"seed\":\"0\",\"cases\":8,\"jobs\":4,\"shrinks\":64,\"index\":3,\"category\":7,\"number\":7,\"values\":[],\"text\":\"\"}\n",
+    "exit": 1,
+    "json_output": true
+  },
+  {
+    "id": "reject",
+    "args": [
+      "run",
+      "reject",
+      "0",
+      "2",
+      "4",
+      "64"
+    ],
+    "output": "passed=0 rejected=2 exhausted=0\n",
+    "exit": 4
+  },
+  {
+    "id": "exhaust",
+    "args": [
+      "run",
+      "exhaust",
+      "0",
+      "2",
+      "4",
+      "64"
+    ],
+    "output": "passed=0 rejected=0 exhausted=2\n",
+    "exit": 4
+  },
+  {
+    "id": "property-error",
+    "args": [
+      "run",
+      "error",
+      "0",
+      "2",
+      "4",
+      "64"
+    ],
+    "output": "property_error=90\n",
+    "exit": 3
+  },
+  {
+    "id": "negative-seed",
+    "args": [
+      "run",
+      "reverse",
+      "-1",
+      "1",
+      "1",
+      "64"
+    ],
+    "output": "invalid:seed\n",
+    "exit": 2
+  },
+  {
+    "id": "overflow-seed",
+    "args": [
+      "run",
+      "reverse",
+      "18446744073709551616",
+      "1",
+      "1",
+      "64"
+    ],
+    "output": "invalid:seed\n",
+    "exit": 2
+  },
+  {
+    "id": "noncanonical-seed",
+    "args": [
+      "run",
+      "reverse",
+      "00",
+      "1",
+      "1",
+      "64"
+    ],
+    "output": "invalid:seed\n",
+    "exit": 2
+  },
+  {
+    "id": "cases-zero",
+    "args": [
+      "run",
+      "reverse",
+      "0",
+      "0",
+      "1",
+      "64"
+    ],
+    "output": "invalid:config\n",
+    "exit": 2
+  },
+  {
+    "id": "cases-over",
+    "args": [
+      "run",
+      "reverse",
+      "0",
+      "65",
+      "1",
+      "64"
+    ],
+    "output": "invalid:config\n",
+    "exit": 2
+  },
+  {
+    "id": "jobs-zero",
+    "args": [
+      "run",
+      "reverse",
+      "0",
+      "1",
+      "0",
+      "64"
+    ],
+    "output": "invalid:config\n",
+    "exit": 2
+  },
+  {
+    "id": "jobs-over",
+    "args": [
+      "run",
+      "reverse",
+      "0",
+      "1",
+      "5",
+      "64"
+    ],
+    "output": "invalid:config\n",
+    "exit": 2
+  },
+  {
+    "id": "shrinks-over",
+    "args": [
+      "run",
+      "reverse",
+      "0",
+      "1",
+      "1",
+      "65"
+    ],
+    "output": "invalid:config\n",
+    "exit": 2
+  },
+  {
+    "id": "replay",
+    "args": [
+      "replay"
+    ],
+    "output": "replayed category=7 minimum=7\n",
+    "exit": 1,
+    "record": {
+      "schema": 1,
+      "strategy_version": 1,
+      "property": "deliberate-faulty",
+      "seed": "0",
+      "cases": 8,
+      "jobs": 4,
+      "shrinks": 64,
+      "index": 3,
+      "category": 7,
+      "number": 7,
+      "values": [],
+      "text": ""
+    }
+  },
+  {
+    "id": "replay-denied",
+    "args": [
+      "replay"
+    ],
+    "output": "replay_io_error\n",
+    "exit": 3,
+    "denied": true
+  },
+  {
+    "id": "record-strategy_version",
+    "args": [
+      "replay"
+    ],
+    "output": "invalid:replay_record\n",
+    "exit": 2,
+    "record": {
+      "schema": 1,
+      "strategy_version": 2,
+      "property": "deliberate-faulty",
+      "seed": "0",
+      "cases": 8,
+      "jobs": 4,
+      "shrinks": 64,
+      "index": 3,
+      "category": 7,
+      "number": 7,
+      "values": [],
+      "text": ""
+    }
+  },
+  {
+    "id": "record-seed",
+    "args": [
+      "replay"
+    ],
+    "output": "invalid:replay_record\n",
+    "exit": 2,
+    "record": {
+      "schema": 1,
+      "strategy_version": 1,
+      "property": "deliberate-faulty",
+      "seed": "-1",
+      "cases": 8,
+      "jobs": 4,
+      "shrinks": 64,
+      "index": 3,
+      "category": 7,
+      "number": 7,
+      "values": [],
+      "text": ""
+    }
+  },
+  {
+    "id": "record-cases",
+    "args": [
+      "replay"
+    ],
+    "output": "invalid:replay_record\n",
+    "exit": 2,
+    "record": {
+      "schema": 1,
+      "strategy_version": 1,
+      "property": "deliberate-faulty",
+      "seed": "0",
+      "cases": 65,
+      "jobs": 4,
+      "shrinks": 64,
+      "index": 3,
+      "category": 7,
+      "number": 7,
+      "values": [],
+      "text": ""
+    }
+  },
+  {
+    "id": "record-category",
+    "args": [
+      "replay"
+    ],
+    "output": "invalid:changed_failure\n",
+    "exit": 2,
+    "record": {
+      "schema": 1,
+      "strategy_version": 1,
+      "property": "deliberate-faulty",
+      "seed": "0",
+      "cases": 8,
+      "jobs": 4,
+      "shrinks": 64,
+      "index": 3,
+      "category": 99,
+      "number": 7,
+      "values": [],
+      "text": ""
+    }
+  },
+  {
+    "id": "record-number",
+    "args": [
+      "replay"
+    ],
+    "output": "invalid:replay_record\n",
+    "exit": 2,
+    "record": {
+      "schema": 1,
+      "strategy_version": 1,
+      "property": "deliberate-faulty",
+      "seed": "0",
+      "cases": 8,
+      "jobs": 4,
+      "shrinks": 64,
+      "index": 3,
+      "category": 7,
+      "number": 33,
+      "values": [],
+      "text": ""
+    }
+  },
+  {
+    "id": "record-values",
+    "args": [
+      "replay"
+    ],
+    "output": "invalid:replay_record\n",
+    "exit": 2,
+    "record": {
+      "schema": 1,
+      "strategy_version": 1,
+      "property": "deliberate-faulty",
+      "seed": "0",
+      "cases": 8,
+      "jobs": 4,
+      "shrinks": 64,
+      "index": 3,
+      "category": 7,
+      "number": 7,
+      "values": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "text": ""
+    }
+  },
+  {
+    "id": "pending-cancel",
+    "args": [
+      "replay-cancel"
+    ],
+    "output": "canceled; joined\n",
+    "exit": 5,
+    "record": {
+      "schema": 1,
+      "strategy_version": 1,
+      "property": "deliberate-faulty",
+      "seed": "0",
+      "cases": 8,
+      "jobs": 4,
+      "shrinks": 64,
+      "index": 3,
+      "category": 7,
+      "number": 7,
+      "values": [],
+      "text": ""
+    },
+    "pending": true
+  },
+  {
+    "id": "afterwrite-release",
+    "args": [
+      "replay-release"
+    ],
+    "output": "replayed category=7 minimum=7\n",
+    "exit": 1,
+    "record": {
+      "schema": 1,
+      "strategy_version": 1,
+      "property": "deliberate-faulty",
+      "seed": "0",
+      "cases": 8,
+      "jobs": 4,
+      "shrinks": 64,
+      "index": 3,
+      "category": 7,
+      "number": 7,
+      "values": [],
+      "text": ""
+    },
+    "release": true
+  },
+  {
+    "id": "record-cap",
+    "args": [
+      "replay"
+    ],
+    "output": "replayed category=7 minimum=7\n",
+    "exit": 1,
+    "record": {
+      "schema": 1,
+      "strategy_version": 1,
+      "property": "deliberate-faulty",
+      "seed": "0",
+      "cases": 8,
+      "jobs": 4,
+      "shrinks": 64,
+      "index": 3,
+      "category": 7,
+      "number": 7,
+      "values": [],
+      "text": ""
+    },
+    "size": 65536,
+    "steps": 10000000
+  },
+  {
+    "id": "record-over",
+    "args": [
+      "replay"
+    ],
+    "output": "invalid:replay_record\n",
+    "exit": 2,
+    "record": {
+      "schema": 1,
+      "strategy_version": 1,
+      "property": "deliberate-faulty",
+      "seed": "0",
+      "cases": 8,
+      "jobs": 4,
+      "shrinks": 64,
+      "index": 3,
+      "category": 7,
+      "number": 7,
+      "values": [],
+      "text": ""
+    },
+    "size": 65537,
+    "steps": 10000000
+  },
+  {
+    "id": "cases-cap",
+    "args": [
+      "run",
+      "reverse",
+      "0",
+      "64",
+      "4",
+      "64"
+    ],
+    "output": "passed=64 rejected=0 exhausted=0\n",
+    "exit": 0,
+    "steps": 10000000
+  }
+]

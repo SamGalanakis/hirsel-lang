@@ -1,0 +1,133 @@
+// proptest 70cf37d4, strategy/traits.rs:580-621 and num.rs:280-345.
+// MIT license retained in LICENSE.proptest. A rejected candidate is complicated
+// back to its owned parent; acceptance rebuilds only that parent's frontier.
+pub type Binary {
+  lo: i64,
+  hi: i64,
+  current: i64,
+}
+
+pub fn binary(value: i64) -> Binary uses {} {
+  Binary(lo: 0, hi: value, current: value)
+}
+
+fn greater(a: i64, b: i64) -> bool uses {} {
+  if a < 0 {
+    a < b
+  } else {
+    a > b
+  }
+}
+
+fn reposition(mut cursor: Binary) -> bool uses {} {
+  let middle = cursor.lo + (cursor.hi - cursor.lo) / 2
+  if middle == cursor.current {
+    return false
+  }
+  cursor.current = middle
+  true
+}
+
+pub fn simplify_integer(mut cursor: Binary) -> bool uses {} {
+  if !greater(cursor.hi, cursor.lo) {
+    return false
+  }
+  cursor.hi = cursor.current
+  reposition(mut cursor)
+}
+
+pub fn complicate_integer(mut cursor: Binary) -> bool uses {} {
+  if !greater(cursor.hi, cursor.lo) {
+    return false
+  }
+  cursor.lo = cursor.current + if cursor.hi < 0 {
+    -1
+  } else {
+    1
+  }
+  reposition(mut cursor)
+}
+
+// Generic state owns both the frontier and the rollback value. It never keeps
+// a view into a temporary list or a property callback's argument.
+pub type Tree[T] {
+  current: T,
+  parent: Option[T],
+  frontier: List[T],
+  next: u64,
+}
+
+pub fn tree[T: inert](take value: unique T, take candidates: unique List[unique T]) -> unique Tree[
+  T
+] uses {} {
+  let mut frontier: List[T] = []
+  for candidate in take candidates {
+    list.push(mut frontier, take candidate)
+  }
+  Tree(current: take value, parent: None(), frontier: take frontier, next: 0)
+}
+
+pub fn simplify[T: copyable + inert](mut state: unique Tree[T]) -> bool uses {} {
+  if list.len(state.frontier) == 0 {
+    return false
+  }
+  let candidate = list.remove(mut state.frontier, 0)
+  let old = replace(mut state.current, take candidate)
+  state.parent = Some(take old)
+  state.next += 1
+  true
+}
+
+pub fn complicate[T: inert](mut state: unique Tree[T]) -> bool uses {} {
+  let old = replace(mut state.parent, None())
+  if let Some(parent) = take old {
+    state.current = take parent
+    return true
+  }
+  false
+}
+
+pub fn integers(value: i64) -> unique List[unique i64] uses {} {
+  let mut out: List[i64] = []
+  if value == 0 {
+    return take out
+  }
+  list.push(mut out, 0)
+  let mut search = binary(value)
+  if simplify_integer(mut search) && search.current != 0 {
+    list.push(mut out, search.current)
+  }
+  let adjacent = value - if value < 0 {
+    -1
+  } else {
+    1
+  }
+  if adjacent != 0 && adjacent != search.current {
+    list.push(mut out, adjacent)
+  }
+  take out
+}
+
+// history.rs:333-358 deletion/restart, followed by element reductions. Size
+// never grows; each integer reduction strictly decreases absolute magnitude.
+pub fn lists(values: List[i64]) -> unique List[unique List[i64]] uses {} {
+  let mut out: unique List[unique List[i64]] = []
+  if list.len(values) == 0 {
+    return take out
+  }
+  list.push(mut out, [])
+  for i in 0u64..list.len(values) {
+    let mut removed = unique values
+    let _ = list.remove(mut removed, i)
+    list.push(mut out, take removed)
+  }
+  for i in 0u64..list.len(values) {
+    let choices = integers(values[i])
+    for choice in choices {
+      let mut changed = unique values
+      changed[i] = choice
+      list.push(mut out, take changed)
+    }
+  }
+  take out
+}

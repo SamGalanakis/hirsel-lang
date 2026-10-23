@@ -1,0 +1,183 @@
+// Draws use shipped std Xoshiro256++; these seeds are deliberately independent
+// of proptest's RNG format. Callables stored here own their environments.
+pub const VERSION: u64 = 1
+
+pub const MAX_DEPTH: u64 = 4
+
+pub const MAX_ATTEMPTS: u64 = 32
+
+pub type GenError = Bounds | Depth | Attempts | Exhausted
+
+pub type Strategy[T] {
+  draw: fn(u64) -> Result[unique T, GenError] uses {},
+  reduce: fn(T) -> unique List[unique T] uses {},
+  depth: u64,
+}
+
+pub fn case_seed(seed: u64, index: u64) -> u64 uses {} {
+  int.wrapping_add(seed, int.wrapping_mul(index, 0x9e3779b97f4a7c15u64))
+}
+
+pub fn integer_draw(seed: u64, low: i64, high: i64) -> Result[unique i64, GenError] uses {} {
+  if low < -32 || high > 32 || low > high {
+    return Error(Bounds())
+  }
+  let mut rng = std@1/prng.seed(seed)
+  let width: u64 = int.narrow(high - low + 1)
+  let Ok(n) = std@1/prng.below(mut rng, width) else {
+    return Error(Bounds())
+  }
+  let offset: i64 = int.narrow(n)
+  Ok(low + offset)
+}
+
+pub fn integers(low: i64, high: i64) -> Result[unique Strategy[i64], GenError] uses {} {
+  if low < -32 || high > 32 || low > high {
+    return Error(Bounds())
+  }
+  Ok(
+    Strategy(
+      draw: fn(seed: u64) -> Result[unique i64, GenError] uses {} {
+        integer_draw(seed, low, high)
+      },
+      reduce: fn(value: i64) -> unique List[unique i64] uses {} {
+        let mut out: List[i64] = []
+        let candidates = shrink.integers(value)
+        for candidate in candidates {
+          if candidate >= low && candidate <= high {
+            list.push(mut out, candidate)
+          }
+        }
+        take out
+      },
+      depth: 1
+    )
+  )
+}
+
+pub fn map[T: copyable + inert, U: copyable + inert](
+  take source: unique Strategy[T],
+  take transform: unique fn(T) -> unique U uses {},
+  take reduce: unique fn(U) -> unique List[unique U] uses {}
+) -> Result[unique Strategy[U], GenError] uses {} {
+  if source.depth >= MAX_DEPTH {
+    return Error(Depth())
+  }
+  let depth = source.depth + 1
+  let generator = shared.freeze(take source)
+  let mapper = shared.freeze(take transform)
+  Ok(
+    Strategy(
+      draw: fn(seed: u64) -> Result[unique U, GenError] uses {} {
+        let value = shared.with(
+          generator,
+          fn(s: Strategy[T]) -> Result[unique T, GenError] uses {} {
+            s.draw(seed)
+          }
+        )?
+        Ok(
+          shared.with(
+            mapper,
+            fn(f: fn(T) -> unique U uses {}) -> unique U uses {} {
+              f(value)
+            }
+          )
+        )
+      },
+      reduce: take reduce,
+      depth: depth
+    )
+  )
+}
+
+pub fn filter[T: copyable + inert](
+  take source: unique Strategy[T],
+  attempts: u64,
+  take predicate: unique fn(T) -> bool uses {}
+) -> Result[unique Strategy[T], GenError] uses {} {
+  if source.depth >= MAX_DEPTH {
+    return Error(Depth())
+  }
+  if attempts == 0 || attempts > MAX_ATTEMPTS {
+    return Error(Attempts())
+  }
+  let depth = source.depth + 1
+  let generator = shared.freeze(take source)
+  let accept = shared.freeze(take predicate)
+  Ok(
+    Strategy(
+      draw: fn(seed: u64) -> Result[unique T, GenError] uses {} {
+        for attempt in 0u64..attempts {
+          let value = shared.with(
+            generator,
+            fn(s: Strategy[T]) -> Result[unique T, GenError] uses {} {
+              s.draw(case_seed(seed, attempt))
+            }
+          )?
+          if shared.with(
+            accept,
+            fn(p: fn(T) -> bool uses {}) -> bool uses {} {
+              p(value)
+            }
+          ) {
+            return Ok(take value)
+          }
+        }
+        Error(Exhausted())
+      },
+      reduce: fn(value: T) -> unique List[unique T] uses {} {
+        let candidates = shared.with(
+          generator,
+          fn(s: Strategy[T]) -> unique List[unique T] uses {} {
+            s.reduce(value)
+          }
+        )
+        let mut kept: unique List[unique T] = []
+        for candidate in take candidates {
+          if shared.with(
+            accept,
+            fn(p: fn(T) -> bool uses {}) -> bool uses {} {
+              p(candidate)
+            }
+          ) {
+            list.push(mut kept, take candidate)
+          }
+        }
+        take kept
+      },
+      depth: depth
+    )
+  )
+}
+
+pub fn lists(maximum: u64) -> Result[unique Strategy[List[i64]], GenError] uses {} {
+  if maximum > 8 {
+    return Error(Bounds())
+  }
+  Ok(
+    Strategy(
+      draw: fn(seed: u64) -> Result[unique List[i64], GenError] uses {} {
+        let mut rng = std@1/prng.seed(seed)
+        let Ok(length) = std@1/prng.below(mut rng, maximum + 1) else {
+          return Error(Bounds())
+        }
+        let mut values: List[i64] = []
+        for i in 0u64..length {
+          list.push(mut values, integer_draw(std@1/prng.u64(mut rng), -32, 32)?)
+        }
+        Ok(take values)
+      },
+      reduce: fn(value: List[i64]) -> unique List[unique List[i64]] uses {} {
+        shrink.lists(value)
+      },
+      depth: 1
+    )
+  )
+}
+
+pub fn draw[T: copyable + inert](source: Strategy[T], seed: u64) -> Result[
+  unique T,
+  GenError
+] uses {} {
+  source.draw(seed)
+}
