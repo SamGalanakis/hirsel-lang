@@ -387,7 +387,12 @@ impl Checker<'_> {
             };
             // Reading a borrowed payload cannot keep its arena storage.
             let borrowed = self.receiving.as_ref().is_some_and(|r| r.borrowed);
-            if !borrowed && !self.keeps_placement(actual, expected, span, false)
+            // MEM-4: seal transfers the complete storage graph, including
+            // arena-placed tuple/record components. I and V independently prove
+            // closure over the designated grant before accepting the transfer.
+            if !borrowed
+                && intrinsic != Some(Intrinsic::ArenaSeal)
+                && !self.keeps_placement(actual, expected, span, false)
                 || variance == Variance::Exact && !self.keeps_exact_promises(actual, expected, span)
                 || !self.compatible(actual, expected, span, intrinsic, sibling)
             {

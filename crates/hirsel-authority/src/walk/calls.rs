@@ -1145,6 +1145,42 @@ impl Checker<'_> {
                 }
             }
         }
+        // A reviewed arena scope returns exactly its callback's result. H's
+        // generic inference precedes checking that callback; retain the closed
+        // brands its result header now promises, including inside Region[T].
+        // Ordinary callable parameters remain invariant and are not producers
+        // from which arbitrary generic brands may be inferred.
+        if let Some(slot) = definition
+            .as_ref()
+            .and_then(|path| hirsel_types::core_roles::arena_scope_callback(path))
+            && let (Some(formal), Some(actual)) =
+                (f.parameters.get(slot as usize), args.get(slot as usize))
+            && let (TypeKind::Function(formal), TypeKind::Function(actual)) =
+                (&self.t.row(formal.ty).kind, &self.t.row(*actual).kind)
+            && formal.generics.is_empty()
+            && let TypeKind::Parameter(parameter) = self.t.row(formal.result).kind
+            && parameter.binder() == GenericBinder::Bound(1)
+            && let Some(GenericArgument::Type(instance)) =
+                generic_arguments.get_mut(parameter.parameter().0 as usize)
+        {
+            *instance = self.adopt_brands(*instance, actual.result);
+        }
+        // The seal stores the complete callable environment without invoking
+        // it. Inference ran before capture analysis; retain intrinsic Once in
+        // both the taking parameter and Region's payload type, rather than
+        // turning it into a many-callable receiving requirement.
+        if intrinsic == Some(Intrinsic::ArenaSeal)
+            && let (Some(formal), Some(actual)) = (f.parameters.get(1), args.get(1))
+            && let TypeKind::Parameter(parameter) = self.t.row(formal.ty).kind
+            && let Some(GenericArgument::Type(argument)) =
+                generic_arguments.get_mut(parameter.parameter().0 as usize)
+            && matches!(self.t.row(*actual).kind, TypeKind::Function(_))
+            && self.t.row(*actual).modes.multiplicity == Multiplicity::Once
+        {
+            let mut row = self.t.row(*argument).clone();
+            row.modes.multiplicity = Multiplicity::Once;
+            *argument = self.intern(row);
+        }
         if let Some(row) = self
             .out
             .body
@@ -1811,7 +1847,7 @@ impl Checker<'_> {
         // Content reaches only storage whose type can hold a part of it.
         let store = self.t;
         let memo = self.m;
-        let mut placements = |store: &TypeInterner, this: &mut Self, holder: TypeId| {
+        let placements = |store: &TypeInterner, this: &mut Self, holder: TypeId| {
             let mut placement = Relation::global();
             for (from, ty, _) in &contents {
                 if !from.is_global()

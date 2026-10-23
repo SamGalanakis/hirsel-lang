@@ -1,0 +1,8 @@
+pub fn main() {
+  let first = arena.with(fn(a: Arena) -> Region[u64] {
+    let root = 7u64
+    make.seal(take a, take root)
+  })
+  let mut moved = take first
+  let n = region.with(mut moved, fn(root: u64) -> u64 { root })
+}

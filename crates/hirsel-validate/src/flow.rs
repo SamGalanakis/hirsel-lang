@@ -26,10 +26,10 @@ pub(super) mod crossing;
 pub(super) mod lifetimes;
 #[path = "loan_content.rs"]
 mod loan_content;
-#[path = "state_proof.rs"]
-mod state_proof;
 #[path = "seal_flow.rs"]
 mod seal_flow;
+#[path = "state_proof.rs"]
+mod state_proof;
 #[path = "tags.rs"]
 pub(super) mod tags;
 #[path = "uniqueness.rs"]
@@ -5694,7 +5694,7 @@ impl Checker<'_> {
                 on_failure,
             } => {
                 let protocol = self.consuming_protocol(callee);
-                self.seal_flow(model, state, callee, arguments, report);
+                let seal_root = self.seal_flow(model, state, callee, arguments, report);
                 let protocol_unique = protocol
                     && arguments.first().is_some_and(|a| {
                         matches!(a.value.usage, UseKind::Take | UseKind::Mut)
@@ -6068,10 +6068,11 @@ impl Checker<'_> {
                             false,
                         );
                     }
-                    let transport = model
-                        .parts(a.value.place)
-                        .any(|part| !state.origins.expired[part].is_empty())
-                        && self.taken_brandless_data(callee, a);
+                    let transport = seal_root == Some(a.value.place)
+                        || model
+                            .parts(a.value.place)
+                            .any(|part| !state.origins.expired[part].is_empty())
+                            && self.taken_brandless_data(callee, a);
                     self.read_operand(model, state, &a.value, false, false, transport, report);
                 }
                 let mut mutated = Vec::new();

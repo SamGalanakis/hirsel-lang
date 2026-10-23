@@ -422,7 +422,24 @@ pub(crate) fn proof_step(
             {
                 return done;
             }
-            if signature.metadata.visibility == hirsel_syntax::Visibility::PublicOpaque {
+            // MEM-4: only the reviewed core owner exposes this structural
+            // crossing rule through its opaque nominal surface. Its payload
+            // remains opaque for every other bound and for source field access.
+            let sealed_owner = bound == Bound::Sendable
+                && signature.definition.path().is_core("Region")
+                && declaration.resource
+                && declaration.representation.is_some_and(|representation| {
+                    matches!(
+                        store.get(representation).map(|row| &row.kind),
+                        Some(TypeKind::Builtin {
+                            kind: BuiltinType::Region,
+                            ..
+                        })
+                    )
+                });
+            if signature.metadata.visibility == hirsel_syntax::Visibility::PublicOpaque
+                && !sealed_owner
+            {
                 return fail;
             }
             let arguments = arguments.clone();
@@ -501,8 +518,23 @@ pub(crate) fn proof_step(
                         }
                         return done;
                     }
-                    BuiltinType::Region
-                    | BuiltinType::Inline
+                    // The owner's affinity/outer uniqueness cannot upgrade
+                    // the complete root's own modes into deep uniqueness.
+                    BuiltinType::Region => {
+                        return Ok((
+                            ProofStep::Parts(
+                                arguments
+                                    .iter()
+                                    .filter_map(|argument| match argument {
+                                        GenericArgument::Type(ty) => Some(*ty),
+                                        _ => None,
+                                    })
+                                    .collect(),
+                            ),
+                            false,
+                        ));
+                    }
+                    BuiltinType::Inline
                     | BuiltinType::Simd
                     | BuiltinType::Packed
                     | BuiltinType::Atomic => (),
@@ -1579,6 +1611,103 @@ mod flat_tests {
                 assert!(
                     !compatible_handback_type(&store, expected, actual, &generics, &mut lookup)
                         .unwrap()
+                );
+            }
+        }
+    }
+    #[test]
+    fn sealed_regions_33_opaque_owner_keeps_the_roots_complete_crossing_evidence() {
+        let store = TypeInterner::new(None);
+        let scalar = store.intern(row(TypeKind::Primitive(Primitive::U64)));
+        let counted = store.intern(row(TypeKind::Builtin {
+            kind: BuiltinType::List,
+            arguments: vec![GenericArgument::Type(scalar)].into(),
+        }));
+        let mut unique_row = store.row(counted).clone();
+        unique_row.modes.uniqueness = Uniqueness::Unique;
+        let unique = store.intern(unique_row.clone());
+        unique_row.modes.relation = Relation::environment();
+        let local = store.intern(unique_row);
+        let core = DefPath::core("Region");
+        let foreign = DefPath(ItemPath {
+            package: PackageId {
+                name: "fixture".into(),
+                version: "1".into(),
+            },
+            modules: vec![],
+            name: "Region".into(),
+        });
+        for (payload, outer_unique, expected) in [
+            (scalar, false, true),
+            (counted, false, false),
+            (counted, true, false),
+            (unique, false, true),
+            (local, false, false),
+        ] {
+            let representation = store.intern(row(TypeKind::Builtin {
+                kind: BuiltinType::Region,
+                arguments: vec![GenericArgument::Type(payload)].into(),
+            }));
+            for (path, wanted) in [(&core, expected), (&foreign, false)] {
+                let definition = DefId::intern(path);
+                let mut nominal = row(TypeKind::Named {
+                    definition,
+                    arguments: vec![].into(),
+                });
+                if outer_unique {
+                    nominal.modes.uniqueness = Uniqueness::Unique;
+                }
+                let nominal = store.intern(nominal);
+                let declaration = std::sync::Arc::new(Signature {
+                    definition,
+                    fingerprint: ContentHash::default(),
+                    metadata: SignatureMetadata {
+                        visibility: hirsel_syntax::Visibility::PublicOpaque,
+                        ..Default::default()
+                    },
+                    kind: SignatureKind::Type(TypeDefinition {
+                        loop_source: None,
+                        format: None,
+                        destructor_allocation: Allocation::NoAlloc,
+                        generics: vec![],
+                        representation: Some(representation),
+                        bounds: vec![],
+                        authority: AuthoritySummary::inert(),
+                        capability: None,
+                        implementation_authority: None,
+                        serializable: false,
+                        serializable_check: None,
+                        layout: Layout::default(),
+                        distinct: false,
+                        resource: true,
+                        drop: None,
+                        fact: None,
+                        captures: None,
+                    }),
+                });
+                let mut lookup = |_| Ok::<_, QueryError>(Some(declaration.clone()));
+                let generics = GenericDeclarations::signature(&[]);
+                assert_eq!(
+                    structural_property(
+                        &store,
+                        nominal,
+                        StructuralProperty::Sendable,
+                        &generics,
+                        &mut lookup
+                    )
+                    .unwrap(),
+                    wanted,
+                    "{payload:?} {outer_unique} {path}"
+                );
+                assert!(
+                    !structural_property(
+                        &store,
+                        nominal,
+                        StructuralProperty::Copyable,
+                        &generics,
+                        &mut lookup
+                    )
+                    .unwrap()
                 );
             }
         }

@@ -2,6 +2,100 @@
 use super::*;
 
 impl Checker<'_, '_> {
+    pub(super) fn sealed_owner(&self, expression: ExprId) -> bool {
+        self.ty(expression).is_some_and(|ty| {
+            matches!(
+                self.t.row(ty).kind,
+                TypeKind::Builtin {
+                    kind: BuiltinType::Region,
+                    ..
+                }
+            )
+        })
+    }
+
+    /// Owned components retain their actual storage bounds even when an inline
+    /// tuple's own row is global. Callable headers are not owned components;
+    /// captures are checked through the flow value's content below.
+    fn foreign_seal_payload(&self, root: TypeId, allowed: Option<&OriginRoot>) -> bool {
+        let mut work = vec![(root, false)];
+        let mut seen = std::collections::HashSet::<TypeId, hirsel_intern::IdHasher>::default();
+        let mut expansions = hirsel_types::NominalExpansions::default();
+        while let Some((ty, exit)) = work.pop() {
+            if exit {
+                expansions.leave(ty, 0);
+                continue;
+            }
+            if !seen.insert(ty) {
+                continue;
+            }
+            let row = self.t.row(ty);
+            if matches!(
+                row.kind,
+                TypeKind::Builtin {
+                    kind: BuiltinType::Shared,
+                    ..
+                }
+            ) {
+                continue;
+            }
+            let plain = self.signatures.prove_flow(|memo| {
+                hirsel_modes::proofs::property(memo, ty, StructuralProperty::Plain)
+            });
+            if plain == Ok(true) {
+                continue;
+            }
+            if let Err(error) = plain {
+                *self.proof_error.borrow_mut() = Some(error);
+                return true;
+            }
+            if row
+                .modes
+                .relation
+                .reaches()
+                .iter()
+                .any(|reach| match reach {
+                    Reach::Region(_) => true,
+                    Reach::Place(origin) if self.arenas.arena(origin) => {
+                        Some(&origin.root) != allowed
+                    }
+                    _ => false,
+                })
+            {
+                return true;
+            }
+            match &row.kind {
+                TypeKind::Function(_) => (),
+                TypeKind::Named { .. } => {
+                    match expansions.enter(ty, 0, self.t) {
+                        Ok(true) => (),
+                        Ok(false) => continue,
+                        Err(error) => {
+                            *self.proof_error.borrow_mut() = Some(error);
+                            return true;
+                        }
+                    }
+                    let Ok(expanded) = hirsel_type_analysis::representation::expand_representation(
+                        self.t,
+                        self.signatures.type_memo(),
+                        ty,
+                        &mut |_, definition, arguments| {
+                            Ok(self.signatures.cached(definition).map(|signature| {
+                                (signature, vec![AuthoritySummary::Unknown; arguments.len()])
+                            }))
+                        },
+                        Some(1),
+                    ) else {
+                        return true;
+                    };
+                    work.push((ty, true));
+                    work.push((expanded, false));
+                }
+                kind => work.extend(kind.value_parts().into_iter().map(|part| (part, false))),
+            }
+        }
+        false
+    }
     pub(super) fn seal_entry(
         &mut self,
         state: &State,
@@ -91,13 +185,51 @@ impl Checker<'_, '_> {
                 }
                 On::Scope(_) | On::Environment | On::Placement => true,
             });
-        if heap || allowed.is_none() || foreign(&root_value.modes.relation) || foreign_content {
+        let foreign_parts = self
+            .ty(root)
+            .is_none_or(|ty| self.foreign_seal_payload(ty, allowed.as_ref()));
+        if heap
+            || allowed.is_none()
+            || foreign(&root_value.modes.relation)
+            || foreign_content
+            || foreign_parts
+        {
             self.diagnostic(const { RuleId::of("MEM-4") }, self.span_of(expression), "seal requires a live explicit arena grant and an owned root closed over that arena and the heap");
             return false;
         }
         let retains = |value: &Value| {
-            value.modes.relation.reaches().iter().any(|reach| matches!(reach, Reach::Place(origin) if Some(&origin.root) == allowed.as_ref()))
-            || grant_binding.is_some_and(|grant| value.content.summary().iter().any(|loan| loan.on == On::Binding(grant)))
+            // A live scoped environment can borrow an alias rather than the
+            // grant directly. Follow those binding dependencies to their
+            // current content and declared bounds; captures do not erase an
+            // arena view's lifetime. The visited set also makes joins finite.
+            let names_grant = |relation: &Relation| {
+                relation.reaches().iter().any(
+                |reach| matches!(reach, Reach::Place(origin) if Some(&origin.root) == allowed.as_ref())
+            )
+            };
+            let mut pending = vec![value];
+            let mut seen = BTreeSet::new();
+            while let Some(value) = pending.pop() {
+                if names_grant(&value.modes.relation) {
+                    return true;
+                }
+                let content = value.content.summary();
+                for loan in value.loans.iter().chain(content.iter()) {
+                    let On::Binding(binding) = loan.on else {
+                        continue;
+                    };
+                    if Some(binding) == grant_binding {
+                        return true;
+                    }
+                    if seen.insert(binding) {
+                        if names_grant(&self.t.row(self.body.bindings[binding].ty).modes.relation) {
+                            return true;
+                        }
+                        pending.push(&state.slots[binding].value);
+                    }
+                }
+            }
+            false
         };
         let alias = self.live.at(self.node).iter().find_map(|holder| {
             let Holder::Binding(binding) = holder else {
@@ -107,7 +239,8 @@ impl Checker<'_, '_> {
                 && Some(*binding) != grant_binding
                 && state.slots[*binding].available & LIVE != 0
                 && !self.properties[self.body.bindings[*binding].ty].plain
-                && retains(&state.slots[*binding].value))
+                && (retains(&state.slots[*binding].value)
+                    || self.t.row(self.body.bindings[*binding].ty).modes.relation.reaches().iter().any(|reach| matches!(reach, Reach::Place(origin) if Some(&origin.root) == allowed.as_ref()))))
             .then_some(*binding)
         });
         if alias.is_some() {

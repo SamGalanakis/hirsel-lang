@@ -185,8 +185,8 @@ N fn atomic.store[A](tasks: Tasks, a: Atomic[A], value: A) -> ()
 // Scope callback entries carry the consumable grant; arbitrary Arena borrows do not.
 // Seal transfers retained semantic inventory and preserves nested Shared boundaries.
 // Region is an opaque affine owner; with supplies a read-only call-bounded root.
-N fn arena.with[R](body: fn(a: Arena) -> R) -> R
-N fn arena.bounded[R](cap: u64, body: fn(a: Arena) -> R) -> Result[R, OutOfSpace]
+N fn arena.with[R](body: once fn(a: Arena) -> R) -> R
+N fn arena.bounded[R](cap: u64, body: once fn(a: Arena) -> R) -> Result[R, OutOfSpace]
 fn arena.seal[T](take a: Arena in a, take root: T in root) -> Region[T]
 N fn region.with[T, R](mut r: Region[T], body: fn(root: T) -> R) -> R
 fn copy_to[T: copyable](a: Arena, x: T) -> T in a

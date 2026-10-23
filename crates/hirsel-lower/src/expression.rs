@@ -1480,15 +1480,24 @@ impl Builder<'_, '_> {
                     },
                 })
                 .collect();
+            let mut constructor_loan = None;
             let (constructor, fields) = match constructor {
                 Construction::Fields(constructor) => (constructor, fields),
                 Construction::SortedMap => {
                     let [field] = fields.as_slice() else {
                         return self.error(span, "sorted constructor requires its dictionary");
                     };
-                    let by = Operand {
+                    // The dictionary is a brand witness, not retained payload.
+                    // Its read still needs an explicit permission at construction.
+                    let mut by = Value {
+                        checked_ty: None,
                         place: field.value.place,
                         usage: UseKind::Borrow,
+                    };
+                    constructor_loan = self.loan(&mut by, span);
+                    let by = Operand {
+                        place: by.place,
+                        usage: by.usage,
                     };
                     (Constructor::SortedMap { by }, vec![])
                 }
@@ -1499,7 +1508,9 @@ impl Builder<'_, '_> {
                 fields,
                 destination,
             };
-            return Ok(Some(self.construct(ty, rv, span)));
+            let result = self.construct(ty, rv, span);
+            self.end_loan(constructor_loan, span);
+            return Ok(Some(result));
         }
         if let Some(Callee::Definition { path, .. }) = &callee {
             if let Some(intrinsic) =

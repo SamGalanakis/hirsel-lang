@@ -9,9 +9,9 @@ impl Checker<'_> {
         callee: &Callee,
         arguments: &[CallArgument],
         report: bool,
-    ) {
+    ) -> Option<PlaceId> {
         if !matches!(callee, Callee::Definition { path, .. } if path.is_core("arena.seal")) {
-            return;
+            return None;
         }
         let arg = |p| {
             arguments
@@ -20,7 +20,7 @@ impl Checker<'_> {
                 .map(|a| a.value.place)
         };
         let (Some(grant), Some(root)) = (arg(0), arg(1)) else {
-            return;
+            return None;
         };
         let identities = self.origin_identity(model, state, grant);
         let grant_index = model.mapping[grant.0 as usize];
@@ -34,7 +34,9 @@ impl Checker<'_> {
         // be replaced by a producer's global-result or resource-free flag.
         let foreign = state.origins.retained[root_index]
             .iter()
-            .any(|origin| !allowed(origin))
+            // A closed definition brand names immortal global identity, not
+            // foreign arena storage. Local/parameter brands still need the grant.
+            .any(|origin| !matches!(origin.root, OriginRoot::Definition(_)) && !allowed(origin))
             || self
                 .t
                 .row(self.place_type(root))
@@ -60,6 +62,7 @@ impl Checker<'_> {
         let live = self.seal_live_after(block);
         let root_local = self.body.places[root.0 as usize].root;
         let grant_local = self.body.places[grant.0 as usize].root;
+        let mut has_alias = false;
         for local in live {
             if local == root_local.0 || local == grant_local.0 {
                 continue;
@@ -78,6 +81,7 @@ impl Checker<'_> {
                             model.mapping[place.0 as usize] == grant_index
                         })
                 {
+                    has_alias = true;
                     self.flow_error(
                         report,
                         ViolationKind::TypeMismatch {
@@ -87,6 +91,28 @@ impl Checker<'_> {
                 }
             }
         }
+        // Lowering ends the grant's source name while evaluating its take,
+        // before evaluating the root argument. That expires arena bounds on
+        // the root, but the taken grant still owns that exact incarnation.
+        // Only this transaction may transport those expired bounds. Foreign
+        // incarnations and hidden capture loans remain ordinary invalid uses.
+        let grant_owned = state.places[grant_index] == LIVE
+            && state.must[grant_local.0 as usize].has(MustFacts::OWNED)
+            && !identities.is_empty()
+            && identities.iter().all(|identity| {
+                state.origins.owners[grant_index]
+                    .iter()
+                    .any(|owner| super::flow_origins::contains(owner, identity))
+            });
+        let own_expiration = model
+            .parts(root)
+            .all(|part| state.origins.expired[part].iter().all(allowed))
+            && self
+                .environment(model, state, root)
+                .expired()
+                .iter()
+                .all(allowed);
+        (!foreign && !has_alias && grant_owned && own_expiration).then_some(root)
     }
 
     /// Recompute demand from executable uses, CFG joins and observable cleanup.

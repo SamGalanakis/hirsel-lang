@@ -221,12 +221,14 @@ N fn atomic.store[A](tasks: Tasks, a: Atomic[A], value: A) -> ()
 
 // MEM-4/5/11/14, PROV-1/4, SEM-4
 // The exact core scope callback entry supplies a consumable arena grant; ordinary
-// borrowed Arena parameters do not. Seal consumes it once, transfers retained
+// borrowed Arena parameters do not. A scope invokes its callback once, so explicit
+// taken captures may transfer an outer grant; ordinary captures remain borrowed.
+// Seal consumes the designated grant once, transfers retained
 // semantic storage (including dead allocations), and preserves nested Shared roots.
 // Region is an opaque affine resource with mechanical NoAlloc cleanup. With lends
 // only a read-only invocation-bound root; callback/results retain their own effects.
-N fn arena.with[R](body: fn(a: Arena) -> R) -> R
-N fn arena.bounded[R](cap: u64, body: fn(a: Arena) -> R) -> Result[R, OutOfSpace]
+N fn arena.with[R](body: once fn(a: Arena) -> R) -> R
+N fn arena.bounded[R](cap: u64, body: once fn(a: Arena) -> R) -> Result[R, OutOfSpace]
 fn arena.seal[T](take a: Arena in a, take root: T in root) -> Region[T]
 N fn region.with[T, R](mut r: Region[T], body: fn(root: T) -> R) -> R
 fn copy_to[T: copyable](a: Arena, x: T) -> T in a

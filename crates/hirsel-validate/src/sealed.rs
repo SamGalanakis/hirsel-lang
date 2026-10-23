@@ -4,6 +4,15 @@ use hirsel_types::{Bound, BuiltinType, Multiplicity, SignatureKind};
 
 impl Checker<'_> {
     pub(super) fn seal_type(&mut self, arguments: &[CallArgument]) {
+        if self
+            .invocation_header()
+            .is_some_and(|header| header.allocation == hirsel_types::Allocation::NoAlloc)
+            || self.noalloc_body()
+        {
+            self.error(ViolationKind::TypeMismatch {
+                entity: "seal allocation",
+            });
+        }
         let argument = |slot| arguments.iter().find(|a| a.parameter.0 == slot);
         let (Some(grant), Some(root)) = (argument(0), argument(1)) else {
             self.error(ViolationKind::TypeMismatch {
@@ -30,7 +39,7 @@ impl Checker<'_> {
         {
             self.error(ViolationKind::InvalidUse(grant.value.place));
         }
-        if !self.sealable_payload(self.place_type(root.value.place)) {
+        if !self.sealable_payload(root.value.place) {
             self.error(ViolationKind::TypeMismatch {
                 entity: "seal resource-free payload",
             });
@@ -39,8 +48,9 @@ impl Checker<'_> {
 
     /// Callable headers are not owned graph edges. Their actual environments
     /// are, independently of a producer's erased resource/mode summary.
-    fn sealable_payload(&mut self, root: TypeId) -> bool {
-        let mut pending = vec![(root, false)];
+    fn sealable_payload(&mut self, root: PlaceId) -> bool {
+        let mut pending = vec![(self.place_type(root), false)];
+        let mut environments = false;
         let mut seen = HashSet::default();
         let mut expansions = hirsel_types::NominalExpansions::default();
         while let Some((ty, exit)) = pending.pop() {
@@ -113,35 +123,12 @@ impl Checker<'_> {
                     }
                 }
                 TypeKind::Function(_) => {
-                    let mut found = false;
-                    for body in &self.definition.bodies {
-                        for instruction in body.blocks.iter().flat_map(|b| &b.instructions) {
-                            let InstructionKind::Assign { destination, value } = instruction.kind
-                            else {
-                                continue;
-                            };
-                            if !self
-                                .t
-                                .semantic_eq(body.places[destination.0 as usize].ty, ty)
-                            {
-                                continue;
-                            }
-                            match &body.rvalues[value.0 as usize] {
-                                Rvalue::Closure { captures, .. } => {
-                                    found = true;
-                                    pending.extend(
-                                        captures
-                                            .iter()
-                                            .map(|c| (body.places[c.place.0 as usize].ty, false)),
-                                    );
-                                }
-                                Rvalue::FunctionReference { .. } => found = true,
-                                _ => (),
-                            }
-                        }
-                    }
-                    if !found && row.modes.multiplicity == Multiplicity::Once {
-                        return false;
+                    if row.modes.multiplicity == Multiplicity::Once && !environments {
+                        let Some(captures) = self.seal_owned_captures(root) else {
+                            return false;
+                        };
+                        pending.extend(captures.into_iter().map(|ty| (ty, false)));
+                        environments = true;
                     }
                 }
                 TypeKind::Builtin {
@@ -165,5 +152,145 @@ impl Checker<'_> {
             }
         }
         true
+    }
+
+    /// Follow this operand's producers, including aggregate fields and capture
+    /// sites. A different closure of the same type proves nothing about it.
+    fn seal_owned_captures(&mut self, root: PlaceId) -> Option<Vec<TypeId>> {
+        let mut pending = vec![(self.site.body, root, Vec::<Projection>::new())];
+        let mut seen = HashSet::default();
+        let mut captures = vec![];
+        while let Some((body_id, place, suffix)) = pending.pop() {
+            let body = &self.definition.bodies[body_id.0 as usize];
+            let access = &body.places[place.0 as usize];
+            if self.bound(
+                self.t,
+                access.ty,
+                Bound::Copyable,
+                self.generic_declarations(),
+            ) {
+                continue;
+            }
+            let mut projection = access.projection.to_vec();
+            projection.extend(suffix);
+            if !seen.insert((body_id.0, access.root.0, projection.clone())) {
+                continue;
+            }
+            if body.locals[access.root.0 as usize].storage == Storage::Capture {
+                let ordinal = body
+                    .locals
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, l)| l.storage == Storage::Capture)
+                    .position(|(index, _)| index == access.root.0 as usize)?;
+                let mut found = false;
+                for (parent_index, parent) in self.definition.bodies.iter().enumerate() {
+                    for rvalue in &parent.rvalues {
+                        if let Rvalue::Closure {
+                            body: child,
+                            captures: inputs,
+                            ..
+                        } = rvalue
+                        {
+                            if *child == body_id {
+                                let input = inputs.get(ordinal)?;
+                                if input.usage == UseKind::Mut {
+                                    return None;
+                                }
+                                pending.push((
+                                    BodyId(parent_index as u32),
+                                    input.place,
+                                    projection.clone(),
+                                ));
+                                found = true;
+                            }
+                        }
+                    }
+                }
+                if !found {
+                    return None;
+                }
+                continue;
+            }
+            if body.locals[access.root.0 as usize].storage == Storage::Parameter {
+                return None;
+            }
+            let mut found = false;
+            for block in &body.blocks {
+                if let Terminator::Call {
+                    returns, arguments, ..
+                } = &block.terminator
+                {
+                    if returns
+                        .as_ref()
+                        .is_some_and(|r| body.places[r.destination.0 as usize].root == access.root)
+                        || arguments.iter().any(|a| {
+                            a.value.usage == UseKind::Mut
+                                && body.places[a.value.place.0 as usize].root == access.root
+                        })
+                    {
+                        return None;
+                    }
+                }
+                for instruction in &block.instructions {
+                    if matches!(&instruction.kind, InstructionKind::Replace { destination, .. } | InstructionKind::BeginLoan { place: destination, mutable: true, .. } if body.places[destination.0 as usize].root == access.root)
+                    {
+                        return None;
+                    }
+                    let InstructionKind::Assign { destination, value } = instruction.kind else {
+                        continue;
+                    };
+                    let destination = &body.places[destination.0 as usize];
+                    if destination.root != access.root {
+                        continue;
+                    }
+                    if !destination.projection.is_empty() {
+                        return None;
+                    }
+                    found = true;
+                    match &body.rvalues[value.0 as usize] {
+                        Rvalue::Use(input)
+                        | Rvalue::Unary {
+                            op: hirsel_syntax::UnaryOp::Unique,
+                            value: input,
+                        } => pending.push((body_id, input.place, projection.clone())),
+                        Rvalue::Construct { fields, .. } => {
+                            if let Some((first, rest)) = projection.split_first() {
+                                let field = match first {
+                                    Projection::Field(field)
+                                    | Projection::VariantField { field, .. } => Some(*field),
+                                    Projection::Index(_) => None,
+                                };
+                                for input in fields
+                                    .iter()
+                                    .filter(|f| field.is_none_or(|field| f.field == field))
+                                {
+                                    pending.push((body_id, input.value.place, rest.to_vec()));
+                                }
+                            } else {
+                                pending.extend(
+                                    fields.iter().map(|f| (body_id, f.value.place, vec![])),
+                                );
+                            }
+                        }
+                        Rvalue::Closure {
+                            captures: inputs, ..
+                        } if projection.is_empty() => {
+                            for input in inputs {
+                                let ty = body.places[input.place.0 as usize].ty;
+                                captures.push(ty);
+                                pending.push((body_id, input.place, vec![]));
+                            }
+                        }
+                        Rvalue::FunctionReference { .. } if projection.is_empty() => (),
+                        _ => return None,
+                    }
+                }
+            }
+            if !found {
+                return None;
+            }
+        }
+        Some(captures)
     }
 }

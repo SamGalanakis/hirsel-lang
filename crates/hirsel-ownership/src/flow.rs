@@ -14,8 +14,8 @@ mod creation;
 mod cursors;
 mod loans;
 mod parameter_parts;
-mod state;
 mod sealed;
+mod state;
 use hirsel_modes::explain::{Cause, Explanation, Fact, Requirement};
 use loans::{Kind, Loan, LoanSet, On, Site};
 
@@ -1467,7 +1467,7 @@ fn join_sendability(current: Sendability, actual: Sendability) -> Sendability {
 /// Flow refines a row's lifetime; its placement stays the row's own.
 fn publish_row(
     t: &TypeInterner,
-    body: &mut CheckedBody,
+    _body: &mut CheckedBody,
     properties: &mut PropertyTable,
     root: TypeId,
     mut modes: Modes,
@@ -2451,6 +2451,7 @@ impl Checker<'_, '_> {
         if value.modes.sendability == Sendability::NotSendable
             && value.modes.uniqueness != Uniqueness::Unique
             && !self.property(expression).is_some_and(|p| p.plain || p.flat)
+            && !self.sealed_owner(expression)
         {
             return Sendability::NotSendable;
         }
@@ -3090,8 +3091,12 @@ impl Checker<'_, '_> {
         }
         value.restrict_crossing_paths(self.retention_depth);
         if value.modes.sendability == Sendability::NotSendable
-            && value.modes.uniqueness == Uniqueness::Unique
+            && (value.modes.uniqueness == Uniqueness::Unique
+                || self.sealed_owner(expression) && self.arenas.global(&value.modes.relation))
         {
+            // A Region cannot be copied or have its payload mutated. Its
+            // complete closed root type, rather than outer deep uniqueness,
+            // decides whether this affine owner can cross a task boundary.
             value.modes.sendability = self.captured_sendability(expression, value);
         }
         if self.property(expression).is_some_and(|p| p.plain) {
@@ -6655,7 +6660,7 @@ impl Checker<'_, '_> {
                 state.argument_loans.retain(|_, loan| loan.1 != *expression);
                 let mut failed = state.argument_conflicts.remove(expression)
                     || arguments.iter().any(|a| self.value(state, a.value).invalid);
-                if !failed && !self.seal_entry(state, *expression, arguments, requirements) {
+                if !self.seal_entry(state, *expression, arguments, requirements) {
                     failed = true;
                 }
                 if !failed
