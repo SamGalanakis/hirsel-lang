@@ -14,6 +14,11 @@ use std::alloc::{Layout, alloc, dealloc, handle_alloc_error};
 use std::ptr::{self, NonNull};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+mod transaction;
+pub use transaction::{
+    Block, BlockId, Charge, Error as SealError, Patch, Placement, Plan, Root, prepare_commit,
+};
+
 static GENERATION: AtomicU64 = AtomicU64::new(1);
 
 #[repr(u32)]
@@ -59,6 +64,8 @@ pub struct SealedRegion {
     run: *const RunShared,
     root: RootBytes,
     storage: Option<DetachedStorage>,
+    /// Private evacuation extensions, adopted at the same publication point.
+    extensions: Option<DetachedStorage>,
     /// One entry per semantic root credit, including repeated equal pointers.
     shared: Vec<*mut Header>,
 }
@@ -94,6 +101,7 @@ impl<'ctx> PreparedSeal<'ctx> {
             // SAFETY: caller's root/extent contract.
             root: unsafe { RootBytes::snapshot(root, size, align) },
             storage: None,
+            extensions: None,
             shared: Vec::new(),
         });
         Self {
@@ -140,7 +148,9 @@ impl<'ctx> PreparedSeal<'ctx> {
     pub unsafe fn commit(mut self, arena: *mut Region) -> *mut SealedRegion {
         let mut control = self.control.take().expect("uncommitted preparation");
         // SAFETY: graph closure and exclusive live arena are caller obligations.
-        control.storage = Some(unsafe { detach_storage(arena) });
+        let storage = unsafe { detach_storage(arena) };
+        unsafe { storage.transfer_diagnostic(self.ctx, arena) };
+        control.storage = Some(storage);
         control.state = State::Published;
         Box::into_raw(control)
     }
@@ -198,6 +208,9 @@ pub unsafe fn drop_owner(ctx: *mut TaskCtx, owner: *mut SealedRegion) {
             .take()
             .expect("published detached storage")
             .release(ctx);
+        if let Some(extensions) = owner.extensions.take() {
+            extensions.release(ctx);
+        }
         owner.state = State::Dead;
         // Box and RootBytes free only owned control/root scratch; no source task
         // pointer is consulted, including on a receiving worker after source exit.

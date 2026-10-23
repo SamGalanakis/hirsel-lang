@@ -15,6 +15,7 @@ use std::alloc::{Layout as HostLayout, alloc as host_alloc, dealloc as host_deal
 use std::ptr;
 
 mod detached;
+pub(crate) mod sealed_cleanup;
 mod lent;
 pub use detached::{DetachedStorage, detach_storage};
 use lent::LentList;

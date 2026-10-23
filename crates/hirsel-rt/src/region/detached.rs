@@ -20,6 +20,26 @@ pub struct DetachedStorage {
 unsafe impl Send for DetachedStorage {}
 
 impl DetachedStorage {
+    /// Rebind diagnostic header ownership without retaining the source frame.
+    /// A null scope identifies detached storage; release identifies its headers
+    /// by segment interval. The map already contains every arena header, so
+    /// publication only updates existing entries and never reserves a vector.
+    pub(crate) unsafe fn transfer_diagnostic(&self, ctx: &TaskCtx, region: *mut Region) {
+        if ctx.heap_ref().diagnostic {
+            let mut owners = ctx
+                .run_ref()
+                .region_owners
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            for owner in owners
+                .values_mut()
+                .filter(|owner| owner.active && owner.region == region)
+            {
+                owner.region = ptr::null_mut();
+            }
+        }
+    }
+
     /// Return this owner's segments to their allocator homes, without allocating.
     /// Remote homes receive them through the existing return queues.
     ///
@@ -34,6 +54,19 @@ impl DetachedStorage {
             while !segment.is_null() {
                 let next = (*segment).prev;
                 if ctx.heap_ref().diagnostic {
+                    let start = segment.addr() + SEGMENT_HEADER;
+                    let end = segment.addr() + (*segment).size as usize;
+                    let mut owners = ctx
+                        .run_ref()
+                        .region_owners
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
+                    for (&address, owner) in owners.iter_mut() {
+                        if owner.region.is_null() && address >= start && address < end {
+                            owner.active = false;
+                        }
+                    }
+                    drop(owners);
                     let data = segment.cast::<u8>().add(SEGMENT_HEADER);
                     #[cfg(feature = "memcheck")]
                     crate::memcheck::undefined(data, (*segment).size as usize - SEGMENT_HEADER);
