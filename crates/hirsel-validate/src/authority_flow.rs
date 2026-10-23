@@ -182,27 +182,25 @@ impl Checker<'_> {
                 GenericArgument::Size(_) => AuthoritySummary::inert(),
             })
             .collect();
-        let mut required = if function.authority == AuthoritySummary::Unknown {
-            match callee {
-                Callee::Indirect { value, .. }
-                    if self
-                        .invocation_header()
-                        .is_some_and(|header| match &header.uses {
-                            Uses::Only(selected) => {
-                                self.parameter_callback(value.place, Some(selected))
-                            }
-                            Uses::Unrestricted => false,
-                        }) =>
-                {
-                    AuthoritySummary::inert()
-                }
-                _ => AuthoritySummary::Unknown,
-            }
+        let selected_callback = function.authority == AuthoritySummary::Unknown
+            && matches!(callee, Callee::Indirect { value, .. }
+            if self.invocation_header().is_some_and(|header| match &header.uses {
+                Uses::Only(selected) => self.parameter_callback(value.place, Some(selected)),
+                Uses::Unrestricted => false,
+            }));
+        let mut required = if selected_callback {
+            AuthoritySummary::inert()
         } else {
             Self::instantiated_authority(&function.authority, &parameters, &generics)
         };
         if let Uses::Only(uses) = &function.uses {
-            required = required.join(Self::instantiated_authority(uses, &parameters, &generics));
+            // An inferred closure's unknown capture ceiling carries no new
+            // charge after this exact origin has been discharged. Known uses
+            // and the actual callback operands remain independent obligations.
+            if !selected_callback || *uses != AuthoritySummary::Unknown {
+                required =
+                    required.join(Self::instantiated_authority(uses, &parameters, &generics));
+            }
         }
         for argument in arguments {
             if function

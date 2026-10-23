@@ -123,3 +123,4 @@ mod string_concat_guidance_24;
 mod output_capability_guidance_24;
 mod closure_effect_joins_26;
 mod result_injection_typing_26;
+mod stored_callable_authority_26;

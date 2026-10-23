@@ -1560,7 +1560,11 @@ impl Checker<'_> {
                             }))
                     {
                         let callee_required = match &f.uses {
-                            Uses::Unrestricted => {
+                            // An inferred scoped closure publishes its captures
+                            // as uses, which stays Unknown for a callback parameter.
+                            // Discharge that environment only through its exact
+                            // origin receipt, as for an unrestricted parameter.
+                            Uses::Unrestricted | Uses::Only(AuthoritySummary::Unknown) => {
                                 self.receipt_authority(callee, AuthoritySummary::Unknown, &frame)
                             }
                             Uses::Only(uses) => self.scoped_authority(substitute_authority(
