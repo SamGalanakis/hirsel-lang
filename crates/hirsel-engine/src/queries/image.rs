@@ -50,6 +50,21 @@ mod tests {
     }
 
     #[test]
+    fn serialized_empty_claimed_verdict_cannot_certify_invalid_tir() {
+        crate::with_compiler_stack(|| {
+            let mut engine = QueryEngine::new(default_environment(), PhaseAdapters::default());
+            let mut claimed = invalid_lowering();
+            claimed.verdict = Some(vec![]);
+            let bytes = bincode::serialize(&claimed).unwrap();
+            let decoded: ImageLowering = bincode::deserialize(&bytes).unwrap();
+            assert!(
+                engine.admit_image_lowering(&decoded).is_err(),
+                "an unauthenticated read list cannot certify invalid TIR"
+            );
+        });
+    }
+
+    #[test]
     fn absent_or_stale_image_verdict_requires_v() {
         crate::with_compiler_stack(|| {
             let mut engine = QueryEngine::new(default_environment(), PhaseAdapters::default());
@@ -347,13 +362,8 @@ impl QueryEngine {
         lowering: &ImageLowering,
     ) -> Result<QueryOutput<hirsel_tir::DefinitionRef>, QueryError> {
         if self.verify == Verify::On {
-            if !self.lowered_verdict_holds(&lowering.definition)
-                && let Some(reads) = &lowering.verdict
-            {
-                self.remember_lowered_verdict(lowering.definition.clone(), reads.clone());
-            }
-            // The image key binds its producer and sources, but acceptance also
-            // depends on the importing snapshot's independently checked views.
+            // Image bytes and claimed reads carry no verifier authority. Only
+            // this engine's own evidence can avoid first-time validation.
             self.ensure_lowered_verdict(&lowering.definition)?;
         }
         self.depth_replay_requests(&lowering.depth)?;
