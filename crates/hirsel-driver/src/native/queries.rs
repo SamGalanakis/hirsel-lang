@@ -49,6 +49,8 @@ pub struct ArenaSummary {
 #[derive(Clone, Debug)]
 pub struct ReadyProduct {
     pub product: ProductRef,
+    /// Bound to emission_context; consumed by the backend profile selector.
+    pub debug: bool,
     pub ready: Reference,
     pub layout_closure: Reference,
     pub emission_context: Reference,
