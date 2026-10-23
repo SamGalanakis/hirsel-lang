@@ -193,10 +193,20 @@ impl CalleeRun {
         }
     }
 
-    /// Service only published bridge continuations. In particular this never
-    /// blocks in an individual callee's adapter wait while other runs need home.
+    /// Service published bridges and ready saved host waits without entering
+    /// an individual callee's adapter wait while other runs need home.
     pub(super) fn service(&mut self) -> bool {
-        unsafe { crate::pool::poll_home_posts((*self.root).run_ptr()) }
+        unsafe {
+            let run = (*self.root).run_ptr();
+            let progress = crate::pool::poll_home_posts(run);
+            match crate::tasks::free::home::service_child(run) {
+                Ok(ready) => progress || ready,
+                Err(stop) => {
+                    (*run).control.request(stop);
+                    true
+                }
+            }
+        }
     }
 
     /// # Safety

@@ -2296,3 +2296,130 @@ pub fn main(rt: Io, args: Args) -> Result[(), E] {
         assert_eq!(std::fs::read_to_string(&report).unwrap(), projection);
     }
 }
+
+#[test]
+fn f1_runner_call_child_host_waits_replay_without_child_effects() {
+    if !hirsel_rt::free_driver::admission_enabled() {
+        return;
+    }
+    let scratch = Scratch::new("f1-runner-call-host-waits");
+    let program = scratch.path("main.hir");
+    std::fs::write(
+        &program,
+        r#"pub type E = Grant(GrantError) | Output(OutputError)
+fn child(rt: Io, n: u64) -> Result[u64, String] {
+  let out = match io.stdout(rt) { Ok(v) => v, Error(_) => return Error("stdout") }
+  let random = match io.random(rt) { Ok(v) => v, Error(_) => return Error("random") }
+  let draw = match random.bytes(random, 8) { Ok(v) => v, Error(_) => return Error("draw") }
+  let clock = match io.monotonic_clock(rt) { Ok(v) => v, Error(_) => return Error("clock") }
+  let now = match clock.monotonic(clock) { Ok(v) => v, Error(_) => return Error("now") }
+  let later = match instant.checked_add(clock, now, 10000000u64) { Some(v) => v, None() => now }
+  match clock.sleep_until(clock, later) { Ok(()) => (), Error(_) => return Error("sleep") }
+  match out.print(out, "child effect\n") { Ok(()) => (), Error(_) => return Error("print") }
+  if bytes.len(draw) == 8 { Ok(n + 1u64) } else { Error("length") }
+}
+pub fn main(rt: Io, args: Args) -> Result[(), E] {
+  let out = io.stdout(rt) ? Grant
+  let runner = io.runner(rt, "worker") ? Grant
+  failure.check(runner.call(runner, child, 8u64) == Ok(9u64), Arithmetic())
+  out.print(out, "parent result\n") ? Output
+  Ok(())
+}
+"#,
+    )
+    .unwrap();
+    let grants = r#"{"io":{"stdout":"stdout.bytes@1","tasks":"tasks.free@1","dirs":[],"runners":[{"name":"worker","provider":"local.threads@1","threads":2,"grants":{"stdout":"stdout.bytes@1","tasks":"tasks.free@1","random":"random.splitmix64@1","monotonic_clock":"clock.monotonic.ns@1","dirs":[]},"definitions":null}]},"args":[]}"#;
+    f1_runner_call_record_replay(
+        &scratch,
+        &program,
+        grants,
+        b"child effect\nparent result\n",
+        b"parent result\n",
+    );
+}
+
+fn f1_runner_call_record_replay(
+    scratch: &Scratch,
+    program: &Path,
+    grants: &str,
+    live_output: &[u8],
+    replay_output: &[u8],
+) {
+    let tape = scratch.path("record");
+    let report = scratch.path("projection");
+    let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+    command
+        .args(["run", "--native"])
+        .arg(&program)
+        .args(["--grants", grants, "--cores", "1", "--record"])
+        .arg(&tape)
+        .env(hirsel_rt::free_replay::Report::VAR, &report);
+    f1_permits(&mut command, 1);
+    let live = bounded_output(&mut command, &program, "runner call child host waits live");
+    assert!(live.status.success(), "{live:?}");
+    assert_eq!(live.stdout, live_output);
+    let projection = std::fs::read_to_string(&report).unwrap();
+    for engine in ENGINES {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+        command
+            .arg("run")
+            .args(engine)
+            .arg(&program)
+            .arg("--replay")
+            .arg(&tape)
+            .args(["--cores", "1"])
+            .env(hirsel_rt::free_replay::Report::VAR, &report);
+        f1_permits(&mut command, 1);
+        let replay = bounded_output(
+            &mut command,
+            &program,
+            &format!("runner call replay {engine:?}"),
+        );
+        assert!(replay.status.success(), "{engine:?}: {replay:?}");
+        // A caller's replay consumes the outcome and never repeats child effects.
+        assert_eq!(replay.stdout, replay_output);
+        assert_eq!(std::fs::read_to_string(&report).unwrap(), projection);
+    }
+}
+
+#[test]
+fn f1_runner_call_child_scope_deadlines_and_cancellation_replay() {
+    if !hirsel_rt::free_driver::admission_enabled() {
+        return;
+    }
+    let scratch = Scratch::new("f1-runner-call-child-deadline");
+    let program = scratch.path("main.hir");
+    std::fs::write(&program, r#"pub type E = Grant(GrantError) | Output(OutputError)
+fn child(rt: Io, n: u64) -> Result[u64, String] {
+  let tasks = match io.tasks(rt) { Ok(v) => v, Error(_) => return Error("tasks") }
+  let clock = match io.monotonic_clock(rt) { Ok(v) => v, Error(_) => return Error("clock") }
+  let now = match clock.monotonic(clock) { Ok(v) => v, Error(_) => return Error("now") }
+  let later = match instant.checked_add(clock, now, 10000000u64) { Some(v) => v, None() => now }
+  let (sender, receiver): (Sender[u64], Receiver[u64]) = channel.open(tasks)
+  let ended = task.scope_until(tasks, Deadline(clock: clock, at: later), fn(s: Scope) -> bool {
+    let mut rx = take receiver
+    let canceled = match channel.receive(tasks, mut rx) {
+      Error(Canceled(DeadlineExceeded())) => true,
+      _ => false,
+    }
+    canceled && match task.check_canceled(s) { Error(Canceled(DeadlineExceeded())) => true, _ => false }
+  })
+  if match ended { Expired(true) => true, _ => false } { Ok(n + 1u64) } else { Error("deadline") }
+}
+pub fn main(rt: Io, args: Args) -> Result[(), E] {
+  let out = io.stdout(rt) ? Grant
+  let runner = io.runner(rt, "worker") ? Grant
+  failure.check(runner.call(runner, child, 8u64) == Ok(9u64), Arithmetic())
+  out.print(out, "child deadline result\n") ? Output
+  Ok(())
+}
+"#).unwrap();
+    let grants = r#"{"io":{"stdout":"stdout.bytes@1","tasks":"tasks.free@1","dirs":[],"runners":[{"name":"worker","provider":"local.threads@1","threads":2,"grants":{"tasks":"tasks.free@1","monotonic_clock":"clock.monotonic.ns@1","dirs":[]},"definitions":null}]},"args":[]}"#;
+    f1_runner_call_record_replay(
+        &scratch,
+        &program,
+        grants,
+        b"child deadline result\n",
+        b"child deadline result\n",
+    );
+}

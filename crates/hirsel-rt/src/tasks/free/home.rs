@@ -153,3 +153,114 @@ unsafe fn poll_home(
     };
     Ok((ready, sources))
 }
+
+/// Poll a home-owned runner child's ordinary adapter without waiting for it.
+/// Its independent Free dispatcher owns saved frames, while the execution's
+/// shared readiness driver waits for all child sources together. No parent
+/// task/adapter or canonical parent host phase is borrowed here.
+/// # Safety
+/// The child's sole home owner, outside program code and all adapter loans.
+pub(crate) unsafe fn service_child(run: *mut RunShared) -> crate::stop::Stopped<bool> {
+    if unsafe { (*run).host_waits.load(Ordering::Acquire) } == 0 {
+        return Ok(false);
+    }
+    let (scopes, waits) = {
+        let Some(_guard) = (unsafe { role::IdleGuard::try_new(run) }) else {
+            return Ok(false);
+        };
+        let Some(s) = (unsafe { (*(*run).tasks.get()).as_deref_mut() }) else {
+            return Ok(false);
+        };
+        let mut waits = Vec::new();
+        for (task, row) in s.tasks.iter().enumerate() {
+            let Some(row) = row else { continue };
+            let Some(super::super::Wait::Host { token }) = row.wait else {
+                continue;
+            };
+            // Do not consume a readiness edge before its owner is saved.
+            // The physical-save post wakes this execution again.
+            if !readiness::saved(s, task as u32) {
+                return Ok(false);
+            }
+            waits.push((task as u32, row.generation, token));
+        }
+        let scopes = s
+            .scopes
+            .iter()
+            .enumerate()
+            .filter_map(|(scope, row)| {
+                let row = row.as_ref()?;
+                Some((scope as u32, row.generation, row.deadline.as_ref()?.token?))
+            })
+            .collect::<Vec<_>>();
+        (scopes, waits)
+    };
+    let crate::host_waits::HomeReady { expired, hosts } =
+        unsafe { crate::host_waits::ready_home(run) }?;
+    let candidates = {
+        let _guard = unsafe { role::IdleGuard::home(run) };
+        if unsafe { (*run).control.stopped().is_some() } {
+            return Ok(false);
+        }
+        let s = unsafe { (*(*run).tasks.get()).as_deref_mut().unwrap() };
+        for index in expired {
+            if scopes.iter().any(|&(scope, generation, token)| {
+                index == scope
+                    && s.scopes
+                        .get(index as usize)
+                        .and_then(Option::as_ref)
+                        .is_some_and(|row| {
+                            row.generation == generation
+                                && row
+                                    .deadline
+                                    .as_ref()
+                                    .is_some_and(|deadline| deadline.token == Some(token))
+                        })
+            }) {
+                s.expire(index);
+            }
+        }
+        hosts.into_iter().filter_map(|host| {
+            let (_, generation, _) = waits.iter().find(|&&(task, generation, token)| {
+                task == host.task && token == host.token
+                    && s.tasks.get(task as usize).and_then(Option::as_ref)
+                        .is_some_and(|row| row.generation == generation
+                            && matches!(row.wait, Some(super::super::Wait::Host { token: t }) if t == token)
+                            && readiness::saved(s, task))
+            })?;
+            let shield = s.task(host.task).shield();
+            let cause = s.canceled_task(host.task, shield);
+            Some((host, *generation, cause))
+        }).collect::<Vec<_>>()
+    };
+    let mut completed = Vec::new();
+    for (host, generation, cause) in candidates {
+        if unsafe { crate::host_waits::poll_home(run, host.token, cause, host.ready) }? {
+            completed.push((host.task, generation, host.token));
+        }
+    }
+    let _guard = unsafe { role::IdleGuard::home(run) };
+    if unsafe { (*run).control.stopped().is_some() } {
+        return Ok(false);
+    }
+    let s = unsafe { (*(*run).tasks.get()).as_deref_mut().unwrap() };
+    let mut changed = false;
+    for (task, generation, token) in completed {
+        if s.tasks
+            .get(task as usize)
+            .and_then(Option::as_ref)
+            .is_some_and(|row| {
+                row.generation == generation
+                    && matches!(row.wait, Some(super::super::Wait::Host { token: t }) if t == token)
+                    && readiness::saved(s, task)
+            })
+        {
+            s.unpark(task);
+            changed = true;
+        }
+    }
+    unsafe { readiness::poll_free(s) };
+    unsafe { super::publish_ready(s, run) };
+    unsafe { super::check_quiet(run) };
+    Ok(changed)
+}
