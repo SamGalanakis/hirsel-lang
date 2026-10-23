@@ -1,0 +1,65 @@
+const HELP: String = "groupmap FILE\nGroup explicitly aliased inventory records; labels follow declaration order.\nReads FILE beneath the read-only input directory grant.\nLimits: 65536 bytes, 64 records, 64 aliases, 128 bytes per name.\nExit: 0 grouped/help, 2 invalid input or I/O.\n"
+
+fn read_local(rt: Io, name: String) -> Result[unique Bytes, model.Invalid] {
+  let Ok(dir) = io.dir(rt, path.of("input")) else {
+    return Error(Input("directory_grant"))
+  }
+  let mut Ok(handle) = file.open(dir, path.of(name)) else {
+    return Error(Input("file_open"))
+  }
+  match file.read_all_bounded(dir, mut handle, model.INPUT_BYTES) {
+    Ok(data) => Ok(take data),
+    Error(Limit()) => Error(Input("input_bytes_limit")),
+    Error(File(_)) => Error(Input("file_read")),
+  }
+}
+
+fn execute(rt: Io, args: Args) -> Result[model.Groups, model.Invalid] {
+  if arg.len(args) != 1 {
+    return Error(Input("usage"))
+  }
+  let Ok(name) = arg.text(args, 0) else {
+    return Error(Input("arguments"))
+  }
+  let inventory = model.decode(read_local(rt, name)?)?
+  model.group(inventory)
+}
+
+pub fn main(rt: Io, args: Args) -> std@1/process.ExitCode {
+  let Ok(output) = io.stdout(rt) else {
+    return std@1/process.exit_code(2u8)
+  }
+  if arg.len(args) == 1 {
+    if let Ok(name) = arg.text(args, 0) {
+      if name == "--help" {
+        let Ok(()) = out.print(output, HELP) else {
+          return std@1/process.exit_code(2u8)
+        }
+        return std@1/process.SUCCESS
+      }
+    }
+  }
+  match execute(rt, args) {
+    Ok(groups) => {
+      let Ok(encoded) = json.stringify(model.groups_to_json(groups)) else {
+        return std@1/process.exit_code(2u8)
+      }
+      let Ok(()) = out.print(output, f"{encoded}\n") else {
+        return std@1/process.exit_code(2u8)
+      }
+      std@1/process.SUCCESS
+    },
+    Error(error) => {
+      let Ok(sink) = io.stderr(rt) else {
+        return std@1/process.exit_code(2u8)
+      }
+      let Ok(encoded) = json.stringify(model.report_to_json(model.report(error))) else {
+        return std@1/process.exit_code(2u8)
+      }
+      let Ok(()) = err.print(sink, f"{encoded}\n") else {
+        return std@1/process.exit_code(2u8)
+      }
+      std@1/process.exit_code(2u8)
+    },
+  }
+}

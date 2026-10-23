@@ -1,0 +1,409 @@
+[
+  {
+    "label": "rustc-singletons",
+    "inventory": {
+      "records": [
+        {
+          "name": "0"
+        },
+        {
+          "name": "1"
+        },
+        {
+          "name": "2"
+        },
+        {
+          "name": "3"
+        },
+        {
+          "name": "4"
+        },
+        {
+          "name": "5"
+        },
+        {
+          "name": "6"
+        },
+        {
+          "name": "7"
+        },
+        {
+          "name": "8"
+        },
+        {
+          "name": "9"
+        }
+      ],
+      "aliases": []
+    },
+    "components": [
+      {
+        "label": "0",
+        "members": [
+          "0"
+        ]
+      },
+      {
+        "label": "1",
+        "members": [
+          "1"
+        ]
+      },
+      {
+        "label": "2",
+        "members": [
+          "2"
+        ]
+      },
+      {
+        "label": "3",
+        "members": [
+          "3"
+        ]
+      },
+      {
+        "label": "4",
+        "members": [
+          "4"
+        ]
+      },
+      {
+        "label": "5",
+        "members": [
+          "5"
+        ]
+      },
+      {
+        "label": "6",
+        "members": [
+          "6"
+        ]
+      },
+      {
+        "label": "7",
+        "members": [
+          "7"
+        ]
+      },
+      {
+        "label": "8",
+        "members": [
+          "8"
+        ]
+      },
+      {
+        "label": "9",
+        "members": [
+          "9"
+        ]
+      }
+    ]
+  },
+  {
+    "label": "rustc-before-transitive",
+    "inventory": {
+      "records": [
+        {
+          "name": "0"
+        },
+        {
+          "name": "1"
+        },
+        {
+          "name": "2"
+        },
+        {
+          "name": "3"
+        },
+        {
+          "name": "4"
+        },
+        {
+          "name": "5"
+        },
+        {
+          "name": "6"
+        },
+        {
+          "name": "7"
+        },
+        {
+          "name": "8"
+        },
+        {
+          "name": "9"
+        }
+      ],
+      "aliases": [
+        {
+          "left": "3",
+          "right": "7"
+        },
+        {
+          "left": "4",
+          "right": "2"
+        }
+      ]
+    },
+    "components": [
+      {
+        "label": "0",
+        "members": [
+          "0"
+        ]
+      },
+      {
+        "label": "1",
+        "members": [
+          "1"
+        ]
+      },
+      {
+        "label": "2",
+        "members": [
+          "2",
+          "4"
+        ]
+      },
+      {
+        "label": "3",
+        "members": [
+          "3",
+          "7"
+        ]
+      },
+      {
+        "label": "5",
+        "members": [
+          "5"
+        ]
+      },
+      {
+        "label": "6",
+        "members": [
+          "6"
+        ]
+      },
+      {
+        "label": "8",
+        "members": [
+          "8"
+        ]
+      },
+      {
+        "label": "9",
+        "members": [
+          "9"
+        ]
+      }
+    ]
+  },
+  {
+    "label": "rustc-transitive",
+    "inventory": {
+      "records": [
+        {
+          "name": "0"
+        },
+        {
+          "name": "1"
+        },
+        {
+          "name": "2"
+        },
+        {
+          "name": "3"
+        },
+        {
+          "name": "4"
+        },
+        {
+          "name": "5"
+        },
+        {
+          "name": "6"
+        },
+        {
+          "name": "7"
+        },
+        {
+          "name": "8"
+        },
+        {
+          "name": "9"
+        }
+      ],
+      "aliases": [
+        {
+          "left": "3",
+          "right": "7"
+        },
+        {
+          "left": "4",
+          "right": "2"
+        },
+        {
+          "left": "7",
+          "right": "4"
+        }
+      ]
+    },
+    "components": [
+      {
+        "label": "0",
+        "members": [
+          "0"
+        ]
+      },
+      {
+        "label": "1",
+        "members": [
+          "1"
+        ]
+      },
+      {
+        "label": "2",
+        "members": [
+          "2",
+          "3",
+          "4",
+          "7"
+        ]
+      },
+      {
+        "label": "5",
+        "members": [
+          "5"
+        ]
+      },
+      {
+        "label": "6",
+        "members": [
+          "6"
+        ]
+      },
+      {
+        "label": "8",
+        "members": [
+          "8"
+        ]
+      },
+      {
+        "label": "9",
+        "members": [
+          "9"
+        ]
+      }
+    ]
+  },
+  {
+    "label": "repeated-self",
+    "inventory": {
+      "records": [
+        {
+          "name": "0"
+        },
+        {
+          "name": "1"
+        },
+        {
+          "name": "2"
+        },
+        {
+          "name": "3"
+        },
+        {
+          "name": "4"
+        },
+        {
+          "name": "5"
+        },
+        {
+          "name": "6"
+        },
+        {
+          "name": "7"
+        },
+        {
+          "name": "8"
+        },
+        {
+          "name": "9"
+        }
+      ],
+      "aliases": [
+        {
+          "left": "3",
+          "right": "7"
+        },
+        {
+          "left": "4",
+          "right": "2"
+        },
+        {
+          "left": "7",
+          "right": "4"
+        },
+        {
+          "left": "3",
+          "right": "3"
+        },
+        {
+          "left": "7",
+          "right": "3"
+        },
+        {
+          "left": "4",
+          "right": "7"
+        }
+      ]
+    },
+    "components": [
+      {
+        "label": "0",
+        "members": [
+          "0"
+        ]
+      },
+      {
+        "label": "1",
+        "members": [
+          "1"
+        ]
+      },
+      {
+        "label": "2",
+        "members": [
+          "2",
+          "3",
+          "4",
+          "7"
+        ]
+      },
+      {
+        "label": "5",
+        "members": [
+          "5"
+        ]
+      },
+      {
+        "label": "6",
+        "members": [
+          "6"
+        ]
+      },
+      {
+        "label": "8",
+        "members": [
+          "8"
+        ]
+      },
+      {
+        "label": "9",
+        "members": [
+          "9"
+        ]
+      }
+    ]
+  }
+]

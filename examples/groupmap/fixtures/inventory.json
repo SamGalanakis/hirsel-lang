@@ -1,0 +1,40 @@
+{
+  "records": [
+    {
+      "name": "warehouse:bolts-m6"
+    },
+    {
+      "name": "vendor:hex-6"
+    },
+    {
+      "name": "legacy:B006"
+    },
+    {
+      "name": "warehouse:washers-m6"
+    },
+    {
+      "name": "vendor:washer-6"
+    },
+    {
+      "name": "warehouse:seal-8"
+    }
+  ],
+  "aliases": [
+    {
+      "left": "vendor:hex-6",
+      "right": "legacy:B006"
+    },
+    {
+      "left": "warehouse:bolts-m6",
+      "right": "vendor:hex-6"
+    },
+    {
+      "left": "vendor:washer-6",
+      "right": "warehouse:washers-m6"
+    },
+    {
+      "left": "legacy:B006",
+      "right": "legacy:B006"
+    }
+  ]
+}

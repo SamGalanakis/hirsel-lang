@@ -51,6 +51,7 @@ selects an explicit bound.
 | --- | --- |
 | [argvplan](argvplan/README.md) | Inspect bounded quoted command lines as JSON argv plans without execution. |
 | [versionaudit](versionaudit/README.md) | Audit bounded pinned versions against explicit Cargo requirements; deterministic mismatches and typed invalid-input reports. |
+| [groupmap](groupmap/README.md) | Group explicit inventory aliases transitively with stable first-declared labels and read-only grants. |
 | [depplan](depplan/README.md) | Turn named prerequisites into a deterministic dry-run order; typed errors name unknown references and all blocked downstream nodes. |
 | [zonetable](zonetable/README.md) | Convert bounded meetings through explicit TZif zones; expose gaps/folds and Earlier/Later/Reject choices. |
 | [wordscan](wordscan/main.hir) | Count newline characters, ASCII-whitespace words and UTF-8 bytes; print lines containing a substring (default `red`). |

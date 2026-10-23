@@ -1,0 +1,223 @@
+// Usage and singleton/transitive vectors follow rustc union_find.rs:28-95 and
+// union_find/tests.rs:1-32 at 15c10447a46529b68e38c7f138aeb95240e4d7d6.
+// MIT, Copyright The Rust Project Contributors; third-party/NOTICES.md.
+// The shipped std owns the algorithm. Representatives never label records.
+pub const INPUT_BYTES: u64 = 65536
+
+pub const MAX_RECORDS: u64 = 64
+
+pub const MAX_ALIASES: u64 = 64
+
+pub const NAME_BYTES: u64 = 128
+
+pub type Record {
+  name: String,
+}
+
+pub type Alias {
+  left: String,
+  right: String,
+}
+
+pub type Inventory {
+  records: List[Record],
+  aliases: List[Alias],
+}
+
+pub type Component {
+  label: String,
+  members: List[String],
+}
+
+pub type Groups {
+  components: List[Component],
+}
+
+pub type Invalid = Json | Shape | RecordLimit | AliasLimit | Name | Duplicate(String) | Unknown(
+  String
+) | Forest(union_find.Error) | Input(String)
+
+pub type Report {
+  error: String,
+  name: String,
+}
+
+type Member {
+  component: u64,
+  id: u64,
+}
+
+fn record_from_json(value: json.Value) -> Result[unique Record, String] uses {} = comptime derive.from_json(
+  shape(Record)
+)
+
+fn alias_from_json(value: json.Value) -> Result[unique Alias, String] uses {} = comptime derive.from_json(
+  shape(Alias)
+)
+
+fn inventory_from_json(value: json.Value) -> Result[unique Inventory, String] uses {} = comptime derive.from_json(
+  shape(Inventory)
+)
+
+fn component_to_json(value: Component) -> json.Value uses {} = comptime derive.json_value(
+  shape(Component)
+)
+
+pub fn groups_to_json(value: Groups) -> json.Value uses {} = comptime derive.json_value(
+  shape(Groups)
+)
+
+pub fn report_to_json(value: Report) -> json.Value uses {} = comptime derive.json_value(
+  shape(Report)
+)
+
+pub fn decode(take data: unique Bytes) -> Result[unique Inventory, Invalid] uses {} {
+  if bytes.len(data) > INPUT_BYTES {
+    return Error(Input("input_bytes_limit"))
+  }
+  let Ok(text) = string.from_bytes(take data) else {
+    return Error(Json())
+  }
+  let Ok(value) = json.parse(take text) else {
+    return Error(Json())
+  }
+  let Some(records_value) = json_access.member(value, "records") else {
+    return Error(Shape())
+  }
+  let Some(records) = json_access.as_array(records_value) else {
+    return Error(Shape())
+  }
+  if list.len(records) > MAX_RECORDS {
+    return Error(RecordLimit())
+  }
+  let Some(aliases_value) = json_access.member(value, "aliases") else {
+    return Error(Shape())
+  }
+  let Some(aliases) = json_access.as_array(aliases_value) else {
+    return Error(Shape())
+  }
+  if list.len(aliases) > MAX_ALIASES {
+    return Error(AliasLimit())
+  }
+  let Ok(inventory) = inventory_from_json(value) else {
+    return Error(Shape())
+  }
+  Ok(take inventory)
+}
+
+fn valid_name(name: String) -> bool uses {} {
+  string.byte_len(name) > 0 && string.byte_len(name) <= NAME_BYTES
+}
+
+@noalloc
+fn compare_component(a: Member, b: Member) -> i32 uses {} {
+  if a.component < b.component {
+    -1i32
+  } else if a.component > b.component {
+    1i32
+  } else {
+    0i32
+  }
+}
+
+pub fn group(inventory: Inventory) -> Result[Groups, Invalid] uses {} {
+  let count = list.len(inventory.records)
+  if count > MAX_RECORDS {
+    return Error(RecordLimit())
+  }
+  if list.len(inventory.aliases) > MAX_ALIASES {
+    return Error(AliasLimit())
+  }
+  let mut ids: Map[String, u64] = map.empty()
+  for id in 0u64..count {
+    let name = inventory.records[id].name
+    if !valid_name(name) {
+      return Error(Name())
+    }
+    if map.contains(ids, name) {
+      return Error(Duplicate(unique name))
+    }
+    map.insert(mut ids, unique name, id)
+  }
+  let mut forest = union_find.new(count, MAX_RECORDS) ? Forest
+  for edge in inventory.aliases {
+    if !valid_name(edge.left) || !valid_name(edge.right) {
+      return Error(Name())
+    }
+    let Some(left) = map.get(ids, edge.left) else {
+      return Error(Unknown(unique edge.left))
+    }
+    let Some(right) = map.get(ids, edge.right) else {
+      return Error(Unknown(unique edge.right))
+    }
+    let _ = union_find.union(mut forest, left, right) ? Forest
+  }
+  let roots = union_find.snapshot(mut forest)
+  let mut members: List[Member] = []
+  for id in 0u64..count {
+    let mut first = id
+    for earlier in 0u64..id {
+      if roots[earlier] == roots[id] {
+        first = earlier
+        break
+      }
+    }
+    list.push(mut members, Member(component: first, id: id))
+  }
+  // Equal component keys retain the original declaration order.
+  list.sort_stable(mut members, compare_component)
+  let mut components: List[Component] = []
+  let mut cursor = 0u64
+  while cursor < count {
+    let key = members[cursor].component
+    let mut names: List[String] = []
+    while cursor < count {
+      if members[cursor].component != key {
+        break
+      }
+      list.push(mut names, unique inventory.records[members[cursor].id].name)
+      cursor += 1
+    }
+    list.push(
+      mut components,
+      Component(label: unique inventory.records[key].name, members: take names)
+    )
+  }
+  Ok(Groups(components: take components))
+}
+
+pub fn report(error: Invalid) -> Report uses {} {
+  let mut report_value = Report(error: "", name: "")
+  match error {
+    Json() => {
+      report_value.error = "json"
+    },
+    Shape() => {
+      report_value.error = "shape"
+    },
+    RecordLimit() => {
+      report_value.error = "record_limit"
+    },
+    AliasLimit() => {
+      report_value.error = "alias_limit"
+    },
+    Name() => {
+      report_value.error = "name"
+    },
+    Duplicate(name) => {
+      report_value.error = "duplicate_name"
+      report_value.name = unique name
+    },
+    Unknown(name) => {
+      report_value.error = "unknown_name"
+      report_value.name = unique name
+    },
+    Forest(_) => {
+      report_value.error = "forest"
+    },
+    Input(code) => {
+      report_value.error = unique code
+    },
+  }
+  take report_value
+}
