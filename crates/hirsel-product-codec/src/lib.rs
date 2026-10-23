@@ -3,7 +3,9 @@
 #[cfg(test)]
 hirsel_guard::install!();
 
+mod base;
 mod types;
+pub use base::{BaseIndex, SharedTypes};
 use bincode::Options;
 use hirsel_span::{Anchor, AnchorCodec};
 use hirsel_syntax::DefPath;

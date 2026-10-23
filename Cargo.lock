@@ -434,6 +434,7 @@ dependencies = [
  "hirsel-guard",
  "hirsel-syntax",
  "libc",
+ "serde",
  "tempfile",
 ]
 

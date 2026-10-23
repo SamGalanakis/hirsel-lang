@@ -6,6 +6,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+serde = { version = "1", features = ["derive"] }
 hirsel-syntax = { path = "../hirsel-syntax" }
 libc = "0.2"
 

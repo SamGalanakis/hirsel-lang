@@ -10,19 +10,19 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
-const DOMAIN: Domain = Domain { kind: 2, schema: 1 };
+pub(super) const DOMAIN: Domain = Domain { kind: 2, schema: 1 };
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct TypeRef {
-    output: ContentHash,
-    len: u64,
-    member: u32,
+    pub(super) output: ContentHash,
+    pub(super) len: u64,
+    pub(super) member: u32,
 }
 impl TypeRef {
-    fn key(self) -> (ContentHash, u64) {
+    pub(super) fn key(self) -> (ContentHash, u64) {
         (self.output, self.len)
     }
-    fn reference(self) -> Reference {
+    pub(super) fn reference(self) -> Reference {
         Reference {
             output: Output(self.output),
             domain: DOMAIN,
@@ -31,10 +31,10 @@ impl TypeRef {
     }
 }
 #[derive(Serialize, Deserialize)]
-struct Component {
-    dependencies: Vec<TypeRef>,
-    count: u32,
-    cyclic: bool,
+pub(super) struct Component {
+    pub(super) dependencies: Vec<TypeRef>,
+    pub(super) count: u32,
+    pub(super) cyclic: bool,
     rows: Vec<u8>,
 }
 
@@ -42,14 +42,27 @@ pub struct TypeRecords {
     pub types: Arc<TypeInterner>,
     pub store: Arc<dyn Contents>,
     encoded: Mutex<HashMap<TypeId, TypeRef>>,
+    pub(super) base: HashMap<TypeRef, TypeId>,
     decoded: Mutex<HashMap<(ContentHash, u64), Arc<[TypeId]>>>,
 }
 impl TypeRecords {
     pub fn new(types: Arc<TypeInterner>, store: Arc<dyn Contents>) -> Arc<Self> {
+        Self::with_base(types, store, HashMap::new())
+    }
+    pub(super) fn with_base(
+        types: Arc<TypeInterner>,
+        store: Arc<dyn Contents>,
+        base: HashMap<TypeRef, TypeId>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             types,
             store,
-            encoded: Mutex::new(HashMap::new()),
+            encoded: Mutex::new(
+                base.iter()
+                    .map(|(reference, id)| (*id, *reference))
+                    .collect(),
+            ),
+            base,
             decoded: Mutex::new(HashMap::new()),
         })
     }
@@ -169,18 +182,10 @@ impl TypeRecords {
         }
         roots.iter().map(|id| known.get(id).copied()).collect()
     }
-    fn component(&self, reference: TypeRef) -> Option<Component> {
-        let bytes = self.store.get_content(reference.reference())?;
-        let component: Component = options(bytes.len()).deserialize(&bytes).ok()?;
-        if component.count == 0
-            || component.count as usize > component.rows.len()
-            || (!component.cyclic && component.count != 1)
-        {
-            return None;
-        }
-        Some(component)
-    }
     fn get(&self, reference: TypeRef) -> Option<TypeId> {
+        if let Some(id) = self.base.get(&reference) {
+            return Some(*id);
+        }
         if reference.len > hirsel_artifact_store::MAX_RECORD as u64 {
             return None;
         }
@@ -189,17 +194,28 @@ impl TypeRecords {
             // Explicit DFS avoids growing a Rust/serde call stack with a deep
             // chain of components. External references must form a DAG.
             let mut active = HashSet::from([reference.output]);
-            let mut stack = vec![(reference, self.component(reference)?, 0usize)];
+            let mut stack = vec![(
+                reference,
+                component(self.store.as_ref(), reference)?,
+                0usize,
+            )];
             while let Some((_, component, next)) = stack.last_mut() {
                 if let Some(dependency) = component.dependencies.get(*next).copied() {
                     *next += 1;
+                    if self.base.contains_key(&dependency) {
+                        continue;
+                    }
                     if let Some(ids) = known.get(&dependency.key()) {
                         ids.get(dependency.member as usize)?;
                     } else {
                         if !active.insert(dependency.output) {
                             return None;
                         }
-                        stack.push((dependency, self.component(dependency)?, 0));
+                        stack.push((
+                            dependency,
+                            self::component(self.store.as_ref(), dependency)?,
+                            0,
+                        ));
                     }
                     continue;
                 }
@@ -207,31 +223,16 @@ impl TypeRecords {
                 let dependencies: Vec<_> = component
                     .dependencies
                     .iter()
-                    .map(|d| known.get(&d.key())?.get(d.member as usize).copied())
-                    .collect::<Option<_>>()?;
-                let table: TypeTable = options(component.rows.len())
-                    .deserialize(&component.rows)
-                    .ok()?;
-                let count = component.count as usize;
-                if table.len() != count
-                    || !table.valid_positions(count.checked_add(dependencies.len())?)
-                {
-                    return None;
-                }
-                let local_graph: Vec<Vec<usize>> = table
-                    .edge_positions()
-                    .iter()
-                    .map(|edges| {
-                        edges
-                            .iter()
-                            .filter_map(|&n| ((n as usize) < count).then_some(n as usize))
-                            .collect()
+                    .map(|d| {
+                        self.base
+                            .get(d)
+                            .copied()
+                            .or_else(|| known.get(&d.key())?.get(d.member as usize).copied())
                     })
-                    .collect();
-                let cyclic = count > 1 || local_graph[0].contains(&0);
-                if cyclic != component.cyclic || hirsel_graph::components(&local_graph).len() != 1 {
-                    return None;
-                }
+                    .collect::<Option<_>>()?;
+                let table = checked_table(&component)?;
+                let count = component.count as usize;
+                let cyclic = component.cyclic;
                 let resolve = |local: &[TypeId]| {
                     let ids: Vec<_> = local.iter().chain(&dependencies).copied().collect();
                     table
@@ -252,6 +253,44 @@ impl TypeRecords {
             .get(reference.member as usize)
             .copied()
     }
+}
+pub(super) fn component(store: &dyn Contents, reference: TypeRef) -> Option<Component> {
+    let bytes = store.get_content(reference.reference())?;
+    let component: Component = options(bytes.len()).deserialize(&bytes).ok()?;
+    if component.count == 0
+        || component.count as usize > component.rows.len()
+        || (!component.cyclic && component.count != 1)
+    {
+        return None;
+    }
+    Some(component)
+}
+pub(super) fn checked_table(component: &Component) -> Option<TypeTable> {
+    let table: TypeTable = options(component.rows.len())
+        .deserialize(&component.rows)
+        .ok()?;
+    let count = component.count as usize;
+    if table.len() != count
+        || !table.valid_positions(count.checked_add(component.dependencies.len())?)
+    {
+        return None;
+    }
+    let graph: Vec<Vec<usize>> = table
+        .edge_positions()
+        .iter()
+        .map(|edges| {
+            edges
+                .iter()
+                .filter_map(|&n| ((n as usize) < count).then_some(n as usize))
+                .collect()
+        })
+        .collect();
+    if (count > 1 || graph[0].contains(&0)) != component.cyclic
+        || hirsel_graph::components(&graph).len() != 1
+    {
+        return None;
+    }
+    Some(table)
 }
 fn options(len: usize) -> impl Options {
     bincode::DefaultOptions::new()
