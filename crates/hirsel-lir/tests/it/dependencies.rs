@@ -65,6 +65,7 @@ const CRATES: &[(&str, Class)] = &[
     ("hirsel-cranelift", Class::Implementation),
     ("hirsel-rt", Class::Implementation),
     ("hirsel-heapcheck", Class::Implementation),
+    ("hirsel-artifact-store", Class::Implementation),
     ("hirsel-code-store", Class::Implementation),
     ("hirsel-remote", Class::Implementation),
     ("hirsel-kernels", Class::LeafKernel),
@@ -81,6 +82,8 @@ const CRATES: &[(&str, Class)] = &[
 /// The implementation crates the engine may use directly; it reaches
 /// signature, check, modes and lower only through its `Phases` trait object.
 const ENGINE_IMPLEMENTATIONS: &[&str] = &[
+    // The engine owns persistence; this store reads ambient files and is not data.
+    "hirsel-artifact-store",
     "hirsel-interp",
     "hirsel-resolve",
     "hirsel-parser",
@@ -280,6 +283,8 @@ fn implementation_to_implementation_production_and_build_edges_are_rejected() {
         ("hirsel-rc", "hirsel-interp"),
         ("hirsel-check", "hirsel-authority"),
         ("hirsel-authority", "hirsel-ownership"),
+        ("hirsel-check", "hirsel-artifact-store"),
+        ("hirsel-artifact-store", "hirsel-check"),
     ] {
         assert!(
             check_edge(from, to, Kind::Production).is_err(),
