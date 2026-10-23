@@ -1,0 +1,301 @@
+// Redis 7.2 d2c8a4b9 src/t_stream.c:2820-2888 and stream-cgroups.tcl:47-150:
+// group PEL and consumer ownership, remove exactly the matching pending entry.
+// BSD-3; LICENSE.redis. Tokens strengthen XACK; bounded vectors replace rax.
+pub type Row[T] {
+  id: u64,
+  value: T,
+}
+
+pub type Table[T] {
+  rows: List[Row[T]],
+}
+
+pub type Delivery {
+  consumer: u64,
+  token: u64,
+  acked: bool,
+  active: bool,
+  until: u64,
+}
+
+pub type Group {
+  present: bool,
+  offset: u64,
+  entries: List[Delivery],
+}
+
+pub type State {
+  messages: Table[String],
+  groups: List[Group],
+  token: u64,
+}
+
+pub type Plan {
+  event: Option[record.Event],
+  reply: Bytes,
+}
+
+pub fn table[T]() -> unique Table[T] uses {} {
+  Table(rows: [])
+}
+
+// Both live String payloads and prepared checkpoint Bytes use this consuming
+// bounded seam. No copyable bound and no implicit duplication of generic T.
+@preserves_unique(target)
+pub fn push[T](mut target: unique Table[T], id: u64, take value: unique T, cap: u64) -> Result[
+  (),
+  record.Error
+] uses {} {
+  if list.len(target.rows) >= cap {
+    return Error(Limit("rows"))
+  }
+  list.push(mut target.rows, Row(id: id, value: take value))
+  Ok(())
+}
+
+fn empty_delivery() -> Delivery uses {} {
+  Delivery(consumer: 0, token: 0, acked: false, active: false, until: 0)
+}
+
+fn empty_group() -> unique Group uses {} {
+  Group(present: false, offset: 0, entries: [])
+}
+
+pub fn empty() -> unique State uses {} {
+  State(messages: table(), groups: [empty_group(), empty_group()], token: 0)
+}
+
+pub fn count(bucket: Group) -> u64 uses {} {
+  let mut total = 0u64
+  for row in bucket.entries {
+    if row.token != 0 && !row.acked {
+      total += 1
+    }
+  }
+  total
+}
+
+pub fn require(state: State, group: u64) -> Result[(), record.Error] uses {} {
+  if group >= 2 {
+    return Error(Limit("groups"))
+  }
+  if !state.groups[group].present {
+    return Error(Input("no_group"))
+  }
+  Ok(())
+}
+
+// Replay is strict about IDs, dimensions and ownership. Runtime deadlines are
+// not durable clocks: all replayed pending deliveries become eligible at boot.
+@preserves_unique(state)
+pub fn apply(mut state: unique State, event: record.Event) -> Result[(), record.Error] uses {} {
+  match event {
+    Message(id, data) => {
+      if id != list.len(state.messages.rows) + 1 || id > 128 || string.byte_len(data) > 1024 {
+        return Error(Corrupt(0))
+      }
+      push(mut state.messages, id, unique data, 128)?
+      for g in 0u64..2u64 {
+        if state.groups[g].present {
+          list.push(mut state.groups[g].entries, empty_delivery())
+        }
+      }
+    },
+    Group(g) => {
+      if g >= 2 || state.groups[g].present {
+        return Error(Corrupt(0))
+      }
+      state.groups[g].present = true
+      for i in 0u64..list.len(state.messages.rows) {
+        list.push(mut state.groups[g].entries, empty_delivery())
+      }
+    },
+    Delivery(g, id, owner, token, acked) => {
+      require(state, g)?
+      if id == 0 || id > list.len(state.messages.rows) || owner >= 4 || token == 0 {
+        return Error(Corrupt(0))
+      }
+      let was_pending = state.groups[g].entries[id - 1].token != 0 && !state.groups[g].entries[id - 1].acked
+      if !acked && !was_pending && count(state.groups[g]) >= 16 {
+        return Error(Corrupt(0))
+      }
+      state.groups[g].entries[id - 1] = Delivery(
+        consumer: owner,
+        token: token,
+        acked: acked,
+        active: false,
+        until: 0
+      )
+      if id > state.groups[g].offset {
+        state.groups[g].offset = id
+      }
+      if token > state.token {
+        state.token = token
+      }
+    },
+  }
+  Ok(())
+}
+
+pub fn delivery(state: State, group: u64, id: u64, owner: u64, token: u64) -> unique Bytes uses {} {
+  let mut out: List[u8] = []
+  text.append(
+    mut out,
+    f"{{\"id\":{id},\"group\":{group},\"consumer\":{owner},\"token\":{token},\"data\":"
+  )
+  json.write_text_into(state.messages.rows[id - 1].value, mut out)
+  text.append(mut out, "}")
+  bytes.from_list(take out)
+}
+
+pub fn pending(state: State, group: u64) -> Result[unique Bytes, record.Error] uses {} {
+  require(state, group)?
+  let mut out: List[u8] = []
+  text.append(mut out, "{\"pending\":[")
+  let mut comma = false
+  for index in 0u64..list.len(state.groups[group].entries) {
+    let row = state.groups[group].entries[index]
+    if row.token != 0 && !row.acked {
+      if comma {
+        text.append(mut out, ",")
+      }
+      let id = index + 1
+      text.append(
+        mut out,
+        f"{{\"id\":{id},\"consumer\":{row.consumer},\"token\":{row.token}}}"
+      )
+      comma = true
+    }
+  }
+  text.append(mut out, "]}")
+  Ok(bytes.from_list(take out))
+}
+
+fn planned(take event: unique record.Event, take reply: unique Bytes) -> unique Plan uses {} {
+  Plan(event: Some(take event), reply: take reply)
+}
+
+pub fn unchanged(take reply: unique Bytes) -> unique Plan uses {} {
+  Plan(event: None(), reply: take reply)
+}
+
+fn expired(row: Delivery, now: u64) -> bool uses {} {
+  !row.active || now >= row.until
+}
+
+fn offer(state: State, g: u64, id: u64, owner: u64) -> Result[unique Plan, record.Error] uses {} {
+  if owner >= 4 {
+    return Error(Limit("consumers"))
+  }
+  let Some(token) = int.checked_add(state.token, 1u64) else {
+    return Error(Limit("tokens"))
+  }
+  Ok(
+    planned(Delivery(g, id, owner, token, false), delivery(state, g, id, owner, token))
+  )
+}
+
+// Pure admission decisions never touch capabilities. Storage orchestration
+// persists the event before applying it or publishing this prepared reply.
+pub fn plan(state: State, command: record.Command, now: u64) -> Result[
+  unique Plan,
+  record.Error
+] uses {} {
+  match command {
+    Enqueue(data) => {
+      if string.byte_len(data) > 1024 {
+        return Error(Limit("payload"))
+      }
+      let id = list.len(state.messages.rows) + 1
+      if id > 128 {
+        return Error(Limit("messages"))
+      }
+      Ok(
+        planned(
+          Message(id, unique data),
+          unique string.as_bytes(f"{{\"enqueued\":{id}}}")
+        )
+      )
+    },
+    Group(g) => {
+      if g >= 2 {
+        return Error(Limit("groups"))
+      }
+      let reply = unique string.as_bytes(f"{{\"group\":{g}}}")
+      if state.groups[g].present {
+        return Ok(unchanged(take reply))
+      }
+      Ok(planned(Group(g), take reply))
+    },
+    Claim(g, owner) => {
+      require(state, g)?
+      for index in 0u64..list.len(state.groups[g].entries) {
+        let row = state.groups[g].entries[index]
+        if row.token != 0 && !row.acked && expired(row, now) {
+          return offer(state, g, index + 1, owner)
+        }
+      }
+      if count(state.groups[g]) >= 16 {
+        return Error(Limit("pending"))
+      }
+      for index in 0u64..list.len(state.groups[g].entries) {
+        if state.groups[g].entries[index].token == 0 {
+          return offer(state, g, index + 1, owner)
+        }
+      }
+      Ok(unchanged(b"{\"empty\":true}"))
+    },
+    Reclaim(g, id, owner) => {
+      require(state, g)?
+      if id == 0 || id > list.len(state.messages.rows) {
+        return Error(Input("no_message"))
+      }
+      let row = state.groups[g].entries[id - 1]
+      if row.token == 0 || row.acked {
+        return Error(Input("not_pending"))
+      }
+      if !expired(row, now) {
+        return Error(Input("lease"))
+      }
+      offer(state, g, id, owner)
+    },
+    Ack(g, id, token) => {
+      require(state, g)?
+      if id == 0 || id > list.len(state.messages.rows) {
+        return Error(Input("no_message"))
+      }
+      let row = state.groups[g].entries[id - 1]
+      if token == 0 || token != row.token {
+        return Error(Input("stale_token"))
+      }
+      if row.acked {
+        return Ok(unchanged(b"{\"acked\":0}"))
+      }
+      Ok(planned(Delivery(g, id, row.consumer, token, true), b"{\"acked\":1}"))
+    },
+    Pending(g) => Ok(unchanged(pending(state, g)?)),
+    _ => Error(Input("operation")),
+  }
+}
+
+@preserves_unique(state)
+pub fn activate(mut state: unique State, event: record.Event, now: u64, lease: u64) -> Result[
+  (),
+  record.Error
+] uses {} {
+  if let Delivery(g, id, _, _, acked) = event {
+    if !acked {
+      let Some(until) = int.checked_add(now, lease) else {
+        return Error(Limit("clock"))
+      }
+      state.groups[g].entries[id - 1].active = true
+      state.groups[g].entries[id - 1].until = until
+    }
+  }
+  Ok(())
+}
+
+pub fn unpack(take decision: unique Plan) -> (Option[record.Event], unique Bytes) uses {} {
+  let Plan(event: event, reply: reply) = take decision
+  (take event, take reply)
+}

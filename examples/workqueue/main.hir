@@ -1,0 +1,80 @@
+const HELP: String = "workqueue serve SOCKET SESSION_MS LEASE_MS\nworkqueue call SOCKET JSON\nOperations: enqueue, group, claim, ack, pending, reclaim, checkpoint, stop.\nBounds: 2 groups, 4 consumers/group, 128 messages, 1024-byte payloads, 16 pending/group, 512 log records, 512KiB log, 4 lifetime clients, 8192-byte frames; session 1..10000ms, lease 1..2000ms.\n"
+
+fn number(args: Args, index: u64) -> Result[u64, record.Error] {
+  match u64.parse(arg.text(args, index)?) {
+    Ok(value) => Ok(value),
+    Error(_) => Error(Input("number")),
+  }
+}
+
+fn execute(rt: Io, args: Args, output: Stdout) -> Result[(), record.Error] {
+  if arg.len(args) == 1 && arg.text(args, 0)? == "--help" {
+    out.print(output, HELP)?
+    return Ok(())
+  }
+  if arg.len(args) < 2 || arg.len(args) > 4 {
+    return Error(Input("usage"))
+  }
+  let mode = arg.text(args, 0)?
+  let socket = arg.path(args, 1)?
+  if mode == "serve" && arg.len(args) == 4 {
+    let milliseconds = number(args, 2)?
+    let lease = number(args, 3)?
+    if milliseconds == 0 || milliseconds > 10000 || lease == 0 || lease > 2000 {
+      return Error(Input("usage"))
+    }
+    let tasks = io.tasks(rt)?
+    let d = io.dir(rt, path.of("data"))?
+    let n = io.net(rt)?
+    let clock = io.monotonic_clock(rt)?
+    return dispatch.serve(
+      tasks,
+      d,
+      n,
+      clock,
+      socket,
+      milliseconds,
+      lease * 1000000,
+      output
+    )
+  }
+  if mode == "call" && arg.len(args) == 3 {
+    let text = arg.text(args, 2)?
+    let payload = string.as_bytes(text)
+    let _ = record.command(payload)?
+    let n = io.net(rt)?
+    let mut connected = net.unix_connect(n, socket)?
+    net.set_read_timeout(n, mut connected, Nanos(2000000000u64))?
+    net.set_write_timeout(n, mut connected, Nanos(2000000000u64))?
+    net.write_all(n, mut connected, record.wire(payload)?)?
+    let Some(response) = record.receive(n, mut connected)? else {
+      return Error(Input("no_reply"))
+    }
+    out.write(output, response)?
+    out.print(output, "\n")?
+    return Ok(())
+  }
+  Error(Input("usage"))
+}
+
+pub fn main(rt: Io, args: Args) -> process.ExitCode {
+  let Ok(output) = io.stdout(rt) else {
+    return process.exit_code(3u8)
+  }
+  match execute(rt, args, output) {
+    Ok(()) => process.SUCCESS,
+    Error(Input(name)) | Error(Limit(name)) => {
+      let _ = out.write(output, record.refusal(Input(name)))
+      let _ = out.print(output, "\n")
+      process.exit_code(2u8)
+    },
+    Error(Corrupt(_)) => {
+      let _ = out.print(output, "{\"error\":\"corrupt\"}\n")
+      process.exit_code(3u8)
+    },
+    Error(_) => {
+      let _ = out.print(output, "{\"error\":\"io\"}\n")
+      process.exit_code(3u8)
+    },
+  }
+}

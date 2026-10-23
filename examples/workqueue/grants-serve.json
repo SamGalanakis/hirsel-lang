@@ -1,0 +1,29 @@
+{
+  "io": {
+    "stdout": "stdout.bytes@1",
+    "tasks": "tasks.cooperative@1",
+    "monotonic_clock": "clock.monotonic.ns@1",
+    "dirs": [
+      {
+        "path": "data",
+        "host": "./data",
+        "access": "read_write"
+      }
+    ],
+    "net": {
+      "provider": "net.stream@1",
+      "rules": [
+        {
+          "address": "/tmp/workqueue.sock",
+          "service": "0",
+          "operation": "unix_listen"
+        }
+      ]
+    }
+  },
+  "placement": {
+    "cores": 1,
+    "commit": "shared",
+    "reorder": "auto"
+  }
+}

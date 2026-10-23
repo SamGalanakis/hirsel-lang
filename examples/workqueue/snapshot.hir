@@ -1,0 +1,123 @@
+// A checkpoint is a deterministic replacement log, not a second mutable file.
+// All messages precede group declarations and the latest ownership/ack rows.
+// Maximum 128+2+256=386 FULL records; nothing is destructively trimmed.
+pub type Prepared {
+  bytes: Bytes,
+  records: u64,
+}
+
+fn collect(scope: Scope, state: groups.State) -> Result[unique Prepared, record.Error] {
+  let mut frames: unique groups.Table[Bytes] = groups.table()
+  for row in state.messages.rows {
+    task.check_canceled(scope)?
+    let encoded = record.frame(record.encode(Message(row.id, unique row.value)))
+    groups.push(mut frames, row.id, take encoded, record.MAX_RECORDS)?
+  }
+  for g in 0u64..2u64 {
+    if state.groups[g].present {
+      task.check_canceled(scope)?
+      groups.push(
+        mut frames,
+        g,
+        record.frame(record.encode(Group(g))),
+        record.MAX_RECORDS
+      )?
+      for index in 0u64..list.len(state.groups[g].entries) {
+        let row = state.groups[g].entries[index]
+        if row.token != 0 {
+          task.check_canceled(scope)?
+          let event: record.Event = Delivery(
+            g,
+            index + 1,
+            row.consumer,
+            row.token,
+            row.acked
+          )
+          groups.push(
+            mut frames,
+            index + 1,
+            record.frame(record.encode(event)),
+            record.MAX_RECORDS
+          )?
+        }
+      }
+    }
+  }
+  let mut output: List[u8] = []
+  bytes.append(mut output, record.MAGIC)
+  for row in frames.rows {
+    if bytes.len(row.value) > record.MAX_LOG - list.len(output) {
+      return Error(Limit("log_bytes"))
+    }
+    bytes.append(mut output, row.value)
+  }
+  Ok(Prepared(bytes: bytes.from_list(take output), records: list.len(frames.rows)))
+}
+
+pub fn prepare(tasks: Tasks, state: groups.State) -> Result[
+  unique Prepared,
+  record.Error
+] {
+  // Frozen copied snapshot is read-only in the child; the admission owner keeps
+  // its current runtime leases. The bounded copy is at most 128 payloads.
+  let frozen = shared.freeze(unique state)
+  task.scope(
+    tasks,
+    fn(scope: Scope) -> Result[unique Prepared, record.Error] {
+      let child: Task[unique Result[unique Prepared, record.Error]] of scope = task.async(
+        scope,
+        fn() -> unique Result[unique Prepared, record.Error] {
+          unique task.scope(
+            tasks,
+            fn(child_scope: Scope) -> Result[unique Prepared, record.Error] {
+              shared.with(
+                frozen,
+                fn(snapshot: groups.State) -> Result[unique Prepared, record.Error] {
+                  collect(child_scope, snapshot)
+                }
+              )
+            }
+          )
+        }
+      )
+      take task.await(scope, take child)
+    }
+  )
+}
+
+@preserves_unique(loaded)
+pub fn checkpoint(tasks: Tasks, d: Dir, mut loaded: unique log.Loaded) -> Result[
+  (),
+  record.Error
+] {
+  let prepared = prepare(tasks, loaded.state)?
+  log.publish(d, prepared.bytes)?
+  loaded.size = bytes.len(prepared.bytes)
+  loaded.records = prepared.records
+  Ok(())
+}
+
+pub fn inspect(state: groups.State) -> unique Bytes uses {} {
+  let mut output: List[u8] = []
+  text.append(
+    mut output,
+    f"{{\"messages\":{list.len(state.messages.rows)},\"token\":{state.token},\"groups\":["
+  )
+  let mut comma = false
+  for g in 0u64..2u64 {
+    if state.groups[g].present {
+      if comma {
+        text.append(mut output, ",")
+      }
+      text.append(
+        mut output,
+        f"{{\"group\":{g},\"offset\":{state.groups[g].offset},\"pending\":{groups.count(
+          state.groups[g]
+        )}}}"
+      )
+      comma = true
+    }
+  }
+  text.append(mut output, "]}")
+  bytes.from_list(take output)
+}

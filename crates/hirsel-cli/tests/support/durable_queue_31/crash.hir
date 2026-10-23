@@ -1,0 +1,52 @@
+// Supplemental crash-cut test of real application persistence modules. These
+// Test entry runs supplement, never substitute for full main-entry fixtures.
+pub fn trial(t: Test) -> Result[(), record.Error] {
+  let tasks = test.tasks(t)
+  for seed in 0u64..4u64 {
+    let d = test.dir(t, [(path.of("queue.log"), unique record.MAGIC)])
+    let mut loaded = log.load(d)?
+    log.append(d, mut loaded, Message(1, "a"), 0, 100)?
+    test.crash(t, d, seed)
+    loaded = log.load(d)?
+    test.check(t, list.len(loaded.state.messages.rows) == 1)
+    log.append(d, mut loaded, Group(0), 0, 100)?
+    test.crash(t, d, seed)
+    loaded = log.load(d)?
+    test.check(t, loaded.state.groups[0].present)
+    log.append(d, mut loaded, Delivery(0, 1, 0, 1, false), 0, 100)?
+    test.crash(t, d, seed)
+    loaded = log.load(d)?
+    test.check(t, groups.count(loaded.state.groups[0]) == 1)
+    let offered = groups.plan(loaded.state, Claim(0, 1), 0)?
+    let (event, _) = groups.unpack(take offered)
+    let Some(change) = event else { test.fail(t) }
+    log.append(d, mut loaded, change, 0, 100)?
+    test.crash(t, d, seed)
+    loaded = log.load(d)?
+    test.check(t, loaded.state.groups[0].entries[0].token == 2)
+    test.check(t, match groups.plan(loaded.state, Ack(0, 1, 1), 0) { Error(Input("stale_token")) => true, _ => false })
+    log.append(d, mut loaded, Delivery(0, 1, 1, 2, true), 0, 100)?
+    test.crash(t, d, seed)
+    loaded = log.load(d)?
+    let duplicate = groups.plan(loaded.state, Ack(0, 1, 2), 0)?
+    let (duplicate_event, reply) = groups.unpack(take duplicate)
+    test.check(t, duplicate_event == None() && reply == b"{\"acked\":0}")
+    snapshot.checkpoint(tasks, d, mut loaded)?
+    test.crash(t, d, seed)
+    loaded = log.load(d)?
+    test.check(t, loaded.state.token == 2 && loaded.state.groups[0].entries[0].acked)
+    let mut stale = file.open_append(d, path.of("queue.log"))?
+    test.crash(t, d, seed)
+    test.check(t, file.append(d, mut stale, b"bad") == Error(FileFault(1u32)))
+    test.check(t, file.sync(d, mut stale) == Error(FileFault(1u32)))
+    // The last unsynced append may survive as any prefix. Recovery never loses
+    // the synchronized message1, and cannot admit an incomplete message2.
+    let mut unsynced = file.open_append(d, path.of("queue.log"))?
+    file.append(d, mut unsynced, record.frame(record.encode(Message(2, "second"))))?
+    test.crash(t, d, seed)
+    let recovered = log.load(d)?
+    test.check(t, list.len(recovered.state.messages.rows) >= 1 && list.len(recovered.state.messages.rows) <= 2)
+  }
+  test.log(t, "durable message/group/claim/redelivery/ack/checkpoint cuts; stale handles; torn append")
+  Ok(())
+}
