@@ -102,10 +102,23 @@ enum Status {
     Ready,
     Running,
     Waiting,
+    Cancelling,
     Settled(Outcome),
 }
+#[derive(Clone)]
+enum Factory {
+    Send(Arc<dyn QueryFactory>),
+    Local(Arc<dyn LocalQueryFactory>),
+}
+enum Task {
+    Send(Option<Box<dyn QueryTask>>),
+    Local {
+        factory: Arc<dyn LocalQueryFactory>,
+        home: Option<usize>,
+    },
+}
 struct Node {
-    task: Option<Box<dyn QueryTask>>,
+    task: Task,
     weight: MemoryWeight,
     status: Status,
     dependencies: BTreeSet<Key>,
@@ -115,9 +128,10 @@ struct Node {
     discard: bool,
 }
 struct State {
-    factories: BTreeMap<u32, Arc<dyn QueryFactory>>,
+    factories: BTreeMap<u32, Factory>,
     nodes: BTreeMap<Key, Node>,
     ready: BTreeSet<(Reverse<u64>, Key)>,
+    cleanup: Vec<BTreeMap<Key, Option<Reference>>>,
     costs: BTreeMap<Key, u64>,
     requests: BTreeMap<u64, Vec<Key>>,
     next_request: u64,
@@ -197,6 +211,7 @@ impl AdmittedRuntime {
                 factories: BTreeMap::new(),
                 nodes: BTreeMap::new(),
                 ready: BTreeSet::new(),
+                cleanup: (0..count).map(|_| BTreeMap::new()).collect(),
                 costs: BTreeMap::new(),
                 requests: BTreeMap::new(),
                 next_request: 0,
@@ -252,6 +267,16 @@ impl AdmittedRuntime {
         kind: u32,
         factory: Arc<dyn QueryFactory>,
     ) -> Result<(), &'static str> {
+        self.register_factory(kind, Factory::Send(factory))
+    }
+    pub fn register_local(
+        &mut self,
+        kind: u32,
+        factory: Arc<dyn LocalQueryFactory>,
+    ) -> Result<(), &'static str> {
+        self.register_factory(kind, Factory::Local(factory))
+    }
+    fn register_factory(&mut self, kind: u32, factory: Factory) -> Result<(), &'static str> {
         let mut state = self.shared.lock();
         if state.started {
             return Err("query dispatch is frozen after first request");
@@ -495,40 +520,54 @@ impl State {
         }
         self.stats.claims += 1;
         self.event(RuntimeEvent::Claim(id(query)));
-        let created = catch_unwind(AssertUnwindSafe(|| {
-            self.factories
-                .get(&query.0)
-                .ok_or(self.errors.protocol)
-                .and_then(|f| f.create(id(query)))
+        let factory = self.factories.get(&query.0).cloned();
+        let created = catch_unwind(AssertUnwindSafe(|| match factory {
+            Some(Factory::Send(factory)) => {
+                let task = factory.create(id(query))?;
+                if task.id() != id(query) {
+                    return Err(self.errors.protocol);
+                }
+                let weight = task.weight();
+                Ok((Task::Send(Some(task)), weight))
+            }
+            Some(Factory::Local(factory)) => {
+                let weight = factory.weight(id(query))?;
+                Ok((
+                    Task::Local {
+                        factory,
+                        home: None,
+                    },
+                    weight,
+                ))
+            }
+            None => Err(self.errors.protocol),
         }))
         .unwrap_or(Err(self.errors.panicked));
         let (task, weight, status) = match created {
-            Ok(task) if task.id() == id(query) => {
-                let weight = task.weight();
-                // Physical pool stacks are already reserved, even while idle.
-                // The worker separately checks that this query fits its stack.
-                let sum = weight.scratch.checked_add(weight.retained);
-                if sum.is_none_or(|n| n > self.budget.saturating_sub(self.stacks + self.metadata))
-                    || weight.retained
-                        > self.budget.saturating_sub(
+            Ok((task, weight))
+                if weight
+                    .scratch
+                    .checked_add(weight.retained)
+                    .is_some_and(|n| {
+                        n <= self.budget.saturating_sub(self.stacks + self.metadata)
+                    })
+                    && weight.retained
+                        <= self.budget.saturating_sub(
                             self.stacks + self.metadata + self.retained + self.scratch,
-                        )
-                {
-                    (
-                        None,
-                        MemoryWeight::default(),
-                        Status::Settled(Err(self.errors.resource)),
-                    )
-                } else {
-                    (Some(task), weight, Status::Ready)
-                }
+                        ) =>
+            {
+                (task, weight, Status::Ready)
             }
             Ok(_) => (
-                None,
+                Task::Send(None),
                 MemoryWeight::default(),
-                Status::Settled(Err(self.errors.protocol)),
+                Status::Settled(Err(self.errors.resource)),
             ),
-            Err(error) => (None, MemoryWeight::default(), Status::Settled(Err(error))),
+            Err(error) => (
+                Task::Send(None),
+                MemoryWeight::default(),
+                Status::Settled(Err(error)),
+            ),
         };
         self.retained += weight.retained;
         let ready = matches!(status, Status::Ready);
@@ -582,7 +621,17 @@ impl State {
         for (&key, node) in &mut self.nodes {
             if !node.live {
                 match node.status {
-                    Status::Ready | Status::Waiting => remove.push(key),
+                    Status::Ready | Status::Waiting => match &node.task {
+                        Task::Local {
+                            home: Some(home), ..
+                        } => {
+                            self.cleanup[*home].insert(key, None);
+                            node.status = Status::Cancelling;
+                            node.discard = true;
+                        }
+                        _ => remove.push(key),
+                    },
+                    Status::Cancelling => (),
                     Status::Running => node.discard = true,
                     Status::Settled(_) => (),
                 }
@@ -610,7 +659,7 @@ impl State {
     }
     fn settle(&mut self, query: Key, result: Outcome) {
         let node = self.nodes.get_mut(&query).expect("claimed query");
-        node.task = None;
+        node.task = Task::Send(None);
         node.status = Status::Settled(result);
         let waiters = std::mem::take(&mut node.waiters);
         self.stats.settled += 1;
@@ -704,15 +753,67 @@ fn thread_cpu_ns() -> u64 {
         0
     }
 }
+// Tokio tokio-1.48.0 task/local.rs:225,741-805,966 keeps local task
+// ownership and destruction on its creating thread. Unlike Tokio, the shared
+// query claim/edge table here decides readiness, with a bounded local map and
+// home cleanup queue rather than an unbounded remote spawn queue.
 fn run_worker(shared: Arc<Shared>, worker: usize, stack: u64) {
+    enum Work {
+        Send(Box<dyn QueryTask>),
+        Local(Arc<dyn LocalQueryFactory>),
+    }
+    let mut locals: BTreeMap<Key, Box<dyn LocalQueryTask>> = BTreeMap::new();
     loop {
-        let (query, mut task, weight) = {
+        // Cleanup has priority and needs no scratch permit. Charge stays live
+        // until the home worker acknowledges destruction of the continuation.
+        let cleanup = shared.lock().cleanup[worker].pop_first();
+        if let Some((query, terminal)) = cleanup {
+            let dropped = catch_unwind(AssertUnwindSafe(|| {
+                locals.remove(&query);
+            }));
+            let mut state = shared.lock();
+            let live = state.nodes.get(&query).is_some_and(|n| n.live);
+            if let Some(error) = terminal {
+                let error = if dropped.is_err() {
+                    state.errors.panicked
+                } else {
+                    error
+                };
+                state.settle(query, Err(error));
+            } else {
+                state.remove(query);
+                if live && !state.stopped {
+                    let _ = state.ensure(query);
+                    if dropped.is_err() {
+                        let error = state.errors.panicked;
+                        state.unqueue(query);
+                        state.settle(query, Err(error));
+                    }
+                }
+            }
+            state.account();
+            shared.changed.notify_all();
+            continue;
+        }
+        let Some((query, work, weight)) = ({
             let mut state = shared.lock();
             loop {
+                if !state.cleanup[worker].is_empty() {
+                    break None;
+                }
                 if state.stopped {
                     return;
                 }
-                let first = state.ready.first().copied();
+                let first = state
+                    .ready
+                    .iter()
+                    .find(|(_, query)| match &state.nodes[query].task {
+                        Task::Local {
+                            home: Some(home), ..
+                        } => *home == worker,
+                        _ => true,
+                    })
+                    .copied();
                 if let Some((_, query)) = first {
                     let weight = state.nodes[&query].weight;
                     if weight.stack > stack {
@@ -729,7 +830,15 @@ fn run_worker(shared: Arc<Shared>, worker: usize, stack: u64) {
                     {
                         state.unqueue(query);
                         let node = state.nodes.get_mut(&query).unwrap();
-                        let task = node.task.take().expect("ready continuation");
+                        let work = match &mut node.task {
+                            Task::Send(task) => {
+                                Work::Send(task.take().expect("ready continuation"))
+                            }
+                            Task::Local { factory, home } => {
+                                *home = Some(worker);
+                                Work::Local(factory.clone())
+                            }
+                        };
                         node.status = Status::Running;
                         state.scratch += weight.scratch;
                         state.stats.active += 1;
@@ -743,15 +852,23 @@ fn run_worker(shared: Arc<Shared>, worker: usize, stack: u64) {
                             elapsed_ns,
                             charged,
                         });
-                        break (query, task, weight);
+                        break Some((query, work, weight));
                     }
-                    // No running task can free memory: retained continuations
-                    // have exhausted the bounded working set. Refuse; never
-                    // wait forever or admit an oversized singleton.
                     if state.stats.active == 0 {
                         state.unqueue(query);
-                        let error = state.errors.resource;
-                        state.settle(query, Err(error));
+                        let node = &state.nodes[&query];
+                        if let Task::Local {
+                            home: Some(home), ..
+                        } = &node.task
+                        {
+                            let home = *home;
+                            let error = state.errors.resource;
+                            state.cleanup[home].insert(query, Some(error));
+                            state.nodes.get_mut(&query).unwrap().status = Status::Cancelling;
+                        } else {
+                            let error = state.errors.resource;
+                            state.settle(query, Err(error));
+                        }
                         shared.changed.notify_all();
                         continue;
                     }
@@ -761,6 +878,8 @@ fn run_worker(shared: Arc<Shared>, worker: usize, stack: u64) {
                     .wait(state)
                     .unwrap_or_else(|e| e.into_inner());
             }
+        }) else {
+            continue;
         };
         let start = thread_cpu_ns();
         let mut cx = Context {
@@ -768,7 +887,35 @@ fn run_worker(shared: Arc<Shared>, worker: usize, stack: u64) {
             query,
             pending: BTreeSet::new(),
         };
-        let outcome = catch_unwind(AssertUnwindSafe(|| task.poll(&mut cx)));
+        let mut send_task = None;
+        let outcome = catch_unwind(AssertUnwindSafe(|| match work {
+            Work::Send(mut task) => {
+                let outcome = task.poll(&mut cx);
+                send_task = Some(task);
+                outcome
+            }
+            Work::Local(factory) => {
+                if !locals.contains_key(&query) {
+                    let task = match factory.create(id(query)) {
+                        Ok(task) => task,
+                        Err(error) => return QueryPoll::Failed(error),
+                    };
+                    if task.id() != id(query) || task.weight() != weight {
+                        return QueryPoll::Failed(shared.lock().errors.protocol);
+                    }
+                    locals.insert(query, task);
+                }
+                locals.get_mut(&query).unwrap().poll(&mut cx)
+            }
+        }));
+        // Completed/failed local states are destroyed on this worker before
+        // releasing its execution accounting. Waiting states stay in locals.
+        let keep_local = matches!(outcome, Ok(QueryPoll::Waiting(_)));
+        if !keep_local {
+            let _ = catch_unwind(AssertUnwindSafe(|| {
+                locals.remove(&query);
+            }));
+        }
         let cpu_ns = thread_cpu_ns().saturating_sub(start);
         let mut state = shared.lock();
         state.scratch -= weight.scratch;
@@ -786,6 +933,12 @@ fn run_worker(shared: Arc<Shared>, worker: usize, stack: u64) {
         let discard = state.nodes[&query].discard;
         let live = state.nodes[&query].live;
         if discard || state.stopped {
+            // Drop without holding the shared graph lock.
+            drop(state);
+            let _ = catch_unwind(AssertUnwindSafe(|| {
+                locals.remove(&query);
+            }));
+            state = shared.lock();
             state.remove(query);
             if live && !state.stopped {
                 let _ = state.ensure(query);
@@ -805,7 +958,9 @@ fn run_worker(shared: Arc<Shared>, worker: usize, stack: u64) {
                 {
                     let ready = cx.pending.iter().all(|k| state.result(*k).is_some());
                     let node = state.nodes.get_mut(&query).unwrap();
-                    node.task = Some(task);
+                    if let Some(task) = send_task {
+                        node.task = Task::Send(Some(task));
+                    }
                     node.status = if ready {
                         Status::Ready
                     } else {
@@ -824,6 +979,11 @@ fn run_worker(shared: Arc<Shared>, worker: usize, stack: u64) {
                     state.settle(query, Err(error));
                 }
                 _ => {
+                    drop(state);
+                    let _ = catch_unwind(AssertUnwindSafe(|| {
+                        locals.remove(&query);
+                    }));
+                    state = shared.lock();
                     let error = state.errors.protocol;
                     state.settle(query, Err(error));
                 }
@@ -832,6 +992,5 @@ fn run_worker(shared: Arc<Shared>, worker: usize, stack: u64) {
         shared.changed.notify_all();
     }
 }
-
 #[cfg(test)]
 mod tests;
