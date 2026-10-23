@@ -294,7 +294,7 @@ impl Importer<'_> {
                     let (abi, actuals) = self.operation_abi(path, arguments)?;
                     operation_arguments = actuals;
                     (Callee::Operation(reference), abi)
-                } else if self.program.definitions.contains_key(path)
+                } else if self.instances.has_function(path)
                     || self
                         .program
                         .instance_bodies

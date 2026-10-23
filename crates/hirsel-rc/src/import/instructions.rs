@@ -1507,9 +1507,7 @@ impl Importer<'_> {
         }
         // An operation without a library body is named, as a value, by its
         // forwarding body (`library::value`).
-        if self.program.operations.contains_key(path)
-            && !self.program.definitions.contains_key(path)
-        {
+        if self.program.operations.contains_key(path) && !self.instances.has_function(path) {
             if !crate::library::value::forwards(path) {
                 return unsupported(format!(
                     "{path:?} as a function value: it is lowered inline at each call"

@@ -346,6 +346,12 @@ impl Instances {
         (0..self.views.len() as u32).map(InstanceId)
     }
     /// The instance of `definition`'s entry body with these actuals.
+    /// Whether an ordinary source callable has a registered entry contract.
+    /// This lookup never observes an implementation body.
+    pub fn has_function(&self, definition: &DefPath) -> bool {
+        self.function_entries.contains_key(definition)
+    }
+
     pub fn find(
         &self,
         program: &Program,
@@ -714,16 +720,105 @@ pub fn capture_passing(usage: CaptureUse) -> Passing {
     }
 }
 
+/// Source implementation contracts needed to register an instance before its
+/// executable body is demanded. These observations carry no source V authority.
+#[derive(Clone, Debug)]
+pub struct SourceDeclaration {
+    pub entry: BodyId,
+    pub declaration: Arc<InstanceDeclaration>,
+    pub entry_parameters: Vec<TypeId>,
+}
+impl SourceDeclaration {
+    pub fn of(definition: &hirsel_tir::Definition) -> Result<Self, InstanceError> {
+        let entry = definition
+            .bodies
+            .get(definition.entry.0 as usize)
+            .ok_or_else(|| {
+                InstanceError::Malformed("source entry outside body contracts".into())
+            })?;
+        let entry_parameters = entry
+            .parameters
+            .iter()
+            .map(|id| {
+                entry
+                    .locals
+                    .get(id.0 as usize)
+                    .map(|local| local.ty)
+                    .ok_or_else(|| {
+                        InstanceError::Malformed("source parameter outside body contracts".into())
+                    })
+            })
+            .collect::<Result<_, _>>()?;
+        Ok(Self {
+            entry: definition.entry,
+            declaration: Arc::new(InstanceDeclaration::of(definition)),
+            entry_parameters,
+        })
+    }
+}
+
+/// Immutable discovery inputs. Requirements belong to their source-owner
+/// products; this registry contains no implementation bodies or native Values.
+#[derive(Clone, Debug, Default)]
+pub struct DiscoveryContext {
+    pub sources: BTreeMap<DefPath, SourceDeclaration>,
+    pub requirements: BTreeMap<DefPath, Vec<Requirement>>,
+}
+impl DiscoveryContext {
+    pub fn of(program: &Program) -> Result<Self, InstanceError> {
+        let mut context = Self::default();
+        for (path, definition) in &program.definitions {
+            context
+                .sources
+                .insert(path.clone(), SourceDeclaration::of(definition)?);
+        }
+        for requirement in &program.requirements {
+            context
+                .requirements
+                .entry(requirement.owner.clone())
+                .or_default()
+                .push(requirement.clone());
+        }
+        Ok(context)
+    }
+}
+
 struct Expander<'p, 'l, 'o> {
     program: &'p Program,
     layouts: &'l mut LayoutBuilder<'o>,
     out: Instances,
     queue: VecDeque<InstanceId>,
-    /// Requirements by owner, in collection order.
-    by_owner: BTreeMap<&'p DefPath, Vec<&'p Requirement>>,
+    context: &'p DiscoveryContext,
     /// Nominal instances already visited (recursive representations).
     nominals: std::collections::HashSet<InstanceKey>,
-    declarations: BTreeMap<DefPath, (BodyId, Arc<InstanceDeclaration>)>,
+}
+
+/// Discover precisely one demanded source instance. Callee registration reads
+/// compact contracts only; their bodies remain unavailable until separate
+/// demands. The returned IDs include source, closure and library discoveries.
+pub fn discover_instance(
+    program: &Program,
+    context: &DiscoveryContext,
+    layouts: &mut LayoutBuilder<'_>,
+    mut instances: Instances,
+    id: InstanceId,
+    definition: DefinitionRef,
+) -> Result<(Instances, Vec<InstanceId>), InstanceError> {
+    let first = instances.len();
+    instances.attach_definition(id, definition)?;
+    let mut discovery = Expander {
+        program,
+        layouts,
+        out: instances,
+        queue: VecDeque::new(),
+        context,
+        nominals: Default::default(),
+    };
+    discovery.visit(id)?;
+    let required = (first..discovery.out.len())
+        .map(|i| InstanceId(i as u32))
+        .collect();
+    Ok((discovery.out, required))
 }
 
 /// Expand every instance the program executes.
@@ -736,21 +831,14 @@ pub fn expand(
     layouts
         .layout(&program.types, program.types.intern(Type::unit()))
         .map_err(|e| InstanceError::Layout(DefPath::core("Unit"), e))?;
-    let mut by_owner: BTreeMap<&DefPath, Vec<&Requirement>> = BTreeMap::new();
-    for requirement in &program.requirements {
-        by_owner
-            .entry(&requirement.owner)
-            .or_default()
-            .push(requirement);
-    }
+    let context = DiscoveryContext::of(program)?;
     let mut e = Expander {
         program,
         layouts,
         out: Instances::new(program.types.clone(), program.memo.clone()),
         queue: VecDeque::new(),
-        by_owner,
+        context: &context,
         nominals: Default::default(),
-        declarations: BTreeMap::new(),
     };
     for (path, signature) in &program.signatures {
         if !program.definitions.contains_key(path) {
@@ -811,6 +899,15 @@ pub fn expand(
         }
     }
     while let Some(id) = e.queue.pop_front() {
+        if !e.out.roles[id.index()].is_library() {
+            let path = e.out.view(id).key.definition();
+            let definition = program
+                .definitions
+                .get(path)
+                .ok_or_else(|| InstanceError::MissingDefinition(path.clone()))?
+                .clone();
+            e.out.attach_definition(id, definition)?;
+        }
         e.visit(id)?;
     }
     Ok(e.out)
@@ -843,8 +940,7 @@ impl Expander<'_, '_, '_> {
             environment,
         )?;
         if fresh {
-            if !self.out.roles[id.index()].is_library() {
-                let definition = self.out.view(id).definition()?.clone();
+            if let Ok(definition) = self.out.view(id).definition().cloned() {
                 self.out.attach_definition(id, definition)?;
             }
             self.queue.push_back(id);
@@ -854,32 +950,19 @@ impl Expander<'_, '_, '_> {
 
     /// The entry-body instance of a function definition.
     fn function(&mut self, path: &DefPath, actuals: Actuals) -> Result<InstanceId, InstanceError> {
-        if !self.declarations.contains_key(path) {
-            let definition = self
-                .program
-                .definitions
-                .get(path)
-                .ok_or_else(|| InstanceError::MissingDefinition(path.clone()))?;
-            self.declarations.insert(
-                path.clone(),
-                (
-                    definition.entry,
-                    Arc::new(InstanceDeclaration::of(definition)),
-                ),
-            );
-        }
-        let (entry, declaration) = self.declarations[path].clone();
-        let (id, fresh) =
-            self.out
-                .register_function(self.program, declaration, entry, actuals, self.layouts)?;
+        let source = self
+            .context
+            .sources
+            .get(path)
+            .ok_or_else(|| InstanceError::MissingDefinition(path.clone()))?;
+        let (id, fresh) = self.out.register_function(
+            self.program,
+            source.declaration.clone(),
+            source.entry,
+            actuals,
+            self.layouts,
+        )?;
         if fresh {
-            let definition = self
-                .program
-                .definitions
-                .get(path)
-                .ok_or_else(|| InstanceError::MissingDefinition(path.clone()))?
-                .clone();
-            self.out.attach_definition(id, definition)?;
             self.queue.push_back(id);
         }
         Ok(id)
@@ -914,13 +997,13 @@ impl Expander<'_, '_, '_> {
             return Ok(());
         };
         // A library finalizer is runtime code, not a TIR body.
-        let Some(definition) = self.program.definitions.get(finalizer).cloned() else {
+        let Some(source) = self.context.sources.get(finalizer) else {
             return Ok(());
         };
         let key = key_of(
             &program.types,
             finalizer,
-            definition.entry,
+            source.entry,
             &actuals,
             None,
             None,
@@ -928,21 +1011,15 @@ impl Expander<'_, '_, '_> {
         if self.out.by_key.contains_key(&key) {
             return Ok(());
         }
-        // The finalizer receives its value borrowed and returns unit (DROP-2).
+        // The independently supplied source contract gives the finalizer's
+        // self parameter without demanding that implementation body.
         let types = &*program.types;
-        let body = &definition.bodies[definition.entry.0 as usize];
-        let parameter = body
-            .parameters
+        let parameter = source
+            .entry_parameters
             .first()
             .ok_or_else(|| InstanceError::Malformed(format!("{finalizer:?} has no self")))?;
-        let self_ty = substitute(
-            types,
-            &program.memo,
-            body.locals[parameter.0 as usize].ty,
-            &actuals,
-            false,
-        )
-        .map_err(|e| InstanceError::Substitution(path.clone(), e))?;
+        let self_ty = substitute(types, &program.memo, *parameter, &actuals, false)
+            .map_err(|e| InstanceError::Substitution(path.clone(), e))?;
         let unit = types.intern(Type::unit());
         let callable = types.intern(Type::with_kind(TypeKind::Function(FunctionType {
             state_promises: Default::default(),
@@ -963,10 +1040,10 @@ impl Expander<'_, '_, '_> {
             incomplete: false,
             foreign: None,
         })));
-        let view = InstanceView::from_definition(
+        let view = InstanceView::from_declaration(
             key,
-            definition.clone(),
-            definition.entry,
+            source.declaration.clone(),
+            source.entry,
             CallableShape::Definition,
             actuals.substitution(finalizer)?,
             parameter_views(types, callable),
@@ -1410,7 +1487,11 @@ impl Expander<'_, '_, '_> {
     ) -> Result<(), InstanceError> {
         let program = self.program;
         let types = &*program.types;
-        let requirements = self.by_owner.get(owner).cloned().unwrap_or_default();
+        let requirements = self
+            .context
+            .requirements
+            .get(owner)
+            .map_or(&[][..], Vec::as_slice);
         for requirement in requirements {
             let named = body_scopes(types, &requirement.arguments);
             let bound: Vec<SiteRef> = actuals.binders().map(|(s, _)| s).collect();
@@ -1441,7 +1522,7 @@ impl Expander<'_, '_, '_> {
                             callee_actuals.arguments,
                         )?;
                         crate::library::instantiate(self.layouts, &mut self.out, request)?;
-                    } else if self.program.definitions.contains_key(callee) {
+                    } else if self.context.sources.contains_key(callee) {
                         self.function(callee, callee_actuals)?;
                     }
                 }

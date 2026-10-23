@@ -191,6 +191,9 @@ fn native_discovery_cache_reuses_requirements_without_demanding_source_bodies() 
         let contracts = seed.contracts.as_ref().unwrap();
         assert_eq!(contracts.entry_parameters.len(), 1);
         let expected_parameters = parameter_contract(&first, contracts);
+        let body = first.native_definition_body(&seed.source).unwrap();
+        let expected_declaration = hirsel_rc::instance::SourceDeclaration::of(&body).unwrap();
+        drop(body);
         assert!(!seed.requirements.edges.is_empty());
         assert_eq!(queries.counts.body_demands, 1);
         let expected = observations(&first, &seed.requirements);
@@ -204,6 +207,11 @@ fn native_discovery_cache_reuses_requirements_without_demanding_source_bodies() 
             .unwrap();
         assert_eq!(queries.counts.hits, 1);
         assert_eq!(queries.counts.body_demands, 0);
+        let declaration = native::queries::source::source_declaration(&read)
+            .unwrap()
+            .unwrap();
+        assert_eq!(declaration.entry, expected_declaration.entry);
+        assert_eq!(*declaration.declaration, *expected_declaration.declaration);
         assert_eq!(seed.product.unwrap().record, read.product.unwrap().record);
         assert_eq!(expected, observations(&fresh, &read.requirements));
         assert_eq!(

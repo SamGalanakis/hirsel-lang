@@ -134,3 +134,147 @@ fn demanded_lexical_index_does_not_retain_a_released_source_body() {
         );
     });
 }
+
+#[test]
+fn demanded_instance_discovery_registers_generic_callee_without_its_body() {
+    with_compiler_stack(|| {
+        let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
+        let file = engine
+            .sources
+            .add(
+                "single-instance.hir",
+                "fn keep[T](take x:T)->T{x}\npub fn main()->u64{keep(take 1u64)}".into(),
+            )
+            .unwrap();
+        engine.parse_file(file, &default_context()).unwrap();
+        let input = engine.export_native_input().unwrap();
+        let input = engine.import_native_input(input).unwrap();
+        let mut program = native::program(&input);
+        let context = hirsel_rc::instance::DiscoveryContext::of(&program).unwrap();
+        let main = entry_path(&default_context());
+        let mut keep = main.clone();
+        keep.0.name = "keep".into();
+        let body = program.definitions[&main].clone();
+        let weak_callee = Arc::downgrade(&program.definitions[&keep]);
+        program.definitions.clear();
+        drop(input);
+        drop(engine);
+        assert!(weak_callee.upgrade().is_none());
+        let target = hirsel_lir::TargetSpec::x86_64_unknown_linux_gnu();
+        let mut layouts = hirsel_layout::layout::LayoutBuilder::new(&target, &program.owners);
+        let mut instances = Instances::new(program.types.clone(), program.memo.clone());
+        let source = &context.sources[&main];
+        let (id, _) = instances
+            .register_function(
+                &program,
+                source.declaration.clone(),
+                source.entry,
+                Actuals::none(),
+                &mut layouts,
+            )
+            .unwrap();
+        let (instances, required) = hirsel_rc::instance::discover_instance(
+            &program,
+            &context,
+            &mut layouts,
+            instances,
+            id,
+            body,
+        )
+        .unwrap();
+        assert!(program.definitions.is_empty());
+        assert_eq!(required.len(), 1);
+        let callee = instances.view(required[0]);
+        assert_eq!(callee.key.definition(), &keep);
+        assert_eq!(instances.actuals[required[0].index()].arguments.len(), 1);
+        assert!(
+            callee.definition().is_err(),
+            "callee declaration lookup cannot demand its implementation"
+        );
+        assert!(weak_callee.upgrade().is_none());
+        let mut instances = instances;
+        let imported =
+            hirsel_rc::import::import_instance(&program, &mut instances, id, None, &mut layouts)
+                .unwrap();
+        let table = layouts.finish();
+        let manifest =
+            hirsel_core_contract::Manifest::skeleton(program.operations.values().cloned());
+        let operations = program.operation_registry();
+        let inputs = hirsel_lir::validate::Inputs {
+            target: &target,
+            layouts: &table,
+            manifest: &manifest,
+            operations: &operations,
+            discharge: None,
+            memo: Default::default(),
+        };
+        hirsel_lir::validate::validate(imported.unit, &inputs)
+            .unwrap_or_else(|rejected| panic!("local caller C refusal: {:?}", rejected.violations));
+        assert!(instances.view(required[0]).definition().is_err());
+        assert!(weak_callee.upgrade().is_none());
+    });
+}
+
+#[test]
+fn demanded_instance_discovery_registers_finalizer_without_its_body() {
+    use hirsel_rc::instance::InstanceRole;
+    with_compiler_stack(|| {
+        let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
+        let file = engine.sources.add("finalizer-instance.hir", "resource type R[T:copyable] {n:T} drop(x) {let _=x.n}\npub fn main()->u64{let r=R(n:1u64);r.n}".into()).unwrap();
+        engine.parse_file(file, &default_context()).unwrap();
+        let input = engine.export_native_input().unwrap();
+        let input = engine.import_native_input(input).unwrap();
+        let mut program = native::program(&input);
+        let context = hirsel_rc::instance::DiscoveryContext::of(&program).unwrap();
+        let main = entry_path(&default_context());
+        let mut resource = main.clone();
+        resource.0.name = "R".into();
+        let hirsel_types::SignatureKind::Type(signature) = &program.signatures[&resource].kind
+        else {
+            panic!("source resource signature")
+        };
+        let finalizer = signature.drop.clone().unwrap();
+        let weak_finalizer = Arc::downgrade(&program.definitions[&finalizer]);
+        let body = program.definitions[&main].clone();
+        program.definitions.clear();
+        drop(input);
+        drop(engine);
+        assert!(weak_finalizer.upgrade().is_none());
+        let target = hirsel_lir::TargetSpec::x86_64_unknown_linux_gnu();
+        let mut layouts = hirsel_layout::layout::LayoutBuilder::new(&target, &program.owners);
+        let mut instances = Instances::new(program.types.clone(), program.memo.clone());
+        let source = &context.sources[&main];
+        let (id, _) = instances
+            .register_function(
+                &program,
+                source.declaration.clone(),
+                source.entry,
+                Actuals::none(),
+                &mut layouts,
+            )
+            .unwrap();
+        let (instances, required) = hirsel_rc::instance::discover_instance(
+            &program,
+            &context,
+            &mut layouts,
+            instances,
+            id,
+            body,
+        )
+        .unwrap();
+        assert_eq!(required.len(), 1);
+        let id = required[0];
+        assert_eq!(instances.roles[id.index()], InstanceRole::Finalizer);
+        assert_eq!(instances.view(id).key.definition(), &finalizer);
+        assert!(instances.view(id).definition().is_err());
+        let table = layouts.finish();
+        let abi = &table.fn_abis[instances.abis[id.index()].0 as usize];
+        assert_eq!(abi.parameters.len(), 1);
+        assert_eq!(
+            abi.parameters[0].convention,
+            hirsel_core_contract::Passing::Borrow
+        );
+        assert!(abi.result.is_none());
+        assert!(weak_finalizer.upgrade().is_none());
+    });
+}

@@ -7,6 +7,7 @@ use hirsel_syntax::ContentHash;
 use std::sync::Arc;
 pub mod arena;
 pub mod graph;
+pub mod source;
 
 pub const INSTANCE_KIND: u32 = 0x4e00_0001;
 pub const ARENA_CANDIDATES_KIND: u32 = 0x4e00_0002;
