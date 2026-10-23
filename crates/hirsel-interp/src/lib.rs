@@ -13,6 +13,8 @@ pub mod conversion;
 mod eval;
 pub mod exit_report;
 mod frame;
+#[doc(hidden)]
+pub mod inventory;
 pub mod library;
 pub mod observation;
 mod parked;

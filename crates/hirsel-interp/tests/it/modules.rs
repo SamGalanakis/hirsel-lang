@@ -1,4 +1,5 @@
 mod aggregates;
+mod arena_inventory_33;
 mod callback_writebacks;
 mod callbacks;
 mod constants;

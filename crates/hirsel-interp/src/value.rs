@@ -176,6 +176,9 @@ impl Eq for SharedRoot {}
 #[derive(Clone, Debug)]
 pub struct ArenaStorage {
     pub arena: u64,
+    /// Semantic allocation receipt, filled by the retained-storage recorder.
+    /// A shallow copy preserves it; growth preserves it; COW replaces it.
+    pub logical_block: Option<crate::inventory::LogicalBlockId>,
     /// The logical bytes of one element: a push's charge (0 in an unbounded arena).
     pub element: u64,
     shared: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -185,6 +188,7 @@ impl ArenaStorage {
     pub fn fresh(arena: u64, element: u64) -> Self {
         Self {
             arena,
+            logical_block: None,
             element,
             shared: Default::default(),
         }

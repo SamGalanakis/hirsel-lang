@@ -155,6 +155,14 @@ impl<'a, 'r> Logical<'a, 'r> {
 
     /// The logical size of a value of `ty`.
     pub fn size(&self, ty: TypeId, scope: &Scope<'a>) -> Result<u64, LogicalError> {
+        self.checked_size(ty, scope)
+            .map(|size| size.unwrap_or(u64::MAX))
+    }
+
+    /// An exact logical size. None means arithmetic overflow, which exceeds
+    /// even a u64::MAX arena capacity. Legacy saturating size queries retain
+    /// their existing result through [`Self::size`].
+    pub fn checked_size(&self, ty: TypeId, scope: &Scope<'a>) -> Result<Option<u64>, LogicalError> {
         self.size_at(ty, scope, 0)
     }
 
@@ -182,33 +190,40 @@ impl<'a, 'r> Logical<'a, 'r> {
         Ok(Some(total))
     }
 
-    fn size_at(&self, ty: TypeId, scope: &Scope<'a>, nesting: usize) -> Result<u64, LogicalError> {
+    fn size_at(
+        &self,
+        ty: TypeId,
+        scope: &Scope<'a>,
+        nesting: usize,
+    ) -> Result<Option<u64>, LogicalError> {
         if nesting > MAX_NESTING {
             return Err(LogicalError::Malformed);
         }
         let Resolved::Structural(row, scope) = self.resolve(ty, scope)? else {
-            return Ok(REFERENCE);
+            return Ok(Some(REFERENCE));
         };
-        let sum = |parts: &mut dyn Iterator<Item = TypeId>| -> Result<u64, LogicalError> {
-            let mut total = 0u64;
+        let sum = |parts: &mut dyn Iterator<Item = TypeId>| -> Result<Option<u64>, LogicalError> {
+            let mut total = Some(0u64);
             for part in parts {
-                total = total.saturating_add(self.size_at(part, &scope, nesting + 1)?);
+                let size = self.size_at(part, &scope, nesting + 1)?;
+                total = total.zip(size).and_then(|(a, b)| a.checked_add(b));
             }
             Ok(total)
         };
         Ok(match &row.kind {
-            TypeKind::Primitive(p) => primitive(*p),
+            TypeKind::Primitive(p) => Some(primitive(*p)),
             TypeKind::Tuple(items) => sum(&mut items.iter().copied())?,
             TypeKind::Record(fields) => sum(&mut fields.iter().map(|field| field.ty))?,
             TypeKind::Variant(variants) => {
-                let mut largest = 0u64;
+                let mut largest = Some(0u64);
                 for variant in variants.iter() {
-                    largest = largest.max(sum(&mut variant.fields.iter().map(|(_, t)| *t))?);
+                    let size = sum(&mut variant.fields.iter().map(|(_, t)| *t))?;
+                    largest = largest.zip(size).map(|(a, b)| a.max(b));
                 }
-                VARIANT_TAG.saturating_add(largest)
+                largest.and_then(|size| VARIANT_TAG.checked_add(size))
             }
-            TypeKind::Function(_) => CALLABLE,
-            TypeKind::Box(_) => REFERENCE,
+            TypeKind::Function(_) => Some(CALLABLE),
+            TypeKind::Box(_) => Some(REFERENCE),
             TypeKind::Builtin { kind, arguments } => {
                 let element = type_arguments(arguments).first().copied();
                 let count = arguments.iter().find_map(|a| match a {
@@ -216,14 +231,20 @@ impl<'a, 'r> Logical<'a, 'r> {
                     GenericArgument::Type(_) => None,
                 });
                 match (kind, element, count) {
-                    (BuiltinType::Inline | BuiltinType::Simd, Some(element), Some(count)) => self
-                        .count(count, &scope)?
-                        .saturating_mul(self.size_at(element, &scope, nesting + 1)?),
+                    (BuiltinType::Inline | BuiltinType::Simd, Some(element), Some(count)) => {
+                        let count = self.count(count, &scope)?;
+                        let size = self.size_at(element, &scope, nesting + 1)?;
+                        if count == 0 {
+                            Some(0)
+                        } else {
+                            size.and_then(|size| count.checked_mul(size))
+                        }
+                    }
                     (BuiltinType::Packed, Some(element), _) => {
                         self.size_at(element, &scope, nesting + 1)?
                     }
-                    (BuiltinType::Iter, _, _) => CALLABLE,
-                    _ => REFERENCE,
+                    (BuiltinType::Iter, _, _) => Some(CALLABLE),
+                    _ => Some(REFERENCE),
                 }
             }
             TypeKind::Named { .. } | TypeKind::Parameter(_) | TypeKind::Error => {
@@ -334,6 +355,37 @@ mod tests {
         assert_eq!(logical_size(&store, list, &none), Ok(8));
         assert_eq!(logical_element(&store, list, &none), Ok(Some(9)));
         assert_eq!(logical_element(&store, pair, &none), Ok(None));
+    }
+
+    #[test]
+    fn checked_sizes_distinguish_max_from_overflow_and_zero_extent() {
+        let store = TypeInterner::new(None);
+        let byte = push(&store, TypeKind::Primitive(Primitive::U8));
+        let inline = |element, count| {
+            push(
+                &store,
+                TypeKind::Builtin {
+                    kind: BuiltinType::Inline,
+                    arguments: vec![
+                        GenericArgument::Type(element),
+                        GenericArgument::Size(Size::Constant(count)),
+                    ]
+                    .into(),
+                },
+            )
+        };
+        let max = inline(byte, u64::MAX);
+        let overflow = push(&store, TypeKind::Tuple(vec![max, byte].into()));
+        let multiplied = inline(max, 2);
+        let zero = inline(overflow, 0);
+        let resolve = |_: DefId| None;
+        let logical = Logical::new(&resolve);
+        let scope = Scope::root(&store);
+        assert_eq!(logical.checked_size(max, &scope), Ok(Some(u64::MAX)));
+        assert_eq!(logical.checked_size(overflow, &scope), Ok(None));
+        assert_eq!(logical.checked_size(multiplied, &scope), Ok(None));
+        assert_eq!(logical.checked_size(zero, &scope), Ok(Some(0)));
+        assert_eq!(logical.size(overflow, &scope), Ok(u64::MAX));
     }
 
     #[test]
