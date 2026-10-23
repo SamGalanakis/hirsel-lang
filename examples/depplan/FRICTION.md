@@ -116,3 +116,17 @@ directional borrowed-argument signature, alongside the original rule, generated
 failure span and comptime origin. The explicit `node_from_json` helper remains
 necessary and is retained. See the [complete nested JSON helper recipe](../../docs/spec/std-library.md#nested-json-helpers).
 The earlier failed attempt above records the historical diagnostic unchanged.
+
+Resolution: String addition guidance landed in `eec112f76e8cef31bc5f11f10741f74689b1d4e2`. The original
+attempt 02 above remains a rejected form; String `+` is still unsupported.
+Its LANG-7 diagnostic now names both operand types and shows `f"{text}\n"`,
+`f"{left}{right}"` and, when `std@1` is selected,
+`std@1/string.concat(left, right)`, without unrelated match guidance. Mixed
+operand errors retain their rule/span and require explicit conversion before
+using the String recipes; arbitrary types do not gain implicit formatting.
+Without std, help first explains the dependency required by f-strings. The
+existing `f"{encoded}\n"` application implementation is the intended form and
+is retained. Five new focused tests plus two existing controls passed; the
+recipes check and export, and text equality/order vectors execute on the
+interpreter and checked heap (zero live heap bytes). This removes a diagnostic
+dead end without changing acceptance or deleting an application workaround.
