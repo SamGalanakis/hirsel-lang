@@ -149,3 +149,13 @@ Focused shared-parser/CLI tests cover the diagnostic, cwd independence,
 relocation, nested runner mounts, escaped paths and authority controls. This
 resolution does not claim that this example's native application matrix was
 rerun.
+
+## Bounded decoded JSON fields (round 36)
+
+Row fields now use `json.read_owned_text_bounded` with 128 bytes for names and 256 for requirements/versions.
+The earlier read-then-measure recipe could allocate a complete rejected escaped
+field. The shared reader admits decoded UTF-8 spans/scalars before appending,
+then validates overflow without retaining the suffix. `Limit` maps to the
+existing `FieldBytes(index)`; malformed strings retain their JSON cause and
+offset even after overflow. The 64 KiB whole-input cap remains necessary to
+bound scanning work. This removes the duplicated post-allocation field check.

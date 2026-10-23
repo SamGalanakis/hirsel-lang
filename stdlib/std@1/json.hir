@@ -142,6 +142,58 @@ fn json_shared_quoted(take data: Bytes, mut pos: u64) -> Result[String, JsonErro
   Ok(json_quoted(data, mut pos)?)
 }
 
+// Shared strict escape/surrogate transitions. Adapted serde_json read.rs:925-1033,
+// 8c535a260ce561eaab4111aafc29038eb9f77ff3 (MIT OR Apache-2.0).
+// Keep Hirsel's existing byte offsets and cursor advancement; no WTF-8 mode.
+fn json_escape(data: Bytes, mut pos: u64) -> Result[char, JsonError] uses {} {
+  if pos == core@1/bytes.len(data) {
+    return Error(Syntax(pos))
+  }
+  let e = data[pos]
+  pos += 1
+  if e == 34 || e == 92 || e == 47 {
+    return Ok(char.from_u8(e))
+  } else if e == 98 {
+    return Ok(char.from_u8(8))
+  } else if e == 102 {
+    return Ok(char.from_u8(12))
+  } else if e == 110 {
+    return Ok(char.from_u8(10))
+  } else if e == 114 {
+    return Ok(char.from_u8(13))
+  } else if e == 116 {
+    return Ok(char.from_u8(9))
+  } else if e == 117 {
+    let mut n = json_hex4(data, mut pos)?
+    if n >= 56320 && n <= 57343 {
+      return Error(Syntax(pos - 4))
+    }
+    if n >= 55296 && n <= 56319 {
+      if json_peek(data, pos) != 92 {
+        return Error(Syntax(pos))
+      }
+      pos += 1
+      if json_peek(data, pos) != 117 {
+        return Error(Syntax(pos))
+      }
+      pos += 1
+      let low = json_hex4(data, mut pos)?
+      if low < 56320 || low > 57343 {
+        return Error(Syntax(pos - 4))
+      }
+      n = 65536 + (n - 55296) * 1024 + low - 56320
+    }
+    // The surrogate checks above leave a scalar value.
+    match core@1/char.from_u32(core@1/int.narrow(n)) {
+      Some(scalar) => return Ok(scalar),
+      None() => core@1/failure.check(false, TextInvariant()),
+    }
+  } else {
+    return Error(Syntax(pos - 1))
+  }
+  Ok('\0')
+}
+
 // Adapted serde_json src/read.rs parse_str_bytes/parse_escape/parse_unicode_escape,
 // commit 20572a6d066958542d79cdd6cf1a7cd9f0c8e1f8. Strict UTF-8 mode only.
 fn json_quoted(data: Bytes, mut pos: u64) -> Result[unique String, JsonError] uses {} {
@@ -183,51 +235,7 @@ fn json_quoted(data: Bytes, mut pos: u64) -> Result[unique String, JsonError] us
       }
       core@1/bytes.append(mut output, core@1/bytes.slice(data, start, pos))
     } else {
-      if pos == core@1/bytes.len(data) {
-        return Error(Syntax(pos))
-      }
-      let e = data[pos]
-      pos += 1
-      if e == 34 || e == 92 || e == 47 {
-        core@1/list.push(mut output, e)
-      } else if e == 98 {
-        core@1/list.push(mut output, 8)
-      } else if e == 102 {
-        core@1/list.push(mut output, 12)
-      } else if e == 110 {
-        core@1/list.push(mut output, 10)
-      } else if e == 114 {
-        core@1/list.push(mut output, 13)
-      } else if e == 116 {
-        core@1/list.push(mut output, 9)
-      } else if e == 117 {
-        let mut n = json_hex4(data, mut pos)?
-        if n >= 56320 && n <= 57343 {
-          return Error(Syntax(pos - 4))
-        }
-        if n >= 55296 && n <= 56319 {
-          if json_peek(data, pos) != 92 {
-            return Error(Syntax(pos))
-          }
-          pos += 1
-          if json_peek(data, pos) != 117 {
-            return Error(Syntax(pos))
-          }
-          pos += 1
-          let low = json_hex4(data, mut pos)?
-          if low < 56320 || low > 57343 {
-            return Error(Syntax(pos - 4))
-          }
-          n = 65536 + (n - 55296) * 1024 + low - 56320
-        }
-        // The surrogate checks above leave a scalar value.
-        match core@1/char.from_u32(core@1/int.narrow(n)) {
-          Some(scalar) => char.format_into(scalar, mut output),
-          None() => core@1/failure.check(false, TextInvariant()),
-        }
-      } else {
-        return Error(Syntax(pos - 1))
-      }
+      char.format_into(json_escape(data, mut pos)?, mut output)
     }
   }
   Error(Syntax(pos))
@@ -697,7 +705,10 @@ pub fn colon(mut cursor: Reader) -> Result[(), JsonError] uses {} {
 
 // Shared lexical member boundary. Preserve the key-start offset after comma
 // whitespace without changing reader_more's delimiter and depth behavior.
-fn owned_member_start(mut cursor: Reader, mut first: bool) -> Result[Option[u64], JsonError] uses {} {
+fn owned_member_start(mut cursor: Reader, mut first: bool) -> Result[
+  Option[u64],
+  JsonError
+] uses {} {
   let _ = peek(mut cursor)
   let mut start = cursor.pos
   if !first && json_peek(cursor.data, start) == 44 {
@@ -739,19 +750,35 @@ fn remember_skipped_key(
   take key: String
 ) -> bool uses {} {
   match first {
-    None => { first = Some(take key); return true },
-    Some(previous) => { if previous == key { return false } },
+    None => {
+      first = Some(take key)
+      return true
+    },
+    Some(previous) => {
+      if previous == key {
+        return false
+      }
+    },
   }
   match second {
-    None => { second = Some(take key); return true },
-    Some(previous) => { if previous == key { return false } },
+    None => {
+      second = Some(take key)
+      return true
+    },
+    Some(previous) => {
+      if previous == key {
+        return false
+      }
+    },
   }
   let mut seen = match std@1/option.remove(mut spill) {
     Some(previous) => take previous,
     None => core@1/set.empty(),
   }
   let duplicate = core@1/set.contains(seen, key)
-  if !duplicate { core@1/set.insert(mut seen, take key) }
+  if !duplicate {
+    core@1/set.insert(mut seen, take key)
+  }
   spill = Some(take seen)
   !duplicate
 }
@@ -820,6 +847,99 @@ pub fn read_owned_text(mut cursor: Reader) -> Result[unique String, JsonError] u
     }
   }
   json_quoted(cursor.data, mut cursor.pos)
+}
+
+/// JSON syntax/UTF-8 failures retain their old cause; Limit has no partial text.
+pub type ReadTextBoundedError = Json(JsonError) | Limit
+
+// serde_json read.rs:521-568 (8c535a2, MIT OR Apache-2.0): scan plain spans,
+// then share strict escape transitions. Unlike serde's scratch, admission comes
+// BEFORE every append. Overflow validates the same token with no more output.
+// Only scalar-sized integer/char locals are scratch; no temporary decoded List.
+/// Decode at most max_decoded_bytes UTF-8 bytes, excluding the quotes. Syntax
+/// wins over Limit; success and Limit stop immediately after the closing quote.
+/// Logical retained length is bounded, not the allocator's capacity/RSS slack.
+pub fn read_owned_text_bounded(mut cursor: Reader, max_decoded_bytes: u64) -> Result[
+  unique String,
+  ReadTextBoundedError
+] uses {} {
+  if peek(mut cursor) != 34 {
+    return Error(Json(Syntax(cursor.pos)))
+  }
+  cursor.pos += 1
+  let mut output: List[u8] = []
+  let mut limited = false
+  let mut invalid = false
+  let mut escaped = false
+  while cursor.pos < core@1/bytes.len(cursor.data) {
+    let start = cursor.pos
+    while cursor.pos < core@1/bytes.len(cursor.data) && cursor.data[cursor.pos] >= 32 && cursor.data[cursor.pos] != 34 && cursor.data[cursor.pos] != 92 {
+      cursor.pos += 1
+    }
+    let span = core@1/bytes.slice(cursor.data, start, cursor.pos)
+    // Check even discarded spans. Delay UTF-8 errors until token finish, as
+    // text.finish did; a later bad escape/control/EOF still takes precedence.
+    if !valid_utf8(span) {
+      invalid = true
+    }
+    if !limited {
+      if core@1/bytes.len(span) > max_decoded_bytes - core@1/list.len(output) {
+        limited = true
+      } else {
+        core@1/bytes.append(mut output, span)
+      }
+    }
+    if cursor.pos == core@1/bytes.len(cursor.data) {
+      break
+    }
+    let c = cursor.data[cursor.pos]
+    cursor.pos += 1
+    if c == 34 {
+      if invalid {
+        return Error(
+          Json(
+            Syntax(
+              if escaped {
+                cursor.pos
+              } else {
+                cursor.pos - 1
+              }
+            )
+          )
+        )
+      }
+      if limited {
+        return Error(Limit)
+      }
+      return match text.finish(take output) {
+        Ok(value) => Ok(take value),
+        Error(_) => Error(Json(Syntax(cursor.pos))),
+      }
+    }
+    if c < 32 {
+      return Error(Json(Syntax(cursor.pos - 1)))
+    }
+    escaped = true
+    let scalar = json_escape(cursor.data, mut cursor.pos) ? Json
+    let code = core@1/char.to_u32(scalar)
+    let width: u64 = if code < 0x80u32 {
+      1
+    } else if code < 0x800u32 {
+      2
+    } else if code < 0x10000u32 {
+      3
+    } else {
+      4
+    }
+    if !limited {
+      if width > max_decoded_bytes - core@1/list.len(output) {
+        limited = true
+      } else {
+        char.format_into(scalar, mut output)
+      }
+    }
+  }
+  Error(Json(Syntax(cursor.pos)))
 }
 
 /// Compare a borrowed key against a field name quoted at compile time.

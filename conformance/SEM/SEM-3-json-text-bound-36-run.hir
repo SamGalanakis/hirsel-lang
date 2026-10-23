@@ -1,0 +1,150 @@
+// rule: SEM-3
+// expect: run
+// serde_json 8c535a2 read.rs:521-568,925-1033 and tests/test.rs:1099-1167
+// (MIT OR Apache-2.0). Hirsel adaptations: decoded byte cap, exact existing
+// offsets, scan-only overflow, and retained byte-view ownership.
+fn bounded(mut cursor: json.Reader, limit: u64) -> Result[
+  unique String,
+  json.ReadTextBoundedError
+] uses {} {
+  json.read_owned_text_bounded(mut cursor, limit)
+}
+
+fn valid(t: Test, source: String, expected: String) -> () {
+  let data = string.as_bytes(source)
+  let size = string.byte_len(expected)
+  let mut exact = json.reader(data)
+  test.equal(t, bounded(mut exact, size), Ok(unique expected))
+  test.equal(t, exact.pos, bytes.len(data))
+  test.equal(t, exact.depth, 0u64)
+  if size > 0 {
+    let mut over = json.reader(data)
+    test.equal(t, bounded(mut over, size - 1), Error(Limit()))
+    test.equal(t, over.pos, bytes.len(data))
+    test.equal(t, over.depth, 0u64)
+  }
+}
+
+fn bad(t: Test, data: Bytes, error: json.JsonError, position: u64) -> () {
+  for cap in [0u64, 1u64, 18446744073709551615u64] {
+    let mut old = json.reader(data)
+    test.equal(t, json.read_owned_text(mut old), Error(error))
+    let mut cursor = json.reader(data)
+    test.equal(t, bounded(mut cursor, cap), Error(Json(error)))
+    test.equal(t, cursor.pos, position)
+    test.equal(t, cursor.pos, old.pos)
+    test.equal(t, cursor.depth, old.depth)
+    test.equal(
+      t,
+      bytes.slice(cursor.data, cursor.pos, bytes.len(data)),
+      bytes.slice(data, position, bytes.len(data))
+    )
+  }
+}
+
+fn independent() -> Result[unique String, json.ReadTextBoundedError] uses {} {
+  let data = bytes.from_list([34u8, 92u8, 117u8, 48u8, 48u8, 54u8, 49u8, 34u8])
+  let mut cursor = json.reader(data)
+  bounded(mut cursor, 1)
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  valid(t, "\"\"", "")
+  valid(t, "\"a\"", "a")
+  valid(t, "\"é\"", "é")
+  valid(t, "\"水\"", "水")
+  valid(t, "\"𝄞\"", "𝄞")
+  valid(t, "\"\\/\\\\\\\"\\b\\f\\n\\r\\t\"", "/\\\"\u{8}\u{c}\n\r\t")
+  valid(t, "\"\\u0061\"", "a")
+  valid(t, "\"\\u00e9\"", "é")
+  valid(t, "\"\\u6c34\"", "水")
+  valid(t, "\"\\uD834\\uDD1E\"", "𝄞")
+  valid(t, "\"prefixé\\n水\\uD834\\uDD1Etail\"", "prefixé\n水𝄞tail")
+  valid(t, "\"\\n\\n\\n\\n\\n\\n\\n\\n\"", "\n\n\n\n\n\n\n\n")
+  let mut tiny = json.reader(b"\"tiny\",false")
+  test.equal(t, bounded(mut tiny, 18446744073709551615u64), Ok("tiny"))
+  test.equal(t, tiny.pos, 6u64)
+  test.equal(t, bytes.slice(tiny.data, tiny.pos, bytes.len(tiny.data)), b",false")
+  let mut nonempty = json.reader(b"\"a\",null")
+  test.equal(t, bounded(mut nonempty, 0), Error(Limit()))
+  test.equal(t, nonempty.pos, 3u64)
+  test.equal(
+    t,
+    bytes.slice(nonempty.data, nonempty.pos, bytes.len(nonempty.data)),
+    b",null"
+  )
+  bad(t, b"  false", Syntax(2), 2)
+  bad(t, b"\"abc\\q\",1", Syntax(5), 6)
+  bad(t, b"\"abc\\", Syntax(5), 5)
+  bad(t, b"\"abc", Syntax(4), 4)
+  bad(t, b"\"abc\n\",1", Syntax(4), 5)
+  bad(t, b"\"abc\\u003", Syntax(9), 9)
+  bad(t, b"\"abc\\uDC00\",1", Syntax(6), 10)
+  bad(t, b"\"abc\\uD800\",1", Syntax(10), 10)
+  bad(t, b"\"abc\\uD800x\",1", Syntax(10), 10)
+  bad(t, b"\"abc\\uD800\\x\",1", Syntax(11), 11)
+  bad(t, b"\"abc\\uD800\\uFFFF\",1", Syntax(12), 16)
+  // Strict raw UTF-8: bad starts, overlong, surrogate, above Unicode, short,
+  // bad continuation and raw/escape boundaries, before and after overflow.
+  for raw in [
+    b"\xff",
+    b"\xc0\xaf",
+    b"\xed\xa0\x80",
+    b"\xf4\x90\x80\x80",
+    b"\xe2\x82",
+    b"\xc2a"
+  ] {
+    let mut plain: List[u8] = [34]
+    bytes.append(mut plain, raw)
+    list.push(mut plain, 34)
+    let stop = list.len(plain) - 1
+    bad(t, bytes.from_list(take plain), Syntax(stop), stop + 1)
+    let mut mixed: List[u8] = [34, 97, 92, 110]
+    bytes.append(mut mixed, raw)
+    list.push(mut mixed, 34)
+    let end = list.len(mixed)
+    bad(t, bytes.from_list(take mixed), Syntax(end), end)
+  }
+  bad(t, b"\"a\xe2\\n\x82\xac\",1", Syntax(8), 8)
+  bad(t, b"\"a\xff\\q\",1", Syntax(4), 5)
+  bad(t, b"\"a\xff", Syntax(3), 3)
+  bad(t, b"\"a\xff\\n\",1", Syntax(6), 6)
+  for count in [16u64, 32u64, 64u64] {
+    let mut input: List[u8] = [34, 97, 92, 110]
+    for _ in 0u64..count {
+      text.append(mut input, "\\u6c34")
+    }
+    list.push(mut input, 34)
+    let size = list.len(input)
+    let mut cursor = json.reader(bytes.from_list(take input))
+    test.equal(t, bounded(mut cursor, 1), Error(Limit()))
+    test.equal(t, cursor.pos, size)
+    test.equal(t, cursor.depth, 0u64)
+  }
+  // Detached token view: invalid sentinels must not affect this Reader.
+  let surrounding = b"\xff\"\xc3\xa9\\n\"\xff"
+  let mut view = json.reader(bytes.slice(surrounding, 1, bytes.len(surrounding) - 1))
+  test.equal(t, bounded(mut view, 3), Ok("é\n"))
+  test.equal(t, view.pos, 6u64)
+  test.equal(t, view.depth, 0u64)
+  let mut nested = json.reader(b"[[\"abc\",\"\\u0061\"],true]")
+  test.equal(t, json.begin_array(mut nested), Ok(()))
+  test.equal(t, json.begin_array(mut nested), Ok(()))
+  test.equal(t, bounded(mut nested, 2), Error(Limit()))
+  test.equal(t, nested.pos, 7u64)
+  test.equal(t, nested.depth, 2u64)
+  test.equal(
+    t,
+    bytes.slice(nested.data, nested.pos, bytes.len(nested.data)),
+    b",\"\\u0061\"],true]"
+  )
+  let mut first = false
+  test.equal(t, json.array_next(mut nested, mut first), Ok(true))
+  let owned = bounded(mut nested, 1)
+  test.equal(t, owned, Ok("a"))
+  test.equal(t, json.array_next(mut nested, mut first), Ok(false))
+  test.equal(t, nested.depth, 1u64)
+  // The owned return survives its local Reader and its input.
+  test.equal(t, independent(), Ok("a"))
+  Ok(())
+}

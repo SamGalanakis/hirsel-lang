@@ -1742,3 +1742,9 @@ four configurations, malformed bytes and exhaustive canonical-tail checks.
 The MIT credits are retained in LICENSE.base64-simd (also vsimd), LICENSE.outref
 and LICENSE.base64; linked dependency license
 notices accompany release packaging.
+
+Bounded JSON text decoding (`json_text_bound_36`) also adapts serde_json
+8c535a260ce561eaab4111aafc29038eb9f77ff3 `src/read.rs:521-568,925-1033` and
+`tests/test.rs:1099-1167` (MIT OR Apache-2.0, Serde project contributors).
+Hirsel adds decoded-byte admission with scan-only overflow, retains its own
+error offsets and delayed UTF-8 validation, and never ports lax/WTF-8 decoding.

@@ -81,3 +81,13 @@ annotations, ownership copies and application adapters remain valid. This is
 documentation navigation for existing APIs, with no alias or resolver change.
 
 Addressed by the executable recipe documentation landed in `36879d8e307bb032944a618df036327bff837fe5`.
+
+## Bounded decoded JSON fields (round 36)
+
+Row fields now use `json.read_owned_text_bounded` with 128 bytes for every row string.
+The earlier read-then-measure recipe could allocate a complete rejected escaped
+field. The shared reader admits decoded UTF-8 spans/scalars before appending,
+then validates overflow without retaining the suffix. `Limit` maps to the
+existing `FieldBytes(index)`; malformed strings retain their JSON cause and
+offset even after overflow. The 64 KiB whole-input cap remains necessary to
+bound scanning work. This removes the duplicated post-allocation field check.

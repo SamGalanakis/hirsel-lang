@@ -3063,6 +3063,7 @@ conformance/MODE/MODE-1-json-document-nested-bad.hir
 conformance/MODE/MODE-1-json-document-record-bad.hir
 conformance/MODE/MODE-1-json-document-tuple-bad.hir
 conformance/MODE/MODE-1-json-reader-escape-bad.hir
+conformance/MODE/MODE-1-json-text-bound-36-view-bad.hir
 conformance/MODE/MODE-1-last-use-closure-view-dead-ok.hir
 conformance/MODE/MODE-1-last-use-closure-view-used-bad.hir
 conformance/MODE/MODE-1-last-use-early-return-drop-bad.hir
@@ -5761,6 +5762,7 @@ conformance/SEM/SEM-3-json-reader-import-036-run.hir
 conformance/SEM/SEM-3-json-reader-import-037-run.hir
 conformance/SEM/SEM-3-json-roundtrip-run.hir
 conformance/SEM/SEM-3-json-slice-run.hir
+conformance/SEM/SEM-3-json-text-bound-36-run.hir
 conformance/SEM/SEM-3-json-typed-numbers-run.hir
 conformance/SEM/SEM-3-json-typed-reader-run.hir
 conformance/SEM/SEM-3-json-typed-serde-enum-run.hir

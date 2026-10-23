@@ -30,14 +30,15 @@ fn row(mut cursor: json.Reader, index: u64) -> Result[unique Row, InputError] us
     if set.len(keys) > 3 || key != "name" && key != "requirement" && key != "version" {
       return Error(Fields(index))
     }
-    let value = json.read_owned_text(mut cursor)?
     let limit = if key == "name" {
       128u64
     } else {
       256u64
     }
-    if string.byte_len(value) > limit {
-      return Error(FieldBytes(index))
+    let value = match json.read_owned_text_bounded(mut cursor, limit) {
+      Ok(value) => take value,
+      Error(Json(cause)) => return Error(Json(cause)),
+      Error(Limit()) => return Error(FieldBytes(index)),
     }
     if key == "name" {
       name = Some(take value)

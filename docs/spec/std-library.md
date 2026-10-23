@@ -698,6 +698,38 @@ spellings are byte views of the input; escaped text has independent storage.
 copies it when an owned String is needed. `read_owned_text` copies only its token for owned typed
 fields. All returned views retain their input owner.
 
+`read_owned_text_bounded(mut cursor: Reader, max_decoded_bytes: u64)` returns
+`Result[unique String, ReadTextBoundedError]`, where
+`ReadTextBoundedError = Json(JsonError) | Limit`. The cap counts decoded UTF-8
+bytes excluding quotes, not input bytes or Unicode scalars. Zero accepts the
+empty string; `u64::MAX` is safe. Each plain span or escaped scalar is admitted
+before appending. After overflow the same token is validated without growing
+output; malformed escapes, surrogate pairs, controls, UTF-8 and EOF retain the
+existing JSON error precedence, offsets and cursor state. Only a valid complete
+oversized token returns `Limit`, without a partial String. Both success and
+`Limit` leave the cursor just after its closing quote, before any following
+comma/value. No unrelated suffix or surrounding backing bytes are validated.
+Callers still need an input-byte cap to bound CPU work. The bound covers logical
+retained output; allocator/List capacity slack is not an RSS guarantee. Scalar
+scratch is a fixed char and integer locals, with no temporary decoded buffer.
+
+A complete bounded Reader consumer (including delimiter and end checks):
+
+```hirsel
+fn labels(data: Bytes) -> Result[unique List[String], json.ReadTextBoundedError] uses {} {
+  let mut cursor = json.reader(data)
+  json.begin_array(mut cursor) ? Json
+  let mut first = true
+  let mut output: List[String] = []
+  while json.array_next(mut cursor, mut first) ? Json {
+    let label = json.read_owned_text_bounded(mut cursor, 128)?
+    list.push(mut output, take label)
+  }
+  json.finish_reader(mut cursor) ? Json
+  Ok(take output)
+}
+```
+
 Structured consumers use `begin_array` / `array_next` and `begin_object` /
 `object_next`. Each container has its own mutable `first: bool` initialized to
 `true`; objects also have a fresh `Set[String]` of decoded keys. These operations
