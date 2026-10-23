@@ -6199,6 +6199,11 @@ impl Checker<'_> {
                     destination,
                     promised
                         || parametric
+                        // An owning core cursor transfers parts of its
+                        // currently unique owner; the result owns no aliases.
+                        // Freshness alone does not prove this for a shared
+                        // owner or an unqualified counted payload.
+                        || protocol_unique
                         || self
                             .t
                             .get(self.place_type(destination))

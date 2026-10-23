@@ -5736,6 +5736,13 @@ impl Checker<'_, '_> {
                             // current element is still exclusively owned.
                             if current != Uniqueness::Unique && !self.properties[ty].shared {
                                 part.modes.uniqueness = Uniqueness::Aliased;
+                            } else if consuming && !self.properties[ty].shared {
+                                // MODE-2 is deep: consuming a currently unique
+                                // collection transfers its elements' exclusive
+                                // ownership, even with unqualified element rows.
+                                // Borrowed loops and indirect iterator results
+                                // cannot inherit this proof.
+                                part.modes.uniqueness = current;
                             }
                         }
                         // An owning cursor and its elements are as local as

@@ -1,0 +1,16 @@
+type Trace[T] { value: T, parents: List[Trace[T]] }
+fn flatten[T: copyable](trace: Trace[T], label: fn(T) -> String uses {}) -> unique List[String] uses {} {
+  let mut values: unique List[String] = unique []
+  for parent in trace.parents {
+    let previous = flatten(parent, label)
+    for item in take previous { list.push(mut values, take item) }
+  }
+  list.push(mut values, unique label(trace.value))
+  take values
+}
+fn text_label(value: String) -> String uses {} { unique value }
+pub fn main() -> Result[(), ()] uses {} {
+  let trace: Trace[String] = Trace(value: "one", parents: [])
+  let _ = flatten(trace, text_label)
+  Ok(())
+}

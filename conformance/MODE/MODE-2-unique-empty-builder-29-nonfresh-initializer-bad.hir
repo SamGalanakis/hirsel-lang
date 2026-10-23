@@ -1,0 +1,12 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 5
+// twin: MODE/MODE-2-unique-empty-builder-29-minimal-run.hir
+fn build(source: List[String]) -> unique List[String] {
+  let mut values: unique List[String] = copy source
+  take values
+}
+
+pub fn main() -> Result[(), ()] {
+  let _ = build(["one"])
+  Ok(())
+}

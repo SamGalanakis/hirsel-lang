@@ -1,0 +1,14 @@
+// rule: MODE-2
+// expect: run
+fn build(take source: unique List[String]) -> unique List[String] uses {} {
+  let mut values: unique List[String] = unique []
+  for item in take source {
+    list.push(mut values, take item)
+  }
+  take values
+}
+
+pub fn main() -> Result[(), ()] uses {} {
+  let _ = build(["one"])
+  Ok(())
+}

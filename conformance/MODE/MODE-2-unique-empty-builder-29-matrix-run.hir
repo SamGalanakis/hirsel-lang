@@ -1,0 +1,354 @@
+// rule: MODE-2
+// expect: run
+// Generic/concrete, recursive/leaf, callback/direct, counted/plain elements.
+fn text(value: u64) -> String uses {} {
+  "one"
+}
+
+fn number(value: u64) -> u64 uses {} {
+  value
+}
+
+fn build_0(take source: unique List[String], value: u64, depth: u64) -> unique List[
+  String
+] uses {} {
+  let mut values: unique List[String] = unique []
+  for item in take source {
+    list.push(mut values, take item)
+  }
+  list.push(mut values, "one")
+  take values
+}
+
+fn build_1(take source: unique List[u64], value: u64, depth: u64) -> unique List[u64] uses {} {
+  let mut values: unique List[u64] = unique []
+  for item in take source {
+    list.push(mut values, take item)
+  }
+  list.push(mut values, 1u64)
+  take values
+}
+
+fn build_2(
+  take source: unique List[String],
+  value: u64,
+  depth: u64,
+  label: fn(u64) -> String uses {}
+) -> unique List[String] uses {} {
+  let mut values: unique List[String] = unique []
+  for item in take source {
+    list.push(mut values, take item)
+  }
+  list.push(mut values, unique label(value))
+  take values
+}
+
+fn build_3(
+  take source: unique List[u64],
+  value: u64,
+  depth: u64,
+  label: fn(u64) -> u64 uses {}
+) -> unique List[u64] uses {} {
+  let mut values: unique List[u64] = unique []
+  for item in take source {
+    list.push(mut values, take item)
+  }
+  list.push(mut values, unique label(value))
+  take values
+}
+
+fn build_4(take source: unique List[String], value: u64, depth: u64) -> unique List[
+  String
+] uses {} {
+  let mut values: unique List[String] = unique []
+  if depth > 0 {
+    let previous = build_4(unique [], value, depth - 1)
+    for item in take previous {
+      list.push(mut values, take item)
+    }
+  }
+  for item in take source {
+    list.push(mut values, take item)
+  }
+  list.push(mut values, "one")
+  take values
+}
+
+fn build_5(take source: unique List[u64], value: u64, depth: u64) -> unique List[u64] uses {} {
+  let mut values: unique List[u64] = unique []
+  if depth > 0 {
+    let previous = build_5(unique [], value, depth - 1)
+    for item in take previous {
+      list.push(mut values, take item)
+    }
+  }
+  for item in take source {
+    list.push(mut values, take item)
+  }
+  list.push(mut values, 1u64)
+  take values
+}
+
+fn build_6(
+  take source: unique List[String],
+  value: u64,
+  depth: u64,
+  label: fn(u64) -> String uses {}
+) -> unique List[String] uses {} {
+  let mut values: unique List[String] = unique []
+  if depth > 0 {
+    let previous = build_6(unique [], value, depth - 1, label)
+    for item in take previous {
+      list.push(mut values, take item)
+    }
+  }
+  for item in take source {
+    list.push(mut values, take item)
+  }
+  list.push(mut values, unique label(value))
+  take values
+}
+
+fn build_7(
+  take source: unique List[u64],
+  value: u64,
+  depth: u64,
+  label: fn(u64) -> u64 uses {}
+) -> unique List[u64] uses {} {
+  let mut values: unique List[u64] = unique []
+  if depth > 0 {
+    let previous = build_7(unique [], value, depth - 1, label)
+    for item in take previous {
+      list.push(mut values, take item)
+    }
+  }
+  for item in take source {
+    list.push(mut values, take item)
+  }
+  list.push(mut values, unique label(value))
+  take values
+}
+
+fn build_8[T: copyable](take source: unique List[String], value: T, depth: u64) -> unique List[
+  String
+] uses {} {
+  let mut values: unique List[String] = unique []
+  for item in take source {
+    list.push(mut values, take item)
+  }
+  list.push(mut values, "one")
+  take values
+}
+
+fn build_9[T: copyable](take source: unique List[u64], value: T, depth: u64) -> unique List[
+  u64
+] uses {} {
+  let mut values: unique List[u64] = unique []
+  for item in take source {
+    list.push(mut values, take item)
+  }
+  list.push(mut values, 1u64)
+  take values
+}
+
+fn build_10[T: copyable](
+  take source: unique List[String],
+  value: T,
+  depth: u64,
+  label: fn(T) -> String uses {}
+) -> unique List[String] uses {} {
+  let mut values: unique List[String] = unique []
+  for item in take source {
+    list.push(mut values, take item)
+  }
+  list.push(mut values, unique label(value))
+  take values
+}
+
+fn build_11[T: copyable](
+  take source: unique List[u64],
+  value: T,
+  depth: u64,
+  label: fn(T) -> u64 uses {}
+) -> unique List[u64] uses {} {
+  let mut values: unique List[u64] = unique []
+  for item in take source {
+    list.push(mut values, take item)
+  }
+  list.push(mut values, unique label(value))
+  take values
+}
+
+fn build_12[T: copyable](take source: unique List[String], value: T, depth: u64) -> unique List[
+  String
+] uses {} {
+  let mut values: unique List[String] = unique []
+  if depth > 0 {
+    let previous = build_12(unique [], value, depth - 1)
+    for item in take previous {
+      list.push(mut values, take item)
+    }
+  }
+  for item in take source {
+    list.push(mut values, take item)
+  }
+  list.push(mut values, "one")
+  take values
+}
+
+fn build_13[T: copyable](take source: unique List[u64], value: T, depth: u64) -> unique List[
+  u64
+] uses {} {
+  let mut values: unique List[u64] = unique []
+  if depth > 0 {
+    let previous = build_13(unique [], value, depth - 1)
+    for item in take previous {
+      list.push(mut values, take item)
+    }
+  }
+  for item in take source {
+    list.push(mut values, take item)
+  }
+  list.push(mut values, 1u64)
+  take values
+}
+
+fn build_14[T: copyable](
+  take source: unique List[String],
+  value: T,
+  depth: u64,
+  label: fn(T) -> String uses {}
+) -> unique List[String] uses {} {
+  let mut values: unique List[String] = unique []
+  if depth > 0 {
+    let previous = build_14(unique [], value, depth - 1, label)
+    for item in take previous {
+      list.push(mut values, take item)
+    }
+  }
+  for item in take source {
+    list.push(mut values, take item)
+  }
+  list.push(mut values, unique label(value))
+  take values
+}
+
+fn build_15[T: copyable](
+  take source: unique List[u64],
+  value: T,
+  depth: u64,
+  label: fn(T) -> u64 uses {}
+) -> unique List[u64] uses {} {
+  let mut values: unique List[u64] = unique []
+  if depth > 0 {
+    let previous = build_15(unique [], value, depth - 1, label)
+    for item in take previous {
+      list.push(mut values, take item)
+    }
+  }
+  for item in take source {
+    list.push(mut values, take item)
+  }
+  list.push(mut values, unique label(value))
+  take values
+}
+
+pub fn main() -> Result[(), ()] uses {} {
+  let values_0_0 = build_0(["one"], 1u64, 0u64)
+  if list.len(values_0_0) != 2 || values_0_0[0] != "one" {
+    return Error(())
+  }
+  let values_1_0 = build_1([1u64], 1u64, 0u64)
+  if list.len(values_1_0) != 2 || values_1_0[0] != 1u64 {
+    return Error(())
+  }
+  let values_2_0 = build_2(["one"], 1u64, 0u64, text)
+  if list.len(values_2_0) != 2 || values_2_0[0] != "one" {
+    return Error(())
+  }
+  let values_3_0 = build_3([1u64], 1u64, 0u64, number)
+  if list.len(values_3_0) != 2 || values_3_0[0] != 1u64 {
+    return Error(())
+  }
+  let values_4_0 = build_4(["one"], 1u64, 0u64)
+  if list.len(values_4_0) != 2 || values_4_0[0] != "one" {
+    return Error(())
+  }
+  let values_4_2 = build_4(["one"], 1u64, 2u64)
+  if list.len(values_4_2) != 4 || values_4_2[0] != "one" {
+    return Error(())
+  }
+  let values_5_0 = build_5([1u64], 1u64, 0u64)
+  if list.len(values_5_0) != 2 || values_5_0[0] != 1u64 {
+    return Error(())
+  }
+  let values_5_2 = build_5([1u64], 1u64, 2u64)
+  if list.len(values_5_2) != 4 || values_5_2[0] != 1u64 {
+    return Error(())
+  }
+  let values_6_0 = build_6(["one"], 1u64, 0u64, text)
+  if list.len(values_6_0) != 2 || values_6_0[0] != "one" {
+    return Error(())
+  }
+  let values_6_2 = build_6(["one"], 1u64, 2u64, text)
+  if list.len(values_6_2) != 4 || values_6_2[0] != "one" {
+    return Error(())
+  }
+  let values_7_0 = build_7([1u64], 1u64, 0u64, number)
+  if list.len(values_7_0) != 2 || values_7_0[0] != 1u64 {
+    return Error(())
+  }
+  let values_7_2 = build_7([1u64], 1u64, 2u64, number)
+  if list.len(values_7_2) != 4 || values_7_2[0] != 1u64 {
+    return Error(())
+  }
+  let values_8_0 = build_8(["one"], 1u64, 0u64)
+  if list.len(values_8_0) != 2 || values_8_0[0] != "one" {
+    return Error(())
+  }
+  let values_9_0 = build_9([1u64], 1u64, 0u64)
+  if list.len(values_9_0) != 2 || values_9_0[0] != 1u64 {
+    return Error(())
+  }
+  let values_10_0 = build_10(["one"], 1u64, 0u64, text)
+  if list.len(values_10_0) != 2 || values_10_0[0] != "one" {
+    return Error(())
+  }
+  let values_11_0 = build_11([1u64], 1u64, 0u64, number)
+  if list.len(values_11_0) != 2 || values_11_0[0] != 1u64 {
+    return Error(())
+  }
+  let values_12_0 = build_12(["one"], 1u64, 0u64)
+  if list.len(values_12_0) != 2 || values_12_0[0] != "one" {
+    return Error(())
+  }
+  let values_12_2 = build_12(["one"], 1u64, 2u64)
+  if list.len(values_12_2) != 4 || values_12_2[0] != "one" {
+    return Error(())
+  }
+  let values_13_0 = build_13([1u64], 1u64, 0u64)
+  if list.len(values_13_0) != 2 || values_13_0[0] != 1u64 {
+    return Error(())
+  }
+  let values_13_2 = build_13([1u64], 1u64, 2u64)
+  if list.len(values_13_2) != 4 || values_13_2[0] != 1u64 {
+    return Error(())
+  }
+  let values_14_0 = build_14(["one"], 1u64, 0u64, text)
+  if list.len(values_14_0) != 2 || values_14_0[0] != "one" {
+    return Error(())
+  }
+  let values_14_2 = build_14(["one"], 1u64, 2u64, text)
+  if list.len(values_14_2) != 4 || values_14_2[0] != "one" {
+    return Error(())
+  }
+  let values_15_0 = build_15([1u64], 1u64, 0u64, number)
+  if list.len(values_15_0) != 2 || values_15_0[0] != 1u64 {
+    return Error(())
+  }
+  let values_15_2 = build_15([1u64], 1u64, 2u64, number)
+  if list.len(values_15_2) != 4 || values_15_2[0] != 1u64 {
+    return Error(())
+  }
+  Ok(())
+}
