@@ -166,15 +166,41 @@ fn durable_source_identity_requires_local_v_and_preserves_private_execution_guar
         )
         .with_verify_store(store::VerifyStore::Recompute);
         assert!(verify.verified_lower_output(&main).unwrap().is_none());
+        let (body, issued) = verify.lower_to_tir_with_verified_output(&main).unwrap();
+        let issued = issued.expect("actual forced recomputation has its own V output");
+        assert_eq!(body.value.path, issued.owner());
+        assert_eq!(issued.reference(), expected.reference());
+        assert_eq!(verify.recompute_count(&main, QueryKind::Lower), 1);
+        assert!(verify.verified_lower_output(&main).unwrap().is_none());
+        assert!(verify.materialize_verified_lower_output(&issued).is_some());
 
         let off_store = Arc::new(store::MemStore::default());
         let mut off = session(off_store.clone(), compiler_adapters(), Verify::Off);
         off.lower_to_tir(&main).unwrap();
+        assert!(
+            off.lower_to_tir_with_verified_output(&main)
+                .unwrap()
+                .1
+                .is_none()
+        );
         assert!(off.verified_lower_output(&main).unwrap().is_none());
         let mut enabled = session(off_store, compiler_adapters(), Verify::On);
         assert!(
             enabled.verified_lower_output(&main).unwrap().is_none(),
             "producer output alone has no V authority"
+        );
+        let mut no_store = QueryEngine::new(default_environment(), compiler_adapters());
+        let file = no_store
+            .sources
+            .add("simple.hir", "pub fn main()->u8{1u8}".into())
+            .unwrap();
+        no_store.parse_file(file, &default_context()).unwrap();
+        assert!(
+            no_store
+                .lower_to_tir_with_verified_output(&main)
+                .unwrap()
+                .1
+                .is_none()
         );
     });
 }
