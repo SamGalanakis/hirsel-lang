@@ -775,6 +775,7 @@ snapshot_struct!(LinkedRecord { executable });
 snapshot_struct!(BlobRecord { len, chunks });
 
 #[cfg(test)]
+#[path = "../../tests/native-validation/object_queries.rs"]
 mod tests;
 
 pub mod tasks;
