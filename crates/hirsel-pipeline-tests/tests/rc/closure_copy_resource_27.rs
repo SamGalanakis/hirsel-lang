@@ -35,6 +35,65 @@ pub fn main(t: Test) -> Result[(), ()] {
 fn cases() -> Vec<(&'static str, String)> {
     vec![
         ("witness", WITNESS.into()),
+        ("once-copied-field-result", r#"
+type Holder { text: String, n: u8 }
+fn make()->once fn()->String {
+  let token:String in heap="token"
+  let text:String in heap="x"
+  let holder=Holder(text:take text,n:1u8)
+  fn(){let consumed=take token;holder.text}
+}
+pub fn main(t:Test)->Result[(),()] {
+  let f=make()
+  test.check(t,string.byte_len(f())==1)
+  Ok(())
+}
+"#.into()),
+        ("copied-tuple", r#"
+fn make()->fn()->u64 {
+  let text:String in heap="x"
+  let pair=(text,1u8)
+  fn(){let(s,n)=pair; string.byte_len(s)}
+}
+pub fn main(t:Test)->Result[(),()] {
+  let f=make()
+  let g=copy f
+  test.check(t,f()==1)
+  test.check(t,g()==1)
+  test.check(t,f()==1)
+  Ok(())
+}
+"#.into()),
+        ("copied-callable-result", r#"
+fn make()->fn()->fn()->u64 {
+  let cb:fn()->u64=fn(){7u64}
+  fn(){cb}
+}
+pub fn main(t:Test)->Result[(),()] {
+  let f=make()
+  let first=f()
+  let second=f()
+  test.check(t,first()==7)
+  test.check(t,second()==7)
+  test.check(t,first()==7)
+  Ok(())
+}
+"#.into()),
+        ("nested-copied-environment", r#"
+fn make()->fn()->fn()->u64 {
+  let text:String in heap="x"
+  fn(){fn(){string.byte_len(text)}}
+}
+pub fn main(t:Test)->Result[(),()] {
+  let f=make()
+  let first=f()
+  let second=f()
+  test.check(t,first()==1)
+  test.check(t,second()==1)
+  Ok(())
+}
+"#.into()),
+
         ("direct", WITNESS.replace("let g = unique copy f\n  g()", "f()")),
         ("plain", WITNESS.replace("unique copy f", "copy f")),
         ("unsendable", WITNESS.replace("sendable fn", "fn")),

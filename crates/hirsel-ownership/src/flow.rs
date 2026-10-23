@@ -1256,8 +1256,14 @@ impl InitialStorage {
                     slot.value.crossing_borrows = dependencies.clone();
                 }
 
+                // CLO-4: creation owns copied captures, but a Many invocation
+                // only borrows them. Keep their global content relation while
+                // preventing implicit moves out of the environment's slots.
+                let many = layout.is_some_and(|layout| {
+                    checker.t.get(layout.ty).unwrap().modes.multiplicity != Multiplicity::Once
+                });
                 slot.value.set_alias(
-                    (checker.graph.scoped && capture.usage != UseKind::Take)
+                    (many || checker.graph.scoped && capture.usage != UseKind::Take)
                         .then_some((index, Site::Binding(index))),
                 );
                 if checker.properties[checker.body.bindings[index].ty].plain {
@@ -3618,6 +3624,12 @@ impl Checker<'_, '_> {
             self.report(rule, site, message, explain);
         }
     }
+    /// Escaping environments own their capture slots even while a Many
+    /// invocation borrows them. This permits another legal copy of global
+    /// content, but never a take through the invocation's borrowed slot.
+    fn owns_capture(&self, binding: usize) -> bool {
+        !self.graph.scoped && self.capture_physical_modes.contains_key(&binding)
+    }
     /// The binding grants write access to `place`, and nothing else may use
     /// its storage (published Shared or region storage is never mutated).
     fn access(&mut self, place: &Place, state: &State, operation: Span) -> bool {
@@ -3858,7 +3870,10 @@ impl Checker<'_, '_> {
                 );
                 continue;
             }
-            if escaping && !specialized && (mutable || (!plain && part.aliased().is_some())) {
+            if escaping
+                && !specialized
+                && (mutable || !plain && part.aliased().is_some() && !self.owns_capture(index))
+            {
                 self.report(
                     const { RuleId::of("CLO-4") },
                     closure,
@@ -4543,6 +4558,16 @@ impl Checker<'_, '_> {
                     Context::Address | Context::Mut => UseKind::Mut,
                     Context::Copy => UseKind::Copy,
                     Context::Take => UseKind::Take,
+                    // An owning environment can lend a global field to this
+                    // invocation without making a returned copy local.
+                    Context::Own
+                        if !property.plain
+                            && property.copyable
+                            && value.aliased().is_some()
+                            && self.owns_capture(place.binding) =>
+                    {
+                        UseKind::Copy
+                    }
                     Context::Store | Context::ResultShare
                         if !property.plain
                             && (value.aliased().is_some()

@@ -252,8 +252,12 @@ rebound `let mut` inside the child before receiving. Scoped closures borrow; an 
 scope-body parameter may take captures without becoming global.
 
 A many-callable invocation borrows its environment, including fields copied when the
-environment was built; the environment releases those fields when it ends. A once-callable
-transfers its owned captures to its invocation. Copying a copyable environment retains
+environment was built; the environment releases those fields when it ends. An owning
+use inside a many invocation copies a copyable capture instead of implicitly taking it.
+That copy retains the captured content's source bounds: owned global content can leave the
+invocation, while scoped content stays bounded. A many invocation cannot take a capture,
+including when returning or destructuring it. A once-callable transfers its owned captures
+to its invocation. Copying a copyable environment retains
 handle roots, and a deep copy stops at `Shared`, `Mutex` and `Atomic` boundaries
 ([MODE-2](ownership.md#mode-2-uniqueness)); it does not duplicate their payloads.
 
