@@ -66,6 +66,8 @@ pub(crate) fn substrate(module: &Module<'_>, function: Function<'_>, entry: Runt
         | R::CtxStats
         | R::Trim
         | R::Alloc
+        | R::TaskSpawnAhead
+        | R::AheadBarrier
         | R::Release
         | R::RootRelease
         | R::RootDrop

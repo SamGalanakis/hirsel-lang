@@ -19,6 +19,7 @@ struct Objects {
     polls: u64,
     wakes: Vec<TaskId>,
     deferred: bool,
+    block_retirement: bool,
     calls: Vec<(TaskId, TaskId)>,
     members: Vec<(TaskId, TaskId)>,
     returned_calls: Vec<TaskId>,
@@ -27,6 +28,9 @@ struct Objects {
 
 impl Backend<Command> for Objects {
     type Result = u64;
+    fn can_retire(&mut self, _: TaskId, _: &Operation<Command>) -> bool {
+        !self.block_retirement
+    }
     fn commit(&mut self, task: TaskId, op: &Operation<Command>, early: bool) -> Receipt<u64> {
         self.committed.push((task, op.descriptor.name, early));
         let (result, next, credit) = match &op.payload {
@@ -577,6 +581,7 @@ fn differential_width_jitter_reorder_matrix() {
                 }
             }
             match f.absorb(&mut b).unwrap() {
+                Progress::NeedSave(_) => panic!("the model backend owns no physical frames"),
                 Progress::NeedSegment(task) => {
                     assert_eq!(task, head);
                     let op = programs.get_mut(&head).unwrap().pop_front().unwrap();
@@ -701,4 +706,54 @@ fn a_budget_stop_does_not_publish_metadata_for_the_rejected_operation() {
     );
     assert_eq!((b.trace.len(), b.retirements.len()), prior);
     assert!(b.values.is_empty());
+}
+
+#[test]
+fn a_physical_save_wait_retains_the_exact_operation_and_stretch_without_polling() {
+    let policy = Policy::admit(&Default::default(), None);
+    let settled = Settled {
+        level: 0,
+        limit: 100,
+        fuel: 100,
+    };
+    let mut frontier = Frontier::new(0, policy, settled);
+    frontier.held.insert(0, Held::empty());
+    assert!(frontier.head_ready(0));
+    let mut backend = Objects {
+        block_retirement: true,
+        ..Default::default()
+    };
+    let mut before = Stretch::new(Budgets {
+        fuel: true,
+        memory: true,
+    });
+    before.fuel_points(7);
+    before.alloc(12).unwrap();
+    let op = Operation {
+        descriptor: op_descriptor("task.async").unwrap(),
+        footprint: Default::default(),
+        payload: Command::Step(Next::Yield, 0),
+    };
+    assert_eq!(
+        frontier.apply_head(before, op, &mut backend),
+        Ok(Progress::NeedSave(0))
+    );
+    assert!(!frontier.head_ready(0));
+    assert_eq!(frontier.settled.fuel, 100);
+    assert_eq!(frontier.settled.level, 0);
+    assert_eq!(frontier.retired(), 0);
+    assert!(backend.committed.is_empty());
+    assert_eq!(backend.polls, 0);
+    assert_eq!(frontier.absorb(&mut backend), Ok(Progress::NeedSave(0)));
+    assert!(backend.trace.is_empty());
+    assert!(!frontier.head_ready(0));
+    backend.block_retirement = false;
+    assert_eq!(frontier.absorb(&mut backend), Ok(Progress::Retired));
+    assert_eq!(frontier.settled.fuel, 93);
+    assert_eq!(frontier.settled.level, 12);
+    assert_eq!(frontier.retired(), 1);
+    assert_eq!(backend.committed.len(), 1);
+    assert_eq!(backend.trace.len(), 1);
+    assert_eq!(backend.polls, 1);
+    assert!(frontier.head_ready(0));
 }

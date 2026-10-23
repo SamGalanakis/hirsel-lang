@@ -3,6 +3,7 @@
 //! This module does not select a physical worker or run a scheduling point.
 
 pub(crate) mod admission;
+pub(crate) mod ahead;
 #[cfg(test)]
 mod commit_tests;
 pub(crate) mod driver;
@@ -257,6 +258,21 @@ impl<'a> Objects<'a> {
 
 impl Backend<Command> for Objects<'_> {
     type Result = Outcome;
+
+    fn can_retire(&mut self, _task: TaskId, op: &Operation<Command>) -> bool {
+        if let Command::TaskSpawn { reservation } = &op.payload {
+            let s = unsafe {
+                (*(*(*self.ctx).run_ptr()).tasks.get())
+                    .as_deref_mut()
+                    .unwrap()
+            };
+            return reservation
+                .borrow()
+                .as_ref()
+                .is_none_or(|spawn| spawn.ready(s));
+        }
+        true
+    }
 
     fn can_commit_early(&mut self, op: &Operation<Command>) -> bool {
         let s = super::scheduler(self.ctx);

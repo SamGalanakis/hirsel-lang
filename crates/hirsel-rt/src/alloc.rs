@@ -655,6 +655,17 @@ pub(crate) struct View {
 }
 
 impl View {
+    /// A private reservation cannot allocate or release storage through an
+    /// inline path. Force preflight before its first such operation; invalidate
+    /// the stamp so canonical switch-in restores the worker's ordinary view.
+    pub(crate) fn private(&mut self) {
+        self.heap = 0;
+        self.epoch = 0;
+        self.compiled.pages.fill(ptr::null_mut());
+        self.compiled.dup_max = 0;
+        self.compiled.free_inline = 0;
+    }
+
     /// A view no worker has bound yet: its first binding copies every word.
     pub(crate) fn new() -> View {
         View {

@@ -296,6 +296,11 @@ fn exceeded(kind: BudgetKind) -> ! {
 /// `ctx` is the running context.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_fuel_refill(ctx: *mut TaskCtx) {
+    if crate::tasks::ordered::ahead::private(ctx) {
+        unsafe { crate::stop::check(ctx, crate::stop::observe(ctx)) };
+        unsafe { crate::tasks::ordered::ahead::refill(ctx) };
+        return;
+    }
     if unsafe { (*ctx).run_ref().ordered_mode.load(Ordering::Acquire) } {
         let result = crate::stop::observe(ctx).and_then(|()| {
             let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
