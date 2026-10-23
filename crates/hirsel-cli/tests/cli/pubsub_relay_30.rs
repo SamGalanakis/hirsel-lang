@@ -187,7 +187,6 @@ fn scripted(boundaries: bool) {
     });
 }
 #[test]
-#[ignore = "INCOMPLETE: native import instance36 block4 has no incoming state; owner native-import-state-30, examples/pubsub/FRICTION.md"]
 fn pubsub_relay_30_native_and_real_unix() {
     let scratch = tempfile::Builder::new()
         .prefix("pubsub-native-")

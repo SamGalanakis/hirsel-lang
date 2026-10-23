@@ -50,16 +50,23 @@ impl Importer<'_> {
                 }
             }
             let Some(entry) = entry else {
-                return malformed(format!("block {} has no incoming state", t.0));
+                // Match lowering can prove an arm and omit its remaining
+                // edges. The TIR RPO still contains those targets. Leave them
+                // un-emitted unless a surviving predecessor reaches them;
+                // finish removes their placeholders from the LIR graph.
+                continue;
             };
             used[t.0 as usize] = Some(entry.clone());
             self.emit_block(t, entry)?;
         }
-        // Back edges reach their targets after those were emitted: the next
-        // pass starts from every edge's state.
+        // Back edges reach their targets after their turn in RPO, including
+        // blocks deferred above. Seed those blocks for the next pass too.
         for (u, incoming) in used.iter_mut().zip(&self.incoming) {
-            if let (Some(u), Some(i)) = (u.as_mut(), incoming) {
-                u.join(i);
+            if let Some(i) = incoming {
+                match u {
+                    Some(u) => u.join(i),
+                    None => *u = Some(i.clone()),
+                }
             }
         }
         Ok(used)

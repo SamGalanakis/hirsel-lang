@@ -25,8 +25,7 @@ Copy the templates and replace their exact socket address to run in a private
 directory. The grants authorize only that pathname; no ambient Net authority is
 used. Exit 2 from an invalid command is a domain refusal, not a language failure.
 
-**Native builds are currently blocked** by `native-import-state-30` (see
-FRICTION.md). After that owner repairs the importer, native invocation is:
+Build and run the native app with either LLVM or Cranelift:
 
 ```sh
 hirsel build examples/pubsub/hirsel.json --backend llvm -o /tmp/pubsub
@@ -34,7 +33,8 @@ hirsel build examples/pubsub/hirsel.json --backend llvm -o /tmp/pubsub
 ```
 
 Record/replay options precede `--hirsel-grants`; application arguments follow its
-operand. The native matrix and effective widths remain INCOMPLETE.
+operand. The native qualification test covers live Unix workflows, requested
+widths 1/2/4, and immutable replay; see FRICTION.md for remaining obligations.
 
 The server prints `{"listening":true}` after bind. Wait for that handshake before
 connecting. `serve SOCKET ADMISSIONS MILLISECONDS JOBS` stops when the admission
@@ -113,7 +113,7 @@ documentation are excluded.
 
 Focused verification uses `pubsub_relay_30` on the CLI shard-1 target. Four tests
 cover complete scripted workflows, boundaries, actual credit finalizers, real
-Unix peers and reference/checked-H replay. The fifth, native qualification, is
-explicitly ignored with its owner and original diagnostic. This is an interpreter
-deliverable with incomplete native, slow-reader and partial-reservation obligations;
-the independent event model is supplementary evidence only.
+Unix peers and reference/checked-H replay. The fifth exercises LLVM and Cranelift
+builds, scripted workflows, live Unix peers and immutable tape replay. Slow-reader
+and partial-reservation obligations remain separate; the independent event model
+is supplementary evidence only.

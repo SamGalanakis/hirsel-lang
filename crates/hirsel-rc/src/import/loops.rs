@@ -152,12 +152,28 @@ impl Importer<'_> {
             target: table.target,
             abi: self.instances.abis[self.id.index()],
         });
+        // A proven match may remove the only path into a TIR block. Only
+        // those reserved, never-emitted blocks may lack a terminator; other
+        // missing terminators remain importer errors. Editor removes the
+        // placeholders and any downstream code left unreachable by pruning.
+        let unemitted: BTreeSet<BlockId> = self
+            .tir_block
+            .iter()
+            .zip(&self.incoming)
+            .filter_map(|(block, incoming)| incoming.is_none().then_some(*block).flatten())
+            .collect();
+        let prune = !unemitted.is_empty();
         let out = std::mem::take(&mut self.out);
         let mut pools = out.pools;
         let mut tables = out.tables;
         let mut values = out.values;
         let mut incoming: BTreeMap<ValueId, Vec<ValueId>> = BTreeMap::new();
         for edge in &out.edges {
+            // An emitted edge must have propagated an ownership state. Dead
+            // placeholders are removable only when no emitted edge names them.
+            if unemitted.contains(&edge.target) {
+                return malformed(format!("block {} has no incoming state", edge.target.0));
+            }
             let target = &out.blocks[edge.target.index()];
             let mut args = edge.args.clone();
             for &(slot, _) in &target.phis {
@@ -200,8 +216,10 @@ impl Importer<'_> {
             let parameters = PoolRange::push(&mut pools.values, params);
             let start = unit.instructions.len() as u32;
             unit.instructions.extend(block.insts);
-            let Some(term) = block.term else {
-                return malformed(format!("block {i} has no terminator"));
+            let term = match block.term {
+                Some(term) => term,
+                None if unemitted.contains(&BlockId(i as u32)) => Terminator::Unreachable,
+                None => return malformed(format!("block {i} has no terminator")),
             };
             unit.blocks.push(Block {
                 kind: block.kind,
@@ -252,6 +270,10 @@ impl Importer<'_> {
         }
         unit.tables = tables;
         unit.pools = pools;
-        Ok(unit)
+        Ok(if prune {
+            crate::insert::Editor::new(unit).finish()
+        } else {
+            unit
+        })
     }
 }

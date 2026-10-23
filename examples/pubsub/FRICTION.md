@@ -39,7 +39,11 @@ link-kit hashes and stderr are in `pubsub-native-jNDrUL/`. The shared importer
 failure precedes backend choice. A standalone flow-module build is a successful
 reduction control, not application acceptance. Owner: `native-import-state-30`.
 The coordinator explicitly requested landing the interpreter app with the native
-qualification test ignored and this owner named. No V/import check is disabled.
+qualification test ignored and this owner named. The importer repair now leaves
+arms removed by proven pattern tests un-emitted and prunes them before LIR
+validation. The minimized witness is a string-payload or-pattern with a nested
+match, from `wire.encode`; it needs no sockets or tasks. Native qualification is
+re-enabled. No V/import check is disabled.
 
 Bounded app coverage: 18 workflows + 11 boundaries on reference and checked H,
 58 completed observations. Boundaries include topic64/65, data192/193,
@@ -54,8 +58,7 @@ Args mutation proves binding refusal. Actual credit-finalizer vectors cover
 four permits, one-over refusal, drop/reuse, two generic envelope payloads and
 queued-disconnect loss on both reference and checked H.
 
-**INCOMPLETE:** LLVM/Cranelift app execution, native tapes/replay and production
-Ordered effective widths1/2/4; actual blocked socket writes, full-app slow/fast
+**INCOMPLETE:** actual blocked socket writes, full-app slow/fast
 reader backpressure, unsubscribe while partially reserved, sender disconnect
 after partial reservation, and full-app pending cap4/one-over. The independent
 model covers these decisions but is not a substitute for full-app observations.
