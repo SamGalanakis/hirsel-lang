@@ -188,8 +188,10 @@ fn consuming_closure(capture_usage: UseKind, multiplicity: Multiplicity, calls: 
     let sty = f.body().places[y as usize].ty;
     let mut nested = empty_body(&mut f);
     let cap = add_capture(&mut nested, sty);
-    nested.add_cleanup(vec![drop(cap)]);
-    nested.blocks[0].terminator = ret(0, 1);
+    if multiplicity == Multiplicity::Once {
+        nested.add_cleanup(vec![drop(cap)]);
+        nested.blocks[0].terminator = ret(0, 1);
+    }
     f.definition.bodies.push(nested);
     let c = f.slot(TypeKind::Function(fn_type(vec![], unit)), Storage::Local);
     let ct = f.body().places[c as usize].ty;
@@ -278,9 +280,7 @@ fn p5a_closure_type_forges_authority_of_its_captures() {
         let d = param(&mut f, kind);
         let dty = f.body().places[d as usize].ty;
         let mut nested = empty_body(&mut f);
-        let cap = add_capture(&mut nested, dty);
-        nested.add_cleanup(vec![drop(cap)]);
-        nested.blocks[0].terminator = ret(0, 1);
+        add_capture(&mut nested, dty);
         f.definition.bodies.push(nested);
         let c = f.slot(
             TypeKind::Function(fn_type(vec![], unit)),
@@ -330,9 +330,7 @@ fn p5b_closure_type_forges_sendability() {
     let x = param(&mut f, string_kind());
     let sty = f.body().places[x as usize].ty;
     let mut nested = empty_body(&mut f);
-    let cap = add_capture(&mut nested, sty);
-    nested.add_cleanup(vec![drop(cap)]);
-    nested.blocks[0].terminator = ret(0, 1);
+    add_capture(&mut nested, sty);
     f.definition.bodies.push(nested);
     let c = f.slot(
         TypeKind::Function(fn_type(vec![], unit)),
@@ -9293,9 +9291,7 @@ fn copied_aggregate_captures_do_not_reuse_descendant_proofs() {
     source.modes.sendability = Sendability::NotSendable;
     let copied = f.definition.types.push(source);
     let mut nested = empty_body(&mut f);
-    let cap = add_capture(&mut nested, copied);
-    nested.add_cleanup(vec![drop(cap)]);
-    nested.blocks[0].terminator = ret(0, 1);
+    add_capture(&mut nested, copied);
     f.definition.bodies.push(nested);
     let closure = f.slot(
         TypeKind::Function(fn_type(vec![], unit)),

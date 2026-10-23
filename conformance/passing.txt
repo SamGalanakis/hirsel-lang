@@ -493,6 +493,12 @@ conformance/CLO/CLO-4-borrowed-resource-global-bad.hir
 conformance/CLO/CLO-4-borrowed-resource-global-ok.hir
 conformance/CLO/CLO-4-capture-authority-declared-bad.hir
 conformance/CLO/CLO-4-capture-authority-declared-ok.hir
+conformance/CLO/CLO-4-closure-copy-resource-27-atomic-run.hir
+conformance/CLO/CLO-4-closure-copy-resource-27-direct-run.hir
+conformance/CLO/CLO-4-closure-copy-resource-27-mutex-run.hir
+conformance/CLO/CLO-4-closure-copy-resource-27-plain-run.hir
+conformance/CLO/CLO-4-closure-copy-resource-27-shared-run.hir
+conformance/CLO/CLO-4-closure-copy-resource-27-unsendable-run.hir
 conformance/CLO/CLO-4-contract6-adapters-run.hir
 conformance/CLO/CLO-4-contract6-callable-type-ok.hir
 conformance/CLO/CLO-4-contract6-callback-copy-bad.hir
@@ -6942,6 +6948,7 @@ conformance/SEM/SEM-4-range-value-untyped-stored-bad.hir
 conformance/SEM/SEM-4-relation-array-string-loop-run.hir
 conformance/SEM/SEM-4-relation-array-tuple-loop-run.hir
 conformance/SEM/SEM-4-relation-list-tuple-loop-run.hir
+conformance/SEM/SEM-4-scope-closure-origin-27-run.hir
 conformance/SEM/SEM-4-set-borrow.hir
 conformance/SEM/SEM-4-set-cursor-last-use-run.hir
 conformance/SEM/SEM-4-set-source-after-take.hir
@@ -7235,4 +7242,3 @@ conformance/STORE/STORE-6-set-key-bad.hir
 conformance/STORE/STORE-6-set-key-ok.hir
 conformance/STORE/STORE-6-simd-key-bad.hir
 conformance/STORE/STORE-6-simd-key-ok.hir
-conformance/SEM/SEM-4-scope-closure-origin-27-run.hir

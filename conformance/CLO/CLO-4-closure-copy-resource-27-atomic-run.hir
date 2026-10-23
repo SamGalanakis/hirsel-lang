@@ -1,0 +1,19 @@
+// rule: CLO-4
+// expect: run
+// Many-callable invocations borrow the environment; handle copies retain their root.
+fn invoke(take f: sendable fn() -> ()) {
+  let g = unique copy f
+  g()
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let tasks = test.tasks(t)
+  let m = atomic.create(tasks, 0u64)
+  invoke(
+    fn() {
+      atomic.store(tasks, m, 1)
+    }
+  )
+  test.check(t, atomic.load(tasks, m) == 1)
+  Ok(())
+}

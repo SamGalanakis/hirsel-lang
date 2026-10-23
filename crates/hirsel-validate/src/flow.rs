@@ -557,6 +557,11 @@ impl Model {
         let inputs = checker
             .scratch
             .definition_inputs(checker.t, checker.definition);
+        // Copy/Take describes construction of the environment, not ownership
+        // at every call. A many-callable lends even its owned fields; only a
+        // once-callable transfers them to the invocation. In particular its
+        // body must not drop a handle still owned by the environment.
+        let lends_captures = inputs.producers[checker.site.body.0 as usize].lends_captures;
         for &(owner, value) in &inputs.producers[checker.site.body.0 as usize].captures {
             work::count(Counter::ValidateDefinitionInputRows);
             let Rvalue::Closure { captures, .. } =
@@ -570,7 +575,8 @@ impl Model {
                 .enumerate()
                 .filter(|(_, local)| local.storage == Storage::Capture);
             for ((index, _), operand) in slots.zip(captures) {
-                borrowed[index] = matches!(operand.usage, UseKind::Borrow | UseKind::Mut);
+                borrowed[index] =
+                    lends_captures || matches!(operand.usage, UseKind::Borrow | UseKind::Mut);
                 mutable_parameters[index] = operand.usage == UseKind::Mut;
             }
         }

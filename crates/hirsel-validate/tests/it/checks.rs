@@ -921,8 +921,8 @@ fn copied_capture_fixture(source: Uniqueness, capture: Uniqueness) -> Fixture {
     let capture_ty = nested.definition.types.push(capture_ty);
     nested.body().locals[slot as usize].ty = capture_ty;
     nested.body().places[slot as usize].ty = capture_ty;
-    let cleanup = nested.cleanup(vec![drop(slot)]);
-    nested.body().blocks[0].terminator = ret(0, cleanup);
+    // The environment owns the copied field; each many invocation only borrows it.
+    nested.body().blocks[0].terminator = ret(0, 0);
     f.definition.types = nested.definition.types;
     f.definition.bodies.push(nested.definition.bodies.remove(0));
 
@@ -1000,6 +1000,9 @@ fn take_capture_types_remain_exact() {
         let root = f.body().places[closure].root;
         f.body().places[closure].ty = ty;
         f.body().locals[root.0 as usize].ty = ty;
+        let nested = &mut f.definition.bodies[1];
+        nested.add_cleanup(vec![drop(1)]);
+        nested.blocks[0].terminator = ret(0, 1);
         f
     };
     // dd474e53 compares neutral shapes for a whole take: a fresh unique

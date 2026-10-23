@@ -76,6 +76,7 @@ impl Scratch {
 pub(super) struct Producer {
     pub(super) first_function: Option<hirsel_types::TypeId>,
     pub(super) last_header: Option<hirsel_types::TypeId>,
+    pub(super) lends_captures: bool,
     pub(super) captures: Vec<(hirsel_tir::BodyId, hirsel_tir::RvalueId)>,
 }
 pub(super) struct DefinitionInputs {
@@ -100,6 +101,9 @@ impl DefinitionInputs {
                     if let Rvalue::Closure { body: nested, .. } = body.rvalues[value.0 as usize] {
                         let producer = &mut producers[nested.0 as usize];
                         let ty = body.places[destination.0 as usize].ty;
+                        producer.lends_captures |= t.get(ty).is_some_and(|row| {
+                            row.modes.multiplicity != hirsel_types::Multiplicity::Once
+                        });
                         if producer.first_function.is_none()
                             && t.get(ty).is_some_and(|row| {
                                 matches!(row.kind, hirsel_types::TypeKind::Function(_))

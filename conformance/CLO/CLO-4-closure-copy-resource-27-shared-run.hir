@@ -1,0 +1,35 @@
+// rule: CLO-4
+// expect: run
+// Many-callable invocations borrow the environment; handle copies retain their root.
+fn invoke(take f: sendable fn() -> ()) {
+  let g = unique copy f
+  g()
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let tasks = test.tasks(t)
+  let m = shared.freeze(unique 7u64)
+  invoke(
+    fn() {
+      failure.check(
+        shared.with(
+          m,
+          fn(n: u64) -> u64 uses {} {
+            n
+          }
+        ) == 7,
+        TextInvariant()
+      )
+    }
+  )
+  test.check(
+    t,
+    shared.with(
+      m,
+      fn(n: u64) -> u64 uses {} {
+        n
+      }
+    ) == 7
+  )
+  Ok(())
+}

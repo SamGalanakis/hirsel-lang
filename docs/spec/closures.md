@@ -251,6 +251,12 @@ captures and outer `let mut` bindings are forbidden. A taken immutable Receiver 
 rebound `let mut` inside the child before receiving. Scoped closures borrow; an owning once
 scope-body parameter may take captures without becoming global.
 
+A many-callable invocation borrows its environment, including fields copied when the
+environment was built; the environment releases those fields when it ends. A once-callable
+transfers its owned captures to its invocation. Copying a copyable environment retains
+handle roots, and a deep copy stops at `Shared`, `Mutex` and `Atomic` boundaries
+([MODE-2](ownership.md#mode-2-uniqueness)); it does not duplicate their payloads.
+
 ```hirsel
 fn adder(k: u64) -> fn(u64) -> u64 {
   fn(x: u64) -> u64 { x + k }       // k is plain: copied into the environment

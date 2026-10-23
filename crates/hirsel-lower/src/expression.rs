@@ -1769,8 +1769,13 @@ impl Builder<'_, '_> {
             capture_rows.push((owner, capture));
         }
         let mut child = Builder::new(self.input, self.decisions, owner, result)?;
+        // A many-callable lends its environment to each invocation. Only a
+        // once-callable transfers owned captures into the body; the environment
+        // otherwise remains their owner and releases them when it is dropped.
+        let once =
+            self.types.get(info.ty).unwrap().modes.multiplicity == hirsel_types::Multiplicity::Once;
         for (owner, capture) in capture_rows {
-            let owned = !matches!(capture.usage, UseKind::Borrow | UseKind::Mut);
+            let owned = once && !matches!(capture.usage, UseKind::Borrow | UseKind::Mut);
             let slot = child.slot(capture.ty, Storage::Capture, span, owned);
             child.state.live.insert(child.root(slot).0);
             child.body.places[slot.0 as usize].binding =

@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "standalone",
+    "version": "0"
+  },
+  "entry": {
+    "module": [],
+    "name": "main"
+  },
+  "sources": [
+    {
+      "path": "CLO-4-closure-copy-resource-27-direct-run.hir",
+      "module": []
+    }
+  ],
+  "dependencies": []
+}

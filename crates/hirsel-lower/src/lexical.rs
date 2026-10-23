@@ -167,7 +167,9 @@ impl Builder<'_, '_> {
                 capture_ty,
                 Storage::Capture,
                 span,
-                matches!(capture_usage, UseKind::Copy | UseKind::Take),
+                self.types.get(row.ty).unwrap().modes.multiplicity
+                    == hirsel_types::Multiplicity::Once
+                    && matches!(capture_usage, UseKind::Copy | UseKind::Take),
             );
             child.state.live.insert(child.root(slot).0);
             child.body.places[slot.0 as usize].binding = capture_binding;
