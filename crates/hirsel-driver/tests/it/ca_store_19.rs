@@ -2691,3 +2691,36 @@ fn ordinary_read_only_executed_helper_keeps_its_check_product() {
         }
     });
 }
+
+#[test]
+fn ordinary_generated_package_reopens_without_signature_or_constructor_errors() {
+    with_compiler_stack(|| {
+        let scratch = tempfile::tempdir().unwrap();
+        let dir = scratch.path();
+        std::fs::write(dir.join("model.hir"),"pub type Draft { title:String }\nfn generator()->Result[Body[fn() -> u32 uses {}],String]{Ok(codegen.body(\"fn() -> u32 uses {} { 1u32 }\"))}\npub fn generated()->u32 uses {}=comptime generator()\n").unwrap();
+        std::fs::write(
+            dir.join("client.hir"),
+            "fn make()->Draft{Draft(title:\"x\")}\n",
+        )
+        .unwrap();
+        let manifest = dir.join("hirsel.json");
+        std::fs::write(&manifest,serde_json::json!({"schema":1,"package":{"name":"library","version":"1"},"sources":[{"path":"model.hir","module":["model"]},{"path":"client.hir","module":["model"]}],"dependencies":[]}).to_string()).unwrap();
+        let compiler = COMPILER.clone().with_config(CompileConfig {
+            store: Arc::new(store::DirStore::new(dir.join("products"))),
+            jobs: hirsel_intern::jobs::Jobs::new(1),
+            ..CompileConfig::for_memory_cap(None)
+        });
+        for pass in ["cold", "warm"] {
+            let mut reader = compiler.load_check_package(&manifest).unwrap();
+            let output = reader
+                .check(LoweringPolicy::Reachable)
+                .unwrap_or_else(|e| panic!("{pass}: {e:?}"));
+            assert_eq!(output.completion, CheckCompletion::Complete, "{pass}");
+            assert!(
+                output.diagnostics.is_empty(),
+                "{pass}: {:?}",
+                output.diagnostics
+            );
+        }
+    });
+}
