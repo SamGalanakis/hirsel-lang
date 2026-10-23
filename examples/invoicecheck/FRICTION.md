@@ -127,3 +127,13 @@ Focused shared-parser/CLI tests cover the diagnostic, cwd independence,
 relocation, nested runner mounts, escaped paths and authority controls. This
 resolution does not claim that this example's native application matrix was
 rerun.
+
+## Nested JSON diagnostic resolution (2026-10-23)
+
+Landed in `66a5b0288e76496d525e829f2db8fefc0cc614a8`: ordinary JSON encoding now labels
+the enclosing `Report.invoices` source field when `invoice_to_json` is missing
+or has the wrong contract. The label gives the canonical helper path and
+directional borrowed-argument signature, alongside the original rule, generated
+failure span and comptime origin. The explicit `invoice_to_json` helper remains
+necessary and is retained. See the [complete nested JSON helper recipe](../../docs/spec/std-library.md#nested-json-helpers).
+The earlier failed attempt above records the historical diagnostic unchanged.

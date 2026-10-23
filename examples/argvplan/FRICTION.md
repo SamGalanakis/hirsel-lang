@@ -57,3 +57,13 @@ supplies the pinned LLVM/link kit/runtime inputs. This is host setup, not a
 source diagnostic or an application engine failure. No cap was raised and no
 fixture was shrunk. No additional application workaround or compiler/std
 change was needed in the enumerated engine scenarios. No open routed issue.
+
+## Nested JSON diagnostic resolution (2026-10-23)
+
+Landed in `66a5b0288e76496d525e829f2db8fefc0cc614a8`: ordinary JSON encoding now labels
+the enclosing `Plan.commands` source field when `command_plan_to_json` is missing
+or has the wrong contract. The label gives the canonical helper path and
+directional borrowed-argument signature, alongside the original rule, generated
+failure span and comptime origin. The explicit `command_plan_to_json` helper remains
+necessary and is retained. See the [complete nested JSON helper recipe](../../docs/spec/std-library.md#nested-json-helpers).
+The earlier failed attempt above records the historical diagnostic unchanged.
