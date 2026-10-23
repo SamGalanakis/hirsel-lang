@@ -1996,9 +1996,9 @@ impl QueryEngine {
         let variant = self.stored_variant(path, QueryKind::Evaluate)?;
         let record: EvaluationRecord = self.decode_record(&variant.payload)?;
         let mut value = record.constant;
-        let syntax = self.snapshot(path).ok()?;
-        if record.owner != syntax.owner().def
-            || !matches!(syntax.item.kind, hirsel_syntax::ItemKind::Const { .. })
+        let (owner, shape) = self.lexical_shape(path)?;
+        if record.owner != owner.def
+            || !self.source_facts(path)?.constant
             || value.executed != variant.reads
             || !self.portable_evaluation_reads(&value)
             || value.depth.first.len() != self.depth_limit() as usize + 1
@@ -2011,7 +2011,7 @@ impl QueryEngine {
             || value
                 .substitutions
                 .iter()
-                .any(|(id, _)| syntax.tree.expressions.get(id.0 as usize).is_none())
+                .any(|(id, _)| !shape.valid_site(hirsel_types::NameSite::Expression(*id)))
         {
             return None;
         }
@@ -2037,6 +2037,41 @@ impl QueryEngine {
         self.store_adoptions += 1;
         Some(value)
     }
+    /// S1 may first compute a signature while persistence is withheld. Once
+    /// execution settles, publish only its already checked, current signature
+    /// closure so the value's prior reads can be validated in a fresh process.
+    fn store_observed_signatures(&mut self, reads: &Reads) -> Result<(), QueryError> {
+        let mut pending: BTreeSet<_> = reads
+            .iter()
+            .filter_map(|(read, _)| match read {
+                ReadKey::Signature(id) | ReadKey::ExecutedSignature(id) => Some(*id),
+                _ => None,
+            })
+            .collect();
+        let mut seen = BTreeSet::new();
+        while let Some(id) = pending.pop_first() {
+            if !seen.insert(id) {
+                continue;
+            }
+            let Some(entry) = self
+                .signatures
+                .get(&id)
+                .cloned()
+                .filter(|entry| entry.consistent && !self.graph.is_dirty(&entry.memo.key))
+            else {
+                continue;
+            };
+            for (read, _) in entry.reads().iter() {
+                if let ReadKey::Signature(dependency) | ReadKey::ExecutedSignature(dependency) =
+                    read
+                {
+                    pending.insert(*dependency);
+                }
+            }
+            self.store_signature(id.path(), &entry)?;
+        }
+        Ok(())
+    }
     pub(crate) fn store_evaluation(
         &mut self,
         path: &DefPath,
@@ -2045,6 +2080,7 @@ impl QueryEngine {
         if self.result_store.is_none() || !self.s1.is_empty() || !self.s1.failure_is_own() {
             return Ok(());
         }
+        self.store_observed_signatures(&value.executed)?;
         let Some(value) = persisted_evaluation(value) else {
             return Ok(());
         };
