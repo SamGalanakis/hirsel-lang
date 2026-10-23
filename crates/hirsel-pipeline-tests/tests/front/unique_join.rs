@@ -124,6 +124,52 @@ fn unique_if_join_matches_reference_heap_llvm_and_cranelift() {
                 include_str!("../../../../conformance/MODE/MODE-2-unique-bound-join-run.hir"),
                 b"a\nb\nb\n".as_slice(),
             ),
+            (
+                "history",
+                r#"fn need(take xs:unique List[u64])->u64 {list.len(xs)}
+fn branch(flag:bool)->u64 {
+  let mut xs:unique List[u64]=[1u64]
+  if flag {{let alias=copy xs};xs=[2u64,3u64]}
+  need(take xs)
+}
+fn cycle(n:u64)->u64 {
+  let mut xs:unique List[u64]=[1u64]
+  let mut i=0u64
+  while i<n {
+    let saved=copy xs
+    xs=[2u64,3u64]
+    failure.check(list.len(saved)==if i==0u64 {1u64} else {2u64},Bounds())
+    i=i+1u64
+    continue
+  }
+  need(take xs)
+}
+fn early(flag:bool)->u64 {
+  let xs:unique List[u64]=[1u64]
+  if flag {let alias=copy xs;return list.len(alias)}
+  need(take xs)
+}
+type Pair {left:List[u64],right:List[u64]}
+fn pair(flag:bool)->u64 {
+  let mut xs:unique Pair=Pair(left:[1u64],right:[2u64])
+  {let alias=copy xs.left}
+  if flag {xs.right=[3u64]}
+  xs=Pair(left:[4u64],right:[5u64])
+  let repaired:unique Pair=take xs
+  list.len(repaired.left)+list.len(repaired.right)
+}
+pub fn main(rt:Io,args:Args)->Result[(),GrantError] {
+  failure.check(branch(false)==1u64&&branch(true)==2u64,Bounds())
+  failure.check(cycle(0u64)==1u64&&cycle(1u64)==2u64&&cycle(2u64)==2u64,Bounds())
+  failure.check(early(false)==1u64&&early(true)==1u64,Bounds())
+  failure.check(pair(false)==2u64&&pair(true)==2u64,Bounds())
+  let output=io.stdout(rt)?
+  let _=out.print(output,"history-ok\n")
+  Ok(())
+}
+"#,
+                b"history-ok\n".as_slice(),
+            ),
         ] {
             let mut engine =
                 QueryEngine::new(default_environment(), hirsel_driver::compiler_adapters());

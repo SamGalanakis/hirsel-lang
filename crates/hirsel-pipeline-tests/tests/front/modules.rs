@@ -44,3 +44,4 @@ mod prov4_owner_placement;
 mod sequence_inference_17;
 mod unique_copy_17;
 mod generic_result_v_21;
+mod unique_join_history;

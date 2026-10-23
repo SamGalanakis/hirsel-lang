@@ -665,3 +665,180 @@ fn derived_cleanup_is_rebuilt_from_rows_instead_of_trusting_cached_roots() {
         assert_eq!(rebuilt[2], vec![1]);
     });
 }
+
+/// Test-shape port of rustc_mir_dataflow initialized.rs:255-303 and
+/// framework/tests.rs:1-68 at 19833af (MIT, Rust Project Contributors):
+/// observe before/after effects separately. Hirsel owners, not Rust move bits,
+/// determine the expected state. Disconnected-CFG rejection is covered in it.
+#[test]
+fn owner_histories_keep_shares_until_a_fresh_whole_replacement() {
+    use crate::support::{Table, drop, operand, take};
+    let mut f = Fixture::unit();
+    let root = param(&mut f, TypeKind::Primitive(Primitive::String));
+    let mut row = interner()
+        .get(f.body().places[root as usize].ty)
+        .unwrap()
+        .clone();
+    row.modes.uniqueness = hirsel_types::Uniqueness::Unique;
+    let unique = f.definition.types.push(row);
+    f.body().locals[root as usize].ty = unique;
+    f.body().places[root as usize].ty = unique;
+    let alias = f.slot(TypeKind::Primitive(Primitive::String), Storage::Local);
+    let cleanup = f.cleanup(vec![drop(root)]);
+    f.assign(alias, Rvalue::Use(copy(root)), cleanup);
+    f.body().blocks[0].instructions.push(inst(
+        InstructionKind::Drop {
+            place: PlaceId(alias),
+            if_live: false,
+        },
+        cleanup,
+    ));
+    let share = f.body().blocks[0].instructions.split_off(1);
+    f.assign(root, Rvalue::Constant(Constant::String("fresh".into())), 0);
+    let fresh = f.body().blocks[0].instructions.pop().unwrap();
+    let condition = param(&mut f, TypeKind::Primitive(Primitive::U64));
+    f.body().blocks[0].terminator = Terminator::Switch {
+        value: copy(condition),
+        arms: vec![(1, BlockId(1)), (2, BlockId(2))],
+        otherwise: BlockId(3),
+    };
+    f.body().blocks.extend([
+        block(share, Terminator::Goto(BlockId(4))),
+        block(
+            vec![
+                inst(
+                    InstructionKind::Drop {
+                        place: PlaceId(root),
+                        if_live: false,
+                    },
+                    0,
+                ),
+                fresh,
+            ],
+            Terminator::Goto(BlockId(4)),
+        ),
+        block(
+            vec![
+                inst(
+                    InstructionKind::BeginLoan {
+                        id: LoanId(0),
+                        place: PlaceId(root),
+                        mutable: false,
+                        if_inactive: false,
+                    },
+                    cleanup,
+                ),
+                inst(
+                    InstructionKind::EndLoan {
+                        loan: LoanId(0),
+                        if_active: false,
+                    },
+                    cleanup,
+                ),
+            ],
+            Terminator::Goto(BlockId(4)),
+        ),
+    ]);
+    f.body()
+        .blocks
+        .push(block(vec![], crate::support::ret(0, cleanup)));
+    owner_sig(&mut f, &[PassingMode::Take, PassingMode::Borrow]);
+    f.valid();
+    with_model(&f, |checker, model, initial| {
+        // Each graph has possible concrete owners. Fresh installs a new
+        // graph; EndLoan leaves its owners alone. No production join supplies
+        // an expectation. Enumerate 1+3+9+27 histories and all 1600 pairs.
+        let mut histories = vec![vec![]];
+        for length in 1..=3 {
+            for code in 0..3usize.pow(length) {
+                let mut code = code;
+                let mut history = vec![];
+                for _ in 0..length {
+                    history.push(code % 3 + 1);
+                    code /= 3;
+                }
+                histories.push(history);
+            }
+        }
+        let mut outcomes = vec![];
+        for history in &histories {
+            let mut owners = BTreeSet::from([0usize]);
+            let mut state = initial.clone();
+            for &event in history {
+                assert_eq!(
+                    checker.operand_unique(&state, &take(root)),
+                    owners.len() == 1,
+                    "before {history:?}"
+                );
+                match event {
+                    1 => {
+                        owners.insert(1);
+                    }
+                    2 => {
+                        owners = BTreeSet::from([0]);
+                    }
+                    3 => (),
+                    _ => unreachable!(),
+                }
+                checker.transfer(model, &mut state, BlockId(event as u32), true);
+                assert_eq!(
+                    checker.operand_unique(&state, &operand(root, UseKind::Mut)),
+                    owners.len() == 1,
+                    "after {history:?}"
+                );
+            }
+            outcomes.push((state, owners));
+        }
+        for (a, owners_a) in &outcomes {
+            for (b, owners_b) in &outcomes {
+                let alternatives = [owners_a, owners_b];
+                let expected = alternatives.iter().all(|owners| owners.len() == 1);
+                let mut joined = a.clone();
+                joined.join(b, model);
+                assert_eq!(checker.operand_unique(&joined, &take(root)), expected);
+                assert_eq!(joined.shared[root as usize], !expected);
+            }
+        }
+        assert_eq!(histories.len(), 40);
+        assert!(checker.errors.is_empty(), "{:?}", checker.errors);
+    });
+}
+
+#[test]
+fn crossing_guarantees_and_bounds_have_separate_must_and_may_orders() {
+    let mut f = Fixture::unit();
+    param(&mut f, TypeKind::Primitive(Primitive::String));
+    owner_sig(&mut f, &[PassingMode::Take]);
+    with_model(&f, |_, model, initial| {
+        // Missing positive evidence cannot certify the other path. Explicit
+        // negative evidence survives even when the other path has no entry.
+        for a in [None, Some(false), Some(true)] {
+            for b in [None, Some(false), Some(true)] {
+                let mut left = initial.clone();
+                let mut right = initial.clone();
+                let path = [crossing::Part::Field(0)];
+                if let Some(a) = a {
+                    left.crossing_parts[1].set(&path, a);
+                }
+                if let Some(b) = b {
+                    right.crossing_parts[1].set(&path, b);
+                }
+                left.sources[1].insert(2);
+                right.sources[1].insert(3);
+                left.current_unique.set(1, a == Some(true));
+                right.current_unique.set(1, b == Some(true));
+                left.join(&right, model);
+                let expected = if a == Some(false) || b == Some(false) {
+                    Some(false)
+                } else if a == Some(true) && b == Some(true) {
+                    Some(true)
+                } else {
+                    None
+                };
+                assert_eq!(left.crossing_parts[1].get(&path), expected);
+                assert_eq!(left.current_unique[1], a == Some(true) && b == Some(true));
+                assert_eq!(left.sources[1], BTreeSet::from([2, 3]));
+            }
+        }
+    });
+}
