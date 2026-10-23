@@ -191,3 +191,8 @@ width, while consumed Path identities and recorded inputs may remain retained.
 Selected paths still use separate metadata and open operations, without an atomic
 no-follow snapshot guarantee. The unique-record, bounded-copy and capability
 plumbing findings above remain applicable.
+
+Streaming documentation and permanent cap/effect coverage landed in
+`dfb8bfab3ddac7f415d1a4939b9cc475388d7c95`: six new bounded partitions prove
+32 app observations across four engines; the existing 83-case app harness and
+two cursor controls also pass. The cap loop and provider remain unchanged.
