@@ -392,6 +392,42 @@ fn valid_ownership(syntax: &ItemSyntax, facts: &OwnershipFacts) -> bool {
 }
 
 #[derive(Serialize, Deserialize)]
+struct Registrations {
+    owner: DefId,
+    rows: Vec<crate::comptime::StagedRegistration>,
+}
+impl Registrations {
+    fn valid(&self, syntax: &ItemSyntax, types: &hirsel_types::TypeInterner) -> bool {
+        self.owner == syntax.owner().def
+            && !self.rows.is_empty()
+            && self.rows.windows(2).all(|w| w[0].path < w[1].path)
+            && self.rows.iter().all(|row| {
+                let constant = &row.constant;
+                let valid_signature = matches!(&constant.signature.kind,
+                    hirsel_types::SignatureKind::Const { generics, .. }
+                        if generics.len() == constant.inputs.len()
+                            && generics.iter().all(|p| matches!(p, hirsel_types::GenericParameter::Size { .. })));
+                constant.owner == syntax.item.definition
+                    && row.path.0.package == constant.owner.0.package
+                    && row.path.0.modules == constant.owner.0.modules
+                    && row.path.0.name.starts_with(&format!("$comptime:{}:", constant.owner.0.name))
+                    && constant.signature.definition == DefId::intern(&row.path)
+                    && valid_signature
+                    && hirsel_types::encoding::fingerprint(types, &constant.signature, &[])
+                        .is_ok_and(|hash| hash == constant.signature.fingerprint)
+                    && !constant.inputs.is_empty()
+                    && constant.inputs.windows(2).all(|w| w[0] < w[1])
+                    && constant.inputs.iter().all(|p| match p.binder() {
+                        hirsel_types::GenericBinder::Body(scope) => scope.owner == syntax.owner() && valid_site(syntax, scope.site),
+                        hirsel_types::GenericBinder::Bound(_) => false,
+                    })
+                    && syntax.tree.expressions.get(constant.expression.0 as usize)
+                        .is_some_and(|e| matches!(e.kind, hirsel_syntax::ExprKind::Comptime(_)))
+            })
+    }
+}
+
+#[derive(Serialize, Deserialize)]
 struct LowerRecord {
     depth: crate::memo::DepthEvidence<Span>,
     output: QueryOutput<hirsel_tir::DefinitionRef>,
@@ -1059,6 +1095,61 @@ impl QueryEngine {
         self.pending_store_checks
             .remove(&(DefId::intern(path), QueryKind::Modes));
     }
+    pub(crate) fn load_registrations(&mut self, path: &DefPath) -> Option<()> {
+        if !self.s1.is_empty() {
+            return None;
+        }
+        let variant = self.stored_variant(path, QueryKind::Registration)?;
+        let record: Registrations = self.decode_record(&variant.payload)?;
+        let syntax = self.snapshot(path).ok()?;
+        if !record.valid(&syntax, &self.types) {
+            return None;
+        }
+        if self.verify_store == crate::store::VerifyStore::Recompute {
+            self.pending_store_checks.insert(
+                (DefId::intern(path), QueryKind::Registration),
+                Expected::capture(variant, &mut self.store_check_spool),
+            );
+            return None;
+        }
+        for row in record.rows {
+            self.install_staged(row);
+        }
+        timings::count(Count::StoreHits);
+        self.store_adoptions += 1;
+        Some(())
+    }
+    pub(crate) fn store_registrations(&mut self, path: &DefPath) -> Result<(), QueryError> {
+        if self.result_store.is_none() || !self.s1.is_empty() || !self.s1.failure_is_own() {
+            return Ok(());
+        }
+        let Some(entry) = self
+            .modes
+            .get(&DefId::intern(path))
+            .cloned()
+            .filter(|e| e.consistent)
+        else {
+            return Ok(());
+        };
+        let rows: Vec<_> = self
+            .staged_constants
+            .iter()
+            .filter(|(_, c)| c.owner == *path)
+            .map(|(p, c)| crate::comptime::StagedRegistration {
+                path: p.clone(),
+                constant: c.clone(),
+            })
+            .collect();
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let record = Registrations {
+            owner: DefId::intern(path),
+            rows,
+        };
+        self.write_record(path, QueryKind::Registration, entry.reads(), &record)
+    }
+
     pub(super) fn load_lower(
         &mut self,
         path: &DefPath,
@@ -1299,11 +1390,14 @@ mod malformed_tests {
     }
 
     fn fixture() -> (QueryEngine, Arc<ItemSyntax>) {
+        fixture_source("fn main() { true }")
+    }
+    fn fixture_source(source: &str) -> (QueryEngine, Arc<ItemSyntax>) {
         let mut engine = QueryEngine::new(crate::default_environment(), PhaseAdapters::default())
             .with_result_store(Arc::new(crate::store::MemStore::default()));
         let file = engine
             .sources
-            .add("cache-record.hir", "fn main() { true }".into())
+            .add("cache-record.hir", source.into())
             .unwrap();
         let tokens = hirsel_lexer::lex(file, &engine.sources).tokens;
         let context = crate::default_context();
@@ -1472,6 +1566,102 @@ mod malformed_tests {
                 assert!(engine.load_lower(path).is_none());
                 assert_eq!(engine.store_adoptions(), 0);
                 assert!(engine.pending_store_checks.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn invalid_registration_records_do_not_publish_a_partial_declaration_set() {
+        for verify in [
+            crate::store::VerifyStore::Off,
+            crate::store::VerifyStore::Recompute,
+        ] {
+            for fault in 0..10 {
+                let (mut engine, syntax) = fixture_source("fn main[n:size]()->u64{comptime n}");
+                let path = &syntax.item.definition;
+                let expression = hirsel_syntax::ExprId(
+                    syntax
+                        .tree
+                        .expressions
+                        .iter()
+                        .position(|e| matches!(e.kind, hirsel_syntax::ExprKind::Comptime(_)))
+                        .unwrap() as u32,
+                );
+                let mut hidden = path.clone();
+                hidden.0.name = "$comptime:main:0".into();
+                let mut signature = hirsel_types::Signature {
+                    metadata: Default::default(),
+                    definition: DefId::intern(&hidden),
+                    kind: hirsel_types::SignatureKind::Const {
+                        ty: engine.types.intern(hirsel_types::Type::unit()),
+                        generics: vec![hirsel_types::GenericParameter::Size {
+                            name: "size0".into(),
+                        }]
+                        .into(),
+                    },
+                    fingerprint: ContentHash::default(),
+                };
+                signature.fingerprint =
+                    hirsel_types::encoding::fingerprint(&engine.types, &signature, &[]).unwrap();
+                let mut record = Registrations {
+                    owner: syntax.owner().def,
+                    rows: vec![crate::comptime::StagedRegistration {
+                        path: hidden,
+                        constant: crate::comptime::StagedConstant {
+                            owner: path.clone(),
+                            expression,
+                            signature: Arc::new(signature),
+                            inputs: vec![hirsel_types::SizeParameterRef::body(
+                                hirsel_types::SiteRef {
+                                    owner: syntax.owner(),
+                                    site: hirsel_types::NameSite::Item,
+                                },
+                                hirsel_types::SizeParamId(0),
+                            )],
+                        },
+                    }],
+                };
+                match fault {
+                    0 => (),
+                    1 => record.rows[0].constant.owner = DefPath::core("foreign"),
+                    2 => record.rows[0].path.0.name = "foreign".into(),
+                    3 => record.rows[0].constant.inputs.clear(),
+                    4 => record.rows[0]
+                        .constant
+                        .inputs
+                        .push(hirsel_types::SizeParameterRef::body(
+                            hirsel_types::SiteRef {
+                                owner: syntax.owner(),
+                                site: hirsel_types::NameSite::Item,
+                            },
+                            hirsel_types::SizeParamId(1),
+                        )),
+                    5 => {
+                        record.rows[0].constant.inputs[0] =
+                            hirsel_types::SizeParameterRef::bound(hirsel_types::SizeParamId(0))
+                    }
+                    6 => record.rows[0].constant.expression = hirsel_syntax::ExprId(u32::MAX),
+                    7 => record.rows.push(record.rows[0].clone()),
+                    8 => record.owner = DefId::intern(&DefPath::core("foreign")),
+                    9 => {
+                        Arc::make_mut(&mut record.rows[0].constant.signature).fingerprint =
+                            ContentHash::default()
+                    }
+                    _ => unreachable!(),
+                }
+                engine
+                    .write_record(path, QueryKind::Registration, &Reads::empty(), &record)
+                    .unwrap();
+                engine.verify_store = verify;
+                let hit = engine.load_registrations(path);
+                let accepted = fault == 0 && verify == crate::store::VerifyStore::Off;
+                assert_eq!(hit.is_some(), accepted, "fault {fault}, verify {verify:?}");
+                assert_eq!(engine.staged_constants.len(), usize::from(accepted));
+                assert_eq!(engine.store_adoptions(), u64::from(accepted));
+                assert_eq!(
+                    engine.pending_store_checks.len(),
+                    usize::from(fault == 0 && verify == crate::store::VerifyStore::Recompute)
+                );
             }
         }
     }

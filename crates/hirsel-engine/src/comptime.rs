@@ -29,7 +29,7 @@ fn operational(message: impl Into<String>) -> QueryError {
         message: message.into(),
     })
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub(crate) struct StagedConstant {
     pub owner: DefPath,
     pub expression: ExprId,
@@ -46,7 +46,7 @@ pub(crate) struct StagedDeclarationInput<'a> {
     pub(crate) inputs: Vec<SizeParameterRef>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct StagedRegistration {
     pub(crate) path: DefPath,
     pub(crate) constant: StagedConstant,
@@ -1009,6 +1009,17 @@ impl QueryEngine {
         let types = self.types.clone();
         prepare_staged_types(&types, analyzed, self)
     }
+    /// Demand the declarations introduced by a source definition's staged
+    /// expressions. Publication uses the same complete observed inputs as its
+    /// analyzed body; a durable hit does not restore that body.
+    pub fn register_staged_definition(&mut self, path: &DefPath) -> Result<(), QueryError> {
+        self.prepare_materialization_environment();
+        if self.load_registrations(path).is_some() {
+            return Ok(());
+        }
+        let analyzed = self.mode_query(path)?;
+        self.register_staged(&analyzed.value)
+    }
     pub(crate) fn register_staged(&mut self, analyzed: &AnalyzedBody) -> Result<(), QueryError> {
         let typed = &analyzed.typed;
         for row in &typed.checked.expressions {
@@ -1037,7 +1048,7 @@ impl QueryEngine {
             .prepare(&self.types, &self.memo, &signature)?;
             self.install_staged(registration);
         }
-        Ok(())
+        self.store_registrations(&typed.syntax.item.definition)
     }
     pub(crate) fn install_staged(&mut self, registration: StagedRegistration) {
         let StagedRegistration { path, constant } = registration;
@@ -1382,11 +1393,10 @@ impl QueryEngine {
             }
             let published = self.front_summary(DefId::intern(&path))?;
             let summary = &published.summary;
-            // Registration needs the analyzed body; traversal retains only the
-            // published summary, including on repeated size instantiations.
+            // Registration demands its own compact product; traversal retains only
+            // the published summary, including on repeated size instantiations.
             if !summary.staged.is_empty() && registered.insert(path.clone()) {
-                let analyzed = self.mode_query(&path)?;
-                let registered = self.register_staged(&analyzed.value);
+                let registered = self.register_staged_definition(&path);
                 let released = self.release_batch_front(&path);
                 registered?;
                 released?;

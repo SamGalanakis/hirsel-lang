@@ -1961,8 +1961,7 @@ impl QueryEngine {
                 .result()
                 .is_ok_and(|output| crate::comptime::has_staged_reads(&output.value))
             {
-                let modes = self.mode_query(definition)?;
-                self.register_staged(&modes.value)?;
+                self.register_staged_definition(definition)?;
             }
             if self.verify == Verify::On {
                 if let Ok(output) = entry.result() {
