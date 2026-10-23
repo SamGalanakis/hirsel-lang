@@ -1093,6 +1093,10 @@ fn f1_blocked_terminal_outcome_replays_exactly() {
 
 #[test]
 fn f1_terminal_restoration_rejects_forged_root_and_unconsumed_records() {
+    f1_terminal_restoration_matrix("record", &[("1", None)]);
+}
+
+fn f1_terminal_restoration_matrix(level: &str, dimensions: &[(&str, Option<usize>)]) {
     use hirsel_free::{
         phase::Progress,
         record::{Encoder, Record},
@@ -1106,19 +1110,16 @@ fn f1_terminal_restoration_rejects_forged_root_and_unconsumed_records() {
     )
     .unwrap();
     let path = scratch.path("record");
-    let live = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+    let grants =
+        serde_json::json!({"io":{"tasks":"tasks.free@1","dirs":[]},"args":[],"recording":level});
+    let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+    command
         .args(["run", "--native"])
         .arg(&program)
-        .args([
-            "--cores",
-            "8",
-            "--grants",
-            r#"{"io":{"tasks":"tasks.free@1","dirs":[]},"args":[],"recording":"record"}"#,
-            "--record",
-        ])
-        .arg(&path)
-        .output()
-        .unwrap();
+        .args(["--cores", "8", "--grants", &grants.to_string(), "--record"])
+        .arg(&path);
+    f1_permits(&mut command, 8);
+    let live = bounded_output(&mut command, &program, "root forgery producer");
     assert!(live.status.success(), "{live:?}");
     let original = std::fs::read(&path).unwrap();
     if !hirsel_rt::free_driver::admission_enabled() {
@@ -1187,32 +1188,41 @@ fn f1_terminal_restoration_rejects_forged_root_and_unconsumed_records() {
         ));
         std::fs::write(&path, forged).unwrap();
         for engine in ENGINES {
-            let replay = Command::new(env!("CARGO_BIN_EXE_hirsel"))
-                .arg("run")
-                .args(engine)
-                .arg(&program)
-                .arg("--replay")
-                .arg(&path)
-                .args(["--cores", "1"])
-                .output()
-                .unwrap();
-            assert_eq!(
-                replay.status.code(),
-                Some(hirsel_run_schema::exit::REFUSED),
-                "{mutation} {engine:?}: {replay:?}"
-            );
-            let diagnostic = String::from_utf8_lossy(&replay.stderr);
-            assert!(
-                if mutation == "root" {
-                    // A contradictory terminal/root pair is independently
-                    // invalid before semantic replay begins.
-                    replay.stdout.is_empty()
-                        && diagnostic.contains("Free terminal outcome differs from root cut")
-                } else {
-                    diagnostic.contains("unconsumed") || diagnostic.contains("cut")
-                },
-                "{mutation} {engine:?}: {diagnostic}"
-            );
+            for &(width, permits) in dimensions {
+                let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+                command
+                    .arg("run")
+                    .args(engine)
+                    .arg(&program)
+                    .arg("--replay")
+                    .arg(&path)
+                    .args(["--cores", width]);
+                if let Some(permits) = permits {
+                    f1_permits(&mut command, permits);
+                }
+                let replay = bounded_output(
+                    &mut command,
+                    &program,
+                    &format!("root forgery {mutation} {engine:?} width{width} permits{permits:?}"),
+                );
+                assert_eq!(
+                    replay.status.code(),
+                    Some(hirsel_run_schema::exit::REFUSED),
+                    "{mutation} {engine:?}: {replay:?}"
+                );
+                let diagnostic = String::from_utf8_lossy(&replay.stderr);
+                assert!(
+                    if mutation == "root" {
+                        // A contradictory terminal/root pair is independently
+                        // invalid before semantic replay begins.
+                        replay.stdout.is_empty()
+                            && diagnostic.contains("Free terminal outcome differs from root cut")
+                    } else {
+                        diagnostic.contains("unconsumed") || diagnostic.contains("cut")
+                    },
+                    "{mutation} {engine:?}: {diagnostic}"
+                );
+            }
         }
     }
 }
@@ -3750,4 +3760,75 @@ fn f1_terminal_metadata_width_and_permit_matrix() {
     for level in ["record", "durable"] {
         f1_terminal_metadata_matrix("8", 8, &[("1", 1), ("1", 8), ("8", 1), ("8", 8)], level);
     }
+}
+
+#[test]
+fn f1_terminal_root_and_consumption_width_and_permit_matrix() {
+    if !hirsel_rt::free_driver::admission_enabled() {
+        return;
+    }
+    for level in ["record", "durable"] {
+        f1_terminal_restoration_matrix(
+            level,
+            &[
+                ("1", Some(1)),
+                ("1", Some(8)),
+                ("8", Some(1)),
+                ("8", Some(8)),
+            ],
+        );
+    }
+}
+
+#[test]
+fn f1_bounded_directory_walk_replays_pages_and_late_error_without_tree() {
+    if !hirsel_rt::free_driver::admission_enabled() {
+        return;
+    }
+    // Follow cli/walk_stream.rs's empty-directory and invalid-name cases.
+    // 129 root files cross the fixed 128-entry page boundary once.
+    f1_corpus_matrix_with_io(
+        "bounded-walk",
+        r#"pub type E = Grant(GrantError) | Files(FileError) | Output(OutputError)
+pub fn main(rt: Io) -> Result[(), E] {
+  let _ = io.tasks(rt) ? Grant
+  let out = io.stdout(rt) ? Grant
+  let dir = io.dir(rt, path.of("tree")) ? Files
+  let mut paths = file.walk(dir) ? Files
+  let mut seen = 0u64
+  let mut errors = 0u64
+  while true {
+    match iter.next(mut paths) {
+      None() => break,
+      Some(Ok(_)) => { seen += 1u64 },
+      Some(Error(_)) => { errors += 1u64 },
+    }
+  }
+  failure.check(seen == 130u64, Bounds())
+  failure.check(errors == 1u64, Bounds())
+  failure.check(match iter.next(mut paths) { None() => true, _ => false }, Bounds())
+  out.print(out, "paged walk\n") ? Output
+  Ok(())
+}
+"#,
+        |scratch| {
+            let tree = scratch.path("tree");
+            std::fs::create_dir_all(tree.join("z-empty-0")).unwrap();
+            std::fs::create_dir_all(tree.join("z-empty-1/deep")).unwrap();
+            std::fs::create_dir_all(tree.join("z-nested")).unwrap();
+            std::fs::create_dir_all(tree.join("zz-invalid")).unwrap();
+            for n in 0..129 {
+                std::fs::write(tree.join(format!("f{n:03}")), b"").unwrap();
+            }
+            std::fs::write(tree.join("z-nested/leaf"), b"").unwrap();
+            use std::os::unix::ffi::OsStringExt;
+            std::fs::write(
+                tree.join("zz-invalid")
+                    .join(std::ffi::OsString::from_vec(vec![255])),
+                b"",
+            )
+            .unwrap();
+            serde_json::json!({"stdout":"stdout.bytes@1","tasks":"tasks.free@1","dirs":[{"path":"tree","host":tree,"access":"read"}]})
+        },
+    );
 }
