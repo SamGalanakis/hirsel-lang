@@ -90,3 +90,4 @@ mod interp_step_budget_29;
 mod sitebuild_29;
 mod config_migrate_29;
 mod dagbuild_29;
+mod e1_live_hang_29;
