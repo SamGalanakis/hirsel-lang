@@ -1,0 +1,151 @@
+// Finite deterministic inputs. IDs are declaration indices, never host identities.
+pub const INPUT_BYTES: u64 = 131072
+
+pub const MAX_TICK: u64 = 1000000
+
+pub const ABSENT: u64 = 1000001
+
+pub const MAX_EVENTS: u64 = 512
+
+pub type Problem = Domain(unique String) | Resource(unique String) | File(FileError) | Canceled(
+  CancelCause
+)
+
+pub type Station {
+  capacity: u64,
+}
+
+pub type Step {
+  station: u64,
+  duration: u64,
+}
+
+pub type Job {
+  arrival: u64,
+  cancel: u64,
+  route: List[Step],
+}
+
+pub type Scenario {
+  version: u64,
+  replicas: u64,
+  stations: List[Station],
+  jobs: List[Job],
+  horizons: List[u64],
+}
+
+fn station_from_json(value: json.Value) -> Result[unique Station, String] uses {} = comptime derive.from_json(
+  shape(Station)
+)
+
+fn step_from_json(value: json.Value) -> Result[unique Step, String] uses {} = comptime derive.from_json(
+  shape(Step)
+)
+
+fn job_from_json(value: json.Value) -> Result[unique Job, String] uses {} = comptime derive.from_json(
+  shape(Job)
+)
+
+fn scenario_from_json(value: json.Value) -> Result[unique Scenario, String] uses {} = comptime derive.from_json(
+  shape(Scenario)
+)
+
+pub fn workers(text: String) -> Result[u64, Problem] uses {} {
+  let Ok(n) = u64.parse(text) else {
+    return Error(Resource("workers"))
+  }
+  if n == 0 || n > 4 {
+    return Error(Resource("workers"))
+  }
+  Ok(n)
+}
+
+pub fn file_problem(error: FileError) -> Problem uses {} {
+  match error {
+    Canceled(cause) => Canceled(cause),
+    _ => File(error),
+  }
+}
+
+// Check the complete possible event count before admitting even one arrival.
+// Canceled and horizon-truncated routes still count against this reservation.
+pub fn validate(s: Scenario) -> Result[(), Problem] uses {} {
+  if s.version != 1 {
+    return Error(Domain("version"))
+  }
+  if s.replicas == 0 || s.replicas > 4 {
+    return Error(Resource("replicas"))
+  }
+  if list.len(s.stations) > 16 {
+    return Error(Resource("stations"))
+  }
+  if list.len(s.jobs) > 64 {
+    return Error(Resource("jobs"))
+  }
+  for station in s.stations {
+    if station.capacity == 0 || station.capacity > 64 {
+      return Error(Domain("capacity"))
+    }
+  }
+  let mut events = 0u64
+  for job in s.jobs {
+    if job.arrival > MAX_TICK || job.cancel > ABSENT {
+      return Error(Domain("tick"))
+    }
+    if list.len(job.route) == 0 {
+      return Error(Domain("route"))
+    }
+    let initial = if job.cancel == ABSENT {
+      1u64
+    } else {
+      2u64
+    }
+    if initial > MAX_EVENTS - events {
+      return Error(Resource("events"))
+    }
+    events += initial
+    if list.len(job.route) > MAX_EVENTS - events {
+      return Error(Resource("events"))
+    }
+    events += list.len(job.route)
+    for step in job.route {
+      if step.station >= list.len(s.stations) {
+        return Error(Domain("station"))
+      }
+      if step.duration == 0 || step.duration > MAX_TICK {
+        return Error(Domain("duration"))
+      }
+    }
+  }
+  // Checkpoint count bounds work; the report encoder enforces the byte cap.
+  if list.len(s.horizons) > 16 {
+    return Error(Resource("horizons"))
+  }
+  let mut previous = 0u64
+  let mut first = true
+  for horizon in s.horizons {
+    if horizon > MAX_TICK || !first && horizon <= previous {
+      return Error(Domain("horizon"))
+    }
+    first = false
+    previous = horizon
+  }
+  Ok(())
+}
+
+pub fn decode(take data: unique Bytes) -> Result[unique Scenario, Problem] uses {} {
+  if bytes.len(data) > INPUT_BYTES {
+    return Error(Resource("input_bytes"))
+  }
+  let Ok(text) = string.from_bytes(take data) else {
+    return Error(Domain("utf8"))
+  }
+  let Ok(value) = json.parse(take text) else {
+    return Error(Domain("json"))
+  }
+  let Ok(scenario) = scenario_from_json(value) else {
+    return Error(Domain("schema"))
+  }
+  validate(scenario)?
+  Ok(take scenario)
+}

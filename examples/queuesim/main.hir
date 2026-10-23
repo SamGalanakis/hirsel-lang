@@ -1,0 +1,131 @@
+pub type Error = Output(OutputError)
+
+type Options {
+  name: Path,
+  workers: u64,
+  interruptible: bool,
+}
+
+fn arguments(args: Args) -> Result[Options, model.Problem] uses {args} {
+  if arg.len(args) != 2 && arg.len(args) != 3 {
+    return Error(Domain("usage"))
+  }
+  let Ok(name) = arg.text(args, 0) else {
+    return Error(Domain("usage"))
+  }
+  if name == "" || name == "." || name == ".." || string.byte_len(name) > 128 {
+    return Error(Domain("path"))
+  }
+  for byte in string.as_bytes(name) {
+    if byte == b'/' || byte == b'\\' || byte == b':' || byte == 0 {
+      return Error(Domain("path"))
+    }
+  }
+  let Ok(text) = arg.text(args, 1) else {
+    return Error(Domain("usage"))
+  }
+  let workers = model.workers(text)?
+  let interruptible = arg.len(args) == 3
+  if interruptible {
+    if arg.text(args, 2) != Ok("--interruptible") {
+      return Error(Domain("usage"))
+    }
+  }
+  Ok(Options(name: path.of(name), workers: workers, interruptible: interruptible))
+}
+
+fn execute(d: Dir, tasks: Tasks, options: Options) -> Result[
+  unique Bytes,
+  model.Problem
+] {
+  let mut f = match file.open(d, options.name) {
+    Ok(value) => take value,
+    Error(error) => return Error(model.file_problem(error)),
+  }
+  let data = match file.read_all_bounded(d, mut f, model.INPUT_BYTES) {
+    Ok(value) => take value,
+    Error(Limit()) => return Error(Resource("input_bytes")),
+    Error(File(error)) => return Error(model.file_problem(error)),
+  }
+  let scenario = model.decode(take data)?
+  simulate.batch(tasks, take scenario, options.workers)
+}
+
+// The actual read races an explicitly delivered signal. Scope exit cancels
+// and joins its losing child, releasing the file and all owned simulation state.
+fn race_interrupt(d: Dir, tasks: Tasks, signals: Signals, options: Options) -> Result[
+  unique Bytes,
+  model.Problem
+] {
+  task.scope(
+    tasks,
+    fn(scope: Scope) -> Result[unique Bytes, model.Problem] {
+      let mut pending: TaskSet[Result[unique Bytes, model.Problem]] of scope = task.set(
+        scope
+      )
+      task.add(
+        scope,
+        mut pending,
+        task.async(
+          scope,
+          fn() -> Result[unique Bytes, model.Problem] {
+            execute(d, tasks, options)
+          }
+        )
+      )
+      task.add(
+        scope,
+        mut pending,
+        task.async(
+          scope,
+          fn() -> Result[unique Bytes, model.Problem] {
+            match signal.wait(signals, [Interrupt()]) {
+              Ok(Interrupt()) => Error(Canceled(Requested())),
+              Error(Canceled(cause)) => Error(Canceled(cause)),
+              _ => Error(Resource("signal_wait")),
+            }
+          }
+        )
+      )
+      let (_, outcome) = task.select(scope, take pending)
+      take outcome
+    }
+  )
+}
+
+fn run(rt: Io, args: Args) -> Result[unique Bytes, model.Problem] {
+  let options = arguments(args)?
+  let Ok(d) = io.dir(rt, path.of("input")) else {
+    return Error(Resource("input_grant"))
+  }
+  let Ok(tasks) = io.tasks(rt) else {
+    return Error(Resource("tasks_grant"))
+  }
+  if options.interruptible {
+    let Ok(signals) = io.signals(rt) else {
+      return Error(Resource("signals_grant"))
+    }
+    race_interrupt(d, tasks, signals, options)
+  } else {
+    execute(d, tasks, options)
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[std@1/process.ExitCode, Error] {
+  let Ok(output) = io.stdout(rt) else {
+    return Ok(std@1/process.exit_code(3u8))
+  }
+  let Ok(errors) = io.stderr(rt) else {
+    return Ok(std@1/process.exit_code(3u8))
+  }
+  match run(rt, args) {
+    Ok(data) => {
+      out.write(output, data)?
+      Ok(std@1/process.SUCCESS)
+    },
+    Error(problem) => {
+      err.write(errors, report.diagnostic(problem))?
+      Ok(std@1/process.exit_code(2u8))
+    },
+  }
+}

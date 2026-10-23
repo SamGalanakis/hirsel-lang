@@ -1,0 +1,96 @@
+// SimPy core.py:165-213, f43816490. The payload is owned by the heap;
+// callbacks receive it only after pop transfers ownership to the dispatcher.
+pub type Event[T] {
+  time: u64,
+  priority: u64,
+  ordinal: u64,
+  payload: T,
+}
+
+pub type Action = Arrive(u64) | Release(u64) | Cancel(u64)
+
+pub type Queue {
+  pending: unique priority_queue.Heap[Event[Action]],
+  generated: u64,
+}
+
+@noalloc
+fn compare(a: Event[Action], b: Event[Action]) -> i32 uses {} {
+  if a.time < b.time {
+    return -1i32
+  }
+  if a.time > b.time {
+    return 1i32
+  }
+  if a.priority < b.priority {
+    return -1i32
+  }
+  if a.priority > b.priority {
+    return 1i32
+  }
+  if a.ordinal < b.ordinal {
+    return -1i32
+  }
+  if a.ordinal > b.ordinal {
+    return 1i32
+  }
+  0i32
+}
+
+pub fn empty() -> unique Queue uses {} {
+  Queue(pending: priority_queue.empty(compare), generated: 0)
+}
+
+pub fn schedule(
+  mut q: unique Queue,
+  now: u64,
+  delay: u64,
+  priority: u64,
+  take action: unique Action
+) -> Result[(), model.Problem] uses {} {
+  if q.generated >= model.MAX_EVENTS {
+    return Error(Resource("events"))
+  }
+  let Some(at) = int.checked_add(now, delay) else {
+    return Error(Domain("overflow"))
+  }
+  if at > model.MAX_TICK {
+    return Error(Domain("tick"))
+  }
+  let event = unique Event(
+    time: at,
+    priority: priority,
+    ordinal: q.generated,
+    payload: take action
+  )
+  q.generated += 1
+  priority_queue.push(mut q.pending, take event)
+  Ok(())
+}
+
+pub fn next_time(q: Queue) -> Option[u64] uses {} {
+  match priority_queue.peek(q.pending) {
+    Some(event) => Some(event.time),
+    None() => None(),
+  }
+}
+
+// Keeping dispatch outside the queue lets the callback mutate simulation
+// resources without retaining a heap loan or a queued payload alias.
+pub fn dispatch(mut q: unique Queue) -> unique Option[Event[Action]] uses {} {
+  priority_queue.pop(mut q.pending)
+}
+
+@test
+fn overflow_refuses_before_scheduling(t: Test) {
+  let mut q = empty()
+  let outcome = schedule(mut q, 18446744073709551615u64, 1, 0, unique Arrive(0))
+  failure.check(
+    match outcome {
+      Error(Domain(name)) => name == "overflow",
+      _ => false,
+    },
+    Arithmetic()
+  )
+  failure.check(q.generated == 0 && next_time(q) == None(), Arithmetic())
+}

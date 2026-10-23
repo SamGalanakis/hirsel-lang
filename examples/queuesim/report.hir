@@ -1,0 +1,116 @@
+pub const OUTPUT_BYTES: u64 = 65536
+
+fn number(mut output: unique List[u8], n: u64) -> () uses {} {
+  list.push(mut output, b' ')
+  u64.format_into(n, mut output)
+}
+
+pub fn phase(value: resources.Phase) -> String uses {} {
+  match value {
+    Future() => "future",
+    Waiting() => "waiting",
+    Service() => "service",
+    Completed() => "completed",
+    Canceled() => "canceled",
+  }
+}
+
+pub fn bounded(output: List[u8]) -> Result[(), model.Problem] uses {} {
+  if list.len(output) > OUTPUT_BYTES {
+    Error(Resource("output_bytes"))
+  } else {
+    Ok(())
+  }
+}
+
+pub fn snapshot(
+  mut output: unique List[u8],
+  now: u64,
+  jobs: List[resources.JobState],
+  stations: List[resources.StationState]
+) -> Result[(), model.Problem] uses {} {
+  bytes.append(mut output, b"time")
+  number(mut output, now)
+  list.push(mut output, b'\n')
+  let mut index = 0u64
+  for job in jobs {
+    bytes.append(mut output, b"job")
+    number(mut output, index)
+    list.push(mut output, b' ')
+    bytes.append(mut output, string.as_bytes(phase(job.phase)))
+    number(mut output, job.visit)
+    number(mut output, resources.wait(job, now))
+    number(mut output, job.finish)
+    list.push(mut output, b'\n')
+    bounded(output)?
+    index += 1
+  }
+  index = 0
+  for station in stations {
+    bytes.append(mut output, b"station")
+    number(mut output, index)
+    number(mut output, station.busy)
+    number(mut output, list.len(station.queue))
+    number(mut output, station.busy_area)
+    number(mut output, station.queue_area)
+    list.push(mut output, b'\n')
+    bounded(output)?
+    index += 1
+  }
+  bytes.append(mut output, b"end\n")
+  bounded(output)
+}
+
+pub fn replica(mut output: unique List[u8], index: u64, data: Bytes) -> Result[
+  (),
+  model.Problem
+] uses {} {
+  // Admit the complete result before appending. Main publishes only after
+  // every replica succeeds, so domain/resource errors have no stdout prefix.
+  if bytes.len(data) > OUTPUT_BYTES || list.len(output) > OUTPUT_BYTES - bytes.len(data) {
+    return Error(Resource("output_bytes"))
+  }
+  bytes.append(mut output, b"replica")
+  number(mut output, index)
+  list.push(mut output, b'\n')
+  if list.len(output) > OUTPUT_BYTES - bytes.len(data) {
+    return Error(Resource("output_bytes"))
+  }
+  bytes.append(mut output, data)
+  Ok(())
+}
+
+pub fn diagnostic(problem: model.Problem) -> unique Bytes uses {} {
+  let name = match problem {
+    Domain(name) => name,
+    Resource(name) => name,
+    Canceled(_) => "canceled",
+    File(NotGranted()) => "file_denied",
+    File(_) => "file",
+  }
+  let mut output: unique List[u8] = []
+  bytes.append(mut output, b"queuesim: ")
+  bytes.append(mut output, string.as_bytes(name))
+  list.push(mut output, b'\n')
+  bytes.from_list(take output)
+}
+
+@test
+fn output_exact_cap_and_one_over(t: Test) {
+  let mut data: unique List[u8] = unique list.filled(65536, 0u8)
+  failure.check(
+    match bounded(data) {
+      Ok(()) => true,
+      _ => false,
+    },
+    Arithmetic()
+  )
+  list.push(mut data, 0u8)
+  failure.check(
+    match bounded(data) {
+      Error(Resource(name)) => name == "output_bytes",
+      _ => false,
+    },
+    Arithmetic()
+  )
+}

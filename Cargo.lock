@@ -520,6 +520,7 @@ dependencies = [
  "hirsel-intern",
  "hirsel-interp",
  "hirsel-rt",
+ "hirsel-run-config",
  "hirsel-run-schema",
  "libc",
  "mimalloc",

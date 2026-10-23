@@ -1,0 +1,24 @@
+replica 0
+time 2
+job 0 completed 1 0 1
+job 1 completed 1 1 2
+station 0 0 0 2 1
+end
+replica 1
+time 2
+job 0 completed 1 0 1
+job 1 completed 1 1 2
+station 0 0 0 2 1
+end
+replica 2
+time 2
+job 0 completed 1 0 1
+job 1 completed 1 1 2
+station 0 0 0 2 1
+end
+replica 3
+time 2
+job 0 completed 1 0 1
+job 1 completed 1 1 2
+station 0 0 0 2 1
+end

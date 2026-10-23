@@ -1,0 +1,7 @@
+replica 0
+time 3
+job 0 completed 2 0 3
+job 1 completed 1 1 2
+station 0 0 0 2 1
+station 1 0 0 2 0
+end

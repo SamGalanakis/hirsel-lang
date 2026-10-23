@@ -1,0 +1,1 @@
+{"version":1,"replicas":1,"stations":[{"capacity":1},{"capacity":1}],"jobs":[{"arrival":0,"cancel":1000001,"route":[{"station":0,"duration":1},{"station":1,"duration":2}]},{"arrival":0,"cancel":1000001,"route":[{"station":0,"duration":1}]}],"horizons":[]}

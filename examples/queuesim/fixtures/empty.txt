@@ -1,0 +1,4 @@
+replica 0
+time 0
+station 0 0 0 0 0
+end

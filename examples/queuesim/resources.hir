@@ -1,0 +1,118 @@
+// SimPy Resource resource.py:168-225: capacity, FIFO queue and release.
+// Waiting indices are references into the sole job-state owner, not extra jobs.
+pub type Phase = Future | Waiting | Service | Completed | Canceled
+
+pub type JobState {
+  phase: Phase,
+  visit: u64,
+  queued_at: u64,
+  waited: u64,
+  finish: u64,
+}
+
+pub type StationState {
+  capacity: u64,
+  busy: u64,
+  queue: List[u64],
+  busy_area: u64,
+  queue_area: u64,
+}
+
+pub fn new_job() -> JobState uses {} {
+  JobState(phase: Future(), visit: 0, queued_at: 0, waited: 0, finish: model.ABSENT)
+}
+
+pub fn new_station(capacity: u64) -> unique StationState uses {} {
+  StationState(capacity: capacity, busy: 0, queue: [], busy_area: 0, queue_area: 0)
+}
+
+pub fn accrue(mut station: unique StationState, delta: u64) -> () uses {} {
+  // Max busy/queue 64, ticks 1M: these integrals cannot overflow u64.
+  station.busy_area += station.busy * delta
+  station.queue_area += list.len(station.queue) * delta
+}
+
+pub fn enqueue(mut station: unique StationState, index: u64) -> () uses {} {
+  list.push(mut station.queue, index)
+}
+
+pub fn remove(mut station: unique StationState, index: u64) -> () uses {} {
+  let mut kept: List[u64] = []
+  let mut at = 0u64
+  while at < list.len(station.queue) {
+    let waiting = station.queue[at]
+    if waiting != index {
+      list.push(mut kept, waiting)
+    }
+    at += 1
+  }
+  station.queue = take kept
+}
+
+pub fn first(station: StationState) -> Option[u64] uses {} {
+  if list.len(station.queue) == 0 {
+    None()
+  } else {
+    Some(station.queue[0])
+  }
+}
+
+pub fn wait(job: JobState, now: u64) -> u64 uses {} {
+  if job.phase == Waiting() {
+    job.waited + now - job.queued_at
+  } else {
+    job.waited
+  }
+}
+
+// This checks the semantic partition independently of the transition branches.
+// Each service/waiting job contributes exactly once to its current station.
+pub fn conserved(s: model.Scenario, jobs: List[JobState], stations: List[StationState]) -> bool uses {} {
+  if list.len(jobs) != list.len(s.jobs) || list.len(stations) != list.len(s.stations) {
+    return false
+  }
+  let mut station_index = 0u64
+  for station in stations {
+    if station.busy > station.capacity {
+      return false
+    }
+    let mut serving = 0u64
+    let mut waiting = 0u64
+    let mut index = 0u64
+    for job in jobs {
+      if job.phase == Service() || job.phase == Waiting() {
+        if job.visit >= list.len(s.jobs[index].route) {
+          return false
+        }
+        if s.jobs[index].route[job.visit].station == station_index {
+          if job.phase == Service() {
+            serving += 1
+          } else {
+            waiting += 1
+          }
+        }
+      }
+      index += 1
+    }
+    if serving != station.busy || waiting != list.len(station.queue) {
+      return false
+    }
+    let mut seen: List[u64] = []
+    for queued_job in station.queue {
+      if queued_job >= list.len(jobs) || jobs[queued_job].phase != Waiting() {
+        return false
+      }
+      if s.jobs[queued_job].route[jobs[queued_job].visit].station != station_index {
+        return false
+      }
+      for prior in seen {
+        if prior == queued_job {
+          return false
+        }
+      }
+      list.push(mut seen, queued_job)
+    }
+    station_index += 1
+  }
+  true
+}

@@ -1,0 +1,216 @@
+pub type State {
+  now: u64,
+  queue: unique events.Queue,
+  jobs: List[resources.JobState],
+  stations: List[resources.StationState],
+}
+
+fn initialize(s: model.Scenario) -> Result[unique State, model.Problem] uses {} {
+  model.validate(s)?
+  let mut state = unique State(now: 0, queue: events.empty(), jobs: [], stations: [])
+  for station in s.stations {
+    list.push(mut state.stations, resources.new_station(station.capacity))
+  }
+  let mut index = 0u64
+  for job in s.jobs {
+    list.push(mut state.jobs, resources.new_job())
+    events.schedule(mut state.queue, 0, job.arrival, 2, unique Arrive(index))?
+    if job.cancel != model.ABSENT {
+      events.schedule(mut state.queue, 0, job.cancel, 0, unique Cancel(index))?
+    }
+    index += 1
+  }
+  Ok(take state)
+}
+
+fn advance(mut state: unique State, at: u64) -> () uses {} {
+  let delta = at - state.now
+  let mut index = 0u64
+  while index < list.len(state.stations) {
+    resources.accrue(mut state.stations[index], delta)
+    index += 1
+  }
+  state.now = at
+}
+
+fn start(s: model.Scenario, mut state: unique State, index: u64) -> Result[
+  (),
+  model.Problem
+] uses {} {
+  let visit = state.jobs[index].visit
+  let step = s.jobs[index].route[visit]
+  // Check the release time and event budget before occupying the resource.
+  events.schedule(mut state.queue, state.now, step.duration, 1, unique Release(index))?
+  let waited = resources.wait(state.jobs[index], state.now)
+  state.jobs[index].waited = waited
+  state.jobs[index].phase = Service()
+  state.stations[step.station].busy += 1
+  Ok(())
+}
+
+fn request(s: model.Scenario, mut state: unique State, index: u64) -> Result[
+  (),
+  model.Problem
+] uses {} {
+  let station = s.jobs[index].route[state.jobs[index].visit].station
+  if state.stations[station].busy < state.stations[station].capacity {
+    start(s, mut state, index)?
+  } else {
+    state.jobs[index].phase = Waiting()
+    state.jobs[index].queued_at = state.now
+    resources.enqueue(mut state.stations[station], index)
+  }
+  Ok(())
+}
+
+fn cancel(s: model.Scenario, mut state: unique State, index: u64) -> () uses {} {
+  let phase = state.jobs[index].phase
+  if phase == Waiting() {
+    let station = s.jobs[index].route[state.jobs[index].visit].station
+    resources.remove(mut state.stations[station], index)
+    let waited = resources.wait(state.jobs[index], state.now)
+    state.jobs[index].waited = waited
+  }
+  // A running service is non-preemptive. Canceled arrival events stay owned
+  // in the heap until dispatch and become no-ops, preserving stable ordinals.
+  if phase == Future() || phase == Waiting() {
+    state.jobs[index].phase = Canceled()
+    state.jobs[index].finish = state.now
+  }
+}
+
+fn release(s: model.Scenario, mut state: unique State, index: u64) -> Result[
+  (),
+  model.Problem
+] uses {} {
+  let station = s.jobs[index].route[state.jobs[index].visit].station
+  state.stations[station].busy -= 1
+  state.jobs[index].visit += 1
+  // Release hands the slot to the oldest waiter before this job's next visit.
+  if let Some(waiter) = resources.first(state.stations[station]) {
+    resources.remove(mut state.stations[station], waiter)
+    start(s, mut state, waiter)?
+  }
+  if state.jobs[index].visit == list.len(s.jobs[index].route) {
+    state.jobs[index].phase = Completed()
+    state.jobs[index].finish = state.now
+  } else {
+    request(s, mut state, index)?
+  }
+  Ok(())
+}
+
+fn transition(s: model.Scenario, mut state: unique State, action: events.Action) -> Result[
+  (),
+  model.Problem
+] uses {} {
+  match action {
+    Arrive(index) => {
+      if state.jobs[index].phase == Future() {
+        request(s, mut state, index)?
+      }
+    },
+    Cancel(index) => cancel(s, mut state, index),
+    Release(index) => release(s, mut state, index)?,
+  }
+  if !resources.conserved(s, state.jobs, state.stations) {
+    return Error(Domain("conservation"))
+  }
+  Ok(())
+}
+
+fn until(
+  s: model.Scenario,
+  mut state: unique State,
+  horizon: u64,
+  bounded: bool,
+  callback: fn(model.Scenario, mut unique State, events.Action) -> Result[
+    (),
+    model.Problem
+  ] uses {}
+) -> Result[(), model.Problem] uses {} {
+  while let Some(at) = events.next_time(state.queue) {
+    if bounded && at >= horizon {
+      break
+    }
+    let Some(event) = events.dispatch(mut state.queue) else {
+      return Error(Domain("queue"))
+    }
+    advance(mut state, at)
+    callback(s, mut state, event.payload)?
+  }
+  if bounded {
+    advance(mut state, horizon)
+  }
+  Ok(())
+}
+
+pub fn run(s: model.Scenario) -> Result[unique Bytes, model.Problem] uses {} {
+  let mut state = initialize(s)?
+  let mut output: unique List[u8] = []
+  if list.len(s.horizons) == 0 {
+    until(s, mut state, 0, false, transition)?
+    report.snapshot(mut output, state.now, state.jobs, state.stations)?
+  } else {
+    for horizon in s.horizons {
+      until(s, mut state, horizon, true, transition)?
+      report.snapshot(mut output, state.now, state.jobs, state.stations)?
+    }
+  }
+  Ok(bytes.from_list(take output))
+}
+
+// Independent replicas share only an immutable scenario. Task results own
+// their bytes; bounded batches join in declaration order before publication.
+pub fn batch(tasks: Tasks, take s: unique model.Scenario, workers: u64) -> Result[
+  unique Bytes,
+  model.Problem
+] {
+  let replicas = s.replicas
+  let source = shared.freeze(take s)
+  task.scope(
+    tasks,
+    fn(scope: Scope) -> Result[unique Bytes, model.Problem] {
+      let mut output: unique List[u8] = []
+      let mut next = 0u64
+      while next < replicas {
+        let mut pending: TaskSet[Result[unique Bytes, model.Problem]] of scope = task.set(
+          scope
+        )
+        let first = next
+        while next < replicas && next - first < workers {
+          task.add(
+            scope,
+            mut pending,
+            task.async(
+              scope,
+              fn() -> Result[unique Bytes, model.Problem] {
+                shared.with(
+                  source,
+                  fn(scenario: model.Scenario) -> Result[unique Bytes, model.Problem] {
+                    run(scenario)
+                  }
+                )
+              }
+            )
+          )
+          next += 1
+        }
+        let mut slot = 0u64
+        while slot < next - first {
+          let joined = task.await_at(scope, mut pending, slot)
+          match take joined {
+            Ok(data) => report.replica(mut output, first + slot, data)?,
+            Error(problem) => {
+              task.cancel_all(scope, take pending)
+              return Error(problem)
+            },
+          }
+          slot += 1
+        }
+        task.cancel_all(scope, take pending)
+      }
+      Ok(bytes.from_list(take output))
+    }
+  )
+}

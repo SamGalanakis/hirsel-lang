@@ -1,0 +1,23 @@
+{
+  "args": [
+    "simpy-fifo.json",
+    "2"
+  ],
+  "io": {
+    "stdout": "stdout.bytes@1",
+    "stderr": "stderr.bytes@1",
+    "tasks": "tasks.cooperative@1",
+    "dirs": [
+      {
+        "path": "input",
+        "host": "examples/queuesim/fixtures",
+        "access": "read"
+      }
+    ]
+  },
+  "placement": {
+    "cores": 2,
+    "commit": "shared",
+    "reorder": "off"
+  }
+}

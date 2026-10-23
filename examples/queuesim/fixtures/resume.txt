@@ -1,0 +1,16 @@
+replica 0
+time 1
+job 0 service 0 0 1000001
+job 1 waiting 0 1 1000001
+station 0 1 1 1 1
+end
+time 2
+job 0 completed 1 0 1
+job 1 service 0 1 1000001
+station 0 1 0 2 1
+end
+time 3
+job 0 completed 1 0 1
+job 1 completed 1 1 2
+station 0 0 0 2 1
+end
