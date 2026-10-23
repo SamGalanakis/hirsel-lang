@@ -3,6 +3,22 @@ use super::*;
 use hirsel_types::{Sendability, TypeId, TypeInterner, TypeKind, Uniqueness};
 
 impl Checker<'_> {
+    /// Core consuming cursors retain their owner's current evidence, rather
+    /// than manufacturing a fresh unique payload from a type argument.
+    pub(super) fn consuming_protocol(&self, callee: &Callee) -> bool {
+        let Callee::Definition { path, .. } = callee else {
+            return false;
+        };
+        static OWNING: std::sync::LazyLock<std::collections::BTreeSet<hirsel_syntax::DefPath>> =
+            std::sync::LazyLock::new(|| {
+                hirsel_types::core_roles::loop_protocols()
+                    .into_iter()
+                    .filter(|(name, _, _)| *name != "SetElements")
+                    .flat_map(|(_, open, next)| [open, next])
+                    .collect()
+            });
+        OWNING.contains(path)
+    }
     pub(crate) fn flat_value(&self, place: PlaceId) -> bool {
         self.bound(
             self.t,

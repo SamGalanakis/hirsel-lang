@@ -1,0 +1,22 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 15
+// twin: MODE/MODE-2-nested-copy-element-repair-run.hir
+fn alter(mut row: unique List[u64]) {
+  row[0] = 9
+}
+
+pub fn main() -> Result[(), u64] {
+  let mut first: unique List[u64] = []
+  list.push(mut first, 7)
+  let source: unique List[unique List[u64]] = [take first]
+  let snapshot = copy source
+  for row in take source {
+    let mut owned = take row
+    alter(mut owned)
+  }
+  if snapshot[0][0] == 7 {
+    Ok(())
+  } else {
+    Error(1)
+  }
+}

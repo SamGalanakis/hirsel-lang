@@ -249,7 +249,11 @@ impl Builder<'_, '_> {
                         {
                             // Snapshot the value observed now; aliases never point
                             // at a mutable carrier slot that a later rebind empties.
-                            value = self.transport(value, Storage::Temporary, span);
+                            // The physical field may declare unique even when
+                            // its current owner is shared. Snapshot the checked
+                            // receipt, without manufacturing a unique temporary.
+                            value =
+                                self.transport_typed(value, binding.ty, Storage::Temporary, span);
                         }
                     }
                     let origin = Self::binding_origin(

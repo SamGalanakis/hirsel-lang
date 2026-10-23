@@ -5647,6 +5647,21 @@ impl Checker<'_> {
                 returns,
                 on_failure,
             } => {
+                let protocol = self.consuming_protocol(callee);
+                let protocol_unique = protocol
+                    && arguments.first().is_some_and(|a| {
+                        matches!(a.value.usage, UseKind::Take | UseKind::Mut)
+                            && self.operand_unique(state, &a.value)
+                    });
+                let protocol_fresh = protocol
+                    && arguments.first().is_some_and(|a| {
+                        let access = &self.body.places[a.value.place.0 as usize];
+                        let root = access.root.0 as usize;
+                        matches!(a.value.usage, UseKind::Take | UseKind::Mut)
+                            && access.projection.is_empty()
+                            && !state.shared[root]
+                            && state.must[root].has(MustFacts::FRESH_RECEIPT)
+                    });
                 // A diverging call has no result: only its argument effects
                 // and its failure edge are modeled.
                 let destination = returns.map(|r| r.destination);
@@ -5881,6 +5896,7 @@ impl Checker<'_> {
                         }
                     );
                     if !shared_result
+                        && !protocol
                         && needs_release(self, self.place_type(destination), self.t)
                         && !self.flat_value(destination)
                     {
@@ -5987,6 +6003,7 @@ impl Checker<'_> {
                     // A `mut` argument handed back unique owns every block it
                     // reaches, so it holds no share of any argument (MODE-2).
                     if a.value.usage == UseKind::Mut
+                        && !protocol
                         && !self.callee_preserves_state(callee, a.parameter, false)
                         && !self.mut_requires_unique(callee, a.parameter)
                         && !(unique_inputs
@@ -6159,7 +6176,11 @@ impl Checker<'_> {
                     return;
                 };
                 self.reset_unique(state, destination);
-                self.set_fresh_receipt(state, destination, true);
+                self.set_fresh_receipt(
+                    state,
+                    destination,
+                    !protocol || protocol_unique || protocol_fresh,
+                );
                 // MODE-2: a `@preserves_unique` taken input passes its
                 // uniqueness on to the result.
                 let promised = unique_inputs

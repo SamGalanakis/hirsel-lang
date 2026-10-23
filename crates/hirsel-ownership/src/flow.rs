@@ -270,6 +270,8 @@ struct ValueData {
     /// The counted input that prevents deep uniqueness, independently of
     /// the input that bounds locality.
     uniqueness_site: Option<ExprId>,
+    /// Counted-copy provenance used only for a secondary diagnostic label.
+    copy_site: Option<ExprId>,
     /// An owned call receipt whose outer root has never been shared.
     fresh_receipt: bool,
     /// The parameter of this body and the field paths within it that this
@@ -333,6 +335,7 @@ impl Value {
             deep_copy: false,
             site: None,
             uniqueness_site: None,
+            copy_site: None,
             fresh_receipt: false,
             part_of: None,
             borrow_only: false,
@@ -661,6 +664,10 @@ impl ValueData {
     }
     fn join(&mut self, other: &Self) {
         work::count(Counter::OwnershipValueJoins);
+        self.copy_site = match (self.copy_site, other.copy_site) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
         if other.modes.uniqueness == Uniqueness::Aliased {
             let incoming = other.uniqueness_site.or(other.site);
             self.uniqueness_site = if self.modes.uniqueness == Uniqueness::Unique {
@@ -4784,6 +4791,7 @@ impl Checker<'_, '_> {
                     && *context != Context::Unique
                 {
                     state.slots[place.binding].value.share();
+                    state.slots[place.binding].value.copy_site = Some(*operation);
                     let copied_independently = property.sendable_aliased
                         || value.modes.sendability == Sendability::Sendable
                             && self
@@ -5721,10 +5729,17 @@ impl Checker<'_, '_> {
                         );
                     }
                     if iteration.is_some() {
-                        // The element is supplied by its checked projection or
-                        // cursor result, not by the container's root promises.
+                        // The item keeps its declared locality and multiplicity,
+                        // but a shared owner cannot prove nested uniqueness.
                         if let Some(ty) = ty {
+                            let current = part.modes.uniqueness;
                             part.modes = self.t.get(ty).unwrap().modes.clone();
+                            // MODE-2: an element annotation is a receiving
+                            // contract, not evidence that a shared owner's
+                            // current element is still exclusively owned.
+                            if current != Uniqueness::Unique && !self.properties[ty].shared {
+                                part.modes.uniqueness = Uniqueness::Aliased;
+                            }
                         }
                         // An owning cursor and its elements are as local as
                         // the collection taken. The checked rows follow the
@@ -5797,7 +5812,11 @@ impl Checker<'_, '_> {
                         part.set_alias(alias);
                         part.element_view = true;
                         if let Some(ty) = ty {
+                            let current = part.modes.uniqueness;
                             part.modes = self.t.get(ty).unwrap().modes.clone();
+                            if current != Uniqueness::Unique && !self.properties[ty].shared {
+                                part.modes.uniqueness = Uniqueness::Aliased;
+                            }
                         }
                     }
                     if iterator {
@@ -8153,6 +8172,7 @@ impl Checker<'_, '_> {
             && !self.property(expression).is_some_and(|p| p.plain)
         {
             let source = self.aliased_source(state, expression);
+            let copied_owner = actual.copy_site.map(|cause| self.span_of(cause));
             let cause = actual.uniqueness_site.unwrap_or(source);
             let cause_span = self.span_of(cause);
             let source_span = self.span_of(source);
@@ -8176,7 +8196,7 @@ impl Checker<'_, '_> {
             } else {
                 span
             };
-            self.report(
+            if let Some(diagnostic) = self.report(
                 const { RuleId::of("MODE-2") },
                 primary,
                 "this operation requires a unique value",
@@ -8188,7 +8208,15 @@ impl Checker<'_, '_> {
                     pending.uniqueness = c.uniqueness_origin(expression);
                     pending
                 },
-            );
+            ) {
+                if let Some(copy_span) = copied_owner {
+                    diagnostic.secondary.push(hirsel_diag::Label {
+                        span: copy_span,
+                        message: "this copy ended the owner's nested uniqueness".into(),
+                    });
+                    diagnostic.notes.push("Use `unique element` for an explicit deep unique copy before passing it to the unique receiver. Alternatively, end or drop the snapshot before the loop and use an ordinary `mut` receiver; a counted copy ends static uniqueness for the rest of its owner's scope.".into());
+                }
+            }
         } else if required.multiplicity == Multiplicity::Many
             && actual.modes.multiplicity == Multiplicity::Once
             && self.property(expression).is_some_and(|p| p.function)

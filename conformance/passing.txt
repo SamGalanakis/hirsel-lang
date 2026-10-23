@@ -7202,3 +7202,8 @@ conformance/MODE/MODE-2-unique-copy-map-run.hir
 conformance/MODE/MODE-2-unique-copy-nested-run.hir
 conformance/MODE/MODE-2-unique-copy-outlive-run.hir
 conformance/MODE/MODE-2-unique-copy-string-run.hir
+conformance/MODE/MODE-2-nested-copy-element-bad.hir
+conformance/MODE/MODE-2-nested-copy-element-dropped-run.hir
+conformance/MODE/MODE-2-nested-copy-element-no-copy-run.hir
+conformance/MODE/MODE-2-nested-copy-element-ordinary-run.hir
+conformance/MODE/MODE-2-nested-copy-element-repair-run.hir
