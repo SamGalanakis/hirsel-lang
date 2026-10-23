@@ -3832,3 +3832,93 @@ pub fn main(rt: Io) -> Result[(), E] {
         },
     );
 }
+
+#[test]
+fn f1_required_finite_release_infinite_suffix_cross_engine_matrix() {
+    if !hirsel_rt::free_driver::admission_enabled() {
+        return;
+    }
+    f1_corpus_matrix_with_run(
+        "required-finite-release",
+        source("finite_release"),
+        |_| serde_json::json!({"io":{"stdout":"stdout.bytes@1","tasks":"tasks.free@1","dirs":[]},"args":[],"budgets":{"provider":"budgets.limits@2","fuel":200000}}),
+        hirsel_run_schema::exit::BUDGET_EXCEEDED,
+        b"",
+    );
+}
+
+#[test]
+fn f1_required_mutex_cycle_cross_engine_matrix() {
+    if !hirsel_rt::free_driver::admission_enabled() {
+        return;
+    }
+    f1_corpus_matrix("required-mutex-cycle", source("mutex_cycle"));
+}
+
+#[test]
+fn f1_required_parked_receive_cross_engine_matrix() {
+    if !hirsel_rt::free_driver::admission_enabled() {
+        return;
+    }
+    f1_corpus_matrix_with_exit(
+        "required-parked-receive",
+        source("parked_receive"),
+        |_| serde_json::json!({"stdout":"stdout.bytes@1","tasks":"tasks.free@1","dirs":[]}),
+        hirsel_run_schema::exit::BLOCKED,
+    );
+}
+
+#[test]
+fn f1_required_nested_root_task_end_cross_engine_matrix() {
+    if !hirsel_rt::free_driver::admission_enabled() {
+        return;
+    }
+    f1_corpus_matrix("required-nested-root", source("nested_root"));
+}
+
+fn f1_required_r7_root_matrix(name: &str, fixture: &str) {
+    if !hirsel_rt::free_driver::admission_enabled() {
+        return;
+    }
+    let scratch = Scratch::new(name);
+    let text = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../conformance/DROP")
+            .join(fixture),
+    )
+    .unwrap();
+    f1_runner_matrix_in(
+        &scratch,
+        &text,
+        r#"{"io":{"stdout":"stdout.bytes@1","tasks":"tasks.free@1","dirs":[]},"args":[]}"#,
+        b"Err\n",
+        b"Err\n",
+    );
+    for level in ["record", "durable"] {
+        let bytes = std::fs::read(scratch.path(level)).unwrap();
+        let tape = hirsel_free::tape::parse(&bytes).unwrap();
+        let thaws: Vec<_> = tape
+            .logs
+            .values()
+            .flat_map(|log| hirsel_free::record::decode(log).unwrap())
+            .filter_map(|record| match record {
+                hirsel_free::record::Record::Thaw { ok, .. } => Some(ok),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(thaws, [false], "{name} {level}: {thaws:?}");
+    }
+}
+
+#[test]
+fn f1_required_r7_copy_thaw_cross_engine_matrix() {
+    f1_required_r7_root_matrix("required-r7-copy", "DROP-2-root-copy-thaw-run.hir");
+}
+
+#[test]
+fn f1_required_r7_aggregate_thaw_cross_engine_matrix() {
+    f1_required_r7_root_matrix(
+        "required-r7-aggregate",
+        "DROP-2-root-aggregate-thaw-run.hir",
+    );
+}
