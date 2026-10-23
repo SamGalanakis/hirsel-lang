@@ -1,6 +1,7 @@
 //! Declared core@1 signatures. This module reads only the normative declaration
 //! ledger, never executable operation bodies (LANG-6). Package identity: #36.
 mod declarations;
+mod products;
 pub use declarations::nominal_roles;
 mod dictionaries;
 pub mod review;
@@ -26,11 +27,11 @@ pub struct BuiltinRegistry {
     /// The interner the signatures' rows were built into.
     types: Arc<TypeInterner>,
     signatures: Arc<BTreeMap<DefId, OnceLock<SignatureRef>>>,
-    image: Option<hirsel_image::Image>,
+    records: Option<Arc<hirsel_product_codec::TypeRecords>>,
+    references: Arc<BTreeMap<DefId, hirsel_artifact_store::Reference>>,
     revision: ContentHash,
 }
-/// The compiler build freezes the core rows and declarations in an indexed
-/// image. Its type rows form the base; signatures decode on their first lookup.
+/// Core declarations are ordinary products over a lazily loaded shared base.
 struct Shared {
     base: Arc<TypeBase>,
     registry: BuiltinRegistry,
@@ -39,32 +40,33 @@ struct Shared {
 fn shared() -> &'static Shared {
     static SHARED: OnceLock<Shared> = OnceLock::new();
     SHARED.get_or_init(|| {
-        let image = hirsel_image::Image::from_static(include_bytes!(concat!(
-            env!("OUT_DIR"),
-            "/core.image"
-        )))
-        .expect("build-time core image");
-        let base = image.base();
-        let variants = image
-            .blob(hirsel_image::FIRST_KIND + 1)
-            .expect("core variant names")
-            .expect("core variant section");
-        let signatures = image
-            .keys(hirsel_image::FIRST_KIND)
-            .expect("core definitions")
-            .into_iter()
-            .map(|d| (d, OnceLock::new()))
-            .collect();
+        use bincode::Options;
+        let bytes = include_bytes!(concat!(env!("OUT_DIR"), "/core-products.index"));
+        let index: products::CoreProducts = bincode::DefaultOptions::new()
+            .with_fixint_encoding()
+            .with_limit(bytes.len() as u64)
+            .reject_trailing_bytes()
+            .deserialize(bytes)
+            .expect("build-time core product index");
+        let store = Arc::new(include!(concat!(env!("OUT_DIR"), "/core-products.rs")));
+        let shared = hirsel_product_codec::SharedTypes::open(index.base, store)
+            .expect("core type reference index");
+        let base = shared.base.clone();
+        let types = TypeInterner::new(Some(base.clone()));
+        let records = shared.records(types.clone()).expect("core base records");
+        let references: BTreeMap<_, _> = index.signatures.into_iter().collect();
+        let signatures = references.keys().map(|&d| (d, OnceLock::new())).collect();
         let registry = BuiltinRegistry {
-            types: TypeInterner::new(Some(base.clone())),
+            types,
             signatures: Arc::new(signatures),
-            revision: image.key(),
-            image: Some(image),
+            revision: index.revision,
+            records: Some(records),
+            references: Arc::new(references),
         };
         Shared {
             base,
             registry,
-            variants,
+            variants: index.variants,
         }
     })
 }
@@ -110,7 +112,8 @@ impl BuiltinRegistry {
                     .map(|(d, s)| (d, OnceLock::from(s)))
                     .collect(),
             ),
-            image: None,
+            records: None,
+            references: Arc::new(BTreeMap::new()),
             revision,
         }
     }
@@ -136,13 +139,16 @@ impl BuiltinRegistry {
     }
     fn decode<'a>(&self, d: DefId, slot: &'a OnceLock<SignatureRef>) -> &'a SignatureRef {
         slot.get_or_init(|| {
+            let records = self.records.as_ref().expect("lazy core records");
+            let reference = *self.references.get(&d).expect("core product reference");
+            let bytes = records
+                .store
+                .get_content(reference)
+                .expect("checked core product");
             Arc::new(
-                self.image
-                    .as_ref()
-                    .expect("lazy registry image")
-                    .entry(hirsel_image::FIRST_KIND, d)
-                    .expect("core signature")
-                    .expect("core entry"),
+                records
+                    .decode_record(&bytes, |_, _| None)
+                    .expect("core signature record"),
             )
         })
     }

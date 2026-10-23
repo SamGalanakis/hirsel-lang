@@ -33,11 +33,11 @@ pub struct Address(pub ContentHash);
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Action(pub ContentHash);
 /// Canonical output identity. Equal recomputation retains this identity.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Output(pub ContentHash);
 
 /// A content domain. Every referenced record checks both kind and schema.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Domain {
     pub kind: u32,
     pub schema: u32,
@@ -45,7 +45,7 @@ pub struct Domain {
 
 /// A reference cannot supply proof authority. Producers and verifier-owned
 /// associations use separate roots; imported bytes create no action association.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Reference {
     pub output: Output,
     pub domain: Domain,
@@ -61,6 +61,37 @@ pub trait Contents: Send + Sync {
 #[derive(Default)]
 pub struct Memory {
     entries: std::sync::Mutex<std::collections::HashMap<ContentHash, (Reference, Bytes)>>,
+}
+impl Memory {
+    /// Snapshot references and shared payload views for bounded toolchain packing.
+    pub fn entries(&self) -> Vec<(Reference, Bytes)> {
+        self.entries
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .values()
+            .cloned()
+            .collect()
+    }
+}
+/// Ordinary store containers embedded by the toolchain build. Entries are
+/// sorted by output digest; complete container validation occurs on demand.
+pub struct Embedded(pub &'static [(Reference, &'static [u8])]);
+impl Contents for Embedded {
+    fn get_content(&self, reference: Reference) -> Option<Bytes> {
+        let n = self
+            .0
+            .binary_search_by_key(&reference.output.0, |(r, _)| r.output.0)
+            .ok()?;
+        let (actual, bytes) = self.0[n];
+        if actual != reference {
+            return None;
+        }
+        checked_content(Arc::new(Region::Static(bytes)), reference)
+    }
+    fn put_content(&self, domain: Domain, bytes: &[u8]) -> Option<Reference> {
+        let reference = domain.reference(bytes)?;
+        self.get_content(reference).map(|_| reference)
+    }
 }
 impl Contents for Memory {
     fn get_content(&self, reference: Reference) -> Option<Bytes> {
@@ -106,6 +137,7 @@ enum Region {
         len: usize,
     },
     Owned(Arc<[u8]>),
+    Static(&'static [u8]),
 }
 // SAFETY: mappings are read-only; publication replaces files rather than
 // modifying a mapped inode. Every view retains an Arc to its mapping.
@@ -158,6 +190,7 @@ impl Region {
                 unsafe { std::slice::from_raw_parts(address.cast(), *len) }
             }
             Self::Owned(bytes) => bytes,
+            Self::Static(bytes) => bytes,
         }
     }
 }
@@ -327,24 +360,9 @@ impl Store {
     /// Mapping alone reads no payload pages; integrity checking necessarily does.
     pub fn get(&self, reference: Reference) -> Option<Bytes> {
         let region = Arc::new(Region::open(&self.path(reference.output.0, "outputs")).ok()?);
-        let bytes = region.bytes();
-        if bytes.get(..8)? != MAGIC
-            || word(bytes, 8)? != reference.domain.kind
-            || word(bytes, 12)? != reference.domain.schema
-            || number(bytes, 16)? != reference.len
-            || bytes.get(24..56)? != reference.output.0.0
-            || bytes.get(56..64)? != [0; 8]
-            || usize::try_from(reference.len).ok()?.checked_add(HEADER)? != bytes.len()
-            || reference.domain.output(&bytes[HEADER..]) != reference.output
-        {
-            return None;
-        }
-        let end = bytes.len();
-        Some(Bytes {
-            region,
-            range: HEADER..end,
-        })
+        checked_content(region, reference)
     }
+
     /// Read a previous association before demanding its output bytes. The query
     /// validates its recorded reads/action before calling get(reference).
     pub fn lookup(&self, address: Address) -> Option<Association> {
@@ -503,3 +521,24 @@ fn publish(path: &Path, parts: &[&[u8]]) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests;
+
+fn checked_content(region: Arc<Region>, reference: Reference) -> Option<Bytes> {
+    let bytes = region.bytes();
+    if reference.len > MAX_RECORD as u64
+        || bytes.get(..8)? != MAGIC
+        || word(bytes, 8)? != reference.domain.kind
+        || word(bytes, 12)? != reference.domain.schema
+        || number(bytes, 16)? != reference.len
+        || bytes.get(24..56)? != reference.output.0.0
+        || bytes.get(56..64)? != [0; 8]
+        || usize::try_from(reference.len).ok()?.checked_add(HEADER)? != bytes.len()
+        || reference.domain.output(&bytes[HEADER..]) != reference.output
+    {
+        return None;
+    }
+    let end = bytes.len();
+    Some(Bytes {
+        region,
+        range: HEADER..end,
+    })
+}

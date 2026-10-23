@@ -203,3 +203,38 @@ fn concurrent_readers_see_only_complete_associations() {
         }
     });
 }
+
+#[test]
+fn embedded_products_use_the_mapped_store_integrity_boundary() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::new(dir.path().to_owned());
+    let reference = store
+        .put(
+            Domain {
+                kind: 31,
+                schema: 1,
+            },
+            b"ordinary product",
+        )
+        .unwrap();
+    let bytes = fs::read(store.output_path(reference)).unwrap();
+    let embedded = |bytes: Vec<u8>| {
+        Embedded(Box::leak(
+            vec![(reference, &*Box::leak(bytes.into_boxed_slice()))].into_boxed_slice(),
+        ))
+    };
+    assert_eq!(
+        &*embedded(bytes.clone()).get_content(reference).unwrap(),
+        b"ordinary product"
+    );
+    for len in 0..bytes.len() {
+        assert!(
+            embedded(bytes[..len].to_vec())
+                .get_content(reference)
+                .is_none()
+        );
+    }
+    let mut corrupt = bytes;
+    *corrupt.last_mut().unwrap() ^= 1;
+    assert!(embedded(corrupt).get_content(reference).is_none());
+}
