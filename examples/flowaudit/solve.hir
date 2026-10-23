@@ -1,0 +1,250 @@
+// NetworkX edmondskarp.py:11-94 at 9d866a5f; BSD-3-Clause (LICENSES.md).
+// Smaller frontier first, source on ties; declared ordinal neighbors.
+type Search {
+  pred: List[Option[u64]],
+  succ: List[Option[u64]],
+  meeting: Option[u64],
+}
+
+fn bfs(g: model.Topology, r: residual.Residual) -> unique Search uses {} {
+  let mut pred: List[Option[u64]] = std@1/list.filled(g.vertices, None())
+  let mut succ: List[Option[u64]] = std@1/list.filled(g.vertices, None())
+  pred[g.source] = Some(g.source)
+  succ[g.sink] = Some(g.sink)
+  let mut left: List[u64] = [g.source]
+  let mut right: List[u64] = [g.sink]
+  let mut meeting: Option[u64] = None()
+  while list.len(left) != 0 && list.len(right) != 0 && meeting == None() {
+    let forward = list.len(left) <= list.len(right)
+    let mut next: List[u64] = []
+    let frontier = if forward {
+      copy left
+    } else {
+      copy right
+    }
+    for u in frontier {
+      for v in 0u64..g.vertices {
+        if forward {
+          if pred[v] == None() && residual.available(r, u, v) > 0 {
+            pred[v] = Some(u)
+            if succ[v] != None() {
+              meeting = Some(v)
+              break
+            }
+            list.push(mut next, v)
+          }
+        } else {
+          if succ[v] == None() && residual.available(r, v, u) > 0 {
+            succ[v] = Some(u)
+            if pred[v] != None() {
+              meeting = Some(v)
+              break
+            }
+            list.push(mut next, v)
+          }
+        }
+      }
+      if meeting != None() {
+        break
+      }
+    }
+    if forward {
+      left = take next
+    } else {
+      right = take next
+    }
+  }
+  unique Search(pred: take pred, succ: take succ, meeting: meeting)
+}
+
+fn path(g: model.Topology, s: Search, meeting: u64) -> Result[
+  unique List[u64],
+  report.Problem
+] uses {} {
+  let mut prefix: List[u64] = []
+  let mut seen = std@1/list.filled(g.vertices, false)
+  let mut cursor = meeting
+  while cursor != g.source {
+    if cursor >= g.vertices || seen[cursor] || list.len(prefix) >= g.vertices {
+      return Error(Invariant())
+    }
+    seen[cursor] = true
+    list.push(mut prefix, cursor)
+    let Some(previous) = s.pred[cursor] else {
+      return Error(Invariant())
+    }
+    cursor = previous
+  }
+  list.push(mut prefix, g.source)
+  std@1/list.reverse(mut prefix)
+  cursor = meeting
+  while cursor != g.sink {
+    let Some(next) = s.succ[cursor] else {
+      return Error(Invariant())
+    }
+    if next >= g.vertices || seen[next] || list.len(prefix) >= g.vertices {
+      return Error(Invariant())
+    }
+    seen[next] = true
+    list.push(mut prefix, next)
+    cursor = next
+  }
+  Ok(take prefix)
+}
+
+pub fn one(g: model.Topology, take capacities: unique List[u64], name: String) -> Result[
+  unique certificate.Witness,
+  report.Problem
+] uses {} {
+  let mut r = residual.create(g, capacities)?
+  let mut total = 0u64
+  // Edmonds-Karp shortest augmentations terminate; never report an arbitrary
+  // iteration cutoff as maximum. All capacities finite integers.
+  while true {
+    let search = bfs(g, r)
+    let Some(meeting) = search.meeting else {
+      break
+    }
+    let route = path(g, search, meeting)?
+    let mut amount = 64000000i64
+    for i in 1u64..list.len(route) {
+      let available = residual.available(r, route[i - 1], route[i])
+      if available < amount {
+        amount = available
+      }
+    }
+    if amount <= 0 {
+      return Error(Invariant())
+    }
+    for i in 1u64..list.len(route) {
+      residual.augment(mut r, route[i - 1], route[i], amount)?
+    }
+    let delta: u64 = int.truncate(amount)
+    total += delta
+    if total > 64000000 {
+      return Error(Invariant())
+    }
+  }
+  let mut flows: List[u64] = []
+  for edge in g.arcs {
+    let net = r.flow[edge.source][edge.target]
+    let flow: u64 = if net > 0 {
+      int.truncate(net)
+    } else {
+      0
+    }
+    list.push(mut flows, flow)
+  }
+  let reachable = certificate.reach(g, capacities, flows)?
+  let mut cut_arcs: List[u64] = []
+  let mut cut_capacity = 0u64
+  for i in 0u64..list.len(g.arcs) {
+    let e = g.arcs[i]
+    if reachable[e.source] && !reachable[e.target] {
+      list.push(mut cut_arcs, i)
+      cut_capacity += capacities[i]
+    }
+  }
+  let witness = unique certificate.Witness(
+    name: unique name,
+    capacities: take capacities,
+    flows: take flows,
+    value: total,
+    reachable: take reachable,
+    cut_arcs: take cut_arcs,
+    cut_capacity: cut_capacity
+  )
+  certificate.validate(g, witness, witness.capacities)?
+  Ok(take witness)
+}
+
+pub type Input {
+  name: String,
+  capacities: List[u64],
+}
+
+pub fn batch(
+  tasks: Tasks,
+  graph: Shared[model.Topology],
+  take requests: unique List[Input],
+  jobs: u64
+) -> Result[unique List[certificate.Witness], report.Problem] {
+  if jobs == 0 || jobs > 4 {
+    return Error(Jobs())
+  }
+  let input = shared.freeze(take requests)
+  task.scope(
+    tasks,
+    fn(s: Scope) -> Result[unique List[certificate.Witness], report.Problem] {
+      let count = shared.with(
+        input,
+        fn(items: List[Input]) -> u64 uses {} {
+          list.len(items)
+        }
+      )
+      let mut output: List[certificate.Witness] = []
+      let mut first = 0u64
+      while first < count {
+        let mut pending: TaskSet[Result[unique certificate.Witness, report.Problem]] of s = task.set(
+          s
+        )
+        let mut slots: List[Option[unique certificate.Witness]] = []
+        while list.len(slots) < jobs && first < count {
+          let index = first
+          list.push(mut slots, None())
+          task.add(
+            s,
+            mut pending,
+            task.async(
+              s,
+              fn() -> Result[unique certificate.Witness, report.Problem] {
+                shared.with(
+                  graph,
+                  fn(network_value: model.Topology) -> Result[
+                    unique certificate.Witness,
+                    report.Problem
+                  ] {
+                    shared.with(
+                      input,
+                      fn(items: List[Input]) -> Result[
+                        unique certificate.Witness,
+                        report.Problem
+                      ] {
+                        one(
+                          network_value,
+                          unique items[index].capacities,
+                          items[index].name
+                        )
+                      }
+                    )
+                  }
+                )
+              }
+            )
+          )
+          first += 1
+        }
+        while let Some(index) = task.await_any(s, pending) {
+          let joined = task.await_at(s, mut pending, index)
+          match take joined {
+            Ok(value) => {
+              slots[index] = Some(take value)
+            },
+            Error(problem) => {
+              task.cancel_all(s, take pending)
+              return Error(problem)
+            },
+          }
+        }
+        task.cancel_all(s, take pending)
+        for slot in take slots {
+          match take slot {
+            Some(value) => list.push(mut output, take value),
+            None() => return Error(Assembly()),
+          }
+        }
+      }
+      Ok(take output)
+    }
+  )
+}

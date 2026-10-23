@@ -1,0 +1,247 @@
+{
+  "reference": [
+    {
+      "id": "classic",
+      "cases": [
+        "classic"
+      ]
+    },
+    {
+      "id": "algorithms-1",
+      "cases": [
+        "upstream-zero-flow",
+        "clrs-antiparallel",
+        "reverse-cancel"
+      ]
+    },
+    {
+      "id": "algorithms-2",
+      "cases": [
+        "disconnected",
+        "zero-network",
+        "bottleneck"
+      ]
+    },
+    {
+      "id": "algorithms-3",
+      "cases": [
+        "four-scenarios"
+      ]
+    },
+    {
+      "id": "boundaries-1",
+      "cases": [
+        "zero-capacity",
+        "capacity-cap",
+        "capacity-over"
+      ]
+    },
+    {
+      "id": "boundaries-2",
+      "cases": [
+        "vertices-arcs-cap",
+        "vertices-over",
+        "arcs-over"
+      ]
+    },
+    {
+      "id": "boundaries-3",
+      "cases": [
+        "scenarios-over",
+        "name-cap",
+        "name-over"
+      ]
+    },
+    {
+      "id": "boundaries-4",
+      "cases": [
+        "bad-override",
+        "overrides-cap",
+        "overrides-over"
+      ]
+    },
+    {
+      "id": "boundaries-5",
+      "cases": [
+        "input-cap",
+        "input-over",
+        "jobs-cap"
+      ]
+    },
+    {
+      "id": "boundaries-6",
+      "cases": [
+        "jobs-over"
+      ]
+    },
+    {
+      "id": "failures-1",
+      "cases": [
+        "duplicate-arc",
+        "self-loop",
+        "bad-endpoint"
+      ]
+    },
+    {
+      "id": "failures-2",
+      "cases": [
+        "same-terminals",
+        "malformed",
+        "denial"
+      ]
+    },
+    {
+      "id": "failures-3",
+      "cases": [
+        "pending",
+        "commit-failure"
+      ]
+    },
+    {
+      "id": "verification-1",
+      "cases": [
+        "alternate-optimum",
+        "corrupt-flow",
+        "corrupt-conservation"
+      ]
+    },
+    {
+      "id": "verification-2",
+      "cases": [
+        "corrupt-value",
+        "corrupt-cut",
+        "corrupt-cut-arcs"
+      ]
+    },
+    {
+      "id": "verification-3",
+      "cases": [
+        "corrupt-reachable",
+        "corrupt-capacity",
+        "malformed-report"
+      ]
+    },
+    {
+      "id": "verification-4",
+      "cases": [
+        "report-cap",
+        "report-over"
+      ]
+    },
+    {
+      "id": "logical-jobs",
+      "cases": [
+        "logical-jobs-1",
+        "logical-jobs-2"
+      ]
+    }
+  ],
+  "native": [
+    {
+      "id": "core",
+      "cases": [
+        "classic",
+        "pending",
+        "alternate-optimum"
+      ]
+    },
+    {
+      "id": "native-algorithms",
+      "cases": [
+        "upstream-zero-flow",
+        "clrs-antiparallel",
+        "reverse-cancel",
+        "disconnected",
+        "zero-network",
+        "zero-capacity",
+        "bottleneck",
+        "four-scenarios"
+      ]
+    },
+    {
+      "id": "native-bounds-a",
+      "cases": [
+        "capacity-cap",
+        "capacity-over",
+        "vertices-arcs-cap",
+        "vertices-over",
+        "arcs-over",
+        "scenarios-over",
+        "name-cap",
+        "name-over"
+      ]
+    },
+    {
+      "id": "native-bounds-b",
+      "cases": [
+        "bad-override",
+        "overrides-cap",
+        "overrides-over",
+        "input-cap",
+        "input-over",
+        "jobs-cap",
+        "jobs-over"
+      ]
+    },
+    {
+      "id": "native-errors",
+      "cases": [
+        "duplicate-arc",
+        "self-loop",
+        "bad-endpoint",
+        "same-terminals",
+        "malformed",
+        "denial",
+        "commit-failure"
+      ]
+    },
+    {
+      "id": "native-verification",
+      "cases": [
+        "corrupt-flow",
+        "corrupt-conservation",
+        "corrupt-value",
+        "corrupt-cut",
+        "corrupt-cut-arcs",
+        "corrupt-reachable",
+        "corrupt-capacity",
+        "malformed-report"
+      ]
+    },
+    {
+      "id": "native-report-cap",
+      "cases": [
+        "report-cap"
+      ]
+    },
+    {
+      "id": "native-report-over",
+      "cases": [
+        "report-over"
+      ]
+    },
+    {
+      "id": "logical-jobs",
+      "cases": [
+        "logical-jobs-1",
+        "logical-jobs-2"
+      ]
+    }
+  ],
+  "ordered": {
+    "backends": [
+      "llvm",
+      "cranelift"
+    ],
+    "widths": [
+      1,
+      2,
+      4
+    ],
+    "kinds": [
+      "success",
+      "domain",
+      "cancel"
+    ]
+  }
+}

@@ -1,0 +1,119 @@
+pub const OUTPUT_BYTES: u64 = 32768
+
+pub type Stage = Open | Read | Create | Write | Commit
+
+pub type Problem = Usage | Jobs | Json | Shape | Version | Vertices | Arcs | Scenarios | Overrides | Endpoint | Override | Capacity | Duplicate | Name | Bounds | InputLimit | OutputLimit | Invariant | Witness | Assembly | Grant | File(
+  Stage,
+  FileError
+) | Canceled(CancelCause)
+
+pub type Document {
+  version: u64,
+  results: List[certificate.Witness],
+}
+
+fn document_to_json(value: Document) -> json.Value uses {} = comptime derive.json_value(
+  shape(Document)
+)
+
+fn document_from_json(value: json.Value) -> Result[unique Document, String] uses {} = comptime derive.from_json(
+  shape(Document)
+)
+
+pub fn decode(take data: Bytes) -> Result[unique Document, Problem] uses {} {
+  if bytes.len(data) > OUTPUT_BYTES {
+    return Error(OutputLimit())
+  }
+  let value = model.parse(take data, OUTPUT_BYTES)?
+  let count = model.collection(value, "results", 4, Witness())?
+  let Some(rows) = json_access.member(value, "results") else {
+    return Error(Shape())
+  }
+  for i in 0u64..count {
+    let Some(row) = json_access.element(rows, i) else {
+      return Error(Shape())
+    }
+    let _ = model.collection(row, "capacities", 64, Witness())?
+    let _ = model.collection(row, "flows", 64, Witness())?
+    let _ = model.collection(row, "reachable", 16, Witness())?
+    let _ = model.collection(row, "cut_arcs", 64, Witness())?
+  }
+  let Ok(document) = document_from_json(value) else {
+    return Error(Shape())
+  }
+  Ok(take document)
+}
+
+pub fn encode(take results: unique List[certificate.Witness]) -> Result[
+  unique Bytes,
+  Problem
+] uses {} {
+  let document = Document(version: 1, results: take results)
+  let Ok(text) = json.stringify(document_to_json(document)) else {
+    return Error(Shape())
+  }
+  if string.byte_len(text) >= OUTPUT_BYTES {
+    return Error(OutputLimit())
+  }
+  let encoded = f"{text}\n"
+  Ok(unique string.as_bytes(encoded))
+}
+
+pub fn file_error(stage: Stage, error: FileError) -> Problem {
+  match error {
+    Canceled(cause) => Canceled(cause),
+    _ => File(stage, error),
+  }
+}
+
+pub fn publish(d: Dir, output: Path, data: Bytes) -> Result[(), Problem] {
+  if bytes.len(data) > OUTPUT_BYTES {
+    return Error(OutputLimit())
+  }
+  let mut destination = match file.create_atomic(d, output) {
+    Ok(value) => take value,
+    Error(error) => return Error(file_error(Create(), error)),
+  }
+  match file.write_all(d, mut destination, data) {
+    Ok(()) => (),
+    Error(error) => return Error(file_error(Write(), error)),
+  }
+  match file.commit(d, take destination) {
+    Ok(()) => Ok(()),
+    Error(error) => Error(file_error(Commit(), error)),
+  }
+}
+
+pub fn name(problem: Problem) -> String uses {} {
+  match problem {
+    Usage() => "usage",
+    Jobs() => "jobs",
+    Json() => "json",
+    Shape() => "shape",
+    Version() => "version",
+    Vertices() => "vertices",
+    Arcs() => "arcs",
+    Scenarios() => "scenarios",
+    Overrides() => "overrides",
+    Endpoint() => "endpoint",
+    Override() => "override",
+    Capacity() => "capacity",
+    Duplicate() => "duplicate",
+    Name() => "name",
+    Bounds() => "bounds",
+    InputLimit() => "input_limit",
+    OutputLimit() => "output_limit",
+    Invariant() => "invariant",
+    Witness() => "witness",
+    Assembly() => "assembly",
+    Grant() => "grant",
+    Canceled(_) => "canceled",
+    File(_, NotGranted()) => "denied",
+    File(_, PermissionDenied()) => "denied",
+    File(Open(), _) => "file_open",
+    File(Read(), _) => "file_read",
+    File(Create(), _) => "file_create",
+    File(Write(), _) => "file_write",
+    File(Commit(), _) => "file_commit",
+  }
+}

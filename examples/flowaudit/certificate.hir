@@ -1,0 +1,144 @@
+pub fn witness_to_json(value: certificate.Witness) -> json.Value uses {} = comptime derive.json_value(
+  shape(certificate.Witness)
+)
+
+pub fn witness_from_json(value: json.Value) -> Result[
+  unique certificate.Witness,
+  String
+] uses {} = comptime derive.from_json(shape(certificate.Witness))
+
+// Verification contains no augmenting-path search. Feasibility plus a separating
+// cut of equal capacity proves optimality by weak duality.
+pub type Witness {
+  name: String,
+  capacities: List[u64],
+  flows: List[u64],
+  value: u64,
+  reachable: List[bool],
+  cut_arcs: List[u64],
+  cut_capacity: u64,
+}
+
+pub fn reach(g: model.Topology, capacities: List[u64], flows: List[u64]) -> Result[
+  unique List[bool],
+  report.Problem
+] uses {} {
+  if list.len(capacities) != list.len(g.arcs) || list.len(flows) != list.len(g.arcs) {
+    return Error(Witness())
+  }
+  let mut reached: List[bool] = []
+  for u in 0u64..g.vertices {
+    list.push(mut reached, false)
+  }
+  reached[g.source] = true
+  // Independent monotone fixed point, <=n passes, scanning original arcs.
+  // Reverse residual is the original flow; antiparallel contributions unite.
+  for pass in 0u64..g.vertices {
+    let mut changed = false
+    for i in 0u64..list.len(g.arcs) {
+      let e = g.arcs[i]
+      if flows[i] > capacities[i] {
+        return Error(Witness())
+      }
+      if reached[e.source] && !reached[e.target] && flows[i] < capacities[i] {
+        reached[e.target] = true
+        changed = true
+      }
+      if reached[e.target] && !reached[e.source] && flows[i] > 0 {
+        reached[e.source] = true
+        changed = true
+      }
+    }
+    if !changed {
+      break
+    }
+  }
+  Ok(take reached)
+}
+
+pub fn validate(g: model.Topology, w: Witness, expected: List[u64]) -> Result[
+  (),
+  report.Problem
+] uses {} {
+  let count = list.len(g.arcs)
+  if list.len(w.capacities) != count || list.len(w.flows) != count || list.len(expected) != count || list.len(
+    w.reachable
+  ) != g.vertices || list.len(w.cut_arcs) > count {
+    return Error(Witness())
+  }
+  if w.value > 64000000 || w.cut_capacity > 64000000 {
+    return Error(Witness())
+  }
+  let mut balance = std@1/list.filled(g.vertices, 0i64)
+  for i in 0u64..count {
+    if w.capacities[i] != expected[i] || expected[i] > model.MAX_CAPACITY || w.flows[i] > expected[i] {
+      return Error(Witness())
+    }
+    let e = g.arcs[i]
+    let flow: i64 = int.truncate(w.flows[i])
+    balance[e.source] -= flow
+    balance[e.target] += flow
+  }
+  let value: i64 = int.truncate(w.value)
+  for u in 0u64..g.vertices {
+    let required = if u == g.source {
+      -value
+    } else {
+      if u == g.sink {
+        value
+      } else {
+        0i64
+      }
+    }
+    if balance[u] != required {
+      return Error(Witness())
+    }
+  }
+  if !w.reachable[g.source] || w.reachable[g.sink] {
+    return Error(Witness())
+  }
+  let reached = reach(g, w.capacities, w.flows)?
+  if reached != w.reachable {
+    return Error(Witness())
+  }
+  let mut cut = 0u64
+  let mut position = 0u64
+  for i in 0u64..count {
+    let e = g.arcs[i]
+    if w.reachable[e.source] && !w.reachable[e.target] {
+      if position >= list.len(w.cut_arcs) || w.cut_arcs[position] != i || w.flows[i] != expected[i] {
+        return Error(Witness())
+      }
+      cut += expected[i]
+      position += 1
+    }
+    if !w.reachable[e.source] && w.reachable[e.target] && w.flows[i] != 0 {
+      return Error(Witness())
+    }
+  }
+  if position != list.len(w.cut_arcs) || cut != w.cut_capacity || cut != w.value {
+    return Error(Witness())
+  }
+  Ok(())
+}
+
+pub fn verify(m: model.Manifest, take data: Bytes) -> Result[u64, report.Problem] uses {} {
+  let document = report.decode(take data)?
+  if document.version != 1 {
+    return Error(Version())
+  }
+  if list.len(document.results) != list.len(m.scenarios) {
+    return Error(Witness())
+  }
+  let g = model.topology(m)?
+  for i in 0u64..list.len(m.scenarios) {
+    let s = m.scenarios[i]
+    let w = document.results[i]
+    if w.name != s.name {
+      return Error(Witness())
+    }
+    let capacities = model.capacities(m, s)
+    validate(g, w, capacities)?
+  }
+  Ok(list.len(document.results))
+}

@@ -1,0 +1,26 @@
+{
+  "args": [
+    "audit",
+    "data",
+    "network.json",
+    "report.json",
+    "4"
+  ],
+  "io": {
+    "stdout": "stdout.bytes@1",
+    "stderr": "stderr.bytes@1",
+    "tasks": "tasks.cooperative@1",
+    "dirs": [
+      {
+        "path": "data",
+        "host": "fixtures",
+        "access": "read_write"
+      }
+    ]
+  },
+  "placement": {
+    "cores": 1,
+    "reorder": "off",
+    "commit": "shared"
+  }
+}

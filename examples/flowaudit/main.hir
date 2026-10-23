@@ -1,0 +1,175 @@
+pub type AppError = Output(OutputError)
+
+type Options {
+  audit: bool,
+  root: Path,
+  input: Path,
+  output: Path,
+  jobs: u64,
+  interruptible: bool,
+}
+
+fn arguments(args: Args) -> Result[Options, report.Problem] {
+  let count = arg.len(args)
+  if count != 5 && count != 6 {
+    return Error(Usage())
+  }
+  let Ok(command) = arg.text(args, 0) else {
+    return Error(Usage())
+  }
+  if command != "audit" && command != "verify" {
+    return Error(Usage())
+  }
+  let Ok(root) = arg.path(args, 1) else {
+    return Error(Usage())
+  }
+  let Ok(input) = arg.path(args, 2) else {
+    return Error(Usage())
+  }
+  let Ok(output) = arg.path(args, 3) else {
+    return Error(Usage())
+  }
+  let Ok(value) = arg.text(args, 4) else {
+    return Error(Usage())
+  }
+  let Ok(jobs) = u64.parse(value) else {
+    return Error(Jobs())
+  }
+  if jobs == 0 || jobs > 4 {
+    return Error(Jobs())
+  }
+  if count == 6 {
+    let Ok(flag) = arg.text(args, 5) else {
+      return Error(Usage())
+    }
+    if flag != "--interruptible" {
+      return Error(Usage())
+    }
+  }
+  Ok(
+    Options(
+      audit: command == "audit",
+      root: root,
+      input: input,
+      output: output,
+      jobs: jobs,
+      interruptible: count == 6
+    )
+  )
+}
+
+fn read(d: Dir, input: Path, limit: u64, problem: report.Problem) -> Result[
+  unique Bytes,
+  report.Problem
+] {
+  let mut handle = match file.open(d, input) {
+    Ok(value) => take value,
+    Error(error) => return Error(report.file_error(Open(), error)),
+  }
+  match file.read_all_bounded(d, mut handle, limit) {
+    Ok(data) => Ok(take data),
+    Error(Limit()) => Error(problem),
+    Error(File(error)) => Error(report.file_error(Read(), error)),
+  }
+}
+
+fn execute(d: Dir, tasks: Tasks, options: Options) -> Result[u64, report.Problem] {
+  let manifest = model.decode(read(d, options.input, model.INPUT_BYTES, InputLimit())?)?
+  if !options.audit {
+    let data = read(d, options.output, report.OUTPUT_BYTES, OutputLimit())?
+    return certificate.verify(manifest, take data)
+  }
+  let count = list.len(manifest.scenarios)
+  let graph = shared.freeze(model.topology(manifest)?)
+  let mut requests: List[solve.Input] = []
+  for scenario in manifest.scenarios {
+    list.push(
+      mut requests,
+      solve.Input(
+        name: unique scenario.name,
+        capacities: model.capacities(manifest, scenario)
+      )
+    )
+  }
+  let results = solve.batch(tasks, graph, take requests, options.jobs)?
+  let encoded = report.encode(take results)?
+  // Validate the complete serialized report before opening an atomic target.
+  let _ = certificate.verify(manifest, copy encoded)?
+  report.publish(d, options.output, encoded)?
+  Ok(count)
+}
+
+// Interrupt is a delivered capability input. select cancels and joins the
+// losing workflow, including an opened file whose read is still Pending.
+fn interruptible(d: Dir, tasks: Tasks, signals: Signals, options: Options) -> Result[
+  u64,
+  report.Problem
+] {
+  task.scope(
+    tasks,
+    fn(s: Scope) -> Result[u64, report.Problem] {
+      let mut pending: TaskSet[Result[u64, report.Problem]] of s = task.set(s)
+      task.add(
+        s,
+        mut pending,
+        task.async(
+          s,
+          fn() -> Result[u64, report.Problem] {
+            execute(d, tasks, options)
+          }
+        )
+      )
+      task.add(
+        s,
+        mut pending,
+        task.async(
+          s,
+          fn() -> Result[u64, report.Problem] {
+            let _ = signal.wait(signals, [Interrupt()])
+            Error(Canceled(Requested()))
+          }
+        )
+      )
+      let (_, outcome) = task.select(s, take pending)
+      outcome
+    }
+  )
+}
+
+fn run(rt: Io, args: Args) -> Result[u64, report.Problem] {
+  let options = arguments(args)?
+  let d = match io.dir(rt, options.root) {
+    Ok(value) => value,
+    Error(error) => return Error(report.file_error(Open(), error)),
+  }
+  let Ok(tasks) = io.tasks(rt) else {
+    return Error(Grant())
+  }
+  if options.interruptible {
+    let Ok(signals) = io.signals(rt) else {
+      return Error(Grant())
+    }
+    interruptible(d, tasks, signals, options)
+  } else {
+    execute(d, tasks, options)
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[std@1/process.ExitCode, AppError] {
+  let Ok(output) = io.stdout(rt) else {
+    return Ok(std@1/process.exit_code(3u8))
+  }
+  let Ok(errors) = io.stderr(rt) else {
+    return Ok(std@1/process.exit_code(3u8))
+  }
+  match run(rt, args) {
+    Ok(count) => {
+      out.print(output, f"flowaudit: {count} scenarios\n")?
+      Ok(std@1/process.SUCCESS)
+    },
+    Error(problem) => {
+      err.print(errors, f"flowaudit: {report.name(problem)}\n")?
+      Ok(std@1/process.exit_code(2u8))
+    },
+  }
+}

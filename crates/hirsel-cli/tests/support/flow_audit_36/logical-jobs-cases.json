@@ -1,0 +1,24 @@
+[
+  {
+    "id": "logical-jobs-1",
+    "input": "{\"version\":1,\"vertices\":[\"s\",\"v1\",\"v2\",\"v3\",\"v4\",\"t\"],\"arcs\":[{\"name\":\"e0\",\"source\":\"s\",\"target\":\"v1\",\"capacity\":16},{\"name\":\"e1\",\"source\":\"s\",\"target\":\"v2\",\"capacity\":13},{\"name\":\"e2\",\"source\":\"v1\",\"target\":\"v2\",\"capacity\":10},{\"name\":\"e3\",\"source\":\"v2\",\"target\":\"v1\",\"capacity\":4},{\"name\":\"e4\",\"source\":\"v1\",\"target\":\"v3\",\"capacity\":12},{\"name\":\"e5\",\"source\":\"v3\",\"target\":\"v2\",\"capacity\":9},{\"name\":\"e6\",\"source\":\"v2\",\"target\":\"v4\",\"capacity\":14},{\"name\":\"e7\",\"source\":\"v4\",\"target\":\"v3\",\"capacity\":7},{\"name\":\"e8\",\"source\":\"v3\",\"target\":\"t\",\"capacity\":20},{\"name\":\"e9\",\"source\":\"v4\",\"target\":\"t\",\"capacity\":4}],\"source\":\"s\",\"sink\":\"t\",\"scenarios\":[{\"name\":\"s0\",\"overrides\":[]},{\"name\":\"s1\",\"overrides\":[{\"arc\":\"e0\",\"capacity\":0}]},{\"name\":\"s2\",\"overrides\":[{\"arc\":\"e0\",\"capacity\":8}]},{\"name\":\"s3\",\"overrides\":[{\"arc\":\"e0\",\"capacity\":1000000}]}]}",
+    "optima": [
+      23,
+      13,
+      21,
+      23
+    ],
+    "cli_jobs": 1
+  },
+  {
+    "id": "logical-jobs-2",
+    "input": "{\"version\":1,\"vertices\":[\"s\",\"v1\",\"v2\",\"v3\",\"v4\",\"t\"],\"arcs\":[{\"name\":\"e0\",\"source\":\"s\",\"target\":\"v1\",\"capacity\":16},{\"name\":\"e1\",\"source\":\"s\",\"target\":\"v2\",\"capacity\":13},{\"name\":\"e2\",\"source\":\"v1\",\"target\":\"v2\",\"capacity\":10},{\"name\":\"e3\",\"source\":\"v2\",\"target\":\"v1\",\"capacity\":4},{\"name\":\"e4\",\"source\":\"v1\",\"target\":\"v3\",\"capacity\":12},{\"name\":\"e5\",\"source\":\"v3\",\"target\":\"v2\",\"capacity\":9},{\"name\":\"e6\",\"source\":\"v2\",\"target\":\"v4\",\"capacity\":14},{\"name\":\"e7\",\"source\":\"v4\",\"target\":\"v3\",\"capacity\":7},{\"name\":\"e8\",\"source\":\"v3\",\"target\":\"t\",\"capacity\":20},{\"name\":\"e9\",\"source\":\"v4\",\"target\":\"t\",\"capacity\":4}],\"source\":\"s\",\"sink\":\"t\",\"scenarios\":[{\"name\":\"s0\",\"overrides\":[]},{\"name\":\"s1\",\"overrides\":[{\"arc\":\"e0\",\"capacity\":0}]},{\"name\":\"s2\",\"overrides\":[{\"arc\":\"e0\",\"capacity\":8}]},{\"name\":\"s3\",\"overrides\":[{\"arc\":\"e0\",\"capacity\":1000000}]}]}",
+    "optima": [
+      23,
+      13,
+      21,
+      23
+    ],
+    "cli_jobs": 2
+  }
+]

@@ -1,0 +1,316 @@
+// Typed admission precedes residual allocation. The std DOM is bounded by bytes.
+pub const INPUT_BYTES: u64 = 65536
+
+pub const MAX_VERTICES: u64 = 16
+
+pub const MAX_ARCS: u64 = 64
+
+pub const MAX_CAPACITY: u64 = 1000000
+
+pub const MAX_SCENARIOS: u64 = 4
+
+pub type Arc {
+  name: String,
+  source: String,
+  target: String,
+  capacity: u64,
+}
+
+pub type Override {
+  arc: String,
+  capacity: u64,
+}
+
+pub type Scenario {
+  name: String,
+  overrides: List[Override],
+}
+
+pub type Manifest {
+  version: u64,
+  vertices: List[String],
+  arcs: List[Arc],
+  source: String,
+  sink: String,
+  scenarios: List[Scenario],
+}
+
+pub type Edge {
+  source: u64,
+  target: u64,
+  capacity: u64,
+}
+
+pub type Topology {
+  vertices: u64,
+  source: u64,
+  sink: u64,
+  arcs: List[Edge],
+}
+
+fn arc_from_json(value: json.Value) -> Result[unique Arc, String] uses {} = comptime derive.from_json(
+  shape(Arc)
+)
+
+fn override_from_json(value: json.Value) -> Result[unique Override, String] uses {} = comptime derive.from_json(
+  shape(Override)
+)
+
+fn scenario_from_json(value: json.Value) -> Result[unique Scenario, String] uses {} = comptime derive.from_json(
+  shape(Scenario)
+)
+
+fn manifest_from_json(value: json.Value) -> Result[unique Manifest, String] uses {} = comptime derive.from_json(
+  shape(Manifest)
+)
+
+pub fn collection(value: json.Value, key: String, limit: u64, problem: report.Problem) -> Result[
+  u64,
+  report.Problem
+] uses {} {
+  let Some(member) = json_access.member(value, key) else {
+    return Error(Shape())
+  }
+  let Some(items) = json_access.as_array(member) else {
+    return Error(Shape())
+  }
+  let count = list.len(items)
+  if count > limit {
+    return Error(problem)
+  }
+  Ok(count)
+}
+
+pub fn parse(take data: Bytes, limit: u64) -> Result[json.Value, report.Problem] uses {} {
+  if bytes.len(data) > limit {
+    return Error(InputLimit())
+  }
+  let Ok(text) = string.from_bytes(take data) else {
+    return Error(Json())
+  }
+  let Ok(value) = json.parse(take text) else {
+    return Error(Json())
+  }
+  Ok(take value)
+}
+
+fn bounded_name(value: json.Value) -> Result[(), report.Problem] uses {} {
+  let Some(text) = json_access.as_text(value) else {
+    return Error(Shape())
+  }
+  name(text)
+}
+
+fn named_field(value: json.Value, key: String) -> Result[(), report.Problem] uses {} {
+  let Some(member) = json_access.member(value, key) else {
+    return Error(Shape())
+  }
+  bounded_name(member)
+}
+
+// Inspect text before derived decoding copies names into typed collections.
+fn preflight_names(value: json.Value) -> Result[(), report.Problem] uses {} {
+  let Some(vertices) = json_access.member(value, "vertices") else {
+    return Error(Shape())
+  }
+  let Some(items) = json_access.as_array(vertices) else {
+    return Error(Shape())
+  }
+  for item in items {
+    bounded_name(item)?
+  }
+  named_field(value, "source")?
+  named_field(value, "sink")?
+  let Some(arcs) = json_access.member(value, "arcs") else {
+    return Error(Shape())
+  }
+  let Some(edges) = json_access.as_array(arcs) else {
+    return Error(Shape())
+  }
+  for edge in edges {
+    named_field(edge, "name")?
+    named_field(edge, "source")?
+    named_field(edge, "target")?
+  }
+  let Some(scenarios) = json_access.member(value, "scenarios") else {
+    return Error(Shape())
+  }
+  let Some(rows) = json_access.as_array(scenarios) else {
+    return Error(Shape())
+  }
+  for row in rows {
+    named_field(row, "name")?
+    let Some(overrides) = json_access.member(row, "overrides") else {
+      return Error(Shape())
+    }
+    let Some(changes) = json_access.as_array(overrides) else {
+      return Error(Shape())
+    }
+    for change in changes {
+      named_field(change, "arc")?
+    }
+  }
+  Ok(())
+}
+
+pub fn decode(take data: Bytes) -> Result[unique Manifest, report.Problem] uses {} {
+  let value = parse(take data, INPUT_BYTES)?
+  let _ = collection(value, "vertices", MAX_VERTICES, Vertices())?
+  let _ = collection(value, "arcs", MAX_ARCS, Arcs())?
+  let count = collection(value, "scenarios", MAX_SCENARIOS, Scenarios())?
+  let Some(scenarios) = json_access.member(value, "scenarios") else {
+    return Error(Shape())
+  }
+  for i in 0u64..count {
+    let Some(item) = json_access.element(scenarios, i) else {
+      return Error(Shape())
+    }
+    let _ = collection(item, "overrides", MAX_ARCS, Overrides())?
+  }
+  preflight_names(value)?
+  let Ok(manifest) = manifest_from_json(value) else {
+    return Error(Shape())
+  }
+  validate(manifest)?
+  Ok(take manifest)
+}
+
+fn name(value: String) -> Result[(), report.Problem] uses {} {
+  if string.byte_len(value) == 0 || string.byte_len(value) > 128 {
+    return Error(Name())
+  }
+  Ok(())
+}
+
+pub fn ordinal(names: List[String], value: String) -> Result[u64, report.Problem] uses {} {
+  for i in 0u64..list.len(names) {
+    if names[i] == value {
+      return Ok(i)
+    }
+  }
+  Error(Endpoint())
+}
+
+pub fn validate(m: Manifest) -> Result[(), report.Problem] uses {} {
+  if m.version != 1 {
+    return Error(Version())
+  }
+  let n = list.len(m.vertices)
+  let a = list.len(m.arcs)
+  let count = list.len(m.scenarios)
+  if n < 2 || n > MAX_VERTICES {
+    return Error(Vertices())
+  }
+  if a > MAX_ARCS {
+    return Error(Arcs())
+  }
+  if count == 0 || count > MAX_SCENARIOS {
+    return Error(Scenarios())
+  }
+  // Derived maxima: 256 matrix cells, 128 paired edges, two 16-item frontiers,
+  // path <=16 vertices; sum <=64,000,000, residual <=2,000,000.
+  // Every product fits u64, every signed update fits i64, before growth.
+  if n * n > 256 || a * 2 > 128 || a * MAX_CAPACITY > 64000000 {
+    return Error(Bounds())
+  }
+  for i in 0u64..n {
+    name(m.vertices[i])?
+    for j in 0u64..i {
+      if m.vertices[i] == m.vertices[j] {
+        return Error(Duplicate())
+      }
+    }
+  }
+  let source = ordinal(m.vertices, m.source)?
+  let sink = ordinal(m.vertices, m.sink)?
+  if source == sink {
+    return Error(Endpoint())
+  }
+  for i in 0u64..a {
+    let e = m.arcs[i]
+    name(e.name)?
+    let u = ordinal(m.vertices, e.source)?
+    let v = ordinal(m.vertices, e.target)?
+    if u == v {
+      return Error(Endpoint())
+    }
+    if e.capacity > MAX_CAPACITY {
+      return Error(Capacity())
+    }
+    for j in 0u64..i {
+      let previous = m.arcs[j]
+      if previous.name == e.name || previous.source == e.source && previous.target == e.target {
+        return Error(Duplicate())
+      }
+    }
+  }
+  for i in 0u64..count {
+    let scenario = m.scenarios[i]
+    name(scenario.name)?
+    for j in 0u64..i {
+      if m.scenarios[j].name == scenario.name {
+        return Error(Duplicate())
+      }
+    }
+    if list.len(scenario.overrides) > MAX_ARCS {
+      return Error(Overrides())
+    }
+    for k in 0u64..list.len(scenario.overrides) {
+      let o = scenario.overrides[k]
+      if o.capacity > MAX_CAPACITY {
+        return Error(Capacity())
+      }
+      let mut found = false
+      for e in m.arcs {
+        if e.name == o.arc {
+          found = true
+        }
+      }
+      if !found {
+        return Error(Override())
+      }
+      for j in 0u64..k {
+        if scenario.overrides[j].arc == o.arc {
+          return Error(Duplicate())
+        }
+      }
+    }
+  }
+  Ok(())
+}
+
+pub fn topology(m: Manifest) -> Result[unique Topology, report.Problem] uses {} {
+  let mut arcs: List[Edge] = []
+  for e in m.arcs {
+    list.push(
+      mut arcs,
+      Edge(
+        source: ordinal(m.vertices, e.source)?,
+        target: ordinal(m.vertices, e.target)?,
+        capacity: e.capacity
+      )
+    )
+  }
+  Ok(
+    unique Topology(
+      vertices: list.len(m.vertices),
+      source: ordinal(m.vertices, m.source)?,
+      sink: ordinal(m.vertices, m.sink)?,
+      arcs: take arcs
+    )
+  )
+}
+
+pub fn capacities(m: Manifest, s: Scenario) -> unique List[u64] uses {} {
+  let mut values: List[u64] = []
+  for arc in m.arcs {
+    let mut capacity = arc.capacity
+    for o in s.overrides {
+      if o.arc == arc.name {
+        capacity = o.capacity
+      }
+    }
+    list.push(mut values, capacity)
+  }
+  take values
+}

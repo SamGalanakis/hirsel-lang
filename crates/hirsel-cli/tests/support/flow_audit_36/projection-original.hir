@@ -1,0 +1,11 @@
+type State { rows: List[List[i64]] }
+@noalloc
+fn update(mut state: unique State) -> () uses {} {
+  state.rows[0][1] += 1
+  state.rows[1][0] -= 1
+}
+pub fn main() -> Result[(), ()] {
+  let mut state = unique State(rows: [[0i64, 0i64], [0i64, 0i64]])
+  update(mut state)
+  Ok(())
+}

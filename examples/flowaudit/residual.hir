@@ -1,0 +1,86 @@
+// NetworkX utils.py:82-157, pinned 9d866a5f; BSD-3-Clause (LICENSES.md).
+// One ordered pair has one net flow even when both input directions exist.
+pub type Graph[C] {
+  rows: List[List[C]],
+}
+
+pub type Residual {
+  capacity: Graph[i64],
+  flow: List[List[i64]],
+}
+
+// Borrow graph and callback; only the accumulator is transferred. Dense ordinal
+// neighbors replace Python insertion-ordered dicts and include zero cells.
+pub fn fold[C, A: plain](
+  graph: Graph[C],
+  vertex: u64,
+  take initial: A,
+  f: fn(A, u64, C) -> A uses {}
+) -> A uses {} {
+  let mut accumulated = take initial
+  for v in 0u64..list.len(graph.rows[vertex]) {
+    accumulated = f(accumulated, v, graph.rows[vertex][v])
+  }
+  take accumulated
+}
+
+pub fn create(g: model.Topology, capacities: List[u64]) -> Result[
+  unique Residual,
+  report.Problem
+] uses {} {
+  if g.vertices > 16 || list.len(g.arcs) > 64 || list.len(capacities) != list.len(
+    g.arcs
+  ) {
+    return Error(Bounds())
+  }
+  let mut rows: List[List[i64]] = []
+  let mut flows: List[List[i64]] = []
+  for u in 0u64..g.vertices {
+    list.push(mut rows, std@1/list.filled(g.vertices, 0i64))
+    list.push(mut flows, std@1/list.filled(g.vertices, 0i64))
+  }
+  for i in 0u64..list.len(g.arcs) {
+    let e = g.arcs[i]
+    if capacities[i] > model.MAX_CAPACITY {
+      return Error(Capacity())
+    }
+    rows[e.source][e.target] = int.truncate(capacities[i])
+  }
+  let graph = Graph(rows: take rows)
+  for u in 0u64..g.vertices {
+    let total = fold(
+      graph,
+      u,
+      0i64,
+      fn(sum: i64, v: u64, capacity: i64) -> i64 uses {} {
+        sum + capacity
+      }
+    )
+    if total > 64000000 {
+      return Error(Bounds())
+    }
+  }
+  Ok(unique Residual(capacity: take graph, flow: take flows))
+}
+
+@noalloc
+pub fn available(r: Residual, u: u64, v: u64) -> i64 uses {} {
+  r.capacity.rows[u][v] - r.flow[u][v]
+}
+
+// Signed antisymmetric state is deliberate: a reverse update may be negative.
+@noalloc
+pub fn augment(mut r: unique Residual, u: u64, v: u64, amount: i64) -> Result[
+  (),
+  report.Problem
+] uses {} {
+  if amount <= 0 || amount > available(r, u, v) {
+    return Error(Invariant())
+  }
+  r.flow[u][v] += amount
+  r.flow[v][u] -= amount
+  if r.flow[u][v] != -r.flow[v][u] || r.flow[u][v] > r.capacity.rows[u][v] || r.flow[v][u] > r.capacity.rows[v][u] {
+    return Error(Invariant())
+  }
+  Ok(())
+}
