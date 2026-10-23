@@ -1,0 +1,24 @@
+{
+  "args": [
+    "--jobs",
+    "4",
+    "demo.sheet"
+  ],
+  "io": {
+    "stdout": "stdout.bytes@1",
+    "stdin": "stdin.bytes@1",
+    "tasks": "tasks.cooperative@1",
+    "dirs": [
+      {
+        "path": "work",
+        "host": "fixtures",
+        "access": "read_write"
+      }
+    ]
+  },
+  "placement": {
+    "cores": 1,
+    "reorder": "auto",
+    "commit": "shared"
+  }
+}

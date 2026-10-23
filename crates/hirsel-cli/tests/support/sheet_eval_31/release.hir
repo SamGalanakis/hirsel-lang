@@ -1,0 +1,13 @@
+// Test host releases a snapshot read only after every task has parked.
+// The child calls the complete application main with its real Args and Io.
+pub fn main(rt: Io, args: Args) -> std@1/process.ExitCode {
+  let Ok(tasks) = io.tasks(rt) else { return std@1/process.exit_code(3u8) }
+  let Ok(signals) = io.signals(rt) else { return std@1/process.exit_code(3u8) }
+  let Ok(work) = io.dir(rt, path.of("work")) else { return std@1/process.exit_code(3u8) }
+  task.scope(tasks, fn(s: Scope) -> std@1/process.ExitCode {
+    let child = task.async(s, fn() -> std@1/process.ExitCode { app.main(rt, args) })
+    let _ = signal.wait(signals, [Interrupt()])
+    let _ = file.write_bytes(work, path.of("release"), b"ready")
+    task.await(s, take child)
+  })
+}

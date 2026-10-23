@@ -1,0 +1,22 @@
+// Supplemental cancellation seam uses the real workbook and evaluator modules.
+pub fn main(rt: Io, args: Args) -> std@1/process.ExitCode {
+  let Ok(tasks) = io.tasks(rt) else { return std@1/process.exit_code(3u8) }
+  let Ok(output) = io.stdout(rt) else { return std@1/process.exit_code(3u8) }
+  let mut book = cells.empty()
+  let _ = cells.edit(mut book, 0, "2+3")
+  let _ = cells.edit(mut book, 1, "A1*2")
+  let owned = unique book
+  let canceled = task.scope(tasks, fn(s: Scope) -> bool {
+    let child = task.async(s, fn() -> bool {
+      let mut worker_book = take owned
+      let attempt = evaluate.refresh(tasks, mut worker_book, 4)
+      let stopped = match attempt { Error(Canceled()) => true, _ => false }
+      stopped && worker_book.dirty[0] && worker_book.dirty[1] && worker_book.values[0].value == Ok(0) && worker_book.values[1].value == Ok(0)
+    })
+    task.cancel(s, child)
+    task.await(s, take child)
+  })
+  if !canceled { return std@1/process.FAILURE }
+  let Ok(()) = out.print(output, "canceled recalculation; cache preserved\n") else { return std@1/process.exit_code(3u8) }
+  std@1/process.SUCCESS
+}

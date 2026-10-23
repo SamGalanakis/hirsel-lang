@@ -1,0 +1,185 @@
+pub type Stop = Canceled | Jobs
+
+fn arithmetic(op: u8, left: i64, right: i64) -> Result[i64, formula.Fault] uses {} {
+  if op == 47 {
+    if right == 0 {
+      return Error(DivZero())
+    }
+    if left == -9223372036854775808i64 && right == -1 {
+      return Error(Overflow())
+    }
+    return Ok(left / right)
+  }
+  let computed = if op == 43 {
+    int.checked_add(left, right)
+  } else if op == 45 {
+    int.checked_sub(left, right)
+  } else {
+    int.checked_mul(left, right)
+  }
+  match computed {
+    Some(value) => Ok(value),
+    None() => Error(Overflow()),
+  }
+}
+
+// The resolver is scoped: immutable borrowed AST/results stay with their owner.
+// Only complete owned result cells cross back from child tasks.
+pub fn expression(
+  tree: box formula.Expr,
+  resolve: fn(u64) -> Result[i64, formula.Fault] uses {}
+) -> Result[i64, formula.Fault] uses {} {
+  match tree {
+    Literal(value) => Ok(value),
+    Reference(id) => resolve(id),
+    Negate(child) => arithmetic(45, 0, expression(child, resolve)?),
+    Binary(op, left, right) => arithmetic(
+      op,
+      expression(left, resolve)?,
+      expression(right, resolve)?
+    ),
+    Sum(first, last) => {
+      let mut total = 0i64
+      for row in first / 16..last / 16 + 1 {
+        for col in first % 16..last % 16 + 1 {
+          total = arithmetic(43, total, resolve(row * 16 + col)?)?
+        }
+      }
+      Ok(total)
+    },
+  }
+}
+
+fn read_cell(values: List[cells.Cell[Result[i64, formula.Fault]]], id: u64) -> Result[
+  i64,
+  formula.Fault
+] uses {} {
+  match values[id].value {
+    Ok(n) => Ok(n),
+    Error(_) => Error(Dependency()),
+  }
+}
+
+fn job(
+  take parsed: Result[box formula.Expr, formula.Fault],
+  prior: Shared[List[cells.Cell[Result[i64, formula.Fault]]]],
+  id: u64
+) -> cells.Cell[Result[i64, formula.Fault]] uses {} {
+  let value = shared.with(
+    prior,
+    fn(values: List[cells.Cell[Result[i64, formula.Fault]]]) -> Result[
+      i64,
+      formula.Fault
+    ] uses {} {
+      match parsed {
+        Ok(tree) => expression(
+          tree,
+          fn(index: u64) -> Result[i64, formula.Fault] uses {} {
+            read_cell(values, index)
+          }
+        ),
+        Error(problem) => Error(problem),
+      }
+    }
+  )
+  cells.cell(id, take value)
+}
+
+// Transactional recalc: cancellation discards the tentative cache. A dirty cell
+// is never made clean before the entire recalculation has joined successfully.
+pub fn recalc(tasks: Tasks, book: cells.Workbook, jobs: u64) -> Result[
+  List[cells.Cell[Result[i64, formula.Fault]]],
+  Stop
+] {
+  if jobs == 0 || jobs > 4 {
+    return Error(Jobs())
+  }
+  let mut values = unique book.values
+  let mut pending = unique book.dirty
+  let cycles = graph.blocked(book.edges)
+  for id in cycles {
+    if pending[id] {
+      values[id].value = Error(Cycle())
+      pending[id] = false
+    }
+  }
+  while true {
+    let layer = graph.ready(book.edges, pending)
+    if list.len(layer) == 0 {
+      break
+    }
+    let mut start = 0u64
+    // Each frozen prior cache is immutable and owns its storage across tasks.
+    let prior = shared.freeze(unique values)
+    while start < list.len(layer) {
+      let width = if list.len(layer) - start < jobs {
+        list.len(layer) - start
+      } else {
+        jobs
+      }
+      let first = start
+      let batch = task.scope(
+        tasks,
+        fn(s: Scope) -> Result[List[cells.Cell[Result[i64, formula.Fault]]], Stop] {
+          let mut members: TaskSet[Result[cells.Cell[Result[i64, formula.Fault]], Stop]] of s = task.set(
+            s
+          )
+          for offset in 0u64..width {
+            if let Error(_) = task.check_canceled(s) {
+              task.cancel_all(s, take members)
+              return Error(Canceled())
+            }
+            let id = layer[first + offset]
+            let parsed = unique book.expressions[id]
+            let work = task.async(
+              s,
+              fn() -> Result[cells.Cell[Result[i64, formula.Fault]], Stop] {
+                // Cancellation also checked inside each admitted child.
+                task.scope(
+                  tasks,
+                  fn(child: Scope) -> Result[
+                    cells.Cell[Result[i64, formula.Fault]],
+                    Stop
+                  ] {
+                    if let Error(_) = task.check_canceled(child) {
+                      return Error(Canceled())
+                    }
+                    Ok(job(take parsed, prior, id))
+                  }
+                )
+              }
+            )
+            task.add(s, mut members, take work)
+          }
+          task.all(s, take members)
+        }
+      )?
+      // task.all retains add order. Only independent cells were admitted.
+      for completed in take batch {
+        let id = completed.id
+        values[id] = take completed
+        pending[id] = false
+      }
+      start += width
+    }
+  }
+  Ok(take values)
+}
+
+pub fn refresh(tasks: Tasks, mut book: cells.Workbook, jobs: u64) -> Result[u64, Stop] {
+  let mut count = 0u64
+  for flag in book.dirty {
+    if flag {
+      count += 1
+    }
+  }
+  if count == 0 {
+    return Ok(0)
+  }
+  let computed = recalc(tasks, book, jobs)?
+  book.values = take computed
+  for id in 0u64..cells.COUNT {
+    book.dirty[id] = false
+  }
+  Ok(count)
+}
