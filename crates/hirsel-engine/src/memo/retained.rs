@@ -107,6 +107,10 @@ pub(crate) fn retained_lower_entry_bytes(
     if let Some(depth) = &entry.depth {
         weight.add(size_of_val(&*depth.first));
     }
+    if let Some(receipt) = &entry.acceptance {
+        weight.add(arc_bytes(receipt.contexts()));
+        weight.add(arc_bytes(receipt.artifacts()));
+    }
     // Lowering has no phase-products sink: these are the empty local products,
     // never a resolver syntax snapshot or an owner representation.
     debug_assert!(entry.products.resolution.is_none() && entry.products.representation.is_none());
@@ -783,6 +787,7 @@ mod tests {
             products: Default::default(),
             covered: vec![],
             depth: None,
+            acceptance: None,
             consistent: true,
         };
         let base = retained_lower_entry_bytes(&entry, None);

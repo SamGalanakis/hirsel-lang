@@ -457,6 +457,7 @@ impl QueryEngine {
                 products: stage.products,
                 covered: vec![],
                 depth: None,
+                acceptance: None,
                 consistent: stage.consistent,
             }))
         } else {
