@@ -187,9 +187,7 @@ pub fn build_path_native_backend_with_validation(
                 )?;
             }
             let mut program = super::build(&validated, &options)?;
-            let facts = hirsel_engine::callee_facts(engine, &loaded.entry).map_err(|error| {
-                NativeError::new(StageName::Launch, format!("callee facts: {error:?}"))
-            })?;
+            let facts = super::callee_metadata(engine, &loaded.entry)?;
             program.bind_callees(facts)?;
             hirsel_intern::memory::checkpoint("native workers complete");
             // Fuel checks let the executable accept a fuel budget (`budgets.limits@2`).

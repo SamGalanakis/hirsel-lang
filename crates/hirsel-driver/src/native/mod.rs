@@ -145,3 +145,37 @@ mod smoke_validation_tests;
 #[cfg(test)]
 #[path = "../../tests/native-validation/roots.rs"]
 mod validation_tests;
+
+/// Checked registry schemas accompany native runner metadata, so request hashes
+/// use the same SER-2 envelopes as interpreted and remote calls.
+fn callee_metadata(
+    engine: &mut hirsel_engine::QueryEngine,
+    entry: &hirsel_engine::DefPath,
+) -> Result<hirsel_rt::program::CalleeMetadata, NativeError> {
+    let failed = |error: String| NativeError::new(StageName::Launch, error);
+    let facts = hirsel_engine::callee_facts(engine, entry)
+        .map_err(|e| failed(format!("callee facts: {e:?}")))?;
+    let runtime = engine
+        .runtime_types()
+        .map_err(|e| failed(format!("runner request types: {e:?}")))?;
+    let schemas = hirsel_interp::library::runners::core_schema(&runtime, "GrantSet")
+        .and_then(|grants| {
+            hirsel_interp::library::runners::allowlist_schema(&runtime)
+                .map(|definitions| (grants, definitions))
+        })
+        .map_err(|e| failed(format!("runner request schemas: {e:?}")))?;
+    let descriptor = |schema: &hirsel_types::serialization::SerializableSchema| {
+        hirsel_types::wire::Codec::new(schema)
+            .map(|codec| codec.descriptor().to_vec())
+            .map_err(|e| failed(format!("runner request codec: {e:?}")))
+    };
+    let request_schemas = hirsel_rt::program::RunnerRequestSchemas::new(
+        descriptor(&schemas.0)?,
+        descriptor(&schemas.1)?,
+    )
+    .map_err(failed)?;
+    Ok(hirsel_rt::program::CalleeMetadata {
+        facts,
+        request_schemas: Some(request_schemas),
+    })
+}

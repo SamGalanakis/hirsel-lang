@@ -267,6 +267,12 @@ pub(crate) struct RunShared {
     pub(crate) driver: RoleCell<crate::stop::Driver>,
     /// The root run's execution of runner calls and the callee runs they start (RUN-10).
     pub(crate) runners: RoleCell<Option<Box<crate::runners::Execution>>>,
+    /// Immutable child-local runner data. Published before dispatch; workers
+    /// never follow a pointer into a parent's home-owned execution.
+    pub(crate) runner_call: Option<std::sync::Arc<crate::runners::native::CallState>>,
+    /// Send-only runner transport and a home-only service location. The actual
+    /// service remains on admission, so detached workers never destroy its Io.
+    pub(crate) runner_home: Option<std::sync::Arc<crate::runners::native::Slot>>,
     /// A callee run's execution root, whose launcher a stop returns to; null for a root.
     pub(crate) root: *mut RunShared,
     /// The run's stop word and what its host asks of it (`crate::stop`).
@@ -867,6 +873,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_ctx_create(
         tasks: RoleCell::new(None),
         driver: RoleCell::new(crate::stop::Driver::default()),
         runners: RoleCell::new(None),
+        runner_call: None,
+        runner_home: None,
         root: ptr::null_mut(),
         control: Default::default(),
         io_facade: RoleCell::new(None),

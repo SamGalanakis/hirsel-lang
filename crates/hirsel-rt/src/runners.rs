@@ -47,6 +47,8 @@ use crate::tasks::TaskCode;
 use crate::views::Slice;
 use crate::{Header, STATUS_OK, TaskCtx, fault};
 
+pub(crate) mod native;
+
 /// `RunnerWait`'s outcome codes, `kind << 4 | detail`, which the compiled bodies turn into
 /// `Result[R, RunError[E]]`: `Ok`, `Failed` and `Faulted` (their bytes from `RunnerTake`),
 /// then `NotRun(reason)`, `InDoubt(reason)` and `Canceled(cause)` by their variants' ordinals.
@@ -68,7 +70,7 @@ const REPLY_ERROR: u64 = 1;
 const REPLY_FAILED: u64 = 2;
 
 /// The runners a launch configures and what callee runs are made from.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct Config {
     /// The root run's runners (RUN-1).
     pub runners: Vec<RunnerEntry>,
@@ -76,6 +78,8 @@ pub struct Config {
     pub fault_seed: u64,
     /// What the launcher found about each callee entry, by full path (RUN-8, RUN-11).
     pub callees: BTreeMap<String, CalleeFacts>,
+    /// Compiler-derived request schemas, required by production runner requests.
+    pub request_schemas: Option<crate::program::RunnerRequestSchemas>,
     /// The program's entries: each Entry's code word and its definition's full path.
     pub entries: Vec<(usize, String)>,
     /// The root run's tape: a callee records `<tape>.call-<ordinal>` beside it.
@@ -250,6 +254,13 @@ pub unsafe fn configure(ctx: *mut TaskCtx, config: Config) {
     unsafe { *(*ctx).run().runners = Some(Box::new(Execution::new(config, ctx))) };
 }
 
+/// # Safety
+/// Sole-root admission, before dispatch, using the validated tape/admission
+/// instance. Harness seeds never supply production call identity.
+pub(crate) unsafe fn set_instance(ctx: *mut TaskCtx, instance: [u8; 16]) {
+    state(ctx).instance = instance;
+}
+
 /// The run state of the execution `ctx`'s run belongs to: its root's.
 fn root_run(ctx: *mut TaskCtx) -> *mut RunShared {
     // SAFETY: the context is live, and a callee run's root outlives it.
@@ -285,6 +296,9 @@ fn state(ctx: *mut TaskCtx) -> &'static mut Runners {
 /// # Safety
 /// `ctx` is live.
 pub(crate) unsafe fn driving(ctx: *mut TaskCtx) -> bool {
+    if unsafe { (*ctx).run_ref().free_production } {
+        return false;
+    }
     // SAFETY: the context is live.
     unsafe { (*root_run(ctx)).runners.as_ref() }.is_some_and(|e| e.driving)
 }
@@ -831,6 +845,7 @@ unsafe fn send(
     let e = execution(ctx);
     let facts = e.config.callees.get(&path).cloned();
     let fault_seed = e.config.fault_seed;
+    let request_schemas = e.config.request_schemas.clone();
     let run = state(ctx);
     let ordinal = run.requests;
     run.requests += 1;
@@ -840,6 +855,14 @@ unsafe fn send(
         fault("a runner's grant set has a net rule the codec cannot encode");
     };
     let definitions = hirsel_run_schema::allowlist_bytes(grant.definitions.as_deref());
+    let (grants, definitions) = if let Some(schemas) = request_schemas {
+        schemas.encode(&grants, &definitions)
+    } else {
+        if unsafe { (*ctx).run_ref().free_production } {
+            fault("production runners require compiled request schemas");
+        }
+        (grants, definitions)
+    };
     let (fingerprint, code_hash) = facts
         .as_ref()
         .map_or(([0; 32], [0; 32]), |f| (f.fingerprint, f.code));
@@ -897,6 +920,25 @@ unsafe fn send(
             } => Ok((crash_after, lose_reply)),
         }
     };
+    if unsafe { (*ctx).run_ref().free_production } {
+        drop(path);
+        return unsafe {
+            native::send(
+                ctx,
+                request,
+                grant,
+                ordinal,
+                placed,
+                Start {
+                    main,
+                    entry,
+                    argument,
+                    form,
+                },
+                spawn,
+            )
+        };
+    }
     // SAFETY: the context is live and its binding bound.
     let readiness = unsafe { Binding::get(ctx) }.adapter.runner_readiness();
     let e = execution(ctx);
@@ -1021,6 +1063,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_io_runner(
 ) -> u8 {
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
+    if unsafe { (*ctx).run_ref().free_production } {
+        unsafe { crate::tasks::pin_home(ctx) };
+    }
     // SAFETY: caller contract.
     let name = unsafe { string(owner, start, length) };
     let e = execution(ctx);
@@ -1044,6 +1089,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_io_runner(
         out.write(GrantResult::of(result));
         crate::tasks::yield_now(&mut *ctx);
     }
+    if unsafe { (*ctx).run_ref().free_production } {
+        unsafe { crate::tasks::leave_home(ctx) };
+    }
     STATUS_OK
 }
 
@@ -1061,6 +1109,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_test_runner(
 ) -> u8 {
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
+    if unsafe { (*ctx).run_ref().free_production } {
+        unsafe { crate::tasks::pin_home(ctx) };
+    }
     let entry = RunnerEntry {
         name: "test".into(),
         provider: "sim@1".into(),
@@ -1096,6 +1147,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_test_runner(
         out.write(word);
         crate::tasks::yield_now(&mut *ctx);
     }
+    if unsafe { (*ctx).run_ref().free_production } {
+        unsafe { crate::tasks::leave_home(ctx) };
+    }
     STATUS_OK
 }
 
@@ -1125,6 +1179,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_runner_grants(
 ) -> u8 {
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
+    if unsafe { (*ctx).run_ref().free_production } {
+        unsafe { crate::tasks::pin_home(ctx) };
+    }
     let grants = runner(ctx, unsafe { r.read() }).grants;
     let bits = flags(&grants)
         .into_iter()
@@ -1133,6 +1190,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_runner_grants(
     unsafe {
         out.write(bits);
         crate::tasks::yield_now(&mut *ctx);
+    }
+    if unsafe { (*ctx).run_ref().free_production } {
+        unsafe { crate::tasks::leave_home(ctx) };
     }
     STATUS_OK
 }
@@ -1155,6 +1215,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_runner_narrow(
 ) -> u8 {
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
+    if unsafe { (*ctx).run_ref().free_production } {
+        unsafe { crate::tasks::pin_home(ctx) };
+    }
     let runner = runner(ctx, unsafe { r.read() });
     let wanted: Vec<bool> = (0..6).map(|i| unsafe { keep.add(i).read() } != 0).collect();
     let lists = [8, 16, 24].iter().any(|&offset| unsafe {
@@ -1195,6 +1258,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_runner_narrow(
         out.write(GrantResult::of(result));
         crate::tasks::yield_now(&mut *ctx);
     }
+    if unsafe { (*ctx).run_ref().free_production } {
+        unsafe { crate::tasks::leave_home(ctx) };
+    }
     STATUS_OK
 }
 
@@ -1214,6 +1280,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_runner_only(
 ) -> u8 {
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
+    if unsafe { (*ctx).run_ref().free_production } {
+        unsafe { crate::tasks::pin_home(ctx) };
+    }
     let runner = runner(ctx, unsafe { r.read() });
     let listed = unsafe { crate::process::list(definitions, 24, |at| crate::process::text(at)) };
     let sorted = listed.windows(2).all(|pair| pair[0] < pair[1]);
@@ -1236,6 +1305,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_runner_only(
         out.write(GrantResult::of(result));
         crate::tasks::yield_now(&mut *ctx);
     }
+    if unsafe { (*ctx).run_ref().free_production } {
+        unsafe { crate::tasks::leave_home(ctx) };
+    }
     STATUS_OK
 }
 
@@ -1252,8 +1324,14 @@ pub unsafe extern "C" fn hirsel_rt_v2_runner_entry_path(
 ) -> u8 {
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
+    if unsafe { (*ctx).run_ref().free_production } {
+        unsafe { crate::tasks::pin_home(ctx) };
+    }
     let path = entry_path(ctx, unsafe { entry.read() });
     unsafe { out.write(allocate_owned_bytes(ctx, path.into_bytes())) };
+    if unsafe { (*ctx).run_ref().free_production } {
+        unsafe { crate::tasks::leave_home(ctx) };
+    }
     STATUS_OK
 }
 
@@ -1281,6 +1359,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_runner_send(
 ) -> u8 {
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
+    if unsafe { (*ctx).run_ref().free_production } {
+        unsafe { crate::tasks::pin_home(ctx) };
+    }
     // SAFETY: caller contract.
     unsafe {
         let entry = (entry.read(), entry.add(1).read());
@@ -1294,6 +1375,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_runner_send(
         let ticket =
             crate::stop::check(ctx, send(ctx, r.read(), entry, argument, main, call, spawn));
         out.write(ticket);
+    }
+    if unsafe { (*ctx).run_ref().free_production } {
+        unsafe { crate::tasks::leave_home(ctx) };
     }
     STATUS_OK
 }
@@ -1311,8 +1395,14 @@ pub unsafe extern "C" fn hirsel_rt_v2_runner_wait(
 ) -> u8 {
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
+    if unsafe { (*ctx).run_ref().free_production } {
+        unsafe { crate::tasks::pin_home(ctx) };
+    }
     let code = unsafe { crate::stop::check(ctx, wait(ctx, ticket)) };
     unsafe { out.write(code) };
+    if unsafe { (*ctx).run_ref().free_production } {
+        unsafe { crate::tasks::leave_home(ctx) };
+    }
     STATUS_OK
 }
 
@@ -1330,6 +1420,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_runner_take(
 ) -> u8 {
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
+    if unsafe { (*ctx).run_ref().free_production } {
+        unsafe { crate::tasks::pin_home(ctx) };
+    }
     let mut call = state(ctx)
         .calls
         .remove(&ticket)
@@ -1343,6 +1436,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_runner_take(
     };
     drop(call);
     unsafe { out.write(allocate_owned_bytes(ctx, bytes)) };
+    if unsafe { (*ctx).run_ref().free_production } {
+        unsafe { crate::tasks::leave_home(ctx) };
+    }
     STATUS_OK
 }
 
@@ -1368,7 +1464,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_runner_entry(
 ) -> u8 {
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
-    let (code, environment) = callee(ctx).start.entry;
+    let (code, environment) = native::call(ctx)
+        .map(|call| call.entry)
+        .unwrap_or_else(|| callee(ctx).start.entry);
     unsafe {
         out.write(code);
         out.add(1).write(environment);
@@ -1389,7 +1487,10 @@ pub unsafe extern "C" fn hirsel_rt_v2_runner_argument(
 ) -> u8 {
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
-    let argument = std::mem::take(&mut callee(ctx).start.argument);
+    let argument = match native::call(ctx) {
+        Some(call) => call.argument.lock().unwrap().take().unwrap_or_default(),
+        None => std::mem::take(&mut callee(ctx).start.argument),
+    };
     unsafe { out.write(allocate_owned_bytes(ctx, argument)) };
     STATUS_OK
 }
@@ -1423,7 +1524,10 @@ pub unsafe extern "C" fn hirsel_rt_v2_runner_io(
 ) -> u8 {
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
-    if callee(ctx).start.form != CallForm::Call {
+    let form = native::call(ctx)
+        .map(|call| call.form)
+        .unwrap_or_else(|| callee(ctx).start.form);
+    if form != CallForm::Call {
         fault("RunnerIo in a compute callee");
     }
     unsafe { out.write(crate::launch::IO_HANDLE) };
@@ -1443,7 +1547,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_runner_tasks(
 ) -> u8 {
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
-    callee(ctx);
+    if native::call(ctx).is_none() {
+        callee(ctx);
+    }
     unsafe { out.write(0) };
     STATUS_OK
 }
@@ -1465,6 +1571,23 @@ pub unsafe extern "C" fn hirsel_rt_v2_runner_reply(
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let bytes = unsafe { crate::io::slice_bytes(owner, start, length) }.to_vec();
+    if let Some(call) = native::call(ctx) {
+        let chain = if tag == REPLY_FAILED {
+            unsafe { (*ctx).isolated.clone() }
+        } else {
+            Vec::new()
+        };
+        if call
+            .reply
+            .lock()
+            .unwrap()
+            .replace(native::Reply { tag, bytes, chain })
+            .is_some()
+        {
+            fault("a callee replied twice");
+        }
+        return STATUS_OK;
+    }
     if tag == REPLY_FAILED {
         // SAFETY: the context is live.
         callee(ctx).chain = unsafe { (*ctx).isolated.clone() };

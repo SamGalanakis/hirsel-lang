@@ -363,6 +363,7 @@ pub(crate) struct HostLibrary {
     free_waits: BTreeMap<u64, free::Wait>,
     free_drops: BTreeMap<u64, free::Drop>,
     free_checks: BTreeMap<u64, free::Check>,
+    free_runners: BTreeMap<u64, free::Runner>,
     pending_free_drop: Option<OperationResult>,
     free_ready: Option<(R, Result<C, hirsel_rt::io::AdapterError>)>,
     pub io: HostIo,
@@ -468,6 +469,7 @@ impl HostLibrary {
             free_waits: BTreeMap::new(),
             free_drops: BTreeMap::new(),
             free_checks: BTreeMap::new(),
+            free_runners: BTreeMap::new(),
             pending_free_drop: None,
             free_ready: None,
             next_wait: 1 << 62,
@@ -2646,6 +2648,9 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
         token: u64,
         cx: &mut OperationContext<'_>,
     ) -> Result<Option<OperationResult>, Error> {
+        if self.free_runners.contains_key(&token) {
+            return self.free_poll_runner(token, cx);
+        }
         if self.free_drops.contains_key(&token) {
             return self.free_poll_drop(token, cx);
         }
@@ -2817,6 +2822,9 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
         }
         if route == HostRoute::Runner as usize {
             let result = self.library.call_resolved(operation, call, cx)?;
+            if self.free.is_some() {
+                return self.free_runner(result.ok_or_else(invalid)?, cx).map(Some);
+            }
             self.runner_sends(cx)?;
             return Ok(result);
         }

@@ -1610,6 +1610,11 @@ pub(crate) unsafe fn execute(
     let entry = program.code;
     let (result_size, layouts, layout_count) =
         (program.result_size, program.layouts, program.layout_count);
+    let runner_instance = match &selection {
+        crate::host::Selection::Live { admitted, .. } => admitted.instance(),
+        crate::host::Selection::Replay { io, .. } => io.instance,
+        crate::host::Selection::Harness => None,
+    };
     let (requested, production_io, production_replay) = match selection {
         crate::host::Selection::Harness => (None, None, None),
         crate::host::Selection::Live { admitted, io, tape } => (
@@ -1800,17 +1805,27 @@ pub(crate) unsafe fn execute(
         // The production execution seam remains gated until runner acceptance.
         // Check descriptor authority before considering any harness-only path.
         program.runner_callees()?;
-        return Err("runners run natively only under the harness launcher".into());
+        if !production_free {
+            return Err("runners run natively only under the harness launcher".into());
+        }
     }
     let harness_text = |name: &str| match std::env::var(name) {
         Ok(text) if requested.is_none() => Ok(Some(text)),
         Ok(_) | Err(std::env::VarError::NotPresent) => Ok(None),
         Err(std::env::VarError::NotUnicode(_)) => Err(format!("{name} is not UTF-8")),
     };
-    let runners = match harness_text("HIRSEL_RT_RUNNERS")? {
-        Some(text) => hirsel_run_config::validate_runners(text.as_bytes())
-            .map_err(|error| format!("the runners: {error}"))?,
-        None => Vec::new(),
+    let runners = if production_free {
+        requested
+            .as_ref()
+            .and_then(|run| run.record().io.as_ref())
+            .map(|io| io.runners.clone())
+            .unwrap_or_default()
+    } else {
+        match harness_text("HIRSEL_RT_RUNNERS")? {
+            Some(text) => hirsel_run_config::validate_runners(text.as_bytes())
+                .map_err(|error| format!("the runners: {error}"))?,
+            None => Vec::new(),
+        }
     };
     // Native places run in this process; another host's (remote.tls@1) is not offered.
     if let Some(entry) = runners
@@ -1833,24 +1848,32 @@ pub(crate) unsafe fn execute(
             entry.name
         ));
     }
-    let fault_seed = match harness_text("HIRSEL_RT_FAULT_SEED")? {
-        Some(text) => text
-            .parse::<u64>()
-            .map_err(|_| "invalid harness fault seed".to_string())?,
-        None => 0,
+    let fault_seed = if production_free {
+        requested
+            .as_ref()
+            .and_then(|run| run.record().inputs.fault_seed)
+            .unwrap_or(0)
+    } else {
+        match harness_text("HIRSEL_RT_FAULT_SEED")? {
+            Some(text) => text
+                .parse::<u64>()
+                .map_err(|_| "invalid harness fault seed".to_string())?,
+            None => 0,
+        }
     };
-    let callees = match harness_text("HIRSEL_RT_CALLEES")? {
-        Some(text) => hirsel_run_schema::parse_callees(&text)
-            .map_err(|error| format!("the callee facts: {error}"))?,
-        None => Default::default(),
+    let callees = if production_free && !runners.is_empty() {
+        program.runner_callees()?.clone()
+    } else {
+        match harness_text("HIRSEL_RT_CALLEES")? {
+            Some(text) => hirsel_run_schema::parse_callees(&text)
+                .map_err(|error| format!("the callee facts: {error}"))?,
+            None => Default::default(),
+        }
     };
     // net.script@2 peers serve the root Net's world; the rules alone decide policy.
     let net_rules = net.as_ref().map(NetRule::from_config).unwrap_or_default();
     let net_script = net.and_then(|grant| Some((grant.peers?, grant.listeners)));
     let mut initial_tree = Tree::new(Default::default()).expect("empty tree");
-    if production_free && !runners.is_empty() {
-        return Err("production Free runners require dedicated admission".into());
-    }
     let mut real = None;
     let mut zero_recording = None;
     let mut replay = None;
@@ -2289,10 +2312,53 @@ pub(crate) unsafe fn execute(
             }
         }
     }
+    let mut runner_config = crate::runners::Config {
+        runners: runners.clone(),
+        fault_seed,
+        callees,
+        request_schemas: program
+            .callees
+            .as_ref()
+            .and_then(|m| m.request_schemas.clone()),
+        entries: program.entries.clone(),
+        tape: std::env::var_os("HIRSEL_RT_TAPE")
+            .filter(|_| requested.is_none() && real.is_some())
+            .map(std::path::PathBuf::from),
+        stdout: Some(sinks.stdout.clone()),
+        runtime: config,
+        failure_table: program.failure_table,
+    };
+    // The home owner stays on admission, outside RunShared: a detached worker
+    // can destroy only the Send transport slot, never Rc adapters or sinks.
+    let _runners_home = if production_free && !runners.is_empty() {
+        let home = if let Some(io) = &free_adapter {
+            let slot = crate::runners::native::Slot::new(io.clone())
+                .map_err(|error| format!("native runners: {error:?}"))?;
+            unsafe { (*ctx).run().runner_home = Some(slot.clone()) };
+            Some(unsafe { crate::runners::native::Home::new(slot, runner_config.clone()) })
+        } else {
+            None
+        };
+        runner_config.stdout = None;
+        home
+    } else {
+        None
+    };
+    unsafe { crate::runners::configure(ctx, runner_config) };
+    if let Some(instance) = runner_instance {
+        unsafe { crate::runners::set_instance(ctx, instance) };
+    }
     crate::tasks::free::record::bind_terminal(unsafe { &*ctx });
     if let Some(io) = free_adapter.take()
-        && let Err(error) =
-            unsafe { crate::tasks::free::host::concurrent::Service::install(ctx, io) }
+        && let Err(error) = unsafe {
+            let io: std::sync::Arc<dyn crate::io_concurrent::ConcurrentAdapter> =
+                if let Some(slot) = (*ctx).run_ref().runner_home.as_ref() {
+                    crate::runners::native::wrap(slot)
+                } else {
+                    io
+                };
+            crate::tasks::free::host::concurrent::Service::install(ctx, io)
+        }
     {
         unsafe { hirsel_rt_v2_ctx_destroy(ctx) };
         control.finish(0);
@@ -2307,7 +2373,7 @@ pub(crate) unsafe fn execute(
         || (options.workers.is_some()
             && control.width.load(std::sync::atomic::Ordering::Acquire) != 0))
         && unsafe { &mut *ctx }.run().free.is_none()
-        && runners.is_empty()
+        && (runners.is_empty() || production_free)
     {
         // SAFETY: the root context, on the admission thread, before the run's code runs.
         if ordered_enabled {
@@ -2353,24 +2419,6 @@ pub(crate) unsafe fn execute(
     if let Some(table) = program.failure_table {
         crate::isolate::attach(unsafe { &mut *ctx }, table);
     }
-    // SAFETY: the context was just created and runs nothing yet.
-    unsafe {
-        crate::runners::configure(
-            ctx,
-            crate::runners::Config {
-                runners,
-                fault_seed,
-                callees,
-                entries: program.entries.clone(),
-                tape: std::env::var_os("HIRSEL_RT_TAPE")
-                    .filter(|_| requested.is_none() && real.is_some())
-                    .map(std::path::PathBuf::from),
-                stdout: Some(sinks.stdout.clone()),
-                runtime: config,
-                failure_table: program.failure_table,
-            },
-        )
-    };
     let roots = [IO_HANDLE, ARGS_HANDLE, u64::MAX, 0, TEST_HANDLE];
     // The replay output already echoed to the real streams.
     let echoed = std::rc::Rc::new(std::cell::Cell::new((0, 0)));

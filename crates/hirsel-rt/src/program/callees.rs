@@ -5,15 +5,140 @@ use hirsel_run_schema::CalleeFacts;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
+/// Compiler-derived SER-2 descriptors for the two request fields whose values
+/// the runtime constructs. Entry argument and reply codecs remain generated code.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RequestSchemas {
+    grants: Vec<u8>,
+    definitions: Vec<u8>,
+}
+impl RequestSchemas {
+    pub fn new(grants: Vec<u8>, definitions: Vec<u8>) -> Result<Self, String> {
+        if [&grants, &definitions]
+            .iter()
+            .any(|bytes| bytes.is_empty() || bytes.len() > 1 << 20)
+        {
+            return Err("invalid runner request schema descriptor".into());
+        }
+        Ok(Self {
+            grants,
+            definitions,
+        })
+    }
+
+    /// Frame the existing canonical payloads exactly as SER-2 does. The
+    /// compiler obtains each descriptor from the checked registry's codec,
+    /// never from a hardcoded copy of the core schema.
+    /// See hirsel-types/src/wire.rs, Codec::envelope.
+    pub(crate) fn encode(&self, grants: &[u8], definitions: &[u8]) -> (Vec<u8>, Vec<u8>) {
+        fn envelope(descriptor: &[u8], payload: &[u8]) -> Vec<u8> {
+            let mut bytes = Vec::with_capacity(24 + descriptor.len() + payload.len());
+            bytes.extend_from_slice(b"HSC1");
+            bytes.extend_from_slice(&1u32.to_le_bytes());
+            bytes.extend_from_slice(&(descriptor.len() as u64).to_le_bytes());
+            bytes.extend_from_slice(descriptor);
+            bytes.extend_from_slice(&(payload.len() as u64).to_le_bytes());
+            bytes.extend_from_slice(payload);
+            bytes
+        }
+        (
+            envelope(&self.grants, grants),
+            envelope(&self.definitions, definitions),
+        )
+    }
+}
+
+/// Canonical metadata in ABI49's existing length-delimited JSON field. Facts-only
+/// metadata remains readable; production runner requests additionally need schemas.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Metadata {
+    pub facts: BTreeMap<String, CalleeFacts>,
+    pub request_schemas: Option<RequestSchemas>,
+}
+impl Metadata {
+    pub fn json(&self) -> String {
+        let facts: serde_json::Value =
+            serde_json::from_str(&hirsel_run_schema::callees_json(&self.facts)).unwrap();
+        match &self.request_schemas {
+            Some(schemas) => serde_json::json!({
+                "version": 1,
+                "facts": facts,
+                "request_schemas": {
+                    "grants": hirsel_run_schema::hex(&schemas.grants),
+                    "definitions": hirsel_run_schema::hex(&schemas.definitions),
+                },
+            })
+            .to_string(),
+            None => facts.to_string(),
+        }
+    }
+
+    fn parse(text: &str) -> Result<Self, String> {
+        let value: serde_json::Value = serde_json::from_str(text).map_err(|e| e.to_string())?;
+        if value.get("version").is_none() {
+            return Ok(Self {
+                facts: hirsel_run_schema::parse_callees(text)?,
+                request_schemas: None,
+            });
+        }
+        if value.get("version").and_then(serde_json::Value::as_u64) != Some(1) {
+            return Err("unsupported compiled callee metadata version".into());
+        }
+        let facts = hirsel_run_schema::parse_callees(
+            &value
+                .get("facts")
+                .ok_or("missing compiled callee facts")?
+                .to_string(),
+        )?;
+        let descriptor = |name| -> Result<Vec<u8>, String> {
+            let hex = value
+                .get("request_schemas")
+                .and_then(|s| s.get(name))
+                .and_then(serde_json::Value::as_str)
+                .ok_or("missing runner request schema")?;
+            // Canonical re-encoding below rejects uppercase and any extra fields.
+            if hex.len() > 2 << 20 || !hex.len().is_multiple_of(2) {
+                return Err("invalid runner request schema hex".into());
+            }
+            hex.as_bytes()
+                .chunks_exact(2)
+                .map(|pair| {
+                    let digit = |b| match b {
+                        b'0'..=b'9' => Some(b - b'0'),
+                        b'a'..=b'f' => Some(b - b'a' + 10),
+                        _ => None,
+                    };
+                    Ok(
+                        digit(pair[0]).ok_or("invalid runner request schema hex")? * 16
+                            + digit(pair[1]).ok_or("invalid runner request schema hex")?,
+                    )
+                })
+                .collect()
+        };
+        let schemas = RequestSchemas::new(descriptor("grants")?, descriptor("definitions")?)?;
+        Ok(Self {
+            facts,
+            request_schemas: Some(schemas),
+        })
+    }
+}
+
+/// Identity of the complete canonical metadata, including request descriptors.
+pub fn metadata_identity(program: &[u8; 32], metadata: &Metadata) -> [u8; 32] {
+    identity_bytes(program, metadata.json().as_bytes())
+}
+
 /// Descriptor identity for canonical facts and their sorted Entry paths. Code
 /// addresses are checked against relocations at load, never hashed as ASLR data.
 pub fn identity(program: &[u8; 32], facts: &BTreeMap<String, CalleeFacts>) -> [u8; 32] {
+    identity_bytes(program, hirsel_run_schema::callees_json(facts).as_bytes())
+}
+fn identity_bytes(program: &[u8; 32], bytes: &[u8]) -> [u8; 32] {
     let mut hash = Sha256::new();
     hash.update(b"hirsel.program-callees.v1\0");
     hash.update(program);
-    let bytes = hirsel_run_schema::callees_json(facts);
     hash.update((bytes.len() as u64).to_le_bytes());
-    hash.update(bytes.as_bytes());
+    hash.update(bytes);
     hash.finalize().into()
 }
 
@@ -22,7 +147,7 @@ pub fn identity(program: &[u8; 32], facts: &BTreeMap<String, CalleeFacts>) -> [u
 pub(super) unsafe fn load(
     d: &ProgramDescriptor,
     entries: &[(usize, String)],
-) -> Result<Option<BTreeMap<String, CalleeFacts>>, String> {
+) -> Result<Option<Metadata>, String> {
     if d.callee_facts_length == 0 {
         if !d.callee_facts.is_null()
             || d.callee_code_count != 0
@@ -43,13 +168,14 @@ pub(super) unsafe fn load(
     let bytes =
         unsafe { std::slice::from_raw_parts(d.callee_facts, d.callee_facts_length as usize) };
     let text = std::str::from_utf8(bytes).map_err(|_| "invalid compiled callee facts text")?;
-    let facts = hirsel_run_schema::parse_callees(text)?;
-    if hirsel_run_schema::callees_json(&facts).as_bytes() != bytes {
+    let metadata = Metadata::parse(text)?;
+    if metadata.json().as_bytes() != bytes {
         return Err("noncanonical compiled callee facts".into());
     }
-    if identity(&d.digest, &facts) != d.callee_identity {
+    if metadata_identity(&d.digest, &metadata) != d.callee_identity {
         return Err("compiled callee facts identity mismatch".into());
     }
+    let facts = &metadata.facts;
     if facts.len() as u64 != d.callee_code_count {
         return Err("compiled callee facts/code count mismatch".into());
     }
@@ -76,7 +202,7 @@ pub(super) unsafe fn load(
             return Err("compiled callee facts do not match the Entry code table".into());
         }
     }
-    Ok(Some(facts))
+    Ok(Some(metadata))
 }
 
 #[cfg(test)]
@@ -188,6 +314,56 @@ mod tests {
                 .unwrap()
                 .contains("Entry code table")
         );
+    }
+
+    #[test]
+    fn descriptor_request_schemas_are_canonical_and_bound_to_program_identity() {
+        let metadata = Metadata {
+            facts: facts(),
+            request_schemas: Some(RequestSchemas::new(vec![1, 2], vec![3, 4]).unwrap()),
+        };
+        let text = metadata.json();
+        let codes = [row(7)];
+        let mut d = descriptor(text.as_bytes(), &codes);
+        d.callee_identity = metadata_identity(&d.digest, &metadata);
+        let loaded = unsafe { Program::load(&d) }.unwrap();
+        assert_eq!(loaded.callees.as_ref(), Some(&metadata));
+        for field in ["grants", "definitions"] {
+            let mut forged = metadata.clone();
+            let schemas = forged.request_schemas.as_mut().unwrap();
+            match field {
+                "grants" => schemas.grants[0] ^= 1,
+                _ => schemas.definitions[0] ^= 1,
+            }
+            let bytes = forged.json();
+            d.callee_facts = bytes.as_ptr();
+            d.callee_facts_length = bytes.len() as u64;
+            assert!(
+                unsafe { Program::load(&d) }
+                    .err()
+                    .unwrap()
+                    .contains("identity mismatch")
+            );
+        }
+        for change in ["extra", "missing", "odd", "uppercase", "version"] {
+            let mut value: serde_json::Value = serde_json::from_str(&text).unwrap();
+            match change {
+                "extra" => value["extra"] = true.into(),
+                "missing" => {
+                    value["request_schemas"]
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("grants");
+                }
+                "odd" => value["request_schemas"]["grants"] = "a".into(),
+                "uppercase" => value["request_schemas"]["grants"] = "AB".into(),
+                _ => value["version"] = 2.into(),
+            }
+            let bytes = value.to_string();
+            d.callee_facts = bytes.as_ptr();
+            d.callee_facts_length = bytes.len() as u64;
+            assert!(unsafe { Program::load(&d) }.is_err(), "{change}");
+        }
     }
 
     #[test]

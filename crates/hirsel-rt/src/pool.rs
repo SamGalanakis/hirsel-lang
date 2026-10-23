@@ -135,6 +135,10 @@ pub(crate) struct Exec {
     /// Foreign frames may suspend here, but may never resume on another thread.
     foreign_frames: AtomicU32,
     exit_pending: Cell<bool>,
+    /// Optional execution-level home wake. Set before a polled child starts;
+    /// the notification carries no adapter or context pointer.
+    home_driver: std::sync::OnceLock<crate::readiness::Readiness>,
+    home_signal: std::sync::OnceLock<Arc<crate::readiness::Signal>>,
 }
 
 // SAFETY: the cells are touched only by the exec's own thread while it runs.
@@ -166,6 +170,8 @@ impl Exec {
             ready_epoch: AtomicU64::new(0),
             foreign_frames: AtomicU32::new(0),
             exit_pending: Cell::new(false),
+            home_driver: Default::default(),
+            home_signal: Default::default(),
         })
     }
 
@@ -188,6 +194,12 @@ impl Exec {
         }
         inbox.posts.push_back((post, queued));
         self.bell.notify_one();
+        if let Some(driver) = self.home_driver.get() {
+            driver.notify().expect("an admitted execution home wake");
+        }
+        if let Some(signal) = self.home_signal.get() {
+            signal.notify();
+        }
         true
     }
 
@@ -1337,6 +1349,9 @@ pub(crate) unsafe fn serve_home(run: *mut RunShared, finished: &dyn Fn() -> bool
         {
             break;
         }
+        if unsafe { crate::runners::native::service(run) } {
+            continue;
+        }
         if unsafe { crate::tasks::ordered::home::service(run) }
             || unsafe { crate::tasks::free::home::service(run) }
         {
@@ -1360,7 +1375,15 @@ pub(crate) unsafe fn serve_home(run: *mut RunShared, finished: &dyn Fn() -> bool
         }
     }
     EXEC.with(|e| e.set(enclosing_exec));
+    unsafe { close_home(run) };
+}
+
+/// Close and withdraw a polled run's home bridge before dropping its adapter.
+/// # Safety
+/// Its sole home owner calls this once, after completion or a published stop.
+pub(crate) unsafe fn close_home(run: *mut RunShared) {
     let execs = unsafe { (*(*run).execs.get()).as_deref().unwrap() };
+    let home = &execs.home;
     if home_computes(execs) {
         unsafe { (&(*run).control).live_width.fetch_sub(1, Ordering::AcqRel) };
     }
@@ -1380,6 +1403,65 @@ pub(crate) unsafe fn serve_home(run: *mut RunShared, finished: &dyn Fn() -> bool
             None => break,
         }
     }
+}
+
+/// Publish an execution's shared readiness before this child starts. Posts
+/// (including the completion post after physical save) wake the same home
+/// driver as the child's host interests.
+/// # Safety
+/// Sole home admission, after topology creation and before root publication.
+pub(crate) unsafe fn home_driver(run: *mut RunShared, driver: crate::readiness::Readiness) {
+    driver.notify().expect("an execution home wake descriptor");
+    let execs = unsafe { (*(*run).execs.get()).as_deref().unwrap() };
+    assert!(execs.home.home_driver.set(driver).is_ok());
+}
+
+/// # Safety
+/// As home_driver. The signal owns no adapter or context borrow and may
+/// outlive the home owner when a stopped child still computes.
+pub(crate) unsafe fn home_signal(run: *mut RunShared, signal: Arc<crate::readiness::Signal>) {
+    let execs = unsafe { (*(*run).execs.get()).as_deref().unwrap() };
+    assert!(execs.home.home_signal.set(signal).is_ok());
+}
+
+/// Service one already-published home continuation without blocking on an
+/// inbox, permit or host readiness source. A multi-run home owner polls each
+/// run's messages before choosing an execution-level wait.
+/// # Safety
+/// Called on this run's home thread, outside program code and scheduler roles.
+/// No other home loop serves this run; the caller retains its context.
+pub(crate) unsafe fn poll_home_posts(run: *mut RunShared) -> bool {
+    let execs = unsafe { (*(*run).execs.get()).as_deref().unwrap() };
+    let home = &execs.home;
+    let enclosing = EXEC.with(|e| e.replace(Arc::as_ptr(home)));
+    unsafe { post_deferred(run, home) };
+    unsafe { free::saved(run, home) };
+    let progress = if let Some(saved) = free::next(execs, home) {
+        unsafe { free::resume(run, home, saved) };
+        true
+    } else {
+        let post = home.inbox.lock().unwrap().posts.pop_front();
+        if let Some((post, _)) = post {
+            match post {
+                Post::Run { task, permit } => unsafe { resume(run, home, task, permit) },
+                Post::Saved(saved) => unsafe { free::resume(run, home, saved) },
+                Post::Call(call) => unsafe { run_call(call) },
+                Post::Wake => {}
+                Post::Exit => fault("the home thread was asked to exit"),
+            }
+            true
+        } else {
+            false
+        }
+    };
+    EXEC.with(|e| e.set(enclosing));
+    progress
+}
+
+/// Outstanding physical saved-frame ownership, used by polled root launchers
+/// before they publish normal completion to their home-owned execution.
+pub(crate) fn saved_pending(run: &RunShared) -> bool {
+    run.execs.as_deref().is_some_and(free::pending)
 }
 
 /// The compute and pool threads of `run` that hold it: a stopped run's workers still inside

@@ -8,7 +8,10 @@ use crate::launch::{Config, Entry, RootsEntry, TestEntry, ZeroEntry};
 use crate::{ABI_VERSION, Layout};
 mod callees;
 #[doc(hidden)]
-pub use callees::identity as callee_identity;
+pub use callees::{
+    Metadata as CalleeMetadata, RequestSchemas as RunnerRequestSchemas,
+    identity as callee_identity, metadata_identity as callee_metadata_identity,
+};
 
 /// [`ProgramDescriptor::flags`]: the program calls C outside a deterministic wrapper, so its
 /// runs cannot be recorded or replayed (PROG-4).
@@ -60,7 +63,7 @@ pub struct ProgramDescriptor {
     /// RUN-3 Entry authority. These rows never grant runner entry admission.
     pub value_codes: *const EntryRow,
     pub value_code_count: u64,
-    /// ABI 49: canonical CalleeFacts JSON, sealed with the program identity.
+    /// ABI 49: canonical callee metadata JSON, sealed with the program identity.
     /// Missing data carries no authority to launch production runner calls.
     pub callee_facts: *const u8,
     pub callee_facts_length: u64,
@@ -125,7 +128,7 @@ pub struct Program {
     /// Each Entry's code word and its definition's full path.
     pub(crate) entries: Vec<(usize, String)>,
     pub(crate) value_codes: std::sync::Arc<std::collections::BTreeMap<usize, String>>,
-    pub(crate) callees: Option<std::collections::BTreeMap<String, hirsel_run_schema::CalleeFacts>>,
+    pub(crate) callees: Option<CalleeMetadata>,
 }
 
 impl Program {
@@ -235,7 +238,7 @@ impl Program {
     pub(crate) fn runner_callees(
         &self,
     ) -> Result<&std::collections::BTreeMap<String, hirsel_run_schema::CalleeFacts>, String> {
-        self.callees.as_ref().ok_or_else(|| {
+        self.callees.as_ref().map(|m| &m.facts).ok_or_else(|| {
             "production runners require compiled callee facts (runtime ABI 49)".into()
         })
     }

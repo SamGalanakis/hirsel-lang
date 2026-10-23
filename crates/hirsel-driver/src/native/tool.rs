@@ -193,8 +193,10 @@ pub fn run_path_native_backend_with_trace_events(
             Ok(proofs) => proofs,
             Err(error) => return Ok(Err(error)),
         };
-        let callee_facts =
-            hirsel_engine::callee_facts(engine, &entry).map_err(|error| query(engine, error))?;
+        let callee_facts = match super::callee_metadata(engine, &entry) {
+            Ok(metadata) => metadata,
+            Err(error) => return Ok(Err(error)),
+        };
         let observation = match run(
             &validated,
             callee_facts,
@@ -234,7 +236,7 @@ pub fn run_path_native_backend_with_trace_events(
 
 fn run(
     validated: &hirsel_engine::ValidatedNativeInput,
-    callee_facts: std::collections::BTreeMap<String, hirsel_run_schema::CalleeFacts>,
+    callee_facts: hirsel_rt::program::CalleeMetadata,
     entry: &hirsel_engine::DefPath,
     (run, tape): (&hirsel_run_config::ValidatedRun, super::link::Tape<'_>),
     proofs: Option<&super::Proofs>,

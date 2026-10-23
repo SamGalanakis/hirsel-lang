@@ -131,6 +131,9 @@ pub(in crate::tasks::free) fn request_keys_with_domains(
         Ok(key)
     };
     let keys = match request {
+        R::RunnerCall(_) | R::RunnerCancel { .. } | R::CallReturn(_) | R::Stopped => {
+            vec![(crate::io_keys::PLACE, Mode::Exclusive)]
+        }
         R::MonotonicClock { io: 1 }
         | R::WallClock { io: 1 }
         | R::Process { io: 1 }

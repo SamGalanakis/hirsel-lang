@@ -2231,3 +2231,68 @@ fn f1_future_scope_timers_replay_cancellation_nested_expiry_and_disarm() {
         |_| serde_json::json!({"stdout":"stdout.bytes@1","tasks":"tasks.free@1","monotonic_clock":"clock.monotonic.ns@1","dirs":[]}),
     );
 }
+
+#[test]
+fn f1_runner_compute_single_permit_cross_engine_outcomes() {
+    if !hirsel_rt::free_driver::admission_enabled() {
+        return;
+    }
+    let scratch = Scratch::new("f1-runner-compute-single-permit");
+    let program = scratch.path("main.hir");
+    std::fs::write(&program, r#"pub type E = Grant(GrantError) | Output(OutputError)
+fn half(n: u64) -> Result[u64, String] {
+  failure.check(n < 100u64, Arithmetic())
+  if n % 2u64 == 1u64 { return Error("odd") }
+  Ok(n / 2u64)
+}
+pub fn main(rt: Io, args: Args) -> Result[(), E] {
+  let out = io.stdout(rt) ? Grant
+  let runner = io.runner(rt, "worker") ? Grant
+  failure.check(runner.compute(runner, half, 8u64) == Ok(4u64), Arithmetic())
+  failure.check(match runner.compute(runner, half, 3u64) { Error(Failed(e)) => e == "odd", _ => false }, Arithmetic())
+  failure.check(match runner.compute(runner, half, 200u64) { Error(Faulted(_)) => true, _ => false }, Arithmetic())
+  out.print(out, "runner outcomes\n") ? Output
+  Ok(())
+}
+"#).unwrap();
+    let grants = r#"{"io":{"stdout":"stdout.bytes@1","tasks":"tasks.free@1","dirs":[],"runners":[{"name":"worker","provider":"local.threads@1","threads":2,"grants":null,"definitions":null}]},"args":[]}"#;
+    let tape = scratch.path("record");
+    let report = scratch.path("projection");
+    let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+    command
+        .args(["run", "--native"])
+        .arg(&program)
+        .args(["--grants", grants, "--cores", "1", "--record"])
+        .arg(&tape)
+        .env(hirsel_rt::free_replay::Report::VAR, &report);
+    f1_permits(&mut command, 1);
+    let live = bounded_output(&mut command, &program, "runner compute live width1 permit1");
+    assert!(live.status.success(), "{live:?}");
+    assert_eq!(live.stdout, b"runner outcomes\n");
+    assert!(
+        std::fs::read(&tape)
+            .unwrap()
+            .starts_with(b"hirsel-free-tape 2\n")
+    );
+    let projection = std::fs::read_to_string(&report).unwrap();
+    for engine in ENGINES {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+        command
+            .arg("run")
+            .args(engine)
+            .arg(&program)
+            .arg("--replay")
+            .arg(&tape)
+            .args(["--cores", "1"])
+            .env(hirsel_rt::free_replay::Report::VAR, &report);
+        f1_permits(&mut command, 1);
+        let replay = bounded_output(
+            &mut command,
+            &program,
+            &format!("runner compute replay {engine:?} width1 permit1"),
+        );
+        assert!(replay.status.success(), "{engine:?}: {replay:?}");
+        assert_eq!(replay.stdout, live.stdout);
+        assert_eq!(std::fs::read_to_string(&report).unwrap(), projection);
+    }
+}

@@ -192,7 +192,7 @@ pub struct ReadyProgram {
     /// function-reference thunk and full path, which the program descriptor lists.
     pub entries: BTreeMap<String, String>,
     /// Checked source facts, supplied through the engine's public admission API.
-    pub(crate) callee_facts: Option<BTreeMap<String, hirsel_run_schema::CalleeFacts>>,
+    pub(crate) callee_facts: Option<hirsel_rt::program::CalleeMetadata>,
     /// Per resource layout, the instance digest of its drop body's unit.
     pub finalizers: BTreeMap<LayoutId, ContentHash>,
     /// Instance digest of each non-generic function, for entry lookup.
@@ -355,9 +355,9 @@ impl ReadyProgram {
     /// Bind source-checked runner facts to the same native Entry table.
     pub(crate) fn bind_callees(
         &mut self,
-        facts: BTreeMap<String, hirsel_run_schema::CalleeFacts>,
+        metadata: hirsel_rt::program::CalleeMetadata,
     ) -> Result<(), NativeError> {
-        for path in facts.keys() {
+        for path in metadata.facts.keys() {
             if !self.entries.values().any(|entry| entry == path) {
                 return Err(NativeError::new(
                     StageName::Launch,
@@ -365,7 +365,7 @@ impl ReadyProgram {
                 ));
             }
         }
-        self.callee_facts = Some(facts);
+        self.callee_facts = Some(metadata);
         Ok(())
     }
 

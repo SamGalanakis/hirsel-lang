@@ -41,6 +41,49 @@ use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Instant;
 
+/// A retained eventfd for execution work whose producer is another executor.
+/// As with the driver's own eventfd, notifications coalesce and an early
+/// notification remains readable until home drains it.
+pub(crate) struct Signal(OwnedFd);
+impl Signal {
+    pub(crate) fn new() -> Result<Self, AdapterError> {
+        let fd = unsafe { libc::eventfd(0, libc::EFD_CLOEXEC | libc::EFD_NONBLOCK) };
+        if fd < 0 {
+            return Err(AdapterError::Unsupported("execution work eventfd".into()));
+        }
+        Ok(Self(unsafe { OwnedFd::from_raw_fd(fd) }))
+    }
+    pub(crate) fn fd(&self) -> std::os::fd::RawFd {
+        self.0.as_raw_fd()
+    }
+    pub(crate) fn notify(&self) {
+        let one = 1u64;
+        loop {
+            let n = unsafe { libc::write(self.fd(), (&raw const one).cast(), 8) };
+            if n == 8 || (n < 0 && errno() == libc::EAGAIN) {
+                return;
+            }
+            if n < 0 && errno() == libc::EINTR {
+                continue;
+            }
+            crate::fault("execution work eventfd write");
+        }
+    }
+    pub(crate) fn drain(&self) {
+        let mut count = 0u64;
+        loop {
+            let n = unsafe { libc::read(self.fd(), (&raw mut count).cast(), 8) };
+            if n == 8 || (n < 0 && errno() == libc::EAGAIN) {
+                return;
+            }
+            if n < 0 && errno() == libc::EINTR {
+                continue;
+            }
+            crate::fault("execution work eventfd read");
+        }
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct Readiness(Arc<Mutex<ReadyState>>, u64, Arc<AtomicU64>);
 /// The token bits a run's tag occupies: above every interpreter and host wait token's

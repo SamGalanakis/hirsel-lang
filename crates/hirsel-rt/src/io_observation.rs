@@ -63,6 +63,10 @@ pub(crate) fn fields(
             | Completion::Wall(_)
             | Completion::Random(_)
             | Completion::Signal(_)
+            // Canonical runner payloads and logical run instances contain no
+            // host handle words. Ready is the provider's empty acknowledgement.
+            | Completion::Runner(_)
+            | Completion::Ready
             | Completion::Checked(_)
             | Completion::Entries(_)
             | Completion::Metadata(_)

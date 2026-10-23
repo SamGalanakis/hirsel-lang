@@ -16,6 +16,11 @@ pub(super) struct Check {
     request: Option<Call>,
     result: OperationResult,
 }
+pub(super) struct Runner {
+    request: Call,
+    sent: Result<u64, hirsel_run_schema::RunnerCompletion>,
+    result: OperationResult,
+}
 struct OwnedCall {
     runtime: hirsel_interp::aggregate::RuntimeTypes,
     path: DefPath,
@@ -48,6 +53,103 @@ impl OwnedCall {
     }
 }
 impl HostLibrary {
+    /// The library supplies the checked request, placement decision and decode
+    /// schemas. Replay advances the same one native host operation and never
+    /// starts a callee or asks the legacy Io tape for an outcome.
+    pub(super) fn free_runner(
+        &mut self,
+        result: OperationResult,
+        cx: &mut OperationContext<'_>,
+    ) -> Result<OperationResult, Error> {
+        let mut sends = self.library.take_runner_sends();
+        if sends.len() != 1 {
+            return Err(invalid());
+        }
+        let send = sends.pop().unwrap();
+        if send.child {
+            return Err(Error::Unavailable(
+                "native Free runner.spawn requires asynchronous phase ownership".into(),
+            ));
+        }
+        if !self.library.begin_native_host()? {
+            return Ok(self.library.native_free_cut(cx));
+        }
+        let request = Call::new(
+            self.free.as_ref().unwrap(),
+            R::RunnerCall(Box::new(send.request)),
+        )
+        .map_err(Error::InvalidTir)?;
+        let token = self.next_wait;
+        self.next_wait += 1;
+        self.free_runners.insert(
+            token,
+            Runner {
+                request,
+                sent: send.sent,
+                result,
+            },
+        );
+        Ok(self
+            .free_poll_runner(token, cx)?
+            .unwrap_or(OperationResult::Park {
+                token,
+                wait: hirsel_interp::BlockedWait {
+                    spawn_path: self.library.task_path(),
+                    anchor: cx.anchor().cloned().ok_or_else(invalid)?,
+                    kind: "free.host.runner".into(),
+                    targets: vec![],
+                },
+            }))
+    }
+
+    pub(super) fn free_poll_runner(
+        &mut self,
+        token: u64,
+        cx: &mut OperationContext<'_>,
+    ) -> Result<Option<OperationResult>, Error> {
+        let mut runner = self.free_runners.remove(&token).unwrap();
+        match self.free_advance(&mut runner.request)? {
+            Poll::Pending => {
+                self.free_runners.insert(token, runner);
+                Ok(None)
+            }
+            Poll::Cut => {
+                self.free_runners.insert(token, runner);
+                Ok(Some(self.library.native_free_cut(cx)))
+            }
+            Poll::Complete(result) => {
+                let completion = match result {
+                    Ok(C::Runner(completion)) => completion,
+                    result => {
+                        return Err(Error::Unavailable(format!(
+                            "Free runner result: {result:?}"
+                        )));
+                    }
+                };
+                let result = match &runner.sent {
+                    Err(expected) if expected == &completion => runner.result,
+                    Err(_) => return Err(invalid()),
+                    Ok(target) => {
+                        self.library.runner_completed(*target, completion, cx)?;
+                        self.library.poll(*target, cx)?.ok_or_else(invalid)?
+                    }
+                };
+                let path = self.library.task_path();
+                if self
+                    .library
+                    .with_free_session(|session| Ok(session.at_cut(&path)))?
+                {
+                    // Keep decoded owners alive until the terminal cut ends
+                    // the execution, as native saved result storage does.
+                    runner.result = result;
+                    self.free_runners.insert(token, runner);
+                    Ok(Some(self.library.native_free_cut(cx)))
+                } else {
+                    Ok(Some(result))
+                }
+            }
+        }
+    }
     pub(super) fn free_request(&self, name: &str, a: &[Value]) -> Result<Option<R>, Error> {
         Ok(Some(match name {
             "io.stdout" => R::Stdout { io: 1 },

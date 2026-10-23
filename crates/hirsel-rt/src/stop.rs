@@ -560,6 +560,70 @@ unsafe extern "C" fn root_entry(ctx: *mut u8, frame: *mut u8) -> ! {
     crate::fault("a finished root task was resumed")
 }
 
+/// A root published to the existing executor, whose home owner continues
+/// servicing an execution instead of waiting for this individual run.
+/// This owns no context lifetime: the caller retains/detaches that run exactly
+/// as run_root does, including after a stop with a still-computing worker.
+pub(crate) struct StartedRoot {
+    run: *mut crate::context::RunShared,
+    frame: *mut LaunchFrame,
+}
+
+impl StartedRoot {
+    /// Observe a stopped or fully saved completed root, without waiting for
+    /// code, a permit, an adapter, or another run's scheduler role.
+    /// # Safety
+    /// The home owner retains this run and its launch frame while polling.
+    pub(crate) unsafe fn poll(&self) -> Option<Stopped<u8>> {
+        unsafe {
+            if let Some(stop) = (*self.run).control.stopped() {
+                return Some(Err(stop));
+            }
+            if (*self.frame).done.load(Ordering::Acquire)
+                && crate::pool::busy(&*self.run) == 0
+                && !crate::pool::saved_pending(&*self.run)
+            {
+                return Some(Ok((*self.frame).status));
+            }
+        }
+        None
+    }
+}
+
+/// Publish a root without entering a waiting home loop. Runner orchestration
+/// can retain several such runs on home; all computation uses the existing
+/// executor and process permits, not an orchestration thread's stack.
+/// # Safety
+/// A fresh, bound root with physical executor topology already installed;
+/// the home owner retains the context until every busy worker leaves, or
+/// detaches it using the normal run lifetime protocol.
+pub(crate) unsafe fn start_root(ctx: *mut TaskCtx, frame: Box<LaunchFrame>) -> StartedRoot {
+    unsafe {
+        let run = (*ctx).run_ptr();
+        assert!(
+            crate::pool::wide(&*run),
+            "an asynchronous root needs executor topology"
+        );
+        crate::io::Binding::bridge(ctx);
+        let (frame, sp) = prepare_root(ctx, frame);
+        crate::tasks::start_root(ctx, sp);
+        StartedRoot { run, frame }
+    }
+}
+
+/// Install the same run-owned frame for synchronous and polled launchers.
+unsafe fn prepare_root(ctx: *mut TaskCtx, frame: Box<LaunchFrame>) -> (*mut LaunchFrame, *mut u8) {
+    unsafe {
+        let run = (*ctx).run_ptr();
+        if !(*(*run).driver.get()).sp.is_null() || (*(*run).launch.get()).is_some() {
+            crate::fault("a run context driven twice");
+        }
+        let frame: *mut LaunchFrame = &raw mut **(*(*run).launch.get()).insert(frame);
+        let sp = (*frame).stack.prepare(root_entry, ctx.cast(), frame.cast());
+        (frame, sp)
+    }
+}
+
 /// Run the run's root task on a fresh fiber, from `frame`, which the run owns from here on:
 /// its status, or the stop that ended the run. Either way no fiber of the run runs again,
 /// unless a stopped run's workers still hold it ([`crate::host::RunStatus`]'s
@@ -577,14 +641,10 @@ pub(crate) unsafe fn run_root(ctx: *mut TaskCtx, frame: Box<LaunchFrame>) -> Sto
     // SAFETY: the context is live; the root fiber returns here when it finishes or stops.
     unsafe {
         let run = (*ctx).run_ptr();
-        if !(*(*run).driver.get()).sp.is_null() || (*(*run).launch.get()).is_some() {
-            crate::fault("a run context driven twice");
-        }
         if crate::pool::wide(&*run) {
             crate::io::Binding::bridge(ctx);
         }
-        let frame: *mut LaunchFrame = &raw mut **(*(*run).launch.get()).insert(frame);
-        let sp = (*frame).stack.prepare(root_entry, ctx.cast(), frame.cast());
+        let (frame, sp) = prepare_root(ctx, frame);
         if crate::pool::wide(&*run) {
             crate::tasks::start_root(ctx, sp);
             let enclosing = crate::foreign::save();
@@ -618,5 +678,102 @@ pub(crate) unsafe fn run_root(ctx: *mut TaskCtx, frame: Box<LaunchFrame>) -> Sto
             .control
             .stopped()
             .unwrap_or_else(|| crate::fault("a root left with no stop")))
+    }
+}
+
+#[cfg(test)]
+mod polled_tests {
+    use super::*;
+    use std::sync::{Arc, atomic::AtomicBool};
+
+    #[test]
+    fn home_can_stop_a_busy_run_and_service_another_under_one_compute_permit() {
+        const CHILD: &str = "HIRSEL_POLLED_ROOT_ONE_PERMIT";
+        if std::env::var_os(CHILD).is_none() {
+            let child = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "stop::polled_tests::home_can_stop_a_busy_run_and_service_another_under_one_compute_permit", "--nocapture"])
+                .env(CHILD, "1").output().unwrap();
+            assert!(child.status.success(), "{child:?}");
+            return;
+        }
+        crate::pool::set_compute_grant(1);
+        for physical in [false, true] {
+            let home = std::thread::current().id();
+            let entered = Arc::new(AtomicBool::new(false));
+            let release = Arc::new(AtomicBool::new(false));
+            let bridged = Arc::new(AtomicBool::new(false));
+            unsafe {
+                let mut contexts = Vec::new();
+                for _ in 0..2 {
+                    let mut ctx = std::ptr::null_mut();
+                    assert_eq!(
+                        crate::context::hirsel_rt_v2_ctx_create(&crate::Config::new(), &mut ctx),
+                        0
+                    );
+                    crate::pool::start(ctx, 1, false);
+                    if physical {
+                        (*ctx).run().free_mode = true;
+                        crate::tasks::free::enable(ctx);
+                        crate::pool::free::enable(ctx);
+                    }
+                    contexts.push(ctx);
+                }
+                let (seen, allow) = (entered.clone(), release.clone());
+                let first = start_root(
+                    contexts[0],
+                    LaunchFrame::bare(Box::new(move |_, _| {
+                        seen.store(true, Ordering::Release);
+                        // A still-computing segment keeps its one permit. Home must
+                        // be able to stop and poll it without preempting the segment.
+                        while !allow.load(Ordering::Acquire) {
+                            std::thread::yield_now();
+                        }
+                        crate::STATUS_OK
+                    })),
+                );
+                let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+                while !entered.load(Ordering::Acquire) {
+                    assert!(std::time::Instant::now() < until);
+                    std::thread::yield_now();
+                }
+                let output = bridged.clone();
+                let second = start_root(
+                    contexts[1],
+                    LaunchFrame::bare(Box::new(move |ctx, _| {
+                        crate::pool::call_home(ctx, &mut || {
+                            assert_eq!(std::thread::current().id(), home);
+                            output.store(true, Ordering::Release);
+                        })
+                        .unwrap();
+                        crate::STATUS_OK
+                    })),
+                );
+                assert_eq!(first.poll(), None);
+                assert_eq!(second.poll(), None);
+                assert!(!bridged.load(Ordering::Acquire));
+                (*contexts[0]).run_ref().control.request(Stop::Requested);
+                assert_eq!(first.poll(), Some(Err(Stop::Requested)));
+                assert_eq!(crate::pool::compute_permits().1, 1);
+                release.store(true, Ordering::Release);
+                loop {
+                    crate::pool::poll_home_posts((*contexts[1]).run_ptr());
+                    if let Some(ended) = second.poll() {
+                        assert_eq!(ended, Ok(crate::STATUS_OK));
+                        break;
+                    }
+                    assert!(std::time::Instant::now() < until);
+                    std::thread::yield_now();
+                }
+                assert!(bridged.load(Ordering::Acquire));
+                while crate::pool::busy((*contexts[0]).run_ref()) != 0 {
+                    assert!(std::time::Instant::now() < until);
+                    std::thread::yield_now();
+                }
+                for ctx in contexts {
+                    crate::context::hirsel_rt_v2_ctx_destroy(ctx);
+                }
+            }
+            assert_eq!(crate::pool::compute_permits(), (1, 0, 0));
+        }
     }
 }

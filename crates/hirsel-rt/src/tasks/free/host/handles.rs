@@ -21,6 +21,26 @@ pub(in crate::tasks::free) struct Envelope {
 }
 impl Envelope {
     pub(in crate::tasks::free) fn validate_request(&self, request: &Request) -> Stopped<()> {
+        if let Request::RunnerCall(request) = request
+            && let Ok(Completion::Runner(completion)) = &self.result
+        {
+            let expected = hirsel_run_schema::callee_instance(&request.key);
+            let valid = match &completion.outcome {
+                hirsel_run_schema::CallOutcome::Ok(_)
+                | hirsel_run_schema::CallOutcome::Failed(_)
+                | hirsel_run_schema::CallOutcome::Faulted(_) => completion.callee == Some(expected),
+                hirsel_run_schema::CallOutcome::NotRun(_)
+                | hirsel_run_schema::CallOutcome::Canceled(_) => completion.callee.is_none(),
+                hirsel_run_schema::CallOutcome::InDoubt(_) => completion
+                    .callee
+                    .is_none_or(|instance| instance == expected),
+            };
+            if !valid {
+                return Err(Stop::Diverged(
+                    "runner completion has an invalid callee instance".into(),
+                ));
+            }
+        }
         let net = matches!(request, Request::Net { .. } | Request::NetNarrow { .. });
         if self
             .created

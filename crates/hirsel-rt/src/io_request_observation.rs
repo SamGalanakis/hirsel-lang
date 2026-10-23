@@ -229,13 +229,12 @@ pub(crate) fn project<A>(
             on(net)?;
             on(listener)?;
         }
-        R::RunnerCall(_)
-        | R::RunnerCancel { .. }
-        | R::CallReturn(_)
-        | R::Stopped
-        | R::Ready { .. }
-        | R::Schedule { .. } => {
-            return Err("request needs a dedicated scheduling or runner projection");
+        // Runner messages contain the canonical grant/argument/result bytes,
+        // definition path and logical call key. No field is a physical handle
+        // requiring authority substitution; preserve every initialized byte.
+        R::RunnerCall(_) | R::RunnerCancel { .. } | R::CallReturn(_) | R::Stopped => {}
+        R::Ready { .. } | R::Schedule { .. } => {
+            return Err("request needs a dedicated scheduling projection");
         }
     }
     let mut payload = Vec::new();

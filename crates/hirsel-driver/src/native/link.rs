@@ -1487,9 +1487,9 @@ done:
     let callee_facts = program
         .callee_facts
         .as_ref()
-        .map(hirsel_run_schema::callees_json);
+        .map(hirsel_rt::program::CalleeMetadata::json);
     let callee_identity = program.callee_facts.as_ref().map_or([0; 32], |facts| {
-        hirsel_rt::program::callee_identity(&revision.digest(), facts)
+        hirsel_rt::program::callee_metadata_identity(&revision.digest(), facts)
     });
     let callee_codes: Vec<_> = program
         .entries
@@ -1498,7 +1498,7 @@ done:
             program
                 .callee_facts
                 .as_ref()
-                .is_some_and(|facts| facts.contains_key(*path))
+                .is_some_and(|facts| facts.facts.contains_key(*path))
         })
         .map(|(thunk, path)| (thunk.clone(), path.as_bytes().to_vec()))
         .collect();
@@ -1633,7 +1633,7 @@ done:
             "null"
         };
         let callee_rows: Vec<_> = program.entries.iter().enumerate().filter(|(_, (_, path))|
-            program.callee_facts.as_ref().is_some_and(|facts| facts.contains_key(*path)))
+            program.callee_facts.as_ref().is_some_and(|facts| facts.facts.contains_key(*path)))
             .map(|(index, (thunk, path))| format!(
                 "{{ ptr, ptr, i64 }} {{ ptr @\"{thunk}\", ptr @hirsel.entry.path.{index}, i64 {} }}", path.len()))
             .collect();
