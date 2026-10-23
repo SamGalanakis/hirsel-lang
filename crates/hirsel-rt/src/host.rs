@@ -353,6 +353,22 @@ impl RunControl {
     pub fn worker_width(&self) -> u32 {
         self.0.live_width.load(std::sync::atomic::Ordering::Acquire)
     }
+    pub(crate) fn worker_snapshot(&self) -> (u32, hirsel_run_config::managed_cores::WorkerPhase) {
+        use hirsel_run_config::managed_cores::WorkerPhase;
+        let before = self.0.worker_phase();
+        let width = self.worker_width();
+        let after = self.0.worker_phase();
+        // Never label a partial startup count, or a count sampled across
+        // shutdown, as a settled running topology. Phases are monotonic.
+        (
+            width,
+            if before == WorkerPhase::Starting {
+                before
+            } else {
+                after
+            },
+        )
+    }
     /// Where the run stands.
     pub fn status(&self) -> RunStatus {
         self.0.status()

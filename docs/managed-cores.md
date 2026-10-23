@@ -102,6 +102,26 @@ minus lost permits. `permit_wait_ns` is the mean acquisition time in B1's
 `bench/multicore/telemetry.json`; clocks and counters run only when worker metrics
 are enabled.
 
+The native Ordered startup/resize guarantee is specified in
+[CONC-1](spec/concurrency.md#conc-1-runtime). `worker_phase` distinguishes
+`starting`, `running`, `draining` and `finished` (null for embeddings that do not
+supply it). The listener starts before `pool::grow`: a first socket reply such as
+requested 4, effective 3, pending 4 can sample registration of the third worker,
+before the root has run. It says nothing about queued application work. All N
+destinations are installed before publishing the root. A later application-ready
+handshake held open by the observer makes the width check deterministic, subject
+to the process-grant/lost-permit ceiling. No sleep or wall-clock startup promise
+is needed. A running snapshot is capacity, not a sample of CPU utilization or
+currently held permits; even all N idle destinations count.
+
+Dogfood harnesses that observe startup without pausing the application must retain
+their samples, continue bounded control sampling until a running snapshot has
+pending zero, and mark width qualification incomplete if the process exits first.
+They must not assert equality against the first socket reply, silently clamp the
+requested width, or count an incomplete sample as physical scaling evidence.
+Timing runs keep their observation outside the application and include startup;
+a separate readiness-qualified run does not certify every short timed run's width.
+
 Prior art: the existing Rust std condition-variable predicate and Tokio permit
 return-before-wake protocol cited in `docs/notes/multicore-workers.md` are retained.
 Socket creation follows Rust std `ea137335b788`,

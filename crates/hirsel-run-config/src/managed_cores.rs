@@ -7,7 +7,7 @@ use std::time::Duration;
 mod linux;
 mod metrics;
 pub use linux::LinuxLimits;
-pub use metrics::{MetricsSnapshot, MetricsWriter, Percentiles, StallSite, Width};
+pub use metrics::{MetricsSnapshot, MetricsWriter, Percentiles, StallSite, Width, WorkerPhase};
 
 /// Sorted, disjoint inclusive intervals; even `0-4294967295` uses bounded storage.
 #[derive(Clone, Debug, Eq, PartialEq)]

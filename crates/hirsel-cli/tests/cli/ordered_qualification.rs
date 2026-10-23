@@ -327,7 +327,10 @@ fn ordered_qualification_topology_reaches_eight_physical_workers() {
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     let snapshot: serde_json::Value = serde_json::from_str(&reply).unwrap();
     eprintln!("topology: {snapshot}");
+    assert_eq!(snapshot["worker_phase"], "running");
+    assert_eq!(snapshot["width"]["requested"], 8);
     assert_eq!(snapshot["width"]["effective"], 8);
+    assert_eq!(snapshot["width"]["pending"], 0);
 }
 
 #[test]

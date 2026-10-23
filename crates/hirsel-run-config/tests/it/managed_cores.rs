@@ -313,7 +313,7 @@ fn metrics_are_jsonl_with_actual_widths_all_signals_and_throttle_deltas() {
         Width {
             requested: Cores::Fixed(8),
             effective: 2,
-            pending: 6,
+            pending: 8,
         },
         true,
     );
@@ -332,7 +332,7 @@ fn metrics_are_jsonl_with_actual_widths_all_signals_and_throttle_deltas() {
         .collect();
     assert_eq!(
         lines[0]["width"],
-        serde_json::json!({"requested":8,"effective":2,"pending":6})
+        serde_json::json!({"requested":8,"effective":2,"pending":8})
     );
     assert_eq!(lines[0]["throttled_usec"], 25);
     assert_eq!(lines[1]["throttled_usec"], 15);
@@ -340,8 +340,10 @@ fn metrics_are_jsonl_with_actual_widths_all_signals_and_throttle_deltas() {
     assert_eq!(lines[0]["lost_permits"], 1);
     assert_eq!(lines[0]["cpus_conflict"], true);
     assert!(lines[0]["runnable"].is_null());
+    assert!(lines[0]["worker_phase"].is_null());
     let expected = [
         "width",
+        "worker_phase",
         "runnable",
         "segment_ready_delay_ns",
         "role_busy",

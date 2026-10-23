@@ -1217,6 +1217,11 @@ unsafe fn start_with_home(ctx: *mut TaskCtx, width: u32, migrate: bool, home_at_
     drop(compute);
     // SAFETY: as above.
     unsafe { (*run).control.set_home(Arc::clone(&execs.home)) };
+    unsafe {
+        (*run)
+            .control
+            .set_worker_phase(hirsel_run_config::managed_cores::WorkerPhase::Running)
+    };
 }
 
 /// Grow only under the run token. Worker::create re-adopts orphaned heaps.
@@ -1382,6 +1387,11 @@ pub(crate) unsafe fn serve_home(run: *mut RunShared, finished: &dyn Fn() -> bool
 /// # Safety
 /// Its sole home owner calls this once, after completion or a published stop.
 pub(crate) unsafe fn close_home(run: *mut RunShared) {
+    unsafe {
+        (*run)
+            .control
+            .set_worker_phase(hirsel_run_config::managed_cores::WorkerPhase::Draining)
+    };
     let execs = unsafe { (*(*run).execs.get()).as_deref().unwrap() };
     let home = &execs.home;
     if home_computes(execs) {
@@ -1687,10 +1697,20 @@ pub(crate) fn enter_root(ctx: *mut TaskCtx) -> Stopped<()> {
             .live_width
             .store(1, Ordering::Release)
     };
+    unsafe {
+        (*(*ctx).run_ptr())
+            .control
+            .set_worker_phase(hirsel_run_config::managed_cores::WorkerPhase::Running)
+    };
     Ok(())
 }
 pub(crate) fn leave_root(ctx: *mut TaskCtx) {
     let execs = execs(ctx);
+    unsafe {
+        (*(*ctx).run_ptr())
+            .control
+            .set_worker_phase(hirsel_run_config::managed_cores::WorkerPhase::Draining)
+    };
     execs.permits.release(&execs.home);
     unsafe {
         (&(*(*ctx).run_ptr()).control)
@@ -1703,6 +1723,8 @@ pub(crate) fn leave_root(ctx: *mut TaskCtx) {
 /// workers stay, for the caller to read and then retire ([`retire`]); the run's root
 /// context goes back to the home worker, which holds the run's storage for its exit.
 pub(crate) fn shutdown(run: &RunShared) {
+    run.control
+        .set_worker_phase(hirsel_run_config::managed_cores::WorkerPhase::Draining);
     let Some(execs) = run.execs.as_deref() else {
         return;
     };

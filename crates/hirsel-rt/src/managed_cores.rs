@@ -144,7 +144,8 @@ impl ManagedCores {
         let status = self.control.status();
         let (limit, _, _) = crate::pool::compute_permits();
         let lost = crate::pool::lost_compute_permits();
-        let effective = u64::from(self.control.worker_width().min(limit.saturating_sub(lost)));
+        let (live, phase) = self.control.worker_snapshot();
+        let effective = u64::from(live.min(limit.saturating_sub(lost)));
         let target = resolution.target;
         let mut snapshot = MetricsSnapshot::new(
             Width {
@@ -154,6 +155,7 @@ impl ManagedCores {
             },
             resolution.cpus_conflict,
         );
+        snapshot.worker_phase = Some(phase);
         snapshot.throttled_usec = state.limits.throttled_usec;
         snapshot.reclamation_pending = Some(status.reclamation_pending.into());
         snapshot.lost_permits = Some(lost.into());
@@ -335,6 +337,9 @@ fn serve_peer(manager: &ManagedCores, peer: &mut UnixStream) -> io::Result<()> {
     reply.push(b'\n');
     peer.write_all(&reply)
 }
+
+#[cfg(test)]
+mod width_tests;
 
 #[cfg(test)]
 mod tests {

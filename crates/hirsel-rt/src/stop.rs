@@ -16,7 +16,7 @@
 use hirsel_run_schema::{BudgetKind, Environmental, RunOutcome};
 
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::TaskCtx;
@@ -121,6 +121,7 @@ impl Default for Driver {
 pub(crate) struct Control {
     pub(crate) width: AtomicU32,
     pub(crate) live_width: AtomicU32,
+    worker_phase: AtomicU8,
     stopped: AtomicBool,
     stop: Mutex<Option<Stop>>,
     /// Installed at admission. Closing the recorded prefix precedes publication
@@ -155,6 +156,21 @@ pub(crate) trait Terminal: Send + Sync {
 }
 
 impl Control {
+    pub(crate) fn worker_phase(&self) -> hirsel_run_config::managed_cores::WorkerPhase {
+        use hirsel_run_config::managed_cores::WorkerPhase;
+        match self.worker_phase.load(Ordering::Acquire) {
+            0 => WorkerPhase::Starting,
+            1 => WorkerPhase::Running,
+            2 => WorkerPhase::Draining,
+            3 => WorkerPhase::Finished,
+            _ => unreachable!("invalid worker phase"),
+        }
+    }
+
+    pub(crate) fn set_worker_phase(&self, phase: hirsel_run_config::managed_cores::WorkerPhase) {
+        self.worker_phase.fetch_max(phase as u8, Ordering::Release);
+    }
+
     /// Admission only, before any worker can enter a recording section. An
     /// embedding host may already have stopped its not-yet-started run.
     pub(crate) fn terminal(&self, terminal: Arc<dyn Terminal>) {
@@ -270,6 +286,7 @@ impl Control {
         self.terminal.lock().unwrap().take();
         self.pending.store(pending, Ordering::SeqCst);
         self.finished.store(true, Ordering::SeqCst);
+        self.set_worker_phase(hirsel_run_config::managed_cores::WorkerPhase::Finished);
     }
     /// The launcher leaves the run to `holders`, its threads: the status counts them down.
     pub(crate) fn track(&self, holders: Arc<crate::pool::Holders>) {

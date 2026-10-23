@@ -16,6 +16,30 @@ with no such point may starve others on a cooperative implementation. Whether a 
 terminates may depend on scheduling decisions. Whether children run in parallel is the
 implementation's choice.
 
+For native Ordered execution, a fixed resolved worker target N is installed before
+the root's first instruction: width one uses the admission thread and wider runs
+create N compute destinations. Worker creation is eager, not driven by a count of
+queued tasks. Host scheduling has no wall-clock startup bound. A control socket may
+be visible before worker creation completes, so socket visibility alone does not
+establish readiness. With unchanged placement, process grant at least N and no lost
+permits, a snapshot taken after an application readiness handshake and before its
+completion reports effective N and pending zero.
+
+These are capacity diagnostics, not a promise that N threads run simultaneously.
+Effective width counts live executor destinations (including workers draining a
+resize), capped by process grant minus lost permits. `width.pending` is zero when
+effective equals the resolved target, otherwise it is that **full target**; it is
+neither a queue length nor the number of missing workers. Fewer effective workers
+are legitimate during startup, cooperative resize, process-grant contraction or
+lost-permit retention, and shutdown. Resize applies at scheduling boundaries;
+an uninterrupted pure segment or foreign call imposes no finite convergence bound.
+Metrics expose `worker_phase` as `starting`, `running`, `draining` or `finished`;
+`running` begins only after initial topology installation, while a resize may
+still be pending. Unsupported embedding diagnostics use null. Physical-width
+qualification must retain a readiness handshake (an application-ready signal or a
+running control reply) with effective N and pending zero; a short run with no such
+snapshot is incomplete.
+
 ### CONC-2: Tasks
 
 The core operations are `task.scope(tasks, body)`, `task.async(s, take f) -> Task[R] of

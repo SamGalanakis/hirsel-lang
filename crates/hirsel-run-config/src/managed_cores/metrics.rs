@@ -9,8 +9,25 @@ use std::{
 #[derive(Clone, Debug, Serialize)]
 pub struct Width {
     pub requested: Cores,
+    /// Live executor destinations capped by process grant minus lost permits;
+    /// not a count of simultaneously running threads or acquired permits.
     pub effective: u64,
+    /// The full resolved target while effective differs, otherwise zero.
+    /// This is not a count of queued tasks or of missing workers.
     pub pending: u64,
+}
+
+/// Lifecycle of the topology sampled by the live runtime. Socket visibility
+/// precedes worker startup; a starting sample is not a physical-width proof.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[repr(u8)]
+pub enum WorkerPhase {
+    #[default]
+    Starting,
+    Running,
+    Draining,
+    Finished,
 }
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct Percentiles {
@@ -29,6 +46,8 @@ pub struct StallSite {
 #[derive(Clone, Debug, Serialize)]
 pub struct MetricsSnapshot {
     pub width: Width,
+    /// None when the embedding executor does not supply lifecycle diagnostics.
+    pub worker_phase: Option<WorkerPhase>,
     pub runnable: Option<u64>,
     pub segment_ready_delay_ns: Option<Percentiles>,
     pub role_busy: Option<f64>,
@@ -55,6 +74,7 @@ impl MetricsSnapshot {
     pub fn new(width: Width, cpus_conflict: bool) -> Self {
         Self {
             width,
+            worker_phase: None,
             cpus_conflict,
             runnable: None,
             segment_ready_delay_ns: None,

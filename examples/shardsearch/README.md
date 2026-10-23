@@ -55,6 +55,15 @@ at logical jobs 1/2/4. Provider waiting and physical placement/replay qualificat
 have separate receipts in the external lane report; ordinary engine agreement
 does not establish physical worker width.
 
+Physical width observations follow [CONC-1](../../docs/spec/concurrency.md#conc-1-runtime):
+the control socket can appear while workers are still being created. Qualification
+requires a retained `worker_phase: "running"` reply with the requested effective
+width and `width.pending: 0`, ideally while an application-ready handshake holds
+the run open. A first reply with requested 4, effective 3, pending 4 is a startup
+observation, not four queued tasks. For unpaused timing runs, sample until settled
+or exit within a bounded observation window; missing settlement stays incomplete.
+The original short timing session remains uncertified for physical scaling.
+
 Prior art: Tokio `ce685ee6916549ed7e52dbfd5430858bbdc734d3`,
 `tokio/src/task/join_set.rs:381–384` and `tokio/tests/task_join_set.rs:267–294`
 (MIT), supplies the cancel-then-drain structure. Hirsel's `cancel_all` combines
