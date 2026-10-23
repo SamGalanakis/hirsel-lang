@@ -1,0 +1,36 @@
+// rule: MEM-4
+// expect: run
+
+fn fits(cap: u64) -> u64 {
+  let outcome = arena.bounded(
+    cap,
+    fn(a: Arena) -> Region[Map[u64, Bytes]] {
+      let mut root: unique Map[u64, Bytes] in a = map.empty()
+      map.insert(mut root, 1u64, unique b"x")
+      map.insert(mut root, 2u64, unique b"abc")
+      let _ = map.remove(mut root, 1u64)
+      arena.seal(take a, take root)
+    }
+  )
+  match take outcome {
+    Ok(r) => {
+      let mut owned = take r
+      region.with(
+        mut owned,
+        fn(view: Map[u64, Bytes]) -> u64 {
+          match map.get(view, 2u64) {
+            Some(value) => bytes.len(value),
+            None() => 0u64,
+          }
+        }
+      )
+    },
+    Error(e) => 0u64,
+  }
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  failure.check(fits(34u64) == 0u64, Bounds())
+  failure.check(fits(35u64) == 3u64, Bounds())
+  Ok(())
+}

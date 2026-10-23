@@ -1,0 +1,80 @@
+// rule: MEM-4
+// expect: run
+// stdout: b
+// stdout: a
+resource type Trace {
+  stdout: Stdout,
+  text: String,
+  broken: bool,
+}
+drop(x) {
+  let _ = out.print(x.stdout, x.text)
+  if x.broken {
+    failure.check(false, TextInvariant())
+  }
+}
+
+fn primary() {
+  failure.check(false, Arithmetic())
+}
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let stdout = io.stdout(rt)?
+  let built: unique Bytes = unique b"abc"
+  let sentinel: Shared[Bytes] = shared.freeze(take built)
+  let status: Result[(), Failure] = task.isolate(
+    tasks,
+    fn() {
+      let mut r = arena.with(
+        fn(a: Arena) -> Region[List[Shared[Bytes]]] {
+          let root: List[Shared[Bytes]] in a = [copy sentinel]
+          arena.seal(take a, take root)
+        }
+      )
+      region.with(
+        mut r,
+        fn(view: List[Shared[Bytes]]) {
+          let a = Trace(stdout: stdout, text: "a\n", broken: false)
+          let b = Trace(stdout: stdout, text: "b\n", broken: true)
+          failure.check(
+            shared.with(
+              view[0],
+              fn(data: Bytes) -> u64 {
+                bytes.len(data)
+              }
+            ) == 3u64,
+            Bounds()
+          )
+          primary()
+        }
+      )
+    }
+  )
+  match status {
+    Ok(_) => failure.check(false, Bounds()),
+    Error(caught) => {
+      failure.check(caught.rule == "SEM-1", Bounds())
+      failure.check(caught.site.line == 18u64, Bounds())
+      failure.check(caught.site.definition == "standalone@0/primary", Bounds())
+      failure.check(list.len(caught.spawn) == 0u64, Bounds())
+      match caught.kind {
+        Check() => {},
+        _ => failure.check(false, Bounds()),
+      }
+      match caught.cause {
+        Some(cause) => {
+          failure.check(cause.rule == "SEM-3", Bounds())
+          failure.check(cause.cause == None(), Bounds())
+        },
+        None() => failure.check(false, Bounds()),
+      }
+    },
+  }
+  let released = match shared.thaw(take sentinel) {
+    Ok(data) => data == b"abc",
+    Error(root) => false,
+  }
+  failure.check(released, Bounds())
+  Ok(())
+}

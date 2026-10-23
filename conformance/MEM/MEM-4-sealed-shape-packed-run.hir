@@ -1,0 +1,47 @@
+// rule: MEM-4
+// expect: run
+// Packed requires plain payloads; each element is tag4 + largest payload9.
+type Choice = Small(value: u8) | Large(value: u64, extra: u8)
+
+fn fits(cap: u64) -> u64 {
+  let outcome = arena.bounded(
+    cap,
+    fn(a: Arena) -> Region[List[Packed[Choice]]] {
+      let root: List[Packed[Choice]] in a = [
+        Small(value: 1u8),
+        Large(value: 3u64, extra: 4u8)
+      ]
+      arena.seal(take a, take root)
+    }
+  )
+  match take outcome {
+    Ok(r) => {
+      let mut owned = take r
+      region.with(
+        mut owned,
+        fn(view: List[Packed[Choice]]) -> u64 {
+          let mut index = 0u64
+          let mut total = 0u64
+          for item in view {
+            if index == 0u64 {
+              failure.check(item.Small.value == 1u8, Bounds())
+            } else {
+              failure.check(item.Large.extra == 4u8, Bounds())
+              total += item.Large.value
+            }
+            index += 1u64
+          }
+          failure.check(index == 2u64, Bounds())
+          total
+        }
+      )
+    },
+    Error(e) => 0u64,
+  }
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  failure.check(fits(25u64) == 0u64, Bounds())
+  failure.check(fits(26u64) == 3u64, Bounds())
+  Ok(())
+}

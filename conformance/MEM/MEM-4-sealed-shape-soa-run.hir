@@ -1,0 +1,39 @@
+// rule: MEM-4
+// expect: run
+@soa
+type Row {
+  tag: u8,
+  data: Bytes,
+}
+
+fn fits(cap: u64) -> u64 {
+  let outcome = arena.bounded(
+    cap,
+    fn(a: Arena) -> Region[List[Row]] {
+      let root: List[Row] in a = [
+        Row(tag: 1u8, data: copy_to(heap, b"x")),
+        Row(tag: 2u8, data: copy_to(heap, b"abc"))
+      ]
+      arena.seal(take a, take root)
+    }
+  )
+  match take outcome {
+    Ok(r) => {
+      let mut owned = take r
+      region.with(
+        mut owned,
+        fn(view: List[Row]) -> u64 {
+          failure.check(view[0].tag == 1u8 && view[1].tag == 2u8, Bounds())
+          bytes.len(view[0].data) + bytes.len(view[1].data)
+        }
+      )
+    },
+    Error(e) => 0u64,
+  }
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  failure.check(fits(21u64) == 0u64, Bounds())
+  failure.check(fits(22u64) == 4u64, Bounds())
+  Ok(())
+}
