@@ -7,7 +7,8 @@ use hirsel_lir::{
     layout_types::{CopyRecipe, LayoutKind, LayoutTable},
     stage::{Placed, Value},
 };
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet};
+pub mod equations;
 
 #[derive(Clone)]
 enum Source {
@@ -310,106 +311,38 @@ pub fn summarize(units: &mut [LirUnit<Value>], table: &mut LayoutTable) {
         .enumerate()
         .map(|(i, u)| ((u.header.definition.clone(), u.header.instance), i))
         .collect();
-    let discovery: Vec<_> = units.iter().map(|u| Discovery::new(u, table)).collect();
-    let mut claims: Vec<BTreeSet<u32>> = discovery
-        .iter()
-        .map(|d| {
-            let abi = &table.fn_abis[d.u.header.abi.0 as usize];
-            if !abi.result.as_ref().is_some_and(|r| {
-                table.layout(r.layout).is_some_and(|r| {
-                    matches!(r.kind, LayoutKind::Block { .. } | LayoutKind::Box { .. })
-                })
-            }) {
-                return BTreeSet::new();
-            }
-            d.u.slots
-                .iter()
-                .enumerate()
-                .filter_map(|(i, s)| match s.kind {
-                    SlotKind::Parameter(p)
-                        if d.stable[i]
-                            && table
-                                .layout(d.u.types[s.ty.index()].layout)
-                                .is_some_and(|r| r.kind == LayoutKind::Arena)
-                            && abi.parameters.iter().any(|a| {
-                                a.source == p
-                                    && a.convention == hirsel_core_contract::Passing::Borrow
-                            }) =>
-                    {
-                        Some(p)
+    let equations: Vec<_> = units.iter().map(|u| equations::extract(u, table)).collect();
+    let mut external = BTreeMap::new();
+    for unit in units.iter() {
+        for call in &unit.tables.calls {
+            if let Callee::Direct(s) = call.callee {
+                let s = &unit.tables.symbols[s.index()];
+                if let Some(hash) = s.instance {
+                    let target = (s.definition.clone(), hash);
+                    if !targets.contains_key(&target) {
+                        external.insert(
+                            target,
+                            table.fn_abis[call.abi.0 as usize]
+                                .result_arena
+                                .into_iter()
+                                .collect(),
+                        );
                     }
-                    _ => None,
-                })
+                }
+            }
+        }
+    }
+    let settled = equations::settle(&equations, &external.into_iter().collect::<Vec<_>>())
+        .expect("fresh local equations and complete call targets");
+    let claims: Vec<BTreeSet<u32>> = units
+        .iter()
+        .map(|u| {
+            settled[&(u.header.definition.clone(), u.header.instance)]
+                .iter()
+                .copied()
                 .collect()
         })
         .collect();
-    let mut callers = vec![BTreeSet::new(); units.len()];
-    for (i, u) in units.iter().enumerate() {
-        for call in &u.tables.calls {
-            if let Callee::Direct(s) = call.callee {
-                let s = &u.tables.symbols[s.index()];
-                if let Some(&callee) = s
-                    .instance
-                    .and_then(|h| targets.get(&(s.definition.clone(), h)))
-                {
-                    callers[callee].insert(i);
-                }
-            }
-        }
-    }
-    for choose in [false, true] {
-        if choose {
-            for xs in &mut claims {
-                if let Some(p) = xs.first().copied() {
-                    *xs = BTreeSet::from([p]);
-                }
-            }
-        }
-        let mut queue: VecDeque<_> = (0..units.len()).collect();
-        let mut queued = vec![true; units.len()];
-        while let Some(i) = queue.pop_front() {
-            queued[i] = false;
-            let d = &discovery[i];
-            let invalid: Vec<_> = claims[i]
-                .iter()
-                .copied()
-                .filter(|&p| {
-                    let slot = SlotId(
-                        d.u.slots
-                            .iter()
-                            .position(|s| s.kind == SlotKind::Parameter(p))
-                            .unwrap() as u32,
-                    );
-                    let requests: Vec<_> =
-                        d.u.terminators
-                            .iter()
-                            .filter_map(|t| match t {
-                                Terminator::Return(Some(v)) => Some((*v, 0)),
-                                _ => None,
-                            })
-                            .collect();
-                    let proof = d.proves(slot, &targets, &claims, &requests);
-                    d.u.terminators.iter().any(|t| match t {
-                        Terminator::Return(Some(v)) => proof.get(&(v.index() * 3)) != Some(&true),
-                        Terminator::Return(None) => true,
-                        _ => false,
-                    })
-                })
-                .collect();
-            if !invalid.is_empty() {
-                for p in invalid {
-                    claims[i].remove(&p);
-                }
-                for &caller in &callers[i] {
-                    if !queued[caller] {
-                        queue.push_back(caller);
-                        queued[caller] = true;
-                    }
-                }
-            }
-        }
-    }
-    drop(discovery);
     let abis: Vec<_> = units
         .iter_mut()
         .enumerate()
