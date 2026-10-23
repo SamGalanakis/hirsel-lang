@@ -46,6 +46,8 @@ mod matching;
 mod origin_dependencies;
 mod origin_types;
 mod proofs;
+mod receipts;
+pub use receipts::{Artifact, VerifierCache, validate_cached};
 mod protocol;
 mod scope_locals;
 mod scoped_transport;

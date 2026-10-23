@@ -6,6 +6,10 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+bincode = "1.3.3"
+hirsel-artifact-store = { path = "../hirsel-artifact-store" }
+hirsel-product-codec = { path = "../hirsel-product-codec" }
+hirsel-span = { path = "../hirsel-span" }
 serde = { version = "1", features = ["derive"] }
 hirsel-type-analysis = { path = "../hirsel-type-analysis" }
 hirsel-graph = { path = "../hirsel-graph" }
@@ -19,4 +23,3 @@ hirsel-types = { path = "../hirsel-types" }
 hirsel-intern = { path = "../hirsel-intern", features = ["id-salt"] }
 hirsel-guard = { path = "../hirsel-guard" }
 hirsel-diag = { path = "../hirsel-diag" }
-hirsel-span = { path = "../hirsel-span" }

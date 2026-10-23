@@ -50,6 +50,11 @@ impl EntryKey {
 /// A content-keyed byte store. Implementations never fail a compile: a
 /// missing, unreadable or corrupt entry is a miss.
 pub trait ResultStore: Send + Sync {
+    /// Local verifier capability, never imported through producer bytes. Custom
+    /// and remote providers default to no authority and require first V.
+    fn verifier(&self) -> Option<Arc<hirsel_validate::VerifierCache>> {
+        None
+    }
     /// Whether this provider can retain results. An off provider disables
     /// record capture and encoding as well as I/O; names are only labels.
     fn enabled(&self) -> bool {
@@ -92,7 +97,7 @@ fn content_key(reference: Reference) -> EntryKey {
 pub(crate) fn product_domain(kind: QueryKind) -> Domain {
     Domain {
         kind: kind as u32 + 16,
-        schema: 3,
+        schema: 4,
     }
 }
 
@@ -321,6 +326,7 @@ impl ResultStore for NoneStore {
 #[derive(Debug, Default)]
 pub struct MemStore {
     entries: Mutex<HashMap<ContentHash, (EntryKey, Bytes)>>,
+    verifier: Arc<hirsel_validate::VerifierCache>,
 }
 impl MemStore {
     /// The process's shared store.
@@ -354,6 +360,9 @@ impl MemStore {
     }
 }
 impl ResultStore for MemStore {
+    fn verifier(&self) -> Option<Arc<hirsel_validate::VerifierCache>> {
+        Some(self.verifier.clone())
+    }
     fn get(&self, key: &EntryKey) -> Option<Bytes> {
         self.entries
             .lock()
