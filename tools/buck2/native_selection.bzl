@@ -29,12 +29,12 @@ def _impl(ctx):
     )
     observations = []
     parts = {"inventory": [DefaultInfo(default_output = inventory)]}
-    image = ctx.attrs.image[DefaultInfo].default_outputs[0]
+    products = ctx.attrs.products[DefaultInfo].default_outputs[0]
     for index in range(1, OBSERVATION_SHARDS + 1):
         part = ctx.actions.declare_output("observations-{}.json".format(index))
         ctx.actions.run(
-            cmd_args(ctx.attrs.collector[RunInfo], "--root", tree, "--derive", part.as_output(), "--shard", "{}/{}".format(index, OBSERVATION_SHARDS), "--inventory-input", inventory, hidden = [llvm, image]),
-            env = {"LD_LIBRARY_PATH": cmd_args(llvm.project("lib")), "HIRSEL_IMAGE": cmd_args(image)},
+            cmd_args(ctx.attrs.collector[RunInfo], "--root", tree, "--derive", part.as_output(), "--shard", "{}/{}".format(index, OBSERVATION_SHARDS), "--inventory-input", inventory, hidden = [llvm, products]),
+            env = {"LD_LIBRARY_PATH": cmd_args(llvm.project("lib")), "HIRSEL_PRODUCTS": cmd_args(products)},
             category = "native_observation", identifier = str(index),
         )
         observations.append(part)
@@ -51,13 +51,13 @@ _selection = rule(
         "collector": attrs.exec_dep(providers = [RunInfo]),
         "data": attrs.list(attrs.source()),
         "labels": attrs.list(attrs.string(), default = []),
-        "image": attrs.dep(),
+        "products": attrs.dep(),
         "_llvm": attrs.exec_dep(default = "toolchains//:llvm"),
     },
 )
 
 
-def hirsel_native_selection(name, collector, data, image):
+def hirsel_native_selection(name, collector, data, products):
     # Fault replay passes its own frozen cover (hirsel.native_selection_file).
     frozen = read_root_config("hirsel", "native_selection_file", FROZEN)
     if read_root_config("hirsel", "native_selection", "frozen") != "derive":
@@ -65,6 +65,6 @@ def hirsel_native_selection(name, collector, data, image):
         return
     # Gate-labelled targets are excluded from the ordinary workspace build.
     native.configured_alias(name = name + "-collector", actual = collector, platform = "root//tools/buck2:checked", labels = ["gate"])
-    _selection(name = name, collector = ":" + name + "-collector", data = data, image = image,
+    _selection(name = name, collector = ":" + name + "-collector", data = data, products = products,
                exec_compatible_with = [budget_constraint(pool_budget_name(*OBSERVATION_REQUEST))],
                labels = ["gate"], visibility = ["PUBLIC"])

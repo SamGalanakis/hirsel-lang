@@ -779,50 +779,42 @@ each). On a drive without power-loss protection a barrier commonly takes millise
 expect seconds for the same program. Requests that park (network, process, stdin and timer
 waits) share barriers through group commit.
 
-## The std image
+## Ordinary std products
 
-std is part of the toolchain, so it is checked once, when the toolchain is built,
-rather than by every program that uses it. `hirsel image` checks a package
-completely, as the only dependency of an empty program, and writes its *std image*:
-each definition's lowered, validated TIR, semantic-revision node and completed
-native source audit, with compile-time substitutions and constant values. Native
-builds reuse these products without repeating H and modes for std.
+The toolchain precomputes std through the same query store used for user packages.
+`hirsel precompute` checks a package with V enabled and persists independently keyed
+products, including declaration heads, canonical type records, summaries, lowered
+TIR, audits and compile-time values. It refuses diagnostics. Every reader validates
+the recorded dependencies and establishes its own verifier authority.
 
-Build and install the release toolchain with Buck2 (from the repository root):
+Build and install the release toolchain with Buck2 from the repository root:
 
 ```sh
 bundle="$(.buck2/bin/buck2 build --target-platforms //tools/buck2:release \
   //:hirsel-toolchain --show-full-simple-output)"
 install -d "$HOME/.local/bin"
 install -m 755 "$bundle/hirsel" "$HOME/.local/bin/hirsel"
-install -m 644 "$bundle/hirsel-std.image" "$HOME/.local/bin/hirsel-std.image"
+cp -R "$bundle/hirsel-std.products" "$HOME/.local/bin/"
 install -d "$HOME/.local/bin/stdlib"
 cp -R "$bundle/stdlib/std@1" "$HOME/.local/bin/stdlib/"
 ```
 
-`//:hirsel-toolchain` produces a directory containing the executable, image,
-and matching `stdlib/std@1` source tree. Keep them together when installing.
-Its executable finds its sibling std image immediately, including after installation. Plain
-`cargo build` users create that sibling with one command from the repository root
-(use `target/release/hirsel` after `cargo build --release`):
+Keep the executable, products directory and matching source tree together.
+Cargo users can create the products with:
 
 ```sh
-tools/capped target/debug/hirsel image stdlib/std@1/hirsel.json -o target/debug/hirsel-std.image
+tools/capped target/debug/hirsel precompute stdlib/std@1/hirsel.json -o target/debug/hirsel-std.products
 ```
 
-`hirsel` maps `$HIRSEL_IMAGE`, or else `hirsel-std.image` beside its own
-executable. A matching image supplies std's declaration index, normalized
-signatures and private views without parsing std. Its canonical type rows are
-shared by sessions; per-definition TIR, semantic nodes, audits and constants
-are decoded only when requested. A diagnostic or compile-time operation that
-needs syntax parses the corresponding source on demand.
-
-The image key binds the compiler identity, std's source contents and closure
-manifests, the core registry revision and compile-time limits. A stale host-selected
-image is rebuilt from source and replaced atomically. If rebuilding fails or the
-image is absent, the normal source check supplies the result; `--verbose` explains
-fallbacks. `hirsel image` refuses any diagnostic. Diagnostics, semantic program
-revisions and replay identity agree with checking from source.
+The default directory provider reads `$HIRSEL_PRODUCTS`, or `hirsel-std.products`
+beside the executable, in addition to its writable local store. Explicitly configured
+providers retain their selected roots. Missing, corrupt or stale records are ordinary
+cache misses. Current compiler, schema, policy, limits and observed source/dependency
+identities select each record. The store maps bounded chunks and restores only demanded
+records and type rows. Syntax is materialized when a diagnostic or query needs it.
+Read-only products cannot transfer a producer's verifier receipts. Diagnostics,
+semantic revisions, private representations and native source audits retain their
+source-check contracts.
 
 ## Compile timings
 
@@ -844,7 +836,6 @@ The report keeps three measures apart (`hirsel_intern::timings`):
   time they cover; `(untimed)` is the rest of the command's wall time (CLI
   startup, and the program's own execution under `run` and `test`). Only
   intervals add up. Today's driver maps onto them as follows:
-  - `image open`: reading and decoding the std image;
   - `S0`: loading the package graph and sources, parsing, publishing std's
     declarations into the session, and the program check's own steps;
   - `parallel`: checking each source file's definitions and lowering the
@@ -912,11 +903,9 @@ Every interval, phase and count appears, in that order, including those still
 0. `crates/hirsel-cli/tests/cli/timings.rs` checks the schema.
 
 `--mem-usage` prints the process's peak RSS and the heap bytes held at the end
-of the command, largest first: the decoded std image (`std image`), each
-table of the session's query engine as it is dropped (`engine: ...`), then the
-shared package cache (std's image) and V's retained signature inputs. A table
-still shared with the package cache frees nothing when the engine drops, so
-std's share appears under `package cache`. With `--timings=json` the same
+of the command, largest first: each session query table as it is dropped
+(`engine: ...`), the shared package cache and V's retained signature inputs.
+Tables still shared with another session free no bytes at that drop. With `--timings=json` the same
 figures go into the JSON's `memory` object instead. Heap bytes are the bytes
 the binary's allocator (mimalloc) handed out and got back, which `--mem-usage`
 alone counts, read before and after each measured load or drop. Counting adds

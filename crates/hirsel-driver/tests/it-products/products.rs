@@ -42,9 +42,7 @@ fn compare_products(partition: usize, selected: Option<Vec<String>>) {
         });
         // `aaa` places std after the program's own sources, exercising FileId rebasing.
         let client = f.program("aaa", STD_PROGRAM, &std_manifest(), "std");
-        let mut imaged = shared
-            .load_program_source_with_images(&client, None, &StdImages::none())
-            .unwrap();
+        let mut imaged = shared.load_program_source(&client, None).unwrap();
         let definitions: Vec<_> = imaged
             .engine
             .indexed_definitions()
@@ -53,11 +51,22 @@ fn compare_products(partition: usize, selected: Option<Vec<String>>) {
             .map(|path| DefId::intern(&path))
             .collect();
         assert!(definitions.len() > 100);
-        let mut reference = compiler
-            .load_program_source_with_images(&client, None, &StdImages::none())
-            .unwrap();
+        let mut reference = compiler.load_program_source(&client, None).unwrap();
         let inventory: Vec<_> = definitions.iter().map(|id| id.path().to_string()).collect();
         assert!(inventory.windows(2).all(|pair| pair[0] < pair[1]));
+        if let Some(selected) = &selected {
+            assert!(
+                selected.windows(2).all(|pair| pair[0] < pair[1]),
+                "selection must be sorted and unique"
+            );
+            for identity in selected {
+                assert!(
+                    inventory.binary_search(identity).is_ok(),
+                    "selected identity is absent: {identity}"
+                );
+            }
+        }
+
         eprintln!("[ca41-coverage] quarter={partition} complete-inventory={inventory:?}");
         let phase = std::time::Instant::now();
         let mut lowered = 0;

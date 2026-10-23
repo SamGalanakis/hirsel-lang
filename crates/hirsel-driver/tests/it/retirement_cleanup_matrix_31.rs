@@ -329,7 +329,7 @@ fn tool_receipt() {
     for variable in [
         "LLVM_SYS_231_PREFIX",
         "HIRSEL_RUNTIME_ARCHIVES",
-        "HIRSEL_IMAGE",
+        "HIRSEL_PRODUCTS",
         "HIRSEL_LINK_KIT",
         "HIRSEL_GLIBC_FLOOR",
     ] {

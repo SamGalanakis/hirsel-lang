@@ -51,7 +51,6 @@ impl Tree {
             entry: self.0.join("hirsel.json"),
             std_manifest: None,
             environment: vec![],
-            images: vec![],
             limits: NL {
                 bytes: 16 << 20,
                 nodes: 4096,
@@ -603,7 +602,7 @@ fn candidate_v2_h7_aliases_roles_preconditions_duplicates_and_utf8() {
     assert_eq!(result(&w, &c).verdict, Verdict::Pass);
 }
 #[test]
-fn candidate_v2_h8_exact_preheld_image_or_frozen_source_fallback() {
+fn candidate_v2_h8_frozen_library_sources_allow_edits() {
     hirsel_engine::with_compiler_stack(|| {
         let t = Tree::basic();
         t.write("lib.hir", "pub fn value(x:u64)->u64{x+1}\n");
@@ -621,18 +620,13 @@ fn candidate_v2_h8_exact_preheld_image_or_frozen_source_fallback() {
             ),
         );
         t.write("main.hir", "pub fn main()->u64{lib.value(1)}\n");
-        let path = t.0.join("lib.image");
-        hirsel_driver::COMPILER
-            .image_package(&t.0.join("lib.json"), &path)
-            .unwrap();
-        let mut p = t.plan();
-        p.images.push(std::fs::read(&path).unwrap().into());
+        let p = t.plan();
         let w = workspace(1);
         let b = w.capture_v2(p).unwrap();
         let a = submit(&w, &b, 1, vec![]);
         let ra = result(&w, &a);
         assert_eq!(ra.verdict, Verdict::Pass);
-        assert!(!ra.selection_v2().unwrap()["images"].is_null());
+        assert!(!ra.selection_v2().unwrap()["sources"].is_null());
         let c = submit(
             &w,
             &b,
@@ -645,11 +639,10 @@ fn candidate_v2_h8_exact_preheld_image_or_frozen_source_fallback() {
                 Some("pub fn value(x:u64)->u64{x+2}\n"),
             )],
         );
-        std::fs::remove_file(path).unwrap();
         std::fs::remove_file(t.0.join("lib.hir")).unwrap();
         let r = result(&w, &c);
         assert_eq!(r.verdict, Verdict::Pass, "{:?}", r.loader_error);
-        assert!(r.selection_v2().unwrap()["images"].is_null());
+        assert!(!r.selection_v2().unwrap()["sources"].is_null());
         assert_eq!(result(&w, &a).selection_v2(), ra.selection_v2());
     });
 }
@@ -1040,7 +1033,7 @@ fn artifacts(r: &CheckReceipt, root: &Path) -> Value {
     normalized(
         json!({"completion":format!("{:?}",r.completion),"verdict":format!("{:?}",r.verdict),"failure":r.failure_class.map(|v|format!("{v:?}")),
         "packages":r.scope.packages,"unsafe_ffi":format!("{:?}",r.output.unsafe_ffi),
-        "selection":r.selection_v2().map(|s|json!({"entry":s["entry"],"sources":s["sources"],"images":s["images"]})),"diagnostics":r.output.diagnostics.iter().map(|d|d.to_json(&r.output.sources)).collect::<Vec<_>>(),"human":r.output.diagnostics.iter().map(|d|d.render_human(&r.output.sources)).collect::<Vec<_>>(),
+        "selection":r.selection_v2().map(|s|json!({"entry":s["entry"],"sources":s["sources"]})),"diagnostics":r.output.diagnostics.iter().map(|d|d.to_json(&r.output.sources)).collect::<Vec<_>>(),"human":r.output.diagnostics.iter().map(|d|d.render_human(&r.output.sources)).collect::<Vec<_>>(),
         "canonical":r.checked_products.as_ref().and_then(|p|p.canonical.clone()),"reads":r.checked_products.as_ref().map(|p|p.canonical_reads().into_iter().map(|((o,k),v)|json!([o,k,hex(v)])).collect::<Vec<_>>())}),
         root,
     )
@@ -1061,20 +1054,8 @@ fn candidate_v2_cold_child() {
             .clone()
             .with_config(config(jobs))
             .with_owned_engines();
-        let images = if root.join("lib.image").exists() {
-            hirsel_engine::StdImages::of(vec![
-                hirsel_engine::StdImage::from_bytes(std::fs::read(root.join("lib.image")).unwrap())
-                    .unwrap(),
-            ])
-        } else {
-            hirsel_engine::StdImages::none()
-        };
-        let loaded = compiler.load_program_inputs(
-            &entry,
-            &hirsel_engine::loader_inputs::DiskInputs,
-            &images,
-            false,
-        );
+        let loaded =
+            compiler.load_program_inputs(&entry, &hirsel_engine::loader_inputs::DiskInputs, false);
         let mut program = match loaded {
             Ok(p) => p,
             Err(e) => {
@@ -1094,8 +1075,7 @@ fn candidate_v2_cold_child() {
             .into_iter()
             .collect();
         let selection = json!({"entry":format!("{:?}",program.entry),
-            "sources":program.files.iter().map(|(f,c)|{let file=program.engine.sources.file(*f).unwrap();json!({"logical":file.logical_path(),"package":c.package,"modules":c.modules,"image":program.engine.imaged(&c.package)})}).collect::<Vec<_>>(),
-            "images":program.engine.selected_image().map(|(p,k)|json!({"package":p,"key":hex(k)}))});
+            "sources":program.files.iter().map(|(f,c)|{let file=program.engine.sources.file(*f).unwrap();json!({"logical":file.logical_path(),"package":c.package,"modules":c.modules})}).collect::<Vec<_>>()});
         program.parse_sources().unwrap();
         let checked = program.check(LoweringPolicy::Comptime).unwrap();
         assert_eq!(checked.completion, hirsel_engine::CheckCompletion::Complete);
@@ -1163,7 +1143,7 @@ fn candidate_v2_independent_cold_jobs_salts_matrix() {
                             );
                         }
                     }
-                    let mut plan = t.plan();
+                    let plan = t.plan();
                     if (9..=11).contains(&case) {
                         for tree in [&t, &oracle] {
                             tree.write("lib.hir", "pub fn value(x:u64)->u64{x+1}\n");
@@ -1190,14 +1170,6 @@ fn candidate_v2_independent_cold_jobs_salts_matrix() {
                                 );
                                 tree.write("main.hir", "pub fn main()->u64{lib.value(1)}\n");
                             }
-                            hirsel_engine::with_compiler_stack(|| {
-                                hirsel_driver::COMPILER
-                                    .image_package(&t.0.join("lib.json"), &t.0.join("lib.image"))
-                            })
-                            .unwrap();
-                            let bytes = std::fs::read(t.0.join("lib.image")).unwrap();
-                            std::fs::write(oracle.0.join("lib.image"), &bytes).unwrap();
-                            plan.images.push(bytes.into());
                         }
                     }
                     let b = w.capture_v2(plan).unwrap();
@@ -1320,7 +1292,7 @@ fn candidate_v2_no_host_child() {
     std::fs::remove_dir_all(&t.0).unwrap();
     std::env::set_current_dir("/").unwrap();
     unsafe {
-        std::env::set_var("HIRSEL_IMAGE", t.0.join("forbidden.image"));
+        std::env::set_var("HIRSEL_PRODUCTS", t.0.join("forbidden.image"));
         std::env::set_var("HIRSEL_MEMORY_LIMIT", "1");
         std::env::set_var("HIRSEL_JOBS", "999");
     }

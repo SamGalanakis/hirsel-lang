@@ -1584,11 +1584,11 @@ fn production_batch_preserves_lint_and_lowering_facts_after_front_bodies_drop() 
         std::fs::write(&source, &text).unwrap();
         let mut batch = COMPILER
             .with_retention(memo::Retention::Batch)
-            .load_program_source_with_images(&source, None, &StdImages::none())
+            .load_program_source(&source, None)
             .unwrap();
         let mut resident = COMPILER
             .with_retention(memo::Retention::Resident)
-            .load_program_source_with_images(&source, None, &StdImages::none())
+            .load_program_source(&source, None)
             .unwrap();
         let first = batch.check(LoweringPolicy::Comptime).unwrap();
         let expected = resident.check(LoweringPolicy::Comptime).unwrap();
@@ -1630,7 +1630,7 @@ fn production_batch_preserves_lint_and_lowering_facts_after_front_bodies_drop() 
             let actual = batch.check(LoweringPolicy::Comptime).unwrap();
             let mut cold = COMPILER
                 .with_retention(memo::Retention::Resident)
-                .load_program_source_with_images(&source, Some(&edited), &StdImages::none())
+                .load_program_source(&source, Some(&edited))
                 .unwrap();
             let expected = cold.check(LoweringPolicy::Comptime).unwrap();
             assert_eq!(diagnostics(&actual), diagnostics(&expected));
@@ -1937,7 +1937,10 @@ fn durable_front_workers_drain_payloads_before_accepting_another_task() {
         fn put_content(&self, domain: store::Domain, bytes: &[u8]) -> Option<store::Reference> {
             if domain.kind == 2 {
                 self.types.fetch_add(1, Ordering::SeqCst);
-            } else if [QueryKind::Summary, QueryKind::Signature].iter().any(|k| domain.kind == *k as u32 + 16) {
+            } else if [QueryKind::Summary, QueryKind::Signature]
+                .iter()
+                .any(|k| domain.kind == *k as u32 + 16)
+            {
                 assert_eq!(std::thread::current().id(), self.home);
             } else {
                 assert_eq!(domain.kind, QueryKind::Modes as u32 + 16);
@@ -2200,7 +2203,7 @@ fn evicted_lower_receipts_preserve_program_reuse_and_edit_invalidation() {
         let mut program = COMPILER
             .clone()
             .with_config(config.clone())
-            .load_program_source_with_images(&source, None, &StdImages::none())
+            .load_program_source(&source, None)
             .unwrap();
         let first = program.check(LoweringPolicy::Reachable).unwrap();
         assert!(first.diagnostics.is_empty());
@@ -2225,7 +2228,7 @@ fn evicted_lower_receipts_preserve_program_reuse_and_edit_invalidation() {
             let mut cold = COMPILER
                 .clone()
                 .with_config(config.clone())
-                .load_program_source_with_images(&source, Some(&edited), &StdImages::none())
+                .load_program_source(&source, Some(&edited))
                 .unwrap();
             let expected = cold.check(LoweringPolicy::Reachable).unwrap();
             assert_eq!(diagnostics(&actual), diagnostics(&expected));

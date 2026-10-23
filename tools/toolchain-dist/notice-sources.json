@@ -1,11 +1,10 @@
 {
   "schema": 1,
   "root": "root//:hirsel-cli-bin-hirsel",
-  "scope": "Standard Linux release bundle: compiler link inputs (Rust and bundled C/assembly, before dead-code elimination), Rust standard library, std sources and compiled std objects. Build scripts and proc-macro executables are build tools, not linked libraries. Upstream library notices can conservatively cover other targets.",
+  "scope": "Standard Linux release bundle: compiler link inputs (Rust and bundled C/assembly, before dead-code elimination), Rust standard library, std sources and ordinary query products. Build scripts and proc-macro executables are build tools, not linked libraries. Upstream library notices can conservatively cover other targets.",
   "bundle_entries": [
     "hirsel",
-    "hirsel-std.image",
-    "hirsel-std.objects",
+    "hirsel-std.products",
     "stdlib"
   ],
   "rust_lock": "tools/buck2/toolchain-lock.json",

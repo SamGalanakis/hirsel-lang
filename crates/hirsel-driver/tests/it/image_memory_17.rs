@@ -1,10 +1,10 @@
-//! Spilled image records must not keep the resolver's body-sized read logs alive.
+//! Released query records must not keep the resolver's body-sized read logs alive.
 use crate::image_fixture::*;
 use hirsel_engine::*;
 use hirsel_syntax::{DefPath, ItemPath};
 
 #[test]
-fn image_spilling_releases_resolution_and_later_demand_recomputes_it() {
+fn batch_release_releases_resolution_and_later_demand_recomputes_it() {
     with_compiler_stack(|| {
         let f = Fixture::new();
         f.write("lib.hir", "pub fn value()->u32{7u32}\n");
@@ -27,7 +27,7 @@ fn image_spilling_releases_resolution_and_later_demand_recomputes_it() {
             modules: vec!["lib".into()],
             name: "value".into(),
         });
-        let mut producer = load(&client, &StdImages::none());
+        let mut producer = load(&client, None);
         let before = producer
             .engine
             .resolve_definition(&path)
@@ -41,9 +41,8 @@ fn image_spilling_releases_resolution_and_later_demand_recomputes_it() {
                 .is_some()
         );
 
-        let bytes = producer
-            .image(&package("lib"), tempfile::tempfile().unwrap())
-            .unwrap();
+        producer.engine.set_retention(memo::Retention::Batch);
+        producer.check(LoweringPolicy::Reachable).unwrap();
         assert!(
             producer
                 .engine
@@ -55,10 +54,12 @@ fn image_spilling_releases_resolution_and_later_demand_recomputes_it() {
             before
         );
 
-        let image = StdImage::from_bytes(bytes).unwrap();
-        let mut cached = load(&client, &StdImages::of(vec![image]));
-        let mut fresh = load(&client, &StdImages::none());
-        assert!(cached.engine.imaged(&package("lib")));
+        let products = f.0.join("lib.products");
+        hirsel_driver::COMPILER
+            .precompute_package(&library, &products)
+            .unwrap();
+        let mut cached = load(&client, Some(&products));
+        let mut fresh = load(&client, None);
         assert_eq!(
             cached.check(LoweringPolicy::Comptime).unwrap().diagnostics,
             fresh.check(LoweringPolicy::Comptime).unwrap().diagnostics

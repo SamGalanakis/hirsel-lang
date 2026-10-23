@@ -47,7 +47,7 @@ def manifest(output, mode):
                   profile='dist', pgo=mode, lto='fat', codegen_units=1,
                   training='compiler-bench examples + syn3k: check, debug Cranelift, release LLVM',
                   hirsel_sha256=digest(output / 'hirsel'),
-                  std_image_sha256=digest(output / 'hirsel-std.image'),
+                  std_products_sha256=hashlib.sha256(json.dumps({str(p.relative_to(output / 'hirsel-std.products')): digest(p) for p in sorted((output / 'hirsel-std.products').rglob('*')) if p.is_file()}, sort_keys=True, separators=(',', ':')).encode()).hexdigest(),
                   notices_sha256=digest(output / 'notices/manifest.json'))
     if mode == 'use':
         record['profdata_sha256'] = digest(output / 'hirsel.profdata')
