@@ -114,8 +114,11 @@ impl ResultStore for DirStore {
             store.associate(Address(key.0), Action(key.0), reference)
         };
         if write().is_ok() {
-            let before = self.written.fetch_add(value.len() as u64, Relaxed);
-            if before == 0 || before / GC_EVERY != (before + value.len() as u64) / GC_EVERY {
+            // Include both the immutable record header and its action root.
+            let written = value.len() as u64 + 64 + 152;
+            let before = self.written.fetch_add(written, Relaxed);
+            let interval = GC_EVERY.min(self.cap.max(1));
+            if before == 0 || before / interval != (before + written) / interval {
                 self.gc(self.cap);
             }
         }

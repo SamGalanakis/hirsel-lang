@@ -223,6 +223,18 @@ fn dir_short_lived_writers_enforce_the_cap() {
 }
 
 #[test]
+fn dir_small_cap_collects_repeated_writes_through_one_handle() {
+    let root = scratch("small-cap");
+    let store = DirStore::new(root.clone()).with_cap(4096);
+    for n in 0..12 {
+        store.put(&key(&format!("entry-{n}")), &[n as u8; 2048]);
+        let report = store.gc(u64::MAX);
+        assert!(report.bytes <= 4096 + 2048 + 216, "{report:?}");
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn dir_concurrent_handles_publish_complete_records_during_eviction() {
     let root = scratch("publish-evict");
     std::thread::scope(|scope| {
