@@ -90,3 +90,46 @@ fn source_lower_record_from_verify_off_cannot_authorize_mutated_private_types() 
         );
     });
 }
+
+#[test]
+fn durable_source_identity_requires_local_v_and_preserves_private_execution_guards() {
+    with_compiler_stack(|| {
+        let store = Arc::new(store::MemStore::default());
+        let main = entry_path(&default_context());
+        let mut seed = session(store.clone(), compiler_adapters(), Verify::On);
+        seed.lower_to_tir(&main).unwrap();
+        let expected = seed
+            .verified_lower_output(&main)
+            .unwrap()
+            .expect("V-owned output after source lowering");
+        let mut fresh = session(store, compiler_adapters(), Verify::On);
+        fresh.adapters.lowering = None;
+        let actual = fresh
+            .verified_lower_output(&main)
+            .unwrap()
+            .expect("validated prior inputs without body lowering");
+        assert_eq!(actual.reference(), expected.reference());
+        assert_eq!(fresh.recompute_count(&main, QueryKind::Lower), 0);
+        assert_eq!(actual.owner(), hirsel_syntax::DefId::intern(&main));
+        let materialized = fresh.materialize_verified_lower_output(&actual).unwrap();
+        assert_eq!(materialized.path, actual.owner());
+        assert_eq!(fresh.recompute_count(&main, QueryKind::Lower), 0);
+        let mut verify = session(
+            Arc::new(store::MemStore::default()),
+            compiler_adapters(),
+            Verify::On,
+        )
+        .with_verify_store(store::VerifyStore::Recompute);
+        assert!(verify.verified_lower_output(&main).unwrap().is_none());
+
+        let off_store = Arc::new(store::MemStore::default());
+        let mut off = session(off_store.clone(), compiler_adapters(), Verify::Off);
+        off.lower_to_tir(&main).unwrap();
+        assert!(off.verified_lower_output(&main).unwrap().is_none());
+        let mut enabled = session(off_store, compiler_adapters(), Verify::On);
+        assert!(
+            enabled.verified_lower_output(&main).unwrap().is_none(),
+            "producer output alone has no V authority"
+        );
+    });
+}

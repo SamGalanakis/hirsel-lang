@@ -50,7 +50,8 @@ mod proofs;
 mod receipts;
 pub use receipts::{
     AcceptedArtifact, Artifact, ExecutionReceipt, ReplayEnvironment, VerifiedDefinition,
-    VerifierCache, validate_cached, validate_definition, validate_with_receipt,
+    VerifiedDefinitionOutput, VerifierCache, validate_cached, validate_definition,
+    validate_with_receipt,
 };
 mod protocol;
 mod scope_locals;
@@ -188,7 +189,8 @@ pub fn validate(
     // accounting (including V invoked by import and compile-time execution).
     let started = profile_start();
     let reader = Reader::new(t, signatures);
-    let validation = validate_input(definition, t, &reader);
+    let mut validation = validate_input(definition, t, &reader);
+    validation.violations.extend(reader.input_errors());
     reader.finish(reads);
     if let Some(started) = started {
         eprintln!(
@@ -218,6 +220,7 @@ pub fn qualify_scoped_transport(
             .violations
             .extend(scoped_transport::check(definition, t, &reader));
     }
+    result.violations.extend(reader.input_errors());
     reader.finish(reads);
     result
 }

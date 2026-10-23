@@ -1,12 +1,14 @@
 //! Local verifier authority, separate from producer query associations. Imported
 //! content can share the physical store but cannot publish through this API.
 use crate::{SignatureLookup, VRead, Validation, read_holds};
+mod outputs;
 use bincode::Options;
 use hirsel_artifact_store::{Action, Address, Domain, Store};
 use hirsel_span::Anchor;
 use hirsel_syntax::{ContentHash, DefPath, PackageId};
 use hirsel_tir::Definition;
 use hirsel_types::TypeInterner;
+pub use outputs::VerifiedDefinitionOutput;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -20,8 +22,10 @@ use std::{
 #[derive(Clone, Debug)]
 pub struct VerifiedDefinition {
     definition: Weak<Definition>,
+    owner: hirsel_syntax::DefId,
     types: Weak<TypeInterner>,
     policy: ContentHash,
+    accepted: Option<AcceptedArtifact>,
     reads: Vec<VRead>,
 }
 impl VerifiedDefinition {
@@ -39,7 +43,15 @@ impl VerifiedDefinition {
     /// A retained query may check its evidence before materializing a body.
     /// Its ordinary query reads must also still hold before adopting the result.
     pub fn environment_holds(&self, policy: ContentHash, signatures: &dyn SignatureLookup) -> bool {
-        self.policy == policy && self.reads.iter().all(|r| read_holds(r, signatures))
+        self.policy == policy
+            && self.types.upgrade().is_some_and(|types| {
+                self.reads
+                    .iter()
+                    .all(|r| crate::input::read_holds_for_types(&types, r, signatures))
+            })
+    }
+    pub fn owner(&self) -> hirsel_syntax::DefId {
+        self.owner
     }
     pub fn reads(&self) -> &Vec<VRead> {
         &self.reads
@@ -74,8 +86,10 @@ pub fn validate_definition(
     };
     let evidence = report.violations.is_empty().then(|| VerifiedDefinition {
         definition: Arc::downgrade(definition),
+        owner: definition.path,
         types: Arc::downgrade(&types),
         policy,
+        accepted: accepted.clone(),
         reads,
     });
     (report, ran, accepted, evidence)
@@ -275,7 +289,7 @@ impl VerifierCache {
             && receipt
                 .reads
                 .iter()
-                .all(|read| read_holds(read, signatures))
+                .all(|read| crate::input::read_holds_for_types(types, read, signatures))
         {
             return Arc::new(crate::ViewVerdict {
                 error: None,
@@ -656,7 +670,7 @@ pub fn validate_with_receipt(
         && receipt
             .reads
             .iter()
-            .all(|read| read_holds(read, signatures))
+            .all(|read| crate::input::read_holds_for_types(&artifact.types, read, signatures))
     {
         cache.retain_artifact(artifact, policy);
         reads.extend(receipt.reads);
@@ -753,6 +767,113 @@ mod tests {
             &f.signatures,
             policy,
         )
+    }
+
+    #[test]
+    fn cached_nested_body_and_private_type_mutations_require_full_v() {
+        let mut f = crate::support::captured_generic_copy(true, false, false);
+        let cache = VerifierCache::default();
+        let policy = ContentHash::default();
+        let (report, ran) = check(&f, &cache, policy);
+        assert!(ran && report.violations.is_empty(), "{report:?}");
+        assert!(!check(&f, &cache, policy).1);
+        let original = f.definition.bodies[1].clone();
+        let public = f.signatures.get(f.definition.path).unwrap().fingerprint;
+        let hirsel_tir::Terminator::Return { value, .. } =
+            &mut f.definition.bodies[1].blocks[0].terminator
+        else {
+            panic!()
+        };
+        value.place = hirsel_tir::PlaceId(u32::MAX);
+        let (report, ran) = check(&f, &cache, policy);
+        assert!(ran && !report.violations.is_empty());
+        f.definition.bodies[1] = original;
+        f.definition.bodies[1].result =
+            session().intern(hirsel_types::Type::with_kind(hirsel_types::TypeKind::Error));
+        assert_eq!(
+            f.signatures.get(f.definition.path).unwrap().fingerprint,
+            public
+        );
+        let (report, ran) = check(&f, &cache, policy);
+        assert!(ran && !report.violations.is_empty());
+    }
+
+    #[test]
+    fn equal_digest_from_a_foreign_type_universe_cannot_reuse_a_local_signature_verdict() {
+        use crate::SignatureLookup;
+        let mut f = Fixture::unit();
+        owner_sig(&mut f, &[]);
+        let types = session();
+        let base = hirsel_types::TypeBase::build(types.len(), |_| {
+            types.ids().map(|id| types.row(id).clone()).collect()
+        });
+        let foreign = crate::IdentifiedSignature::new(
+            TypeInterner::new(Some(base)),
+            Arc::new(f.signatures.get(f.definition.path).unwrap().clone()),
+        );
+        let original = f.signatures.view(f.definition.path).unwrap();
+        assert_eq!(original.digest(), foreign.digest());
+        struct Views<'a> {
+            foreign: crate::IdentifiedSignature,
+            original: &'a crate::SignatureMap,
+        }
+        impl SignatureLookup for Views<'_> {
+            fn view(&self, d: hirsel_syntax::DefId) -> Option<crate::ViewInput<'_>> {
+                if d == self.foreign.signature().definition {
+                    Some(self.foreign.input())
+                } else {
+                    self.original.view(d)
+                }
+            }
+            fn first_heap(&self) -> Option<(hirsel_syntax::DefId, hirsel_types::HeapRole)> {
+                self.original.first_heap()
+            }
+            fn universe_errors(&self) -> (ContentHash, &[crate::Violation]) {
+                self.original.universe_errors()
+            }
+        }
+        let mut verdicts = crate::ValidatedSignatures::default();
+        assert!(
+            verdicts
+                .verdict(&types, f.definition.path, &f.signatures)
+                .error
+                .is_none()
+        );
+        let views = Views {
+            foreign,
+            original: &f.signatures,
+        };
+        let (report, _, _, evidence) = validate_definition(
+            &Arc::new(f.definition.clone()),
+            types.clone(),
+            |_| Some((path("main"), 0)),
+            &views,
+            ContentHash::default(),
+            None,
+        );
+        assert!(
+            !report.violations.is_empty(),
+            "foreign owner must not be treated as optional absence"
+        );
+        assert!(evidence.is_none());
+        assert!(
+            verdicts
+                .verdict(&types, f.definition.path, &views)
+                .error
+                .is_some()
+        );
+        assert!(
+            VerifierCache::default()
+                .view_verdict(
+                    &types,
+                    f.definition.path,
+                    views.view(f.definition.path).unwrap(),
+                    &views,
+                    ContentHash::default()
+                )
+                .error
+                .is_some()
+        );
     }
 
     #[test]

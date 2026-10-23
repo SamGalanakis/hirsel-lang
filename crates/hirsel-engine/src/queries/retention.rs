@@ -184,10 +184,12 @@ impl QueryEngine {
                 return false;
             };
             let snapshot = self.signature_snapshot();
-            if !evidence.environment_holds(
-                snapshot.source_verification_policy(),
-                snapshot.validation(&path.0.package),
-            ) {
+            if evidence.owner() != DefId::intern(path)
+                || !evidence.environment_holds(
+                    snapshot.source_verification_policy(),
+                    snapshot.validation(&path.0.package),
+                )
+            {
                 return false;
             }
         }
