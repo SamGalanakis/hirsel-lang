@@ -4,10 +4,16 @@ version.workspace = true
 edition.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+autotests = false
+
+[[test]]
+name = "index_harness"
+path = "tests/index_harness.rs"
 
 [dependencies]
 hirsel-syntax = { path = "../hirsel-syntax" }
 libc = "0.2"
+crc32c = "=0.6.8"
 
 [dev-dependencies]
 hirsel-guard = { path = "../hirsel-guard" }
