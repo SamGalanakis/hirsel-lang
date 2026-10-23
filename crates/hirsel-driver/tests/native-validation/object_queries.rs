@@ -384,6 +384,7 @@ struct NativeFixture {
     program: Arc<crate::native::ReadyProgram>,
     address: InstanceAddress,
     descriptor: Arc<ReadyProduct>,
+    owner: usize,
     opt: hirsel_lir::emission::OptLevel,
     materializations: Arc<Cell<usize>>,
 }
@@ -419,7 +420,7 @@ impl NativeProducts for NativeFixture {
         }
         self.materializations.set(self.materializations.get() + 1);
         let program = &self.program;
-        let units: Vec<_> = program.units.iter().collect();
+        let units = [&program.units[self.owner]];
         let inputs = hirsel_lir::emission::EmitInputs {
             index: None,
             input: &program.input,
@@ -474,12 +475,12 @@ fn actual_ready_fixture_emits_links_restores_and_exits_on_both_backends() {
         let mut options = native::Options::new(TargetSpec::x86_64_unknown_linux_gnu());
         options.validation = native::Validation::EveryStage;
         let program = Arc::new(native::build(&validated, &options).unwrap());
-        assert_eq!(
-            program.units.len(),
-            1,
-            "fixture should own exactly one Ready instance"
-        );
-        let unit = program.units[0].unit();
+        let owner = program
+            .units
+            .iter()
+            .position(|u| u.unit().header.definition == entry)
+            .unwrap();
+        let unit = program.units[owner].unit();
         let instance =
             hirsel_layout::instance::InstanceKey::new(&entry, 0, &[], engine.types(), None, None)
                 .unwrap();
@@ -514,9 +515,33 @@ fn actual_ready_fixture_emits_links_restores_and_exits_on_both_backends() {
                     program: program.clone(),
                     address: address.clone(),
                     descriptor: Arc::new(descriptor),
+                    owner,
                     opt,
                     materializations: count.clone(),
                 };
+                let baseline = native::emit_backend_objects(
+                    &program,
+                    backend,
+                    opt,
+                    native::Partition::Singleton,
+                    false,
+                    None,
+                )
+                .unwrap();
+                let owner_symbol =
+                    hirsel_lir::emission::symbol_name(&entry, Some(&unit.header.instance));
+                let remaining: Vec<_> = baseline
+                    .into_iter()
+                    .filter(|object| {
+                        !object
+                            .exports
+                            .iter()
+                            .any(|export| export.name == owner_symbol)
+                    })
+                    .collect();
+                let supplementary =
+                    store_link_input(store.as_ref(), hirsel_codec::to_text(&remaining).as_bytes())
+                        .unwrap();
                 let links = Cell::new(0);
                 let link_store = store.clone();
                 let mut queries = ObjectQueries::new(
@@ -524,13 +549,8 @@ fn actual_ready_fixture_emits_links_restores_and_exits_on_both_backends() {
                     fixture,
                     |_: &LinkKey, _: &LinkInputs, objects: &[ObjectArtifact]| {
                         links.set(links.get() + 1);
-                        let registry = hirsel_lir::descriptor_registry::DescriptorRegistry::new(
-                            &program.table,
-                            &program.finalizers,
-                        );
                         let mut objects = objects.to_vec();
-                        objects
-                            .push(native::emit_glue(&program, backend, &registry).map_err(error)?);
+                        objects.extend(remaining.iter().cloned());
                         let path = native::link_objects(&program, &entry, &objects, &tools, &dir)
                             .map_err(error)?;
                         std::fs::read(path).map_err(error)
@@ -549,6 +569,7 @@ fn actual_ready_fixture_emits_links_restores_and_exits_on_both_backends() {
                 assert_eq!(cold.product, warm.product);
                 assert_eq!(count.get(), 1, "hit materialized Ready");
                 let mut manifest = inputs(link_store.as_ref(), vec![(*cold).clone()]);
+                manifest.static_manifest = supplementary;
                 let archive = tools
                     .runtime
                     .get(&(
@@ -698,10 +719,7 @@ impl ObjectTaskSnapshot for TaskSnapshot {
     fn link_input(&self, p: ProductRef) -> Result<Reference, Reference> {
         Ok(p.record)
     }
-    fn products(
-        &self,
-        settled: &[ProductRef],
-    ) -> Result<Box<dyn ObjectProducts + Send>, Reference> {
+    fn products(&self, settled: &[ProductRef]) -> Result<Box<dyn ObjectProducts>, Reference> {
         assert!(!settled.is_empty());
         self.makes.fetch_add(1, Ordering::SeqCst);
         Ok(Box::new(TaskProducts {
