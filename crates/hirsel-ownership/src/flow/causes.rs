@@ -513,6 +513,37 @@ impl Checker<'_, '_> {
             syntax: self.syntax,
         }
     }
+    /// Recover an owned call behind immutable local bindings and pattern
+    /// payloads. `site` on a read is the read itself; the slot retains the
+    /// producing expression. This is diagnostic-only: never follow lifetime
+    /// roots (a result related to an argument is still owned), copy boundaries,
+    /// or mutable storage whose historical value may have been replaced.
+    pub(super) fn owned_call_source(&self, state: &State, mut source: ExprId) -> Option<ExprId> {
+        let mut seen = BTreeSet::new();
+        while seen.insert(source) {
+            match self.tree.expressions[source.0 as usize].kind {
+                ExprKind::Call { .. } => {
+                    return self.source_rows.call(source).and_then(|i| {
+                        (!matches!(self.body.calls[i].target, CallTarget::Constructor(_)))
+                            .then_some(source)
+                    });
+                }
+                ExprKind::Unary {
+                    op: UnaryOp::Take,
+                    value,
+                } => source = value,
+                _ => {
+                    let place = place(self.body, source, self.source_rows)?;
+                    let binding = &self.body.bindings[place.binding];
+                    if binding.mutable || binding.owner != self.graph.owner {
+                        return None;
+                    }
+                    source = state.slots[place.binding].value.site?;
+                }
+            }
+        }
+        None
+    }
     /// A binding's name and the site that declares it: a parameter's type,
     /// or the pattern that binds it.
     pub(super) fn binding_site(&self, index: usize) -> (String, Span) {

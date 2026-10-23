@@ -290,3 +290,199 @@ fn cursor_diagnostics_16_invalid_cover_prerequisites() {
         &[("LANG-15", "a"), ("OWN-1", "take b")],
     );
 }
+
+#[test]
+fn cursor_diagnostics_16_matched_owned_producer() {
+    let source = "// λ matched owned result\nfn f(a:List[u64],m:Map[u64,List[u64]])->u64{let mut c:List[u64] in {a,m}=a;let Some(next)=map.get(m,0u64) else{return 0};c=take next;list.len(c)}\npub fn main(){}";
+    let diagnostics = check(
+        source,
+        &[("LANG-15", "c=take next;")],
+        &[
+            ("let mut c", "c", "read-only borrow cursor"),
+            ("take next", "take next", "owned value"),
+            ("map.get(m,0u64)", "map.get(m,0u64)", "owned result"),
+            (
+                "map.get(m,0u64)",
+                "map.get",
+                "result relation does not turn an owned return",
+            ),
+        ],
+    );
+    let diagnostic = &diagnostics[0];
+    assert!(
+        diagnostic["secondary"][3]["message"]
+            .as_str()
+            .unwrap()
+            .contains("-> Option[List[u64]] in m"),
+        "{diagnostic}"
+    );
+    let notes = diagnostic["notes"].to_string();
+    assert!(
+        notes.contains("cover") && notes.contains("`take`"),
+        "{diagnostic}"
+    );
+    assert!(
+        notes.contains("owned state") && notes.contains("borrowed"),
+        "{diagnostic}"
+    );
+}
+
+#[test]
+fn cursor_diagnostics_16_owned_binding_chain_and_controls() {
+    for (binding, refill) in [
+        (
+            "let Some(next)=map.get(m,0u64) else{return 0};",
+            "take next",
+        ),
+        (
+            "let receipt=map.get(m,0u64);let Some(next)=take receipt else{return 0};let moved=take next;",
+            "take moved",
+        ),
+    ] {
+        let source = format!(
+            "fn f(a:List[u64],m:Map[u64,List[u64]])->u64{{let mut c:List[u64] in {{a,m}}=a;{binding}c={refill};list.len(c)}}"
+        );
+        check(
+            &source,
+            &[("LANG-15", &format!("c={refill};"))],
+            &[
+                ("let mut c", "c", "read-only borrow cursor"),
+                (&format!("c={refill};"), refill, "owned value"),
+                ("map.get(m,0u64)", "map.get(m,0u64)", "owned result"),
+                (
+                    "map.get(m,0u64)",
+                    "map.get",
+                    "result relation does not turn an owned return",
+                ),
+            ],
+        );
+    }
+    // A borrowed item still needs the map in its fixed cover.
+    check_recovery(
+        "fn f(a:List[u64],m:Map[u64,List[u64]])->u64{let mut c=a;for (key,item) in m {if key==0u64 {c=item;return list.len(c)}};0}",
+        &[("MODE-1", "c=item;")],
+    );
+    // A local owned temporary's view does not originate in a or m.
+    check_recovery(
+        "fn f(a:List[u64],m:Map[u64,List[u64]])->u64{let mut c:List[u64] in {a,m}=a;let next=[1u64];c=next;list.len(c)}",
+        &[("MODE-1", "c=next;")],
+    );
+    check_recovery(
+        "fn f(a:List[u64],m:Map[u64,List[u64]])->u64{let mut c:List[u64] in {a,m}=a;let Some(next)=map.get(m,0u64) else{return 0};c=take next;let independent=take a;list.len(c)}",
+        &[("LANG-15", "c=take next;"), ("OWN-1", "take a")],
+    );
+    // Do not attribute a replaced mutable value to its old call producer.
+    let ds = check(
+        "fn owned(a:Bytes)->Bytes in a{copy a}\nfn f(a:Bytes){let mut c=a;let mut next=owned(a);next=copy a;c=take next}",
+        &[("LANG-15", "c=take next")],
+        &[
+            ("let mut c", "c", "read-only borrow cursor"),
+            ("take next", "take next", "owned value"),
+        ],
+    );
+    assert_eq!(ds.len(), 1);
+}
+
+fn cursor_lookup_recipe() -> String {
+    let docs = include_str!("../../../../docs/spec/language.md");
+    let recipe = docs
+        .split("// cursor-owned-refill borrowing recipe\n")
+        .nth(1)
+        .unwrap()
+        .split("```")
+        .next()
+        .unwrap();
+    let helper = recipe.split("pub fn main()").next().unwrap();
+    format!(
+        "{helper}\nfn owned_length(a:List[u64],m:Map[u64,List[u64]])->u64 {{let mut c:List[u64] in {{a,m}}=copy a;let Some(next)=map.get(m,0u64) else{{return 0}};c=take next;list.len(c)}}\n"
+    )
+}
+
+#[test]
+fn cursor_diagnostics_16_lookup_recipes_check_export_and_observe() {
+    use hirsel_driver::native::*;
+    with_compiler_stack(|| {
+        let source = format!(
+            "{}{}",
+            cursor_lookup_recipe(),
+            r"
+pub fn main()->Result[(),u64] {
+  let a=[9u64,8u64,7u64]
+  let mut m:Map[u64,List[u64]]=map.empty()
+  if borrowed_length(a,m)!=0u64 || owned_length(a,m)!=0u64 {return Error(1)}
+  map.insert(mut m,1u64,[6u64])
+  if borrowed_length(a,m)!=0u64 || owned_length(a,m)!=0u64 {return Error(2)}
+  map.insert(mut m,0u64,[])
+  if borrowed_length(a,m)!=0u64 || owned_length(a,m)!=0u64 {return Error(3)}
+  map.insert(mut m,0u64,[4u64,5u64])
+  if borrowed_length(a,m)!=2u64 || owned_length(a,m)!=2u64 {return Error(4)}
+  Ok(())
+}
+"
+        );
+        let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
+        let file = engine.sources.add("lookup.hir", source.into()).unwrap();
+        let output = check_progress(&mut engine, file, &default_context()).unwrap();
+        assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+        let entry = entry_path(&default_context());
+        for name in ["borrowed_length", "owned_length", "main"] {
+            let mut path = entry.clone();
+            path.0.name = name.into();
+            let tir = engine.export_tir(&path).unwrap();
+            engine.import_tir(&tir).unwrap();
+        }
+        let run = run_observed_snapshot(
+            &mut engine,
+            &RunConfiguration {
+                entry: entry.clone(),
+                hash_seed: 0,
+                inputs: vec![],
+            },
+            Default::default(),
+        )
+        .unwrap();
+        let reference = Observation::of_reference(run.observation.as_ref().unwrap());
+        assert_eq!(reference.exit_code, Some(0));
+        assert!(reference.failures.is_empty());
+        let mut options = Options::new(TargetSpec::x86_64_unknown_linux_gnu());
+        options.validation = Validation::EveryStage;
+        let matrix = vec![
+            Configuration {
+                options: options.clone(),
+                engine: Engine::Heap { campaign: true },
+            },
+            Configuration {
+                options: options.clone(),
+                engine: Engine::Native {
+                    opt: OptLevel::Speed,
+                    partition: Partition::Whole,
+                    runtime: Runtime::Diagnostic,
+                },
+            },
+            Configuration {
+                options,
+                engine: Engine::Cranelift {
+                    partition: Partition::Whole,
+                    runtime: Runtime::Diagnostic,
+                },
+            },
+        ];
+        let directory = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+            .join("cursor-owned-refill-repairs-21");
+        std::fs::create_dir_all(&directory).unwrap();
+        let toolchain = Toolchain::for_matrix(&directory.join("runtime"), &matrix).unwrap();
+        let input = engine.export_native_input().unwrap();
+        let input = engine.import_native_input(input).unwrap();
+        let outcomes = differential(&input, &entry, &reference, &matrix, &toolchain, &directory);
+        assert_eq!(outcomes.len(), 3);
+        for (configuration, outcome) in outcomes {
+            assert!(
+                matches!(outcome, Outcome::Agree),
+                "{configuration}: {outcome:?}"
+            );
+        }
+        eprintln!(
+            "lookup recipes: 4 hit/miss vectors; reference + 3 H/LLVM/Cranelift agreements; 3 TIR round trips"
+        );
+    });
+}

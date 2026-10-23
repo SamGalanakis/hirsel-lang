@@ -193,6 +193,15 @@ result local. Non-global borrowed and `mut` values lend their bounds plus their 
 home; copies of non-flat local content keep lasting source bounds after access loans end.
 Plain results are independent bits.
 
+Destructuring an owned result or moving it through local bindings preserves that
+ownership; `in m` describes its lifetime sources, not borrowed access to `m`.
+Neither a larger cursor cover nor `take` changes this. A read-only lookup may
+instead traverse borrowed entries within the cursor's fixed cover, as in the
+[complete length-lookup recipe](language.md#lang-15-bindings). That recipe takes
+O(n) traversal in the worst case and preserves the lookup's `0` miss result;
+it is appropriate only when that traversal cost is acceptable. Ordinary owned
+state retains the hash-lookup algorithm when owned results are intended.
+
 **Relations compose.** A local binding of the calling body (not a parameter, capture or
 temporary) whose value is related to other places (a call result related to its
 arguments, a borrowed view, a field read through its owner) lends a related `data`

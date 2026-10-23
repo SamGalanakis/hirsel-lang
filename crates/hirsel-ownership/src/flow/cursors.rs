@@ -461,14 +461,57 @@ impl Checker<'_, '_> {
                             .into(),
                     },
                 ];
-                if let ExprKind::Call { callee, .. } = self.tree.expressions[source.0 as usize].kind
+                if let Some(call) = self.owned_call_source(state, source)
+                    && let ExprKind::Call { callee, .. } =
+                        self.tree.expressions[call.0 as usize].kind
                 {
+                    if call != source {
+                        labels.push(hirsel_diag::Label {
+                            span: self.span_of(call),
+                            message: "this call produced the owned result carried through the local binding or pattern".into(),
+                        });
+                    }
                     let callee_name = self
                         .spelled(callee)
                         .unwrap_or_else(|| "this callable".into());
+                    let signature = self.ty(callee).map(|ty| {
+                        let mut header = self.t.get(ty).unwrap().clone();
+                        if let TypeKind::Function(function) = &mut header.kind
+                            && let Some(index) = self.source_rows.call(call)
+                        {
+                            // J has already instantiated this call's parameter
+                            // rows and the call expression's result. Keep declared relations and
+                            // binder names rather than displaying scheme T0/T1.
+                            let checked = &self.body.calls[index];
+                            let mut parameters = function.parameters.to_vec();
+                            for argument in &checked.arguments {
+                                if let Some((ordinal, parameter)) = &argument.parameter {
+                                    parameters[*ordinal as usize] = parameter.clone();
+                                }
+                            }
+                            function.parameters = parameters.into();
+                            let mut result = self
+                                .t
+                                .get(self.ty(call).unwrap_or(checked.result))
+                                .unwrap()
+                                .clone();
+                            result.modes.relation =
+                                self.t.get(checked.result).unwrap().modes.relation.clone();
+                            function.result = self.t.intern(result);
+                        }
+                        hirsel_type_analysis::spelling::type_spelling(
+                            self.t,
+                            self.t.intern(header),
+                            &self.body.resolution.generic_declarations,
+                            &self.syntax.item.definition.0.package,
+                            true,
+                        )
+                    });
+                    let signature =
+                        signature.map_or_else(String::new, |s| format!("; signature: `{s}`"));
                     labels.push(hirsel_diag::Label {
                         span: self.cursor_result_site(callee),
-                        message: format!("`{callee_name}` returns an owned value; a result relation does not turn an owned return into a read-only view"),
+                        message: format!("`{callee_name}` returns an owned value{signature}; a result relation does not turn an owned return into a read-only view"),
                     });
                 }
                 if let Some(diagnostic) = self.diagnostic(
@@ -477,6 +520,8 @@ impl Checker<'_, '_> {
                     "a borrow cursor requires a read-only view, not an owned refill",
                 ) {
                     diagnostic.secondary = labels;
+                    diagnostic.notes.push("Enlarging the origin cover or adding `take` cannot turn an owned result into a read-only view.".into());
+                    diagnostic.notes.push("help: For read-only traversal, select borrowed parts of the original owner within the fixed cover. If the algorithm needs owned call results, initialize ordinary owned state instead.".into());
                 }
             }
             return true;

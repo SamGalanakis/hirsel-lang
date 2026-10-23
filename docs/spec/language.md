@@ -762,6 +762,40 @@ is owned; `c[0] = 1` is LANG-15 because the view grants no referent write. Addin
 unrelated borrowed parameter `b` does not admit `c = b` without a written `in {a, b}`
 cover. An owned initializer such as `let mut c = copy a` keeps ordinary owned assignment.
 
+For example, `let Some(next) = map.get(m, 0u64) else { return 0 }` binds
+an owned payload. Even with `in {a, m}`, a cursor initialized from `a` cannot
+receive `take next`; widening the cover or adding `take` cannot make the owned
+result a view. For this read-only length lookup, a borrowing traversal can keep
+views of the original map entries:
+
+```hirsel
+// cursor-owned-refill borrowing recipe
+fn borrowed_length(a: List[u64], m: Map[u64, List[u64]]) -> u64 {
+  let mut c: List[u64] in {a, m} = a
+  for (key, item) in m {
+    if key == 0u64 {
+      c = item
+      return list.len(c)
+    }
+  }
+  0
+}
+
+pub fn main() -> u64 {
+  let mut m: Map[u64, List[u64]] = map.empty()
+  map.insert(mut m, 0u64, [4u64, 5u64])
+  borrowed_length([9u64], m)
+}
+```
+
+This returns the selected list's length on a hit and `0` on a miss, including
+when `a` is nonempty. The scan visits up to every entry: O(n) traversal, rather
+than the expected O(1) hash lookup. Use it only when that traversal cost is
+appropriate. If the algorithm needs owned call results, initialize ordinary
+owned state (for example, `let mut c: List[u64] in {a, m} = copy a`) and retain
+the lookup and its owned payload instead. The ordinary locality and copy rules
+still apply; the cover alone does not determine whether a binding owns a value.
+
 A binding's **receiving contract** is fixed at its declaration: a written relation
 (`let x: T in S`, [MODE-1](ownership.md#mode-1-locality)) supplies it, and otherwise the
 initializer does. A binding named in its own relation stands for its own scope, so
