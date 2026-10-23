@@ -1,0 +1,19 @@
+pub type AppError = Grant(GrantError) | Clock(ClockError)
+fn work(tasks: Tasks, a: Atomic[u64]) {
+  for i in 0u64..1024u64 {
+    atomic.store(tasks, a, i)
+  }
+}
+pub fn main(rt: Io, args: Args) -> Result[(), AppError] {
+  let tasks = io.tasks(rt)?
+  let a: Atomic[u64] = atomic.create(tasks, 0)
+  if arg.len(args) == 0 {
+    work(tasks, a)
+  } else {
+    let c = io.monotonic_clock(rt)?
+    let now = clock.monotonic(c)?
+    let Some(at) = instant.checked_add(c, now, 60000000000u64) else { return Ok(()) }
+    let _ = task.scope_until(tasks, Deadline(clock: c, at: at), fn(s: Scope) { work(tasks, a) })
+  }
+  Ok(())
+}

@@ -456,6 +456,32 @@ impl Readiness {
         parked.sort_unstable();
         Ok(parked.into_iter().map(|t| t & !TAG_MASK).collect())
     }
+    /// Home's conservative readiness bound. Like Go's timers.check precheck,
+    /// readers need not enter the driver before its earliest possible timer.
+    /// Decline every request that could become ready independently of time.
+    /// wake_on descriptors are readiness-neutral: poll removes WAKE_TOKEN;
+    /// stop words are checked separately at the existing runtime entries.
+    pub(crate) fn ready_deadline(&self) -> Option<Instant> {
+        let state = self.0.lock().unwrap();
+        if state.shared || state.virtual_time.is_some() || !state.woken.is_empty() {
+            return None;
+        }
+        let mut earliest = None;
+        for (_, pending) in state.pending.iter_unordered() {
+            if pending.interest.is_some()
+                || pending.delivery
+                || pending.scripted.is_some()
+                || pending.process.is_some()
+                || pending.resolver.is_some()
+            {
+                return None;
+            }
+            let deadline = pending.deadline?;
+            earliest = Some(earliest.map_or(deadline, |old: Instant| old.min(deadline)));
+        }
+        earliest
+    }
+
     /// Whether [`ready`](Self::ready) would report a token of this run now, without taking
     /// any: what epoll and the timers found waits for that scheduling point.
     pub fn has_ready(&self) -> Result<bool, AdapterError> {
@@ -1040,7 +1066,12 @@ impl WaitLog {
     }
     /// A new scheduling point.
     pub(crate) fn point(&mut self) {
-        self.point += 1;
+        self.advance(1);
+    }
+    /// Exact empty points counted by an Ordered timer precheck. Apply before
+    /// any wait-log operation, so park/ready/finish retain their old positions.
+    pub(crate) fn advance(&mut self, points: u64) {
+        self.point += points;
     }
     /// The scheduling points `token`'s wait has waited through before this one.
     pub(crate) fn points(&self, token: u64) -> Option<u64> {
@@ -1145,6 +1176,100 @@ mod tests {
         assert_eq!(readiness.wait_current(), Ok(false));
         readiness.finish(8);
         readiness.finish(7);
+    }
+
+    #[test]
+    fn timer_bound_declines_mixed_sources_and_tracks_the_earliest_remaining_timer() {
+        let readiness = Readiness::default();
+        assert_eq!(readiness.ready_deadline(), None);
+        let later = Instant::now() + Duration::from_secs(60);
+        let earlier = later - Duration::from_secs(10);
+        for (token, deadline) in [(1, later), (2, earlier)] {
+            readiness.enter(token);
+            readiness.pending().deadline = Some(deadline);
+            readiness.parked(token);
+        }
+        assert_eq!(readiness.ready_deadline(), Some(earlier));
+        readiness.finish(2);
+        assert_eq!(readiness.ready_deadline(), Some(later));
+        // Each independent source must invalidate the timer-only conclusion.
+        for source in 0..5 {
+            readiness.enter(3);
+            match source {
+                0 => readiness.pending().interest = Some((0, libc::POLLIN)),
+                1 => readiness.await_delivery(),
+                2 => readiness.scripted(),
+                3 => {
+                    let _ = readiness.pending();
+                }
+                4 => {
+                    readiness.0.lock().unwrap().woken.insert(1);
+                }
+                _ => unreachable!(),
+            }
+            assert_eq!(readiness.ready_deadline(), None, "source {source}");
+            readiness.finish(3);
+            readiness.0.lock().unwrap().woken.remove(&1);
+            assert_eq!(readiness.ready_deadline(), Some(later));
+        }
+        readiness.tagged(0);
+        assert_eq!(readiness.ready_deadline(), None, "shared drivers decline");
+        let virtual_clock = Readiness::virtual_clock(0);
+        virtual_clock.enter(7);
+        assert_eq!(virtual_clock.timer(100), Ok(false));
+        assert_eq!(virtual_clock.ready_deadline(), None);
+    }
+
+    #[test]
+    fn deferred_empty_poll_points_preserve_wait_ordinals_across_park_and_finish() {
+        fn log() -> WaitLog {
+            let mut log = WaitLog::default();
+            log.enter(17);
+            log.park(false);
+            log.parked(17);
+            log
+        }
+        let (mut eager, mut deferred) = (log(), log());
+        for _ in 0..1024 {
+            eager.point();
+        }
+        deferred.advance(1024);
+        for log in [&mut eager, &mut deferred] {
+            log.enter(23);
+            log.park(false);
+            log.parked(23);
+            log.point();
+        }
+        assert_eq!(eager.ready(17), Some((0, 1024)));
+        assert_eq!(deferred.ready(17), Some((0, 1024)));
+        assert_eq!(eager.ready(23), Some((1, 0)));
+        assert_eq!(deferred.ready(23), Some((1, 0)));
+        eager.finish(17);
+        deferred.finish(17);
+        for _ in 0..17 {
+            eager.point();
+        }
+        deferred.advance(17);
+        assert_eq!(eager.ready(23), deferred.ready(23));
+        assert_eq!(eager.token_of(0), deferred.token_of(0));
+        assert_eq!(eager.token_of(1), deferred.token_of(1));
+    }
+
+    #[test]
+    fn a_readable_wake_descriptor_readies_no_token_and_keeps_the_timer_bound() {
+        let readiness = Readiness::default();
+        let end = Instant::now() + Duration::from_secs(60);
+        readiness.enter(7);
+        readiness.pending().deadline = Some(end);
+        readiness.parked(7);
+        let (wake, mut sender) = pair();
+        readiness.wake_on(wake.as_raw_fd()).unwrap();
+        assert_eq!(readiness.ready_deadline(), Some(end));
+        sender.write_all(b"stop").unwrap();
+        assert_eq!(readiness.ready_deadline(), Some(end));
+        assert_eq!(readiness.ready().unwrap(), Vec::<u64>::new());
+        assert_eq!(readiness.ready_deadline(), Some(end));
+        assert!(!readiness.has_ready().unwrap());
     }
 
     /// mio tests/poll.rs:120 readiness_is_reregistered_after_would_block.

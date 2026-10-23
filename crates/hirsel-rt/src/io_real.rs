@@ -1103,6 +1103,25 @@ impl<S: Streams> Adapter for RealCore<S> {
         }
         Ok(Ready::Tokens(tokens))
     }
+    fn ready_deadline(&self) -> Option<std::time::Instant> {
+        // Durable barriers, signal delivery, test time and runner completions
+        // have readiness semantics beyond an exclusive real timer driver.
+        if self.journal.durable()
+            || self.test_clock.is_some()
+            || !self.signal_waits.is_empty()
+            || !self.delivered.is_empty()
+        {
+            return None;
+        }
+        self.cooperative.as_ref()?.0.ready_deadline()
+    }
+    fn advance_ready_points(&mut self, points: u64) {
+        if (self.retain_history || self.journal.records())
+            && let Some((_, log)) = &mut self.cooperative
+        {
+            log.advance(points);
+        }
+    }
     fn runner_readiness(&mut self) -> Option<crate::readiness::Readiness> {
         if self.cooperative.is_none() {
             // A harness run's in-process callees keep virtual time from 0, as its own

@@ -2477,6 +2477,18 @@ pub trait Adapter {
     fn ready(&mut self) -> Result<Ready, AdapterError> {
         Ok(Ready::Every)
     }
+    /// A conservative lower bound on the next ready token, only when all
+    /// readiness sources are real timers and no asynchronous source can change
+    /// them. Custom, shared, scripted and replay adapters must decline.
+    fn ready_deadline(&self) -> Option<std::time::Instant> {
+        None
+    }
+    /// Account for exactly `points` timer-only queries answered empty by an
+    /// Ordered poll owner. Called on home before any subsequent adapter method.
+    /// Only an adapter publishing ready_deadline may receive nonzero points.
+    fn advance_ready_points(&mut self, points: u64) {
+        assert_eq!(points, 0, "adapter published no timer readiness bound");
+    }
     /// Whether a parked request of this run is ready now, without taking it and without
     /// waiting: an execution's idle runs ask before any of them waits (RUN-12).
     fn has_ready(&mut self) -> Result<bool, AdapterError> {

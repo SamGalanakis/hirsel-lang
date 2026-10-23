@@ -664,3 +664,176 @@ fn an_unsaved_receiver_releases_the_home_poll_reservation_then_retries_after_sav
         assert_eq!(outcome.pending, 0);
     }
 }
+
+/// The retirement precheck must preserve the number and position of logical
+/// polls even when no worker asks home to query the timer driver.
+#[test]
+fn timer_readiness_defers_exact_poll_points_until_before_the_next_adapter_operation() {
+    use std::sync::Mutex;
+    use std::time::{Duration, Instant};
+
+    struct Timed {
+        home: std::thread::ThreadId,
+        hint: bool,
+        armed: bool,
+        end: Instant,
+        points: u64,
+        queries: Arc<AtomicU64>,
+        boundaries: Arc<Mutex<Vec<u64>>>,
+    }
+    impl Adapter for Timed {
+        fn preflight(&self, _: &Request) -> Result<Option<Completion>, AdapterError> {
+            Ok(None)
+        }
+        fn call(&mut self, _: Request) -> Result<Completion, AdapterError> {
+            assert_eq!(std::thread::current().id(), self.home);
+            self.boundaries.lock().unwrap().push(self.points);
+            self.armed = true;
+            Err(AdapterError::Blocked)
+        }
+        fn finish(&mut self, _: u64) {
+            assert_eq!(std::thread::current().id(), self.home);
+            self.boundaries.lock().unwrap().push(self.points);
+            self.armed = false;
+        }
+        fn ready(&mut self) -> Result<Ready, AdapterError> {
+            assert_eq!(std::thread::current().id(), self.home);
+            self.points += 1;
+            self.queries.fetch_add(1, Ordering::Relaxed);
+            Ok(Ready::Tokens(Vec::new()))
+        }
+        fn ready_deadline(&self) -> Option<Instant> {
+            (self.hint && self.armed).then_some(self.end)
+        }
+        fn advance_ready_points(&mut self, points: u64) {
+            assert_eq!(std::thread::current().id(), self.home);
+            self.points += points;
+        }
+    }
+    for width in [1, 2, 4] {
+        let mut reference = None;
+        for hint in [false, true] {
+            let queries = Arc::new(AtomicU64::new(0));
+            let boundaries = Arc::new(Mutex::new(Vec::new()));
+            let mut run = crate::host::BodyRun::new(width, true);
+            // Production retains its adapter behind this launcher wrapper.
+            let adapter = Timed {
+                home: std::thread::current().id(),
+                hint,
+                armed: false,
+                end: Instant::now() + Duration::from_secs(60),
+                points: 0,
+                queries: queries.clone(),
+                boundaries: boundaries.clone(),
+            };
+            run.adapter = Some(Box::new(crate::launch::Shared(std::rc::Rc::new(
+                std::cell::RefCell::new(adapter),
+            ))));
+            unsafe { run.use_physical_dispatch() };
+            let outcome = run.run(
+                |ctx| unsafe { engine::enable(ctx, Policy::admit(&Default::default(), None)) },
+                |ctx| unsafe {
+                    let mut scope = 0;
+                    let deadline = [11, 100];
+                    assert_eq!(
+                        hirsel_rt_v2_task_scope_enter_until(
+                            ctx,
+                            std::ptr::null_mut(),
+                            &mut scope,
+                            &0,
+                            &deadline
+                        ),
+                        STATUS_OK
+                    );
+                    for _ in 0..32 {
+                        let mut canceled = 99;
+                        assert_eq!(
+                            hirsel_rt_v2_task_canceled(ctx, &mut canceled, &0),
+                            STATUS_OK
+                        );
+                        assert_eq!(canceled, 0);
+                    }
+                    let mut expired = 99;
+                    assert_eq!(
+                        hirsel_rt_v2_task_scope_exit_until(ctx, 0, 0, &mut expired, &scope, 0),
+                        STATUS_OK
+                    );
+                    assert_eq!(expired, 0);
+                    STATUS_OK
+                },
+            );
+            assert_eq!(outcome.ended, Ok(STATUS_OK));
+            let boundaries = boundaries.lock().unwrap().clone();
+            assert!(boundaries.last().copied().unwrap() >= 32);
+            if let Some((points, raw_queries)) = &reference {
+                assert_eq!(&boundaries, points, "same polls before issue and finish");
+                assert!(queries.load(Ordering::Relaxed) < *raw_queries);
+            } else {
+                reference = Some((boundaries, queries.load(Ordering::Relaxed)));
+            }
+        }
+    }
+}
+
+#[test]
+fn an_armed_future_timer_fast_path_observes_an_external_stop_at_the_next_entry() {
+    struct FutureTimer(std::time::Instant);
+    impl Adapter for FutureTimer {
+        fn preflight(&self, _: &Request) -> Result<Option<Completion>, AdapterError> {
+            Ok(None)
+        }
+        fn call(&mut self, _: Request) -> Result<Completion, AdapterError> {
+            Err(AdapterError::Blocked)
+        }
+        fn ready_deadline(&self) -> Option<std::time::Instant> {
+            Some(self.0)
+        }
+        fn advance_ready_points(&mut self, _: u64) {}
+    }
+    for width in [1, 2, 4] {
+        let mut run = crate::host::BodyRun::new(width, true);
+        run.adapter = Some(Box::new(FutureTimer(
+            std::time::Instant::now() + std::time::Duration::from_secs(60),
+        )));
+        unsafe { run.use_physical_dispatch() };
+        let control = run.control();
+        let (begun, receive) = std::sync::mpsc::sync_channel(0);
+        let (stopped, await_stop) = std::sync::mpsc::sync_channel(0);
+        let stopper = std::thread::spawn(move || {
+            receive.recv().unwrap();
+            control.stop();
+            stopped.send(()).unwrap();
+        });
+        let outcome = run.run(
+            |ctx| unsafe { engine::enable(ctx, Policy::admit(&Default::default(), None)) },
+            move |ctx| unsafe {
+                let mut scope = 0;
+                assert_eq!(
+                    hirsel_rt_v2_task_scope_enter_until(
+                        ctx,
+                        std::ptr::null_mut(),
+                        &mut scope,
+                        &0,
+                        &[11, 100]
+                    ),
+                    STATUS_OK
+                );
+                for _ in 0..16 {
+                    let mut canceled = 99;
+                    assert_eq!(
+                        hirsel_rt_v2_task_canceled(ctx, &mut canceled, &0),
+                        STATUS_OK
+                    );
+                    assert_eq!(canceled, 0);
+                }
+                begun.send(()).unwrap();
+                await_stop.recv().unwrap();
+                let mut canceled = 99;
+                hirsel_rt_v2_task_canceled(ctx, &mut canceled, &0);
+                panic!("the next runtime entry must observe the external stop");
+            },
+        );
+        stopper.join().unwrap();
+        assert_eq!(outcome.ended, Err(crate::stop::Stop::Requested));
+    }
+}

@@ -247,3 +247,68 @@ fn ordered_home_poll_does_not_retain_another_tasks_result_under_the_running_call
     assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
     assert_eq!(outcome.pending, 0);
 }
+
+#[test]
+fn an_injected_parked_wait_is_polled_even_with_a_published_future_scope_timer() {
+    struct Injected(std::time::Instant);
+    impl Adapter for Injected {
+        fn preflight(&self, _: &Request) -> Result<Option<Completion>, AdapterError> {
+            Ok(None)
+        }
+        fn call(&mut self, _: Request) -> Result<Completion, AdapterError> {
+            Err(AdapterError::Blocked)
+        }
+        fn ready(&mut self) -> Result<Ready, AdapterError> {
+            Ok(Ready::Tokens(Vec::new()))
+        }
+        fn ready_deadline(&self) -> Option<std::time::Instant> {
+            Some(self.0)
+        }
+        fn advance_ready_points(&mut self, _: u64) {}
+        fn injected_wait(&self, request: &Request) -> bool {
+            matches!(request, Request::WatchNext { .. })
+        }
+    }
+    for width in [1, 2, 4] {
+        let mut run = crate::host::BodyRun::new(width, true);
+        run.adapter = Some(Box::new(Injected(
+            std::time::Instant::now() + std::time::Duration::from_secs(60),
+        )));
+        unsafe { run.use_physical_dispatch() };
+        let outcome = run.run(
+            |ctx| unsafe {
+                crate::tasks::ordered::engine::enable(
+                    ctx,
+                    crate::ordered::Policy::admit(&Default::default(), None),
+                )
+            },
+            |ctx| unsafe {
+                let _role = crate::tasks::role::Guard::new(ctx);
+                let timer = arm(ctx, 0, 11, 100).unwrap().unwrap();
+                // Derived watcher readiness has no driver Pending row. Mirror
+                // the normal parked insertion without inventing a task frame.
+                Binding::raw(ctx).waits.parked.insert(
+                    77,
+                    Parked {
+                        request: Request::WatchNext {
+                            directory: 1,
+                            watcher: 2,
+                        },
+                        borrowed: None,
+                        task: None,
+                        completion: None,
+                    },
+                );
+                count(ctx);
+                let found = ready(ctx).unwrap();
+                assert!(found.contains(77), "derived readiness must reach this poll");
+                assert!(!found.contains(timer));
+                Binding::raw(ctx).waits.parked.remove(&77);
+                count(ctx);
+                disarm(ctx, timer);
+                crate::STATUS_OK
+            },
+        );
+        assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
+    }
+}

@@ -43,6 +43,28 @@ pub(crate) struct HomeAdapter {
     pub(crate) run: *mut RunShared,
 }
 impl HomeAdapter {
+    /// Home only. Ordered serializes the poll owner with every adapter call;
+    /// drain its empty points before a method can change wait-log ordinals.
+    unsafe fn invoke<T>(&self, f: impl FnOnce(&mut dyn Adapter) -> T) -> T {
+        let adapter = unsafe { &mut *self.adapter };
+        if !unsafe {
+            (*self.run)
+                .ordered_mode
+                .load(std::sync::atomic::Ordering::Acquire)
+        } {
+            return f(adapter);
+        }
+        let hint = unsafe { &(*self.run).timer_hint };
+        hint.publish(None);
+        let points = hint.take_points();
+        if points != 0 {
+            adapter.advance_ready_points(points);
+        }
+        let out = f(adapter);
+        hint.publish(adapter.ready_deadline());
+        out
+    }
+
     fn observer(&self) -> Option<u32> {
         let ctx = crate::stop::running();
         // Home poll callbacks already have their own source-free observer.
@@ -92,11 +114,11 @@ impl HomeAdapter {
             // On home, call_home executes directly. Off home, `ctx` is this
             // fiber's context and remains valid across the synchronous bridge.
             if ctx.is_null() {
-                out = f.take().map(|f| f(&mut *self.adapter));
+                out = f.take().map(|f| self.invoke(f));
                 Ok(())
             } else {
                 crate::pool::call_home_in(self.run, &mut || {
-                    out = f.take().map(|f| f(&mut *self.adapter));
+                    out = f.take().map(|f| self.invoke(f));
                 })
             }
         };

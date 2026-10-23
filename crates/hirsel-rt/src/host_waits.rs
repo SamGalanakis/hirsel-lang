@@ -26,6 +26,67 @@ use crate::io::{AdapterError, Binding, Completion, Ready, Request};
 use crate::stop::{Stop, Stopped};
 use crate::tasks::ordered::host::concurrent::{self as ordered_concurrent, CONCURRENT};
 
+/// Home publishes a lower bound on readiness, only for an exclusive real timer
+/// driver. Ordered's poll owner counts the empty points it can answer locally;
+/// home applies them before its next adapter operation. No adapter or saved
+/// task frame is reachable through this snapshot.
+pub(crate) struct TimerHint {
+    origin: std::time::Instant,
+    next: std::sync::atomic::AtomicU64,
+    points: std::sync::atomic::AtomicU64,
+    scope_only: std::sync::atomic::AtomicBool,
+}
+
+impl Default for TimerHint {
+    fn default() -> Self {
+        Self {
+            origin: std::time::Instant::now(),
+            next: Default::default(),
+            points: Default::default(),
+            scope_only: Default::default(),
+        }
+    }
+}
+
+impl TimerHint {
+    /// Called only by Ordered's exclusive poll owner, with no concurrent host
+    /// request. Home cannot mutate the adapter until this owner relinquishes
+    /// the role or synchronously calls it.
+    fn empty_point(&self) -> bool {
+        use std::sync::atomic::Ordering;
+        let next = self.next.load(Ordering::Acquire);
+        if next == 0 || self.origin.elapsed().as_nanos() >= u128::from(next) {
+            return false;
+        }
+        self.points.fetch_add(1, Ordering::Relaxed);
+        true
+    }
+
+    pub(crate) fn publish(&self, next: Option<std::time::Instant>) {
+        // A derived watcher may have no driver Pending row at all. Only the
+        // run's scope-only wait-table mirror can authorize this publication.
+        let next = next.filter(|_| self.scope_only.load(std::sync::atomic::Ordering::Acquire));
+        // Round down, never extending the driver's deadline. Zero declines.
+        let next = next
+            .and_then(|next| next.checked_duration_since(self.origin))
+            .and_then(|left| u64::try_from(left.as_nanos()).ok())
+            .unwrap_or(0);
+        self.next.store(next, std::sync::atomic::Ordering::Release);
+    }
+
+    fn scope_only(&self, only: bool) {
+        self.scope_only
+            .store(only, std::sync::atomic::Ordering::Release);
+        if !only {
+            self.publish(None);
+        }
+    }
+
+    pub(crate) fn take_points(&self) -> u64 {
+        self.points.swap(0, std::sync::atomic::Ordering::AcqRel)
+    }
+}
+
 /// Run `f` on the run's home thread, which holds the Io binding: the scheduling points of a
 /// width > 1 run run on compute workers (`crate::pool`).
 ///
@@ -51,12 +112,16 @@ unsafe fn at_home<T>(ctx: *mut TaskCtx, f: impl FnOnce() -> T) -> Stopped<T> {
 unsafe fn count(ctx: *mut TaskCtx) {
     // SAFETY: caller contract.
     unsafe {
-        let live = if (*ctx).io_data().is_null() {
-            0
+        let (live, scope_only) = if (*ctx).io_data().is_null() {
+            (0, false)
         } else {
             let waits = &Binding::raw(ctx).waits;
-            waits.parked.len() + waits.native.len() + waits.armed.len()
+            (
+                waits.parked.len() + waits.native.len() + waits.armed.len(),
+                waits.scope_only(),
+            )
         };
+        (*ctx).run_ref().timer_hint.scope_only(scope_only);
         (*ctx)
             .run_ref()
             .host_waits
@@ -90,6 +155,10 @@ pub(crate) struct Waits {
     armed: IdMap<(u32, Request)>,
 }
 impl Waits {
+    fn scope_only(&self) -> bool {
+        self.parked.is_empty() && self.native.is_empty() && !self.armed.is_empty()
+    }
+
     fn every_tokens(&self) -> Vec<u64> {
         self.parked
             .iter_unordered()
@@ -141,6 +210,7 @@ pub(crate) unsafe fn native_begin_home(
 
 unsafe fn native_count_home(run: *mut crate::context::RunShared, binding: &Binding) {
     unsafe {
+        (*run).timer_hint.scope_only(binding.waits.scope_only());
         (*run).host_waits.store(
             (binding.waits.parked.len() + binding.waits.native.len() + binding.waits.armed.len())
                 as u32,
@@ -550,6 +620,8 @@ unsafe fn issue_here(
             completion: None,
         },
     );
+    // Invalidate timer-only publication before park can retire a boundary.
+    unsafe { count(ctx) };
     // SAFETY: the context is live and nothing is borrowed across the park.
     unsafe { crate::tasks::park_host(&mut *ctx, token, yielded) }?;
     let binding = unsafe { Binding::get(ctx) };
@@ -599,6 +671,8 @@ pub(crate) unsafe fn send(ctx: *mut TaskCtx, request: Request) -> Stopped<Result
             completion: None,
         },
     );
+    // Invalidate timer-only publication before park can retire a boundary.
+    unsafe { count(ctx) };
     Ok(Err(token))
 }
 
@@ -703,6 +777,8 @@ pub(crate) unsafe fn issue_net(
             completion: None,
         },
     );
+    // Invalidate timer-only publication before park can retire a boundary.
+    unsafe { count(ctx) };
     unsafe { crate::tasks::park_host(&mut *ctx, token, true) }?;
     let binding = unsafe { Binding::get(ctx) };
     let completion = binding
@@ -799,7 +875,7 @@ unsafe fn arm_here(
 /// `ctx` is live; with no Binding bound nothing is armed.
 pub(crate) unsafe fn expired(ctx: *mut TaskCtx, ready: &Ready) -> Stopped<Vec<u32>> {
     // SAFETY: caller contract.
-    if unsafe { quiet(ctx) } {
+    if matches!(ready, Ready::Tokens(tokens) if tokens.is_empty()) || unsafe { quiet(ctx) } {
         return Ok(Vec::new());
     }
     // SAFETY: caller contract.
@@ -928,6 +1004,7 @@ unsafe fn ready_binding_home(run: *mut crate::context::RunShared) -> Stopped<Hom
         })
         .collect();
     unsafe {
+        (*run).timer_hint.scope_only(binding.waits.scope_only());
         (*run).host_waits.store(
             (binding.waits.parked.len() + binding.waits.native.len() + binding.waits.armed.len())
                 as u32,
@@ -1192,6 +1269,12 @@ pub(crate) unsafe fn ready(ctx: *mut TaskCtx) -> Stopped<Ready> {
     }
     // Concurrent callbacks must not retain the issuer's scheduler role.
     let concurrent = unsafe { ordered_concurrent::pending((*ctx).run_ptr()) };
+    if !concurrent
+        && crate::tasks::ordered::engine::on(ctx)
+        && unsafe { (*ctx).run_ref().timer_hint.empty_point() }
+    {
+        return Ok(Ready::Tokens(Vec::new()));
+    }
     if concurrent {
         let _segment = unsafe { crate::tasks::role::Segment::new(ctx) };
         return unsafe { at_home(ctx, || ready_here(ctx)) }?;
@@ -1257,6 +1340,9 @@ unsafe fn ready_binding(ctx: *mut TaskCtx) -> Stopped<Ready> {
 /// # Safety
 /// `ctx` is live; with no Binding bound nothing is parked.
 pub(crate) unsafe fn woken(ctx: *mut TaskCtx, ready: &Ready) -> Vec<u32> {
+    if matches!(ready, Ready::Tokens(tokens) if tokens.is_empty()) {
+        return Vec::new();
+    }
     // SAFETY: caller contract.
     let mut woken = if unsafe { quiet(ctx) } {
         Vec::new()

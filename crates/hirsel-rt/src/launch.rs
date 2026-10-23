@@ -197,6 +197,12 @@ impl<A: Adapter> Adapter for Shared<A> {
     fn ready(&mut self) -> Result<Ready, AdapterError> {
         self.0.borrow_mut().ready()
     }
+    fn ready_deadline(&self) -> Option<std::time::Instant> {
+        self.0.borrow().ready_deadline()
+    }
+    fn advance_ready_points(&mut self, points: u64) {
+        self.0.borrow_mut().advance_ready_points(points);
+    }
     fn has_ready(&mut self) -> Result<bool, AdapterError> {
         self.0.borrow_mut().has_ready()
     }

@@ -281,6 +281,7 @@ pub(crate) struct RunShared {
     /// it (`crate::host_waits`).
     pub(crate) io_facade: RoleCell<Option<Box<crate::io::Binding>>>,
     pub(crate) host_waits: std::sync::atomic::AtomicU32,
+    pub(crate) timer_hint: crate::host_waits::TimerHint,
     /// The root task's entry, words and stack, owned by the run (`crate::stop`).
     pub(crate) launch: RoleCell<Option<Box<crate::stop::LaunchFrame>>>,
     /// The run's root context and its first worker (the home thread's), which a detached
@@ -879,6 +880,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_ctx_create(
         control: Default::default(),
         io_facade: RoleCell::new(None),
         host_waits: Default::default(),
+        timer_hint: Default::default(),
         launch: RoleCell::new(None),
         root_ctx: ptr::null_mut(),
         home: ptr::null_mut(),

@@ -1,0 +1,103 @@
+#!/usr/bin/env python3
+"""Measure the native atomic/deadline differential; artifacts stay outside the repo."""
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import random
+import statistics
+import subprocess
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--binary', type=Path, required=True)
+    parser.add_argument('--before', type=Path)
+    parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--cpus', required=True)
+    parser.add_argument('--timing-slice', action='store_true')
+    args = parser.parse_args()
+    root = Path(__file__).resolve().parents[3]
+    out = args.output.resolve()
+    if out.is_relative_to(root):
+        parser.error('--output must be outside the repository')
+    out.mkdir(parents=True, exist_ok=False)
+    binaries = {'after': args.binary.resolve()}
+    if args.before:
+        binaries['before'] = args.before.resolve()
+    env = {k: v for k, v in os.environ.items() if not k.startswith('HIRSEL_')}
+    env.update(HIRSEL_JOBS='4', HIRSEL_MEMORY_LIMIT='2G',
+               HIRSEL_DAEMON='off', HIRSEL_RESULTS='none@1')
+    cells = [(v, timer, width) for v in binaries for timer in [False, True]
+             for width in [1, 2, 4]]
+    rng = random.Random(280028)
+    order = []
+    for rnd in range(3):
+        rng.shuffle(cells)
+        order.extend((rnd, *cell) for cell in cells)
+    hashes = {v: hashlib.sha256(p.read_bytes()).hexdigest() for v, p in binaries.items()}
+    (out / 'plan.json').write_text(json.dumps(dict(order=order, sha256=hashes), indent=2))
+    rows = []
+    for rnd, variant, timer, width in order:
+        cell = out / f'r{rnd}-{variant}-timer{int(timer)}-w{width}'
+        cell.mkdir()
+        grants = dict(args=['timer'] if timer else [],
+                      io=dict(tasks='tasks.cooperative@1',
+                              monotonic_clock='clock.monotonic.ns@1', dirs=[]),
+                      placement=dict(cores=width, commit='shared', reorder='auto'))
+        grant_file = cell / 'grants.json'
+        grant_file.write_text(json.dumps(grants))
+        native = [str(binaries[variant]), '--hirsel-grants', str(grant_file), *grants['args']]
+        measured = ['perf', 'stat', '-x', ';', '-e',
+                    'cycles,instructions,context-switches,duration_time',
+                    '-o', str(cell / 'perf.csv'), '--',
+                    'taskset', '-c', args.cpus, *native]
+        if args.timing_slice:
+            wrapper = ['sudo', '-n', 'systemd-run', '--wait', '--pipe',
+                       '--collect', '--quiet', '--slice=timing.slice',
+                       '--uid=1000', '--gid=1000',
+                       '-p', f'AllowedCPUs={args.cpus}',
+                       '-p', 'MemoryMax=2G', '-p', 'RuntimeMaxSec=60', '--']
+        else:
+            wrapper = [str(root / 'tools/capped'), '--timeout', '60']
+        command = wrapper + measured
+        result = subprocess.run(command, env=env, capture_output=True)
+        (cell / 'stdout').write_bytes(result.stdout)
+        (cell / 'stderr').write_bytes(result.stderr)
+        counts = {}
+        if (cell / 'perf.csv').exists():
+            for line in (cell / 'perf.csv').read_text().splitlines():
+                parts = line.split(';')
+                if len(parts) > 2:
+                    try:
+                        counts[parts[2]] = float(parts[0])
+                    except ValueError:
+                        pass
+        passed = result.returncode == 0 and result.stdout == b''
+        row = dict(round=rnd, variant=variant, timer=timer, width=width,
+                   exit=result.returncode, passed=passed, perf=counts, argv=command)
+        rows.append(row)
+        (out / 'receipts.json').write_text(json.dumps(rows, indent=2))
+        print(variant, timer, width, passed, counts, flush=True)
+        if not passed or not {'cycles', 'instructions'} <= counts.keys():
+            raise SystemExit('failed measurement retained')
+    summary = {}
+    for variant in binaries:
+        summary[variant] = {}
+        for timer in [False, True]:
+            medians = {w: {c: statistics.median(
+                r['perf'][c] for r in rows
+                if (r['variant'], r['timer'], r['width']) == (variant, timer, w))
+                for c in ['cycles', 'instructions', 'context-switches', 'duration_time']}
+                for w in [1, 2, 4]}
+            summary[variant][str(timer)] = medians
+    (out / 'summary.json').write_text(json.dumps(summary, indent=2))
+    after = summary['after']['True']
+    ratios = {w: after[w]['cycles'] / after[1]['cycles'] for w in [2, 4]}
+    print('DEADLINE_WIDTH_GATE', 'GREEN' if max(ratios.values()) <= 1.2 else 'RED', ratios)
+    return int(max(ratios.values()) > 1.2)
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())
