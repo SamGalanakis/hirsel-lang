@@ -1,0 +1,71 @@
+// Owned paths retain edge ordinals rather than borrowing predecessor storage.
+pub type Path {
+  cost: u64,
+  edges: List[u64],
+}
+
+pub type Outcome = Found(Path) | Unreachable | Overflow
+
+pub type Bundle {
+  primary: Outcome,
+  alternative: Option[Outcome],
+}
+
+// A predecessor names the incoming edge. Bound traversal independently of the
+// search invariant so accidental cycles never hang reconstruction.
+pub fn reconstruct(
+  graph: network.Snapshot,
+  source: u64,
+  target: u64,
+  cost: u64,
+  predecessors: List[Option[u64]]
+) -> Result[unique Path, report.Problem] uses {} {
+  if source >= graph.nodes || target >= graph.nodes || list.len(predecessors) != graph.nodes {
+    return Error(Predecessor())
+  }
+  let mut reverse: List[u64] = []
+  let mut visited: Set[u64] = set.empty()
+  let mut cursor = target
+  let mut steps = 0u64
+  let mut total = 0u64
+  while cursor != source {
+    if steps >= graph.nodes || set.contains(visited, cursor) {
+      return Error(Predecessor())
+    }
+    set.insert(mut visited, cursor)
+    let Some(ordinal) = predecessors[cursor] else {
+      return Error(Predecessor())
+    }
+    if ordinal >= list.len(graph.edges) {
+      return Error(Predecessor())
+    }
+    let edge = graph.edges[ordinal]
+    if edge.target != cursor || edge.source >= graph.nodes {
+      return Error(Predecessor())
+    }
+    let Some(next_total) = int.checked_add(total, edge.weight) else {
+      return Error(Predecessor())
+    }
+    total = next_total
+    list.push(mut reverse, ordinal)
+    cursor = edge.source
+    steps += 1
+  }
+  if total != cost {
+    return Error(Predecessor())
+  }
+  let mut edges: List[u64] = []
+  while let Some(ordinal) = list.pop(mut reverse) {
+    list.push(mut edges, ordinal)
+  }
+  Ok(unique Path(cost: cost, edges: take edges))
+}
+
+pub fn contains(route_value: Path, ordinal: u64) -> bool uses {} {
+  for edge in route_value.edges {
+    if edge == ordinal {
+      return true
+    }
+  }
+  false
+}

@@ -1,0 +1,32 @@
+// Explicit helper controls, never substitutes for the actual main workflows.
+pub fn main(rt: Io, args: Args) -> Result[(), FileError] {
+  let Ok(d) = io.dir(rt, path.of("data")) else {
+    return Error(NotGranted())
+  }
+  let data = file.read_bytes(d, path.of("probe"))?
+  if bytes.len(data) == 65536 {
+    failure.check(report.publish(d, path.of("output"), data) == Ok(()), Arithmetic())
+    failure.check(file.read_bytes(d, path.of("output"))? == data, Arithmetic())
+  } else {
+    failure.check(bytes.len(data) == 65537, Arithmetic())
+    failure.check(
+      report.publish(d, path.of("output"), data) == Error(OutputLimit()),
+      Arithmetic()
+    )
+    failure.check(file.read_bytes(d, path.of("output"))? == b"preserve", Arithmetic())
+  }
+  let graph = network.Snapshot(
+    revision: 7,
+    nodes: 2,
+    edges: [network.Edge(source: 1u64, target: 1u64, weight: 0u64)]
+  )
+  failure.check(
+    routes.reconstruct(graph, 0, 1, 0, [None(), Some(0u64)]) == Error(Predecessor()),
+    Arithmetic()
+  )
+  failure.check(
+    routes.reconstruct(graph, 0, 0, 1, [None(), None()]) == Error(Predecessor()),
+    Arithmetic()
+  )
+  Ok(())
+}

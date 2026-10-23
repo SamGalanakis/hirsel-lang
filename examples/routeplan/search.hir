@@ -1,0 +1,124 @@
+// Port of NetworkX weighted.py:838-889, 9d866a5f447d9fe1c989b31f90c520dc2813ee26.
+// BSD-3-Clause, see LICENSES.md. Settled distances and stale heap entries follow
+// upstream. Dense keys, checked u64 sums and single stable predecessors differ.
+type Frontier[K] {
+  distance: u64,
+  serial: u64,
+  node: K,
+}
+
+type State {
+  settled: List[bool],
+  seen: List[Option[u64]],
+  predecessors: List[Option[u64]],
+  frontier: unique priority_queue.Heap[Frontier[u64]],
+  serial: u64,
+}
+
+@noalloc
+fn compare(a: Frontier[u64], b: Frontier[u64]) -> i32 uses {} {
+  if a.distance < b.distance {
+    return -1
+  }
+  if a.distance > b.distance {
+    return 1
+  }
+  if a.serial < b.serial {
+    return -1
+  }
+  if a.serial > b.serial {
+    return 1
+  }
+  0
+}
+
+fn new_state(nodes: u64, source: u64) -> unique State uses {} {
+  let mut settled: List[bool] = []
+  let mut seen: List[Option[u64]] = []
+  let mut predecessors: List[Option[u64]] = []
+  for node in 0u64..nodes {
+    list.push(mut settled, false)
+    list.push(mut seen, None())
+    list.push(mut predecessors, None())
+  }
+  seen[source] = Some(0)
+  let mut frontier: unique priority_queue.Heap[Frontier[u64]] = priority_queue.empty(
+    compare
+  )
+  priority_queue.push(
+    mut frontier,
+    unique Frontier(distance: 0, serial: 0, node: source)
+  )
+  unique State(
+    settled: take settled,
+    seen: take seen,
+    predecessors: take predecessors,
+    frontier: take frontier,
+    serial: 1
+  )
+}
+
+// The callback borrows query-local closure state for this invocation. No
+// captured authority or mutable search owner crosses the callback boundary.
+pub fn shortest(
+  graph: network.Snapshot,
+  source: u64,
+  target: u64,
+  cap: Option[u64],
+  weight: fn(u64, network.Edge[u64]) -> Option[u64] uses {}
+) -> Result[unique routes.Outcome, report.Problem] uses {} {
+  if source >= graph.nodes || target >= graph.nodes {
+    return Error(Endpoint())
+  }
+  let mut state = new_state(graph.nodes, source)
+  while let Some(entry) = priority_queue.pop(mut state.frontier) {
+    let node = entry.node
+    if state.settled[node] {
+      continue
+    }
+    state.settled[node] = true
+    if node == target {
+      let path = routes.reconstruct(
+        graph,
+        source,
+        target,
+        entry.distance,
+        state.predecessors
+      )?
+      return Ok(Found(take path))
+    }
+    // Scanning a bounded edge array preserves original ordinal for parallel
+    // edges. A node is settled once, so there are at most 64*256 inspections.
+    for ordinal in 0u64..list.len(graph.edges) {
+      let edge = graph.edges[ordinal]
+      if edge.source != node || state.settled[edge.target] {
+        continue
+      }
+      let Some(cost) = weight(ordinal, edge) else {
+        continue
+      }
+      let Some(distance) = int.checked_add(entry.distance, cost) else {
+        return Ok(Overflow())
+      }
+      if let Some(limit) = cap {
+        if distance > limit {
+          continue
+        }
+      }
+      let better = match state.seen[edge.target] {
+        None() => true,
+        Some(previous) => distance < previous,
+      }
+      if better {
+        state.seen[edge.target] = Some(distance)
+        state.predecessors[edge.target] = Some(ordinal)
+        priority_queue.push(
+          mut state.frontier,
+          unique Frontier(distance: distance, serial: state.serial, node: edge.target)
+        )
+        state.serial += 1
+      }
+    }
+  }
+  Ok(Unreachable())
+}

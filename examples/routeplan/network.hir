@@ -1,0 +1,152 @@
+// Versioned, bounded immutable network snapshots. JSON belongs to std.
+pub const INPUT_BYTES: u64 = 131072
+
+pub const MAX_NODES: u64 = 64
+
+pub const MAX_EDGES: u64 = 256
+
+pub const MAX_QUERIES: u64 = 16
+
+pub const MAX_CLOSURES: u64 = 128
+
+// Endpoint keys are generic; the admitted wire format uses dense u64 keys.
+pub type Edge[K] {
+  source: K,
+  target: K,
+  weight: u64,
+}
+
+pub type Request {
+  revision: u64,
+  source: u64,
+  target: u64,
+  closed: List[u64],
+  max_cost: Option[u64],
+  alternative: Option[u64],
+}
+
+pub type Batch {
+  version: u64,
+  revision: u64,
+  nodes: u64,
+  edges: List[Edge[u64]],
+  queries: List[Request],
+}
+
+pub type Snapshot {
+  revision: u64,
+  nodes: u64,
+  edges: List[Edge[u64]],
+}
+
+fn edge_from_json(value: json.Value) -> Result[unique Edge[u64], String] uses {} = comptime derive.from_json(
+  shape(Edge[u64])
+)
+
+fn request_from_json(value: json.Value) -> Result[unique Request, String] uses {} = comptime derive.from_json(
+  shape(Request)
+)
+
+fn batch_from_json(value: json.Value) -> Result[unique Batch, String] uses {} = comptime derive.from_json(
+  shape(Batch)
+)
+
+// Inspect counts before derived decoding allocates typed collections. The DOM
+// itself is bounded by input bytes. No graph mutation is exposed to queries.
+fn collection(value: json.Value, name: String, limit: u64, problem: report.Problem) -> Result[
+  u64,
+  report.Problem
+] uses {} {
+  let Some(member) = json_access.member(value, name) else {
+    return Error(Shape())
+  }
+  let Some(items) = json_access.as_array(member) else {
+    return Error(Shape())
+  }
+  let count = list.len(items)
+  if count > limit {
+    return Error(problem)
+  }
+  Ok(count)
+}
+
+pub fn decode(take data: unique Bytes) -> Result[unique Batch, report.Problem] uses {} {
+  if bytes.len(data) > INPUT_BYTES {
+    return Error(InputLimit())
+  }
+  let Ok(text) = string.from_bytes(take data) else {
+    return Error(Json())
+  }
+  let Ok(value) = json.parse(take text) else {
+    return Error(Json())
+  }
+  let _ = collection(value, "edges", MAX_EDGES, Edges())?
+  let count = collection(value, "queries", MAX_QUERIES, Queries())?
+  let Some(queries) = json_access.member(value, "queries") else {
+    return Error(Shape())
+  }
+  for index in 0u64..count {
+    let Some(item) = json_access.element(queries, index) else {
+      return Error(Shape())
+    }
+    let _ = collection(item, "closed", MAX_CLOSURES, Closures())?
+  }
+  let Ok(batch) = batch_from_json(value) else {
+    return Error(Shape())
+  }
+  validate(batch)?
+  Ok(take batch)
+}
+
+pub fn validate(batch: Batch) -> Result[(), report.Problem] uses {} {
+  if batch.version != 1 {
+    return Error(Version())
+  }
+  if batch.nodes > MAX_NODES {
+    return Error(Nodes())
+  }
+  let edges = list.len(batch.edges)
+  if edges > MAX_EDGES {
+    return Error(Edges())
+  }
+  if list.len(batch.queries) > MAX_QUERIES {
+    return Error(Queries())
+  }
+  for edge in batch.edges {
+    if edge.source >= batch.nodes || edge.target >= batch.nodes {
+      return Error(Endpoint())
+    }
+  }
+  for request in batch.queries {
+    if request.revision != batch.revision {
+      return Error(Revision())
+    }
+    if request.source >= batch.nodes || request.target >= batch.nodes {
+      return Error(Endpoint())
+    }
+    if list.len(request.closed) > MAX_CLOSURES {
+      return Error(Closures())
+    }
+    for ordinal in request.closed {
+      if ordinal >= edges {
+        return Error(Closure())
+      }
+    }
+    if let Some(ordinal) = request.alternative {
+      if ordinal >= edges {
+        return Error(Alternative())
+      }
+    }
+  }
+  Ok(())
+}
+
+pub fn snapshot(batch: Batch) -> Shared[Snapshot] uses {} {
+  shared.freeze(
+    unique Snapshot(
+      revision: batch.revision,
+      nodes: batch.nodes,
+      edges: unique batch.edges
+    )
+  )
+}

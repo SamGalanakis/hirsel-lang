@@ -1,0 +1,139 @@
+// Closures belong to a query, never to the shared network. Repeated queries
+// therefore observe exactly the same immutable revision after any exclusion.
+fn excluded(closed: List[u64], extra: Option[u64], ordinal: u64) -> bool uses {} {
+  if extra == Some(ordinal) {
+    return true
+  }
+  for edge in closed {
+    if edge == ordinal {
+      return true
+    }
+  }
+  false
+}
+
+fn search_one(graph: network.Snapshot, request: network.Request, extra: Option[u64]) -> Result[
+  unique routes.Outcome,
+  report.Problem
+] uses {} {
+  search.shortest(
+    graph,
+    request.source,
+    request.target,
+    request.max_cost,
+    fn(ordinal: u64, edge: network.Edge[u64]) -> Option[u64] uses {} {
+      if excluded(request.closed, extra, ordinal) {
+        None()
+      } else {
+        Some(edge.weight)
+      }
+    }
+  )
+}
+
+pub fn one(graph: network.Snapshot, request: network.Request) -> Result[
+  unique routes.Bundle,
+  report.Problem
+] uses {} {
+  if graph.revision != request.revision {
+    return Error(Revision())
+  }
+  let primary = search_one(graph, request, None())?
+  let mut alternative: Option[routes.Outcome] = None()
+  if let Some(ordinal) = request.alternative {
+    match primary {
+      Found(path) => {
+        if !routes.contains(path, ordinal) {
+          return Error(Alternative())
+        }
+        alternative = Some(search_one(graph, request, Some(ordinal))?)
+      },
+      _ => (),
+    }
+  }
+  Ok(unique routes.Bundle(primary: take primary, alternative: take alternative))
+}
+
+// Independent child results are owned. No shared mutable accumulator; all
+// publication happens after every admitted child is joined, in query order.
+pub fn batch(
+  tasks: Tasks,
+  graph: Shared[network.Snapshot],
+  requests: List[network.Request],
+  jobs: u64
+) -> Result[unique List[routes.Bundle], report.Problem] {
+  if jobs == 0 || jobs > 4 {
+    return Error(Jobs())
+  }
+  let input = shared.freeze(unique requests)
+  task.scope(
+    tasks,
+    fn(s: Scope) -> Result[unique List[routes.Bundle], report.Problem] {
+      let count = shared.with(
+        input,
+        fn(items: List[network.Request]) -> u64 uses {} {
+          list.len(items)
+        }
+      )
+      let mut output: List[routes.Bundle] = []
+      let mut first = 0u64
+      while first < count {
+        let mut pending: TaskSet[Result[unique routes.Bundle, report.Problem]] of s = task.set(
+          s
+        )
+        let mut slots: List[Option[unique routes.Bundle]] = []
+        while list.len(slots) < jobs && first < count {
+          let index = first
+          list.push(mut slots, None())
+          task.add(
+            s,
+            mut pending,
+            task.async(
+              s,
+              fn() -> Result[unique routes.Bundle, report.Problem] {
+                shared.with(
+                  graph,
+                  fn(network_value: network.Snapshot) -> Result[
+                    unique routes.Bundle,
+                    report.Problem
+                  ] {
+                    shared.with(
+                      input,
+                      fn(items: List[network.Request]) -> Result[
+                        unique routes.Bundle,
+                        report.Problem
+                      ] {
+                        one(network_value, items[index])
+                      }
+                    )
+                  }
+                )
+              }
+            )
+          )
+          first += 1
+        }
+        while let Some(index) = task.await_any(s, pending) {
+          let joined = task.await_at(s, mut pending, index)
+          match take joined {
+            Ok(value) => {
+              slots[index] = Some(take value)
+            },
+            Error(problem) => {
+              task.cancel_all(s, take pending)
+              return Error(problem)
+            },
+          }
+        }
+        task.cancel_all(s, take pending)
+        for slot in take slots {
+          match take slot {
+            Some(value) => list.push(mut output, take value),
+            None() => return Error(Assembly()),
+          }
+        }
+      }
+      Ok(take output)
+    }
+  )
+}

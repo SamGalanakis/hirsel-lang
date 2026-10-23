@@ -1,0 +1,133 @@
+// Typed domain and publication errors; failures preserve the old destination.
+pub const OUTPUT_BYTES: u64 = 65536
+
+pub type Stage = Open | Read | Create | Write | Commit
+
+pub type Problem = Usage | Jobs | Json | Shape | Version | Revision | Nodes | Edges | Queries | Closures | Endpoint | Closure | Alternative | InputLimit | OutputLimit | Predecessor | Assembly | Grant | File(
+  Stage,
+  FileError
+) | Canceled(CancelCause)
+
+pub type Route {
+  status: String,
+  cost: Option[u64],
+  edges: List[u64],
+}
+
+pub type ResultRow {
+  primary: Route,
+  alternative: Option[Route],
+}
+
+pub type Document {
+  version: u64,
+  revision: u64,
+  results: List[ResultRow],
+}
+
+fn route_to_json(value: Route) -> json.Value uses {} = comptime derive.json_value(
+  shape(Route)
+)
+
+fn result_row_to_json(value: ResultRow) -> json.Value uses {} = comptime derive.json_value(
+  shape(ResultRow)
+)
+
+fn document_to_json(value: Document) -> json.Value uses {} = comptime derive.json_value(
+  shape(Document)
+)
+
+fn route(value: routes.Outcome) -> unique Route uses {} {
+  match value {
+    Found(route_value) => unique Route(
+      status: "found",
+      cost: Some(route_value.cost),
+      edges: unique route_value.edges
+    ),
+    Unreachable() => unique Route(status: "unreachable", cost: None(), edges: []),
+    Overflow() => unique Route(status: "overflow", cost: None(), edges: []),
+  }
+}
+
+pub fn encode(revision: u64, values: List[routes.Bundle]) -> Result[
+  unique Bytes,
+  Problem
+] uses {} {
+  let mut rows: List[ResultRow] = []
+  for value in values {
+    let alternate = match value.alternative {
+      Some(outcome) => Some(route(outcome)),
+      None() => None(),
+    }
+    list.push(
+      mut rows,
+      ResultRow(primary: route(value.primary), alternative: alternate)
+    )
+  }
+  let document = Document(version: 1, revision: revision, results: take rows)
+  let Ok(text) = json.stringify(document_to_json(document)) else {
+    return Error(Shape())
+  }
+  // Account for newline before allocating/copying the final byte buffer.
+  if string.byte_len(text) >= OUTPUT_BYTES {
+    return Error(OutputLimit())
+  }
+  let encoded = f"{text}\n"
+  Ok(unique string.as_bytes(encoded))
+}
+
+pub fn file_error(stage: Stage, error: FileError) -> Problem {
+  match error {
+    Canceled(cause) => Canceled(cause),
+    _ => File(stage, error),
+  }
+}
+
+pub fn publish(d: Dir, output: Path, data: Bytes) -> Result[(), Problem] {
+  if bytes.len(data) > OUTPUT_BYTES {
+    return Error(OutputLimit())
+  }
+  let mut destination = match file.create_atomic(d, output) {
+    Ok(value) => take value,
+    Error(error) => return Error(file_error(Create(), error)),
+  }
+  match file.write_all(d, mut destination, data) {
+    Ok(()) => (),
+    Error(error) => return Error(file_error(Write(), error)),
+  }
+  match file.commit(d, take destination) {
+    Ok(()) => Ok(()),
+    Error(error) => Error(file_error(Commit(), error)),
+  }
+}
+
+pub fn name(problem: Problem) -> String uses {} {
+  match problem {
+    Usage() => "usage",
+    Jobs() => "jobs",
+    Json() => "json",
+    Shape() => "shape",
+    Version() => "version",
+    Revision() => "revision",
+    Nodes() => "nodes",
+    Edges() => "edges",
+    Queries() => "queries",
+    Closures() => "closures",
+    Endpoint() => "endpoint",
+    Closure() => "closure",
+    Alternative() => "alternative",
+    InputLimit() => "input_limit",
+    OutputLimit() => "output_limit",
+    Predecessor() => "predecessor",
+    Assembly() => "assembly",
+    Grant() => "grant",
+    Canceled(_) => "canceled",
+    File(_, NotGranted()) => "denied",
+    File(_, PermissionDenied()) => "denied",
+    File(Open(), _) => "file_open",
+    File(Read(), _) => "file_read",
+    File(Create(), _) => "file_create",
+    File(Write(), _) => "file_write",
+    File(Commit(), _) => "file_commit",
+  }
+}
