@@ -1,0 +1,95 @@
+const HELP: String = "usage: metricfold FILE\nFold bounded job measurements into counters and duration_ms histograms.\nInput: NDJSON instrument, unit, labels (queue/status text), value (integer).\nLimits: 16384 input bytes, 1024 bytes/line, 64 records, 2 series/instrument.\nUnseen series beyond the limit aggregate into overflow without labels.\n"
+
+pub type AppError = Output(OutputError)
+
+fn run(rt: Io, args: Args) -> Result[Bytes, model.InvalidInput] {
+  if arg.len(args) != 1 {
+    return Error(model.invalid(0, Usage()))
+  }
+  let Ok(name) = arg.text(args, 0) else {
+    return Error(model.invalid(0, Usage()))
+  }
+  let Ok(dir) = io.dir(rt, path.of("input")) else {
+    return Error(model.invalid(0, DirectoryGrant()))
+  }
+  let mut Ok(file) = file.open(dir, path.of(name)) else {
+    return Error(model.invalid(0, FileOpen()))
+  }
+  let mut fold = model.start()?
+  let mut scanner = match line_scan.new(model.MAX_LINE, true) {
+    Ok(scanner) => take scanner,
+    Error(_) => return Error(model.invalid(0, Internal())),
+  }
+  let mut total: u64 = 0
+  while true {
+    let mut chunk: List[u8] = []
+    let Ok(n) = file.read(dir, mut file, mut chunk, 256) else {
+      return Error(model.invalid(fold.records + 1, FileRead()))
+    }
+    let data = bytes.from_list(take chunk)
+    let mut start: u64 = 0
+    let mut i: u64 = 0
+    // Feed one newline-terminated segment at a time so a later scanner error
+    // cannot hide an earlier invalid record from the same read.
+    while i < n || n == 0 && i == 0 {
+      let end: u64 = if n == 0 {
+        0
+      } else {
+        i + 1
+      }
+      if n == 0 || data[i] == 10 || end == n {
+        let width = end - start
+        if width > model.MAX_INPUT - total {
+          return Error(model.invalid(fold.records + 1, InputLimit()))
+        }
+        total += width
+        let lines = match line_scan.feed(
+          mut scanner,
+          bytes.slice(data, start, end),
+          n == 0
+        ) {
+          Ok(lines) => take lines,
+          Error(_) => return Error(model.invalid(fold.records + 1, LineLimit())),
+        }
+        for line in take lines {
+          model.accept(mut fold, take line)?
+        }
+        start = end
+      }
+      i += 1
+    }
+    if n == 0 {
+      break
+    }
+  }
+  Ok(model.report(fold))
+}
+
+pub fn main(rt: Io, args: Args) -> Result[std@1/process.ExitCode, AppError] {
+  let Ok(output) = io.stdout(rt) else {
+    return Ok(std@1/process.exit_code(3u8))
+  }
+  if arg.len(args) == 1 {
+    if let Ok(flag) = arg.text(args, 0) {
+      if flag == "--help" {
+        out.print(output, HELP)?
+        return Ok(std@1/process.SUCCESS)
+      }
+    }
+  }
+  match run(rt, args) {
+    Ok(report) => {
+      out.write(output, report)?
+      Ok(std@1/process.SUCCESS)
+    },
+    Error(error) => {
+      let Ok(diagnostics) = io.stderr(rt) else {
+        return Ok(std@1/process.exit_code(3u8))
+      }
+      match err.print(diagnostics, model.error_report(error)) {
+        Ok(()) => Ok(std@1/process.exit_code(2u8)),
+        Error(_) => Ok(std@1/process.exit_code(3u8)),
+      }
+    },
+  }
+}

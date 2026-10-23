@@ -1,0 +1,4 @@
+{"instrument":"jobs","unit":"job","labels":{"queue":"build","status":"ok"},"value":1}
+{"instrument":"duration_ms","unit":"ms","labels":{"queue":"build","status":"ok"},"value":3}
+{"instrument":"jobs","unit":"job","labels":{"queue":"test","status":"failed"},"value":1}
+{"instrument":"duration_ms","unit":"ms","labels":{"queue":"test","status":"failed"},"value":9}

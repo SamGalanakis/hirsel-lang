@@ -1,0 +1,263 @@
+// Registry usage and inclusive histogram vector follow OpenTelemetry Rust SDK
+// histogram.rs:120-159,317-342 at fb6b5356 (Apache-2.0; fixtures/LICENSE).
+// std owns aggregation; this module owns the bounded job-event policy.
+pub const MAX_INPUT: u64 = 16384
+
+pub const MAX_LINE: u64 = 1024
+
+pub const MAX_RECORDS: u64 = 64
+
+pub type Reason = Usage | DirectoryGrant | FileOpen | FileRead | InputLimit | LineLimit | RecordLimit | Utf8 | Json | Shape | Labels | Value | Descriptor | Arithmetic | Internal
+
+pub type InvalidInput {
+  line: u64,
+  reason: Reason,
+}
+
+pub type Fold {
+  registry: metrics.Registry,
+  records: u64,
+}
+
+pub fn invalid(line: u64, reason: Reason) -> InvalidInput uses {} {
+  InvalidInput(line: line, reason: reason)
+}
+
+fn descriptor(name: String, unit: String) -> metrics.Descriptor uses {} {
+  let histogram = name == "duration_ms"
+  metrics.Descriptor(
+    scope: "metricfold",
+    version: "1",
+    name: unique name,
+    kind: if histogram {
+      Histogram()
+    } else {
+      Counter()
+    },
+    unit: unique unit,
+    labels: ["queue", "status"],
+    bounds: if histogram {
+      [1, 3, 6]
+    } else {
+      []
+    }
+  )
+}
+
+pub fn start() -> Result[Fold, InvalidInput] uses {} {
+  let config = metrics.MetricConfig(
+    descriptors: [descriptor("jobs", "job"), descriptor("duration_ms", "ms")],
+    max_series: 2,
+    max_buckets: 4,
+    max_labels: 2,
+    max_label_bytes: 64
+  )
+  match metrics.registry(config) {
+    Ok(registry) => Ok(Fold(registry: take registry, records: 0)),
+    Error(_) => Error(invalid(0, Internal())),
+  }
+}
+
+fn metric_reason(error: metrics.MetricError) -> Reason uses {} {
+  match error {
+    DescriptorConflict() => Descriptor(),
+    InvalidDescriptor() => Descriptor(),
+    InvalidLabels() => Labels(),
+    InvalidValue() => Value(),
+    Arithmetic() => Arithmetic(),
+    _ => Internal(),
+  }
+}
+
+fn text_field(fields: Map[String, json.Value], key: String, number: u64) -> Result[
+  String,
+  InvalidInput
+] uses {} {
+  match map.get(fields, key) {
+    Some(Text(value)) => Ok(unique value),
+    _ => Error(invalid(number, Shape())),
+  }
+}
+
+fn measurement(take data: Bytes, number: u64) -> Result[
+  metrics.CheckedMeasurement,
+  InvalidInput
+] uses {} {
+  let Ok(text) = string.from_bytes(take data) else {
+    return Error(invalid(number, Utf8()))
+  }
+  let fields = match json.parse(take text) {
+    Ok(Object(fields)) => copy fields,
+    _ => return Error(invalid(number, Json())),
+  }
+  if map.len(fields) != 4 {
+    return Error(invalid(number, Shape()))
+  }
+  let name = text_field(fields, "instrument", number)?
+  if name != "jobs" && name != "duration_ms" {
+    return Error(invalid(number, Descriptor()))
+  }
+  let unit = text_field(fields, "unit", number)?
+  let dimensions = match map.get(fields, "labels") {
+    Some(Object(labels)) => copy labels,
+    _ => return Error(invalid(number, Labels())),
+  }
+  if map.len(dimensions) > 2 {
+    return Error(invalid(number, Labels()))
+  }
+  let mut labels: List[telemetry.Attribute] = []
+  for (key, value) in dimensions {
+    if key != "queue" && key != "status" {
+      return Error(invalid(number, Labels()))
+    }
+    let Text(label) = value else {
+      return Error(invalid(number, Labels()))
+    }
+    if string.byte_len(label) > 64 {
+      return Error(invalid(number, Labels()))
+    }
+    list.push(
+      mut labels,
+      telemetry.Attribute(name: unique key, value: Text(unique label))
+    )
+  }
+  let value: metrics.Number = match map.get(fields, "value") {
+    Some(Number(lexeme)) => if string.starts_with(lexeme, "-") {
+      match i64.parse(lexeme) {
+        Ok(value) => Signed(value),
+        Error(_) => return Error(invalid(number, Value())),
+      }
+    } else {
+      match u64.parse(lexeme) {
+        Ok(value) => Unsigned(value),
+        Error(_) => return Error(invalid(number, Value())),
+      }
+    },
+    _ => return Error(invalid(number, Value())),
+  }
+  match metrics.check_measurement(
+    metrics.Measurement(
+      descriptor: descriptor(name, unit),
+      labels: take labels,
+      value: value,
+      exemplar: None()
+    )
+  ) {
+    Ok(checked) => Ok(take checked),
+    Error(error) => Error(invalid(number, metric_reason(error))),
+  }
+}
+
+pub fn accept(mut fold: Fold, take data: Bytes) -> Result[(), InvalidInput] uses {} {
+  let number = fold.records + 1
+  if fold.records == MAX_RECORDS {
+    return Error(invalid(number, RecordLimit()))
+  }
+  let checked = measurement(take data, number)?
+  match metrics.record(mut fold.registry, checked) {
+    Ok(()) => (),
+    Error(error) => return Error(invalid(number, metric_reason(error))),
+  }
+  fold.records = number
+  Ok(())
+}
+
+fn aggregate(value: metrics.Aggregate, mut out: List[u8]) uses {} {
+  text.append(
+    mut out,
+    f"{{\"count\":{value.count},\"sum\":{value.unsigned},\"buckets\":["
+  )
+  let mut first = true
+  for n in value.buckets {
+    if !first {
+      text.append(mut out, ",")
+    }
+    first = false
+    text.append(mut out, f"{n}")
+  }
+  text.append(mut out, "]}")
+}
+
+pub fn report(fold: Fold) -> Bytes uses {} {
+  let snapshot = metrics.snapshot(fold.registry)
+  let mut out: List[u8] = []
+  text.append(
+    mut out,
+    f"{{\"schema\":1,\"records\":{fold.records},\"overflow_policy\":\"aggregate_unseen_without_labels\",\"instruments\":["
+  )
+  let mut first_instrument = true
+  for instrument in snapshot.instruments {
+    if !first_instrument {
+      text.append(mut out, ",")
+    }
+    first_instrument = false
+    text.append(mut out, "{\"name\":")
+    json.write_text_into(instrument.descriptor.name, mut out)
+    text.append(mut out, ",\"unit\":")
+    json.write_text_into(instrument.descriptor.unit, mut out)
+    text.append(mut out, ",\"bounds\":[")
+    let mut first_bound = true
+    for bound in instrument.descriptor.bounds {
+      if !first_bound {
+        text.append(mut out, ",")
+      }
+      first_bound = false
+      text.append(mut out, f"{bound}")
+    }
+    text.append(mut out, "],\"series\":[")
+    let mut first_series = true
+    for series in instrument.series {
+      if !first_series {
+        text.append(mut out, ",")
+      }
+      first_series = false
+      text.append(mut out, "{\"labels\":{")
+      let mut first_label = true
+      for label in series.labels {
+        if !first_label {
+          text.append(mut out, ",")
+        }
+        first_label = false
+        json.write_text_into(label.name, mut out)
+        text.append(mut out, ":")
+        match label.value {
+          Text(value) => json.write_text_into(value, mut out),
+          _ => text.append(mut out, "null"),
+        }
+      }
+      text.append(mut out, "},\"aggregate\":")
+      aggregate(series.aggregate, mut out)
+      text.append(mut out, "}")
+    }
+    text.append(mut out, "],\"overflow\":")
+    aggregate(instrument.overflow, mut out)
+    text.append(mut out, "}")
+  }
+  text.append(mut out, "]}\n")
+  bytes.from_list(take out)
+}
+
+fn reason_text(reason: Reason) -> String uses {} {
+  match reason {
+    Usage() => "usage",
+    DirectoryGrant() => "directory_grant",
+    FileOpen() => "file_open",
+    FileRead() => "file_read",
+    InputLimit() => "input_bytes_limit",
+    LineLimit() => "line_bytes_limit",
+    RecordLimit() => "record_count_limit",
+    Utf8() => "invalid_utf8",
+    Json() => "invalid_json",
+    Shape() => "record_shape",
+    Labels() => "invalid_labels",
+    Value() => "invalid_value",
+    Descriptor() => "descriptor_conflict",
+    Arithmetic() => "integer_overflow",
+    Internal() => "internal",
+  }
+}
+
+pub fn error_report(error: InvalidInput) -> String uses {} {
+  let reason = reason_text(error.reason)
+  f"{{\"schema\":1,\"error\":{{\"line\":{error.line},\"kind\":\"{reason}\"}}}}\n"
+}

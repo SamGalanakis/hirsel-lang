@@ -1,0 +1,35 @@
+// The pure entry reaches the shipped model; checked-H uses the existing adapter.
+pub fn model_contract() -> Result[(), model.InvalidInput] {
+  let mut fold = model.start()?
+  let mut n: u64 = 1
+  while n <= 10 {
+    let line = f"{{\"instrument\":\"duration_ms\",\"unit\":\"ms\",\"labels\":{{\"queue\":\"build\"}},\"value\":{n}}}"
+    model.accept(mut fold, unique string.as_bytes(line))?
+    n += 1
+  }
+  let snapshot = metrics.snapshot(fold.registry)
+  let aggregate = snapshot.instruments[1].series[0].aggregate
+  failure.check(
+    aggregate.count == 10 && aggregate.unsigned == 55 && aggregate.buckets == [
+      1u64,
+      2,
+      3,
+      4
+    ],
+    Arithmetic()
+  )
+  let saved_report = model.report(fold)
+  let negative = model.accept(
+    mut fold,
+    b"{\"instrument\":\"jobs\",\"unit\":\"job\",\"labels\":{},\"value\":-1}"
+  )
+  failure.check(negative == Error(model.invalid(11, Value())), Arithmetic())
+  failure.check(model.report(fold) == saved_report, Arithmetic())
+  let conflict = model.accept(
+    mut fold,
+    b"{\"instrument\":\"jobs\",\"unit\":\"wrong\",\"labels\":{},\"value\":1}"
+  )
+  failure.check(conflict == Error(model.invalid(11, Descriptor())), Arithmetic())
+  failure.check(model.report(fold) == saved_report, Arithmetic())
+  Ok(())
+}
