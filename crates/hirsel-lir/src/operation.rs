@@ -122,6 +122,30 @@ snapshot_enum!(BuiltinType {
 /// Independently supplied operation declarations. Implementations derive from
 /// the declaration and actuals, never from the candidate unit or its call ABI.
 pub trait OperationDeclarations {
+    /// Current original-source identity supplied by the actual source query
+    /// owner, not derived from a candidate LIR header or producer reference.
+    fn seal_source_witness(
+        &self,
+        _: &hirsel_syntax::DefPath,
+        _: hirsel_syntax::ContentHash,
+    ) -> Option<crate::sealed_payload_source::SealSourceWitness> {
+        None
+    }
+    /// Independently expected-empty is Some(vec![]); unavailable is None.
+    fn seal_events(
+        &self,
+        _: &hirsel_syntax::DefPath,
+        _: hirsel_syntax::ContentHash,
+    ) -> Option<Vec<crate::sealed_payload_source::SourceEvent>> {
+        None
+    }
+    fn seal_payloads(
+        &self,
+        _: &hirsel_syntax::DefPath,
+        _: hirsel_syntax::ContentHash,
+    ) -> Option<Vec<crate::sealed_payload_source::SourcePayload>> {
+        None
+    }
     fn derive(
         &self,
         operation: &OperationId,

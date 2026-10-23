@@ -72,7 +72,12 @@ impl Context<'_> {
         }
         Ok(local)
     }
-    fn destination(&self, destination: &Destination) -> Result<PayloadDestination, SourceError> {
+    fn destination(
+        &self,
+        destination: &Destination,
+        definitions: &[Vec<Definition>],
+        substitute: &mut impl FnMut(TypeId) -> Result<TypeId, SourceError>,
+    ) -> Result<PayloadDestination, SourceError> {
         Ok(match destination {
             Destination::Heap | Destination::Inferred => PayloadDestination::Heap,
             Destination::Arena(origin) => {
@@ -90,7 +95,12 @@ impl Context<'_> {
                         "ambiguous arena destination source place",
                     ));
                 }
-                PayloadDestination::Arena(index as u32)
+                PayloadDestination::Arena(PayloadOperand {
+                    place: index as u32,
+                    ty: native(self.types, substitute(first.ty)?)?,
+                    producer: producer(self, definitions, PlaceId(index as u32))?,
+                    capture_slot: None,
+                })
             }
             Destination::Caller(parameters) => PayloadDestination::Caller(
                 parameters
@@ -311,7 +321,7 @@ pub fn payloads(
             recipe: PayloadRecipe {
                 source,
                 operation: PayloadOperation::Allocate {
-                    destination: context.destination(destination)?,
+                    destination: context.destination(destination, &definitions, &mut substitute)?,
                 },
                 inputs,
             },
@@ -322,3 +332,6 @@ pub fn payloads(
 
 #[cfg(test)]
 mod tests;
+
+mod witness;
+pub use witness::{SourceDeclarations, SourceExpectation, SourceInput};

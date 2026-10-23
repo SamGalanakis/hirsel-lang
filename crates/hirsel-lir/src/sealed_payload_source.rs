@@ -40,7 +40,7 @@ pub struct PayloadOperand {
 pub enum PayloadDestination {
     Heap,
     Static,
-    Arena(u32),
+    Arena(PayloadOperand),
     Caller(Vec<u32>),
 }
 
@@ -76,7 +76,7 @@ snapshot_struct!(PayloadOperand {
     producer,
     capture_slot
 });
-snapshot_enum!(PayloadDestination { Heap, Static, Arena(place), Caller(parameters) });
+snapshot_enum!(PayloadDestination { Heap, Static, Arena(operand), Caller(parameters) });
 snapshot_enum!(PayloadOperation { Allocate { destination }, Replace { previous }, Transfer { previous }, Boundary });
 snapshot_struct!(PayloadRecipe {
     source,
@@ -84,3 +84,82 @@ snapshot_struct!(PayloadRecipe {
     inputs
 });
 snapshot_struct!(SourcePayload { root_type, recipe });
+
+/// Independently expected semantic events, including allocations elided by LIR.
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub struct SourceEvent {
+    pub anchor: SourceAnchor,
+    pub kind: SourceEventKind,
+    pub root_type: NativeType,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub enum SourceEventKind {
+    Seal,
+    BorrowRoot,
+    Allocate,
+    Replace,
+}
+
+/// Cache observation identity, not a V/C proof. An actual declaration provider
+/// returns this only after deriving its expectations from original source.
+/// `Some` with empty expectations differs from an unavailable observation.
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub struct SealSourceWitness {
+    /// Per-definition V/source-query identity including its reached private
+    /// dependencies, validated by the actual query owner at current lookup.
+    /// Never the whole-program adapt::input_identity digest.
+    pub source: hirsel_syntax::ContentHash,
+    pub definition: hirsel_syntax::DefPath,
+    pub implementation_revision: hirsel_syntax::ContentHash,
+    pub instance: hirsel_syntax::ContentHash,
+    pub inventory_rule: u32,
+    pub expectations: hirsel_syntax::ContentHash,
+}
+
+snapshot_struct!(SourceEvent {
+    anchor,
+    kind,
+    root_type
+});
+snapshot_enum!(SourceEventKind {
+    Seal,
+    BorrowRoot,
+    Allocate,
+    Replace
+});
+snapshot_struct!(SealSourceWitness {
+    source,
+    definition,
+    implementation_revision,
+    instance,
+    inventory_rule,
+    expectations
+});
+
+impl SealSourceWitness {
+    /// Canonical identity of independently reconstructed expectations. This
+    /// constructor creates data only; it conveys no validated-source authority.
+    pub fn from_expectations(
+        source: hirsel_syntax::ContentHash,
+        definition: hirsel_syntax::DefPath,
+        implementation_revision: hirsel_syntax::ContentHash,
+        instance: hirsel_syntax::ContentHash,
+        events: &[SourceEvent],
+        payloads: &[SourcePayload],
+    ) -> Self {
+        let events = hirsel_codec::to_text(&events.to_vec());
+        let payloads = hirsel_codec::to_text(&payloads.to_vec());
+        Self {
+            source,
+            definition,
+            implementation_revision,
+            instance,
+            inventory_rule: 1,
+            expectations: hirsel_syntax::ContentHash::of_parts(
+                "hirsel.seal-source-expectations.retained-occurrences.v1",
+                [events.as_bytes(), payloads.as_bytes()],
+            ),
+        }
+    }
+}
