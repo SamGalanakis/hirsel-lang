@@ -5192,6 +5192,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_env_narrow(
 /// read appends no element MEM-6 charges.
 /// # Safety
 /// Context is live; buffer is an exclusive address of a live List[u8].
+#[inline]
 pub(crate) unsafe fn append_byte_list(
     ctx: *mut crate::TaskCtx,
     buffer: *mut *mut crate::Header,
@@ -5214,6 +5215,7 @@ pub(crate) unsafe fn append_byte_list(
 /// Shared byte-list growth policy for borrowed appends and LZ history copies.
 /// # Safety
 /// As `append_byte_list`; additional is nonzero and the total fits the extent.
+#[inline(always)]
 pub(crate) unsafe fn reserve_byte_list(
     ctx: *mut crate::TaskCtx,
     buffer: *mut *mut crate::Header,
@@ -5225,6 +5227,38 @@ pub(crate) unsafe fn reserve_byte_list(
         let total = count
             .checked_add(additional)
             .unwrap_or_else(|| crate::fault("List[u8] length overflow"));
+        // Count one excludes tracked arenas and immortal roots. Keep the
+        // ordinary reserve/copy/publish path together (Rust Vec::append_elements,
+        // alloc/src/vec/mod.rs:2995-3031, f6c1107f8be1; MIT/Apache-2.0).
+        if (*block).count == 1 {
+            let capacity = crate::alloc::payload(block)
+                .add(crate::alloc::SEQUENCE_CAPACITY_OFFSET as usize)
+                .cast::<u64>()
+                .read();
+            if capacity >= total {
+                return (block, count);
+            }
+        }
+        (
+            reserve_byte_list_slow(ctx, buffer, block, count, total),
+            count,
+        )
+    }
+}
+
+/// Preserve tracked-arena, shared-root and growth policy off the common path.
+/// # Safety
+/// As `reserve_byte_list`; block and count are the current buffer and length.
+#[cold]
+#[inline(never)]
+unsafe fn reserve_byte_list_slow(
+    ctx: *mut crate::TaskCtx,
+    buffer: *mut *mut crate::Header,
+    block: *mut crate::Header,
+    count: u64,
+    total: u64,
+) -> *mut crate::Header {
+    unsafe {
         let block = if crate::region::is_tracked(block) {
             let capacity = crate::alloc::payload(block)
                 .add(crate::alloc::SEQUENCE_CAPACITY_OFFSET as usize)
@@ -5255,7 +5289,7 @@ pub(crate) unsafe fn reserve_byte_list(
             }
         };
         buffer.write(block);
-        (block, count)
+        block
     }
 }
 
