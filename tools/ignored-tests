@@ -1,0 +1,62 @@
+#!/usr/bin/env python3
+"""Run one registered archival or host qualification test.
+
+tools/ignored-tests --list shows exact identities and required environment inputs.
+Supply the original retained inputs named there, then select one identity. Missing
+inputs fail closed; this command never records replacement archival fixtures.
+"""
+import argparse
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+
+ROOT = Path(__file__).resolve().parents[1]
+REGISTRY = json.loads((ROOT / 'tools/ignored-tests.json').read_text())
+
+
+def command(case, environment):
+    home = REGISTRY[case]
+    missing = [key for key in home['inputs'] if not environment.get(key)]
+    if missing:
+        raise ValueError('required retained inputs: ' + ', '.join(missing))
+    return [str(ROOT / '.buck2/bin/buck2'), 'test', '-c', 'hirsel.tests=host',
+            '//:hirsel-cli-test-cli-shard-1', '--',
+            *[argument for key in home['inputs']
+              for argument in ['--env', f'{key}={environment[key]}']],
+            '--test-arg=--exact', f'--test-arg={case}', '--test-arg=--ignored',
+            '--test-arg=--test-threads=1', '--test-arg=--nocapture']
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('case', nargs='?', choices=sorted(REGISTRY))
+    parser.add_argument('--list', action='store_true')
+    args = parser.parse_args()
+    if args.list:
+        for case, home in REGISTRY.items():
+            print(case + '\t' + ','.join(home['inputs']))
+        return 0
+    if args.case is None:
+        parser.error('select one identity (or --list)')
+    try:
+        selected = command(args.case, os.environ)
+    except ValueError as error:
+        parser.error(str(error))
+    result = subprocess.run(selected, cwd=ROOT, stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, text=True)
+    print(result.stdout, end='')
+    if result.returncode:
+        return result.returncode
+    counts = re.findall(r'test result: ok\. (\d+) passed; (\d+) failed; (\d+) ignored;',
+                        result.stdout)
+    if counts != [('1', '0', '0')]:
+        print('ignored-tests: expected exactly one executed passing test', file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

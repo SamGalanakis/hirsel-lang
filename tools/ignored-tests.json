@@ -1,0 +1,120 @@
+{
+  "cancel_replay_31::production_cancel_recordings_refuse_incompatible_runtime": {
+    "source": "crates/hirsel-cli/tests/cli/cancel_replay_31.rs",
+    "inputs": [
+      "HIRSEL_CANCEL_REPLAY_FIXTURES",
+      "HIRSEL_CANCEL_REPLAY_MANIFEST"
+    ]
+  },
+  "discrete_simulation_33::discrete_simulation_33_ordered_llvm": {
+    "source": "crates/hirsel-cli/tests/cli/discrete_simulation_33.rs",
+    "inputs": []
+  },
+  "discrete_simulation_33::discrete_simulation_33_ordered_cranelift": {
+    "source": "crates/hirsel-cli/tests/cli/discrete_simulation_33.rs",
+    "inputs": []
+  },
+  "durable_queue_31::durable_queue_31_fixture_native_record_replay": {
+    "source": "crates/hirsel-cli/tests/cli/durable_queue_31.rs",
+    "inputs": []
+  },
+  "durable_queue_31::durable_queue_31_existing_tapes_and_refusal_controls": {
+    "source": "crates/hirsel-cli/tests/cli/durable_queue_31.rs",
+    "inputs": [
+      "DURABLE_QUEUE_31_TAPES"
+    ]
+  },
+  "durable_queue_31::durable_queue_31_retained_event_audit": {
+    "source": "crates/hirsel-cli/tests/cli/durable_queue_31.rs",
+    "inputs": [
+      "DURABLE_QUEUE_31_NATIVE_RECORDS"
+    ]
+  },
+  "host_replay_parity_31::retained_production_tapes": {
+    "source": "crates/hirsel-cli/tests/cli/host_replay_parity_31.rs",
+    "inputs": [
+      "HOST_REPLAY_PARITY_31_CASES"
+    ]
+  },
+  "host_replay_parity_31::record_chunk_blocked_on_current_runtime": {
+    "source": "crates/hirsel-cli/tests/cli/host_replay_parity_31.rs",
+    "inputs": [
+      "HOST_REPLAY_PARITY_31_CHUNK"
+    ]
+  },
+  "property_kit_31::property_kit_31_production_ordered_widths_and_replay": {
+    "source": "crates/hirsel-cli/tests/cli/property_kit_31.rs",
+    "inputs": []
+  },
+  "sheet_eval_31::sheet_eval_31_dense_reference_boundary": {
+    "source": "crates/hirsel-cli/tests/cli/sheet_eval_31.rs",
+    "inputs": []
+  },
+  "sheet_eval_31::sheet_eval_31_production_host_replay": {
+    "source": "crates/hirsel-cli/tests/cli/sheet_eval_31.rs",
+    "inputs": [
+      "SHEET_EVAL_31_PRODUCTION"
+    ]
+  },
+  "sheet_eval_31::sheet_eval_31_production_refusal_controls": {
+    "source": "crates/hirsel-cli/tests/cli/sheet_eval_31.rs",
+    "inputs": [
+      "SHEET_EVAL_31_PRODUCTION"
+    ]
+  },
+  "sheet_eval_31::sheet_eval_31_remaining_dense_native_replay": {
+    "source": "crates/hirsel-cli/tests/cli/sheet_eval_31.rs",
+    "inputs": [
+      "SHEET_EVAL_31_PRODUCTION",
+      "SHEET_EVAL_31_DENSE_ROOT"
+    ]
+  },
+  "sheet_eval_31::sheet_eval_31_real_output_error_replay": {
+    "source": "crates/hirsel-cli/tests/cli/sheet_eval_31.rs",
+    "inputs": [
+      "SHEET_EVAL_31_PRODUCTION"
+    ]
+  },
+  "toy_analyzer_31::toy_analyzer_31_production_ordered_real_files": {
+    "source": "crates/hirsel-cli/tests/cli/toy_analyzer_31.rs",
+    "inputs": []
+  },
+  "toy_analyzer_31::toy_analyzer_31_host_tapes_checked_replay_and_controls": {
+    "source": "crates/hirsel-cli/tests/cli/toy_analyzer_31.rs",
+    "inputs": [
+      "TOY_ANALYZER_31_ARCHIVES"
+    ]
+  },
+  "toy_analyzer_31::toy_analyzer_31_exact_refusal_controls": {
+    "source": "crates/hirsel-cli/tests/cli/toy_analyzer_31.rs",
+    "inputs": [
+      "TOY_ANALYZER_31_REFUSAL_ARCHIVE"
+    ]
+  },
+  "toy_analyzer_31::toy_analyzer_31_recording_difference": {
+    "source": "crates/hirsel-cli/tests/cli/toy_analyzer_31.rs",
+    "inputs": [
+      "TOY_ANALYZER_31_REFUSAL_ARCHIVE"
+    ]
+  },
+  "assignment_planner_34::assignment_planner_34_ordered_capacity": {
+    "source": "crates/hirsel-cli/tests/cli/assignment_planner_34.rs",
+    "inputs": []
+  },
+  "geofence_audit_34::geofence_audit_34_ordered_capacity": {
+    "source": "crates/hirsel-cli/tests/cli/geofence_audit_34.rs",
+    "inputs": [
+      "GEOFENCE_AUDIT_34_BACKEND",
+      "GEOFENCE_AUDIT_34_WIDTH",
+      "GEOFENCE_AUDIT_34_KIND"
+    ]
+  },
+  "state_model_checker_34::state_model_checker_34_ordered_llvm": {
+    "source": "crates/hirsel-cli/tests/cli/state_model_checker_34.rs",
+    "inputs": []
+  },
+  "state_model_checker_34::state_model_checker_34_ordered_cranelift": {
+    "source": "crates/hirsel-cli/tests/cli/state_model_checker_34.rs",
+    "inputs": []
+  }
+}
