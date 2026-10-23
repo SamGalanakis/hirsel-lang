@@ -118,4 +118,9 @@ impl QueryEngine {
             frame.record(key, value);
         }
     }
+    pub(crate) fn merge_mode_execution(&mut self, path: &DefPath) {
+        if let Some(entry) = self.modes.get(&DefId::intern(path)).cloned() {
+            self.merge_execution(entry.reads());
+        }
+    }
 }

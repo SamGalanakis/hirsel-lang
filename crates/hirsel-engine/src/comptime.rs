@@ -1347,6 +1347,7 @@ impl QueryEngine {
         self.execution_stack.push(Default::default());
         self.begin_evaluation_validation();
         self.read_implementation(&constant.owner);
+        self.merge_mode_execution(&constant.owner);
         self.read_execution_signatures(&body.dependencies);
         let mut result = (|| {
             let signature = self.item_signature(&constant.owner)?.value;

@@ -1186,6 +1186,7 @@ impl QueryEngine {
         }
         // Successes reached inside a failed root remain independently valid.
         // Publish only after all worker requests/claims have settled.
+        let mut staged_write_errors = BTreeMap::new();
         for (path, constant, mut registrations, staged) in shared.into_constants() {
             let admitted = !prefix
                 || match &staged {
@@ -1201,6 +1202,17 @@ impl QueryEngine {
                 }
                 match staged {
                     Some(key) => {
+                        // The prefix already admitted this exact selection.
+                        // Publish its declaration before its selected value;
+                        // compact front receipts suffice without retaining Modes.
+                        let owner = self.staged_constants.get(&key.0).map(|c| c.owner.clone());
+                        let written = owner
+                            .map_or(Ok(()), |owner| self.store_registrations(&owner))
+                            .and_then(|()| self.store_staged_evaluation(&key.0, &key.1, &constant));
+                        if let Err(error) = written {
+                            staged_write_errors
+                                .insert((DefId::intern(&key.0), key.1.clone()), error);
+                        }
                         self.staged_values.insert(key, constant);
                     }
                     None => {
@@ -1272,7 +1284,12 @@ impl QueryEngine {
                 .cloned();
             for event in selected {
                 match event {
-                    SelectionEvent::StagedValue(_) | SelectionEvent::LowerComputed(_) => {}
+                    SelectionEvent::StagedValue(request) => {
+                        if let Some(failure) = staged_write_errors.get(&request) {
+                            error = Some(failure.clone());
+                        }
+                    }
+                    SelectionEvent::LowerComputed(_) => {}
                     SelectionEvent::Failed(mut product) => {
                         let definition = product.definition.clone();
                         let cached = self.checked.get(&DefId::intern(&definition)).cloned();

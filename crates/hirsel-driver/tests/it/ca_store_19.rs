@@ -742,3 +742,35 @@ fn staged_evaluation_products_bind_arguments_and_local_completion_before_body_de
         assert!(on.constant_instance(&hidden, &[2]).is_err(), "VerifyOff staged products cannot mint private completion");
     });
 }
+
+#[test]
+fn worker_staged_products_publish_only_prefix_selected_instances() {
+    with_compiler_stack(|| {
+        use hirsel_tir::TirProvider;
+        let source = "fn scaled[n:size](xs:Inline[u8,n])->u64{let _=xs;comptime (n*n)}\nconst FIRST:u64=comptime {let xs:Inline[u8,2]=[1,2];scaled(xs)}\nfn BAD()->u64{comptime {let zero=0u64;1u64/zero}}\nfn LATER()->u64{comptime {let xs:Inline[u8,3]=[1,2,3];scaled(xs)}}\n";
+        for jobs in [1, 2, 4, 8] {
+            let store = Arc::new(store::MemStore::default());
+            let mut seed = signature_session(store.clone(), source, true);
+            let lowered = seed.lower_to_tir(&definition("scaled")).unwrap();
+            let declarations = lowered.value.bodies[lowered.value.entry.0 as usize].rvalues.iter().filter_map(|v| match v {
+                hirsel_tir::Rvalue::ReadConstant { definition, arguments } if !arguments.is_empty() => Some(definition.clone()),
+                _ => None,
+            }).collect::<Vec<_>>();
+            assert_eq!(declarations.len(), 1, "one explicit staged expression");
+            let hidden = declarations[0].clone();
+            let outcomes = seed.check_lower_definition_prefix(vec![definition("FIRST"), definition("BAD"), definition("LATER")], hirsel_intern::jobs::Jobs::new(jobs));
+            assert_eq!(outcomes.len(), 2, "jobs={jobs}");
+            assert!(outcomes[0].result.is_ok());
+            assert!(outcomes[1].result.is_err());
+            let mut fresh = signature_session(store.clone(), source, true);
+            fresh.adapters.modes = None;
+            fresh.adapters.lowering = None;
+            fresh.register_staged_definition(&definition("scaled")).unwrap();
+            assert_eq!(fresh.constant_instance(&hidden, &[2]).unwrap().root.kind, hirsel_tir::ValueKind::Constant(hirsel_tir::Constant::Integer(4)), "jobs={jobs}");
+            assert!(fresh.constant_instance(&hidden, &[3]).is_err(), "later speculative size cannot publish at jobs={jobs}");
+            let mut oracle = signature_session(store, source, true).with_verify_store(store::VerifyStore::Recompute);
+            oracle.register_staged_definition(&definition("scaled")).unwrap();
+            assert_eq!(oracle.constant_instance(&hidden, &[2]).unwrap().root.kind, hirsel_tir::ValueKind::Constant(hirsel_tir::Constant::Integer(4)));
+        }
+    });
+}
