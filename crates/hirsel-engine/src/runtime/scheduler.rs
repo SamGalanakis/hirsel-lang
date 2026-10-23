@@ -16,6 +16,18 @@ use std::time::Instant;
 
 type Key = (u32, ContentHash);
 type Outcome = Result<ProductRef, Reference>;
+const REFUSED_REQUEST: u64 = 1 << 63;
+// Conservative space for a node plus its tree/queue indexes, request roots,
+// costs, four edges/subscriptions and temporary traversal work. These bounds
+// supplement producer payload weights, whose RSS must still be measured.
+const ENTRY_BYTES: u64 = 4096;
+
+/// The engine installs a streaming observer, with separately budgeted buffers.
+/// Called under the scheduler lock: do not reenter the runtime or block on work.
+/// Production tracing never retains an unbounded in-runtime event history.
+pub trait RuntimeObserver: Send + Sync {
+    fn record(&self, event: RuntimeEvent);
+}
 fn key(id: QueryId) -> Key {
     (id.kind, id.address.0)
 }
@@ -82,6 +94,8 @@ pub struct RuntimeStats {
     pub charged_bytes: u64,
     pub active: usize,
     pub settled: u64,
+    pub bookkeeping_bytes: u64,
+    pub workers: usize,
 }
 
 enum Status {
@@ -111,11 +125,14 @@ struct State {
     scratch: u64,
     stacks: u64,
     budget: u64,
+    metadata: u64,
+    edges: usize,
+    max_entries: usize,
     errors: RuntimeErrors,
     stopped: bool,
     started: bool,
     stats: RuntimeStats,
-    events: Option<Vec<RuntimeEvent>>,
+    observer: Option<Arc<dyn RuntimeObserver>>,
     origin: Instant,
 }
 struct Shared {
@@ -174,6 +191,7 @@ impl AdmittedRuntime {
         let count = jobs
             .get()
             .min((budget / (2 * stack as u64)).max(1) as usize);
+        let metadata = (budget - count as u64 * stack as u64) / 16;
         let shared = Arc::new(Shared {
             state: Mutex::new(State {
                 factories: BTreeMap::new(),
@@ -186,11 +204,14 @@ impl AdmittedRuntime {
                 scratch: 0,
                 stacks: count as u64 * stack as u64,
                 budget,
+                metadata,
+                edges: 0,
+                max_entries: (metadata / ENTRY_BYTES).min(usize::MAX as u64) as usize,
                 errors,
                 stopped: false,
                 started: false,
                 stats: RuntimeStats::default(),
-                events: None,
+                observer: None,
                 origin: Instant::now(),
             }),
             changed: Condvar::new(),
@@ -218,7 +239,11 @@ impl AdmittedRuntime {
                 }
             }
         }
-        runtime.shared.lock().account();
+        {
+            let mut state = runtime.shared.lock();
+            state.stats.workers = runtime.workers.len();
+            state.account();
+        }
         Ok(runtime)
     }
     /// Register each producer kind exactly once before any request starts.
@@ -231,6 +256,9 @@ impl AdmittedRuntime {
         if state.started {
             return Err("query dispatch is frozen after first request");
         }
+        if state.factories.len() >= state.max_entries.max(1) {
+            return Err("query factory allowance exhausted");
+        }
         if state.factories.contains_key(&kind) {
             return Err("query kind already registered");
         }
@@ -239,9 +267,12 @@ impl AdmittedRuntime {
     }
     /// Measured disjoint CPU cost from a prior comparable query, used only for
     /// ready priority. Neither identity nor semantic accounting depends on it.
-    pub fn set_cost(&mut self, query: QueryId, cpu_ns: u64) {
+    pub fn set_cost(&mut self, query: QueryId, cpu_ns: u64) -> Result<(), &'static str> {
         let mut state = self.shared.lock();
         let query = key(query);
+        if !state.costs.contains_key(&query) && state.costs.len() >= state.max_entries {
+            return Err("query cost allowance exhausted");
+        }
         state.unqueue(query);
         state.costs.insert(query, cpu_ns.max(1));
         if state
@@ -251,18 +282,16 @@ impl AdmittedRuntime {
         {
             state.queue(query);
         }
+        Ok(())
     }
-    /// Optional exact event capture for bounded diagnostics, disabled by default.
-    pub fn record_events(&mut self) {
-        self.shared.lock().events = Some(Vec::new());
-    }
-    pub fn take_events(&mut self) -> Vec<RuntimeEvent> {
-        self.shared
-            .lock()
-            .events
-            .as_mut()
-            .map(std::mem::take)
-            .unwrap_or_default()
+    /// Observer ownership belongs to the engine, not request clients.
+    pub fn observe(&mut self, observer: Arc<dyn RuntimeObserver>) -> Result<(), &'static str> {
+        let mut state = self.shared.lock();
+        if state.started {
+            return Err("query observation is frozen after first request");
+        }
+        state.observer = Some(observer);
+        Ok(())
     }
     pub fn stats(&self) -> RuntimeStats {
         self.shared.lock().stats
@@ -298,6 +327,10 @@ impl AdmittedRuntime {
         state.ready.clear();
         state.retained = 0;
         state.stacks = 0;
+        state.metadata = 0;
+        state.costs.clear();
+        state.factories.clear();
+        state.observer = None;
         state.account();
         self.reservation.take();
     }
@@ -316,25 +349,61 @@ impl QueryRuntime for AdmittedRuntime {
         state.next_request = state
             .next_request
             .checked_add(1)
+            .filter(|n| *n < REFUSED_REQUEST)
             .expect("request token exhausted");
         state.started = true;
+        if state.stopped {
+            return request;
+        }
+        let root_count: usize = state.requests.values().map(Vec::len).sum();
+        if state.requests.len() >= state.max_entries
+            || roots.len() > state.max_entries.saturating_sub(root_count)
+        {
+            return RequestId(request.0 | REFUSED_REQUEST);
+        }
+        let missing = roots
+            .iter()
+            .map(|r| key(*r))
+            .collect::<BTreeSet<_>>()
+            .iter()
+            .filter(|r| !state.nodes.contains_key(r))
+            .count();
+        if missing > state.max_entries.saturating_sub(state.nodes.len()) {
+            let idle: Vec<_> = state
+                .nodes
+                .iter()
+                .filter_map(|(&k, n)| {
+                    (!n.live
+                        && matches!(n.status, Status::Settled(_))
+                        && !roots.iter().any(|r| key(*r) == k))
+                    .then_some(k)
+                })
+                .collect();
+            for k in idle {
+                state.remove(k);
+            }
+            if missing > state.max_entries.saturating_sub(state.nodes.len()) {
+                return RequestId(request.0 | REFUSED_REQUEST);
+            }
+        }
         let roots: Vec<_> = roots.iter().copied().map(key).collect();
         state.event(RuntimeEvent::Request {
             request,
             roots: roots.iter().copied().map(id).collect(),
         });
-        if !state.stopped {
-            state.requests.insert(request.0, roots.clone());
-            for root in roots {
-                state.ensure(root);
-            }
-            state.mark_live();
+        state.requests.insert(request.0, roots.clone());
+        for root in roots {
+            state.ensure(root).expect("root table pre-admitted");
         }
+        state.mark_live();
         self.shared.changed.notify_all();
         request
     }
     fn poll(&mut self, request: RequestId) -> Poll<OutcomeList> {
         let mut state = self.shared.lock();
+        if request.0 & REFUSED_REQUEST != 0 {
+            return Poll::Ready(Err(state.errors.resource));
+        }
         let Some(roots) = state.requests.get(&request.0) else {
             return Poll::Ready(Err(state.errors.cancelled));
         };
@@ -383,15 +452,16 @@ impl Shared {
 }
 impl State {
     fn event(&mut self, event: RuntimeEvent) {
-        if let Some(events) = &mut self.events {
-            events.push(event);
+        if let Some(observer) = &self.observer {
+            observer.record(event);
         }
     }
     fn elapsed(&self) -> u64 {
         self.origin.elapsed().as_nanos().min(u64::MAX as u128) as u64
     }
     fn account(&mut self) {
-        let bytes = self.stacks + self.retained + self.scratch;
+        let bytes = self.stacks + self.metadata + self.retained + self.scratch;
+        self.stats.bookkeeping_bytes = self.metadata;
         self.stats.charged_bytes = bytes;
         self.stats.peak_bytes = self.stats.peak_bytes.max(bytes);
         debug_assert!(bytes <= self.budget);
@@ -415,30 +485,34 @@ impl State {
         self.ready
             .remove(&(Reverse(self.costs.get(&key).copied().unwrap_or(1)), key));
     }
-    fn ensure(&mut self, query: Key) {
+    fn ensure(&mut self, query: Key) -> Result<(), Reference> {
         if let Some(node) = self.nodes.get_mut(&query) {
             node.live = true;
-            return;
+            return Ok(());
+        }
+        if self.nodes.len() >= self.max_entries {
+            return Err(self.errors.resource);
         }
         self.stats.claims += 1;
         self.event(RuntimeEvent::Claim(id(query)));
-        let created = self
-            .factories
-            .get(&query.0)
-            .ok_or(self.errors.protocol)
-            .and_then(|f| f.create(id(query)));
+        let created = catch_unwind(AssertUnwindSafe(|| {
+            self.factories
+                .get(&query.0)
+                .ok_or(self.errors.protocol)
+                .and_then(|f| f.create(id(query)))
+        }))
+        .unwrap_or(Err(self.errors.panicked));
         let (task, weight, status) = match created {
             Ok(task) if task.id() == id(query) => {
                 let weight = task.weight();
-                let sum = weight
-                    .scratch
-                    .checked_add(weight.retained)
-                    .and_then(|n| n.checked_add(weight.stack));
-                if sum.is_none_or(|n| n > self.budget.saturating_sub(self.stacks))
+                // Physical pool stacks are already reserved, even while idle.
+                // The worker separately checks that this query fits its stack.
+                let sum = weight.scratch.checked_add(weight.retained);
+                if sum.is_none_or(|n| n > self.budget.saturating_sub(self.stacks + self.metadata))
                     || weight.retained
-                        > self
-                            .budget
-                            .saturating_sub(self.stacks + self.retained + self.scratch)
+                        > self.budget.saturating_sub(
+                            self.stacks + self.metadata + self.retained + self.scratch,
+                        )
                 {
                     (
                         None,
@@ -474,6 +548,7 @@ impl State {
             self.queue(query);
         }
         self.account();
+        Ok(())
     }
     fn mark_live(&mut self) {
         for node in self.nodes.values_mut() {
@@ -493,6 +568,7 @@ impl State {
         self.unqueue(query);
         if let Some(node) = self.nodes.remove(&query) {
             self.retained -= node.weight.retained;
+            self.edges -= node.dependencies.len();
             for dependency in node.dependencies {
                 if let Some(node) = self.nodes.get_mut(&dependency) {
                     node.waiters.remove(&query);
@@ -573,6 +649,14 @@ impl QueryContext for Context<'_> {
             return Poll::Ready(Err(state.errors.cancelled));
         }
         let dependency = key(dependency);
+        if !state.nodes[&self.query].dependencies.contains(&dependency)
+            && state.edges >= state.max_entries * 4
+        {
+            return Poll::Ready(Err(state.errors.resource));
+        }
+        if let Err(error) = state.ensure(dependency) {
+            return Poll::Ready(Err(error));
+        }
         if state.reaches(dependency, self.query) {
             return Poll::Ready(Err(state.errors.cycle));
         }
@@ -584,12 +668,12 @@ impl QueryContext for Context<'_> {
             .insert(dependency);
         if new {
             state.stats.edges += 1;
+            state.edges += 1;
             state.event(RuntimeEvent::Read {
                 query: id(self.query),
                 dependency: id(dependency),
             });
         }
-        state.ensure(dependency);
         if let Some(result) = state.result(dependency) {
             return Poll::Ready(result);
         }
@@ -639,9 +723,9 @@ fn run_worker(shared: Arc<Shared>, worker: usize, stack: u64) {
                         continue;
                     }
                     if weight.scratch
-                        <= state
-                            .budget
-                            .saturating_sub(state.stacks + state.retained + state.scratch)
+                        <= state.budget.saturating_sub(
+                            state.stacks + state.metadata + state.retained + state.scratch,
+                        )
                     {
                         state.unqueue(query);
                         let node = state.nodes.get_mut(&query).unwrap();
@@ -704,7 +788,7 @@ fn run_worker(shared: Arc<Shared>, worker: usize, stack: u64) {
         if discard || state.stopped {
             state.remove(query);
             if live && !state.stopped {
-                state.ensure(query);
+                let _ = state.ensure(query);
             }
         } else {
             match outcome {

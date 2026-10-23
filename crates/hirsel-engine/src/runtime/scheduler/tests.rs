@@ -12,6 +12,18 @@ fn query(n: u64) -> QueryId {
 fn reference(text: &[u8]) -> Reference {
     Domain { kind: 1, schema: 1 }.reference(text).unwrap()
 }
+#[derive(Default)]
+struct Events(Mutex<Vec<RuntimeEvent>>);
+impl RuntimeObserver for Events {
+    fn record(&self, event: RuntimeEvent) {
+        self.0.lock().unwrap().push(event);
+    }
+}
+fn trace(rt: &mut AdmittedRuntime) -> Arc<Events> {
+    let events = Arc::new(Events::default());
+    rt.observe(events.clone()).unwrap();
+    events
+}
 fn product(q: QueryId) -> ProductRef {
     ProductRef {
         address: q.address,
@@ -222,7 +234,10 @@ fn idle_eviction_recreates_only_evicted_claims() {
     rt.wait(request).unwrap();
     assert_eq!(claims.load(Ordering::SeqCst), 1);
     rt.evict_to(0);
-    assert_eq!(rt.stats().charged_bytes, STACK as u64);
+    assert_eq!(
+        rt.stats().charged_bytes - rt.stats().bookkeeping_bytes,
+        STACK as u64
+    );
     let request = rt.request(&[query(0)]);
     rt.wait(request).unwrap();
     assert_eq!(claims.load(Ordering::SeqCst), 2);
@@ -314,11 +329,11 @@ fn cancelling_one_shared_request_preserves_the_live_claim() {
 #[test]
 fn actual_edges_disjoint_costs_admission_and_completion_are_explicit() {
     let mut rt = runtime(1, 4 << 20);
-    rt.record_events();
+    let events = trace(&mut rt);
     install(&mut rt, &[(0, Spec::deps(&[1])), (1, Spec::deps(&[]))]);
     let request = rt.request(&[query(0)]);
     rt.wait(request).unwrap();
-    let events = rt.take_events();
+    let events = std::mem::take(&mut *events.0.lock().unwrap());
     assert_eq!(
         events
             .iter()
@@ -390,10 +405,10 @@ fn measured_cost_prioritizes_large_ready_queries_and_releases_temporary_charge()
             (2, Spec::deps(&[])),
         ],
     );
-    rt.set_cost(query(0), 10);
-    rt.set_cost(query(1), 100);
-    rt.set_cost(query(2), 1);
-    rt.record_events();
+    rt.set_cost(query(0), 10).unwrap();
+    rt.set_cost(query(1), 100).unwrap();
+    rt.set_cost(query(2), 1).unwrap();
+    let events = trace(&mut rt);
     let request = rt.request(&[query(0), query(2), query(1)]);
     assert_eq!(
         rt.wait(request),
@@ -403,8 +418,7 @@ fn measured_cost_prioritizes_large_ready_queries_and_releases_temporary_charge()
             product(query(1))
         ])
     );
-    let admitted: Vec<_> = rt
-        .take_events()
+    let admitted: Vec<_> = std::mem::take(&mut *events.0.lock().unwrap())
         .into_iter()
         .filter_map(|e| match e {
             RuntimeEvent::Admit { query, .. } => Some(query),
@@ -412,7 +426,10 @@ fn measured_cost_prioritizes_large_ready_queries_and_releases_temporary_charge()
         })
         .collect();
     assert_eq!(admitted, [query(1), query(0), query(2)]);
-    assert_eq!(rt.stats().charged_bytes, STACK as u64 + 3 * 16);
+    assert_eq!(
+        rt.stats().charged_bytes - rt.stats().bookkeeping_bytes,
+        STACK as u64 + 3 * 16
+    );
 }
 struct PanicFactory;
 impl QueryFactory for PanicFactory {
@@ -456,7 +473,10 @@ fn panicking_task_releases_scratch_and_wakes_failed_dependents() {
     let request = rt.request(&[query(0)]);
     assert_eq!(rt.wait(request), Err(errors().panicked));
     assert_eq!(rt.stats().active, 0);
-    assert_eq!(rt.stats().charged_bytes, 2 * STACK as u64 + 2 * 16);
+    assert_eq!(
+        rt.stats().charged_bytes - rt.stats().bookkeeping_bytes,
+        2 * STACK as u64 + 2 * 16
+    );
 }
 struct LyingFactory;
 impl QueryFactory for LyingFactory {
@@ -485,4 +505,56 @@ fn provisional_product_with_pending_reads_is_not_published() {
     rt.register(1, Arc::new(LyingFactory)).unwrap();
     let request = rt.request(&[query(0)]);
     assert_eq!(rt.wait(request), Err(errors().protocol));
+}
+
+#[test]
+fn metadata_exhaustion_refuses_requests_and_dependency_growth_without_leaking_slots() {
+    let mut rt = runtime(1, STACK as u64 + 32 * ENTRY_BYTES);
+    assert_eq!(rt.shared.lock().max_entries, 2);
+    install(
+        &mut rt,
+        &[
+            (0, Spec::deps(&[1])),
+            (1, Spec::deps(&[2])),
+            (2, Spec::deps(&[])),
+        ],
+    );
+    let oversized = rt.request(&[query(0), query(1), query(2)]);
+    assert_eq!(rt.poll(oversized), Poll::Ready(Err(errors().resource)));
+    assert_eq!(rt.stats().claims, 0);
+    let request = rt.request(&[query(0)]);
+    assert_eq!(rt.wait(request), Err(errors().resource));
+    assert_eq!(rt.stats().claims, 2);
+    assert_eq!(rt.stats().active, 0);
+    assert!(rt.stats().peak_bytes <= STACK as u64 + 32 * ENTRY_BYTES);
+    for n in 10..30 {
+        let request = rt.request(&[query(n)]);
+        assert_eq!(rt.wait(request), Err(errors().protocol));
+        assert!(rt.shared.lock().nodes.len() <= 2);
+    }
+}
+struct PanickingFactory;
+impl QueryFactory for PanickingFactory {
+    fn create(&self, _: QueryId) -> Result<Box<dyn QueryTask>, Reference> {
+        panic!("factory fixture")
+    }
+}
+#[test]
+fn failed_factory_construction_settles_without_poisoning_the_pool() {
+    let mut rt = runtime(2, 8 << 20);
+    rt.register(1, Arc::new(PanickingFactory)).unwrap();
+    let request = rt.request(&[query(0), query(1)]);
+    assert_eq!(rt.wait(request), Err(errors().panicked));
+    rt.shutdown();
+    assert_eq!(rt.stats().charged_bytes, 0);
+}
+#[test]
+fn declared_stack_fits_reserved_worker_stack_without_being_charged_twice() {
+    let mut rt = runtime(1, 2 * STACK as u64);
+    let mut spec = Spec::deps(&[]);
+    spec.weight.stack = STACK as u64;
+    install(&mut rt, &[(0, spec)]);
+    let request = rt.request(&[query(0)]);
+    assert_eq!(rt.wait(request), Ok(vec![product(query(0))]));
+    assert_eq!(rt.stats().workers, 1);
 }
