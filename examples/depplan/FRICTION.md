@@ -130,3 +130,19 @@ is retained. Five new focused tests plus two existing controls passed; the
 recipes check and export, and text equality/order vectors execute on the
 interpreter and checked heap (zero live heap bytes). This removes a diagnostic
 dead end without changing acceptance or deleting an application workaround.
+
+## Output capability diagnostic resolution
+
+The failed attempt 03 above remains historical evidence. Diagnostic guidance
+landed in `e6bdd04c31dc574fc7e29a767d0e5688d78ccfab`: supplying `Stderr` to
+`out.print` still rejects with CAP-1, but now names expected `Stdout` and supplied
+`Stderr` and labels that argument. An omitted capability is reported separately.
+For the declared output pair only, an advisory note points to `err.print` when
+stderr is intended; there is no automatic edit or capability acquisition.
+
+Depplan's `err.print` repair remains semantically required to put error reports
+on stderr. Forward the correct typed capability explicitly; adding a `uses`
+clause cannot create one. The focused controls check and reachable-export legal
+repairs, preserve authority/brand/arity rejections, and execute one tiny launch
+with exact, distinct stdout and stderr bytes. The original failed call and its
+then-current message above are preserved rather than presented as current advice.
