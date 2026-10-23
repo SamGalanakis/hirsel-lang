@@ -281,6 +281,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_ahead_barrier(ctx: *mut TaskCtx) {
 }
 
 #[cfg(test)]
+mod qualification;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::tasks::*;
