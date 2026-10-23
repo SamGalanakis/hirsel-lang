@@ -163,3 +163,50 @@ impl SealSourceWitness {
         }
     }
 }
+
+/// Original-source storage inventory associated through the independently
+/// selected instance body. These are input data, never V/C authority supplied
+/// by a candidate unit or its source-anchor table.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SourceSeal {
+    pub reference: crate::invocations::ReferenceBody,
+    pub witness: SealSourceWitness,
+    pub events: Vec<SourceEvent>,
+    pub payloads: Vec<SourcePayload>,
+}
+snapshot_struct!(SourceSeal {
+    reference,
+    witness,
+    events,
+    payloads
+});
+impl SourceSeal {
+    pub fn check(&self) -> Result<(), &'static str> {
+        if self.reference.definition != self.witness.definition
+            || self.reference.instance != self.witness.instance
+            || self
+                .events
+                .iter()
+                .any(|event| event.anchor.body != self.reference.body)
+            || self
+                .payloads
+                .iter()
+                .any(|payload| payload.recipe.source.body != self.reference.body)
+        {
+            return Err("sealed source inventory names another reference body");
+        }
+        if self.witness
+            != SealSourceWitness::from_expectations(
+                self.witness.source,
+                self.reference.definition.clone(),
+                self.witness.implementation_revision,
+                self.reference.instance,
+                &self.events,
+                &self.payloads,
+            )
+        {
+            return Err("sealed source inventory differs from its source observation");
+        }
+        Ok(())
+    }
+}

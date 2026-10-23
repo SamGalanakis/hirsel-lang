@@ -19,6 +19,7 @@ pub mod fragment;
 pub mod fuel;
 pub mod glue;
 pub mod handle_scan;
+pub mod invocations;
 pub mod ir;
 pub mod layout;
 pub mod layout_index;
