@@ -685,3 +685,60 @@ fn resident_lower_completion_rechecks_its_private_validation_context() {
         assert_eq!(engine.lower_adapter_calls(&path), before + 1, "complete private V context changed");
     });
 }
+
+#[test]
+fn staged_evaluation_products_bind_arguments_and_local_completion_before_body_demand() {
+    with_compiler_stack(|| {
+        use hirsel_tir::TirProvider;
+        let source = "fn value[n:size]()->u64{comptime (n*n)}\n";
+        let owner = definition("value");
+        let store = Arc::new(store::MemStore::default());
+        let mut seed = signature_session(store.clone(), source, true);
+        let lowered = seed.lower_to_tir(&owner).unwrap();
+        let hidden = lowered.value.bodies.iter().flat_map(|b| &b.rvalues).find_map(|v| match v {
+            hirsel_tir::Rvalue::ReadConstant { definition, arguments } if !arguments.is_empty() => Some(definition.clone()),
+            _ => None,
+        }).unwrap();
+        let expected: Vec<_> = [2, 3].into_iter().map(|n| seed.constant_instance(&hidden, &[n]).unwrap()).collect();
+        let mut fresh = signature_session(store.clone(), source, false);
+        fresh.adapters.modes = None;
+        fresh.adapters.lowering = None;
+        fresh.register_staged_definition(&owner).unwrap();
+        for (n, expected) in [2, 3].into_iter().zip(&expected) {
+            let actual = fresh.constant_instance(&hidden, &[n]).unwrap();
+            assert_eq!(actual.root.kind, expected.root.kind, "selected size={n}");
+        }
+        assert_eq!(fresh.recompute_count(&owner, QueryKind::Modes), 0);
+        assert!(fresh.constant_instance(&hidden, &[4]).is_err(), "unpublished instance cannot alias a selected size");
+        assert!(fresh.constant_instance(&hidden, &[2, 3]).is_err(), "arity remains checked");
+
+        let copied = Arc::new(store::MemStore::default());
+        for (key, bytes) in store.take() {
+            store::ResultStore::put(&*copied, &key, &bytes);
+            store::ResultStore::put(&*store, &key, &bytes);
+        }
+        let mut remote = signature_session(copied, source, false);
+        remote.adapters.modes = None;
+        remote.adapters.lowering = None;
+        remote.register_staged_definition(&owner).unwrap();
+        assert!(remote.constant_instance(&hidden, &[2]).is_err(), "ordinary staged values cannot transfer private completion");
+
+        let edited = source.replace("n*n", "n+n");
+        let mut changed = signature_session(store.clone(), &edited, true);
+        changed.register_staged_definition(&owner).unwrap();
+        changed.adapters.modes = None;
+        changed.adapters.lowering = None;
+        assert!(changed.constant_instance(&hidden, &[2]).is_err(), "owner body edits invalidate all selected instances");
+
+        let off_store = Arc::new(store::MemStore::default());
+        let mut off = signature_session(off_store.clone(), source, true);
+        off.verify = Verify::Off;
+        off.register_staged_definition(&owner).unwrap();
+        off.constant_instance(&hidden, &[2]).unwrap();
+        let mut on = signature_session(off_store, source, true);
+        on.register_staged_definition(&owner).unwrap();
+        on.adapters.modes = None;
+        on.adapters.lowering = None;
+        assert!(on.constant_instance(&hidden, &[2]).is_err(), "VerifyOff staged products cannot mint private completion");
+    });
+}
