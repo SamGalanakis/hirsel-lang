@@ -1403,6 +1403,37 @@ impl Model {
                 );
                 state.origins.proofs[index] = proof;
             }
+            // A function or abstract T may contain borrowed captures. Its
+            // written root lifetime names actual retained dependencies, not
+            // callable-header metadata. Keep them in the independent hidden
+            // environment so copies/transfers cannot erase them with a wider
+            // receiving row; concrete data deep copies still detach as before.
+            let row = types.get(body.locals[local.0 as usize].ty).unwrap();
+            if matches!(row.kind, TypeKind::Function(_) | TypeKind::Parameter(_)) {
+                let mut retained = BTreeSet::new();
+                for reach in row.modes.relation.reaches() {
+                    let hirsel_types::Reach::Place(origin) = reach else {
+                        continue;
+                    };
+                    if arena(origin) {
+                        continue;
+                    }
+                    retained.insert(origin.clone());
+                    if let Some(identities) = state.origins.bindings.get(&origin.root) {
+                        for identity in identities {
+                            let mut identity = identity.clone();
+                            identity.fields.extend(&origin.fields);
+                            retained.insert(identity);
+                        }
+                    }
+                }
+                let environment =
+                    super::flow_origins::Environment::closure(retained, BTreeSet::new());
+                state
+                    .origins
+                    .environments
+                    .update(root, |current| current.join(&environment));
+            }
         }
         state
     }

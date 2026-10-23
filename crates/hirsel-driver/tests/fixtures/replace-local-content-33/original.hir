@@ -1,0 +1,6 @@
+fn keep[T: copyable](source: T, take seed: T) {
+  let mut current: T in current = take seed
+  let candidate = unique source
+  let old = replace(mut current, take candidate)
+}
+pub fn main() -> Result[(), ()] { Ok(()) }

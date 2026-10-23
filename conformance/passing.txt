@@ -12,6 +12,13 @@ GEN/GEN-6-package-identity-run.hir
 GEN/GEN-6-package-identity-version-bad.hir
 LANG/LANG-15-cursor-diagnostics-16-invalid.hir
 LANG/LANG-15-cursor-diagnostics-16-run.hir
+MODE/MODE-1-replace-local-content-33-borrowed-callable-run.hir
+MODE/MODE-1-replace-local-content-33-callable-run.hir
+MODE/MODE-1-replace-local-content-33-concrete-relation-run.hir
+MODE/MODE-1-replace-local-content-33-concrete-run.hir
+MODE/MODE-1-replace-local-content-33-mutation-bad.hir
+MODE/MODE-1-replace-local-content-33-projected-run.hir
+MODE/MODE-1-replace-local-content-33-retained-bad.hir
 conformance/CAP/CAP-1-acquire-net-result-run.hir
 conformance/CAP/CAP-1-acquire-random-result-run.hir
 conformance/CAP/CAP-1-acquire-stdout-result-run.hir

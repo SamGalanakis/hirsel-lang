@@ -1,0 +1,37 @@
+// rule: MODE-1
+// expect: run
+fn touch(mut xs: List[u64]) {
+  list.push(mut xs, 2u64)
+}
+
+fn probe(
+  mut xs: List[u64],
+  source: List[u64] in xs,
+  take seed: List[u64],
+  inspect: fn(List[u64]) -> u64
+) -> u64 {
+  let mut current: List[u64] in current = take seed
+  let candidate = unique source
+  let old = replace(mut current, take candidate)
+  touch(mut xs)
+  inspect(current)
+}
+
+fn size(xs: List[u64]) -> u64 {
+  list.len(xs)
+}
+
+pub fn main() -> Result[(), ()] {
+  let mut xs: List[u64] = [1u64]
+  let source: List[u64] = [3u64, 4u64]
+  if probe(mut xs, source, [], size) != 2u64 {
+    return Error(())
+  }
+  if list.len(xs) != 2u64 || xs[1u64] != 2u64 {
+    return Error(())
+  }
+  if list.len(source) != 2u64 {
+    return Error(())
+  }
+  Ok(())
+}

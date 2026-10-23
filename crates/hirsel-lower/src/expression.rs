@@ -1437,9 +1437,15 @@ impl Builder<'_, '_> {
             prepared.push((ordinal, value, a.value));
         }
         let evaluation_holders = self.evaluation_holders.split_off(pending);
+        let replacement = matches!(&callee, Some(Callee::Definition { path, .. })
+            if hirsel_types::core_roles::LoweredIntrinsic::for_definition(path)
+                == Some(hirsel_types::core_roles::LoweredIntrinsic::Replace));
         let mut entered = Vec::with_capacity(prepared.len());
         for (index, (ordinal, mut value, source)) in prepared.into_iter().enumerate() {
-            if constructor.is_none() && value.usage == UseKind::Mut {
+            // Replace writes the physical place itself, as assignment does.
+            // An invocation loan would turn an owned Local field into a lent
+            // access to caller storage and lose its receiving content contract.
+            if constructor.is_none() && value.usage == UseKind::Mut && !replacement {
                 let _ = self.loan(&mut value, self.span(source)?);
                 argument_dependencies[index].1 = self.operand_loans(&Operand {
                     place: value.place,

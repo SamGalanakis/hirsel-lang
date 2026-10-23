@@ -1,0 +1,13 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 8
+// twin: MODE/MODE-1-replace-local-content-33-callable-run.hir
+fn escape[T: copyable](source: T, take seed: T) -> T {
+  let mut current: T in current = take seed
+  let candidate = unique source
+  let old = replace(mut current, take candidate)
+  take current
+}
+
+pub fn main() -> Result[(), ()] {
+  Ok(())
+}

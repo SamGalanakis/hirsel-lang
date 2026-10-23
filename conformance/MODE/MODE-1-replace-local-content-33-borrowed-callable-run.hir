@@ -1,0 +1,40 @@
+// rule: MODE-1
+// expect: run
+fn observe(f: fn() -> u64) -> u64 {
+  f()
+}
+
+fn exercise[T: copyable](source: T, take seed: T, inspect: fn(T) -> u64) -> u64 {
+  let mut current: T in current = take seed
+  let candidate = unique source
+  let old = replace(mut current, take candidate)
+  let old_value = inspect(old)
+  let new_value = inspect(current)
+  let moved = replace(mut current, take old)
+  old_value + new_value + inspect(current) + inspect(moved)
+}
+
+fn with_source(source: fn() -> u64) -> u64 {
+  exercise(
+    source,
+    fn() -> u64 {
+      5u64
+    },
+    observe
+  )
+}
+
+fn loaned(text: String) -> u64 {
+  with_source(
+    fn() -> u64 {
+      string.byte_len(text)
+    }
+  )
+}
+
+pub fn main() -> Result[(), ()] {
+  if loaned("abc") != 16u64 {
+    return Error(())
+  }
+  Ok(())
+}

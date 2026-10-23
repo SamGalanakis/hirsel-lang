@@ -2821,6 +2821,29 @@ impl Checker<'_, '_> {
             state.slots[binding].value = slot;
         }
     }
+    /// The intrinsic's checked parameter ordinals, independently of argument order.
+    fn replacement_operands(
+        &self,
+        callee: ExprId,
+        arguments: &[hirsel_syntax::Argument],
+        requirements: &[Option<super::cfg::Requirement>],
+    ) -> Option<(ExprId, ExprId)> {
+        if self
+            .callee_definition(callee)
+            .and_then(hirsel_types::core_roles::LoweredIntrinsic::for_definition)
+            != Some(hirsel_types::core_roles::LoweredIntrinsic::Replace)
+        {
+            return None;
+        }
+        let argument = |parameter| {
+            arguments.iter().zip(requirements).find_map(|(a, r)| {
+                r.as_ref()
+                    .filter(|r| r.parameter == parameter)
+                    .map(|_| a.value)
+            })
+        };
+        Some((argument(0)?, argument(1)?))
+    }
     /// `replace` writes the destination's fixed receiving storage. Its
     /// inferred type argument can be Local because the first argument is a
     /// borrowed access; that does not admit Local content into caller storage.
@@ -2832,21 +2855,9 @@ impl Checker<'_, '_> {
         arguments: &[hirsel_syntax::Argument],
         requirements: &[Option<super::cfg::Requirement>],
     ) -> bool {
-        if self
-            .callee_definition(callee)
-            .and_then(hirsel_types::core_roles::LoweredIntrinsic::for_definition)
-            != Some(hirsel_types::core_roles::LoweredIntrinsic::Replace)
-        {
-            return true;
-        }
-        let argument = |parameter| {
-            arguments.iter().zip(requirements).find_map(|(a, r)| {
-                r.as_ref()
-                    .filter(|r| r.parameter == parameter)
-                    .map(|_| a.value)
-            })
-        };
-        let (Some(destination), Some(incoming)) = (argument(0), argument(1)) else {
+        let Some((destination, incoming)) =
+            self.replacement_operands(callee, arguments, requirements)
+        else {
             return true;
         };
         let Some(destination) = place(self.body, destination, self.source_rows) else {
@@ -3809,7 +3820,24 @@ impl Checker<'_, '_> {
         if self.loaned(state, place) {
             // A borrowed loop's source is a loan like any other; whether
             // SEM-4 owns its conflicts instead is spec #89.
-            self.report(
+            let retained = self.lender(state, place).flatten().and_then(|holder| {
+                let copy = state.slots[holder].value.unique_copy_site?;
+                let ExprKind::Unary {
+                    op: UnaryOp::Unique,
+                    value,
+                } = self.tree.expressions[copy.0 as usize].kind
+                else {
+                    return None;
+                };
+                let source = super::cfg::place(self.body, value, self.source_rows)?;
+                Some((
+                    self.span_of(copy),
+                    self.binding_site(source.binding).1,
+                    self.binding_site(place.binding).0,
+                    self.binding_site(holder).0,
+                ))
+            });
+            let diagnostic = self.report(
                 if call
                     && (self.capturer(state, place.binding).is_some()
                         || self.iterated(state, place)
@@ -3833,6 +3861,18 @@ impl Checker<'_, '_> {
                     )
                 },
             );
+            if let (Some(diagnostic), Some((copy, source, name, holder))) = (diagnostic, retained) {
+                diagnostic.secondary.push(hirsel_diag::Label {
+                    span: copy,
+                    message: "this abstract unique copy retains its source's borrowed dependencies"
+                        .into(),
+                });
+                diagnostic.secondary.push(hirsel_diag::Label {
+                    span: source,
+                    message: format!("the declared source relation keeps a dependency on `{name}`"),
+                });
+                diagnostic.notes.push(format!("End `{holder}` and every value derived from it before mutating `{name}`, or use a concrete type whose deep copy proves it retains no borrowed captures."));
+            }
             return false;
         }
         true
@@ -5244,7 +5284,50 @@ impl Checker<'_, '_> {
                                 );
                             }
                             value.unique_copy_site = Some(*expression);
-                            value.extract_unique(self.may_capture(*expression));
+                            let captures = self.may_capture(*expression);
+                            value.extract_unique(captures);
+                            if captures {
+                                // An abstract/function copy retains the named
+                                // source dependencies as well as its frame bound.
+                                // Unlike a concrete deep copy, it cannot prove
+                                // that no borrowed capture still reads them.
+                                for reach in value.modes.relation.reaches().to_vec() {
+                                    let Reach::Place(origin) = reach else {
+                                        continue;
+                                    };
+                                    if self.arenas.arena(&origin) {
+                                        continue;
+                                    }
+                                    let binding = self.body.bindings.iter().position(|binding| {
+                                        match (&origin.root, &binding.binding) {
+                                            (
+                                                OriginRoot::Parameter(ParameterRef::Body {
+                                                    scope,
+                                                    parameter,
+                                                }),
+                                                ResolvedName::Parameter(actual),
+                                            ) => {
+                                                *scope == self.body.lexical.site(binding.owner)
+                                                    && parameter == actual
+                                            }
+                                            (
+                                                OriginRoot::Local(owner, local),
+                                                ResolvedName::Local(actual),
+                                            ) => *owner == self.body.lexical && local == actual,
+                                            _ => false,
+                                        }
+                                    });
+                                    if let Some(binding) = binding {
+                                        let fields: Vec<_> =
+                                            origin.fields.iter().map(|field| field.0).collect();
+                                        value.read_within(
+                                            binding,
+                                            &fields,
+                                            Site::Expression(*expression),
+                                        );
+                                    }
+                                }
+                            }
                             self.deep_copy_sendability(*expression, &mut value);
                         }
                         value.modes.uniqueness = Uniqueness::Unique;
@@ -6870,6 +6953,19 @@ impl Checker<'_, '_> {
                 }
                 let environment_local =
                     !*constructor && self.value(state, *callee).environment_local();
+                let replacement = self
+                    .replacement_operands(*callee, arguments, requirements)
+                    .and_then(|(destination, incoming)| {
+                        let storage = place(self.body, destination, self.source_rows)?;
+                        let mut outgoing = state.slots[storage.binding].value.clone();
+                        outgoing.project_content(&storage.projections);
+                        Some((
+                            destination,
+                            storage,
+                            self.entry_value(state, incoming),
+                            outgoing,
+                        ))
+                    });
                 let mut value = Value::new(result.clone());
                 value.site = Some(*expression);
                 value.invalid = failed;
@@ -7427,6 +7523,77 @@ impl Checker<'_, '_> {
                         }
                     }
                 }
+                let replaced = replacement.is_some();
+                if let Some((destination, storage, mut incoming, outgoing)) = replacement {
+                    // The intrinsic transfers the old content's loans to its
+                    // result and the incoming loans to storage, as assignment
+                    // does. Its invocation access is neither one's content.
+                    if !self.property(*expression).is_some_and(|p| p.plain) {
+                        value.content = outgoing.content.clone();
+                        value.loans = outgoing.loans.clone();
+                        value.shared_parts = outgoing.shared_parts.clone();
+                        value.crossing_parts = outgoing.crossing_parts.clone();
+                        value.crossing_borrows = outgoing.crossing_borrows.clone();
+                        value.set_alias(None);
+                    }
+                    let access = match self.tree.expressions[destination.0 as usize].kind {
+                        ExprKind::Unary {
+                            op: UnaryOp::Mut,
+                            value,
+                        } => value,
+                        _ => destination,
+                    };
+                    // Fixed receiving lifetime, independent of the current
+                    // value and of the localized access used to infer T.
+                    value.modes.relation =
+                        if self.body.bindings[storage.binding].usage == UseKind::Mut {
+                            self.receiving_contract(storage.binding)
+                        } else if let Some(plan) = self.projection_lifetimes.get(&access) {
+                            self.physical_projection_modes(state, plan).relation
+                        } else {
+                            state.slots[storage.binding].declared.clone()
+                        };
+                    if !failed {
+                        if storage.projections.is_empty() {
+                            // A Local binding keeps the lifetime fixed at its
+                            // introduction, including any initial temporary bound.
+                            for (kind, scope, site) in outgoing.content.summary().scopes() {
+                                incoming.content.whole.insert(kind, On::Scope(scope), site);
+                            }
+                            if self.body.bindings[storage.binding].usage == UseKind::Mut {
+                                incoming.set_alias(outgoing.alias());
+                                incoming.modes.relation = outgoing.modes.relation.clone();
+                            }
+                            state.slots[storage.binding].value = incoming;
+                        } else {
+                            // Apply the same part receipts as assignment while
+                            // preserving every sibling's content and evidence.
+                            let mut shared = SharedParts::default();
+                            if incoming.modes.uniqueness != Uniqueness::Unique {
+                                shared.insert(vec![], *expression);
+                            }
+                            shared.install(&[], &incoming.shared_parts);
+                            let target = &mut state.slots[storage.binding].value;
+                            target.shared_parts.replace(&storage.projections, &shared);
+                            target
+                                .crossing_parts
+                                .set(&storage.projections, incoming.modes.sendability.clone());
+                            target
+                                .crossing_parts
+                                .install(&storage.projections, &incoming.crossing_parts);
+                            Arc::make_mut(&mut target.crossing_borrows)
+                                .retain(|borrow| !borrow.within.starts_with(&storage.projections));
+                            target.install_crossing_borrows(&storage.projections, &incoming);
+                            target.restrict_crossing_paths(self.retention_depth);
+                            target.replace_content(
+                                &storage.projections,
+                                &incoming,
+                                self.retention_depth,
+                                &self.arenas,
+                            );
+                        }
+                    }
+                }
                 self.receiving_scope(
                     &value,
                     self.graph.lifetimes.expressions[expression],
@@ -7439,7 +7606,7 @@ impl Checker<'_, '_> {
                 self.record(*expression, &mut value);
                 // Flow evidence, as V derives it; the published row stays
                 // the declared one (MODE-1).
-                if !*constructor {
+                if !*constructor && !replaced {
                     self.mut_content_bounds(
                         state,
                         &mut value,

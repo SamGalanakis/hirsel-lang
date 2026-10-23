@@ -1,0 +1,26 @@
+// rule: MODE-1
+// expect: run
+fn consume(take value: List[i64] in value) -> i64 {
+  value[0u64]
+}
+
+pub fn main() -> Result[(), ()] {
+  let source: List[i64] = [7i64]
+  let mut current: List[i64] in current = [11i64]
+  let candidate = unique copy source
+  let old = replace(mut current, take candidate)
+  if consume(take old) != 11i64 || current[0u64] != 7i64 {
+    return Error(())
+  }
+  list.push(mut current, 9i64)
+  let incoming: List[i64] = [13i64]
+  let discarded = replace(mut current, take incoming)
+  if current[0u64] != 13i64 || source[0u64] != 7i64 || list.len(source) != 1u64 {
+    return Error(())
+  }
+  list.push(mut current, 17i64)
+  if list.len(current) != 2u64 {
+    return Error(())
+  }
+  Ok(())
+}

@@ -1,0 +1,21 @@
+// rule: MODE-1
+// expect: run
+type State[T] {
+  current: T,
+}
+
+fn keep[T: copyable](source: T, take seed: T) {
+  let mut state: State[T] in state = State(current: take seed)
+  let candidate = unique source
+  let old = replace(mut state.current, take candidate)
+  let moved = replace(mut state.current, take old)
+}
+
+pub fn main() -> Result[(), ()] {
+  let source: List[i64] = [7i64]
+  keep(source, [11i64])
+  if source[0u64] != 7i64 {
+    return Error(())
+  }
+  Ok(())
+}

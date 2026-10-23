@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "replace_local_concrete",
+    "version": "1"
+  },
+  "sources": [
+    {
+      "path": "MODE-1-replace-local-content-33-concrete-run.hir",
+      "module": []
+    }
+  ],
+  "dependencies": [],
+  "entry": {
+    "module": [],
+    "name": "main"
+  }
+}

@@ -1,0 +1,23 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 17
+// twin: MODE/MODE-1-replace-local-content-33-callable-run.hir
+fn touch(mut xs: List[u64]) {
+  list.push(mut xs, 2u64)
+}
+
+fn probe[T: copyable](
+  mut xs: List[u64],
+  source: T in xs,
+  take seed: T,
+  inspect: fn(T) -> u64
+) -> u64 {
+  let mut current: T in current = take seed
+  let candidate = unique source
+  let old = replace(mut current, take candidate)
+  touch(mut xs)
+  inspect(current)
+}
+
+pub fn main() -> Result[(), ()] {
+  Ok(())
+}
