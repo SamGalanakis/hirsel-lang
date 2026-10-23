@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "package": {"name": "jsonpatchctl", "version": "0"},
+  "entry": {"module": [], "name": "main"},
+  "sources": [
+    {"module": [], "path": "main.hir"},
+    {"module": ["model"], "path": "model.hir"}
+  ],
+  "dependencies": [
+    {"manifest": "../../stdlib/std@1/hirsel.json", "package": {"name": "std", "version": "1"}, "expose": []}
+  ]
+}

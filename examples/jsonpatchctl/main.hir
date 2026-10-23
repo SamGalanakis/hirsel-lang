@@ -1,0 +1,70 @@
+const HELP: String = "Usage: jsonpatchctl DOCUMENT PATCH\n\nApply a bounded RFC 6902 patch; publish only after complete success.\nFiles are relative to the read-only input directory grant.\nLimits: 65536 bytes per file, 64 operations, depth 32, 32 pointer tokens.\n\nOptions:\n  --help  Print help\n"
+
+pub type AppError = Grant(GrantError) | Output(OutputError)
+
+type InvalidInput = Usage | Arguments(ArgError) | DirectoryGrant | Filename | Open(
+  FileError
+) | Read(file.ReadBoundedError) | Utf8 | Model(model.InputError)
+
+fn read(d: Dir, name: String) -> Result[String, InvalidInput] {
+  if !model.valid_name(name) {
+    return Error(Filename())
+  }
+  let mut source = file.open(d, path.of(name)) ? Open
+  let data = file.read_all_bounded(d, mut source, model.INPUT_BYTES)?
+  let Ok(text) = string.from_bytes(take data) else {
+    return Error(Utf8())
+  }
+  Ok(take text)
+}
+
+fn execute(rt: Io, args: Args) -> Result[String, InvalidInput] {
+  if arg.len(args) == 1 {
+    if arg.text(args, 0) ? Arguments == "--help" {
+      return Ok(HELP)
+    }
+  }
+  if arg.len(args) != 2 {
+    return Error(Usage())
+  }
+  let document_name = arg.text(args, 0) ? Arguments
+  let patch_name = arg.text(args, 1) ? Arguments
+  let Ok(directory) = io.dir(rt, path.of("input")) else {
+    return Error(DirectoryGrant())
+  }
+  let document = read(directory, document_name)?
+  let patch_text = read(directory, patch_name)?
+  let patched = model.apply(document, patch_text)?
+  Ok(model.success(patched)?)
+}
+
+fn describe(error: InvalidInput) -> model.Rejection uses {} {
+  match error {
+    Usage => model.simple("arguments", "Usage", "expected DOCUMENT PATCH or --help"),
+    Arguments(_) => model.simple("arguments", "Arguments", ""),
+    DirectoryGrant => model.simple("input", "DirectoryGrant", "input"),
+    Filename => model.simple(
+      "input",
+      "Filename",
+      "relative normalized path, at most 256 bytes"
+    ),
+    Open(_) => model.simple("input", "FileOpen", ""),
+    Read(Limit) => model.simple("input", "BytesLimit", ""),
+    Read(File(_)) => model.simple("input", "FileRead", ""),
+    Utf8 => model.simple("input", "Utf8", ""),
+    Model(cause) => model.describe(cause),
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[process.ExitCode, AppError] {
+  match execute(rt, args) {
+    Ok(output) => {
+      out.write(io.stdout(rt)?, string.as_bytes(output))?
+      Ok(process.SUCCESS)
+    },
+    Error(error) => {
+      err.write(io.stderr(rt)?, model.rejection(describe(error)))?
+      Ok(process.exit_code(2u8))
+    },
+  }
+}

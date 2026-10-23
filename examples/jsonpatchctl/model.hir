@@ -1,0 +1,255 @@
+// Usage and vectors follow json-patch lib.rs:340-385,440-490 and
+// tests/basic.rs:7-48 at 1b0f707f (MIT, Ivan Dubrov; see README.md).
+// std owns RFC6902; this module owns application bounds and result envelopes.
+pub const INPUT_BYTES: u64 = 65536
+
+pub type InputError = DocumentBytes | PatchBytes | Document(json.JsonError) | Patch(
+  json_patch.PatchError
+) | Encode(json.JsonError)
+
+pub type Rejection {
+  stage: String,
+  kind: String,
+  operation: Option[u64],
+  path: Option[String],
+  detail: String,
+}
+
+pub fn limits() -> json_patch.Limits uses {} {
+  json_patch.Limits(
+    max_bytes: INPUT_BYTES,
+    max_operations: 64,
+    max_depth: 32,
+    max_tokens: 32,
+    max_work: 10000000
+  )
+}
+
+// Both text inputs remain immutable snapshots. apply publishes an owned Option.
+pub fn apply(document: String, patch_text: String) -> Result[
+  Option[json.Value],
+  InputError
+] uses {} {
+  if string.byte_len(document) > INPUT_BYTES {
+    return Error(DocumentBytes())
+  }
+  if string.byte_len(patch_text) > INPUT_BYTES {
+    return Error(PatchBytes())
+  }
+  let original = json.parse(unique document) ? Document
+  let patch = json_patch.parse_text(unique patch_text, limits())?
+  Ok(json_patch.apply(Some(copy original), patch, limits())?)
+}
+
+pub fn success(value: Option[json.Value]) -> Result[String, InputError] uses {} {
+  match value {
+    Some(document) => {
+      let encoded = json.stringify(document) ? Encode
+      Ok(f"{{\"schema\":1,\"present\":true,\"document\":{encoded}}}\n")
+    },
+    None => Ok("{\"schema\":1,\"present\":false}\n"),
+  }
+}
+
+pub fn simple(stage: String, kind: String, detail: String) -> Rejection uses {} {
+  Rejection(
+    stage: unique stage,
+    kind: unique kind,
+    operation: None(),
+    path: None(),
+    detail: unique detail
+  )
+}
+
+fn json_detail(error: json.JsonError) -> String uses {} {
+  match error {
+    Syntax(at) => f"Syntax({at})",
+    DuplicateKey(at) => f"DuplicateKey({at})",
+    Nesting(at) => f"Nesting({at})",
+    InvalidNumber => "InvalidNumber",
+  }
+}
+
+fn patch_kind(kind: json_patch.ErrorKind) -> String uses {} {
+  match kind {
+    LimitsError => "LimitsError",
+    BytesLimit => "BytesLimit",
+    OperationsLimit => "OperationsLimit",
+    DepthLimit => "DepthLimit",
+    TokensLimit => "TokensLimit",
+    WorkLimit => "WorkLimit",
+    InvalidJson(_) => "InvalidJson",
+    Shape => "Shape",
+    Field(_) => "Field",
+    UnknownOperation => "UnknownOperation",
+    InvalidPath(_) => "InvalidPath",
+    MissingTarget => "MissingTarget",
+    MissingSource => "MissingSource",
+    InvalidIndex => "InvalidIndex",
+    MoveDescendant => "MoveDescendant",
+    TestFailed => "TestFailed",
+    InvalidNumber => "InvalidNumber",
+  }
+}
+
+pub fn describe(error: InputError) -> Rejection uses {} {
+  match error {
+    DocumentBytes => simple("document", "BytesLimit", ""),
+    PatchBytes => simple("patch", "BytesLimit", ""),
+    Document(cause) => simple("document", "InvalidJson", json_detail(cause)),
+    Encode(cause) => simple("output", "InvalidJson", json_detail(cause)),
+    Patch(cause) => {
+      let detail = match cause.kind {
+        InvalidJson(nested) => json_detail(nested),
+        Field(name) => unique name,
+        InvalidPath(at) => f"byte {at}",
+        _ => "",
+      }
+      Rejection(
+        stage: "patch",
+        kind: patch_kind(cause.kind),
+        operation: Some(cause.operation),
+        path: Some(unique cause.path),
+        detail: take detail
+      )
+    },
+  }
+}
+
+fn append(mut output: List[u8], text: String) -> () uses {} {
+  bytes.append(mut output, string.as_bytes(text))
+}
+
+// Every user-controlled string goes through the shipped JSON string writer.
+pub fn rejection(error: Rejection) -> Bytes uses {} {
+  let mut output: List[u8] = []
+  append(mut output, "{\"schema\":1,\"class\":\"invalid_input\",\"stage\":")
+  json.write_text_into(error.stage, mut output)
+  append(mut output, ",\"kind\":")
+  json.write_text_into(error.kind, mut output)
+  append(mut output, ",\"operation\":")
+  match error.operation {
+    Some(index) => append(mut output, f"{index}"),
+    None => append(mut output, "null"),
+  }
+  append(mut output, ",\"path\":")
+  match error.path {
+    Some(pointer) => json.write_text_into(pointer, mut output),
+    None => append(mut output, "null"),
+  }
+  append(mut output, ",\"detail\":")
+  json.write_text_into(error.detail, mut output)
+  append(mut output, "}\n")
+  bytes.from_list(take output)
+}
+
+pub fn valid_name(name: String) -> bool uses {} {
+  if name == "" || string.byte_len(name) > 256 || string.starts_with(name, "/") {
+    return false
+  }
+  for byte in string.as_bytes(name) {
+    if byte == 0 || byte == 92 || byte == 58 {
+      return false
+    }
+  }
+  for part in string.split(unique name, "/") {
+    if part == "" || part == "." || part == ".." {
+      return false
+    }
+  }
+  true
+}
+
+// Pure entry for the checked-heap helper and the source test runner. These
+// constants port upstream basic.rs:7-48 and lib.rs:440-464, not std output.
+@test
+pub fn verify() -> Result[(), String] uses {} {
+  let raw = r#"[{"op":"add","path":"/a/b","value":1},{"op":"remove","path":"/c"}]"#
+  let Ok(dom) = json.parse(copy raw) else {
+    return Error("parse vector JSON")
+  }
+  let Ok(from_value) = json_patch.parse(take dom, limits()) else {
+    return Error("parse add/remove value")
+  }
+  let value_ops = json_patch.operations(from_value)
+  if list.len(value_ops) != 2 {
+    return Error("value operation count")
+  }
+  let Add(value_path, Number(value_number)) = value_ops[0] else {
+    return Error("value add shape")
+  }
+  let Remove(value_removed) = value_ops[1] else {
+    return Error("value remove shape")
+  }
+  if json_patch.path_text(value_path) != "/a/b" || value_number != "1" || json_patch.path_text(
+    value_removed
+  ) != "/c" {
+    return Error("value paths/value")
+  }
+  let Ok(parsed) = json_patch.parse_text(take raw, limits()) else {
+    return Error("parse add/remove")
+  }
+  let ops = json_patch.operations(parsed)
+  if list.len(ops) != 2 {
+    return Error("operation count")
+  }
+  let Add(destination, Number(number)) = ops[0] else {
+    return Error("add shape")
+  }
+  let Remove(removed) = ops[1] else {
+    return Error("remove shape")
+  }
+  if json_patch.path_text(destination) != "/a/b" || number != "1" || json_patch.path_text(
+    removed
+  ) != "/c" {
+    return Error("parsed paths/value")
+  }
+  let Ok(original_value) = json.parse(r#"{"a":{},"c":2}"#) else {
+    return Error("fixture")
+  }
+  let original = Some(take original_value)
+  let alias = copy original
+  let Ok(updated) = json_patch.apply(original, parsed, limits()) else {
+    return Error("apply add/remove")
+  }
+  if success(updated) != Ok(
+    "{\"schema\":1,\"present\":true,\"document\":{\"a\":{\"b\":1}}}\n"
+  ) {
+    return Error("add/remove answer")
+  }
+  let Ok(failure) = json_patch.parse_text(
+    r#"[{"op":"remove","path":""},{"op":"test","path":"/c","value":2}]"#,
+    limits()
+  ) else {
+    return Error("failure fixture")
+  }
+  let Error(cause) = json_patch.apply(original, failure, limits()) else {
+    return Error("late failure accepted")
+  }
+  if cause.operation != 1 || cause.path != "/c" || cause.kind != MissingTarget() {
+    return Error("failure index/path")
+  }
+  if success(original) != success(alias) || success(original) != Ok(
+    "{\"schema\":1,\"present\":true,\"document\":{\"a\":{},\"c\":2}}\n"
+  ) || list.len(json_patch.operations(parsed)) != 2 {
+    return Error("input changed")
+  }
+  if apply("null", r#"[{"op":"remove","path":""}]"#) != Ok(None()) || apply(
+    "null",
+    "[]"
+  ) != Ok(Some(Null())) {
+    return Error("absence/null")
+  }
+  let Ok(happy) = apply(
+    r#"[{"name":"Andrew"},{"name":"Maxim"}]"#,
+    r#"[{"op":"test","path":"/0/name","value":"Andrew"},{"op":"add","path":"/0/happy","value":true}]"#
+  ) else {
+    return Error("upstream test/add")
+  }
+  if success(happy) != Ok(
+    "{\"schema\":1,\"present\":true,\"document\":[{\"name\":\"Andrew\",\"happy\":true},{\"name\":\"Maxim\"}]}\n"
+  ) {
+    return Error("upstream answer")
+  }
+  Ok(())
+}

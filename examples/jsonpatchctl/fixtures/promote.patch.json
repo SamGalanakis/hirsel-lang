@@ -1,0 +1,9 @@
+[
+  {"op":"test","path":"/revision","value":7},
+  {"op":"replace","path":"/replicas","value":3},
+  {"op":"add","path":"/checks/-","value":"canary"},
+  {"op":"copy","from":"/staging/timeout","path":"/timeout"},
+  {"op":"move","from":"/staging","path":"/previous"},
+  {"op":"replace","path":"/labels/team~1platform","value":"search"},
+  {"op":"replace","path":"/revision","value":8}
+]

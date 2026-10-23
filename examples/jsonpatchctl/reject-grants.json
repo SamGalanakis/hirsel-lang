@@ -1,0 +1,8 @@
+{
+  "io": {
+    "stdout": "stdout.bytes@1",
+    "stderr": "stderr.bytes@1",
+    "dirs": [{"path": "input", "host": "fixtures", "access": "read"}]
+  },
+  "args": ["deployment.json", "stale.patch.json"]
+}

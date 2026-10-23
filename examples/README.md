@@ -56,6 +56,7 @@ selects an explicit bound.
 | [wordscan](wordscan/main.hir) | Count newline characters, ASCII-whitespace words and UTF-8 bytes; print lines containing a substring (default `red`). |
 | [csvjson](csvjson/main.hir) | Bounded std CSV reader to JSON objects, with `--help`, optional file/`-` stdin, and `--base64-field NAME` to decode/re-encode a field and append its SHA-256 digest. Reject unequal widths and duplicate headers; explicit stderr grants enable escaped JSON error records. |
 | [configcheck](configcheck/README.md) | Validate explicitly selected TOML/YAML service settings into one typed model; normalized JSON, field paths, bounded read-only inputs. |
+| [jsonpatchctl](jsonpatchctl/README.md) | Apply a bounded RFC 6902 patch transactionally; preserve failure index/pointer and distinguish absent roots from null. |
 | [jsonquery](jsonquery/main.hir) | Extract a top-level JSON object member (default `flock`) and emit compact JSON. |
 | [logsummary](logsummary/main.hir) | Count the first whitespace-delimited severity token, case-insensitively, in first-seen order. |
 | [calculator](calculator/main.hir) | Evaluate one whitespace-separated integer expression per line, left to right; report malformed expressions and continue. Checked arithmetic retains language overflow failures. |
