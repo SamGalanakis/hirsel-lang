@@ -1622,7 +1622,13 @@ pub(crate) unsafe fn execute(
     };
     // Binding refused a fuel budget this code cannot enforce (`ProgramFacts::fueled`).
     let budgets = requested.as_ref().and_then(|run| run.budgets()).cloned();
-    let ordered = crate::tasks::ordered::admission::Admission::prepare(requested.as_ref())?;
+    // F0's explicit test channel replaces the logical schedule and suppresses
+    // worker startup below. It cannot also install the production Ordered policy.
+    let ordered = if hirsel_free::session::TestHook::from_env()?.is_some() {
+        None
+    } else {
+        crate::tasks::ordered::admission::Admission::prepare(requested.as_ref())?
+    };
     let ordered_enabled = ordered.is_some();
     let production_free = crate::free_launch::ENABLED
         && requested
