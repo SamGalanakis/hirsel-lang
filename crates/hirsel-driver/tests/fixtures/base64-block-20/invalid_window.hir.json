@@ -1,0 +1,39 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "application",
+    "version": "1"
+  },
+  "entry": {
+    "module": [],
+    "name": "main"
+  },
+  "sources": [
+    {
+      "path": "invalid_window.hir",
+      "module": []
+    },
+    {
+      "path": "window_cases.hir",
+      "module": [
+        "window_cases"
+      ]
+    },
+    {
+      "path": "oracle.hir",
+      "module": [
+        "oracle"
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "manifest": "../../../../../stdlib/std@1/hirsel.json",
+      "package": {
+        "name": "std",
+        "version": "1"
+      },
+      "expose": []
+    }
+  ]
+}

@@ -1,7 +1,7 @@
 // Go encoding/base64 @ ebe2feef, base64.go:328-408 decodeQuantum (BSD-3-Clause).
 // Quantum scan/padding/error precedence and byte offsets follow Go Strict().
 // Deviations: CR/LF rejected (strict RFC4648), typed error kinds, no partial output.
-// Bulk kernels port Rust base64 scalar general_purpose, with no assembly/SIMD.
+// Bulk kernels adapt aklomp/base64 generic lookup blocks; no SIMD shuffle exists.
 @serializable
 pub type Alphabet = Standard | UrlSafe
 
@@ -35,6 +35,53 @@ fn output_buffer(length: u64) -> unique List[u8] uses {} {
   take out
 }
 
+// aklomp/base64 e4cc438b lib/arch/generic/64/enc_loop.c:14-24,
+// lib/tables/table_enc_12bit.py:11-26: two output symbols per 12-bit index.
+// See third-party/LICENSE.aklomp-base64. Explicit shifts are endian independent.
+fn encode_pairs(alphabet: Alphabet) -> unique List[u16] uses {} {
+  let bytes = alphabet_bytes(alphabet)
+  let mut table: List[u16] = []
+  core@1/list.reserve(mut table, 4096)
+  let mut i = 0u64
+  while i < 4096 {
+    let a: u16 = core@1/int.widen(bytes[i >> 6])
+    let b: u16 = core@1/int.widen(bytes[i & 63])
+    core@1/list.push(mut table, a << 8 | b)
+    i += 1
+  }
+  take table
+}
+
+const ENCODE_STANDARD: List[u16] = comptime encode_pairs(Standard())
+const ENCODE_URL: List[u16] = comptime encode_pairs(UrlSafe())
+
+// aklomp/base64 e4cc438b lib/arch/generic/32/dec_loop.c:4-20:
+// shifted sextets and an error bit share each lookup. OR validates a block.
+// Unlike the C kernel, store exactly three output bytes (no overstore).
+fn decode_words(alphabet: Alphabet) -> unique List[u32] uses {} {
+  let bytes = alphabet_bytes(alphabet)
+  let mut table: List[u32] = []
+  core@1/list.reserve(mut table, 1024)
+  for _ in 0u64..1024 {
+    core@1/list.push(mut table, 0x80000000u32)
+  }
+  let mut i = 0u64
+  while i < 64 {
+    let byte: u64 = core@1/int.widen(bytes[i])
+    let value: u32 = core@1/int.truncate(i)
+    table[byte] = value << 18
+    table[256 + byte] = value << 12
+    table[512 + byte] = value << 6
+    table[768 + byte] = value
+    i += 1
+  }
+  take table
+}
+
+const DECODE_STANDARD: List[u32] = comptime decode_words(Standard())
+const DECODE_URL: List[u32] = comptime decode_words(UrlSafe())
+
+// Frozen shared tables avoid copying kilobytes of Inline lanes on each call.
 // Keep the complete loop in one unique mutable borrow: no per-byte detach.
 // Both literal tables have 64 ASCII bytes; masked indices stay within them.
 @noalloc
@@ -48,81 +95,87 @@ fn encode_into(
     Standard() => b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/",
     UrlSafe() => b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_",
   }
+  let pairs = match alphabet {
+    Standard() => ENCODE_STANDARD,
+    UrlSafe() => ENCODE_URL,
+  }
   let len = core@1/bytes.len(data)
   let mut i: u64 = 0
   let mut at: u64 = 0
-  // Four overlapping eight-byte reads consume 24 bytes, exactly as Rust's
-  // scalar fast loop. Keep two lookahead bytes inside the input interval.
-  // Check higher offsets first so their bounds dominate lower offsets.
-  while len - i >= 26 {
-    let b3_7: u64 = core@1/int.widen(data[i + 25])
-    let b3_6: u64 = core@1/int.widen(data[i + 24])
-    let b3_5: u64 = core@1/int.widen(data[i + 23])
-    let b3_4: u64 = core@1/int.widen(data[i + 22])
-    let b3_3: u64 = core@1/int.widen(data[i + 21])
-    let b3_2: u64 = core@1/int.widen(data[i + 20])
-    let b3_1: u64 = core@1/int.widen(data[i + 19])
-    let b3_0: u64 = core@1/int.widen(data[i + 18])
-    let value3 = b3_0 << 56 | b3_1 << 48 | b3_2 << 40 | b3_3 << 32 | b3_4 << 24 | b3_5 << 16 | b3_6 << 8 | b3_7
-    out[at + 31] = table[value3 >> 16 & 63]
-    out[at + 30] = table[value3 >> 22 & 63]
-    out[at + 29] = table[value3 >> 28 & 63]
-    out[at + 28] = table[value3 >> 34 & 63]
-    out[at + 27] = table[value3 >> 40 & 63]
-    out[at + 26] = table[value3 >> 46 & 63]
-    out[at + 25] = table[value3 >> 52 & 63]
-    out[at + 24] = table[value3 >> 58 & 63]
-    let b2_7: u64 = core@1/int.widen(data[i + 19])
-    let b2_6: u64 = core@1/int.widen(data[i + 18])
-    let b2_5: u64 = core@1/int.widen(data[i + 17])
-    let b2_4: u64 = core@1/int.widen(data[i + 16])
-    let b2_3: u64 = core@1/int.widen(data[i + 15])
-    let b2_2: u64 = core@1/int.widen(data[i + 14])
-    let b2_1: u64 = core@1/int.widen(data[i + 13])
-    let b2_0: u64 = core@1/int.widen(data[i + 12])
-    let value2 = b2_0 << 56 | b2_1 << 48 | b2_2 << 40 | b2_3 << 32 | b2_4 << 24 | b2_5 << 16 | b2_6 << 8 | b2_7
-    out[at + 23] = table[value2 >> 16 & 63]
-    out[at + 22] = table[value2 >> 22 & 63]
-    out[at + 21] = table[value2 >> 28 & 63]
-    out[at + 20] = table[value2 >> 34 & 63]
-    out[at + 19] = table[value2 >> 40 & 63]
-    out[at + 18] = table[value2 >> 46 & 63]
-    out[at + 17] = table[value2 >> 52 & 63]
-    out[at + 16] = table[value2 >> 58 & 63]
-    let b1_7: u64 = core@1/int.widen(data[i + 13])
-    let b1_6: u64 = core@1/int.widen(data[i + 12])
-    let b1_5: u64 = core@1/int.widen(data[i + 11])
-    let b1_4: u64 = core@1/int.widen(data[i + 10])
-    let b1_3: u64 = core@1/int.widen(data[i + 9])
-    let b1_2: u64 = core@1/int.widen(data[i + 8])
-    let b1_1: u64 = core@1/int.widen(data[i + 7])
-    let b1_0: u64 = core@1/int.widen(data[i + 6])
-    let value1 = b1_0 << 56 | b1_1 << 48 | b1_2 << 40 | b1_3 << 32 | b1_4 << 24 | b1_5 << 16 | b1_6 << 8 | b1_7
-    out[at + 15] = table[value1 >> 16 & 63]
-    out[at + 14] = table[value1 >> 22 & 63]
-    out[at + 13] = table[value1 >> 28 & 63]
-    out[at + 12] = table[value1 >> 34 & 63]
-    out[at + 11] = table[value1 >> 40 & 63]
-    out[at + 10] = table[value1 >> 46 & 63]
-    out[at + 9] = table[value1 >> 52 & 63]
-    out[at + 8] = table[value1 >> 58 & 63]
-    let b0_7: u64 = core@1/int.widen(data[i + 7])
-    let b0_6: u64 = core@1/int.widen(data[i + 6])
-    let b0_5: u64 = core@1/int.widen(data[i + 5])
-    let b0_4: u64 = core@1/int.widen(data[i + 4])
-    let b0_3: u64 = core@1/int.widen(data[i + 3])
-    let b0_2: u64 = core@1/int.widen(data[i + 2])
-    let b0_1: u64 = core@1/int.widen(data[i + 1])
-    let b0_0: u64 = core@1/int.widen(data[i + 0])
-    let value0 = b0_0 << 56 | b0_1 << 48 | b0_2 << 40 | b0_3 << 32 | b0_4 << 24 | b0_5 << 16 | b0_6 << 8 | b0_7
-    out[at + 7] = table[value0 >> 16 & 63]
-    out[at + 6] = table[value0 >> 22 & 63]
-    out[at + 5] = table[value0 >> 28 & 63]
-    out[at + 4] = table[value0 >> 34 & 63]
-    out[at + 3] = table[value0 >> 40 & 63]
-    out[at + 2] = table[value0 >> 46 & 63]
-    out[at + 1] = table[value0 >> 52 & 63]
-    out[at + 0] = table[value0 >> 58 & 63]
+  // Eight quanta consume exactly 24 bytes; no input overread.
+  while len - i >= 24 {
+    let c7: u64 = core@1/int.widen(data[i + 23])
+    let b7: u64 = core@1/int.widen(data[i + 22])
+    let a7: u64 = core@1/int.widen(data[i + 21])
+    let high7 = pairs[a7 << 4 | b7 >> 4]
+    let low7 = pairs[(b7 & 15) << 8 | c7]
+    out[at + 31] = core@1/int.truncate(low7)
+    out[at + 30] = core@1/int.truncate(low7 >> 8)
+    out[at + 29] = core@1/int.truncate(high7)
+    out[at + 28] = core@1/int.truncate(high7 >> 8)
+    let c6: u64 = core@1/int.widen(data[i + 20])
+    let b6: u64 = core@1/int.widen(data[i + 19])
+    let a6: u64 = core@1/int.widen(data[i + 18])
+    let high6 = pairs[a6 << 4 | b6 >> 4]
+    let low6 = pairs[(b6 & 15) << 8 | c6]
+    out[at + 27] = core@1/int.truncate(low6)
+    out[at + 26] = core@1/int.truncate(low6 >> 8)
+    out[at + 25] = core@1/int.truncate(high6)
+    out[at + 24] = core@1/int.truncate(high6 >> 8)
+    let c5: u64 = core@1/int.widen(data[i + 17])
+    let b5: u64 = core@1/int.widen(data[i + 16])
+    let a5: u64 = core@1/int.widen(data[i + 15])
+    let high5 = pairs[a5 << 4 | b5 >> 4]
+    let low5 = pairs[(b5 & 15) << 8 | c5]
+    out[at + 23] = core@1/int.truncate(low5)
+    out[at + 22] = core@1/int.truncate(low5 >> 8)
+    out[at + 21] = core@1/int.truncate(high5)
+    out[at + 20] = core@1/int.truncate(high5 >> 8)
+    let c4: u64 = core@1/int.widen(data[i + 14])
+    let b4: u64 = core@1/int.widen(data[i + 13])
+    let a4: u64 = core@1/int.widen(data[i + 12])
+    let high4 = pairs[a4 << 4 | b4 >> 4]
+    let low4 = pairs[(b4 & 15) << 8 | c4]
+    out[at + 19] = core@1/int.truncate(low4)
+    out[at + 18] = core@1/int.truncate(low4 >> 8)
+    out[at + 17] = core@1/int.truncate(high4)
+    out[at + 16] = core@1/int.truncate(high4 >> 8)
+    let c3: u64 = core@1/int.widen(data[i + 11])
+    let b3: u64 = core@1/int.widen(data[i + 10])
+    let a3: u64 = core@1/int.widen(data[i + 9])
+    let high3 = pairs[a3 << 4 | b3 >> 4]
+    let low3 = pairs[(b3 & 15) << 8 | c3]
+    out[at + 15] = core@1/int.truncate(low3)
+    out[at + 14] = core@1/int.truncate(low3 >> 8)
+    out[at + 13] = core@1/int.truncate(high3)
+    out[at + 12] = core@1/int.truncate(high3 >> 8)
+    let c2: u64 = core@1/int.widen(data[i + 8])
+    let b2: u64 = core@1/int.widen(data[i + 7])
+    let a2: u64 = core@1/int.widen(data[i + 6])
+    let high2 = pairs[a2 << 4 | b2 >> 4]
+    let low2 = pairs[(b2 & 15) << 8 | c2]
+    out[at + 11] = core@1/int.truncate(low2)
+    out[at + 10] = core@1/int.truncate(low2 >> 8)
+    out[at + 9] = core@1/int.truncate(high2)
+    out[at + 8] = core@1/int.truncate(high2 >> 8)
+    let c1: u64 = core@1/int.widen(data[i + 5])
+    let b1: u64 = core@1/int.widen(data[i + 4])
+    let a1: u64 = core@1/int.widen(data[i + 3])
+    let high1 = pairs[a1 << 4 | b1 >> 4]
+    let low1 = pairs[(b1 & 15) << 8 | c1]
+    out[at + 7] = core@1/int.truncate(low1)
+    out[at + 6] = core@1/int.truncate(low1 >> 8)
+    out[at + 5] = core@1/int.truncate(high1)
+    out[at + 4] = core@1/int.truncate(high1 >> 8)
+    let c0: u64 = core@1/int.widen(data[i + 2])
+    let b0: u64 = core@1/int.widen(data[i + 1])
+    let a0: u64 = core@1/int.widen(data[i + 0])
+    let high0 = pairs[a0 << 4 | b0 >> 4]
+    let low0 = pairs[(b0 & 15) << 8 | c0]
+    out[at + 3] = core@1/int.truncate(low0)
+    out[at + 2] = core@1/int.truncate(low0 >> 8)
+    out[at + 1] = core@1/int.truncate(high0)
+    out[at + 0] = core@1/int.truncate(high0 >> 8)
     i += 24
     at += 32
   }
@@ -209,7 +262,7 @@ fn sextet(byte: u8, alphabet: Alphabet) -> u32 uses {} {
   core@1/int.widen(value)
 }
 
-// Rust base64 general_purpose/decode.rs:224-306, eight input bytes to six.
+// aklomp/base64 generic shifted lookup blocks, sixteen input bytes to twelve.
 // Invalid or padded blocks fall back to Go's existing quantum parser from the
 // same input position, retaining its first-error and canonical-bit precedence.
 @noalloc
@@ -227,29 +280,50 @@ fn decode_into(
   }
   let mut at: u64 = 0
   let mut i: u64 = 0
-  // A single eight-symbol kernel avoids duplicating the fallible suffix in
-  // four helper calls; checked source loads replace Rust's read_u64.
-  while len - i >= 8 {
-    let b7: u64 = core@1/int.widen(table[core@1/int.widen(data[i + 7])])
-    let b6: u64 = core@1/int.widen(table[core@1/int.widen(data[i + 6])])
-    let b5: u64 = core@1/int.widen(table[core@1/int.widen(data[i + 5])])
-    let b4: u64 = core@1/int.widen(table[core@1/int.widen(data[i + 4])])
-    let b3: u64 = core@1/int.widen(table[core@1/int.widen(data[i + 3])])
-    let b2: u64 = core@1/int.widen(table[core@1/int.widen(data[i + 2])])
-    let b1: u64 = core@1/int.widen(table[core@1/int.widen(data[i + 1])])
-    let b0: u64 = core@1/int.widen(table[core@1/int.widen(data[i + 0])])
-    if b0 | b1 | b2 | b3 | b4 | b5 | b6 | b7 > 63 {
+  let words = match alphabet {
+    Standard() => DECODE_STANDARD,
+    UrlSafe() => DECODE_URL,
+  }
+  // Four quanta share one error test. Retry the untouched block through the
+  // existing quantum parser on any padding or invalid byte, preserving offsets.
+  while len - i >= 16 {
+    let d3_3: u64 = core@1/int.widen(data[i + 15])
+    let d3_2: u64 = core@1/int.widen(data[i + 14])
+    let d3_1: u64 = core@1/int.widen(data[i + 13])
+    let d3_0: u64 = core@1/int.widen(data[i + 12])
+    let v3 = words[d3_0] | words[256 + d3_1] | words[512 + d3_2] | words[768 + d3_3]
+    let d2_3: u64 = core@1/int.widen(data[i + 11])
+    let d2_2: u64 = core@1/int.widen(data[i + 10])
+    let d2_1: u64 = core@1/int.widen(data[i + 9])
+    let d2_0: u64 = core@1/int.widen(data[i + 8])
+    let v2 = words[d2_0] | words[256 + d2_1] | words[512 + d2_2] | words[768 + d2_3]
+    let d1_3: u64 = core@1/int.widen(data[i + 7])
+    let d1_2: u64 = core@1/int.widen(data[i + 6])
+    let d1_1: u64 = core@1/int.widen(data[i + 5])
+    let d1_0: u64 = core@1/int.widen(data[i + 4])
+    let v1 = words[d1_0] | words[256 + d1_1] | words[512 + d1_2] | words[768 + d1_3]
+    let d0_3: u64 = core@1/int.widen(data[i + 3])
+    let d0_2: u64 = core@1/int.widen(data[i + 2])
+    let d0_1: u64 = core@1/int.widen(data[i + 1])
+    let d0_0: u64 = core@1/int.widen(data[i + 0])
+    let v0 = words[d0_0] | words[256 + d0_1] | words[512 + d0_2] | words[768 + d0_3]
+    if (v0 | v1 | v2 | v3) & 0x80000000u32 != 0 {
       break
     }
-    let value = b0 << 42 | b1 << 36 | b2 << 30 | b3 << 24 | b4 << 18 | b5 << 12 | b6 << 6 | b7
-    out[at + 5] = core@1/int.truncate(value >> 0)
-    out[at + 4] = core@1/int.truncate(value >> 8)
-    out[at + 3] = core@1/int.truncate(value >> 16)
-    out[at + 2] = core@1/int.truncate(value >> 24)
-    out[at + 1] = core@1/int.truncate(value >> 32)
-    out[at + 0] = core@1/int.truncate(value >> 40)
-    i += 8
-    at += 6
+    out[at + 11] = core@1/int.truncate(v3 >> 0)
+    out[at + 10] = core@1/int.truncate(v3 >> 8)
+    out[at + 9] = core@1/int.truncate(v3 >> 16)
+    out[at + 8] = core@1/int.truncate(v2 >> 0)
+    out[at + 7] = core@1/int.truncate(v2 >> 8)
+    out[at + 6] = core@1/int.truncate(v2 >> 16)
+    out[at + 5] = core@1/int.truncate(v1 >> 0)
+    out[at + 4] = core@1/int.truncate(v1 >> 8)
+    out[at + 3] = core@1/int.truncate(v1 >> 16)
+    out[at + 2] = core@1/int.truncate(v0 >> 0)
+    out[at + 1] = core@1/int.truncate(v0 >> 8)
+    out[at + 0] = core@1/int.truncate(v0 >> 16)
+    i += 16
+    at += 12
   }
   while i < len {
     let start = i

@@ -1,0 +1,18 @@
+// Seed zero runs the union natively; each nonzero seed is one bounded
+// position/mode run under the interpreter and checked-H default step budgets.
+pub fn main(t: Test) -> Result[(), ()] {
+  let seed = test.seed(t)
+  if seed == 0 {
+    cases.invalid(Standard(), Required(), 0, 304)?
+    cases.invalid(Standard(), Omitted(), 0, 304)?
+    cases.invalid(UrlSafe(), Required(), 0, 304)?
+    cases.invalid(UrlSafe(), Omitted(), 0, 304)?
+  } else {
+    let index = seed - 1
+    let pos = index % 304
+    let alphabet: std@1/base64.Alphabet = if index / 304 < 2 { Standard() } else { UrlSafe() }
+    let padding: std@1/base64.Padding = if index / 304 % 2 == 0 { Required() } else { Omitted() }
+    cases.invalid(alphabet, padding, pos, pos + 1)?
+  }
+  Ok(())
+}

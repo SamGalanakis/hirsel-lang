@@ -1,0 +1,42 @@
+// Every invalid ASCII byte at every byte offset 0..304, in both alphabets and
+// padding modes. Non-ASCII input is tested as valid UTF-8: arbitrary invalid
+// UTF-8 byte strings cannot inhabit String. All valid multibyte leading bytes
+// are represented separately, with errors measured as UTF-8 byte offsets.
+fn check(input: String, alphabet: std@1/base64.Alphabet, padding: std@1/base64.Padding, at: u64) {
+  failure.check(std@1/base64.decode(input, alphabet, padding) == Error(InvalidByte(at)), TextInvariant())
+}
+
+pub fn invalid(alphabet: std@1/base64.Alphabet, padding: std@1/base64.Padding, start: u64, end: u64) -> Result[(), ()] {
+  for pos in start..end {
+    let mut data: List[u8] = []
+    for _ in 0u64..308 { list.push(mut data, b'A') }
+    for byte in 0u64..128 {
+      if byte == 61 { continue }
+      let value: u8 = int.truncate(byte)
+      if std@1/ascii.is_upper(value) || std@1/ascii.is_lower(value) || std@1/ascii.is_digit(value) { continue }
+      if alphabet == Standard() && (byte == 43 || byte == 47) { continue }
+      if alphabet == UrlSafe() && (byte == 45 || byte == 95) { continue }
+      data[pos] = value
+      let input = text.finish_valid(copy data)
+      check(input, alphabet, padding, pos)
+    }
+    // Every possible leading byte of well-formed non-ASCII UTF-8.
+    data[pos] = b'A'
+    for lead in 194u64..245 {
+      data[pos] = int.truncate(lead)
+      data[pos + 1] = if lead == 224 { 160 } else if lead == 240 { 144 } else { 128 }
+      if lead >= 224 { data[pos + 2] = 128u8 }
+      if lead >= 240 { data[pos + 3] = 128u8 }
+      check(text.finish_valid(copy data), alphabet, padding, pos)
+      data[pos + 1] = b'A'
+      data[pos + 2] = b'A'
+      data[pos + 3] = b'A'
+    }
+
+    data[pos] = b'='
+    let padded = text.finish_valid(take data)
+    // Padding errors carry parser-specific offsets, compared to the frozen oracle.
+    failure.check(std@1/base64.decode(padded, alphabet, padding) == oracle.decode(padded, alphabet, padding), TextInvariant())
+  }
+  Ok(())
+}

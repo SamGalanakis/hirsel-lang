@@ -1,0 +1,66 @@
+
+fn check(data: Bytes, alphabet: std@1/base64.Alphabet, padding: std@1/base64.Padding) {
+  let expected = oracle.encode(data, alphabet, padding)
+  failure.check(std@1/base64.encode(data, alphabet, padding) == expected, TextInvariant())
+  failure.check(std@1/base64.decode(expected, alphabet, padding) == Ok(data), TextInvariant())
+}
+
+fn decode_check(data: String, alphabet: std@1/base64.Alphabet, padding: std@1/base64.Padding) {
+  failure.check(
+    std@1/base64.decode(data, alphabet, padding) == oracle.decode(data, alphabet, padding),
+    TextInvariant()
+  )
+}
+
+fn variants(data: Bytes) {
+  check(data, Standard(), Required())
+  check(data, Standard(), Omitted())
+  check(data, UrlSafe(), Required())
+  check(data, UrlSafe(), Omitted())
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let batch = test.seed(t)
+  let mut seed = 20261023u32
+  // Every length through 300 and arbitrary high/low bytes, across all four modes.
+  for length in 0u64..301 {
+    if batch != 0 && length != (batch - 1) % 301 { continue }
+    seed = u32.wrapping_add(20261023, int.truncate(length))
+    let mut data: List[u8] = []
+    for _ in 0u64..length {
+      seed = u32.wrapping_add(u32.wrapping_mul(seed, 1664525), 1013904223)
+      list.push(mut data, int.truncate(seed >> 24))
+    }
+    variants(bytes.from_list(take data))
+  }
+  if batch <= 1 {
+  // RFC4648, including short tails, and maximal-byte blocks.
+  variants(b"f")
+  variants(b"fo")
+  variants(b"foo")
+  variants(b"foob")
+  variants(b"fooba")
+  variants(b"foobar")
+  let mut maximal: List[u8] = []
+  for _ in 0u64..300 { list.push(mut maximal, 255u8) }
+  variants(bytes.from_list(take maximal))
+  }
+  // Random malformed inputs exercise fallible bulk blocks and parser precedence.
+  for case in 0u64..600 {
+    if batch != 0 && case != batch - 1 { continue }
+    seed = u32.wrapping_add(20261623, int.truncate(case))
+    let mut data: List[u8] = []
+    seed = u32.wrapping_add(u32.wrapping_mul(seed, 1664525), 1013904223)
+    let length: u64 = int.widen(seed % 301u32)
+    for _ in 0u64..length {
+      seed = u32.wrapping_add(u32.wrapping_mul(seed, 1664525), 1013904223)
+      list.push(mut data, int.truncate(seed >> 24 & 127u32))
+    }
+    let input = text.finish_valid(take data)
+    decode_check(input, Standard(), Required())
+    decode_check(input, Standard(), Omitted())
+    decode_check(input, UrlSafe(), Required())
+    decode_check(input, UrlSafe(), Omitted())
+  }
+  Ok(())
+}
