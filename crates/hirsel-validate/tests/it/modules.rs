@@ -14,3 +14,4 @@ mod generic_result_v_21;
 mod generic_bound_22;
 mod nominal_authority_22;
 mod match_coverage_22;
+mod authority_call_22;

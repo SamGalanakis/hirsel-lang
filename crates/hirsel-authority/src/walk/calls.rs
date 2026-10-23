@@ -1464,7 +1464,7 @@ impl Checker<'_> {
                                 !self.t.get(ty).unwrap().modes.relation.is_global()
                             }))
                     {
-                        receipt_required = match &f.uses {
+                        let callee_required = match &f.uses {
                             Uses::Unrestricted => {
                                 self.receipt_authority(callee, AuthoritySummary::Unknown, &frame)
                             }
@@ -1473,6 +1473,15 @@ impl Checker<'_> {
                                 &receipt_arguments,
                                 &generic_authorities,
                             )),
+                        };
+                        // Discharging the callee's environment does not erase
+                        // known declaration charges on its actual parameters.
+                        // An unrestricted selected callback has unknown ambient
+                        // evidence, discharged only by that exact receipt.
+                        receipt_required = if f.authority == AuthoritySummary::Unknown {
+                            callee_required
+                        } else {
+                            receipt_required.join(callee_required)
                         };
                         // Selecting the callee never selects callbacks supplied to it.
                         for (ty, authority) in args.iter().zip(&receipt_arguments) {

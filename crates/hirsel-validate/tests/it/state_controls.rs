@@ -237,6 +237,10 @@ fn captured_state(mutable: bool) -> Fixture {
         };
         fun.parameters[1].passing = PassingMode::Take;
     }
+    // The fixture tests state promises, with no ambient authority restriction.
+    if let SignatureKind::Function(owner) = &mut f.signatures.get_mut(&path("main")).unwrap().kind {
+        owner.uses = Uses::Unrestricted;
+    }
     let mut nested = f.body().clone();
     nested.parameter_scope = scoped(NameSite::Expression(hirsel_syntax::ExprId(0)));
     nested.parameters.clear();

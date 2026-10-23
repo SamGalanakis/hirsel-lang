@@ -23,7 +23,7 @@ impl Checker<'_> {
         Some(function)
     }
 
-    fn invocation_header(&self) -> Option<&FunctionType> {
+    pub(super) fn invocation_header(&self) -> Option<&FunctionType> {
         if self.site.body == self.definition.entry {
             return self
                 .signatures
@@ -502,17 +502,25 @@ impl Checker<'_> {
                 }
             })
             .collect();
-        let allowed = parameters.iter().cloned().fold(
-            Self::instantiated_authority(allowed, &parameters, &generics),
-            AuthoritySummary::join,
-        );
-        Some(allowed)
+        let allowed = Self::instantiated_authority(allowed, &parameters, &generics);
+        // Named definitions promise the written ceiling. Their inputs are
+        // provision, not permission to widen it. Nested callable inputs enter
+        // independently of the capture ceiling (CLO-2).
+        Some(if self.site.body == self.definition.entry {
+            allowed
+        } else {
+            parameters.into_iter().fold(allowed, AuthoritySummary::join)
+        })
     }
 
     /// Trace whole-value staging to this callable's own parameters. Captures,
     /// calls and projected writes cannot claim parameter provision; flow still
     /// independently proves availability and authority at the invocation.
-    fn parameter_callback(&self, place: PlaceId, selected: Option<&AuthoritySummary>) -> bool {
+    pub(super) fn parameter_callback(
+        &self,
+        place: PlaceId,
+        selected: Option<&AuthoritySummary>,
+    ) -> bool {
         let mut pending = vec![place];
         let mut seen = BTreeSet::new();
         let mut parameter = false;

@@ -1,12 +1,31 @@
 //! Capability authority follows values derived inside the frame (spec #58).
 use super::*;
+use hirsel_types::{AuthoritySummary, AuthorityTerm, ParameterRef, SignatureKind, Uses};
+
+// Unknown is missing evidence, never a finite restriction's permission.
+fn within(actual: &AuthoritySummary, allowed: &AuthoritySummary) -> bool {
+    actual == &AuthoritySummary::inert()
+        || matches!(allowed, AuthoritySummary::Known(_)) && actual.is_subset_of(allowed)
+}
 
 impl Checker<'_> {
     pub(super) fn initial_authority(&self, model: &Model, state: &mut State) {
         let allowed = self.frame_authority();
         for (root, local) in self.body.locals.iter().enumerate() {
-            let valid = self.body.parameters.contains(&LocalId(root as u32))
-                || local.storage == Storage::Capture
+            let parameter = self
+                .body
+                .parameters
+                .iter()
+                .position(|p| p.0 as usize == root);
+            let valid = parameter.is_some_and(|ordinal| {
+                if self.site.body != self.definition.entry || allowed.is_none() {
+                    return true;
+                }
+                let authority = self.authority_with_generics(self.t, local.ty, &self.generic_declarations());
+                within(&authority, allowed.as_ref().unwrap())
+                    || self.invocation_header().is_some_and(|header| matches!(&header.uses,
+                        Uses::Only(AuthoritySummary::Known(terms)) if terms.contains(&AuthorityTerm::Parameter(ParameterRef::bound(hirsel_types::ParamId(ordinal as u32))))))
+            }) || local.storage == Storage::Capture
                     && allowed.as_ref().is_none_or(|allowed| {
                         self.authority_with_generics(self.t, local.ty, &self.generic_declarations())
                             .is_subset_of(allowed)
@@ -85,7 +104,12 @@ impl Checker<'_> {
                 Callee::Indirect { value, .. } => self.operand_authority(model, state, value.place),
                 Callee::Definition { .. } => true,
             };
-        if self.frame_authority().is_some() && !valid {
+        let permitted = if self.site.body == self.definition.entry {
+            self.entry_call_authority(model, state, callee, arguments)
+        } else {
+            valid
+        };
+        if self.frame_authority().is_some() && !permitted {
             self.flow_error(
                 report,
                 ViolationKind::TypeMismatch {
@@ -94,5 +118,110 @@ impl Checker<'_> {
             );
         }
         valid
+    }
+
+    /// Check the named body's written uses against this call's actual receipts.
+    /// Parameter IDs select declaration slots, independently of operand order.
+    /// Flow discharges authorized derivations; an unselected operand retains its
+    /// own summary so one selected receipt cannot hide a known sibling.
+    fn entry_call_authority(
+        &self,
+        model: &Model,
+        state: &State,
+        callee: &Callee,
+        arguments: &[CallArgument],
+    ) -> bool {
+        let Some(allowed) = self.frame_authority() else {
+            return true;
+        };
+        let (function, generics) = match callee {
+            Callee::Definition { path, arguments } => {
+                let Some(signature) = self.signatures.get(path) else {
+                    return false;
+                };
+                let SignatureKind::Function(function) = &signature.kind else {
+                    return false;
+                };
+                (function, arguments)
+            }
+            Callee::Indirect {
+                value, arguments, ..
+            } => {
+                let Some(row) = self.t.get(self.place_type(value.place)) else {
+                    return false;
+                };
+                let TypeKind::Function(function) = &row.kind else {
+                    return false;
+                };
+                (function, arguments)
+            }
+        };
+        let receipt = |place| {
+            if self.operand_authority(model, state, place) {
+                AuthoritySummary::inert()
+            } else {
+                self.authority_with_generics(
+                    self.t,
+                    self.place_type(place),
+                    &self.generic_declarations(),
+                )
+            }
+        };
+        let mut parameters = vec![AuthoritySummary::Unknown; function.parameters.len()];
+        for argument in arguments {
+            if let Some(parameter) = parameters.get_mut(argument.parameter.0 as usize) {
+                *parameter = receipt(argument.value.place);
+            }
+        }
+        let generics: Vec<_> = generics
+            .iter()
+            .map(|argument| match argument {
+                GenericArgument::Type(ty) => {
+                    self.authority_with_generics(self.t, *ty, &self.generic_declarations())
+                }
+                GenericArgument::Size(_) => AuthoritySummary::inert(),
+            })
+            .collect();
+        let mut required = if function.authority == AuthoritySummary::Unknown {
+            match callee {
+                Callee::Indirect { value, .. }
+                    if self
+                        .invocation_header()
+                        .is_some_and(|header| match &header.uses {
+                            Uses::Only(selected) => {
+                                self.parameter_callback(value.place, Some(selected))
+                            }
+                            Uses::Unrestricted => false,
+                        }) =>
+                {
+                    AuthoritySummary::inert()
+                }
+                _ => AuthoritySummary::Unknown,
+            }
+        } else {
+            Self::instantiated_authority(&function.authority, &parameters, &generics)
+        };
+        if let Uses::Only(uses) = &function.uses {
+            required = required.join(Self::instantiated_authority(uses, &parameters, &generics));
+        }
+        for argument in arguments {
+            if function
+                .parameters
+                .get(argument.parameter.0 as usize)
+                .is_some_and(|p| {
+                    p.passing == hirsel_syntax::PassingMode::Borrow
+                        && matches!(
+                            self.t.get(p.ty).map(|t| &t.kind),
+                            Some(TypeKind::Function(_))
+                        )
+                })
+            {
+                required = required.join(receipt(argument.value.place));
+            }
+        }
+        if let Callee::Indirect { value, .. } = callee {
+            required = required.join(receipt(value.place));
+        }
+        within(&required, &allowed)
     }
 }

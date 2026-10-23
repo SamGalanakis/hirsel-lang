@@ -1,0 +1,17 @@
+// rule: CAP-1
+// expect: reject CAP-1 at line 16
+// twin: CAP/CAP-1-authority-call-22-stored-ok.hir
+// A stored generic callable retains both selected actual authorities.
+type Packet {
+  tag: u64,
+  directory: Dir,
+  network: Net,
+}
+
+fn effect[S](record: S) uses {record} {}
+
+pub fn main(d: Dir, n: Net) uses {Dir} {
+  let record = Packet(tag: 0u64, directory: d, network: n)
+  let f: fn(Packet) -> () = effect
+  f(record)
+}

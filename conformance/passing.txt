@@ -12,6 +12,8 @@ conformance/CAP/CAP-1-arg-len-parameter-ok.hir
 conformance/CAP/CAP-1-arg-snapshot-run.hir
 conformance/CAP/CAP-1-arg-text-parameter-bad.hir
 conformance/CAP/CAP-1-arg-text-parameter-ok.hir
+conformance/CAP/CAP-1-authority-call-22-stored-bad.hir
+conformance/CAP/CAP-1-authority-call-22-stored-ok.hir
 conformance/CAP/CAP-1-bufio-stdin-run.hir
 conformance/CAP/CAP-1-captured-dictionary-bad.hir
 conformance/CAP/CAP-1-captured-dictionary-ok.hir

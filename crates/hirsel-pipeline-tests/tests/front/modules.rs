@@ -47,3 +47,4 @@ mod generic_result_v_21;
 mod unique_join_history;
 mod generic_bound_22;
 mod match_coverage_22;
+mod authority_call_22;

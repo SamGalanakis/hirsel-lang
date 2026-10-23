@@ -909,3 +909,86 @@ fn nongeneric_calls_skip_refinement_walks_but_generic_calls_keep_them() {
         }
     }
 }
+
+#[test]
+fn selected_callable_receipt_keeps_actual_parameter_authority() {
+    for allowed in [false, true] {
+        let mut f = Fixture::new();
+        let dir = f.capability("Dir", CapabilityKind::Global);
+        let net = f.capability("Net", CapabilityKind::Global);
+        let mut callback = function(f.unit);
+        callback.parameters = vec![
+            parameter(dir, PassingMode::Borrow),
+            parameter(net, PassingMode::Borrow),
+        ]
+        .into();
+        callback.authority = AuthoritySummary::Known(
+            vec![
+                AuthorityTerm::Parameter(ParameterRef::bound(ParamId(0))),
+                AuthorityTerm::Parameter(ParameterRef::bound(ParamId(1))),
+            ]
+            .into(),
+        );
+        callback.uses = Uses::Unrestricted;
+        let callback = f.ty(TypeKind::Function(callback));
+        let callee = f.binding(
+            ResolvedName::Parameter(ParamId(0)),
+            callback,
+            NameSite::Item,
+            UseKind::Borrow,
+            false,
+        );
+        let d = f.binding(
+            ResolvedName::Parameter(ParamId(1)),
+            dir,
+            NameSite::Item,
+            UseKind::Borrow,
+            false,
+        );
+        let n = f.binding(
+            ResolvedName::Parameter(ParamId(2)),
+            net,
+            NameSite::Item,
+            UseKind::Borrow,
+            false,
+        );
+        if let SignatureKind::Function(signature) = &mut f.signature.kind {
+            signature.parameters = vec![
+                parameter(callback, PassingMode::Borrow),
+                parameter(dir, PassingMode::Borrow),
+                parameter(net, PassingMode::Borrow),
+            ]
+            .into();
+            let mut terms = vec![
+                AuthorityTerm::Parameter(ParameterRef::bound(ParamId(0))),
+                AuthorityTerm::Capability(path("Dir")),
+            ];
+            if allowed {
+                terms.push(AuthorityTerm::Capability(path("Net")));
+            }
+            signature.uses = Uses::Only(AuthoritySummary::Known(terms.into()));
+        }
+        let root = f.expr(
+            ExprKind::Call {
+                callee,
+                arguments: vec![
+                    hirsel_syntax::Argument {
+                        label: None,
+                        value: d,
+                    },
+                    hirsel_syntax::Argument {
+                        label: None,
+                        value: n,
+                    },
+                ],
+            },
+            f.unit,
+        );
+        let out = f.finish(root);
+        if allowed {
+            clean(&out)
+        } else {
+            rejected(&out, "CAP-1")
+        }
+    }
+}
