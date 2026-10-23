@@ -1113,6 +1113,11 @@ impl<'a> Checker<'a> {
         }
         self.error(ViolationKind::TypeMismatch { entity });
     }
+    fn resolved_cleanup(&self, ty: TypeId) -> DropAllocation {
+        let resolved = instantiate_cleanup_bounds(self.t, ty, self.generic_declarations())
+            .unwrap_or_else(|error| self.proof_failure(error, ty));
+        self.t.get(resolved).unwrap().drop_allocation.clone()
+    }
     pub(super) fn received_type(
         &self,
         store: &TypeInterner,
@@ -1441,6 +1446,11 @@ impl<'a> Checker<'a> {
                 self.signatures.get(path).cloned().map(std::sync::Arc::new),
             )
         };
+        // A callback may retain a conditional cleanup row from its signature.
+        // Resolve only bounds of the exact declaring binder before comparing
+        // owned receipts; no receiving row supplies a cleanup proof (GEN-1/MEM-5).
+        let expected = instantiate_cleanup_bounds(store, expected, context)?;
+        let actual = instantiate_cleanup_bounds(store, actual, context)?;
         let expected = self.canonical_plain(store, expected);
         let actual = self.canonical_plain(store, actual);
         let mut memo = hirsel_types::ContextMemo::new(store, context, &mut lookup);
@@ -3173,9 +3183,7 @@ impl<'a> Checker<'a> {
                         expected_field = store.intern(receiving);
                         // Cleanup summaries remain exact. Placement uses the
                         // shared Value relation: heap values outlive arenas.
-                        if store.get(*t).unwrap().drop_allocation
-                            != store.get(actual).unwrap().drop_allocation
-                        {
+                        if self.resolved_cleanup(*t) != self.resolved_cleanup(actual) {
                             self.error(ViolationKind::TypeMismatch {
                                 entity: "constructor field",
                             });
@@ -4135,9 +4143,7 @@ impl<'a> Checker<'a> {
             } else {
                 actual
             };
-            let declared = store.get(expected).unwrap();
-            let supplied = store.get(actual).unwrap();
-            if declared.drop_allocation != supplied.drop_allocation {
+            if self.resolved_cleanup(expected) != self.resolved_cleanup(actual) {
                 self.error(ViolationKind::TypeMismatch {
                     entity: "constructor field",
                 });
