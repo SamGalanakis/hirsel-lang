@@ -606,6 +606,23 @@ impl Importer<'_> {
                         return Ok(Step2::Skip);
                     }
                     let p = self.place(*place)?;
+                    if tp.projection.is_empty()
+                        && self.borrowed_storage(p.slot)
+                        && self.out.types[p.ty.index()].repr == ValueRepr::Arena
+                        && self.body.arena_scope_grant.as_ref().is_some_and(|grant| {
+                            self.body.parameters.get(grant.arena_parameter.0 as usize)
+                                == Some(&tp.root)
+                                && hirsel_types::core_roles::arena_scope_callback(&grant.intrinsic)
+                                    == Some(grant.callback_parameter.0)
+                        })
+                    {
+                        // V-qualified scope grants have logical cleanup even
+                        // with the public borrowed Arena spelling. The native
+                        // token is inert: its opener owns the physical guard
+                        // and closes it after the callback on either outcome.
+                        // This is not a drop of the borrowed parameter storage.
+                        return Ok(Step2::Skip);
+                    }
                     if matches!(self.out.slots[p.slot.index()].kind, SlotKind::Capture(_)) {
                         // A closure's captures are its caller's environment,
                         // lent for the call: the environment releases them.
