@@ -4,7 +4,7 @@
 fn fits(cap: u64) -> u64 {
   let outcome = arena.bounded(
     cap,
-    fn(a: Arena) -> Region[SortedMap[u64, Bytes] of u64.order] {
+    fn(a: Arena) {
       let mut root: SortedMap[u64, Bytes] of u64.order in a = sorted_map.empty(
         u64.order
       )
