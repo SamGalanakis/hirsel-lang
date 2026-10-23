@@ -492,6 +492,7 @@ fn assemble(
         .map_err(|e| failed(format!("plan layout preflight: {e:?}")))?;
     let mut ready = ReadyProgram {
         entries: super::stages::summary_entries(&summaries),
+        callee_facts: None,
         foreign_dispatch: BTreeMap::new(),
         semantic_owners: plan.owners.iter().cloned().collect(),
         semantic_units: None,

@@ -1797,6 +1797,9 @@ pub(crate) unsafe fn execute(
         .and_then(|run| run.record().io.as_ref())
         .is_some_and(|io| !io.runners.is_empty())
     {
+        // The production execution seam remains gated until runner acceptance.
+        // Check descriptor authority before considering any harness-only path.
+        program.runner_callees()?;
         return Err("runners run natively only under the harness launcher".into());
     }
     let harness_text = |name: &str| match std::env::var(name) {

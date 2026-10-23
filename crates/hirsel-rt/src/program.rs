@@ -6,6 +6,9 @@
 use crate::isolate::FailureTable;
 use crate::launch::{Config, Entry, RootsEntry, TestEntry, ZeroEntry};
 use crate::{ABI_VERSION, Layout};
+mod callees;
+#[doc(hidden)]
+pub use callees::identity as callee_identity;
 
 /// [`ProgramDescriptor::flags`]: the program calls C outside a deterministic wrapper, so its
 /// runs cannot be recorded or replayed (PROG-4).
@@ -57,6 +60,14 @@ pub struct ProgramDescriptor {
     /// RUN-3 Entry authority. These rows never grant runner entry admission.
     pub value_codes: *const EntryRow,
     pub value_code_count: u64,
+    /// ABI 49: canonical CalleeFacts JSON, sealed with the program identity.
+    /// Missing data carries no authority to launch production runner calls.
+    pub callee_facts: *const u8,
+    pub callee_facts_length: u64,
+    /// Code references for the facts; each must match the RUN-3 Entry table.
+    pub callee_codes: *const EntryRow,
+    pub callee_code_count: u64,
+    pub callee_identity: [u8; 32],
 }
 
 /// One row of [`ProgramDescriptor::entries`].
@@ -114,6 +125,7 @@ pub struct Program {
     /// Each Entry's code word and its definition's full path.
     pub(crate) entries: Vec<(usize, String)>,
     pub(crate) value_codes: std::sync::Arc<std::collections::BTreeMap<usize, String>>,
+    pub(crate) callees: Option<std::collections::BTreeMap<String, hirsel_run_schema::CalleeFacts>>,
 }
 
 impl Program {
@@ -124,15 +136,19 @@ impl Program {
     /// for as long as the program and its runs exist.
     pub unsafe fn load(descriptor: *const ProgramDescriptor) -> Result<Program, String> {
         // SAFETY: caller contract.
-        let Some(d) = (unsafe { descriptor.as_ref() }) else {
+        if descriptor.is_null() {
             return Err("missing program descriptor".into());
-        };
-        if d.abi_version != ABI_VERSION {
+        }
+        // Read the common prefix before borrowing the current descriptor:
+        // older ABI records may be shorter than this version's structure.
+        let abi_version = unsafe { descriptor.cast::<u32>().read() };
+        if abi_version != ABI_VERSION {
             return Err(format!(
                 "runtime ABI {} but the program was built for {}",
-                ABI_VERSION, d.abi_version
+                ABI_VERSION, abi_version
             ));
         }
+        let d = unsafe { &*descriptor };
         if d.flags & !KNOWN_FLAGS != 0 {
             return Err("unknown program flags".into());
         }
@@ -171,6 +187,7 @@ impl Program {
             entries.push((row.code as usize, path.to_owned()));
         }
         let value_codes = unsafe { load_value_codes(d.value_codes, d.value_code_count) }?;
+        let callees = unsafe { callees::load(d, &entries) }?;
         Ok(Program {
             code: Code::Roots(d.entry, roots),
             result_size: d.result_size,
@@ -185,6 +202,7 @@ impl Program {
             config: d.config,
             entries,
             value_codes: std::sync::Arc::new(value_codes),
+            callees,
         })
     }
 
@@ -210,7 +228,16 @@ impl Program {
             config,
             entries: Vec::new(),
             value_codes: Default::default(),
+            callees: None,
         }
+    }
+
+    pub(crate) fn runner_callees(
+        &self,
+    ) -> Result<&std::collections::BTreeMap<String, hirsel_run_schema::CalleeFacts>, String> {
+        self.callees.as_ref().ok_or_else(|| {
+            "production runners require compiled callee facts (runtime ABI 49)".into()
+        })
     }
 
     pub(crate) fn standalone(&self) -> bool {

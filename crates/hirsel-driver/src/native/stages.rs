@@ -191,6 +191,8 @@ pub struct ReadyProgram {
     /// The definitions some unit makes an Entry value of (RUN-3): each one's
     /// function-reference thunk and full path, which the program descriptor lists.
     pub entries: BTreeMap<String, String>,
+    /// Checked source facts, supplied through the engine's public admission API.
+    pub(crate) callee_facts: Option<BTreeMap<String, hirsel_run_schema::CalleeFacts>>,
     /// Per resource layout, the instance digest of its drop body's unit.
     pub finalizers: BTreeMap<LayoutId, ContentHash>,
     /// Instance digest of each non-generic function, for entry lookup.
@@ -350,6 +352,23 @@ impl ReadyProgram {
         });
         Ok(())
     }
+    /// Bind source-checked runner facts to the same native Entry table.
+    pub(crate) fn bind_callees(
+        &mut self,
+        facts: BTreeMap<String, hirsel_run_schema::CalleeFacts>,
+    ) -> Result<(), NativeError> {
+        for path in facts.keys() {
+            if !self.entries.values().any(|entry| entry == path) {
+                return Err(NativeError::new(
+                    StageName::Launch,
+                    format!("callee facts outside native Entry table: {path}"),
+                ));
+            }
+        }
+        self.callee_facts = Some(facts);
+        Ok(())
+    }
+
     /// Put `unit` at `index` in place of the unit there, with its summary.
     pub fn replace_unit(&mut self, index: usize, unit: ValidatedUnit<Ready>) -> Result<(), String> {
         self.summaries[index] = hirsel_lir::fragment::UnitSummary::of(
@@ -694,6 +713,7 @@ pub fn build_program(
         validation: options.validation,
         callbacks,
         entries,
+        callee_facts: None,
         operations,
         launch: options.launch.clone(),
         revisions: BTreeMap::new(),
@@ -878,6 +898,7 @@ impl BuiltUnits {
             .collect();
         ReadyProgram {
             entries: summary_entries(&self.summaries),
+            callee_facts: None,
             foreign_dispatch: BTreeMap::new(),
             semantic_owners: lowered.semantic_owners.clone(),
             semantic_units: None,

@@ -76,3 +76,4 @@ mod watchfiles_27;
 mod rpcbatch_27;
 mod csvreduce_27;
 mod batchrun_27;
+mod runner_descriptor;

@@ -1484,6 +1484,24 @@ done:
             ));
         }
     }
+    let callee_facts = program
+        .callee_facts
+        .as_ref()
+        .map(hirsel_run_schema::callees_json);
+    let callee_identity = program.callee_facts.as_ref().map_or([0; 32], |facts| {
+        hirsel_rt::program::callee_identity(&revision.digest(), facts)
+    });
+    let callee_codes: Vec<_> = program
+        .entries
+        .iter()
+        .filter(|(_, path)| {
+            program
+                .callee_facts
+                .as_ref()
+                .is_some_and(|facts| facts.contains_key(*path))
+        })
+        .map(|(thunk, path)| (thunk.clone(), path.as_bytes().to_vec()))
+        .collect();
     // The launcher object comes from the backend that emitted the program's objects, so a
     // Cranelift build never runs LLVM.
     let main = if cranelift_objects(objects) {
@@ -1519,6 +1537,18 @@ done:
                     .collect(),
             ),
             F::U64(value_codes.len() as u64),
+            match &callee_facts {
+                Some(text) => F::Bytes(text.as_bytes().to_vec()),
+                None => F::U64(0),
+            },
+            F::U64(callee_facts.as_ref().map_or(0, |text| text.len() as u64)),
+            if callee_codes.is_empty() {
+                F::U64(0)
+            } else {
+                F::Entries(callee_codes.clone())
+            },
+            F::U64(callee_codes.len() as u64),
+            F::Inline(callee_identity.to_vec()),
         ];
         let words: Vec<u64> = roots.iter().map(|r| root_index(*r) as u64).collect();
         let report = hirsel_cranelift::ExitReport {
@@ -1591,14 +1621,40 @@ done:
             code_rows.len(),
             code_rows.join(", ")
         ));
+        let mut callee_ir = String::new();
+        let callee_facts_pointer = if let Some(text) = &callee_facts {
+            callee_ir.push_str(&format!(
+                "@hirsel.callee.facts = private constant [{} x i8] [{}]\n",
+                text.len(),
+                bytes(text.as_bytes())
+            ));
+            "@hirsel.callee.facts"
+        } else {
+            "null"
+        };
+        let callee_rows: Vec<_> = program.entries.iter().enumerate().filter(|(_, (_, path))|
+            program.callee_facts.as_ref().is_some_and(|facts| facts.contains_key(*path)))
+            .map(|(index, (thunk, path))| format!(
+                "{{ ptr, ptr, i64 }} {{ ptr @\"{thunk}\", ptr @hirsel.entry.path.{index}, i64 {} }}", path.len()))
+            .collect();
+        let callee_code_pointer = if callee_rows.is_empty() {
+            "null"
+        } else {
+            callee_ir.push_str(&format!(
+                "@hirsel.callee.codes = private constant [{} x {{ ptr, ptr, i64 }}] [{}]\n",
+                callee_rows.len(),
+                callee_rows.join(", ")
+            ));
+            "@hirsel.callee.codes"
+        };
         let program_ir = format!(
             "@hirsel.failure.table = private constant [{table_len} x i8] c\"{text}\"\n\
              @hirsel.entry.name = private constant [{name_len} x i8] [{name_bytes}]\n\
-             {entry_ir}{code_ir}\
-             @hirsel.program = private constant {{ i32, i32, i32, i32, ptr, i64, ptr, ptr, i64, ptr, i64, [32 x i8], [56 x i8], ptr, i64, i64, i64, ptr, i64 }} \
+             {entry_ir}{code_ir}{callee_ir}\
+             @hirsel.program = private constant {{ i32, i32, i32, i32, ptr, i64, ptr, ptr, i64, ptr, i64, [32 x i8], [56 x i8], ptr, i64, i64, i64, ptr, i64, ptr, i64, ptr, i64, [32 x i8] }} \
              {{ i32 {abi}, i32 {flags}, i32 {roots_mask}, i32 {layout_count}, ptr @hirsel.entry, i64 {result_size}, \
              ptr @\"{registry_symbol}\", ptr @hirsel.failure.table, i64 {table_len}, ptr @hirsel.entry.name, i64 {name_len}, \
-             [32 x i8] [{digest}], [56 x i8] [{config}], ptr @hirsel.entries, i64 {entry_count}, i64 {return_kind}, i64 {success_offset}, ptr @hirsel.value.codes, i64 {value_code_count} }}\n\
+             [32 x i8] [{digest}], [56 x i8] [{config}], ptr @hirsel.entries, i64 {entry_count}, i64 {return_kind}, i64 {success_offset}, ptr @hirsel.value.codes, i64 {value_code_count}, ptr {callee_facts_pointer}, i64 {callee_facts_length}, ptr {callee_code_pointer}, i64 {callee_code_count}, [32 x i8] [{callee_digest}] }}\n\
              declare i32 @hirsel_rt_v2_main(ptr, i32, ptr)\n",
             table_len = table.len(),
             name_len = name.len(),
@@ -1610,6 +1666,9 @@ done:
             config = bytes(&config_bytes),
             entry_count = program.entries.len(),
             value_code_count = value_codes.len(),
+            callee_facts_length = callee_facts.as_ref().map_or(0, |text| text.len()),
+            callee_code_count = callee_codes.len(),
+            callee_digest = bytes(&callee_identity),
         );
         let shim = format!(
             "target triple = \"{}\"\n{registry_declaration}\n{declaration}\n{program_ir}declare ptr @signal(i32, ptr)\ndefine i32 @{main_symbol}(i32 %argc, ptr %argv) {{\n %old_sigpipe = call ptr @signal(i32 13, ptr inttoptr (i64 1 to ptr))\n %r = call i32 @hirsel_rt_v2_main(ptr @hirsel.program, i32 %argc, ptr %argv)\n ret i32 %r\n}}\n",

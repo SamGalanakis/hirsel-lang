@@ -193,8 +193,11 @@ pub fn run_path_native_backend_with_trace_events(
             Ok(proofs) => proofs,
             Err(error) => return Ok(Err(error)),
         };
+        let callee_facts =
+            hirsel_engine::callee_facts(engine, &entry).map_err(|error| query(engine, error))?;
         let observation = match run(
             &validated,
+            callee_facts,
             &entry,
             (&host.0, host.1),
             proofs.as_ref(),
@@ -231,6 +234,7 @@ pub fn run_path_native_backend_with_trace_events(
 
 fn run(
     validated: &hirsel_engine::ValidatedNativeInput,
+    callee_facts: std::collections::BTreeMap<String, hirsel_run_schema::CalleeFacts>,
     entry: &hirsel_engine::DefPath,
     (run, tape): (&hirsel_run_config::ValidatedRun, super::link::Tape<'_>),
     proofs: Option<&super::Proofs>,
@@ -258,6 +262,7 @@ fn run(
     };
     options.objects = super::units::selected(&target, backend, opt, false, fuel)?;
     let mut program = build(validated, &options)?;
+    program.bind_callees(callee_facts)?;
     program.fuel = fuel;
     for line in proofs.map_or_else(Vec::new, |p| p.report(&program)) {
         writeln!(stderr, "hirsel: {line}")
