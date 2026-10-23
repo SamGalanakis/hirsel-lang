@@ -53,9 +53,19 @@ type Replay = fn(
     Option<u64>,
 ) -> Result<hirsel_interp::observation::Observable, hirsel_engine::ToolError>;
 fn recovery() -> Value {
-    std::env::var("SPECTRAL_AUDIT_35_RECOVERY")
-        .map(|s| serde_json::from_str(&s).unwrap())
-        .unwrap_or_else(|_| json!({}))
+    if let Ok(encoded) = std::env::var("SPECTRAL_AUDIT_35_RECOVERY_GZIP") {
+        let output=Command::new("python3").args(["-c", "import base64,gzip,sys;sys.stdout.buffer.write(gzip.decompress(base64.b64decode(sys.argv[1],validate=True)))", &encoded]).output().unwrap();
+        assert!(
+            output.status.success(),
+            "recovery decode: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice(&output.stdout).unwrap()
+    } else {
+        std::env::var("SPECTRAL_AUDIT_35_RECOVERY")
+            .map(|s| serde_json::from_str(&s).unwrap())
+            .unwrap_or_else(|_| json!({}))
+    }
 }
 fn listed(value: &Value, item: &str) -> bool {
     value
@@ -116,6 +126,15 @@ fn package_entry(root: &Path, entry: &str) -> PathBuf {
         fs::write(root.join(format!("{name}.hir")), data).unwrap();
     }
     fs::write(root.join("main.hir"), entry).unwrap();
+    if std::env::var_os("SPECTRAL_AUDIT_35_RECOVERY_GZIP").is_some()
+        || std::env::var_os("SPECTRAL_AUDIT_35_RECOVERY").is_some()
+    {
+        fs::write(
+            root.join("recovery-input.json"),
+            serde_json::to_vec_pretty(&recovery()).unwrap(),
+        )
+        .unwrap();
+    }
     for (name, data) in [
         ("capped", include_str!("../../../../tools/capped")),
         (
@@ -977,6 +996,7 @@ fn semantic_record(mut record: hirsel_rt::launch::Recording) -> hirsel_rt::launc
     record
 }
 #[test]
+#[ignore = "UNRUN: width-reruns-36 owns Fixture run-selection admission; requires landed repaired producer"]
 fn spectral_audit_35_scripted_ordered_streams() {
     hirsel_engine::with_compiler_stack(|| {
         let root = scratch("scripted-ordered-");

@@ -29,7 +29,7 @@ if a.kind=='cancel':grant['io']['signals']=dict(provider='signals.host@1',kinds=
 lib=ctypes.CDLL(None,use_errno=True);notify=lib.inotify_init1(os.O_CLOEXEC|os.O_NONBLOCK);assert notify>=0
 assert lib.inotify_add_watch(notify,os.fsencode(r),0x102)>=0
 assert lib.inotify_add_watch(notify,os.fsencode(data),0x20)>=0
-cmd=[str(binary.resolve()),'--hirsel-grants',str(r/'grants.json'),'--hirsel-record',str(tape),'--hirsel-trace-events',str(trace),*words]
+cmd=[str(binary.resolve()),'--hirsel-trace-events',str(trace),'--hirsel-record',str(tape),'--hirsel-grants',str(r/'grants.json'),*words]
 (r/'consumer-before.json').write_text(json.dumps(dict(argv=cmd,environment={k:v for k,v in os.environ.items() if k.startswith('HIRSEL_')},files={str(x):hashlib.sha256(x.read_bytes()).hexdigest() for x in [binary,pathlib.Path(__file__),r/'grants.json',data/'samples.json']}),indent=2))
 child=subprocess.Popen(cmd,stdout=subprocess.PIPE,stderr=subprocess.PIPE);pidfd=os.pidfd_open(child.pid)
 samples=[];opened=False;ready=False;sent=False;deadline=time.monotonic()+45

@@ -167,3 +167,35 @@ The assigned std performance owner app-budget-reds-35 acknowledged both exact
 witnesses in 657821. Its current scanner/Markdown/SHA/Chunk candidate does not
 change decimal_seq or json. Both cost obligations remain separate followups;
 no recovery is inferred from that scanner work.
+
+## Recovery payload transport and standalone flag grammar (fixed; app test owner)
+
+Original recovery-original-caps JSON was 223061 bytes in one --env argument.
+The local subprocess failed before Buck launch with `OSError: [Errno 7]
+Argument list too long`. No app cell started and no archive existed. Recovery
+now carries gzip/base64 JSON in the environment, decoded by Python stdlib and
+retained as exact recovery-input.json before the consumer. No tape byte is
+changed; no system limit is raised. About 2 active minutes; transport-only cost.
+
+Original ordered.py placed --hirsel-grants before observer flags. Physical
+LLVM width1 success/domain/cancel returned status2, `spectral: usage`, no
+control reply; the next width2 success action was interrupted after this
+common cause was identified. All completed failure archives and the interrupted
+action identity are retained. standalone.live_options consumes leading observer
+flags only, then grants parsing snapshots every suffix word as application Args.
+The owned script now uses pnm_tiles_30/qualify.py:12's documented order:
+trace, record, grants, then unchanged app words. No runtime parser patch, cap
+change, vector change, replay relaxation or control-assertion weakening. About
+3 active minutes; no app ownership/copy/runtime cost.
+
+## Fixture placement admission (dependency-owned, explicitly UNRUN)
+
+Shepherd658105 and owner658168/658210 identified the already owned producer
+gap: launch_fixture selects HIRSEL_RT_FIXTURE_RUN, Selection.Harness has
+requested=None, managed placement/control reads requested, and fixture_run
+restores only Args. The scripted_ordered_streams importer requires actual
+recorded placement, so it cannot earn width credit on this producer. It has
+never launched and remains explicitly ignored/UNRUN pending width-reruns-36's
+landed repair. Routed in 658195. No duplicate runtime/Fixture patch. The real
+ordered.py/CLI capacity route is independent. Owner will provide the repair SHA
+for a missing-only importer continuation.
