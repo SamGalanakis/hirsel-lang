@@ -59,6 +59,9 @@ pub(crate) struct TaskBody {
 pub(crate) trait TirSource: Sync {
     fn inputs(&self) -> &TaskInputs;
     fn implementation(&self, path: &DefPath) -> Option<ContentHash>;
+    fn anchor_owner(&self, _: hirsel_span::Anchor) -> Option<(DefPath, u32)> {
+        None
+    }
     fn site(&self, path: &DefPath) -> Result<Span, QueryError>;
     fn body(
         &self,
@@ -208,6 +211,7 @@ impl TaskShared {
 
 struct Lowered {
     definition: DefinitionRef,
+    acceptance: Option<hirsel_validate::AcceptedArtifact>,
     reads: Reads,
     depth: DepthEvidence<Span>,
     registrations: Vec<StagedRegistration>,
@@ -232,6 +236,7 @@ pub(crate) struct TaskWorker<'a, S: TirSource + ?Sized> {
     /// Clone once per worker; nested evaluation reuses this recorder stack.
     runtime: Arc<RuntimeTypes>,
     reads: Vec<ReadsBuilder>,
+    acceptance: Vec<Option<Vec<hirsel_validate::AcceptedArtifact>>>,
     lowered: Holds<Arc<Lowered>>,
     lower_work: hirsel_syntax::DefMap<S1LowerWork>,
     pub(crate) registrations: Vec<StagedRegistration>,
@@ -277,6 +282,7 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
             stack: shared.coordinator.worker(),
             runtime: Arc::new((*source.inputs().runtime).clone()),
             reads: vec![],
+            acceptance: vec![],
             lowered: Holds::new(source.inputs().lower_budget),
             lower_work: Default::default(),
             registrations: vec![],
@@ -284,6 +290,48 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
             phase: Some(QueryKind::Lower),
             pending: vec![],
             selections: vec![],
+        }
+    }
+    fn record_acceptance(&mut self, acceptance: Option<hirsel_validate::AcceptedArtifact>) {
+        for frame in &mut self.acceptance {
+            match (&mut *frame, &acceptance) {
+                (Some(proofs), Some(proof)) => {
+                    if !proofs.contains(proof) {
+                        proofs.push(proof.clone());
+                    }
+                }
+                (_, None) => *frame = None,
+                _ => (),
+            }
+        }
+    }
+    fn merge_acceptance(&mut self, value: &EvaluatedConstant) {
+        if let Some(receipt) = &value.acceptance {
+            for proof in receipt.artifacts() {
+                self.record_acceptance(Some(proof.clone()));
+            }
+        } else {
+            self.acceptance.fill(None);
+        }
+    }
+    fn finish_acceptance(&mut self, result: &mut Result<EvaluatedConstant, QueryError>) {
+        let proofs = self
+            .acceptance
+            .pop()
+            .expect("worker evaluation acceptance frame");
+        if let Ok(value) = result {
+            let mut contexts: Vec<_> = value
+                .executed
+                .iter()
+                .filter_map(|(read, digest)| match read {
+                    ReadKey::ValidationUniverse(package) => Some((package.id(), *digest)),
+                    _ => None,
+                })
+                .collect();
+            contexts.sort_unstable();
+            value.acceptance = proofs
+                .as_ref()
+                .and_then(|proofs| hirsel_validate::ExecutionReceipt::compose(&contexts, proofs));
         }
     }
     pub(super) fn capture<T>(
@@ -445,6 +493,7 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
     ) -> Result<EvaluatedConstant, QueryError> {
         if let Some(value) = self.source.cached_constant(path) {
             self.admit(&value.depth, site)?;
+            self.merge_acceptance(&value);
             self.merge(&value.executed);
             self.stack.requested(&value.depth, site);
             return Ok(value);
@@ -469,6 +518,7 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
                 .cloned();
             if let Some(cached) = cached {
                 self.admit(&cached.constant.depth, site)?;
+                self.merge_acceptance(&cached.constant);
                 self.merge(&cached.constant.executed);
                 self.registrations.extend(cached.registrations);
                 self.replay_staged_requests(&cached.requests);
@@ -500,6 +550,8 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
         let selection_start = self.selections.len();
         let registration_start = self.registrations.len();
         let pending_start = self.pending.len();
+        self.acceptance
+            .push((self.source.inputs().verify == Verify::On).then(Vec::new));
         let product = self.capture(|worker| {
             worker.implementation(path);
             let signature = worker.signature(path)?;
@@ -554,7 +606,7 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
             Ok((value, constants))
         });
         let depth = self.stack.composed(self.depth_limit(), true);
-        let result = product
+        let mut result = product
             .result
             .map(|(value, substitutions)| EvaluatedConstant {
                 value,
@@ -564,6 +616,7 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
                 validation: None,
                 acceptance: None,
             });
+        self.finish_acceptance(&mut result);
         if self.pending.len() == pending_start
             && let Ok(value) = &result
         {
@@ -673,6 +726,7 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
                 .cloned();
             if let Some(cached) = cached {
                 self.admit(&cached.constant.depth, site)?;
+                self.merge_acceptance(&cached.constant);
                 self.merge(&cached.constant.executed);
                 self.registrations.extend(cached.registrations);
                 self.replay_staged_requests(&cached.requests);
@@ -695,6 +749,8 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
         let selection_start = self.selections.len();
         let registration_start = self.registrations.len();
         let pending_start = self.pending.len();
+        self.acceptance
+            .push((self.source.inputs().verify == Verify::On).then(Vec::new));
         let product = self.capture(|worker| {
             worker.implementation(&constant.owner);
             worker.merge(&body.reads);
@@ -755,7 +811,7 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
         });
         let depth = self.stack.composed(self.depth_limit(), true);
         self.merge(&product.reads);
-        let result = product
+        let mut result = product
             .result
             .map(|(value, substitutions)| EvaluatedConstant {
                 value,
@@ -765,6 +821,7 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
                 validation: None,
                 acceptance: None,
             });
+        self.finish_acceptance(&mut result);
         if self.pending.len() == pending_start
             && let Ok(value) = &result
         {
@@ -932,6 +989,7 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
         let runtime = self.runtime.clone();
         let product = validated.run(&inputs.sources, inputs.limits, &runtime, self);
         self.merge(&product.value.reads);
+        self.record_acceptance(product.acceptance);
         if product.limit.is_some() {
             self.limit = product.limit;
         }
@@ -941,34 +999,33 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
         &mut self,
         path: &DefPath,
         definition: &hirsel_tir::Definition,
-    ) -> Result<(), QueryError> {
+    ) -> Result<Option<hirsel_validate::AcceptedArtifact>, QueryError> {
         self.phase = Some(QueryKind::Lower);
         let inputs = self.source.inputs();
         if inputs.verify == Verify::Off {
-            return Ok(());
+            return Ok(None);
         }
-        self.lower_work
-            .entry(DefId::intern(path))
-            .or_default()
-            .validation_runs += 1;
         let mut reads = ReadsBuilder::new();
         FrozenProvider::new(&inputs.snapshot, path.0.package.clone(), &mut reads)
             .validation_universe();
         self.merge(&reads.finish().expect("one immutable validation universe"));
         let _time = timings::phase(Phase::Verify);
-        timings::count(Count::VRuns);
-        let mut observed = vec![];
-        let report = hirsel_validate::validate(
-            definition,
-            inputs.snapshot.types(),
-            inputs.snapshot.validation(&path.0.package),
-            &mut observed,
-        );
+        let (report, ran, acceptance) = inputs
+            .snapshot
+            .validate_source_artifact(definition, |anchor| self.source.anchor_owner(anchor));
+        self.record_acceptance(acceptance.clone());
+        if ran {
+            timings::count(Count::VRuns);
+            self.lower_work
+                .entry(DefId::intern(path))
+                .or_default()
+                .validation_runs += 1;
+        }
         if let Some(error) = hirsel_validate::tooling_limit_error(&report) {
             return Err(error);
         }
         if report.violations.is_empty() {
-            Ok(())
+            Ok(acceptance)
         } else {
             Err(QueryError::Operational(hirsel_types::OperationalFailure {
                 operation: "TIR validation".into(),
@@ -999,6 +1056,7 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
                 .replay_requests(&hit.depth)
                 .map_err(|site| self.overflow(site))?;
             self.merge(&hit.reads);
+            self.record_acceptance(hit.acceptance.clone());
             self.registrations.extend(hit.registrations.iter().cloned());
             self.replay_staged_requests(&hit.requests);
             return Ok(QueryOutput {
@@ -1054,7 +1112,7 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
                 },
                 &signature,
             )?;
-            worker.validate_lowered(path, &output.value)?;
+            let acceptance = worker.validate_lowered(path, &output.value)?;
             if has_errors(&output.diagnostics) {
                 return Err(QueryError::Diagnostics(output.diagnostics));
             }
@@ -1067,13 +1125,19 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
                 );
             }
             dependencies.extend(output.dependencies);
-            Ok((Arc::new(output.value), output.diagnostics, dependencies))
+            Ok((
+                Arc::new(output.value),
+                output.diagnostics,
+                dependencies,
+                acceptance,
+            ))
         });
         let depth = self.stack.finish_requests(self.depth_limit());
         self.merge(&product.reads);
-        let (definition, diagnostics, dependencies) = product.result?;
+        let (definition, diagnostics, dependencies, acceptance) = product.result?;
         let held = Arc::new(Lowered {
             definition: definition.clone(),
+            acceptance,
             reads: product.reads,
             depth,
             registrations: self.registrations[registration_start..].to_vec(),

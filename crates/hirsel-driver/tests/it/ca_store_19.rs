@@ -589,3 +589,36 @@ fn scalar_evaluation_products_require_local_completion_and_skip_analyzed_bodies(
         assert_eq!(changed.materialize_constant(&path).unwrap(), hirsel_tir::Constant::Integer(9));
     });
 }
+
+#[test]
+fn worker_evaluation_products_adopt_only_local_complete_verdicts() {
+    with_compiler_stack(|| {
+        let source = "fn helper()->u32{7u32}\nconst A:u32=comptime helper()\nconst B:u32=comptime A+1u32\n";
+        let paths = vec![definition("A"), definition("B")];
+        for jobs in [1, 2, 4, 8] {
+            let store = Arc::new(store::MemStore::default());
+            let mut seed = signature_session(store.clone(), source, true);
+            for name in ["helper", "A", "B"] { seed.item_signature(&definition(name)).unwrap(); }
+            let expected = seed.materialize_values(paths.clone(), hirsel_intern::jobs::Jobs::new(jobs));
+            assert!(expected.iter().all(Result::is_ok), "{expected:?}");
+            let mut fresh = signature_session(store.clone(), source, false);
+            fresh.adapters.modes = None;
+            fresh.adapters.lowering = None;
+            let actual = fresh.materialize_values(paths.clone(), hirsel_intern::jobs::Jobs::new(jobs));
+            assert!(actual.iter().all(Result::is_ok), "jobs={jobs}: {actual:?}");
+            assert_eq!(actual.iter().map(|v| &v.as_ref().unwrap().root.kind).collect::<Vec<_>>(), expected.iter().map(|v| &v.as_ref().unwrap().root.kind).collect::<Vec<_>>());
+            for path in &paths { assert_eq!(fresh.recompute_count(path, QueryKind::Modes), 0); }
+            let copied = Arc::new(store::MemStore::default());
+            for (key, bytes) in store.take() {
+                store::ResultStore::put(&*copied, &key, &bytes);
+                store::ResultStore::put(&*store, &key, &bytes);
+            }
+            let mut untrusted = signature_session(copied, source, false);
+            untrusted.adapters.modes = None;
+            untrusted.adapters.lowering = None;
+            assert!(untrusted.materialize_values(paths.clone(), hirsel_intern::jobs::Jobs::new(jobs)).iter().all(Result::is_err));
+            let mut edited = signature_session(store, &source.replace("7u32", "9u32"), true);
+            assert_eq!(edited.materialize_constant(&definition("B")).unwrap(), hirsel_tir::Constant::Integer(10));
+        }
+    });
+}
