@@ -19,6 +19,7 @@ fn every_request_has_an_explicit_cancellation_classification() {
     }
     for request in super::tape_property::requests(0) {
         let cancellable = match &request {
+            Request::ProcessTime { .. } | Request::ProcessSettle { .. } => false,
             Request::Stdin { .. } => false,
             Request::Stderr { .. } => false,
             Request::ReadStdin { .. } => true,
