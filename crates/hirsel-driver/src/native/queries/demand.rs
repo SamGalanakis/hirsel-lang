@@ -219,9 +219,23 @@ impl DemandInstances {
             .completed
             .get(key.instance.encoding())
             .ok_or("native instance dependency has not completed")?;
+        let request = self
+            .requests
+            .get(key.instance.encoding())
+            .ok_or("native instance dependency has no selected request")?;
+        let operations = super::instance_operations::InstanceOperations {
+            declarations: environment.operations,
+            source: request
+                .source_definition()
+                .map(|_| (key.instance.definition(), key.instance.digest())),
+        };
+        let scoped = NativeEnvironment {
+            operations: &operations,
+            ..*environment
+        };
         let linkage = self
             .queries
-            .linkage(key, output.product.product.action, environment)
+            .linkage(key, output.product.product.action, &scoped)
             .ok_or_else(|| format!(
                 "native instance dependency lost current C admission: {} body {} instance {:?}, library={}, action {:?}, record {:?}",
                 key.instance.definition(), key.instance.body(), key.instance.digest(),
