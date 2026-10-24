@@ -108,19 +108,16 @@ impl ResultStore for RequestStore {
         if self.get_content(reference).is_none() {
             return;
         }
-        self.backend.associate_product(address, action, reference);
         let association = Association { action, reference };
-        let durable = self.backend.lookup_product(address) == Some(association)
-            && self.backend.get_content(reference).is_some();
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        if durable {
-            state.associations.remove(&address.0);
-            // Charges remain monotone for this request, including external
-            // Bytes views. No eviction can spend a live mapping's allowance.
-        } else if state.associations.contains_key(&address.0)
-            || self.charge(&mut state, ENTRY_CHARGE)
-        {
+        // Durable associations are a shared latest-result index. Another
+        // admitted request can publish a different action at the same address
+        // immediately, so they cannot replace this request's selected result.
+        // Retain only metadata here, under the same bounded transport charge.
+        if state.associations.contains_key(&address.0) || self.charge(&mut state, ENTRY_CHARGE) {
             state.associations.insert(address.0, association);
+            drop(state);
+            self.backend.associate_product(address, action, reference);
         }
     }
 }
@@ -210,5 +207,60 @@ mod tests {
         request.associate_product(address(), Action(address().0), wrong);
         assert!(request.lookup_product(address()).is_none());
         assert!(!request.exhausted());
+    }
+
+    #[test]
+    fn request_associations_remain_selected_across_interleaved_durable_publications() {
+        let backend = Arc::new(MemStore::default());
+        let budget = ProcessBudget::new(ENTRY_CHARGE * 2);
+        let a = RequestStore::new(backend.clone(), budget.reserve(ENTRY_CHARGE).unwrap());
+        let b = RequestStore::new(backend.clone(), budget.reserve(ENTRY_CHARGE).unwrap());
+        let first = a.put_content(domain(), b"first request").unwrap();
+        let second = b.put_content(domain(), b"second request").unwrap();
+        let action_a = Action(ContentHash::of_bytes(b"first action"));
+        let action_b = Action(ContentHash::of_bytes(b"second action"));
+        let selected_a = Association {
+            action: action_a,
+            reference: first,
+        };
+        let selected_b = Association {
+            action: action_b,
+            reference: second,
+        };
+        a.associate_product(address(), action_a, first);
+        b.associate_product(address(), action_b, second);
+        assert_eq!(a.lookup_product(address()), Some(selected_a));
+        assert_eq!(b.lookup_product(address()), Some(selected_b));
+        assert_eq!(backend.lookup_product(address()), Some(selected_b));
+        // Repeated publication by one request spends no additional allowance
+        // and cannot change the other request's settled read.
+        a.associate_product(address(), action_a, first);
+        assert_eq!(backend.lookup_product(address()), Some(selected_a));
+        assert_eq!(b.lookup_product(address()), Some(selected_b));
+        assert_eq!(a.retained_bytes(), ENTRY_CHARGE);
+        assert_eq!(b.retained_bytes(), ENTRY_CHARGE);
+        assert!(!a.exhausted() && !b.exhausted());
+        drop(a);
+        drop(b);
+        assert_eq!(budget.reserved(), 0);
+        let next = RequestStore::new(backend, budget.reserve(ENTRY_CHARGE).unwrap());
+        assert_eq!(next.lookup_product(address()), Some(selected_a));
+    }
+
+    #[test]
+    fn durable_association_pinning_obeys_the_admitted_metadata_bound() {
+        let backend = Arc::new(MemStore::default());
+        let budget = ProcessBudget::new(ENTRY_CHARGE);
+        let request = RequestStore::new(backend.clone(), budget.reserve(ENTRY_CHARGE).unwrap());
+        let reference = request.put_content(domain(), b"durable content").unwrap();
+        let action = Action(address().0);
+        request.associate_product(address(), action, reference);
+        let other = Address(ContentHash::of_bytes(b"another address"));
+        request.associate_product(other, action, reference);
+        assert!(request.exhausted());
+        assert_eq!(request.retained_bytes(), ENTRY_CHARGE);
+        assert!(request.lookup_product(other).is_none());
+        assert!(backend.lookup_product(other).is_none());
+        assert!(request.lookup_product(address()).is_some());
     }
 }
