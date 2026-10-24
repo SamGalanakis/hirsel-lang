@@ -519,6 +519,68 @@ impl<'a, P: SignatureProvider + ?Sized> Resolver<'a, P> {
             self.suggest_path(path, span);
         }
     }
+    /// Explain only a variant in the expected type's already-read header.
+    /// This diagnostic must not discover signatures, infer from payloads, or
+    /// change the lookup/dependency reads of the rejected expression.
+    fn qualified_variant_help(
+        &self,
+        error: &LookupError,
+        path: &Path,
+        expected: &ExpectedType,
+    ) -> Option<String> {
+        let ExpectedType::Named { definition, .. } = expected else {
+            return None;
+        };
+        let (name, modules) = path.segments.split_last()?;
+        let owner = &definition.0;
+        let same_module = match error {
+            LookupError::MissingMember(candidates) => candidates
+                .iter()
+                .any(|d| d.0.package == owner.package && d.0.modules == owner.modules),
+            LookupError::Missing => {
+                let modules: Vec<_> = modules.iter().map(|s| s.as_str().to_owned()).collect();
+                if let Some(package) = &path.package {
+                    package == &owner.package && modules == owner.modules
+                } else {
+                    !modules.is_empty()
+                        && owner.package == self.context.package
+                        && (modules == owner.modules
+                            || self
+                                .context
+                                .modules
+                                .iter()
+                                .chain(&modules)
+                                .eq(owner.modules.iter()))
+                }
+            }
+            _ => false,
+        };
+        if !same_module || self.index.access(&self.context, definition).is_err() {
+            return None;
+        }
+        let signature = self.signatures.get(&DefId::intern(definition))?.as_ref()?;
+        if owner.package != self.context.package
+            && signature.metadata.visibility != Visibility::Public
+        {
+            return None;
+        }
+        let ty::SignatureKind::Type(declaration) = &signature.kind else {
+            return None;
+        };
+        let ty::TypeKind::Variant(variants) = &self.types.get(declaration.representation?)?.kind
+        else {
+            return None;
+        };
+        if !variants.iter().any(|v| v.name == *name) {
+            return None;
+        }
+        Some(format!(
+            "help: variants are written bare and selected by the expected type; write `{name}` \
+             without the qualifier for `{definition}` (keep any payload arguments). \
+             When several types declare `{name}`, supply an expected type, for example \
+             with a binding annotation or function return type"
+        ))
+    }
     fn signature(&mut self, definition: &DefPath) -> Option<ty::SignatureRef> {
         // A header's own declaration/group is being normalized, so no published
         // signature exists yet. Syntax supplies recursive nominal shape;
@@ -2338,6 +2400,15 @@ impl<'a, P: SignatureProvider + ?Sized> Resolver<'a, P> {
                         &format!("before `.`, `{head}` names a module; rename the local `{head}` to access its fields"));
                 } else {
                     self.lookup_diagnostic(&e, path, span);
+                    if let Some(help) = self.qualified_variant_help(&e, path, &expected) {
+                        self.output
+                            .query
+                            .diagnostics
+                            .last_mut()
+                            .unwrap()
+                            .notes
+                            .push(help);
+                    }
                     if path.package.is_none()
                         && path.segments.len() == 1
                         && matches!(e, LookupError::Missing)

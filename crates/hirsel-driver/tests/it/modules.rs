@@ -151,3 +151,4 @@ mod e1_completed_read_35;
 mod recursive_tail_agreement_44;
 mod receipt_original_actuals_33;
 mod manifest_module_guidance_48;
+mod variant_constructor_guidance_48;
