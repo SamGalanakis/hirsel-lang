@@ -181,3 +181,5 @@ fn callee_metadata(
         request_schemas: Some(request_schemas),
     })
 }
+
+pub mod queries;
