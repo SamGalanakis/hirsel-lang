@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-2246 exported definitions; 974 variants.
+2248 exported definitions; 976 variants.
 
 ## Types and roots
 
@@ -8982,6 +8982,26 @@ References: [`core@1/i8`](#def-core_401_2fi8)
 
 ## input
 
+<a id="def-std_401_2finput_2fReadBoundedError"></a>
+
+- `@serializable pub type input.ReadBoundedError = LineTooLong | Input(InputError)`
+
+References: [`core@1/InputError`](#def-core_401_2fInputError)
+
+<a id="def-std_401_2finput_2fReadBoundedError_23Input"></a>
+
+- `Input(InputError) -> input.ReadBoundedError`
+
+Variant of input.ReadBoundedError.
+
+References: [`core@1/InputError`](#def-core_401_2fInputError)
+
+<a id="def-std_401_2finput_2fReadBoundedError_23LineTooLong"></a>
+
+- `LineTooLong -> input.ReadBoundedError`
+
+Variant of input.ReadBoundedError.
+
 <a id="def-std_401_2finput_2fread_5fall"></a>
 
 - `pub fn input.read_all(s: Stdin) -> Result[unique Bytes, InputError]`
@@ -8993,6 +9013,15 @@ References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/InputError`](#def-
 - `pub fn input.read_line(s: Stdin) -> Result[Option[unique String], InputError]`
 
 References: [`core@1/InputError`](#def-core_401_2fInputError), [`core@1/Option`](#def-core_401_2fOption), [`core@1/Result`](#def-core_401_2fResult), [`core@1/Stdin`](#def-core_401_2fStdin), [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2finput_2fread_5fline_5fbounded"></a>
+
+- `pub fn input.read_line_bounded(s: Stdin, max_line_bytes: u64) -> Result[ Option[unique String], ReadBoundedError ]`
+
+Counts bytes before LF, including CR. A limit error consumes one rejected
+non-LF byte and does not drain: recovery is the caller's policy.
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/Result`](#def-core_401_2fResult), [`core@1/Stdin`](#def-core_401_2fStdin), [`core@1/String`](#def-core_401_2fString), [`core@1/u64`](#def-core_401_2fu64), [`std@1/input/ReadBoundedError`](#def-std_401_2finput_2fReadBoundedError)
 
 
 ## instant
