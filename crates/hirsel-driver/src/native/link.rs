@@ -520,7 +520,7 @@ fn llvm_tool(prefix: &Path, tool: &str) -> Command {
 }
 
 // Exact tool and shipped dynamic library contents enter derived runtime actions.
-fn runtime_derivation(prefix: &Path, tool: &str) -> Result<ContentHash, NativeError> {
+pub(super) fn runtime_derivation(prefix: &Path, tool: &str) -> Result<ContentHash, NativeError> {
     let io = |e| {
         NativeError::new(
             StageName::Link,

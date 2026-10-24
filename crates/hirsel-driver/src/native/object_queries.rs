@@ -940,3 +940,5 @@ mod transport_tests {
         assert_eq!(std::fs::read(&path).unwrap(), b"frozen linker input");
     }
 }
+
+pub mod thin;
