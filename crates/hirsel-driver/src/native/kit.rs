@@ -59,6 +59,14 @@ impl Kit {
         };
         let manifest = read("manifest.json")?;
         let digest = String::from_utf8_lossy(&read("digest")?).trim().to_string();
+        Self::from_manifest(root, &manifest, digest)
+    }
+
+    pub(crate) fn from_manifest(
+        root: &Path,
+        manifest: &[u8],
+        digest: String,
+    ) -> Result<Self, NativeError> {
         let actual: String = {
             use sha2::Digest;
             sha2::Sha256::digest(&manifest)
@@ -494,6 +502,121 @@ mod tests {
                 expected,
                 "{}",
                 target.triple
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "requires frozen-kit-proof packaged linker inputs"]
+    fn frozen_kit_binds_transitive_leaf_edits_and_plans_without_originals() {
+        use crate::native::object_queries::capture::{CaptureLimits, FrozenLinkKit, FrozenLinker};
+        use crate::native::{FrozenExecutableLinkInputs, plan_frozen_executable_inputs};
+        use hirsel_engine::store::MemStore;
+        use sha2::Digest;
+        let store = MemStore::default();
+        let linker = FrozenLinker::snapshot(&store, &input("HIRSEL_CAPTURE_LINKER")).unwrap();
+        let llvm = input("HIRSEL_CAPTURE_LLVM");
+        let root = tempfile::tempdir().unwrap();
+        let limits = CaptureLimits {
+            archive_bytes: 16 << 20,
+            files: 64,
+        };
+        for target in [
+            TargetSpec::x86_64_unknown_linux_gnu(),
+            TargetSpec::aarch64_unknown_linux_gnu(),
+        ] {
+            let kit = root.path().join(&target.triple);
+            let files = kit.join(&target.triple);
+            std::fs::create_dir_all(&files).unwrap();
+            let assemble = |name: &str, source: &str| {
+                let text = files.join(format!("{name}.s"));
+                let object = files.join(format!("{name}.o"));
+                std::fs::write(&text, source).unwrap();
+                let output = Command::new(llvm.join("bin/llvm-mc"))
+                    .arg(format!("-triple={}", target.triple))
+                    .args(["-filetype=obj", "-o"])
+                    .arg(&object)
+                    .arg(text)
+                    .env_clear()
+                    .env("LD_LIBRARY_PATH", llvm.join("lib"))
+                    .output()
+                    .unwrap();
+                assert!(
+                    output.status.success(),
+                    "{}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                object
+            };
+            let arm = target.triple.starts_with("aarch64");
+            assemble(
+                "start",
+                if arm {
+                    ".globl _start\n_start:\n bl leaf\n mov x8,#93\n svc #0\n"
+                } else {
+                    ".globl _start\n_start:\n call leaf\n mov %rax,%rdi\n mov $60,%rax\n syscall\n"
+                },
+            );
+            std::fs::write(files.join("empty.a"), b"!<arch>\n").unwrap();
+            std::fs::write(files.join("script.ld"), b"INPUT(leaf.o)\n").unwrap();
+            let manifest = serde_json::to_vec(&serde_json::json!({ "targets": { (target.triple.clone()): {
+                "interpreter": "/unused/loader", "options": [], "start": ["start.o"],
+                "unwind": "empty.a", "libraries": ["script.ld"], "nonshared": "empty.a", "end": []
+            }}}))
+            .unwrap();
+            std::fs::write(kit.join("manifest.json"), &manifest).unwrap();
+            std::fs::write(
+                kit.join("digest"),
+                format!("{:x}", sha2::Sha256::digest(&manifest)),
+            )
+            .unwrap();
+            let mut versions = Vec::new();
+            for value in [42, 43] {
+                assemble(
+                    "leaf",
+                    &if arm {
+                        format!(".globl leaf\nleaf:\n mov x0,#{value}\n ret\n")
+                    } else {
+                        format!(".globl leaf\nleaf:\n mov ${value},%rax\n ret\n")
+                    },
+                );
+                versions
+                    .push(FrozenLinkKit::snapshot(&store, &kit, &target, linker, limits).unwrap());
+            }
+            assert_ne!(
+                versions[0].reference(),
+                versions[1].reference(),
+                "manifest is unchanged; actual transitive bytes bind the hit identity"
+            );
+            let planned = root.path().join(format!("planned-{}", target.triple));
+            std::fs::create_dir_all(&planned).unwrap();
+            let runtime = planned.join("runtime.a");
+            std::fs::write(&runtime, b"!<arch>\n").unwrap();
+            std::fs::remove_dir_all(&kit).unwrap();
+            let mut images = Vec::new();
+            for kit in versions {
+                let kit = FrozenLinkKit::from_reference(&store, kit.reference(), &target).unwrap();
+                let plan = plan_frozen_executable_inputs(
+                    &target,
+                    &planned,
+                    &[],
+                    FrozenExecutableLinkInputs {
+                        store: &store,
+                        kit,
+                        runtime: &runtime,
+                        foreign: &[],
+                        loader: None,
+                    },
+                )
+                .unwrap();
+                let captured = plan.capture(&store, linker, limits).unwrap();
+                let output = planned.join("program");
+                captured.link(&store, &output).unwrap();
+                images.push(std::fs::read(output).unwrap());
+            }
+            assert_ne!(
+                images[0], images[1],
+                "different frozen leaf code must reach each image"
             );
         }
     }

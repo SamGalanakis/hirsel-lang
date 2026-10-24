@@ -1975,6 +1975,7 @@ pub struct ExecutableLinkPlan {
     pub directory: PathBuf,
     pub arguments: Vec<std::ffi::OsString>,
     pub build_id: [u8; 20],
+    pub frozen_kit: Option<super::object_queries::capture::FrozenLinkKit>,
 }
 
 impl ExecutableLinkPlan {
@@ -1994,7 +1995,10 @@ impl ExecutableLinkPlan {
                     .ok_or_else(|| "non-UTF8 link argument".to_string())
             })
             .collect::<Result<Vec<_>, _>>()?;
-        linker.capture(store, &self.directory, &arguments, limits)
+        match self.frozen_kit {
+            Some(kit) => kit.capture(store, linker, &self.directory, &arguments, limits),
+            None => linker.capture(store, &self.directory, &arguments, limits),
+        }
     }
 }
 
@@ -2011,13 +2015,72 @@ pub fn plan_executable_link(
     standalone: bool,
     inputs: ExecutableLinkInputs<'_>,
 ) -> Result<ExecutableLinkPlan, NativeError> {
+    let objects = executable_objects(program, entry, objects, directory, requested, standalone)?;
+    plan_executable_inputs(&program.target, directory, &objects, inputs)
+}
+
+fn executable_objects(
+    program: &ReadyProgram,
+    entry: &DefPath,
+    objects: &[hirsel_lir::stage::ObjectArtifact],
+    directory: &Path,
+    requested: Option<&hirsel_run_config::ValidatedRun>,
+    standalone: bool,
+) -> Result<Vec<PathBuf>, NativeError> {
     let main = launcher_object(
         program, entry, objects, directory, requested, standalone, "main",
     )?;
     let main = write(directory, "main.o", &main)?;
     check_link_manifest(program, entry, objects)?;
-    let objects = write_link_objects(directory, objects, &[main])?;
-    plan_executable_inputs(&program.target, directory, &objects, inputs)
+    write_link_objects(directory, objects, &[main])
+}
+
+/// Fully selected kit input. The ordinary reference binds all actual kit leaves
+/// before codegen, including transitive script and archive-member reads.
+pub struct FrozenExecutableLinkInputs<'a> {
+    pub store: &'a dyn hirsel_engine::store::ResultStore,
+    pub kit: super::object_queries::capture::FrozenLinkKit,
+    pub runtime: &'a Path,
+    pub foreign: &'a [PathBuf],
+    pub loader: Option<(PathBuf, PathBuf)>,
+}
+
+/// The same launcher/manifest algorithm over a kit captured before codegen.
+/// Planning and final capture do not reopen the kit installation.
+pub fn plan_frozen_executable_link(
+    program: &ReadyProgram,
+    entry: &DefPath,
+    objects: &[hirsel_lir::stage::ObjectArtifact],
+    directory: &Path,
+    requested: Option<&hirsel_run_config::ValidatedRun>,
+    standalone: bool,
+    inputs: FrozenExecutableLinkInputs<'_>,
+) -> Result<ExecutableLinkPlan, NativeError> {
+    let objects = executable_objects(program, entry, objects, directory, requested, standalone)?;
+    plan_frozen_executable_inputs(&program.target, directory, &objects, inputs)
+}
+
+pub fn plan_frozen_executable_inputs(
+    target: &TargetSpec,
+    directory: &Path,
+    objects: &[PathBuf],
+    inputs: FrozenExecutableLinkInputs<'_>,
+) -> Result<ExecutableLinkPlan, NativeError> {
+    let kit = inputs
+        .kit
+        .load(inputs.store, target)
+        .map_err(|error| NativeError::new(StageName::Link, error))?;
+    let mut plan = kit_plan(
+        &kit,
+        target,
+        directory,
+        objects,
+        inputs.runtime,
+        inputs.foreign,
+        inputs.loader,
+    )?;
+    plan.frozen_kit = Some(inputs.kit);
+    Ok(plan)
 }
 
 /// Plan the shared kit line for already emitted launcher/unit objects. This also
@@ -2029,22 +2092,41 @@ pub fn plan_executable_inputs(
     inputs: ExecutableLinkInputs<'_>,
 ) -> Result<ExecutableLinkPlan, NativeError> {
     let kit = super::kit::Kit::load(inputs.kit)?;
-    let link = super::kit::Link {
-        kit: &kit,
-        triple: &target.triple,
-        kind: super::kit::Kind::Executable {
-            loader: inputs.loader,
-        },
+    kit_plan(
+        &kit,
+        target,
+        directory,
         objects,
-        runtime: Some(inputs.runtime),
+        inputs.runtime,
+        inputs.foreign,
+        inputs.loader,
+    )
+}
+
+fn kit_plan(
+    kit: &super::kit::Kit,
+    target: &TargetSpec,
+    directory: &Path,
+    objects: &[PathBuf],
+    runtime: &Path,
+    foreign: &[PathBuf],
+    loader: Option<(PathBuf, PathBuf)>,
+) -> Result<ExecutableLinkPlan, NativeError> {
+    let link = super::kit::Link {
+        kit,
+        triple: &target.triple,
+        kind: super::kit::Kind::Executable { loader },
+        objects,
+        runtime: Some(runtime),
         unwind: true,
-        foreign: inputs.foreign,
+        foreign,
     };
     let (arguments, build_id) = link.invocation()?;
     Ok(ExecutableLinkPlan {
         directory: directory.to_path_buf(),
         arguments,
         build_id,
+        frozen_kit: None,
     })
 }
 
