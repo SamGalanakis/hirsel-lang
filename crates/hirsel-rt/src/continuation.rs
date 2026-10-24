@@ -200,9 +200,9 @@ pub type ResumeDispatcher =
     unsafe extern "C" fn(*mut crate::TaskCtx, *mut crate::Header, u64, u64, *mut u8) -> u8;
 
 /// A resumable task body. Its dispatcher starts at state 0 of a fresh owned
-/// frame; each `STATUS_SUSPENDED` saves the frame, whose header names the next
-/// state, and yields, so the task may resume on another worker. Activation
-/// takes the saved frame back and the dispatcher continues at that state.
+/// frame; each `STATUS_SUSPENDED` unwinds the compiled stack to this owner,
+/// which saves the frame (its header names the next state), activates it and
+/// continues the dispatcher at that state.
 ///
 /// # Safety
 /// As for the task entry it replaces; `dispatcher` is the body's compiled
@@ -216,13 +216,18 @@ pub unsafe extern "C" fn hirsel_rt_v2_resume_run(
     dispatcher: ResumeDispatcher,
     bytes: u32,
 ) -> u8 {
+    // SAFETY: this physical entry owns its task between compiled segments.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let mut frame = OwnedResumeFrame::new(bytes);
     let mut owner = Continuation::Fresh;
     owner.start();
     loop {
-        // SAFETY: caller contract; the frame is exclusively this body's.
-        let status =
-            unsafe { dispatcher(ctx, environment, caller_site, operation_site, frame.as_mut_ptr()) };
+        let status = {
+            // SAFETY: no scheduler borrow survives the call into compiled code.
+            let _segment = unsafe { crate::tasks::role::Segment::new(ctx) };
+            // SAFETY: caller contract; the frame is exclusively this body's.
+            unsafe { dispatcher(ctx, environment, caller_site, operation_site, frame.as_mut_ptr()) }
+        };
         if status != crate::STATUS_SUSPENDED {
             owner.complete();
             return status;
@@ -230,9 +235,10 @@ pub unsafe extern "C" fn hirsel_rt_v2_resume_run(
         if frame.state() == 0 {
             crate::fault("a resumable frame suspended at its entry");
         }
+        // A save is physical: it adds no operation or scheduling point. The
+        // boundary the frame resumes at suspends, and may move the task, as
+        // its operation always does.
         owner.save(SavedRepr::Resumable(frame));
-        // SAFETY: the context is live and no borrow of it is held.
-        unsafe { crate::tasks::yield_now(&mut *ctx) };
         let SavedRepr::Resumable(saved) = owner.activate() else {
             crate::fault("a resumable frame changed representation while saved");
         };

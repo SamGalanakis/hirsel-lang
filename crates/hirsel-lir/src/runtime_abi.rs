@@ -560,8 +560,8 @@ pub enum RuntimeEntry {
     /// A resumable frame reached a boundary with its live state materialized: proceed
     /// with the boundary call (0) or return `STATUS_SUSPENDED` (1).
     ResumePoint,
-    /// A resumable task body: run its dispatcher over an owned compact frame, saving the
-    /// frame and yielding at each `STATUS_SUSPENDED`, until it returns.
+    /// A resumable task body: run its dispatcher over an owned compact frame, saving and
+    /// resuming the frame at each `STATUS_SUSPENDED`, until it returns.
     ResumeRun,
 }
 
