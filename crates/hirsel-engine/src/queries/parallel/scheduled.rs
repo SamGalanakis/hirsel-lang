@@ -38,6 +38,7 @@ pub struct FrontBodyQueries {
     store: Arc<dyn ResultStore>,
     work: Mutex<BTreeMap<(DefPath, QueryKind), u64>>,
     table_keys: Mutex<BTreeMap<Key, Arc<crate::table_keys::TableKeyUse>>>,
+    memos: Mutex<BTreeMap<crate::memo::MemoKey, Arc<Reads>>>,
     outcomes: Mutex<BTreeMap<Key, (Reference, ModeResult, CheckedProduct)>>,
     errors: RuntimeErrors,
     // Own immutable snapshot and output metadata admission until every task and
@@ -62,6 +63,24 @@ pub struct FrontCheckedOutput {
 }
 impl FrontBodyQueries {
     /// Actual phase invocations, including failed or discarded producers.
+    /// Actual completed phase read rows, captured by the same compact phase
+    /// finisher as scalar publication. This inspection executes no query.
+    pub fn memo_snapshot(&self) -> Vec<(crate::memo::MemoKey, Arc<Reads>)> {
+        self.memos
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .map(|(key, reads)| (*key, reads.clone()))
+            .collect()
+    }
+    pub fn work_snapshot(&self) -> Vec<(DefPath, QueryKind, u64)> {
+        self.work
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .map(|((path, kind), count)| (path.clone(), *kind, *count))
+            .collect()
+    }
     pub fn recompute_count(&self, definition: &DefPath, kind: QueryKind) -> u64 {
         self.work
             .lock()
@@ -225,6 +244,11 @@ impl BodyTask {
             &mut source,
             Some(&queries.records),
         );
+        queries
+            .memos
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .extend(completed.memo_snapshot(&mut source));
         let checked = completed.checked_product();
         let published = completed.outcome().clone();
         let outcome = ModeResult {
@@ -435,6 +459,7 @@ impl QueryEngine {
             outcomes: Mutex::new(BTreeMap::new()),
             work: Mutex::new(BTreeMap::new()),
             table_keys: Mutex::new(BTreeMap::new()),
+            memos: Mutex::new(BTreeMap::new()),
             errors,
             _allowance: allowance,
         }))

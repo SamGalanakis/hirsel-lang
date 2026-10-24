@@ -115,6 +115,45 @@ pub(crate) struct CompactCompleted {
     outcome: PublishedResult,
 }
 impl CompactCompleted {
+    pub(super) fn memo_snapshot(
+        &self,
+        source: &mut impl memos::ReadSource,
+    ) -> Vec<(crate::memo::MemoKey, Arc<Reads>)> {
+        let mut rows = Vec::new();
+        let owner = &self.outcome.definition;
+        let definition = DefId::intern(owner);
+        if let Some(resolution) = &self.resolution {
+            let reads = match resolution {
+                Product::Hit(entry) => Some(entry.memo.reads.clone()),
+                Product::Computed(stage) => {
+                    memos::complete_reads(owner, &stage.detail, &stage.observed, source)
+                        .ok()
+                        .map(Arc::new)
+                }
+            };
+            if let Some(reads) = reads {
+                rows.push((
+                    crate::memo::MemoKey::new(QueryKind::Resolve, definition),
+                    reads,
+                ));
+            }
+        }
+        for (kind, stage) in [
+            (QueryKind::Check, &self.checked),
+            (QueryKind::Modes, &self.modes),
+        ] {
+            if let Some(stage) = stage {
+                if stage.consistent {
+                    rows.push((
+                        crate::memo::MemoKey::new(kind, definition),
+                        stage.reads.clone(),
+                    ));
+                }
+            }
+        }
+        rows
+    }
+
     pub(super) fn checked_product(&self) -> Option<(Arc<CheckedSummary>, Arc<Reads>)> {
         let stage = self.checked.as_ref()?;
         if !stage.consistent || stage.error.is_some() {
