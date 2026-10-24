@@ -63,3 +63,5 @@ toolchain_proof(name = "executable-plan-proof", tools = [":llvm", ":linker", ":k
 
 export_file(name = "lld-input-main.cpp")
 export_file(name = "lld-input-overlay.patch")
+
+toolchain_proof(name = "root-plan-proof", tools = [":llvm", ":linker", ":kit", "root//:hirsel-rt-archives", "root//:hirsel-driver-test-it-harness"], script = "root_plan_proof.py", interpreter = "python3")
