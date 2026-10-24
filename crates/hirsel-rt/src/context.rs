@@ -200,6 +200,9 @@ pub struct TaskCtx {
     pub(crate) invocation_site_slots: *mut std::mem::MaybeUninit<[u64; 2]>,
     #[cfg(test)]
     pub(crate) test_host_tail: bool,
+    /// Free operation state only the running task touches: its quantum,
+    /// deferred child and resolved object leases (`tasks::free::objects`).
+    pub(crate) free_ops: crate::tasks::free::objects::OpLocal,
 }
 
 const _: () = assert!(std::mem::offset_of!(TaskCtx, view) == 0);
@@ -322,6 +325,9 @@ pub(crate) struct RunShared {
     pub(crate) free: RoleCell<Option<Box<crate::free::Free>>>,
     /// The admitted tasks.free@1 policy, independently of recording.
     pub(crate) free_mode: bool,
+    /// The Free logical policy without replay, fixed at admission: immediate
+    /// object operations may then act on resolved leases without the role.
+    pub(crate) free_objects: std::sync::atomic::AtomicBool,
     /// Fixed at native replay admission before any task starts.
     pub(crate) free_replay: bool,
     /// Ordinary configured native Free admission, distinct from F0/BodyRun tests.
@@ -466,6 +472,7 @@ impl TaskCtx {
                 hirsel_core_contract::depth::CLEANUP_LIMIT,
             )),
             cleanup_rejections: 0,
+            free_ops: Default::default(),
             invocation_sites,
             invocation_depth: 0,
             invocation_tokens,
@@ -971,6 +978,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_ctx_create(
         schedule: Default::default(),
         free: RoleCell::new(None),
         free_mode: false,
+        free_objects: Default::default(),
         free_replay: false,
         free_production: false,
         free_root_env: false,

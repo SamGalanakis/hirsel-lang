@@ -30,6 +30,11 @@ struct Trace {
     points: BTreeMap<Vec<u32>, u64>,
 }
 
+/// Whether scheduling points are traced; their observer needs the role.
+pub(crate) fn enabled() -> bool {
+    ENABLED.load(Ordering::Relaxed)
+}
+
 fn with(f: impl FnOnce(&mut Trace)) {
     if !ENABLED.load(Ordering::Relaxed) {
         return;

@@ -49,6 +49,8 @@ fn a_recorded_last_mutex_close_detaches_before_its_yielding_payload_finalizer() 
             let plain = super::tests::layout();
             let image = crate::Layout {
                 finalizer: Some(destroy),
+                // Hand-written runtime test thunks carry no emitted scope marker.
+                flags: crate::release::LAYOUT_IMPLEMENTATION_FINALIZER,
                 ..plain
             };
             let step = crate::Step {

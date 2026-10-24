@@ -25,11 +25,10 @@ pub(super) fn allowed(ctx: *mut TaskCtx, flags: u64) -> bool {
 /// # Safety
 /// The current task holds the role, before any operation's effect.
 pub(super) unsafe fn flush(ctx: *mut TaskCtx) {
-    let s = scheduler(ctx);
-    let me = s.current;
-    let Some(child) = s.task(me).deferred.take() else {
+    let Some(child) = (unsafe { (*ctx).free_ops.deferred.take() }) else {
         return;
     };
+    let s = scheduler(ctx);
     let stack = unsafe { (*ctx).worker().idle_stacks.take() };
     let target = stack.context();
     let row = s.task(child);
@@ -249,7 +248,7 @@ mod tests {
                     if flags == IMMEDIATE && !fallback {
                         let _role = role::Guard::new(ctx);
                         let s = scheduler(ctx);
-                        assert_eq!(s.task(0).deferred, Some(task as u32));
+                        assert_eq!((*ctx).free_ops.deferred, Some(task as u32));
                         assert!(s.task(task as u32).stack.is_none());
                     }
                     if fallback {

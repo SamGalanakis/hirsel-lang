@@ -1248,6 +1248,96 @@ fn f1_mutex_corpus_full_projection_width_and_permit_matrix() {
         .unwrap(),
     );
 }
+/// Two children each loop on a disjoint mutex and a contended shared mutex
+/// beside atomic and channel operations. Role-free immediate custody records
+/// the same per-object histories that every engine, width and permit count
+/// replays. Each recording level is its own case, inside the action's time.
+const RUNTIME50_OBJECTS: &str = r#"
+pub type AppError = Grant(GrantError) | Output(OutputError)
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let tasks = io.tasks(rt) ? Grant
+  let output = io.stdout(rt) ? Grant
+  let shared: Mutex[u32] = mutex.create(tasks, 0)
+  let hits: Atomic[u32] = atomic.create(tasks, 0)
+  let total = task.scope(tasks, fn(s: Scope) -> u32 {
+    let (sender, receiver): (Sender[u32], Receiver[u32]) = channel.open(tasks)
+    let first = sender.dup(tasks, sender)
+    let second = sender.dup(tasks, sender)
+    let a = task.async(s, fn() -> () {
+      let contended = copy shared
+      let own: Mutex[u32] = mutex.create(tasks, 0)
+      let mut i = 0u32
+      while i < 16u32 {
+        mutex.with(tasks, own, fn(mut value: unique u32) { value += 1 })
+        mutex.with(tasks, contended, fn(mut value: unique u32) { value += 1 })
+        atomic.store(tasks, hits, i)
+        i += 1u32
+      }
+      let mut tx = take first
+      let _ = channel.send(tasks, mut tx, mutex.with(tasks, own, fn(mut value: unique u32) -> u32 { value }))
+    })
+    let b = task.async(s, fn() -> () {
+      let contended = copy shared
+      let own: Mutex[u32] = mutex.create(tasks, 0)
+      let mut i = 0u32
+      while i < 16u32 {
+        mutex.with(tasks, own, fn(mut value: unique u32) { value += 1 })
+        mutex.with(tasks, contended, fn(mut value: unique u32) { value += 1 })
+        let _ = atomic.load(tasks, hits)
+        i += 1u32
+      }
+      let mut tx = take second
+      let _ = channel.send(tasks, mut tx, mutex.with(tasks, own, fn(mut value: unique u32) -> u32 { value }))
+    })
+    let mut r = take receiver
+    let mut sum = 0u32
+    let mut n = 0u32
+    while n < 2u32 {
+      match channel.receive(tasks, mut r) {
+        Ok(v) => { sum += v },
+        Error(_) => (),
+      }
+      n += 1u32
+    }
+    task.await(s, take a)
+    task.await(s, take b)
+    sum
+  })
+  failure.check(total == 32u32, Bounds())
+  failure.check(mutex.with(tasks, shared, fn(mut value: unique u32) -> u32 { value }) == 32u32, Bounds())
+  out.print(output, "objects\n") ? Output
+  Ok(())
+}
+"#;
+
+fn runtime50_objects_at(cells: Cells) {
+    f1_corpus_matrix_cells(
+        &format!("runtime50-objects-{}", cells.levels[0]),
+        RUNTIME50_OBJECTS,
+        |_| serde_json::json!({"io":{"stdout":"stdout.bytes@1", "tasks":"tasks.free@1", "dirs":[]},"args":[]}),
+        (0, |_, _, _, _| {}),
+        b"",
+        || Box::new(|| {}),
+        cells,
+    );
+}
+
+#[test]
+fn runtime50_object_phase_cross_engine_replay() {
+    runtime50_objects_at(Cells {
+        levels: &["record"],
+        engines: &ENGINES,
+    });
+}
+
+#[test]
+fn runtime50_object_phase_cross_engine_replay_durable() {
+    runtime50_objects_at(Cells {
+        levels: &["durable"],
+        engines: &ENGINES,
+    });
+}
+
 #[test]
 fn f1_task_set_corpus_full_projection_width_and_permit_matrix() {
     f1_corpus_matrix(

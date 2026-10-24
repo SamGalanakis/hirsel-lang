@@ -18,6 +18,7 @@ pub(crate) mod home;
 pub(crate) mod host;
 pub(crate) mod lifecycle;
 pub(crate) mod mutex;
+pub(crate) mod objects;
 pub(crate) mod record;
 pub(crate) mod replay;
 pub(crate) mod sets;
@@ -36,6 +37,9 @@ pub(crate) struct Driver {
 /// dispatch and supported waits; it cannot invoke cooperative switch paths.
 pub(crate) unsafe fn enable(ctx: *mut TaskCtx) {
     scheduler(ctx).logical = Logical::Free(Driver::default());
+    unsafe { (*ctx).run_ref() }
+        .free_objects
+        .store(true, std::sync::atomic::Ordering::Release);
 }
 
 pub(crate) fn enabled(ctx: *mut TaskCtx) -> bool {
@@ -71,6 +75,15 @@ pub(super) unsafe fn publish_ready(s: &mut Scheduler, run: *mut crate::context::
 /// # Safety
 /// The running task holds the role; its operation's borrows have ended.
 pub(super) unsafe fn try_yield(ctx: &mut TaskCtx) -> Stopped<()> {
+    let proceed = unsafe { crate::pool::free::proceed(ctx) };
+    unsafe { boundary(ctx, proceed) }
+}
+
+/// The scheduling point after an op's quantum decision: service readiness and
+/// placement, then keep running or give up the worker.
+/// # Safety
+/// As for try_yield.
+pub(super) unsafe fn boundary(ctx: &mut TaskCtx, proceed: bool) -> Stopped<()> {
     replay::wake(scheduler(ctx));
     if replay::at_cut(ctx) {
         park_final(ctx);
@@ -93,7 +106,7 @@ pub(super) unsafe fn try_yield(ctx: &mut TaskCtx) -> Stopped<()> {
     let s = scheduler(ctx);
     let me = s.current;
     unpin(s.task(me));
-    if unsafe { crate::pool::free::proceed(ctx) } {
+    if proceed {
         if let Some(metrics) = &ctx.run_ref().worker_metrics {
             metrics.elision();
         }

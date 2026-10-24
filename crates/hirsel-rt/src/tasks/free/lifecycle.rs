@@ -220,9 +220,8 @@ pub(crate) unsafe fn join(
         let s = scheduler(ctx);
         let scope_id = s.scope_handle(scope);
         let child = s.task_handle(task, scope_id);
-        let me = s.current;
-        (s.task(me).deferred == Some(child)).then(|| {
-            s.task(me).deferred = None;
+        (unsafe { (*ctx).free_ops.deferred } == Some(child)).then(|| {
+            unsafe { (*ctx).free_ops.deferred = None };
             child
         })
     };
@@ -494,7 +493,7 @@ pub(crate) unsafe fn spawn(
             return try_yield(&mut *ctx);
         }
         if fast && flags & super::spawn::IMMEDIATE != 0 {
-            scheduler(ctx).task(current).deferred = Some(index);
+            (*ctx).free_ops.deferred = Some(index);
             // The compiler proved the next op is its join. Returning does not
             // expose an unstarted child to a worker before its destination exists.
             if crate::pool::free::proceed(ctx) {

@@ -8,7 +8,7 @@
 //! before starting workers, after installing boundary coverage.
 
 use std::cell::Cell;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Condvar, Mutex};
 
 use crate::{TaskCtx, context::RunShared};
@@ -28,6 +28,9 @@ pub(crate) struct Role {
     owner: Mutex<Option<usize>>,
     available: Condvar,
     home_waiting: AtomicBool,
+    /// Ownership transitions into a task, claim or idle owner. Re-entry by
+    /// the current owner is not an acquisition.
+    acquisitions: AtomicU64,
 }
 
 impl Role {
@@ -36,15 +39,28 @@ impl Role {
         self.enabled.store(true, Ordering::Release);
     }
 
+    /// The scheduler-role acquisitions so far, for headroom counters and tests.
+    pub(crate) fn acquisitions(&self) -> u64 {
+        self.acquisitions.load(Ordering::Relaxed)
+    }
+
+    fn acquired(&self) {
+        self.acquisitions.fetch_add(1, Ordering::Relaxed);
+    }
+
     fn acquire(&self, task: usize) {
         let mut owner = self.owner.lock().unwrap_or_else(|e| e.into_inner());
-        while owner.is_some_and(|owner| owner != task) {
+        if *owner == Some(task) {
+            return;
+        }
+        while owner.is_some() {
             owner = self
                 .available
                 .wait(owner)
                 .unwrap_or_else(|e| e.into_inner());
         }
         *owner = Some(task);
+        self.acquired();
     }
 
     fn acquire_idle(&self) {
@@ -58,6 +74,7 @@ impl Role {
                 .unwrap_or_else(|e| e.into_inner());
         }
         *owner = Some(IDLE_OWNER);
+        self.acquired();
     }
 
     /// Like std Condvar::wait_while (rust-lang/rust a7c37f9f0ee5,
@@ -87,6 +104,7 @@ impl Role {
         }
         self.home_waiting.store(false, Ordering::Relaxed);
         *owner = Some(task);
+        self.acquired();
     }
 
     #[cfg(test)]
@@ -115,6 +133,7 @@ impl Role {
             return false;
         }
         *owner = Some(IDLE_OWNER);
+        self.acquired();
         true
     }
 

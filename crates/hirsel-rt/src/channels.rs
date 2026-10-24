@@ -191,6 +191,10 @@ pub(crate) struct ChannelCell {
     pub(crate) element: Element,
     pub(crate) object: std::sync::OnceLock<hirsel_free::record::ObjectId>,
     sequence: AtomicU64,
+    /// Mirrors the role-owned park list's length. A receiver registers before
+    /// its first poll takes the state lock, so a sender that reads zero under
+    /// that lock leaves every receiver to see its message.
+    parked: std::sync::atomic::AtomicU32,
     state: Mutex<ChannelState>,
 }
 
@@ -218,6 +222,11 @@ impl ChannelCell {
             .fetch_add(1, Ordering::Relaxed)
             .checked_add(1)
             .expect("channel version overflow")
+    }
+
+    /// Whether a parked receiver may need a scheduling point to see a send.
+    pub(crate) fn parked(&self) -> bool {
+        self.parked.load(std::sync::atomic::Ordering::Relaxed) != 0
     }
 
     pub(crate) fn dup(&self, state: &mut ChannelState) {
@@ -391,6 +400,7 @@ impl Channels {
             element,
             object: Default::default(),
             sequence: AtomicU64::new(1),
+            parked: Default::default(),
         })
     }
 
@@ -619,7 +629,12 @@ impl Channels {
 
     /// `task` parked receiving on `channel` at park place `at`, the latest place so far.
     pub(crate) fn wait(&mut self, channel: u32, at: u64, task: u32) {
-        self.row(channel).waiting.push_back((at, task));
+        let row = self.row(channel);
+        row.waiting.push_back((at, task));
+        row.payload.parked.store(
+            row.waiting.len() as u32,
+            std::sync::atomic::Ordering::Relaxed,
+        );
     }
     /// The receiver parked at `at` is no longer waiting.
     pub(crate) fn unwait(&mut self, channel: u32, at: u64) {
@@ -627,6 +642,10 @@ impl Channels {
             && let Some(i) = row.waiting.iter().position(|&(place, _)| place == at)
         {
             row.waiting.remove(i);
+            row.payload.parked.store(
+                row.waiting.len() as u32,
+                std::sync::atomic::Ordering::Relaxed,
+            );
         }
     }
     /// A live channel's queued message count, whether no sender is left, and its parked

@@ -165,8 +165,6 @@ struct Task {
     stack: Option<Stack>,
     /// Fast children own a stable context independently of the lent fiber.
     inline_context: Option<Box<std::cell::UnsafeCell<TaskCtx>>>,
-    /// A compiler-proved adjacent spawn/await, not published to a worker yet.
-    deferred: Option<u32>,
     /// Parent destination while an immediate child runs on its parent's fiber.
     inline_result: Option<(*mut u8, u64)>,
     /// An op-free child's trivially droppable result, already off its frame.
@@ -273,7 +271,7 @@ enum Logical {
 #[derive(Default)]
 pub(crate) struct Scheduler {
     logical: Logical,
-    cancel_epoch: hirsel_free::cancel::Epoch,
+    cancel_epoch: std::sync::Arc<hirsel_free::cancel::Epoch>,
     /// The cancellation generation home last rechecked saved host waits for.
     home_epoch: u64,
     cancel_metrics: Option<std::sync::Arc<crate::pool::WorkerMetrics>>,
@@ -935,7 +933,6 @@ impl Task {
             ctx,
             stack: None,
             inline_context: None,
-            deferred: None,
             inline_result: None,
             inline_value: None,
             inline_running: false,
@@ -3955,6 +3952,12 @@ pub unsafe extern "C" fn hirsel_rt_v2_channel_send(
     sender: *mut u64,
     message: *mut u8,
 ) -> u8 {
+    // SAFETY: caller contract; a resolved immediate send needs no role.
+    if let Some(result) =
+        unsafe { free::objects::channel_send(ctx, sender.read(), message, out) }
+    {
+        return unsafe { free::objects::finish(ctx, result) };
+    }
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
@@ -4012,6 +4015,12 @@ pub unsafe extern "C" fn hirsel_rt_v2_channel_receive(
     receiver: *mut u64,
     message: *mut u8,
 ) -> u8 {
+    // SAFETY: caller contract; a resolved ready receive needs no role.
+    if let Some(result) =
+        unsafe { free::objects::channel_receive(ctx, receiver.read(), message, out) }
+    {
+        return unsafe { free::objects::finish(ctx, result) };
+    }
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
@@ -4274,6 +4283,12 @@ pub unsafe extern "C" fn hirsel_rt_v2_mutex_take(
     m: *const u64,
     payload: *mut u8,
 ) -> u8 {
+    // SAFETY: caller contract; a resolved available take needs no role.
+    if let Some(result) =
+        unsafe { free::objects::mutex_take(ctx, mutex_word(m), payload, out) }
+    {
+        return unsafe { free::objects::finish(ctx, result) };
+    }
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
@@ -4334,6 +4349,10 @@ pub unsafe extern "C" fn hirsel_rt_v2_mutex_put(
     m: *const u64,
     payload: *mut u8,
 ) -> u8 {
+    // SAFETY: caller contract; only a registered successor's wake needs R.
+    if let Some(result) = unsafe { free::objects::mutex_put(ctx, mutex_word(m), payload) } {
+        return unsafe { free::objects::finish(ctx, result) };
+    }
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
@@ -4586,6 +4605,10 @@ pub unsafe extern "C" fn hirsel_rt_v2_atomic_load(
     slot: *mut u8,
     size: u64,
 ) -> u8 {
+    // SAFETY: caller contract; a resolved load needs no role.
+    if let Some(result) = unsafe { free::objects::atomic_load(ctx, a.read(), slot, size) } {
+        return unsafe { free::objects::finish(ctx, result) };
+    }
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
@@ -4634,6 +4657,10 @@ pub unsafe extern "C" fn hirsel_rt_v2_atomic_store(
     value: *const u8,
     size: u64,
 ) -> u8 {
+    // SAFETY: caller contract; a resolved store needs no role.
+    if let Some(result) = unsafe { free::objects::atomic_store(ctx, a.read(), value, size) } {
+        return unsafe { free::objects::finish(ctx, result) };
+    }
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]

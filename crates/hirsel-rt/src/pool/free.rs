@@ -726,6 +726,15 @@ pub(crate) unsafe fn proceed(ctx: *mut TaskCtx) -> bool {
     more
 }
 
+/// Start the calling worker's chain budget afresh.
+/// # Safety
+/// As for proceed.
+#[cfg(test)]
+pub(crate) unsafe fn renew(ctx: *mut TaskCtx) {
+    // SAFETY: only this exec's own thread touches its chain cell.
+    unsafe { &*current(execs(ctx)) }.chain.set(Budget::default());
+}
+
 /// An addressed post can supersede a requested queue search. Hand its
 /// reservation on before running that post, which might never yield.
 pub(super) fn cancel_search(execs: &Execs, exec: &Exec) {

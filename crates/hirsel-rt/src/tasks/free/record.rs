@@ -527,14 +527,31 @@ pub(crate) unsafe fn atomic_load(
 ) -> Stopped<()> {
     begin(ctx);
     let replay = super::replay::token(ctx);
-    let size_bytes = usize::try_from(size).expect("an atomic image fits memory");
     let image = crate::tasks::scheduler(ctx).sync.image(word, size);
+    super::objects::keep_image(ctx, word, &image);
     unsafe { crate::tasks::role::release(ctx) };
+    let result = unsafe { load_image(ctx, &image, slot, size, replay.as_ref()) };
+    drop(image);
+    unsafe { crate::tasks::role::enter(ctx) };
+    result
+}
+
+/// A begun load's action and record, holding no scheduler borrow.
+/// # Safety
+/// As for atomic_load; image is the word's resolved cell.
+pub(super) unsafe fn load_image(
+    ctx: *mut TaskCtx,
+    image: &crate::sync::AtomicImage,
+    slot: *mut u8,
+    size: u64,
+    replay: Option<&super::replay::Token>,
+) -> Stopped<()> {
+    let size_bytes = usize::try_from(size).expect("an atomic image fits memory");
     // The wide-image stripe is acquired outside the section. Retain it until
     // progress is published, so its next accessor cannot observe an action
-    // that the cutter cannot yet see. No scheduler borrow remains here.
+    // that the cutter cannot yet see.
     let access = image.access();
-    let result = publish_with_replay(ctx, Phase::Done, replay.as_ref(), |writer| unsafe {
+    let result = publish_with_replay(ctx, Phase::Done, replay, |writer| unsafe {
         let out = std::slice::from_raw_parts_mut(slot, size_bytes);
         access.load(out);
         if writer.is_some() || replay.is_some() {
@@ -544,7 +561,7 @@ pub(crate) unsafe fn atomic_load(
             if let Some(writer) = writer {
                 writer.load(bits);
             } else {
-                let bits = replay.as_ref().unwrap().load(bits)?;
+                let bits = replay.unwrap().load(bits)?;
                 if !image.substitute(out, bits) {
                     return Err(Stop::Diverged(
                         "a recorded atomic load does not fit its scalar".into(),
@@ -556,8 +573,6 @@ pub(crate) unsafe fn atomic_load(
     })
     .and_then(|result| result);
     drop(access);
-    drop(image);
-    unsafe { crate::tasks::role::enter(ctx) };
     result
 }
 
@@ -572,13 +587,27 @@ pub(crate) unsafe fn atomic_store(
     begin(ctx);
     let replay = super::replay::token(ctx);
     let image = crate::tasks::scheduler(ctx).sync.image(word, size);
-    let value = unsafe { std::slice::from_raw_parts(value, image.size()) };
+    super::objects::keep_image(ctx, word, &image);
     unsafe { crate::tasks::role::release(ctx) };
-    let access = image.access();
-    let result = publish_with_replay(ctx, Phase::Done, replay.as_ref(), |_| access.store(value));
-    drop(access);
+    let result = unsafe { store_image(ctx, &image, value, replay.as_ref()) };
     drop(image);
     unsafe { crate::tasks::role::enter(ctx) };
+    result
+}
+
+/// A begun store's action, holding no scheduler borrow.
+/// # Safety
+/// As for atomic_store; image is the word's resolved cell.
+pub(super) unsafe fn store_image(
+    ctx: *mut TaskCtx,
+    image: &crate::sync::AtomicImage,
+    value: *const u8,
+    replay: Option<&super::replay::Token>,
+) -> Stopped<()> {
+    let value = unsafe { std::slice::from_raw_parts(value, image.size()) };
+    let access = image.access();
+    let result = publish_with_replay(ctx, Phase::Done, replay, |_| access.store(value));
+    drop(access);
     result
 }
 

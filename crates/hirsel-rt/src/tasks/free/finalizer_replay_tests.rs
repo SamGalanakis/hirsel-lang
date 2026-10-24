@@ -138,7 +138,8 @@ fn nested_finalizer_replay_keeps_outer_images_stable_across_owner_growth_and_sav
         steps: std::ptr::null(),
         step_count: 0,
         field_count: 0,
-        flags: 0,
+        // Hand-written runtime test thunks carry no emitted scope marker.
+        flags: crate::release::LAYOUT_IMPLEMENTATION_FINALIZER,
         logical: 0,
         logical_count: std::ptr::null(),
         scan: std::ptr::null(),
@@ -249,6 +250,7 @@ fn yielding_object_finalizers_replay_only_the_admitted_cleanup_prefix() {
     };
     let image = crate::Layout {
         finalizer: Some(destroy),
+        flags: crate::release::LAYOUT_IMPLEMENTATION_FINALIZER,
         ..plain
     };
     let wrapper = crate::Layout {

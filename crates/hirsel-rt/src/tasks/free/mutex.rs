@@ -2,6 +2,8 @@
 //! role. FIFO permit state and payload movement share that lock. A notification
 //! is installed after reacquiring the role, even if the waiter has not parked
 //! yet; park's first saved-frame poll consumes it, avoiding a lost wake.
+//! These are the role paths: resolution, waits, wakes and replay. An immediate
+//! operation on a resolved lease runs in `objects` without the role.
 //!
 //! Recording publishes the action and its version inside that same lock.
 
@@ -22,7 +24,7 @@ pub(crate) fn live(ctx: *mut TaskCtx) -> bool {
     true
 }
 
-fn touched(
+pub(super) fn touched(
     ctx: *mut TaskCtx,
     phase: Phase,
     cell: &crate::sync::MutexCell,
@@ -91,7 +93,7 @@ pub(crate) unsafe fn create(
     unsafe { try_yield(&mut *ctx) }
 }
 
-fn notify(ctx: *mut TaskCtx, task: u32) {
+pub(super) fn notify(ctx: *mut TaskCtx, task: u32) {
     let s = scheduler(ctx);
     // Set this before testing Parked: a running queued waiter may still be
     // between releasing the object lock and registering its Retry wait.
@@ -116,6 +118,7 @@ pub(crate) unsafe fn take(
     loop {
         let replay = super::replay::object(ctx, (crate::free::MUTEX, word));
         let cell = scheduler(ctx).sync.mutex(word);
+        super::objects::keep_mutex(ctx, word, &cell);
         unsafe { role::release(ctx) };
         let mut state = cell.lock();
         let mut result = Acquired::Pending;
@@ -176,6 +179,7 @@ pub(crate) unsafe fn put(ctx: *mut TaskCtx, word: u64, payload: *mut u8) -> Stop
     unsafe { super::replay::wait_object(ctx, (crate::free::MUTEX, word)) }?;
     let replay = super::replay::object(ctx, (crate::free::MUTEX, word));
     let cell = scheduler(ctx).sync.mutex(word);
+    super::objects::keep_mutex(ctx, word, &cell);
     unsafe { role::release(ctx) };
     let mut state = cell.lock();
     let mut next = None;

@@ -677,6 +677,29 @@ pub(crate) unsafe fn on_home(run: *mut RunShared) -> bool {
     current.is_null() || std::ptr::eq(current, Arc::as_ptr(&execs.home))
 }
 
+/// Whether a running task's quantum may continue here without the placement
+/// check of a scheduling point: on a compute worker of a run that does not
+/// force migration, or on home while no compute worker is active. A run whose
+/// execs are not initialized yet is not settled: only the role initializes them. A retiring
+/// worker is left at the task's next scheduling point.
+/// # Safety
+/// As for on_home.
+pub(crate) unsafe fn settled(run: *mut RunShared) -> bool {
+    let Some(execs) = (unsafe { (*(*run).execs.get()).as_deref() }) else {
+        return false;
+    };
+    let current = own_exec();
+    if execs.migrate || current.is_null() {
+        return false;
+    }
+    // SAFETY: a thread's own exec lives while the thread serves its run.
+    match unsafe { (*current).kind } {
+        Kind::Compute(_) => true,
+        Kind::Home => execs.compute.lock().unwrap().active.is_empty(),
+        Kind::Pool(_) | Kind::Commit => false,
+    }
+}
+
 /// Whether the calling thread is one of a run's blocking-pool threads.
 #[inline(never)]
 pub(crate) fn on_pool() -> bool {
