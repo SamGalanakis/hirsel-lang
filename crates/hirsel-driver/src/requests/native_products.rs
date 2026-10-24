@@ -26,7 +26,6 @@ impl NativeBuildReadiness {
     pub fn new(
         bootstrap: Arc<NativeBootstrap>,
         request: NativeRequest,
-        store: Arc<dyn ResultStore>,
         toolchain: Arc<native::Toolchain>,
     ) -> Result<Self, NativeError> {
         // Evidence requires its actual assessment/discharge producer. An
@@ -37,6 +36,7 @@ impl NativeBuildReadiness {
                 "native proof assessment root is not installed",
             ));
         }
+        let store = bootstrap.selected_store();
         Ok(Self {
             bootstrap,
             request,
