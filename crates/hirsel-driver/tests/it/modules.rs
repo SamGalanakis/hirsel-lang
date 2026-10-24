@@ -223,3 +223,4 @@ mod sealed_region_capture_cuts_33;
 mod sealed_region_entry_33;
 mod sealed_region_read_entry_33;
 mod sealed_region_scope_custody_33;
+mod arena_named_callback_33;

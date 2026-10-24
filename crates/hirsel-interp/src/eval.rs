@@ -5177,24 +5177,13 @@ fn checked_callee(
             return Ok((callee, None, None));
         }
         let cap = bounded.then(|| bounded_capacity(arguments)).transpose()?;
-        let (definition, body, captures, _, sizes, type_arguments) =
-            arena_callback(arguments, &mut budgets.storage)?;
+        let (callee, _) = arena_callback(arguments, &mut budgets.storage)?;
         let id = budgets.issue();
         budgets.storage.open(id)?;
         *arguments = vec![Value::Handle {
             kind: crate::checked::ARENA_HANDLE.into(),
             id,
         }];
-        let callee = RuntimeCallee::Closure {
-            definition,
-            body,
-            captures,
-            sizes,
-            generic_sizes: vec![],
-            actuals: Default::default(),
-            type_arguments,
-            check: None,
-        };
         return Ok((
             callee,
             Some(u32::try_from(id).map_err(|_| invalid("arena identity exhausted"))?),
@@ -5212,16 +5201,20 @@ fn checked_callee(
         return Ok((callee, None, None));
     }
     let cap = bounded.then(|| bounded_capacity(arguments)).transpose()?;
-    let (definition, body, captures, owned_captures, sizes, type_arguments) =
-        arena_callback(arguments, &mut budgets.storage)?;
+    let (mut callee, owned_captures) = arena_callback(arguments, &mut budgets.storage)?;
     let arena = state.arena();
     budgets.storage.open(arena.into())?;
     let shadow = checks.pop().unwrap_or_default().shadow;
-    let check = crate::checked::Callee {
-        captures: (0..captures.len()).map(|i| shadow.capture(i)).collect(),
-        owned: owned_captures,
-        lifetime: shadow.total(),
-    };
+    if let RuntimeCallee::Closure {
+        captures, check, ..
+    } = &mut callee
+    {
+        *check = Some(crate::checked::Callee {
+            captures: (0..captures.len()).map(|i| shadow.capture(i)).collect(),
+            owned: owned_captures,
+            lifetime: shadow.total(),
+        });
+    }
     *arguments = vec![Value::Handle {
         kind: crate::checked::ARENA_HANDLE.into(),
         id: arena.into(),
@@ -5231,16 +5224,6 @@ fn checked_callee(
         lifetime: vec![arena],
         mutable: false,
     }];
-    let callee = RuntimeCallee::Closure {
-        definition,
-        body,
-        captures,
-        sizes,
-        generic_sizes: vec![],
-        actuals: Default::default(),
-        type_arguments,
-        check: Some(check),
-    };
     Ok((callee, Some(arena), cap.map(|cap| (arena.into(), cap))))
 }
 /// Remove `arena.bounded`'s leading capacity argument.
@@ -5255,19 +5238,12 @@ fn bounded_capacity(arguments: &mut Vec<Value>) -> Result<u64, Error> {
         _ => Err(invalid("arena.bounded capacity is not a u64")),
     }
 }
-type Callback = (
-    hirsel_syntax::DefId,
-    hirsel_tir::BodyId,
-    Vec<Option<Value>>,
-    Vec<bool>,
-    crate::value::SizeBindings,
-    crate::type_arguments::Bindings,
-);
-/// The one closure argument of `arena.with`.
+/// The one callable argument of an arena scope, using the same named and
+/// environment-carrying invocation paths as an ordinary indirect call.
 fn arena_callback(
     arguments: &mut Vec<Value>,
     storage: &mut crate::sealed_storage::Storage,
-) -> Result<Callback, Error> {
+) -> Result<(RuntimeCallee, Vec<bool>), Error> {
     let [callback] = <[Value; 1]>::try_from(std::mem::take(arguments))
         .map_err(|_| invalid("arena.with takes one callback"))?;
     // Callback admission has succeeded before this adapter runs. Transfer a
@@ -5275,31 +5251,44 @@ fn arena_callback(
     // does, so its caller's snapshot no longer releases them after the body.
     storage.environment_entry(&callback)?;
     callback.begin_call();
-    let Value::Closure {
-        definition,
-        body,
-        captures,
-        environment,
-        ..
-    } = callback
+    match callback {
+        Value::FunctionReference(reference) => Ok((
+            RuntimeCallee::Definition {
+                path: CalleePath::Value(reference.definition),
+                generics: reference.arguments,
+            },
+            vec![],
+        )),
+        Value::Closure {
+            definition,
+            body,
+            captures,
+            environment,
+            ..
+        } => {
+            let crate::value::Environment {
+                owned_captures,
+                sizes,
+                type_arguments,
+                ..
+            } = *environment;
+            Ok((
+                RuntimeCallee::Closure {
+                    definition,
+                    body,
+                    captures,
+                    sizes,
+                    generic_sizes: vec![],
+                    actuals: Default::default(),
+                    type_arguments,
+                    check: None,
+                },
+                owned_captures,
+            ))
+        }
+        _ => Err(invalid("arena.with callback must be a function")),
+    }
 
-    else {
-        return Err(invalid("arena.with callback must be a closure"));
-    };
-    let crate::value::Environment {
-        owned_captures,
-        sizes,
-        type_arguments,
-        ..
-    } = *environment;
-    Ok((
-        definition,
-        body,
-        captures,
-        owned_captures,
-        sizes,
-        type_arguments,
-    ))
 }
 /// What a closure call's environment is bounded by, under checked execution.
 fn callee_lifetime(
