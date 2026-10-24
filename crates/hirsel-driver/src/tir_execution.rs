@@ -232,3 +232,145 @@ pub(crate) fn run_tir_on_host(
     }
     Ok((outcome, returned))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::requests::TirProducts;
+    use hirsel_engine::DefinitionQueries;
+    use hirsel_syntax::DefPath;
+    use hirsel_tir::{DefinitionRef, MaterializedRef};
+    use hirsel_types::{GenericArgument, QueryError};
+    use std::sync::Arc;
+
+    struct Settled(Option<DefinitionRef>);
+    impl TirProducts for Settled {
+        fn definition(&self, path: &DefPath) -> Result<DefinitionRef, QueryError> {
+            self.0
+                .as_ref()
+                .filter(|body| body.path.path() == path)
+                .cloned()
+                .ok_or(QueryError::NotImplemented)
+        }
+        fn constant(&self, _: &DefPath, _: &[u64]) -> Result<MaterializedRef, QueryError> {
+            Err(QueryError::NotImplemented)
+        }
+        fn constant_definitions(&self) -> Result<Vec<DefPath>, QueryError> {
+            Ok(vec![])
+        }
+        fn instance_body(
+            &self,
+            _: &DefPath,
+            _: &[GenericArgument],
+        ) -> Result<Option<DefPath>, QueryError> {
+            Ok(None)
+        }
+    }
+
+    fn fixture() -> TirExecution {
+        let mut engine = hirsel_engine::QueryEngine::new(
+            hirsel_engine::default_environment(),
+            crate::compiler_adapters(),
+        );
+        let file = engine
+            .sources
+            .add(
+                "settled-execution.hir",
+                "pub fn main()->Result[(),()]{Ok(())}".into(),
+            )
+            .unwrap();
+        let context = hirsel_engine::default_context();
+        hirsel_engine::check_snapshot(&mut engine, file, &context).unwrap();
+        let entry = hirsel_engine::entry_path(&context);
+        let definition = engine.lower_to_tir(&entry).unwrap().value;
+        let checked_runtime = engine.checked_runtime_types().unwrap().checked.unwrap();
+        TirExecution {
+            entry: entry.clone(),
+            definition: definition.clone(),
+            signature: engine.item_signature(&entry).unwrap().value,
+            sources: engine.sources.clone(),
+            runtime: Arc::new(engine.runtime_types().unwrap()),
+            checked_runtime: Arc::new(checked_runtime),
+            code: hirsel_run_schema::CodeReach::Safe,
+            callees: Default::default(),
+            entries: Default::default(),
+            revision: engine.semantic_program_revision(&entry).unwrap(),
+            foreign_unreplayable: false,
+            foreign: Default::default(),
+            products: Arc::new(Settled(Some(definition))),
+        }
+    }
+
+    #[test]
+    fn immutable_tir_executes_normal_and_checked_after_engine_drop_with_identical_observations() {
+        hirsel_engine::with_compiler_stack(|| {
+            let input = fixture();
+            let mut prior = None;
+            for checked in [false, true] {
+                let launch = HostLaunch::empty();
+                let mut observed = None;
+                let (outcome, callee) = run_tir_on_host(
+                    &input,
+                    launch,
+                    LaunchSelection::read(launch).unwrap(),
+                    Some(10000),
+                    Some(&mut observed),
+                    None,
+                    checked,
+                )
+                .unwrap();
+                assert_eq!(
+                    outcome,
+                    RunOutcome::Returned(hirsel_run_schema::Returned::Ok)
+                );
+                assert!(callee.is_none());
+                let observed = observed.expect("completed execution has a semantic observation");
+                if let Some(prior) = prior {
+                    assert_eq!(prior, observed);
+                }
+                prior = Some(observed);
+            }
+        });
+    }
+
+    #[test]
+    fn immutable_tir_refuses_foreign_use_and_missing_settled_bodies_without_compiler_fallback() {
+        hirsel_engine::with_compiler_stack(|| {
+            let mut input = fixture();
+            let extern_ = DefPath::core("external");
+            input.foreign.externs.insert(extern_.clone());
+            let launch = HostLaunch::empty();
+            let error = run_tir_on_host(
+                &input,
+                launch,
+                LaunchSelection::read(launch).unwrap(),
+                Some(10000),
+                None,
+                None,
+                false,
+            )
+            .unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                format!(
+                    "launch: the reference interpreter does not call C, and {extern_} is an \
+                 extern \"c\" function; build or run the program natively (PROG-4)"
+                )
+            );
+            input.foreign.externs.clear();
+            input.products = Arc::new(Settled(None));
+            assert!(
+                run_tir_on_host(
+                    &input,
+                    launch,
+                    LaunchSelection::read(launch).unwrap(),
+                    Some(10000),
+                    None,
+                    None,
+                    false
+                )
+                .is_err()
+            );
+        });
+    }
+}
