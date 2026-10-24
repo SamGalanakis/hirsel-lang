@@ -42,3 +42,4 @@ mod scoped_proof_context_17;
 mod logical_depth_31;
 mod structural_access_31;
 mod receipt_calls_33;
+mod ownership_trace;

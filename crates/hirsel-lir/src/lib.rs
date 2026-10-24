@@ -30,6 +30,7 @@ pub mod layout_validate;
 pub mod object;
 pub mod objects;
 pub mod operation;
+pub mod ownership_trace;
 pub mod persistent;
 pub mod profile;
 pub mod receipt_transport;

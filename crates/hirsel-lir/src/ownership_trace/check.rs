@@ -1,0 +1,317 @@
+use super::*;
+use hirsel_core_contract::Passing;
+
+/// Check the plan's exact unit binding, unique inventory and local operation
+/// correspondence. Unsupported placements fail closed; no fallback observation
+/// is inferred from counters, equal payload bits or a nearby source operation.
+pub fn check<'a, S: Stage>(unit: &'a LirUnit<S>, plan: &'a Plan) -> Result<CheckedPlan<'a>, Error> {
+    if plan.version != VERSION {
+        return Err(Error::Version(plan.version));
+    }
+    if plan.unit != unit.digest() {
+        return Err(Error::StalePlan);
+    }
+    let mut markers = BTreeMap::new();
+    let mut placements = std::collections::HashSet::new();
+    for observation in &plan.observations {
+        let marker = &observation.marker;
+        if markers.insert(marker.id, observation).is_some() {
+            return Err(Error::DuplicateMarker(marker.id));
+        }
+        if !binding(unit, observation)? {
+            return Err(Error::InvalidBinding(marker.id));
+        }
+        if site(unit, observation.point) != Some(marker.site) {
+            return Err(Error::InvalidSite(marker.id));
+        }
+        if !placements.insert((observation.point, marker.kind, marker.token, marker.owner)) {
+            return Err(Error::DuplicateObservation(marker.id));
+        }
+    }
+    Ok(CheckedPlan { plan, markers })
+}
+
+/// Check every rewriting boundary, including a no-op pass. The recipe is
+/// mandatory and consumes each input id exactly once. There is no implicit
+/// identity recipe, silent deletion, synthesized replacement marker or permit
+/// to change the immutable source/kind. Pass-specific semantic checks still
+/// judge whether the rewrite itself is valid.
+pub fn check_transform<'a, A: Stage, B: Stage>(
+    before: &LirUnit<A>,
+    input: &Plan,
+    after: &'a LirUnit<B>,
+    output: &'a Plan,
+    recipe: Option<&Recipe>,
+) -> Result<CheckedPlan<'a>, Error> {
+    let input = check(before, input)?;
+    if before.header.definition != after.header.definition
+        || before.header.target != after.header.target
+        || before.header.abi != after.header.abi
+        || before.header.instance != after.header.instance
+        || before.header.implementation_revision != after.header.implementation_revision
+    {
+        return Err(Error::ChangedUnit);
+    }
+    let recipe = recipe.ok_or(Error::MissingRecipe)?;
+    if recipe.before != input.plan.unit || recipe.after != output.unit {
+        return Err(Error::StaleRecipe);
+    }
+    let output = check(after, output)?;
+    let mut relocations = BTreeMap::new();
+    for relocation in &recipe.relocations {
+        if relocations.insert(relocation.id, relocation).is_some() {
+            return Err(Error::DuplicateRelocation(relocation.id));
+        }
+        if !input.markers.contains_key(&relocation.id) {
+            return Err(Error::ForgedRelocation(relocation.id));
+        }
+    }
+    for (&id, old) in &input.markers {
+        let new = output.markers.get(&id).ok_or(Error::MissingMarker(id))?;
+        let relocation = relocations.get(&id).ok_or(Error::MissingRelocation(id))?;
+        if relocation.token != old.marker.token || relocation.owner != old.marker.owner {
+            return Err(Error::IdentityRewrite(id));
+        }
+        for location in [old.marker.token, old.marker.owner] {
+            if let Location::Address(address) = location
+                && before.addresses.get(address.index()) != after.addresses.get(address.index())
+            {
+                return Err(Error::IdentityRewrite(id));
+            }
+        }
+        if old.marker.kind != new.marker.kind
+            || old.marker.site != new.marker.site
+            || new.point != relocation.point
+            || new.marker.token != relocation.token
+            || new.marker.owner != relocation.owner
+        {
+            return Err(Error::ChangedMarker(id));
+        }
+    }
+    for &id in output.markers.keys() {
+        if !input.markers.contains_key(&id) {
+            return Err(Error::ForgedMarker(id));
+        }
+    }
+    if output
+        .plan
+        .observations
+        .iter()
+        .map(|o| o.marker.id)
+        .ne(recipe.relocations.iter().map(|r| r.id))
+    {
+        return Err(Error::ChangedOrder);
+    }
+    Ok(output)
+}
+
+fn binding<S: Stage>(unit: &LirUnit<S>, observation: &Observation) -> Result<bool, Error> {
+    use Kind::{Create, Drop, Move};
+    use Location::{Address, Capture, EnvironmentCapture, Field, Parameter, Return, Value};
+    let m = &observation.marker;
+    let tuple = (m.kind, m.token, m.owner);
+    let same = |kind, location| tuple == (kind, location, location);
+    let moved = |from, to| tuple == (Move, from, to);
+    let block = |b: BlockId| unit.blocks.get(b.index()).ok_or(Error::InvalidPoint(m.id));
+    let term = |b: BlockId| {
+        unit.terminators
+            .get(b.index())
+            .ok_or(Error::InvalidPoint(m.id))
+    };
+    Ok(match observation.point {
+        Point::Entry => {
+            unit.parameters
+                .iter()
+                .enumerate()
+                .any(|(i, &v)| moved(Parameter(i as u32), Value(v)))
+                || unit
+                    .captures
+                    .iter()
+                    .enumerate()
+                    .any(|(i, &v)| moved(EnvironmentCapture(i as u32), Value(v)))
+        }
+        Point::Instruction {
+            block: b,
+            index,
+            moment,
+        } => {
+            let instructions = block(b)?
+                .instructions
+                .get(&unit.instructions)
+                .ok_or(Error::InvalidPoint(m.id))?;
+            let inst = instructions
+                .get(index as usize)
+                .ok_or(Error::InvalidPoint(m.id))?;
+            match (*inst, moment) {
+                (
+                    Inst::Construct {
+                        result, construct, ..
+                    }
+                    | Inst::Reuse {
+                        result, construct, ..
+                    },
+                    Moment::After,
+                ) => {
+                    let site = unit
+                        .tables
+                        .constructs
+                        .get(construct.index())
+                        .ok_or(Error::InvalidPoint(m.id))?;
+                    same(Create, Value(result))
+                        || site
+                            .fields
+                            .get(&unit.pools.fields)
+                            .unwrap_or(&[])
+                            .iter()
+                            .any(|f| {
+                                moved(
+                                    Value(f.value),
+                                    Field {
+                                        aggregate: result,
+                                        field: f.field,
+                                    },
+                                )
+                            })
+                }
+                (
+                    Inst::Closure {
+                        result, closure, ..
+                    },
+                    Moment::After,
+                ) => {
+                    let site = unit
+                        .tables
+                        .closures
+                        .get(closure.index())
+                        .ok_or(Error::InvalidPoint(m.id))?;
+                    same(Create, Value(result))
+                        || site
+                            .captures
+                            .get(&unit.pools.captures)
+                            .unwrap_or(&[])
+                            .iter()
+                            .enumerate()
+                            .any(|(i, c)| {
+                                c.usage == CaptureUse::Take
+                                    && moved(
+                                        Value(c.value),
+                                        Capture {
+                                            closure: result,
+                                            capture: i as u32,
+                                        },
+                                    )
+                            })
+                }
+                (
+                    Inst::Read {
+                        result,
+                        address,
+                        mode: ReadMode::Take,
+                        ..
+                    },
+                    Moment::After,
+                ) => moved(Address(address), Value(result)),
+                (Inst::Store { address, value, .. }, Moment::After) => {
+                    moved(Value(value), Address(address))
+                }
+                (
+                    Inst::Recast { result, value } | Inst::Weaken { result, value },
+                    Moment::After,
+                ) => moved(Value(value), Value(result)),
+                (
+                    Inst::Copy { result, .. }
+                    | Inst::CopyValue { result, .. }
+                    | Inst::FlatCopy { result, .. },
+                    Moment::After,
+                ) => same(Create, Value(result)),
+                (Inst::Release { value, .. } | Inst::Reset { value, .. }, Moment::Before) => {
+                    same(Drop, Value(value))
+                }
+                (Inst::FinalizeEnd { address, .. }, Moment::After) => same(Drop, Address(address)),
+                // Conditional Drop, Replace, generic runtime operations and other
+                // compound transitions need their own explicit commit recipe.
+                // Never accept them as "close enough" to a supported transition.
+                _ => false,
+            }
+        }
+        Point::Edge(id) => {
+            let edge = unit
+                .tables
+                .edges
+                .get(id.index())
+                .ok_or(Error::InvalidPoint(m.id))?;
+            let parameters = block(edge.target)?
+                .parameters
+                .get(&unit.pools.values)
+                .ok_or(Error::InvalidPoint(m.id))?;
+            let arguments = edge
+                .arguments
+                .get(&unit.pools.values)
+                .ok_or(Error::InvalidPoint(m.id))?;
+            parameters
+                .iter()
+                .zip(arguments)
+                .any(|(&to, &from)| moved(Value(from), Value(to)))
+        }
+        Point::CallEntered(b) | Point::CallReturned(b) => {
+            let Terminator::Call { call, normal, .. } = *term(b)? else {
+                return Err(Error::InvalidPoint(m.id));
+            };
+            let call = unit
+                .tables
+                .calls
+                .get(call.index())
+                .ok_or(Error::InvalidPoint(m.id))?;
+            if matches!(observation.point, Point::CallEntered(_)) {
+                call.arguments.get(&unit.pools.call_arguments).unwrap_or(&[]).iter().any(|a| {
+                    matches!(a.value, ArgumentValue::Value(v) if a.passing == Passing::Take && moved(Value(v), Parameter(a.parameter)))
+                })
+            } else {
+                normal.is_some() && call.result.is_some_and(|v| moved(Return, Value(v)))
+            }
+        }
+        Point::Return(b) => {
+            matches!(term(b)?, Terminator::Return(Some(v)) if moved(Value(*v), Return))
+        }
+    })
+}
+
+// An observation has the same source as the operation it describes. A join
+// observation uses its recipient block's anchor. It never takes an arbitrary
+// source range merely because that range occurs somewhere in the unit.
+fn site<S: Stage>(unit: &LirUnit<S>, point: Point) -> Option<SiteRange> {
+    let source = |id: SourceAnchorId| unit.tables.source_anchors.get(id.index()).map(|a| a.site);
+    let cleanup = |id: CleanupAnchorId| unit.tables.cleanup_anchors.get(id.index()).map(|a| a.site);
+    let block_site = |b: BlockId| source(unit.blocks.get(b.index())?.anchor);
+    match point {
+        Point::Entry => block_site(unit.entry),
+        Point::Instruction { block, index, .. } => {
+            let inst = unit
+                .blocks
+                .get(block.index())?
+                .instructions
+                .get(&unit.instructions)?
+                .get(index as usize)?;
+            match *inst {
+                Inst::Construct { construct, .. } | Inst::Reuse { construct, .. } => {
+                    source(unit.tables.constructs.get(construct.index())?.anchor)
+                }
+                Inst::Closure { closure, .. } => {
+                    source(unit.tables.closures.get(closure.index())?.anchor)
+                }
+                Inst::Release { anchor, .. }
+                | Inst::Reset { anchor, .. }
+                | Inst::FinalizeEnd { anchor, .. } => cleanup(anchor),
+                _ => block_site(block),
+            }
+        }
+        Point::Edge(edge) => block_site(unit.tables.edges.get(edge.index())?.target),
+        Point::CallEntered(block) | Point::CallReturned(block) => {
+            let Terminator::Call { call, .. } = unit.terminators.get(block.index())? else {
+                return None;
+            };
+            source(unit.tables.calls.get(call.index())?.anchor)
+        }
+        Point::Return(block) => block_site(block),
+    }
+}
