@@ -18,7 +18,10 @@ pub use types::{ProductTypes, TypeRecords, TypeRef};
 pub struct Record {
     pub anchors: Vec<(DefPath, u32)>,
     pub types: Vec<TypeRef>,
-    #[serde(serialize_with = "serialize_payload")]
+    #[serde(
+        serialize_with = "serialize_payload",
+        deserialize_with = "deserialize_payload"
+    )]
     pub payload: Vec<u8>,
 }
 fn serialize_payload<S: serde::Serializer>(
@@ -27,6 +30,34 @@ fn serialize_payload<S: serde::Serializer>(
 ) -> Result<S::Ok, S::Error> {
     serializer.serialize_bytes(payload)
 }
+// serde-rs/bytes f685179, src/bytebuf.rs:202-259: request bulk bytes while
+// preserving sequence-format support. Keep the public Vec and Serde's existing
+// bounded Vec sequence fallback; strings remain invalid for this payload.
+fn deserialize_payload<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<u8>, D::Error> {
+    struct Payload;
+    impl<'de> serde::de::Visitor<'de> for Payload {
+        type Value = Vec<u8>;
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("a byte array")
+        }
+        fn visit_bytes<E: serde::de::Error>(self, bytes: &[u8]) -> Result<Self::Value, E> {
+            Ok(bytes.to_vec())
+        }
+        fn visit_byte_buf<E: serde::de::Error>(self, bytes: Vec<u8>) -> Result<Self::Value, E> {
+            Ok(bytes)
+        }
+        fn visit_seq<A: serde::de::SeqAccess<'de>>(
+            self,
+            sequence: A,
+        ) -> Result<Self::Value, A::Error> {
+            Vec::deserialize(serde::de::value::SeqAccessDeserializer::new(sequence))
+        }
+    }
+    deserializer.deserialize_byte_buf(Payload)
+}
+
 fn anchor_owners(
     codec: AnchorCodec,
     mut owner: impl FnMut(Anchor) -> Option<(DefPath, u32)>,
@@ -98,11 +129,26 @@ impl TypeRecords {
         .ok()
     }
 }
-fn options(len: usize) -> impl Options {
-    bincode::DefaultOptions::new()
-        .with_fixint_encoding()
-        .with_limit(len as u64)
-        .reject_trailing_bytes()
+struct DecodeOptions {
+    limit: usize,
+}
+fn options(limit: usize) -> DecodeOptions {
+    DecodeOptions { limit }
+}
+impl DecodeOptions {
+    fn deserialize<'de, T: Deserialize<'de>>(&self, bytes: &'de [u8]) -> bincode::Result<T> {
+        // bincode 1.3.3 internal.rs:114 substitutes Infinite for slice limits.
+        // Enforce the caller's bound before decoding or copying a byte buffer;
+        // SliceReader also checks each claimed length against remaining input.
+        if bytes.len() > self.limit {
+            return Err(bincode::ErrorKind::SizeLimit.into());
+        }
+        bincode::DefaultOptions::new()
+            .with_fixint_encoding()
+            .with_limit(self.limit as u64)
+            .reject_trailing_bytes()
+            .deserialize(bytes)
+    }
 }
 
 #[cfg(test)]
@@ -121,6 +167,72 @@ mod tests {
             name: "owner".into(),
         })
     }
+    #[test]
+    fn record_payload_accepts_bulk_bytes_and_preserves_wire_limits() {
+        use serde::de::value::{
+            BorrowedBytesDeserializer, BorrowedStrDeserializer, Error, SeqDeserializer,
+        };
+        // serde-rs/bytes tests/test_serde.rs:3-17's empty/ABC byte vectors,
+        // plus non-ASCII bytes and the legacy sequence-format fallback.
+        for bytes in [b"".as_slice(), b"ABC".as_slice(), &[0, 127, 128, 255]] {
+            assert_eq!(
+                deserialize_payload(BorrowedBytesDeserializer::<Error>::new(bytes)).unwrap(),
+                bytes
+            );
+            assert_eq!(
+                deserialize_payload(SeqDeserializer::<_, Error>::new(bytes.iter().copied()))
+                    .unwrap(),
+                bytes
+            );
+        }
+        assert!(deserialize_payload(BorrowedStrDeserializer::<Error>::new("ABC")).is_err());
+        #[derive(Serialize, Deserialize)]
+        struct LegacyRecord {
+            anchors: Vec<(DefPath, u32)>,
+            types: Vec<TypeRef>,
+            payload: Vec<u8>,
+        }
+        for len in [0, 1, 127, 8192] {
+            let payload: Vec<_> = (0..len).map(|n| n as u8).collect();
+            let legacy = LegacyRecord {
+                anchors: vec![],
+                types: vec![],
+                payload: payload.clone(),
+            };
+            let encoded = bincode::serialize(&legacy).unwrap();
+            let record: Record = options(encoded.len()).deserialize(&encoded).unwrap();
+            assert_eq!(record.payload, payload);
+            assert_eq!(bincode::serialize(&record).unwrap(), encoded);
+            let old: LegacyRecord =
+                bincode::deserialize(&bincode::serialize(&record).unwrap()).unwrap();
+            assert_eq!(old.payload, payload);
+            assert!(
+                options(encoded.len() - 1)
+                    .deserialize::<Record>(&encoded)
+                    .is_err()
+            );
+            assert!(
+                options(encoded.len())
+                    .deserialize::<Record>(&encoded[..encoded.len() - 1])
+                    .is_err()
+            );
+            let mut trailing = encoded.clone();
+            trailing.push(0);
+            assert!(
+                options(trailing.len())
+                    .deserialize::<Record>(&trailing)
+                    .is_err()
+            );
+        }
+        let mut forged = vec![0; 24];
+        forged[16..24].copy_from_slice(&u64::MAX.to_le_bytes());
+        assert!(
+            options(forged.len())
+                .deserialize::<Record>(&forged)
+                .is_err()
+        );
+    }
+
     #[test]
     fn ordinary_records_relocate_owned_anchors_and_refuse_foreign_or_missing_sites() {
         let store = Arc::new(Memory::default());
