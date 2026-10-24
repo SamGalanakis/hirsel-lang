@@ -75,15 +75,7 @@ pub(crate) unsafe fn scope_enter(ctx: *mut TaskCtx, out: *mut u64) -> Stopped<u8
     let owner = engine::current(ctx);
     let (index, generation) = {
         let s = scheduler(ctx);
-        let generation = s.fresh_generation();
-        let index = match s.vacant_scopes.pop() {
-            Some(index) => index,
-            None => {
-                s.scopes.push(None);
-                (s.scopes.len() - 1) as u32
-            }
-        };
-        (index, generation)
+        s.take_scope_slot()
     };
     let word = handle(index, generation);
     engine::driver(ctx).objects.inert(Kind::Scope, word);
@@ -213,11 +205,7 @@ pub(crate) unsafe fn spawn_certified(
         let s = scheduler(ctx);
         let mut path = s.task(parent as u32).path.clone();
         path.push(ordinal);
-        let generation = s.fresh_generation();
-        let index = s.vacant_tasks.pop().unwrap_or_else(|| {
-            s.tasks.push(None);
-            (s.tasks.len() - 1) as u32
-        });
+        let (index, generation) = s.take_task_slot();
         (index, generation, path)
     };
     let stack = unsafe { (*ctx).worker() }.idle_stacks.take();
@@ -713,8 +701,7 @@ unsafe fn exit_scope(
             }
             s.vacate_task(child);
         }
-        let deadline = s.scopes[scope as usize].take().and_then(|row| row.deadline);
-        s.vacant_scopes.push(scope);
+        let deadline = s.take_scope(scope).deadline;
         (deadline, Next::Keep)
     })?;
     if let Some(ScopeDeadline {

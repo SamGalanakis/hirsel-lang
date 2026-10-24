@@ -1022,6 +1022,7 @@ unsafe fn resume(run: *mut RunShared, exec: &Exec, task: u32, permit: bool) {
 /// # Safety
 /// `call` came from a live [`call_home`].
 pub(crate) unsafe fn run_call(call: Call) {
+    crate::tasks::role::unlent("a home call");
     // SAFETY: the caller waits for `done`, so its closure and completion are live.
     unsafe {
         let claimed = call.claim.claim();
@@ -1531,6 +1532,7 @@ pub(crate) unsafe fn call_home(ctx: *mut TaskCtx, call: &mut dyn FnMut()) -> Sto
 
 /// As call_home, with an explicit run for a facade whose caller may be home.
 pub(crate) unsafe fn call_home_in(run: *mut RunShared, call: &mut dyn FnMut()) -> Stopped<()> {
+    crate::tasks::role::unlent("a home call");
     // SAFETY: the facade is owned by this live run.
     let run = unsafe { &*run };
     let caller = own_exec();

@@ -38,6 +38,24 @@ impl Frame {
     pub(crate) fn mark_saved(&self) {
         self.saved.store(true, Ordering::Release);
     }
+
+    /// A frame never published to a worker, for registry ownership tests.
+    #[cfg(test)]
+    pub(crate) fn unpublished(task: u32, saved: bool) -> Arc<Self> {
+        let (notification, queued) = frame::prepared(Image {
+            ctx: std::ptr::null_mut(),
+            task,
+            sp: std::ptr::null_mut(),
+        });
+        drop(queued);
+        Arc::new(Self {
+            notification,
+            owner: AtomicUsize::new(0),
+            saved: AtomicBool::new(saved),
+            #[cfg(feature = "free-qualification")]
+            stop_before_start: false,
+        })
+    }
 }
 
 /// Whether the task's parked stack is available to the logical policy for

@@ -7,10 +7,13 @@
 //! The W1 run token remains the default; concurrent drivers enable this role
 //! before starting workers, after installing boundary coverage.
 
+use std::cell::Cell;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Condvar, Mutex};
 
 use crate::{TaskCtx, context::RunShared};
+
+use super::Scheduler;
 
 // Task contexts are aligned pointers; temporary claims use a u32 task ID.
 // This marker is used only by acquire_idle, which never permits re-entry.
@@ -134,6 +137,77 @@ impl Role {
             false
         }
     }
+}
+
+thread_local! {
+    /// Whether this thread is inside a [`with_role`] closure. A table borrow
+    /// is lexical and non-suspending: every host, user, home-call and fiber
+    /// switch boundary checks that none is live.
+    static LENT: Cell<bool> = const { Cell::new(false) };
+}
+
+/// The role-protected task/scope tables, lent to one [`with_role`] closure.
+/// It is neither Send nor storable: the borrow ends when the closure
+/// returns, before any suspension, user code, home call or role release.
+pub(crate) struct RoleTables<'a> {
+    tables: &'a mut Scheduler,
+    _local: std::marker::PhantomData<*mut ()>,
+}
+
+impl std::ops::Deref for RoleTables<'_> {
+    type Target = Scheduler;
+    fn deref(&self) -> &Scheduler {
+        self.tables
+    }
+}
+
+impl std::ops::DerefMut for RoleTables<'_> {
+    fn deref_mut(&mut self) -> &mut Scheduler {
+        self.tables
+    }
+}
+
+struct Lent;
+
+impl Lent {
+    fn new() -> Self {
+        LENT.with(|lent| {
+            assert!(!lent.replace(true), "a role table borrow nested in another");
+        });
+        Self
+    }
+}
+
+impl Drop for Lent {
+    fn drop(&mut self) {
+        LENT.with(|lent| lent.set(false));
+    }
+}
+
+/// Run `f` with the role's tables, entering the role for `ctx`'s task as a
+/// semantic entry does. The borrow cannot outlive `f`; a nested borrow, or a
+/// boundary reached inside `f`, is an invariant fault.
+pub(crate) fn with_role<T>(ctx: *mut TaskCtx, f: impl FnOnce(&mut RoleTables<'_>) -> T) -> T {
+    let tables = super::role_tables(ctx);
+    let _lent = Lent::new();
+    f(&mut RoleTables {
+        tables,
+        _local: std::marker::PhantomData,
+    })
+}
+
+/// No role table borrow may span `boundary` on this thread. Like every
+/// runtime panic, this aborts at the compiled-code boundary.
+#[inline]
+pub(crate) fn unlent(boundary: &str) {
+    if LENT.with(Cell::get) {
+        panic!("a role table borrow spans {boundary}");
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn lent() -> bool {
+    LENT.with(Cell::get)
 }
 
 /// Role ownership for an idle callback, independent of any task context.
@@ -293,6 +367,7 @@ pub(crate) unsafe fn release(ctx: *mut TaskCtx) {
 /// Return the actual released ownership under the same predicate lock. Idle
 /// task accounting may own the role without opening a semantic entry guard.
 unsafe fn release_owned(ctx: *mut TaskCtx) -> bool {
+    unlent("a role release");
     // SAFETY: caller contract.
     let role = unsafe { &(*(*ctx).run_ptr()).role };
     if role.enabled.load(Ordering::Acquire) {
@@ -368,6 +443,7 @@ impl Segment {
     /// # Safety
     /// The caller holds no scheduler borrow across the compiled code call.
     pub(crate) unsafe fn new(ctx: *mut TaskCtx) -> Self {
+        unlent("compiled user code");
         // SAFETY: caller contract.
         unsafe {
             let depth = std::mem::take(&mut (*ctx).role_depth);
