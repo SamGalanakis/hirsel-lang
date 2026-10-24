@@ -1508,6 +1508,8 @@ pub(crate) fn busy(run: &RunShared) -> u32 {
 /// Run `call` on the home thread: at once on home and in a run without compute workers;
 /// otherwise the calling thread, which holds the run, posts it and waits. A stopped run's
 /// home thread takes no call: its stop.
+/// The synchronous loan retains the caller's compute permit. A genuinely
+/// blocking wait releases it explicitly before calling (host_waits::wait).
 ///
 /// # Safety
 /// `ctx` is live; `call` does not suspend and holds nothing of the calling thread's.
@@ -1550,9 +1552,10 @@ pub(crate) unsafe fn call_home_in(run: *mut RunShared, call: &mut dyn FnMut()) -
     let mut ended = done.ended.lock().unwrap();
     let exec = unsafe { &*current(execs) };
     let held = exec.held.load(Ordering::Relaxed);
-    if held {
-        execs.permits.release(exec);
-    }
+    // The caller can lend R and scheduler borrows to this synchronous loan.
+    // Returning C here would require R -> C on return, while another selected
+    // worker can hold C waiting for R. Keep the existing permit, as for the
+    // dedicated commit loan; home serves Call without acquiring either C or R.
     while ended.is_none() {
         ended = done.bell.wait(ended).unwrap();
     }
@@ -1562,10 +1565,10 @@ pub(crate) unsafe fn call_home_in(run: *mut RunShared, call: &mut dyn FnMut()) -
     if !claimed {
         return Err(run.control.stopped().unwrap_or(Stop::Requested));
     }
-    if held {
-        execs
-            .permits
-            .acquire(exec, Some(&run.control), run.worker_metrics.as_deref())?;
+    // The old permit reacquisition observed a stop after the borrowed callback
+    // completed. Keep that boundary, even though no permit wait is needed.
+    if held && let Some(stop) = run.control.stopped() {
+        return Err(stop);
     }
     Ok(())
 }
@@ -1872,6 +1875,9 @@ pub(crate) unsafe fn home_posts(run: *mut RunShared) -> bool {
     let execs = unsafe { (*(*run).execs.get()).as_deref().unwrap() };
     !execs.home.inbox.lock().unwrap().posts.is_empty()
 }
+
+#[cfg(test)]
+mod progress_tests;
 
 #[cfg(test)]
 mod tests {
