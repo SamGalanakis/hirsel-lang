@@ -134,7 +134,10 @@ fn tool(stage: StageName, command: &mut Command) -> Result<std::process::Output,
 
 /// Run `command` in its own process group to completion, or kill the group
 /// once `timeout` has passed and fail.
-pub(super) fn bounded(command: &mut Command, timeout: Duration) -> Result<std::process::Output, NativeError> {
+pub(super) fn bounded(
+    command: &mut Command,
+    timeout: Duration,
+) -> Result<std::process::Output, NativeError> {
     use std::os::unix::process::CommandExt;
     use std::process::Stdio;
     let child = command
@@ -2468,6 +2471,37 @@ pub struct Launched {
 pub enum Runnable {
     Executable(PathBuf),
     Image(super::runner::Image),
+    Closed(ClosedExecutable),
+}
+
+/// The selected executable and its materialized closed runtime share one
+/// launch lifetime; no loader or DSO path is rediscovered by process().
+#[derive(Clone)]
+pub struct ClosedExecutable {
+    executable: PathBuf,
+    runtime: std::sync::Arc<super::object_queries::runtime::RuntimeFiles>,
+    emulator: Option<PathBuf>,
+}
+impl std::fmt::Debug for ClosedExecutable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClosedExecutable")
+            .field("executable", &self.executable)
+            .field("emulator", &self.emulator)
+            .finish_non_exhaustive()
+    }
+}
+impl Runnable {
+    pub(crate) fn closed(
+        executable: PathBuf,
+        runtime: super::object_queries::runtime::RuntimeFiles,
+        emulator: Option<PathBuf>,
+    ) -> Self {
+        Self::Closed(ClosedExecutable {
+            executable,
+            runtime: std::sync::Arc::new(runtime),
+            emulator,
+        })
+    }
 }
 
 /// Run a linked executable with an empty granted directory under `dir`.
@@ -2899,9 +2933,36 @@ fn process(
     command: &Command,
 ) -> Result<(Command, Option<std::fs::File>), NativeError> {
     let (mut process, hold) = match runnable {
-        Runnable::Executable(executable) => (launcher(executable, target, toolchain)?, None),
+        Runnable::Executable(executable) => {
+            let mut process = launcher(executable, target, toolchain)?;
+            process.env_clear();
+            (process, None)
+        }
+        Runnable::Closed(executable) => {
+            let selected = executable
+                .runtime
+                .command(executable.emulator.as_deref(), &executable.executable);
+            let process = if !toolchain.wrapper.is_empty() && executable.emulator.is_none() {
+                let mut wrapped = Command::new(&toolchain.wrapper[0]);
+                wrapped
+                    .env_clear()
+                    .args(&toolchain.wrapper[1..])
+                    .arg(selected.get_program())
+                    .args(selected.get_args());
+                for (name, value) in selected.get_envs() {
+                    if let Some(value) = value {
+                        wrapped.env(name, value);
+                    }
+                }
+                wrapped
+            } else {
+                selected
+            };
+            (process, None)
+        }
         Runnable::Image(image) => {
             let mut process = launcher(&image.runner.path, target, toolchain)?;
+            process.env_clear();
             process
                 .arg("exec")
                 .arg(tooling)
@@ -2910,7 +2971,7 @@ fn process(
             (process, super::runner::hold(&image.path))
         }
     };
-    process.env_clear().args(command.get_args());
+    process.args(command.get_args());
     for (name, value) in command.get_envs() {
         if let Some(value) = value {
             process.env(name, value);
