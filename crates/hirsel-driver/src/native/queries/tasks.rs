@@ -16,7 +16,7 @@ use std::{
     task::Poll,
 };
 
-const FAILURE: hirsel_artifact_store::Domain = hirsel_artifact_store::Domain {
+const FAILURE: hirsel_engine::store::Domain = hirsel_engine::store::Domain {
     kind: 0x4e00_001e,
     schema: 1,
 };
@@ -41,7 +41,7 @@ enum Work {
 struct Request {
     key: QueryId,
     work: Work,
-    reads: Vec<(QueryId, hirsel_artifact_store::Reference)>,
+    reads: Vec<(QueryId, hirsel_engine::store::Reference)>,
 }
 
 /// Immutable dispatch/read plans, built during snapshot admission. Factory
@@ -50,7 +50,7 @@ pub struct NativeTasks {
     pub snapshot: Arc<NativeSnapshot>,
     requests: BTreeMap<Id, Arc<Request>>,
     weight: MemoryWeight,
-    fallback: hirsel_artifact_store::Reference,
+    fallback: hirsel_engine::store::Reference,
     pub created: AtomicU64,
     pub ready_transformations: AtomicU64,
 }
@@ -187,7 +187,7 @@ impl NativeTasks {
             ready_transformations: AtomicU64::new(0),
         }))
     }
-    pub fn failure(&self, message: &str) -> hirsel_artifact_store::Reference {
+    pub fn failure(&self, message: &str) -> hirsel_engine::store::Reference {
         self.snapshot
             .store
             .put_content(FAILURE, message.as_bytes())

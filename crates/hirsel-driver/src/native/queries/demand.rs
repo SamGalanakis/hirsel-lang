@@ -4,7 +4,7 @@ use super::{
     declarations::NativeDeclarations, instance::*, ready_source::ReadySourceFacts, recipes::*,
     source_inputs::NativeSourceProvider, *,
 };
-use hirsel_artifact_store::{Action, Domain, Reference};
+use hirsel_engine::store::{Action, Domain, Reference};
 use hirsel_engine::{NativeRecordSource, NativeRecords, Verify, store::ResultStore};
 use hirsel_layout::{instance::InstanceKey, layout::LayoutBuilder};
 use hirsel_lir::{

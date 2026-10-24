@@ -415,7 +415,7 @@ fn check_error(error: ToolError) -> Result<CheckOutput, ToolError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hirsel_artifact_store::{Action, Address, Domain};
+    use hirsel_engine::store::{Action, Address, Domain};
     use hirsel_engine::{QueryError, QueryOutput, runtime::*};
     use hirsel_syntax::ContentHash;
     use std::sync::{
@@ -446,7 +446,7 @@ mod tests {
         fn create(
             &self,
             _: QueryId,
-        ) -> Result<Box<dyn QueryTask>, hirsel_artifact_store::Reference> {
+        ) -> Result<Box<dyn QueryTask>, hirsel_engine::store::Reference> {
             Ok(Box::new(Task(self.0)))
         }
     }

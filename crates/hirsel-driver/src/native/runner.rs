@@ -26,7 +26,7 @@
 use super::kit::{Kind, Kit, Link};
 use super::link::{Toolchain, checked};
 use super::stages::{NativeError, StageName};
-use hirsel_artifact_store::{Action, Address, Domain, Reference};
+use hirsel_engine::store::{Action, Address, Domain, Reference};
 use hirsel_lir::layout_types::TargetSpec;
 use hirsel_syntax::ContentHash;
 use object::read::elf::{Dyn, FileHeader, ProgramHeader, Rela, SectionHeader, Sym};

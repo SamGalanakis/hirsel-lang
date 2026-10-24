@@ -2,7 +2,7 @@
 //! existing pass implementation; actual final C owns every accepted envelope.
 use super::*;
 use crate::native::stages::lower_local_raw;
-use hirsel_artifact_store::{Action, Contents, Domain, Reference};
+use hirsel_engine::store::{Action, Contents, Domain, Reference};
 use hirsel_engine::store::ResultStore;
 use hirsel_lir::stage::{Ready, StageKind, ValidatedUnit, Value};
 use hirsel_lir::validate::{Inputs, NativeCache, NativeEnvironment, ValidationContext};
@@ -18,7 +18,7 @@ pub const UNIT_SUMMARY_DOMAIN: Domain = Domain {
 
 struct SelectedContents(Arc<dyn ResultStore>);
 impl Contents for SelectedContents {
-    fn get_content(&self, reference: Reference) -> Option<hirsel_artifact_store::Bytes> {
+    fn get_content(&self, reference: Reference) -> Option<hirsel_engine::store::Bytes> {
         self.0.get_content(reference)
     }
     fn put_content(&self, domain: Domain, bytes: &[u8]) -> Option<Reference> {
