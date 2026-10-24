@@ -107,7 +107,7 @@ fn native_ready_tasks_validate_cold_and_fresh_snapshots_with_current_source_invo
                 policy,
                 MemoryWeight {
                     scratch: 16 << 20,
-                    retained: 64 << 10,
+                    retained: 1 << 20,
                     stack: 0,
                 },
                 budget.reserve(16 << 20).unwrap(),
@@ -151,7 +151,7 @@ fn native_ready_tasks_validate_cold_and_fresh_snapshots_with_current_source_invo
                 0,
                 MemoryWeight {
                     scratch: 16 << 20,
-                    retained: 64 << 10,
+                    retained: 1 << 20,
                     stack: 0,
                 },
                 budget.reserve(16 << 20).unwrap(),
@@ -167,7 +167,8 @@ fn native_ready_tasks_validate_cold_and_fresh_snapshots_with_current_source_invo
             let request = runtime.request(&[tasks.discovery_id()]);
             let result = runtime.wait(request).unwrap_or_else(|error| {
                 panic!(
-                    "{}",
+                    "discovery phase: {error:?}, {:?}: {}",
+                    runtime.stats(),
                     String::from_utf8_lossy(&store.get_content(error).unwrap())
                 )
             });
@@ -175,7 +176,8 @@ fn native_ready_tasks_validate_cold_and_fresh_snapshots_with_current_source_invo
             let arena_request = runtime.request(&[arenas.query_id()]);
             let arena_output = runtime.wait(arena_request).unwrap_or_else(|error| {
                 panic!(
-                    "{}",
+                    "arena phase: {error:?}, {:?}: {}",
+                    runtime.stats(),
                     String::from_utf8_lossy(&store.get_content(error).unwrap())
                 )
             })[0];
@@ -216,7 +218,7 @@ fn native_ready_tasks_validate_cold_and_fresh_snapshots_with_current_source_invo
                 snapshot.clone(),
                 MemoryWeight {
                     scratch: 16 << 20,
-                    retained: 64 << 10,
+                    retained: 1 << 20,
                     stack: 0,
                 },
             )
@@ -242,7 +244,8 @@ fn native_ready_tasks_validate_cold_and_fresh_snapshots_with_current_source_invo
             let selected = ready_runtime.request(&[main.ready_query_id()]);
             let ready = ready_runtime.wait(selected).unwrap_or_else(|error| {
                 panic!(
-                    "{}",
+                    "Ready phase: {error:?}, {:?}: {}",
+                    ready_runtime.stats(),
                     String::from_utf8_lossy(&store.get_content(error).unwrap())
                 )
             });
