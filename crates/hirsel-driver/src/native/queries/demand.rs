@@ -28,6 +28,10 @@ const REQUEST_LAYOUTS: Domain = Domain {
     kind: 0x4e00_0018,
     schema: 2,
 };
+const INSTANCE_PLAN: Domain = Domain {
+    kind: 0x4e00_002a,
+    schema: 1,
+};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 struct NamedKey {
@@ -56,6 +60,7 @@ pub(super) struct Request {
     key: NamedKey,
     recipe: Reference,
     layouts: Option<Reference>,
+    plan: Reference,
 }
 impl Request {
     pub(super) fn source_definition(&self) -> Option<&hirsel_syntax::DefPath> {
@@ -88,6 +93,8 @@ pub struct DiscoveredInstance {
     pub templates: super::optimizer::TemplateFacts,
     pub operation_freedom: hirsel_rc::closure_calls::OperationFreedom,
     pub emission: super::emission::EmissionFacts,
+    /// Independent original plan selections, re-derived before C on every hit.
+    pub adapters: Vec<hirsel_lir::ir::Symbol>,
 }
 
 /// One immutable request snapshot. Source/native proof authority stays in the
@@ -219,16 +226,7 @@ impl DemandInstances {
             .completed
             .get(key.instance.encoding())
             .ok_or("native instance dependency has not completed")?;
-        let request = self
-            .requests
-            .get(key.instance.encoding())
-            .ok_or("native instance dependency has no selected request")?;
-        let operations = super::instance_operations::InstanceOperations {
-            declarations: environment.operations,
-            source: request
-                .source_definition()
-                .map(|_| (key.instance.definition(), key.instance.digest())),
-        };
+        let operations = self.operations(key, environment)?;
         let scoped = NativeEnvironment {
             operations: &operations,
             ..*environment
@@ -242,6 +240,42 @@ impl DemandInstances {
                 output.templates.library, output.product.product.action, output.product.product.record,
             ))?;
         Ok((output.clone(), linkage))
+    }
+    pub(super) fn operations<'a>(
+        &'a self,
+        key: &'a InstanceAddress,
+        environment: &NativeEnvironment<'a>,
+    ) -> Result<super::instance_operations::InstanceOperations<'a>, String> {
+        let output = self
+            .completed
+            .get(key.instance.encoding())
+            .ok_or("native operation scope has no completed original plan")?;
+        let request = self
+            .requests
+            .get(key.instance.encoding())
+            .ok_or("native operation scope has no original request")?;
+        Ok(super::instance_operations::InstanceOperations {
+            declarations: environment.operations,
+            all_sources: false,
+            source: request
+                .source_definition()
+                .map(|_| (key.instance.definition(), key.instance.digest())),
+            pretransfer: Some(
+                output
+                    .adapters
+                    .iter()
+                    .map(|symbol| {
+                        environment
+                            .operations
+                            .pretransfer_adapters()
+                            .iter()
+                            .find(|reference| &reference.adapter == symbol)
+                            .cloned()
+                            .ok_or("native snapshot lost an independently planned adapter")
+                    })
+                    .collect::<Result<Vec<_>, _>>()?,
+            ),
+        })
     }
     fn address(&self, key: InstanceKey) -> InstanceAddress {
         InstanceAddress {
@@ -299,11 +333,20 @@ impl DemandInstances {
             key: NamedKey::of(key),
             recipe,
             layouts,
+            plan: self.put(
+                INSTANCE_PLAN,
+                &self
+                    .records
+                    .encode(engine, &InstancePlan::capture(instances, id, table))
+                    .ok_or("native original plan encoding failed")?,
+            )?,
         })
     }
     pub(super) fn admit(&mut self, request: Request) -> Result<InstanceAddress, String> {
         let key = request.key.bind()?;
         if ![SOURCE_RECIPE, LIBRARY_RECIPE].contains(&request.recipe.domain)
+            || request.plan.domain != INSTANCE_PLAN
+            || self.store.get_content(request.plan).is_none()
             || (request.recipe.domain == LIBRARY_RECIPE) != request.layouts.is_some()
             || request.layouts.is_some_and(|r| r.domain != REQUEST_LAYOUTS)
             || self.store.get_content(request.recipe).is_none()
@@ -314,7 +357,7 @@ impl DemandInstances {
             return Err("native instance request has missing or foreign products".into());
         }
         if let Some(previous) = self.requests.get(key.encoding()) {
-            if previous.recipe != request.recipe || previous.layouts != request.layouts {
+            if previous != &request {
                 return Err("one native address has inconsistent recipes".into());
             }
         } else {
@@ -324,6 +367,48 @@ impl DemandInstances {
             self.requests.insert(key.encoding().to_vec(), request);
         }
         Ok(self.address(key))
+    }
+
+    /// Reconstruct only independent declarations and ABI inputs. Ordinary
+    /// instance plans carry typed actuals; current GEN-5 selects materialized
+    /// source references. No source, Value or Ready body is read here.
+    pub(super) fn bind_planned_adapters<'a>(
+        &self,
+        source: &impl NativeSourceProvider,
+        requests: impl IntoIterator<Item = &'a Request>,
+        registry: &mut hirsel_layout::operation::OperationRegistry,
+    ) -> Result<(), String> {
+        let declarations = source.declarations();
+        let owners = hirsel_rc::library::owners(
+            &declarations.program.types,
+            &declarations.program.signatures,
+        )
+        .over(&declarations.program.owners);
+        let mut layouts = LayoutBuilder::new(&self.target, &owners);
+        layouts.prepare_native_controls();
+        let mut instances = Instances::new(
+            declarations.program.types.clone(),
+            declarations.program.memo.clone(),
+        );
+        for request in requests {
+            let bytes = self
+                .store
+                .get_content(request.plan)
+                .ok_or("missing native original instance plan")?;
+            let plan: InstancePlan = self
+                .records
+                .decode(source, &bytes)
+                .ok_or("native original instance plan decoding failed")?;
+            plan.register(
+                &declarations.program,
+                &declarations.context,
+                &request.key.bind()?,
+                request.source_definition().is_none(),
+                &mut layouts,
+                &mut instances,
+            )?;
+        }
+        hirsel_rc::import::bind_pretransfer_inventory(registry, &declarations.program, &instances)
     }
 
     /// Existing source/GEN-5 and constant root policy, with compact declaration
@@ -458,6 +543,7 @@ impl DemandInstances {
         &mut self,
         key: &InstanceAddress,
         product: Arc<InstanceProduct>,
+        adapters: Vec<hirsel_lir::ir::Symbol>,
     ) -> Result<Arc<DiscoveredInstance>, String> {
         let discovery = self.descriptor(key, &product)?;
         let ready_source = ReadySourceFacts::decode(&discovery.ready_source)?;
@@ -476,6 +562,7 @@ impl DemandInstances {
             templates: discovery.templates,
             operation_freedom: discovery.operation_freedom,
             emission: discovery.emission,
+            adapters,
         });
         self.completed
             .insert(key.instance.encoding().to_vec(), output.clone());
@@ -548,6 +635,12 @@ impl DemandInstances {
         } else {
             inputs.declarations().program.operation_registry()
         };
+        self.bind_planned_adapters(inputs, [&request], &mut operations)?;
+        let adapters = operations
+            .pretransfer_adapters
+            .iter()
+            .map(|reference| reference.adapter.clone())
+            .collect::<Vec<_>>();
         let manifest = inputs.declarations().manifest()?;
         let environment = NativeEnvironment {
             target: &self.target,
@@ -558,7 +651,7 @@ impl DemandInstances {
         if previous.is_some()
             && inputs.query_policy().reuse
             && let Some(product) = self.queries.lookup(key, action, &environment)
-            && let Ok(output) = self.discovered(key, product)
+            && let Ok(output) = self.discovered(key, product, adapters.clone())
         {
             return Ok(output);
         }
@@ -656,6 +749,33 @@ impl DemandInstances {
             hirsel_rc::library::instantiate(&mut layouts, &mut instances, request)
                 .map_err(|e| format!("native library registration: {e:?}"))?;
         }
+        // Batch import discovers these prerequisites while building the adapter.
+        // A one-instance import must plan them before checking the caller too.
+        // Use original instance actuals, never the candidate's direct-call rows.
+        let primitives = instances
+            .ids()
+            .map(|other| {
+                hirsel_rc::library::keyed::primitive_request(
+                    &inputs.declarations().program,
+                    instances.view(other).key.definition(),
+                    instances.actuals[other.index()].arguments.clone(),
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("native adapter primitive plan: {e:?}"))?;
+        for request in primitives.into_iter().flatten() {
+            hirsel_rc::library::instantiate(&mut layouts, &mut instances, request)
+                .map_err(|e| format!("native adapter primitive registration: {e:?}"))?;
+        }
+        let rebound = super::instance_operations::bind_pretransfer(
+            &operations,
+            layouts.table(),
+            &self.target,
+        )?;
+        for (actual, reference) in operations.pretransfer_actuals.iter_mut().zip(&rebound) {
+            actual.1 = reference.abi;
+        }
+        operations.pretransfer_adapters = rebound;
         let statics = hirsel_rc::import::instance_statics(
             &inputs.declarations().program,
             &instances,
@@ -754,10 +874,11 @@ impl DemandInstances {
             })
             .collect::<Vec<_>>();
 
-        let additional_abis = reached_finalizers
+        let mut additional_abis = reached_finalizers
             .iter()
             .map(|(_, f)| f.abi)
             .collect::<Vec<_>>();
+        additional_abis.extend(operations.pretransfer_adapters.iter().map(|r| r.abi));
         let mut portable_finalizers = reached_finalizers
             .into_iter()
             .map(|(layout, finalizer)| {
@@ -793,6 +914,6 @@ impl DemandInstances {
             discovery,
             statics_finalizers,
         )?;
-        self.discovered(key, product)
+        self.discovered(key, product, adapters)
     }
 }

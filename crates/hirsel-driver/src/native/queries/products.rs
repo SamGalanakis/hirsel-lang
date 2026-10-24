@@ -436,11 +436,21 @@ impl NativeProducts for DemandProducts {
             .map(|(closure, _)| closure)
             .collect::<Vec<_>>();
         let binding = Binding::new(environment.target, &closures)?;
+        let operations = super::instance_operations::InstanceOperations {
+            declarations: environment.operations,
+            source: None,
+            all_sources: true,
+            pretransfer: Some(super::instance_operations::bind_pretransfer(
+                environment.operations,
+                &binding.table,
+                environment.target,
+            )?),
+        };
         let inputs = Inputs {
             memo: Default::default(),
             target: environment.target,
             layouts: &binding.table,
-            operations: environment.operations,
+            operations: &operations,
             manifest: environment.manifest,
             discharge: environment.discharge,
         };
