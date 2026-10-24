@@ -18,10 +18,11 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 # The harness removes the randomized delay only; production always uses jitter.
-DRIVER = '''import runpy, sys
+DRIVER = '''import os, runpy, sys
 from unittest.mock import patch
 module = runpy.run_path('tools/land', run_name='land_test')
 module['LandQueue'].HEARTBEAT = .05
+module['main'].__globals__['BATCH'] = int(os.environ.get('FAKE_BATCH', module['BATCH']))
 with patch('random.uniform', return_value=0):
     sys.exit(module['main']())
 '''
@@ -38,6 +39,13 @@ if os.environ.get('FAKE_RED_AFTER_RACE') and STAGE == os.environ['FAKE_RED_AFTER
 
 FAKES = {
     '.buck2/bin/buck2': '#!/bin/sh\necho root//:a\n',
+    # Land slots are fresh worktrees: prepare installs the fake Buck2 there.
+    'tools/buck2/prepare.py': '''import os, pathlib
+buck2 = pathlib.Path('.buck2/bin/buck2')
+buck2.parent.mkdir(parents=True, exist_ok=True)
+buck2.write_text('#!/bin/sh\\necho root//:a\\n')
+buck2.chmod(0o755)
+''',
     'tools/buck2/sync.py': '',
     'tools/check-hot-files': '',
     'tools/buck2/event_logs.py': '',
@@ -150,7 +158,8 @@ for line in sys.stdin:
         # Hold the first check so later, faster lands cannot overtake it.
         with (self.lane / 'tools/buck2/fmt.py').open('a') as out:
             out.write("""
-if pathlib.Path.cwd().name == 'lane':
+# Only the first lane's own tree: it lands alone, and later batches do not hold.
+if pathlib.Path('lane-0.txt').exists() and not pathlib.Path('lane-1.txt').exists():
     import time
     (root / 'holding').touch()
     deadline = time.monotonic() + 20
@@ -214,6 +223,12 @@ if pathlib.Path.cwd().name == 'lane':
             with (self.lane / f'tools/buck2/{fake}.py').open('a') as out:
                 out.write("if pathlib.Path('red.txt').is_file() and pathlib.Path('red.txt').read_text() == 'red\\n':\n"
                           f"    print({error!r})\n    sys.exit(1)\n")
+            if red == 'build':
+                # Each build records when it ran, to show that slots build at once.
+                with (self.lane / 'tools/buck2/event_logs.py').open('a') as out:
+                    out.write("import time\nstarted = time.time()\ntime.sleep(.4)\n"
+                              "with (root / 'builds').open('a') as log:\n"
+                              "    log.write(f'{started} {time.time()}\\n')\n")
             self.git(self.lane, 'commit', '-qam', f'red {red}')
         # The fake checks are main's; only each lane's own commit is queued.
         hook = self.origin / 'hooks/pre-receive'
@@ -300,13 +315,33 @@ if pathlib.Path.cwd().name == 'lane':
         outputs = [self.finish_land(land, 1 if i == 2 else 0) for i, land in enumerate(lands)]
         self.assertIn('error[E0425]: red.txt is red', outputs[2])
         self.assertIn('refusing to push a red tree', outputs[2])
-        # All four red; lanes 0-1 green and pushed; lane 2 alone red; lane 3 green.
-        self.assertEqual(outputs[0].count('workspace build'), 4, outputs[0])
+        # All four red; lanes 0-1 and 2-3 at once; lanes 0-1 green and pushed; lanes 2 and 3 at once,
+        # lane 2 red, lane 3 green (checked again if it finished before lanes 0-1 were pushed).
+        self.assertIn(outputs[0].count('workspace build'), (5, 6), outputs[0])
         received = (checks / 'received').read_text().splitlines()
         self.assertEqual(self.subjects(received), ['lane 1', 'lane 3'])
-        self.assertLess(outputs[0].index('pushed ' + received[0][:12]), outputs[0].index('with lane2 (ticket 4)'))
+        builds = sorted(tuple(map(float, line.split())) for line in (checks / 'builds').read_text().splitlines())
+        self.assertTrue(any(later[0] < earlier[1] for earlier, later in zip(builds, builds[1:])), builds)
         self.assertEqual(self.subjects(self.landed(outputs[1])), ['lane 1'])
         self.assertEqual(self.main_log()[:4], ['lane 3', 'lane 1', 'lane 0', 'red build'])
+        self.assertEqual(self.queued(), [])
+
+    def test_while_a_red_batch_bisects_the_next_batch_is_checked_speculatively(self):
+        self.env['FAKE_BATCH'] = '2'
+        checks, lanes, lands, holder = self.batch_lanes(4, edits={1: ('red.txt', 'red\n')}, red='build')
+        holder.unlink()
+        outputs = [self.finish_land(land, 1 if i == 1 else 0) for i, land in enumerate(lands)]
+        head = outputs[0]
+        self.assertIn('batch of 2 tickets', head)
+        # Lanes 0 and 1 bisect in two slots while the third checks lanes 2 and 3.
+        self.assertLess(head.index('speculative batch of 2 tickets'), head.index('ticket 3 for lane1: refusing'))
+        self.assertIn('error[E0425]: red.txt is red', outputs[1])
+        for i in (2, 3):
+            self.assertEqual(self.subjects(self.landed(outputs[i])), [f'lane {i}'])
+        self.assertEqual(self.main_log()[:4], ['lane 3', 'lane 2', 'lane 0', 'red build'])
+        builds = sorted(tuple(map(float, line.split())) for line in (checks / 'builds').read_text().splitlines())
+        self.assertLessEqual(max(sum(start < end and stop > begin for start, stop in builds)
+                                 for begin, end in builds), 3)
         self.assertEqual(self.queued(), [])
 
     def test_a_conflict_in_the_middle_ticket_leaves_only_that_ticket(self):
@@ -644,7 +679,8 @@ if not marker.exists():
         self.git(self.lane, 'commit', '-qm', 'generator')
         landed = self.land()
         self.assertEqual(landed.returncode, 0, landed.stdout + landed.stderr)
-        self.assertEqual((self.lane / 'BUCK').read_text(), 'fresh inventory\n')
+        # The checked tree lives in a land slot, which regenerated its inventory.
+        self.assertEqual((self.top / 'lane-land-slots/0/BUCK').read_text(), 'fresh inventory\n')
         self.assertEqual(self.git(self.lane, 'ls-files', 'BUCK'), '')
 
     def test_source_conflicts_still_refuse_the_push_and_abort_the_rebase(self):
@@ -672,26 +708,28 @@ class RetryChecks(unittest.TestCase):
         record['process_start'] = queue.process(os.getpid())
         self.assertIsNone(queue.stale(queue, record))
 
-    def test_uncertain_graph_or_inventory_runs_full_aggregates(self):
+    def slot(self):
         module = runpy.run_path(str(ROOT / 'tools/land'))
-        checks = module['checks']
+        return module['Slot'](0, ROOT, -1)
+
+    def test_uncertain_graph_or_inventory_runs_full_aggregates(self):
         for before, after, graph in ((None, ('a',), 'root//:a'),
                                      (('a',), ('b',), 'root//:a'),
                                      (('a',), ('a',), ''),
                                      (('a',), ('a',), 'root//:a')):
             with self.subTest(before=before, after=after, graph=graph):
-                commands = []
+                slot, commands = self.slot(), []
                 def check(name, command):
                     commands.append(command)
                     return True
-                def query(command, **kwargs):
-                    return SimpleNamespace(returncode=0, stdout=graph if command[-1] == 'scope' else 'root//:a', stderr='')
-                with patch.dict(checks.__globals__, inventory=lambda: after, check=check), \
-                        patch('subprocess.run', query), patch('pathlib.Path.exists', return_value=True):
-                    self.assertTrue(checks('scope', before))
+                def run(command):
+                    return SimpleNamespace(returncode=0, stdout=graph if command[-1] == 'scope' else 'root//:a',
+                                           stderr='')
+                slot.check, slot.run, slot.inventory = check, run, lambda: after
+                self.assertTrue(slot.checks('scope', before))
                 scoped = [command for command in commands if '--scope' in command]
                 self.assertEqual(len(scoped), 2 if before == after and graph else 0)
-                self.assertEqual(len(commands), 4)  # sync, build, Clippy, fmt
+                self.assertEqual(len(commands), 5)  # prepare, sync, build, Clippy, fmt
 
     def test_missing_or_malformed_commit_cannot_become_a_push_refspec(self):
         module = runpy.run_path(str(ROOT / 'tools/land'))
@@ -704,11 +742,10 @@ class RetryChecks(unittest.TestCase):
                         resolve('HEAD')
 
     def test_empty_build_query_refuses_the_aggregate(self):
-        module = runpy.run_path(str(ROOT / 'tools/land'))
-        checks = module['checks']
-        with patch.dict(checks.__globals__, check=lambda *args: True), patch('subprocess.run') as query:
-            query.return_value = SimpleNamespace(returncode=0, stdout='', stderr='')
-            self.assertFalse(checks())
+        slot = self.slot()
+        slot.check = lambda *args: True
+        slot.run = lambda command: SimpleNamespace(returncode=0, stdout='', stderr='')
+        self.assertFalse(slot.checks())
 
     def test_scoped_clippy_still_rejects_error_diagnostics(self):
         module = runpy.run_path(str(ROOT / 'tools/buck2/clippy.py'))

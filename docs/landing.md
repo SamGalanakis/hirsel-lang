@@ -100,12 +100,28 @@ finds the first ticket that turns them red. That ticket leaves with its
 first error, and the rest are screened again. A fmt slip therefore costs
 seconds, not a build and a bisection.
 
-A red batch then splits into halves, each checked on the green tree
-before it. A green half is pushed at once, and the rest are settled on top
-of it. A half that is already known red is split without another
-check. A ticket is blamed only when a check of its change alone, on a
-green tree, is red; the culprit exits with that check's first error and
-the rest land. A red that does not repeat blames nobody. A batch of one is a single land, as before.
+The head checks up to three trees at once, each in its own land slot: a
+detached worktree in `<repository>-land-slots/<n>`, with its own Buck2
+daemon, kept warm on main for the next head. The head's own worktree only
+replays commits. Each slot runs `prepare.py` before a check (under a second
+when nothing changed), so a toolchain pin change reaches it. A slot's lock
+is inherited by its check processes, so a check orphaned by a dead head
+keeps the slot until it exits. When no slot is free, for example because
+an expired head that is still alive holds them all, the head checks one
+tree at a time in its own worktree, as a single land always did.
+
+Every group of tickets is checked on the tip pushed so far. A green group
+whose tip has not moved is pushed at once. If another group was pushed
+during its check, it is checked again on the new tip, narrowed by the same
+proof a retry uses (see below). A red group splits into halves, and both
+halves are checked at once. A ticket is blamed only when a check of its
+change alone, on a green tree, is red; the culprit exits with that check's
+first error, and the rest land. A red that does not repeat blames nobody.
+While a red batch bisects, a free slot takes the next waiting batch, of up
+to 16 tickets, screens it and checks it on the pushed tip, as Zuul checks
+the items behind a failing one. A head drives at most four batches, and
+at most one speculative batch is open at a time. A batch of one is a
+single land, as before, checked in a slot.
 
 Every pushed tree is one this attempt checked green. Before the push, the
 head confirms that it still owns the queue head and that every batched
@@ -135,9 +151,12 @@ The design follows four merge trains:
 - [Zuul's dependent pipeline](https://opendev.org/zuul/zuul/src/commit/3daef6c4f92672347ba9a2dcabef4415e35f7ac1/zuul/manager/__init__.py#L1955)
   tests each change on the changes ahead of it. A failing change leaves,
   and the rest move onto the nearest non-failing item (lines 1955–1972).
+  It runs a window of items at once (`zuul/manager/dependent.py` lines
+  36–45).
 - [GitHub's merge queue](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/configuring-pull-request-merges/managing-a-merge-queue)
-  groups up to a maximum number of pull requests per merge group, and
-  removes only the failing one.
+  groups up to a maximum number of pull requests per merge group, builds
+  several groups at once (build concurrency), and removes only the failing
+  one.
 - [LUCI CV](https://chromium.googlesource.com/infra/luci/luci-go/+/f46b764fe10a5595c02d8779d520bbfec9705fe4/cv/internal/tryjob/execute/retry.go#43),
   the Chromium CQ, gives each verdict to one change, and retries failed
   tryjobs before it blames that change (lines 43–60).
@@ -238,7 +257,9 @@ after losing its ticket. Re-execution retains the ticket and PID identity.
 Batch cases: three clean changes
 land with one check run; a fmt-red change in a batch of four leaves in
 the screen, before the one build; a build-red change in a batch of four
-bisects, and the green half is pushed before the rest is checked; a
+bisects with both halves building at once, and the green half lands first;
+while a red batch bisects, the next batch is checked speculatively in the
+third slot, and no more than three builds overlap; a
 conflict in the middle ticket leaves only that ticket; a conflict with a
 red ticket ahead stays queued and lands next; a dead lane's ticket is dropped; a batch that
 loses a push race is checked again and lands whole; and a ticket queued
