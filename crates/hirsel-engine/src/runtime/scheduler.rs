@@ -187,6 +187,19 @@ impl RuntimeCompletion {
     }
 }
 
+// Same policy as Jobs::worker_count_with_cap, also used with smaller
+// test stacks. Both public capacity planning and construction share it.
+fn runtime_layout(jobs: Jobs, budget: u64, stack: usize) -> Option<(usize, u64)> {
+    let stack = u64::try_from(stack).ok()?;
+    if stack == 0 || budget < stack {
+        return None;
+    }
+    let count = jobs
+        .get()
+        .min((budget / stack.checked_mul(2)?).max(1) as usize);
+    Some((count, budget - count as u64 * stack))
+}
+
 impl AdmittedRuntime {
     pub fn new(
         jobs: Jobs,
@@ -216,6 +229,13 @@ impl AdmittedRuntime {
     /// constructor. Includes node indexes, four edges, roots and traversal.
     pub fn query_capacity_bytes(entries: usize) -> Option<u64> {
         u64::try_from(entries).ok()?.checked_mul(ENTRY_BYTES)
+    }
+    /// Original constructor capacity, including its effective worker-stack
+    /// selection. Hosts can preserve subscriber/factory headroom when a small
+    /// query inventory would otherwise reserve fewer rows than `new`.
+    pub fn default_query_capacity(jobs: Jobs, runtime_bytes: u64) -> Option<usize> {
+        let (_, working) = runtime_layout(jobs, runtime_bytes, COMPILER_STACK_BYTES)?;
+        Some(((working / 16) / ENTRY_BYTES).min(usize::MAX as u64) as usize)
     }
     #[cfg(test)]
     fn with_stack(
@@ -247,17 +267,9 @@ impl AdmittedRuntime {
         entries: Option<usize>,
     ) -> std::io::Result<Self> {
         let budget = reservation.bytes();
-        if budget < stack as u64 {
-            return Err(std::io::Error::other(
-                "query budget cannot reserve one compiler stack",
-            ));
-        }
-        // Same policy as Jobs::worker_count_with_cap, also exercised with
-        // smaller test stacks so requested parallel controls really run in parallel.
-        let count = jobs
-            .get()
-            .min((budget / (2 * stack as u64)).max(1) as usize);
-        let working = budget - count as u64 * stack as u64;
+        let (count, working) = runtime_layout(jobs, budget, stack).ok_or_else(|| {
+            std::io::Error::other("query budget cannot reserve one compiler stack")
+        })?;
         let metadata = match entries {
             None => working / 16,
             Some(entries) => Self::query_capacity_bytes(entries)
