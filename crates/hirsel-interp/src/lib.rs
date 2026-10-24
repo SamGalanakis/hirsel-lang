@@ -18,6 +18,7 @@ mod frame;
 pub mod inventory;
 pub mod library;
 pub mod observation;
+pub mod ownership_trace;
 mod parked;
 mod profile;
 mod provider;

@@ -55,12 +55,34 @@ pub fn run_with_runtime(
     operations: &mut impl Operations,
     runtime: &crate::aggregate::RuntimeTypes,
 ) -> Result<Execution, ExecutionError> {
+    run_observed(
+        provider,
+        sources,
+        configuration,
+        arguments,
+        limits,
+        operations,
+        runtime,
+        &mut crate::ownership_trace::NoTrace,
+    )
+}
+
+pub(crate) fn run_observed<O: crate::ownership_trace::Observer>(
+    provider: &mut (impl TirProvider + ?Sized),
+    sources: &SourceMap,
+    configuration: &RunConfiguration,
+    arguments: Vec<Value>,
+    limits: Limits,
+    operations: &mut impl Operations,
+    runtime: &crate::aggregate::RuntimeTypes,
+    observer: &mut O,
+) -> Result<Execution, ExecutionError> {
     use std::{
         future::Future,
         task::{Context, Poll, Waker},
     };
     let mut immediate = crate::provider::ImmediateTirProvider::new(provider);
-    let mut execution = std::pin::pin!(run_with_runtime_async(
+    let mut execution = std::pin::pin!(run_observed_async(
         &mut immediate,
         sources,
         configuration,
@@ -68,6 +90,7 @@ pub fn run_with_runtime(
         limits,
         operations,
         runtime,
+        observer
     ));
     match execution
         .as_mut()
@@ -77,6 +100,7 @@ pub fn run_with_runtime(
         Poll::Pending => unreachable!("an immediate TIR provider suspended"),
     }
 }
+
 /// Execute with saved compiler dependency continuations. Poll and drop this
 /// future on one worker: it retains the interpreter's Rc/RefCell ownership.
 pub async fn run_with_runtime_async(
@@ -87,6 +111,29 @@ pub async fn run_with_runtime_async(
     limits: Limits,
     operations: &mut impl Operations,
     runtime: &crate::aggregate::RuntimeTypes,
+) -> Result<Execution, ExecutionError> {
+    run_observed_async(
+        provider,
+        sources,
+        configuration,
+        arguments,
+        limits,
+        operations,
+        runtime,
+        &mut crate::ownership_trace::NoTrace,
+    )
+    .await
+}
+
+async fn run_observed_async<O: crate::ownership_trace::Observer>(
+    provider: &mut (impl AsyncTirProvider + ?Sized),
+    sources: &SourceMap,
+    configuration: &RunConfiguration,
+    arguments: Vec<Value>,
+    limits: Limits,
+    operations: &mut impl Operations,
+    runtime: &crate::aggregate::RuntimeTypes,
+    observer: &mut O,
 ) -> Result<Execution, ExecutionError> {
     let checker = runtime.checked.clone().map(crate::checked::state);
     let root = crate::runs::Run::new(
@@ -99,8 +146,10 @@ pub async fn run_with_runtime_async(
         checker.as_ref(),
     )
     .await?;
-    let (mut root, result) =
-        crate::runs::execute(provider, sources, limits, operations, runtime, root).await;
+    let (mut root, result) = crate::runs::execute(
+        provider, sources, limits, operations, runtime, root, observer,
+    )
+    .await;
     let execution = &mut root.execution;
     let result = match (result, &checker) {
         (Err(Error::Blocked(waits)), _) => {
@@ -347,7 +396,7 @@ pub(crate) enum Step {
 }
 /// The holding table's size before its first pruning.
 const HOLDING_MARK: usize = 32;
-pub(crate) async fn execute_frames(
+pub(crate) async fn execute_frames<O: crate::ownership_trace::Observer>(
     provider: &mut (impl AsyncTirProvider + ?Sized),
     sources: &SourceMap,
     configuration: &RunConfiguration,
@@ -357,6 +406,7 @@ pub(crate) async fn execute_frames(
     state: &mut Option<Scheduler>,
     execution: &mut Execution,
     entry_consumed: &mut bool,
+    observer: &mut O,
 ) -> Result<Step, Error> {
     let profile = crate::profile::Profile::active(&configuration.entry);
     let provider = &mut Resolved::new(provider);
@@ -378,6 +428,7 @@ pub(crate) async fn execute_frames(
         .ok_or_else(|| invalid("a finished run resumed"))?;
     operations.enter_task(task, frames.iter().any(|f| f.finalized.is_some()));
     loop {
+        observer.sync(task, &frames, sources);
         for start in operations.take_tasks() {
             let mut invocation_types = Default::default();
             let (definition, body, captures, sizes) = match &start.callee {
@@ -1418,6 +1469,14 @@ pub(crate) async fn execute_frames(
                                         .work
                                         .push_front(crate::resources::Work::RetireShadow(shadow));
                                 }
+                                observer.drop_place(
+                                    task,
+                                    frame,
+                                    place,
+                                    &value,
+                                    anchor.site,
+                                    sources,
+                                );
                                 frame.work.push_front(crate::resources::Work::Release(
                                     value,
                                     anchor,
@@ -1742,6 +1801,7 @@ pub(crate) async fn execute_frames(
         if frames.last().unwrap().ending.is_some()
             && let Some(ending) = frames.last_mut().unwrap().ending.take()
         {
+            observer.finish_frame(task, frames.last().unwrap(), sources);
             let mut finished = frames.pop().unwrap();
             // Map the result and mut write-backs into the caller's lifetimes, then
             // end every instance the frame owns (MODE-1, MEM-10, MEM-4).
@@ -2047,14 +2107,18 @@ pub(crate) async fn execute_frames(
             }
         };
         let before = execution.steps;
-        let general = dispatch(
-            frame,
-            codes.get(code),
-            depth,
-            limits,
-            runtime.trace_mode,
-            execution,
-        );
+        let general = if O::ENABLED {
+            true
+        } else {
+            dispatch(
+                frame,
+                codes.get(code),
+                depth,
+                limits,
+                runtime.trace_mode,
+                execution,
+            )
+        };
         profile.add(frame.definition.path.path(), execution.steps - before);
         if !general {
             continue;
@@ -2147,6 +2211,14 @@ pub(crate) async fn execute_frames(
             state.site = site;
             state.definition = Some(frame.definition.path.path().clone());
         }
+        observer.before_step(
+            task,
+            frame,
+            instruction.map(|i| &i.kind),
+            terminator,
+            site,
+            sources,
+        );
         let result = if let Some(instruction) = instruction {
             if runtime.trace_mode == TraceMode::Full {
                 execution.trace.push(TraceEvent::Instruction {
@@ -2200,6 +2272,7 @@ pub(crate) async fn execute_frames(
             }
             execute_terminator(frame, terminator, call.as_ref(), runtime, &mut budgets)
         };
+        observer.after_step(task, frame, result.is_ok());
         match result {
             Err(EvalError::Scalar(ScalarError::InvalidOperation)) => {
                 return Err(invalid("invalid scalar operation or literal type"));
@@ -2319,6 +2392,13 @@ pub(crate) async fn execute_frames(
                     return Err(invalid("unconditional drop of dead storage"));
                 }
                 if let Some(value) = value {
+                    if let Some(Instruction {
+                        kind: InstructionKind::Drop { place, .. },
+                        ..
+                    }) = instruction
+                    {
+                        observer.drop_place(task, frame, *place, &value, site, sources);
+                    }
                     frame.work.push_back(crate::resources::Work::Release(
                         value,
                         anchor(frame, site),
@@ -2579,6 +2659,7 @@ pub(crate) async fn execute_frames(
                                     crate::checked::resources_in(&value);
                             }
                             crate::aggregate::forget(value)?;
+                            observer.forgotten(task, frame, site, sources);
                             let Some(CallReturn { destination, next }) = returns else {
                                 return Err(invalid("diverging forget"));
                             };

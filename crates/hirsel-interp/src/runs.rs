@@ -63,13 +63,14 @@ impl Run {
             entry_consumed: false,
         })
     }
-    async fn step(
+    async fn step<O: crate::ownership_trace::Observer>(
         &mut self,
         provider: &mut (impl AsyncTirProvider + ?Sized),
         sources: &SourceMap,
         limits: Limits,
         operations: &mut (impl Operations + ?Sized),
         runtime: &aggregate::RuntimeTypes,
+        observer: &mut O,
     ) -> Result<Step, Error> {
         execute_frames(
             provider,
@@ -81,6 +82,7 @@ impl Run {
             &mut self.state,
             &mut self.execution,
             &mut self.entry_consumed,
+            observer,
         )
         .await
     }
@@ -124,13 +126,14 @@ struct Callee {
 /// and its result. A callee's tooling limit, undefined behavior, trap or environmental
 /// stop ends the whole execution with that outcome, as a process crash ends caller and
 /// callees together.
-pub(crate) async fn execute(
+pub(crate) async fn execute<O: crate::ownership_trace::Observer>(
     provider: &mut (impl AsyncTirProvider + ?Sized),
     sources: &SourceMap,
     limits: Limits,
     root_operations: &mut dyn Operations,
     runtime: &aggregate::RuntimeTypes,
     mut root: Run,
+    observer: &mut O,
 ) -> (Run, Result<(), Error>) {
     let mut callees: Vec<Option<Callee>> = vec![];
     let mut ready: VecDeque<usize> = VecDeque::from([0]);
@@ -198,9 +201,17 @@ pub(crate) async fn execute(
             }
             continue;
         };
+        observer.run(index);
         let step = if index == 0 {
-            root.step(provider, sources, limits, root_operations, runtime)
-                .await
+            root.step(
+                provider,
+                sources,
+                limits,
+                root_operations,
+                runtime,
+                observer,
+            )
+            .await
         } else {
             let callee = callees[index - 1].as_mut().expect("a ready callee is live");
             callee.started = true;
@@ -212,6 +223,7 @@ pub(crate) async fn execute(
                     limits,
                     callee.operations.as_mut(),
                     runtime,
+                    observer,
                 )
                 .await;
             // A place in this process writes to the process's own output.

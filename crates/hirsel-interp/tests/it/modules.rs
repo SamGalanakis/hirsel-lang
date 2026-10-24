@@ -18,3 +18,4 @@ mod patterns;
 mod scalars;
 mod structural;
 mod query_suspension;
+mod ownership_trace;

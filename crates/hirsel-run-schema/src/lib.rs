@@ -15,6 +15,7 @@ pub use file_faults::{
 mod file_reads;
 mod path;
 pub use file_reads::{FileReadScript, FileReadiness};
+pub mod ownership_trace;
 pub mod tape;
 pub use path::confined_relative;
 
