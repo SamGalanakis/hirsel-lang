@@ -107,6 +107,17 @@ fn actual_native_selector_coalesces_build_and_bound_run_without_a_retained_contr
                     );
                 };
                 let output = (second.output.materialize)(&products).unwrap();
+                let repeated = (first.output.materialize)(&products).unwrap();
+                let (CompileResult::Native(a), CompileResult::Native(b)) =
+                    (&output.result, &repeated.result)
+                else {
+                    panic!("native readiness results");
+                };
+                assert!(
+                    Arc::ptr_eq(a, b),
+                    "coalesced callers share the admitted execution metadata"
+                );
+                drop(repeated);
                 let CompileResult::Native(execution) = &output.result else {
                     panic!("selected native readiness did not produce executable");
                 };
