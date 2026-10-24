@@ -1156,8 +1156,14 @@ fn spectral_audit_35_scripted_ordered_streams() {
                         .placement
                         .as_ref()
                         .expect("record must retain requested placement");
-                    assert_eq!(placement.cores, hirsel_run_config::Cores::Fixed(width));
-                    assert_eq!(placement.reorder, Some(hirsel_run_config::Reorder::Off));
+                    assert_eq!(
+                        placement.request.cores,
+                        hirsel_run_config::Cores::Fixed(width)
+                    );
+                    assert_eq!(
+                        placement.request.reorder,
+                        Some(hirsel_run_config::Reorder::Off)
+                    );
                     if id == "pending-cancel" {
                         assert!(record.events.iter().any(|e| matches!(
                             (&e.request, &e.completion),
