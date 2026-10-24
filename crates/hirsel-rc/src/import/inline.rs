@@ -305,56 +305,6 @@ impl Inline for Importer<'_> {
         Ok(result)
     }
 
-    fn iterator_next(&mut self, call: &crate::library::CallShape<'_>) -> R<()> {
-        let value = call.arguments[0].value.clone();
-        // The iterator's words stay in its exclusive source place. Only the
-        // environment changes; call its step through that borrowed value.
-        let callee = self.operand(&value)?;
-        let body =
-            crate::library::body_index(&crate::library::native_path("iter_from_step")).unwrap();
-        let request = self.library_request(body, call.path, call.generics)?;
-        let mut callable = self.types.row(request.callable).clone();
-        let hirsel_types::TypeKind::Function(ref mut function) = callable.kind else {
-            unreachable!()
-        };
-        function.parameters = Vec::new().into();
-        let callable = self.types.intern(callable);
-        let abi = self
-            .layouts
-            .fn_abi(self.types, callable, CallableShape::IterNext)
-            .map_err(|e| PassError::Layout(self.def.path.path().clone(), e))?;
-        let fn_abi = self.layouts.table().fn_abis[abi.0 as usize].clone();
-        let result = self.new_value(fn_abi.result.unwrap().layout, None);
-        self.consumed(callee);
-        let failure = self.fail(None)?;
-        let anchor = self.anchor_here();
-        let id = CallId(self.out.tables.calls.len() as u32);
-        self.out.tables.calls.push(CallSite {
-            pretransfer_failure: None,
-            forward_caller: false,
-            operation_arguments: Vec::new(),
-            callee: Callee::Indirect(callee),
-            abi,
-            arguments: PoolRange::EMPTY,
-            result: Some(result),
-            destination: fn_abi.destination.then_some(DestinationClass::Inferred),
-            declared: CALL_EFFECTS,
-            anchor,
-        });
-        let after = self.block(BlockKind::Body);
-        let normal = self.edge(after, Vec::new());
-        self.terminate(Terminator::Call {
-            call: id,
-            normal: Some(normal),
-            failure,
-        });
-        self.current = after;
-        if self.holds(result) {
-            self.failure.pending.push(result);
-        }
-        self.finish(call.destination, call.next, result)
-    }
-
     fn function(&mut self, path: &DefPath) -> R<(SymbolId, FnAbiId)> {
         self.direct(path, &[])
     }

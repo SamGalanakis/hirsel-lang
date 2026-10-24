@@ -1155,7 +1155,6 @@ trait Inline {
         constructor: ConstructorKind,
         values: &[ValueId],
     ) -> R<ValueId>;
-    fn iterator_next(&mut self, call: &crate::library::CallShape<'_>) -> R<()>;
     fn codec_schema(
         &mut self,
         ty: TypeId,
@@ -1255,10 +1254,7 @@ impl ImportCx<'_> {
     ) -> R<ValueId> {
         self.im.iterator_closure(call, helper)
     }
-    /// Advance the exclusive iterator place with one indirect step call.
-    pub fn iterator_next(&mut self, call: &crate::library::CallShape<'_>) -> R<()> {
-        self.im.iterator_next(call)
-    }
+
     /// The concrete SER-1 schema of a type of the importing definition, under
     /// this instance's actuals; None when it is not serializable.
     pub fn codec_schema(

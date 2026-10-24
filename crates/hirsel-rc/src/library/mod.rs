@@ -173,6 +173,7 @@ pub const BODIES: &[&LibraryBody] = &[
     // value: an operation used as a function value.
     &value::FORWARD,
     // views (lib-views): none; its cursor protocols are runtime primitives.
+    &iter::NEXT,
 ];
 
 /// Operation calls a family lowers inline at import. Called before the
@@ -198,7 +199,6 @@ pub const INLINE: &[&InlineLowering] = &[
     &sorted::LEN,
     &sorted::PUBLIC_LEN,
     &iter::FROM,
-    &iter::NEXT,
     &views::AS_BYTES,
     &views::SCALARS,
     &views::POSITIONS,
@@ -277,7 +277,7 @@ pub fn inline_lowering(path: &DefPath) -> Option<&'static InlineLowering> {
 
 /// Bumped by any change to a body's generated code, so every artifact keyed
 /// by an instance of it is invalidated.
-pub const REVISION: u32 = 30;
+pub const REVISION: u32 = 31;
 
 /// The implementation revision of the library body at `path`.
 pub fn revision(path: &DefPath) -> ContentHash {

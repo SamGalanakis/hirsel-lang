@@ -73,7 +73,7 @@ impl<S: Stage> Program<S> {
                 crate::invocations::audit(unit, reference, selected.body)?;
             }
             if unit.header.origin == hirsel_lir::ir::UnitOrigin::Library {
-                crate::invocations::audit_library(unit, &self.invocation_bodies)?;
+                crate::invocations::audit_library(unit, &self.invocation_bodies, &self.layouts)?;
             }
             for plan in &unit.tables.structural {
                 plan.check(&self.layouts)

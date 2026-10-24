@@ -235,9 +235,36 @@ pub fn check_library_with_declarations<S: Stage>(
     unit: &LirUnit<S>,
     declarations: &dyn crate::operation::OperationDeclarations,
 ) -> Result<(), String> {
+    check_library_context(unit, declarations, None)
+}
+
+/// Validate typed compiler forwarding with the independently supplied table.
+pub fn check_library_with_layouts<S: Stage>(
+    unit: &LirUnit<S>,
+    declarations: &dyn crate::operation::OperationDeclarations,
+    layouts: &crate::LayoutTable,
+) -> Result<(), String> {
+    check_library_context(unit, declarations, Some(layouts))
+}
+
+fn check_library_context<S: Stage>(
+    unit: &LirUnit<S>,
+    declarations: &dyn crate::operation::OperationDeclarations,
+    layouts: Option<&crate::LayoutTable>,
+) -> Result<(), String> {
+    let forwarded = if unit.header.definition.is_core("iter.next") {
+        Some(iterator_forward(
+            unit,
+            layouts.ok_or("iterator forwarding lacks its ABI table")?,
+        )?)
+    } else {
+        None
+    };
     // Canonical library recipes are independent of candidate calls/events.
     // Even an empty callback must preserve its invocation and dispatch witness.
-    let expected = if unit.header.definition.is_core("map.upsert_with") {
+    let expected = if forwarded.is_some() {
+        Some(0)
+    } else if unit.header.definition.is_core("map.upsert_with") {
         Some(2)
     } else if [
         "arena.with",
@@ -326,11 +353,11 @@ pub fn check_library_with_declarations<S: Stage>(
             .terminators
             .get(block.index())
             .ok_or("library invocation terminator")?;
-        if let Terminator::Call { call, .. } = term {
+        if let Terminator::Call { call: id, .. } = term {
             let call = unit
                 .tables
                 .calls
-                .get(call.index())
+                .get(id.index())
                 .ok_or("library invocation call")?;
             let source_direct = match call.callee {
                 Callee::Direct(id) => unit.tables.symbols.get(id.index()).is_some_and(|symbol| {
@@ -342,9 +369,10 @@ pub fn check_library_with_declarations<S: Stage>(
                 }),
                 _ => false,
             };
-            if source_direct
-                || matches!(call.callee, Callee::Indirect(_) | Callee::Bound { .. })
-                || active && !call.forward_caller
+            if Some(*id) != forwarded
+                && (source_direct
+                    || matches!(call.callee, Callee::Indirect(_) | Callee::Bound { .. })
+                    || active && !call.forward_caller)
             {
                 if !active || dispatched {
                     return Err("library callback lacks its own admission".into());
@@ -382,4 +410,112 @@ pub fn check_library_with_declarations<S: Stage>(
         }
     }
     Ok(())
+}
+
+/// Recognize only the canonical forwarding recipe, never an arbitrary helper.
+/// It borrows the declared iterator parameter and invokes its typed compiler
+/// thunk exactly once before any successful return, without adding a source
+/// activation of its own.
+fn iterator_forward<S: Stage>(
+    unit: &LirUnit<S>,
+    layouts: &crate::LayoutTable,
+) -> Result<CallId, String> {
+    let refuse = || "iterator forwarding differs from its canonical recipe".to_owned();
+    if unit.tables.calls.len() != 1 {
+        return Err(refuse());
+    }
+    let call = &unit.tables.calls[0];
+    let own = layouts
+        .fn_abis
+        .get(unit.header.abi.0 as usize)
+        .ok_or_else(refuse)?;
+    let abi = layouts
+        .fn_abis
+        .get(call.abi.0 as usize)
+        .ok_or_else(refuse)?;
+    if own.parameters.len() != 1
+        || own.parameters[0].source != 0
+        || own.parameters[0].convention != hirsel_core_contract::Passing::Mut
+        || abi.shape != crate::abi_types::CallableShape::IterNext
+        || !abi.parameters.is_empty()
+        || abi.result != own.result
+        || !call.forward_caller
+        || call.pretransfer_failure.is_some()
+        || !call.operation_arguments.is_empty()
+        || call.arguments.len != 0
+    {
+        return Err(refuse());
+    }
+    let value = match call.callee {
+        Callee::Indirect(value) | Callee::Bound { closure: value, .. } => value,
+        _ => return Err(refuse()),
+    };
+    let address = unit
+        .instructions
+        .iter()
+        .find_map(|instruction| match instruction {
+            Inst::Read {
+                result,
+                address,
+                mode: ReadMode::Borrow,
+                ..
+            } if *result == value => Some(*address),
+            _ => None,
+        })
+        .ok_or_else(refuse)?;
+    let info = unit.addresses.get(address.index()).ok_or_else(refuse)?;
+    let AddressBase::Slot(slot) = info.base else {
+        return Err(refuse());
+    };
+    if info.projection.len != 0
+        || unit
+            .slots
+            .get(slot.index())
+            .is_none_or(|slot| slot.kind != SlotKind::Parameter(0))
+    {
+        return Err(refuse());
+    }
+    let Holding::Borrowed(loan) = unit.values.get(value.index()).ok_or_else(refuse)?.holding else {
+        return Err(refuse());
+    };
+    if unit
+        .tables
+        .loans
+        .get(loan.index())
+        .is_none_or(|loan| !loan.mutable || loan.address != address)
+    {
+        return Err(refuse());
+    }
+    let mut pending = vec![unit.entry];
+    let mut seen = BTreeSet::new();
+    let mut dispatched = false;
+    while let Some(block) = pending.pop() {
+        if !seen.insert(block) {
+            continue;
+        }
+        let term = unit.terminators.get(block.index()).ok_or_else(refuse)?;
+        if let Terminator::Call { call, .. } = term {
+            if *call != CallId(0) {
+                return Err(refuse());
+            }
+            dispatched = true;
+            continue;
+        }
+        if matches!(term, Terminator::Return(_)) {
+            return Err(refuse());
+        }
+        for edge in term.normal_edges(&unit.pools) {
+            pending.push(
+                unit.tables
+                    .edges
+                    .get(edge.index())
+                    .ok_or_else(refuse)?
+                    .target,
+            );
+        }
+    }
+    if !dispatched {
+        return Err(refuse());
+    }
+    Ok(CallId(0))
 }

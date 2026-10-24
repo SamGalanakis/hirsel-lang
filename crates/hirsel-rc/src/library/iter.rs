@@ -14,9 +14,9 @@ pub static FROM: InlineLowering = InlineLowering {
     path: || hirsel_syntax::DefPath::core("iter.from"),
     lower: from,
 };
-pub static NEXT: InlineLowering = InlineLowering {
+pub static NEXT: LibraryBody = LibraryBody {
     path: || hirsel_syntax::DefPath::core("iter.next"),
-    lower: next,
+    build: next,
 };
 pub static FROM_STEP: LibraryBody = LibraryBody {
     path: || native_path("iter_from_step"),
@@ -40,12 +40,62 @@ fn construct(cx: &mut ImportCx<'_>, call: &CallShape<'_>, name: &str) -> R<bool>
 fn from(cx: &mut ImportCx<'_>, call: &CallShape<'_>) -> R<bool> {
     construct(cx, call, "iter_from_step")
 }
-fn next(cx: &mut ImportCx<'_>, call: &CallShape<'_>) -> R<bool> {
-    if call.arguments.len() != 1 || call.arguments[0].value.usage != UseKind::Mut {
-        return Ok(false);
-    }
-    cx.iterator_next(call)?;
-    Ok(true)
+/// The source primitive keeps its own declared entry. Its iterator thunk is
+/// a compiler adapter and forwards that activation; a user callback inside
+/// the thunk still receives the ordinary additional admission.
+fn next(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
+    let mut callable = cx.types.row(cx.callable).clone();
+    let TypeKind::Function(ref mut function) = callable.kind else {
+        return Err(PassError::Malformed("iterator primitive callable".into()));
+    };
+    function.parameters = Vec::new().into();
+    let callable = cx.types.intern(callable);
+    let abi = cx
+        .layouts
+        .fn_abi(
+            cx.types,
+            callable,
+            hirsel_lir::abi_types::CallableShape::IterNext,
+        )
+        .map_err(|error| PassError::Layout(cx.path.clone(), error))?;
+    let mut b = Body::new(cx)?;
+    let [iterator] = b.parameters[..] else {
+        return Err(PassError::Malformed("iterator primitive parameters".into()));
+    };
+    let (callee, loan) = b.borrow(iterator.address, true)?;
+    let shape = b.cx.layouts.table().fn_abis[abi.0 as usize].clone();
+    let result = shape.result.map(|result| b.fresh(result.layout));
+    let at = b.current();
+    let failed = b.block(BlockKind::FailureCleanup, &[]);
+    b.at(failed);
+    b.end_loan(loan);
+    b.terminate(Terminator::Propagate);
+    b.at(at);
+    let failure = b.failure_to(failed, &[], None);
+    let after = b.block(BlockKind::Body, &[]);
+    let normal = b.edge(after, &[]);
+    let call = CallId(b.ed.unit.tables.calls.len() as u32);
+    b.ed.unit.tables.calls.push(CallSite {
+        pretransfer_failure: None,
+        forward_caller: true,
+        callee: Callee::Indirect(callee),
+        operation_arguments: Vec::new(),
+        abi,
+        arguments: PoolRange::EMPTY,
+        result,
+        destination: shape.destination.then_some(DestinationClass::Inferred),
+        declared: crate::import::CALL_EFFECTS,
+        anchor: b.anchor,
+    });
+    b.terminate(Terminator::Call {
+        call,
+        normal: Some(normal),
+        failure,
+    });
+    b.at(after);
+    b.end_loan(loan);
+    b.ret(result);
+    Ok(b.finish())
 }
 
 fn captures(b: &mut Body<'_, '_>) -> Result<[Parameter; 2], PassError> {

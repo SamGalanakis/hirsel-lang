@@ -699,9 +699,11 @@ fn check_with_context<S: Stage>(
             }
         }
         if unit.header.origin == crate::ir::UnitOrigin::Library {
-            if let Err(error) =
-                crate::invocations::check_library_with_declarations(unit, inputs.operations)
-            {
+            if let Err(error) = crate::invocations::check_library_with_layouts(
+                unit,
+                inputs.operations,
+                inputs.layouts,
+            ) {
                 report.add(Site::UNIT, ViolationKind::Schema(error));
             }
         }
