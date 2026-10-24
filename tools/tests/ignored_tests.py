@@ -66,6 +66,11 @@ PROOFS = {
                         'HIRSEL_CAPTURE_LINKER': '/original packaged linker',
                         'HIRSEL_LINK_KIT': '/selected kit', 'HIRSEL_RUNTIME_ARCHIVES': '/selected runtime'},
     },
+    'native::kit::tests::frozen_kit_binds_transitive_leaf_edits_and_plans_without_originals': {
+        'source': 'crates/hirsel-driver/src/native/kit.rs',
+        'target': '//tools/buck2/native-toolchain:frozen-kit-proof',
+        'probe': 'tools/buck2/native-toolchain/frozen_kit_proof.py',
+    },
 }
 EXPLICIT = json.loads((ROOT / 'tools/ignored-tests.json').read_text())
 ATTRIBUTE = re.compile(r'^[ \t]*#\[(ignore\b[^\]]*)\]|^[ \t]*#\[cfg_attr\(\s*([^,]+),\s*ignore\b', re.M)
