@@ -97,8 +97,7 @@ impl InspectionLedger {
                 if !state.counts.contains_key(path) {
                     // Like RequestStore's entry bound, include tree allocation,
                     // nested path containers and the encoded path payload.
-                    let charge = bincode::serialized_size(path)
-                        .ok()?
+                    let charge = (serde_json::to_vec(path).ok()?.len() as u64)
                         .checked_mul(4)?
                         .checked_add(2048)?;
                     let next = state.used.checked_add(charge)?;
