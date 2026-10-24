@@ -108,6 +108,8 @@ pub enum Cause {
     UniquenessLoss,
     UniquenessMerge,
     IterationItem,
+    InspectedMatch,
+    BorrowedPattern,
 }
 impl Cause {
     /// The closed docs/spec/diagnostics.md vocabulary entry. Fine wording kinds remain
@@ -135,7 +137,7 @@ impl Cause {
             Binding | FrameStorage | LocalValue | BlockBinding => "storage of this body",
             Unplaced | NoPlacement => "no placement",
             Moved | Uninitialised => "moved or not initialised",
-            Immutable | MutAlias | NotMut | NotTaken => "access",
+            Immutable | MutAlias | NotMut | NotTaken | InspectedMatch | BorrowedPattern => "access",
             LastUse => "last use of a binding",
             Published => "published storage",
             Once => "once function value",
@@ -244,6 +246,14 @@ impl Cause {
             Aliased => (
                 "`{0}` is not proved unique",
                 "`{0}` may share counted storage; its current contract does not prove uniqueness",
+            ),
+            InspectedMatch => (
+                "the match borrows the payloads of `{0}`",
+                "this match inspects `{0}` in place and borrows its payloads (LANG-13)",
+            ),
+            BorrowedPattern => (
+                "`{0}` is a borrowed pattern binding",
+                "this pattern binds `{0}` as a borrowed view, even when the scrutinee is owned",
             ),
             IterationItem => ("loop item `{0}` supplies this input", "{1}"),
             UniquenessLoss => ("`{0}` lost its deep uniqueness", "{1}"),
@@ -694,6 +704,8 @@ impl<K> Fact<K> {
 /// the checker accepts for that cause and requirement are listed.
 #[derive(Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 pub enum Repair {
+    /// Conditional whole-owner consumption; never an automatic edit.
+    ConsumingMatch(String),
     /// A prose recipe, never a machine edit: every field is explicitly bound.
     WholeRecord {
         owner: String,
@@ -764,6 +776,9 @@ pub enum Repair {
 impl Repair {
     fn text(&self) -> String {
         match self {
+            Repair::ConsumingMatch(owner) => format!(
+                "if consuming the owner is intended, use `match take {owner}` at the inspected match; this consumes the whole `{owner}` and gives its payloads to the selected arm. Check later uses of `{owner}` and drop behavior on every arm and early exit; the whole-owner transfer needs no deep copy"
+            ),
             Repair::WholeRecord { owner, statement } => format!(
                 "replace the enclosing field-extraction statement with `{statement}` and update later field uses to the new bindings; this consumes all of `{owner}`, so `{owner}` cannot be used later. Bind every still-needed field explicitly; this recipe binds every field and omits none"
             ),
@@ -866,6 +881,8 @@ impl Repair {
 /// Repairs that look plausible and that the checker rejects.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Caution {
+    /// Each nested inspection has its own borrowing decision.
+    NestedMatch,
     /// A copy of local content shares its blocks, which stay local (P2).
     CopyStaysLocal(String),
     /// A deep copy is made where its source lives and keeps its placement.
@@ -877,6 +894,7 @@ pub enum Caution {
 impl Caution {
     fn text(&self) -> String {
         match self {
+            Caution::NestedMatch => "Each inspected match borrows its own scrutinee; consuming an outer owner alone does not make a nested match consume its scrutinee".into(),
             Caution::CopyStaysLocal(x) => format!(
                 "`copy {x}` does not help: a copy shares the blocks of `{x}`, which stay local"
             ),
@@ -1047,7 +1065,8 @@ impl Repair {
             | Repair::CaptureSnapshot {
                 deep_copy: true, ..
             } => 2,
-            Repair::TakeChangesMeaning(_)
+            Repair::ConsumingMatch(_)
+            | Repair::TakeChangesMeaning(_)
             | Repair::KeepCaptureLocal(_)
             | Repair::MutableCaptureLocal { .. }
             | Repair::WholeRecord { .. }
@@ -1443,10 +1462,12 @@ mod tests {
             Sendable,
             UniquenessLoss,
             UniquenessMerge,
+            InspectedMatch,
+            BorrowedPattern,
             IterationItem,
         ];
         let seen: std::collections::BTreeSet<_> = kinds.iter().map(|kind| *kind as usize).collect();
-        assert_eq!(seen, (0..=IterationItem as usize).collect());
+        assert_eq!(seen, (0..=BorrowedPattern as usize).collect());
         let (provided, _) = spec_table();
         for kind in kinds {
             assert!(

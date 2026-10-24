@@ -155,3 +155,4 @@ mod variant_constructor_guidance_48;
 mod sealed_storage_placement_33;
 mod sealed_storage_profile_v_33;
 mod expression_type_argument_guidance_49;
+mod borrowed_match_guidance_49;

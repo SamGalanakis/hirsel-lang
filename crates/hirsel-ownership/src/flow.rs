@@ -8,6 +8,7 @@ use hirsel_type_analysis::parametric::{ParametricInput, parametric_inputs, uniqu
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
+mod borrowed_match;
 mod causes;
 mod confined;
 mod creation;
@@ -4844,8 +4845,9 @@ impl Checker<'_, '_> {
                             operation_site,
                             "an owned result cannot move out of borrowed storage",
                             |c| {
-                                c.locality(
+                                c.borrowed_match_explanation(
                                     state,
+                                    &place,
                                     &value,
                                     Fact::new(Requirement::OwnedResult, operation_site, &[]),
                                 )
@@ -4868,8 +4870,9 @@ impl Checker<'_, '_> {
                             operation_site,
                             "a borrowed value cannot be taken",
                             |c| {
-                                c.locality(
+                                c.borrowed_match_explanation(
                                     state,
+                                    &place,
                                     &value,
                                     Fact::new(Requirement::Owned, operation_site, &[]),
                                 )
