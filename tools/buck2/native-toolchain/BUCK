@@ -1,5 +1,5 @@
 load("//tools/native-toolchain:pins.bzl", "LINK_KIT", "LLD_SOURCE", "LLVM_DEBS", "NATIVE", "VALGRIND_DEBS")
-load(":defs.bzl", "link_kit", "overlay_linker", "toolchain_proof", "unpack_toolchain")
+load(":defs.bzl", "link_kit", "runtime_auditor", "overlay_linker", "toolchain_proof", "unpack_toolchain")
 
 http_file(name = "lld-source", urls = [LLD_SOURCE["url"]], sha256 = LLD_SOURCE["sha256"])
 overlay_linker(
@@ -56,3 +56,6 @@ export_file(name = "environment.tsv", visibility = ["PUBLIC"])
 
 export_file(name = "lld-input-main.cpp")
 export_file(name = "lld-input-overlay.patch")
+
+runtime_auditor(name = "runtime-auditor", llvm = ":llvm", builder = "build_runtime_auditor.py", source = "runtime_auditor.c", visibility = ["PUBLIC"])
+toolchain_proof(name = "runtime-auditor-proof", tools = [":llvm", ":runtime-auditor", ":glibc_floor", ":qemu"], script = "runtime_auditor_proof.py", interpreter = "python3")

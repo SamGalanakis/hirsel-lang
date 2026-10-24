@@ -99,3 +99,18 @@ def toolchain_proof(name, tools, script, interpreter = "bash"):
         request = [str(value) for value in test_request("native-toolchain-proof")],
         exec_compatible_with = [budget_constraint(test_budget_name("native-toolchain-proof"))],
         visibility = ["PUBLIC"])
+
+
+def _runtime_auditor(ctx):
+    output = ctx.actions.declare_output(ctx.label.name, dir = True)
+    ctx.actions.run(cmd_args(
+        "python3", ctx.attrs.builder,
+        "--llvm", ctx.attrs.llvm[DefaultInfo].default_outputs[0],
+        "--source", ctx.attrs.source,
+        "--output", output.as_output(),
+    ), category = "runtime_auditor")
+    return [DefaultInfo(default_output = output)]
+
+runtime_auditor = rule(impl = _runtime_auditor, attrs = {
+    "llvm": attrs.dep(), "builder": attrs.source(), "source": attrs.source(),
+})
