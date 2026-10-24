@@ -9,6 +9,30 @@ use hirsel_syntax::DefPath;
 use hirsel_tir::{Definition, DefinitionRef, TirProvider};
 use std::collections::BTreeMap;
 
+#[test]
+fn task_scope_returns_updated_owned_list() {
+    with_compiler_stack(|| {
+        let source = r#"
+fn values(tasks: Tasks, input: List[u64]) -> List[u64] {
+  let initial: List[u64] = [0u64]
+  task.scope(tasks, fn(s: Scope) -> List[u64] {
+    let mut rows = take initial
+    rows[0] = input[0]
+    take rows
+  })
+}
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let rows = values(io.tasks(rt)?, [7u64])
+  if rows[0] == 7u64 { let _ = out.print(io.stdout(rt)?, "seven\n") }
+  Ok(())
+}
+"#;
+        let mut engine = accepted(source);
+        assert_eq!(printed(run(&mut engine, &[], false)), "seven\n");
+        assert_eq!(printed(run(&mut engine, &[], true)), "seven\n");
+    });
+}
+
 /// Serves edited definitions in place of the engine's own.
 struct Edited<'a> {
     engine: &'a mut QueryEngine,

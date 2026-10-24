@@ -1157,6 +1157,7 @@ pub(crate) fn operation_result(
 pub(crate) fn native_shadow(target: &Value, values: &[Value], check: &OperationCheck) -> Shadow {
     let mut bound = vec![];
     let mut found: Option<Shadow> = None;
+    let mut matches = 0;
     let mut work: Vec<_> = values
         .iter()
         .zip(&check.inputs)
@@ -1164,6 +1165,7 @@ pub(crate) fn native_shadow(target: &Value, values: &[Value], check: &OperationC
         .collect();
     while let Some((value, shadow)) = work.pop() {
         if value == target {
+            matches += 1;
             union(&mut bound, &shadow.total());
             if found.is_none() {
                 found = Some(shadow.clone());
@@ -1178,7 +1180,12 @@ pub(crate) fn native_shadow(target: &Value, values: &[Value], check: &OperationC
         }
     }
     if let Some(mut shadow) = found {
-        shadow.add_bound(&bound);
+        // One recovered source retains its independent fields: an owned capture
+        // must not acquire a sibling borrow's lifetime. Equal values from several
+        // sources are ambiguous, so retain every possible bound conservatively.
+        if matches > 1 {
+            shadow.add_bound(&bound);
+        }
         shadow
     } else {
         Shadow::of(check.input_bound())
@@ -1528,6 +1535,68 @@ impl FrameCheck {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn recovered_native_fields_keep_independent_lifetimes() {
+        let shared = state(CheckedRuntime::default());
+        let mut state = shared.borrow_mut();
+        let borrowed = state.root(&Shadow::default());
+        let value = Value::Tuple(vec![
+            Some(Value::Bytes(vec![1])),
+            Some(Value::Bytes(vec![2])),
+        ]);
+        let check = OperationCheck {
+            result: Shadow::default(),
+            updates: vec![],
+            inputs: vec![Argument {
+                shadow: Shadow::Parts(vec![Shadow::default(), Shadow::of(vec![borrowed])]),
+                ..Default::default()
+            }],
+            callbacks: vec![],
+        };
+        let recovered = native_shadow(&value, &[value.clone()], &check);
+        state.close(borrowed);
+        assert!(state.access(&recovered.capture(0), "owned sibling").is_ok());
+        let Err(Error::Trapped(trap)) = state.access(&recovered.capture(1), "escaped borrow")
+        else {
+            panic!("recovered borrowed field must still expire")
+        };
+        assert_eq!(trap.rule, TrapRule::RegionUseAfterScopeExit);
+    }
+
+    #[test]
+    fn ambiguous_native_sources_keep_all_possible_lifetimes() {
+        let shared = state(CheckedRuntime::default());
+        let mut state = shared.borrow_mut();
+        let first = state.root(&Shadow::default());
+        let second = state.root(&Shadow::default());
+        let value = Value::Tuple(vec![
+            Some(Value::Bytes(vec![1])),
+            Some(Value::Bytes(vec![2])),
+        ]);
+        let check = OperationCheck {
+            result: Shadow::default(),
+            updates: vec![],
+            inputs: [first, second]
+                .map(|borrowed| Argument {
+                    shadow: Shadow::Parts(vec![Shadow::default(), Shadow::of(vec![borrowed])]),
+                    ..Default::default()
+                })
+                .into(),
+            callbacks: vec![],
+        };
+        let recovered = native_shadow(&value, &[value.clone(), value.clone()], &check);
+        for borrowed in [first, second] {
+            assert!(recovered.capture(0).total().contains(&borrowed));
+            assert!(recovered.capture(1).total().contains(&borrowed));
+        }
+        state.close(first);
+        let Err(Error::Trapped(trap)) = state.access(&recovered.capture(0), "ambiguous source")
+        else {
+            panic!("ambiguous recovery must retain the possibly ended source")
+        };
+        assert_eq!(trap.rule, TrapRule::RegionUseAfterScopeExit);
+    }
+
     #[test]
     fn native_list_edits_keep_each_childs_actual_holder() {
         let list = |values: Vec<Value>| Value::Sequence {
