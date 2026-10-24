@@ -5,7 +5,7 @@ use hirsel_run_config::{
 };
 use hirsel_run_schema::{CalleeFacts, CodeReach, LaunchKind, ProgramRevision, RunRefusal};
 use hirsel_syntax::Visibility;
-use hirsel_types::{GenericArgument, Signature, SignatureKind, TypeInterner, TypeKind};
+use hirsel_types::{Signature, SignatureKind, TypeInterner, TypeKind};
 use std::collections::BTreeMap;
 use std::path::Path;
 

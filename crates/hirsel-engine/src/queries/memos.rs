@@ -5,8 +5,8 @@
 //! observing every read again, and an unmarked one is valid as it stands.
 use super::*;
 use crate::memo::{
-    ChangeSet, Durability, Invalidation, LookupKey, LookupSource, Memo, MemoKey, ModuleKey,
-    PackageKey, ReadKey, Reads, ReadsBuilder, Verdict,
+    ChangeSet, Durability, LookupKey, LookupSource, Memo, MemoKey, ModuleKey, PackageKey, ReadKey,
+    Reads, ReadsBuilder, Verdict,
 };
 use hirsel_syntax::DefId;
 use hirsel_types::LookupError;
