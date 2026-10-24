@@ -347,3 +347,121 @@ fn source_evidence_factory_31_uses_original_source_and_planned_instances() {
         );
     });
 }
+
+#[test]
+fn cached_pretransfer_inventory_rederives_canonical_abis_from_independent_plans() {
+    use hirsel_lir::stage::StageKind;
+    use hirsel_lir::validate::{NativeCache, NativeEnvironment};
+    use std::sync::Arc;
+    hirsel_engine::with_compiler_stack(|| {
+        let (program, lowered) = support::lower(SOURCE);
+        let registry = lowered.operation_registry(&program);
+        assert_eq!(registry.pretransfer_adapters.len(), 1);
+        assert_eq!(registry.pretransfer_actuals.len(), 1);
+        let manifest = support::manifest(&program);
+        let target = support::target();
+        let caller = lowered
+            .units
+            .iter()
+            .find(|u| u.header.definition == support::path("main"))
+            .unwrap();
+        let inputs = Inputs {
+            memo: Default::default(),
+            target: &target,
+            layouts: &lowered.table,
+            manifest: &manifest,
+            operations: &registry,
+            discharge: None,
+        };
+        let store = Arc::new(hirsel_artifact_store::Memory::default());
+        let cache = NativeCache::new(store, None);
+        let subject = hirsel_syntax::ContentHash::of_bytes(b"pretransfer independent input");
+        let policy = hirsel_syntax::ContentHash::of_bytes(b"pretransfer canonical ABI");
+        let (_, output) = cache
+            .validate_and_publish(
+                subject,
+                policy,
+                caller.clone(),
+                &inputs,
+                &[],
+                b"checked targets",
+            )
+            .unwrap();
+        assert!(
+            output.is_some(),
+            "actual strict C can publish a canonical nonempty target inventory"
+        );
+        let accepts = |operations: &hirsel_layout::operation::OperationRegistry| {
+            cache
+                .lookup(
+                    subject,
+                    policy,
+                    StageKind::Value,
+                    &NativeEnvironment {
+                        target: &target,
+                        manifest: &manifest,
+                        operations,
+                        discharge: None,
+                    },
+                )
+                .is_some()
+        };
+        let trace = hirsel_lir::construction::ValueTrace::default();
+        let observe = trace.enter();
+        assert!(accepts(&registry));
+        let mut missing = registry.clone();
+        missing.pretransfer_adapters.clear();
+        assert!(!accepts(&missing));
+        let mut missing = registry.clone();
+        missing.pretransfer_actuals.clear();
+        assert!(!accepts(&missing), "a bare ABI index cannot accept a hit");
+        let mut crossed = registry.clone();
+        crossed.pretransfer_adapters[0].abi = hirsel_lir::FnAbiId(u32::MAX);
+        assert!(
+            !accepts(&crossed),
+            "adapter index must match its independent plan binding"
+        );
+        let mut duplicate = registry.clone();
+        duplicate
+            .pretransfer_actuals
+            .push(duplicate.pretransfer_actuals[0].clone());
+        assert!(!accepts(&duplicate));
+        let mut changed = registry.clone();
+        changed.pretransfer_actuals[0].3.clear();
+        assert!(
+            !accepts(&changed),
+            "typed actuals must independently rederive the ABI"
+        );
+        let mut rebound_table = lowered.table.clone();
+        let old = registry.pretransfer_adapters[0].abi;
+        let rebound_id = hirsel_lir::FnAbiId(rebound_table.fn_abis.len() as u32);
+        rebound_table
+            .fn_abis
+            .push(rebound_table.fn_abis[old.0 as usize].clone());
+        let mut rebound = registry.clone();
+        rebound.pretransfer_adapters[0].abi = rebound_id;
+        rebound.pretransfer_actuals[0].1 = rebound_id;
+        assert_eq!(
+            hirsel_lir::LayoutKeys::new(&rebound_table)
+                .fn_abi(&rebound_table.fn_abis[rebound_id.0 as usize]),
+            hirsel_lir::LayoutKeys::new(&lowered.table)
+                .fn_abi(&lowered.table.fn_abis[old.0 as usize])
+        );
+        assert!(
+            accepts(&rebound),
+            "a consistent independent table reindex leaves canonical ABI identity unchanged"
+        );
+        assert_eq!(
+            trace.totals(),
+            Default::default(),
+            "hit admission opens no Value"
+        );
+        drop(observe);
+        let (fresh, fresh_lowered) = support::lower(SOURCE);
+        let independent = fresh_lowered.operation_registry(&fresh);
+        assert!(
+            accepts(&independent),
+            "current independent plan with another type interner agrees"
+        );
+    });
+}

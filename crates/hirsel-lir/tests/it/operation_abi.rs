@@ -201,6 +201,7 @@ fn network() -> (OperationRegistry, OperationId, OperationId) {
     );
     let mut registry = OperationRegistry {
         pretransfer_adapters: Vec::new(),
+        pretransfer_actuals: Vec::new(),
         invocation_bodies: Vec::new(),
         owners,
         ..support::registry()
@@ -476,6 +477,7 @@ fn a_type_generic_operation_cannot_use_another_instances_abi() {
     let operation = id(&s);
     let registry = OperationRegistry {
         pretransfer_adapters: Vec::new(),
+        pretransfer_actuals: Vec::new(),
         invocation_bodies: Vec::new(),
         signatures: [(operation.clone(), s)].into(),
         ..support::registry()
