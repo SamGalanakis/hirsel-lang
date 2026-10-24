@@ -220,6 +220,15 @@ impl OperationDeclarations for OperationRegistry {
         !self.invocations.is_empty()
     }
 
+    fn seal_descriptor(
+        &self,
+        source: &NativeType,
+        table: &hirsel_lir::LayoutTable,
+        target: &hirsel_lir::TargetSpec,
+    ) -> Result<hirsel_lir::sealed::SealDescriptor, LayoutError> {
+        crate::sealed::derive(self, source, table, target)
+    }
+
     fn structural_access(
         &self,
         source: &NativeType,

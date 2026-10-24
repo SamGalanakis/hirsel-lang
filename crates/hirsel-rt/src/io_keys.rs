@@ -288,7 +288,12 @@ impl Registry {
             | R::Process { .. }
             | R::Signals { .. }
             | R::Telemetry { .. } => keys.push((ROOT, S)),
-            R::EnvGet { .. } | R::EnvNarrow { .. } | R::Ready { .. } | R::Schedule { .. } => {}
+            R::EnvGet { .. }
+            | R::EnvNarrow { .. }
+            | R::Ready { .. }
+            | R::Schedule { .. }
+            | R::ProcessTime { .. }
+            | R::ProcessSettle { .. } => {}
             R::Print { stdout: h, .. } | R::PrintStderr { stderr: h, .. } => {
                 on(self, &mut keys, *h, X)
             }

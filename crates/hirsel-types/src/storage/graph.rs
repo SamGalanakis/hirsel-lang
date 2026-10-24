@@ -40,8 +40,27 @@ pub enum StoragePlacement {
     Unknown,
 }
 
+/// A capture-free code leaf observed in a declared immutable field graph.
+/// Paths describe the actual value, never callable headers or inferred bodies.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
+pub struct StorageConstantCode {
+    pub parts: SharedPath<OwnedTypePart>,
+    pub definition: DefId,
+    pub arguments: Vec<crate::GenericArgument>,
+}
+
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub enum StorageValue {
+    /// Original source reference, resolved by the program-level source query.
+    ConstantReference {
+        definition: DefId,
+        arguments: Vec<crate::Size>,
+    },
+    /// Independently observed immutable data with actual code leaves.
+    Constant {
+        code: Vec<StorageConstantCode>,
+        complete: bool,
+    },
     /// Original named code and selected generic actuals. Source program
     /// assembly must resolve this to the actual original entry before solving.
     Reference {

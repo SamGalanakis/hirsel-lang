@@ -292,6 +292,8 @@ fn native(backend: &str) {
     }
     eprintln!("{}", String::from_utf8_lossy(&result.stdout));
     hirsel_engine::with_compiler_stack(|| {
+        // Compile once; replay still constructs a new runtime for each bound tape.
+        hirsel_driver::session::enable_resident(1);
         for path in fs::read_dir(root)
             .unwrap()
             .map(|p| p.unwrap().path())
@@ -316,16 +318,14 @@ fn native(backend: &str) {
             ]
             .iter()
             .any(|id| path.file_name().unwrap().to_string_lossy().starts_with(id));
-            if large
-                && ordinary.as_ref().err().is_some_and(|e| {
-                    e.to_string()
-                        .contains("replay produced no semantic observation")
-                })
-            {
-                assert!(checked.as_ref().err().is_some_and(|e| {
-                    e.to_string()
-                        .contains("replay produced no semantic observation")
-                }));
+            let steps_stop = |error: &hirsel_engine::ToolError| {
+                let message = error.to_string();
+                message.contains("ToolingLimit")
+                    && message.contains("Steps")
+                    && message.contains("limit: 10000000")
+            };
+            if large && ordinary.as_ref().err().is_some_and(steps_stop) {
+                assert!(checked.as_ref().err().is_some_and(steps_stop));
                 eprintln!(
                     "MAN_RENDER_30_INCOMPLETE {} reference+checked-host-replay no observation at fixed10000000",
                     path.display()
@@ -569,7 +569,7 @@ fn markdown_parse_budget_39_mdman_consumer() {
 #[test]
 fn man_render_30_owned_ast_40_consumer() {
     let source = include_str!("../../../../examples/mdman/document.hir");
-    assert!(source.contains("markdown.parse_bounded_owned("));
+    assert!(source.contains("markdown.parse_located_bounded("));
     assert!(source.contains("Ok(tree) => take tree,"));
     assert!(!source.contains("Ok(tree) => unique tree,"));
     scripted(
@@ -578,4 +578,31 @@ fn man_render_30_owned_ast_40_consumer() {
             .filter(|r| ["cmark-nowrap", "html-block"].contains(&r["id"].as_str().unwrap()))
             .collect(),
     );
+}
+
+#[test]
+fn markdown_source_map_41_mdman_consumer() {
+    let mut row = cases()
+        .into_iter()
+        .find(|r| r["id"] == "html-inline")
+        .unwrap();
+    row["id"] = "guide-located".into();
+    row["files"] = serde_json::json!({"guide.md": "# Demo\n\nText <b>unsafe</b>.\n"});
+    row["args"] = serde_json::json!(["render", "guide.md", "out.1", "TEST", "1"]);
+    row["stdout"] =
+        "guide.md:3:6–3:9: unsupported raw HTML (bytes [13,16), end exclusive)\n".into();
+    let mut selected = vec![row];
+    selected.extend(cases().into_iter().filter(|r| {
+        [
+            "empty",
+            "cmark-nowrap",
+            "html-block",
+            "html-inline",
+            "table",
+            "batch-no-publish",
+            "pending-cancel-queued",
+        ]
+        .contains(&r["id"].as_str().unwrap())
+    }));
+    scripted(selected);
 }

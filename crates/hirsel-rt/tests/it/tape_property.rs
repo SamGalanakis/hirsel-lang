@@ -134,6 +134,8 @@ pub(super) fn requests(n: u64) -> Vec<Request> {
         _ => vec!["h2".to_owned(), text.clone() + "#alpn", String::new()],
     };
     requests! {
+        ProcessTime { from: n, to: n.saturating_add(5) },
+        ProcessSettle { canceled: vec![n] },
         Stdin { io: n.wrapping_add(12) },
         Stderr { io: n.wrapping_add(12) },
         ReadStdin { stdin: n.wrapping_add(26), max: n.wrapping_add(14) },

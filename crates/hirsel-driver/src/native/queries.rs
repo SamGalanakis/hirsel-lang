@@ -14,6 +14,36 @@ pub struct InstanceAddress {
     pub policy: ContentHash,
 }
 
+pub const READY_KIND: u32 = 0x4e00_0004;
+
+impl InstanceAddress {
+    /// Full-encoding order, independent of session ids or digest ordering.
+    pub fn canonical_cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.instance
+            .encoding()
+            .cmp(other.instance.encoding())
+            .then_with(|| self.target_abi.cmp(&other.target_abi))
+            .then_with(|| self.policy.cmp(&other.policy))
+    }
+    pub fn ready_query_id(&self) -> hirsel_engine::runtime::QueryId {
+        hirsel_engine::runtime::QueryId {
+            kind: READY_KIND,
+            address: self.address(READY_KIND),
+        }
+    }
+    pub fn address(&self, kind: u32) -> hirsel_artifact_store::Address {
+        hirsel_artifact_store::Address(ContentHash::of_parts(
+            "hirsel.native.instance-address.v1",
+            [
+                kind.to_le_bytes().as_slice(),
+                self.instance.encoding(),
+                self.target_abi.0.as_slice(),
+                self.policy.0.as_slice(),
+            ],
+        ))
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct InstanceProduct {
     pub product: ProductRef,

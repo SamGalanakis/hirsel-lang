@@ -461,3 +461,82 @@ pub fn main(rt: Io, u: Unsafe) -> Result[(), GrantError] {
         assert_eq!(counts().fallbacks.get("foreign"), Some(&(before + 1)));
     });
 }
+
+#[test]
+fn ordinary_products_restore_runners_and_images_without_path_or_json_authority() {
+    with_compiler_stack(|| {
+        let root = tempfile::tempdir().unwrap();
+        let products = root.path().join("products");
+        let mut tools = toolchain();
+        tools.cache = root.path().join("materialized");
+        tools.products = std::sync::Arc::new(hirsel_engine::store::DirStore::new(products.clone()));
+        let target = x86();
+        let first = runner(&tools, &target).unwrap();
+        let expected_runner = std::fs::read(&first.path).unwrap();
+        std::fs::write(&first.path, b"truncated runner").unwrap();
+        tools.products = std::sync::Arc::new(hirsel_engine::store::DirStore::new(products.clone()));
+        let restored = runner(&tools, &target).unwrap();
+        assert_eq!(restored.build_id, first.build_id);
+        assert_eq!(restored.mode, first.mode);
+        assert_eq!(std::fs::read(&restored.path).unwrap(), expected_runner);
+        assert!(!restored.path.parent().unwrap().join("runner.json").exists());
+        let dir = root.path().join("launch");
+        std::fs::create_dir_all(&dir).unwrap();
+        let compiled = compiled(PARTIAL, &target, Backend::Cranelift);
+        let image = link_runnable(
+            &compiled.program,
+            &compiled.entry,
+            &compiled.objects,
+            &tools,
+            &dir,
+            None,
+        )
+        .unwrap();
+        let Runnable::Image(first_image) = &image else {
+            panic!("expected the actual runner image");
+        };
+        assert!(!first_image.cached);
+        let expected_image = std::fs::read(&first_image.path).unwrap();
+        let expected = seen(&run(&image, &target, &tools, &dir));
+        std::fs::remove_file(&first_image.path).unwrap();
+        std::fs::remove_file(&restored.path).unwrap();
+        tools.products = std::sync::Arc::new(hirsel_engine::store::DirStore::new(products));
+        let next = link_runnable(
+            &compiled.program,
+            &compiled.entry,
+            &compiled.objects,
+            &tools,
+            &dir,
+            None,
+        )
+        .unwrap();
+        let Runnable::Image(next_image) = &next else {
+            panic!("restored product must remain an image");
+        };
+        assert!(
+            next_image.cached,
+            "the stored product restores a missing materialization"
+        );
+        assert_eq!(std::fs::read(&next_image.path).unwrap(), expected_image);
+        assert_eq!(
+            std::fs::read(&next_image.runner.path).unwrap(),
+            expected_runner
+        );
+        assert_eq!(seen(&run(&next, &target, &tools, &dir)), expected);
+        // Same materialized files under a fresh provider do not constitute hits.
+        tools.products = std::sync::Arc::new(hirsel_engine::store::MemStore::default());
+        let recomputed = link_runnable(
+            &compiled.program,
+            &compiled.entry,
+            &compiled.objects,
+            &tools,
+            &dir,
+            None,
+        )
+        .unwrap();
+        let Runnable::Image(recomputed) = recomputed else {
+            panic!("recomputation must remain an image");
+        };
+        assert!(!recomputed.cached);
+    });
+}

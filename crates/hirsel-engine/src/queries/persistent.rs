@@ -939,7 +939,7 @@ impl QueryEngine {
         self.verify_store = verify;
         self
     }
-    fn store_key(&mut self, path: &DefPath, kind: QueryKind) -> Option<EntryKey> {
+    pub(super) fn store_key(&mut self, path: &DefPath, kind: QueryKind) -> Option<EntryKey> {
         // A generated body's registration must still be replayed by S1; its
         // transient syntax isn't a source-owned record.
         if !self.items.contains_key(path) && self.catalog.body(path).is_some() {
@@ -1010,7 +1010,7 @@ impl QueryEngine {
         let records = self.type_records()?;
         encode_record(&records, &self.items, record)
     }
-    fn type_records(&self) -> Option<Arc<TypeRecords>> {
+    pub(super) fn type_records(&self) -> Option<Arc<TypeRecords>> {
         let store = self.result_store.clone()?;
         let mut current = self
             .portable_type_records

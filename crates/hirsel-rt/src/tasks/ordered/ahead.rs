@@ -355,7 +355,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_ahead_barrier(ctx: *mut TaskCtx) {
 mod qualification;
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::tasks::*;
     use std::sync::{Arc, atomic::AtomicU32};
@@ -398,7 +398,7 @@ mod tests {
     }
 
     #[test]
-    fn a_second_real_frame_runs_before_its_spawn_is_admitted_and_is_adopted_once() {
+    pub(crate) fn a_second_real_frame_runs_before_its_spawn_is_admitted_and_is_adopted_once() {
         let layout = crate::Layout {
             magic: crate::LAYOUT_MAGIC,
             version: crate::LAYOUT_VERSION,
@@ -485,7 +485,7 @@ mod tests {
         remaining: std::sync::atomic::AtomicU64,
     }
 
-    const POINTS: u64 = crate::budget::FUEL_CHUNK + 4;
+    pub(crate) const POINTS: u64 = crate::budget::FUEL_CHUNK + 4;
 
     unsafe extern "C" fn fuel_child(
         ctx: *mut TaskCtx,
@@ -563,7 +563,7 @@ mod tests {
     }
 
     #[derive(Clone, Copy)]
-    enum Boundary {
+    pub(crate) enum Boundary {
         Exit,
         Submit,
         Refill,
@@ -585,7 +585,7 @@ mod tests {
         checkpoint_case(2, 2, true, 1, Boundary::Allocation);
     }
 
-    fn checkpoint_case(
+    pub(crate) fn checkpoint_case(
         width: u32,
         jobs: u64,
         hold_until_save: bool,

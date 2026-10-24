@@ -22,17 +22,9 @@ pub(crate) unsafe fn create(ctx: *mut TaskCtx, scope: *const u64, out: *mut u64)
     let scope = unsafe { scope.read() };
     let (index, generation) = {
         let s = scheduler(ctx);
-        let generation = s.fresh_generation() & 0x3fff_ffff;
         // Remove a vacant row from reuse, without publishing a native TaskSet.
         // The owning create command installs it only at retirement.
-        let index = match s.vacant_sets.pop() {
-            Some(index) => index,
-            None => {
-                s.sets.push(None);
-                (s.sets.len() - 1) as u32
-            }
-        };
-        (index, generation)
+        s.take_set_slot()
     };
     let word = crate::channels::ENDPOINT | TASK_SET | handle(index, generation);
     let task = engine::current(ctx);
@@ -350,7 +342,7 @@ pub(crate) unsafe fn release(
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::ordered::Policy;
 
@@ -406,7 +398,7 @@ mod tests {
         STATUS_OK
     }
 
-    fn run_mode(width: u32, mode: u64) {
+    pub(crate) fn run_mode(width: u32, mode: u64) {
         use hirsel_core_contract::handle_scan::TYPED_HANDLE;
         let scan = [
             TYPED_HANDLE,

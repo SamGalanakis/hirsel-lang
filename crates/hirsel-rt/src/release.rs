@@ -34,7 +34,7 @@ use crate::{STATUS_OK, fault};
 /// `Layout::magic`: "HRL1".
 pub const LAYOUT_MAGIC: u32 = 0x484e_4c31;
 /// `Layout::version` of this descriptor format.
-pub const LAYOUT_VERSION: u32 = 16;
+pub const LAYOUT_VERSION: u32 = 17;
 /// `Layout::flags`: the type is declared in an `unsafe ffi` package, so a failure in its
 /// finalizer ends the process (FAIL-3).
 pub const LAYOUT_UNSAFE_FFI: u32 = 1;
@@ -108,6 +108,9 @@ pub const STEP_RELEASE_LAST: u32 = 10;
 pub const STEP_RELEASE_ROOT: u32 = 11;
 /// Retire a language finalizer after all of its fields, including on failure.
 pub const STEP_END_FINALIZE: u32 = 12;
+/// Consume the private semantic metadata holder at offset (descriptor version 17).
+/// This never traverses language counts, invokes user code or suspends.
+pub const STEP_RELEASE_RECEIPT: u32 = 13;
 /// The finalizer is compiler implementation cleanup, adding no invocation itself.
 pub const LAYOUT_IMPLEMENTATION_FINALIZER: u32 = 4096;
 
@@ -420,7 +423,8 @@ fn check_frame(
             fault("a leaf drop step has a span");
         }
         match step.kind {
-            STEP_RELEASE | STEP_RELEASE_LAST | STEP_RELEASE_ROOT | STEP_CLOSE_HANDLE => {
+            STEP_RELEASE | STEP_RELEASE_LAST | STEP_RELEASE_ROOT | STEP_CLOSE_HANDLE
+            | STEP_RELEASE_RECEIPT => {
                 if step.kind == STEP_RELEASE_LAST && loops > 0 {
                     fault("a last release inside a loop");
                 }
@@ -1067,6 +1071,10 @@ unsafe fn run_step(
                 if consume_edge(ctx, child) {
                     return child;
                 }
+            }
+            STEP_RELEASE_RECEIPT => {
+                let receipt = at.cast::<*mut std::ffi::c_void>().read_unaligned();
+                crate::sealed_region::receipt::abi::hirsel_rt_v2_receipt_release(receipt);
             }
             STEP_RELEASE_ROOT => {
                 let child = at.cast::<*mut Header>().read_unaligned();

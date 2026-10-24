@@ -21,16 +21,37 @@ fn copied_values(count: u64) -> u64 {
         ),
     )
     .unwrap();
+    let setup_before = hirsel_intern::work::read(hirsel_intern::work::Counter::InterpCopiedValues);
+    // 25e2b384 loads ordinary std source; its compile-time execution is setup,
+    // not work performed by the list loop under test.
+    let mut program = COMPILER
+        .with_verify(Verify::On)
+        .load_program(&path)
+        .unwrap();
+    program.check_for_execution().unwrap();
+    program.engine.adapters.interpreter = Some(Box::new(InterpreterAdapter {
+        limits: hirsel_interp::Limits {
+            steps: None,
+            ..Default::default()
+        },
+        ..Default::default()
+    }));
     let before = hirsel_intern::work::read(hirsel_intern::work::Counter::InterpCopiedValues);
-    let outcome = run_path_with_step_budget(
-        &path,
+    eprintln!(
+        "std precheck copied {} values before application execution",
+        hirsel_intern::work::read(hirsel_intern::work::Counter::InterpCopiedValues) - setup_before
+    );
+    let observed = run_observed_snapshot(
+        &mut program.engine,
+        &hirsel_tir::RunConfiguration {
+            entry: program.entry.clone(),
+            hash_seed: 0,
+            inputs: vec![],
+        },
         SimulationConfig::default(),
-        None,
-        hirsel_engine::Verify::On,
-        &mut vec![],
-        &mut vec![],
     )
     .unwrap();
+    let outcome = observed.outcome.unwrap();
     assert_eq!(
         outcome,
         RunOutcome::Returned(hirsel_run_schema::Returned::Ok)

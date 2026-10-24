@@ -1,7 +1,7 @@
 use hirsel_driver::*;
 use hirsel_engine::*;
 
-fn keyed_work(kind: &str, count: u64) -> u64 {
+fn keyed_work(kind: &str, count: u64) -> (u64, u64) {
     let dir_scratch = tempfile::Builder::new()
         .prefix("hirsel-interp-keyed-")
         .tempdir()
@@ -30,22 +30,47 @@ fn keyed_work(kind: &str, count: u64) -> u64 {
          for i in 0u64..{count}u64 {{\n    if !({check}) {{ return Error(\"missing key\") }}\n  }}\n  \
          Ok(())\n}}\n"
     )).unwrap();
+    let setup_before = hirsel_intern::work::read(hirsel_intern::work::Counter::InterpCopiedValues);
+    // Ordinary std precheck (25e2b384) executes unrelated compile-time code.
+    // Measure both counters over the same application execution interval.
+    let mut program = COMPILER
+        .with_verify(Verify::On)
+        .load_program(&path)
+        .unwrap();
+    program.check_for_execution().unwrap();
+    program.engine.adapters.interpreter = Some(Box::new(InterpreterAdapter {
+        limits: hirsel_interp::Limits {
+            steps: None,
+            ..Default::default()
+        },
+        ..Default::default()
+    }));
     let before = hirsel_intern::work::read(hirsel_intern::work::Counter::InterpKeyedRows);
-    let outcome = run_path_with_step_budget(
-        &path,
+    let copies_before = hirsel_intern::work::read(hirsel_intern::work::Counter::InterpCopiedValues);
+    eprintln!(
+        "std precheck copied {} values before application execution",
+        hirsel_intern::work::read(hirsel_intern::work::Counter::InterpCopiedValues) - setup_before
+    );
+    let observed = run_observed_snapshot(
+        &mut program.engine,
+        &hirsel_tir::RunConfiguration {
+            entry: program.entry.clone(),
+            hash_seed: 0,
+            inputs: vec![],
+        },
         SimulationConfig::default(),
-        None,
-        hirsel_engine::Verify::On,
-        &mut vec![],
-        &mut vec![],
     )
     .unwrap();
+    let outcome = observed.outcome.unwrap();
     assert_eq!(
         outcome,
         RunOutcome::Returned(hirsel_run_schema::Returned::Ok)
     );
     std::fs::remove_dir_all(&dir).unwrap();
-    hirsel_intern::work::read(hirsel_intern::work::Counter::InterpKeyedRows) - before
+    (
+        hirsel_intern::work::read(hirsel_intern::work::Counter::InterpKeyedRows) - before,
+        hirsel_intern::work::read(hirsel_intern::work::Counter::InterpCopiedValues) - copies_before,
+    )
 }
 
 #[test]
@@ -53,7 +78,7 @@ fn map_and_set_insertions_and_reads_inspect_linearly_many_entries() {
     with_compiler_stack(|| {
         for kind in ["map", "set"] {
             for count in [2_000, 8_000] {
-                let rows = keyed_work(kind, count);
+                let (rows, _) = keyed_work(kind, count);
                 assert!(
                     rows <= 4 * count + 1_000,
                     "{count} {kind} insertions and reads inspected {rows} entries"
@@ -67,12 +92,7 @@ fn map_and_set_insertions_and_reads_inspect_linearly_many_entries() {
 fn map_upserts_and_value_callbacks_preserve_the_index_without_copying_the_map() {
     with_compiler_stack(|| {
         for count in [2_000, 8_000] {
-            let before =
-                hirsel_intern::work::read(hirsel_intern::work::Counter::InterpCopiedValues);
-            let rows = keyed_work("upsert", count);
-            let copied =
-                hirsel_intern::work::read(hirsel_intern::work::Counter::InterpCopiedValues)
-                    - before;
+            let (rows, copied) = keyed_work("upsert", count);
             assert!(
                 rows <= 4 * count + 1_000,
                 "{count} upserts inspected {rows} entries"

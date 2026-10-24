@@ -14,6 +14,8 @@ pub(crate) mod foreign;
 pub(crate) mod home;
 pub(crate) mod host;
 pub(crate) mod lifecycle;
+#[cfg(test)]
+mod runtime50_tests;
 pub(crate) mod sets;
 #[cfg(test)]
 mod terminal_tests;
@@ -1106,14 +1108,14 @@ mod tests {
             super::super::scheduler(run.0).set(0).members,
             vec![Some(child)]
         );
-        assert!(super::super::scheduler(run.0).vacant_sets.is_empty());
+        assert_eq!(super::super::scheduler(run.0).set_slots.free_len(), 0);
         // Add yields: the following close waits through both older queued turns.
         f.apply_head(empty(), load(), &mut backend).unwrap();
         f.apply_head(empty(), load(), &mut backend).unwrap();
         assert!(super::super::scheduler(run.0).sets[0].is_some());
         f.absorb(&mut backend).unwrap();
         assert!(super::super::scheduler(run.0).sets[0].is_none());
-        assert_eq!(super::super::scheduler(run.0).vacant_sets, vec![0]);
+        assert_eq!(super::super::scheduler(run.0).set_slots.free_len(), 1);
         assert_eq!(super::super::scheduler(run.0).task_handle(child, scope), 1);
         assert_eq!(
             polls, 8,

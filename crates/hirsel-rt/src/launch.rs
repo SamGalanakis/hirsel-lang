@@ -206,6 +206,20 @@ impl<A: Adapter> Adapter for Shared<A> {
     fn telemetry_context(&self, telemetry: u64, span: u64) -> Option<Vec<u8>> {
         self.0.borrow().telemetry_context(telemetry, span)
     }
+    fn isolated_clock(&self) -> bool {
+        self.0.borrow().isolated_clock()
+    }
+    fn process_site(&mut self, child: u64, site: u64, operation_site: u64, path: &[u32]) {
+        self.0
+            .borrow_mut()
+            .process_site(child, site, operation_site, path)
+    }
+    fn process_sources(&self) -> bool {
+        self.0.borrow().process_sources()
+    }
+    fn process_batch(&mut self, canceled: &[u64]) -> Result<Ready, AdapterError> {
+        self.0.borrow_mut().process_batch(canceled)
+    }
     fn ready(&mut self) -> Result<Ready, AdapterError> {
         self.0.borrow_mut().ready()
     }

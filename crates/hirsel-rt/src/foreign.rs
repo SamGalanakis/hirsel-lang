@@ -132,6 +132,23 @@ pub unsafe extern "C" fn hirsel_rt_v2_foreign_enter(
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let enclosing = save();
     let nested = !enclosing.context.is_null();
+    if !nested && !unsafe { (*ctx).io_data() }.is_null() {
+        let mut isolated = false;
+        let queried = unsafe {
+            crate::pool::call_home(ctx, &mut || {
+                isolated = crate::io::Binding::get(ctx).adapter.isolated_clock();
+            })
+        };
+        unsafe { crate::stop::check(ctx, queried) };
+        if isolated {
+            unsafe {
+                crate::stop::raise(
+                    ctx,
+                    crate::stop::Stop::Refused("foreign call in timed process clock domain".into()),
+                )
+            };
+        }
+    }
     let threads = dispatch & FOREIGN_THREADS_MASK;
     let started = if unsafe { (*ctx).run_ref() }.extern_metrics.is_some() {
         now_ns()

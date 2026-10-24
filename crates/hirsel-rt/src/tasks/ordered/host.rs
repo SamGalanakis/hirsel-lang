@@ -222,7 +222,7 @@ mod home_terminal_tests;
 mod output;
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::io::{Adapter, AdapterError, Completion, Ready, Request, UnitResult};
     use crate::ordered::Policy;
@@ -983,7 +983,7 @@ mod tests {
         );
     }
 
-    fn owned_host_sleep_completes_from_idle_and_deadline_cancels_a_saved_request_commit(
+    pub(crate) fn owned_host_sleep_completes_from_idle_and_deadline_cancels_a_saved_request_commit(
         commit: hirsel_run_config::Commit,
     ) {
         for width in [2, 4, 8] {

@@ -39,6 +39,7 @@ pub mod receipt_entry;
 pub mod receipt_transport;
 pub mod rt_program;
 pub mod runtime_abi;
+pub mod sealed;
 pub mod sealed_payload_source;
 pub mod snapshot;
 pub mod stage;

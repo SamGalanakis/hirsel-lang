@@ -14,7 +14,13 @@ pub const JOBS: u64 = 4
 pub type Problem = Invalid(String, String) | Limit(String, String) | Files(
   String,
   FileError
-) | Utf8(String) | Unsupported(String, String, String) | Canceled
+) | Utf8(String) | Unsupported(String, String, String) | SourceUnsupported(
+  String,
+  markdown.Origin,
+  Option[markdown.SourcePoint],
+  Option[markdown.SourcePoint],
+  String
+) | Canceled
 
 pub type Spec {
   input: String,
@@ -51,6 +57,12 @@ pub fn describe(problem: Problem) -> String uses {} {
     Files(name, error) => f"{name}: file {file_error(error)}",
     Utf8(name) => f"{name}: invalid UTF-8",
     Unsupported(name, anchor, kind) => f"{name}: AST{anchor}: unsupported {kind}",
+    SourceUnsupported(name, extent, start, end, kind) => {
+      match (extent, start, end) {
+        (Cover(range), Some(a), Some(b)) => f"{name}:{a.line}:{a.byte_column}–{b.line}:{b.byte_column}: unsupported {kind} (bytes [{range.start},{range.end}), end exclusive)",
+        _ => f"{name}: source unavailable: unsupported {kind}",
+      }
+    },
     Canceled() => "batch: canceled",
   }
 }

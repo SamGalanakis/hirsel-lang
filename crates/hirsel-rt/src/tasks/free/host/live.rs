@@ -30,6 +30,7 @@ pub(crate) struct Pending {
     keys: KeySet,
     positions: Option<Positions>,
     completion: Option<Result<Completion, AdapterError>>,
+    job: Option<super::jobs::Owned>,
 }
 
 /// # Safety
@@ -53,11 +54,24 @@ pub(super) unsafe fn request(
             keys,
             positions: None,
             completion: None,
+            job: None,
         }));
     }
     super::super::record::begin(ctx);
     let pending = unsafe { (*ctx).live_host.as_deref_mut().unwrap() } as *mut Pending;
     let wait = io.register(token, unsafe { (*pending).request.buffers().clone() });
+    let blocking = {
+        let _segment = unsafe { role::Segment::new(ctx) };
+        io.adapter.blocking(unsafe { (*pending).request.buffers() })
+    };
+    if blocking {
+        unsafe {
+            (*pending).job = Some(super::jobs::Owned {
+                reservation: None,
+                slot: None,
+            })
+        };
+    }
     let mut first = true;
     loop {
         unsafe {
@@ -74,6 +88,11 @@ pub(super) unsafe fn request(
             unsafe { try_block(&mut *ctx, Wait::Retry { cancelable: false }, false, 0) }?;
         }
         crate::stop::observe(ctx)?;
+        if let Some(owned) = unsafe { (*pending).job.as_mut() } {
+            // Positions are ready: reserve job credit before claim.
+            unsafe { blocking::reserve(ctx, io, wait, owned) }?;
+            crate::stop::observe(ctx)?;
+        }
         if first && !unsafe { (*pending).request.claim() } {
             return Err(Stop::Requested);
         }
@@ -86,7 +105,11 @@ pub(super) unsafe fn request(
             } else {
                 None
             };
-        {
+        if let Some(owned) = unsafe { (*pending).job.as_mut() } {
+            let request = unsafe { &(*pending).request };
+            let (result, _) = unsafe { blocking::call(ctx, io, wait, owned, request, cause) }?;
+            unsafe { (*pending).completion = Some(result) };
+        } else {
             let _segment = unsafe { role::Segment::new(ctx) };
             let request = unsafe { (*pending).request.buffers() };
             let result = if let Some(cause) = cause

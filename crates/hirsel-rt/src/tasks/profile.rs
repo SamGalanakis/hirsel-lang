@@ -239,5 +239,7 @@ pub(crate) fn request_kind(request: &crate::io::Request) -> &'static str {
         Request::UnixListen { .. } => "UnixListen",
         Request::Ready { .. } => "Ready",
         Request::Schedule { .. } => "Schedule",
+        Request::ProcessTime { .. } => "ProcessTime",
+        Request::ProcessSettle { .. } => "ProcessSettle",
     }
 }

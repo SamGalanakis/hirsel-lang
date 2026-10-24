@@ -123,6 +123,11 @@ pub(crate) fn render_request(request: &Request) -> Option<String> {
         },
         Request::Stopped => "stopped".into(),
         Request::Schedule { count, choice } => format!("schedule {count} {choice}"),
+        Request::ProcessTime { from, to } => format!("process_time {from} {to}"),
+        Request::ProcessSettle { canceled } => format!(
+            "process_settle {}",
+            hex(&serde_json::to_vec(canceled).unwrap())
+        ),
         Request::RandomBytes { random, count } => format!("random_bytes {random} {count}"),
         Request::Telemetry { io } => format!("telemetry {io}"),
         Request::TelemetryBegin {
@@ -561,6 +566,13 @@ pub(crate) fn parse_request(words: &[&str]) -> Result<Option<Request>, String> {
             _ => return Err("bad call return".into()),
         }),
         ["stopped"] => Request::Stopped,
+        ["process_settle", encoded] => Request::ProcessSettle {
+            canceled: serde_json::from_slice(&bytes(encoded)?).map_err(|_| "bad process settle")?,
+        },
+        ["process_time", from, to] => Request::ProcessTime {
+            from: number(from)?,
+            to: number(to)?,
+        },
         ["schedule", count, choice] => Request::Schedule {
             count: number(count)?,
             choice: number(choice)?,

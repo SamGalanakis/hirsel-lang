@@ -49,6 +49,7 @@ pub(crate) mod ordered;
 #[cfg(feature = "measurement")]
 pub(crate) mod profile;
 mod readiness;
+pub(crate) mod registry;
 pub mod role;
 
 use std::collections::VecDeque;
@@ -150,6 +151,11 @@ struct Slot {
 
 struct Task {
     generation: u32,
+    /// Stable control block, created at the first lease. Holders keep the
+    /// slot from reuse; they never reach this row or its context.
+    control: Option<registry::TaskLease>,
+    /// Waiters subscribed to this task's cancellation.
+    cancel_subs: Vec<registry::CancelSub>,
     /// Role-owned notification metadata. Remote wakes never read a running
     /// TaskCtx, whose local runtime entries may hold an exclusive borrow.
     dispatch: Option<std::sync::Arc<crate::pool::free::Frame>>,
@@ -269,10 +275,9 @@ pub(crate) struct Scheduler {
     cancel_epoch: hirsel_free::cancel::Epoch,
     cancel_metrics: Option<std::sync::Arc<crate::pool::WorkerMetrics>>,
     tasks: Vec<Option<Task>>,
-    vacant_tasks: Vec<u32>,
+    task_slots: registry::TaskSlots,
     scopes: Vec<Option<Scope>>,
-    vacant_scopes: Vec<u32>,
-    generation: u32,
+    scope_slots: registry::Slots<{ u32::MAX }>,
     current: u32,
     runnable: VecDeque<u32>,
     /// Park places handed out so far; a parked task holds its place in `Task::parked_at`.
@@ -288,7 +293,7 @@ pub(crate) struct Scheduler {
     pub(crate) channels: crate::channels::Channels,
     sync: crate::sync::Synchronizers,
     sets: Vec<Option<TaskSet>>,
-    vacant_sets: Vec<u32>,
+    set_slots: registry::Slots<SET_GENERATIONS>,
     /// The run's scheduler policy (`inputs.scheduler`).
     schedule: Schedule,
     /// The `serial` packages' gates, by package ordinal (S-13).
@@ -297,7 +302,13 @@ pub(crate) struct Scheduler {
     pool_waiters: Vec<u32>,
     /// Replay enablement and live free-mode object waits.
     retrying: Vec<u32>,
+    /// Cancellation subscriptions a cancellation touched, until drained.
+    cancel_notices: Vec<registry::CancelNotice>,
+    cancel_registrations: u64,
 }
+
+/// TaskSet generations stay below the endpoint and TaskSet word bits.
+const SET_GENERATIONS: u32 = 0x3fff_ffff;
 
 fn handle(index: u32, generation: u32) -> u64 {
     u64::from(generation) << 32 | u64::from(index)
@@ -309,7 +320,6 @@ impl Scheduler {
         root.priority = schedule.admit();
         Scheduler {
             tasks: vec![Some(root)],
-            generation: 1,
             schedule,
             ..Scheduler::default()
         }
@@ -324,9 +334,150 @@ impl Scheduler {
             .as_mut()
             .unwrap_or_else(|| fault("a vacant scope row"))
     }
-    fn fresh_generation(&mut self) -> u32 {
-        self.generation = self.generation.wrapping_add(1).max(1);
-        self.generation
+    /// A task slot for a new row and its generation. The slot's previous
+    /// row has left and every owner of its storage has released it.
+    fn take_task_slot(&mut self) -> (u32, u32) {
+        let (index, generation) = self.task_slots.take(self.tasks.len());
+        if index as usize == self.tasks.len() {
+            self.tasks.push(None);
+        }
+        (index, generation)
+    }
+    fn take_scope_slot(&mut self) -> (u32, u32) {
+        let (index, generation) = self.scope_slots.take(self.scopes.len());
+        if index as usize == self.scopes.len() {
+            self.scopes.push(None);
+        }
+        (index, generation)
+    }
+    fn take_set_slot(&mut self) -> (u32, u32) {
+        let (index, generation) = self.set_slots.take(self.sets.len());
+        if index as usize == self.sets.len() {
+            self.sets.push(None);
+        }
+        (index, generation)
+    }
+    /// Remove scope row `index`; its slot is reusable at once.
+    fn take_scope(&mut self, index: u32) -> Scope {
+        let row = self.scopes[index as usize]
+            .take()
+            .unwrap_or_else(|| fault("a scope exited twice"));
+        self.scope_slots.release(index, row.generation);
+        row
+    }
+    /// The live row's key, if `slot` holds one.
+    pub(crate) fn task_key(&self, slot: u32) -> Option<registry::TaskKey> {
+        let row = self.tasks.get(slot as usize)?.as_ref()?;
+        Some(registry::TaskKey {
+            slot,
+            generation: u64::from(row.generation),
+        })
+    }
+    /// The row `key` names while it is live; never a later occupant.
+    pub(crate) fn live_task(&self, key: registry::TaskKey) -> Option<u32> {
+        (self.task_key(key.slot) == Some(key)).then_some(key.slot)
+    }
+    pub(crate) fn scope_key(&self, slot: u32) -> Option<registry::ScopeKey> {
+        let row = self.scopes.get(slot as usize)?.as_ref()?;
+        Some(registry::ScopeKey {
+            slot,
+            generation: u64::from(row.generation),
+        })
+    }
+    pub(crate) fn live_scope(&self, key: registry::ScopeKey) -> Option<u32> {
+        (self.scope_key(key.slot) == Some(key)).then_some(key.slot)
+    }
+    /// A retained reference to live task `slot`'s control block. Its slot is
+    /// not reused until the lease drops, though the row may retire.
+    pub(crate) fn lease(&mut self, slot: u32) -> registry::TaskLease {
+        let key = self
+            .task_key(slot)
+            .unwrap_or_else(|| fault("a lease of a vacant task row"));
+        self.task(slot)
+            .control
+            .get_or_insert_with(|| registry::TaskLease::new(key))
+            .clone()
+    }
+    /// Subscribe `token` to live task `task`'s cancellation. The result
+    /// carries the post-registration recheck, so an earlier cancellation is
+    /// never missed.
+    pub(crate) fn subscribe_cancel(
+        &mut self,
+        task: u32,
+        token: u64,
+    ) -> registry::CancelRegistration {
+        let key = self
+            .task_key(task)
+            .unwrap_or_else(|| fault("a cancellation subscription of a vacant task row"));
+        self.cancel_registrations += 1;
+        let registration = self.cancel_registrations;
+        self.task(task).cancel_subs.push(registry::CancelSub {
+            token,
+            registration,
+        });
+        let shield = self.task(task).shield();
+        let canceled = self.canceled_task(task, shield);
+        if canceled.is_some() {
+            // Already canceled: no later event names this registration, so
+            // its service drains the notice like any other.
+            self.cancel_notices.push(registry::CancelNotice {
+                task: key,
+                token,
+                registration,
+            });
+        }
+        registry::CancelRegistration {
+            key,
+            registration,
+            canceled,
+        }
+    }
+    /// Remove a subscription; a retired row's subscriptions left with it.
+    pub(crate) fn unsubscribe_cancel(&mut self, task: registry::TaskKey, registration: u64) {
+        if let Some(slot) = self.live_task(task) {
+            self.task(slot)
+                .cancel_subs
+                .retain(|sub| sub.registration != registration);
+        }
+    }
+    /// The subscriptions cancellations touched since the last drain, in
+    /// cancellation order. Untouched subscriptions are never visited.
+    pub(crate) fn drain_cancel_notices(&mut self, out: &mut Vec<registry::CancelNotice>) {
+        out.append(&mut self.cancel_notices);
+    }
+    /// As [`Self::drain_cancel_notices`], for the notices whose token has
+    /// `token & mask == value` only; other services' notices stay queued.
+    pub(crate) fn drain_cancel_notices_matching(
+        &mut self,
+        mask: u64,
+        value: u64,
+        out: &mut Vec<registry::CancelNotice>,
+    ) {
+        self.cancel_notices.retain(|notice| {
+            let matched = notice.token & mask == value;
+            if matched {
+                out.push(*notice);
+            }
+            !matched
+        });
+    }
+    /// A cancellation touched `task`: queue its subscriptions' notices.
+    /// The notice capacity was reserved with the cancellation's targets.
+    fn notify_cancel(&mut self, task: u32) {
+        let Some(Some(row)) = self.tasks.get(task as usize) else {
+            return;
+        };
+        let key = registry::TaskKey {
+            slot: task,
+            generation: u64::from(row.generation),
+        };
+        for sub in &row.cancel_subs {
+            self.cancel_notices.push(registry::CancelNotice {
+                task: key,
+                token: sub.token,
+                registration: sub.registration,
+            });
+        }
     }
     /// The task a Task word names, which must belong to `scope`.
     fn task_handle(&mut self, word: u64, scope: u32) -> u32 {
@@ -374,11 +525,15 @@ impl Scheduler {
         // rows. Links stay until the child row is vacated, including scope exit.
         let mut pending = vec![task];
         let mut targets = Vec::new();
+        let mut subs = 0;
         while let Some(index) = pending.pop() {
             targets.push(index);
-            pending.extend_from_slice(&self.tasks[index as usize].as_ref().unwrap().children);
+            let row = self.tasks[index as usize].as_ref().unwrap();
+            subs += row.cancel_subs.len();
+            pending.extend_from_slice(&row.children);
         }
         self.woken.reserve(targets.len());
+        self.cancel_notices.reserve(subs);
         targets
     }
     fn cancel_prepared(&mut self, task: u32, cause: u32, targets: &[u32]) {
@@ -389,6 +544,7 @@ impl Scheduler {
                     .canceled
                     .cancel(if index == task { cause } else { CANCEL_PARENT });
             self.wake(index);
+            self.notify_cancel(index);
         }
         if changed {
             self.cancel_epoch.changed();
@@ -397,6 +553,9 @@ impl Scheduler {
     fn cancel_scope(&mut self, scope: u32, cause: u32) {
         if self.scope(scope).canceled.cancel(cause) {
             self.cancel_epoch.changed();
+            // Only the owner enters a scope; children are canceled by name.
+            let owner = self.scope(scope).owner;
+            self.notify_cancel(owner);
         }
     }
     /// Poll parked `task` at the next scheduling point: an event may have ended its wait.
@@ -579,8 +738,15 @@ impl Scheduler {
     }
     /// Vacate task set row `set`; its members stay children of their scope.
     fn close_set(&mut self, set: u32) {
-        self.sets[set as usize] = None;
-        self.vacant_sets.push(set);
+        drop(self.take_set(set));
+    }
+    /// Remove task set row `set`; its slot is reusable at once.
+    fn take_set(&mut self, set: u32) -> TaskSet {
+        let row = self.sets[set as usize]
+            .take()
+            .unwrap_or_else(|| fault("a task set closed twice"));
+        self.set_slots.release(set, row.generation);
+        row
     }
     /// `task` holds its result or failed: its place in completion order.
     fn order(&mut self, task: u32) {
@@ -679,8 +845,17 @@ impl Scheduler {
                 "a root retired with live children"
             );
         }
-        self.vacant_tasks.push(index);
+        self.task_slots.retire(
+            index,
+            task.generation,
+            task.control.clone(),
+            task.dispatch.clone(),
+        );
         task
+    }
+    /// Capacity for `additional` task retirements inside a recording section.
+    fn reserve_retirements(&mut self, additional: usize) {
+        self.task_slots.reserve(additional);
     }
 
     fn link_child(&mut self, parent: u32, child: u32) {
@@ -700,6 +875,8 @@ impl Task {
     ) -> Task {
         Task {
             generation,
+            control: None,
+            cancel_subs: Vec::new(),
             dispatch: None,
             ctx,
             stack: None,
@@ -843,6 +1020,14 @@ fn wake_in(tasks: &mut [Option<Task>], woken: &mut Vec<u32>, task: u32) {
 /// first.
 #[inline(always)]
 pub(crate) fn scheduler(ctx: *mut TaskCtx) -> &'static mut Scheduler {
+    role::unlent("a broad scheduler access");
+    role_tables(ctx)
+}
+
+/// Enter the role and reach the tables, for [`role::with_role`] (and the
+/// remaining broad accessor) only.
+#[inline(always)]
+fn role_tables(ctx: *mut TaskCtx) -> &'static mut Scheduler {
     // SAFETY: callers retain no scheduler reference across a role leave.
     unsafe { role::enter(ctx) };
     // Admission also builds row zero before code starts; only code entries
@@ -905,30 +1090,34 @@ fn create_scheduler(ctx: *mut TaskCtx) -> &'static mut Scheduler {
 
 /// The running task.
 pub(crate) fn current_task(ctx: *mut TaskCtx) -> u32 {
-    scheduler(ctx).current
+    role::with_role(ctx, |t| t.current)
 }
 
 /// `task`'s cancellation, with its own finalizer shield.
 pub(crate) fn task_canceled(ctx: *mut TaskCtx, task: u32) -> Option<u32> {
-    let s = scheduler(ctx);
-    let shield = s.task(task).shield();
-    s.canceled_task(task, shield)
+    role::with_role(ctx, |t| {
+        let shield = t.task(task).shield();
+        t.canceled_task(task, shield)
+    })
 }
 
 /// RUN-9: a callee run's place forwards its caller's cancellation: the run's root task is
 /// canceled with `cause` and every other task with `Parent`, and the parked ones are polled.
 pub(crate) fn cancel_root(ctx: *mut TaskCtx, cause: u32) {
-    scheduler(ctx).cancel(ROOT, cause);
+    role::with_role(ctx, |t| t.cancel(ROOT, cause));
 }
 
 /// Outstanding waits for the test runner. This is host reporting, outside program Io.
 pub(crate) fn test_waits(ctx: *mut TaskCtx) -> String {
-    let s = scheduler(ctx);
-    let mut waits: Vec<_> = s
-        .parked()
+    let parked = role::with_role(ctx, |t| {
+        t.parked()
+            .into_iter()
+            .map(|(task, wait)| (t.task(task).path.clone(), wait))
+            .collect::<Vec<_>>()
+    });
+    let mut waits: Vec<_> = parked
         .into_iter()
-        .map(|(task, wait)| {
-            let row = s.tasks[task as usize].as_ref().unwrap();
+        .map(|(path, wait)| {
             let kind = match wait {
                 Wait::Join { .. } => "task.await",
                 Wait::Exit { .. } => "task.scope",
@@ -941,7 +1130,7 @@ pub(crate) fn test_waits(ctx: *mut TaskCtx) -> String {
                 Wait::Gate { .. } => "foreign.gate",
                 Wait::Pool => "foreign.pool",
             };
-            (row.path.clone(), kind)
+            (path, kind)
         })
         .collect();
     waits.sort_by(|a, b| a.0.cmp(&b.0));
@@ -963,11 +1152,12 @@ pub(crate) fn park_final(ctx: *mut TaskCtx) -> ! {
 /// Free mode: park the running task until the next publish (or, `cancelable`, its
 /// cancellation); the caller checks its condition again.
 pub(crate) fn park_retry(ctx: *mut TaskCtx, cancelable: bool) {
-    let current = scheduler(ctx).current;
-    let s = scheduler(ctx);
-    if !s.retrying.contains(&current) {
-        s.retrying.push(current);
-    }
+    role::with_role(ctx, |t| {
+        let current = t.current;
+        if !t.retrying.contains(&current) {
+            t.retrying.push(current);
+        }
+    });
     // SAFETY: the context is live; the caller holds nothing a stop must drop.
     unsafe { block(&mut *ctx, Wait::Retry { cancelable }, false, 0) };
 }
@@ -975,13 +1165,18 @@ pub(crate) fn park_retry(ctx: *mut TaskCtx, cancelable: bool) {
 /// Free mode: a publish happened; `tasks` parked replay-pending are polled at the next
 /// scheduling point.
 pub(crate) fn wake_all(ctx: *mut TaskCtx, tasks: &[u32]) {
-    let s = scheduler(ctx);
-    for &task in tasks {
-        if let Some(Some(row)) = s.tasks.get_mut(task as usize)
-            && matches!(row.wait, Some(Wait::Retry { .. }))
-        {
-            row.retried = true;
-            s.wake(task);
+    role::with_role(ctx, |t| t.wake_retried(tasks));
+}
+
+impl Scheduler {
+    fn wake_retried(&mut self, tasks: &[u32]) {
+        for &task in tasks {
+            if let Some(Some(row)) = self.tasks.get_mut(task as usize)
+                && matches!(row.wait, Some(Wait::Retry { .. }))
+            {
+                row.retried = true;
+                self.wake(task);
+            }
         }
     }
 }
@@ -989,15 +1184,18 @@ pub(crate) fn wake_all(ctx: *mut TaskCtx, tasks: &[u32]) {
 /// A phase publication can enable object or replay waiters. They recheck
 /// outside the publishing phase, and never hold an object while waiting.
 pub(crate) fn wake_retrying(ctx: *mut TaskCtx) {
-    let retrying = std::mem::take(&mut scheduler(ctx).retrying);
-    wake_all(ctx, &retrying);
+    role::with_role(ctx, |t| {
+        let retrying = std::mem::take(&mut t.retrying);
+        t.wake_retried(&retrying);
+    });
 }
 
 /// The running task's spawn path.
 pub(crate) fn current_path(ctx: *mut TaskCtx) -> Vec<u32> {
-    let s = scheduler(ctx);
-    let current = s.current;
-    s.task(current).path.clone()
+    role::with_role(ctx, |t| {
+        let current = t.current;
+        t.task(current).path.clone()
+    })
 }
 
 /// Copy immutable issuer metadata while the caller owns the role/run token.
@@ -1351,9 +1549,10 @@ pub(crate) fn dispatch_owner(ctx: *mut TaskCtx) -> Owner {
     if ordered::ahead::private(ctx) {
         return Owner::Any;
     }
-    let s = scheduler(ctx);
-    let me = s.current;
-    s.task(me).owner
+    role::with_role(ctx, |t| {
+        let me = t.current;
+        t.task(me).owner
+    })
 }
 
 /// Record a physical claim without invoking a stop-aware task entry before
@@ -1378,7 +1577,7 @@ pub(crate) unsafe fn record_dispatch(
 /// Admission only; no worker has started a task.
 pub(crate) unsafe fn install_cancel_metrics(ctx: *mut TaskCtx) {
     let metrics = unsafe { (*ctx).run_ref() }.worker_metrics.clone();
-    scheduler(ctx).cancel_metrics = metrics;
+    role::with_role(ctx, |t| t.cancel_metrics = metrics);
 }
 
 /// A physical stack reached idle, before its dispatch activity reservation
@@ -1654,6 +1853,22 @@ unsafe fn poll_parked(ctx: *mut TaskCtx) -> Stopped<()> {
     for scope in unsafe { crate::host_waits::expired(ctx, &ready) }? {
         ordered::events::expire(scheduler(ctx), scope);
     }
+    let canceled: Vec<u64> = {
+        let s = scheduler(ctx);
+        s.tasks
+            .iter()
+            .enumerate()
+            .filter_map(|(task, row)| {
+                let row = row.as_ref()?;
+                let Wait::Host { token } = row.wait? else {
+                    return None;
+                };
+                s.canceled_task(task as u32, row.shield()).map(|_| token)
+            })
+            .collect()
+    };
+    let batch = unsafe { crate::host_waits::process_batch(ctx, &canceled) }?;
+    let ready = crate::host_waits::merge_ready(ready, batch);
     for task in unsafe { crate::host_waits::woken(ctx, &ready) } {
         scheduler(ctx).wake(task);
     }
@@ -2384,26 +2599,16 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_scope_enter(
 /// A fresh scope of the running task, its row and generation.
 fn open_scope(ctx: *mut TaskCtx, deadline: Option<ScopeDeadline>) -> (u32, u32) {
     let s = scheduler(ctx);
-    let generation = s.fresh_generation();
+    let (index, generation) = s.take_scope_slot();
     let current = s.current;
-    let row = Scope {
+    s.scopes[index as usize] = Some(Scope {
         generation,
         owner: current,
         children: Vec::new(),
         canceled: Default::default(),
         deadline,
         completions: AtomicU64::new(0),
-    };
-    let index = match s.vacant_scopes.pop() {
-        Some(index) => {
-            s.scopes[index as usize] = Some(row);
-            index
-        }
-        None => {
-            s.scopes.push(Some(row));
-            (s.scopes.len() - 1) as u32
-        }
-    };
+    });
     s.task(current).scopes.push(index);
     s.cancel_epoch.changed();
     (index, generation)
@@ -2597,8 +2802,7 @@ unsafe fn exit_scope(
         }
         s.vacate_task(child);
     }
-    let deadline = s.scopes[index as usize].take().and_then(|row| row.deadline);
-    s.vacant_scopes.push(index);
+    let deadline = s.take_scope(index).deadline;
     // A scope that exits before its deadline removes the timer; nothing is recorded.
     if let Some(ScopeDeadline {
         token: Some(token), ..
@@ -2728,7 +2932,7 @@ unsafe fn spawn_child(
     let mut path = parent.path.clone();
     path.push(parent.spawned);
     parent.spawned += 1;
-    let generation = s.fresh_generation();
+    let (index, generation) = s.take_task_slot();
     // SAFETY: the context is live.
     let (worker, run) = unsafe { ((*ctx).worker_ptr(), (*ctx).run_ptr()) };
     let stack = unsafe { (*ctx).worker() }.idle_stacks.take();
@@ -2738,13 +2942,6 @@ unsafe fn spawn_child(
     let mut task = Task::new(generation, child, Some(scope), path, canceled);
     task.code = Some((code, environment, operation_site));
     task.priority = s.schedule.admit();
-    let index = match s.vacant_tasks.pop() {
-        Some(index) => index,
-        None => {
-            s.tasks.push(None);
-            (s.tasks.len() - 1) as u32
-        }
-    };
     unsafe {
         (*child).task_id = index;
         (*child).task_sp = stack.prepare(task_entry, child.cast(), index as usize as *mut u8);
@@ -3052,22 +3249,12 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_set(
     let s = scheduler(ctx);
     // SAFETY: caller contract.
     let scope = s.scope_handle(unsafe { scope.read() });
-    let generation = s.fresh_generation() & 0x3fff_ffff;
-    let row = TaskSet {
+    let (index, generation) = s.take_set_slot();
+    s.sets[index as usize] = Some(TaskSet {
         generation,
         scope,
         members: Vec::new(),
-    };
-    let index = match s.vacant_sets.pop() {
-        Some(index) => {
-            s.sets[index as usize] = Some(row);
-            index
-        }
-        None => {
-            s.sets.push(Some(row));
-            (s.sets.len() - 1) as u32
-        }
-    };
+    });
     crate::free::done(ctx);
     // SAFETY: caller contract.
     unsafe {

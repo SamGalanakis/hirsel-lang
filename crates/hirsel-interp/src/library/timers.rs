@@ -131,9 +131,37 @@ impl Library {
             .values()
             .map(|(deadline, _)| *deadline)
             .chain(self.next_scope_deadline())
+            .chain(
+                self.simulation
+                    .next_child_gate()
+                    .filter(|t| *t > self.simulation.monotonic_now()),
+            )
+            .chain(
+                self.network_waits
+                    .values()
+                    .filter(|w| matches!(w.name.as_str(), "child.wait" | "proc.wait_group"))
+                    .filter_map(|w| {
+                        super::process::deadline(w.arguments.get(2)?)
+                            .ok()
+                            .flatten()
+                            .map(|(_, t)| t)
+                    })
+                    .filter(|t| *t > self.simulation.monotonic_now()),
+            )
             .min()
         {
             Some(deadline) => {
+                let from = self.simulation.monotonic_now();
+                if self
+                    .simulation
+                    .config
+                    .process
+                    .as_ref()
+                    .is_some_and(|g| g.timed.is_some())
+                    && deadline > from
+                {
+                    self.process_advance = Some((from, deadline));
+                }
                 self.simulation.advance_monotonic(deadline);
                 true
             }

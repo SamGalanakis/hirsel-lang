@@ -6,7 +6,7 @@ use super::stages::{NativeError, ReadyProgram, StageName};
 use hirsel_lir::abi_types::{ParameterPassing, PhysicalType};
 use hirsel_lir::emission::OptLevel;
 use hirsel_lir::layout_types::{SizeSpec, TargetSpec};
-use hirsel_syntax::DefPath;
+use hirsel_syntax::{ContentHash, DefPath};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -14,8 +14,10 @@ use std::time::{Duration, Instant};
 
 /// The external tools and archives linking and launching use. Nothing here is
 /// discovered ambiently at link time: a missing tool is a `NativeError`.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Toolchain {
+    /// The same admitted result provider used by native, object and runtime tasks.
+    pub products: std::sync::Arc<dyn hirsel_engine::store::ResultStore>,
     /// The archive variant `link` links; measurement also selects emitted
     /// inline-edge hooks. `with_runtime` selects another built variant.
     pub runtime_build: RuntimeBuild,
@@ -62,6 +64,19 @@ pub struct Toolchain {
     pub cache: PathBuf,
     /// How a program linked for a launch runs: in a runner unless an executable is selected.
     pub execution: super::runner::Execution,
+}
+
+impl std::fmt::Debug for Toolchain {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Toolchain")
+            .field("products", &self.products.name())
+            .field("lld", &self.lld)
+            .field("kit", &self.kit)
+            .field("runtime", &self.runtime)
+            .field("runtime_build", &self.runtime_build)
+            .field("execution", &self.execution)
+            .finish_non_exhaustive()
+    }
 }
 
 /// A corpus program finishes in well under a second natively and in seconds
@@ -255,7 +270,7 @@ impl Toolchain {
         targets: &[&TargetSpec],
         runtime_builds: &[RuntimeBuild],
     ) -> Result<Self, NativeError> {
-        Self::in_tree_inputs(build_dir, targets, runtime_builds, None)
+        Self::in_tree_inputs(build_dir, targets, runtime_builds, None, None)
     }
 
     /// Construct a toolchain against a resident session's frozen Cargo inputs.
@@ -265,7 +280,18 @@ impl Toolchain {
         runtime_builds: &[RuntimeBuild],
         inputs: &super::RuntimeInputs,
     ) -> Result<Self, NativeError> {
-        Self::in_tree_inputs(build_dir, targets, runtime_builds, Some(inputs))
+        Self::in_tree_inputs(build_dir, targets, runtime_builds, Some(inputs), None)
+    }
+
+    /// Use the admitted native request's single provider for runtime products.
+    pub fn in_tree_with_products(
+        build_dir: &Path,
+        targets: &[&TargetSpec],
+        runtime_builds: &[RuntimeBuild],
+        inputs: Option<&super::RuntimeInputs>,
+        store: std::sync::Arc<dyn hirsel_engine::store::ResultStore>,
+    ) -> Result<Self, NativeError> {
+        Self::in_tree_inputs(build_dir, targets, runtime_builds, inputs, Some(store))
     }
 
     fn in_tree_inputs(
@@ -273,6 +299,7 @@ impl Toolchain {
         targets: &[&TargetSpec],
         runtime_builds: &[RuntimeBuild],
         inputs: Option<&super::RuntimeInputs>,
+        store: Option<std::sync::Arc<dyn hirsel_engine::store::ResultStore>>,
     ) -> Result<Self, NativeError> {
         let _timing = hirsel_intern::timings::interval(hirsel_intern::timings::Interval::Link);
         let [runtime_build, ..] = *runtime_builds else {
@@ -298,6 +325,24 @@ impl Toolchain {
         // names their directory: `<dir>/<triple>/<features or default>/libhirsel_rt.a`.
         // Cargo is then never run, and a missing archive is an error.
         let prebuilt = std::env::var_os("HIRSEL_RUNTIME_ARCHIVES").map(PathBuf::from);
+        let products = match store {
+            Some(store) => store,
+            None => {
+                let cap = std::env::var("HIRSEL_MEMORY_LIMIT")
+                    .ok()
+                    .and_then(|text| hirsel_guard::parse_limit(text.as_bytes()))
+                    .unwrap_or(hirsel_guard::DEFAULT_LIMIT);
+                let bytes = (cap / 8).min(128 << 20);
+                let budget = hirsel_engine::runtime::ProcessBudget::new(bytes);
+                std::sync::Arc::new(hirsel_engine::store::RequestStore::new(
+                    std::sync::Arc::new(hirsel_engine::store::NoneStore),
+                    budget
+                        .reserve(bytes)
+                        .map_err(|e| NativeError::new(StageName::Link, e.to_string()))?,
+                ))
+            }
+        };
+        let store = products.as_ref();
         let mut runtime = BTreeMap::new();
         let mut runtime_debug = BTreeMap::new();
         let mut builtins = BTreeMap::new();
@@ -324,6 +369,7 @@ impl Toolchain {
                 continue;
             }
             let archive = super::runtime_cache::archive(
+                store,
                 inputs,
                 build_dir,
                 target,
@@ -370,8 +416,13 @@ impl Toolchain {
             )?;
             // Cargo builds the debug-bearing archive; derive the link forms Buck
             // builds beside it (tools/buck2/runtime_parts.py).
-            let stripped =
-                super::runtime_cache::derived(build_dir, &archive, "stripped", |scratch| {
+            let stripped = super::runtime_cache::derived(
+                store,
+                build_dir,
+                &archive,
+                "stripped",
+                runtime_derivation(&prefix, "llvm-objcopy")?,
+                |scratch| {
                     let stripped = scratch.join("libhirsel_rt.a");
                     checked(
                         StageName::Link,
@@ -380,12 +431,17 @@ impl Toolchain {
                             .args([&archive, &stripped]),
                     )?;
                     Ok(stripped)
-                })?;
+                },
+            )?;
             if runtime_build == RuntimeBuild::default() || !builtins.contains_key(&target.triple) {
-                let derived =
-                    super::runtime_cache::derived(build_dir, &archive, "builtins", |scratch| {
-                        compiler_builtins(&prefix, &stripped, scratch)
-                    })?;
+                let derived = super::runtime_cache::derived(
+                    store,
+                    build_dir,
+                    &archive,
+                    "builtins",
+                    runtime_derivation(&prefix, "llvm-ar")?,
+                    |scratch| compiler_builtins(&prefix, &stripped, scratch),
+                )?;
                 builtins.insert(target.triple.clone(), derived);
             }
             let key = (target.triple.clone(), runtime_build);
@@ -393,6 +449,7 @@ impl Toolchain {
             runtime_debug.insert(key, archive);
         }
         Ok(Self {
+            products,
             runtime_build,
             clang: prefix.join("bin/hirsel-clang"),
             aarch64_cc,
@@ -460,6 +517,49 @@ fn llvm_tool(prefix: &Path, tool: &str) -> Command {
         .env_clear()
         .env("LD_LIBRARY_PATH", prefix.join("lib"));
     command
+}
+
+// Exact tool and shipped dynamic library contents enter derived runtime actions.
+pub(super) fn runtime_derivation(prefix: &Path, tool: &str) -> Result<ContentHash, NativeError> {
+    let io = |e| {
+        NativeError::new(
+            StageName::Link,
+            format!("runtime transformation input: {e}"),
+        )
+    };
+    let mut paths = vec![prefix.join("bin").join(tool)];
+    for entry in std::fs::read_dir(prefix.join("lib")).map_err(io)? {
+        let path = entry.map_err(io)?.path();
+        if path.is_file()
+            && path
+                .file_name()
+                .is_some_and(|name| name.to_string_lossy().contains(".so"))
+        {
+            paths.push(path);
+        }
+    }
+    paths.sort();
+    let mut parts = vec![crate::COMPILER_IDENTITY.to_vec()];
+    for path in paths {
+        parts.push(
+            path.strip_prefix(prefix)
+                .unwrap()
+                .as_os_str()
+                .as_encoded_bytes()
+                .to_vec(),
+        );
+        parts.push(
+            super::file_digest::file(&path)
+                .map_err(io)?
+                .content
+                .0
+                .to_vec(),
+        );
+    }
+    Ok(ContentHash::of_parts(
+        "hirsel.runtime-transformation.v1",
+        parts.iter().map(Vec::as_slice),
+    ))
 }
 
 /// `stripped`'s `compiler_builtins` members, in archive order, as an archive in
@@ -1161,12 +1261,25 @@ pub fn link_fixture_runnable(
     dir: &Path,
     fixture: &super::Fixture,
 ) -> Result<Runnable, NativeError> {
-    use hirsel_run_schema::{IoGrants, Mount, ProviderContract as P};
     hirsel_run_schema::validate_file_faults(&fixture.file_faults)
         .map_err(|e| NativeError::new(StageName::Link, e))?;
     if !matches!(program.launches.get(entry), Some(LaunchKind::Main(_))) {
         return link_runnable(program, entry, objects, toolchain, dir, None);
     }
+    let run = fixture_run_record(program, entry, fixture)?;
+    link_runnable(program, entry, objects, toolchain, dir, Some(&run))
+}
+
+/// The exact fixture binding shared by native links and reference/checked tape producers.
+/// Building this record performs no link or host operation.
+pub fn fixture_run_record(
+    program: &ReadyProgram,
+    entry: &DefPath,
+    fixture: &super::Fixture,
+) -> Result<hirsel_run_config::ValidatedRun, NativeError> {
+    use hirsel_run_schema::{IoGrants, Mount, ProviderContract as P};
+    hirsel_run_schema::validate_file_faults(&fixture.file_faults)
+        .map_err(|e| NativeError::new(StageName::Link, e))?;
     let revision = program
         .revisions
         .get(entry)
@@ -1175,6 +1288,11 @@ pub fn link_fixture_runnable(
         hirsel_run_config::RunConfig::for_program(revision, hirsel_run_schema::LaunchKind::Main);
     record.inputs = program.launch.clone();
     record.inputs.fault_seed = fixture.fault_seed;
+    record.inputs.fixture_monotonic = fixture
+        .process
+        .as_ref()
+        .filter(|g| g.timed.is_some())
+        .and(fixture.monotonic);
     record.inputs.fixture_file_faults =
         (!fixture.file_faults.is_empty()).then(|| fixture.file_faults.clone());
     record.args = Some(fixture.args.clone());
@@ -1214,6 +1332,7 @@ pub fn link_fixture_runnable(
                 .process
                 .clone()
                 .unwrap_or(hirsel_run_schema::ProcessGrant {
+                    timed: None,
                     provider: P::ProcessScript.name().into(),
                     rules: vec![],
                     runs: Some(vec![]),
@@ -1229,10 +1348,9 @@ pub fn link_fixture_runnable(
         }),
         ..Default::default()
     });
-    let run = record
+    record
         .validated()
-        .map_err(|e| NativeError::new(StageName::Link, e.to_string()))?;
-    link_runnable(program, entry, objects, toolchain, dir, Some(&run))
+        .map_err(|e| NativeError::new(StageName::Link, e.to_string()))
 }
 
 /// A standalone executable `dir/program`, including DWARF for a `debug_info` toolchain.
@@ -2254,6 +2372,25 @@ pub fn launch_fixture(
             ));
         }
     }
+    if run.process_grant().is_some_and(|g| g.timed.is_some()) {
+        let initial = run.record().inputs.fixture_monotonic;
+        if (!matches!(tape, Tape::Replay(_)) || fixture.monotonic.is_some())
+            && fixture.monotonic != initial
+        {
+            return Err(NativeError::new(
+                StageName::Launch,
+                "timed fixture initial clock differs from binding",
+            ));
+        }
+        if (!matches!(tape, Tape::Replay(_)) || fixture.process.is_some())
+            && fixture.process.as_ref() != run.process_grant()
+        {
+            return Err(NativeError::new(
+                StageName::Launch,
+                "timed fixture process script differs from binding",
+            ));
+        }
+    }
     hirsel_run_schema::validate_file_faults(&fixture.file_faults)
         .map_err(|e| NativeError::new(StageName::Launch, e))?;
     // Replay consumes recorded inputs without a live script; an explicitly supplied
@@ -2885,6 +3022,39 @@ pub fn observe_run(
     program: &ReadyProgram,
     sites: &Sites<'_>,
 ) -> Result<Observed, NativeError> {
+    observe_run_tables(
+        launched,
+        &failure_rules(program),
+        &site_codes(program),
+        sites,
+    )
+}
+
+/// Decode a completed immutable native request using only its compact linked
+/// failure tables and selected source anchors. This constructs no Value/Ready
+/// body and applies the same audit, exit, refusal and malformed-record checks.
+pub fn observe_request(
+    launched: &Launched,
+    metadata: &crate::requests::NativeObservation,
+    sources: &hirsel_span::SourceMap,
+) -> Result<Observed, NativeError> {
+    let sites = Sites::from_anchors(
+        sources,
+        metadata
+            .anchors
+            .iter()
+            .map(|(path, anchors)| (path, anchors.clone()))
+            .collect(),
+    );
+    observe_run_tables(launched, &metadata.failure_rules, &metadata.sites, &sites)
+}
+
+fn observe_run_tables(
+    launched: &Launched,
+    rules: &[String],
+    codes: &BTreeMap<u64, (DefPath, hirsel_lir::ir::SiteRange)>,
+    sites: &Sites<'_>,
+) -> Result<Observed, NativeError> {
     let bad = |what: String| {
         NativeError::new(
             StageName::Launch,
@@ -2924,8 +3094,6 @@ pub fn observe_run(
     if lines.next() != Some(version.as_str()) {
         return Err(bad("the process left no observation record".into()));
     }
-    let rules = failure_rules(program);
-    let codes = site_codes(program);
     let mut status = None;
     let mut result = None;
     let mut reported_code = None;
@@ -3317,6 +3485,7 @@ mod tests {
     #[test]
     fn floor_launches_run_through_the_release_loader_and_its_libraries_only() {
         let tools = Toolchain {
+            products: std::sync::Arc::new(hirsel_engine::store::NoneStore),
             runtime_build: RuntimeBuild::default(),
             clang: "/unused/clang".into(),
             aarch64_cc: None,
@@ -3375,6 +3544,7 @@ mod tests {
             .unwrap();
         let dir = dir_scratch.path().to_path_buf();
         let mut tools = Toolchain {
+            products: std::sync::Arc::new(hirsel_engine::store::NoneStore),
             runtime_build: RuntimeBuild::default(),
             clang: "/unused/clang".into(),
             aarch64_cc: Some("/unused/gcc".into()),

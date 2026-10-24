@@ -120,9 +120,13 @@ unsafe fn count(ctx: *mut TaskCtx) {
         let (live, scope_only) = if (*ctx).io_data().is_null() {
             (0, false)
         } else {
-            let waits = &Binding::raw(ctx).waits;
+            let binding = Binding::raw(ctx);
+            let waits = &binding.waits;
             (
-                waits.parked.len() + waits.native.len() + waits.armed.len(),
+                waits.parked.len()
+                    + waits.native.len()
+                    + waits.armed.len()
+                    + usize::from(binding.adapter.process_sources()),
                 waits.scope_only(),
             )
         };
@@ -217,8 +221,10 @@ unsafe fn native_count_home(run: *mut crate::context::RunShared, binding: &Bindi
     unsafe {
         (*run).timer_hint.scope_only(binding.waits.scope_only());
         (*run).host_waits.store(
-            (binding.waits.parked.len() + binding.waits.native.len() + binding.waits.armed.len())
-                as u32,
+            (binding.waits.parked.len()
+                + binding.waits.native.len()
+                + binding.waits.armed.len()
+                + usize::from(binding.adapter.process_sources())) as u32,
             std::sync::atomic::Ordering::Release,
         )
     };
@@ -1071,8 +1077,10 @@ unsafe fn ready_binding_home(run: *mut crate::context::RunShared) -> Stopped<Hom
     unsafe {
         (*run).timer_hint.scope_only(binding.waits.scope_only());
         (*run).host_waits.store(
-            (binding.waits.parked.len() + binding.waits.native.len() + binding.waits.armed.len())
-                as u32,
+            (binding.waits.parked.len()
+                + binding.waits.native.len()
+                + binding.waits.armed.len()
+                + usize::from(binding.adapter.process_sources())) as u32,
             std::sync::atomic::Ordering::Release,
         )
     };
@@ -1318,8 +1326,10 @@ pub(crate) unsafe fn idle(ctx: *mut TaskCtx) -> bool {
     if unsafe { (*ctx).io_data() }.is_null() {
         return true;
     }
-    let waits = &unsafe { Binding::get(ctx) }.waits;
-    waits.parked.is_empty() && waits.armed.is_empty()
+    let binding = unsafe { Binding::get(ctx) };
+    binding.waits.parked.is_empty()
+        && binding.waits.armed.is_empty()
+        && !binding.adapter.process_sources()
 }
 
 /// A scheduling point: the parked tokens to re-issue, asked of the adapter once while a host
@@ -1374,7 +1384,10 @@ unsafe fn ready_binding(ctx: *mut TaskCtx) -> Stopped<Ready> {
         return Ok(Ready::Tokens(Vec::new()));
     }
     let binding = unsafe { Binding::get(ctx) };
-    if binding.waits.parked.is_empty() && binding.waits.armed.is_empty() {
+    if binding.waits.parked.is_empty()
+        && binding.waits.armed.is_empty()
+        && !binding.adapter.process_sources()
+    {
         return Ok(Ready::Tokens(Vec::new()));
     }
     let ready = binding.adapter.ready().map_err(Stop::refusal)?;
@@ -1395,6 +1408,110 @@ unsafe fn ready_binding(ctx: *mut TaskCtx) -> Stopped<Ready> {
     Ok(Ready::Tokens(tokens))
 }
 
+/// Phase B/C on home's binding, after the scheduler has applied scope expiry.
+/// The adapter receives only canceled consuming children; borrowing reads retain gates.
+unsafe fn process_batch_binding(
+    run: *mut crate::context::RunShared,
+    binding: &mut Binding,
+    canceled: &[u64],
+) -> Stopped<Ready> {
+    let mut children: Vec<u64> = canceled
+        .iter()
+        .filter_map(|token| {
+            let request = binding
+                .waits
+                .parked
+                .get(token)
+                .map(|p| &p.request)
+                .or_else(|| binding.waits.native.get(token).map(|p| &p.request))?;
+            match request {
+                Request::ChildWait { child, .. } | Request::GroupWait { group: child, .. } => {
+                    Some(*child)
+                }
+                _ => None,
+            }
+        })
+        .collect();
+    children.sort_unstable();
+    children.dedup();
+    let mut ready = binding
+        .adapter
+        .process_batch(&children)
+        .map_err(|error| match error {
+            AdapterError::ProcessFailed {
+                site,
+                operation_site,
+                path,
+                ..
+            } => {
+                let record = crate::failure::FailureRecord {
+                    kind: 1,
+                    rule: hirsel_core_contract::runtime_rule_code("LANG-9").unwrap(),
+                    site,
+                    operation_site,
+                };
+                unsafe {
+                    (*(*run).root_context())
+                        .failure
+                        .append_chain(vec![(record, path)])
+                };
+                Stop::Failed
+            }
+            other => Stop::refusal(other),
+        })?;
+    if binding.adapter.isolated_clock() {
+        let canceled = canceled
+            .iter()
+            .copied()
+            .filter(|token| binding.adapter.cancellable(*token))
+            .filter(|token| {
+                binding.waits.native.get(token).is_some_and(|row| {
+                    crate::io_checks::cancellation_result(&row.request, 0).is_some()
+                })
+            })
+            .collect();
+        ready = merge_ready(ready, Ready::Tokens(canceled));
+    }
+    let tokens: Vec<u64> = binding
+        .waits
+        .native
+        .iter_unordered()
+        .filter_map(|(token, _)| ready.contains(token).then_some(token))
+        .collect();
+    for token in tokens {
+        binding.waits.native.get_mut(&token).unwrap().ready = true;
+    }
+    Ok(ready)
+}
+
+pub(crate) unsafe fn process_batch_home(
+    run: *mut crate::context::RunShared,
+    canceled: &[u64],
+) -> Stopped<Ready> {
+    if unsafe { (*run).io_binding() }.is_null() {
+        return Ok(Ready::Tokens(Vec::new()));
+    }
+    let binding = unsafe { &mut *(*run).io_binding().cast::<Binding>() };
+    let ready = unsafe { process_batch_binding(run, binding, canceled) };
+    unsafe { native_count_home(run, binding) };
+    ready
+}
+
+pub(crate) unsafe fn process_batch(ctx: *mut TaskCtx, canceled: &[u64]) -> Stopped<Ready> {
+    unsafe { at_home(ctx, || process_batch_home((*ctx).run_ptr(), canceled)) }?
+}
+
+pub(crate) fn merge_ready(a: Ready, b: Ready) -> Ready {
+    match (a, b) {
+        (Ready::Every, _) | (_, Ready::Every) => Ready::Every,
+        (Ready::Tokens(mut a), Ready::Tokens(b)) => {
+            a.extend(b);
+            a.sort_unstable();
+            a.dedup();
+            Ready::Tokens(a)
+        }
+    }
+}
 /// The parked tasks whose request `ready` names. Their order is immaterial: the scheduler
 /// polls the woken tasks by deadline, then park order.
 ///

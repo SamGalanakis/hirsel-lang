@@ -514,6 +514,10 @@ class Batch:
         self.verdict = None
         self.checked = 0
         self.green_tip = None
+        # The members each applied tree holds, and the conflicts against batched changes,
+        # which stand only if every change ahead of the ticket lands.
+        self.contents = {main_sha: ()}
+        self.conflicts = []
 
     def fail(self, member, code, message, report=()):
         if member is self.own:
@@ -530,10 +534,18 @@ class Batch:
             if result.returncode:
                 conflicts = git('diff', '--name-only', '--diff-filter=U').stdout.split()
                 git('rebase', '--abort')
-                ahead = '' if tip == self.main else ' and the batched changes ahead of it'
-                self.fail(member, 1, f'the rebase onto origin/main{ahead} conflicts in: '
-                          + (', '.join(conflicts) or 'see git rebase')
-                          + '; rebase by hand, resolve, then run tools/land again')
+                ahead = self.contents[tip]
+                message = ('the rebase onto origin/main'
+                           + (f' and the batched {", ".join(m.lane for m in ahead)}' if ahead else '')
+                           + ' conflicts in: ' + (', '.join(conflicts) or 'see the rebase output above')
+                           + '; rebase by hand, resolve, then run tools/land again')
+                report = [] if conflicts else (result.stderr + result.stdout).strip().splitlines()[-20:]
+                if ahead:
+                    say(f'ticket {int(member.ticket)} for {member.lane}: {message}; it stands if the batch'
+                        ' ahead of it lands')
+                    self.conflicts.append((member, ahead, message, report))
+                else:
+                    self.fail(member, 1, message, report)
                 continue
             new = revision('HEAD')
             diff = git('diff', '--name-only', '--diff-filter=d', tip, new)
@@ -546,6 +558,7 @@ class Batch:
                 self.fail(member, 0, 'nothing to land; HEAD is on origin/main')
             else:
                 applied.append((member, commits))
+                self.contents[new] = self.contents[tip] + (member,)
                 tip = new
         if git('checkout', '-q', '--detach', tip).returncode:
             raise Refusal('cannot check out the batch; refusing to push')
@@ -722,6 +735,12 @@ def land(queue, branch):
                 for member, commits in landed:
                     log.write(json.dumps(dict(landed=commits[-1], pushed=tip, base=main_sha, branch=member.lane,
                                               unchecked_rebase=False, at=at), sort_keys=True) + '\n')
+            for member, ahead, message, report in batch.conflicts:
+                if set(ahead) <= {m for m, _ in landed}:
+                    batch.fail(member, 1, message, report)
+                else:
+                    say(f'ticket {int(member.ticket)} for {member.lane} stays queued: it conflicted only with'
+                        ' a batch that did not land whole')
             for member, commits in landed:
                 if member is not batch.own:
                     queue.deliver(member, dict(

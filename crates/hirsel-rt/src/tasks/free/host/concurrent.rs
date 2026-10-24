@@ -13,6 +13,7 @@ const CONCURRENT: u64 = 1 << 63;
 pub(crate) struct Service {
     pub(super) adapter: Arc<dyn ConcurrentAdapter>,
     pub(super) live: Arc<super::live::State>,
+    pub(super) jobs: super::jobs::Jobs,
     driver: Option<crate::readiness::Readiness>,
     rows: Mutex<BTreeMap<u64, Row>>,
     pending: AtomicUsize,
@@ -58,11 +59,24 @@ impl Service {
                 .ok_or_else(|| Stop::Refused("concurrent host stop descriptor".into()))?;
             driver.wake_on(fd).map_err(Stop::refusal)?;
         }
+        let jobs = super::jobs::Jobs::default();
+        let (ready, home) = (driver.clone(), unsafe {
+            crate::pool::home_wake((*ctx).run_ptr())
+        });
+        jobs.set_waker(Arc::new(move || {
+            if let Some(ready) = &ready {
+                let _ = ready.notify();
+            }
+            if let Some(home) = &home {
+                home();
+            }
+        }));
         assert!(
             run.free_io
                 .set(Arc::new(Self {
                     adapter,
                     live,
+                    jobs,
                     driver,
                     rows: Default::default(),
                     pending: AtomicUsize::new(0),
@@ -84,7 +98,7 @@ impl Service {
     }
 
     pub(crate) fn pending(&self) -> bool {
-        self.pending.load(Ordering::Acquire) != 0 || self.timers.pending()
+        self.pending.load(Ordering::Acquire) != 0 || self.timers.pending() || self.jobs.busy()
     }
 
     #[cfg(test)]
@@ -221,10 +235,11 @@ pub(super) unsafe fn request_with_keys(
         (pending.request.id, pending.request.buffers().clone())
     };
     let wait = io.register(token, request);
+    unsafe { super::blocking::before_claim(ctx, io, wait) }?;
     if !unsafe { claim(ctx) }? {
         return Err(Stop::Requested);
     }
-    unsafe { invoke_concurrent(ctx, &*io.adapter) }?;
+    unsafe { super::blocking::invoke(ctx, io, wait) }?;
     unsafe { ended(ctx) }?;
     while matches!(
         unsafe { &(*ctx).pending_host.as_ref().unwrap().completion },
@@ -237,7 +252,7 @@ pub(super) unsafe fn request_with_keys(
         unsafe { try_block(&mut *ctx, Wait::Host { token: wait }, false, 0) }?;
         io.retry(wait);
         unsafe { attempt(ctx) }?;
-        unsafe { invoke_concurrent(ctx, &*io.adapter) }?;
+        unsafe { super::blocking::invoke(ctx, io, wait) }?;
         unsafe { ended(ctx) }?;
     }
     {
@@ -354,14 +369,16 @@ pub(crate) unsafe fn service(run: *mut RunShared) -> bool {
             return true;
         }
     };
+    let jobs = io.jobs.drain();
     let mut changed = false;
     let mut waiting = io.timers.pending();
     {
         let s = unsafe { (*(*run).tasks.get()).as_deref_mut().unwrap() };
         changed |= io.timers.expire(s, &scopes);
         for (&token, row) in io.rows.lock().unwrap().iter_mut() {
-            row.ready |=
-                ready.contains(token & !CONCURRENT) || canceled.contains(&(token & !CONCURRENT));
+            row.ready |= ready.contains(token & !CONCURRENT)
+                || canceled.contains(&(token & !CONCURRENT))
+                || jobs.contains(&token);
             let Some((task, generation)) = row.task else {
                 continue;
             };
@@ -398,6 +415,11 @@ pub(crate) unsafe fn service(run: *mut RunShared) -> bool {
         return changed;
     }
     let sources = unsafe { wait(run) };
+    // An in-flight job is an event source that wakes home through its inbox:
+    // with nothing else to wait on, block there instead of declaring quiet.
+    if matches!(sources, Ok(false)) && io.jobs.busy() {
+        return false;
+    }
     if !matches!(sources, Ok(true)) {
         let _guard = unsafe { role::IdleGuard::home(run) };
         match sources {

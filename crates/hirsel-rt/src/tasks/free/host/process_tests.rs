@@ -219,6 +219,7 @@ fn native_process_wait_releases_namespace_for_other_task_file_write_and_replays_
             real.set_cooperative(Default::default());
             real.process(crate::process::host);
             real.set_process_grant(&hirsel_run_schema::ProcessGrant {
+                timed: None,
                 provider: "process.spawn@1".into(),
                 rules: vec![hirsel_run_schema::ProcessRule {
                     program: "/bin/sh".into(),

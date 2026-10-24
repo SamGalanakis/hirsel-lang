@@ -280,6 +280,9 @@ pub struct Simulation {
     pub(super) process_worlds: BTreeMap<u64, super::process::World>,
     pub(super) process_children: BTreeMap<u64, super::process::Children>,
     /// Spawned scripted children, by Child handle.
+    pub(super) process_path: Vec<u32>,
+    pub(super) test_clocks: BTreeSet<u64>,
+    pub(super) process_sites: BTreeMap<u64, (crate::observation::Anchor, Vec<u32>)>,
     pub(super) script_children: BTreeMap<u64, hirsel_run_schema::ScriptChild>,
     /// Spawned scripted pipelines, by ChildGroup handle.
     pub(super) script_groups: BTreeMap<u64, hirsel_run_schema::ScriptGroup>,
@@ -575,6 +578,27 @@ impl Simulation {
         let random_seed = config.random_seed;
         let telemetry_seed = config.telemetry_seed;
         let net_worlds = super::net::configured_world(config.net.as_ref())?;
+        if let Some(process) = &config.process {
+            if let Some(timed) = &process.timed {
+                if timed.clock != "run.monotonic" {
+                    return Err(invalid("invalid timed clock selector"));
+                }
+                for child in &timed.children {
+                    child.validate().map_err(invalid)?;
+                }
+            }
+            if process.timed.is_some()
+                && (!config.grants.contains("MonotonicClock")
+                    || config
+                        .net
+                        .as_ref()
+                        .is_some_and(|n| n.provider != "net.script@2"))
+            {
+                return Err(invalid(
+                    "timed processes require an isolated granted virtual monotonic clock",
+                ));
+            }
+        }
         let (process_worlds, process_children) =
             super::process::configured_world(config.process.as_ref())?;
         let root_trace = config.trace_roots.then(Default::default);
@@ -585,6 +609,9 @@ impl Simulation {
             net_streams: BTreeMap::new(),
             process_worlds,
             process_children,
+            process_path: vec![],
+            test_clocks: BTreeSet::new(),
+            process_sites: BTreeMap::new(),
             script_children: BTreeMap::new(),
             script_groups: BTreeMap::new(),
             net_listeners: BTreeMap::new(),

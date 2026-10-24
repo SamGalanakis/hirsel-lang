@@ -1272,11 +1272,11 @@ pub(crate) unsafe fn mutex_cause(ctx: *mut TaskCtx, word: u64) -> Stopped<()> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
 
     #[test]
-    fn ordered_native_region_credits_and_first_stop_match_warm_and_cold_pools() {
+    pub(crate) fn ordered_native_region_credits_and_first_stop_match_warm_and_cold_pools() {
         use std::sync::{
             Arc,
             atomic::{AtomicU64, Ordering},
@@ -1673,7 +1673,7 @@ mod tests {
         0
     }
 
-    fn younger_budget(modes: &[u64]) {
+    pub(crate) fn younger_budget(modes: &[u64]) {
         use super::super::super::*;
         use hirsel_core_contract::handle_scan::TYPED_HANDLE;
         use std::sync::{Arc, atomic::Ordering};

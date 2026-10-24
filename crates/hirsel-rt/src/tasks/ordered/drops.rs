@@ -342,7 +342,7 @@ pub(crate) unsafe fn kill(ctx: *mut TaskCtx, word: u64) -> Stopped<u8> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::ordered::Policy;
 
@@ -428,6 +428,27 @@ mod tests {
         }
     }
 
+    /// A language-finalizer descriptor whose drop program ends its own scope
+    /// with the self-referencing root end the static scope proof requires,
+    /// as `tests/support` builds them. Leaked: run tables keep the pointer.
+    pub(crate) fn finalized(base: crate::Layout, steps: &[crate::Step]) -> &'static crate::Layout {
+        let descriptor = Box::into_raw(Box::new(base));
+        let mut program = steps.to_vec();
+        program.push(crate::Step {
+            field: crate::WHOLE_VALUE,
+            variant: 1,
+            layout: descriptor,
+            ..step(crate::STEP_END_FINALIZE, 0)
+        });
+        let program = Box::leak(program.into_boxed_slice());
+        // SAFETY: the fresh leaked descriptor has no other reference yet.
+        unsafe {
+            (*descriptor).steps = program.as_ptr();
+            (*descriptor).step_count = program.len() as u64;
+            &*descriptor
+        }
+    }
+
     #[test]
     fn plain_cleanup_certificate_requires_a_complete_transitively_safe_type_graph() {
         use hirsel_core_contract::handle_scan::TYPE_EDGE;
@@ -448,10 +469,13 @@ mod tests {
             scan_words: 8,
             ..layout(8)
         };
-        let finalizer = crate::Layout {
-            finalizer: Some(log_drop),
-            ..layout(24)
-        };
+        let finalizer = finalized(
+            crate::Layout {
+                finalizer: Some(log_drop),
+                ..layout(24)
+            },
+            &[],
+        );
         let handle = crate::Layout {
             steps: &close,
             step_count: 1,
@@ -484,7 +508,7 @@ mod tests {
         let layouts = [
             &scalar as *const crate::Layout,
             &cycle,
-            &finalizer,
+            finalizer,
             &handle,
             &unknown,
             &reaches_finalizer,
@@ -771,20 +795,20 @@ mod tests {
         }
     }
 
-    fn run_drops(width: u32) {
+    pub(crate) fn run_drops(width: u32) {
         use hirsel_core_contract::handle_scan::TYPED_HANDLE;
-        let close_sender = step(crate::STEP_CLOSE_HANDLE, 16);
         let scan = [TYPED_HANDLE, 16, Kind::Sender.code(), 3, 0, 0, 0, 0];
         let image = layout(16);
-        let resource = crate::Layout {
-            finalizer: Some(log_drop),
-            steps: &close_sender,
-            step_count: 1,
-            field_count: 1,
-            scan: scan.as_ptr(),
-            scan_words: scan.len() as u64,
-            ..layout(24)
-        };
+        let resource = finalized(
+            crate::Layout {
+                finalizer: Some(log_drop),
+                field_count: 1,
+                scan: scan.as_ptr(),
+                scan_words: scan.len() as u64,
+                ..layout(24)
+            },
+            &[step(crate::STEP_CLOSE_HANDLE, 16)],
+        );
         let close_mutex = step(crate::STEP_CLOSE_HANDLE, 0);
         let wrapper = crate::Layout {
             flags: crate::LAYOUT_FROZEN | crate::LAYOUT_MUTEX_ROOT,
@@ -800,7 +824,7 @@ mod tests {
         let environment = layout(8);
         let layouts = [
             &image as *const crate::Layout,
-            &resource,
+            resource,
             &wrapper,
             &scalar_root,
             &environment,

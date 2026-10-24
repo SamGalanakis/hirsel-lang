@@ -337,6 +337,9 @@ impl SimIo {
     pub fn set_process_grant(&mut self, grant: &hirsel_run_schema::ProcessGrant) {
         self.state.set_process_grant(grant);
     }
+    pub fn set_process_time(&mut self, initial: u64) {
+        self.state.last_monotonic = Some(initial);
+    }
     /// The bound RunConfig rule set; replay re-derives every grant decision from it.
     pub fn set_net_rules(&mut self, rules: std::collections::BTreeSet<NetRule>) {
         self.state.net_rules = rules;
@@ -395,6 +398,55 @@ impl SimIo {
             .and_then(|index| self.tape.cached(index))
     }
 }
+impl SimIo {
+    fn ready_tokens(&mut self) -> Result<Ready, AdapterError> {
+        let mut tokens = Vec::new();
+        while let Some(Request::Ready { wait, points }) =
+            self.tape.get(self.position)?.map(|event| &event.request)
+        {
+            let Some(token) = self
+                .waits
+                .token_of(*wait)
+                .filter(|&t| self.waits.rows_of(t).is_some_and(|row| row.parked))
+            else {
+                break;
+            };
+            if self.state.timed_process && self.waits.next_points(token) == Some(0) {
+                return Err(AdapterError::InvalidCompletion);
+            }
+            if self.state.timed_process {
+                if self
+                    .state
+                    .timed_requests
+                    .get(&token)
+                    .is_some_and(|r| !self.state.process_ready(r))
+                    || self
+                        .state
+                        .timed_sleeps
+                        .get(&token)
+                        .is_some_and(|d| *d > self.state.last_monotonic.unwrap_or(0))
+                {
+                    return Err(AdapterError::InvalidCompletion);
+                }
+            }
+            let waited = self.waits.points(token).unwrap();
+            if waited < *points {
+                break;
+            }
+            if waited > *points {
+                return Err(AdapterError::ReplayMismatch(self.position));
+            }
+            if self.state.timed_process && tokens.contains(&token) {
+                return Err(AdapterError::InvalidCompletion);
+            }
+            self.waits.ready(token);
+            self.position += 1;
+            tokens.push(token);
+        }
+        tokens.sort_unstable();
+        Ok(Ready::Tokens(tokens))
+    }
+}
 impl Adapter for SimIo {
     fn print_observed(
         &mut self,
@@ -442,6 +494,8 @@ impl Adapter for SimIo {
         self.waits.enter(token);
     }
     fn finish(&mut self, token: u64) {
+        self.state.timed_requests.remove(&token);
+        self.state.timed_sleeps.remove(&token);
         self.waits.finish(token);
         self.runner_waits.remove(&token);
         self.file_waits.remove(&token);
@@ -478,33 +532,50 @@ impl Adapter for SimIo {
     /// the tape's head whose wait has waited through exactly the recorded points.
     fn ready(&mut self) -> Result<Ready, AdapterError> {
         self.waits.point();
-        let mut tokens = Vec::new();
-        while let Some(Request::Ready { wait, points }) =
-            self.tape.get(self.position)?.map(|event| &event.request)
-        {
-            let Some(token) = self
-                .waits
-                .token_of(*wait)
-                .filter(|&t| self.waits.rows_of(t).is_some_and(|row| row.parked))
-            else {
-                break;
-            };
-            let waited = self.waits.points(token).unwrap();
-            if waited < *points {
-                break;
-            }
-            if waited > *points {
-                return Err(AdapterError::ReplayMismatch(self.position));
-            }
-            self.waits.ready(token);
-            self.position += 1;
-            tokens.push(token);
+        self.ready_tokens()
+    }
+    fn isolated_clock(&self) -> bool {
+        self.state.timed_process
+    }
+    fn process_site(&mut self, child: u64, site: u64, operation_site: u64, path: &[u32]) {
+        if self.state.timed_process {
+            self.state
+                .process_sites
+                .insert(child, (site, operation_site, path.to_vec()));
         }
-        tokens.sort_unstable();
-        Ok(Ready::Tokens(tokens))
+    }
+    fn process_sources(&self) -> bool {
+        self.state.next_child_gate().is_some() || self.state.process_batch_pending
+    }
+    fn process_batch(&mut self, canceled: &[u64]) -> Result<Ready, AdapterError> {
+        if !self.state.process_batch_pending {
+            return Ok(Ready::Tokens(Vec::new()));
+        }
+        let event = Event {
+            request: Request::ProcessSettle {
+                canceled: canceled.to_vec(),
+            },
+            completion: Completion::Ready,
+            fault: None,
+        };
+        if self.tape.get(self.position)? != Some(&event) {
+            return Err(AdapterError::ReplayMismatch(self.position));
+        }
+        self.state.claim_children(canceled)?;
+        self.position += 1;
+        if let Some((child, report)) = self
+            .state
+            .settle_children(self.state.last_monotonic.unwrap_or(0))
+        {
+            return Err(self.state.process_failed(child, &report));
+        }
+        self.ready_tokens()
     }
     /// No host wait: idle scheduling points continue only toward the next recorded `ready`,
     /// which must belong to a parked request that has not waited past it.
+    fn scripted_input(&self) -> bool {
+        self.state.next_child_gate().is_some() || self.state.process_batch_pending
+    }
     fn wait(&mut self) -> Result<bool, AdapterError> {
         if self.position == self.tape.len() {
             use hirsel_run_schema::RunOutcome as O;
@@ -520,19 +591,31 @@ impl Adapter for SimIo {
                 _ => {}
             }
         }
+        if let Some(Event {
+            request: Request::ProcessTime { from, to },
+            completion: Completion::Ready,
+            fault: None,
+        }) = self.tape.get(self.position)?.cloned()
+        {
+            self.state.apply_process_time(from, to)?;
+            self.position += 1;
+            return Ok(true);
+        }
         if self.waits.is_empty() {
             return Ok(false);
         }
+
         let Some(Request::Ready { wait, points }) =
             self.tape.get(self.position)?.map(|event| &event.request)
         else {
             // Sent runner calls and scripted snapshot reads can end a recording still
             // parked: their source never arrived, so replay blocks as the recording did.
             if self.position == self.tape.len()
-                && self
-                    .waits
-                    .tokens()
-                    .all(|t| self.runner_waits.contains(&t) || self.file_waits.contains(&t))
+                && self.waits.tokens().all(|t| {
+                    self.runner_waits.contains(&t)
+                        || self.file_waits.contains(&t)
+                        || self.state.timed_process && self.state.next_process_time().is_none()
+                })
             {
                 return Ok(false);
             }
@@ -574,6 +657,23 @@ impl Adapter for SimIo {
         if event.request != request {
             return Err(AdapterError::ReplayMismatch(self.position));
         }
+        if self.state.timed_process {
+            match (&request, &event.completion) {
+                (Request::Monotonic { clock }, Completion::Monotonic(Ok(ticks)))
+                    if !self.state.test_clocks.contains(clock)
+                        && *ticks != self.state.last_monotonic.unwrap_or(0) =>
+                {
+                    return Err(AdapterError::InvalidCompletion);
+                }
+                (Request::SleepUntil { clock, deadline }, Completion::Wait(Ok(())))
+                    if !self.state.test_clocks.contains(clock)
+                        && *deadline > self.state.last_monotonic.unwrap_or(0) =>
+                {
+                    return Err(AdapterError::InvalidCompletion);
+                }
+                _ => {}
+            }
+        }
         // Only explicitly tagged host file observations replace the storage input.
         // Old tapes retain their snapshot-derived checks; test trees never accept a tag.
         let input = match &event.completion {
@@ -609,6 +709,39 @@ impl Adapter for SimIo {
             Completion::Blocked { .. } | Completion::Held
         ) {
             let committed = matches!(event.completion, Completion::Blocked { committed: true });
+            if self.state.timed_process && event.completion != Completion::Held {
+                if self.state.is_process(&request) {
+                    let mut state = self.state.clone();
+                    if state
+                        .execute_process(&mut |_| Err(AdapterError::InvalidCompletion), &request)
+                        != Err(AdapterError::Blocked)
+                    {
+                        return Err(AdapterError::ReplayMismatch(self.position));
+                    }
+                    self.state = state;
+                    if matches!(
+                        request,
+                        Request::ChildRead { .. }
+                            | Request::ChildWait { .. }
+                            | Request::GroupWait { .. }
+                    ) {
+                        self.state
+                            .timed_requests
+                            .insert(self.waits.current(), request.clone());
+                    }
+                } else if let Request::SleepUntil { clock, deadline } = &request {
+                    self.state
+                        .expect(*clock, crate::handles::Grant::MonotonicClock)?;
+                    if *deadline <= self.state.last_monotonic.unwrap_or(0) {
+                        return Err(AdapterError::InvalidCompletion);
+                    }
+                    if !self.state.test_clocks.contains(clock) {
+                        self.state
+                            .timed_sleeps
+                            .insert(self.waits.current(), *deadline);
+                    }
+                }
+            }
             // An unanswered scripted connect consumes one peer attempt before it
             // parks. Reconstruct that transition once per request token; retries
             // of the same wait must not consume another connection (DET-1).

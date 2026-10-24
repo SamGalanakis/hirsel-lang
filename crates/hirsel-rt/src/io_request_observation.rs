@@ -238,7 +238,7 @@ pub(crate) fn project<A>(
         | R::RunnerCancel { .. }
         | R::CallReturn(_)
         | R::Stopped => {}
-        R::Ready { .. } | R::Schedule { .. } => {
+        R::Ready { .. } | R::Schedule { .. } | R::ProcessTime { .. } | R::ProcessSettle { .. } => {
             return Err("request needs a dedicated scheduling projection");
         }
     }

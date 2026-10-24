@@ -1243,6 +1243,46 @@ impl Program<'_> {
                                     ..Value::default()
                                 })
                                 .unwrap_or_else(Value::unknown),
+                            StorageValue::ConstantReference { .. } => Value::unknown(),
+                            StorageValue::Constant { code, complete } => {
+                                let mut value = Value::default();
+                                value.payload.unknown = !complete;
+                                for reference in code {
+                                    // Materialized constants are closed global values. Never
+                                    // close a forged open code leaf in a caller context: it
+                                    // has no original call edge for the growth preflight.
+                                    if hirsel_types::generated_actual_key(
+                                        self.types,
+                                        &reference.arguments,
+                                    )
+                                    .is_none()
+                                    {
+                                        value.payload.unknown = true;
+                                        continue;
+                                    }
+                                    match self.instance(reference.definition, &reference.arguments)
+                                    {
+                                        Some((index, actuals)) => {
+                                            value
+                                                .targets
+                                                .entry(reference.parts.clone())
+                                                .or_default()
+                                                .insert(Target::Body {
+                                                    callable: Code {
+                                                        callable: self.bodies[index].callable,
+                                                        actuals,
+                                                    },
+                                                    captures: vec![],
+                                                    capture_code: vec![],
+                                                    producers: Producers::new(),
+                                                    unknown_captures: false,
+                                                });
+                                        }
+                                        None => value.payload.unknown = true,
+                                    }
+                                }
+                                value
+                            }
                             StorageValue::Fresh => Value::default(),
                             StorageValue::Unknown => Value::unknown(),
                             StorageValue::Copy { value, detaches } => {

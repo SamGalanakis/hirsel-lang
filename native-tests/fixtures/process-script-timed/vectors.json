@@ -1,0 +1,1083 @@
+{
+  "format": "design-oracle-1 (not a runtime/tape version)",
+  "status": "PROPOSED_NOT_EXECUTED",
+  "provider": "process.script.timed@1 (candidate name)",
+  "initial_ns": 0,
+  "tick_unit": "nanoseconds",
+  "default_program": "/bin/cat",
+  "bytes": "exact integer arrays; readable action strings are specification notation, not executable code",
+  "source_pin": "ee28d5f143b284f69b4846a7dad9b0dff721b50e",
+  "license_notices": "NOTICES.md",
+  "phase_order": [
+    "effect-free operation checks",
+    "scope expiry/pending cancellation",
+    "pending process wait deadline",
+    "due child gates and pipeline settle",
+    "ready continuations under existing scheduler"
+  ],
+  "vectors": [
+    {
+      "id": "U01",
+      "source": "Hirsel C:347-381 unchanged",
+      "steps": [
+        {
+          "print": [
+            114,
+            101,
+            97,
+            100,
+            121,
+            10
+          ]
+        },
+        {
+          "print": [
+            103,
+            111
+          ]
+        },
+        {
+          "expect": [
+            112,
+            105,
+            110,
+            103,
+            10
+          ]
+        },
+        {
+          "print": [
+            112,
+            111,
+            110,
+            103,
+            10
+          ]
+        },
+        {
+          "exit": {
+            "exited": 3
+          }
+        }
+      ],
+      "actions": [
+        "read(stdout,100)",
+        "read(stdout,1)",
+        "read(stdout,100)",
+        "read(stdout,100)",
+        "read(stderr,100)",
+        "write(pi)",
+        "read(stdout,100)",
+        "write(ng\\nextra)",
+        "read(stdout,100)",
+        "read(stdout,100)",
+        "write(x)",
+        "write(empty)",
+        "close",
+        "status"
+      ],
+      "expected": [
+        "ready\n",
+        "g",
+        "o",
+        "Waiting",
+        "Waiting",
+        "Ok",
+        "Waiting",
+        "Ok",
+        "pong\n",
+        "EOF",
+        "InputClosed",
+        "Ok",
+        null,
+        {
+          "exited": 3
+        }
+      ],
+      "provider": "process.script@1",
+      "exact_test": "untimed-controls.rs::steps_play_until_an_expect_and_reads_never_cross_a_step"
+    },
+    {
+      "id": "U02",
+      "source": "Hirsel C:384-416 unchanged",
+      "steps": [
+        {
+          "expect": [
+            112,
+            105,
+            110,
+            103
+          ]
+        }
+      ],
+      "actions": [
+        "fresh child write(pong)",
+        "fresh child write(pi), close, kill(Terminate), close, status",
+        "fresh empty child kill(Kill), status"
+      ],
+      "expected": [
+        "test failure: child /bin/cat expected b\"ping\" but the program wrote b\"pong\"\n",
+        {
+          "write": "Ok",
+          "close": "test failure: child /bin/cat expected b\"ping\" but the program closed its input after writing b\"pi\"\n",
+          "close_after_kill": null,
+          "status": {
+            "signaled": 15
+          }
+        },
+        {
+          "exited": 0
+        }
+      ],
+      "provider": "process.script@1",
+      "exact_test": "untimed-controls.rs::a_contradicted_or_unmet_expect_reports_and_a_kill_skips_it"
+    },
+    {
+      "id": "P01",
+      "source": "Tokio time_pause.rs:82-96 adapted",
+      "steps": [
+        {
+          "at": 301000000
+        },
+        {
+          "print": [
+            120
+          ]
+        },
+        {
+          "exit": {
+            "exited": 0
+          }
+        }
+      ],
+      "actions": [
+        "initial=1000000",
+        "poll read twice",
+        "model checkpoint advance to 101000000",
+        "poll read"
+      ],
+      "expected": {
+        "polls": "Waiting",
+        "now_ns": 101000000,
+        "output": []
+      },
+      "initial_ns": 1000000,
+      "model_only_checkpoints": true
+    },
+    {
+      "id": "P02",
+      "source": "Tokio boundary derived from P01",
+      "steps": [
+        {
+          "at": 301000000
+        },
+        {
+          "print": [
+            120
+          ]
+        },
+        {
+          "exit": {
+            "exited": 0
+          }
+        }
+      ],
+      "actions": [
+        "checkpoint 300999999; poll",
+        "checkpoint 301000000; settle; read"
+      ],
+      "expected": [
+        "Waiting",
+        {
+          "bytes": [
+            120
+          ],
+          "now_ns": 301000000
+        }
+      ],
+      "initial_ns": 1000000,
+      "model_only_checkpoints": true
+    },
+    {
+      "id": "G01",
+      "source": "Go synctest.go:18-43 adapted",
+      "steps": [],
+      "actions": [
+        "child A gate 1000000000 then print a, exit",
+        "child B gate 2000000000 then print b, exit",
+        "all tasks park on reads"
+      ],
+      "expected": {
+        "advances_ns": [
+          1000000000,
+          2000000000
+        ],
+        "observations": [
+          "a",
+          "b"
+        ]
+      }
+    },
+    {
+      "id": "G02",
+      "source": "Go synctest.go:24-25; Hirsel CL:698",
+      "steps": [
+        {
+          "at": 5
+        },
+        {
+          "print": [
+            120
+          ]
+        },
+        {
+          "exit": {
+            "exited": 0
+          }
+        }
+      ],
+      "actions": [
+        "park child read",
+        "sibling still runnable",
+        "poll read 3 times"
+      ],
+      "expected": {
+        "now_ns": 0,
+        "read": "Waiting",
+        "runnable_loop": "budget applies, not Blocked"
+      }
+    },
+    {
+      "id": "G03",
+      "source": "Go synctest.go:69-90; CONC-8 adapted",
+      "steps": [
+        {
+          "expect": [
+            120
+          ]
+        },
+        {
+          "at": 5
+        },
+        {
+          "print": [
+            121
+          ]
+        },
+        {
+          "exit": {
+            "exited": 0
+          }
+        }
+      ],
+      "actions": [
+        "read(stdout,1); no writer, sleep, scope deadline or external source"
+      ],
+      "expected": {
+        "observation": "Blocked",
+        "now_ns": 0,
+        "live_child": true,
+        "cleanup_as_observation": false
+      }
+    },
+    {
+      "id": "D01",
+      "source": "Hirsel reached-deadline rule extended; T04/T05",
+      "steps": [
+        {
+          "at": 4
+        },
+        {
+          "exit": {
+            "exited": 7
+          }
+        }
+      ],
+      "actions": [
+        "wait deadline 5, no scope deadline"
+      ],
+      "expected": {
+        "now_ns": 4,
+        "result": {
+          "exited": 7
+        },
+        "handles": 0,
+        "timers": 0
+      }
+    },
+    {
+      "id": "D02",
+      "source": "Hirsel reached-deadline rule extended; T04/T05",
+      "steps": [
+        {
+          "at": 5
+        },
+        {
+          "exit": {
+            "exited": 7
+          }
+        }
+      ],
+      "actions": [
+        "wait deadline 5, no scope deadline"
+      ],
+      "expected": {
+        "now_ns": 5,
+        "result": "TimedOut",
+        "handles": 0,
+        "timers": 0
+      }
+    },
+    {
+      "id": "D03",
+      "source": "Hirsel reached-deadline rule extended; T04/T05",
+      "steps": [
+        {
+          "at": 6
+        },
+        {
+          "exit": {
+            "exited": 7
+          }
+        }
+      ],
+      "actions": [
+        "wait deadline 5, no scope deadline"
+      ],
+      "expected": {
+        "now_ns": 5,
+        "result": "TimedOut",
+        "handles": 0,
+        "timers": 0
+      }
+    },
+    {
+      "id": "D04",
+      "source": "Hirsel @1 reached-deadline precedence; T06",
+      "steps": [
+        {
+          "exit": {
+            "exited": 7
+          }
+        }
+      ],
+      "actions": [
+        "at now=5 enter wait deadline=5"
+      ],
+      "expected": {
+        "result": "TimedOut",
+        "handles": 0,
+        "now_ns": 5
+      },
+      "initial_ns": 5
+    },
+    {
+      "id": "C01",
+      "source": "Hirsel CL:896-898; CONC-3; T07",
+      "steps": [
+        {
+          "at": 5
+        },
+        {
+          "print": [
+            120
+          ]
+        },
+        {
+          "exit": {
+            "exited": 0
+          }
+        }
+      ],
+      "actions": [
+        "scope deadline 5",
+        "park read with initial buffer [90]",
+        "on cancellation explicitly kill(Kill), then wait without deadline"
+      ],
+      "expected": {
+        "read": "Canceled(DeadlineExceeded)",
+        "buffer": [
+          90
+        ],
+        "now_ns": 5,
+        "final_handles": 0
+      }
+    },
+    {
+      "id": "C02",
+      "source": "Hirsel CL:896-898; T04/T07",
+      "steps": [
+        {
+          "at": 5
+        },
+        {
+          "exit": {
+            "exited": 0
+          }
+        }
+      ],
+      "actions": [
+        "scope deadline 5",
+        "wait deadline 5"
+      ],
+      "expected": {
+        "wait": "Canceled(DeadlineExceeded)",
+        "scope": "Expired",
+        "now_ns": 5,
+        "handles": 0
+      }
+    },
+    {
+      "id": "C03",
+      "source": "Hirsel C:174-176; T08/T09",
+      "steps": [
+        {
+          "at": 5
+        },
+        {
+          "print": [
+            120
+          ]
+        },
+        {
+          "exit": {
+            "exited": 7
+          }
+        }
+      ],
+      "actions": [
+        "compare explicit cancel/read orders at same now",
+        "compare kill committed before gate vs sleep-resumed kill after gate"
+      ],
+      "expected": {
+        "read_orders": [
+          "cancel before byte commit: Canceled, buffer unchanged",
+          "byte commit before cancel: x, success"
+        ],
+        "kill_orders": [
+          {
+            "signaled": 9
+          },
+          {
+            "exited": 7
+          }
+        ],
+        "order": "recorded committed scheduler operations; due batch before sleep-resumed user code"
+      }
+    },
+    {
+      "id": "E01",
+      "source": "Hirsel C:98-108; T10",
+      "steps": [
+        {
+          "expect": [
+            97,
+            98
+          ]
+        },
+        {
+          "at": 5
+        },
+        {
+          "print": [
+            120
+          ]
+        },
+        {
+          "exit": {
+            "exited": 0
+          }
+        }
+      ],
+      "actions": [
+        "write(a) at 0",
+        "independent sleep advances to 7",
+        "write(b) at 7",
+        "read"
+      ],
+      "expected": {
+        "before_write_b": "no child timer",
+        "write_b": "Ok",
+        "read": [
+          120
+        ],
+        "now_ns": 7
+      }
+    },
+    {
+      "id": "E02",
+      "source": "Hirsel C:98-108; T11",
+      "steps": [
+        {
+          "at": 5
+        },
+        {
+          "expect": [
+            97,
+            98
+          ]
+        },
+        {
+          "print": [
+            120
+          ]
+        },
+        {
+          "exit": {
+            "exited": 0
+          }
+        }
+      ],
+      "actions": [
+        "write(a) at 0",
+        "write(bextra) at 0",
+        "quiesce; read"
+      ],
+      "expected": {
+        "writes": [
+          "Ok",
+          "Ok"
+        ],
+        "read": [
+          120
+        ],
+        "now_ns": 5,
+        "surplus": "extra accepted"
+      }
+    },
+    {
+      "id": "E03",
+      "source": "Hirsel C:98-108; T11",
+      "steps": [
+        {
+          "at": 5
+        },
+        {
+          "expect": [
+            97,
+            98
+          ]
+        }
+      ],
+      "actions": [
+        "write(z) at 0",
+        "advance to gate at 5",
+        "write(q) at 5"
+      ],
+      "expected": {
+        "before_full_input": "Waiting without mismatch",
+        "report": "test failure: child /bin/cat expected b\"ab\" but the program wrote b\"zq\"\n",
+        "failure": "LANG-9",
+        "now_ns": 5
+      },
+      "program": "/bin/cat"
+    },
+    {
+      "id": "E04",
+      "source": "Hirsel C:142-151 extended; T13",
+      "steps": [
+        {
+          "at": 5
+        },
+        {
+          "expect": [
+            97,
+            98
+          ]
+        }
+      ],
+      "actions": [
+        "write(a)",
+        "close stdin at 0",
+        "park read; advance to 5"
+      ],
+      "expected": {
+        "close_at_0": "no report",
+        "at_5": "test failure: child /bin/cat expected b\"ab\" but the program closed its input after writing b\"a\"\n",
+        "failure": "LANG-9"
+      },
+      "program": "/bin/cat"
+    },
+    {
+      "id": "E05",
+      "source": "Hirsel drop closes current Expect; T12/T17",
+      "steps": [
+        {
+          "expect": [
+            97,
+            98
+          ]
+        },
+        {
+          "at": 5
+        },
+        {
+          "exit": {
+            "exited": 0
+          }
+        }
+      ],
+      "actions": [
+        "write(a)",
+        "drop at 0"
+      ],
+      "expected": {
+        "report": "test failure: child /bin/cat expected b\"ab\" but the program closed its input after writing b\"a\"\n",
+        "failure": "LANG-9",
+        "now_ns": 0,
+        "handles_after_failure_cleanup": 0
+      },
+      "program": "/bin/cat"
+    },
+    {
+      "id": "B01",
+      "source": "Hirsel C:154-170; T02/T15",
+      "steps": [
+        {
+          "at": 5
+        },
+        {
+          "print": [
+            97,
+            98
+          ]
+        },
+        {
+          "print": [
+            99,
+            100
+          ]
+        },
+        {
+          "print_err": [
+            69,
+            70
+          ]
+        },
+        {
+          "exit": {
+            "exited": 3
+          }
+        }
+      ],
+      "actions": [
+        "read(stdout,1)",
+        "read(stdout,10)",
+        "read(stdout,10)",
+        "read(stdout,10)",
+        "read(stderr,1)",
+        "read(stderr,10)",
+        "read(stderr,10)",
+        "wait without deadline"
+      ],
+      "expected": [
+        [
+          97
+        ],
+        [
+          98
+        ],
+        [
+          99,
+          100
+        ],
+        [],
+        [
+          69
+        ],
+        [
+          70
+        ],
+        [],
+        {
+          "exited": 3
+        }
+      ]
+    },
+    {
+      "id": "B02",
+      "source": "Hirsel C:126-135 and adapter checks; T14",
+      "steps": [
+        {
+          "at": 5
+        },
+        {
+          "exit": {
+            "exited": 0
+          }
+        }
+      ],
+      "actions": [
+        "kill(Kill) at 0",
+        "write(x)",
+        "write(empty)",
+        "close stdin",
+        "write(empty) in canceled scope"
+      ],
+      "expected": {
+        "write_x": "InputClosed",
+        "write_empty_open": "Ok",
+        "write_empty_closed": "InvalidInput",
+        "now_ns": 0,
+        "future_gate_removed": true
+      }
+    },
+    {
+      "id": "B03",
+      "source": "Hirsel drop extension; T17",
+      "steps": [
+        {
+          "at": 5
+        },
+        {
+          "expect": [
+            97,
+            98
+          ]
+        },
+        {
+          "print": [
+            120
+          ]
+        },
+        {
+          "exit": {
+            "exited": 0
+          }
+        }
+      ],
+      "actions": [
+        "drop at 0",
+        "audit timers/handles"
+      ],
+      "expected": {
+        "report": null,
+        "now_ns": 0,
+        "handles": 0,
+        "timers": 0,
+        "output": []
+      }
+    },
+    {
+      "id": "L01",
+      "source": "Hirsel C:251-275; T18",
+      "steps": [],
+      "actions": [
+        "spawn pipeline A=[At(5),Print(ab),Exit(0)], B=[Expect(ab),Print(cd),Exit(3)]",
+        "read group stdout then wait"
+      ],
+      "expected": {
+        "bytes": [
+          99,
+          100
+        ],
+        "now_ns": 5,
+        "statuses": [
+          {
+            "exited": 0
+          },
+          {
+            "exited": 3
+          }
+        ],
+        "stderr": [
+          [],
+          []
+        ]
+      }
+    },
+    {
+      "id": "L02",
+      "source": "Hirsel C:251-275 with deferred EOF; T13/T18",
+      "steps": [],
+      "actions": [
+        "spawn A=[At(3),Print(a),Exit(0)], B=[At(5),Expect(ab),Exit(0)]",
+        "read group"
+      ],
+      "expected": {
+        "now_ns": 5,
+        "report": "test failure: child /fixture/b expected b\"ab\" but its input stage /fixture/a closed its output after writing b\"a\"\n",
+        "failure": "LANG-9"
+      }
+    },
+    {
+      "id": "L03",
+      "source": "Hirsel C:255-258,269,319-331; T19",
+      "steps": [],
+      "actions": [
+        "A=[At(5),Print(x),PrintErr(EE),Exit(0)], B=[Exit(3)]",
+        "max_stderr=2 control then =1 variant",
+        "wait group without deadline"
+      ],
+      "expected": {
+        "exact_cap": {
+          "statuses": [
+            {
+              "exited": 0
+            },
+            {
+              "exited": 3
+            }
+          ],
+          "stderr": [
+            [
+              69,
+              69
+            ],
+            []
+          ]
+        },
+        "over_cap": "OutputLimit",
+        "downstream_feed": "discarded; no SIGPIPE",
+        "now_ns": 5
+      }
+    },
+    {
+      "id": "A01",
+      "source": "Hirsel S:195-215; authority T21",
+      "steps": [
+        {
+          "at": 5
+        },
+        {
+          "print": [
+            120
+          ]
+        },
+        {
+          "exit": {
+            "exited": 0
+          }
+        }
+      ],
+      "actions": [
+        "invalid program or ungranted env at spawn",
+        "valid spawn with same matching entry"
+      ],
+      "expected": {
+        "first": "InvalidInput or NotGranted in specified check order",
+        "entry_after_refusal": "unused",
+        "second": "same entry selected",
+        "no_time_from_refusal": true
+      }
+    },
+    {
+      "id": "A02",
+      "source": "Hirsel CONC-3 and CAP-2; T21",
+      "steps": [
+        {
+          "at": 5
+        },
+        {
+          "print": [
+            120
+          ]
+        },
+        {
+          "exit": {
+            "exited": 0
+          }
+        }
+      ],
+      "actions": [
+        "read max=0 in canceled scope",
+        "read with wrong Proc",
+        "taking wait with other clock domain",
+        "audit teardown after adapter refusal"
+      ],
+      "expected": {
+        "zero": "InvalidInput",
+        "wrong_proc": "authority/handle refusal",
+        "other_domain": "InvalidInput before timer consumption",
+        "read_buffer_unchanged": true,
+        "teardown_live_handles": 0,
+        "teardown_live_timers": 0
+      }
+    },
+    {
+      "id": "A03",
+      "source": "New schema plus existing checked_add overflow",
+      "steps": [],
+      "actions": [
+        "decode negative/fraction/>u64::MAX tick",
+        "decode decreasing At",
+        "decode null/unknown field",
+        "decode steps after Exit",
+        "decode At(u64::MAX)",
+        "checked_add(MAX,1)"
+      ],
+      "expected": [
+        "admission refusal",
+        "admission refusal",
+        "admission refusal",
+        "admission refusal",
+        "valid terminal event time",
+        "None"
+      ]
+    },
+    {
+      "id": "A04",
+      "source": "Go isolation adapted; CONC-8",
+      "steps": [],
+      "actions": [
+        "attach timed provider to real host clock or request live host effect",
+        "defensive seam has outstanding external operation"
+      ],
+      "expected": {
+        "admission_or_use": "refuse before real effect",
+        "external_pending": "no virtual jump; no Blocked; existing completion/cleanup required"
+      }
+    },
+    {
+      "id": "R01",
+      "source": "Existing immutable replay binding extended",
+      "steps": [],
+      "actions": [
+        "change program/initial clock/grants/script bytes against original timed tape"
+      ],
+      "expected": {
+        "result": "binding refusal",
+        "host_effects": 0,
+        "original_tape": "unchanged"
+      }
+    },
+    {
+      "id": "R02",
+      "source": "Timed replay validation",
+      "steps": [],
+      "actions": [
+        "time regression",
+        "duplicate/stale wake",
+        "At behind unmet Expect",
+        "Canceled with bytes",
+        "EOF before buffered bytes"
+      ],
+      "expected": {
+        "each": "replay refusal, never fallback",
+        "host_effects": 0
+      }
+    },
+    {
+      "id": "R03",
+      "source": "Existing format/crash/corruption qualification extended",
+      "steps": [],
+      "actions": [
+        "unknown tape/provider version",
+        "truncated due batch",
+        "corrupt payload",
+        "crash during consuming wait and resume record validation"
+      ],
+      "expected": {
+        "each": "ordinary refusal or existing crash oracle, no invented success",
+        "cleanup": "no leaked handle/timer",
+        "original_receipts": "preserved independently"
+      }
+    },
+    {
+      "id": "R04",
+      "source": "Existing public fixture four-engine replay recipe",
+      "steps": [
+        {
+          "at": 5
+        },
+        {
+          "print": [
+            120
+          ]
+        },
+        {
+          "exit": {
+            "exited": 0
+          }
+        }
+      ],
+      "actions": [
+        "record in each of reference/H/LLVM/Cranelift",
+        "replay each tape in all four with original child/host inputs absent"
+      ],
+      "expected": {
+        "same_record_replay": "exact payloads/time/ordering/terminal state and full consumption",
+        "qualification_run_here": false
+      }
+    },
+    {
+      "id": "S01",
+      "source": "Pinned suite-runner run.hir:25-59/report.hir; DESIGN exact new fixture",
+      "steps": [
+        {
+          "at": 6000000
+        },
+        {
+          "print": [
+            79
+          ]
+        },
+        {
+          "print_err": [
+            69
+          ]
+        },
+        {
+          "exit": {
+            "exited": 0
+          }
+        }
+      ],
+      "actions": [
+        "run deadline.json report.json",
+        "attempt scope and child.wait deadline=5000000",
+        "global scope deadline=20000000"
+      ],
+      "expected": {
+        "now_ns": 5000000,
+        "child_wait": "Canceled(DeadlineExceeded)",
+        "attempt_scope": "Expired",
+        "summary": {
+          "version": 1,
+          "cases": [
+            {
+              "index": 0,
+              "id": "slow",
+              "suite": "tiny",
+              "status": "failed",
+              "reason": "selected",
+              "attempts": [
+                {
+                  "number": 1,
+                  "status": "timeout",
+                  "exit": null,
+                  "signal": null
+                }
+              ]
+            }
+          ],
+          "selected": 1,
+          "passed": 0,
+          "failed": 1,
+          "skipped": 0,
+          "not_run": 0,
+          "incomplete": 0,
+          "attempts": 1,
+          "failed_attempts": 1,
+          "expired": false,
+          "cutoff": false,
+          "output": "discarded"
+        },
+        "stdout": "existing serializer(summary) + newline",
+        "report": "existing serializer(summary), no newline",
+        "stderr": [],
+        "exit": 1,
+        "live_child_handles": 0,
+        "live_timers": 0,
+        "child_output_delivered": []
+      },
+      "manifest_utf8": "{\"jobs\":1,\"timeout_ms\":20,\"failure_limit\":0,\"suites\":[{\"id\":\"tiny\",\"cases\":[{\"id\":\"slow\",\"argv\":[\"/fixture/child\"],\"tags\":[],\"expect\":0,\"retries\":0,\"timeout_ms\":5}]}]}",
+      "args": [
+        "run",
+        "deadline.json",
+        "report.json"
+      ],
+      "initial_report_utf8": "previous"
+    }
+  ]
+}

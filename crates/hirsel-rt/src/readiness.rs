@@ -105,6 +105,8 @@ struct ReadyState {
     /// Tagged execution runs share a driver: one run must never wait by itself.
     shared: bool,
     virtual_time: Option<u64>,
+    provider_deadline: Option<u64>,
+    isolated_process_clock: bool,
     pending: IdMap<Pending>,
     /// Tokens whose Pending a provider borrowed since the last scheduling point: their
     /// interest and deadline are registered before the next readiness question.
@@ -327,6 +329,19 @@ impl Readiness {
         let progress = self.0.lock().unwrap().progress;
         self.pending().scripted = Some(ScriptedWait::Progress(progress));
     }
+    /// A provider inspected this scripted candidate and it is still blocked.
+    /// Acknowledge the current progress without publishing a false wake; the
+    /// next idle wait can then consider the provider's next virtual deadline.
+    pub(crate) fn acknowledge_scripted(&self, token: u64) {
+        let token = self.tag(token);
+        let mut state = self.0.lock().unwrap();
+        let progress = state.progress;
+        if let Some(pending) = state.pending.get_mut(&token)
+            && matches!(pending.scripted, Some(ScriptedWait::Progress(_)))
+        {
+            pending.scripted = Some(ScriptedWait::Progress(progress));
+        }
+    }
     /// An unbounded Unanswered connect has no readiness source (CONC-8).
     pub(crate) fn scripted_connect(&self) {
         self.pending().scripted = Some(ScriptedWait::UnansweredConnect);
@@ -354,6 +369,12 @@ impl Readiness {
         let readiness = Self::default();
         readiness.0.lock().unwrap().virtual_time = Some(ticks);
         readiness
+    }
+    pub(crate) fn isolate_process_clock(&self) {
+        self.0.lock().unwrap().isolated_process_clock = true;
+    }
+    pub(crate) fn provider_deadline(&self, deadline: Option<u64>) {
+        self.0.lock().unwrap().provider_deadline = deadline;
     }
     pub(crate) fn virtual_time(&self) -> Option<u64> {
         self.0.lock().unwrap().virtual_time
@@ -656,11 +677,26 @@ impl Readiness {
     pub(crate) fn wait_source(&self, include_wake_only: bool) -> Result<WaitSource, AdapterError> {
         let mut state = self.0.lock().unwrap();
         state.sync()?;
+        if state.isolated_process_clock
+            && state
+                .pending
+                .values_unordered()
+                .any(|p| p.interest.is_some() || p.delivery)
+        {
+            return Err(AdapterError::Unsupported(
+                "external wait in timed process clock domain".into(),
+            ));
+        }
         if !state.progressed_scripts().is_empty() {
             return Ok(WaitSource::Ready);
         }
         if let Some(now) = state.virtual_time {
-            if let Some(next) = state.next_virtual() {
+            let next = state
+                .next_virtual()
+                .into_iter()
+                .chain(state.provider_deadline)
+                .min();
+            if let Some(next) = next {
                 state.virtual_time = Some(now.max(next));
                 return Ok(WaitSource::Ready);
             }
@@ -1623,5 +1659,27 @@ mod tagged_worker_tests {
             }
         });
         assert_eq!(readiness.0.lock().unwrap().pending.len(), 8);
+    }
+}
+
+#[cfg(test)]
+mod timed_isolation_tests {
+    use super::*;
+    #[test]
+    fn pending_external_delivery_refuses_before_virtual_advance_or_blocked() {
+        let readiness = Readiness::virtual_clock(0);
+        readiness.isolate_process_clock();
+        readiness.enter(7);
+        readiness.await_delivery();
+        readiness.parked(7);
+        readiness.provider_deadline(Some(5));
+        assert!(matches!(
+            readiness.wait(),
+            Err(AdapterError::Unsupported(_))
+        ));
+        assert_eq!(readiness.virtual_time(), Some(0));
+        readiness.finish(7);
+        assert!(readiness.wait().unwrap());
+        assert_eq!(readiness.virtual_time(), Some(5));
     }
 }
