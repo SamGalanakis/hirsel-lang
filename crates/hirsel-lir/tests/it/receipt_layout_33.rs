@@ -93,10 +93,24 @@ fn receipt_layout_validator_refuses_language_credit_copy_size_and_field_forgerie
     }
 }
 #[test]
-fn receipt_layout_runtime_descriptor_stays_unavailable_until_private_cleanup_is_linked() {
+fn receipt_layout_runtime_descriptor_uses_a_distinct_metadata_release_without_a_scan() {
     let (_, table, id) = fixture();
-    let error = hirsel_lir::rt_program::descriptor(&table, id).unwrap_err();
-    assert!(format!("{error:?}").contains("receipt metadata runtime drop is not linked"));
+    let descriptor = hirsel_lir::rt_program::descriptor(&table, id).unwrap();
+    assert_eq!(descriptor.steps.len(), 1);
+    let step = &descriptor.steps[0];
+    assert_eq!(step.kind, hirsel_lir::rt_program::StepKind::ReleaseReceipt);
+    assert_eq!(
+        step.kind.code(),
+        hirsel_lir::runtime_abi::STEP_RELEASE_RECEIPT
+    );
+    assert_eq!(step.offset, 0);
+    assert_eq!(step.field, hirsel_lir::runtime_abi::WHOLE_VALUE);
+    assert!(step.layout.is_none());
+    assert_eq!(
+        descriptor.logical,
+        hirsel_lir::runtime_abi::LOGICAL_UNSUPPORTED
+    );
+    descriptor.check_finalizers(&table).unwrap();
 }
 #[test]
 fn receipt_layout_declaration_alone_cannot_enter_executable_c() {
