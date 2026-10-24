@@ -59,6 +59,8 @@ fn transitive_authority_card_matches_goldens_and_does_not_run_code() {
 
 #[test]
 fn std_json_dependency_card_matches_goldens() {
+    // d2b8596c changed the JSON declaration graph; keep the current scan leaves
+    // and ordinary product facts pinned alongside the unchanged authority oracle.
     let manifest = "packages/dep_card_fixture/json/hirsel.json";
     let text = card(manifest, &["--package", "std@1/json"]);
     assert_eq!(

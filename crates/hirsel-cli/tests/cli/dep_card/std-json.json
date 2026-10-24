@@ -7,7 +7,9 @@
           "operations": [],
           "unresolved": [
             "core@1/bytes/append",
+            "core@1/bytes/find_any",
             "core@1/bytes/from_list",
+            "core@1/bytes/json_number_end",
             "core@1/bytes/len",
             "core@1/bytes/slice",
             "core@1/char/from_u32",
@@ -27,7 +29,9 @@
           "operations": [],
           "unresolved": [
             "core@1/bytes/append",
+            "core@1/bytes/find_any",
             "core@1/bytes/from_list",
+            "core@1/bytes/json_number_end",
             "core@1/bytes/len",
             "core@1/bytes/slice",
             "core@1/char/from_u32",
@@ -95,6 +99,7 @@
         "std@1/json/peek",
         "std@1/json/read_number",
         "std@1/json/read_owned_text",
+        "std@1/json/read_owned_text_bounded",
         "std@1/json/read_text",
         "std@1/json/reader",
         "std@1/json/skip",
@@ -110,15 +115,15 @@
           "basis": "source_token_work_estimate",
           "build_ms": null,
           "check_ms": null,
-          "check_source_tokens": 0,
-          "lower_source_tokens": 0,
-          "native_build_source_tokens": 2399,
-          "prechecked_definitions": 14,
-          "reached_source_tokens": 2399
+          "check_source_tokens": 2176,
+          "lower_source_tokens": 2176,
+          "native_build_source_tokens": 2176,
+          "prechecked_definitions": 0,
+          "reached_source_tokens": 2176
         },
         "definitions": {
-          "reached": 14,
-          "total": 45
+          "reached": 17,
+          "total": 50
         },
         "transitive_dependencies": [],
         "units": {
