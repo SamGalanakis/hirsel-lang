@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 
 const RECEIPT: Domain = Domain {
     kind: 0x4300_0001,
-    schema: 2,
+    schema: 3,
 };
 const VALUE_BODY: Domain = Domain {
     kind: 0x4300_0002,
@@ -69,6 +69,7 @@ struct Record {
     instance: ContentHash,
     implementation_revision: ContentHash,
     source_witness: Option<SealSourceWitness>,
+    linkage: super::linkage::LinkageRecord,
     operations: Vec<OperationRead>,
     manifest: Vec<(OperationId, Option<OperationRow>)>,
     discharge: ContentHash,
@@ -87,6 +88,7 @@ snapshot_struct!(Record {
     instance,
     implementation_revision,
     source_witness,
+    linkage,
     operations,
     manifest,
     discharge,
@@ -204,6 +206,9 @@ impl NativeOutput {
     }
     pub fn stage(&self) -> StageKind {
         self.record.stage
+    }
+    pub fn linkage(&self) -> super::CheckedLinkage {
+        self.record.linkage.checked()
     }
 }
 
@@ -391,6 +396,7 @@ impl NativeCache {
                 instance: header.instance,
                 implementation_revision: header.implementation_revision,
                 source_witness,
+                linkage: super::linkage::LinkageRecord::capture(&checked, inputs.layouts)?,
                 operations: operation_reads.into_values().collect(),
                 manifest: checked
                     .unit()

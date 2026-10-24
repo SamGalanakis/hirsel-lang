@@ -246,3 +246,128 @@ fn arena_query_graph_settles_local_equations_and_reuses_unchanged_components() {
     nodes.push(missing);
     assert!(settle_arena_queries(&store, &nodes, &[], 0, &mut counts).is_err());
 }
+
+#[test]
+fn native_checked_linkage_survives_body_release_and_layout_relocation() {
+    use hirsel_artifact_store::Memory;
+    use hirsel_lir::validate::{NativeCache, NativeEnvironment, check_arena_scoped_links};
+    use hirsel_syntax::ContentHash;
+    use std::sync::Arc;
+    let program = rc_support::compile(
+        "type Item {n:u64}\nfn leaf(a:Arena)->(box Item) in a {box Item(n:1u64)}\nfn wrap(a:Arena)->(box Item) in a {leaf(a)}\nfn apply(f:fn()->u64)->u64{f()}\nfn answer()->u64{9u64}\nfn main()->u64 {arena.with(fn(a:Arena){let x=wrap(a);});apply(answer)}",
+    );
+    let target = hirsel_lir::TargetSpec::x86_64_unknown_linux_gnu();
+    let lowered = hirsel_rc::import::lower(&program, &target).unwrap();
+    hirsel_lir::validate::check_result_arena_calls(&lowered.units, &lowered.table).unwrap();
+    hirsel_lir::validate::check_scoped_links(&lowered.units, &lowered.table).unwrap();
+    let manifest = rc_support::manifest(&program);
+    let operations = program.operation_registry();
+    let inputs = Inputs {
+        memo: Default::default(),
+        target: &target,
+        layouts: &lowered.table,
+        operations: &operations,
+        manifest: &manifest,
+        discharge: Some(&lowered.native_discharge),
+    };
+    let contents = Arc::new(Memory::default());
+    let cache = NativeCache::new(contents.clone(), None);
+    let policy = ContentHash::of_bytes(b"checked linkage policy");
+    let mut outputs = Vec::new();
+    let mut products = Vec::new();
+    for (index, raw) in lowered.units.iter().cloned().enumerate() {
+        let subject = ContentHash::of_bytes(&(index as u64).to_le_bytes());
+        let (checked, output) = cache
+            .validate_and_publish(
+                subject,
+                policy,
+                raw,
+                &inputs,
+                &[],
+                b"ordinary producer metadata",
+            )
+            .unwrap();
+        let output = output.unwrap();
+        let (closure, body) = cache.read(&output, &target).unwrap();
+        assert_eq!(
+            output.linkage().definition(),
+            &checked.unit().header.definition
+        );
+        products.push((closure, body));
+        outputs.push((subject, output));
+    }
+    let expected = outputs
+        .iter()
+        .map(|(_, output)| output.linkage())
+        .collect::<Vec<_>>();
+    check_arena_scoped_links(&expected).unwrap();
+    let binding = Binding::new(
+        &target,
+        &products
+            .iter()
+            .map(|(closure, _)| closure)
+            .collect::<Vec<_>>(),
+    )
+    .unwrap();
+    let rebound_inputs = Inputs {
+        memo: Default::default(),
+        layouts: &binding.table,
+        ..inputs
+    };
+    let mut relocated = Vec::new();
+    for (index, (_, body)) in products.iter().enumerate() {
+        let raw = binding.materialize::<Value>(body).unwrap();
+        let subject = ContentHash::of_parts(
+            "relocated checked linkage",
+            [(index as u64).to_le_bytes().as_slice()],
+        );
+        let (_, output) = cache
+            .validate_and_publish(subject, policy, raw, &rebound_inputs, &[], b"relocated")
+            .unwrap();
+        let observed = output.unwrap().linkage();
+        assert_eq!(observed.abi(), expected[index].abi());
+        relocated.push(observed);
+    }
+    check_arena_scoped_links(&relocated).unwrap();
+    drop(products);
+    drop(binding);
+    drop(lowered);
+    let environment = NativeEnvironment {
+        target: &target,
+        manifest: &manifest,
+        operations: &operations,
+        discharge: None,
+    };
+    let trace = hirsel_lir::construction::ValueTrace::default();
+    let _observe = trace.enter();
+    let retained = outputs
+        .iter()
+        .map(|(subject, _)| {
+            cache
+                .lookup(
+                    *subject,
+                    policy,
+                    hirsel_lir::stage::StageKind::Value,
+                    &environment,
+                )
+                .unwrap()
+                .linkage()
+        })
+        .collect::<Vec<_>>();
+    check_arena_scoped_links(&retained).unwrap();
+    assert_eq!(
+        trace.totals(),
+        hirsel_lir::construction::ValueCounts::default()
+    );
+    let unassociated = NativeCache::new(contents, None);
+    assert!(
+        unassociated
+            .lookup(
+                outputs[0].0,
+                policy,
+                hirsel_lir::stage::StageKind::Value,
+                &environment
+            )
+            .is_none()
+    );
+}
