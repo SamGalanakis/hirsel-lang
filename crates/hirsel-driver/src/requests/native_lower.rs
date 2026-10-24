@@ -109,7 +109,7 @@ mod tests {
                     &paths,
                     front.clone(),
                     weight,
-                    4096,
+                    paths.len().checked_mul(3).unwrap().min(4096),
                     budget.reserve(16 << 20).unwrap(),
                     errors,
                 )
