@@ -1,6 +1,6 @@
 //! PROG-3: derive immutable diagnostic views from checked types and actual Ready layouts.
+use super::root_source::LinkSource;
 use super::{NativeError, ReadyProgram, StageName};
-use hirsel_engine::NativeInput;
 use hirsel_lir::layout_types::{LayoutId, LayoutKind, SizeSpec, TagForm};
 use hirsel_syntax::DefPath;
 use hirsel_type_analysis::logical::{Logical, LogicalNominal, Resolved, Scope, type_arguments};
@@ -28,7 +28,7 @@ struct Node {
 }
 
 pub(crate) fn derive(
-    input: &NativeInput,
+    input: &LinkSource<'_>,
     program: &ReadyProgram,
     entry: &DefPath,
 ) -> Result<Report, NativeError> {

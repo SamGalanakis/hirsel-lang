@@ -317,7 +317,13 @@ impl ReadyProgram {
     /// Attach checked semantic code selection, independently of pass options and topology.
     /// Adapted-program clients retain and supply their validated source input here.
     pub fn bind_revisions(&mut self, input: &ValidatedNativeInput) -> Result<(), NativeError> {
-        if self.input != adapt::input_identity(input.snapshot()) {
+        self.bind_source(&super::root_source::LinkSource::snapshot(input))
+    }
+    pub(crate) fn bind_source(
+        &mut self,
+        input: &super::root_source::LinkSource<'_>,
+    ) -> Result<(), NativeError> {
+        if self.input != input.input {
             return Err(NativeError::new(
                 StageName::Launch,
                 "semantic binding belongs to another input",
@@ -325,7 +331,7 @@ impl ReadyProgram {
         }
         for unit in &self.summaries {
             let covered = match self.semantic_owners.get(&unit.definition) {
-                Some(Some(owner)) => input.semantic_contains(owner),
+                Some(Some(owner)) => input.semantic.semantic_contains(owner),
                 Some(None) => unit.origin == hirsel_lir::ir::UnitOrigin::Library,
                 None => false,
             };
@@ -348,6 +354,7 @@ impl ReadyProgram {
             .keys()
             .map(|entry| {
                 input
+                    .semantic
                     .semantic_program_revision(entry)
                     .map(|revision| (entry.clone(), revision))
                     .map_err(|error| {
@@ -355,14 +362,14 @@ impl ReadyProgram {
                     })
             })
             .collect::<Result<_, _>>()?;
-        self.foreign_links = input.snapshot().foreign_links.clone();
-        self.foreign_unreplayable = input.snapshot().foreign_unreplayable;
-        self.foreign_dispatch = super::foreign::dispatch(input.snapshot());
+        self.foreign_links = input.foreign_links.clone();
+        self.foreign_unreplayable = input.foreign_unreplayable;
+        self.foreign_dispatch = super::foreign::dispatch(input);
         super::foreign::check_callbacks(self, input)?;
         self.escaping = self
             .launches
             .keys()
-            .filter(|entry| input.unsafe_reach(entry).is_some())
+            .filter(|entry| input.semantic.unsafe_reach(entry).is_some())
             .cloned()
             .collect();
         self.exit_reports = self
@@ -370,12 +377,14 @@ impl ReadyProgram {
             .keys()
             .filter(|entry| self.functions.contains_key(*entry))
             .map(|entry| {
-                super::exit_report::derive(input.snapshot(), self, entry)
-                    .map(|report| (entry.clone(), report))
+                super::exit_report::derive(input, self, entry).map(|report| (entry.clone(), report))
             })
             .collect::<Result<_, _>>()?;
         self.failure_table = Some({
-            super::observe::failure_table(self, &super::observe::Sites::new(input.snapshot()))
+            super::observe::failure_table(
+                self,
+                &super::observe::Sites::from_anchors(input.sources, input.anchors.clone()),
+            )
         });
         Ok(())
     }
