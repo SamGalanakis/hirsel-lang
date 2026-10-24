@@ -1,5 +1,5 @@
 load("//tools/native-toolchain:pins.bzl", "LINK_KIT", "LLD_SOURCE", "LLVM_DEBS", "NATIVE", "VALGRIND_DEBS")
-load(":defs.bzl", "link_kit", "overlay_linker", "toolchain_proof", "unpack_toolchain")
+load(":defs.bzl", "link_kit", "runtime_auditor", "overlay_linker", "toolchain_proof", "unpack_toolchain")
 
 http_file(name = "lld-source", urls = [LLD_SOURCE["url"]], sha256 = LLD_SOURCE["sha256"])
 overlay_linker(
@@ -68,3 +68,5 @@ toolchain_proof(name = "root-observation-proof", tools = [":llvm", ":kit", "root
 toolchain_proof(name = "source-metadata-proof", tools = [":llvm", ":kit", "root//:hirsel-rt-archives", "root//:hirsel-driver-unittest-harness", "root//:hirsel-driver-test-it-harness"], script = "source_metadata_proof.sh")
 
 toolchain_proof(name = "root-frozen-kit-proof", tools = [":llvm", ":linker", ":kit", "root//:hirsel-rt-archives", "root//:hirsel-driver-test-it-harness"], script = "root_frozen_kit_proof.py", interpreter = "python3")
+runtime_auditor(name = "runtime-auditor", llvm = ":llvm", builder = "build_runtime_auditor.py", source = "runtime_auditor.c", visibility = ["PUBLIC"])
+toolchain_proof(name = "runtime-auditor-proof", tools = [":llvm", ":runtime-auditor", ":glibc_floor", ":qemu"], script = "runtime_auditor_proof.py", interpreter = "python3")
