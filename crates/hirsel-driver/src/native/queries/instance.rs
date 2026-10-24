@@ -21,6 +21,25 @@ pub const STATICS_FINALIZERS_DOMAIN: Domain = Domain {
     schema: 1,
 };
 
+/// The rewritten Value is a distinct semantic query stage while retaining the
+/// source callable's canonical function identity. C subjects and associations
+/// are separated; ordinary records never carry acceptance across the stages.
+pub const CALLABLE_VALUE_KIND: u32 = 0x4e00_0029;
+
+#[derive(Clone, Copy)]
+enum Phase {
+    Imported,
+    Callable,
+}
+impl Phase {
+    fn kind(self) -> u32 {
+        match self {
+            Self::Imported => INSTANCE_KIND,
+            Self::Callable => CALLABLE_VALUE_KIND,
+        }
+    }
+}
+
 type Record = (Reference, Reference, Reference, Reference, Reference);
 type Metadata = (Reference, Reference, Reference);
 
@@ -34,11 +53,11 @@ impl Contents for SelectedContents {
     }
 }
 
-fn subject(key: &InstanceAddress, action: Action) -> ContentHash {
+fn subject(phase: Phase, key: &InstanceAddress, action: Action) -> ContentHash {
     ContentHash::of_parts(
         "hirsel.native.instance-validation-subject.v1",
         [
-            key.address(INSTANCE_KIND).0.0.as_slice(),
+            key.address(phase.kind()).0.0.as_slice(),
             action.0.0.as_slice(),
         ],
     )
@@ -56,12 +75,20 @@ pub struct InstanceQueryCounts {
 pub struct InstanceQueries {
     store: Arc<dyn ResultStore>,
     native: Arc<NativeCache>,
+    phase: Phase,
     pub counts: InstanceQueryCounts,
 }
 impl InstanceQueries {
     pub fn new(store: Arc<dyn ResultStore>) -> Self {
         let native = Self::validator(&store);
         Self::with_validator(store, native)
+    }
+    pub fn new_callable(store: Arc<dyn ResultStore>) -> Self {
+        let native = Self::validator(&store);
+        Self::with_phase(store, native, Phase::Callable)
+    }
+    pub fn address(&self, key: &InstanceAddress) -> hirsel_artifact_store::Address {
+        key.address(self.phase.kind())
     }
     pub(super) fn validator(store: &Arc<dyn ResultStore>) -> Arc<NativeCache> {
         Arc::new(NativeCache::new(
@@ -70,9 +97,13 @@ impl InstanceQueries {
         ))
     }
     pub(super) fn with_validator(store: Arc<dyn ResultStore>, native: Arc<NativeCache>) -> Self {
+        Self::with_phase(store, native, Phase::Imported)
+    }
+    fn with_phase(store: Arc<dyn ResultStore>, native: Arc<NativeCache>, phase: Phase) -> Self {
         Self {
             native,
             store,
+            phase,
             counts: InstanceQueryCounts::default(),
         }
     }
@@ -93,7 +124,7 @@ impl InstanceQueries {
     /// native acceptance, Value decode or binding; callers must still use
     /// lookup with a complete current action and independent environment.
     pub fn candidate(&self, key: &InstanceAddress) -> Option<InstanceProduct> {
-        let address = key.address(INSTANCE_KIND);
+        let address = self.address(key);
         let previous = self.store.lookup_product(address)?;
         if previous.reference.domain != INSTANCE_RECORD_DOMAIN {
             return None;
@@ -146,7 +177,7 @@ impl InstanceQueries {
         self.lookup_inner(key, action, environment)?;
         self.native
             .lookup(
-                subject(key, action),
+                subject(self.phase, key, action),
                 key.policy,
                 StageKind::Value,
                 environment,
@@ -167,7 +198,7 @@ impl InstanceQueries {
             return None;
         }
         let accepted = self.native.lookup(
-            subject(key, action),
+            subject(self.phase, key, action),
             key.policy,
             StageKind::Value,
             environment,
@@ -192,6 +223,38 @@ impl InstanceQueries {
             return None;
         }
         Some(Arc::new(candidate))
+    }
+
+    /// Open a selected accepted Value only for a transformation miss. The
+    /// descriptor must still match this stage's own current C admission.
+    pub fn read(
+        &self,
+        key: &InstanceAddress,
+        product: &InstanceProduct,
+        environment: &NativeEnvironment<'_>,
+    ) -> Result<
+        (
+            hirsel_lir::products::LayoutClosure,
+            hirsel_lir::products::UnitBody,
+        ),
+        String,
+    > {
+        let current = self
+            .lookup_inner(key, product.product.action, environment)
+            .ok_or("Value materialization lost current C admission")?;
+        if current.product != product.product {
+            return Err("Value materialization descriptor differs".into());
+        }
+        let accepted = self
+            .native
+            .lookup(
+                subject(self.phase, key, product.product.action),
+                key.policy,
+                StageKind::Value,
+                environment,
+            )
+            .ok_or("Value materialization lost native output")?;
+        self.native.read(&accepted, environment.target)
     }
 
     /// Actual one-instance miss: C chooses the Value/layout envelopes; equations
@@ -233,7 +296,7 @@ impl InstanceQueries {
         let (checked, output) = self
             .native
             .validate_output(
-                subject(key, action),
+                subject(self.phase, key, action),
                 key.policy,
                 unit,
                 inputs,
@@ -275,7 +338,7 @@ impl InstanceQueries {
         if reference != expected {
             return Err("instance descriptor content identity differs".into());
         }
-        let address = key.address(INSTANCE_KIND);
+        let address = self.address(key);
         self.store.associate_product(address, action, reference);
         Ok((
             checked,
