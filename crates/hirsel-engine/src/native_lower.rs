@@ -13,6 +13,7 @@ use std::{
 /// A settled front Lower result. The ordinary payload is always available;
 /// an optional opaque V output can avoid rechecking only in its own context.
 /// These observations are data and grant no native C authority.
+#[derive(Clone)]
 pub struct NativeOriginalProduct {
     pub definition: DefPath,
     pub implementation_revision: ContentHash,

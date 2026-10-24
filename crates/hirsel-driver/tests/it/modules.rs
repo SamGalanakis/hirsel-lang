@@ -170,3 +170,4 @@ mod scheduled_check;
 mod native_settled_declarations_19;
 mod receipt_closure_source_33;
 mod scheduled_storage;
+mod scheduled_native;
