@@ -232,7 +232,7 @@ impl OperationDeclarations for OperationRegistry {
         {
             return None;
         }
-        self.derive(operation, arguments, target).ok()
+        self.derive_abi(operation, arguments, target, true).ok()
     }
 
     fn invocation_body(
@@ -295,6 +295,18 @@ impl OperationDeclarations for OperationRegistry {
         arguments: &[OperationArgument],
         target: &hirsel_lir::TargetSpec,
     ) -> Result<(FnAbi, hirsel_lir::LayoutTable), LayoutError> {
+        self.derive_abi(operation, arguments, target, false)
+    }
+}
+
+impl OperationRegistry {
+    fn derive_abi(
+        &self,
+        operation: &OperationId,
+        arguments: &[OperationArgument],
+        target: &hirsel_lir::TargetSpec,
+        materialized: bool,
+    ) -> Result<(FnAbi, hirsel_lir::LayoutTable), LayoutError> {
         let signature = self
             .signatures
             .get(operation)
@@ -348,17 +360,46 @@ impl OperationDeclarations for OperationRegistry {
             parameters.push(p);
         }
         let result = one(function.result)?;
-        let callable = types.intern(Type {
-            kind: TypeKind::Function(FunctionType {
-                parameters: parameters.into(),
-                foreign: function.foreign.clone(),
-                ..empty_function(result)
-            }),
-            ..Type::unit()
-        });
+        // Match the source-independent library request instantiation in
+        // hirsel-rc/src/instance.rs::instantiate_function. Runtime primitive
+        // derivation retains its existing ABI namespace.
+        let callable = if materialized {
+            let error = function.error.map(one).transpose()?;
+            types.intern(Type {
+                modes: Modes::global(),
+                ..Type::with_kind(TypeKind::Function(FunctionType {
+                    state_promises: function.state_promises.clone(),
+                    generics: Vec::new().into(),
+                    parameters: parameters.into(),
+                    result,
+                    error,
+                    allocation: function.allocation,
+                    authority: AuthoritySummary::Unknown,
+                    uses: function.uses.clone(),
+                    contracts: Vec::new().into(),
+                    incomplete: false,
+                    foreign: function.foreign.clone(),
+                }))
+            })
+        } else {
+            types.intern(Type {
+                kind: TypeKind::Function(FunctionType {
+                    parameters: parameters.into(),
+                    foreign: function.foreign.clone(),
+                    ..empty_function(result)
+                }),
+                ..Type::unit()
+            })
+        };
         let mut builder = LayoutBuilder::new(target, &self.owners);
         let abi = builder.fn_abi(types, callable, CallableShape::Definition)?;
-        let abi = if signature.metadata.track_caller {
+        let abi = if materialized {
+            let parameters = builder.table().fn_abis[abi.0 as usize].nonretaining.clone();
+            builder.with_scoped_contract(abi, parameters, Vec::new())?
+        } else {
+            abi
+        };
+        let abi = if materialized || signature.metadata.track_caller {
             builder.with_caller_site(abi)?
         } else {
             abi
