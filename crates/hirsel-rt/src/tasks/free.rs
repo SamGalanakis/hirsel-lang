@@ -53,14 +53,18 @@ pub(super) unsafe fn dispatch_ready(ctx: *mut TaskCtx) {
 /// # Safety
 /// The role owns s and run; no table borrow survives queue publication.
 pub(super) unsafe fn publish_ready(s: &mut Scheduler, run: *mut crate::context::RunShared) {
+    if s.runnable.is_empty() {
+        return;
+    }
     let ready = {
         std::mem::take(&mut s.runnable)
             .into_iter()
             .map(|task| (task, s.task(task).owner))
             .collect::<Vec<_>>()
     };
+    let mut batch = unsafe { crate::pool::free::ReadyBatch::new(run) };
     for (task, owner) in ready {
-        unsafe { crate::pool::free::schedule_saved(run, task, owner) };
+        unsafe { batch.schedule(task, owner) };
     }
 }
 
@@ -86,15 +90,13 @@ pub(super) unsafe fn try_yield(ctx: &mut TaskCtx) -> Stopped<()> {
     }
     let s = scheduler(ctx);
     let me = s.current;
-    let row = s.task(me);
-    unpin(row);
-    if row.budget.proceed() {
+    unpin(s.task(me));
+    if unsafe { crate::pool::free::proceed(ctx) } {
         if let Some(metrics) = &ctx.run_ref().worker_metrics {
             metrics.elision();
         }
         unsafe { migrate(ctx) };
     } else {
-        row.budget.reset();
         unsafe { suspend(ctx, true) };
     }
     crate::stop::observe(ctx)

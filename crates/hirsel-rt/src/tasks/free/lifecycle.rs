@@ -497,7 +497,7 @@ pub(crate) unsafe fn spawn(
             scheduler(ctx).task(current).deferred = Some(index);
             // The compiler proved the next op is its join. Returning does not
             // expose an unstarted child to a worker before its destination exists.
-            if scheduler(ctx).task(current).budget.proceed() {
+            if crate::pool::free::proceed(ctx) {
                 return Ok(());
             }
             // Count spawn as an operation even when its physical switch is

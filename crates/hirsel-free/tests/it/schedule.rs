@@ -221,14 +221,15 @@ fn work_search_steals_started_ids_and_shrink_exposes_the_retiring_lifo() {
     workers[7].push(&ready, 99, false);
     // Worker 0 skips empty queues, steals ceil(6/2), and runs the last
     // stolen identifier. A started fiber is represented by the same ID.
-    assert_eq!(workers[0].next(&ready), Some(2));
-    assert_eq!(workers[0].next(&ready), Some(0));
-    assert_eq!(workers[0].next(&ready), Some(1));
+    assert_eq!(workers[0].next(&ready), Some((2, work::Source::Steal)));
+    assert_eq!(workers[0].next(&ready), Some((0, work::Source::Local)));
+    assert_eq!(workers[0].next(&ready), Some((1, work::Source::Local)));
     assert_eq!(metrics.counts().1, 1);
     ready.set_width(1);
-    assert_eq!(workers[7].next(&ready), None);
+    // The retiring owner exposes its LIFO slot and FIFO explicitly.
+    workers[7].drain(&ready);
     let mut remaining = Vec::new();
-    while let Some(id) = workers[0].next(&ready) {
+    while let Some((id, _)) = workers[0].next(&ready) {
         remaining.push(id);
     }
     remaining.sort_unstable();
@@ -268,7 +269,8 @@ fn eight_workers_requeue_and_steal_started_tasks_through_live_shrink() {
     }));
     let threads: Vec<_> = workers
         .into_iter()
-        .map(|mut worker| {
+        .enumerate()
+        .map(|(index, mut worker)| {
             let (ready, seen, finished, total, barrier) = (
                 ready.clone(),
                 seen.clone(),
@@ -279,7 +281,11 @@ fn eight_workers_requeue_and_steal_started_tasks_through_live_shrink() {
             std::thread::spawn(move || {
                 barrier.wait();
                 while finished.load(Ordering::Acquire) != TASKS {
-                    let Some(mut fiber) = worker.next(&ready) else {
+                    if index >= ready.width() as usize {
+                        // A retiring worker drains at its scheduler boundary.
+                        break;
+                    }
+                    let Some((mut fiber, _)) = worker.next(&ready) else {
                         std::thread::yield_now();
                         continue;
                     };
@@ -348,7 +354,7 @@ fn exclusive_saved_images_migrate_through_eight_queues_and_drop_at_completion() 
             threads.spawn(move || {
                 barrier.wait();
                 while freed.load(Ordering::Acquire) != TASKS {
-                    let Some(queued) = worker.next(&ready) else {
+                    let Some((queued, _)) = worker.next(&ready) else {
                         std::thread::yield_now();
                         continue;
                     };

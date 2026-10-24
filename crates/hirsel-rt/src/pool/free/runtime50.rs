@@ -659,6 +659,7 @@ impl World {
             queued,
             frame: self.tasks[slot].frame.clone(),
             lease: Lease::new(&self.dispatch().count),
+            chained: false,
         };
         publish(&self.execs, saved, false, false);
     }
@@ -675,6 +676,7 @@ impl World {
                     queued,
                     frame: task.frame.clone(),
                     lease: Lease::new(&self.execs.dispatch.get().unwrap().count),
+                    chained: false,
                 };
                 publish(&self.execs, saved, false, false);
             }
@@ -836,6 +838,7 @@ impl World {
             queued,
             frame,
             lease,
+            ..
         }) = saved
         else {
             self.c.observe("dispatch", runnable, None);
@@ -935,6 +938,7 @@ impl World {
                         queued,
                         frame,
                         lease,
+                        chained: false,
                     };
                     with_exec(&exec, || publish(&self.execs, saved, yielded, true));
                 } else {
@@ -1617,6 +1621,7 @@ fn runtime50_composed_ownership_cut_matrix() {
                 queued: first,
                 frame: task.frame.clone(),
                 lease: lease(),
+                chained: false,
             },
             false,
             false,
@@ -1634,6 +1639,7 @@ fn runtime50_composed_ownership_cut_matrix() {
                 queued,
                 frame: saved.frame,
                 lease: saved.lease,
+                chained: false,
             },
             false,
             false,

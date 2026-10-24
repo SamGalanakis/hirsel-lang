@@ -130,6 +130,8 @@ pub(crate) struct Exec {
     lost: AtomicBool,
     ready: Cell<Option<hirsel_free::work::Worker<free::Saved>>>,
     active: Cell<Option<free::Active>>,
+    /// The Free operation budget of the immediate chain this exec runs.
+    chain: Cell<hirsel_free::schedule::Budget>,
     pub(crate) leaving: Cell<Option<free::Leave>>,
     ready_epoch: AtomicU64,
     /// Foreign frames may suspend here, but may never resume on another thread.
@@ -166,6 +168,7 @@ impl Exec {
             lost: AtomicBool::new(false),
             ready: Cell::new(None),
             active: Cell::new(None),
+            chain: Cell::default(),
             leaving: Cell::new(None),
             ready_epoch: AtomicU64::new(0),
             foreign_frames: AtomicU32::new(0),
@@ -1330,6 +1333,7 @@ fn resize(ctx: *mut TaskCtx) {
         }
     }
     grow(run, execs, &mut compute, width);
+    free::set_width(execs, compute.active.len());
 }
 
 /// Post the root task `task` (suspended at its row) to the first compute worker.

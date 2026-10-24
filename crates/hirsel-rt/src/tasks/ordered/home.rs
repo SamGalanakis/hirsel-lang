@@ -195,10 +195,15 @@ fn complete(s: &mut Scheduler, run: *mut RunShared, retiring: bool) {
     } else {
         driver.frontier.as_mut().unwrap().resume_idle(woken);
     }
-    for id in driver.select() {
+    let selected = driver.select();
+    if selected.is_empty() {
+        return;
+    }
+    let mut batch = unsafe { crate::pool::free::ReadyBatch::new(run) };
+    for id in selected {
         let task = id as u32;
         let owner = s.task(task).owner;
-        unsafe { crate::pool::free::schedule_saved(run, task, owner) };
+        unsafe { batch.schedule(task, owner) };
     }
 }
 

@@ -7,7 +7,8 @@
 
 use super::*;
 use hirsel_free::frame::{self, Notification, Queued, Running};
-use hirsel_free::work::{Ready, Worker as ReadyWorker};
+use hirsel_free::schedule::Budget;
+use hirsel_free::work::{Ready, Source, Worker as ReadyWorker};
 
 struct Image {
     ctx: *mut TaskCtx,
@@ -97,6 +98,9 @@ pub(super) struct Saved {
     frame: Arc<Frame>,
     // Drop execution ownership before releasing the activity reservation.
     lease: Lease,
+    /// Claimed from its worker's LIFO slot: it continues that worker's
+    /// immediate chain and its operation budget rather than starting one.
+    chained: bool,
 }
 
 pub(super) struct Active {
@@ -224,12 +228,23 @@ pub(crate) unsafe fn enable(ctx: *mut TaskCtx) {
             .is_ok(),
         "physical dispatch enabled twice"
     );
+    set_width(execs, execs.compute.lock().unwrap().active.len());
     // SAFETY: admission, before the first task starts.
     unsafe { crate::tasks::role::enable(ctx) };
     // Workers started before opt-in may still be waiting in W1's inbox-only
     // predicate. A real post moves each to the physical ready predicate.
     for exec in &execs.compute.lock().unwrap().active {
         exec.post(Post::Wake, None);
+    }
+}
+
+/// Size injection refills by the live compute membership. Only the run-token
+/// holder changes membership; the refill share is a physical tuning input.
+pub(super) fn set_width(execs: &Execs, active: usize) {
+    if let Some(dispatch) = execs.dispatch.get() {
+        dispatch
+            .ready
+            .set_width(active.clamp(1, MAX_WIDTH as usize) as u32);
     }
 }
 
@@ -280,17 +295,30 @@ pub(crate) unsafe fn lend(ctx: *mut TaskCtx, task: u32) {
 /// The caller holds the run's scheduler role (or is admitting its root). The
 /// task row/context is live; its stack stays allocated until completion.
 pub(crate) unsafe fn schedule_saved(run: *mut RunShared, task: u32, owner: Owner) {
+    let execs = unsafe { (*(*run).execs.get()).as_deref().expect("physical dispatch") };
+    if let Some(saved) = unsafe { admit(run, execs, task, owner) } {
+        // A notifier can keep executing indefinitely after this op. Work
+        // cannot remain in its private LIFO slot until its next idle turn.
+        publish(execs, saved, false, false);
+    }
+}
+
+/// Transfer one notification into queue ownership, or latch it on a running
+/// image. `None` means the task's idle save, or an earlier wake, publishes.
+/// # Safety
+/// As for [`schedule_saved`].
+unsafe fn admit(run: *mut RunShared, execs: &Execs, task: u32, owner: Owner) -> Option<Saved> {
     // SAFETY: the role owns this task lookup. No borrow survives publication.
     let (slot, ctx) = unsafe { crate::tasks::dispatch_frame(run, task) };
-    let execs = unsafe { (*(*run).execs.get()).as_deref().expect("physical dispatch") };
     let dispatch = execs.dispatch.get().expect("physical dispatch enabled");
-    let saved = unsafe {
+    unsafe {
         if let Some(frame) = slot {
             frame.owner.store(owner_word(owner), Ordering::Release);
             frame.notification.notify().map(|queued| Saved {
                 queued,
                 frame: frame.clone(),
                 lease: Lease::new(&dispatch.count),
+                chained: false,
             })
         } else {
             let (notification, queued) = frame::prepared(Image {
@@ -311,13 +339,98 @@ pub(crate) unsafe fn schedule_saved(run: *mut RunShared, task: u32, owner: Owner
                 queued,
                 frame,
                 lease: Lease::new(&dispatch.count),
+                chained: false,
             })
         }
-    };
-    if let Some(saved) = saved {
-        // A notifier can keep executing indefinitely after this op. Work
-        // cannot remain in its private LIFO slot until its next idle turn.
-        publish(execs, saved, false, false);
+    }
+}
+
+/// The most saved continuations a [`ReadyBatch`] holds before it flushes.
+pub(crate) const BATCH: usize = 32;
+
+/// Bounded owned ready publication (S2 `ReadyBatch`). A policy that makes
+/// several saved continuations ready in one runtime entry publishes all of
+/// its Any-owned entries with one injection and one wake decision; a woken
+/// searcher that claims work wakes the next (Tokio `worker.rs:647-651`), so
+/// one wake suffices. Dropping flushes, so no admitted entry survives the
+/// entry that made it ready: nothing hides behind a park, a foreign call or
+/// a return to potentially nonterminating user code. Batching is transport
+/// only; entries keep their policy order and every ordinal and wake position.
+pub(crate) struct ReadyBatch {
+    run: *mut RunShared,
+    execs: *const Execs,
+    entries: [Option<Saved>; BATCH],
+    len: usize,
+}
+
+impl ReadyBatch {
+    /// # Safety
+    /// The caller holds the run's scheduler role (or admits its root) until
+    /// this batch drops, and the run has physical dispatch enabled.
+    pub(crate) unsafe fn new(run: *mut RunShared) -> Self {
+        let execs = unsafe { (*(*run).execs.get()).as_deref().expect("physical dispatch") };
+        Self {
+            run,
+            execs,
+            entries: [const { None }; BATCH],
+            len: 0,
+        }
+    }
+
+    /// Notify a task selected by the logical policy; publication waits for
+    /// this batch's flush or drop.
+    ///
+    /// # Safety
+    /// As for [`schedule_saved`].
+    pub(crate) unsafe fn schedule(&mut self, task: u32, owner: Owner) {
+        let execs = unsafe { &*self.execs };
+        if let Some(saved) = unsafe { admit(self.run, execs, task, owner) } {
+            self.push(saved);
+        }
+    }
+
+    fn push(&mut self, saved: Saved) {
+        if word_owner(saved.frame.owner.load(Ordering::Acquire)) != Owner::Any {
+            // An addressed owner has its own inbox; there is no shared wake.
+            publish(unsafe { &*self.execs }, saved, false, false);
+            return;
+        }
+        self.entries[self.len] = Some(saved);
+        self.len += 1;
+        if self.len == BATCH {
+            self.flush();
+        }
+    }
+
+    /// Publish every held entry, then make one wake decision. A notifier can
+    /// keep executing indefinitely after its op, so non-idle publication never
+    /// uses its private LIFO slot.
+    pub(crate) fn flush(&mut self) {
+        let len = std::mem::take(&mut self.len);
+        if len == 0 {
+            return;
+        }
+        // SAFETY: the batch's creator retains the run's topology.
+        let execs = unsafe { &*self.execs };
+        let entries = self.entries[..len]
+            .iter_mut()
+            .map(|entry| entry.take().expect("a batched entry"));
+        if home_computes(execs) {
+            for saved in entries {
+                execs.home.post(Post::Saved(saved), None);
+            }
+            return;
+        }
+        let dispatch = execs.dispatch.get().expect("physical dispatch enabled");
+        dispatch.queued.fetch_add(len, Ordering::SeqCst);
+        dispatch.ready.inject(entries);
+        wake_ready(execs);
+    }
+}
+
+impl Drop for ReadyBatch {
+    fn drop(&mut self) {
+        self.flush();
     }
 }
 
@@ -516,6 +629,7 @@ pub(super) unsafe fn saved(run: *mut RunShared, exec: &Exec) {
                         queued,
                         frame,
                         lease,
+                        chained: false,
                     },
                     yielded,
                     true,
@@ -541,7 +655,7 @@ pub(super) fn next(execs: &Execs, exec: &Exec) -> Option<Saved> {
         .take()
         .or_else(|| dispatch.locals.lock().unwrap().pop())?;
     let mut saved = if dispatch.queued.load(Ordering::SeqCst) != 0 {
-        local.next(&dispatch.ready)
+        local.next(&dispatch.ready).map(chain)
     } else {
         None
     };
@@ -566,7 +680,7 @@ pub(super) fn next(execs: &Execs, exec: &Exec) -> Option<Saved> {
     {
         // Publication either precedes this last check, or observes no
         // searcher and notifies a worker. Never park on the earlier miss.
-        saved = local.next(&dispatch.ready);
+        saved = local.next(&dispatch.ready).map(chain);
     }
     if saved.is_some() {
         assert_ne!(dispatch.queued.fetch_sub(1, Ordering::SeqCst), 0);
@@ -582,6 +696,27 @@ pub(super) fn next(execs: &Execs, exec: &Exec) -> Option<Saved> {
         wake_ready(execs);
     }
     saved
+}
+
+fn chain((mut saved, source): (Saved, Source)) -> Saved {
+    saved.chained = source == Source::Lifo;
+    saved
+}
+
+/// Spend one completed immediate operation from the calling worker's chain
+/// budget; false when the chain must yield its worker. Tokio's LIFO tasks
+/// inherit their parent's coop budget (`worker.rs:680-714`): a handoff through
+/// the LIFO slot continues this budget, so an immediate chain cannot renew
+/// its quantum on every save. Any other dispatch starts a fresh budget.
+/// # Safety
+/// The running task's context, on the exec that runs it.
+pub(crate) unsafe fn proceed(ctx: *mut TaskCtx) -> bool {
+    // SAFETY: only this exec's own thread touches its chain cell.
+    let exec = unsafe { &*current(execs(ctx)) };
+    let mut budget = exec.chain.take();
+    let more = budget.proceed();
+    exec.chain.set(budget);
+    more
 }
 
 /// An addressed post can supersede a requested queue search. Hand its
@@ -616,6 +751,7 @@ pub(super) unsafe fn resume(run: *mut RunShared, exec: &Exec, saved: Saved) {
         queued,
         frame,
         lease,
+        chained,
     } = saved;
     let execs = unsafe { (*(*run).execs.get()).as_deref().unwrap() };
     if exec.kind == Kind::Home
@@ -628,6 +764,7 @@ pub(super) unsafe fn resume(run: *mut RunShared, exec: &Exec, saved: Saved) {
                 queued,
                 frame,
                 lease,
+                chained: false,
             },
             false,
             false,
@@ -712,6 +849,7 @@ pub(super) unsafe fn resume(run: *mut RunShared, exec: &Exec, saved: Saved) {
                         queued,
                         frame,
                         lease,
+                        chained: false,
                     },
                     false,
                     true,
@@ -723,6 +861,9 @@ pub(super) unsafe fn resume(run: *mut RunShared, exec: &Exec, saved: Saved) {
             return;
         }
         crate::tasks::record_dispatch(run, task, compute_index());
+        if !chained {
+            exec.chain.set(Budget::default());
+        }
         frame.saved.store(false, Ordering::Release);
         TaskCtx::switch_in(ctx, exec.worker.get());
         crate::tasks::role::release(ctx);

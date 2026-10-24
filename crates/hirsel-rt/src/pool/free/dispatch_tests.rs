@@ -74,6 +74,7 @@ fn segment(execs: &Execs, task: u32) -> Saved {
             stop_before_start: false,
         }),
         lease: Lease::new(&execs.dispatch.get().unwrap().count),
+        chained: false,
     }
 }
 
@@ -270,4 +271,311 @@ fn forced_migration_publishes_to_other_workers_even_for_one_continuation() {
     );
     let peer = execs.compute.lock().unwrap().active[1].clone();
     assert_eq!(next(&execs, &peer).unwrap().queued.start().value().task, 13);
+}
+
+fn exec(execs: &Execs, index: usize) -> Arc<Exec> {
+    execs.compute.lock().unwrap().active[index].clone()
+}
+
+/// The calling test thread acts as `exec`'s own OS thread until it drops.
+struct OwnThread(*const Exec);
+impl OwnThread {
+    fn new(exec: &Arc<Exec>) -> Self {
+        Self(EXEC.with(|e| e.replace(Arc::as_ptr(exec))))
+    }
+}
+impl Drop for OwnThread {
+    fn drop(&mut self) {
+        EXEC.with(|e| e.set(self.0));
+    }
+}
+
+/// A claimed dispatch: starting its token is the only access to the image.
+struct Started {
+    task: u32,
+    chained: bool,
+    running: Running<Image>,
+    frame: Arc<Frame>,
+    lease: Lease,
+}
+
+fn start(saved: Saved) -> Started {
+    let Saved {
+        queued,
+        frame,
+        lease,
+        chained,
+    } = saved;
+    let running = queued.start();
+    Started {
+        task: running.value().task,
+        chained,
+        running,
+        frame,
+        lease,
+    }
+}
+
+impl Started {
+    /// The idle continuation saves, then publishes: a yield to the FIFO, a
+    /// notified continuation to its worker's LIFO slot.
+    fn republish(self, execs: &Execs, yielded: bool) {
+        let queued = self.running.save(true).expect("a yield is always ready");
+        publish(
+            execs,
+            Saved {
+                queued,
+                frame: self.frame,
+                lease: self.lease,
+                chained: false,
+            },
+            yielded,
+            true,
+        );
+    }
+}
+
+#[test]
+fn runtime50_global_injection_has_bounded_service() {
+    use hirsel_free::work::GLOBAL_INTERVAL;
+    let bound = GLOBAL_INTERVAL as usize;
+    // Every phase of the worker's tick counter, including a remote completion
+    // arriving just after a forced check and at the first opportunity.
+    for arrival in 0..2 * bound {
+        let execs = topology(1);
+        let worker = exec(&execs, 0);
+        let _thread = OwnThread::new(&worker);
+        // Four local tasks that yield forever: the local FIFO never empties.
+        for task in 0..4 {
+            start(segment(&execs, task)).republish(&execs, true);
+        }
+        let mut dispatches = 0;
+        let served = loop {
+            if dispatches == arrival {
+                // A remote completion from a host or timer thread: no LIFO slot.
+                publish(&execs, segment(&execs, 100), false, false);
+            }
+            let started = start(next(&execs, &worker).expect("local work is never empty"));
+            dispatches += 1;
+            assert!(!started.chained, "neither the FIFO nor injection chains");
+            if started.task == 100 {
+                break dispatches;
+            }
+            assert!(started.task < 4);
+            started.republish(&execs, true);
+            assert!(
+                dispatches < arrival + bound,
+                "injected work starved behind a busy local queue"
+            );
+        };
+        let delay = served - arrival;
+        assert!(
+            (1..=bound).contains(&delay),
+            "arrival {arrival}: injected work waited {delay} dispatches"
+        );
+        // Local work was served meanwhile; the forced check is not a drain.
+        assert_eq!(execs.dispatch.get().unwrap().ready.injected(), 0);
+    }
+    // A LIFO handoff continues its worker's chain budget; three polls bound
+    // the slot, and the FIFO then starts a fresh chain. The first save
+    // precedes this worker's first search, so it is injected, not chained.
+    let execs = topology(1);
+    let worker = exec(&execs, 0);
+    let _thread = OwnThread::new(&worker);
+    start(segment(&execs, 7)).republish(&execs, false);
+    let chained: Vec<bool> = (0..8)
+        .map(|_| {
+            let started = start(next(&execs, &worker).unwrap());
+            assert_eq!(started.task, 7);
+            let chained = started.chained;
+            started.republish(&execs, false);
+            chained
+        })
+        .collect();
+    assert_eq!(
+        chained,
+        [false, true, true, true, false, true, true, true],
+        "LIFO polls are bounded by {}",
+        hirsel_free::schedule::LIFO_POLLS
+    );
+}
+
+#[test]
+fn runtime50_forced_service_never_hides_a_saved_continuation() {
+    // The forced check runs injected work that need not return to this
+    // search. At every LIFO phase, the worker's own saved continuation must
+    // already be visible to another worker.
+    for shift in 0..=usize::from(hirsel_free::schedule::LIFO_POLLS) {
+        let execs = topology(2);
+        let (worker, thief) = (exec(&execs, 0), exec(&execs, 1));
+        let _thread = OwnThread::new(&worker);
+        assert!(next(&execs, &worker).is_none());
+        start(segment(&execs, 7)).republish(&execs, false);
+        publish(&execs, segment(&execs, 100), false, false);
+        let mut dispatches = 0;
+        loop {
+            let started = start(next(&execs, &worker).unwrap());
+            if started.task == 100 {
+                break;
+            }
+            assert_eq!(started.task, 7);
+            started.republish(&execs, dispatches < shift);
+            dispatches += 1;
+        }
+        let stolen = start(next(&execs, &thief).expect("a hidden continuation"));
+        assert_eq!(stolen.task, 7, "shift {shift}");
+    }
+}
+
+#[test]
+fn runtime50_width_aware_refill_takes_a_fair_share() {
+    let execs = topology(4);
+    let ready = &execs.dispatch.get().unwrap().ready;
+    assert_eq!(ready.width(), 4);
+    for task in 0..40 {
+        publish(&execs, segment(&execs, task), false, false);
+    }
+    // 40 / 4 + 1: one runs directly and ten move to the first worker's FIFO,
+    // leaving the rest for other workers rather than half the capacity.
+    let first = start(next(&execs, &exec(&execs, 0)).unwrap());
+    assert_eq!(first.task, 0);
+    assert_eq!(ready.injected(), 29);
+    let second = start(next(&execs, &exec(&execs, 1)).unwrap());
+    assert_eq!(second.task, 11, "the second worker refills its own share");
+    assert_eq!(ready.injected(), 29 - (29 / 4 + 1));
+    assert_eq!(start(next(&execs, &exec(&execs, 0)).unwrap()).task, 1);
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Event {
+    Wake,
+    DuplicateWake,
+    Save,
+    Flush,
+    Retire,
+}
+
+fn permutations(events: &mut Vec<Event>, at: usize, out: &mut Vec<Vec<Event>>) {
+    if at == events.len() {
+        out.push(events.clone());
+        return;
+    }
+    for i in at..events.len() {
+        events.swap(at, i);
+        permutations(events, at + 1, out);
+        events.swap(at, i);
+    }
+}
+
+#[test]
+fn runtime50_notify_save_shrink_batch() {
+    let mut orders = Vec::new();
+    permutations(
+        &mut vec![
+            Event::Wake,
+            Event::DuplicateWake,
+            Event::Save,
+            Event::Flush,
+            Event::Retire,
+        ],
+        0,
+        &mut orders,
+    );
+    assert_eq!(orders.len(), 120);
+    for order in orders {
+        let execs = topology(2);
+        let dispatch = execs.dispatch.get().unwrap();
+        let (home, thief) = (exec(&execs, 0), exec(&execs, 1));
+        let _thread = OwnThread::new(&home);
+        // Bind a local to the running worker, then park the thief after its
+        // empty search: any shared publication must reach a sleeper.
+        assert!(next(&execs, &home).is_none());
+        assert!(next(&execs, &thief).is_none());
+        let epochs_before = epochs(&execs);
+        // Task 1 runs on `home`; task 2 is already admitted into the batch.
+        let mut running = Some(start(segment(&execs, 1)));
+        let frame = running.as_ref().unwrap().frame.clone();
+        let mut batch = ReadyBatch {
+            run: std::ptr::null_mut(),
+            execs: &*execs as *const Execs,
+            entries: [const { None }; BATCH],
+            len: 0,
+        };
+        batch.push(segment(&execs, 2));
+        let mut retired = false;
+        let mut publications = 0;
+        for event in &order {
+            match event {
+                Event::Wake | Event::DuplicateWake => {
+                    // Notification never reads the running image.
+                    if let Some(queued) = frame.notification.notify() {
+                        publications += 1;
+                        batch.push(Saved {
+                            queued,
+                            frame: frame.clone(),
+                            lease: Lease::new(&dispatch.count),
+                            chained: false,
+                        });
+                    }
+                }
+                Event::Save => {
+                    let Started {
+                        running: image,
+                        lease,
+                        ..
+                    } = running.take().unwrap();
+                    // Wake-before-save latched on RUNNING: only the save
+                    // acknowledgement may publish the started image.
+                    if let Some(queued) = image.save(false) {
+                        publications += 1;
+                        publish(
+                            &execs,
+                            Saved {
+                                queued,
+                                frame: frame.clone(),
+                                lease,
+                                chained: false,
+                            },
+                            false,
+                            true,
+                        );
+                    }
+                }
+                Event::Flush => batch.flush(),
+                Event::Retire => {
+                    retire(&execs, &home);
+                    retired = true;
+                }
+            }
+        }
+        drop(batch);
+        assert_eq!(
+            publications, 1,
+            "{order:?}: two wakes and a save made one publication"
+        );
+        assert!(
+            frame.notification.notify().is_none(),
+            "{order:?}: a queued wake coalesces"
+        );
+        if dispatch.ready.injected() != 0 {
+            assert!(
+                epochs(&execs) > epochs_before,
+                "{order:?}: shared publication woke no sleeping thief"
+            );
+        }
+        let mut claims = Vec::new();
+        loop {
+            let claimed =
+                next(&execs, &thief).or_else(|| if retired { None } else { next(&execs, &home) });
+            let Some(saved) = claimed else { break };
+            // Exactly one resumable owner: starting the token is the only
+            // access to the saved image, and each succeeds once.
+            claims.push(start(saved).task);
+        }
+        claims.sort_unstable();
+        assert_eq!(claims, [1, 2], "{order:?}: each continuation has one owner");
+        assert_eq!(dispatch.queued.load(Ordering::SeqCst), 0, "{order:?}");
+        drop(frame);
+        assert_eq!(dispatch.count.live.load(Ordering::Acquire), 0, "{order:?}");
+    }
 }

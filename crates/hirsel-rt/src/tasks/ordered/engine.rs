@@ -500,6 +500,10 @@ fn poll(ctx: *mut TaskCtx) -> Stopped<()> {
 
 fn notify(ctx: *mut TaskCtx) {
     let selected = with_driver(ctx, |d| d.select());
+    if selected.is_empty() {
+        return;
+    }
+    let mut batch = unsafe { crate::pool::free::ReadyBatch::new((*ctx).run_ptr()) };
     for id in selected {
         let task = id as u32;
         let owner = role::with_role(ctx, |s| {
@@ -507,7 +511,7 @@ fn notify(ctx: *mut TaskCtx) {
             assert_eq!(row.generation, (id >> 32) as u32);
             row.owner
         });
-        unsafe { crate::pool::free::schedule_saved((*ctx).run_ptr(), task, owner) };
+        unsafe { batch.schedule(task, owner) };
     }
 }
 

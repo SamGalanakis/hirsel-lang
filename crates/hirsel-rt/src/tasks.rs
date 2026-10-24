@@ -1673,8 +1673,9 @@ pub(crate) unsafe fn after_save(run: *mut crate::context::RunShared, task: u32, 
         if let Some(ready) = ordered::ahead::after_save(s, task, completed, unsafe {
             (*run).control.stopped().is_some()
         }) {
+            let mut batch = unsafe { crate::pool::free::ReadyBatch::new(run) };
             for (task, owner) in ready {
-                unsafe { crate::pool::free::schedule_saved(run, task, owner) };
+                unsafe { batch.schedule(task, owner) };
             }
             return;
         }
@@ -1709,9 +1710,12 @@ pub(crate) unsafe fn after_save(run: *mut crate::context::RunShared, task: u32, 
         }
     };
     // No Scheduler or Task reference survives a fresh raw table lookup.
-    for (task, owner) in ready {
+    if !ready.is_empty() {
         // SAFETY: the idle guard owns the role and the policy retained rows.
-        unsafe { crate::pool::free::schedule_saved(run, task, owner) };
+        let mut batch = unsafe { crate::pool::free::ReadyBatch::new(run) };
+        for (task, owner) in ready {
+            unsafe { batch.schedule(task, owner) };
+        }
     }
     if unsafe {
         ((*run).free_mode
@@ -2406,7 +2410,7 @@ unsafe fn try_block(ctx: &mut TaskCtx, wait: Wait, yielded: bool, site: u64) -> 
         let s = scheduler(ctx);
         let me = s.current;
         let row = s.task(me);
-        row.budget.reset();
+        // The chain budget continues only through this worker's LIFO slot.
         row.wait_site = site;
         unpin(row);
         s.park(wait);

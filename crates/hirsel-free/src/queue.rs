@@ -129,6 +129,14 @@ impl<T, const N: usize> Local<T, N> {
         }
     }
 
+    /// Free slots for the owner's next pushes. Thieves only remove work, so
+    /// a later push finds at least this many slots (Tokio `remaining_slots`).
+    pub fn remaining(&self) -> usize {
+        let (steal, _) = unpack(self.inner.head.load(Ordering::Acquire));
+        let tail = self.inner.tail.load(Ordering::Relaxed);
+        N - tail.wrapping_sub(steal) as usize
+    }
+
     pub fn pop(&mut self) -> Option<T> {
         let mut head = self.inner.head.load(Ordering::Acquire);
         loop {
