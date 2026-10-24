@@ -134,6 +134,12 @@ impl LocalReadyQueries {
             return Err("local Ready request environment differs".into());
         }
         let (owner, _) = instances.admitted(key, environment)?;
+        let operations = instances.operations(key, environment)?;
+        let scoped = NativeEnvironment {
+            operations: &operations,
+            ..*environment
+        };
+        let environment = &scoped;
         let context = UnitEmissionContext {
             request: emission_context,
             statics_finalizers: owner.product.statics_finalizers,
@@ -301,11 +307,24 @@ impl LocalReadyQueries {
                 .collect::<Result<_, String>>()?,
         );
         let statics = bind_statics(statics, &binding)?;
+        let adapters = super::instance_operations::bind_pretransfer(
+            environment.operations,
+            &binding.table,
+            environment.target,
+        )?;
+        let additional_abis = adapters.iter().map(|r| r.abi).collect::<Vec<_>>();
+        let operations = super::instance_operations::InstanceOperations {
+            declarations: environment.operations,
+            all_sources: false,
+            source: (!owner.templates.library)
+                .then_some((key.instance.definition(), key.instance.digest())),
+            pretransfer: Some(adapters),
+        };
         let inputs = Inputs {
             memo: Default::default(),
             target: environment.target,
             layouts: &binding.table,
-            operations: environment.operations,
+            operations: &operations,
             manifest: environment.manifest,
             discharge: environment.discharge,
         };
@@ -318,7 +337,7 @@ impl LocalReadyQueries {
                 source: &owner.ready_source,
                 finalizers: &finalizers,
                 inputs: &inputs,
-                additional_abis: &[],
+                additional_abis: &additional_abis,
                 statics: &statics,
                 emission_context,
                 debug,

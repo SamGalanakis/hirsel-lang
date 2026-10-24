@@ -8,6 +8,37 @@ use hirsel_syntax::{ContentHash, DefPath};
 pub(super) struct InstanceOperations<'a> {
     pub declarations: &'a (dyn OperationDeclarations + Sync),
     pub source: Option<(&'a DefPath, ContentHash)>,
+    pub all_sources: bool,
+    pub pretransfer: Option<Vec<hirsel_lir::pretransfer::AdapterReference>>,
+}
+
+/// Numeric selectors belong to the current table. Match full independently
+/// derived ABI content before using an adapter with a portable unit binding.
+pub(super) fn bind_pretransfer(
+    declarations: &(dyn OperationDeclarations + Sync),
+    table: &LayoutTable,
+    target: &TargetSpec,
+) -> Result<Vec<hirsel_lir::pretransfer::AdapterReference>, String> {
+    let keys = hirsel_lir::LayoutKeys::new(table);
+    declarations
+        .pretransfer_adapters()
+        .iter()
+        .map(|reference| {
+            let (abi, source) = declarations
+                .pretransfer_abi(reference, target)
+                .ok_or("missing independently derived adapter ABI")?;
+            let expected = hirsel_lir::LayoutKeys::new(&source).fn_abi(&abi);
+            let index = table
+                .fn_abis
+                .iter()
+                .position(|abi| keys.fn_abi(abi) == expected)
+                .ok_or("independently planned adapter ABI is absent from bound layouts")?;
+            Ok(hirsel_lir::pretransfer::AdapterReference {
+                abi: hirsel_lir::FnAbiId(index as u32),
+                ..reference.clone()
+            })
+        })
+        .collect()
 }
 impl OperationDeclarations for InstanceOperations<'_> {
     fn seal_source_witness(
@@ -51,17 +82,27 @@ impl OperationDeclarations for InstanceOperations<'_> {
             .seal_descriptor_for_source(definition, instance, source, table, target)
     }
     fn pretransfer_adapters(&self) -> &[hirsel_lir::pretransfer::AdapterReference] {
-        self.declarations.pretransfer_adapters()
+        self.pretransfer
+            .as_deref()
+            .unwrap_or_else(|| self.declarations.pretransfer_adapters())
     }
     fn pretransfer_abi(
         &self,
         reference: &hirsel_lir::pretransfer::AdapterReference,
         target: &TargetSpec,
     ) -> Option<(FnAbi, LayoutTable)> {
-        self.declarations.pretransfer_abi(reference, target)
+        let original = self
+            .declarations
+            .pretransfer_adapters()
+            .iter()
+            .find(|original| {
+                original.adapter == reference.adapter && original.primitive == reference.primitive
+            })?;
+        self.declarations.pretransfer_abi(original, target)
     }
     fn requires_structural_reference(&self) -> bool {
-        self.source.is_some() && self.declarations.requires_structural_reference()
+        (self.all_sources || self.source.is_some())
+            && self.declarations.requires_structural_reference()
     }
     fn structural_access(
         &self,
@@ -72,19 +113,24 @@ impl OperationDeclarations for InstanceOperations<'_> {
         self.declarations.structural_access(source, table, target)
     }
     fn requires_invocation_reference(&self) -> bool {
-        self.source.is_some() && self.declarations.requires_invocation_reference()
+        (self.all_sources || self.source.is_some())
+            && self.declarations.requires_invocation_reference()
     }
     fn invocations(
         &self,
         definition: &DefPath,
     ) -> Option<&[hirsel_lir::invocations::ReferenceInvocation]> {
-        self.source
-            .filter(|(selected, _)| *selected == definition)?;
+        if !self.all_sources {
+            self.source
+                .filter(|(selected, _)| *selected == definition)?;
+        }
         self.declarations.invocations(definition)
     }
     fn invocation_body(&self, definition: &DefPath, instance: ContentHash) -> Option<u32> {
-        self.source
-            .filter(|(selected, id)| *selected == definition && *id == instance)?;
+        if !self.all_sources {
+            self.source
+                .filter(|(selected, id)| *selected == definition && *id == instance)?;
+        }
         self.declarations.invocation_body(definition, instance)
     }
     fn derive(
