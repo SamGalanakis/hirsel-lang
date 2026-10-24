@@ -120,6 +120,14 @@ impl SourceRecipe {
             .sources
             .get(&self.definition)
             .ok_or("missing source recipe declaration")?;
+        let current = hirsel_rc::instance::SourceDeclaration::of(&original)
+            .map_err(|e| format!("source recipe original contracts: {e:?}"))?;
+        if source.entry != current.entry
+            || source.entry_parameters != current.entry_parameters
+            || source.declaration != current.declaration
+        {
+            return Err("source recipe contracts differ from current original source".into());
+        }
         let root = self
             .steps
             .first()

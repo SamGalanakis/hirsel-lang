@@ -175,3 +175,4 @@ mod scheduled_native;
 mod scheduled_native_root;
 mod native_source_inputs_19;
 mod native_instance_products_19;
+mod native_demand_tasks_19;
