@@ -61,7 +61,7 @@ for backend,exe in binaries.items():
             grant=root/(name+'.json');grant.write_text(json.dumps(grants))
             tape=root/(name+'.tape')
             code,out,err=run([str(exe),'--hirsel-record',str(tape),'--hirsel-grants',str(grant),*case['args']],name)
-            receipt={'id':name,'engine':backend,'provider':'script','width_requested':width,'effective':'INCOMPLETE: no settled running control observation in short scripted cell','exit':code,'passed':False}
+            receipt={'id':name,'engine':backend,'provider':'script','width_requested':width,'capacity':{'kind':'not_physical','reason':'scripted_world','requested':width,'host_obligation':f'host-{"cancel" if case["reason"]=="deadline" else "domain" if case["exit"]!=0 or case["reason"]=="eof" else "success"}-{backend}-{width}'},'exit':code,'passed':False}
             try:
                 assert code==case['exit'],(code,case['exit'])
                 rows=[json.loads(s) for s in out.splitlines()]

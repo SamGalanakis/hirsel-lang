@@ -2,8 +2,8 @@
 //! header/payload/checksum validation and rr's length-delimited event stream.
 use std::ops::Range;
 
-pub const VERSION: u32 = 8;
-pub const MAGIC: &[u8] = b"hirsel-io-tape 8\0";
+pub const VERSION: u32 = 9;
+pub const MAGIC: &[u8] = b"hirsel-io-tape 9\0";
 pub const FRAME: usize = 17;
 
 /// Append one frame in an existing buffer. Hash the payload in place; the

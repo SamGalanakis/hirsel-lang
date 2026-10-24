@@ -11,7 +11,10 @@ use hirsel_run_schema::{
 use serde::{Deserialize, Serialize};
 pub mod managed_cores;
 mod placement;
-pub use placement::{AutoCores, Commit, CoreRange, Cores, Pin, Placement, Reorder};
+pub use placement::{
+    AutoCores, CapacityAdmission, CapacityExclusion, Commit, CoreRange, Cores, Pin, Placement,
+    RecordedPlacement, Reorder,
+};
 mod calls;
 mod object_stores;
 pub use object_stores::{CredentialsReference, ObjectStore};

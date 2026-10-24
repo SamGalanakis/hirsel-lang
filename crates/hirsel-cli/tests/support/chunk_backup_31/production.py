@@ -15,7 +15,7 @@ def signal_projected(tape):
  # Trace events publish at completion; the tape flushes each completed event.
  if not tape.exists():return None
  data=tape.read_bytes()
- if data[:17]!=b'hirsel-io-tape 8\0':return None
+ if data[:17]!=b'hirsel-io-tape 9\0':return None
  at=17;expected=0
  while at+17<=len(data):
   length,checksum,seq,kind=struct.unpack_from('<IIQB',data,at)

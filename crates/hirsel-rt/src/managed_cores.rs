@@ -138,6 +138,10 @@ impl ManagedCores {
         drop(state);
         Ok(self.snapshot())
     }
+    pub(crate) fn admission_policy(&self) -> (Placement, u64) {
+        let state = self.state.lock().unwrap();
+        (state.placement.clone(), state.resolver.resolution().target)
+    }
     pub fn snapshot(&self) -> MetricsSnapshot {
         let state = self.state.lock().unwrap();
         let resolution = state.resolver.resolution();

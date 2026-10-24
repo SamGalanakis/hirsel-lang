@@ -29,7 +29,7 @@ pub(crate) fn binding(bytes: &[u8]) -> Result<(Recording, bool), String> {
         return Err("Free recording runtime ABI version mismatch".into());
     }
     let bytes = bytes
-        .strip_prefix(b"F1B3")
+        .strip_prefix(b"F1B4")
         .ok_or("unsupported Free admission binding")?;
     let mut input = crate::tape_wire::Decode(bytes);
     let abi = u32::decode(&mut input)?;
@@ -63,7 +63,7 @@ impl Session {
             (_, Some(path)) => {
                 let (file, header, _) = crate::host_launch::header(io, admitted, path, outputs)?;
                 let namespace_coupled = io.namespace_coupled();
-                let mut binding = b"F1B3".to_vec();
+                let mut binding = b"F1B4".to_vec();
                 crate::ABI_VERSION.encode(&mut binding);
                 header.encode(&mut binding);
                 namespace_coupled.encode(&mut binding);

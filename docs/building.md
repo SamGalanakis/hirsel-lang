@@ -740,7 +740,7 @@ never replays. The tape path must lie outside every granted directory. Tapes hol
 record, including granted Env values, every byte read or written and every
 `random.system@1` draw: treat them as secrets.
 
-The on-disk format is binary v8 (`hirsel-io-tape 8` plus NUL), using
+The on-disk format is binary v9 (`hirsel-io-tape 9` plus NUL), using
 length-prefixed CRC32C frames and raw payload bytes. Durable journals use format
 2 with the same frame codec. Use `hirsel tapes check` and `hirsel view` to inspect
 recordings; text rendering is outside recording and replay. Existing v1 durable

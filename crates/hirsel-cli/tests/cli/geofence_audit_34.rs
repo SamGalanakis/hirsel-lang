@@ -952,7 +952,7 @@ fn geofence_audit_34_ordered_capacity() {
         .arg("--fixture-root")
         .arg(&root)
         .arg("--width")
-        .arg(width)
+        .arg(&width)
         .arg("--kind")
         .arg(kind)
         .output()
@@ -960,4 +960,23 @@ fn geofence_audit_34_ordered_capacity() {
     fs::write(root.join("qualification-stdout"), &output.stdout).unwrap();
     fs::write(root.join("qualification-stderr"), &output.stderr).unwrap();
     assert!(output.status.success(), "{output:?}");
+    let recording = hirsel_rt::host_launch::read_recording(&root.join("cell/recording")).unwrap();
+    recording.bound_run().unwrap();
+    let placement = recording
+        .binding
+        .as_ref()
+        .unwrap()
+        .placement
+        .as_ref()
+        .unwrap();
+    let capacity = placement.proves(width.parse().unwrap());
+    let path = root.join("cell/receipt.json");
+    let mut receipt: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    receipt["placement"] = serde_json::to_value(placement).unwrap();
+    receipt["capacity"] = json!(capacity);
+    fs::write(path, serde_json::to_vec_pretty(&receipt).unwrap()).unwrap();
+    assert!(
+        capacity,
+        "INCOMPLETE: exact admission capacity missing: {placement:?}"
+    );
 }

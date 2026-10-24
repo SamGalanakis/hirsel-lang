@@ -27,6 +27,43 @@ pub fn journal(
     }
 }
 
+/// Native Ordered attaches its actual startup evidence before any root effect.
+pub(crate) fn journal_at_admission(
+    io: &mut RealIo,
+    admitted: &AdmittedRun,
+    path: Option<&Path>,
+    outputs: &[(&str, &File)],
+    placement: Option<&hirsel_run_config::RecordedPlacement>,
+) -> Result<(), String> {
+    use hirsel_run_schema::RecordingLevel;
+    let level = recording_level(admitted.run(), path.is_some())?;
+    let Some(path) = path.filter(|_| level != RecordingLevel::None) else {
+        return Ok(());
+    };
+    let (file, mut header, path) = header(io, admitted, path, outputs)?;
+    if let Some(placement) = placement {
+        placement.validate().map_err(|e| e.to_string())?;
+        header.binding.as_mut().expect("admitted run").placement = Some(placement.clone());
+    }
+    let journal: Box<dyn crate::journal::Journal + Send> = match level {
+        RecordingLevel::Record => Box::new(crate::journal::TapeJournal(
+            RecordingWriter::new(file, &header).map_err(|e| format!("the Io tape: {e}"))?,
+        )),
+        RecordingLevel::Durable => {
+            let journal = crate::journal::DurableJournal::create(file, &header)
+                .map_err(|e| format!("the durable journal: {e}"))?;
+            journal.file().sync_all().map_err(|e| e.to_string())?;
+            File::open(path.parent().unwrap_or(Path::new("/")))
+                .and_then(|directory| directory.sync_all())
+                .map_err(|e| e.to_string())?;
+            Box::new(journal)
+        }
+        RecordingLevel::None => unreachable!(),
+    };
+    timing_journal(io, journal, path, outputs);
+    Ok(())
+}
+
 /// The level a launch records `run` at, with or without a recording destination; a level
 /// and a destination that disagree refuse.
 pub fn recording_level(
@@ -78,7 +115,7 @@ pub(crate) fn header(
         test_seed: config.test_seed(),
         binding: Some(RecordedRun {
             canonical: run.canonical().to_vec(),
-            placement: Some(run.record().placement.clone().unwrap_or_default()),
+            placement: Some(run.record().placement.clone().unwrap_or_default().into()),
             admitted_at: admitted.evidence().at,
             revocation: admitted.evidence().revocation.clone(),
             instance: admitted.instance(),

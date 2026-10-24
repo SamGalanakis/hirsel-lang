@@ -2933,6 +2933,7 @@ pub fn observe_run(
     let mut budget = None;
     let mut signaled = None;
     let mut stopped = None;
+    let mut placement_seen = false;
     for line in lines {
         let words: Vec<&str> = line.split(' ').collect();
         let rest = |n: usize| words[n..].join(" ");
@@ -2968,6 +2969,21 @@ pub fn observe_run(
                 stopped = Some(hirsel_run_schema::RunOutcome::Environmental(
                     hirsel_run_schema::Environmental::Stopped,
                 ))
+            }
+            ["placement", value] => {
+                if std::mem::replace(&mut placement_seen, true) {
+                    return Err(bad("duplicate placement report".into()));
+                }
+                hirsel_run_config::RecordedPlacement::from_json(&{
+                    if value.len() % 2 != 0 || !value.bytes().all(|b| b.is_ascii_hexdigit()) {
+                        return Err(bad("invalid placement hex".into()));
+                    }
+                    (0..value.len())
+                        .step_by(2)
+                        .map(|i| u8::from_str_radix(&value[i..i + 2], 16).unwrap())
+                        .collect::<Vec<_>>()
+                })
+                .map_err(|e| bad(e.to_string()))?;
             }
             ["status", s] => status = s.parse::<u8>().ok(),
             ["blocked"] => blocked = true,

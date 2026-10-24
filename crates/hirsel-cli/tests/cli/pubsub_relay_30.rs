@@ -249,6 +249,35 @@ fn pubsub_relay_30_native_and_real_unix() {
                 {
                     continue;
                 }
+                let recording = hirsel_rt::host_launch::read_recording(&path).unwrap();
+                recording.bound_run().unwrap();
+                let placement = recording
+                    .binding
+                    .as_ref()
+                    .unwrap()
+                    .placement
+                    .as_ref()
+                    .unwrap();
+                let width = stem.rsplit('-').next().unwrap().parse::<u64>().unwrap();
+                let physical = stem.starts_with("host-");
+                if physical {
+                    assert!(
+                        placement.proves(width),
+                        "missing host admission capacity: {stem}"
+                    );
+                } else {
+                    assert!(matches!(&placement.admission,
+                        hirsel_run_config::CapacityAdmission::NotPhysical {
+                            requested: hirsel_run_config::Cores::Fixed(n),
+                            reason: hirsel_run_config::CapacityExclusion::ScriptedWorld, ..
+                        } if *n == width));
+                }
+                fs::write(
+                    path.with_extension("capacity.json"),
+                    serde_json::to_vec_pretty(&json!({"placement":placement,"physical":physical}))
+                        .unwrap(),
+                )
+                .unwrap();
                 let before = fs::read(&path).unwrap();
                 for checked in [false, true] {
                     let name = if checked { "checked-h" } else { "reference" };

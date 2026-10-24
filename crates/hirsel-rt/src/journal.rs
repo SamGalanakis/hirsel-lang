@@ -1,6 +1,6 @@
 //! The recording seam (determinism.md, Recording and resuming). Every capability request of a
 //! host run passes through its [`Journaled`] gate, whose [`Journal`] is the recording level the
-//! run record selects: [`NoJournal`] (none), [`TapeJournal`] (record: the v8 binary tape), or [`DurableJournal`] (durable: framed, checksummed records over a [`JournalFile`],
+//! run record selects: [`NoJournal`] (none), [`TapeJournal`] (record: the v9 binary tape), or [`DurableJournal`] (durable: framed, checksummed records over a [`JournalFile`],
 //! the host's file or the simulated disk's [`SimJournalFile`]). The performer (`RealIo`) only
 //! performs; the gate decides when a request may be issued and when its completion may be
 //! delivered. [`recover`] reads a durable journal back: a torn tail is cut, earlier damage is
@@ -95,7 +95,7 @@ impl Journal for NoJournal {
     }
 }
 
-/// Recording level `record`: the v8 binary tape, each completion flushed before delivery and
+/// Recording level `record`: the v9 binary tape, each completion flushed before delivery and
 /// labelled with an unknown suffix until its terminal frame.
 pub struct TapeJournal<W: io::Write>(pub RecordingWriter<W>);
 impl<W: io::Write> Journal for TapeJournal<W> {
@@ -123,7 +123,7 @@ impl JournalFile for std::fs::File {
 }
 
 /// The first bytes of every durable journal.
-pub const MAGIC: &[u8] = b"hirsel-journal 2\n";
+pub const MAGIC: &[u8] = b"hirsel-journal 3\n";
 /// Frame header: payload length, CRC-32C, sequence number, kind.
 const FRAME: usize = 4 + 4 + 8 + 1;
 /// Group commit bounds (determinism.md, Durable journal).

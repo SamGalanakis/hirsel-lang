@@ -54,7 +54,7 @@ use std::io::Write as _;
 use std::rc::Rc;
 
 /// The observation record's format version (`hirsel-observation <n>` on its first line).
-pub const OBSERVATION_VERSION: u32 = 6;
+pub const OBSERVATION_VERSION: u32 = 7;
 
 /// The logical identity of the `Io` root (`Handles::default`).
 pub const IO_HANDLE: u64 = 1;
@@ -79,7 +79,7 @@ pub type Entry = unsafe extern "C" fn(
     args: *const u64,
 ) -> u8;
 
-/// The legacy inspection syntax. On-disk writers use binary format 8; this renderer
+/// The legacy inspection syntax. On-disk writers use binary format 9; this renderer
 /// remains readable for humans and for v6/v7 text imports.
 pub(crate) const TAPE_HEADER: &str = "hirsel-io-tape 7";
 const TAPE_HEADER_6: &str = "hirsel-io-tape 6";
@@ -969,9 +969,9 @@ pub struct Recording {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RecordedRun {
     pub canonical: Vec<u8>,
-    /// Diagnostic placement provenance. Replay validates syntax, then discards it.
-    /// Absent in historical recordings; never an input to semantic identity.
-    pub placement: Option<hirsel_run_config::Placement>,
+    /// Validated request and immutable startup evidence, excluded from semantic
+    /// identity. Replay checks this provenance without applying it to the host.
+    pub placement: Option<hirsel_run_config::RecordedPlacement>,
     pub admitted_at: i64,
     pub revocation: Option<hirsel_run_config::RevocationEvidence>,
     /// The run instance fixed at admission (RUN-11), for a run that calls runners or
@@ -1006,6 +1006,19 @@ impl Recording {
             || expected.is_some_and(|instance| binding.instance != Some(instance))
         {
             return Err(invalid("the run instance disagrees with its run record"));
+        }
+        if let Some(placement) = &binding.placement {
+            placement.validate()?;
+            if run
+                .net_grant()
+                .is_some_and(|net| net.provider == "net.script@2")
+                && matches!(
+                    placement.admission,
+                    hirsel_run_config::CapacityAdmission::Physical { .. }
+                )
+            {
+                return Err(invalid("scripted world cannot claim physical capacity"));
+            }
         }
         let config = run.config();
         if (config.hash_seed(), config.random_seed(), config.test_seed())
@@ -1087,7 +1100,7 @@ pub fn render_recording(record: &Recording) -> Result<String, String> {
     let _ = writeln!(text, "complete {}", record.events.len());
     Ok(text)
 }
-/// Read either a binary v8 tape or the legacy inspection syntax.
+/// Read either a binary v9 tape or the legacy inspection syntax.
 pub fn parse_recording_bytes(bytes: &[u8]) -> Result<Recording, String> {
     crate::tape_binary::parse(bytes)
 }
@@ -1168,9 +1181,10 @@ pub fn parse_recording_prefix(text: &str) -> Result<(Recording, bool), String> {
                 test_seed = Some(value.parse().map_err(|_| "bad recorded test seed")?)
             }
             ["placement", value] if placement.is_none() => {
-                let parsed: hirsel_run_config::Placement =
-                    hirsel_run_config::Placement::from_json(&bytes(value)?)
-                        .map_err(|e| e.to_string())?;
+                let data = bytes(value)?;
+                let parsed = hirsel_run_config::RecordedPlacement::from_json(&data)
+                    .or_else(|_| hirsel_run_config::Placement::from_json(&data).map(Into::into))
+                    .map_err(|e| e.to_string())?;
                 placement = Some(parsed);
             }
             ["run", value] if run.is_none() => run = Some(bytes(value)?),
@@ -1982,6 +1996,8 @@ pub(crate) unsafe fn execute(
     let mut initial_tree = Tree::new(Default::default()).expect("empty tree");
     let mut real = None;
     let mut zero_recording = None;
+    let mut pending_fixture_recording = None;
+    let mut pending_host_journal = None;
     let mut replay = None;
     // Preserve the admitted destination before live Free moves RealIo into
     // its concurrent owner. Callee tapes belong beside this root tape.
@@ -1994,10 +2010,9 @@ pub(crate) unsafe fn execute(
                 tape.as_deref(),
                 &output_grants,
             )?;
-        } else if let Err(error) =
-            crate::host_launch::journal(&mut io, &admitted, tape.as_deref(), &output_grants)
-        {
-            return Err(error);
+        } else {
+            // Attach the header after physical startup, before root publication.
+            pending_host_journal = Some((admitted, tape));
         }
         if entry.is_test() {
             io.test_context(seed);
@@ -2227,7 +2242,7 @@ pub(crate) unsafe fn execute(
                                 .filter(|run| !entry.is_test() && !run.calls())
                                 .map(|run| RecordedRun {
                                     canonical: run.canonical().to_vec(),
-                                    placement: run.record().placement.clone(),
+                                    placement: run.record().placement.clone().map(Into::into),
                                     admitted_at: 0,
                                     revocation: None,
                                     instance: None,
@@ -2235,11 +2250,7 @@ pub(crate) unsafe fn execute(
                             tree: initial_tree.clone(),
                             events: vec![],
                         };
-                        let writer = RecordingWriter::new(file, &record);
-                        match writer {
-                            Ok(writer) => io.record_to(writer),
-                            Err(error) => return Err(format!("the Io tape: {error}")),
-                        }
+                        pending_fixture_recording = Some((file, record));
                     }
                     if entry.is_test() {
                         io.test_context(seed);
@@ -2424,6 +2435,10 @@ pub(crate) unsafe fn execute(
         })
     });
     unsafe { &mut *ctx }.run().worker_metrics = worker_metrics.clone();
+    // Freeze the request/resolution before the live control service may resize it.
+    let admission_policy = managed
+        .as_ref()
+        .map(|(_, manager, _, _)| manager.admission_policy());
     let _managed_service = managed
         .map(|(reader, manager, writer, socket)| {
             crate::managed_cores::Service::start(reader, manager, writer, socket, worker_metrics)
@@ -2565,6 +2580,70 @@ pub(crate) unsafe fn execute(
     if let Some(ordered) = ordered {
         // SAFETY: fresh root, after topology/budgets and before root publication.
         unsafe { ordered.install(ctx) };
+    }
+    // Startup has published real destinations and Running synchronously. Capture
+    // once before root entry: no socket round trip or program lifetime race.
+    let admitted_placement = admission_policy.map(|(request, resolved)| {
+        use hirsel_run_config::{CapacityAdmission, CapacityExclusion, RecordedPlacement};
+        let run_control = crate::host::RunControl::from_inner(std::sync::Arc::clone(&control));
+        let (launched, worker_phase) = run_control.worker_snapshot();
+        let (grant, _, _) = crate::pool::compute_permits();
+        let permitted = grant.saturating_sub(crate::pool::lost_compute_permits());
+        let scripted = placement_run
+            .and_then(|run| run.net_grant())
+            .is_some_and(|net| net.provider == "net.script@2");
+        let admission = if scripted || launched == 0 {
+            CapacityAdmission::NotPhysical {
+                requested: request.cores.clone(),
+                worker_phase,
+                reason: if scripted {
+                    CapacityExclusion::ScriptedWorld
+                } else {
+                    CapacityExclusion::ExecutorNotObserved
+                },
+            }
+        } else {
+            CapacityAdmission::Physical {
+                requested: request.cores.clone(),
+                resolved,
+                launched: launched.into(),
+                permitted: permitted.into(),
+                effective: launched.min(permitted).into(),
+                worker_phase,
+            }
+        };
+        RecordedPlacement {
+            schema: 1,
+            request,
+            admission,
+        }
+    });
+    let attach_journal = (|| -> Result<(), String> {
+        if let Some((admitted, tape)) = pending_host_journal {
+            crate::host_launch::journal_at_admission(
+                &mut real.as_ref().expect("live host Io").borrow_mut(),
+                &admitted,
+                tape.as_deref(),
+                &output_grants,
+                admitted_placement.as_ref(),
+            )?;
+        }
+        if let Some((file, mut header)) = pending_fixture_recording {
+            if let Some(binding) = &mut header.binding {
+                binding.placement = admitted_placement.clone().or(binding.placement.take());
+            }
+            let writer =
+                RecordingWriter::new(file, &header).map_err(|e| format!("the Io tape: {e}"))?;
+            real.as_ref()
+                .expect("fixture Io")
+                .borrow_mut()
+                .record_to(writer);
+        }
+        Ok(())
+    })();
+    if let Err(error) = attach_journal {
+        unsafe { hirsel_rt_v2_ctx_destroy(ctx) };
+        return Err(error);
     }
     if trace_destination.is_some() {
         crate::tasks::ordered::events::enable(ctx);
@@ -2740,6 +2819,9 @@ pub(crate) unsafe fn execute(
         .take(result_size as usize)
         .collect();
     let mut record = format!("hirsel-observation {OBSERVATION_VERSION}\n");
+    if let Some(placement) = &admitted_placement {
+        let _ = writeln!(record, "placement {}", hex(&placement.to_json()));
+    }
     // FAIL-3: a run a failure ended where it stood reports that failure as a failed entry,
     // but its tasks still hold their storage, so it is abandoned like a stopped run.
     let ended = matches!(ran, Err(crate::stop::Stop::Failed));

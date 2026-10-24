@@ -479,8 +479,8 @@ that issues no request, is never journaled.
 
 ### Durable journal
 
-An ordinary tape starts with `hirsel-io-tape 8` followed by NUL; a durable
-journal starts with `hirsel-journal 2` followed by newline. Both use the same
+An ordinary tape starts with `hirsel-io-tape 9` followed by NUL; a durable
+journal starts with `hirsel-journal 3` followed by newline. Both use the same
 binary frame envelope: a 32-bit little-endian payload length, 32-bit CRC32C,
 64-bit little-endian sequence number starting at zero, a kind byte, then the raw
 payload. CRC32C covers the encoded length, sequence, kind and payload (everything
@@ -1018,3 +1018,35 @@ rules. The pure Hirsel `s3.from_grants(io, env, name)` reads these explicit snap
 opens the JSON credential reference through its granted Dir. No new core capability,
 ambient environment lookup or host S3 client is involved. The expanded grants determine
 ordinary admission, subset checks, run identity, recording and replay.
+
+### Capacity admission provenance
+
+Native Ordered captures placement after worker startup and before root publication.
+`recording.binding.placement` uses recorded-placement schema 1: `request` is the
+validated placement policy and `admission` is a tagged record. A `physical` record
+contains `requested`, `resolved`, `launched`, `permitted`, `effective` and
+`worker_phase`. Launched destinations come from the executor, permitted destinations
+from the process grant minus lost permits, and effective is their minimum. Physical
+evidence requires the running phase; exact-width acceptance additionally requires
+requested = resolved = effective. This records capacity available at admission,
+not simultaneous utilization, useful overlap or speedup. Live controls still report
+the current topology, including starting, draining and finished states.
+
+`not_physical` records contain requested width, phase and a reason, with no effective
+width. `executor_not_observed` covers adapters such as the interpreter that did not
+observe native workers. `scripted_world` explicitly excludes scripted network
+fixtures from physical host qualification; their semantic and replay obligations
+remain. Their physical claims belong to corresponding host-mode backend/width/kind
+cells. Neither a requested width nor a semantic fixture pass earns capacity credit.
+
+Placement remains outside semantic run identity and is never replay placement
+input. Tape readers validate the evidence's arithmetic and consistency with the
+bound run's provider before replay; replay never consults topology or sidecars.
+Frame CRCs detect damage; unsigned tapes do not authenticate a coherently rewritten
+entire recording. Native result receipts carry the same placement encoding.
+
+This changes the stored run binding: ordinary tape 8, durable journal 2 and Free
+native binding F1B3 are reset to tape 9, journal 3 and F1B4. Native observation
+receipts reset from 6 to 7. The RunConfig request schema and semantic identity
+domain remain 1; neither contains launcher evidence. Legacy text inspection imports
+without admission evidence earn no physical capacity credit.

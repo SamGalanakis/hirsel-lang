@@ -101,7 +101,7 @@ fn records(op: u64, request: Request, completion: Option<Completion>) -> Vec<Rec
     out
 }
 fn tape(header: &Recording, logs: Vec<(Vec<u32>, Vec<Record>, Progress)>) -> Vec<u8> {
-    let mut binding = b"F1B3".to_vec();
+    let mut binding = b"F1B4".to_vec();
     crate::ABI_VERSION.encode(&mut binding);
     header.encode(&mut binding);
     false.encode(&mut binding);

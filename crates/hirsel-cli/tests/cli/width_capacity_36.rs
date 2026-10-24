@@ -54,6 +54,16 @@ pub(super) fn fixture_capacity(
     width: u64,
     verify: impl FnOnce(&Observation, &hirsel_rt::launch::Recording),
 ) {
+    capacity(manifest, root, fixture, (backend, width, false), verify);
+}
+fn capacity(
+    manifest: &Path,
+    root: &Path,
+    fixture: &Fixture,
+    cell: (Backend, u64, bool),
+    verify: impl FnOnce(&Observation, &hirsel_rt::launch::Recording),
+) {
+    let (backend, width, host) = cell;
     use std::io::{BufRead, BufReader, Write};
     use std::os::unix::net::UnixStream;
     let mut loaded = hirsel_driver::load_program(manifest).unwrap();
@@ -113,18 +123,32 @@ pub(super) fn fixture_capacity(
     let mut replies = Vec::new();
     let launched = std::thread::scope(|scope| {
         let child = scope.spawn(|| {
-            launch_fixture(
-                &runnable,
-                &ready.target,
-                &tools,
-                &dir,
-                true,
-                Tape::Live {
-                    record: Some(&tape),
-                    revocations: None,
-                },
-                fixture,
-            )
+            if host {
+                launch_runnable(
+                    &runnable,
+                    &ready.target,
+                    &tools,
+                    &dir,
+                    true,
+                    Tape::Live {
+                        record: Some(&tape),
+                        revocations: None,
+                    },
+                )
+            } else {
+                launch_fixture(
+                    &runnable,
+                    &ready.target,
+                    &tools,
+                    &dir,
+                    true,
+                    Tape::Live {
+                        record: Some(&tape),
+                        revocations: None,
+                    },
+                    fixture,
+                )
+            }
         });
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         while !child.is_finished() && std::time::Instant::now() < deadline {
@@ -148,12 +172,34 @@ pub(super) fn fixture_capacity(
         }
         child.join().unwrap()
     });
-    let capacity = replies.iter().any(|m| running(m, width));
-    fs::write(root.join("capacity.json"), serde_json::to_vec_pretty(&json!({
-        "backend": format!("{backend:?}"), "requested": width, "control": replies, "capacity": capacity,
-    })).unwrap()).unwrap();
-    assert!(capacity, "INCOMPLETE: exact running capacity reply missing");
+    let frozen_admission =
+        hirsel_rt::launch::parse_recording_bytes(&fs::read(&tape).unwrap()).unwrap();
+    let placement = frozen_admission
+        .binding
+        .as_ref()
+        .unwrap()
+        .placement
+        .as_ref()
+        .unwrap();
+    let capacity = placement.proves(width);
+    fs::write(
+        root.join("capacity.json"),
+        serde_json::to_vec_pretty(&json!({
+            "backend": format!("{backend:?}"), "requested": width, "control": replies,
+            "placement": placement, "capacity": capacity,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    assert!(
+        capacity,
+        "INCOMPLETE: exact admission capacity missing: {placement:?}"
+    );
     let launched = launched.unwrap();
+    assert!(launched.record.contains(&format!(
+        "placement {}",
+        hirsel_run_schema::hex(&placement.to_json())
+    )));
     fs::write(dir.join("stdout"), &launched.stdout).unwrap();
     fs::write(dir.join("stderr"), &launched.stderr).unwrap();
     let observed = observe(&launched, &ready, &sites).unwrap();
@@ -166,19 +212,62 @@ pub(super) fn fixture_capacity(
         file_reads: Default::default(),
         ..fixture.clone()
     };
-    let replayed = launch_fixture(
-        &runnable,
-        &ready.target,
-        &tools,
-        &dir,
-        true,
-        Tape::Replay(&tape),
-        &replay_fixture,
-    )
+    let replayed = if host {
+        launch_runnable(
+            &runnable,
+            &ready.target,
+            &tools,
+            &dir,
+            true,
+            Tape::Replay(&tape),
+        )
+    } else {
+        launch_fixture(
+            &runnable,
+            &ready.target,
+            &tools,
+            &dir,
+            true,
+            Tape::Replay(&tape),
+            &replay_fixture,
+        )
+    }
     .unwrap();
     assert_eq!(observe(&replayed, &ready, &sites).unwrap(), observed);
     assert_eq!(fs::read(&tape).unwrap(), frozen);
-    assert!(capacity, "INCOMPLETE: exact running capacity reply missing");
+    assert_eq!(
+        recording.bound_run().unwrap().identity(),
+        requested.identity()
+    );
+    let encoded = placement.to_json();
+    let replacement = String::from_utf8(encoded.clone())
+        .unwrap()
+        .replace(
+            &format!("\"effective\":{width}"),
+            &format!("\"effective\":{}", width + 1),
+        )
+        .into_bytes();
+    let frame =
+        hirsel_run_schema::tape::read(&frozen, hirsel_run_schema::tape::MAGIC.len(), 0).unwrap();
+    let offset = frame
+        .payload
+        .windows(encoded.len())
+        .position(|w| w == encoded)
+        .unwrap();
+    assert_eq!(encoded.len(), replacement.len());
+    let mut payload = frame.payload.to_vec();
+    payload[offset..offset + encoded.len()].copy_from_slice(&replacement);
+    let mut forged = hirsel_run_schema::tape::MAGIC.to_vec();
+    hirsel_run_schema::tape::frame(&mut forged, 0, 1, &payload).unwrap();
+    forged.extend_from_slice(&frozen[frame.range.end..]);
+    assert!(
+        hirsel_rt::launch::parse_recording_bytes(&forged)
+            .unwrap_err()
+            .contains("inconsistent physical capacity")
+    );
+    assert_eq!(fs::read(&tape).unwrap(), frozen);
+
+    assert!(capacity, "INCOMPLETE: exact admission capacity missing");
     eprintln!("WIDTH36_CAPACITY_PASS {:?} {width}", backend);
 }
 fn running(m: &Value, width: u64) -> bool {
@@ -190,6 +279,13 @@ fn running(m: &Value, width: u64) -> bool {
 
 #[test]
 fn fixture_placement_starts_exact_workers() {
+    immediate(false);
+}
+#[test]
+fn immediate_host_records_exact_admission_and_replays() {
+    immediate(true);
+}
+fn immediate(host: bool) {
     hirsel_engine::with_compiler_stack(|| {
         let scratch = tempfile::tempdir().unwrap();
         let root = scratch.path();
@@ -197,15 +293,6 @@ fn fixture_placement_starts_exact_workers() {
         fs::write(
             root.join("main.hir"),
             r#"pub fn main(rt: Io) -> Result[(), GrantError] {
-  let tasks = io.tasks(rt)?
-  task.scope(tasks, fn(s: Scope) {
-    let work = task.async(s, fn() {
-      let mut i: u64 = 0
-      while i < 1000000 { i += 1 }
-      failure.check(i == 1000000, Arithmetic())
-    })
-    task.await(s, take work)
-  })
   Ok(())
 }"#,
         )
@@ -220,12 +307,11 @@ fn fixture_placement_starts_exact_workers() {
             "entry":{"module":[],"name":"main"},
             "dependencies":[{"manifest":stdlib,"package":{"name":"std","version":"1"},"expose":[]}]
         }).to_string()).unwrap();
-        fixture_capacity(
+        capacity(
             &manifest,
             root,
             &Fixture::default(),
-            Backend::Llvm,
-            4,
+            (Backend::Llvm, 4, host),
             |observed, recording| {
                 assert_eq!(observed.exit_code, Some(0));
                 assert!(observed.failures.is_empty());
@@ -237,6 +323,7 @@ fn fixture_placement_starts_exact_workers() {
                         .placement
                         .as_ref()
                         .unwrap()
+                        .request
                         .cores,
                     hirsel_run_config::Cores::Fixed(4)
                 );

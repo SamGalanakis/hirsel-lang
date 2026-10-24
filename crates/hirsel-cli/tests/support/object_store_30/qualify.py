@@ -35,7 +35,7 @@ snapshots=[];settled=False;sent=False
 # projection tag22. No event is rewritten and no timing sleep is involved.
 def signals_ready():
  if not tape.exists():return False
- b=tape.read_bytes();at=len(b'hirsel-io-tape 8\0')
+ b=tape.read_bytes();at=len(b'hirsel-io-tape 9\0')
  while at+17<=len(b):
   length=struct.unpack_from('<I',b,at)[0];end=at+17+length
   if end>len(b):return False

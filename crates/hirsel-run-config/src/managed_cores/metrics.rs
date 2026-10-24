@@ -1,5 +1,5 @@
 use crate::Cores;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
     io::{self, Write},
@@ -19,7 +19,7 @@ pub struct Width {
 
 /// Lifecycle of the topology sampled by the live runtime. Socket visibility
 /// precedes worker startup; a starting sample is not a physical-width proof.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[repr(u8)]
 pub enum WorkerPhase {

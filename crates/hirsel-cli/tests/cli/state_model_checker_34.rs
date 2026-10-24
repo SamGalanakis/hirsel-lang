@@ -922,9 +922,8 @@ fn state_model_checker_34_arithmetic_and_encoder_boundaries() {
     }
 }
 
-// Ordered capacity remains an ignored owner-blocked obligation. These cells
-// use the same public Fixture and full main, with supported placement requests.
-// Missing running replies fail explicitly, even when semantic output agrees.
+// The same full main and fixture earn capacity from immutable startup evidence.
+// Optional selection recovers one missing obligation without repeating settled cells.
 fn ordered(backend: Backend) {
     use std::io::{BufRead, BufReader, Write};
     use std::os::unix::net::UnixStream;
@@ -959,6 +958,14 @@ fn ordered(backend: Backend) {
             None,
         )
         .unwrap();
+        let selected = std::env::var("STATE_MODEL_CHECKER_34_ORDERED")
+            .ok()
+            .map(|_| {
+                let (selected_backend, width, kind) =
+                    super::width_capacity_36::selection("STATE_MODEL_CHECKER_34_ORDERED");
+                assert_eq!(selected_backend, backend);
+                (width, kind)
+            });
         let rows = cases();
         let mut receipts = Vec::new();
         let mut failed = Vec::new();
@@ -971,6 +978,12 @@ fn ordered(backend: Backend) {
             let fixture = fixture(row);
             let mut previous = None;
             for width in [1, 2, 4] {
+                if selected
+                    .as_ref()
+                    .is_some_and(|(w, k)| *w != width || k != mode)
+                {
+                    continue;
+                }
                 eprintln!("WIDTH36_STARTED {mode} {width}");
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     let dir = root.join(format!("{mode}-w{width}"));
@@ -1047,13 +1060,22 @@ fn ordered(backend: Backend) {
                         }
                         child.join().unwrap().unwrap()
                     });
-                    let capacity = replies.iter().any(|m| {
-                        m["worker_phase"] == "running"
-                            && m["width"]["requested"] == width
-                            && m["width"]["effective"] == width
-                            && m["width"]["pending"] == 0
-                    });
-                    receipts.push(json!({"mode":mode,"requested":width,"control":replies,"capacity":capacity,"completed":true}));
+                    let recording =
+                        hirsel_rt::launch::parse_recording_bytes(&fs::read(&tape).unwrap())
+                            .unwrap();
+                    assert_eq!(
+                        recording.bound_run().unwrap().identity(),
+                        requested.identity()
+                    );
+                    let placement = recording
+                        .binding
+                        .as_ref()
+                        .unwrap()
+                        .placement
+                        .as_ref()
+                        .unwrap();
+                    let capacity = placement.proves(width);
+                    receipts.push(json!({"mode":mode,"requested":width,"control":replies,"placement":placement,"capacity":capacity,"completed":true}));
                     fs::write(
                         root.join("receipts.json"),
                         serde_json::to_vec_pretty(&receipts).unwrap(),
@@ -1061,7 +1083,7 @@ fn ordered(backend: Backend) {
                     .unwrap();
                     assert!(
                         capacity,
-                        "{}: exact running capacity reply missing",
+                        "{}: exact admission capacity missing",
                         dir.display()
                     );
                     let observed = observe(&launched, &ready, &sites).unwrap();
@@ -1110,12 +1132,12 @@ fn ordered(backend: Backend) {
     });
 }
 #[test]
-#[ignore = "exact CPU deploy owned by @agentlang-24; capacity requires running control replies"]
+#[ignore = "selected exact-capacity pool cell"]
 fn state_model_checker_34_ordered_llvm() {
     ordered(Backend::Llvm);
 }
 #[test]
-#[ignore = "exact CPU deploy owned by @agentlang-24; capacity requires running control replies"]
+#[ignore = "selected exact-capacity pool cell"]
 fn state_model_checker_34_ordered_cranelift() {
     ordered(Backend::Cranelift);
 }

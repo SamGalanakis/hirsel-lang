@@ -1,4 +1,4 @@
-//! Ordinary v8 tapes: a header, event frames and a terminal event count.
+//! Ordinary v9 tapes: a header, event frames and a terminal event count.
 //! The same payload codec is used by ordinary and durable recording, in both engines.
 use crate::io::Event;
 use crate::launch::{RecordedRun, Recording};
@@ -23,7 +23,9 @@ impl Wire for RecordedRun {
         Ok(Self {
             canonical: Wire::decode(input)?,
             placement: Option::<Vec<u8>>::decode(input)?
-                .map(|p| hirsel_run_config::Placement::from_json(&p).map_err(|e| e.to_string()))
+                .map(|p| {
+                    hirsel_run_config::RecordedPlacement::from_json(&p).map_err(|e| e.to_string())
+                })
                 .transpose()?,
             admitted_at: Wire::decode(input)?,
             revocation: Option::<(String, String, bool)>::decode(input)?.map(
@@ -75,7 +77,7 @@ pub struct Tape {
 impl Tape {
     pub fn read(bytes: std::sync::Arc<Vec<u8>>) -> Result<(Recording, Self), String> {
         if !bytes.starts_with(MAGIC) {
-            return Err("not a v8 binary tape".into());
+            return Err("not a v9 binary tape".into());
         }
         let header = tape::read(&bytes, MAGIC.len(), 0)?;
         if header.kind != 1 {

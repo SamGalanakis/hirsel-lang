@@ -459,12 +459,15 @@ fn placement_header_is_diagnostic_validated_and_not_replayed() {
         admitted_at: 0,
         revocation: None,
         instance: None,
-        placement: Some(Placement {
-            cores: Cores::Fixed(8),
-            metrics: Some("/missing/metrics".into()),
-            control: Some("/missing/control".into()),
-            ..Default::default()
-        }),
+        placement: Some(
+            Placement {
+                cores: Cores::Fixed(8),
+                metrics: Some("/missing/metrics".into()),
+                control: Some("/missing/control".into()),
+                ..Default::default()
+            }
+            .into(),
+        ),
     });
     let text = render_recording(&recording).unwrap();
     let parsed = parse_recording(&text).unwrap();
@@ -529,4 +532,59 @@ fn binary_frames_preserve_arbitrary_bytes_and_reject_every_torn_event() {
         bad[at] ^= 1;
         assert!(hirsel_rt::launch::parse_recording_bytes(&bad).is_err());
     }
+}
+
+#[test]
+fn bound_scripted_world_refuses_physical_capacity_even_with_consistent_arithmetic() {
+    use hirsel_run_config::managed_cores::WorkerPhase;
+    use hirsel_run_config::{CapacityAdmission, Cores, Placement, RecordedPlacement, RunConfig};
+    use hirsel_run_schema::{IoGrants, LaunchKind, NetGrant};
+    let mut config = RunConfig::empty([1; 32], "script@1/main".into(), LaunchKind::Main);
+    config.io = Some(IoGrants {
+        tasks: Some("tasks.cooperative@1".into()),
+        net: Some(NetGrant {
+            provider: "net.script@2".into(),
+            rules: vec![],
+            peers: Some(vec![]),
+            listeners: vec![],
+        }),
+        ..Default::default()
+    });
+    let run = config.validated().unwrap();
+    let mut recording = header();
+    recording.run_identity = run.identity();
+    recording.hash_seed = 0;
+    recording.random_seed = 0;
+    recording.test_seed = 0;
+    recording.arguments.clear();
+    recording.binding = Some(hirsel_rt::launch::RecordedRun {
+        canonical: run.canonical().to_vec(),
+        admitted_at: 0,
+        revocation: None,
+        instance: None,
+        placement: Some(RecordedPlacement {
+            schema: 1,
+            request: Placement {
+                cores: Cores::Fixed(4),
+                ..Default::default()
+            },
+            admission: CapacityAdmission::Physical {
+                requested: Cores::Fixed(4),
+                resolved: 4,
+                launched: 4,
+                permitted: 4,
+                effective: 4,
+                worker_phase: WorkerPhase::Running,
+            },
+        }),
+    });
+    let encoded = hirsel_rt::launch::render_recording(&recording).unwrap();
+    let parsed = hirsel_rt::launch::parse_recording(&encoded).unwrap();
+    assert!(
+        parsed
+            .bound_run()
+            .unwrap_err()
+            .to_string()
+            .contains("scripted world cannot claim physical capacity")
+    );
 }
