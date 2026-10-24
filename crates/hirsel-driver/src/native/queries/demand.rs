@@ -33,7 +33,7 @@ const REQUEST_LAYOUTS: Domain = Domain {
     schema: 2,
 };
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 struct NamedKey {
     definition: hirsel_syntax::DefPath,
     body: u32,
@@ -55,8 +55,8 @@ impl NamedKey {
 
 /// Compact ordinary discovery data. A recipe's typed actuals are a separate
 /// content product and are decoded only when that particular instance misses.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-struct Request {
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub(super) struct Request {
     key: NamedKey,
     recipe: Reference,
     layouts: Option<Reference>,
@@ -111,9 +111,19 @@ impl DemandInstances {
         target: hirsel_lir::TargetSpec,
         policy: ContentHash,
     ) -> Self {
+        let native = InstanceQueries::validator(&store);
+        Self::with_validator(source, store, target, policy, native)
+    }
+    pub(super) fn with_validator(
+        source: &impl NativeRecordSource,
+        store: Arc<dyn ResultStore>,
+        target: hirsel_lir::TargetSpec,
+        policy: ContentHash,
+        native: Arc<hirsel_lir::validate::NativeCache>,
+    ) -> Self {
         Self {
             records: NativeRecords::new(source.record_types().clone(), store.clone()),
-            queries: InstanceQueries::new(store.clone()),
+            queries: InstanceQueries::with_validator(store.clone(), native),
             store,
             target,
             policy,
@@ -122,6 +132,54 @@ impl DemandInstances {
             imports: 0,
             recipe_decodes: 0,
         }
+    }
+    pub(super) fn registered_requests(&self) -> Result<Vec<(InstanceAddress, Request)>, String> {
+        self.requests
+            .values()
+            .map(|request| Ok((self.address(request.key.bind()?), request.clone())))
+            .collect()
+    }
+    /// Ordinary completed metadata only; subsequent consumers still call
+    /// admitted() against the same snapshot-private C authority.
+    pub(super) fn attach_completed(
+        &mut self,
+        key: &InstanceAddress,
+        output: Arc<DiscoveredInstance>,
+    ) -> Result<(), String> {
+        if !self.requests.contains_key(key.instance.encoding())
+            || output.product.product.address != key.address(INSTANCE_KIND)
+        {
+            return Err("completed descriptor has no selected request".into());
+        }
+        self.completed
+            .insert(key.instance.encoding().to_vec(), output);
+        Ok(())
+    }
+    /// Selected source observations and prior read witnesses, without a source
+    /// body, recipe or Value decode. Cold import may discover additional reads;
+    /// its final action is still computed by the sole instance producer.
+    pub(super) fn producer_inputs(
+        &self,
+        source: &impl NativeSourceProvider,
+        key: &InstanceAddress,
+        options: &super::super::Options,
+    ) -> Result<Vec<u8>, String> {
+        let request = self
+            .requests
+            .get(key.instance.encoding())
+            .ok_or("missing producer request")?;
+        let previous = self
+            .queries
+            .candidate(key)
+            .and_then(|product| self.descriptor(key, &product).ok());
+        let reads = previous
+            .as_ref()
+            .map_or(&[][..], |d| d.selection_reads.as_slice());
+        let constants = previous
+            .as_ref()
+            .map_or(&[][..], |d| d.constant_reads.as_slice());
+        let action = self.action(source, request, options, reads, constants)?;
+        serde_json::to_vec(&(request, action.0)).map_err(|e| e.to_string())
     }
     pub fn counts(&self) -> &InstanceQueryCounts {
         &self.queries.counts
@@ -226,7 +284,7 @@ impl DemandInstances {
             layouts,
         })
     }
-    fn admit(&mut self, request: Request) -> Result<InstanceAddress, String> {
+    pub(super) fn admit(&mut self, request: Request) -> Result<InstanceAddress, String> {
         let key = request.key.bind()?;
         if ![SOURCE_RECIPE, LIBRARY_RECIPE].contains(&request.recipe.domain)
             || (request.recipe.domain == LIBRARY_RECIPE) != request.layouts.is_some()

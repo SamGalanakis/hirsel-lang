@@ -55,14 +55,23 @@ pub struct InstanceQueryCounts {
 /// C authority, never another semantic dependency graph or content provider.
 pub struct InstanceQueries {
     store: Arc<dyn ResultStore>,
-    native: NativeCache,
+    native: Arc<NativeCache>,
     pub counts: InstanceQueryCounts,
 }
 impl InstanceQueries {
     pub fn new(store: Arc<dyn ResultStore>) -> Self {
-        let local = store.local_product_store();
+        let native = Self::validator(&store);
+        Self::with_validator(store, native)
+    }
+    pub(super) fn validator(store: &Arc<dyn ResultStore>) -> Arc<NativeCache> {
+        Arc::new(NativeCache::new(
+            Arc::new(SelectedContents(store.clone())),
+            store.local_product_store(),
+        ))
+    }
+    pub(super) fn with_validator(store: Arc<dyn ResultStore>, native: Arc<NativeCache>) -> Self {
         Self {
-            native: NativeCache::new(Arc::new(SelectedContents(store.clone())), local),
+            native,
             store,
             counts: InstanceQueryCounts::default(),
         }
