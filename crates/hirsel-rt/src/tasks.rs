@@ -486,12 +486,8 @@ impl Scheduler {
     }
     /// A prepared request is not yet a parked event source. Only a saved
     /// host waiter authorizes home readiness without an armed scope timer.
-    /// At most the currently running workers can precede the first saved
-    /// waiter; unrelated task rows are never visited.
     fn has_saved_host_waiter(&self) -> bool {
-        self.host_waiters
-            .iter()
-            .any(|&task| readiness::saved(self, task))
+        !self.host_waiters.is_empty()
     }
     /// Drain only cancellation events addressed to this host service. The
     /// registration check rejects delayed notices after retry or row reuse.
@@ -672,9 +668,6 @@ impl Scheduler {
         row.parked_at = at;
         row.woken = true;
         self.woken.push(current);
-        if matches!(wait, Wait::Host { .. }) {
-            self.host_waiters.insert(current);
-        }
         if matches!(self.logical, Logical::Free(_))
             && let Wait::Host { token } = wait
         {
@@ -1665,6 +1658,9 @@ pub(crate) unsafe fn after_save(run: *mut crate::context::RunShared, task: u32, 
             && let Some(frame) = &row.dispatch
         {
             frame.mark_saved();
+            if matches!(row.wait, Some(Wait::Host { .. })) {
+                s.host_waiters.insert(task);
+            }
         }
         // The flag and policy callback share one role acquisition: no join
         // can observe completion, vacate this row, and reuse its id in between.

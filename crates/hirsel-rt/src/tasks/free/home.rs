@@ -17,7 +17,7 @@ pub(crate) unsafe fn service(run: *mut RunShared) -> bool {
     }
     let scope_source = unsafe { crate::host_waits::scope_pending_home(run) };
     let idle = unsafe { crate::pool::busy(&*run) } == 0;
-    let (canceled, idle) = {
+    let (mut canceled, idle) = {
         let Some(_guard) = (unsafe { role::IdleGuard::try_new(run) }) else {
             return false;
         };
@@ -48,7 +48,7 @@ pub(crate) unsafe fn service(run: *mut RunShared) -> bool {
     if unsafe { (*run).control.stopped().is_some() } {
         return true;
     }
-    let (crate::host_waits::HomeReady { expired, hosts }, sources) = match result {
+    let (crate::host_waits::HomeReady { expired, .. }, sources) = match result {
         Ok(result) => result,
         Err(stop) => {
             unsafe { (*run).control.request_inside(stop) };
@@ -67,15 +67,12 @@ pub(crate) unsafe fn service(run: *mut RunShared) -> bool {
             acknowledged.push(expiry.token);
         }
     }
-    let canceled: Vec<u64> = hosts.iter().filter_map(|host| {
-        let shield = s.task(host.task).shield();
-        s.canceled_task(host.task, shield).map(|_| host.token)
-    }).collect();
+    canceled.extend(s.host_cancellations(1 << 63, 0));
     drop(_guard);
-    let batch = unsafe { crate::host_waits::process_batch_home(run, &canceled) };
+    let hosts = unsafe { crate::host_waits::native_batch_home(run, &canceled) };
     let _guard = unsafe { role::IdleGuard::home(run) };
-    let batch = match batch {
-        Ok(ready) => ready,
+    let hosts = match hosts {
+        Ok(hosts) => hosts,
         Err(stop) => {
             unsafe { (*run).control.request_inside(stop) };
             return true;
@@ -83,8 +80,7 @@ pub(crate) unsafe fn service(run: *mut RunShared) -> bool {
     };
     let s = unsafe { (*(*run).tasks.get()).as_deref_mut().unwrap() };
     let mut notified = Vec::new();
-    for mut host in hosts {
-        host.ready |= batch.contains(host.token);
+    for host in hosts {
         let valid = host.ready && s.tasks.get(host.task as usize)
             .and_then(Option::as_ref).is_some_and(|row| row.generation == host.generation
                 && matches!(row.wait, Some(super::super::Wait::Host { token }) if token == host.token)

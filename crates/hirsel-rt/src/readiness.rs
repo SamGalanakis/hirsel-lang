@@ -114,6 +114,7 @@ struct ReadyState {
     /// Requests that can become ready independently of a real timer. Updated
     /// when the provider releases its PendingGuard, never by a population scan.
     non_timer: usize,
+    external_waits: usize,
     /// The epoll set, created at the first descriptor interest.
     epoll: Option<OwnedFd>,
     /// Each watched descriptor's tokens and the events each waits for; the descriptor's
@@ -165,6 +166,7 @@ pub(crate) struct Pending {
     /// What the epoll set and the deadline indexes hold for this token.
     registered: Option<(libc::c_int, libc::c_short)>,
     non_timer: bool,
+    external_wait: bool,
     timer: Option<Instant>,
     virtual_timer: Option<u64>,
 }
@@ -202,12 +204,21 @@ impl Drop for PendingGuard<'_> {
             || p.process.is_some()
             || p.resolver.is_some();
         let script = p.scripted;
+        let external = p.interest.is_some() || p.delivery;
+        let was_external = std::mem::replace(&mut p.external_wait, external);
         let was = std::mem::replace(&mut p.non_timer, non_timer);
         if non_timer != was {
             if non_timer {
                 self.state.non_timer += 1;
             } else {
                 self.state.non_timer -= 1;
+            }
+        }
+        if external != was_external {
+            if external {
+                self.state.external_waits += 1;
+            } else {
+                self.state.external_waits -= 1;
             }
         }
         if let Some(ScriptedWait::Progress(since)) = script {
@@ -449,6 +460,7 @@ impl Readiness {
             return;
         };
         state.non_timer -= usize::from(pending.non_timer);
+        state.external_waits -= usize::from(pending.external_wait);
         state.timers.remove(token);
         state.virtual_timers.remove(token);
         state.touched.remove(&token);
@@ -718,12 +730,7 @@ impl Readiness {
     pub(crate) fn wait_source(&self, include_wake_only: bool) -> Result<WaitSource, AdapterError> {
         let mut state = self.0.lock().unwrap();
         state.sync()?;
-        if state.isolated_process_clock
-            && state
-                .pending
-                .values_unordered()
-                .any(|p| p.interest.is_some() || p.delivery)
-        {
+        if state.isolated_process_clock && state.external_waits != 0 {
             return Err(AdapterError::Unsupported(
                 "external wait in timed process clock domain".into(),
             ));

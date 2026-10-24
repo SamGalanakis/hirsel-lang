@@ -351,14 +351,6 @@ fn native_ready_binding(binding: &mut Binding, canceled: &[u64]) -> Stopped<Home
     for token in binding.waits.native_injected.members_unordered() {
         available.insert(token);
     }
-    for &token in canceled {
-        if let Some(row) = binding.waits.native.get(&token)
-            && binding.adapter.cancellable(token)
-            && crate::io_checks::cancellation_result(&row.request, 0).is_some()
-        {
-            available.insert(token);
-        }
-    }
     for token in available.members_unordered() {
         let row = binding.waits.native.get_mut(&token).unwrap();
         if !row.notified {
@@ -366,7 +358,28 @@ fn native_ready_binding(binding: &mut Binding, canceled: &[u64]) -> Stopped<Home
             binding.waits.native_ready.insert(token);
         }
     }
-    let hosts = binding
+    native_cancel_ready(binding, canceled);
+    Ok(HomeReady {
+        expired,
+        hosts: native_ready_hosts(binding),
+    })
+}
+
+fn native_cancel_ready(binding: &mut Binding, canceled: &[u64]) {
+    for &token in canceled {
+        if let Some(row) = binding.waits.native.get_mut(&token)
+            && !row.notified
+            && binding.adapter.cancellable(token)
+            && crate::io_checks::cancellation_result(&row.request, 0).is_some()
+        {
+            row.ready = true;
+            binding.waits.native_ready.insert(token);
+        }
+    }
+}
+
+fn native_ready_hosts(binding: &Binding) -> Vec<ReadyHost> {
+    binding
         .waits
         .native_ready
         .members_unordered()
@@ -389,8 +402,22 @@ fn native_ready_binding(binding: &mut Binding, canceled: &[u64]) -> Stopped<Home
                 ready: row.ready,
             })
         })
-        .collect();
-    Ok(HomeReady { expired, hosts })
+        .collect()
+}
+
+/// Complete provider phases outside the scheduler role, then collect all
+/// latched tokens, including candidates first published by this batch.
+pub(crate) unsafe fn native_batch_home(
+    run: *mut crate::context::RunShared,
+    canceled: &[u64],
+) -> Stopped<Vec<ReadyHost>> {
+    unsafe { process_batch_home(run, canceled) }?;
+    let binding = unsafe { &mut *(*run).io_binding().cast::<Binding>() };
+    // Cancellation can arrive after the initial adapter readiness poll.
+    // Latch it before consuming its subscription notice, even when this
+    // provider has no physical source and process_batch returns no tokens.
+    native_cancel_ready(binding, canceled);
+    Ok(native_ready_hosts(binding))
 }
 
 /// The completion a canceled `request` returns without its requested effect, or `None` when it
@@ -1675,14 +1702,22 @@ unsafe fn process_batch_binding(
             .collect();
         ready = merge_ready(ready, Ready::Tokens(canceled));
     }
-    let tokens: Vec<u64> = binding
-        .waits
-        .native
-        .iter_unordered()
-        .filter_map(|(token, _)| ready.contains(token).then_some(token))
-        .collect();
+    let tokens: Vec<u64> = match &ready {
+        Ready::Tokens(tokens) => tokens.clone(),
+        Ready::Every => binding
+            .waits
+            .native
+            .iter_unordered()
+            .map(|(token, _)| token)
+            .collect(),
+    };
     for token in tokens {
-        binding.waits.native.get_mut(&token).unwrap().ready = true;
+        if let Some(row) = binding.waits.native.get_mut(&token)
+            && !row.notified
+        {
+            row.ready = true;
+            binding.waits.native_ready.insert(token);
+        }
     }
     Ok(ready)
 }
