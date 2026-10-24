@@ -1,0 +1,13 @@
+pub fn main(rt: Io) -> Result[(), FileError] {
+  let input = io.dir(rt, path.of("input"))?
+  let output = io.dir(rt, path.of("output"))?
+  failure.check(file.read_bytes(input, path.of("data"))? == b"\x00\xff", Arithmetic())
+  // Denied authority must not consume the scripted write head.
+  failure.check(file.write_bytes(input, path.of("denied"), b"x") == Error(NotGranted()), Arithmetic())
+  failure.check(file.write_bytes(output, path.of("denied"), b"x") == Error(PermissionDenied()), Arithmetic())
+  file.write_bytes(output, path.of("written"), b"x")?
+  let _ = out.print(io.stdout(rt)? grant_error, "binary; read only\n")
+  Ok(())
+}
+@noalloc
+fn grant_error(e: GrantError) -> FileError uses {} { NotGranted() }

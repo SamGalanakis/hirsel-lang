@@ -3,6 +3,8 @@
 // under `--mem-usage`.
 hirsel_guard::install!(allocator::Counting: allocator::Counting);
 
+mod simulation_world;
+
 use hirsel_cli_args::lexopt::{self, Arg::*, Parser};
 use hirsel_engine::{QueryError, RunOutcome, ToolError, Verify};
 use std::{env, ffi::OsString, path::Path, process::ExitCode};
@@ -2001,123 +2003,7 @@ fn usage() -> u8 {
 }
 
 fn read_simulation(path: &Path) -> Result<hirsel_engine::SimulationConfig, String> {
-    let value: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(path).map_err(|e| e.to_string())?)
-            .map_err(|e| e.to_string())?;
-    let object = value.as_object().ok_or("expected a JSON object")?;
-    let mut config = hirsel_engine::SimulationConfig::default();
-    for (key, value) in object {
-        match key.as_str() {
-            "args" | "grants" | "directories" | "projections" => {
-                let values = value
-                    .as_array()
-                    .ok_or_else(|| format!("{key}: expected an array"))?
-                    .iter()
-                    .map(|v| {
-                        v.as_str()
-                            .map(str::to_owned)
-                            .ok_or_else(|| format!("{key}: expected strings"))
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                match key.as_str() {
-                    "args" => config.args = values,
-                    "grants" => config.grants = values.into_iter().collect(),
-                    "projections" => {
-                        for projection in &values {
-                            if !matches!(
-                                projection.as_str(),
-                                "stdin"
-                                    | "stderr"
-                                    | "stdout"
-                                    | "tasks"
-                                    | "net"
-                                    | "process"
-                                    | "random"
-                                    | "dir"
-                            ) {
-                                return Err(format!("unknown Io projection {projection}"));
-                            }
-                        }
-                        config.projections = values.into_iter().collect();
-                    }
-                    _ => config.directories = values.into_iter().collect(),
-                }
-            }
-            "race" => config.debug.races = value.as_bool().ok_or("race: expected a boolean")?,
-            "sim_points" => {
-                let points = value
-                    .as_str()
-                    .and_then(hirsel_driver::testing::SimulationDebug::parse_points)
-                    .ok_or(
-                        "sim_points: expected root-release, atomic-store, or both comma-separated",
-                    )?;
-                config.debug.root_releases = points.root_releases;
-                config.debug.atomic_stores = points.atomic_stores;
-            }
-            "scheduler" => {
-                config.scheduler = Some(
-                    value
-                        .as_str()
-                        .and_then(hirsel_driver::testing::Scheduler::parse)
-                        .ok_or("scheduler: expected name@1:seed")?,
-                )
-            }
-            "stdin" => {
-                config.stdin = if let Some(text) = value.as_str() {
-                    text.as_bytes().to_vec()
-                } else {
-                    value
-                        .as_array()
-                        .ok_or("stdin: expected text or an array of bytes")?
-                        .iter()
-                        .map(|byte| {
-                            byte.as_u64()
-                                .and_then(|n| u8::try_from(n).ok())
-                                .ok_or("stdin: expected bytes")
-                        })
-                        .collect::<Result<Vec<_>, _>>()?
-                };
-            }
-            "files" | "env" => {
-                let entries = value
-                    .as_object()
-                    .ok_or_else(|| format!("{key}: expected an object"))?;
-                for (name, text) in entries {
-                    if key == "env" && text.is_null() {
-                        config.env.insert(name.clone(), None);
-                        continue;
-                    }
-                    let text = text
-                        .as_str()
-                        .ok_or_else(|| format!("{key}: expected string values"))?;
-                    if key == "files" {
-                        config.files.insert(name.clone(), text.as_bytes().to_vec());
-                    } else {
-                        config.env.insert(name.clone(), Some(text.into()));
-                    }
-                }
-            }
-            // The RunConfig `io.net` object; the simulation serves net.script@2.
-            "net" => {
-                config.net =
-                    Some(serde_json::from_value(value.clone()).map_err(|e| format!("net: {e}"))?)
-            }
-            // The RunConfig `io.process` object; the simulation serves process.script@1.
-            "process" => {
-                config.process = Some(
-                    serde_json::from_value(value.clone()).map_err(|e| format!("process: {e}"))?,
-                )
-            }
-            "wall" => config.wall = value.as_i64().ok_or("wall: expected a signed integer")?,
-            "monotonic" => {
-                config.monotonic = value
-                    .as_u64()
-                    .ok_or("monotonic: expected a nonnegative integer")?
-            }
-            _ => return Err(format!("unknown field {key}")),
-        }
-    }
-    Ok(config)
+    simulation_world::read(path)
 }
 
 fn run_result_for_path(result: Result<RunOutcome, ToolError>, path: &Path, json: bool) -> u8 {

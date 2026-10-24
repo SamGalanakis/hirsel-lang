@@ -174,3 +174,131 @@ or stderr prefix and then finds unused events exits3 and returns its exact
 refusal through `Launched.record`; `observe_run` classifies it as
 `Observed::Refused`, including when the observation file was created empty.
 The file-fault regression checks the retained prefix and the exact event count.
+
+## CLI simulation JSON
+
+`hirsel run --simulation world.json program.hir` transports the same typed
+readiness, faults, signal grant and mount rights into the interpreter. It remains
+incompatible with `--native`. No host file or host signal supplies these worlds.
+The JSON adapter uses the existing MIT `hirsel-run-schema` types and validators
+(`file_reads.rs:7`, `file_faults.rs:78`, `signals.rs:62`) and the standalone
+`hirsel-run-config` signal validator. Its adaptations are text/byte JSON inputs,
+a closed `AfterWrite` object, and CLI diagnostics; provider effects are unchanged.
+
+The optional top-level fields are `args`, `grants`, `directories`, `projections`,
+`race`, `sim_points`, `scheduler`, `stdin`, `files`, `env`, `net`, `process`,
+`signals`, `file_reads`, `file_faults`, `mounts`, `monotonic`, and `wall`.
+Unknown fields are errors. Omission preserves `SimulationConfig::default()`:
+roots Io/Args/Env, one empty read-write mount, no signal grant, empty readiness
+and fault maps, and zero clocks. An explicit empty `mounts: {}` grants no
+mount. An empty script `[]` supplies no arrivals; it differs from omitting the
+signal grant. `signals: null`, `signals.script: null`, and null maps are errors.
+`env` alone accepts null values for unset variables. `FileFault.requested` and
+`error` retain their optional schema values (null or omission means None);
+`partial` is required. Bytes are exact integers 0–255, including binary 0/255;
+`files` values and `stdin` also accept UTF-8 text. No lossy byte coercion occurs.
+
+Recognized projections are `stdin`, `stderr`, `stdout`, `tasks`, `net`,
+`process`, `random`, `dir`, `signals`, and `telemetry`. Names do not create
+root grants, script arrivals or mount rights. Signals projection follows the
+provider's explicit SignalsGrant. Clocks are projected from explicit root
+grants, independently of the projection-name list. For example, this complete
+clock world grants both clocks and configures their initial values:
+
+```json
+{
+  "grants": ["Io", "MonotonicClock", "WallClock"],
+  "projections": ["stdout"],
+  "monotonic": 7,
+  "wall": -9
+}
+```
+
+`projections: ["monotonic_clock"]` remains invalid and points to this grant
+recipe. Merely setting `monotonic` or `wall` grants no clock access.
+
+These fresh, small adapter reproductions reduce the existing pnmtiles pending
+Interrupt race and treelearn commit-denial fixtures. Their identities are
+`simulation-world-cli-39/pending-interrupt` and
+`simulation-world-cli-39/commit-denied`; they do not replace original app runs,
+capacity claims or RE600 receipts. From the repository root, with `hirsel` on PATH:
+
+```sh
+hirsel run --simulation crates/hirsel-cli/tests/support/simulation_world_cli_39/pending-interrupt.json crates/hirsel-cli/tests/support/simulation_world_cli_39/cancel.hir
+hirsel run --simulation crates/hirsel-cli/tests/support/simulation_world_cli_39/commit-denied.json crates/hirsel-cli/tests/support/simulation_world_cli_39/commit.hir
+```
+
+The complete pending world (unused maps omitted, retaining their defaults):
+
+```json
+{
+  "grants": ["Io", "Args", "Env"],
+  "projections": ["stdout", "stderr", "tasks", "dir", "signals", "telemetry"],
+  "mounts": {"input": "read", "output": "read_write"},
+  "files": {"input/data": [0, 255]},
+  "file_reads": {"input/data": "Pending"},
+  "signals": {
+    "provider": "signals.script@1",
+    "kinds": ["interrupt"],
+    "script": ["interrupt"]
+  }
+}
+```
+
+It prints `canceled; joined` on stdout and `pending adapter` on stderr, exits0,
+and leaves only the input and `output/joined = "yes"`. `no-signal.json` changes
+the script to `[]` and stays Blocked. No actual SIGINT is sent.
+
+The complete commit-denial world:
+
+```json
+{
+  "grants": ["Io", "Args", "Env"],
+  "projections": ["stdout", "dir"],
+  "mounts": {"output": "read_write"},
+  "files": {"output/old": "old"},
+  "file_faults": {
+    "file.commit": [{"requested": null, "error": "PermissionDenied", "partial": 0}]
+  }
+}
+```
+
+It prints `commit denied; old preserved`, exits0 and preserves `output/old`.
+The second commit publishes `output/published = "new"`, checking queue exhaustion;
+no temporary or live file handle survives. Fault names are the exact public
+`file.*` operation keys; error tags retain Rust schema case, for example
+`"PermissionDenied"`, `{"Fault":77}` or `{"Canceled":0}`. Every byte operation
+requires an exact `requested` count. A structurally invalid queue refuses before
+entry; a count mismatch refuses at operation admission before popping its head.
+A nonzero partial Canceled completion is always invalid.
+
+For an AfterWrite gate use:
+
+```json
+{
+  "mounts": {"input": "read", "output": "read_write"},
+  "files": {"input/data": [0, 255]},
+  "file_reads": {"input/data": {"AfterWrite": {"path": "output/release"}}}
+}
+```
+
+```sh
+hirsel run --simulation crates/hirsel-cli/tests/support/simulation_world_cli_39/after-write.json crates/hirsel-cli/tests/support/simulation_world_cli_39/read.hir
+hirsel run --simulation crates/hirsel-cli/tests/support/simulation_world_cli_39/failed-write.json crates/hirsel-cli/tests/support/simulation_world_cli_39/read.hir
+```
+
+Only a **successful `file.write_bytes`** to `output/release` in the same tree
+releases this gate, including a write before the read. Failed or partial-error
+writes do not release it. `file.put_new` and other write operations do not
+release it: `put-new.json` demonstrates Blocked despite publishing that path.
+`failed-write.json` cancels and joins the still-pending child after denial.
+`binary-readonly.json` checks that read-only denial leaves the queued fault
+available to the following authorized call. The executable adapter tests compare
+complete JSON/typed observations in reference and checked H, then invoke the real
+CLI; their negative vectors include nested unknown fields and explicit nulls.
+
+```sh
+python3 tools/buck2/prepare.py
+python3 tools/buck2/sync.py --if-stale
+.buck2/bin/buck2 test -c hirsel.tests=focus //:hirsel-cli-test-cli-shard-1 -- --test-arg=simulation_world_cli_39 --test-arg=--nocapture
+```

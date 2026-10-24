@@ -79,3 +79,15 @@ plumbing around the owned loan defect. A queued publish may be reported lost on
 EOF or shutdown, including after local provider write failure. The report never
 labels a socket write as remote consumption. Topic records are bounded for the
 whole finite session, including inactive connection records.
+
+Round 39 additive correction (`simulation-world-cli-39`): the historical
+`monotonic_clock` projection rejection above is invalid JSON projection spelling,
+not a missing clock implementation. The current interpreter projects clocks
+from explicit `grants: ["Io", "MonotonicClock"]` and the `monotonic` value
+(and `WallClock`/`wall` for wall time). Projection names do not create grants.
+The CLI now transports the existing typed `signals`, `file_reads`, `file_faults`
+and `mounts` worlds, plus exact binary `files` values. Fresh small pending
+cancellation and commit-denial adapter identities and commands are documented in
+[CLI simulation JSON](../../docs/native-test-fixtures.md#cli-simulation-json).
+This corrects the historical explanation additively; it does not complete or
+rebind Pubsub's 108 scripted capacity claims or the RE600 aggregate.

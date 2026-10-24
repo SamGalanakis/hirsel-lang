@@ -1,0 +1,41 @@
+{
+  "grants": [
+    "Io",
+    "Args",
+    "Env"
+  ],
+  "projections": [
+    "stdout",
+    "stderr",
+    "tasks",
+    "dir",
+    "signals",
+    "telemetry"
+  ],
+  "mounts": {
+    "input": "read",
+    "output": "read_write"
+  },
+  "files": {
+    "input/data": [
+      0,
+      255
+    ]
+  },
+  "args": [],
+  "stdin": [],
+  "env": {},
+  "directories": [],
+  "monotonic": 0,
+  "wall": 0,
+  "file_reads": {
+    "input/data": "Pending"
+  },
+  "signals": {
+    "provider": "signals.script@1",
+    "kinds": [
+      "interrupt"
+    ],
+    "script": []
+  }
+}

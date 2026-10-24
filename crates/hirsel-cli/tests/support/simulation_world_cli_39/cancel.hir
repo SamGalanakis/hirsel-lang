@@ -1,0 +1,32 @@
+// Fresh CLI adapter reduction of pnmtiles' pending Interrupt race (MIT).
+resource type Joined { dir: Dir }
+drop(x) { let _ = file.write_bytes(x.dir, path.of("joined"), b"yes") }
+pub fn main(rt: Io) -> Result[(), FileError] {
+  let tasks = io.tasks(rt)? grant_error
+  let signals = io.signals(rt)? grant_error
+  let input = io.dir(rt, path.of("input"))?
+  let output = io.dir(rt, path.of("output"))?
+  task.scope(tasks, fn(s: Scope) {
+    let mut pending: TaskSet[u8] of s = task.set(s)
+    task.add(s, mut pending, task.async(s, fn() -> u8 {
+      let guard = Joined(dir: output)
+      let mut Ok(f) = file.open(input, path.of("data")) else { return 9u8 }
+      let mut bytes: List[u8] = []
+      failure.check(file.read(input, mut f, mut bytes, 2u64) == Error(Canceled(Requested())), Arithmetic())
+      failure.check(bytes == [], Arithmetic())
+      2u8
+    }))
+    task.add(s, mut pending, task.async(s, fn() -> u8 {
+      failure.check(signal.wait(signals, [Interrupt()]) == Ok(Interrupt()), Arithmetic())
+      1u8
+    }))
+    let (_, winner) = task.select(s, take pending)
+    failure.check(winner == 1u8, Arithmetic())
+  })
+  failure.check(file.read_bytes(output, path.of("joined"))? == b"yes", Arithmetic())
+  let _ = out.print(io.stdout(rt)? grant_error, "canceled; joined\n")
+  let _ = err.print(io.stderr(rt)? grant_error, "pending adapter\n")
+  Ok(())
+}
+@noalloc
+fn grant_error(e: GrantError) -> FileError uses {} { NotGranted() }

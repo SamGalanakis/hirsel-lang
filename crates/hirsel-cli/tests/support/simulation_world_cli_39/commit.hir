@@ -1,0 +1,16 @@
+// Fresh CLI adapter reduction of treelearn's commit-denied world (MIT).
+pub fn main(rt: Io) -> Result[(), FileError] {
+  let output = io.dir(rt, path.of("output"))?
+  let mut f = file.create_atomic(output, path.of("old"))?
+  file.write_all(output, mut f, b"new")?
+  failure.check(file.commit(output, take f) == Error(PermissionDenied()), Arithmetic())
+  failure.check(file.read_bytes(output, path.of("old"))? == b"old", Arithmetic())
+  // Exhaustion restores ordinary commit; the denied call consumed exactly one head.
+  let mut next = file.create_atomic(output, path.of("published"))?
+  file.write_all(output, mut next, b"new")?
+  file.commit(output, take next)?
+  let _ = out.print(io.stdout(rt)? grant_error, "commit denied; old preserved\n")
+  Ok(())
+}
+@noalloc
+fn grant_error(e: GrantError) -> FileError uses {} { NotGranted() }

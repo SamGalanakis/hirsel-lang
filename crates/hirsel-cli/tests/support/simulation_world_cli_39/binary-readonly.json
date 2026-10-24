@@ -1,0 +1,40 @@
+{
+  "grants": [
+    "Io",
+    "Args",
+    "Env"
+  ],
+  "projections": [
+    "stdout",
+    "stderr",
+    "tasks",
+    "dir",
+    "signals",
+    "telemetry"
+  ],
+  "mounts": {
+    "input": "read",
+    "output": "read_write"
+  },
+  "files": {
+    "input/data": [
+      0,
+      255
+    ]
+  },
+  "args": [],
+  "stdin": [],
+  "env": {},
+  "directories": [],
+  "monotonic": 0,
+  "wall": 0,
+  "file_faults": {
+    "file.write_bytes": [
+      {
+        "requested": 1,
+        "error": "PermissionDenied",
+        "partial": 0
+      }
+    ]
+  }
+}
