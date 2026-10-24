@@ -58,6 +58,7 @@ impl Io {
         let writing = matches!(
             name,
             "create"
+                | "open_append"
                 | "write_bytes"
                 | "write"
                 | "append"

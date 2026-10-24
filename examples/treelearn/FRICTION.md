@@ -138,15 +138,18 @@ player identities); native heap additionally stops on bytes65536 and the
 31-node/four-job manifest. These are separate from the ten live interpreter
 Stops. All raw tapes and per-engine receipts remain in native-manzeH.
 
-The lowered native Heap adapter rejects any nonempty typed file-fault queue:
-"native heap: file faults require reference/checked simulation or native
-snapshot providers" (differential.rs569–571). The exact commit-denied full-main
-witness is immutable in commit-denied-attempt1-immutable and routed to the
-coordinator (message657647), with no local repair. Recovery records only this
-exact known unsupported response as INCOMPLETE and continues missing native
-snapshot cells; it never awards Heap credit. Reference/checked simulation of
-commit refusal passed. Cost: test-only dispatch, 2 active minutes, open adapter
-coverage owned by coordinator/native Heap provider; intended guard.
+The historical lowered native Heap adapter rejected every nonempty typed
+file-fault queue: "native heap: file faults require reference/checked simulation
+or native snapshot providers". The original commit-denied full-main Unsupported
+receipt remains immutable in commit-denied-attempt1-immutable (coordinator657647).
+`heap_file_faults_38` now implements and qualifies the typed snapshot queues;
+its separately selected `treelearn_original_commit_denied` recovery uses the
+unchanged six source modules, Args, input/fault world and default Heap cap. It
+checks exit 2, empty stdout/failures, prior destination bytes, no published
+temporary and no live file handles. This recovery is separate from the retained
+historical refusal and from the tiny same-operation commit-denied control.
+Reference/checked simulation and existing native/replay passes are retained.
+No interpreter cap, tape, physical-width or other app cell is recovered here.
 
 The early worker wrote passed.json even when incomplete.json existed; aggregate
 receipts always rejected those cells. Future workers omit the passed marker
@@ -244,14 +247,15 @@ tape checks. Oracle45 and both minimum-row adapters passed exact serial
 selections. These observations are separate from 36 accepted width cells and
 one full semantic tape comparison. No preexisting treelearn test existed.
 
-Exactly 33 original core identities remain incomplete: ten source interpreter
+The historical report retained 33 incomplete original core identities: ten source interpreter
 Stops and twenty interpreter tape-replay Stops on rows-64, batch-four,
 bytes-65536, nodes-31-jobs-1 and nodes-31-jobs-4; two lowered Heap Steps Stops
 on bytes-65536 and nodes-31-jobs-4; and the commit-denied Heap typed-file-fault
 unsupported guard. All use unchanged original inputs and limits. Witnesses
 are the frozen cases plus per-engine raw receipts/tapes in lane evidence.
 The Steps obligations remain owned by decision-tree-35 with coordinator
-follow-up; native Heap provider coverage is routed to coordinator657647.
+follow-up. The one typed-file-fault identity has a separate Heap recovery in
+`heap_file_faults_38`; the 32 Steps identities remain unassigned by that change.
 Neither a small passing control nor native success closes an interpreter Stop.
 The overwritten initial failed toy libtest streams and the first physical
 missing archive/unproved tape remain explicit retention limitations.

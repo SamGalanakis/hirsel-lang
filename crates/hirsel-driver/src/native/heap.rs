@@ -15,6 +15,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 mod durability;
 mod env;
+mod file_faults;
 mod filesystem;
 mod net;
 mod process;
@@ -26,6 +27,7 @@ mod signals;
 struct Io {
     args: Vec<String>,
     file_reads: hirsel_run_schema::FileReadiness,
+    file_faults: hirsel_run_schema::FileFaults,
     deny_output: bool,
     next: u64,
     test_seed: u64,
@@ -94,6 +96,8 @@ impl Io {
         random_seed: u64,
         world: &HeapWorld,
     ) -> Result<Self, NativeError> {
+        hirsel_run_schema::validate_file_faults(&world.file_faults)
+            .map_err(|e| NativeError::new(StageName::Heap, e))?;
         let mut io = Self::new();
         io.args = world.args.clone();
         io.mounts = world.mounts.clone();
@@ -104,6 +108,7 @@ impl Io {
         }
         io.trees.insert(0, (tree.directories, tree.files));
         io.file_reads = hirsel_run_schema::FileReadiness::new(world.file_reads.clone());
+        io.file_faults = world.file_faults.clone();
         io.deny_output = world.deny_output;
         io.test_seed = test_seed;
         io.monotonic = world.monotonic;
@@ -137,6 +142,7 @@ impl Io {
         Self {
             args: vec![],
             file_reads: Default::default(),
+            file_faults: Default::default(),
             next: IO_HANDLE + 1,
             test_seed: 0,
             stdout: Vec::new(),
@@ -789,6 +795,19 @@ impl Io {
         }
     }
     fn io(&mut self, module: Option<&str>, name: &str, args: &[OpValue]) -> Option<OpOutcome> {
+        if module == Some("file")
+            && let Some(outcome) = self.scripted_file(name, args)
+        {
+            return Some(outcome);
+        }
+        self.io_ordinary(module, name, args)
+    }
+    fn io_ordinary(
+        &mut self,
+        module: Option<&str>,
+        name: &str,
+        args: &[OpValue],
+    ) -> Option<OpOutcome> {
         let value = match (module, name, args) {
             (Some("path"), "text", [OpValue::Handle(path)]) => OpValue::ByteSequence(
                 self.paths
@@ -1153,18 +1172,7 @@ impl Io {
                 } else if !writable || self.stale.contains(file) {
                     io_error(1)
                 } else {
-                    let path = self
-                        .files
-                        .iter()
-                        .find(|(_, id)| std::sync::Arc::ptr_eq(id, &identity))
-                        .map(|((_, path), _)| path.clone());
-                    self.durable_write(tree, &identity, contents.len(), bytes);
-                    let mut data = contents;
-                    data.extend_from_slice(bytes);
-                    if let Some(path) = path {
-                        self.trees.get_mut(&tree).unwrap().1.insert(path, data);
-                    }
-                    self.update_files(&identity, bytes, true);
+                    self.append_file(tree, &identity, &contents, bytes);
                     io_ok(if name == "write" {
                         OpValue::Bits {
                             scalar: ScalarKind::U64,
@@ -1460,8 +1468,8 @@ impl Io {
             }
             (
                 Some("file"),
-                kind @ ("open" | "create" | "size" | "read_bytes" | "write_bytes" | "remove"
-                | "create_atomic" | "put_new" | "map" | "watch"),
+                kind @ ("open" | "create" | "open_append" | "size" | "read_bytes" | "write_bytes"
+                | "remove" | "create_atomic" | "put_new" | "map" | "watch"),
                 [OpValue::Handle(directory), OpValue::Handle(path), rest @ ..],
             ) => {
                 let Some(IoGrant::Dir { tree, root, access }) = self.grants.get(directory).cloned()
@@ -1471,7 +1479,12 @@ impl Io {
                 if access == Access::Read
                     && matches!(
                         kind,
-                        "create" | "write_bytes" | "remove" | "create_atomic" | "put_new"
+                        "create"
+                            | "open_append"
+                            | "write_bytes"
+                            | "remove"
+                            | "create_atomic"
+                            | "put_new"
                     )
                 {
                     return Some(OpOutcome::Value(io_not_granted()));
@@ -1550,7 +1563,7 @@ impl Io {
                             contents,
                         })))
                     }
-                    "create" => {
+                    "create" | "open_append" => {
                         let parent = path.rsplit_once('/').map_or("", |(p, _)| p);
                         if self.trees[&tree].0.contains(&path)
                             || !self.trees[&tree].0.contains(parent)
@@ -1566,19 +1579,26 @@ impl Io {
                                 .entry((tree, path.clone()))
                                 .or_insert_with(|| std::sync::Arc::new(()))
                                 .clone();
+                            let contents = if kind == "open_append" {
+                                self.trees[&tree].1.get(&path).cloned().unwrap_or_default()
+                            } else {
+                                vec![]
+                            };
                             self.trees
                                 .get_mut(&tree)
                                 .unwrap()
                                 .1
-                                .insert(path.clone(), vec![]);
-                            self.update_files(&identity, &[], false);
+                                .insert(path.clone(), contents.clone());
+                            if kind == "create" {
+                                self.update_files(&identity, &[], false);
+                            }
                             io_ok(OpValue::OpenHandle(self.grant(IoGrant::File {
                                 tree,
                                 path: logical,
                                 directory: *directory,
                                 position: 0,
                                 writable: true,
-                                contents: vec![],
+                                contents,
                                 identity,
                             })))
                         }
@@ -2105,6 +2125,11 @@ fn views(name: &str, args: &[OpValue]) -> Option<OpOutcome> {
 
 /// One audited heap-executor run.
 pub struct HeapRun {
+    /// Model filesystem after a single run; campaigns audit independent variants
+    /// and do not retain their provider state. This is not physical heap evidence.
+    pub files: Option<BTreeMap<String, Vec<u8>>>,
+    /// Live model File/AtomicFile grants after a single run (None for campaigns).
+    pub file_handles: Option<Vec<u64>>,
     pub observation: Observation,
     /// Failure-capable sites the run executed: the fault campaign's domain.
     pub sites: u64,
@@ -2252,6 +2277,8 @@ pub struct HeapWorld {
     pub files: BTreeMap<String, Vec<u8>>,
     pub mounts: BTreeMap<String, Access>,
     pub file_reads: BTreeMap<String, hirsel_run_schema::FileReadScript>,
+    /// Typed snapshot queues, cloned afresh for each run and campaign variant.
+    pub file_faults: hirsel_run_schema::FileFaults,
     /// Deny stdout and stderr projection for a negative grant fixture.
     pub deny_output: bool,
     /// A monotonic clock (`io.monotonic_clock`), whose virtual reading starts here, as the
@@ -2276,6 +2303,7 @@ impl Default for HeapWorld {
             files: Default::default(),
             mounts: hirsel_engine::SimulationConfig::default().mounts,
             file_reads: Default::default(),
+            file_faults: Default::default(),
             deny_output: false,
             monotonic: None,
             process: None,
@@ -2338,6 +2366,15 @@ pub fn run_heap_in(
         .as_ref()
         .map_err(|v| violation(entry, v, hirsel_heapcheck::Perturbation::Clean))?;
     Ok(HeapRun {
+        files: Some(io.trees[&0].1.clone()),
+        file_handles: Some(
+            io.grants
+                .iter()
+                .filter_map(|(id, grant)| {
+                    matches!(grant, IoGrant::File { .. } | IoGrant::Atomic { .. }).then_some(*id)
+                })
+                .collect(),
+        ),
         observation: observation(program, audit, &run.output, sites)?,
         sites: run.sites,
         choices: run.choices,
@@ -2404,6 +2441,8 @@ pub fn heap_campaign_in(
     }
     let audit = campaign.clean.result.as_ref().expect("checked above");
     Ok(HeapRun {
+        files: None,
+        file_handles: None,
         observation: observation(program, audit, &campaign.clean.output, sites)?,
         sites: campaign.clean.sites,
         choices: campaign.clean.choices,

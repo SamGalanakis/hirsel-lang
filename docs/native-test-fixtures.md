@@ -128,6 +128,20 @@ invalid causes and overlapping typed/legacy simulation queues are admission
 errors. Queue exhaustion restores normal provider behavior. Pending reads,
 real task cancellation, and calls rejected by authority/mode/path preflight do
 not consume entries. Unused entries (for paths the app never visits) are allowed.
+The lowered Heap snapshot provider also accepts these queues through
+`HeapWorld.file_faults`. Complete scripts are validated before entry, and every
+independent run and allocation-failure campaign variant starts with fresh queues.
+Authority, lexical paths, file modes and read readiness precede admission;
+cancellation does not consume a head. Exact count mismatches refuse the model
+without popping or applying effects. Failed reads preserve the caller buffer,
+partial writes use the ordinary model filesystem, failed atomic commit drops its
+temporary and preserves the destination, and sync failure does not synchronize.
+`HeapRun.files` and `file_handles` retain the final fixture-tree bytes and live
+file grants for single runs; campaigns return `None` for those fields. These are
+model observations, not physical allocation reclamation evidence.
+`heap_file_faults_38` qualifies finite reference/Heap vectors; historical
+Unsupported receipts from other app campaigns are not retroactive passes.
+
 Scripts are bound in `inputs.fixture_file_faults` of the test run record. A live
 launch must match the link recipe; replay needs no live files or script.
 

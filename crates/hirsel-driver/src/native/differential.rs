@@ -493,6 +493,7 @@ pub fn differential_in(
         files: fixture.files.clone(),
         mounts: fixture.mounts.clone(),
         file_reads: fixture.file_reads.clone(),
+        file_faults: fixture.file_faults.clone(),
         deny_output: fixture.deny_output,
         monotonic: fixture.monotonic,
         process: fixture.process.clone(),
@@ -570,10 +571,6 @@ pub fn differential_in(
             .as_ref()
             .map_err(Clone::clone)
             .and_then(|program| match configuration.engine {
-                Engine::Heap { .. } if !fixture.file_faults.is_empty() => Err(NativeError::new(
-                    StageName::Heap,
-                    "file faults require reference/checked simulation or native snapshot providers",
-                )),
                 Engine::Heap { campaign: true } => {
                     super::heap_campaign_in(program, entry, &sites, &world)
                         .map(|run| run.observation)
