@@ -324,3 +324,149 @@ fn equal_bytes_keep_distinct_loaded_libraries_and_shared_aliases() {
         assert_eq!(output.stdout, expected);
     }
 }
+
+#[test]
+fn actual_loader_discovers_transitive_runtime_inputs_and_closes_replay() {
+    use discovery::{DiscoveryPolicy, discover};
+    let llvm = PathBuf::from(std::env::var_os("LLVM_SYS_231_PREFIX").unwrap());
+    let auditors = PathBuf::from(std::env::var_os("HIRSEL_AUDITOR_PACKAGE").unwrap());
+    let floor = PathBuf::from(std::env::var_os("HIRSEL_GLIBC_FLOOR").unwrap());
+    let qemu = PathBuf::from(std::env::var_os("HIRSEL_QEMU").unwrap());
+    for target in [
+        super::super::super::TargetSpec::x86_64_unknown_linux_gnu(),
+        super::super::super::TargetSpec::aarch64_unknown_linux_gnu(),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let original = directory.path().join("original with spaces\nand newline");
+        std::fs::create_dir_all(&original).unwrap();
+        let store_root = directory.path().join("products");
+        let store = DirStore::new(store_root.clone());
+        let loader = store_file(&store, &floor.join(&target.triple).join("ld-2.28.so"));
+        let auditor = store_file(&store, &auditors.join(format!("{}.so", target.triple)));
+        let arm = target.triple.starts_with("aarch64");
+        let leaf = original.join("libleaf.so");
+        let top = original.join("top.so");
+        let image = original.join("program");
+        let limits = RuntimeLimits {
+            aliases: 16,
+            name_bytes: 8192,
+        };
+        let mut versions = Vec::new();
+        for value in [42, 43] {
+            let object = assemble(
+                &llvm,
+                &original,
+                &target.triple,
+                "leaf",
+                &if arm {
+                    format!(".globl leaf\nleaf:\n mov x0,#{value}\n ret\n")
+                } else {
+                    format!(".globl leaf\nleaf:\n mov ${value},%rax\n ret\n")
+                },
+            );
+            run(Command::new(llvm.join("bin/ld.lld"))
+                .args(["-shared", "--threads=1", "--soname=libleaf.so", "-o"])
+                .arg(&leaf)
+                .arg(object));
+            if value == 42 {
+                let object = assemble(
+                    &llvm,
+                    &original,
+                    &target.triple,
+                    "top",
+                    if arm {
+                        ".globl top\ntop:\n b leaf\n"
+                    } else {
+                        ".globl top\ntop:\n jmp leaf@PLT\n"
+                    },
+                );
+                run(Command::new(llvm.join("bin/ld.lld"))
+                    .args(["-shared", "--threads=1", "-rpath", "$ORIGIN", "-o"])
+                    .arg(&top)
+                    .arg(object)
+                    .arg(&leaf));
+                let object = assemble(
+                    &llvm,
+                    &original,
+                    &target.triple,
+                    "start",
+                    if arm {
+                        ".globl _start\n_start:\n bl top\n mov x8,#93\n svc #0\n"
+                    } else {
+                        ".globl _start\n_start:\n call top@PLT\n mov %rax,%rdi\n mov $60,%rax\n syscall\n"
+                    },
+                );
+                run(Command::new(llvm.join("bin/ld.lld"))
+                    .args(["--threads=1", "--allow-shlib-undefined", "-o"])
+                    .arg(&image)
+                    .arg(object)
+                    .arg(&top));
+            }
+            let result = discover(
+                &store,
+                &target,
+                &image,
+                loader,
+                auditor,
+                DiscoveryPolicy {
+                    library_path: original.as_os_str(),
+                    emulator: arm.then_some(qemu.as_path()),
+                    timeout: std::time::Duration::from_secs(20),
+                    events_bytes: 16 << 10,
+                    input_bytes: 16 << 20,
+                    runtime: limits,
+                },
+            )
+            .unwrap();
+            assert_eq!(result.inputs.len(), 2);
+            assert!(
+                result
+                    .inputs
+                    .iter()
+                    .any(|input| input.path == leaf && input.file == store_file(&store, &leaf))
+            );
+            versions.push((result.image, result.runtime.reference()));
+        }
+        assert_eq!(versions[0].0, versions[1].0);
+        assert_ne!(versions[0].1, versions[1].1);
+        std::fs::rename(&leaf, original.join("removed-leaf")).unwrap();
+        assert!(
+            discover(
+                &store,
+                &target,
+                &image,
+                loader,
+                auditor,
+                DiscoveryPolicy {
+                    library_path: original.as_os_str(),
+                    emulator: arm.then_some(qemu.as_path()),
+                    timeout: std::time::Duration::from_secs(20),
+                    events_bytes: 16 << 10,
+                    input_bytes: 16 << 20,
+                    runtime: limits,
+                }
+            )
+            .is_err(),
+            "missing current transitive leaf must refuse"
+        );
+        std::fs::remove_dir_all(original).unwrap();
+        drop(store);
+        let store = DirStore::new(store_root);
+        for ((image, runtime), expected) in versions.into_iter().zip([42, 43]) {
+            let runtime = FrozenRuntime::from_reference(&store, runtime, &target, limits).unwrap();
+            let files = runtime.materialize(&store, &target, limits).unwrap();
+            let executable = files.directory().join("program");
+            materialize_link_input(&store, image, &executable, true).unwrap();
+            let output = files
+                .command(arm.then_some(qemu.as_path()), &executable)
+                .output()
+                .unwrap();
+            assert_eq!(
+                output.status.code(),
+                Some(expected),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    }
+}
