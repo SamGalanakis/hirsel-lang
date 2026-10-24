@@ -405,3 +405,9 @@ type ReadyRecord = (
 );
 
 pub mod instance;
+
+pub mod demand;
+pub mod ready_source;
+pub mod optimizer;
+pub mod emission;
+pub mod instance_tasks;
