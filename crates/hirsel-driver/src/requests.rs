@@ -5,6 +5,13 @@ use crate::native::{Backend, BuildProfile, LaunchInputs, TargetSpec, Validation}
 use hirsel_engine::{LoweringPolicy, loader_inputs::FrozenInputs};
 use hirsel_syntax::DefPath;
 use std::path::PathBuf;
+mod output;
+mod selector;
+pub use output::{
+    CompileOutput, CompileResult, CompilerReadiness, NativeExecution, RequestWork, TirExecution,
+    TirProducts,
+};
+pub use selector::{CompilerRequests, RequestLimits};
 
 /// Already observed inputs, including missing files, manifests, aliases and
 /// directory membership. Selection must use these bytes verbatim; observing

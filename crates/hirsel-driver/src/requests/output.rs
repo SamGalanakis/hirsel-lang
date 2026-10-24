@@ -1,0 +1,137 @@
+//! Readiness returns immutable products, never a mutable compiler session.
+//! The request lease and these products retain their admitted owners; a host
+//! cannot make a producer descriptor into V, source or native authority.
+use super::*;
+use hirsel_engine::{CheckOutput, ToolError, UnsafeReach, WorkStats};
+use hirsel_span::SourceMap;
+use hirsel_tir::{DefinitionRef, MaterializedRef, TirProvider};
+use hirsel_types::{GenericArgument, QueryError, SignatureRef};
+use std::sync::Arc;
+
+/// Work of this completed request, independently of a transport's delivery
+/// revision. Equal concurrent requests can share products without claiming
+/// that every caller performed their transformations.
+#[derive(Clone, Debug, Default)]
+pub struct RequestWork {
+    pub front: WorkStats,
+    pub touched_memos: Vec<hirsel_engine::memo::MemoKey>,
+    pub memo_operations: u64,
+    pub input_operations: u64,
+    pub input_bytes: u64,
+}
+/// One completed operation. Its metadata belongs to the same immutable input
+/// snapshot as its result and does not ask the disk for newer observations.
+pub struct CompileOutput {
+    pub inputs: FrozenInputs,
+    pub work: RequestWork,
+    pub result: CompileResult,
+}
+pub enum CompileResult {
+    Check(CheckOutput),
+    SafeCheck {
+        checked: CheckOutput,
+        reach: Option<(DefPath, Option<UnsafeReach>)>,
+    },
+    Tir(Arc<TirExecution>),
+    Native(Arc<NativeExecution>),
+}
+/// Materialize only already settled, checked execution products. These reads
+/// may decode an owned product but never run a compiler query, evaluate a
+/// constant or mutate registration. Missing/corrupt content remains an error.
+/// This owner has no second semantic invalidation or verifier-receipt table.
+pub trait TirProducts: Send + Sync {
+    fn definition(&self, path: &DefPath) -> Result<DefinitionRef, QueryError>;
+    fn constant(&self, path: &DefPath, actuals: &[u64]) -> Result<MaterializedRef, QueryError>;
+    fn constant_definitions(&self) -> Result<Vec<DefPath>, QueryError>;
+    fn instance_body(
+        &self,
+        path: &DefPath,
+        actuals: &[GenericArgument],
+    ) -> Result<Option<DefPath>, QueryError>;
+}
+/// The selected TIR root and the immutable closure needed to execute it. The
+/// runtime contains the exact type, private-view and checked-H metadata for
+/// this snapshot; semantic revision remains independent of native artifacts.
+pub struct TirExecution {
+    pub entry: DefPath,
+    pub definition: DefinitionRef,
+    pub signature: SignatureRef,
+    pub sources: SourceMap,
+    pub runtime: Arc<hirsel_interp::aggregate::RuntimeTypes>,
+    pub revision: hirsel_run_schema::ProgramRevision,
+    pub foreign_unreplayable: bool,
+    pub(crate) products: Arc<dyn TirProducts>,
+}
+impl TirExecution {
+    pub fn provider(&self) -> impl TirProvider + '_ {
+        ExecutionProvider(self.products.as_ref())
+    }
+}
+struct ExecutionProvider<'a>(&'a dyn TirProducts);
+impl TirProvider for ExecutionProvider<'_> {
+    fn definition(&mut self, path: &DefPath) -> Result<DefinitionRef, QueryError> {
+        self.0.definition(path)
+    }
+    fn constant(&mut self, path: &DefPath) -> Result<MaterializedRef, QueryError> {
+        self.0.constant(path, &[])
+    }
+    fn constant_instance(
+        &mut self,
+        path: &DefPath,
+        actuals: &[u64],
+    ) -> Result<MaterializedRef, QueryError> {
+        self.0.constant(path, actuals)
+    }
+    fn constant_definitions(&mut self) -> Result<Vec<DefPath>, QueryError> {
+        self.0.constant_definitions()
+    }
+    fn instance_body(
+        &mut self,
+        path: &DefPath,
+        actuals: &[GenericArgument],
+    ) -> Result<Option<DefPath>, QueryError> {
+        self.0.instance_body(path, actuals)
+    }
+}
+/// Executable readiness includes a materialized executable and frozen launch
+/// metadata. Construction follows successful Link/materialization checks; the
+/// admission/scratch owner lives until the last output user releases it.
+pub struct NativeExecution {
+    pub executable: PathBuf,
+    pub product: hirsel_engine::runtime::ProductRef,
+    pub entry: DefPath,
+    pub signature: SignatureRef,
+    pub sources: SourceMap,
+    pub revision: hirsel_run_schema::ProgramRevision,
+    pub request: NativeRequest,
+    pub toolchain: Arc<crate::native::Toolchain>,
+    pub run: Option<Arc<hirsel_run_config::ValidatedRun>>,
+    pub foreign_unreplayable: bool,
+    pub(crate) owner: Arc<dyn Send + Sync>,
+}
+impl NativeExecution {
+    /// Keep admitted executable/launch owners alive through a child process.
+    pub fn retain(&self) -> Arc<dyn Send + Sync> {
+        self.owner.clone()
+    }
+}
+
+/// Engine-selected materialization after query completion. The implementation
+/// is installed by the selector; hosts receive this only inside SelectedRequest.
+pub struct CompilerReadiness {
+    pub(crate) materialize: Arc<Materialize>,
+}
+pub(crate) type Materialize = dyn Fn(&[hirsel_engine::runtime::ProductRef]) -> Result<Arc<CompileOutput>, ToolError>
+    + Send
+    + Sync;
+
+impl hirsel_engine::requests::OutputReadiness for CompilerReadiness {
+    type Output = Arc<CompileOutput>;
+    type Error = ToolError;
+    fn ready(
+        &mut self,
+        products: &[hirsel_engine::runtime::ProductRef],
+    ) -> Result<Self::Output, Self::Error> {
+        (self.materialize)(products)
+    }
+}
