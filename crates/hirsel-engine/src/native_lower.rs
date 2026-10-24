@@ -310,6 +310,16 @@ impl NativeOriginalBody {
     }
 }
 impl NativeOriginalReader {
+    /// Copied reader maps and path buffers only. Shared source/signature/V,
+    /// interner, CT-5 and store payloads retain their original admission owners.
+    pub fn retained_metadata_bytes(&self) -> u64 {
+        let mut weight = crate::NativeMetadataWeight::default();
+        weight.add(std::mem::size_of::<Self>());
+        weight.map(&self.verified.selected, |weight, path, _| weight.path(path));
+        weight.map(&self.ordinary, |weight, path, _| weight.path(path));
+        weight.bytes()
+    }
+
     pub fn record_context(&self) -> Arc<NativeRecordContext> {
         self.verified.anchors.clone()
     }

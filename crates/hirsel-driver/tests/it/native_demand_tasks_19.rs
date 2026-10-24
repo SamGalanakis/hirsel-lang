@@ -204,7 +204,6 @@ fn native_source_metadata_debits_one_grant_and_outlives_the_instance_registry() 
         assert!(Arc::ptr_eq(&retained, &tasks.retained_source_allowance()));
         drop(tasks);
         assert_eq!(budget.reserved(), copied);
-        drop(make);
         drop(inputs);
         assert_eq!(budget.reserved(), copied);
         drop(retained);
