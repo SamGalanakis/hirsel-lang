@@ -7,7 +7,7 @@ use hirsel_lir::layout_types::*;
 use hirsel_lir::operation::{NativeType, Primitive};
 use hirsel_lir::sealed_payload_source::*;
 
-fn fixture(target: &TargetSpec) -> (LayoutTable, LirUnit<Ready>, FnAbi) {
+pub(crate) fn fixture(target: &TargetSpec) -> (LayoutTable, LirUnit<Ready>, FnAbi) {
     let definition = DefPath::core("receipt_holder_probe");
     let digest = ContentHash::of_bytes(b"private receipt holder probe");
     let mut table = LayoutTable::new(target);
@@ -214,7 +214,7 @@ int main(void) {
 }
 "#;
 
-fn execute(target: &TargetSpec, bytes: Vec<u8>, label: &str) {
+pub(crate) fn execute(target: &TargetSpec, bytes: Vec<u8>, label: &str, source: &str) {
     use std::path::PathBuf;
     use std::process::Command;
     fn checked(command: &mut Command) {
@@ -227,7 +227,7 @@ fn execute(target: &TargetSpec, bytes: Vec<u8>, label: &str) {
     let c = dir.join("probe.c");
     let object = dir.join("probe.o");
     let executable = dir.join("probe");
-    std::fs::write(&c, HARNESS).unwrap();
+    std::fs::write(&c, source).unwrap();
     std::fs::write(&object, bytes).unwrap();
     let arm = target.triple.starts_with("aarch64");
     let mut cc = if arm {
@@ -348,7 +348,7 @@ fn probe(target: &TargetSpec, malformed: u8) -> Vec<u8> {
 fn native_receipt_entry_preserves_input_handles_mut_aliasing_and_unwritten_result_on_both_targets()
 {
     for target in TargetSpec::executed() {
-        execute(&target, probe(&target, 0), "llvm-receipt-entry");
+        execute(&target, probe(&target, 0), "llvm-receipt-entry", HARNESS);
     }
 }
 

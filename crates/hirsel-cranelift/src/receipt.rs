@@ -1,8 +1,8 @@
 //! Physical receipt entry bindings, without source/custody admission.
 use crate::function::{FnEmitter, Place, Shape, V};
 use crate::module::Emitted;
-use hirsel_lir::ir::SlotKind;
-use hirsel_lir::layout_types::ScalarKind;
+use hirsel_lir::ir::{CallSite, Callee, ReceiptArgument, SlotKind, ValueId};
+use hirsel_lir::layout_types::{LayoutKind, ScalarKind};
 use hirsel_lir::sealed_payload_source::ReceiptMode;
 
 impl FnEmitter<'_, '_, '_> {
@@ -85,7 +85,75 @@ impl FnEmitter<'_, '_, '_> {
         }
         Ok(())
     }
+    pub(crate) fn check_receipt_call(
+        &self,
+        site: &CallSite,
+        abi: &hirsel_lir::abi_types::FnAbi,
+    ) -> Emitted {
+        hirsel_lir::abi::check_receipt_contract(abi, self.em.layouts())
+            .and_then(|()| {
+                hirsel_lir::receipt_transport::check_call_contract(abi, site, &self.unit.pools)
+            })
+            .map_err(|what| crate::CodegenError::Invalid {
+                definition: self.definition().clone(),
+                what: what.into(),
+            })?;
+        if let Some(contract) = &abi.receipts {
+            if !matches!(site.callee, Callee::Direct(_))
+                || abi.environment
+                || !contract.captures.is_empty()
+            {
+                return self
+                    .unsupported("receipt calls require a direct entry without capture transport");
+            }
+        }
+        Ok(())
+    }
+
+    /// Append metadata holders/addresses in the contract's physical order. This
+    /// acquires no holder and writes neither caller mut storage nor the output.
+    pub(crate) fn receipt_call_arguments(
+        &mut self,
+        site: &CallSite,
+        arguments: &mut Vec<cranelift_codegen::ir::Value>,
+    ) -> Emitted<Option<(ValueId, Place)>> {
+        let Some(receipts) = &site.receipts else {
+            return Ok(None);
+        };
+        for argument in &receipts.arguments {
+            let pointer = match *argument {
+                ReceiptArgument::Borrow { receipt, .. } | ReceiptArgument::Take { receipt, .. } => {
+                    if !self.is_receipt_value(receipt)? {
+                        return self.invalid("a receipt call passed a language value as metadata");
+                    }
+                    self.get1(receipt)?
+                }
+                ReceiptArgument::Mut { address, .. } => {
+                    let place = self.place(address)?;
+                    let record = self.layout(place.layout)?;
+                    if !matches!(record.kind, LayoutKind::PayloadReceipt { .. })
+                        || place.columns.is_some()
+                        || place.align < record.align
+                    {
+                        return self
+                            .invalid("a receipt mut carrier is not an aligned metadata slot");
+                    }
+                    place.ptr
+                }
+            };
+            arguments.push(pointer);
+        }
+        let Some(result) = receipts.result else {
+            return Ok(None);
+        };
+        if !self.is_receipt_value(result)? {
+            return self.invalid("a receipt result lacks metadata representation");
+        }
+        let place = self.stack(self.value_type(result)?.layout)?;
+        arguments.push(place.ptr);
+        Ok(Some((result, place)))
+    }
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

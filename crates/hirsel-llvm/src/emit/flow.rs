@@ -99,6 +99,10 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                     self.versions.insert(version);
                 }
             }
+            if let Some(receipts) = &call.receipts {
+                self.versions
+                    .extend(receipts.writebacks().map(|(_, version)| version));
+            }
         }
         for parameter in &self.signature.abi.parameters {
             let backed = unit

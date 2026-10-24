@@ -325,13 +325,24 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         let Some(site) = unit.tables.calls.get(call.index()) else {
             return self.invalid("a call outside the call table");
         };
-        if site.receipts.is_some() {
-            return Err(CodegenError::Invalid {
-                definition: self.definition().clone(),
-                what: "receipt call ownership transport is not implemented".into(),
-            });
-        }
         let abi = fn_abi(self.inputs.layouts, site.abi, self.definition())?;
+        self.call_with_abi(call, normal, failure, abi)
+    }
+
+    /// Lower an already selected ABI. The public unit path above retains its
+    /// admission guard; private backend probes can exercise physical transport.
+    pub(super) fn call_with_abi(
+        &mut self,
+        call: CallId,
+        normal: Option<EdgeId>,
+        failure: FailureId,
+        abi: &'a FnAbi,
+    ) -> Emitted {
+        let unit = self.unit;
+        let Some(site) = unit.tables.calls.get(call.index()) else {
+            return self.invalid("a call outside the call table");
+        };
+        self.check_receipt_call(site, abi)?;
         if abi.shape == CallableShape::Foreign {
             return self.foreign_call(call, abi, normal);
         }
@@ -561,6 +572,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 _ => return self.invalid("an argument passed against its parameter's convention"),
             }
         }
+        let receipt_result = self.receipt_call_arguments(site, &mut args)?;
         // list_grow's SeqReserve hands back unique storage unless it was given a tracked
         // arena block (MEM-6), which it leaves alone: known before the call, or read from it.
         let reserved = matches!(site.callee, Callee::Direct(symbol)
@@ -803,6 +815,9 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             self.builder.unreachable();
             return Ok(());
         };
+        if let Some((result, place)) = receipt_result {
+            self.define(result, self.load(Shape::Scalar(ScalarKind::Pointer), place))?;
+        }
         if let Some(result) = site.result {
             let value = match (signature.result(&self.builder, returned), result_place) {
                 (Some(value), _) => value,

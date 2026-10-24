@@ -792,6 +792,10 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
                     self.versions.insert(version);
                 }
             }
+            if let Some(receipts) = &call.receipts {
+                self.versions
+                    .extend(receipts.writebacks().map(|(_, version)| version));
+            }
         }
         for parameter in &self.sig.abi.parameters {
             let backed = unit
@@ -1906,13 +1910,23 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
         let Some(site) = unit.tables.calls.get(call.index()) else {
             return self.invalid("a call outside the call table");
         };
-        if site.receipts.is_some() {
-            return Err(CodegenError::Invalid {
-                definition: self.definition().clone(),
-                what: "receipt call ownership transport is not implemented".into(),
-            });
-        }
         let abi = self.em.fn_abi(site.abi, self.definition())?;
+        self.call_site_with_abi(call, normal, failure, abi)
+    }
+
+    /// Physical lowering below the unchanged unit/ABI admission boundary.
+    fn call_site_with_abi(
+        &mut self,
+        call: CallId,
+        normal: Option<EdgeId>,
+        failure: FailureId,
+        abi: &'a FnAbi,
+    ) -> Emitted {
+        let unit = self.unit;
+        let Some(site) = unit.tables.calls.get(call.index()) else {
+            return self.invalid("a call outside the call table");
+        };
+        self.check_receipt_call(site, abi)?;
         if abi.shape == CallableShape::Foreign {
             return self.foreign_call(call, abi, normal);
         }
@@ -2075,6 +2089,7 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
                 _ => return self.invalid("an argument passed against its parameter's convention"),
             }
         }
+        let receipt_result = self.receipt_call_arguments(site, &mut args)?;
         if args.len() != signature.ir.params.len() {
             return self.invalid("a call whose arguments differ from its signature");
         }
@@ -2196,6 +2211,10 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
             self.b.ins().trap(TRAP);
             return Ok(());
         };
+        if let Some((result, place)) = receipt_result {
+            let receipt = self.load(Shape::Scalar(ScalarKind::Pointer), place);
+            self.define(result, receipt)?;
+        }
         if let Some(result) = site.result {
             let value = match (signature.value, result_place) {
                 (Some(kind), _) => {
@@ -2243,3 +2262,6 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
         abi_digest(abi)
     }
 }
+
+#[cfg(test)]
+mod receipt_call_tests;
