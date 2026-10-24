@@ -160,8 +160,8 @@ fn arc_bytes<T: ?Sized>(value: &T) -> usize {
 }
 
 #[derive(Default)]
-struct Weight {
-    bytes: u64,
+pub(crate) struct Weight {
+    pub(crate) bytes: u64,
     shared: HashSet<usize>,
 }
 impl Weight {
@@ -296,10 +296,10 @@ impl Weight {
         }
         self.vec(citations, |w, (path, _)| w.def_path(path));
     }
-    fn add(&mut self, bytes: usize) {
+    pub(crate) fn add(&mut self, bytes: usize) {
         self.bytes = self.bytes.saturating_add(bytes as u64);
     }
-    fn flat_vec<T>(&mut self, value: &Vec<T>) {
+    pub(crate) fn flat_vec<T>(&mut self, value: &Vec<T>) {
         self.add(value.capacity().saturating_mul(size_of::<T>()));
     }
     fn vec<T>(&mut self, value: &Vec<T>, mut visit: impl FnMut(&mut Self, &T)) {
@@ -328,7 +328,7 @@ impl Weight {
             }
         }
     }
-    fn generic(&mut self, value: &hirsel_types::GenericParameter) {
+    pub(crate) fn generic(&mut self, value: &hirsel_types::GenericParameter) {
         match value {
             hirsel_types::GenericParameter::Type { name, bounds } => {
                 self.add(name.capacity());
@@ -490,7 +490,7 @@ impl Weight {
             value = value.prefix().expect("nonempty paths have a prefix");
         }
     }
-    fn def_path(&mut self, value: &DefPath) {
+    pub(crate) fn def_path(&mut self, value: &DefPath) {
         let hirsel_syntax::ItemPath {
             package,
             modules,
@@ -519,7 +519,7 @@ impl Weight {
             Destination::Heap | Destination::Region(_) | Destination::Inferred => (),
         }
     }
-    fn constant(&mut self, value: &Constant) {
+    pub(crate) fn constant(&mut self, value: &Constant) {
         match value {
             Constant::String(value) => self.add(value.capacity()),
             Constant::Bytes(value) => self.flat_vec(value),
@@ -530,7 +530,7 @@ impl Weight {
             | Constant::F64(_) => (),
         }
     }
-    fn constructor(&mut self, value: &Constructor) {
+    pub(crate) fn constructor(&mut self, value: &Constructor) {
         match value {
             Constructor::Record(path)
             | Constructor::Variant {
