@@ -402,65 +402,190 @@ pub(crate) fn prepare_values(
     signature: &Signature,
     source: &mut impl ComptimeValueSource,
 ) -> Result<Vec<(ExprId, Materialized)>, QueryError> {
-    let file = &analyzed.typed.syntax;
-    let checked = &analyzed.typed.checked;
-    let mut constants = vec![];
-    for (expression, name) in &checked.resolution.expressions {
-        if let ResolvedName::Definition(path) = name {
-            if matches!(
-                source.signature(path)?.kind,
-                hirsel_types::SignatureKind::Const { ty: _, .. }
-            ) {
-                let mut value = source.constant(
-                    path,
-                    file.tree.expressions[expression.0 as usize].origin.span,
-                )?;
+    let mut preparation = ValuePreparation::new(analyzed);
+    match preparation.poll(types, analyzed, staged, signature, &mut ReadyValues(source)) {
+        std::task::Poll::Ready(Ok(_)) => Ok(preparation.constants),
+        std::task::Poll::Ready(Err(error)) => Err(error),
+        std::task::Poll::Pending => unreachable!("synchronous value source suspended"),
+    }
+}
+
+/// A dependency source that can release the compiler worker while a constant or
+/// private evaluation is pending. Implementations retain their own evaluation
+/// continuation; polling again must never restart an initializer.
+pub(crate) trait PreparingSource {
+    fn signature(
+        &mut self,
+        path: &DefPath,
+    ) -> std::task::Poll<Result<hirsel_types::SignatureRef, QueryError>>;
+    fn constant(
+        &mut self,
+        path: &DefPath,
+        site: Span,
+    ) -> std::task::Poll<Result<Materialized, QueryError>>;
+    fn evaluate(
+        &mut self,
+        input: EvaluationInput<'_>,
+    ) -> std::task::Poll<Result<Materialized, QueryError>>;
+}
+struct ReadyValues<'a, S>(&'a mut S);
+impl<S: ComptimeValueSource> PreparingSource for ReadyValues<'_, S> {
+    fn signature(
+        &mut self,
+        path: &DefPath,
+    ) -> std::task::Poll<Result<hirsel_types::SignatureRef, QueryError>> {
+        std::task::Poll::Ready(self.0.signature(path))
+    }
+    fn constant(
+        &mut self,
+        path: &DefPath,
+        site: Span,
+    ) -> std::task::Poll<Result<Materialized, QueryError>> {
+        std::task::Poll::Ready(self.0.constant(path, site))
+    }
+    fn evaluate(
+        &mut self,
+        input: EvaluationInput<'_>,
+    ) -> std::task::Poll<Result<Materialized, QueryError>> {
+        std::task::Poll::Ready(self.0.evaluate(input))
+    }
+}
+
+/// Saved preparation cursor over one immutable checked body. A pending read
+/// keeps preceding substitutions and the selected signature, in their original
+/// order, so suspension repeats neither completed work nor observable reads.
+/// This is the same preparation algorithm used by synchronous callers.
+pub(crate) struct ValuePreparation {
+    reference: usize,
+    selected_constant: Option<(ExprId, DefPath, TypeId, Span)>,
+    expressions: Vec<(ExprId, ExprId, TypeId)>,
+    expression: usize,
+    constants: Vec<(ExprId, Materialized)>,
+    terminal: Option<Result<(), QueryError>>,
+}
+impl ValuePreparation {
+    pub(crate) fn new(analyzed: &AnalyzedBody) -> Self {
+        let file = &analyzed.typed.syntax;
+        let mut expressions: Vec<_> = analyzed
+            .typed
+            .checked
+            .expressions
+            .iter()
+            .filter_map(
+                |row| match file.tree.expressions[row.expression.0 as usize].kind {
+                    ExprKind::Comptime(child) => Some((row.expression, child, row.ty)),
+                    _ => None,
+                },
+            )
+            .collect();
+        expressions.sort_by_key(|(id, _, _)| {
+            let span = file.tree.expressions[id.0 as usize].origin.span;
+            (span.end - span.start, span.start)
+        });
+        Self {
+            reference: 0,
+            selected_constant: None,
+            expressions,
+            expression: 0,
+            constants: vec![],
+            terminal: None,
+        }
+    }
+    pub(crate) fn poll(
+        &mut self,
+        types: &hirsel_types::TypeInterner,
+        analyzed: &AnalyzedBody,
+        staged: &[(ExprId, TypeId)],
+        signature: &Signature,
+        source: &mut impl PreparingSource,
+    ) -> std::task::Poll<Result<&[(ExprId, Materialized)], QueryError>> {
+        if let Some(result) = &self.terminal {
+            return std::task::Poll::Ready(result.clone().map(|()| self.constants.as_slice()));
+        }
+        let result = self.advance(types, analyzed, staged, signature, source);
+        match result {
+            std::task::Poll::Pending => std::task::Poll::Pending,
+            std::task::Poll::Ready(result) => {
+                self.terminal = Some(result.clone());
+                std::task::Poll::Ready(result.map(|()| self.constants.as_slice()))
+            }
+        }
+    }
+    fn advance(
+        &mut self,
+        types: &hirsel_types::TypeInterner,
+        analyzed: &AnalyzedBody,
+        staged: &[(ExprId, TypeId)],
+        signature: &Signature,
+        source: &mut impl PreparingSource,
+    ) -> std::task::Poll<Result<(), QueryError>> {
+        use std::task::{Poll, ready};
+        let file = &analyzed.typed.syntax;
+        let checked = &analyzed.typed.checked;
+        while self.reference < checked.resolution.expressions.len() {
+            if let Some((expression, path, ty, site)) = &self.selected_constant {
+                let mut value = ready!(source.constant(path, *site))?;
+                value.root.ty = *ty;
+                self.constants.push((*expression, value));
+                self.selected_constant = None;
+                self.reference += 1;
+                continue;
+            }
+            let (expression, name) = &checked.resolution.expressions[self.reference];
+            if let ResolvedName::Definition(path) = name
+                && matches!(
+                    ready!(source.signature(path))?.kind,
+                    SignatureKind::Const { .. }
+                )
+            {
                 let ty = checked
                     .expressions
                     .iter()
-                    .find(|r| r.expression == *expression)
+                    .find(|row| row.expression == *expression)
                     .ok_or_else(|| operational("missing constant reference type"))?
                     .ty;
-                // One session interner: the reference has the checked type.
-                value.root.ty = ty;
-                constants.push((*expression, value));
-            }
-        }
-    }
-    let mut expressions: Vec<_> = checked
-        .expressions
-        .iter()
-        .filter_map(|row| {
-            if let ExprKind::Comptime(child) = file.tree.expressions[row.expression.0 as usize].kind
-            {
-                Some((row.expression, child, row.ty))
+                self.selected_constant = Some((
+                    *expression,
+                    path.clone(),
+                    ty,
+                    file.tree.expressions[expression.0 as usize].origin.span,
+                ));
             } else {
-                None
+                self.reference += 1;
             }
-        })
-        .collect();
-    expressions.sort_by_key(|(id, _, _)| {
-        let s = file.tree.expressions[id.0 as usize].origin.span;
-        (s.end - s.start, s.start)
-    });
-    for (expression, child, ty) in expressions {
-        if !hirsel_check_protocol::body::comptime_inputs(types, file, checked, expression)
-            .is_empty()
-        {
-            continue;
         }
-        let value = source.evaluate(EvaluationInput {
-            analyzed,
-            staged,
-            signature,
-            expression,
-            child,
-            ty,
-            constants: &constants,
-            sizes: &[],
-        })?;
-        constants.push((expression, value));
+        while let Some(&(expression, child, ty)) = self.expressions.get(self.expression) {
+            if !hirsel_check_protocol::body::comptime_inputs(types, file, checked, expression)
+                .is_empty()
+            {
+                self.expression += 1;
+                continue;
+            }
+            let value = ready!(source.evaluate(EvaluationInput {
+                analyzed,
+                staged,
+                signature,
+                expression,
+                child,
+                ty,
+                constants: &self.constants,
+                sizes: &[],
+            }))?;
+            self.constants.push((expression, value));
+            self.expression += 1;
+        }
+        validate_repeats(types, analyzed, &self.constants)?;
+        Poll::Ready(Ok(()))
     }
+}
+
+fn validate_repeats(
+    types: &hirsel_types::TypeInterner,
+    analyzed: &AnalyzedBody,
+    constants: &[(ExprId, Materialized)],
+) -> Result<(), QueryError> {
+    let file = &analyzed.typed.syntax;
+    let checked = &analyzed.typed.checked;
     for repeat in &file.tree.repeats {
         let Some(row) = checked
             .expressions
@@ -505,7 +630,7 @@ pub(crate) fn prepare_values(
             )]));
         }
     }
-    Ok(constants)
+    Ok(())
 }
 
 /// Reception types for hidden size-generic constants, using only immutable
@@ -1765,6 +1890,9 @@ impl QueryEngine {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod preparation_tests;
 
 #[cfg(test)]
 mod task_tests {
