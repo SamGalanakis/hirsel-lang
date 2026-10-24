@@ -22,7 +22,6 @@ use hirsel_artifact_store::{Action, Address, Domain, Store};
 use hirsel_syntax::ContentHash;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 use std::sync::{Arc, Mutex, PoisonError};
 
 /// The content key of one planned unit's object.
@@ -118,8 +117,6 @@ impl ObjectStore for NoObjects {
 
 /// The default size cap of `dir@1`.
 pub const DEFAULT_CAP: u64 = 4 << 30;
-/// After this many bytes written in a process, `dir@1` enforces its cap.
-const GC_EVERY: u64 = 64 << 20;
 
 /// `dir@1`: native action associations and checked immutable content in the
 /// common artifact store. The v3 reset has no reader for old object files.
@@ -127,7 +124,6 @@ const GC_EVERY: u64 = 64 << 20;
 pub struct DirObjects {
     store: Store,
     cap: u64,
-    written: AtomicU64,
 }
 impl std::fmt::Debug for DirObjects {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -143,14 +139,16 @@ pub use hirsel_artifact_store::GcReport;
 impl DirObjects {
     /// The store at `root`, the directory of one partition.
     pub fn new(root: PathBuf) -> Self {
+        let store = Store::rebuildable(root);
+        store.set_cache_cap(DEFAULT_CAP);
         Self {
-            store: Store::rebuildable(root),
+            store,
             cap: DEFAULT_CAP,
-            written: AtomicU64::new(0),
         }
     }
     pub fn with_cap(mut self, cap: u64) -> Self {
         self.cap = cap;
+        self.store.set_cache_cap(cap);
         self
     }
     /// `$XDG_CACHE_HOME/hirsel/objects-v<N>/<partition>`, else under `$HOME/.cache`.
@@ -208,20 +206,9 @@ impl ObjectStore for DirObjects {
         let Ok(reference) = self.store.put(OBJECT_DOMAIN, value) else {
             return;
         };
-        if self
-            .store
-            .associate(address(key), action(key), reference)
-            .is_ok()
-        {
-            // Charge the shared content header and action record as well as
-            // the payload, including empty records after a nonempty write.
-            let len = value.len() as u64 + 64 + 152;
-            let before = self.written.fetch_add(len, Relaxed);
-            let interval = GC_EVERY.min(self.cap.max(1));
-            if before == 0 || before.saturating_add(len) / interval != before / interval {
-                self.gc(self.cap);
-            }
-        }
+        // The physical owner counts segments, index layers and maintenance,
+        // including empty payloads, and collects at a safe publication boundary.
+        let _ = self.store.associate(address(key), action(key), reference);
     }
 }
 
@@ -734,10 +721,9 @@ mod tests {
 
     fn paths(store: &DirObjects, key: &UnitKey) -> (PathBuf, PathBuf) {
         let entry = store.store.lookup(address(key)).unwrap();
-        let hash = address(key).0;
-        let hex: String = hash.0.iter().map(|b| format!("{b:02x}")).collect();
+        // 25e2b384 stores associations in immutable packed segments.
         (
-            store.root().join("actions").join(&hex[..2]).join(&hex),
+            store.store.association_path(address(key)).unwrap(),
             store.store.output_path(entry.reference),
         )
     }
@@ -766,6 +752,8 @@ mod tests {
         store.put(&key(3), b"third object");
         let old = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1);
         let (old_action, old_output) = paths(&store, &key(1));
+        let old_bytes =
+            fs::metadata(&old_action).unwrap().len() + fs::metadata(&old_output).unwrap().len();
         for path in [old_action, old_output] {
             fs::File::options()
                 .append(true)
@@ -774,10 +762,11 @@ mod tests {
                 .set_modified(old)
                 .unwrap();
         }
-        let (action, output) = paths(&store, &key(3));
-        let one = fs::metadata(action).unwrap().len() + fs::metadata(output).unwrap().len();
+        // The physical budget includes packed routing layers and their root.
+        let before = store.gc(u64::MAX);
+        let one = before.bytes - old_bytes;
         let report = store.gc(one);
-        assert_eq!((report.entries, report.removed), (4, 2));
+        assert_eq!((report.entries, report.removed), (before.entries, 2));
         assert_eq!(report.bytes - report.removed_bytes, one);
         assert!(store.get(&key(1)).is_none());
         assert!(store.get(&key(3)).is_some());
@@ -914,7 +903,7 @@ mod tests {
             store.put(&key(id), b"");
         }
         let report = store.gc(u64::MAX);
-        assert!(report.bytes <= cap + cap.min(GC_EVERY) + 216, "{report:?}");
+        assert!(report.bytes <= cap, "{report:?}");
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -985,8 +974,8 @@ mod tests {
         let store = DirObjects::new(root.clone());
         store.put(&key(99), b"complete");
         assert_eq!(&*store.get(&key(99)).unwrap(), b"complete");
-        for kind in ["actions", "outputs"] {
-            for shard in fs::read_dir(root.join(kind)).unwrap() {
+        for kind in ["packs", "outputs"] {
+            for shard in fs::read_dir(root.join(kind)).into_iter().flatten() {
                 for file in fs::read_dir(shard.unwrap().path()).unwrap() {
                     assert!(!file.unwrap().file_name().to_string_lossy().starts_with('.'));
                 }
