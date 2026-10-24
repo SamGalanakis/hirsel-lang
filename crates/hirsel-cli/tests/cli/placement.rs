@@ -40,8 +40,9 @@ fn cores_shorthand_equals_record_placement_in_source_and_native_headers() {
             };
             let placement: serde_json::Value =
                 serde_json::from_slice(&decode(&field("placement "))).unwrap();
-            assert_eq!(placement["cores"], 8);
-            assert_eq!(placement["cpus"], cpus);
+            assert_eq!(placement["schema"], 1);
+            assert_eq!(placement["request"]["cores"], 8);
+            assert_eq!(placement["request"]["cpus"], cpus);
             let canonical: serde_json::Value =
                 serde_json::from_slice(&decode(&field("run "))).unwrap();
             assert!(canonical.get("placement").is_none());
@@ -115,8 +116,9 @@ fn cores_overrides_bound_record_and_works_without_explicit_grants() {
         .find_map(|line| line.strip_prefix("placement "))
         .unwrap();
     let placement: serde_json::Value = serde_json::from_slice(&decode(provenance)).unwrap();
-    assert_eq!(placement["cores"], 8);
-    assert_eq!(placement["run_ahead"], 3);
+    assert_eq!(placement["schema"], 1);
+    assert_eq!(placement["request"]["cores"], 8);
+    assert_eq!(placement["request"]["run_ahead"], 3);
     let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
         .args(["run", "--cores", "8"])
         .arg(&source)

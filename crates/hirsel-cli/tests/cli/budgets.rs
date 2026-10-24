@@ -230,18 +230,26 @@ fn a_run_without_budgets_keeps_historical_identity_and_events_with_placement_pro
     assert_eq!(recorded.stdout, b"recorded on main\n");
     let written = hirsel_rt::launch::read_recording_text(&tape).unwrap();
     let mut expected = normalized(MAIN_TAPE);
-    // Exact default placement provenance; all historical semantic bytes and events match.
-    expected.insert(
-        6,
-        concat!(
-            "placement ",
-            "7b22636f726573223a312c2263707573223a6e756c6c2c2270696e223a226e6f6e65222c",
-            "22636f6d6d6974223a6e756c6c2c2272756e5f6168656164223a6e756c6c2c2272656f72",
-            "646572223a6e756c6c2c2273706563756c6174696f6e5f6279746573223a6e756c6c2c226d",
-            "657472696373223a6e756c6c2c22636f6e74726f6c223a6e756c6c7d"
-        )
-        .into(),
+    // 4a539389 binds the new invocation-depth semantics explicitly. The retained
+    // historical tape stays untouched; only this fresh recording's oracle changes.
+    expected[5] = expected[5].replacen(
+        "\"schema\":1,",
+        "\"schema\":1,\"depth_semantics\":\"hirsel.depth.invocations.v1\",",
+        1,
     );
+    // c9f5ab7c separates the unchanged request from observed capacity provenance.
+    // This source execution supplies no physical admission evidence.
+    let placement = concat!(
+        "{\"schema\":1,\"request\":{\"cores\":1,\"cpus\":null,\"pin\":\"none\",",
+        "\"commit\":null,\"run_ahead\":null,\"reorder\":null,\"speculation_bytes\":null,",
+        "\"metrics\":null,\"control\":null},\"admission\":{\"kind\":\"not_physical\",",
+        "\"requested\":1,\"worker_phase\":\"starting\",\"reason\":\"executor_not_observed\"}}"
+    );
+    let encoded: String = placement
+        .bytes()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    expected.insert(6, format!("placement {encoded}"));
     assert_eq!(normalized(&written), expected);
     let replayed = Command::new(env!("CARGO_BIN_EXE_hirsel"))
         .arg("run")
