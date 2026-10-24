@@ -116,6 +116,7 @@ struct Record {
 
 /// A completed ordinary discovery result. Failed cache publication leaves its
 /// current typed result usable but supplies no successful durable association.
+#[derive(Clone)]
 pub struct NativeDiscoveryProduct {
     pub product: Option<crate::runtime::ProductRef>,
     pub source: NativeDefinitionProduct,
