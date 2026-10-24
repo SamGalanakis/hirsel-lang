@@ -48,6 +48,7 @@ pub struct FrontCheckQueries {
     query: QueryId,
     files: Vec<FileInput>,
     plan: FrontCheckPlan,
+    storage: Option<Arc<FrontStorageGraphQueries>>,
     constants: BTreeSet<DefId>,
     sources: SourceMap,
     records: crate::NativeRecords,
@@ -60,6 +61,25 @@ pub struct FrontCheckQueries {
     _allowance: MemoryReservation,
 }
 impl FrontCheckQueries {
+    /// Install the matching actual source storage producer before sharing this
+    /// new root with any factory or consumer. No mutable graph switch exists.
+    pub fn with_storage(
+        mut self: Arc<Self>,
+        storage: Arc<FrontStorageGraphQueries>,
+    ) -> Result<Arc<Self>, QueryError> {
+        let error = || {
+            QueryError::Operational(hirsel_types::OperationalFailure {
+                operation: "ordered source storage admission".into(),
+                message: "storage graph must match an unshared Check root".into(),
+            })
+        };
+        if !storage.matches(&self.plan.front, &self.plan.lower, &self.plan.growth) {
+            return Err(error());
+        }
+        Arc::get_mut(&mut self).ok_or_else(error)?.storage = Some(storage);
+        Ok(self)
+    }
+
     /// Ordered file/path cursors and product-reference rows. The actual
     /// definition bodies remain charged to their own producer owners.
     pub fn input_bytes(definitions: &[DefPath], files: usize, weight: MemoryWeight) -> Option<u64> {
@@ -164,6 +184,7 @@ impl File {
 enum Stage {
     Front,
     Growth,
+    Storage,
     Comptime,
     Rest,
     Done,
@@ -340,10 +361,45 @@ impl Task {
                                 }
                             }
                         }
-                        // These rules require their own actual demand producers.
-                        // Until installed, report the normal incomplete phase;
-                        // never accept a program after omitting a source rule.
-                        if self.files.iter().any(|file| file.source_rules) {
+                    }
+                    self.stage = Stage::Storage;
+                }
+                Stage::Storage => {
+                    if self.files.iter().any(File::clean) {
+                        if let Some(storage) = &self.queries.storage {
+                            let id = storage.query();
+                            let result = match cx.read(id) {
+                                Poll::Pending => return Ok(Some(vec![id])),
+                                Poll::Ready(result) => result,
+                            };
+                            match result {
+                                Ok(product) => {
+                                    let output = storage
+                                        .outcome(product)
+                                        .ok_or(self.queries.errors.protocol)?;
+                                    self.reads.merge(&output.reads);
+                                    for file in self.files.iter_mut().filter(|file| file.clean()) {
+                                        file.diagnostics.extend(output.diagnostics.iter().cloned());
+                                    }
+                                }
+                                Err(reference) => {
+                                    let error = storage
+                                        .failure(reference)
+                                        .or_else(|| self.queries.plan.lower.failure(reference))
+                                        .or_else(|| {
+                                            self.queries
+                                                .plan
+                                                .front
+                                                .outcome(reference)
+                                                .and_then(|o| o.outcome.result.err())
+                                        })
+                                        .ok_or(reference)?;
+                                    for file in self.files.iter_mut().filter(|file| file.clean()) {
+                                        file.error(error.clone(), Some(QueryKind::Check));
+                                    }
+                                }
+                            }
+                        } else if self.files.iter().any(|file| file.source_rules) {
                             for file in self.files.iter_mut().filter(|file| file.clean()) {
                                 file.error(QueryError::NotImplemented, Some(QueryKind::Check));
                             }
@@ -473,7 +529,7 @@ impl Task {
                 ),
             )
             .ok_or(queries.errors.resource)?;
-        if bytes.len() as u64 > queries.weight.retained {
+        if bytes.len() as u64 > queries.weight.scratch {
             return Err(queries.errors.resource);
         }
         let record = queries
@@ -604,6 +660,7 @@ impl QueryEngine {
             query,
             files,
             plan,
+            storage: None,
             constants,
             sources: self.sources.clone(),
             records: crate::NativeRecords::new(self.types.clone(), store.clone()),
