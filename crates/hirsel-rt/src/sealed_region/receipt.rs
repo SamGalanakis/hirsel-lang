@@ -10,6 +10,7 @@
 //! This Rust-only primitive does not construct semantic receipts, acquire source
 //! storage, validate recipes, or expose a native ABI. Its run identity and node
 //! generation are metadata identities, never semantic allocation identities.
+use super::RootBytes;
 use crate::fault;
 use std::cell::UnsafeCell;
 use std::marker::PhantomData;
@@ -36,6 +37,7 @@ pub struct MetadataRun(u64);
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Error {
     DifferentRun,
+    InvalidImageLayout,
 }
 
 impl MetadataRun {
@@ -48,9 +50,45 @@ impl MetadataRun {
     /// acquires no ordinary or Shared language credit. A record must not be
     /// treated as permission to dereference descriptive source addresses.
     pub fn node<T: Copy>(self, record: T, children: &[Receipt<T>]) -> Result<Receipt<T>, Error> {
+        self.make_node(record, children, || None)
+    }
+
+    /// Copy initialized inline bytes to stable, aligned metadata storage.
+    /// The image owns only bytes: embedded pointer words are descriptive and
+    /// acquire no ordinary or Shared credits. It must not be dereferenced as a
+    /// source storage permission. Padding must be initialized by the caller.
+    /// Even an empty image is present and has the requested alignment.
+    pub fn node_with_bytes<T: Copy>(
+        self,
+        record: T,
+        bytes: &[u8],
+        alignment: usize,
+        children: &[Receipt<T>],
+    ) -> Result<Receipt<T>, Error> {
+        std::alloc::Layout::from_size_align(bytes.len().max(1), alignment)
+            .map_err(|_| Error::InvalidImageLayout)?;
+        self.make_node(record, children, || {
+            Some(InlineImage {
+                // SAFETY: the slice contains exactly len initialized bytes;
+                // the preceding Layout check establishes size and alignment.
+                storage: unsafe { RootBytes::snapshot(bytes.as_ptr(), bytes.len(), alignment) },
+                size: bytes.len(),
+            })
+        })
+    }
+
+    fn make_node<T: Copy>(
+        self,
+        record: T,
+        children: &[Receipt<T>],
+        image: impl FnOnce() -> Option<InlineImage>,
+    ) -> Result<Receipt<T>, Error> {
         if children.iter().any(|child| child.run() != self) {
             return Err(Error::DifferentRun);
         }
+        // Refuse foreign children before allocating/copying an inline image
+        // or acquiring any child holder, including a same-run prefix.
+        let image = image();
         let children = children
             .iter()
             .map(|child| {
@@ -64,6 +102,7 @@ impl MetadataRun {
             generation: fresh(&GENERATIONS),
             record,
             children,
+            image,
             release_next: UnsafeCell::new(ptr::null_mut()),
         });
         Ok(Receipt {
@@ -78,12 +117,18 @@ impl Default for MetadataRun {
     }
 }
 
+struct InlineImage {
+    storage: RootBytes,
+    size: usize,
+}
+
 struct Node<T: Copy> {
     holders: AtomicUsize,
     run: MetadataRun,
     generation: u64,
     record: T,
     children: Box<[NonNull<Node<T>>]>,
+    image: Option<InlineImage>,
     // Read/written only by the sole last-holder release after count reaches 0.
     release_next: UnsafeCell<*mut Node<T>>,
 }
@@ -119,6 +164,14 @@ impl<T: Copy> Receipt<T> {
     pub fn record(&self) -> &T {
         // SAFETY: this holder keeps the immutable record live.
         &unsafe { self.pointer.as_ref() }.record
+    }
+
+    pub fn bytes(&self) -> Option<&[u8]> {
+        self.view().bytes()
+    }
+
+    pub fn alignment(&self) -> Option<usize> {
+        self.view().alignment()
     }
 
     pub fn children(&self) -> impl ExactSizeIterator<Item = View<'_, T>> {
@@ -159,6 +212,21 @@ impl<'a, T: Copy> View<'a, T> {
 
     pub fn record(self) -> &'a T {
         &self.node().record
+    }
+
+    pub fn bytes(self) -> Option<&'a [u8]> {
+        self.node().image.as_ref().map(|image| {
+            // SAFETY: immutable initialized bytes were copied into this exact
+            // allocation; this view retains its ancestor-bounded lifetime.
+            unsafe { std::slice::from_raw_parts(image.storage.data.as_ptr(), image.size) }
+        })
+    }
+
+    pub fn alignment(self) -> Option<usize> {
+        self.node()
+            .image
+            .as_ref()
+            .map(|image| image.storage.allocation.align())
     }
 
     pub fn children(self) -> impl ExactSizeIterator<Item = View<'a, T>> {
@@ -217,8 +285,9 @@ impl<T: Copy> Drop for Receipt<T> {
                     pending = child.as_ptr();
                 }
             }
-            // Box frees this exact node and child-link allocation. Children
-            // are raw nonowning pointer words now, and Copy T has no Drop.
+            // Box frees this exact node, child links and any aligned inline
+            // image. Children are raw nonowning words; Copy T has no Drop.
+            // RootBytes returns its exact original Layout without user code.
             drop(node);
         }
     }

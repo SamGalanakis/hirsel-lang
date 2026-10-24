@@ -181,3 +181,90 @@ fn deep_release_uses_constant_stack_and_zero_scratch_allocations() {
         .join()
         .unwrap();
 }
+
+#[test]
+fn inline_bytes_are_copied_aligned_and_retained_with_metadata_only() {
+    let run = MetadataRun::new();
+    let mut source = [7u8; 17];
+    let leaf = run.node_with_bytes(3u64, &source, 64, &[]).unwrap();
+    source.fill(9);
+    assert_eq!(leaf.bytes(), Some(&[7u8; 17][..]));
+    assert_eq!(leaf.alignment(), Some(64));
+    assert_eq!(leaf.bytes().unwrap().as_ptr() as usize % 64, 0);
+    assert_ne!(leaf.bytes().unwrap().as_ptr(), source.as_ptr());
+    let root = run.node(0, std::slice::from_ref(&leaf)).unwrap();
+    assert_eq!(root.bytes(), None);
+    assert_eq!(root.alignment(), None);
+    let before = crate::io_real::borrowed_net_tests::allocation_calls();
+    let snapshot = root.clone();
+    let child = snapshot.children().next().unwrap().retain();
+    assert_eq!(child.bytes(), leaf.bytes());
+    assert_eq!(
+        child.bytes().unwrap().as_ptr(),
+        leaf.bytes().unwrap().as_ptr()
+    );
+    drop(leaf);
+    drop(root);
+    drop(snapshot);
+    assert_eq!(child.bytes(), Some(&[7u8; 17][..]));
+    drop(child);
+    assert_eq!(
+        before,
+        crate::io_real::borrowed_net_tests::allocation_calls()
+    );
+    let empty = run.node_with_bytes(0, &[], 128, &[]).unwrap();
+    assert_eq!(empty.bytes(), Some(&[][..]));
+    assert_eq!(empty.bytes().unwrap().as_ptr() as usize % 128, 0);
+}
+
+#[test]
+fn inline_bytes_outlive_source_thread_and_release_on_receiver() {
+    let root = std::thread::spawn(|| {
+        let run = MetadataRun::new();
+        let source = [11u8; 24];
+        let leaf = run.node_with_bytes(1u64, &source, 32, &[]).unwrap();
+        run.node(2, &[leaf]).unwrap()
+    })
+    .join()
+    .unwrap();
+    let child = root.children().next().unwrap().retain();
+    drop(root);
+    std::thread::spawn(move || {
+        assert_eq!(child.bytes(), Some(&[11u8; 24][..]));
+        assert_eq!(child.alignment(), Some(32));
+        let before = crate::io_real::borrowed_net_tests::allocation_calls();
+        drop(child);
+        assert_eq!(
+            before,
+            crate::io_real::borrowed_net_tests::allocation_calls()
+        );
+    })
+    .join()
+    .unwrap();
+}
+
+#[test]
+fn inline_bytes_invalid_alignment_and_foreign_children_refuse_without_allocation() {
+    let run = MetadataRun::new();
+    let other = MetadataRun::new();
+    let own = run.node(1u64, &[]).unwrap();
+    let foreign = other.node(2, &[]).unwrap();
+    let children = [own.clone(), foreign.clone()];
+    let before = crate::io_real::borrowed_net_tests::allocation_calls();
+    for alignment in [0, 3, usize::MAX] {
+        assert!(matches!(
+            run.node_with_bytes(0u64, &[5; 3], alignment, &[]),
+            Err(Error::InvalidImageLayout)
+        ));
+    }
+    assert!(matches!(
+        run.node_with_bytes(0u64, &[5; 3], 8, &children),
+        Err(Error::DifferentRun)
+    ));
+    assert_eq!(holders(&own), 2);
+    assert_eq!(holders(&foreign), 2);
+    assert_eq!(
+        before,
+        crate::io_real::borrowed_net_tests::allocation_calls()
+    );
+}
