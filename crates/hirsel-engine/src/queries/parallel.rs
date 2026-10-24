@@ -9,7 +9,7 @@ mod compact;
 mod scheduled;
 pub(crate) use compact::CompactCompleted;
 use compact::{FrontResult, WorkerCompleted};
-pub use scheduled::{FRONT_BODY_KIND, FrontBodyOutput, FrontBodyQueries};
+pub use scheduled::{FRONT_BODY_KIND, FrontBodyOutput, FrontBodyQueries, FrontCheckedOutput};
 
 /// One input's outcome, including the phase that completed or stopped it.
 /// Results from `mode_definitions` always retain the caller's input order.
@@ -118,6 +118,19 @@ pub(crate) struct Completed {
 }
 
 impl Completed {
+    pub(super) fn recomputed(&self) -> Vec<QueryKind> {
+        let mut work = Vec::new();
+        if matches!(self.resolution, Some(Product::Computed(_))) {
+            work.push(QueryKind::Resolve);
+        }
+        if matches!(self.checked, Some(Product::Computed(_))) {
+            work.push(QueryKind::Check);
+        }
+        if matches!(self.modes, Some(Product::Computed(_))) {
+            work.push(QueryKind::Modes);
+        }
+        work
+    }
     /// Modes carries the final successful output. `result` otherwise records
     /// the earlier phase that stopped the task before modes was produced.
     pub(crate) fn result(&self) -> Result<Arc<QueryOutput<AnalyzedBody>>, QueryError> {

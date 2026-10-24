@@ -8,11 +8,19 @@ mod frontier;
 pub use frontier::FrontChanges;
 mod parallel;
 pub(crate) mod s1;
+mod scheduled_check;
+mod scheduled_lower;
+pub use scheduled_check::{FRONT_CHECK_KIND, FrontCheckOutput, FrontCheckPlan, FrontCheckQueries};
+mod scheduled_growth;
 pub use parallel::{
-    FRONT_BODY_KIND, FrontBodyOutput, FrontBodyQueries, ModeResult, PublishedDefinition,
-    PublishedResult,
+    FRONT_BODY_KIND, FrontBodyOutput, FrontBodyQueries, FrontCheckedOutput, ModeResult,
+    PublishedDefinition, PublishedResult,
 };
 pub use s1::{LoweringResult, S1LowerWork};
+pub use scheduled_growth::{FRONT_GROWTH_KIND, FrontGrowthOutput, FrontGrowthQueries};
+pub use scheduled_lower::{
+    FRONT_EVALUATE_KIND, FRONT_LOWER_KIND, FrontLowerOutput, FrontLowerQueries, FrontLowerWork,
+};
 /// One S1 root's captured outcome. Phase, tooling limit and complete execution
 /// reads belong to this root, including when another root finished afterward.
 #[derive(Clone, Debug)]
