@@ -1673,6 +1673,36 @@ fn every_opcode_is_covered_and_admitted_by_a_stage() {
         .map(Inst::opcode)
         .chain(unit.terminators.iter().map(Terminator::opcode))
         .collect();
+    // The typed sealed vocabulary is not executable Ready input yet. Its
+    // standalone rows still have complete snapshot and opcode coverage.
+    for instruction in [
+        Inst::SealArena {
+            result: ValueId(0),
+            grant: ValueId(1),
+            root: ValueId(2),
+            shape: SealDescriptorId(0),
+            failure: FailureId(0),
+            origin: SourceAnchorId(0),
+        },
+        Inst::BorrowSealedRoot {
+            result: ValueId(0),
+            owner: ValueId(1),
+            loan: LoanId(0),
+            shape: SealDescriptorId(0),
+        },
+        Inst::ArenaInventory {
+            arena: ValueId(0),
+            allocation: SourceAnchorId(0),
+            value: ValueId(1),
+            shape: SealDescriptorId(0),
+            previous: None,
+        },
+    ] {
+        assert_round_trip(&instruction);
+        let opcode = instruction.opcode();
+        assert!(!StageKind::Ready.admits(opcode));
+        seen.push(opcode);
+    }
     seen.sort();
     seen.dedup();
     let mut all = Opcode::ALL.to_vec();

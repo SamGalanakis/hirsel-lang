@@ -165,6 +165,13 @@ fn transition_fixture_with_root(
     };
     let address = t.at(support::ENTRY, slot, &[], &abort);
     let alias = t.read(support::ENTRY, address, grant, ReadMode::Bits, None);
+    if heap {
+        // Keep the ordinary cleanup independently reachable when a mutation
+        // redirects only the seal's abort edge past it.
+        let condition = t.boolean(support::ENTRY);
+        t.builder
+            .push(support::ENTRY, Inst::Check { condition, failure });
+    }
     t.builder.push(
         support::ENTRY,
         Inst::SealArena {
@@ -442,9 +449,9 @@ struct LegacyTables {
     /// Drop flags (LIR schema revision 8).
     pub init_flags: Vec<InitFlag>,
     /// SER-2 codec plans (LIR schema revision 29).
-    pub codecs: Vec<crate::codec::CodecPlan>,
+    pub codecs: Vec<hirsel_lir::codec::CodecPlan>,
     /// MEM-3 logical types and complete physical access, independently validated.
-    pub structural: Vec<crate::structural_access::AccessPlan>,
+    pub structural: Vec<hirsel_lir::structural_access::AccessPlan>,
 }
 hirsel_codec::snapshot_struct!(LegacyTables {
     calls,
@@ -501,5 +508,31 @@ fn absent_sealed_tables_preserve_ordinary_side_table_bytes_and_hash() {
     assert_eq!(
         hirsel_codec::from_text::<SideTables>(&text).unwrap(),
         demanded
+    );
+}
+
+#[test]
+fn sealed_descriptor_objects_erase_and_rebind_complete_physical_projection() {
+    let (t, _, _, _) = transition_fixture_with_root(true);
+    let (unit, _, _) = t.finish();
+    let descriptor = &unit.tables.seal_descriptors[0];
+    let (erased, layouts, abis) = hirsel_lir::objects::erased(&unit);
+    assert!(descriptor.layouts().all(|id| layouts.contains(&id)));
+    assert!(layouts.len() > 1);
+    let restored = hirsel_lir::objects::rebound(erased.clone(), &layouts, &abis).unwrap();
+    assert_eq!(
+        restored.tables.seal_descriptors,
+        unit.tables.seal_descriptors
+    );
+    let moved: Vec<_> = layouts.iter().map(|id| LayoutId(id.0 + 100)).collect();
+    let rebound = hirsel_lir::objects::rebound(erased, &moved, &abis).unwrap();
+    let before: Vec<_> = descriptor.layouts().collect();
+    let after: Vec<_> = rebound.tables.seal_descriptors[0].layouts().collect();
+    assert_eq!(
+        after,
+        before
+            .iter()
+            .map(|id| LayoutId(id.0 + 100))
+            .collect::<Vec<_>>()
     );
 }

@@ -352,6 +352,9 @@ impl Derived {
                             .write_unaligned(leaf)
                     };
                 }
+                DropStep::ReleaseSealed { .. } => {
+                    panic!("ordinary generated corpus cannot manufacture sealed owner custody")
+                }
                 DropStep::ReleaseReceipt { .. } => {
                     panic!("ordinary generated corpus cannot manufacture private receipt custody")
                 }
@@ -458,6 +461,9 @@ impl Derived {
                     out.push(Event::Finalize(super::payload(child) as u64));
                 }
                 DropStep::CloseHandle { offset } => out.push(Event::Close(read(base, *offset))),
+                DropStep::ReleaseSealed { .. } => {
+                    panic!("ordinary generated corpus cannot manufacture sealed owner custody")
+                }
                 DropStep::ReleaseReceipt { .. } => {
                     panic!("ordinary generated corpus cannot manufacture private receipt custody")
                 }
