@@ -35,6 +35,15 @@ pub struct NativeRecordContext {
     anchors: BTreeMap<(DefPath, u32), Anchor>,
 }
 impl NativeRecordContext {
+    pub(crate) fn input_bytes(&self) -> Option<u64> {
+        let slot = (std::mem::size_of::<(Anchor, (DefPath, u32))>()
+            + std::mem::size_of::<((DefPath, u32), Anchor)>()
+            + 12 * std::mem::size_of::<usize>()) as u64;
+        (self.owners.len() as u64)
+            .checked_mul(slot)?
+            .checked_add(std::mem::size_of::<Self>() as u64)
+    }
+
     pub fn capture(engine: &QueryEngine) -> Self {
         let mut owners = BTreeMap::new();
         let mut anchors = BTreeMap::new();

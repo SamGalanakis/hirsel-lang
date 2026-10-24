@@ -11,6 +11,12 @@ use std::sync::Arc;
 pub trait CitationSource: Sync {
     fn cited_name(&self, owner: DefId, target: DefId) -> Option<Span>;
     fn cited_text(&self, target: DefId) -> ContentHash;
+    fn arm_insertion(&self, _owner: &DefPath, _site: Span) -> Option<(Span, ContentHash)> {
+        None
+    }
+    fn record_owner(&self, _anchor: hirsel_span::Anchor) -> Option<(DefPath, u32)> {
+        None
+    }
 }
 
 pub(crate) struct SourceContext<'a> {
@@ -92,6 +98,9 @@ pub(crate) struct OwnedSourceContext {
     pub items: Arc<BTreeMap<DefPath, Vec<Arc<ItemSyntax>>>>,
     pub declarations: DeclarationIndex,
     pub catalog: crate::queries::catalog::Catalog,
+    pub owners: Arc<crate::NativeRecordContext>,
+    pub cited: BTreeMap<DefId, ContentHash>,
+    pub arm_fixes: BTreeMap<DefPath, (Span, FileId, ContentHash)>,
 }
 impl OwnedSourceContext {
     fn borrowed(&self) -> SourceContext<'_> {
@@ -108,6 +117,17 @@ impl CitationSource for OwnedSourceContext {
         self.borrowed().cited_name(owner, target)
     }
     fn cited_text(&self, target: DefId) -> ContentHash {
-        self.borrowed().cited_text(target)
+        self.cited
+            .get(&target)
+            .copied()
+            .unwrap_or_else(|| self.borrowed().cited_text(target))
+    }
+    fn arm_insertion(&self, owner: &DefPath, site: Span) -> Option<(Span, ContentHash)> {
+        let (span, file, hash) = self.arm_fixes.get(owner)?;
+        (self.sources.resolve(site).file == *file).then_some((*span, *hash))
+    }
+    fn record_owner(&self, anchor: hirsel_span::Anchor) -> Option<(DefPath, u32)> {
+        use crate::NativeRecordSource;
+        self.owners.record_owner(anchor)
     }
 }

@@ -46,7 +46,7 @@ impl ResolverPhase for ResolverAdapter {
     ) -> Result<QueryOutput<Resolution>, QueryError> {
         let item = &syntax.item;
         let index = declarations.index(item.definition.0.package.clone());
-        let siblings = declarations.siblings(&syntax);
+        let siblings = declarations.try_siblings(&syntax)?;
         let result = hirsel_resolve::resolve_view(
             &syntax,
             &siblings,
@@ -162,7 +162,7 @@ impl SignatureAdapter {
         let module = declarations;
         let index = module.index(context.package.clone());
         let declaration_sites = module.sites(&item.definition);
-        let siblings = module.siblings(&syntax);
+        let siblings = module.try_siblings(&syntax)?;
         // Retained snapshots can be older than edited peers; candidates are in
         // current source order, so only this owner's indexed sites are replaced.
         let declaration_sites: Arc<[DeclarationSite]> =
