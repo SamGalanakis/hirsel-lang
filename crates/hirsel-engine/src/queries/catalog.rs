@@ -1,6 +1,7 @@
 //! Ordinary parse heads, separate from semantic products and verifier authority.
 //! A hit indexes names and source positions without expression arenas or types.
 use super::*;
+mod syntax;
 use crate::snapshot::DeclarationHead;
 use bincode::Options;
 use serde::{Deserialize, Serialize};
@@ -657,7 +658,13 @@ impl QueryEngine {
         let Some(context) = self.catalog.files.get(&file).cloned() else {
             return Ok(());
         };
-        let mut output = self.parse_syntax(file, &context)?;
+        let cached = self.load_parse_syntax(file, &context);
+        let restored = cached.is_some() && self.verify_store == crate::store::VerifyStore::Off;
+        let mut output = if restored {
+            cached.unwrap()
+        } else {
+            self.parse_syntax(file, &context)?
+        };
         if has_errors(&output.diagnostics) {
             return Err(QueryError::Diagnostics(output.diagnostics));
         }
@@ -686,6 +693,9 @@ impl QueryEngine {
             syntax.occurrence = occurrence;
             syntax.reanchor(anchor);
             self.sources.move_anchor(anchor, file, base);
+        }
+        if !restored {
+            self.store_parse_syntax(file, &context, &output)?;
         }
         for syntax in &output.value.items {
             let mut add = |item: Arc<ItemSyntax>| {

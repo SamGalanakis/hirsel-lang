@@ -107,6 +107,9 @@ pub(crate) struct FrozenSource<'a> {
     pub(crate) checked: &'a Table<TypedBody>,
     pub(crate) resolutions: &'a Table<Resolution>,
     pub(crate) lowered: &'a Table<DefinitionRef>,
+    constants: &'a BTreeMap<DefPath, crate::comptime::EvaluatedConstant>,
+    valid_constants: BTreeSet<DefPath>,
+    mode_attempts: BTreeSet<DefPath>,
     pub(crate) graph: &'a MemoGraph,
     pub(crate) declarations: Arc<Declarations>,
     pub(crate) citations: SourceContext<'a>,
@@ -406,6 +409,18 @@ impl TirSource for FrozenSource<'_> {
                 reads: entry.reads().clone(),
             };
         }
+        // A nested execution demand can reach a body absent from the frozen
+        // tables even when its ordinary Modes product is durable. Return the
+        // demand before running P; only the controller may validate/adopt it.
+        // A failed lookup is remembered for this request so cold bodies still
+        // use the ordinary worker on the next round.
+        if !self.mode_attempts.contains(path) {
+            worker.pending.push(Requirement::Modes(path.clone()));
+            return DependencyProduct {
+                result: Err(QueryError::NotImplemented),
+                reads: Reads::empty(),
+            };
+        }
         let Some(syntax) = self
             .items
             .get(path)
@@ -560,6 +575,12 @@ impl TirSource for FrozenSource<'_> {
     fn staged_constant(&self, path: &DefPath) -> Option<crate::comptime::StagedConstant> {
         self.staged.get(path).cloned()
     }
+    fn cached_constant(&self, path: &DefPath) -> Option<crate::comptime::EvaluatedConstant> {
+        self.valid_constants
+            .contains(path)
+            .then(|| self.constants.get(path).cloned())
+            .flatten()
+    }
     fn cached_lowering(
         &self,
         path: &DefPath,
@@ -672,16 +693,38 @@ impl QueryEngine {
     pub(crate) fn frozen_s1_source(
         &mut self,
         lower_budget: u64,
+        mode_attempts: &BTreeSet<DefPath>,
     ) -> Result<FrozenSource<'_>, QueryError> {
         self.note_environment();
         self.prepare_materialization_environment();
         let runtime = self.comptime_runtime_types()?;
-        let snapshot = self.signature_inputs();
+        // Settle the signature universe before checking private acceptance.
+        let _ = self.signature_inputs();
         let lowering = self
             .adapters
             .lowering
             .clone()
             .ok_or(QueryError::NotImplemented)?;
+        // Validate metadata one value at a time; borrow the original values
+        // rather than retaining a second constant graph beside the controller.
+        // Each registration round constructs a new immutable eligibility set.
+        let mut valid_constants = BTreeSet::new();
+        let constants: Vec<_> = self.constant_values.keys().cloned().collect();
+        for path in constants {
+            let Some((validation, executed)) = self
+                .constant_values
+                .get(&path)
+                .map(|value| (value.validation.clone(), value.executed.clone()))
+            else {
+                continue;
+            };
+            if self.evaluation_context_holds(validation.as_deref(), &executed)
+                && self.execution_valid(&path, &executed)
+            {
+                valid_constants.insert(path);
+            }
+        }
+        let snapshot = self.signature_inputs();
         let declarations = self.frozen_declarations();
         let environment = self.environment_value();
         Ok(FrozenSource {
@@ -702,6 +745,9 @@ impl QueryEngine {
             checked: &self.checked,
             resolutions: &self.resolutions,
             lowered: &self.lowered,
+            constants: &self.constant_values,
+            valid_constants,
+            mode_attempts: mode_attempts.clone(),
             graph: &self.graph,
             declarations,
             citations: SourceContext {
@@ -827,11 +873,17 @@ impl QueryEngine {
     ) -> Vec<RootOutcome> {
         let mut selections = BTreeMap::new();
         let mut settled = vec![];
+        let mut mode_attempts = BTreeSet::new();
         loop {
             let remaining = &definitions[settled.len()..];
-            if let Some(mut results) =
-                self.s1_roots_round(remaining, jobs, kind, &mut selections, prefix)
-            {
+            if let Some(mut results) = self.s1_roots_round(
+                remaining,
+                jobs,
+                kind,
+                &mut selections,
+                &mut mode_attempts,
+                prefix,
+            ) {
                 // Only admitted ordered roots publish durable values.
                 if matches!(kind, RootKind::Constant) {
                     for outcome in &mut results {
@@ -933,6 +985,7 @@ impl QueryEngine {
         jobs: hirsel_intern::jobs::Jobs,
         kind: RootKind,
         selections: &mut BTreeMap<DefPath, hirsel_diag::Label>,
+        mode_attempts: &mut BTreeSet<DefPath>,
         prefix: bool,
     ) -> Option<Vec<RootOutcome>> {
         if definitions.is_empty() {
@@ -974,6 +1027,7 @@ impl QueryEngine {
                 // checked body before freezing; execution and V still run under
                 // this reader's authority when their own receipt is absent.
                 self.restore_execution_mode(definition);
+                mode_attempts.insert(definition.clone());
                 tasks.push((index, definition.clone()));
             }
         }
@@ -984,7 +1038,7 @@ impl QueryEngine {
         let mut shared = worker::TaskShared::new(self.s1.coordinator().clone());
         let workers = jobs.worker_count(tasks.len()).max(1);
         let lower_budget = self.available_hold_bytes() / workers as u64;
-        let source = match self.frozen_s1_source(lower_budget) {
+        let source = match self.frozen_s1_source(lower_budget, mode_attempts) {
             Ok(source) => source,
             Err(_) => {
                 drop(prepare);
@@ -1109,6 +1163,26 @@ impl QueryEngine {
             {
                 let _ = self.merge_compact_completed(body);
             }
+        }
+        // Resolve only demands from the admitted prefix, after observing
+        // their complete reads. Loading Modes publishes no generated names,
+        // consumes no execution fuel, and confers no V authority.
+        let mut restored = false;
+        for (_, path, product, _, _, _, pending, _) in &completed {
+            if !self.execution_valid(path, &product.reads) {
+                continue;
+            }
+            for requirement in pending {
+                if let Requirement::Modes(path) = requirement
+                    && mode_attempts.insert(path.clone())
+                {
+                    self.restore_execution_mode(path);
+                    restored = true;
+                }
+            }
+        }
+        if restored {
+            return None;
         }
         // A declaration demand suspends evaluation before V. Install only
         // registrations whose complete producer reads still hold, then begin

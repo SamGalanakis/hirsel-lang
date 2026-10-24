@@ -675,3 +675,65 @@ fn explicit_directory_selection_keeps_installed_products_without_forwarding_auth
     let _ = std::fs::remove_dir_all(packaged);
     let _ = std::fs::remove_dir_all(local);
 }
+
+#[test]
+fn disabled_writable_cache_keeps_installed_products_and_never_publishes() {
+    const CHILD: &str = "HIRSEL_STORE_READ_ONLY_CHILD";
+    let query = key("read-only-products");
+    let domain = Domain {
+        kind: 123,
+        schema: 1,
+    };
+    let reference = domain.reference(b"installed bytes").unwrap();
+    let new_reference = domain.reference(b"new bytes").unwrap();
+    let address = Address(h("read-only-address"));
+    if std::env::var_os(CHILD).is_some() {
+        let store = store_by_name("none@1", None).unwrap();
+        assert_eq!(store.name(), "none@1");
+        assert!(store.enabled());
+        assert!(store.local_product_store().is_none());
+        assert_eq!(&*store.get(&query).unwrap(), b"installed index");
+        assert_eq!(&*store.get_content(reference).unwrap(), b"installed bytes");
+        assert!(store.verifier().is_some());
+        let other = store_by_name("none@1", None).unwrap();
+        assert!(!Arc::ptr_eq(
+            &store.verifier().unwrap(),
+            &other.verifier().unwrap()
+        ));
+        store.put(&query, b"ignored local replacement");
+        assert!(store.put_content(domain, b"new bytes").is_none());
+        store.associate_product(address, Action(h("ignored action")), reference);
+        assert_eq!(&*store.get(&query).unwrap(), b"installed index");
+        assert!(store.get_content(new_reference).is_none());
+        assert!(store.lookup_product(address).is_none());
+        return;
+    }
+    let packaged = scratch("read-only-packaged");
+    let seed = DirStore::new(packaged.clone());
+    assert_eq!(
+        seed.put_content(domain, b"installed bytes"),
+        Some(reference)
+    );
+    seed.put(&query, b"installed index");
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "store::tests::disabled_writable_cache_keeps_installed_products_and_never_publishes",
+            "--nocapture",
+        ])
+        .env(CHILD, "1")
+        .env("HIRSEL_PRODUCTS", &packaged)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
+    assert_eq!(&*seed.get(&query).unwrap(), b"installed index");
+    assert!(seed.get_content(new_reference).is_none());
+    assert!(seed.lookup_product(address).is_none());
+    let _ = std::fs::remove_dir_all(packaged);
+}

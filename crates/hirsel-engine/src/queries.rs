@@ -2172,6 +2172,9 @@ impl DefinitionQueries for QueryEngine {
             let _timing = timings::phase(Phase::Declarations);
             self.index(&mut output.value, context).map(|_| output)
         };
+        if let Ok(output) = &result {
+            self.store_parse_syntax(file, context, output)?;
+        }
         self.parsed.insert(
             file,
             (context.clone(), package_environment.clone(), result.clone()),

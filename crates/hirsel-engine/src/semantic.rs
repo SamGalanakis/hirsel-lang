@@ -19,6 +19,10 @@ impl std::ops::Deref for ResolverSnapshot {
 /// local to the invocation, including when normalization returns diagnostics.
 #[derive(Clone, Debug, Default)]
 pub struct PhaseProducts {
+    /// A validated durable Signature already owns the complete publication.
+    /// Its lazy local projection may omit syntax-backed auxiliary products and
+    /// must never be serialized back over that original record.
+    pub(crate) signature_persisted: bool,
     pub resolution: Option<ResolverSnapshot>,
     pub(crate) representation: Option<crate::representation::OwnerRecord>,
     pub mode_diagnostics: Vec<(Diagnostic, String)>,

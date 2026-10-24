@@ -129,3 +129,22 @@ fn explicit_item_terminators_do_not_detach_trailing_comments() {
         "/// b\nfn b() {}; // trailing b"
     );
 }
+
+#[test]
+fn newline_statement_ranges_stay_item_local_after_a_prefix() {
+    let item = "fn same() -> u8 {\n let value: u8 = 1u8\n value\n}\n";
+    let snapshot = |source: &str| {
+        let (parsed, sources) = support::parse(source);
+        assert!(parsed.diagnostics.is_empty());
+        let mut syntax = (*parsed.syntax.items.last().unwrap().clone()).clone();
+        for statement in &syntax.tree.statements {
+            assert!(statement.origin.tokens.end as usize <= syntax.tree.tokens.len());
+        }
+        assert!(syntax.structurally_valid(|span| sources.slice(span).is_some()));
+        syntax.reanchor(hirsel_span::Anchor(0));
+        syntax
+    };
+    let alone = snapshot(item);
+    let prefixed = snapshot(&format!("fn earlier() {{}}\n{item}"));
+    assert_eq!(alone, prefixed);
+}

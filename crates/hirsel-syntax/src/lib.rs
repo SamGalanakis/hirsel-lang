@@ -133,19 +133,19 @@ macro_rules! ids { ($($name:ident),* $(,)?) => {$(
 )*}; }
 ids!(TokenId, ExprId, PatternId, TypeExprId, StmtId);
 /// Half-open indices into one item's token tape (LANG-1).
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct TokenRange {
     pub start: u32,
     pub end: u32,
 }
 /// Source origin shared by AST nodes; spans exclude surrounding trivia (LANG-1).
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Origin {
     pub span: Span,
     pub tokens: TokenRange,
 }
 /// Reserved words, exactly LANG-14; other special names are contextual.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum Keyword {
     Fn,
     Let,
@@ -252,7 +252,7 @@ pub fn is_binding_name(name: &str) -> bool {
         && Keyword::from_spelling(name).is_none()
 }
 /// Longest-match punctuation, independent of type information (LANG-1/2; issue #21).
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum Punct {
     LParen,
     RParen,
@@ -303,7 +303,7 @@ pub enum Punct {
     ShrEq,
 }
 /// Trivia remains in the tape, including CRLF and doc comments (LANG-1; issue #21).
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TriviaKind {
     Space,
     Newline,
@@ -313,7 +313,7 @@ pub enum TriviaKind {
     DocBlock,
 }
 /// Tokens carry literal source spelling through their spans (SEM-1/2/3).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub enum TokenKind {
     Ident(Symbol),
     Label(Symbol),
@@ -333,7 +333,7 @@ pub enum TokenKind {
 }
 /// The pieces of `f"a{x}b{y}c"` are `f"a{` (Head), `}b{` (Middle) and `}c"` (Tail);
 /// an f-string without holes is one `f"abc"` (Whole). Text keeps its spelling.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum FormatPiece {
     /// A colon and its raw format specification, ending before `}`.
     Spec,
@@ -343,13 +343,13 @@ pub enum FormatPiece {
     Tail,
 }
 /// Every source byte belongs to exactly one non-EOF token, even on errors (LANG-1).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct Token {
     pub kind: TokenKind,
     pub span: Span,
 }
 /// Unresolved source path. Dot projections and module qualification share syntax (LANG-4).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct Path {
     pub package: Option<PackageId>,
     pub segments: Vec<Symbol>,
@@ -398,7 +398,7 @@ pub enum BinaryOp {
     RangeInclusive,
 }
 /// Assignment is statement-only; None is plain '=' (LANG-5).
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AssignOp(pub Option<BinaryOp>);
 /// Literal spelling is preserved independently of type inference and numeric conversion (LANG-2).
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
@@ -513,26 +513,26 @@ fn quoted_scalar(body: &str, hex: bool) -> Option<char> {
 }
 
 /// A labelled or positional argument; labels precede ownership expressions (LANG-12).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct Argument {
     pub label: Option<Symbol>,
     pub value: ExprId,
 }
 /// Match arm; refutability/exhaustiveness belongs to checking (LANG-7/13).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct MatchArm {
     pub pattern: PatternId,
     pub guard: Option<ExprId>,
     pub body: ExprId,
 }
 /// Indexed expression; references only nodes in its owning SyntaxTree (LANG-1/3).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct Expr {
     pub origin: Origin,
     pub kind: ExprKind,
 }
 /// All surface expressions; scope/task/arena operations are ordinary calls (CONC-2, MEM-4).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub enum ExprKind {
     Literal(Literal),
     Path(Path),
@@ -608,7 +608,7 @@ pub enum ExprKind {
 /// `Pad(mark, fill, align, width, mut builder)` padding the hole's text; any other
 /// specified hole is one `AppendSpec(value, fill, align, width, precision, flags,
 /// kind, mut builder)`. `Pad` names the hole whose type selects its operation.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum FormatStep {
     Append,
     AppendSpec(FormatSpec),
@@ -620,7 +620,7 @@ pub enum FormatStep {
 /// Flags: 1 plus, 2 alternate, 4 sign-aware zero padding, 8 precision present.
 /// Kind: 0 display or the ASCII radix letter. A width or precision written as
 /// `name$` is a runtime argument; its field here is then 0.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct FormatSpec {
     pub fill: u64,
     pub align: u64,
@@ -631,7 +631,7 @@ pub struct FormatSpec {
 }
 /// A written f-string (SEM-3). The parser desugars it to `expression`, an ordinary
 /// block every later phase reads; the formatter prints these written pieces instead.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct FormatString {
     pub expression: ExprId,
     /// Piece spellings, one more than `holes`: `f"a{`, `}b"`, or a single `f"ab"`.
@@ -642,7 +642,7 @@ pub struct FormatString {
 }
 /// A written `if let` or `while let` (LANG-13). The parser desugars each to an
 /// ordinary match every later phase reads; the formatter prints the written form.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LetCondition {
     /// `if let P = e A`, optionally `else B`: `matching` is
     /// `match e { P => A, _ => B }`, with `{}` for an omitted else.
@@ -661,20 +661,20 @@ impl LetCondition {
 }
 /// A parenthesized expression, kept so a parse can tell `(if ..)` from `if ..`;
 /// grouping is otherwise implied by the tree.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Group {
     pub expression: ExprId,
     /// The parentheses and everything between them.
     pub origin: Origin,
 }
 /// Statement origin includes its terminator; the block tail does not (LANG-11).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct Stmt {
     pub origin: Origin,
     pub kind: StmtKind,
 }
 /// Local definitions are ordered and cannot recurse (LANG-10/15).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub enum StmtKind {
     Let {
         mutable: bool,
@@ -718,13 +718,13 @@ impl StmtKind {
     }
 }
 /// Pattern tree node, with constructor names resolved using the expected type (LANG-2/13).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct Pattern {
     pub origin: Origin,
     pub kind: PatternKind,
 }
 /// Record '..' ignores remaining fields; no expression ellipsis is permitted (OWN-8; #25).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub enum PatternKind {
     Wildcard,
     Binding(Symbol),
@@ -747,32 +747,34 @@ pub enum PatternKind {
     Error,
 }
 /// Constructor pattern field; Some(label) for records, None for positional variants (LANG-12/13).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct PatternField {
     pub label: Option<Symbol>,
     pub pattern: PatternId,
 }
 /// Written type syntax is separate from expressions, including generic brackets (LANG-2).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct TypeExpr {
     pub origin: Origin,
     pub kind: TypeExprKind,
 }
 /// Numeric generic arguments are size literals; name arguments resolve as type or size (GEN-1).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub enum TypeArgument {
     Type(TypeExprId),
     SizeLiteral(u64),
 }
 /// Prefix value modifiers (LANG-7, MODE-2/3/4). `sendable` is contextual.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
+#[derive(
+    serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd,
+)]
 pub enum TypeModifier {
     Unique,
     Once,
     Sendable,
 }
 /// One place a relation names (MODE-1, PROV-4; #77).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub enum RelationPlace {
     /// A parameter, binding or arena, optionally with a field path (`p.a`).
     Path(Path),
@@ -782,19 +784,19 @@ pub enum RelationPlace {
     Environment,
 }
 /// `in x` or `in {x, a}`. Formatting prints braces exactly when there is more than one place.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct RelationSyntax {
     pub places: Vec<RelationPlace>,
     pub origin: Origin,
 }
 /// Sibling-field origin is distinct from an ordinary path (PROV-5).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct BrandSyntax {
     pub sibling: bool,
     pub path: Path,
 }
 /// Prefix modifiers cover the whole type; a brand and relation bind to the nearest type (LANG-7, R5).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub enum TypeExprKind {
     Named {
         path: Path,
@@ -829,19 +831,19 @@ pub enum Bound {
     Serializable,
 }
 /// Generic parameter kind with equality-only sizes (LANG-7, GEN-1).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub enum GenericKind {
     Type(Vec<Bound>),
     Size,
 }
 /// Generic binders are in scope after declaration (LANG-2).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct GenericParam {
     pub name: Symbol,
     pub kind: GenericKind,
 }
 /// Anonymous names are allowed only in function-type slots (CLO-1; #24).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct Parameter {
     pub label: Option<Symbol>,
     pub name: Option<Symbol>,
@@ -849,7 +851,7 @@ pub struct Parameter {
     pub ty: TypeExprId,
 }
 /// Attribute payloads are lexical values, not arbitrary expressions (MEM-7, MODE-6; #24).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub enum AttributeArgument {
     Name(Symbol),
     LoopSource(LoopSourceSyntax),
@@ -860,40 +862,40 @@ pub enum AttributeArgument {
     Integer(String),
     String(String),
 }
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct LoopSourceSyntax {
     pub open: Path,
     pub next: Path,
     pub origin: Origin,
 }
 /// `@format(function)`: the function an f-string hole of this type calls (SEM-3).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct FormatAssociation {
     pub function: Path,
     pub origin: Origin,
 }
 /// `@serializable(check = function)`: the function that admits a decoded opaque
 /// representation (SER-1).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct CheckAssociation {
     pub function: Path,
     pub origin: Origin,
 }
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Eq, PartialEq)]
 pub enum StatePromiseKind {
     AdvanceOnly,
     PreserveCaptures,
     PreserveUnique,
     Captures,
 }
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct StatePromiseSyntax {
     pub kind: StatePromiseKind,
     pub selectors: Vec<Path>,
     pub origin: Origin,
 }
 /// Supported attributes are grammar-defined and retain source origin (MEM-7).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct Attribute {
     pub name: Symbol,
     pub arguments: Vec<AttributeArgument>,
@@ -906,13 +908,13 @@ pub enum ContractKind {
     Ensures,
 }
 /// Executable public signature expression, never inferred from the body (FACT-1, LANG-6).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct ContractSyntax {
     pub kind: ContractKind,
     pub expression: ExprId,
 }
 /// None uses is distinct from explicitly empty uses (CLO-2/4, CAP-3).
-#[derive(Clone, Debug, Eq, PartialEq, Default)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq, Default)]
 pub struct FunctionSyntax {
     pub attributes: Vec<Attribute>,
     pub generics: Vec<GenericParam>,
@@ -929,7 +931,7 @@ pub enum Visibility {
     PublicOpaque,
 }
 /// Type storage/ownership declaration (MEM-12, DROP-2, FACT-2).
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TypeFlavor {
     Ordinary,
     Distinct,
@@ -937,7 +939,7 @@ pub enum TypeFlavor {
     Resource,
 }
 /// Named record field (LANG-12, PROV-5).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct FieldSyntax {
     /// Field layout marker, never a value mode (MEM-12).
     pub growable: bool,
@@ -946,13 +948,13 @@ pub struct FieldSyntax {
     pub origin: Origin,
 }
 /// Variant declaration; fields may be positional or all labelled (LANG-7/12).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct VariantSyntax {
     pub name: Symbol,
     pub fields: Vec<(Option<Symbol>, TypeExprId)>,
 }
 /// Structural type declaration, including opaque external types (PROG-2; #24).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub enum TypeBody {
     Record(Vec<FieldSyntax>),
     Variants(Vec<VariantSyntax>),
@@ -964,7 +966,7 @@ pub enum TypeBody {
     Opaque,
 }
 /// Resource finalizer belongs to the declaring type (DROP-2/3).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct DropSyntax {
     /// Written promise covering finalizer and implicit field cleanup (DROP-2).
     pub noalloc: bool,
@@ -973,7 +975,7 @@ pub struct DropSyntax {
 }
 /// An `extern` function's ABI string and the doc comment attached to the
 /// declaration, which states its aliasing contract (PROG-4, MEM-9).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct ForeignAbi {
     /// The ABI string literal as written, quotes included.
     pub literal: String,
@@ -990,7 +992,7 @@ impl ForeignAbi {
     }
 }
 /// Top-level declaration payload (LANG-6, PROG-4, CT-1).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub enum ItemKind {
     Function {
         signature: FunctionSyntax,
@@ -1013,7 +1015,9 @@ pub enum ItemKind {
 /// Where an analysis annotation attaches within its item (PS-17). Indexes
 /// follow declaration order: a function definition's parameters, a record's
 /// fields (a distinct type's field is field 0), a variant's payloads.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[derive(
+    serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash,
+)]
 pub enum AnalysisSite {
     Item,
     Parameter(u32),
@@ -1024,7 +1028,7 @@ pub enum AnalysisSite {
 /// analysis. The compiler parses, formats and exports it and reads it for
 /// nothing else, so it lives beside its item's tree, never inside a declaration
 /// node (PS-19).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct AnalysisAnnotation {
     pub site: AnalysisSite,
     /// The analysis's dotted name, such as `taint` or `acme.units`.
@@ -1036,7 +1040,7 @@ pub struct AnalysisAnnotation {
     pub origin: Origin,
 }
 /// A top-level declaration; identity is a manifest-qualified path (PROG-5).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct Item {
     /// Exact declaration name, including for duplicate diagnostics (LANG-7).
     pub name_span: Span,
@@ -1050,7 +1054,7 @@ pub struct Item {
     pub generated: Option<Generated>,
 }
 /// Items the compiler builds for a `= comptime e` declaration (CT-5).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub enum Generated {
     /// The declaration with its generated body: the function literal's
     /// parameter names (None for `_`) and their sites, which bind the declared
@@ -1063,7 +1067,7 @@ pub enum Generated {
 }
 /// Written repeat literal, represented by a typed count binding and a one-element
 /// sequence. Lowering repeats that element's prepared value, never its evaluation.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct RepeatLiteral {
     pub expression: ExprId,
     pub sequence: ExprId,
@@ -1073,7 +1077,7 @@ pub struct RepeatLiteral {
 }
 /// One top-level item's owning AST arenas and token tape. All IDs address these
 /// Vecs, so they are item-local; no AST node borrows source storage (LANG-1).
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default, Eq, PartialEq)]
 pub struct SyntaxTree {
     /// The tokens the item owns, leading trivia and trailing same-line comment
     /// included, with spans relative to the item's anchor.
@@ -1315,15 +1319,18 @@ impl SyntaxTree {
 /// One top-level item occurrence with its own arenas. Nothing in it depends on
 /// where the item stands: its IDs are item-local and its spans are relative to
 /// its anchor, so inserting other items or moving it between files keeps it.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct ItemSyntax {
     pub item: Item,
     pub tree: SyntaxTree,
+    #[serde(with = "snapshot_anchor")]
     pub anchor: Anchor,
     /// Hashes the exact bytes of the item's owned tokens, including attributes,
     /// contracts and drop; no newline normalization.
     pub text_hash: ContentHash,
     /// Ordinal among this DefPath's candidates, in (file path, position) order.
+    /// Parsing persists before package-wide occurrence placement.
+    #[serde(skip)]
     pub occurrence: u32,
 }
 impl ItemSyntax {
@@ -1466,10 +1473,11 @@ impl LexicalOwner {
     }
 }
 /// Parser output retains invalid tokens and orphan/EOF trivia for round-trip formatting (LANG-1).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct SyntaxFile {
     /// Includes recovery diagnostics which have no Error node.
     pub has_syntax_errors: bool,
+    #[serde(skip)]
     pub file: FileId,
     /// Top-level items in source order; their owned tokens tile the tape's start.
     pub items: Vec<Arc<ItemSyntax>>,
@@ -1648,3 +1656,30 @@ mod revision_tests {
         assert_eq!(file, file.clone());
     }
 }
+
+// Item ownership anchors use exactly the same portable numbering as spans.
+mod snapshot_anchor {
+    use super::*;
+    use serde::{Deserialize, Serialize};
+    pub fn serialize<S: serde::Serializer>(
+        anchor: &Anchor,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        Span {
+            anchor: *anchor,
+            start: 0,
+            end: 0,
+        }
+        .serialize(serializer)
+    }
+    pub fn deserialize<'de, D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Anchor, D::Error> {
+        let span = Span::deserialize(deserializer)?;
+        if span.start != 0 || span.end != 0 {
+            return Err(serde::de::Error::custom("invalid ownership anchor"));
+        }
+        Ok(span.anchor)
+    }
+}
+mod structure;
