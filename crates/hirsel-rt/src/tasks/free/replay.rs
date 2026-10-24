@@ -1,15 +1,44 @@
-//! Native replay admission, shared with the F0 Session decoder and projection.
-//! A mutex serializes session mutations. No session borrow or lock
-//! crosses a physical save; atomic carriers are released before cut parking.
+//! Native replay admission over the backend-neutral decoder and projection.
+//! Each task replays from its own cursor over its immutable stream; an ordinary
+//! phase locks only that task's state and the object version cell it orders
+//! against. Object handle lookup, key epochs and the terminal check are the
+//! only shared administration. No cursor borrow or lock crosses a physical
+//! save; atomic carriers are released before cut parking.
 use super::super::*;
+use hirsel_free::phase::Progress;
 use hirsel_free::projection::Projection;
-use hirsel_free::replay::Diverged;
-use hirsel_free::session::Session;
+use hirsel_free::record::ObjectId;
+use hirsel_free::replay::{Cursor, Diverged, Shared};
+use hirsel_free::session::Handle;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
+
+/// One task's replay state. Only its running owner locks it (and the terminal
+/// check after every task stopped), so the lock is never contended.
+pub(crate) struct TaskReplay {
+    state: Mutex<TaskState>,
+}
+
+struct TaskState {
+    cursor: Cursor,
+    op: u64,
+    progress: Progress,
+    started: bool,
+}
+
+impl TaskState {
+    fn at(&self, phase: Phase) -> Progress {
+        Progress::new(self.op, phase)
+    }
+}
 
 pub(crate) struct Replay {
-    session: Mutex<Option<Session>>,
+    shared: Arc<Shared>,
+    /// Every task the tape can start, built at admission and never changed.
+    tasks: HashMap<Vec<u32>, Arc<TaskReplay>>,
+    objects: RwLock<HashMap<Handle, ObjectId>>,
+    finished: AtomicBool,
     published: AtomicBool,
     handles: Mutex<super::host::handles::Handles>,
     output: Mutex<(Vec<u8>, Vec<u8>)>,
@@ -20,10 +49,30 @@ pub(crate) struct Replay {
 
 impl Replay {
     pub(crate) fn new(tape: &[u8]) -> Result<Arc<Self>, Diverged> {
-        let mut session = Session::replay(tape)?;
-        session.start(&[]);
+        let tape = hirsel_free::tape::parse(tape).map_err(Diverged)?;
+        let shared = Shared::new(&tape)?;
+        let mut paths: Vec<Vec<u32>> = shared.cut().keys().cloned().collect();
+        paths.push(Vec::new());
+        let tasks = paths
+            .into_iter()
+            .map(|path| {
+                let cursor = shared.cursor(&path);
+                let task = Arc::new(TaskReplay {
+                    state: Mutex::new(TaskState {
+                        cursor,
+                        op: 0,
+                        progress: Progress::START,
+                        started: path.is_empty(),
+                    }),
+                });
+                (path, task)
+            })
+            .collect();
         Ok(Arc::new(Self {
-            session: Mutex::new(Some(session)),
+            shared,
+            tasks,
+            objects: RwLock::default(),
+            finished: AtomicBool::new(false),
             published: AtomicBool::new(false),
             handles: Mutex::default(),
             output: Mutex::default(),
@@ -65,18 +114,40 @@ impl Replay {
         });
     }
 
+    /// The terminal check: every started task consumed its stream and reached
+    /// its cut. Called once, after every task stopped.
     pub(crate) fn finish(&self) -> Result<Projection, Diverged> {
-        self.session
-            .lock()
-            .unwrap()
-            .take()
-            .expect("one replay finish")
-            .finish()
+        assert!(
+            !self.finished.swap(true, Ordering::AcqRel),
+            "one replay finish"
+        );
+        let mut paths: Vec<_> = self.tasks.keys().collect();
+        paths.sort();
+        let states: Vec<_> = paths
+            .into_iter()
+            .map(|path| self.tasks[path].state.lock().unwrap())
+            .collect();
+        self.shared.finish(
+            states
+                .iter()
+                .filter(|state| state.started && state.cursor.starts())
+                .map(|state| (&state.cursor, state.progress)),
+        )
     }
 
-    fn with<T>(&self, action: impl FnOnce(&mut Session) -> T) -> T {
-        let mut session = self.session.lock().unwrap();
-        action(session.as_mut().expect("an unfinished replay"))
+    fn task(&self, path: &[u32]) -> &Arc<TaskReplay> {
+        self.tasks
+            .get(path)
+            .unwrap_or_else(|| panic!("free-mode task {path:?} never starts in this replay"))
+    }
+
+    fn object(&self, handle: Handle) -> Result<ObjectId, Diverged> {
+        self.objects
+            .read()
+            .unwrap()
+            .get(&handle)
+            .cloned()
+            .ok_or_else(|| Diverged(format!("free-mode object {handle:?} was never created")))
     }
 
     pub(crate) fn output(&self) -> (Vec<u8>, Vec<u8>) {
@@ -119,7 +190,11 @@ pub(super) fn at_cut(ctx: *mut TaskCtx) -> bool {
         return false;
     };
     let path = path(ctx);
-    state.with(|session| session.at_cut(&path))
+    let Some(task) = state.tasks.get(&path) else {
+        return true;
+    };
+    let task = task.state.lock().unwrap();
+    !task.cursor.starts() || task.cursor.cut() == Some(task.progress)
 }
 
 /// Before any user segment, a task whose cut is START stays saved forever.
@@ -133,7 +208,12 @@ pub(crate) fn start(ctx: *mut TaskCtx) {
 /// queued forever, including cuts that contain only its START registration.
 pub(super) fn child(ctx: *mut TaskCtx, path: &[u32]) -> bool {
     let Some(state) = state(ctx) else { return true };
-    state.with(|session| session.start(path))
+    let Some(task) = state.tasks.get(path) else {
+        return false;
+    };
+    let mut task = task.state.lock().unwrap();
+    task.started = true;
+    task.cursor.starts()
 }
 
 /// An unadmitted continuation returns Requested only to unwind temporary
@@ -149,7 +229,8 @@ pub(crate) fn cut_rejection(ctx: *mut TaskCtx, stop: &Stop) -> bool {
 pub(super) fn begin(ctx: *mut TaskCtx) {
     let Some(state) = state(ctx) else { return };
     let path = path(ctx);
-    state.with(|session| session.begin(&path));
+    let mut task = state.task(&path).state.lock().unwrap();
+    task.op = task.op.checked_add(1).expect("native op ordinal overflow");
 }
 
 /// A publication can enable replay waits. Drain the notification only under
@@ -186,14 +267,20 @@ pub(super) unsafe fn thaw(
             let token = token(ctx).expect("an admitted native replay");
             token.entry(ctx, Phase::Done)?;
             let last = unsafe { crate::roots::sole(root) };
-            if token
-                .shared
-                .with(|session| session.thaw_ready(&token.path, last))
-            {
+            if token.with(|task| task.cursor.thaw_outcome(task.op) != Some(true) || last) {
                 token.publish(ctx, Phase::Done, || {
                     let last = token
-                        .shared
-                        .with(|session| session.thaw(&token.path, last))
+                        .with(|task| {
+                            let ok = task.cursor.thaw(task.op)?;
+                            if ok && !last {
+                                return Err(Diverged(format!(
+                                    "{:?} op {}: a recorded Ok thaw of a root that is not the last",
+                                    task.cursor.path(),
+                                    task.op
+                                )));
+                            }
+                            Ok(ok)
+                        })
                         .map_err(|error| Stop::Diverged(error.0))?;
                     unsafe { out.write(u8::from(last)) };
                     Ok(())
@@ -227,15 +314,13 @@ pub(super) unsafe fn thaw(
 /// or role acquisition occurs while this token publishes or substitutes.
 pub(super) struct Token {
     shared: Arc<Replay>,
-    path: Vec<u32>,
+    task: Arc<TaskReplay>,
 }
 
 pub(super) fn token(ctx: *mut TaskCtx) -> Option<Token> {
     let shared = state(ctx)?;
-    Some(Token {
-        shared,
-        path: path(ctx),
-    })
+    let task = shared.task(&path(ctx)).clone();
+    Some(Token { shared, task })
 }
 
 /// An object binding captured under the role before independent cell access.
@@ -283,59 +368,83 @@ impl Object {
     }
 
     pub(super) fn create(&self) -> Stopped<()> {
-        self.token
-            .shared
-            .with(|session| session.create(&self.token.path, self.handle))
-            .map_err(|error| Stop::Diverged(error.0))
+        self.token.with(|task| {
+            let id = ObjectId::Made {
+                path: task.cursor.path().to_vec(),
+                op: task.op,
+            };
+            self.token
+                .shared
+                .objects
+                .write()
+                .unwrap()
+                .insert(self.handle, id.clone());
+            task.cursor.create(id);
+        });
+        Ok(())
     }
 
     fn ready(&self, ctx: *mut TaskCtx) -> Stopped<bool> {
         self.token.entry(ctx, Phase::Done)?;
-        if !self
-            .token
-            .shared
-            .with(|session| session.admits(&self.token.path, Phase::Done))
-        {
+        if !self.token.admits(Phase::Done) {
             self.token.publish(ctx, Phase::Entered, || ())?;
             return Err(Stop::Requested);
         }
+        let id = self.id()?;
+        self.token
+            .with(|task| task.cursor.enabled(task.op, 0, &id))
+            .map_err(|error| Stop::Diverged(error.0))
+    }
+
+    fn id(&self) -> Stopped<ObjectId> {
         self.token
             .shared
-            .with(|session| session.enabled(&self.token.path, 0, self.handle))
+            .object(self.handle)
             .map_err(|error| Stop::Diverged(error.0))
     }
 
     pub(super) fn touch(&self, outcome: &str) -> Stopped<()> {
+        let id = self.id()?;
         self.token
-            .shared
-            .with(|session| session.touch(&self.token.path, 0, self.handle, outcome))
+            .with(|task| task.cursor.touch(task.op, 0, &id, outcome))
             .map_err(|error| Stop::Diverged(error.0))
     }
 
     pub(super) fn receive(&self, outcome: &str) -> Stopped<()> {
-        self.token
-            .shared
-            .with(|session| session.receive(&self.token.path, self.handle, outcome))
-            .map_err(|error| Stop::Diverged(error.0))
+        let id = self.id()?;
+        self.token.with(|task| task.cursor.receive(&id, outcome));
+        Ok(())
     }
 }
 
 impl Token {
+    /// Lock this task's own replay state for one bounded step.
+    fn with<T>(&self, action: impl FnOnce(&mut TaskState) -> T) -> T {
+        action(&mut self.task.state.lock().unwrap())
+    }
+
+    fn admits(&self, phase: Phase) -> bool {
+        self.with(|task| task.cursor.admits(task.at(phase)))
+    }
+
+    fn diverged<T>(
+        &self,
+        action: impl FnOnce(&mut TaskState) -> Result<T, Diverged>,
+    ) -> Stopped<T> {
+        self.with(action).map_err(|error| Stop::Diverged(error.0))
+    }
+
     pub(super) fn admit_done(&self, ctx: *mut TaskCtx) -> Stopped<()> {
         self.entry(ctx, Phase::Done)?;
-        if !self
-            .shared
-            .with(|session| session.admits(&self.path, Phase::Done))
-        {
+        if !self.admits(Phase::Done) {
             self.publish(ctx, Phase::Entered, || ())?;
             return Err(Stop::Requested);
         }
         Ok(())
     }
 
-    pub(super) fn cancel_peek(&self, live: Option<u32>) -> Option<u32> {
-        self.shared
-            .with(|session| session.cancel_peek(&self.path, live))
+    pub(super) fn cancel_peek(&self, _live: Option<u32>) -> Option<u32> {
+        self.with(|task| task.cursor.cancel_outcome(task.op))
     }
 
     /// No action runs past its admitted phase. Rejection returns through its
@@ -366,10 +475,7 @@ impl Token {
         phase: Phase,
         action: impl FnOnce() -> T,
     ) -> Stopped<T> {
-        if !self
-            .shared
-            .with(|session| session.admits(&self.path, phase))
-        {
+        if !self.admits(phase) {
             return Err(crate::stop::Stop::Requested);
         }
         let mut roots = crate::roots::PhaseRoots::prepare(ctx);
@@ -377,9 +483,12 @@ impl Token {
             crate::roots::wait_phase(ctx);
         }
         let result = action();
-        let publication = self
-            .shared
-            .with(|session| session.publish(&self.path, phase));
+        let publication = self.with(|task| {
+            let progress = task.at(phase);
+            task.cursor.publish(progress)?;
+            task.progress = progress;
+            Ok::<_, Diverged>(())
+        });
         roots.finish(ctx);
         if publication.is_ok() {
             self.shared.published.store(true, Ordering::Release);
@@ -394,9 +503,9 @@ impl Token {
         request: &crate::io::Request,
         envelope: super::host::handles::Envelope,
     ) -> Stopped<Result<crate::io::Completion, crate::io::AdapterError>> {
-        let op = self.shared.with(|session| session.op(&self.path));
+        let (path, op) = self.with(|task| (task.cursor.path().to_vec(), task.op));
         super::host::engine::restore(
-            &self.path,
+            &path,
             op,
             request,
             envelope,
@@ -410,9 +519,16 @@ impl Token {
         self.observation(&actual)
     }
     pub(super) fn observation(&self, bytes: &[u8]) -> Stopped<()> {
-        self.shared
-            .with(|session| session.replay_host_request(&self.path, bytes))
-            .map_err(|error| Stop::Diverged(error.0))
+        self.diverged(|task| {
+            if task.cursor.observation(task.op)? != bytes {
+                return Err(Diverged(format!(
+                    "host request differs at {:?} operation {}",
+                    task.cursor.path(),
+                    task.op
+                )));
+            }
+            Ok(())
+        })
     }
 
     pub(super) fn host_keys(
@@ -445,9 +561,13 @@ impl Token {
     }
 
     pub(super) fn host_readiness(&self, ready: bool) -> Stopped<()> {
-        self.shared
-            .with(|session| session.replay_host_readiness(&self.path, ready))
-            .map_err(|error| Stop::Diverged(error.0))
+        self.diverged(|task| {
+            if ready {
+                task.cursor.ready(task.op)
+            } else {
+                task.cursor.blocked(task.op)
+            }
+        })
     }
 
     pub(super) fn host_positions(
@@ -459,23 +579,25 @@ impl Token {
             .iter()
             .map(|(key, shared)| (key.as_str(), *shared))
             .collect();
-        self.shared
-            .with(|session| session.replay_host_positions(&self.path, index, &keys))
-            .map_err(|error| Stop::Diverged(error.0))
+        self.diverged(|task| {
+            if index == 0 {
+                task.cursor.prepare(task.op)?;
+            }
+            task.cursor.positions(task.op, index, &keys)
+        })
     }
 
     pub(super) fn host_ready(&self, positions: &[hirsel_free::recorder::Position]) -> bool {
-        self.shared
-            .with(|session| session.replay_host_ready(positions))
+        self.shared.shared.positions_ready(positions)
     }
 
     pub(super) fn host_observation(
         &self,
         positions: &[hirsel_free::recorder::Position],
     ) -> Stopped<Vec<u8>> {
-        self.shared
-            .with(|session| session.replay_host_observation(&self.path, positions))
-            .map_err(|error| Stop::Diverged(error.0))
+        let bytes = self.diverged(|task| task.cursor.observation(task.op))?;
+        self.shared.shared.end_positions(positions);
+        Ok(bytes)
     }
 
     pub(super) fn host_output(
@@ -485,9 +607,7 @@ impl Token {
         bytes: &[u8],
         stderr: bool,
     ) -> Stopped<()> {
-        self.shared
-            .with(|session| session.replay_host_output(&self.path, positions, sink, bytes))
-            .map_err(|error| Stop::Diverged(error.0))?;
+        self.diverged(|task| task.cursor.output_at_position(positions, sink, bytes))?;
         let mut output = self.shared.output.lock().unwrap();
         if stderr {
             output.1.extend_from_slice(bytes);
@@ -498,78 +618,60 @@ impl Token {
     }
 
     pub(super) fn host_completion(&self) -> Stopped<Vec<u8>> {
-        self.shared
-            .with(|session| session.replay_host_completion(&self.path))
-            .map_err(|error| Stop::Diverged(error.0))
+        self.diverged(|task| task.cursor.completion(task.op))
     }
 
-    pub(super) fn load(&self, live: u128) -> Stopped<u128> {
-        self.shared
-            .with(|session| session.load(&self.path, live))
-            .map_err(|error| crate::stop::Stop::Diverged(error.0))
+    pub(super) fn load(&self, _live: u128) -> Stopped<u128> {
+        self.diverged(|task| task.cursor.load(task.op))
     }
 
-    pub(super) fn cancel(&self, live: Option<u32>) -> Stopped<Option<u32>> {
-        self.shared
-            .with(|session| session.cancel_check(&self.path, live))
-            .map_err(|error| Stop::Diverged(error.0))
+    pub(super) fn cancel(&self, _live: Option<u32>) -> Stopped<Option<u32>> {
+        Ok(self.with(|task| task.cursor.cancel_check(task.op)))
     }
 
-    pub(super) fn expired(&self, live: bool) -> Stopped<bool> {
-        self.shared
-            .with(|session| session.expired(&self.path, live))
-            .map_err(|error| Stop::Diverged(error.0))
+    pub(super) fn expired(&self, _live: bool) -> Stopped<bool> {
+        Ok(self.with(|task| task.cursor.expired(task.op)))
     }
 
     pub(super) fn await_member(&self, ctx: *mut TaskCtx) -> Stopped<u64> {
-        if !self
-            .shared
-            .with(|session| session.admits(&self.path, Phase::Done))
-        {
+        if !self.admits(Phase::Done) {
             // Entered-only cuts carry no selected member yet. Replay applies
             // entry (including its root tail) and parks before inspecting it.
             self.publish(ctx, Phase::Entered, || ())?;
             return Err(Stop::Requested);
         }
-        self.shared
-            .with(|session| session.await_any_member(&self.path))
+        self.with(|task| task.cursor.await_any_member(task.op))
             .ok_or_else(|| {
                 Stop::Diverged("a nonempty native await_any has no recorded member".into())
             })
     }
 
     pub(super) fn await_any(&self, index: u64) -> Stopped<()> {
-        let selected = self
-            .shared
-            .with(|session| {
-                session.await_any(&self.path, Some(index), |candidate| candidate == index)
-            })
-            .map_err(|error| Stop::Diverged(error.0))?;
-        assert_eq!(selected, Some(index), "the recorded member was ready");
+        let selected = self.diverged(|task| task.cursor.await_any(task.op))?;
+        assert_eq!(selected, index, "the recorded member was ready");
         Ok(())
     }
 
     pub(super) fn gate_ready(&self, ctx: *mut TaskCtx, gate: u32) -> Stopped<bool> {
         self.entry(ctx, Phase::Done)?;
-        if !self
-            .shared
-            .with(|session| session.admits(&self.path, Phase::Done))
-        {
+        if !self.admits(Phase::Done) {
             self.publish(ctx, Phase::Entered, || ())?;
             return Err(Stop::Requested);
         }
-        self.shared
-            .with(|session| {
-                session.gate((3, u64::from(gate)), &format!("package:{gate}"));
-                session.enabled(&self.path, 0, (3, u64::from(gate)))
-            })
-            .map_err(|error| Stop::Diverged(error.0))
+        let id = self.gate_id(gate);
+        self.diverged(|task| task.cursor.enabled(task.op, 0, &id))
+    }
+
+    /// A serial gate exists from admission at version 1, under its package identity.
+    fn gate_id(&self, gate: u32) -> ObjectId {
+        let package = format!("package:{gate}");
+        self.shared.shared.gate(&package);
+        ObjectId::Gate(package)
     }
 
     pub(super) fn gate_touch(&self, gate: u32, outcome: &str) -> Stopped<()> {
-        self.shared
-            .with(|session| session.touch(&self.path, 0, (3, u64::from(gate)), outcome))
-            .map_err(|error| Stop::Diverged(error.0))
+        let id = self.gate_id(gate);
+        self.diverged(|task| task.cursor.touch(task.op, 0, &id, outcome))
     }
 }
 

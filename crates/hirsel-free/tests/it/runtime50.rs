@@ -5,7 +5,7 @@ use hirsel_free::concurrent::{ExecutorSlot, Metrics, Recorder, Task};
 use hirsel_free::phase::{Phase, Progress};
 use hirsel_free::projection::Projection;
 use hirsel_free::record::{Encoder, ObjectId, Record, RecordBound, decode};
-use hirsel_free::replay::Replayer;
+use hirsel_free::replay::{Admission, Replayer, Shared};
 use hirsel_free::section::SEGMENT as SEGMENT_HINT;
 use hirsel_free::session::{Marked, Session};
 use hirsel_free::tape;
@@ -634,4 +634,307 @@ fn runtime50_diagnostic_free_encoding_projection() {
         live.objects.values().all(|h| !h.versions.is_empty()),
         "the projection compares object histories"
     );
+}
+
+/// The F0 dependency traces, replayed through owner-local cursors at width and permit 1.
+fn dependency_traces() -> Vec<(&'static str, crate::executor::Program)> {
+    use crate::executor::{Ins::*, Program};
+    vec![
+        (
+            "mutex-root cycle",
+            Program(vec![
+                vec![
+                    Mutex("m"),
+                    Freeze("s", vec![]),
+                    Dup("s"),
+                    Take("m"),
+                    Spawn(1, vec!["s"]),
+                    Atomic("y"),
+                    Store("y", 1),
+                    Thaw("s"),
+                    Put("m"),
+                    Join(1),
+                ],
+                vec![Release("s"), Take("m"), Put("m")],
+            ]),
+        ),
+        (
+            "infinite trailing segment",
+            Program(vec![
+                vec![
+                    Freeze("s", vec![]),
+                    Dup("s"),
+                    Atomic("x"),
+                    Spawn(1, vec!["s"]),
+                    Load("x"),
+                    Thaw("s"),
+                ],
+                vec![Store("x", 1), Release("s"), Loop],
+            ]),
+        ),
+        (
+            "parked receive",
+            Program(vec![
+                vec![
+                    Open("c", 1),
+                    Freeze("s", vec![]),
+                    Dup("s"),
+                    Spawn(1, vec!["s"]),
+                    Atomic("y"),
+                    Thaw("s"),
+                    Write("out", "x"),
+                    Loop,
+                ],
+                vec![Release("s"), Recv("c")],
+            ]),
+        ),
+        (
+            "nested phase root",
+            Program(vec![
+                vec![
+                    Freeze("r2", vec![]),
+                    Dup("r2"),
+                    Freeze("r1", vec!["r2"]),
+                    Dup("r1"),
+                    Spawn(1, vec!["r1"]),
+                    Release("r1"),
+                    Join(1),
+                    Thaw("r2"),
+                ],
+                vec![Atomic("z")],
+            ]),
+        ),
+    ]
+}
+
+/// Rebuild `tape` with each task's log rewritten by `edit`.
+fn rewrite(tape: &tape::Tape, edit: impl Fn(Vec<Record>) -> Vec<Record>) -> Vec<u8> {
+    let mut bytes = tape::header(&tape.binding);
+    let tasks: Vec<_> = tape
+        .cut
+        .iter()
+        .map(|(path, progress)| {
+            let records = edit(decode(tape.logs.get(path).map_or(&[][..], Vec::as_slice)).unwrap());
+            let mut encoder = Encoder::default();
+            let mut log = Vec::new();
+            for record in &records {
+                encoder.encode(record, &mut log);
+            }
+            tape::TaskChunk {
+                path: path.clone(),
+                progress: *progress,
+                bytes: log,
+            }
+        })
+        .collect();
+    let end = tape.end.clone().expect("a terminal tape");
+    bytes.extend(tape::stop(&tape.keys, &tasks, &end));
+    bytes
+}
+
+/// Serial-gate callbacks recorded by three executors, replayed by three threads each owning
+/// its task's cursor, under one permit: a pending task holds nothing and waits on its
+/// dependency token.
+fn serial_callbacks_with_local_cursors() {
+    const TASKS: usize = 3;
+    const ROUNDS: u64 = 16;
+    let recorder = Arc::new(
+        Recorder::<Marked>::new(
+            Marked::default(),
+            b"serial gate",
+            TASKS + 1,
+            false,
+            true,
+            None,
+        )
+        .unwrap(),
+    );
+    let gate = ObjectId::Gate("package:7".into());
+    let mut slot = recorder.executor(0).unwrap();
+    let mut root = recorder.root(&mut slot).unwrap();
+    let children = recorder
+        .phase(&mut slot, &mut root, done(1), |w| {
+            (0..TASKS).map(|_| w.spawn()).collect::<Vec<_>>()
+        })
+        .unwrap();
+    drop(slot);
+    // The gate's version: enter and leave each advance it, under the package's serial lock.
+    let version = Arc::new(std::sync::Mutex::new(1u64));
+    let threads: Vec<_> = children
+        .into_iter()
+        .map(|mut task| {
+            let (recorder, version, gate) = (recorder.clone(), version.clone(), gate.clone());
+            std::thread::spawn(move || {
+                let mut slot = recorder.executor_available(1).unwrap();
+                for round in 0..ROUNDS {
+                    let mut held = version.lock().unwrap();
+                    for (i, outcome) in ["gate enter", "gate leave"].into_iter().enumerate() {
+                        task.track(&gate);
+                        task.reserve(RecordBound::records(1));
+                        recorder
+                            .phase(&mut slot, &mut task, done(2 * round + 1 + i as u64), |w| {
+                                *held += 1;
+                                w.touch(&gate, *held, 0, outcome);
+                            })
+                            .unwrap();
+                    }
+                    drop(held);
+                    std::thread::yield_now();
+                }
+                task
+            })
+        })
+        .collect();
+    let tasks: Vec<_> = threads.into_iter().map(|t| t.join().unwrap()).collect();
+    let cut = recorder.stop("returned", None).unwrap().unwrap().0;
+    let mut events = root.trace().to_vec();
+    for task in &tasks {
+        events.extend_from_slice(task.trace());
+    }
+    let live = Projection::new("returned", &cut.progress, &events);
+    let marked = Arc::try_unwrap(recorder).ok().unwrap().into_sink();
+
+    let shared = Shared::new(&tape::parse(&marked.bytes).unwrap()).unwrap();
+    shared.gate("package:7");
+    let mut root = shared.cursor(&[]);
+    root.publish(done(1)).unwrap();
+    let permit = Arc::new(std::sync::Mutex::new(()));
+    let pending = Arc::new(AtomicUsize::new(0));
+    let replayers: Vec<_> = (0..TASKS as u32)
+        .map(|id| {
+            let mut cursor = shared.cursor(&[id]);
+            let (permit, gate, pending) = (permit.clone(), gate.clone(), pending.clone());
+            std::thread::spawn(move || {
+                assert!(cursor.starts());
+                for op in 1..=2 * ROUNDS {
+                    let outcome = if op % 2 == 1 {
+                        "gate enter"
+                    } else {
+                        "gate leave"
+                    };
+                    loop {
+                        let held = permit.lock().unwrap();
+                        match cursor.admission(op, 0, &gate).unwrap() {
+                            Admission::Ready => {
+                                cursor.touch(op, 0, &gate, outcome).unwrap();
+                                cursor.publish(done(op)).unwrap();
+                                break;
+                            }
+                            Admission::Pending(token) => {
+                                // Pending owns no permit: release it, then wait for the token.
+                                drop(held);
+                                pending.fetch_add(1, Ordering::Relaxed);
+                                while !token.ready() {
+                                    std::thread::yield_now();
+                                }
+                            }
+                        }
+                    }
+                }
+                cursor
+            })
+        })
+        .collect();
+    let cursors: Vec<_> = replayers.into_iter().map(|t| t.join().unwrap()).collect();
+    assert!(
+        pending.load(Ordering::Relaxed) > 0,
+        "some callback waited for its predecessor"
+    );
+    let mut all = vec![(&root, done(1))];
+    all.extend(cursors.iter().map(|cursor| (cursor, done(2 * ROUNDS))));
+    assert_eq!(shared.finish(all).unwrap(), live);
+}
+
+#[test]
+fn runtime50_local_replay_dependency_progress() {
+    use crate::executor::{Drive, record, replay};
+    let mut gapped = 0;
+    for (name, program) in dependency_traces() {
+        for seed in 0..16 {
+            for drive in [
+                Drive::new(seed),
+                Drive {
+                    durable: true,
+                    flush_one_in: 3,
+                    ..Drive::new(seed)
+                },
+            ] {
+                let recorded = record(&program, drive);
+                // Consumes every record and reaches every cut, at width and permit 1.
+                let replayed = replay(&program, &recorded.tape, seed ^ 0x5a)
+                    .unwrap_or_else(|e| panic!("{name} {drive:?}: {e}"));
+                assert_eq!(replayed, recorded.live, "{name} {drive:?}");
+                let parsed = tape::parse(&recorded.tape).unwrap();
+                let has_gap = parsed.logs.values().any(|log| {
+                    decode(log)
+                        .unwrap()
+                        .iter()
+                        .any(|r| matches!(r, Record::Gap { .. }))
+                });
+                if !has_gap {
+                    continue;
+                }
+                gapped += 1;
+                // An impossible predecessor (a gap no version can satisfy) is refused,
+                // never left blocked.
+                let impossible = rewrite(&parsed, |records| {
+                    records
+                        .into_iter()
+                        .map(|r| match r {
+                            Record::Gap { op, sub, gap } => Record::Gap {
+                                op,
+                                sub,
+                                gap: gap + 1000,
+                            },
+                            other => other,
+                        })
+                        .collect()
+                });
+                assert!(
+                    replay(&program, &impossible, seed).is_err(),
+                    "{name}: an impossible dependency diverges"
+                );
+            }
+        }
+    }
+    assert!(
+        gapped > 0,
+        "the traces record contended object dependencies"
+    );
+
+    // Malformed streams are refused before any task runs.
+    let (program, recorded) = {
+        let (_, program) = dependency_traces().remove(0);
+        let recorded = record(&program, Drive::new(3));
+        (program, recorded)
+    };
+    let parsed = tape::parse(&recorded.tape).unwrap();
+    let past_cut = rewrite(&parsed, |mut records| {
+        let op = records.last().map_or(0, Record::op) + 100;
+        records.push(Record::Load { op, bits: 1 });
+        records
+    });
+    let error = replay(&program, &past_cut, 0).unwrap_err();
+    assert!(error.0.contains("past its cut"), "{error}");
+    assert!(Shared::new(&tape::parse(&past_cut).unwrap()).is_err());
+    let mut torn = parsed.clone();
+    for log in torn.logs.values_mut() {
+        if !log.is_empty() {
+            log.push(0xff);
+        }
+    }
+    assert!(
+        Shared::new(&torn).is_err(),
+        "an undecodable stream is refused"
+    );
+    let mut orphan = parsed.clone();
+    let mut log = Vec::new();
+    Encoder::default().encode(&Record::Load { op: 1, bits: 1 }, &mut log);
+    orphan.logs.insert(vec![9], log);
+    assert!(
+        Shared::new(&orphan).is_err(),
+        "records of a task outside the cut"
+    );
+
+    serial_callbacks_with_local_cursors();
 }

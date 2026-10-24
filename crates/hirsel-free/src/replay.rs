@@ -1,7 +1,10 @@
 //! The replay side of a free-mode tape (design §5 Replay protocol), backend-neutral.
 //!
+//! - **Validation.** [`Shared::new`] decodes every task's stream once and checks it before any
+//!   task runs: every record decodes, names an op the task's cut admits and a key the tape
+//!   names; key epochs are consistent across streams. A malformed tape is refused here.
 //! - **Admission.** A task runs only up to its progress in the tape's cut (the terminal cut,
-//!   or a truncated tape's last flush). The engine asks [`Replayer::admits`] before each phase
+//!   or a truncated tape's last flush). The engine asks [`Cursor::admits`] before each phase
 //!   and parks the task for good when it is not admitted: at (k, done) it parks once op k
 //!   completes; at (k, entered) it runs op k's entry, releases included, and waits for good; a
 //!   request parks in flight at its claimed, attempt or ended phase; at (k, cleanup i) it
@@ -9,22 +12,32 @@
 //! - **Enablement.** A gapped sub-event is enabled when its object's version equals p + g (p:
 //!   the version this task's previous sub-event on it left, 1 for its first); a host
 //!   transition when every transition of its key's previous epoch ended. A task waiting for
-//!   enablement is replay-pending: it holds nothing and releases its worker.
+//!   enablement is replay-pending: it holds nothing and releases its worker
+//!   ([`Admission::Pending`]).
 //! - **Substitution.** Loads, `await_any`, thaws, cancellation checks, `scope_until`, host
 //!   observations and completions take their recorded outcomes; no host call is made.
-//! - **Validation.** At the end every record is consumed, or the replay [`Diverged`].
+//! - **Finish.** At the end every record is consumed, or the replay [`Diverged`].
+//!
+//! Each task's [`Cursor`] is owner-local: it moves with its task and needs no lock, so an
+//! ordinary phase touches only its own cursor and the atomic version cell of the object it
+//! orders against. [`Shared`] holds the immutable streams and synchronises only shared
+//! administration: the object directory (creation and lookup), host-key epochs and the
+//! terminal check. [`Replayer`] keys the same cursors by spawn path for width-1 engines.
 //!
 //! Progress over the admitted prefix holds at any width and permit count: order the admitted
 //! phases by the real time of their sections in the recording; the earliest one not yet
 //! replayed has its task's earlier phases replayed, and each predecessor it names acted in an
-//! earlier section, which the closed cut admits, so it is enabled.
+//! earlier section, which the closed cut admits, so it is enabled. An engine that finds every
+//! unfinished task pending reports [`Diverged`], never a hang.
 
 use crate::keys::KeyEpochs;
 use crate::phase::Progress;
 use crate::projection::{Event, Observed, Projection, Stamped};
 use crate::record::{CheckIndex, ObjectId, Record, decode};
 use crate::tape::{End, Tape};
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, RwLock};
 
 /// The replay cannot follow its tape.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -36,57 +49,80 @@ impl std::fmt::Display for Diverged {
     }
 }
 
-#[derive(Default)]
-struct Script {
+/// One task's immutable recorded stream and its cut.
+struct Stream {
+    records: Box<[Record]>,
     cut: Option<Progress>,
-    records: VecDeque<Record>,
-    last: HashMap<ObjectId, u64>,
-    /// This task's previous epoch on each key, as its records advance.
-    epochs: HashMap<u32, u64>,
-    canceled: Option<u32>,
-    cancel_checks: CheckIndex,
-    events: Vec<Event>,
 }
 
-impl Script {
-    /// Take the first unconsumed record of op `op` that `pick` accepts.
-    fn take<T>(&mut self, op: u64, mut pick: impl FnMut(&Record) -> Option<T>) -> Option<T> {
-        let at = self
-            .records
-            .iter()
-            .take_while(|r| r.op() <= op)
-            .position(|r| r.op() == op && pick(r).is_some())?;
-        let record = self.records.remove(at).unwrap();
-        pick(&record)
-    }
-    fn peek<T>(&self, op: u64, pick: impl Fn(&Record) -> Option<T>) -> Option<T> {
-        self.records
-            .iter()
-            .take_while(|r| r.op() <= op)
-            .filter(|r| r.op() == op)
-            .find_map(pick)
+/// An object's replayed version: the dependency cell its gapped sub-events wait on. A
+/// sub-event advances it by one, from exactly the version it requires.
+#[derive(Debug)]
+pub struct Version(AtomicU64);
+
+impl Version {
+    pub fn get(&self) -> u64 {
+        self.0.load(Ordering::Acquire)
     }
 }
 
-/// A replay of one tape.
-pub struct Replayer {
+/// A pending sub-event's predecessor: ready once its object reaches `at`.
+#[derive(Clone, Debug)]
+pub struct DependencyToken {
+    cell: Arc<Version>,
+    at: u64,
+}
+
+impl DependencyToken {
+    pub fn ready(&self) -> bool {
+        self.cell.get() >= self.at
+    }
+    /// The version the dependency waits for.
+    pub fn at(&self) -> u64 {
+        self.at
+    }
+}
+
+/// Whether a gapped sub-event can act now.
+#[derive(Clone, Debug)]
+pub enum Admission {
+    Ready,
+    /// Its predecessor has not acted: wait, holding nothing, for the token.
+    Pending(DependencyToken),
+}
+
+/// What every replayed task shares: the validated streams (immutable) and the synchronised
+/// administration.
+pub struct Shared {
     end: Option<End>,
     cut: BTreeMap<Vec<u32>, Progress>,
     keys: Vec<String>,
-    scripts: HashMap<Vec<u32>, Script>,
-    objects: HashMap<ObjectId, u64>,
-    epochs: Vec<KeyEpochs>,
-    events: Vec<Stamped>,
+    streams: HashMap<Vec<u32>, Arc<Stream>>,
+    objects: RwLock<HashMap<ObjectId, Arc<Version>>>,
+    epochs: Mutex<Vec<KeyEpochs>>,
 }
 
-impl Replayer {
-    pub fn new(tape: &Tape) -> Result<Replayer, Diverged> {
+impl Shared {
+    /// Validate `tape` and decode its streams; a malformed tape is refused before any task
+    /// runs.
+    pub fn new(tape: &Tape) -> Result<Arc<Shared>, Diverged> {
         let mut epochs = vec![KeyEpochs::default(); tape.keys.len()];
-        let mut scripts = HashMap::new();
+        let mut streams = HashMap::new();
         for (path, bytes) in &tape.logs {
             let records = decode(bytes).map_err(|e| Diverged(format!("task {path:?}: {e}")))?;
+            let cut = tape.cut.get(path).copied().ok_or_else(|| {
+                Diverged(format!(
+                    "task {path:?} has records but no progress in the cut"
+                ))
+            })?;
             let mut last: HashMap<u32, u64> = HashMap::new();
             for record in &records {
+                if record.op() > cut.op {
+                    return Err(Diverged(format!(
+                        "task {path:?} records op {} past its cut {cut}",
+                        record.op()
+                    )));
+                }
                 if let Record::Key {
                     key, shared, gap, ..
                 } = *record
@@ -94,50 +130,40 @@ impl Replayer {
                     let epochs = epochs
                         .get_mut(key as usize)
                         .ok_or(Diverged(format!("unnamed key {key}")))?;
-                    let epoch = last.get(&key).copied().unwrap_or(0) + gap;
+                    let epoch = last
+                        .get(&key)
+                        .copied()
+                        .unwrap_or(0)
+                        .checked_add(gap)
+                        .ok_or_else(|| Diverged(format!("key {key} epoch overflows")))?;
                     last.insert(key, epoch);
                     epochs.member(epoch, shared).map_err(Diverged)?;
                 }
             }
-            let script = Script {
-                records: records.into(),
-                ..Script::default()
-            };
-            scripts.insert(path.clone(), script);
+            streams.insert(
+                path.clone(),
+                Arc::new(Stream {
+                    records: records.into(),
+                    cut: Some(cut),
+                }),
+            );
         }
         for (path, progress) in &tape.cut {
-            scripts.entry(path.clone()).or_default().cut = Some(*progress);
+            streams.entry(path.clone()).or_insert_with(|| {
+                Arc::new(Stream {
+                    records: Box::default(),
+                    cut: Some(*progress),
+                })
+            });
         }
-        Ok(Replayer {
+        Ok(Arc::new(Shared {
             end: tape.end.clone(),
             cut: tape.cut.clone(),
             keys: tape.keys.clone(),
-            scripts,
-            objects: HashMap::new(),
-            epochs,
-            events: Vec::new(),
-        })
-    }
-
-    fn script(&mut self, task: &[u32]) -> Result<&mut Script, Diverged> {
-        self.scripts
-            .get_mut(task)
-            .ok_or_else(|| Diverged(format!("task {task:?} is not on the tape")))
-    }
-
-    /// Whether the cut admits `task`'s phase at `progress`.
-    pub fn admits(&self, task: &[u32], progress: Progress) -> bool {
-        self.cut.get(task).is_some_and(|cut| cut.admits(progress))
-    }
-
-    /// `task`'s progress in the cut.
-    pub fn cut(&self, task: &[u32]) -> Option<Progress> {
-        self.cut.get(task).copied()
-    }
-
-    /// Whether a spawned child starts: it is in the cut, past its start.
-    pub fn starts(&self, task: &[u32]) -> bool {
-        self.cut.get(task).is_some_and(|cut| *cut > Progress::START)
+            streams,
+            objects: RwLock::new(HashMap::new()),
+            epochs: Mutex::new(epochs),
+        }))
     }
 
     /// The recorded outcome and stopping task; `None` for a truncated tape.
@@ -145,117 +171,285 @@ impl Replayer {
         self.end.as_ref()
     }
 
-    /// Gates exist at admission, independently of which replayed task first
-    /// reaches one. Registration does not consume an ordinal or a gap.
-    pub fn gate(&mut self, package: &str) {
-        self.objects
-            .entry(ObjectId::Gate(package.into()))
-            .or_insert(1);
+    /// Every task's progress in the cut.
+    pub fn cut(&self) -> &BTreeMap<Vec<u32>, Progress> {
+        &self.cut
     }
 
-    pub fn create(&mut self, task: &[u32], object: ObjectId) -> Result<(), Diverged> {
-        self.objects.insert(object.clone(), 1);
-        self.script(task)?.events.push(Event::Versioned {
+    /// Whether a spawned child starts: it is in the cut, past its start.
+    pub fn starts(&self, task: &[u32]) -> bool {
+        self.cut.get(task).is_some_and(|cut| *cut > Progress::START)
+    }
+
+    /// The owner-local cursor of `task`. A task absent from the tape gets an empty cursor,
+    /// which the cut never admits.
+    pub fn cursor(self: &Arc<Shared>, task: &[u32]) -> Cursor {
+        let stream = self.streams.get(task).cloned().unwrap_or_else(|| {
+            Arc::new(Stream {
+                records: Box::default(),
+                cut: None,
+            })
+        });
+        Cursor {
+            shared: self.clone(),
+            path: task.to_vec(),
+            taken: vec![false; stream.records.len()].into(),
+            first: 0,
+            remaining: stream.records.len(),
+            stream,
+            last: HashMap::new(),
+            epochs: HashMap::new(),
+            canceled: None,
+            cancel_checks: CheckIndex::default(),
+            staged: Vec::new(),
+            events: Vec::new(),
+        }
+    }
+
+    /// Gates exist at admission, independently of which replayed task first reaches one.
+    /// Registration does not consume an ordinal or a gap.
+    pub fn gate(&self, package: &str) {
+        let id = ObjectId::Gate(package.into());
+        if self.objects.read().unwrap().contains_key(&id) {
+            return;
+        }
+        self.objects
+            .write()
+            .unwrap()
+            .entry(id)
+            .or_insert_with(|| Arc::new(Version(AtomicU64::new(1))));
+    }
+
+    /// `object`'s version cell, once created.
+    pub fn object(&self, object: &ObjectId) -> Result<Arc<Version>, Diverged> {
+        self.objects
+            .read()
+            .unwrap()
+            .get(object)
+            .cloned()
+            .ok_or_else(|| Diverged(format!("{object} was never created")))
+    }
+
+    fn key(&self, name: &str) -> Result<u32, Diverged> {
+        self.keys
+            .iter()
+            .position(|k| k == name)
+            .map(|key| key as u32)
+            .ok_or_else(|| Diverged(format!("key {name} is not on the tape")))
+    }
+
+    pub fn positions_ready(&self, positions: &[crate::recorder::Position]) -> bool {
+        let epochs = self.epochs.lock().unwrap();
+        positions
+            .iter()
+            .all(|p| epochs[p.key as usize].ready(p.epoch))
+    }
+
+    pub fn end_positions(&self, positions: &[crate::recorder::Position]) {
+        let mut epochs = self.epochs.lock().unwrap();
+        for p in positions {
+            epochs[p.key as usize].end(p.epoch);
+        }
+    }
+
+    /// Finish: every cursor consumed its records and reached its cut (`cursors` holds every
+    /// started task's cursor; an unstarted one has nothing to consume).
+    pub fn finish<'c>(
+        &self,
+        cursors: impl IntoIterator<Item = (&'c Cursor, Progress)>,
+    ) -> Result<Projection, Diverged> {
+        let mut events = Vec::new();
+        let mut reached: BTreeMap<&[u32], Progress> = BTreeMap::new();
+        for (cursor, at) in cursors {
+            if let Some(record) = cursor.unconsumed() {
+                return Err(Diverged(format!(
+                    "task {:?} left {record:?} and {} more unconsumed",
+                    cursor.path,
+                    cursor.remaining - 1
+                )));
+            }
+            reached.insert(&cursor.path, at);
+            events.extend_from_slice(&cursor.events);
+        }
+        for (path, stream) in &self.streams {
+            if !stream.records.is_empty() && !reached.contains_key(path.as_slice()) {
+                return Err(Diverged(format!(
+                    "task {path:?} left {} records unconsumed",
+                    stream.records.len()
+                )));
+            }
+        }
+        for (path, cut) in &self.cut {
+            let at = reached
+                .get(path.as_slice())
+                .copied()
+                .unwrap_or(Progress::START);
+            if at != *cut {
+                return Err(Diverged(format!(
+                    "task {path:?} reached {at}, not its cut {cut}"
+                )));
+            }
+        }
+        let outcome = self.end.as_ref().map_or("truncated", |end| &end.outcome);
+        Ok(Projection::new(outcome, &self.cut, &events))
+    }
+}
+
+/// One task's replay: its immutable stream, what it consumed, and its own object and key
+/// history. It moves with its task and is used by one owner at a time.
+pub struct Cursor {
+    shared: Arc<Shared>,
+    path: Vec<u32>,
+    stream: Arc<Stream>,
+    taken: Box<[bool]>,
+    /// The first record not yet consumed.
+    first: usize,
+    remaining: usize,
+    last: HashMap<ObjectId, u64>,
+    /// This task's previous epoch on each key, as its records advance.
+    epochs: HashMap<u32, u64>,
+    canceled: Option<u32>,
+    cancel_checks: CheckIndex,
+    /// The current phase's effects, stamped at its publication.
+    staged: Vec<Event>,
+    events: Vec<Stamped>,
+}
+
+impl Cursor {
+    pub fn path(&self) -> &[u32] {
+        &self.path
+    }
+
+    pub fn shared(&self) -> &Arc<Shared> {
+        &self.shared
+    }
+
+    fn unconsumed(&self) -> Option<&Record> {
+        (self.remaining != 0).then(|| &self.stream.records[self.first])
+    }
+
+    /// The unconsumed records of op `op`, by index.
+    fn of(&self, op: u64) -> impl Iterator<Item = (usize, &Record)> {
+        self.stream.records[self.first..]
+            .iter()
+            .enumerate()
+            .map(|(i, r)| (self.first + i, r))
+            .take_while(move |(_, r)| r.op() <= op)
+            .filter(move |&(i, r)| r.op() == op && !self.taken[i])
+    }
+
+    /// Take the first unconsumed record of op `op` that `pick` accepts.
+    fn take<T>(&mut self, op: u64, mut pick: impl FnMut(&Record) -> Option<T>) -> Option<T> {
+        let (at, value) = self.of(op).find_map(|(i, r)| pick(r).map(|v| (i, v)))?;
+        self.taken[at] = true;
+        self.remaining -= 1;
+        while self.first < self.taken.len() && self.taken[self.first] {
+            self.first += 1;
+        }
+        Some(value)
+    }
+
+    fn peek<T>(&self, op: u64, pick: impl Fn(&Record) -> Option<T>) -> Option<T> {
+        self.of(op).find_map(|(_, r)| pick(r))
+    }
+
+    fn substitute<T>(
+        &mut self,
+        op: u64,
+        what: &str,
+        pick: impl FnMut(&Record) -> Option<T>,
+    ) -> Result<T, Diverged> {
+        self.take(op, pick)
+            .ok_or_else(|| Diverged(format!("{:?} op {op}: no recorded {what}", self.path)))
+    }
+
+    /// Whether the cut admits this task's phase at `progress`.
+    pub fn admits(&self, progress: Progress) -> bool {
+        self.stream.cut.is_some_and(|cut| cut.admits(progress))
+    }
+
+    /// This task's progress in the cut.
+    pub fn cut(&self) -> Option<Progress> {
+        self.stream.cut
+    }
+
+    /// Whether this task starts: it is in the cut, past its start.
+    pub fn starts(&self) -> bool {
+        self.stream.cut.is_some_and(|cut| cut > Progress::START)
+    }
+
+    pub fn create(&mut self, object: ObjectId) {
+        self.shared
+            .objects
+            .write()
+            .unwrap()
+            .insert(object.clone(), Arc::new(Version(AtomicU64::new(1))));
+        self.staged.push(Event::Versioned {
             object,
             version: 1,
             sub: 0,
             outcome: "create".into(),
         });
-        Ok(())
     }
 
-    fn required(
-        &self,
-        task: &[u32],
-        op: u64,
-        sub: u32,
-        object: &ObjectId,
-    ) -> Result<u64, Diverged> {
-        let script = self
-            .scripts
-            .get(task)
-            .ok_or_else(|| Diverged(format!("task {task:?} is not on the tape")))?;
-        let gap = script.peek(op, |r| match *r {
+    fn required(&self, op: u64, sub: u32, object: &ObjectId) -> u64 {
+        let gap = self.peek(op, |r| match *r {
             Record::Gap { sub: s, gap, .. } if s == sub => Some(gap),
             _ => None,
         });
-        Ok(script.last.get(object).copied().unwrap_or(1) + gap.unwrap_or(0))
+        self.last.get(object).copied().unwrap_or(1) + gap.unwrap_or(0)
     }
 
-    /// Whether sub-event `sub` of `task`'s op `op` on `object` is enabled now.
-    pub fn enabled(
-        &self,
-        task: &[u32],
-        op: u64,
-        sub: u32,
-        object: &ObjectId,
-    ) -> Result<bool, Diverged> {
-        let version = *self
-            .objects
-            .get(object)
-            .ok_or_else(|| Diverged(format!("{object} was never created")))?;
-        let required = self.required(task, op, sub, object)?;
+    /// Whether sub-event `sub` of op `op` on `object` can act now, or the token it waits for.
+    pub fn admission(&self, op: u64, sub: u32, object: &ObjectId) -> Result<Admission, Diverged> {
+        let cell = self.shared.object(object)?;
+        let required = self.required(op, sub, object);
+        let version = cell.get();
         if version > required {
             return Err(Diverged(format!(
-                "{object} is at version {version}, past the {required} that {task:?} op {op} needs"
+                "{object} is at version {version}, past the {required} that {:?} op {op} needs",
+                self.path
             )));
         }
-        Ok(version == required)
+        Ok(if version == required {
+            Admission::Ready
+        } else {
+            Admission::Pending(DependencyToken { cell, at: required })
+        })
     }
 
-    /// Apply an enabled sub-event.
-    pub fn touch(
-        &mut self,
-        task: &[u32],
-        op: u64,
-        sub: u32,
-        object: &ObjectId,
-        outcome: &str,
-    ) -> Result<(), Diverged> {
-        let event = self.apply(task, op, sub, object, outcome)?;
-        self.script(task)?.events.push(event);
-        Ok(())
-    }
-
-    /// Apply an enabled sub-event of an op that already published (op, done): an engine
-    /// that cannot hold the op until it is enabled applies it later, stamped with that phase.
-    pub fn touch_stamped(
-        &mut self,
-        task: &[u32],
-        op: u64,
-        sub: u32,
-        object: &ObjectId,
-        outcome: &str,
-    ) -> Result<(), Diverged> {
-        let event = self.apply(task, op, sub, object, outcome)?;
-        self.events.push(Stamped {
-            task: task.to_vec(),
-            progress: Progress::new(op, crate::phase::Phase::Done),
-            event,
-        });
-        Ok(())
+    /// Whether sub-event `sub` of op `op` on `object` is enabled now.
+    pub fn enabled(&self, op: u64, sub: u32, object: &ObjectId) -> Result<bool, Diverged> {
+        Ok(matches!(self.admission(op, sub, object)?, Admission::Ready))
     }
 
     fn apply(
         &mut self,
-        task: &[u32],
         op: u64,
         sub: u32,
         object: &ObjectId,
         outcome: &str,
     ) -> Result<Event, Diverged> {
-        if !self.enabled(task, op, sub, object)? {
-            return Err(Diverged(format!(
-                "{task:?} op {op} touched {object} before it was enabled"
-            )));
-        }
-        let version = self.objects[object] + 1;
-        self.objects.insert(object.clone(), version);
-        let script = self.script(task)?;
-        script.take(op, |r| {
+        let cell = self.shared.object(object)?;
+        let required = self.required(op, sub, object);
+        cell.0
+            .compare_exchange(required, required + 1, Ordering::AcqRel, Ordering::Acquire)
+            .map_err(|_| {
+                Diverged(format!(
+                    "{:?} op {op} touched {object} before it was enabled",
+                    self.path
+                ))
+            })?;
+        self.take(op, |r| {
             matches!(*r, Record::Gap { sub: s, .. } if s == sub).then_some(())
         });
-        script.last.insert(object.clone(), version);
+        let version = required + 1;
+        match self.last.get_mut(object) {
+            Some(last) => *last = version,
+            None => {
+                self.last.insert(object.clone(), version);
+            }
+        }
         Ok(Event::Versioned {
             object: object.clone(),
             version,
@@ -264,113 +458,115 @@ impl Replayer {
         })
     }
 
-    pub fn receive(
+    /// Apply an enabled sub-event.
+    pub fn touch(
         &mut self,
-        task: &[u32],
+        op: u64,
+        sub: u32,
         object: &ObjectId,
         outcome: &str,
     ) -> Result<(), Diverged> {
-        self.script(task)?.events.push(Event::Received {
-            object: object.clone(),
-            outcome: outcome.into(),
+        let event = self.apply(op, sub, object, outcome)?;
+        self.staged.push(event);
+        Ok(())
+    }
+
+    /// Apply an enabled sub-event of an op that already published (op, done): an engine
+    /// that cannot hold the op until it is enabled applies it later, stamped with that phase.
+    pub fn touch_stamped(
+        &mut self,
+        op: u64,
+        sub: u32,
+        object: &ObjectId,
+        outcome: &str,
+    ) -> Result<(), Diverged> {
+        let event = self.apply(op, sub, object, outcome)?;
+        self.events.push(Stamped {
+            task: self.path.clone(),
+            progress: Progress::new(op, crate::phase::Phase::Done),
+            event,
         });
         Ok(())
     }
 
-    fn substitute<T>(
-        &mut self,
-        task: &[u32],
-        op: u64,
-        what: &str,
-        pick: impl FnMut(&Record) -> Option<T>,
-    ) -> Result<T, Diverged> {
-        self.script(task)?
-            .take(op, pick)
-            .ok_or_else(|| Diverged(format!("{task:?} op {op}: no recorded {what}")))
+    pub fn receive(&mut self, object: &ObjectId, outcome: &str) {
+        self.staged.push(Event::Received {
+            object: object.clone(),
+            outcome: outcome.into(),
+        });
     }
 
-    pub fn load(&mut self, task: &[u32], op: u64) -> Result<u128, Diverged> {
-        let bits = self.substitute(task, op, "load", |r| match *r {
+    pub fn load(&mut self, op: u64) -> Result<u128, Diverged> {
+        let bits = self.substitute(op, "load", |r| match *r {
             Record::Load { bits, .. } => Some(bits),
             _ => None,
         })?;
-        self.script(task)?
-            .events
-            .push(Event::Observed(Observed::Load(bits)));
+        self.staged.push(Event::Observed(Observed::Load(bits)));
         Ok(bits)
     }
 
-    pub fn await_any(&mut self, task: &[u32], op: u64) -> Result<u64, Diverged> {
-        let index = self.substitute(task, op, "await_any member", |r| match *r {
+    pub fn await_any(&mut self, op: u64) -> Result<u64, Diverged> {
+        let index = self.substitute(op, "await_any member", |r| match *r {
             Record::AwaitAny { index, .. } => Some(index),
             _ => None,
         })?;
-        self.script(task)?
-            .events
-            .push(Event::Observed(Observed::AwaitAny(index)));
+        self.staged.push(Event::Observed(Observed::AwaitAny(index)));
         Ok(index)
     }
 
-    /// Peek ``task.await_any``'s recorded member without consuming it (to wait for it).
-    pub fn await_any_member(&self, task: &[u32], op: u64) -> Option<u64> {
-        self.scripts.get(task)?.peek(op, |r| match *r {
+    /// Peek `task.await_any`'s recorded member without consuming it (to wait for it).
+    pub fn await_any_member(&self, op: u64) -> Option<u64> {
+        self.peek(op, |r| match *r {
             Record::AwaitAny { index, .. } => Some(index),
             _ => None,
         })
     }
 
     /// `shared.thaw`'s outcome: `Err` is forced; `Ok` waits for count 1.
-    pub fn thaw(&mut self, task: &[u32], op: u64) -> Result<bool, Diverged> {
-        let ok = self.substitute(task, op, "thaw", |r| match *r {
+    pub fn thaw(&mut self, op: u64) -> Result<bool, Diverged> {
+        let ok = self.substitute(op, "thaw", |r| match *r {
             Record::Thaw { ok, .. } => Some(ok),
             _ => None,
         })?;
-        self.script(task)?
-            .events
-            .push(Event::Observed(Observed::Thaw(ok)));
+        self.staged.push(Event::Observed(Observed::Thaw(ok)));
         Ok(ok)
     }
 
     /// Peek a thaw's outcome without consuming it (to wait for count 1 before applying it).
-    pub fn thaw_outcome(&self, task: &[u32], op: u64) -> Option<bool> {
-        self.scripts.get(task)?.peek(op, |r| match *r {
+    pub fn thaw_outcome(&self, op: u64) -> Option<bool> {
+        self.peek(op, |r| match *r {
             Record::Thaw { ok, .. } => Some(ok),
             _ => None,
         })
     }
 
-    pub fn expired(&mut self, task: &[u32], op: u64) -> Result<bool, Diverged> {
-        let script = self.script(task)?;
-        let expired = script
+    pub fn expired(&mut self, op: u64) -> bool {
+        let expired = self
             .take(op, |r| matches!(r, Record::Expired { .. }).then_some(()))
             .is_some();
-        script
-            .events
+        self.staged
             .push(Event::Observed(Observed::Expired(expired)));
-        Ok(expired)
+        expired
     }
 
     /// The cancellation an unshielded check of op `op` will observe, without consuming it.
-    pub fn cancel_outcome(&self, task: &[u32], op: u64) -> Option<u32> {
-        let script = self.scripts.get(task)?;
-        let check = script.cancel_checks.peek(op);
-        script
-            .peek(op, |r| match *r {
-                Record::Cancel {
-                    check: index,
-                    cause,
-                    ..
-                } if index == check => Some(cause),
-                _ => None,
-            })
-            .unwrap_or(script.canceled)
+    pub fn cancel_outcome(&self, op: u64) -> Option<u32> {
+        let check = self.cancel_checks.peek(op);
+        self.peek(op, |r| match *r {
+            Record::Cancel {
+                check: index,
+                cause,
+                ..
+            } if index == check => Some(cause),
+            _ => None,
+        })
+        .unwrap_or(self.canceled)
     }
 
     /// The cancellation an unshielded check of op `op` observes.
-    pub fn cancel_check(&mut self, task: &[u32], op: u64) -> Result<Option<u32>, Diverged> {
-        let script = self.script(task)?;
-        let check = script.cancel_checks.take(op);
-        if let Some(cause) = script.take(op, |r| match *r {
+    pub fn cancel_check(&mut self, op: u64) -> Option<u32> {
+        let check = self.cancel_checks.take(op);
+        if let Some(cause) = self.take(op, |r| match *r {
             Record::Cancel {
                 check: index,
                 cause,
@@ -378,30 +574,29 @@ impl Replayer {
             } if index == check => Some(cause),
             _ => None,
         }) {
-            script.canceled = cause;
+            self.canceled = cause;
         }
-        let observed = script.canceled;
-        script
-            .events
+        let observed = self.canceled;
+        self.staged
             .push(Event::Observed(Observed::Cancel(observed)));
-        Ok(observed)
+        observed
     }
 
-    pub fn blocked(&mut self, task: &[u32], op: u64) -> Result<(), Diverged> {
-        self.substitute(task, op, "blocked", |r| {
+    pub fn blocked(&mut self, op: u64) -> Result<(), Diverged> {
+        self.substitute(op, "blocked", |r| {
             matches!(r, Record::Blocked { .. }).then_some(())
         })
     }
 
-    pub fn ready(&mut self, task: &[u32], op: u64) -> Result<(), Diverged> {
-        self.substitute(task, op, "ready", |r| {
+    pub fn ready(&mut self, op: u64) -> Result<(), Diverged> {
+        self.substitute(op, "ready", |r| {
             matches!(r, Record::Ready { .. }).then_some(())
         })
     }
 
     /// A host request's entered phase: its recorded request id.
-    pub fn prepare(&mut self, task: &[u32], op: u64) -> Result<u64, Diverged> {
-        self.substitute(task, op, "Prepared", |r| match *r {
+    pub fn prepare(&mut self, op: u64) -> Result<u64, Diverged> {
+        self.substitute(op, "Prepared", |r| match *r {
             Record::Prepared { id, .. } => Some(id),
             _ => None,
         })
@@ -410,25 +605,18 @@ impl Replayer {
     /// The positions a request's issue (`index` 0) or attempt `index` takes, in key order.
     pub fn positions(
         &mut self,
-        task: &[u32],
         op: u64,
         index: u32,
         keys: &[(&str, bool)],
     ) -> Result<Vec<crate::recorder::Position>, Diverged> {
         let mut wanted: Vec<(u32, bool)> = Vec::new();
         for &(name, shared) in keys {
-            let key = self
-                .keys
-                .iter()
-                .position(|k| k == name)
-                .ok_or_else(|| Diverged(format!("key {name} is not on the tape")))?;
-            wanted.push((key as u32, shared));
+            wanted.push((self.shared.key(name)?, shared));
         }
         wanted.sort_unstable();
         let mut positions = Vec::new();
         for (key, shared) in wanted {
-            let script = self.script(task)?;
-            let gap = script
+            let gap = self
                 .take(op, |r| match *r {
                     Record::Key {
                         key: k,
@@ -440,14 +628,14 @@ impl Replayer {
                 })
                 .ok_or_else(|| {
                     Diverged(format!(
-                        "{task:?} op {op}: no recorded position on key {key}"
+                        "{:?} op {op}: no recorded position on key {key}",
+                        self.path
                     ))
                 })?;
-            let epoch = script.epochs.get(&key).copied().unwrap_or(0) + gap;
-            script.epochs.insert(key, epoch);
-            let name = self.keys[key as usize].clone();
-            self.script(task)?.events.push(Event::Key {
-                key: name,
+            let epoch = self.epochs.get(&key).copied().unwrap_or(0) + gap;
+            self.epochs.insert(key, epoch);
+            self.staged.push(Event::Key {
+                key: self.shared.keys[key as usize].clone(),
                 epoch,
                 index,
             });
@@ -456,16 +644,235 @@ impl Replayer {
         Ok(positions)
     }
 
-    pub fn positions_ready(&self, positions: &[crate::recorder::Position]) -> bool {
-        positions
+    pub fn output(&mut self, sink: &str, epoch: u64, bytes: &[u8]) {
+        self.staged.push(Event::Output {
+            sink: sink.into(),
+            epoch,
+            bytes: bytes.to_vec(),
+        });
+    }
+
+    pub fn output_at_position(
+        &mut self,
+        positions: &[crate::recorder::Position],
+        sink: &str,
+        bytes: &[u8],
+    ) -> Result<(), Diverged> {
+        let position = positions
             .iter()
-            .all(|p| self.epochs[p.key as usize].ready(p.epoch))
+            .find(|p| {
+                self.shared
+                    .keys
+                    .get(p.key as usize)
+                    .is_some_and(|key| key == sink)
+            })
+            .ok_or_else(|| Diverged("output sink is absent from host positions".into()))?;
+        self.output(sink, position.epoch, bytes);
+        Ok(())
+    }
+
+    pub fn observation(&mut self, op: u64) -> Result<Vec<u8>, Diverged> {
+        self.substitute(op, "host observation", |r| match r {
+            Record::Observation { bytes, .. } => Some(bytes.clone()),
+            _ => None,
+        })
+    }
+
+    pub fn completion(&mut self, op: u64) -> Result<Vec<u8>, Diverged> {
+        self.substitute(op, "completion", |r| match r {
+            Record::Completion { bytes, .. } => Some(bytes.clone()),
+            _ => None,
+        })
+    }
+
+    /// A phase of this task replayed: stamp its effects.
+    pub fn publish(&mut self, progress: Progress) -> Result<(), Diverged> {
+        if !self.admits(progress) {
+            return Err(Diverged(format!(
+                "{:?} replayed {progress}, past its cut",
+                self.path
+            )));
+        }
+        let path = &self.path;
+        self.events
+            .extend(self.staged.drain(..).map(|event| Stamped {
+                task: path.clone(),
+                progress,
+                event,
+            }));
+        Ok(())
+    }
+}
+
+/// A replay of one tape for a width-1 engine: the same cursors, keyed by spawn path.
+pub struct Replayer {
+    shared: Arc<Shared>,
+    cursors: HashMap<Vec<u32>, Cursor>,
+}
+
+impl Replayer {
+    pub fn new(tape: &Tape) -> Result<Replayer, Diverged> {
+        let shared = Shared::new(tape)?;
+        let cursors = shared
+            .streams
+            .keys()
+            .map(|path| (path.clone(), shared.cursor(path)))
+            .collect();
+        Ok(Replayer { shared, cursors })
+    }
+
+    pub fn shared(&self) -> &Arc<Shared> {
+        &self.shared
+    }
+
+    fn cursor(&mut self, task: &[u32]) -> Result<&mut Cursor, Diverged> {
+        self.cursors
+            .get_mut(task)
+            .ok_or_else(|| Diverged(format!("task {task:?} is not on the tape")))
+    }
+
+    fn get(&self, task: &[u32]) -> Result<&Cursor, Diverged> {
+        self.cursors
+            .get(task)
+            .ok_or_else(|| Diverged(format!("task {task:?} is not on the tape")))
+    }
+
+    /// Whether the cut admits `task`'s phase at `progress`.
+    pub fn admits(&self, task: &[u32], progress: Progress) -> bool {
+        self.cursors
+            .get(task)
+            .is_some_and(|cursor| cursor.admits(progress))
+    }
+
+    /// `task`'s progress in the cut.
+    pub fn cut(&self, task: &[u32]) -> Option<Progress> {
+        self.shared.cut.get(task).copied()
+    }
+
+    /// Whether a spawned child starts: it is in the cut, past its start.
+    pub fn starts(&self, task: &[u32]) -> bool {
+        self.shared.starts(task)
+    }
+
+    /// The recorded outcome and stopping task; `None` for a truncated tape.
+    pub fn end(&self) -> Option<&End> {
+        self.shared.end()
+    }
+
+    pub fn gate(&mut self, package: &str) {
+        self.shared.gate(package);
+    }
+
+    pub fn create(&mut self, task: &[u32], object: ObjectId) -> Result<(), Diverged> {
+        self.cursor(task)?.create(object);
+        Ok(())
+    }
+
+    /// Whether sub-event `sub` of `task`'s op `op` on `object` is enabled now.
+    pub fn enabled(
+        &self,
+        task: &[u32],
+        op: u64,
+        sub: u32,
+        object: &ObjectId,
+    ) -> Result<bool, Diverged> {
+        self.get(task)?.enabled(op, sub, object)
+    }
+
+    /// Apply an enabled sub-event.
+    pub fn touch(
+        &mut self,
+        task: &[u32],
+        op: u64,
+        sub: u32,
+        object: &ObjectId,
+        outcome: &str,
+    ) -> Result<(), Diverged> {
+        self.cursor(task)?.touch(op, sub, object, outcome)
+    }
+
+    /// See [`Cursor::touch_stamped`].
+    pub fn touch_stamped(
+        &mut self,
+        task: &[u32],
+        op: u64,
+        sub: u32,
+        object: &ObjectId,
+        outcome: &str,
+    ) -> Result<(), Diverged> {
+        self.cursor(task)?.touch_stamped(op, sub, object, outcome)
+    }
+
+    pub fn receive(
+        &mut self,
+        task: &[u32],
+        object: &ObjectId,
+        outcome: &str,
+    ) -> Result<(), Diverged> {
+        self.cursor(task)?.receive(object, outcome);
+        Ok(())
+    }
+
+    pub fn load(&mut self, task: &[u32], op: u64) -> Result<u128, Diverged> {
+        self.cursor(task)?.load(op)
+    }
+
+    pub fn await_any(&mut self, task: &[u32], op: u64) -> Result<u64, Diverged> {
+        self.cursor(task)?.await_any(op)
+    }
+
+    pub fn await_any_member(&self, task: &[u32], op: u64) -> Option<u64> {
+        self.cursors.get(task)?.await_any_member(op)
+    }
+
+    pub fn thaw(&mut self, task: &[u32], op: u64) -> Result<bool, Diverged> {
+        self.cursor(task)?.thaw(op)
+    }
+
+    pub fn thaw_outcome(&self, task: &[u32], op: u64) -> Option<bool> {
+        self.cursors.get(task)?.thaw_outcome(op)
+    }
+
+    pub fn expired(&mut self, task: &[u32], op: u64) -> Result<bool, Diverged> {
+        Ok(self.cursor(task)?.expired(op))
+    }
+
+    pub fn cancel_outcome(&self, task: &[u32], op: u64) -> Option<u32> {
+        self.cursors.get(task)?.cancel_outcome(op)
+    }
+
+    pub fn cancel_check(&mut self, task: &[u32], op: u64) -> Result<Option<u32>, Diverged> {
+        Ok(self.cursor(task)?.cancel_check(op))
+    }
+
+    pub fn blocked(&mut self, task: &[u32], op: u64) -> Result<(), Diverged> {
+        self.cursor(task)?.blocked(op)
+    }
+
+    pub fn ready(&mut self, task: &[u32], op: u64) -> Result<(), Diverged> {
+        self.cursor(task)?.ready(op)
+    }
+
+    pub fn prepare(&mut self, task: &[u32], op: u64) -> Result<u64, Diverged> {
+        self.cursor(task)?.prepare(op)
+    }
+
+    pub fn positions(
+        &mut self,
+        task: &[u32],
+        op: u64,
+        index: u32,
+        keys: &[(&str, bool)],
+    ) -> Result<Vec<crate::recorder::Position>, Diverged> {
+        self.cursor(task)?.positions(op, index, keys)
+    }
+
+    pub fn positions_ready(&self, positions: &[crate::recorder::Position]) -> bool {
+        self.shared.positions_ready(positions)
     }
 
     pub fn end_positions(&mut self, positions: &[crate::recorder::Position]) {
-        for p in positions {
-            self.epochs[p.key as usize].end(p.epoch);
-        }
+        self.shared.end_positions(positions);
     }
 
     pub fn output(
@@ -475,11 +882,7 @@ impl Replayer {
         epoch: u64,
         bytes: &[u8],
     ) -> Result<(), Diverged> {
-        self.script(task)?.events.push(Event::Output {
-            sink: sink.into(),
-            epoch,
-            bytes: bytes.to_vec(),
-        });
+        self.cursor(task)?.output(sink, epoch, bytes);
         Ok(())
     }
 
@@ -490,63 +893,33 @@ impl Replayer {
         sink: &str,
         bytes: &[u8],
     ) -> Result<(), Diverged> {
-        let position = positions
-            .iter()
-            .find(|p| self.keys.get(p.key as usize).is_some_and(|key| key == sink))
-            .ok_or_else(|| Diverged("output sink is absent from host positions".into()))?;
-        self.output(task, sink, position.epoch, bytes)
+        self.cursor(task)?
+            .output_at_position(positions, sink, bytes)
     }
 
     pub fn observation(&mut self, task: &[u32], op: u64) -> Result<Vec<u8>, Diverged> {
-        self.substitute(task, op, "host observation", |r| match r {
-            Record::Observation { bytes, .. } => Some(bytes.clone()),
-            _ => None,
-        })
+        self.cursor(task)?.observation(op)
     }
 
     pub fn completion(&mut self, task: &[u32], op: u64) -> Result<Vec<u8>, Diverged> {
-        self.substitute(task, op, "completion", |r| match r {
-            Record::Completion { bytes, .. } => Some(bytes.clone()),
-            _ => None,
-        })
+        self.cursor(task)?.completion(op)
     }
 
     /// A phase of `task` replayed: stamp its effects.
     pub fn publish(&mut self, task: &[u32], progress: Progress) -> Result<(), Diverged> {
-        if !self.admits(task, progress) {
-            return Err(Diverged(format!(
-                "{task:?} replayed {progress}, past its cut"
-            )));
-        }
-        let events = std::mem::take(&mut self.script(task)?.events);
-        self.events.extend(events.into_iter().map(|event| Stamped {
-            task: task.to_vec(),
-            progress,
-            event,
-        }));
-        Ok(())
+        self.cursor(task)?.publish(progress)
     }
 
     /// Finish: every record consumed and every task at its cut. `at` is each task's progress
     /// when the replay ended.
     pub fn finish(self, at: &BTreeMap<Vec<u32>, Progress>) -> Result<Projection, Diverged> {
-        for (path, script) in &self.scripts {
-            if let Some(record) = script.records.front() {
-                return Err(Diverged(format!(
-                    "task {path:?} left {record:?} and {} more unconsumed",
-                    script.records.len() - 1
-                )));
-            }
-        }
-        for (path, cut) in &self.cut {
-            let reached = at.get(path).copied().unwrap_or(Progress::START);
-            if reached != *cut {
-                return Err(Diverged(format!(
-                    "task {path:?} reached {reached}, not its cut {cut}"
-                )));
-            }
-        }
-        let outcome = self.end.as_ref().map_or("truncated", |end| &end.outcome);
-        Ok(Projection::new(outcome, &self.cut, &self.events))
+        let mut cursors: Vec<_> = self.cursors.values().collect();
+        cursors.sort_by(|a, b| a.path.cmp(&b.path));
+        self.shared.finish(cursors.into_iter().map(|cursor| {
+            (
+                cursor,
+                at.get(&cursor.path).copied().unwrap_or(Progress::START),
+            )
+        }))
     }
 }
