@@ -58,8 +58,7 @@ pub struct NativeInput {
 pub struct ValidatedNativeInput {
     input: NativeInput,
     verify: Verify,
-    semantic_program: crate::queries::SemanticProgram,
-    escapes: BTreeMap<DefPath, crate::Escape>,
+    semantic: NativeSemanticProgram,
     storage_reads: hirsel_validate::storage::StorageReads,
 }
 impl ValidatedNativeInput {
@@ -76,15 +75,19 @@ impl ValidatedNativeInput {
         &self,
         entry: &DefPath,
     ) -> Result<hirsel_run_schema::ProgramRevision, QueryError> {
-        self.semantic_program.revision(entry)
+        self.semantic.semantic_program_revision(entry)
     }
     /// The escape from capability checking `entry` reaches, if any (CAP-6).
     pub fn unsafe_reach(&self, entry: &DefPath) -> Option<crate::UnsafeReach> {
-        self.semantic_program.reach(entry, &self.escapes)
+        self.semantic.unsafe_reach(entry)
     }
     /// Whether this frozen run identity covers the source definition.
     pub fn semantic_contains(&self, definition: &DefPath) -> bool {
-        self.semantic_program.definitions.contains(definition)
+        self.semantic.semantic_contains(definition)
+    }
+    /// Bodyless semantic launch binding from the same independently checked input.
+    pub fn semantic_program(&self) -> &NativeSemanticProgram {
+        &self.semantic
     }
     pub fn snapshot(&self) -> &NativeInput {
         &self.input
@@ -92,22 +95,7 @@ impl ValidatedNativeInput {
     /// The first extern of a `home` package `root` reaches, on a shortest dependency path
     /// (S-13): a callback that can reach one runs only on the home thread.
     pub fn home_reach(&self, root: &DefPath) -> Option<crate::UnsafeReach> {
-        let home: BTreeMap<DefPath, crate::Escape> = self
-            .escapes
-            .iter()
-            .filter(|(path, escape)| {
-                **escape == crate::Escape::Extern
-                    && self
-                        .input
-                        .foreign_threads
-                        .get(&path.0.package)
-                        .copied()
-                        .unwrap_or_default()
-                        == hirsel_types::ForeignThreads::Home
-            })
-            .map(|(path, escape)| (path.clone(), *escape))
-            .collect();
-        self.semantic_program.reach(root, &home)
+        self.semantic.home_reach(root)
     }
 }
 fn invalid(message: impl Into<String>) -> QueryError {
@@ -529,11 +517,12 @@ impl QueryEngine {
         }
         let semantic_program = self.semantic_program(input.source_owners.keys().cloned())?;
         let escapes = self.escapes(&semantic_program)?;
+        let semantic =
+            NativeSemanticProgram::new(semantic_program, escapes, input.foreign_threads.clone());
         Ok(ValidatedNativeInput {
             input,
             verify: self.verify,
-            semantic_program,
-            escapes,
+            semantic,
             storage_reads: storage.reads,
         })
     }

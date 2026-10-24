@@ -837,3 +837,44 @@ fn library_surface_instantiates_generics_and_preserves_argument_labels() {
         assert!(surface.compile("sample").unwrap() >= 4);
     });
 }
+
+#[test]
+fn native_semantic_launch_binding_matches_import_and_survives_engine_release() {
+    let mut source = engine(PROGRAM);
+    let input = source.export_native_input().unwrap();
+    let roots = input.source_owners.keys().cloned().collect::<Vec<_>>();
+    let entry = entry_path(&default_context());
+    let semantic = source.native_semantic_program(roots).unwrap();
+    let validated = source.import_native_input(input).unwrap();
+    let revision = validated.semantic_program_revision(&entry).unwrap();
+    assert_eq!(
+        semantic.semantic_program_revision(&entry).unwrap(),
+        revision
+    );
+    assert_eq!(
+        semantic.unsafe_reach(&entry),
+        validated.unsafe_reach(&entry)
+    );
+    assert_eq!(semantic.home_reach(&entry), validated.home_reach(&entry));
+    assert_eq!(
+        validated
+            .semantic_program()
+            .semantic_program_revision(&entry)
+            .unwrap(),
+        revision
+    );
+    drop(validated);
+    drop(source);
+    assert!(semantic.semantic_contains(&entry));
+    assert_eq!(
+        semantic.semantic_program_revision(&entry).unwrap(),
+        revision
+    );
+    let mut unknown = entry.clone();
+    unknown.0.name = "absent".into();
+    assert!(!semantic.semantic_contains(&unknown));
+    assert!(semantic.semantic_program_revision(&unknown).is_err());
+    let mut changed = engine(&PROGRAM.replace("let n = answer", "let n = answer + 1u64"));
+    let edited = changed.native_semantic_program([entry.clone()]).unwrap();
+    assert_ne!(edited.semantic_program_revision(&entry).unwrap(), revision);
+}

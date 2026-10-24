@@ -9,6 +9,8 @@ mod operations;
 pub use operations::*;
 mod native_audit;
 pub use native_audit::{CleanupSite, SourceAudit};
+mod native_semantic;
+pub use native_semantic::NativeSemanticProgram;
 mod native_input;
 pub use native_input::*;
 mod representation;
