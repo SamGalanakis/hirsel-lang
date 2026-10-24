@@ -9,11 +9,25 @@ import subprocess
 import sys
 import tarfile
 from oracle import report
+from host_replay import Batch
 from vectors import cases as cap_cases
 
 
 def digest(p):
     return hashlib.sha256(p.read_bytes()).hexdigest()
+
+
+def receipt_summary(receipts):
+    # A resumed success does not erase an earlier unfinished attempt of that ID.
+    unfinished=[r['id'] for r in receipts if r.get('started') and not r.get('completed') and not r.get('disposition')]
+    return dict(selected=len({r['id'] for r in receipts}),attempts=len(receipts),
+        started=sum(r.get('started',0) for r in receipts),
+        completed=sum(r.get('completed',0) for r in receipts),
+        passed=sum(r.get('passed',0) for r in receipts),
+        completed_unique=len({r['id'] for r in receipts if r.get('completed')}),
+        passed_unique=len({r['id'] for r in receipts if r.get('passed')}),
+        unfinished_attempts=unfinished,
+        incomplete_cells=len(unfinished)+sum('disposition' in r for r in receipts))
 
 
 def main(args):
@@ -35,7 +49,8 @@ def main(args):
     full_ids={row['full_id'] for row in twins}
     selected_ids={row['id'] for row in rows}
     rows += [row['case'] for row in twins if row['full_id'] in selected_ids]
-    toolpaths=[args.hirsel,Path(env['HIRSEL_IMAGE']),Path(env['LLVM_SYS_231_PREFIX'])/'bin/clang',Path(env['LLVM_SYS_231_PREFIX'])/'bin/ld.lld']
+    host = Batch(root, root / 'hirsel.json', env, 'verify')
+    toolpaths=[args.hirsel,Path(env['PACKTREE_29_HOST_REPLAYER']),Path(env['HIRSEL_IMAGE']),Path(env['LLVM_SYS_231_PREFIX'])/'bin/clang',Path(env['LLVM_SYS_231_PREFIX'])/'bin/ld.lld']
     toolpaths += list(Path(env['HIRSEL_RUNTIME_ARCHIVES']).rglob('*.a'))
     toolpaths += list(Path(env['HIRSEL_LINK_KIT']).rglob('manifest.json'))
     (out/('resume-tools.json' if args.resume else 'prebuild-tools.json')).write_text(json.dumps({str(p):digest(p) for p in toolpaths},indent=2))
@@ -49,7 +64,7 @@ def main(args):
         (out/(backend+'-build.stderr')).write_bytes(done.stderr)
         assert done.returncode==0,(backend,done)
         binaries[backend]=binary
-    seal={str(p):digest(p) for p in [*root.glob('*.hir'),root/'hirsel.json',root/'cases.json',root/'verify.py',root/'oracle.py',root/'vectors.py',args.hirsel,*binaries.values()]}
+    seal={str(p):digest(p) for p in [*root.glob('*.hir'),root/'hirsel.json',root/'cases.json',root/'verify.py',root/'host_replay.py',root/'oracle.py',root/'vectors.py',args.hirsel,*binaries.values()]}
     if args.resume:
         original=json.loads((out/'inputs.json').read_text())
         for p,h in original.items():
@@ -66,16 +81,21 @@ def main(args):
         rec=dict(id=id,argv=list(map(str,argv)),expected={k:row[k] for k in ('status','stdout','stderr')},started=1,completed=0,passed=0)
         receipts.append(rec)
         (out/'receipts.json').write_text(json.dumps(receipts,indent=2))
+        def finish(actual, status):
+            expected={k:row[k] for k in ('status','stdout','stderr')}
+            rec.update(completed=1,actual=actual,passed=int(actual==expected and status==row['status']))
+            (out/'receipts.json').write_text(json.dumps(receipts,indent=2))
+            assert rec['passed'],(id,actual,expected)
+            print('PACKTREE_29_PASS '+id,flush=True)
+        if str(argv[0]) == str(args.hirsel) and '--replay' in argv:
+            assert argv[-2:] == ['--max-steps','1000000']
+            host.add(argv[argv.index('--replay')+1], cell/'result.json', lambda actual: finish(actual, actual['status']))
+            return
         command=[sys.executable,str(root/'capped'),'--timeout','60','prlimit','--cpu=60:61',sys.executable,str(root/'verify.py'),'--child',str(cell/'result.json'),'--',*map(str,argv)]
         done=subprocess.run(command,env=env,capture_output=True,timeout=90)
         (cell/'resources').write_bytes(done.stderr)
         assert (cell/'result.json').exists(),(id,done)
-        actual=json.loads((cell/'result.json').read_text())
-        expected={k:row[k] for k in ('status','stdout','stderr')}
-        rec.update(completed=1,actual=actual,passed=int(actual==expected and done.returncode==row['status']))
-        (out/'receipts.json').write_text(json.dumps(receipts,indent=2))
-        assert rec['passed'],(id,actual,expected)
-        print('PACKTREE_29_PASS '+id,flush=True)
+        finish(json.loads((cell/'result.json').read_text()), done.returncode)
     tapes=[]
     for backend,binary in binaries.items():
         for row in rows:
@@ -135,6 +155,7 @@ def main(args):
         if row['id'] in full_ids:continue
         run(id+'-replay-reference',[args.hirsel,'run',root/'hirsel.json','--replay',tape,'--max-steps','1000000'],row)
         assert not mounts.exists() and digest(tape)==original
+    host.flush()
     tape=tapes[0][1]
     damaged=out/'truncated.tape';damaged.write_bytes(tape.read_bytes()[:-1])
     refusal=subprocess.run([str(binaries['llvm']),'--hirsel-replay',str(damaged)],capture_output=True,env=env,timeout=60)
@@ -152,7 +173,7 @@ def main(args):
         (out/(name+'.stdout')).write_bytes(done.stdout);(out/(name+'.stderr')).write_bytes(done.stderr)
         assert done.returncode!=0 and not done.stdout,(name,done)
     assert all(digest(Path(p))==h for p,h in seal.items())
-    print(json.dumps(dict(selected=len(receipts),started=sum(r.get('started',0) for r in receipts),completed=sum(r.get('completed',0) for r in receipts),passed=sum(r['passed'] for r in receipts),incomplete_cells=sum('disposition' in r for r in receipts),
+    print(json.dumps(dict(**receipt_summary(receipts),
         incomplete=['pending regular-file worker cancellation: no provider readiness script',
                     'physical effective widths: metrics retained, no claimed placement',
                     'checked-H host-tape replay unsupported','scripted native file faults unsupported'])))

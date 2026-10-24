@@ -406,6 +406,7 @@ fn chunk_backup_31_scripted_native_record_replay() {
     }
 
     with_compiler_stack(|| {
+        hirsel_driver::session::enable_resident(1);
         let root = scratch("native-");
         let path = package(&root);
         seal_tools(&root);
@@ -1177,15 +1178,44 @@ fn dispatch_cases(test: &str, boundaries: bool, native: bool) -> bool {
         selected.retain(|case| filter.split(',').any(|id| case["id"] == id));
     }
     assert!(!selected.is_empty(), "zero dispatch selection");
+    // Small fixtures share compiler setup while every original recorder/case
+    // still executes. Larger fixtures retain their independent process budgets.
+    let mut groups: Vec<(String, Vec<&str>)> = vec![];
+    let mut small = vec![];
     for case in selected {
-        let engines: Vec<&str> = if native {
-            vec!["Llvm", "Cranelift"]
+        let id = case["id"].as_str().unwrap().to_owned();
+        let bytes: usize = case["files"]
+            .as_object()
+            .unwrap()
+            .values()
+            .map(|value| value.as_str().unwrap().len() / 2)
+            .sum();
+        if native && bytes <= 1024 {
+            small.push(id);
+            if small.len() == 8 {
+                groups.push((small.join(","), vec!["Llvm,Cranelift"]));
+                small.clear();
+            }
         } else {
-            ["reference", "checked-h"]
-                .into_iter()
-                .filter(|e| selected_engine(e))
-                .collect()
-        };
+            if !small.is_empty() {
+                groups.push((small.join(","), vec!["Llvm,Cranelift"]));
+                small.clear();
+            }
+            let engines = if native {
+                vec!["Llvm", "Cranelift"]
+            } else {
+                ["reference", "checked-h"]
+                    .into_iter()
+                    .filter(|e| selected_engine(e))
+                    .collect()
+            };
+            groups.push((id, engines));
+        }
+    }
+    if !small.is_empty() {
+        groups.push((small.join(","), vec!["Llvm,Cranelift"]));
+    }
+    for (ids, engines) in groups {
         for engine in engines {
             let mut command = std::process::Command::new(std::env::current_exe().unwrap());
             command
@@ -1194,7 +1224,7 @@ fn dispatch_cases(test: &str, boundaries: bool, native: bool) -> bool {
                     &format!("chunk_backup_31::{test}"),
                     "--nocapture",
                 ])
-                .env("CHUNK_BACKUP_31_CASE", case["id"].as_str().unwrap())
+                .env("CHUNK_BACKUP_31_CASE", &ids)
                 .env("CHUNK_BACKUP_31_CAP_CPU", "1")
                 .env("HIRSEL_MEMORY_LIMIT", "2G");
             if native {
@@ -1203,7 +1233,7 @@ fn dispatch_cases(test: &str, boundaries: bool, native: bool) -> bool {
                 command.env("CHUNK_BACKUP_31_ENGINE", engine);
             }
             let output = command.output().unwrap();
-            let label = format!("{}-{engine}", case["id"].as_str().unwrap());
+            let label = format!("{ids}-{engine}");
             fs::write(root.join(format!("{label}.stdout")), &output.stdout).unwrap();
             fs::write(root.join(format!("{label}.stderr")), &output.stderr).unwrap();
             eprintln!("{}", String::from_utf8_lossy(&output.stderr));

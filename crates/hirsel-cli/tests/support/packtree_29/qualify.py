@@ -10,6 +10,7 @@ import socket
 import subprocess
 import sys
 import time
+from host_replay import Batch
 
 
 def main(a):
@@ -82,6 +83,7 @@ def main(a):
     # No granted host path exists during replay. Each engine consumes the tape.
     trees.rename(q/'unavailable')
     replays=[]
+    host=Batch(a.root,a.root/'hirsel.json',env,'qualification-reference' if a.reference_twin else 'qualification')
     for workflow,tapes in groups.items():
         expected=dict(status=0,stdout=report(entries),stderr='') if workflow=='success' else dict(status=2,stdout='',stderr=compact(dict(kind='duplicate_path',path='a'))+'\n')
         for tape in tapes:
@@ -90,14 +92,19 @@ def main(a):
                 id=Path(tape).stem+'-replay-'+backend
                 cmd=[str(a.root/'evidence'/backend),'--hirsel-replay',tape] if backend!='reference' else [str(a.hirsel),'run',str(a.root/'hirsel.json'),'--replay',tape,'--max-steps','1000000']
                 actual=q/(id+'.result.json')
+                def complete(observed,id=id,expected=expected,tape=tape,original=original):
+                    rec=dict(id=id,actual=observed,expected=expected,passed=observed==expected)
+                    assert rec['passed'],rec
+                    replays.append(rec);(q/'replays.json').write_text(json.dumps(replays,indent=2))
+                    assert not trees.exists() and hashlib.sha256(Path(tape).read_bytes()).hexdigest()==original
+                if backend=='reference':
+                    host.add(tape,actual,complete)
+                    continue
                 command=[sys.executable,str(a.root/'capped'),'--timeout','60','prlimit','--cpu=60:61',sys.executable,str(Path(__file__)),'--child',str(actual),'--',*cmd]
                 done=subprocess.run(command,env=env,capture_output=True,timeout=90)
                 (q/(id+'.resources')).write_bytes(done.stderr)
-                observed=json.loads(actual.read_text())
-                rec=dict(id=id,actual=observed,expected=expected,passed=observed==expected)
-                assert rec['passed'],rec
-                replays.append(rec);(q/'replays.json').write_text(json.dumps(replays,indent=2))
-                assert not trees.exists() and hashlib.sha256(Path(tape).read_bytes()).hexdigest()==original
+                complete(json.loads(actual.read_text()))
+    host.flush()
     print(json.dumps(dict(qualified=len(receipt),effective=sum(r['effective_observed'] for r in receipt),replays=len(replays),replay_passes=sum(r['passed'] for r in replays))))
 
 

@@ -409,8 +409,80 @@ fn refusal_controls(root: &std::path::Path) {
     }
     assert_eq!(receipts.len(), 9);
 }
+// This worker owns one compiler session, but every replay constructs its own
+// runtime and consumes its own bound tape. It runs alone in a capped child.
+fn replay_batch(path: &std::path::Path) {
+    use std::io::Write;
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+
+    struct Streams([OwnedFd; 2]);
+    impl Drop for Streams {
+        fn drop(&mut self) {
+            std::io::stdout().flush().unwrap();
+            std::io::stderr().flush().unwrap();
+            for (index, saved) in self.0.iter().enumerate() {
+                let fd = index as i32 + 1;
+                assert_eq!(unsafe { libc::dup2(saved.as_raw_fd(), fd) }, fd);
+            }
+        }
+    }
+    hirsel_engine::with_compiler_stack(|| {
+        hirsel_driver::session::enable_resident(1);
+        let requests: Vec<Value> = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+        assert!(!requests.is_empty() && requests.len() <= 8);
+        for request in requests {
+            let result = PathBuf::from(request["result"].as_str().unwrap());
+            let stdout = result.with_extension("stdout");
+            let stderr = result.with_extension("stderr");
+            let files = [
+                fs::File::create(&stdout).unwrap(),
+                fs::File::create(&stderr).unwrap(),
+            ];
+            std::io::stdout().flush().unwrap();
+            std::io::stderr().flush().unwrap();
+            let saved = Streams(std::array::from_fn(|index| {
+                let fd = unsafe { libc::dup(index as i32 + 1) };
+                assert!(fd >= 0);
+                unsafe { OwnedFd::from_raw_fd(fd) }
+            }));
+            for (index, file) in files.iter().enumerate() {
+                let fd = index as i32 + 1;
+                assert_eq!(unsafe { libc::dup2(file.as_raw_fd(), fd) }, fd);
+            }
+            let outcome = hirsel_driver::run_path_on_host(
+                std::path::Path::new(request["manifest"].as_str().unwrap()),
+                hirsel_driver::HostLaunch::Replay(std::path::Path::new(
+                    request["tape"].as_str().unwrap(),
+                )),
+                Some(1_000_000),
+                hirsel_engine::Verify::On,
+            );
+            drop(saved);
+            let outcome = outcome.unwrap_or_else(|e| panic!("{e}"));
+            assert!(
+                matches!(outcome, hirsel_run_schema::RunOutcome::Returned(_)),
+                "{outcome:?}"
+            );
+            fs::write(
+                result,
+                serde_json::to_vec(&serde_json::json!({
+                    "status": outcome.exit_code(),
+                    "stdout": String::from_utf8(fs::read(stdout).unwrap()).unwrap(),
+                    "stderr": String::from_utf8(fs::read(stderr).unwrap()).unwrap(),
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+        }
+    });
+}
+
 #[test]
 fn packtree_29_native_workflows_replay() {
+    if let Some(requests) = std::env::var_os("PACKTREE_29_HOST_REPLAY_BATCH") {
+        replay_batch(&PathBuf::from(requests));
+        return;
+    }
     if let Some(root) = std::env::var_os("PACKTREE_29_BINDING_CONTROLS") {
         refusal_controls(&PathBuf::from(root));
         return;
@@ -444,6 +516,10 @@ fn packtree_29_native_workflows_replay() {
             "reference-cases.json",
             include_str!("../support/packtree_29/reference-cases.json"),
         ),
+        (
+            "host_replay.py",
+            include_str!("../support/packtree_29/host_replay.py"),
+        ),
         ("capped", include_str!("../../../../tools/capped")),
         (
             "vectors.py",
@@ -453,6 +529,10 @@ fn packtree_29_native_workflows_replay() {
         fs::write(tmp.path().join(name), source).unwrap();
     }
     let output = Command::new("python3")
+        .env(
+            "PACKTREE_29_HOST_REPLAYER",
+            std::env::current_exe().unwrap(),
+        )
         .arg(tmp.path().join("verify.py"))
         .arg("--hirsel")
         .arg(env!("CARGO_BIN_EXE_hirsel"))
@@ -465,6 +545,10 @@ fn packtree_29_native_workflows_replay() {
     let qualified = if output.status.success() {
         Some(
             Command::new("python3")
+                .env(
+                    "PACKTREE_29_HOST_REPLAYER",
+                    std::env::current_exe().unwrap(),
+                )
                 .arg("-B")
                 .arg(tmp.path().join("qualify.py"))
                 .arg("--root")
@@ -484,6 +568,10 @@ fn packtree_29_native_workflows_replay() {
         compare_recordings(tmp.path());
         refusal_controls(tmp.path());
         let twin = Command::new("python3")
+            .env(
+                "PACKTREE_29_HOST_REPLAYER",
+                std::env::current_exe().unwrap(),
+            )
             .arg("-B")
             .arg(tmp.path().join("qualify.py"))
             .arg("--reference-twin")
