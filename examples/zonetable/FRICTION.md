@@ -91,3 +91,17 @@ then validates overflow without retaining the suffix. `Limit` maps to the
 existing `FieldBytes(index)`; malformed strings retain their JSON cause and
 offset even after overflow. The 64 KiB whole-input cap remains necessary to
 bound scanning work. This removes the duplicated post-allocation field check.
+
+## Source-file/module diagnostic resolution
+
+The diagnostic improvement landed in `482e4aa18247e83442130bc1ba7c133d40a5b8ad`.
+An unresolved `time_format.FormatError` now explains that the selected
+`time_format.hir` source is registered as module `std@1/time`, and points to
+`std@1/time.FormatError`. The same selected mapping explains `broken_down` and
+`format`. The original LANG-4 rule and primary span remain unchanged.
+
+This is explanatory help from selected source mappings and visible declaration
+metadata. Filenames still create no module aliases; multiple legal candidates
+are listed deterministically with bounded output, and unproven or inaccessible
+repairs are withheld. The original incident above remains historical evidence;
+the application's existing `time` module calls remain correct.
