@@ -50,6 +50,8 @@ pub enum CompileOperation {
 /// executable materialization follow their completed readiness descriptor.
 #[derive(Clone)]
 pub struct NativeRequest {
+    /// Selected launch definition; None uses the observed package entry.
+    pub definition: Option<DefPath>,
     pub backend: Backend,
     pub profile: BuildProfile,
     pub target: TargetSpec,
