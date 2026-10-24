@@ -2,9 +2,12 @@
 use hirsel_engine::*;
 
 fn checked(source: &str) -> CheckOutput {
-    let mut engine = crate::source_std::engine();
+    checked_in(&mut crate::source_std::engine(), source)
+}
+
+fn checked_in(engine: &mut QueryEngine, source: &str) -> CheckOutput {
     let file = engine.sources.add("capture.hir", source.into()).unwrap();
-    let output = check_progress(&mut engine, file, &default_context()).unwrap();
+    let output = check_progress(engine, file, &default_context()).unwrap();
     assert_eq!(output.completion, CheckCompletion::Complete);
     output
 }
@@ -124,6 +127,14 @@ fn first_error(output: &CheckOutput) -> &hirsel_diag::Diagnostic {
 #[test]
 fn borrowed_capture_repairs_19_concrete_sequences_shared_and_parameter_control() {
     with_compiler_stack(|| {
+        // Reuse the ordinary source-std preparation for every original/repair
+        // pair. Checking the same source path replaces its previous snapshot.
+        let mut engine = crate::source_std::engine();
+        let mut checks = 0;
+        let mut checked = |source: &str| {
+            checks += 1;
+            checked_in(&mut engine, source)
+        };
         for ty in [
             "String",
             "Bytes",
@@ -205,6 +216,8 @@ fn borrowed_capture_repairs_19_concrete_sequences_shared_and_parameter_control()
                 .diagnostics
                 .is_empty()
         );
+        assert_eq!(checks, 34, "every original/repair fixture must be checked");
+        eprintln!("borrowed capture concrete sequences: all 34 source checks completed");
     });
 }
 
