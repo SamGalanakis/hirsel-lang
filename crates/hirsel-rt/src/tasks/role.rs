@@ -170,15 +170,17 @@ impl std::ops::DerefMut for RoleTables<'_> {
 struct Lent;
 
 impl Lent {
+    #[inline(always)]
     fn new() -> Self {
-        LENT.with(|lent| {
-            assert!(!lent.replace(true), "a role table borrow nested in another");
-        });
+        if LENT.with(|lent| lent.replace(true)) {
+            spanned("another role table borrow");
+        }
         Self
     }
 }
 
 impl Drop for Lent {
+    #[inline(always)]
     fn drop(&mut self) {
         LENT.with(|lent| lent.set(false));
     }
@@ -198,11 +200,17 @@ pub(crate) fn with_role<T>(ctx: *mut TaskCtx, f: impl FnOnce(&mut RoleTables<'_>
 
 /// No role table borrow may span `boundary` on this thread. Like every
 /// runtime panic, this aborts at the compiled-code boundary.
-#[inline]
+#[inline(always)]
 pub(crate) fn unlent(boundary: &str) {
     if LENT.with(Cell::get) {
-        panic!("a role table borrow spans {boundary}");
+        spanned(boundary);
     }
+}
+
+#[cold]
+#[inline(never)]
+fn spanned(boundary: &str) -> ! {
+    panic!("a role table borrow spans {boundary}")
 }
 
 #[cfg(test)]

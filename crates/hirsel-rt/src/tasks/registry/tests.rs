@@ -274,3 +274,21 @@ fn cancellation_notices_visit_only_affected_subscriptions_with_a_post_register_c
     assert_eq!(e, c);
     assert!(s.task(e).cancel_subs.is_empty());
 }
+
+#[test]
+fn keys_round_trip_through_run_local_words() {
+    let (mut s, scope, children) = tree(1);
+    let key = s.task_key(children[0]).unwrap();
+    assert_eq!(
+        key.word(),
+        super::super::handle(key.slot, key.generation as u32)
+    );
+    assert_eq!(TaskKey::from_word(key.word()), key);
+    assert_eq!(
+        s.live_task(TaskKey::from_word(key.word())),
+        Some(children[0])
+    );
+    let scope_key = s.scope_key(scope).unwrap();
+    assert_eq!(ScopeKey::from_word(scope_key.word()), scope_key);
+    assert_eq!(s.scope_handle(scope_key.word()), scope);
+}

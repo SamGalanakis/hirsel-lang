@@ -338,6 +338,7 @@ impl Scheduler {
     }
     /// A task slot for a new row and its generation. The slot's previous
     /// row has left and every owner of its storage has released it.
+    #[inline]
     fn take_task_slot(&mut self) -> (u32, u32) {
         let (index, generation) = self.task_slots.take(self.tasks.len());
         if index as usize == self.tasks.len() {
@@ -345,6 +346,7 @@ impl Scheduler {
         }
         (index, generation)
     }
+    #[inline]
     fn take_scope_slot(&mut self) -> (u32, u32) {
         let (index, generation) = self.scope_slots.take(self.scopes.len());
         if index as usize == self.scopes.len() {
@@ -352,6 +354,7 @@ impl Scheduler {
         }
         (index, generation)
     }
+    #[inline]
     fn take_set_slot(&mut self) -> (u32, u32) {
         let (index, generation) = self.set_slots.take(self.sets.len());
         if index as usize == self.sets.len() {
@@ -360,6 +363,7 @@ impl Scheduler {
         (index, generation)
     }
     /// Remove scope row `index`; its slot is reusable at once.
+    #[inline]
     fn take_scope(&mut self, index: u32) -> Scope {
         let row = self.scopes[index as usize]
             .take()
@@ -895,8 +899,8 @@ impl Scheduler {
         self.task_slots.retire(
             index,
             task.generation,
-            task.control.clone(),
-            task.dispatch.clone(),
+            task.control.as_ref(),
+            task.dispatch.as_ref(),
         );
         task
     }

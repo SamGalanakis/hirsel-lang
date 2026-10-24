@@ -33,6 +33,43 @@ pub(crate) struct ScopeKey {
     pub(crate) generation: u64,
 }
 
+impl TaskKey {
+    /// The run-local Task word: generation above slot. Row generations stay
+    /// within 32 bits, so the word round-trips.
+    pub(crate) fn word(self) -> u64 {
+        word(self.slot, self.generation)
+    }
+
+    pub(crate) fn from_word(word: u64) -> Self {
+        Self {
+            slot: word as u32,
+            generation: word >> 32,
+        }
+    }
+}
+
+impl ScopeKey {
+    /// The run-local Scope word, as for [`TaskKey::word`].
+    pub(crate) fn word(self) -> u64 {
+        word(self.slot, self.generation)
+    }
+
+    pub(crate) fn from_word(word: u64) -> Self {
+        Self {
+            slot: word as u32,
+            generation: word >> 32,
+        }
+    }
+}
+
+fn word(slot: u32, generation: u64) -> u64 {
+    assert!(
+        generation <= u64::from(u32::MAX),
+        "a row generation above 32 bits"
+    );
+    generation << 32 | u64::from(slot)
+}
+
 /// An object cell's identity, as for [`TaskKey`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub(crate) struct CellKey {
@@ -94,6 +131,7 @@ pub(crate) struct Slots<const LIMIT: u32> {
 
 impl<const LIMIT: u32> Slots<LIMIT> {
     /// A slot and its generation; a fresh slot is `len`, the table's length.
+    #[inline]
     pub(crate) fn take(&mut self, len: usize) -> (u32, u32) {
         match self.free.pop() {
             Some((slot, generation)) => (slot, generation + 1),
@@ -110,6 +148,7 @@ impl<const LIMIT: u32> Slots<LIMIT> {
     }
 
     /// `slot`'s row, of `generation`, left its table.
+    #[inline]
     pub(crate) fn release(&mut self, slot: u32, generation: u32) {
         if generation < LIMIT {
             self.free.push((slot, generation));
@@ -162,8 +201,11 @@ impl Default for TaskSlots {
 
 impl TaskSlots {
     /// The next task slot and generation, after a bounded reclamation step.
+    #[inline]
     pub(crate) fn take(&mut self, len: usize) -> (u32, u32) {
-        self.reclaim(RECLAIM_STEP);
+        if !self.retiring.is_empty() {
+            self.reclaim(RECLAIM_STEP);
+        }
         self.slots.take(len)
     }
 
@@ -173,24 +215,31 @@ impl TaskSlots {
         self.slots.reserve(additional);
     }
 
-    /// The row left its table. Its slot waits for the frame's save
-    /// acknowledgement and for every outstanding lease.
+    /// The row left its table, still holding its own `lease` and `frame`
+    /// references. Its slot waits for the frame's save acknowledgement and
+    /// for every other reference; with none outstanding it is free at once.
     pub(crate) fn retire(
         &mut self,
         slot: u32,
         generation: u32,
-        lease: Option<TaskLease>,
-        frame: Option<Arc<Frame>>,
+        lease: Option<&TaskLease>,
+        frame: Option<&Arc<Frame>>,
     ) {
-        if let Some(lease) = &lease {
+        if let Some(lease) = lease {
             lease.retire();
         }
-        self.retiring.push_back(Retiring {
-            slot,
-            generation,
-            lease,
-            frame,
-        });
+        let held = lease.is_some_and(|lease| !lease.sole())
+            || frame.is_some_and(|frame| Arc::strong_count(frame) != 1 || !frame.is_saved());
+        if held {
+            self.retiring.push_back(Retiring {
+                slot,
+                generation,
+                lease: lease.cloned(),
+                frame: frame.cloned(),
+            });
+        } else {
+            self.slots.release(slot, generation);
+        }
     }
 
     fn reclaim(&mut self, budget: usize) {
