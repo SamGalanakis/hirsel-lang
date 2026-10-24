@@ -93,9 +93,7 @@ impl OperationTasks {
         }
         let declarations = &self.instances.source_inputs().declarations;
         let operations = declarations.program.operation_registry();
-        let manifest = hirsel_core_contract::Manifest::skeleton(
-            declarations.program.operations.values().cloned(),
-        );
+        let manifest = declarations.manifest()?;
         let environment = hirsel_lir::validate::NativeEnvironment {
             target: &self.instances.options().target,
             manifest: &manifest,

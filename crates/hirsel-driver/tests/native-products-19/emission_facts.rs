@@ -167,9 +167,7 @@ fn run(callback: bool, tracking: bool) {
             .inline_instances
             .insert(ContentHash::of_bytes(b"not an admitted template"));
         let operations = inputs.declarations.program.operation_registry();
-        let manifest = hirsel_core_contract::Manifest::skeleton(
-            inputs.declarations.program.operations.values().cloned(),
-        );
+        let manifest = inputs.declarations.manifest().unwrap();
         let before = trace.totals();
         let snapshot = NativeSnapshot::new(
             store.clone(),

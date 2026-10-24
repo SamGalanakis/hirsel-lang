@@ -538,9 +538,7 @@ impl DemandInstances {
             return Ok(output.clone());
         }
         let operations = inputs.declarations().program.operation_registry();
-        let manifest = hirsel_core_contract::Manifest::skeleton(
-            inputs.declarations().program.operations.values().cloned(),
-        );
+        let manifest = inputs.declarations().manifest()?;
         let environment = NativeEnvironment {
             target: &self.target,
             operations: &operations,

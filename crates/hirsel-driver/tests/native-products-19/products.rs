@@ -117,9 +117,7 @@ fn run_product_case(aggregate: bool, scheduled_jobs: Option<usize>) {
         )
         .unwrap();
         let operations = declarations.program.operation_registry();
-        let manifest = hirsel_core_contract::Manifest::skeleton(
-            declarations.program.operations.values().cloned(),
-        );
+        let manifest = declarations.manifest().unwrap();
         let emission = EmissionOptions {
             input: declarations.program.input.clone(),
             opt: hirsel_lir::emission::OptLevel::None,

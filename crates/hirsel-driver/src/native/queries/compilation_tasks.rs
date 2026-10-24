@@ -203,9 +203,7 @@ impl CompilationTasks {
         }
         let declarations = &self.instances.source_inputs().declarations;
         let operations = declarations.program.operation_registry();
-        let manifest = hirsel_core_contract::Manifest::skeleton(
-            declarations.program.operations.values().cloned(),
-        );
+        let manifest = declarations.manifest()?;
         let mut snapshot = NativeSnapshot::new(
             self.instances.selected_store().clone(),
             self.instances.products(discovery)?,

@@ -126,9 +126,16 @@ fn cleanup(value: &DropAllocation) -> Result<CleanupEffect, String> {
 /// runtime's native disposition for every row. A row the runtime has not
 /// reviewed is an error, never an unclassified row.
 pub fn manifest(input: &NativeInput) -> Result<Manifest, String> {
-    let rows = input
-        .operations
-        .values()
+    operation_manifest(input.operations.values())
+}
+
+/// The same reviewed runtime classification over body-free source records.
+/// A skeleton is insufficient for Ready: its native rows are unclassified.
+pub(super) fn operation_manifest<'a>(
+    records: impl IntoIterator<Item = &'a hirsel_engine::OperationRecord>,
+) -> Result<Manifest, String> {
+    let rows = records
+        .into_iter()
         .map(|record| {
             let mut row = OperationRow::unclassified(OperationId {
                 definition: record.key.definition.clone(),

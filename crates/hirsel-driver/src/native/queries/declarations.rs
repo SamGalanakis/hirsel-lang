@@ -23,6 +23,11 @@ pub struct NativeDeclarations {
     pub constant_definitions: Vec<DefPath>,
 }
 impl NativeDeclarations {
+    /// Reviewed runtime dispositions and ownership from this exact source
+    /// inventory. Instance C admission and Ready must use the same manifest.
+    pub fn manifest(&self) -> Result<hirsel_core_contract::Manifest, String> {
+        crate::native::adapt::operation_manifest(self.roots.operations.values())
+    }
     /// Demand one original source body and apply the same independent CT-5
     /// uses check as snapshot import. No body enters the declaration registry.
     pub fn body(

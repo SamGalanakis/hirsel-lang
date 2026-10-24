@@ -181,9 +181,7 @@ fn run(jobs: usize) {
         )
         .unwrap();
         let operations = declarations.program.operation_registry();
-        let manifest = hirsel_core_contract::Manifest::skeleton(
-            declarations.program.operations.values().cloned(),
-        );
+        let manifest = declarations.manifest().unwrap();
         let emission = EmissionOptions {
             input: declarations.program.input.clone(),
             opt: native::OptLevel::None,
