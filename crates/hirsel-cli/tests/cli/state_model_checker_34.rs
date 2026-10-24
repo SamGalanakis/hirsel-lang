@@ -423,10 +423,14 @@ fn state_model_checker_34_reference_checked_workflows() {
                         1_000_000,
                     )
                 };
+                // 214eae8f made some formerly stopped inputs complete. Validate
+                // those observations normally; only a genuine known stop is exempt.
+                let mut incomplete = false;
                 let result = result.map_err(|e| e.to_string()).and_then(|execution| {
-                    if original_steps(row) {
+                    if original_steps(row) && execution.observation.is_none() {
                         assert!(execution.observation.is_none());
                         assert!(matches!(&execution.outcome, Ok(hirsel_engine::RunOutcome::ToolingLimit(limit)) if limit.kind == "Steps" && limit.limit == 1_000_000));
+                        incomplete = true;
                         return Err(format!("INCOMPLETE original Steps1M: {:?}",execution.outcome));
                     }
                     let observed = execution.observation.ok_or_else(|| format!("INCOMPLETE {:?}", execution.outcome))?;
@@ -445,7 +449,7 @@ fn state_model_checker_34_reference_checked_workflows() {
                     Ok(())
                 });
                 if let Err(error) = &result
-                    && !original_steps(row)
+                    && !incomplete
                 {
                     failures.push(format!("{}/{engine}: {error}", row["id"]));
                 }
