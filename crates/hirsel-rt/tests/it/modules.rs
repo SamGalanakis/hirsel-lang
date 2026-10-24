@@ -44,3 +44,4 @@ mod views;
 mod waits;
 mod walk_stream;
 mod workers;
+mod physical_wait_graph_24;
