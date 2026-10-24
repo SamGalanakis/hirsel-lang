@@ -279,12 +279,6 @@ struct Provided {
 }
 
 fn provided(kit: &Kit, triple: &str) -> Result<Arc<Provided>, NativeError> {
-    static PROVIDED: Mutex<BTreeMap<(PathBuf, String), Arc<Provided>>> =
-        Mutex::new(BTreeMap::new());
-    let key = (kit.root().to_path_buf(), triple.to_string());
-    if let Some(provided) = PROVIDED.lock().unwrap().get(&key) {
-        return Ok(provided.clone());
-    }
     let mut out = Provided::default();
     for path in kit.libraries(triple)? {
         let bytes = std::fs::read(path).map_err(|e| failed(format!("{}: {e}", path.display())))?;
@@ -296,9 +290,7 @@ fn provided(kit: &Kit, triple: &str) -> Result<Arc<Provided>, NativeError> {
         });
         out.libraries.insert(soname, stub.versions);
     }
-    let out = Arc::new(out);
-    PROVIDED.lock().unwrap().insert(key, out.clone());
-    Ok(out)
+    Ok(Arc::new(out))
 }
 
 /// Check an image's import contract against its runner's exports and the kit's libraries.
@@ -1061,6 +1053,34 @@ pub(crate) fn tooling_failure(tooling: &Path) -> Option<NativeError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn provided_contract_rechecks_current_kit_bytes_at_the_same_path() {
+        fn copy(source: &Path, destination: &Path) {
+            std::fs::create_dir_all(destination).unwrap();
+            for entry in std::fs::read_dir(source).unwrap() {
+                let path = entry.unwrap().path();
+                let target = destination.join(path.file_name().unwrap());
+                if path.is_dir() {
+                    copy(&path, &target);
+                } else {
+                    std::fs::copy(path, target).unwrap();
+                }
+            }
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let source = super::super::link::environment_path("HIRSEL_LINK_KIT").unwrap();
+        let captured = directory.path().join("kit");
+        copy(&source, &captured);
+        let kit = Kit::load(&captured).unwrap();
+        let target = TargetSpec::x86_64_unknown_linux_gnu();
+        assert!(!provided(&kit, &target.triple).unwrap().libraries.is_empty());
+        let library = &kit.libraries(&target.triple).unwrap()[0];
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(library, std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::fs::write(library, b"corrupt current ELF stub").unwrap();
+        assert!(provided(&kit, &target.triple).is_err());
+    }
 
     fn contract() -> (BTreeMap<String, SymbolKind>, Provided) {
         let runner = BTreeMap::from([
