@@ -1,5 +1,6 @@
 //! Demand declaration assembly over source products. This boundary owns no
 //! Definition or Value collection and never exports a NativeInput snapshot.
+mod metadata;
 use super::*;
 use hirsel_core_contract::OperationId;
 use hirsel_engine::{
