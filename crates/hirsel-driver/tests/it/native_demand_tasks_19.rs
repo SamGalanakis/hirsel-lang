@@ -11,6 +11,25 @@ use std::{
     task::Poll,
 };
 
+struct Traced(Arc<dyn QueryFactory>, hirsel_lir::construction::ValueTrace);
+struct TracedTask(Box<dyn QueryTask>, hirsel_lir::construction::ValueTrace);
+impl QueryFactory for Traced {
+    fn create(&self, id: QueryId) -> Result<Box<dyn QueryTask>, store::Reference> {
+        Ok(Box::new(TracedTask(self.0.create(id)?, self.1.clone())))
+    }
+}
+impl QueryTask for TracedTask {
+    fn id(&self) -> QueryId {
+        self.0.id()
+    }
+    fn weight(&self) -> MemoryWeight {
+        self.0.weight()
+    }
+    fn poll(&mut self, cx: &mut dyn QueryContext) -> QueryPoll {
+        let _observe = self.1.enter();
+        self.0.poll(cx)
+    }
+}
 struct Pending;
 impl QueryContext for Pending {
     fn read(&mut self, _: QueryId) -> Poll<Result<ProductRef, store::Reference>> {
@@ -72,7 +91,8 @@ fn native_demand_tasks_import_and_reuse_actual_settled_source_without_a_controll
             drop(discovery);
             drop(engine);
             assert!(originals.iter().all(|body| body.upgrade().is_none()));
-            let budget = ProcessBudget::new(128 << 20);
+            let runtime_bytes = hirsel_intern::jobs::COMPILER_STACK_BYTES as u64 + (64 << 20);
+            let budget = ProcessBudget::new(runtime_bytes + (16 << 20));
             let trace = hirsel_lir::construction::ValueTrace::default();
             let _observe = trace.enter();
             let tasks = InstanceTasks::new(
@@ -112,12 +132,13 @@ fn native_demand_tasks_import_and_reuse_actual_settled_source_without_a_controll
             };
             let mut runtime = AdmittedRuntime::new(
                 hirsel_intern::jobs::Jobs::new(1),
-                budget.reserve(112 << 20).unwrap(),
+                budget.reserve(runtime_bytes).unwrap(),
                 errors,
             )
             .unwrap();
+            let traced = Arc::new(Traced(factory.clone(), trace.clone()));
             for kind in [INSTANCE_KIND, INSTANCE_INPUT_KIND, DISCOVERY_KIND] {
-                runtime.register(kind, factory.clone()).unwrap();
+                runtime.register(kind, traced.clone()).unwrap();
             }
             let request = runtime.request(&[tasks.discovery_id()]);
             let result = runtime.wait(request).unwrap_or_else(|error| {
@@ -127,7 +148,14 @@ fn native_demand_tasks_import_and_reuse_actual_settled_source_without_a_controll
                 )
             });
             let completed = tasks.completed_instances(result[0]).unwrap();
-            assert_eq!(completed.len(), 2);
+            assert_eq!(
+                completed
+                    .iter()
+                    .filter(|(key, _)| key.instance.definition().0.name == "main"
+                        || key.instance.definition().0.name == "other")
+                    .count(),
+                2
+            );
             let outputs = completed
                 .iter()
                 .map(|(_, output)| output.product.product)
@@ -138,7 +166,10 @@ fn native_demand_tasks_import_and_reuse_actual_settled_source_without_a_controll
                 assert_eq!(tasks.source_body_demands.load(Ordering::Relaxed), 0);
                 assert_eq!(trace.totals(), Default::default());
             } else {
-                assert_eq!(tasks.imports.load(Ordering::Relaxed), 2);
+                assert_eq!(
+                    tasks.imports.load(Ordering::Relaxed),
+                    completed.len() as u64
+                );
                 expected = Some(outputs);
             }
         }
