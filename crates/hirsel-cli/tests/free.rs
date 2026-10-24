@@ -568,9 +568,34 @@ fn racing_trace_all(name: &str, outcomes: [&str; 2], engine: &[&str]) {
 /// A trace whose outcome a schedule decides reaches each outcome under some
 /// seed on `engine`, and that seed's durable recording replays as above.
 fn racing_trace(name: &str, outcomes: &[&str], engine: &[&str]) {
+    // Seeds are searched in order, a group of concurrent recordings at a time;
+    // the smallest seed that prints `want` is the one a sequential search finds.
+    let seeds: Vec<u64> = (0..64).collect();
+    let width = std::thread::available_parallelism().map_or(1, |n| n.get());
     for &want in outcomes {
-        let seed = (0..64u64)
-            .find(|&seed| record(engine, name, GRANTS, seed, false).stdout == want)
+        let seed = seeds
+            .chunks(width)
+            .find_map(|group| {
+                std::thread::scope(|scope| {
+                    let recordings: Vec<_> = group
+                        .iter()
+                        .map(|&seed| {
+                            scope.spawn(move || {
+                                (
+                                    seed,
+                                    record(engine, name, GRANTS, seed, false).stdout == want,
+                                )
+                            })
+                        })
+                        .collect();
+                    recordings
+                        .into_iter()
+                        .map(|recording| recording.join().unwrap())
+                        .filter(|&(_, prints)| prints)
+                        .map(|(seed, _)| seed)
+                        .min()
+                })
+            })
             .unwrap_or_else(|| panic!("{name} on {engine:?}: no seed prints {want:?}"));
         let recorded = record(engine, name, GRANTS, seed, true);
         assert_eq!(recorded.stdout, want, "{}", recorded.what);
