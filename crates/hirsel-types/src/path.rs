@@ -287,6 +287,19 @@ impl<T: Clone + Eq + Hash> PathInterner<T> {
 mod tests {
     use super::*;
     #[test]
+    fn a_scalar_path_counts_both_arc_header_words_without_alignment_masking_them() {
+        let path: SharedPath<u8> = [7].into_iter().collect();
+        // Two Arc counters, a prefix pointer, a length, and the padded scalar.
+        assert_eq!(path.node_allocation_bytes(), 5 * size_of::<usize>());
+        let mut extended = path.clone();
+        extended.push(9);
+        assert_eq!(extended.node_allocation_bytes(), 5 * size_of::<usize>());
+        assert_eq!(
+            extended.prefix().unwrap().node_identity(),
+            path.node_identity()
+        );
+    }
+    #[test]
     fn retained_prefix_rows_grow_linearly_and_mutations_preserve_other_paths() {
         for count in [32, 128] {
             let mut prefixes = vec![];
