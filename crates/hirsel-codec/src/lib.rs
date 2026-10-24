@@ -1104,6 +1104,44 @@ mod tests {
     }
 
     #[test]
+    fn optional_and_empty_trailers_preserve_ordinary_and_existing_optional_prefixes() {
+        #[derive(Debug, PartialEq)]
+        struct Old {
+            base: u32,
+            entry: Option<Vec<u32>>,
+        }
+        snapshot_struct!(Old { base } trailing_optional entry);
+        #[derive(Debug, PartialEq)]
+        struct New {
+            base: u32,
+            entry: Option<Vec<u32>>,
+            pool: Vec<u32>,
+        }
+        snapshot_struct!(New { base } trailing_optional entry trailing_empty pool);
+        for entry in [None, Some(vec![]), Some(vec![1])] {
+            for pool in [vec![], vec![2]] {
+                let value = New {
+                    base: 7,
+                    entry: entry.clone(),
+                    pool,
+                };
+                let text = to_text(&value);
+                assert_eq!(from_text::<New>(&text).unwrap(), value);
+                if value.pool.is_empty() {
+                    assert_eq!(
+                        text,
+                        to_text(&Old {
+                            base: 7,
+                            entry: entry.clone()
+                        })
+                        .replace("Old", "New")
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn optional_and_two_empty_trailers_preserve_all_previous_prefixes() {
         #[derive(Debug, PartialEq)]
         struct Previous {
