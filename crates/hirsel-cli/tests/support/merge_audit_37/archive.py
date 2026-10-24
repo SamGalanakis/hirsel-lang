@@ -16,7 +16,14 @@ def emit(paths):
     body = gzip.compress(stream.getvalue(), compresslevel=9, mtime=0)
     encoded = base64.b64encode(body)
     if len(encoded) > 4 * 1024 * 1024:
-        raise SystemExit(f'MERGE_ARCHIVE_FAILURE encoded={len(encoded)} exceeds 4MiB; split cells')
+        if len(paths) < 2:
+            raise SystemExit(f'MERGE_ARCHIVE_FAILURE encoded={len(encoded)} exceeds 4MiB; split cells')
+        # Each complete archive preserves paths and the original transport cap.
+        # Split the file set without dropping source or product evidence.
+        middle = len(paths) // 2
+        emit(paths[:middle])
+        emit(paths[middle:])
+        return
     digest = hashlib.sha256(body).hexdigest()
     print(f'MERGE37_ARCHIVE_BEGIN {digest} {len(body)} {len(encoded)}', flush=True)
     for start in range(0, len(encoded), 1024):
