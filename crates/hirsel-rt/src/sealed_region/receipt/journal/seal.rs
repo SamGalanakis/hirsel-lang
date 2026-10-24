@@ -63,14 +63,14 @@ impl<'ctx> Journal<'ctx> {
                 arena,
                 plan,
                 checkpoint,
-                Some(&mut self.holders),
+                Some(&mut self.custody),
             )
         };
         match result {
             Ok(owner) => Ok(owner),
             Err(error) => Err((SealError::Transaction(error), self)),
         }
-        // On success self drops empty holder batches and private metadata;
+        // On success self drops empty source custody and private metadata;
         // transaction already retired the exact source snapshot after publish.
     }
 }

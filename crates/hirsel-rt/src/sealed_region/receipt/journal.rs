@@ -7,15 +7,14 @@
 //! the ordinary release and Shared-root deferral policy. No new release engine
 //! or count interpretation is introduced.
 //!
-//! This Rust-only component is not yet a demanded guard, a complete typed Plan
-//! producer or a native ABI. A caller must still prove complete source-event
+//! This Rust-only component is not a complete typed Plan producer or a native
+//! ABI. A caller must still prove complete source-event
 //! correspondence, pairing/lifetimes and exclusive ownership independently.
 use super::semantic::{self, AllocationId, GrantId, Inventory, Record};
 use super::{MetadataRun, Receipt};
 use crate::alloc::Header;
 use crate::context::TaskCtx;
 use crate::region::sealed_cleanup::Credits;
-use std::collections::BTreeMap;
 use std::marker::PhantomData;
 use std::ptr::NonNull;
 
@@ -32,6 +31,8 @@ pub enum Error {
     Semantic(semantic::Error),
     InvalidHolder,
     InvalidRetention,
+    /// Private custody identity space exhausted; never a language budget error.
+    CreditIdExhausted,
 }
 
 pub type Rejected = (Error, Update);
@@ -44,7 +45,9 @@ pub struct Replacement {
     pub transferred: Vec<*mut Header>,
 }
 
+mod custody;
 mod seal;
+use custody::Custody;
 pub use seal::SealError;
 
 /// One open arena's private source credits and retained semantic metadata.
@@ -57,7 +60,7 @@ pub struct Journal<'ctx> {
     ctx: NonNull<TaskCtx>,
     lifetime: PhantomData<&'ctx mut TaskCtx>,
     inventory: Inventory,
-    holders: BTreeMap<AllocationId, Vec<*mut Header>>,
+    custody: Custody,
 }
 impl<'ctx> Journal<'ctx> {
     pub fn new(ctx: &'ctx mut TaskCtx, run: MetadataRun) -> Self {
@@ -78,7 +81,7 @@ impl<'ctx> Journal<'ctx> {
             ctx: NonNull::new(ctx).unwrap_or_else(|| crate::fault("null receipt journal context")),
             lifetime: PhantomData,
             inventory: Inventory::new(run),
-            holders: BTreeMap::new(),
+            custody: Custody::new(),
         }
     }
     pub fn grant(&self) -> GrantId {
@@ -90,7 +93,7 @@ impl<'ctx> Journal<'ctx> {
     /// Exact actual holder multiplicity, independently of semantic paths and
     /// physical relocation deduplication. These words grant no new credit.
     pub fn holders(&self, id: AllocationId) -> Option<&[*mut Header]> {
-        self.holders.get(&id).map(Vec::as_slice)
+        self.custody.holders(id)
     }
 
     /// Record a committed construction or COW allocation. All additions become
@@ -102,15 +105,17 @@ impl<'ctx> Journal<'ctx> {
     /// one actual owned, live, resource-free holder in ctx's
     /// run and remains live until retired here. Caller removes its former
     /// cleanup obligation on success, including physical region cleanup. Each
-    /// repeated pointer represents a separate credit. Source semantics and C
+    /// repeated pointer represents a separate credit. Additions are in their
+    /// original enrollment order (oldest first). Source semantics and C
     /// prove this is the exact successful event, not a metadata-only clone.
     pub unsafe fn allocate(&mut self, input: Update) -> Result<AllocationId, Rejected> {
-        if input.additions.iter().any(|holder| holder.is_null()) {
-            return Err((Error::InvalidHolder, input));
-        }
+        let change = match self.custody.allocation(&input.additions) {
+            Ok(change) => change,
+            Err(error) => return Err((error, input)),
+        };
         match self.inventory.allocate(input.value.clone()) {
             Ok(id) => {
-                self.holders.insert(id, input.additions);
+                self.custody.commit(id, change);
                 Ok(id)
             }
             Err(error) => Err((Error::Semantic(error), input)),
@@ -159,44 +164,15 @@ impl<'ctx> Journal<'ctx> {
         take: &[usize],
         input: Update,
     ) -> Result<Replacement, Rejected> {
-        let Some(old) = self.holders.get(&id) else {
-            return Err((Error::Semantic(semantic::Error::UnknownAllocation), input));
+        let change = match self.custody.replacement(id, keep, take, &input.additions) {
+            Ok(change) => change,
+            Err(error) => return Err((error, input)),
         };
-        let invalid = |indices: &[usize]| {
-            indices.windows(2).any(|pair| pair[0] >= pair[1])
-                || indices.last().is_some_and(|&index| index >= old.len())
-        };
-        if invalid(keep)
-            || invalid(take)
-            || keep.iter().any(|index| take.binary_search(index).is_ok())
-        {
-            return Err((Error::InvalidRetention, input));
-        }
-        if input.additions.iter().any(|holder| holder.is_null()) {
-            return Err((Error::InvalidHolder, input));
-        }
-        // Stage raw words before metadata commit; staging acquires no holder.
-        let mut next = Vec::with_capacity(keep.len());
-        next.extend(keep.iter().map(|&index| old[index]));
-        next.extend_from_slice(&input.additions);
-        let transferred = take.iter().map(|&index| old[index]).collect();
-        let mut removed = Vec::with_capacity(old.len() - keep.len() - take.len());
-        let mut kept = keep.iter().copied().peekable();
-        let mut taken = take.iter().copied().peekable();
-        for (index, &holder) in old.iter().enumerate() {
-            if kept.peek() == Some(&index) {
-                kept.next();
-            } else if taken.peek() == Some(&index) {
-                taken.next();
-            } else {
-                removed.push(holder);
-            }
-        }
         let previous = match self.inventory.replace(id, input.value.clone()) {
             Ok(previous) => previous,
             Err(error) => return Err((Error::Semantic(error), input)),
         };
-        self.holders.insert(id, next);
+        let (transferred, removed) = self.custody.commit(id, change);
         // Kept and taken credits moved, so only omitted credits retire.
         unsafe { Credits::from_owned(removed).release(self.ctx.as_mut()) };
         Ok(Replacement {
@@ -208,15 +184,11 @@ impl<'ctx> Journal<'ctx> {
 
 impl Drop for Journal<'_> {
     fn drop(&mut self) {
-        // Reuse each retained batch's allocation; do not allocate a flattened
-        // list at scope cleanup. Actual source release keeps existing runtime
-        // scratch/root-deferral behavior; only metadata drop promises NoAlloc.
-        for holders in self.holders.values_mut() {
-            let owned = std::mem::take(holders);
-            // SAFETY: successful events transferred these exact credits, and
-            // retained updates moved them rather than duplicating ownership.
-            unsafe { Credits::from_owned(owned).release(self.ctx.as_mut()) };
-        }
+        // The global enrollment index, not allocation-map/holder ordinals,
+        // owns cleanup order. Draining it needs no flattened allocation.
+        // SAFETY: events transfer these exact credits once; keep moves their
+        // enrollment identities and take removes custody without retirement.
+        unsafe { self.custody.retire(self.ctx.as_mut()) };
     }
 }
 

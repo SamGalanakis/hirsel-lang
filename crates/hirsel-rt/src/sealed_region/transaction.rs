@@ -15,7 +15,7 @@ use crate::region::{
     hirsel_rt_v2_region_exit,
 };
 use crate::{STATUS_OK, TaskCtx, fault};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::mem::MaybeUninit;
 use std::ptr;
 
@@ -113,18 +113,6 @@ pub(super) enum Event {
 pub(super) trait JournalCredits {
     fn snapshot(&self, credits: &mut Credits);
     fn disarm(&mut self);
-}
-impl<K: Ord> JournalCredits for BTreeMap<K, Vec<*mut Header>> {
-    fn snapshot(&self, credits: &mut Credits) {
-        for holders in self.values() {
-            credits.journal_snapshot(holders);
-        }
-    }
-    fn disarm(&mut self) {
-        for holders in self.values_mut() {
-            holders.clear();
-        }
-    }
 }
 
 fn extent_valid(extent: usize, align: usize) -> bool {

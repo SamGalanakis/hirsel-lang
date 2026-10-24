@@ -8,14 +8,14 @@ use crate::sealed_region::{
 };
 use std::mem::MaybeUninit;
 
-unsafe fn enter(ctx: *mut TaskCtx) -> Box<Region> {
+pub(super) unsafe fn enter(ctx: *mut TaskCtx) -> Box<Region> {
     let mut region = Box::new(MaybeUninit::<Region>::uninit());
     unsafe {
         hirsel_rt_v2_region_enter(ctx, region.as_mut_ptr());
         Box::from_raw(Box::into_raw(region).cast())
     }
 }
-unsafe fn close(ctx: *mut TaskCtx, arena: &mut Region) {
+pub(super) unsafe fn close(ctx: *mut TaskCtx, arena: &mut Region) {
     assert_eq!(
         unsafe { hirsel_rt_v2_region_exit(ctx, arena, 0, 0) },
         crate::STATUS_OK

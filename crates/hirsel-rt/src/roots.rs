@@ -68,6 +68,11 @@ impl TaskRoots {
     pub(crate) fn has_pending(&self) -> bool {
         !self.pending.is_empty() || !self.deferred.is_empty()
     }
+
+    #[cfg(all(test, feature = "diagnostic"))]
+    pub(crate) fn deferred_for_test(&self) -> &[*mut Header] {
+        &self.deferred
+    }
 }
 
 #[inline(always)]

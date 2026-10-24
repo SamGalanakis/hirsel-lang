@@ -82,13 +82,24 @@ impl Credits {
     pub(crate) unsafe fn release(self, ctx: &mut TaskCtx) {
         unsafe {
             for block in self.0 {
-                if (*block).domain() == crate::DOMAIN_HEAP && crate::shared::is_root(ctx, block) {
-                    crate::roots::hirsel_rt_v2_root_release(ctx, block);
-                } else if crate::release::release_block(ctx, block, ptr::null(), 0, 0)
-                    != crate::STATUS_OK
-                {
-                    fault("seal cleanup ran a failing resource destructor");
-                }
+                Self::release_one(ctx, block);
+            }
+        }
+    }
+
+    /// Apply the existing source retirement policy to one actual credit.
+    ///
+    /// # Safety
+    /// The nonnull resource-free holder is live and this caller owns its one
+    /// retirement obligation. Destination acquisition precedes source release.
+    pub(crate) unsafe fn release_one(ctx: &mut TaskCtx, block: *mut Header) {
+        unsafe {
+            if (*block).domain() == crate::DOMAIN_HEAP && crate::shared::is_root(ctx, block) {
+                crate::roots::hirsel_rt_v2_root_release(ctx, block);
+            } else if crate::release::release_block(ctx, block, ptr::null(), 0, 0)
+                != crate::STATUS_OK
+            {
+                fault("seal cleanup ran a failing resource destructor");
             }
         }
     }
