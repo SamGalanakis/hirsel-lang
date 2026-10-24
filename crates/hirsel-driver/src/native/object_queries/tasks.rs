@@ -79,6 +79,20 @@ pub trait ObjectTaskSnapshot: Send + Sync {
     fn ready_descriptor(&self, product: ProductRef) -> Result<ReadyProduct, Reference>;
     /// Resolve each optimizer read's registered native query kind and address.
     fn optimizer_query(&self, product: ProductRef) -> Result<QueryId, Reference>;
+    /// Backend-specific copy queries, plus expected outputs where a producer
+    /// already selected them. None means read the immutable request's current
+    /// output; it never allows bypassing native admission in products().
+    fn optimizer_queries(
+        &self,
+        _key: &CodegenKey,
+        ready: &ReadyProduct,
+    ) -> Result<Vec<(QueryId, Option<ProductRef>)>, Reference> {
+        ready
+            .optimizer_reads
+            .iter()
+            .map(|product| Ok((self.optimizer_query(*product)?, Some(*product))))
+            .collect()
+    }
     fn link_dependencies(&self, manifest: ProductRef) -> Result<LinkDependencies, Reference>;
     /// Resolve a settled static/runtime/foreign/launch record to its content.
     fn link_input(&self, product: ProductRef) -> Result<Reference, Reference>;
@@ -146,18 +160,30 @@ impl<S: ObjectTaskSnapshot> ObjectTask<S> {
                 if descriptor.product != own {
                     return Err(failed(self.snapshot.failure("Ready descriptor mismatch")));
                 }
-                let ids = descriptor
-                    .optimizer_reads
-                    .iter()
-                    .map(|p| self.snapshot.optimizer_query(*p))
-                    .collect::<Result<Vec<_>, _>>()
+                let dependencies = self
+                    .snapshot
+                    .optimizer_queries(key, &descriptor)
                     .map_err(failed)?;
+                let ids = dependencies.iter().map(|(id, _)| *id).collect::<Vec<_>>();
+                if ids.iter().any(|id| *id == *ready)
+                    || ids
+                        .iter()
+                        .enumerate()
+                        .any(|(index, id)| ids[..index].contains(id))
+                {
+                    return Err(failed(
+                        self.snapshot.failure("duplicate or self optimizer read"),
+                    ));
+                }
                 let copies = read(cx, &ids)?;
                 if copies
                     .iter()
-                    .zip(&descriptor.optimizer_reads)
-                    .any(|(current, old)| {
-                        current.address != old.address || current.record != old.record
+                    .zip(&dependencies)
+                    .any(|(current, (id, expected))| {
+                        current.address != id.address
+                            || expected.is_some_and(|old| {
+                                current.address != old.address || current.record != old.record
+                            })
                     })
                 {
                     return Err(failed(

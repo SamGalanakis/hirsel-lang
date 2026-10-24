@@ -69,7 +69,7 @@ fn one_native_runtime_produces_cold_instances_both_arena_strata_ready_roots_and_
 {
     with_compiler_stack(|| {
         for jobs in [1, 4] {
-            run(jobs, false);
+            run(jobs, false, false);
         }
     });
 }
@@ -77,7 +77,15 @@ fn one_native_runtime_produces_cold_instances_both_arena_strata_ready_roots_and_
 fn frozen_platform_links_standalone_after_original_tool_kit_runtime_and_foreign_paths_disappear() {
     with_compiler_stack(|| {
         for jobs in [1, 4] {
-            run(jobs, true);
+            run(jobs, true, false);
+        }
+    });
+}
+#[test]
+fn optimized_codegen_reads_transitive_recursive_templates_without_recursive_ready_dependencies() {
+    with_compiler_stack(|| {
+        for jobs in [1, 4] {
+            run(jobs, false, true);
         }
     });
 }
@@ -107,7 +115,7 @@ impl native::queries::link_tasks::NativeLinkExecutor for CountedPlatform {
         self.inner.link(native, input)
     }
 }
-fn run(jobs: usize, freeze_platform: bool) {
+fn run(jobs: usize, freeze_platform: bool, optimized: bool) {
     let directory = tempfile::tempdir().unwrap();
     let store = Arc::new(store::DirStore::new(directory.path().join("products")));
     let target = native::TargetSpec::x86_64_unknown_linux_gnu();
@@ -186,6 +194,8 @@ fn run(jobs: usize, freeze_platform: bool) {
     };
     let policy = ContentHash::of_bytes(b"one runtime cold native Link control");
     let mut previous = None;
+    let mut previous_actions = std::collections::BTreeMap::new();
+    let mut previous_ready = std::collections::BTreeMap::new();
     let mut reference = None;
     for (iteration, (literal, fresh)) in [(7u64, false), (7, true), (8, false), (8, true)]
         .into_iter()
@@ -193,7 +203,11 @@ fn run(jobs: usize, freeze_platform: bool) {
     {
         let mut engine = QueryEngine::new(default_environment(), compiler_adapters())
             .with_result_store(store.clone());
-        let text = if freeze_platform {
+        let text = if optimized {
+            format!(
+                "fn leaf(n:u64)->u64 {{if n==0u64 {{{literal}u64}} else {{middle(n-1u64)}}}}\nfn middle(n:u64)->u64 {{leaf(n)}}\npub fn main()->Result[(),u64] {{Error(middle(0u64))}}\n"
+            )
+        } else if freeze_platform {
             format!(
                 "const SECOND:u64=comptime {literal}u64\nfn worker(n:u64)->Result[(),u64] uses {{}} {{let _=n;Error(SECOND)}}\nfn dispatch(f:fn(u64)->Result[(),u64] uses {{}})->Result[(),u64] uses {{f}} {{f(0u64)}}\npub fn main()->Result[(),u64] {{dispatch(worker)}}\n"
             )
@@ -238,8 +252,12 @@ fn run(jobs: usize, freeze_platform: bool) {
         }
         let emission = EmissionOptions {
             input: declarations.program.input.clone(),
-            opt: native::OptLevel::None,
-            debug: true,
+            opt: if optimized {
+                native::OptLevel::Default
+            } else {
+                native::OptLevel::None
+            },
+            debug: !optimized,
             callbacks: false,
             tracking: false,
             foreign: Default::default(),
@@ -287,7 +305,11 @@ fn run(jobs: usize, freeze_platform: bool) {
                     [backend.name().as_bytes(), COMPILER_IDENTITY.as_slice()],
                 ),
                 target_features: target.digest(),
-                profile_options: ContentHash::of_bytes(b"debug opt none"),
+                profile_options: ContentHash::of_bytes(if optimized {
+                    b"default opt"
+                } else {
+                    b"debug opt none"
+                }),
                 runtime_abi: ContentHash::of_bytes(&hirsel_lir::RUNTIME_ABI_VERSION.to_le_bytes()),
                 linker_options: if let Some(platform) = &frozen {
                     platform.linker_options(backend, &main).unwrap()
@@ -439,6 +461,15 @@ fn run(jobs: usize, freeze_platform: bool) {
             native.snapshot.ready_materializations(),
             if fresh {
                 0
+            } else if optimized {
+                // Every one of the 13 roots emits once per backend. The
+                // recursive leaf/middle each copy one body; main copies two.
+                // On edit only leaf Ready changes: LLVM reads 2+2+3, CRAN 1.
+                if iteration == 0 {
+                    completed.len() as u64 * 2 + 4
+                } else {
+                    8
+                }
             } else if iteration == 0 {
                 completed.len() as u64 * 2
             } else {
@@ -469,6 +500,103 @@ fn run(jobs: usize, freeze_platform: bool) {
         ] {
             assert!(events.iter().any(|event| matches!(event, RuntimeEvent::Read {query, dependency} if query.kind == from && dependency.kind == to)), "missing actual edge {from:x}->{to:x}");
         }
+        if optimized {
+            assert_eq!(completed.len(), 13);
+            assert_eq!(
+                completed
+                    .iter()
+                    .filter(|(_, output)| output.templates.library)
+                    .count(),
+                10
+            );
+            assert_eq!(
+                completed
+                    .iter()
+                    .filter(|(_, output)| !output.templates.library)
+                    .map(|(owner, _)| owner.instance.definition().0.name.as_str())
+                    .collect::<std::collections::BTreeSet<_>>(),
+                std::collections::BTreeSet::from(["leaf", "main", "middle"])
+            );
+            assert!(!events.iter().any(|event| matches!(event,
+                RuntimeEvent::Read { query, dependency } if query.kind == READY_KIND && dependency.kind == READY_KIND)),
+                "template copying must not create recursive Ready dependencies");
+            for (owner, output) in &completed {
+                assert!(output.templates.small);
+                let own_ready = store
+                    .lookup_product(owner.ready_query_id().address)
+                    .unwrap();
+                let name = owner.instance.definition().0.name.to_string();
+                if let Some(old) = previous_ready.insert(name.clone(), own_ready.reference) {
+                    if fresh || name != "leaf" {
+                        assert_eq!(
+                            own_ready.reference, old,
+                            "unchanged caller Ready remains equal"
+                        );
+                    } else {
+                        assert_ne!(own_ready.reference, old);
+                    }
+                }
+                for backend in ["llvm", "cranelift"] {
+                    let key = native::object_queries::CodegenKey {
+                        owner: owner.clone(),
+                        backend: backend.into(),
+                        backend_version: ContentHash::of_parts(
+                            "backend",
+                            [backend.as_bytes(), COMPILER_IDENTITY.as_slice()],
+                        ),
+                        target_features: target.digest(),
+                        profile_options: ContentHash::of_bytes(b"default opt"),
+                        runtime_abi: ContentHash::of_bytes(
+                            &hirsel_lir::RUNTIME_ABI_VERSION.to_le_bytes(),
+                        ),
+                    };
+                    let reads = events
+                        .iter()
+                        .filter_map(|event| match event {
+                            RuntimeEvent::Read { query, dependency }
+                                if *query == key.query_id() && dependency.kind == READY_KIND =>
+                            {
+                                Some(dependency.address.0)
+                            }
+                            _ => None,
+                        })
+                        .collect::<std::collections::BTreeSet<_>>();
+                    // Library roots have no references; source recursion
+                    // copies only the named source bodies, never those roots.
+                    let expected = completed
+                        .iter()
+                        .filter(|(copy, copy_output)| {
+                            if backend == "cranelift" || output.templates.library {
+                                copy == owner
+                            } else {
+                                !copy_output.templates.library
+                                    && (name == "main"
+                                        || copy.instance.definition().0.name != "main")
+                            }
+                        })
+                        .map(|(copy, _)| copy.ready_query_id().address.0)
+                        .collect::<std::collections::BTreeSet<_>>();
+                    assert_eq!(
+                        reads, expected,
+                        "{backend} {name} explicit template inventory"
+                    );
+                    let current = store.lookup_product(key.address()).unwrap().action;
+                    if let Some(old) = previous_actions.insert((name.clone(), backend), current) {
+                        if fresh
+                            || output.templates.library
+                            || (backend == "cranelift" && name != "leaf")
+                        {
+                            assert_eq!(current, old);
+                        } else {
+                            assert_ne!(
+                                current, old,
+                                "copied changed leaf invalidates LLVM caller Codegen"
+                            );
+                        }
+                    }
+                }
+            }
+        }
         drop(events);
         let mut metadata = vec![roots.query_id()];
         metadata.extend(completed.iter().map(|(key, _)| key.ready_query_id()));
@@ -488,7 +616,11 @@ fn run(jobs: usize, freeze_platform: bool) {
             if fresh {
                 assert_eq!(current, old);
             } else {
-                assert_ne!(current.0, old.0);
+                if optimized {
+                    assert_eq!(current.0, old.0);
+                } else {
+                    assert_ne!(current.0, old.0);
+                }
                 assert_ne!(current.1, old.1);
             }
         }

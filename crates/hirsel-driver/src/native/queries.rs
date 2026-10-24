@@ -15,6 +15,7 @@ pub mod instance;
 pub mod instance_tasks;
 pub mod link_tasks;
 pub mod local;
+pub mod optimizer;
 pub mod platform;
 pub mod products;
 pub mod ready;
@@ -314,6 +315,17 @@ pub trait NativeProducts {
     fn instance(&mut self, key: &InstanceAddress) -> Result<Arc<InstanceProduct>, String>;
     fn arena_summary(&mut self, key: &ComponentKey) -> Result<Arc<ArenaSummary>, String>;
     fn ready(&mut self, key: &InstanceAddress) -> Result<Arc<ReadyProduct>, String>;
+
+    /// Selected owner followed by backend-specific copied bodies. The caller
+    /// must have settled every read before constructing a restricted view.
+    /// Selection observes compact metadata only; bodies open on a Codegen miss.
+    fn codegen_units(
+        &mut self,
+        key: &InstanceAddress,
+        _backend: &str,
+    ) -> Result<Vec<Arc<ReadyProduct>>, String> {
+        Ok(vec![self.ready(key)?])
+    }
 
     /// Units are borrowed only while their reached layout closure is bound.
     /// Supply requested owners first, followed by their complete transitive

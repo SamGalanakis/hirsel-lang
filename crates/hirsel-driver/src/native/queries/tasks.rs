@@ -345,6 +345,26 @@ impl ObjectTaskSnapshot for CodegenTasks {
             })
             .ok_or_else(|| self.failure("unregistered Ready optimizer dependency"))
     }
+    fn optimizer_queries(
+        &self,
+        key: &CodegenKey,
+        ready: &ReadyProduct,
+    ) -> Result<Vec<(QueryId, Option<ProductRef>)>, Reference> {
+        if !ready.optimizer_reads.is_empty() {
+            return Err(self.failure("unregistered Ready transformation reads"));
+        }
+        self.native
+            .snapshot
+            .codegen_owners(&key.owner, &key.backend)
+            .map(|owners| {
+                owners
+                    .into_iter()
+                    .skip(1)
+                    .map(|owner| (owner.ready_query_id(), None))
+                    .collect()
+            })
+            .map_err(|error| self.failure(&error))
+    }
     fn link_dependencies(&self, _: ProductRef) -> Result<LinkDependencies, Reference> {
         Err(self.failure("native Link manifest is not registered"))
     }

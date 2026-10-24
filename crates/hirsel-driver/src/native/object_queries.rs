@@ -211,62 +211,74 @@ where
         };
         // The producer checks its old reads and native authority before returning
         // a descriptor. No Value or Ready decoding is needed to decide this hit.
-        let ready = self.native.ready(&key.owner)?;
-        codegen_checked(self.store.as_ref(), key, &ready, self.verify_store, || {
-            self.native.with_ready(&[ready.clone()], |units, inputs| {
-                if units.len() != 1 + ready.optimizer_reads.len() {
-                    return Err("Ready materialization omitted optimizer bodies".into());
-                }
-                let owner = units[0].unit();
-                if owner.header.instance != key.owner.instance.digest()
-                    || owner.header.definition != *key.owner.instance.definition()
-                {
-                    return Err("Ready materialization returned another owner".into());
-                }
-                if (inputs.opt == hirsel_lir::emission::OptLevel::None
-                    || backend == super::Backend::Cranelift)
-                    && units.len() != 1
-                {
-                    return Err("non-inlining emission received optimizer bodies".into());
-                }
-                let names: Vec<_> = units[1..]
-                    .iter()
-                    .map(|unit| {
-                        hirsel_lir::emission::symbol_name(
-                            &unit.unit().header.definition,
-                            Some(&unit.unit().header.instance),
-                        )
-                    })
-                    .collect();
-                if names.windows(2).any(|pair| pair[0] >= pair[1]) {
-                    return Err("optimizer bodies are not sorted unique symbols".into());
-                }
-                let copies = units[1..]
-                    .iter()
-                    .map(|u| u.unit().header.instance)
-                    .collect();
-                let inputs = hirsel_lir::emission::EmitInputs {
-                    available_externally: &copies,
-                    ..inputs.clone()
-                };
-                // Source paths/line-table binding are Link inputs; the producer
-                // binds the interval-collection option to emission_context.
-                let profile = hirsel_lir::debug::Profile {
-                    debug: ready.debug,
-                    sources: None,
-                };
-                match backend {
-                    super::Backend::Llvm => {
-                        hirsel_llvm::emit_object_profile(units, &inputs, profile)
-                            .map_err(|e| e.to_string())
+        let selected = self.native.codegen_units(&key.owner, &key.backend)?;
+        let ready = selected.first().ok_or("Codegen omitted its owner")?;
+        let optimizer = selected[1..]
+            .iter()
+            .map(|ready| ready.product)
+            .collect::<Vec<_>>();
+        codegen_checked(
+            self.store.as_ref(),
+            key,
+            ready,
+            &optimizer,
+            self.verify_store,
+            || {
+                self.native.with_ready(&selected, |units, inputs| {
+                    if units.len() != selected.len() + ready.optimizer_reads.len() {
+                        return Err("Ready materialization omitted optimizer bodies".into());
                     }
-                    super::Backend::Cranelift => {
-                        hirsel_cranelift::emit_object_profile(units, &inputs, profile)
-                            .map_err(|e| e.to_string())
+                    let owner = units[0].unit();
+                    if owner.header.instance != key.owner.instance.digest()
+                        || owner.header.definition != *key.owner.instance.definition()
+                    {
+                        return Err("Ready materialization returned another owner".into());
                     }
-                }
-            })
-        })
+                    if (inputs.opt == hirsel_lir::emission::OptLevel::None
+                        || backend == super::Backend::Cranelift)
+                        && units.len() != 1
+                    {
+                        return Err("non-inlining emission received optimizer bodies".into());
+                    }
+                    let names: Vec<_> = units[1..]
+                        .iter()
+                        .map(|unit| {
+                            hirsel_lir::emission::symbol_name(
+                                &unit.unit().header.definition,
+                                Some(&unit.unit().header.instance),
+                            )
+                        })
+                        .collect();
+                    if names.windows(2).any(|pair| pair[0] >= pair[1]) {
+                        return Err("optimizer bodies are not sorted unique symbols".into());
+                    }
+                    let copies = units[1..]
+                        .iter()
+                        .map(|u| u.unit().header.instance)
+                        .collect();
+                    let inputs = hirsel_lir::emission::EmitInputs {
+                        available_externally: &copies,
+                        ..inputs.clone()
+                    };
+                    // Source paths/line-table binding are Link inputs; the producer
+                    // binds the interval-collection option to emission_context.
+                    let profile = hirsel_lir::debug::Profile {
+                        debug: ready.debug,
+                        sources: None,
+                    };
+                    match backend {
+                        super::Backend::Llvm => {
+                            hirsel_llvm::emit_object_profile(units, &inputs, profile)
+                                .map_err(|e| e.to_string())
+                        }
+                        super::Backend::Cranelift => {
+                            hirsel_cranelift::emit_object_profile(units, &inputs, profile)
+                                .map_err(|e| e.to_string())
+                        }
+                    }
+                })
+            },
+        )
         .map(Arc::new)
     }
 
@@ -289,13 +301,14 @@ fn codegen(
     ready: &ReadyProduct,
     compute: impl FnOnce() -> Result<ObjectArtifact, String>,
 ) -> Result<FragmentProduct, String> {
-    codegen_checked(store, key, ready, VerifyStore::Off, compute)
+    codegen_checked(store, key, ready, &[], VerifyStore::Off, compute)
 }
 
 fn codegen_checked(
     store: &dyn ResultStore,
     key: &CodegenKey,
     ready: &ReadyProduct,
+    optimizer: &[ProductRef],
     verify_store: VerifyStore,
     compute: impl FnOnce() -> Result<ObjectArtifact, String>,
 ) -> Result<FragmentProduct, String> {
@@ -308,9 +321,10 @@ fn codegen_checked(
         ready.unit_summary,
     ];
     reads.extend(ready.optimizer_reads.iter().map(|p| p.record));
+    reads.extend(optimizer.iter().map(|p| p.record));
     // References bind domains/lengths as well as content. Action revisions are
     // deliberately absent: equal settled outputs cut off downstream work.
-    let action = action("hirsel.codegen.action.v1", address, &reads);
+    let action = action("hirsel.codegen.action.v2", address, &reads);
     let mut cached = None;
     if let Some(previous) = store.lookup_product(address).filter(|p| p.action == action) {
         let product = ProductRef {

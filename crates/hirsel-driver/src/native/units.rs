@@ -187,14 +187,11 @@ pub(crate) fn lower(
     // The templates each unit's object copies: those it reaches through templates.
     let copies: Vec<Vec<usize>> = (0..units.len())
         .map(|i| {
-            let mut seen = BTreeSet::new();
-            let mut pending: Vec<usize> = reached[i].clone();
-            while let Some(j) = pending.pop() {
-                if j != i && copyable[j] && seen.insert(j) {
-                    pending.extend(reached[j].iter().copied());
-                }
-            }
-            seen.into_iter().collect()
+            super::queries::optimizer::copy_closure(
+                &i,
+                |&member| reached[member].clone(),
+                |&member| copyable[member],
+            )
         })
         .collect();
     // A template's own key: its code with no copies. A unit's key names its copies' keys.
@@ -545,7 +542,7 @@ fn symbol_name<S>(unit: &LirUnit<S>) -> String {
 }
 
 /// Every function the unit names directly, by a function reference or as closure code.
-fn references<S>(unit: &LirUnit<S>) -> impl Iterator<Item = Symbol> + '_ {
+pub(crate) fn references<S>(unit: &LirUnit<S>) -> impl Iterator<Item = Symbol> + '_ {
     let calls = unit.tables.calls.iter().filter_map(|c| match c.callee {
         Callee::Direct(s) | Callee::Bound { code: s, .. } => Some(s),
         _ => None,

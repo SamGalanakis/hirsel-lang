@@ -69,6 +69,8 @@ pub struct NativeSnapshot {
     operations: Arc<dyn hirsel_lir::operation::OperationDeclarations + Send + Sync>,
     pub(super) owners: BTreeMap<ContentHash, InstanceAddress>,
     pub(super) summaries: BTreeMap<ContentHash, Arc<ArenaSummary>>,
+    templates:
+        BTreeMap<super::optimizer::Function, (InstanceAddress, super::optimizer::TemplateFacts)>,
     native: Arc<hirsel_lir::validate::NativeCache>,
     materializations: AtomicU64,
     // Compilation dispatch and copied instance/arena metadata remain charged
@@ -113,6 +115,16 @@ impl NativeSnapshot {
             .chain(&arena.chosen)
             .map(|summary| (summary.product.address.0, summary.clone()))
             .collect();
+        let templates = instances
+            .completed_inputs()?
+            .into_iter()
+            .map(|(owner, output)| {
+                (
+                    (owner.instance.definition().clone(), owner.instance.digest()),
+                    (owner, output.templates.clone()),
+                )
+            })
+            .collect();
         Ok(Arc::new(Self {
             native: super::ready::ReadyQueries::validator(&store),
             store,
@@ -125,9 +137,53 @@ impl NativeSnapshot {
             operations,
             owners,
             summaries,
+            templates,
             materializations: AtomicU64::new(0),
             retained_allowances: Vec::new(),
         }))
+    }
+
+    /// Backend copying observes only settled instance facts. Every selected
+    /// body's actual Ready query is a later explicit Codegen dependency.
+    pub(super) fn codegen_owners(
+        &self,
+        key: &InstanceAddress,
+        backend: &str,
+    ) -> Result<Vec<InstanceAddress>, String> {
+        if self.owners.get(&key.address(READY_KIND).0) != Some(key) {
+            return Err("unregistered Codegen owner".into());
+        }
+        let mut owners = vec![key.clone()];
+        if backend != "llvm" || self.emission.opt == OptLevel::None || self.emission.debug {
+            return Ok(owners);
+        }
+        let function = (key.instance.definition().clone(), key.instance.digest());
+        let mut copies = super::optimizer::copy_closure(
+            &function,
+            |member| {
+                self.templates
+                    .get(member)
+                    .map_or_else(Vec::new, |(_, facts)| facts.references.clone())
+            },
+            |member| {
+                self.templates.get(member).is_some_and(|(_, facts)| {
+                    facts.library
+                        || facts.small
+                        || self.emission.inline_instances.contains(&member.1)
+                })
+            },
+        )
+        .into_iter()
+        .map(|member| self.templates[&member].0.clone())
+        .collect::<Vec<_>>();
+        copies.sort_by_cached_key(|member| {
+            hirsel_lir::emission::symbol_name(
+                member.instance.definition(),
+                Some(&member.instance.digest()),
+            )
+        });
+        owners.extend(copies);
+        Ok(owners)
     }
 
     pub(super) fn environment(&self) -> NativeEnvironment<'_> {
@@ -220,6 +276,18 @@ impl NativeProducts for SettledProducts {
         }
         Ok(current)
     }
+    fn codegen_units(
+        &mut self,
+        key: &InstanceAddress,
+        backend: &str,
+    ) -> Result<Vec<Arc<ReadyProduct>>, String> {
+        self.inner
+            .snapshot
+            .codegen_owners(key, backend)?
+            .iter()
+            .map(|owner| self.ready(owner))
+            .collect()
+    }
     fn with_ready<R>(
         &mut self,
         products: &[Arc<ReadyProduct>],
@@ -272,6 +340,17 @@ impl NativeProducts for DemandProducts {
         Ok(product)
     }
 
+    fn codegen_units(
+        &mut self,
+        key: &InstanceAddress,
+        backend: &str,
+    ) -> Result<Vec<Arc<ReadyProduct>>, String> {
+        self.snapshot
+            .codegen_owners(key, backend)?
+            .iter()
+            .map(|owner| self.ready(owner))
+            .collect()
+    }
     fn with_ready<R>(
         &mut self,
         products: &[Arc<ReadyProduct>],

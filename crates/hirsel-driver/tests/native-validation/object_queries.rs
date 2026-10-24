@@ -606,18 +606,32 @@ fn explicit_recompute_checks_exact_cached_bytes() {
     let descriptor = ready(&store);
     let cold = codegen(&store, &key, &descriptor, || Ok(object())).unwrap();
     let calls = Cell::new(0);
-    let checked = codegen_checked(&store, &key, &descriptor, VerifyStore::Recompute, || {
-        calls.set(calls.get() + 1);
-        Ok(object())
-    })
+    let checked = codegen_checked(
+        &store,
+        &key,
+        &descriptor,
+        &[],
+        VerifyStore::Recompute,
+        || {
+            calls.set(calls.get() + 1);
+            Ok(object())
+        },
+    )
     .unwrap();
     assert_eq!(calls.get(), 1);
     assert_eq!(cold.product, checked.product);
-    let error = codegen_checked(&store, &key, &descriptor, VerifyStore::Recompute, || {
-        let mut changed = object();
-        changed.bytes.push(0);
-        Ok(changed)
-    })
+    let error = codegen_checked(
+        &store,
+        &key,
+        &descriptor,
+        &[],
+        VerifyStore::Recompute,
+        || {
+            let mut changed = object();
+            changed.bytes.push(0);
+            Ok(changed)
+        },
+    )
     .unwrap_err();
     assert!(error.contains("differs from cached output"), "{error}");
 }

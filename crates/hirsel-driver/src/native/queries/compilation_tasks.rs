@@ -143,15 +143,22 @@ impl CompilationTasks {
         // Includes duplicated key/read metadata in native/root/object dispatch.
         // This bounds dispatch records, not the still-separate source/C-cache
         // memory accounting or the host's final RSS qualification.
-        let bytes = 16384u64.saturating_add(
-            owners
-                .iter()
-                .map(|owner| {
-                    (owner.instance.encoding().len() as u64 + 4096)
-                        .saturating_mul((8 + self.backends.len() * 4) as u64)
-                })
-                .sum::<u64>(),
-        );
+        let template_bytes = completed.iter().try_fold(0u64, |total, (_, output)| {
+            serde_json::to_vec(&output.templates)
+                .map(|bytes| total.saturating_add(bytes.len() as u64))
+                .map_err(|error| error.to_string())
+        })?;
+        let bytes = 16384u64
+            .saturating_add(template_bytes.saturating_mul(4))
+            .saturating_add(
+                owners
+                    .iter()
+                    .map(|owner| {
+                        (owner.instance.encoding().len() as u64 + 4096)
+                            .saturating_mul((8 + self.backends.len() * 4) as u64)
+                    })
+                    .sum::<u64>(),
+            );
         if bytes > self.allowance.bytes() {
             return Err("native compilation dispatch allowance exhausted".into());
         }

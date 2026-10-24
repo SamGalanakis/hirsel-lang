@@ -70,6 +70,7 @@ struct Discovery {
     requests: Vec<Request>,
     selection_reads: Vec<SelectionRead>,
     constant_reads: Vec<hirsel_syntax::DefPath>,
+    templates: super::optimizer::TemplateFacts,
 }
 
 /// The descriptor returned after one demand has been admitted by actual C or
@@ -81,6 +82,7 @@ pub struct DiscoveredInstance {
     pub dependencies: Vec<InstanceAddress>,
     pub selection_reads: Vec<SelectionRead>,
     pub constant_reads: Vec<hirsel_syntax::DefPath>,
+    pub templates: super::optimizer::TemplateFacts,
 }
 
 /// One immutable request snapshot. Source/native proof authority stays in the
@@ -408,7 +410,7 @@ impl DemandInstances {
         ))
         .map_err(|e| e.to_string())?;
         Ok(Action(ContentHash::of_parts(
-            "hirsel.native.demand-import-action.v5",
+            "hirsel.native.demand-import-action.v6",
             [bytes.as_slice()],
         )))
     }
@@ -423,7 +425,8 @@ impl DemandInstances {
             .get_content(product.discovery)
             .ok_or("missing native discovery")?;
         let discovery: Discovery = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
-        if discovery.schema != 3
+        if discovery.schema != 4
+            || !discovery.templates.canonical()
             || discovery.owner.bind()? != key.instance
             || discovery
                 .requests
@@ -460,6 +463,7 @@ impl DemandInstances {
             dependencies,
             selection_reads: discovery.selection_reads,
             constant_reads: discovery.constant_reads,
+            templates: discovery.templates,
         });
         self.completed
             .insert(key.instance.encoding().to_vec(), output.clone());
@@ -692,16 +696,25 @@ impl DemandInstances {
         constant_reads.sort();
         constant_reads.dedup();
         let action = self.action(inputs, &request, options, &selection_reads, &constant_reads)?;
+        let finalizers = hirsel_rc::cleanup::Finalizers::planned(&instances, &table);
+        let reached_finalizers = finalizers.reached(&unit, &table);
+        let templates = super::optimizer::TemplateFacts::of(
+            &unit,
+            reached_finalizers
+                .iter()
+                .map(|(_, finalizer)| (finalizer.definition.clone(), finalizer.instance)),
+        );
         let discovery = self.put(
             INSTANCE_DISCOVERY_DOMAIN,
             &serde_json::to_vec(&Discovery {
-                schema: 3,
+                schema: 4,
                 owner: NamedKey::of(&key.instance),
                 ready_source,
                 callees,
                 requests,
                 selection_reads,
                 constant_reads,
+                templates,
             })
             .map_err(|e| e.to_string())?,
         )?;
@@ -720,8 +733,7 @@ impl DemandInstances {
                 (layouts, hirsel_codec::to_text(&data))
             })
             .collect::<Vec<_>>();
-        let finalizers = hirsel_rc::cleanup::Finalizers::planned(&instances, &table);
-        let reached_finalizers = finalizers.reached(&unit, &table);
+
         let additional_abis = reached_finalizers
             .iter()
             .map(|(_, f)| f.abi)
