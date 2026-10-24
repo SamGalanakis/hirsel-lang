@@ -652,6 +652,20 @@ pub struct ExecutionReceipt {
     artifacts: Arc<[AcceptedArtifact]>,
 }
 impl ExecutionReceipt {
+    /// Actual compact context/artifact ownership, without source body bytes.
+    pub fn retained_bytes(&self) -> Option<u64> {
+        let slots = (std::mem::size_of::<Self>() + 4 * std::mem::size_of::<usize>()) as u64;
+        slots
+            .checked_add(
+                (self.contexts.len() as u64)
+                    .checked_mul(std::mem::size_of::<(PackageId, ContentHash)>() as u64)?,
+            )?
+            .checked_add(bincode::serialized_size(self.contexts.as_ref()).ok()?)?
+            .checked_add(
+                (self.artifacts.len() as u64)
+                    .checked_mul(std::mem::size_of::<AcceptedArtifact>() as u64)?,
+            )
+    }
     pub fn compose(
         contexts: &[(PackageId, ContentHash)],
         artifacts: &[AcceptedArtifact],
