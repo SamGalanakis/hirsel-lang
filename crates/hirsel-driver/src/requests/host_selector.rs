@@ -89,6 +89,11 @@ impl LoadingAdmission {
                 .map_err(ToolError::Io)?,
         })
     }
+    /// Transfer the already admitted transport before S0 uses the provider.
+    /// The remaining zero-sized reservation keeps finish's ownership shape.
+    pub fn take_transport(&mut self) -> MemoryReservation {
+        self.transport.split(self.transport.bytes()).unwrap()
+    }
     pub fn finish(mut self, plan: SnapshotPlan) -> Result<GraphAdmission, ToolError> {
         let bytes = [plan.source, plan.front, plan.lower, plan.growth, plan.check]
             .into_iter()
@@ -381,6 +386,48 @@ pub(super) fn completed_artifacts(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn loading_transport_transfer_keeps_one_shared_charge_before_s0() {
+        use hirsel_engine::store::{Domain, NoneStore, RequestStore, ResultStore};
+        let budget = ProcessBudget::new(8320);
+        let limits = RequestLimits {
+            runtime_bytes: 64,
+            snapshot_bytes: 64,
+            transport_bytes: 8192,
+        };
+        let mut loading = LoadingAdmission::reserve(&budget, limits).unwrap();
+        let store = Arc::new(RequestStore::new(
+            Arc::new(NoneStore),
+            loading.take_transport(),
+        ));
+        assert_eq!(budget.reserved(), 8320);
+        assert!(budget.reserve(1).is_err());
+        let record = store
+            .put_content(Domain { kind: 1, schema: 1 }, b"source input")
+            .unwrap();
+        let admission = loading
+            .finish(SnapshotPlan {
+                source: 16,
+                front: 16,
+                lower: 16,
+                check: 16,
+                growth: 0,
+            })
+            .unwrap();
+        assert_eq!(admission.transport.bytes(), 0);
+        assert_eq!(budget.reserved(), 8320);
+        let held = store.get_content(record).unwrap();
+        drop(admission);
+        drop(store);
+        assert_eq!(
+            budget.reserved(),
+            8192,
+            "a held transport view keeps its original admission"
+        );
+        assert_eq!(&*held, b"source input");
+        drop(held);
+        assert_eq!(budget.reserved(), 0);
+    }
     #[test]
     fn loading_admission_transfers_charge_and_holds_failed_diagnostic_sources() {
         let limits = RequestLimits {
