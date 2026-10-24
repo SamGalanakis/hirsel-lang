@@ -1002,6 +1002,8 @@ def first_party(meta: dict) -> str:
     out.append("\n" + call("hirsel_script_test", name="gate-distribution-notices", script="tools/tests/distribution_notices.py", full=False,
                             data=["tools/tests/distribution_notices.py"],
                             files_env={"HIRSEL_DISTRIBUTION_NOTICES": "//tools/toolchain-dist:notices.py"}))
+    out.append("\n" + call("hirsel_script_test", name="test-pubsub-registration", script="tools/tests/pubsub_registration.py", full=False,
+                            data=Raw('glob(["tools/tests/pubsub_registration.py", "crates/hirsel-cli/tests/support/pubsub_relay_30/*.py", "crates/hirsel-cli/tests/support/pubsub_relay_30/cases.json", "crates/hirsel-cli/tests/cli/pubsub_relay_30*.rs"])')))
     out.append("\n" + call("hirsel_script_test", name="test-land", script="tools/tests/land.py", full=False,
                             data=["tools/land", "tools/tests/land.py", "//tools/buck2:generated.py",
                                   "//tools/buck2:merging.py", "//tools/buck2:clippy.py", "//tools/buck2:fmt.py",

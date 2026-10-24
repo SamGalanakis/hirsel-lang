@@ -291,5 +291,9 @@
     "source": "crates/hirsel-driver/tests/it-stdlib/capture_fixed_tags_37.rs",
     "target": "//:hirsel-driver-test-it-stdlib-shard-1",
     "inputs": []
+  },
+  "pubsub_relay_30::pubsub_relay_30_native_and_real_unix": {
+    "source": "crates/hirsel-cli/tests/cli/pubsub_relay_30.rs",
+    "inputs": []
   }
 }
