@@ -416,7 +416,18 @@ pub(super) fn install(
         .map_err(&query_error)?;
     let lower = program
         .engine
-        .front_lower_queries(&definitions, front.clone(), plan.body, 4096, lower, errors)
+        .front_lower_queries(
+            &definitions,
+            front.clone(),
+            plan.body,
+            definitions
+                .len()
+                .checked_mul(3)
+                .ok_or_else(uninstalled)?
+                .min(4096),
+            lower,
+            errors,
+        )
         .map_err(&query_error)?;
     let growth = program
         .engine
