@@ -81,3 +81,5 @@ toolchain_proof(name = "native-bootstrap-link-proof", tools = [":llvm", ":linker
 toolchain_proof(name = "runtime-store-proof", tools = [":llvm", ":runtime-auditor", ":glibc_floor", ":qemu", "root//:hirsel-driver-unittest-harness"], script = "runtime_store_proof.sh")
 
 toolchain_proof(name = "runtime-identity-proof", tools = [":llvm", ":runtime-auditor", ":glibc_floor", ":qemu", "root//:hirsel-driver-unittest-harness"], script = "runtime_identity_proof.sh")
+
+toolchain_proof(name = "runtime-discovery-proof", tools = [":llvm", ":runtime-auditor", ":glibc_floor", ":qemu", "root//:hirsel-driver-unittest-harness"], script = "runtime_discovery_proof.sh")
