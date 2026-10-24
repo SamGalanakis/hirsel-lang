@@ -138,7 +138,6 @@ mod tests {
         assert!(
             hirsel_engine::check_snapshot(&mut engine, file, &context)
                 .unwrap()
-                .diagnostics
                 .is_empty()
         );
         let mut path = hirsel_engine::entry_path(&context);
