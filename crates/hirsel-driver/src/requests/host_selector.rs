@@ -333,7 +333,7 @@ impl GraphSelections {
         })
     }
 }
-fn retain_error(error: ToolError, owner: Arc<dyn Send + Sync>) -> ToolError {
+pub(super) fn retain_error(error: ToolError, owner: Arc<dyn Send + Sync>) -> ToolError {
     match error {
         ToolError::Query {
             error,
