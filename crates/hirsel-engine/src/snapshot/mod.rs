@@ -12,6 +12,7 @@ use hirsel_validate::{SignatureLookup, ValidatedSignatures, ValidationDigest};
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
+mod checked_runtime;
 mod declarations;
 mod provider;
 mod sources;
