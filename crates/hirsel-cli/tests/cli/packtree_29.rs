@@ -632,11 +632,20 @@ fn packtree_29_bounded_target_listing_native_replay() {
             "vectors.py",
             include_str!("../support/packtree_29/vectors.py"),
         ),
+        (
+            "host_replay.py",
+            include_str!("../support/packtree_29/host_replay.py"),
+        ),
         ("capped", include_str!("../../../../tools/capped")),
     ] {
         fs::write(tmp.path().join(name), source).unwrap();
     }
+    // 4587317e's verifier batches reference tapes through this same harness.
     let output = Command::new("python3")
+        .env(
+            "PACKTREE_29_HOST_REPLAYER",
+            std::env::current_exe().unwrap(),
+        )
         .arg(tmp.path().join("verify.py"))
         .arg("--hirsel")
         .arg(env!("CARGO_BIN_EXE_hirsel"))
