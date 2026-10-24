@@ -899,6 +899,7 @@ impl QueryEngine {
             mode_diagnostics: vec![],
         });
         timings::count(Count::StoreHits);
+        timings::count(Count::StoreSignatureHits);
         self.store_adoptions += 1;
         Some(entry)
     }
@@ -975,6 +976,7 @@ impl QueryEngine {
             self.front_products.lowering_inputs.insert(id, facts);
         }
         timings::count(Count::StoreHits);
+        timings::count(Count::StoreSummaryHits);
         self.store_adoptions += 1;
         Some(PublishedResult {
             definition: path.clone(),
@@ -1222,6 +1224,12 @@ impl QueryEngine {
             .and_then(|variant| variant.resolve(&*store, key));
         if hit.is_none() {
             timings::count(Count::StoreMisses);
+            match key.2 {
+                QueryKind::Signature => timings::count(Count::StoreSignatureMisses),
+                QueryKind::Summary => timings::count(Count::StoreSummaryMisses),
+                QueryKind::Modes => timings::count(Count::StoreModeMisses),
+                _ => (),
+            }
         }
         hit
     }
@@ -1385,6 +1393,7 @@ impl QueryEngine {
         }
         if mode_archive.is_none() {
             timings::count(Count::StoreHits);
+            timings::count(Count::StoreModeHits);
             self.store_adoptions += 1;
         }
         let mut entry = self.adopted(path, QueryKind::Modes, variant, output, record.detail);
