@@ -281,7 +281,7 @@ pub fn lower_cached_with_roots(
         let id = InstanceId(next as u32);
         next += 1;
         let own_environment = instances.environments[id.index()];
-        let definition = instances.view(id).definition.path.path().clone();
+        let definition = instances.view(id).key.definition().clone();
         let proof_owner = &definition;
         let sites = discharge.sites(proof_owner);
         if sites.is_none()
@@ -536,7 +536,7 @@ pub(crate) fn invocation_registry(
         let owner = owners
             .get(&unit.header.definition)
             .and_then(Option::as_ref)
-            .unwrap_or_else(|| view.definition.path.path());
+            .unwrap_or_else(|| view.key.definition());
         let original = program
             .definitions
             .get(owner)
@@ -703,7 +703,7 @@ fn statics(
                             if arguments.is_empty() {
                                 instances
                                     .ids()
-                                    .find(|id| instances.view(*id).definition.path.path() == path)
+                                    .find(|id| instances.view(*id).key.definition() == path)
                                     .ok_or(error)
                             } else {
                                 Err(error)
@@ -1284,7 +1284,7 @@ fn import_body(
     required: &mut Vec<crate::library::Request>,
 ) -> R<LirUnit<Value>> {
     let view = instances.view(id);
-    let def: &tir::Definition = &view.definition;
+    let def: &tir::Definition = view.definition().map_err(InstanceError::from)?;
     let body = &def.bodies[view.body.0 as usize];
     let actuals = &instances.actuals[id.index()];
     let types = &*program.types;
