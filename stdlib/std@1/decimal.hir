@@ -139,8 +139,6 @@ pub fn append_prefix(mut out: List[u8], buffer: Inline[u8, 40], count: u64) -> (
   }
 }
 
-const DECIMAL_PAIR_BYTES: Bytes = b"00010203040506070809101112131415161718192021222324252627282930313233343536373839404142434445464748495051525354555657585960616263646566676869707172737475767778798081828384858687888990919293949596979899"
-
 // Two decimal digits per entry, "00" through "99": Rust core::fmt::num's
 // DECIMAL_PAIRS (third-party/NOTICES.md). The fixed inline table has no owner
 // credit or cleanup when indexed.
@@ -501,19 +499,30 @@ pub fn append_u64(mut out: List[u8], value: u64, negative: bool) -> () uses {} {
     core@1/list.push(mut out, core@1/int.narrow(value) + 48u8)
     return
   }
-  // Emit the leading one/two digits and the low pair as bulk spans from
-  // itoa's pair table. There is no scratch initialization or second digit pass.
+  // Read scalar digits from the inline table: byte slices would introduce
+  // counted view temporaries and cleanup work in this scalar emitter.
   if value < 10000 {
+    let count: u64 = if value >= 1000 {
+      4
+    } else if value >= 100 {
+      3
+    } else {
+      2
+    }
+    core@1/list.reserve(mut out, core@1/list.len(out) + sign + count)
     if negative {
       core@1/list.push(mut out, 45)
     }
     if value >= 100 {
-      let high = value / 100 * 2
-      let start = if value >= 1000 { high } else { high + 1 }
-      core@1/bytes.append(mut out, core@1/bytes.slice(DECIMAL_PAIR_BYTES, start, high + 2))
+      let high = value / 100
+      if high >= 10 {
+        core@1/list.push(mut out, DECIMAL_PAIRS[high * 2])
+      }
+      core@1/list.push(mut out, DECIMAL_PAIRS[high * 2 + 1])
     }
     let low = value % 100 * 2
-    core@1/bytes.append(mut out, core@1/bytes.slice(DECIMAL_PAIR_BYTES, low, low + 2))
+    core@1/list.push(mut out, DECIMAL_PAIRS[low])
+    core@1/list.push(mut out, DECIMAL_PAIRS[low + 1])
     return
   }
   let mut buffer: Inline[u8, 20] = [

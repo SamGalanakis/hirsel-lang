@@ -247,3 +247,107 @@ fn numeric_decimal_oracle_runs_heap_with_fault_injection() {
         }
     });
 }
+
+#[test]
+fn short_decimal_appends_agree_on_four_engines() {
+    with_compiler_stack(|| {
+        let mut source = String::from("pub fn main() -> Result[(), ()] uses {} {\n");
+        for value in [
+            0u64,
+            9,
+            10,
+            11,
+            19,
+            20,
+            99,
+            100,
+            101,
+            109,
+            110,
+            999,
+            1000,
+            1001,
+            9999,
+            10000,
+            u64::MAX,
+        ] {
+            source.push_str(&format!(
+                "failure.check(std@1/u64.to_string({value}u64) == {:?}, TextInvariant())\n",
+                value.to_string()
+            ));
+        }
+        for value in [-1i64, -9, -10, -99, -100, -999, -1000, -9999, i64::MIN] {
+            source.push_str(&format!(
+                "failure.check(std@1/i64.to_string({value}i64) == {:?}, TextInvariant())\n",
+                value.to_string()
+            ));
+        }
+        source.push_str("Ok(())\n}\n");
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/std_numeric.hir");
+        let mut loaded = load_program_source(&path, Some(&source)).unwrap();
+        loaded.check_for_execution().unwrap();
+        let reference = run_observed_snapshot(
+            &mut loaded.engine,
+            &RunConfiguration {
+                entry: loaded.entry.clone(),
+                hash_seed: 0,
+                inputs: vec![],
+            },
+            SimulationConfig::default(),
+        )
+        .unwrap();
+        assert!(
+            matches!(
+                reference.outcome,
+                Ok(RunOutcome::Returned(hirsel_run_schema::Returned::Ok))
+            ),
+            "{:?}",
+            reference.outcome
+        );
+        let expected = native::Observation::of_reference(reference.observation.as_ref().unwrap());
+        let snapshot = loaded.engine.export_native_input().unwrap();
+        let validated = loaded.engine.import_native_input(snapshot).unwrap();
+        let target = native::TargetSpec::x86_64_unknown_linux_gnu();
+        let mut configs = vec![native::Configuration {
+            options: native::Options::new(target.clone()),
+            engine: native::Engine::Heap { campaign: false },
+        }];
+        configs.push(native::Configuration {
+            options: native::Options::new(target.clone()),
+            engine: native::Engine::Native {
+                opt: native::OptLevel::Speed,
+                partition: native::Partition::Whole,
+                runtime: native::Runtime::Default,
+            },
+        });
+        configs.push(native::Configuration {
+            options: native::Options::new(target),
+            engine: native::Engine::Cranelift {
+                partition: native::Partition::Whole,
+                runtime: native::Runtime::Default,
+            },
+        });
+        let scratch = tempfile::Builder::new()
+            .prefix("short-decimal-")
+            .tempdir()
+            .unwrap();
+        let tools =
+            native::Toolchain::for_matrix(&scratch.path().join("runtime"), &configs).unwrap();
+        let outcomes = native::differential(
+            &validated,
+            &loaded.entry,
+            &expected,
+            &configs,
+            &tools,
+            scratch.path(),
+        );
+        assert_eq!(outcomes.len(), 3);
+        for (config, outcome) in outcomes {
+            assert!(
+                matches!(outcome, native::Outcome::Agree),
+                "{config}: {outcome:?}"
+            );
+        }
+    });
+}
