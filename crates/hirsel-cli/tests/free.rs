@@ -5119,11 +5119,30 @@ fn f1_recorded_thaws(tape: &hirsel_free::tape::Tape) -> Vec<bool> {
 }
 
 #[test]
-fn f1_required_finite_release_records_unfinished_child_and_failed_thaw() {
+fn f1_required_finite_release_records_unfinished_child_and_failed_thaw_record_interpreter() {
+    f1_required_finite_release_matrix(Cells::part(false, false));
+}
+
+#[test]
+fn f1_required_finite_release_records_unfinished_child_and_failed_thaw_record_native() {
+    f1_required_finite_release_matrix(Cells::part(false, true));
+}
+
+#[test]
+fn f1_required_finite_release_records_unfinished_child_and_failed_thaw_durable_interpreter() {
+    f1_required_finite_release_matrix(Cells::part(true, false));
+}
+
+#[test]
+fn f1_required_finite_release_records_unfinished_child_and_failed_thaw_durable_native() {
+    f1_required_finite_release_matrix(Cells::part(true, true));
+}
+
+fn f1_required_finite_release_matrix(cells: Cells) {
     if !hirsel_rt::free_driver::admission_enabled() {
         return;
     }
-    f1_corpus_matrix_with_witness(
+    f1_corpus_matrix_cells(
         "required-finite-release-witness",
         source("finite_release"),
         |_| serde_json::json!({"io":{"stdout":"stdout.bytes@1","tasks":"tasks.free@1","dirs":[]},"args":[],"budgets":{"provider":"budgets.limits@2","fuel":200000}}),
@@ -5139,6 +5158,7 @@ fn f1_required_finite_release_records_unfinished_child_and_failed_thaw() {
         ),
         b"",
         || Box::new(|| {}),
+        cells,
     );
 }
 
