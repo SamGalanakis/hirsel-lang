@@ -17,3 +17,4 @@ mod operation_mutation;
 mod patterns;
 mod scalars;
 mod structural;
+mod query_suspension;
