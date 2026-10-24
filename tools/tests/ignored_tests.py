@@ -53,6 +53,15 @@ DELEGATED = {
 # These Buck proof targets supply their own immutable tool inputs, rather than
 # the archival runner's environment. Each probe checks exact identity/counts.
 PROOFS = {
+    'requests::native_bootstrap::tests::actual_native_bootstrap_links_both_backends_and_restores_after_runtime_drop': {
+        'source': 'crates/hirsel-driver/src/requests/native_bootstrap/tests.rs',
+        'target': '//tools/buck2/native-toolchain:native-bootstrap-link-proof',
+        'probe': 'tools/buck2/native-toolchain/native_bootstrap_link_proof.py',
+        'arguments': ['/original pinned llvm', '/original packaged linker', '/selected kit', '/selected runtime', '/selected harness'],
+        'environment': {'LLVM_SYS_231_PREFIX': '/original pinned llvm',
+                        'HIRSEL_CAPTURE_LINKER': '/original packaged linker',
+                        'HIRSEL_LINK_KIT': '/selected kit', 'HIRSEL_RUNTIME_ARCHIVES': '/selected runtime'},
+    },
     'native::object_queries::capture::tests::packaged_capture_replays_changed_inputs_without_originals': {
         'source': 'crates/hirsel-driver/tests/native-validation/link_capture.rs',
         'target': '//tools/buck2/native-toolchain:linker-store-proof',
