@@ -22,6 +22,8 @@ struct SourceProducts {
     entry: DefPath,
     inputs: FrozenInputs,
     lowering: LoweringPolicy,
+    launch_entry: Option<DefPath>,
+    foreign_unreplayable: bool,
     run: Option<Arc<FrontRunQueries>>,
     safe: Option<Arc<super::safe_check::SafeCheck>>,
     front: Arc<FrontBodyQueries>,
@@ -39,6 +41,7 @@ impl GraphProducts for SourceProducts {
         match operation {
             CompileOperation::Check { lowering } => *lowering == self.lowering,
             CompileOperation::Inspect { .. } | CompileOperation::RecomputeCounts { .. } => true,
+            CompileOperation::Tir { .. } => self.run.is_some(),
             CompileOperation::SafeCheck => self.safe.is_some(),
             _ => false,
         }
@@ -55,14 +58,40 @@ impl GraphProducts for SourceProducts {
                 vec![self.check.query()]
             }
             CompileOperation::Inspect { .. } | CompileOperation::RecomputeCounts { .. } => vec![],
+            CompileOperation::Tir { definition } => {
+                let entry = definition
+                    .as_ref()
+                    .or(self.launch_entry.as_ref())
+                    .ok_or_else(|| ToolError::Runtime("launch manifest requires entry".into()))?;
+                vec![
+                    self.run
+                        .as_ref()
+                        .and_then(|run| run.query(entry))
+                        .ok_or_else(|| {
+                            ToolError::Runtime(
+                                "selected TIR definition has no admitted run root".into(),
+                            )
+                        })?,
+                ]
+            }
             _ => return Err(uninstalled()),
         };
         let selected = roots.first().copied();
         let operation = operation.clone();
+        let run = self.run.clone();
         let safe = self.safe.clone();
+        let lower = self.lower.clone();
+        let foreign_unreplayable = self.foreign_unreplayable;
         let check = self.check.clone();
         let expected = check.query();
-        let entry = self.entry.clone();
+        let entry = match &operation {
+            CompileOperation::Tir { definition } => definition
+                .as_ref()
+                .or(self.launch_entry.as_ref())
+                .cloned()
+                .ok_or_else(|| ToolError::Runtime("launch manifest requires entry".into()))?,
+            _ => self.entry.clone(),
+        };
         let inputs = self.inputs.clone();
         let meter = self.meter.clone();
         let store = self.store.clone();
@@ -104,6 +133,31 @@ impl GraphProducts for SourceProducts {
                                 ToolError::Runtime("selected check product is unavailable".into())
                             })?;
                             CompileResult::Check(completed.checked)
+                        }
+                        CompileOperation::Tir { .. } => {
+                            let [product] = products else {
+                                return Err(ToolError::Runtime(
+                                    "TIR readiness requires exactly one root".into(),
+                                ));
+                            };
+                            if selected.is_none_or(|selected| selected.address != product.address) {
+                                return Err(ToolError::Runtime(
+                                    "TIR readiness received another root".into(),
+                                ));
+                            }
+                            let facts = run
+                                .as_ref()
+                                .and_then(|run| run.outcome(*product))
+                                .ok_or_else(|| {
+                                    ToolError::Runtime(
+                                        "selected TIR run facts are unavailable".into(),
+                                    )
+                                })?;
+                            CompileResult::Tir(super::tir_products::materialize(
+                                facts,
+                                lower.clone(),
+                                foreign_unreplayable,
+                            )?)
                         }
                         CompileOperation::Inspect { definitions } if products.is_empty() => {
                             CompileResult::Inspect(meter.inspect(definitions)?)
@@ -313,6 +367,7 @@ pub(super) fn install(
 ) -> Result<Arc<InstalledGraph>, ToolError> {
     let (lowering, needs_run) = match &request.operation {
         CompileOperation::Check { lowering } => (*lowering, false),
+        CompileOperation::Tir { .. } => (LoweringPolicy::Reachable, true),
         CompileOperation::SafeCheck => (config.lowering, true),
         _ => return Err(uninstalled()),
     };
@@ -325,6 +380,7 @@ pub(super) fn install(
         Err(error) => return Err(loading.failed(error)),
     };
     let launch_entry = program.launch_entry().cloned();
+    let foreign_unreplayable = program.engine.foreign_unreplayable;
     let sources = program.engine.sources.clone();
     let definitions = program.engine.indexed_definitions();
     let plan = Plan::new(
@@ -502,6 +558,8 @@ pub(super) fn install(
         entry: program.entry,
         inputs: request.inputs.clone(),
         lowering,
+        launch_entry,
+        foreign_unreplayable,
         run,
         safe,
         front,

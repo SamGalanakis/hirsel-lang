@@ -315,3 +315,92 @@ fn selected_safe_check_reports_the_settled_entry_escape() {
         );
     });
 }
+
+#[test]
+fn selected_run_executes_tir_and_checked_after_host_drop() {
+    hirsel_engine::with_compiler_stack(|| {
+        let (_directory, entry, source) = fixture();
+        std::fs::write(&source, "pub fn main()->Result[(),()]{Ok(())}\n").unwrap();
+        let mut selected = request(&entry);
+        selected.operation = CompileOperation::Tir { definition: None };
+        let budget = ProcessBudget::new(768 << 20);
+        let mut host = Host::new(run_selector(budget.clone()));
+        let output = host.request(&selected).unwrap().wait().unwrap();
+        let CompileResult::Tir(input) = &output.result else {
+            panic!("run returned another operation")
+        };
+        let input = input.clone();
+        drop(output);
+        drop(host);
+        assert!(
+            budget.reserved() > 0,
+            "execution retains its admitted source products"
+        );
+        let mut prior = None;
+        for checked in [false, true] {
+            let launch = crate::HostLaunch::empty();
+            let mut observed = None;
+            let (outcome, callee) = crate::tir_execution::run_tir_on_host(
+                &input,
+                launch,
+                crate::launch_binding::LaunchSelection::read(launch).unwrap(),
+                Some(10000),
+                Some(&mut observed),
+                None,
+                checked,
+            )
+            .unwrap();
+            assert_eq!(
+                outcome,
+                crate::RunOutcome::Returned(hirsel_run_schema::Returned::Ok)
+            );
+            assert!(callee.is_none());
+            let observed = observed.expect("settled execution has an observation");
+            if let Some(prior) = prior {
+                assert_eq!(prior, observed);
+            }
+            prior = Some(observed);
+        }
+        drop(input);
+        assert_eq!(budget.reserved(), 0);
+    });
+}
+
+#[test]
+fn selected_run_callee_identity_and_cancellation_keep_the_shared_check_live() {
+    hirsel_engine::with_compiler_stack(|| {
+        let (_directory, entry, source) = fixture();
+        std::fs::write(
+            &source,
+            "fn callee()->Result[(),()]{Ok(())}\npub fn main()->Result[(),()]{Ok(())}\n",
+        )
+        .unwrap();
+        let mut selected = request(&entry);
+        selected.operation = CompileOperation::Tir { definition: None };
+        let metadata = crate::COMPILER
+            .with_config(config())
+            .load_check_package_inputs(&entry, &selected.inputs, false)
+            .unwrap();
+        let mut callee = metadata.entry.clone();
+        callee.0.name = "callee".into();
+        drop(metadata);
+        let mut host = Host::new(run_selector(ProcessBudget::new(768 << 20)));
+        let pending_main = host.request(&selected).unwrap();
+        selected.operation = CompileOperation::Tir {
+            definition: Some(callee.clone()),
+        };
+        let selected_callee = host.request(&selected).unwrap();
+        assert!(Arc::ptr_eq(
+            &pending_main.subscription.runtime,
+            &selected_callee.subscription.runtime
+        ));
+        drop(pending_main);
+        let output = selected_callee.wait().unwrap();
+        assert_eq!(output.entry, callee);
+        let CompileResult::Tir(input) = &output.result else {
+            panic!("callee returned another operation")
+        };
+        assert_eq!(input.entry, callee);
+        assert_eq!(input.definition.path.path(), &callee);
+    });
+}
