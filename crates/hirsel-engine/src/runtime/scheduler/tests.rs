@@ -847,6 +847,97 @@ fn new_dependent_keeps_its_latch_when_cancelled_inflight_claim_is_restarted() {
     assert_eq!(events.iter().filter(|e| e.1 == LocalEvent::Drop).count(), 1);
 }
 
+struct FutureFactory {
+    steps: Arc<AtomicUsize>,
+    invalid_wait: bool,
+    reads: usize,
+}
+impl LocalQueryFactory for FutureFactory {
+    fn weight(&self, _: QueryId) -> Result<MemoryWeight, Reference> {
+        Ok(MemoryWeight {
+            retained: 8192,
+            scratch: 32,
+            stack: 0,
+        })
+    }
+    fn create(&self, id: QueryId) -> Result<Box<dyn LocalQueryTask>, Reference> {
+        let steps = self.steps.clone();
+        let invalid_wait = self.invalid_wait;
+        let reads = self.reads;
+        let state = std::rc::Rc::new(std::cell::Cell::new(0));
+        LocalFutureTask::new(
+            id,
+            self.weight(id)?,
+            reads,
+            errors(),
+            |dependencies| async move {
+                steps.fetch_add(1, Ordering::SeqCst);
+                if invalid_wait {
+                    std::future::pending::<()>().await;
+                }
+                for dependency in [query(1), query(2)] {
+                    dependencies.read(dependency).await?;
+                    state.set(state.get() + 1);
+                    steps.fetch_add(1, Ordering::SeqCst);
+                }
+                assert_eq!(state.get(), 2);
+                // A repeated read reuses the task's resolved output, not a new
+                // transformation or future invocation.
+                dependencies.read(query(1)).await?;
+                Ok(product(id))
+            },
+        )
+        .map(|task| Box::new(task) as Box<dyn LocalQueryTask>)
+    }
+}
+#[test]
+fn local_future_keeps_rc_state_across_real_query_waits_without_restarting() {
+    let mut rt = runtime(1, 4 << 20);
+    install(&mut rt, &[(1, Spec::deps(&[])), (2, Spec::deps(&[]))]);
+    let steps = Arc::new(AtomicUsize::new(0));
+    rt.register_local(
+        2,
+        Arc::new(FutureFactory {
+            steps: steps.clone(),
+            invalid_wait: false,
+            reads: 2,
+        }),
+    )
+    .unwrap();
+    let request = rt.request(&[local_query(0)]);
+    assert_eq!(rt.wait(request), Ok(vec![product(local_query(0))]));
+    assert_eq!(steps.load(Ordering::SeqCst), 3);
+    assert_eq!(rt.stats().claims, 3);
+    assert_eq!(rt.stats().edges, 2);
+    assert_eq!(rt.stats().waits, 2);
+}
+#[test]
+fn future_dependency_metadata_and_unregistered_suspensions_refuse_without_hanging() {
+    for (invalid_wait, reads, expected) in
+        [(true, 2, errors().protocol), (false, 1, errors().resource)]
+    {
+        let mut rt = runtime(1, 4 << 20);
+        install(&mut rt, &[(1, Spec::deps(&[])), (2, Spec::deps(&[]))]);
+        let steps = Arc::new(AtomicUsize::new(0));
+        rt.register_local(
+            2,
+            Arc::new(FutureFactory {
+                steps: steps.clone(),
+                invalid_wait,
+                reads,
+            }),
+        )
+        .unwrap();
+        let request = rt.request(&[local_query(0)]);
+        assert_eq!(rt.wait(request), Err(expected));
+        assert_eq!(
+            steps.load(Ordering::SeqCst),
+            if invalid_wait { 1 } else { 2 }
+        );
+        assert_eq!(rt.stats().active, 0);
+    }
+}
+
 #[test]
 fn host_completion_wait_does_not_hold_runtime_ownership_or_consume_results() {
     let mut rt = runtime(1, 4 << 20);
@@ -897,4 +988,111 @@ fn host_completion_handles_settlement_before_wait_and_runtime_shutdown() {
     let refused = rt.request(&[query(1)]);
     completion.wait(refused);
     assert_eq!(rt.poll(refused), Poll::Ready(Err(errors().cancelled)));
+}
+
+struct DroppingFactory {
+    gates: Mutex<Option<DropGates>>,
+}
+struct DropGates {
+    entered: mpsc::Sender<()>,
+    release_poll: mpsc::Receiver<()>,
+    dropping: mpsc::Sender<()>,
+    release_drop: mpsc::Receiver<()>,
+}
+struct DroppingTask {
+    id: QueryId,
+    gates: Option<DropGates>,
+}
+impl LocalQueryFactory for DroppingFactory {
+    fn weight(&self, _: QueryId) -> Result<MemoryWeight, Reference> {
+        Ok(MemoryWeight {
+            retained: 128,
+            scratch: 32,
+            stack: 0,
+        })
+    }
+    fn create(&self, id: QueryId) -> Result<Box<dyn LocalQueryTask>, Reference> {
+        Ok(Box::new(DroppingTask {
+            id,
+            gates: self.gates.lock().unwrap().take(),
+        }))
+    }
+}
+impl LocalQueryTask for DroppingTask {
+    fn id(&self) -> QueryId {
+        self.id
+    }
+    fn weight(&self) -> MemoryWeight {
+        MemoryWeight {
+            retained: 128,
+            scratch: 32,
+            stack: 0,
+        }
+    }
+    fn poll(&mut self, cx: &mut dyn QueryContext) -> QueryPoll {
+        if let Some(gates) = &self.gates {
+            assert!(cx.read(query(1)).is_pending());
+            gates.entered.send(()).unwrap();
+            gates.release_poll.recv().unwrap();
+            return QueryPoll::Waiting(vec![query(1)]);
+        }
+        QueryPoll::Complete(product(self.id))
+    }
+}
+impl Drop for DroppingTask {
+    fn drop(&mut self) {
+        if let Some(gates) = &self.gates {
+            gates.dropping.send(()).unwrap();
+            gates.release_drop.recv().unwrap();
+        }
+    }
+}
+#[test]
+fn new_request_during_cancelled_local_destruction_keeps_the_replacement_claim() {
+    let mut rt = runtime(1, 4 << 20);
+    install(&mut rt, &[(1, Spec::deps(&[]))]);
+    let (entered, entered_rx) = mpsc::channel();
+    let (release_poll, released_poll) = mpsc::channel();
+    let (dropping, dropping_rx) = mpsc::channel();
+    let (release_drop, released_drop) = mpsc::channel();
+    rt.register_local(
+        2,
+        Arc::new(DroppingFactory {
+            gates: Mutex::new(Some(DropGates {
+                entered,
+                release_poll: released_poll,
+                dropping,
+                release_drop: released_drop,
+            })),
+        }),
+    )
+    .unwrap();
+    let old = rt.request(&[local_query(0)]);
+    entered_rx.recv().unwrap();
+    rt.cancel(old);
+    release_poll.send(()).unwrap();
+    // The old bounded poll has returned and its continuation is being destroyed
+    // outside the scheduler lock. Reattach before that home handoff completes.
+    dropping_rx.recv().unwrap();
+    let request = rt.request(&[local_query(0)]);
+    release_drop.send(()).unwrap();
+    {
+        let state = rt.shared.lock();
+        let (_state, timeout) = rt
+            .shared
+            .changed
+            .wait_timeout_while(state, std::time::Duration::from_secs(2), |s| {
+                !s.request_complete(request.0)
+            })
+            .unwrap();
+        assert!(
+            !timeout.timed_out(),
+            "new live request was lost during old continuation destruction"
+        );
+    }
+    assert_eq!(
+        rt.poll(request),
+        Poll::Ready(Ok(vec![product(local_query(0))]))
+    );
+    assert_eq!(rt.stats().claims, 3);
 }
