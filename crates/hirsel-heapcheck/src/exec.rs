@@ -10832,3 +10832,6 @@ fn soa_tag_width(scalar: ScalarKind) -> u64 {
         _ => 4,
     }
 }
+
+#[cfg(test)]
+mod sealed_tests;
