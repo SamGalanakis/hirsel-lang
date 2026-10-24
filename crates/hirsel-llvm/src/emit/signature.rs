@@ -149,6 +149,13 @@ impl<'m, 'a> Signature<'m, 'a> {
             }
             types.extend(parameter.slots.iter().map(|s| physical(module, s.ty)));
         }
+        let receipts = hirsel_lir::abi::receipt_slots(abi, types.len()).map_err(|what| {
+            CodegenError::Invalid {
+                definition: definition.clone(),
+                what: what.into(),
+            }
+        })?;
+        types.extend(std::iter::repeat_n(ptr, receipts.len()));
         let returns = match value {
             Some(kind) => pair_type(module, kind),
             None => module.int_type(8),
@@ -472,3 +479,6 @@ impl<'m, 'a> Signature<'m, 'a> {
         }
     }
 }
+
+#[cfg(test)]
+mod receipt_tests;

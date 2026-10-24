@@ -75,6 +75,71 @@ pub fn check_implemented_transport(abi: &FnAbi) -> Result<(), &'static str> {
     Ok(())
 }
 
+/// One appended parameter carrier in the physical Hirsel signature.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReceiptParameterSlot {
+    pub source: u32,
+    pub mode: crate::sealed_payload_source::ReceiptMode,
+    pub index: usize,
+}
+
+/// Receipt carriers follow the entire ordinary physical argument prefix.
+/// Captures remain in the demanded environment; unit results still have an
+/// output slot, and register-returned values keep their ordinary convention.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ReceiptSlots {
+    pub parameters: Vec<ReceiptParameterSlot>,
+    pub result: Option<usize>,
+}
+
+impl ReceiptSlots {
+    pub fn len(&self) -> usize {
+        self.parameters.len() + usize::from(self.result.is_some())
+    }
+    pub fn is_empty(&self) -> bool {
+        self.parameters.is_empty() && self.result.is_none()
+    }
+}
+
+/// Derive only physical carrier positions. Complete source authority and
+/// value/receipt custody are checked separately before executable acceptance.
+pub fn receipt_slots(abi: &FnAbi, first: usize) -> Result<ReceiptSlots, &'static str> {
+    let Some(contract) = &abi.receipts else {
+        return if abi.key.receipt_contract.is_none() {
+            Ok(ReceiptSlots::default())
+        } else {
+            Err("receipt ABI key without its complete contract")
+        };
+    };
+    if abi.shape == CallableShape::Foreign {
+        return Err("foreign entries require Hirsel receipt adapters");
+    }
+    if abi.key.receipt_contract != Some(contract.content()?) {
+        return Err("receipt ABI key disagrees with its complete contract");
+    }
+    first
+        .checked_add(contract.parameters.len())
+        .and_then(|end| end.checked_add(usize::from(contract.result.is_some())))
+        .ok_or("receipt carrier index overflow")?;
+    let mut next = first;
+    let mut parameters = Vec::with_capacity(contract.parameters.len());
+    for parameter in &contract.parameters {
+        parameters.push(ReceiptParameterSlot {
+            source: parameter.source,
+            mode: parameter.mode,
+            index: next,
+        });
+        next = next
+            .checked_add(1)
+            .ok_or("receipt carrier index overflow")?;
+    }
+    let result = contract.result.as_ref().map(|_| next);
+    if result.is_some() && abi.diverges {
+        return Err("diverging entries cannot publish a receipt result");
+    }
+    Ok(ReceiptSlots { parameters, result })
+}
+
 /// The value word of a typed Hirsel result, when it fits beside its status.
 /// Wide integers and inline aggregates retain the output pointer.
 pub fn register_kind(kind: &crate::layout_types::LayoutKind) -> Option<ScalarKind> {
@@ -310,3 +375,6 @@ pub(crate) fn scoped_entry_identity_with_keys(
     }
     ContentHash::of_parts("hirsel.scoped-entry.v1", parts)
 }
+
+#[cfg(test)]
+mod receipt_slots_tests;

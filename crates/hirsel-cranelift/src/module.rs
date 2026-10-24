@@ -131,6 +131,9 @@ pub(crate) fn signature<'a>(
                 });
         }
     }
+    let receipts = hirsel_lir::abi::receipt_slots(abi, ir.params.len())?;
+    ir.params
+        .extend(std::iter::repeat_n(AbiParam::new(PTR), receipts.len()));
     if value.is_some() {
         ir.returns.push(AbiParam::new(types::I64));
     }
@@ -1257,3 +1260,6 @@ fn report_nodes(module: &mut ObjectModule, report: &ExitReport) -> Emitted<DataI
     }
     Ok(root)
 }
+
+#[cfg(test)]
+mod receipt_tests;
