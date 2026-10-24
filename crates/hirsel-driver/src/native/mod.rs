@@ -25,6 +25,7 @@ mod pairwise;
 mod plan;
 mod proofs;
 pub mod queries;
+pub mod receipt_source;
 pub(crate) mod request_output;
 pub mod root_source;
 mod runner;

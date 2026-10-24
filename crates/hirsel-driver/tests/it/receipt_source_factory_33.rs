@@ -1,0 +1,191 @@
+//! Actual original-Lower/V observations; no receipt-aware native activation.
+use hirsel_driver::{compiler_adapters, native::receipt_source};
+use hirsel_engine::*;
+use hirsel_rc::instance::{Actuals, key_of};
+use hirsel_rc::sealed_source::SourceError;
+use hirsel_types::{GenericArgument, Primitive, Type, TypeKind, TypeMemo, Uniqueness};
+use std::sync::Arc;
+
+const SOURCE: &str = "fn id[T](take value:T)->T {take value}\npub fn main()->u64 {7u64}";
+
+fn engine(
+    verify: Verify,
+) -> (
+    QueryEngine,
+    Arc<dyn store::ResultStore>,
+    hirsel_syntax::DefPath,
+) {
+    let store: Arc<dyn store::ResultStore> = Arc::new(store::MemStore::default());
+    let mut engine = QueryEngine::new(default_environment(), compiler_adapters())
+        .with_result_store(store.clone());
+    engine.verify = verify;
+    let file = engine
+        .sources
+        .add("receipt-source-factory.hir", SOURCE.into())
+        .unwrap();
+    engine.parse_file(file, &default_context()).unwrap();
+    let mut id = entry_path(&default_context());
+    id.0.name = "id".into();
+    (engine, store, id)
+}
+
+#[test]
+fn actual_v_observation_preserves_original_modes_and_releases_the_body() {
+    with_compiler_stack(|| {
+        let (mut engine, store, path) = engine(Verify::On);
+        let signature = engine.item_signature(&path).unwrap().value;
+        let reader = engine
+            .native_original_reader(&[path.clone()], store)
+            .unwrap();
+        let original = reader.read(&path).unwrap();
+        let output = original.output().expect("actual V output");
+        let source = output.observation_identity();
+        let revision = original.implementation_revision();
+        let types = engine.types().clone();
+        let definition = original.definition();
+        let body = definition.entry;
+        let scope = definition.bodies[body.0 as usize].parameter_scope;
+        let weak = Arc::downgrade(definition);
+        let mut accounts = Vec::new();
+        let mut keys = Vec::new();
+        for uniqueness in [Uniqueness::Aliased, Uniqueness::Unique] {
+            let mut ty = Type::with_kind(TypeKind::Primitive(Primitive::Bytes));
+            ty.modes.uniqueness = uniqueness;
+            let actuals = Actuals {
+                binder: Some(scope),
+                arguments: vec![GenericArgument::Type(types.intern(ty))],
+                outer: vec![],
+            };
+            let base = key_of(&types, &path, body, &actuals, None, None).unwrap();
+            let observed = receipt_source::named(
+                &original,
+                &base,
+                &types,
+                &signature,
+                &actuals,
+                &TypeMemo::new(),
+            )
+            .unwrap();
+            assert_eq!(observed.entry().source_identity(), source);
+            assert_eq!(observed.demand().source_identity(), source);
+            assert_eq!(observed.entry().implementation_revision(), revision);
+            assert_eq!(observed.demand().implementation_revision(), revision);
+            assert_eq!(observed.entry().reference(), observed.demand().reference());
+            assert_eq!(observed.entry().parameters().len(), 1);
+            assert_eq!(
+                &observed.entry().parameters()[0].ty,
+                observed.entry().result()
+            );
+            keys.push(base);
+            accounts.push(observed);
+        }
+        assert_eq!(keys[0], keys[1], "native key erases source uniqueness");
+        assert_ne!(
+            accounts[0].entry().result().source_type,
+            accounts[1].entry().result().source_type
+        );
+        drop(original);
+        drop(reader);
+        drop(engine);
+        assert!(
+            weak.upgrade().is_none(),
+            "compact observations retain no source body"
+        );
+        assert_eq!(accounts[0].entry().source_identity(), source);
+        assert_eq!(accounts[1].demand().projection().parameters().len(), 1);
+    });
+}
+
+#[test]
+fn a_wrong_declaration_or_derived_native_key_cannot_select_original_source() {
+    with_compiler_stack(|| {
+        let (mut engine, store, path) = engine(Verify::On);
+        let signature = engine.item_signature(&path).unwrap().value;
+        let reader = engine
+            .native_original_reader(&[path.clone()], store)
+            .unwrap();
+        let original = reader.read(&path).unwrap();
+        let types = engine.types();
+        let body = original.definition().entry;
+        let actuals = Actuals {
+            binder: Some(original.definition().bodies[body.0 as usize].parameter_scope),
+            arguments: vec![GenericArgument::Type(
+                types.intern(Type::with_kind(TypeKind::Primitive(Primitive::Bytes))),
+            )],
+            outer: vec![],
+        };
+        let base = key_of(types, &path, body, &actuals, None, None).unwrap();
+        assert!(
+            receipt_source::named(
+                &original,
+                &base,
+                types,
+                &signature,
+                &actuals,
+                &TypeMemo::new()
+            )
+            .is_ok()
+        );
+        let mut wrong = signature.as_ref().clone();
+        wrong.fingerprint = Default::default();
+        assert_eq!(
+            receipt_source::named(&original, &base, types, &wrong, &actuals, &TypeMemo::new())
+                .err(),
+            Some(SourceError::Malformed(
+                "original entry declaration identity"
+            ))
+        );
+        let derived = base.derived("hirsel.test.receipt-derived.v1", &[b"not an original base"]);
+        assert_eq!(
+            receipt_source::named(
+                &original,
+                &derived,
+                types,
+                &signature,
+                &actuals,
+                &TypeMemo::new()
+            )
+            .err(),
+            Some(SourceError::Malformed(
+                "original named specialization key differs"
+            ))
+        );
+    });
+}
+
+#[test]
+fn unavailable_v_output_is_not_an_expected_empty_source_observation() {
+    with_compiler_stack(|| {
+        let (mut engine, store, path) = engine(Verify::Off);
+        let signature = engine.item_signature(&path).unwrap().value;
+        let reader = engine
+            .native_original_reader(&[path.clone()], store)
+            .unwrap();
+        let original = reader.read(&path).unwrap();
+        assert!(original.output().is_none());
+        let types = engine.types();
+        let body = original.definition().entry;
+        let actuals = Actuals {
+            binder: Some(original.definition().bodies[body.0 as usize].parameter_scope),
+            arguments: vec![GenericArgument::Type(
+                types.intern(Type::with_kind(TypeKind::Primitive(Primitive::Bytes))),
+            )],
+            outer: vec![],
+        };
+        let base = key_of(types, &path, body, &actuals, None, None).unwrap();
+        assert_eq!(
+            receipt_source::named(
+                &original,
+                &base,
+                types,
+                &signature,
+                &actuals,
+                &TypeMemo::new()
+            )
+            .err(),
+            Some(SourceError::Unsupported(
+                "receipt source observation needs the current original V output"
+            ))
+        );
+    });
+}
