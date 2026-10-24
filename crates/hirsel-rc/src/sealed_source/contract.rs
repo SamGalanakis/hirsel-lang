@@ -10,8 +10,8 @@ use super::{SourceCallableEntry, SourceDemandProjection, SourceError};
 use hirsel_core_contract::Passing;
 use hirsel_lir::operation::NativeType;
 use hirsel_lir::sealed_payload_source::{
-    ClosedStorageProfile, ClosedStorageType, ReceiptContract, ReceiptGrant, ReceiptMode,
-    ReceiptParameter, ReceiptResult, ReceiptType,
+    ClosedStorageProfile, ClosedStorageType, ReceiptCapture, ReceiptContract, ReceiptGrant,
+    ReceiptMode, ReceiptParameter, ReceiptResult, ReceiptType,
 };
 use std::collections::BTreeMap;
 
@@ -138,14 +138,6 @@ fn assemble(input: &Input<'_>, requirements: Requirements) -> Result<Declaration
             "receipt result needs original grant transport",
         ));
     }
-    if input.entry.captures().iter().any(|capture| {
-        requirements.payload_locals.contains(&capture.local)
-            || requirements.inventory_locals.contains(&capture.local)
-    }) {
-        return Err(SourceError::Unsupported(
-            "receipt capture needs complete environment transport schema",
-        ));
-    }
     let mut parameters = Vec::new();
     let mut inventory = Vec::new();
     for parameter in input.entry.parameters() {
@@ -170,6 +162,32 @@ fn assemble(input: &Input<'_>, requirements: Requirements) -> Result<Declaration
             inventory.push(ReceiptGrant::Parameter(parameter.ordinal));
         }
     }
+    let mut captures = Vec::new();
+    for capture in input.entry.captures() {
+        let payload = requirements.payload_locals.contains(&capture.local);
+        let retained = requirements.inventory_locals.contains(&capture.local);
+        if (payload || retained) && capture.usage != hirsel_types::UseKind::Borrow {
+            return Err(SourceError::Unsupported(
+                "receipt capture needs complete environment transport schema",
+            ));
+        }
+        if payload {
+            captures.push(ReceiptCapture {
+                ordinal: capture.ordinal,
+                ty: receipt_type(input, Port::Capture(capture.ordinal))?,
+                mode: ReceiptMode::Borrow,
+            });
+        }
+        if retained {
+            if !matches!(&capture.ty.ty, NativeType::Named(path, args) if path.is_core("Arena") && args.is_empty())
+            {
+                return Err(SourceError::Unsupported(
+                    "receipt inventory needs exact original Arena grant",
+                ));
+            }
+            inventory.push(ReceiptGrant::Capture(capture.ordinal));
+        }
+    }
     let result = if requirements.result {
         Some(ReceiptResult {
             ty: receipt_type(input, Port::Result)?,
@@ -184,7 +202,7 @@ fn assemble(input: &Input<'_>, requirements: Requirements) -> Result<Declaration
         None
     } else {
         Some(
-            ReceiptContract::new(parameters, result, vec![], inventory)
+            ReceiptContract::new(parameters, result, captures, inventory)
                 .map_err(SourceError::Malformed)?,
         )
     };

@@ -60,6 +60,9 @@ impl Fixture {
             .map(|p| (Port::Parameter(p.ordinal), profile(&p.ty)))
             .collect::<BTreeMap<_, _>>();
         profiles.insert(Port::Result, profile(entry.result()));
+        for capture in entry.captures() {
+            profiles.insert(Port::Capture(capture.ordinal), profile(&capture.ty));
+        }
         Self {
             entry,
             projection,
@@ -455,14 +458,14 @@ fn ordinary_and_unique_generic_actuals_sharing_erased_base_cannot_share_source_p
     );
 }
 
-#[test]
-fn demanded_capture_refuses_until_environment_transport_is_complete() {
-    let (types, bytes, scalar, _) = types();
+fn captured_fixture(usage: UseKind, arena: bool) -> Fixture {
+    let (types, bytes, scalar, grant) = types();
+    let captured = if arena { grant } else { bytes };
     let callable = types.intern(Type::with_kind(TypeKind::Function(function(
-        &[(PassingMode::Borrow, bytes)],
+        &[(PassingMode::Borrow, captured)],
         scalar,
     ))));
-    let mut parent = body(&[bytes, callable], 1);
+    let mut parent = body(&[captured, callable], 1);
     assign(
         &mut parent,
         1,
@@ -470,13 +473,13 @@ fn demanded_capture_refuses_until_environment_transport_is_complete() {
             body: BodyId(1),
             captures: vec![Operand {
                 place: PlaceId(0),
-                usage: UseKind::Borrow,
+                usage,
             }],
             context: CaptureContext::Scoped,
             destination: Destination::Heap,
         },
     );
-    let mut child = body(&[bytes, bytes, scalar], 1);
+    let mut child = body(&[captured, captured, scalar], 1);
     child.locals[1].storage = Storage::Capture;
     call(&mut child, 0, &[(1, UseKind::Borrow)], None);
     let mut definition = witness_definition(parent);
@@ -488,9 +491,90 @@ fn demanded_capture_refuses_until_environment_transport_is_complete() {
         .unwrap();
     let mut fixture = Fixture::observed(entry, source.demand_projection(&key).unwrap());
     fixture.calls.insert(0, sink(&[0], &[]));
+    fixture
+}
+
+#[test]
+fn demanded_borrowed_capture_uses_original_ordinal_and_complete_profile() {
+    let fixture = captured_fixture(UseKind::Borrow, false);
+    let declaration = fixture.derive().unwrap();
+    let contract = declaration.contract().unwrap();
+    assert!(contract.parameters.is_empty());
+    assert!(contract.result.is_none());
+    assert!(contract.inventory.is_empty());
+    assert_eq!(
+        contract.captures,
+        vec![ReceiptCapture {
+            ordinal: 0,
+            ty: ReceiptType {
+                source_type: fixture.entry.captures()[0].ty.source_type,
+                profile: fixture.profiles[&Port::Capture(0)].content().unwrap(),
+            },
+            mode: ReceiptMode::Borrow,
+        }]
+    );
+    contract.check_structure().unwrap();
+}
+
+#[test]
+fn demanded_borrowed_capture_requires_a_complete_profile() {
+    let mut fixture = captured_fixture(UseKind::Borrow, false);
+    fixture.profiles.remove(&Port::Capture(0));
     assert_eq!(
         fixture.derive().unwrap_err(),
-        SourceError::Unsupported("receipt capture needs complete environment transport schema")
+        SourceError::Unsupported("receipt demand needs independently observed closed profile")
+    );
+}
+
+#[test]
+fn demanded_borrowed_capture_rejects_another_original_profile() {
+    let mut fixture = captured_fixture(UseKind::Borrow, false);
+    fixture
+        .profiles
+        .insert(Port::Capture(0), fixture.profiles[&Port::Result].clone());
+    assert_eq!(
+        fixture.derive().unwrap_err(),
+        SourceError::Malformed("receipt profile differs from full original source type")
+    );
+}
+
+#[test]
+fn demanded_capture_custody_other_than_borrow_remains_unavailable() {
+    for usage in [UseKind::Take, UseKind::Copy, UseKind::Mut] {
+        let fixture = captured_fixture(usage, false);
+        assert_eq!(
+            fixture.derive().unwrap_err(),
+            SourceError::Unsupported("receipt capture needs complete environment transport schema")
+        );
+    }
+}
+
+#[test]
+fn undemanded_borrowed_capture_keeps_the_ordinary_contract() {
+    let mut fixture = captured_fixture(UseKind::Borrow, false);
+    fixture.calls.insert(0, sink(&[], &[]));
+    assert!(fixture.derive().unwrap().contract().is_none());
+}
+
+#[test]
+fn demanded_capture_inventory_names_only_its_original_arena() {
+    let mut fixture = captured_fixture(UseKind::Borrow, true);
+    fixture.calls.insert(0, sink(&[], &[0]));
+    let declaration = fixture.derive().unwrap();
+    let contract = declaration.contract().unwrap();
+    assert!(contract.parameters.is_empty());
+    assert!(contract.captures.is_empty());
+    assert_eq!(contract.inventory, vec![ReceiptGrant::Capture(0)]);
+    contract.check_structure().unwrap();
+}
+
+#[test]
+fn demanded_capture_inventory_cannot_retag_a_nongrant() {
+    let mut fixture = captured_fixture(UseKind::Borrow, false);
+    fixture.calls.insert(0, sink(&[], &[0]));
+    assert_eq!(
+        fixture.derive().unwrap_err(),
+        SourceError::Unsupported("receipt inventory needs exact original Arena grant")
     );
 }
 
