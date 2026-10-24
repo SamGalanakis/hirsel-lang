@@ -1104,6 +1104,51 @@ mod tests {
     }
 
     #[test]
+    fn optional_and_two_empty_trailers_preserve_all_previous_prefixes() {
+        #[derive(Debug, PartialEq)]
+        struct Previous {
+            base: u32,
+            entry: Option<Vec<u32>>,
+            first: Vec<u32>,
+        }
+        snapshot_struct!(Previous { base } trailing_optional entry trailing_empty first);
+        #[derive(Debug, PartialEq)]
+        struct Current {
+            base: u32,
+            entry: Option<Vec<u32>>,
+            first: Vec<u32>,
+            second: Vec<u32>,
+        }
+        snapshot_struct!(Current { base } trailing_optional entry trailing_empty first, second);
+        for entry in [None, Some(vec![]), Some(vec![1])] {
+            for first in [vec![], vec![2]] {
+                for second in [vec![], vec![3]] {
+                    let value = Current {
+                        base: 7,
+                        entry: entry.clone(),
+                        first: first.clone(),
+                        second,
+                    };
+                    let text = to_text(&value);
+                    assert_eq!(from_text::<Current>(&text).unwrap(), value);
+                    if value.second.is_empty() {
+                        let previous = to_text(&Previous {
+                            base: 7,
+                            entry: entry.clone(),
+                            first: first.clone(),
+                        });
+                        assert_eq!(text, previous.replace("Previous", "Current"));
+                        assert_eq!(
+                            from_text::<Current>(&previous.replace("Previous", "Current")).unwrap(),
+                            value
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn two_empty_vector_trailers_preserve_each_previous_prefix() {
         #[derive(Debug, PartialEq)]
         struct Pools {
