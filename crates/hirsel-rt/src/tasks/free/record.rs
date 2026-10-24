@@ -3,8 +3,8 @@
 //! records execute inside the same production recorder phase, before its
 //! progress publication. No section or recorder borrow crosses a suspension.
 //!
-//! Production launch wiring is staged behind the F1 qualification gate.
-//! Explicit runtime proofs also install these owners directly. All admitted
+//! Ordinary `tasks.free@1` launches install these owners; explicit runtime
+//! proofs also install them directly. All admitted
 //! boundaries and stops share this protocol; the recording-off host path uses
 //! the same request ownership without sections, ordinals or tape allocation.
 

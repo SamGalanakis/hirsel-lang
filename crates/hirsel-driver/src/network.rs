@@ -448,15 +448,11 @@ impl HostLibrary {
         };
         let mut library = Library::new(run, config)?;
         library.host_deadlines();
-        let free = if hirsel_rt::free_driver::admission_enabled() {
-            match &io {
-                HostIo::Replay(io) => {
-                    hirsel_rt::free_replay::Codec::open(io).map_err(Error::InvalidTir)?
-                }
-                _ => None,
+        let free = match &io {
+            HostIo::Replay(io) => {
+                hirsel_rt::free_replay::Codec::open(io).map_err(Error::InvalidTir)?
             }
-        } else {
-            None
+            _ => None,
         };
         let free = free.map(|(codec, session)| {
             library.enable_native_free(session, record.inputs.test_seed);

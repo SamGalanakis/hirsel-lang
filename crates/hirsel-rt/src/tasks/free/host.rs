@@ -1,5 +1,4 @@
-//! Request ownership and native host phases. Production launch admission is
-//! staged behind the F1 qualification gate. Host requests own claim/withdraw,
+//! Request ownership and native host phases. Host requests own claim/withdraw,
 //! bounded key transitions, readiness, cancellation and result substitution.
 use super::super::*;
 use crate::io::{AdapterError, Completion, Request};

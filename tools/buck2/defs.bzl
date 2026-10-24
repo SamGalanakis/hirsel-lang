@@ -34,9 +34,6 @@ BIN_EXE_DIR = "buck-out/tmp/cargo-bin-exe"
 # `-c hirsel.tests=host` explicitly opts into execution on the invoking host;
 # `-c hirsel.tests=focus` uses one CPU unless a target requires an exact count.
 TESTS_ON_HOST = read_root_config("hirsel", "tests", "pool") == "host"
-# Compiled F1 qualification uses the ordinary launch with dedicated runtime
-# artifacts. This is a build input, never a runtime admission environment knob.
-FREE_QUALIFICATION = read_root_config("hirsel", "free_qualification", "false") == "true"
 # The seed of every randomly seeded test (PROPTEST_RNG_SEED). It is part of the
 # test's environment, so of its cached verdict: a pass is reused only under the
 # same seed, and main's hourly run draws a new one each run (tools/main-runs).
@@ -157,8 +154,6 @@ def _rust(rule, name, **attrs):
             attrs["features"] = attrs.get("features", []) + ["operation-latency"]
         if name == "hirsel-rt" and read_root_config("hirsel", "ownership_trace", "false") == "true" and "ownership-trace" not in attrs.get("features", []):
             attrs["features"] = attrs.get("features", []) + ["ownership-trace"]
-        if FREE_QUALIFICATION:
-            attrs["features"] = attrs.get("features", []) + ["free-qualification"]
     rule(name = name, **attrs)
     if CLIPPY_TWINS:
         twin = attrs | dict(exec_compatible_with = [budget_constraint(pool_budget_name(*CLIPPY_REQUEST))], visibility = ["PUBLIC"])

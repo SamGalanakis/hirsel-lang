@@ -1836,12 +1836,11 @@ pub(crate) unsafe fn execute(
         crate::tasks::ordered::admission::Admission::prepare(placement_run)?
     };
     let ordered_enabled = ordered.is_some();
-    let production_free = crate::free_launch::ENABLED
-        && requested
-            .as_ref()
-            .and_then(|run| run.record().io.as_ref())
-            .and_then(|io| io.tasks.as_deref())
-            == Some("tasks.free@1");
+    let production_free = requested
+        .as_ref()
+        .and_then(|run| run.record().io.as_ref())
+        .and_then(|io| io.tasks.as_deref())
+        == Some("tasks.free@1");
     let mut free_session = None;
     let trace_destination = options
         .trace_events

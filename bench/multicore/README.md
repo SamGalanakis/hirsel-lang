@@ -149,8 +149,7 @@ it with a closed-loop client or compare saved sessions' wall times.
 independent_files at n=256/512/1024, eight workers, three interleaved rounds
 (seed 20261024). It requires the coordinator's temporary physical-core fence
 on CPUs 8–15, with siblings 24–31 idle. It never establishes the fence itself.
-Build release qualification archives with `-c hirsel.free_qualification=true`;
-build the separate observer archives with `-c hirsel.operation_latency=true`
+Build the ordinary archives, and the separate observer archives with `-c hirsel.operation_latency=true`
 (Cargo feature `operation-latency`, default off). Link otherwise identical
 native programs against each archive set. Tokio remains the locked comparator.
 

@@ -749,7 +749,6 @@ fn prepare(
         owner: AtomicUsize::new(owner_word(Owner::Any)),
         saved: AtomicBool::new(true),
         left: AtomicUsize::new(0),
-        #[cfg(feature = "free-qualification")]
         stop_before_start: false,
     });
     let task = Task {

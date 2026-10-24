@@ -304,9 +304,3 @@ mod tests {
         assert_eq!(count, 1);
     }
 }
-
-/// Whether ordinary configured launches admit production Free execution in
-/// this runtime. Qualification builds change only the admission constant.
-pub fn admission_enabled() -> bool {
-    crate::free_launch::ENABLED
-}

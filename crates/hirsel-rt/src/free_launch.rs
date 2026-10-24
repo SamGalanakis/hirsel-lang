@@ -8,10 +8,6 @@ use crate::tasks::free::{record, replay};
 use hirsel_run_schema::RunOutcome;
 use std::sync::Arc;
 
-// Staged until the full F1 qualification matrix is complete. Runtime unit
-// tests exercise the ordinary configured launch path with production wiring.
-pub(crate) const ENABLED: bool = cfg!(any(test, feature = "free-qualification"));
-
 pub(crate) enum Session {
     Recording {
         recorder: Arc<record::Recording>,

@@ -801,11 +801,9 @@ pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
     assert!(output.status.success(), "{output:?}");
     assert_eq!(output.stdout, b"f1 production\n");
     let bytes = std::fs::read(&tape).unwrap();
-    let qualified = hirsel_rt::free_driver::admission_enabled();
-    assert_eq!(
+    assert!(
         bytes.starts_with(b"hirsel-free-tape 2\n"),
-        qualified,
-        "compiled admission must use F1 phases exactly in the qualification build"
+        "ordinary admission records F1 phases"
     );
     // A replay must be bound to this exact program before entering code.
     let replay = Command::new(env!("CARGO_BIN_EXE_hirsel"))
@@ -846,17 +844,12 @@ fn f1_native_task_channel_recording_replays_across_engines() {
         live.stdout == b"sent\n" || live.stdout == b"closed\n",
         "{live:?}"
     );
-    assert_eq!(
+    assert!(
         std::fs::read(&tape)
             .unwrap()
-            .starts_with(b"hirsel-free-tape 2\n"),
-        hirsel_rt::free_driver::admission_enabled()
+            .starts_with(b"hirsel-free-tape 2\n")
     );
-    let live_projection = if hirsel_rt::free_driver::admission_enabled() {
-        Some(std::fs::read_to_string(&report).unwrap())
-    } else {
-        None
-    };
+    let live_projection = Some(std::fs::read_to_string(&report).unwrap());
     for engine in ENGINES {
         for width in ["1", "8"] {
             let replay = Command::new(env!("CARGO_BIN_EXE_hirsel"))
@@ -1107,24 +1100,19 @@ fn f1_corpus_matrix_cells(
             Some(expected.0),
             "{name} {level} live: {live:?}"
         );
-        assert_eq!(
+        assert!(
             std::fs::read(&tape)
                 .unwrap()
-                .starts_with(b"hirsel-free-tape 2\n"),
-            hirsel_rt::free_driver::admission_enabled()
+                .starts_with(b"hirsel-free-tape 2\n")
         );
-        let projection = if hirsel_rt::free_driver::admission_enabled() {
-            let bytes = std::fs::read(&tape).unwrap();
-            (expected.1)(
-                &live,
-                &hirsel_free::tape::parse(&bytes).unwrap(),
-                &scratch,
-                level,
-            );
-            Some(std::fs::read_to_string(&report).unwrap())
-        } else {
-            None
-        };
+        let bytes = std::fs::read(&tape).unwrap();
+        (expected.1)(
+            &live,
+            &hirsel_free::tape::parse(&bytes).unwrap(),
+            &scratch,
+            level,
+        );
+        let projection = Some(std::fs::read_to_string(&report).unwrap());
         // Replay must use recorded completions even when the granted tree is
         // unavailable. Restore it only for the next independent live recording.
         let withheld: Vec<_> = io["dirs"]
@@ -1600,31 +1588,11 @@ fn atomic_scalar_tape_bytes_match_interpreter_llvm_and_cranelift() {
                 .output()
                 .unwrap();
             assert!(output.status.success(), "F1 {engine:?}: {output:?}");
-            if hirsel_rt::free_driver::admission_enabled() {
-                assert_eq!(
-                    canonical(&tape),
-                    *expected.as_ref().unwrap(),
-                    "F1 {engine:?}: canonical scalar tape bytes"
-                );
-            } else {
-                assert!(
-                    !std::fs::read(&tape)
-                        .unwrap()
-                        .starts_with(hirsel_free::tape::MAGIC)
-                );
-                let replay = Command::new(env!("CARGO_BIN_EXE_hirsel"))
-                    .arg("run")
-                    .args(engine)
-                    .arg(&program)
-                    .arg("--replay")
-                    .arg(&tape)
-                    .output()
-                    .unwrap();
-                assert!(
-                    replay.status.success(),
-                    "default admission {engine:?}: {replay:?}"
-                );
-            }
+            assert_eq!(
+                canonical(&tape),
+                *expected.as_ref().unwrap(),
+                "F1 {engine:?}: canonical scalar tape bytes"
+            );
         }
     }
 }
@@ -1752,9 +1720,6 @@ fn f1_blocked_terminal_outcome_replays_exactly_durable() {
 fn f1_blocked_terminal_outcome_matrix(cells: Cells) {
     // Full F1 phases are exercised by the qualification configuration. The
     // ordinary admission control checks the shipping legacy-tape path.
-    if !hirsel_rt::free_driver::admission_enabled() {
-        return;
-    }
     f1_corpus_matrix_with_exit_cells(
         "blocked-root",
         "pub fn main(rt: Io) -> Result[(), GrantError] { let tasks = io.tasks(rt)?; let (tx, rx): (Sender[u32], Receiver[u32]) = channel.open(tasks); let mut sender = take tx; let mut receiver = take rx; let _ = channel.receive(tasks, mut receiver); let _ = channel.send(tasks, mut sender, 1u32); Ok(()) }",
@@ -1799,18 +1764,6 @@ fn f1_terminal_restoration_matrix(
     let live = bounded_output(&mut command, &program, "root forgery producer");
     assert!(live.status.success(), "{live:?}");
     let original = std::fs::read(&path).unwrap();
-    if !hirsel_rt::free_driver::admission_enabled() {
-        assert!(!original.starts_with(tape::MAGIC));
-        let replay = Command::new(env!("CARGO_BIN_EXE_hirsel"))
-            .arg("run")
-            .arg(&program)
-            .arg("--replay")
-            .arg(&path)
-            .output()
-            .unwrap();
-        assert!(replay.status.success(), "default admission: {replay:?}");
-        return;
-    }
     let parsed = tape::parse(&original).unwrap();
     for mutation in ["root", "record", "progress"] {
         let mut tasks: Vec<_> = parsed
@@ -1908,9 +1861,6 @@ fn f1_terminal_restoration_matrix(
 fn f1_canceled_sleep_completion_is_consumed_before_terminal_restoration() {
     // Full F1 phases are exercised by the qualification configuration. The
     // ordinary admission control checks the shipping legacy-tape path.
-    if !hirsel_rt::free_driver::admission_enabled() {
-        return;
-    }
     f1_corpus_matrix_with_io(
         "canceled-sleep",
         r#"
@@ -2432,9 +2382,6 @@ pub fn main(rt: Io, args: Args) -> Result[(), E] {
 fn f1_tcp_listener_and_connect_addr_replay_without_sockets() {
     // Full F1 phases are exercised by the qualification configuration. The
     // ordinary admission control checks the shipping legacy-tape path.
-    if !hirsel_rt::free_driver::admission_enabled() {
-        return;
-    }
     let reservation = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
     let port = reservation.local_addr().unwrap().port();
     drop(reservation);
@@ -3054,9 +3001,6 @@ pub fn main(rt: Io, args: Args) -> Result[(), E] {
 // Every part keeps the native recording and every width/permit replay cell.
 // Separate recording levels and engine groups keep each action within RE600.
 fn f1_deadline_matrix(future: bool, cells: Cells) {
-    if !hirsel_rt::free_driver::admission_enabled() {
-        return;
-    }
     let (name, text) = if future {
         (
             "scope-deadline-future",
@@ -3191,9 +3135,6 @@ const F1_RUNNER_COMPUTE_GRANTS: &str = r#"{"io":{"stdout":"stdout.bytes@1","task
 
 #[test]
 fn f1_runner_compute_single_permit_cross_engine_outcomes() {
-    if !hirsel_rt::free_driver::admission_enabled() {
-        return;
-    }
     let scratch = Scratch::new("f1-runner-compute-single-permit");
     let program = scratch.path("main.hir");
     std::fs::write(&program, F1_RUNNER_COMPUTE_SOURCE).unwrap();
@@ -3263,9 +3204,6 @@ const F1_RUNNER_HOST_WAIT_GRANTS: &str = r#"{"io":{"stdout":"stdout.bytes@1","ta
 
 #[test]
 fn f1_runner_call_child_host_waits_replay_without_child_effects() {
-    if !hirsel_rt::free_driver::admission_enabled() {
-        return;
-    }
     let scratch = Scratch::new("f1-runner-call-host-waits");
     let program = scratch.path("main.hir");
     std::fs::write(&program, F1_RUNNER_HOST_WAIT_SOURCE).unwrap();
@@ -3497,9 +3435,6 @@ fn f1_external_stop_matrix(
     replay_dimensions: &[(&str, usize)],
     cells: Cells,
 ) {
-    if !hirsel_rt::free_driver::admission_enabled() {
-        return;
-    }
     let scratch = Scratch::new("f1-external-stop-host-wait");
     let program = scratch.path("main.hir");
     std::fs::write(&program, r#"pub type E = Grant(GrantError) | Output(OutputError) | Clock(ClockError) | Wait(WaitError)
@@ -3681,9 +3616,6 @@ fn f1_returned_error_resource_matrix(
     record_permits: usize,
     replay_dimensions: &[(&str, usize)],
 ) {
-    if !hirsel_rt::free_driver::admission_enabled() {
-        return;
-    }
     let scratch = Scratch::new("f1-returned-error-resource");
     let program = scratch.path("main.hir");
     // Reuse PROG-3's returned-resource fixture and its cleanup expectations.
@@ -3785,9 +3717,6 @@ fn f1_explicit_exit_codes_matrix(
     cells: Cells,
     fixtures: &[&str],
 ) {
-    if !hirsel_rt::free_driver::admission_enabled() {
-        return;
-    }
     // Cover all three entry result ABIs using the ordinary ExitCode fixtures'
     // public constructors. Resource-bearing Result[(), E] is covered above.
     for (name, text, code, stderr) in [
@@ -3889,9 +3818,6 @@ fn f1_ordered_cleanup_causes_matrix(
     replay_dimensions: &[(&str, usize)],
     cells: Cells,
 ) {
-    if !hirsel_rt::free_driver::admission_enabled() {
-        return;
-    }
     let scratch = Scratch::new("f1-failed-root-causes");
     let program = scratch.path("main.hir");
     // FAIL-3's resource-unwind shape: failed drops remain causes while the
@@ -4014,9 +3940,6 @@ fn f1_terminal_metadata_matrix(
     level: &str,
     engines: &[&[&str]],
 ) {
-    if !hirsel_rt::free_driver::admission_enabled() {
-        return;
-    }
     let scratch = Scratch::new("f1-terminal-metadata");
     let program = scratch.path("main.hir");
     let text = r#"pub fn main(rt: Io) -> Result[(), GrantError] {
@@ -4159,9 +4082,6 @@ fn f1_runner_width_and_permit_matrix(
     live_output: &[u8],
     replay_output: &[u8],
 ) {
-    if !hirsel_rt::free_driver::admission_enabled() {
-        return;
-    }
     let scratch = Scratch::new(name);
     f1_runner_matrix_in(
         &scratch,
@@ -4182,9 +4102,6 @@ fn f1_runner_width_and_permit_matrix_at(
     output: (&[u8], &[u8]),
     durable: bool,
 ) {
-    if !hirsel_rt::free_driver::admission_enabled() {
-        return;
-    }
     let cells = Cells::level(durable);
     let scratch = Scratch::new(&format!("{name}-{}", cells.levels[0]));
     f1_runner_matrix_in(&scratch, text, grants, output.0, output.1, cells);
@@ -4362,9 +4279,6 @@ fn f1_runner_linked_tapes_width_and_permit_matrix_durable_cranelift() {
 }
 
 fn f1_runner_linked_tapes_matrix(cells: Cells) {
-    if !hirsel_rt::free_driver::admission_enabled() {
-        return;
-    }
     let scratch = Scratch::new("f1-runner-linked-matrix");
     f1_runner_matrix_in(
         &scratch,
@@ -4429,9 +4343,6 @@ fn f1_runner_crashed_child_width_and_permit_matrix_durable_cranelift() {
 }
 
 fn f1_runner_crashed_child_matrix(cells: Cells) {
-    if !hirsel_rt::free_driver::admission_enabled() {
-        return;
-    }
     let scratch = Scratch::new("f1-runner-crash-matrix");
     f1_runner_matrix_in(
         &scratch,
@@ -4521,9 +4432,6 @@ fn f1_runner_short_lose_reply_width_and_permit_matrix_durable_cranelift() {
 }
 
 fn f1_runner_short_matrix(fault: &str, outcome: &str, cells: Cells) {
-    if !hirsel_rt::free_driver::admission_enabled() {
-        return;
-    }
     {
         let scratch = Scratch::new(&format!("f1-runner-short-{fault}-matrix"));
         let (text, grants) = f1_runner_short_fixture(fault, outcome);
@@ -4871,9 +4779,6 @@ fn f1_terminal_metadata_width_and_permit_matrix_durable_cranelift() {
 
 #[test]
 fn f1_terminal_root_and_consumption_width_and_permit_matrix_record_interpreter() {
-    if !hirsel_rt::free_driver::admission_enabled() {
-        return;
-    }
     f1_terminal_restoration_matrix(
         "record",
         &[
@@ -4888,9 +4793,6 @@ fn f1_terminal_root_and_consumption_width_and_permit_matrix_record_interpreter()
 
 #[test]
 fn f1_terminal_root_and_consumption_width_and_permit_matrix_record_llvm() {
-    if !hirsel_rt::free_driver::admission_enabled() {
-        return;
-    }
     f1_terminal_restoration_matrix(
         "record",
         &[
@@ -4905,9 +4807,6 @@ fn f1_terminal_root_and_consumption_width_and_permit_matrix_record_llvm() {
 
 #[test]
 fn f1_terminal_root_and_consumption_width_and_permit_matrix_record_cranelift() {
-    if !hirsel_rt::free_driver::admission_enabled() {
-        return;
-    }
     f1_terminal_restoration_matrix(
         "record",
         &[
@@ -4922,9 +4821,6 @@ fn f1_terminal_root_and_consumption_width_and_permit_matrix_record_cranelift() {
 
 #[test]
 fn f1_terminal_root_and_consumption_width_and_permit_matrix_durable_interpreter() {
-    if !hirsel_rt::free_driver::admission_enabled() {
-        return;
-    }
     f1_terminal_restoration_matrix(
         "durable",
         &[
@@ -4939,9 +4835,6 @@ fn f1_terminal_root_and_consumption_width_and_permit_matrix_durable_interpreter(
 
 #[test]
 fn f1_terminal_root_and_consumption_width_and_permit_matrix_durable_llvm() {
-    if !hirsel_rt::free_driver::admission_enabled() {
-        return;
-    }
     f1_terminal_restoration_matrix(
         "durable",
         &[
@@ -4956,9 +4849,6 @@ fn f1_terminal_root_and_consumption_width_and_permit_matrix_durable_llvm() {
 
 #[test]
 fn f1_terminal_root_and_consumption_width_and_permit_matrix_durable_cranelift() {
-    if !hirsel_rt::free_driver::admission_enabled() {
-        return;
-    }
     f1_terminal_restoration_matrix(
         "durable",
         &[
@@ -4982,9 +4872,6 @@ fn f1_bounded_directory_walk_replays_pages_and_late_error_without_tree_durable()
 }
 
 fn f1_bounded_directory_walk_matrix(cells: Cells) {
-    if !hirsel_rt::free_driver::admission_enabled() {
-        return;
-    }
     // Follow cli/walk_stream.rs's empty-directory and invalid-name cases.
     // 129 root files cross the fixed 128-entry page boundary once.
     f1_corpus_matrix_with_exit_cells(
@@ -5037,17 +4924,11 @@ pub fn main(rt: Io) -> Result[(), E] {
 
 #[test]
 fn f1_required_mutex_cycle_cross_engine_matrix() {
-    if !hirsel_rt::free_driver::admission_enabled() {
-        return;
-    }
     f1_corpus_matrix("required-mutex-cycle", source("mutex_cycle"));
 }
 
 #[test]
 fn f1_required_parked_receive_cross_engine_matrix() {
-    if !hirsel_rt::free_driver::admission_enabled() {
-        return;
-    }
     f1_corpus_matrix_with_exit(
         "required-parked-receive",
         source("parked_receive"),
@@ -5057,9 +4938,6 @@ fn f1_required_parked_receive_cross_engine_matrix() {
 }
 
 fn f1_required_r7_root_matrix(name: &str, fixture: &str) {
-    if !hirsel_rt::free_driver::admission_enabled() {
-        return;
-    }
     let scratch = Scratch::new(name);
     let text = std::fs::read_to_string(
         Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -5115,9 +4993,6 @@ fn f1_required_process_wait_allows_other_task_file_progress_cross_engine_matrix_
 }
 
 fn f1_required_process_wait_matrix(cells: Cells) {
-    if !hirsel_rt::free_driver::admission_enabled() {
-        return;
-    }
     use std::os::unix::fs::PermissionsExt;
     let executable = Scratch::new("required-process-file");
     let host = executable.path("data");
@@ -5209,9 +5084,6 @@ fn f1_required_finite_release_records_unfinished_child_and_failed_thaw_durable_n
 }
 
 fn f1_required_finite_release_matrix(cells: Cells) {
-    if !hirsel_rt::free_driver::admission_enabled() {
-        return;
-    }
     f1_corpus_matrix_cells(
         "required-finite-release-witness",
         source("finite_release"),
@@ -5234,9 +5106,6 @@ fn f1_required_finite_release_matrix(cells: Cells) {
 
 #[test]
 fn f1_required_nested_root_records_child_end_before_successful_thaw() {
-    if !hirsel_rt::free_driver::admission_enabled() {
-        return;
-    }
     f1_corpus_matrix_with_witness(
         "required-nested-root-witness",
         source("nested_root"),
@@ -5359,9 +5228,6 @@ fn f1_required_serial_callbacks_interpreter_refuses_extern() {
 
 #[test]
 fn f1_required_serial_callbacks_native_width_and_permit_matrix() {
-    if !hirsel_rt::free_driver::admission_enabled() {
-        return;
-    }
     let scratch = f1_serial_callback_fixture();
     let program = scratch.path("hirsel.json");
     let capture = scratch.path("main.hir");
@@ -5486,9 +5352,6 @@ fn f1_required_mutex_cycle_witness_source_checks() {
 
 #[test]
 fn f1_required_mutex_cycle_records_release_on_wait_entry_before_thaw() {
-    if !hirsel_rt::free_driver::admission_enabled() {
-        return;
-    }
     f1_corpus_matrix_with_witness(
         "required-mutex-cycle-witness",
         F1_REQUIRED_MUTEX_CYCLE_WITNESS,
@@ -5541,9 +5404,6 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
 
 #[test]
 fn f1_required_parked_receive_records_live_durable_output_cut_and_replays_prefix() {
-    if !hirsel_rt::free_driver::admission_enabled() {
-        return;
-    }
     f1_corpus_matrix_with_witness(
         "required-parked-receive-witness",
         F1_REQUIRED_PARKED_RECEIVE_WITNESS,
@@ -5704,9 +5564,6 @@ fn f1_late_task_set_and_reverse_insertion_full_projection_matrix_durable() {
 }
 
 fn f1_late_task_set_and_reverse_insertion_matrix(cells: Cells) {
-    if !hirsel_rt::free_driver::admission_enabled() {
-        return;
-    }
     // The child's pending release attaches to TaskFinish entry. The role
     // covers both entry and result-readiness publication before the parent
     // can observe its successful thaw. Neither child has another body op.
@@ -5817,9 +5674,6 @@ fn f1_started_saved_frames_migrate_before_shrink_full_projection_matrix() {
 }
 
 fn f1_worker_shrink_matrix(observe_migration: bool, cells: Cells) {
-    if !hirsel_rt::free_driver::admission_enabled() {
-        return;
-    }
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::{Duration, Instant};
@@ -5956,9 +5810,6 @@ fn f1_worker_shrink_matrix(observe_migration: bool, cells: Cells) {
 
 #[test]
 fn f1_queued_never_started_divergent_child_full_projection_matrix() {
-    if !hirsel_rt::free_driver::admission_enabled() {
-        return;
-    }
     let scratch = Scratch::new("queued-never-started");
     let program = scratch.path("main.hir");
     std::fs::write(
@@ -6071,9 +5922,6 @@ fn f1_queued_never_started_divergent_child_full_projection_matrix() {
 /// attempts. The B1 independent-file smoke originally stalled after one create.
 #[test]
 fn f1_recording_off_independent_files_wake_namespace_waiters() {
-    if !hirsel_rt::free_driver::admission_enabled() {
-        return;
-    }
     let scratch = Scratch::new("f1-live-namespace-wakes");
     let program = scratch.path("main.hir");
     std::fs::write(
@@ -6166,9 +6014,6 @@ enum Runtime50 {
 }
 
 fn runtime50_matrix(name: &str, text: &str, part: Runtime50) {
-    if !hirsel_rt::free_driver::admission_enabled() {
-        return;
-    }
     const BACKENDS: [&[&str]; 2] = [&["--native"], &["--native", "--backend", "cranelift"]];
     let grants = r#"{"io":{"stdout":"stdout.bytes@1","tasks":"tasks.free@1","dirs":[]},"args":[]}"#;
     let (mut replays, mut refusals) = (0, 0);
@@ -6379,4 +6224,155 @@ fn runtime50_end_to_end_engine_replay_matrix_task_set_cranelift() {
 #[test]
 fn runtime50_end_to_end_engine_replay_matrix_task_set_refusals() {
     runtime50_matrix("task-set", &corpus(TASK_SET), Runtime50::Refusals);
+}
+
+/// The single production route (runtime-cutover-50). Source and build checks:
+/// no qualification feature, configuration, admission constant or probe
+/// remains, and launch selects production Free exactly for `tasks.free@1`.
+/// Trace checks: an ordinary build's native width-8 launch records F1 phases
+/// with production host-request evidence and a projected stdout output, and
+/// the interpreter replays it without a live host.
+/// The `outputs` map of a reported projection: each sink and its bytes, in sink order.
+fn projected_outputs(report: &str) -> Vec<(String, Vec<u8>)> {
+    let [_, rest] = report.split(", outputs: {").collect::<Vec<_>>()[..] else {
+        panic!("one outputs map: {report}");
+    };
+    let mut rest = rest;
+    let mut outputs = Vec::new();
+    while let Some(entry) = rest.strip_prefix('"') {
+        let (sink, entry) = entry.split_once("\": [").unwrap();
+        let (bytes, entry) = entry.split_once(']').unwrap();
+        let bytes = bytes
+            .split(", ")
+            .filter(|byte| !byte.is_empty())
+            .map(|byte| byte.parse().unwrap())
+            .collect();
+        outputs.push((sink.to_owned(), bytes));
+        rest = entry.strip_prefix(", ").unwrap_or(entry);
+    }
+    assert!(
+        rest.starts_with("}, observed: {"),
+        "outputs map ends: {rest}"
+    );
+    outputs
+}
+
+#[test]
+fn runtime50_default_routes_use_r6() {
+    let sources = [
+        (
+            "hirsel-rt Cargo.toml",
+            include_str!("../../hirsel-rt/Cargo.toml"),
+        ),
+        ("launch.rs", include_str!("../../hirsel-rt/src/launch.rs")),
+        (
+            "free_launch.rs",
+            include_str!("../../hirsel-rt/src/free_launch.rs"),
+        ),
+        (
+            "free_driver.rs",
+            include_str!("../../hirsel-rt/src/free_driver.rs"),
+        ),
+        (
+            "pool/free.rs",
+            include_str!("../../hirsel-rt/src/pool/free.rs"),
+        ),
+        (
+            "network.rs",
+            include_str!("../../hirsel-driver/src/network.rs"),
+        ),
+    ];
+    for (name, text) in sources {
+        for superseded in [
+            "free-qualification",
+            "free_qualification",
+            "FREE_QUALIFICATION",
+            "free_launch::ENABLED",
+            "admission_enabled",
+        ] {
+            assert!(!text.contains(superseded), "{name} retains {superseded}");
+        }
+    }
+    let launch: String = sources[1].1.split_whitespace().collect();
+    assert!(
+        launch.contains(
+            "letproduction_free=requested.as_ref()\
+             .and_then(|run|run.record().io.as_ref())\
+             .and_then(|io|io.tasks.as_deref())==Some(\"tasks.free@1\");"
+        ),
+        "the Tasks provider alone selects production Free"
+    );
+
+    let scratch = Scratch::new("runtime50-routes");
+    let program = scratch.path("main.hir");
+    std::fs::write(&program, source("gap")).unwrap();
+    let tape = scratch.path("tape");
+    let report = scratch.path("projection");
+    let grants = r#"{"io":{"stdout":"stdout.bytes@1","tasks":"tasks.free@1","dirs":[]},"args":[]}"#;
+    let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+    command
+        .args(["run", "--native"])
+        .arg(&program)
+        .args(["--grants", grants, "--cores", "8", "--record"])
+        .arg(&tape)
+        .stdin(std::process::Stdio::null())
+        .env(hirsel_rt::free_replay::Report::VAR, &report);
+    f1_permits(&mut command, 8);
+    let live = bounded_output(&mut command, &program, "runtime50 routes live LLVM width 8");
+    assert!(live.status.success(), "{live:?}");
+    let bytes = std::fs::read(&tape).unwrap();
+    assert!(bytes.starts_with(hirsel_free::tape::MAGIC), "F1 phases");
+    let parsed = hirsel_free::tape::parse(&bytes).unwrap();
+    assert_eq!(
+        parsed.cut[&Vec::new()].phase,
+        hirsel_free::phase::Phase::Done,
+        "the root's terminal phase"
+    );
+    assert!(parsed.logs.len() >= 2, "a child task's own phase log");
+    let host = parsed
+        .logs
+        .values()
+        .flat_map(|log| hirsel_free::record::decode(log).unwrap())
+        .filter(|record| {
+            matches!(
+                record,
+                hirsel_free::record::Record::Prepared { .. }
+                    | hirsel_free::record::Record::Completion { .. }
+            )
+        })
+        .count();
+    assert!(
+        host >= 2,
+        "production host requests record prepare and completion"
+    );
+    let projection = std::fs::read_to_string(&report).unwrap();
+    assert!(
+        live.stdout == b"sent\n" || live.stdout == b"closed\n",
+        "{live:?}"
+    );
+    // The gap fixture's one output is its stdout print: one exclusive host-resource sink.
+    let outputs = projected_outputs(&projection);
+    let [(sink, bytes)] = &outputs[..] else {
+        panic!("one projected output sink: {projection}");
+    };
+    assert!(sink.starts_with("host-resource/"), "{sink}: {projection}");
+    assert_eq!(bytes, &live.stdout, "the stdout sink's projected bytes");
+    let _ = std::fs::remove_file(&report);
+    let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+    command
+        .arg("run")
+        .arg(&program)
+        .arg("--replay")
+        .arg(&tape)
+        .args(["--cores", "1"])
+        .stdin(std::process::Stdio::null())
+        .env(hirsel_rt::free_replay::Report::VAR, &report);
+    let replay = bounded_output(
+        &mut command,
+        &program,
+        "runtime50 routes interpreter replay",
+    );
+    assert_eq!(replay.status.code(), live.status.code(), "{replay:?}");
+    assert_eq!(replay.stdout, live.stdout);
+    assert_eq!(std::fs::read_to_string(&report).unwrap(), projection);
 }

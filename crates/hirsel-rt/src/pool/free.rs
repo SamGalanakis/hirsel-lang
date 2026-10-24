@@ -28,8 +28,7 @@ pub(crate) struct Frame {
     saved: AtomicBool,
     /// Under forced migration, the exec a compact frame left, until another claims it.
     left: AtomicUsize,
-    // This observer is absent from shipping archives and never reads a queued image.
-    #[cfg(feature = "free-qualification")]
+    // A test stop channel's observer; it never reads a queued image.
     stop_before_start: bool,
 }
 
@@ -69,7 +68,6 @@ impl Frame {
             owner: AtomicUsize::new(0),
             saved: AtomicBool::new(saved),
             left: AtomicUsize::new(0),
-            #[cfg(feature = "free-qualification")]
             stop_before_start: false,
         })
     }
@@ -141,7 +139,6 @@ pub(super) struct Dispatch {
     count: Arc<Count>,
     /// Reservations precede publication; claims consume one after removal.
     queued: AtomicUsize,
-    #[cfg(feature = "free-qualification")]
     queued_stop_witness: Option<std::path::PathBuf>,
     /// At most one worker is being woken to search (Go wakep / Tokio Idle).
     searcher: AtomicUsize,
@@ -240,15 +237,13 @@ pub(crate) unsafe fn enable(ctx: *mut TaskCtx) {
         .as_ref()
         .map(|m| m.ready_metrics());
     let (ready, locals) = hirsel_free::work::workers(MAX_WIDTH, metrics);
-    // As with HIRSEL_RT_STOP_AFTER_MS, only the qualification host requests
-    // this stop. Read the channel once at admission, outside scheduler paths.
-    #[cfg(feature = "free-qualification")]
+    // As with HIRSEL_RT_STOP_AFTER_MS, only a test host requests this stop.
+    // Read the channel once at admission, outside scheduler paths.
     let queued_stop_witness = unsafe { (*ctx).run_ref() }
         .free_production
         .then(|| std::env::var_os("HIRSEL_RT_FREE_STOP_BEFORE_FIRST_CHILD"))
         .flatten()
         .map(std::path::PathBuf::from);
-    #[cfg(feature = "free-qualification")]
     if queued_stop_witness.is_some() {
         unsafe { (*ctx).run_ref() }.control.host();
     }
@@ -259,7 +254,6 @@ pub(crate) unsafe fn enable(ctx: *mut TaskCtx) {
                 ready,
                 locals: Mutex::new(locals),
                 queued: AtomicUsize::new(0),
-                #[cfg(feature = "free-qualification")]
                 queued_stop_witness,
                 searcher: AtomicUsize::new(0),
                 #[cfg(test)]
@@ -384,7 +378,6 @@ unsafe fn admit(run: *mut RunShared, execs: &Execs, task: TaskKey, owner: Owner)
                 owner: AtomicUsize::new(owner_word(owner)),
                 saved: AtomicBool::new(true),
                 left: AtomicUsize::new(0),
-                #[cfg(feature = "free-qualification")]
                 stop_before_start: task.slot == 1 && dispatch.queued_stop_witness.is_some(),
             });
             *slot = Some(frame.clone());
@@ -1021,7 +1014,6 @@ pub(super) unsafe fn resume(run: *mut RunShared, exec: &Exec, saved: Saved) {
         );
         return;
     }
-    #[cfg(feature = "free-qualification")]
     if frame.stop_before_start {
         // Immutable metadata was copied while preparing the first child under
         // the role. The idle claimant owns its actual Queued token, but must
