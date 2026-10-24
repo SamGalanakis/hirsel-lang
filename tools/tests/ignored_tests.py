@@ -97,6 +97,17 @@ PROOFS = {
                         'HIRSEL_AUDITOR_PACKAGE': '/selected auditors', 'HIRSEL_GLIBC_FLOOR': '/selected floor',
                         'HIRSEL_QEMU': '/selected qemu/qemu-aarch64'},
     },
+    'requests::native_bootstrap::tests::actual_native_bootstrap_binds_run_identity_and_delivers_live_output': {
+        'source': 'crates/hirsel-driver/src/requests/native_bootstrap/tests.rs',
+        'target': '//tools/buck2/native-toolchain:native-bound-bootstrap-proof',
+        'probe': 'tools/buck2/native-toolchain/native_bound_bootstrap_proof.py',
+        'arguments': ['/original pinned llvm', '/original packaged linker', '/selected kit', '/selected runtime', '/selected auditors', '/selected floor', '/selected qemu', '/selected harness'],
+        'environment': {'LLVM_SYS_231_PREFIX': '/original pinned llvm',
+                        'HIRSEL_CAPTURE_LINKER': '/original packaged linker',
+                        'HIRSEL_LINK_KIT': '/selected kit', 'HIRSEL_RUNTIME_ARCHIVES': '/selected runtime',
+                        'HIRSEL_AUDITOR_PACKAGE': '/selected auditors', 'HIRSEL_GLIBC_FLOOR': '/selected floor',
+                        'HIRSEL_QEMU': '/selected qemu/qemu-aarch64'},
+    },
     'native::object_queries::capture::tests::packaged_capture_replays_changed_inputs_without_originals': {
         'source': 'crates/hirsel-driver/tests/native-validation/link_capture.rs',
         'target': '//tools/buck2/native-toolchain:linker-store-proof',
