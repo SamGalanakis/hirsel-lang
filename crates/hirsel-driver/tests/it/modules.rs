@@ -159,3 +159,4 @@ mod borrowed_match_guidance_49;
 mod native_source_products_19;
 mod native_discovery_cache_19;
 mod settled_native_source_19;
+mod native_declarations_19;

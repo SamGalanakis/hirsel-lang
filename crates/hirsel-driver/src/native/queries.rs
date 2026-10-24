@@ -88,3 +88,6 @@ pub trait NativeProducts {
         ) -> Result<R, String>,
     ) -> Result<R, String>;
 }
+
+pub mod declarations;
+pub mod source;
