@@ -37,6 +37,7 @@ pub struct FrontBodyQueries {
     store: Arc<dyn ResultStore>,
     outcomes: Mutex<BTreeMap<Key, (Reference, ModeResult)>>,
     work: Mutex<BTreeMap<(DefPath, QueryKind), u64>>,
+    memos: Mutex<BTreeMap<crate::memo::MemoKey, Arc<Reads>>>,
     errors: RuntimeErrors,
     // Own immutable snapshot and output metadata admission until every task and
     // external output reader releases this view.
@@ -51,6 +52,22 @@ pub struct FrontBodyOutput {
 }
 impl FrontBodyQueries {
     /// Actual phase invocations, including failed or discarded producers.
+    pub fn memo_snapshot(&self) -> Vec<(crate::memo::MemoKey, Arc<Reads>)> {
+        self.memos
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .map(|(key, reads)| (*key, reads.clone()))
+            .collect()
+    }
+    pub fn work_snapshot(&self) -> Vec<(DefPath, QueryKind, u64)> {
+        self.work
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .map(|((path, kind), count)| (path.clone(), *kind, *count))
+            .collect()
+    }
     pub fn recompute_count(&self, definition: &DefPath, kind: QueryKind) -> u64 {
         self.work
             .lock()
@@ -183,6 +200,11 @@ impl BodyTask {
             &mut source,
             Some(&queries.records),
         );
+        queries
+            .memos
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .extend(completed.memo_snapshot(&mut source));
         let published = completed.outcome().clone();
         let outcome = ModeResult {
             definition: published.definition.clone(),
@@ -391,6 +413,7 @@ impl QueryEngine {
             store,
             outcomes: Mutex::new(BTreeMap::new()),
             work: Mutex::new(BTreeMap::new()),
+            memos: Mutex::new(BTreeMap::new()),
             errors,
             _allowance: allowance,
         }))
