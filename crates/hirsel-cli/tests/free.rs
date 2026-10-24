@@ -372,10 +372,10 @@ fn verify(engine: &[&str], grants: &str, outcome: &str, recorded: &Recorded) {
 /// Every recording of trace `name` on `engine` replays to its live projection
 /// at every cut. Each trace and engine is one case: a native run spends most of
 /// its time compiling.
-fn every_f0_trace(name: &str, engine: &[&str]) {
+fn every_f0_trace(name: &str, engine: &[&str], recordings: &[bool]) {
     let &(_, grants, outcome) = TRACES.iter().find(|(trace, ..)| *trace == name).unwrap();
     for seed in SEEDS {
-        for durable in [false, true] {
+        for &durable in recordings {
             let recorded = record(engine, name, grants, seed, durable);
             verify(engine, grants, outcome, &recorded);
         }
@@ -384,128 +384,176 @@ fn every_f0_trace(name: &str, engine: &[&str]) {
 
 #[test]
 fn every_f0_trace_replays_to_its_live_projection_at_every_cut_gap_interpreter() {
-    every_f0_trace("gap", ENGINES[0]);
+    every_f0_trace_all("gap", ENGINES[0]);
 }
 
 #[test]
-fn every_f0_trace_replays_to_its_live_projection_at_every_cut_gap_llvm() {
-    every_f0_trace("gap", ENGINES[1]);
+fn every_f0_trace_replays_to_its_live_projection_at_every_cut_gap_llvm_plain() {
+    every_f0_trace("gap", ENGINES[1], &[false]);
+}
+
+#[test]
+fn every_f0_trace_replays_to_its_live_projection_at_every_cut_gap_llvm_durable() {
+    every_f0_trace("gap", ENGINES[1], &[true]);
 }
 
 #[test]
 fn every_f0_trace_replays_to_its_live_projection_at_every_cut_gap_cranelift() {
-    every_f0_trace("gap", ENGINES[2]);
+    every_f0_trace_all("gap", ENGINES[2]);
 }
 
 #[test]
 fn every_f0_trace_replays_to_its_live_projection_at_every_cut_finite_release_interpreter() {
-    every_f0_trace("finite_release", ENGINES[0]);
+    every_f0_trace_all("finite_release", ENGINES[0]);
 }
 
 #[test]
 fn every_f0_trace_replays_to_its_live_projection_at_every_cut_finite_release_llvm() {
-    every_f0_trace("finite_release", ENGINES[1]);
+    every_f0_trace_all("finite_release", ENGINES[1]);
 }
 
 #[test]
 fn every_f0_trace_replays_to_its_live_projection_at_every_cut_finite_release_cranelift() {
-    every_f0_trace("finite_release", ENGINES[2]);
+    every_f0_trace_all("finite_release", ENGINES[2]);
 }
 
 #[test]
-fn every_f0_trace_replays_to_its_live_projection_at_every_cut_mutex_cycle_interpreter() {
-    every_f0_trace("mutex_cycle", ENGINES[0]);
+fn every_f0_trace_replays_to_its_live_projection_at_every_cut_mutex_cycle_interpreter_plain() {
+    every_f0_trace("mutex_cycle", ENGINES[0], &[false]);
 }
 
 #[test]
-fn every_f0_trace_replays_to_its_live_projection_at_every_cut_mutex_cycle_llvm() {
-    every_f0_trace("mutex_cycle", ENGINES[1]);
+fn every_f0_trace_replays_to_its_live_projection_at_every_cut_mutex_cycle_interpreter_durable() {
+    every_f0_trace("mutex_cycle", ENGINES[0], &[true]);
 }
 
 #[test]
-fn every_f0_trace_replays_to_its_live_projection_at_every_cut_mutex_cycle_cranelift() {
-    every_f0_trace("mutex_cycle", ENGINES[2]);
+fn every_f0_trace_replays_to_its_live_projection_at_every_cut_mutex_cycle_llvm_plain() {
+    every_f0_trace("mutex_cycle", ENGINES[1], &[false]);
 }
 
 #[test]
-fn every_f0_trace_replays_to_its_live_projection_at_every_cut_parked_receive_interpreter() {
-    every_f0_trace("parked_receive", ENGINES[0]);
+fn every_f0_trace_replays_to_its_live_projection_at_every_cut_mutex_cycle_llvm_durable() {
+    every_f0_trace("mutex_cycle", ENGINES[1], &[true]);
+}
+
+#[test]
+fn every_f0_trace_replays_to_its_live_projection_at_every_cut_mutex_cycle_cranelift_plain() {
+    every_f0_trace("mutex_cycle", ENGINES[2], &[false]);
+}
+
+#[test]
+fn every_f0_trace_replays_to_its_live_projection_at_every_cut_mutex_cycle_cranelift_durable() {
+    every_f0_trace("mutex_cycle", ENGINES[2], &[true]);
+}
+
+#[test]
+fn every_f0_trace_replays_to_its_live_projection_at_every_cut_parked_receive_interpreter_plain() {
+    every_f0_trace("parked_receive", ENGINES[0], &[false]);
+}
+
+#[test]
+fn every_f0_trace_replays_to_its_live_projection_at_every_cut_parked_receive_interpreter_durable() {
+    every_f0_trace("parked_receive", ENGINES[0], &[true]);
 }
 
 #[test]
 fn every_f0_trace_replays_to_its_live_projection_at_every_cut_parked_receive_llvm() {
-    every_f0_trace("parked_receive", ENGINES[1]);
+    every_f0_trace_all("parked_receive", ENGINES[1]);
 }
 
 #[test]
 fn every_f0_trace_replays_to_its_live_projection_at_every_cut_parked_receive_cranelift() {
-    every_f0_trace("parked_receive", ENGINES[2]);
+    every_f0_trace_all("parked_receive", ENGINES[2]);
 }
 
 #[test]
 fn every_f0_trace_replays_to_its_live_projection_at_every_cut_nested_root_interpreter() {
-    every_f0_trace("nested_root", ENGINES[0]);
+    every_f0_trace_all("nested_root", ENGINES[0]);
 }
 
 #[test]
 fn every_f0_trace_replays_to_its_live_projection_at_every_cut_nested_root_llvm() {
-    every_f0_trace("nested_root", ENGINES[1]);
+    every_f0_trace_all("nested_root", ENGINES[1]);
 }
 
 #[test]
 fn every_f0_trace_replays_to_its_live_projection_at_every_cut_nested_root_cranelift() {
-    every_f0_trace("nested_root", ENGINES[2]);
+    every_f0_trace_all("nested_root", ENGINES[2]);
 }
 
 #[test]
 fn every_f0_trace_replays_to_its_live_projection_at_every_cut_acquire_reply_interpreter() {
-    every_f0_trace("acquire_reply", ENGINES[0]);
+    every_f0_trace_all("acquire_reply", ENGINES[0]);
 }
 
 #[test]
-fn every_f0_trace_replays_to_its_live_projection_at_every_cut_acquire_reply_llvm() {
-    every_f0_trace("acquire_reply", ENGINES[1]);
+fn every_f0_trace_replays_to_its_live_projection_at_every_cut_acquire_reply_llvm_plain() {
+    every_f0_trace("acquire_reply", ENGINES[1], &[false]);
 }
 
 #[test]
-fn every_f0_trace_replays_to_its_live_projection_at_every_cut_acquire_reply_cranelift() {
-    every_f0_trace("acquire_reply", ENGINES[2]);
+fn every_f0_trace_replays_to_its_live_projection_at_every_cut_acquire_reply_llvm_durable() {
+    every_f0_trace("acquire_reply", ENGINES[1], &[true]);
+}
+
+#[test]
+fn every_f0_trace_replays_to_its_live_projection_at_every_cut_acquire_reply_cranelift_plain() {
+    every_f0_trace("acquire_reply", ENGINES[2], &[false]);
+}
+
+#[test]
+fn every_f0_trace_replays_to_its_live_projection_at_every_cut_acquire_reply_cranelift_durable() {
+    every_f0_trace("acquire_reply", ENGINES[2], &[true]);
 }
 
 #[test]
 fn every_f0_trace_replays_to_its_live_projection_at_every_cut_coalesced_root_interpreter() {
-    every_f0_trace("coalesced_root", ENGINES[0]);
+    every_f0_trace_all("coalesced_root", ENGINES[0]);
 }
 
 #[test]
 fn every_f0_trace_replays_to_its_live_projection_at_every_cut_coalesced_root_llvm() {
-    every_f0_trace("coalesced_root", ENGINES[1]);
+    every_f0_trace_all("coalesced_root", ENGINES[1]);
 }
 
 #[test]
 fn every_f0_trace_replays_to_its_live_projection_at_every_cut_coalesced_root_cranelift() {
-    every_f0_trace("coalesced_root", ENGINES[2]);
+    every_f0_trace_all("coalesced_root", ENGINES[2]);
 }
 
 #[test]
-fn every_f0_trace_replays_to_its_live_projection_at_every_cut_thaw_race_interpreter() {
-    every_f0_trace("thaw_race", ENGINES[0]);
+fn every_f0_trace_replays_to_its_live_projection_at_every_cut_thaw_race_interpreter_plain() {
+    every_f0_trace("thaw_race", ENGINES[0], &[false]);
+}
+
+#[test]
+fn every_f0_trace_replays_to_its_live_projection_at_every_cut_thaw_race_interpreter_durable() {
+    every_f0_trace("thaw_race", ENGINES[0], &[true]);
 }
 
 #[test]
 fn every_f0_trace_replays_to_its_live_projection_at_every_cut_thaw_race_llvm() {
-    every_f0_trace("thaw_race", ENGINES[1]);
+    every_f0_trace_all("thaw_race", ENGINES[1]);
 }
 
 #[test]
 fn every_f0_trace_replays_to_its_live_projection_at_every_cut_thaw_race_cranelift() {
-    every_f0_trace("thaw_race", ENGINES[2]);
+    every_f0_trace_all("thaw_race", ENGINES[2]);
+}
+
+fn every_f0_trace_all(name: &str, engine: &[&str]) {
+    every_f0_trace(name, engine, &[false, true]);
+}
+
+fn racing_trace_all(name: &str, outcomes: [&str; 2], engine: &[&str]) {
+    racing_trace(name, &outcomes, engine);
 }
 
 /// A trace whose outcome a schedule decides reaches each outcome under some
 /// seed on `engine`, and that seed's durable recording replays as above.
-fn racing_trace(name: &str, outcomes: [&str; 2], engine: &[&str]) {
-    for want in outcomes {
+fn racing_trace(name: &str, outcomes: &[&str], engine: &[&str]) {
+    for &want in outcomes {
         let seed = (0..64u64)
             .find(|&seed| record(engine, name, GRANTS, seed, false).stdout == want)
             .unwrap_or_else(|| panic!("{name} on {engine:?}: no seed prints {want:?}"));
@@ -516,48 +564,78 @@ fn racing_trace(name: &str, outcomes: [&str; 2], engine: &[&str]) {
 }
 
 #[test]
-fn the_racing_traces_reach_both_outcomes_and_replay_mutex_cycle_interpreter() {
-    racing_trace("mutex_cycle", ["thawed\n", "shared\n"], ENGINES[0]);
+fn the_racing_traces_reach_both_outcomes_and_replay_mutex_cycle_interpreter_first() {
+    racing_trace("mutex_cycle", &["thawed\n"], ENGINES[0]);
+}
+
+#[test]
+fn the_racing_traces_reach_both_outcomes_and_replay_mutex_cycle_interpreter_second() {
+    racing_trace("mutex_cycle", &["shared\n"], ENGINES[0]);
 }
 
 #[test]
 fn the_racing_traces_reach_both_outcomes_and_replay_mutex_cycle_llvm() {
-    racing_trace("mutex_cycle", ["thawed\n", "shared\n"], ENGINES[1]);
+    racing_trace_all("mutex_cycle", ["thawed\n", "shared\n"], ENGINES[1]);
 }
 
 #[test]
-fn the_racing_traces_reach_both_outcomes_and_replay_mutex_cycle_cranelift() {
-    racing_trace("mutex_cycle", ["thawed\n", "shared\n"], ENGINES[2]);
+fn the_racing_traces_reach_both_outcomes_and_replay_mutex_cycle_cranelift_first() {
+    racing_trace("mutex_cycle", &["thawed\n"], ENGINES[2]);
 }
 
 #[test]
-fn the_racing_traces_reach_both_outcomes_and_replay_acquire_reply_interpreter() {
-    racing_trace("acquire_reply", ["a first\n", "b first\n"], ENGINES[0]);
+fn the_racing_traces_reach_both_outcomes_and_replay_mutex_cycle_cranelift_second() {
+    racing_trace("mutex_cycle", &["shared\n"], ENGINES[2]);
 }
 
 #[test]
-fn the_racing_traces_reach_both_outcomes_and_replay_acquire_reply_llvm() {
-    racing_trace("acquire_reply", ["a first\n", "b first\n"], ENGINES[1]);
+fn the_racing_traces_reach_both_outcomes_and_replay_acquire_reply_interpreter_first() {
+    racing_trace("acquire_reply", &["a first\n"], ENGINES[0]);
 }
 
 #[test]
-fn the_racing_traces_reach_both_outcomes_and_replay_acquire_reply_cranelift() {
-    racing_trace("acquire_reply", ["a first\n", "b first\n"], ENGINES[2]);
+fn the_racing_traces_reach_both_outcomes_and_replay_acquire_reply_interpreter_second() {
+    racing_trace("acquire_reply", &["b first\n"], ENGINES[0]);
 }
 
 #[test]
-fn the_racing_traces_reach_both_outcomes_and_replay_thaw_race_interpreter() {
-    racing_trace("thaw_race", ["thawed\n", "shared\n"], ENGINES[0]);
+fn the_racing_traces_reach_both_outcomes_and_replay_acquire_reply_llvm_first() {
+    racing_trace("acquire_reply", &["a first\n"], ENGINES[1]);
+}
+
+#[test]
+fn the_racing_traces_reach_both_outcomes_and_replay_acquire_reply_llvm_second() {
+    racing_trace("acquire_reply", &["b first\n"], ENGINES[1]);
+}
+
+#[test]
+fn the_racing_traces_reach_both_outcomes_and_replay_acquire_reply_cranelift_first() {
+    racing_trace("acquire_reply", &["a first\n"], ENGINES[2]);
+}
+
+#[test]
+fn the_racing_traces_reach_both_outcomes_and_replay_acquire_reply_cranelift_second() {
+    racing_trace("acquire_reply", &["b first\n"], ENGINES[2]);
+}
+
+#[test]
+fn the_racing_traces_reach_both_outcomes_and_replay_thaw_race_interpreter_first() {
+    racing_trace("thaw_race", &["thawed\n"], ENGINES[0]);
+}
+
+#[test]
+fn the_racing_traces_reach_both_outcomes_and_replay_thaw_race_interpreter_second() {
+    racing_trace("thaw_race", &["shared\n"], ENGINES[0]);
 }
 
 #[test]
 fn the_racing_traces_reach_both_outcomes_and_replay_thaw_race_llvm() {
-    racing_trace("thaw_race", ["thawed\n", "shared\n"], ENGINES[1]);
+    racing_trace_all("thaw_race", ["thawed\n", "shared\n"], ENGINES[1]);
 }
 
 #[test]
 fn the_racing_traces_reach_both_outcomes_and_replay_thaw_race_cranelift() {
-    racing_trace("thaw_race", ["thawed\n", "shared\n"], ENGINES[2]);
+    racing_trace_all("thaw_race", ["thawed\n", "shared\n"], ENGINES[2]);
 }
 
 /// Repeated dup and drop of one root in one segment leave the root to the joiner on every
