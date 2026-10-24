@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-2268 exported definitions; 983 variants.
+2287 exported definitions; 999 variants.
 
 ## Types and roots
 
@@ -11143,6 +11143,12 @@ References: [`core@1/Map`](#def-core_401_2fMap)
 
 ## markdown
 
+<a id="def-std_401_2fmarkdown_2fByteRange"></a>
+
+- `pub type markdown.ByteRange { start: u64, end: u64, }`
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
 <a id="def-std_401_2fmarkdown_2fKind"></a>
 
 - `pub type markdown.Kind = Document | Paragraph | Heading(u64) | BlockQuote | ListBlock( bool, u64, bool ) | Item(Option[bool]) | CodeBlock(String, String) | HtmlBlock(String) | ThematicBreak | Text( String ) | SoftBreak | HardBreak | Code(String) | HtmlInline(String) | Emphasis | Strong | Link( String, String ) | Image(String, String) | Strikethrough | Table | TableRow(bool) | TableCell(u8) | FootnoteDefinition( String ) | FootnoteReference(String, u64, u64) | FootnoteBackrefs(String, u64, u64)`
@@ -11339,6 +11345,16 @@ An owned, editable tree. HTML rendering depends only on this AST.
 
 References: [`core@1/List`](#def-core_401_2fList), [`std@1/markdown/Kind`](#def-std_401_2fmarkdown_2fKind)
 
+<a id="def-std_401_2fmarkdown_2fNodeChildren"></a>
+
+- `pub opaque type markdown.NodeChildren: copyable + inert + noalloc_drop uses {}`
+
+<a id="def-std_401_2fmarkdown_2fNodeView"></a>
+
+- `@loop_source(node_children_open, node_children_next) pub opaque type markdown.NodeView: copyable + inert + noalloc_drop uses {}`
+
+An unforgeable local borrow of one document, never an independently usable ID.
+
 <a id="def-std_401_2fmarkdown_2fOptions"></a>
 
 - `pub type markdown.Options { tables: bool, strikethrough: bool, autolinks: bool, task_lists: bool, footnotes: bool, allow_unsafe: bool, tagfilter: bool, }`
@@ -11346,6 +11362,36 @@ References: [`core@1/List`](#def-core_401_2fList), [`std@1/markdown/Kind`](#def-
 Extensions are opt-in. Rendering omits raw HTML and unsafe destinations by default.
 
 References: [`core@1/bool`](#def-core_401_2fbool)
+
+<a id="def-std_401_2fmarkdown_2fOrigin"></a>
+
+- `pub type markdown.Origin = Cover(ByteRange) | Synthetic(SyntheticReason, Option[ByteRange]) | Unavailable( UnavailableReason )`
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`std@1/markdown/ByteRange`](#def-std_401_2fmarkdown_2fByteRange), [`std@1/markdown/SyntheticReason`](#def-std_401_2fmarkdown_2fSyntheticReason), [`std@1/markdown/UnavailableReason`](#def-std_401_2fmarkdown_2fUnavailableReason)
+
+<a id="def-std_401_2fmarkdown_2fOrigin_23Cover"></a>
+
+- `Cover(ByteRange) -> markdown.Origin`
+
+Variant of markdown.Origin.
+
+References: [`std@1/markdown/ByteRange`](#def-std_401_2fmarkdown_2fByteRange)
+
+<a id="def-std_401_2fmarkdown_2fOrigin_23Synthetic"></a>
+
+- `Synthetic(SyntheticReason, Option[ByteRange]) -> markdown.Origin`
+
+Variant of markdown.Origin.
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`std@1/markdown/ByteRange`](#def-std_401_2fmarkdown_2fByteRange), [`std@1/markdown/SyntheticReason`](#def-std_401_2fmarkdown_2fSyntheticReason)
+
+<a id="def-std_401_2fmarkdown_2fOrigin_23Unavailable"></a>
+
+- `Unavailable( UnavailableReason ) -> markdown.Origin`
+
+Variant of markdown.Origin.
+
+References: [`std@1/markdown/UnavailableReason`](#def-std_401_2fmarkdown_2fUnavailableReason)
 
 <a id="def-std_401_2fmarkdown_2fOutputLimit"></a>
 
@@ -11387,6 +11433,13 @@ Variant of markdown.ParseLimit.
 
 Variant of markdown.ParseLimit.
 
+<a id="def-std_401_2fmarkdown_2fParsedDocument"></a>
+
+- `pub opaque type markdown.ParsedDocument: copyable + inert + noalloc_drop uses {}`
+
+One immutable record AST, scalar source rows and original line index. No source
+String, parser arena or editable Node is retained.
+
 <a id="def-std_401_2fmarkdown_2fRenderError"></a>
 
 - `pub type markdown.RenderError[E] = LimitReached(u64) | Sink(E)`
@@ -11409,17 +11462,149 @@ References: [`core@1/u64`](#def-core_401_2fu64)
 
 Variant of markdown.RenderError.
 
+<a id="def-std_401_2fmarkdown_2fSourceField"></a>
+
+- `pub type markdown.SourceField = Destination | Title | CodeInfo | TaskMarker`
+
+<a id="def-std_401_2fmarkdown_2fSourceField_23CodeInfo"></a>
+
+- `CodeInfo -> markdown.SourceField`
+
+Variant of markdown.SourceField.
+
+<a id="def-std_401_2fmarkdown_2fSourceField_23Destination"></a>
+
+- `Destination -> markdown.SourceField`
+
+Variant of markdown.SourceField.
+
+<a id="def-std_401_2fmarkdown_2fSourceField_23TaskMarker"></a>
+
+- `TaskMarker -> markdown.SourceField`
+
+Variant of markdown.SourceField.
+
+<a id="def-std_401_2fmarkdown_2fSourceField_23Title"></a>
+
+- `Title -> markdown.SourceField`
+
+Variant of markdown.SourceField.
+
+<a id="def-std_401_2fmarkdown_2fSourcePoint"></a>
+
+- `pub type markdown.SourcePoint { line: u64, byte_column: u64, }`
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fmarkdown_2fSyntheticReason"></a>
+
+- `pub type markdown.SyntheticReason = InsertedBreak | MissingTableCell | FootnoteBackrefs | FootnoteSpacer | EmptyAutolinkFragment | GeneratedField`
+
+<a id="def-std_401_2fmarkdown_2fSyntheticReason_23EmptyAutolinkFragment"></a>
+
+- `EmptyAutolinkFragment -> markdown.SyntheticReason`
+
+Variant of markdown.SyntheticReason.
+
+<a id="def-std_401_2fmarkdown_2fSyntheticReason_23FootnoteBackrefs"></a>
+
+- `FootnoteBackrefs -> markdown.SyntheticReason`
+
+Variant of markdown.SyntheticReason.
+
+<a id="def-std_401_2fmarkdown_2fSyntheticReason_23FootnoteSpacer"></a>
+
+- `FootnoteSpacer -> markdown.SyntheticReason`
+
+Variant of markdown.SyntheticReason.
+
+<a id="def-std_401_2fmarkdown_2fSyntheticReason_23GeneratedField"></a>
+
+- `GeneratedField -> markdown.SyntheticReason`
+
+Variant of markdown.SyntheticReason.
+
+<a id="def-std_401_2fmarkdown_2fSyntheticReason_23InsertedBreak"></a>
+
+- `InsertedBreak -> markdown.SyntheticReason`
+
+Variant of markdown.SyntheticReason.
+
+<a id="def-std_401_2fmarkdown_2fSyntheticReason_23MissingTableCell"></a>
+
+- `MissingTableCell -> markdown.SyntheticReason`
+
+Variant of markdown.SyntheticReason.
+
+<a id="def-std_401_2fmarkdown_2fUnavailableReason"></a>
+
+- `pub type markdown.UnavailableReason = DetachedNode | NotPresent | NotApplicable`
+
+<a id="def-std_401_2fmarkdown_2fUnavailableReason_23DetachedNode"></a>
+
+- `DetachedNode -> markdown.UnavailableReason`
+
+Variant of markdown.UnavailableReason.
+
+<a id="def-std_401_2fmarkdown_2fUnavailableReason_23NotApplicable"></a>
+
+- `NotApplicable -> markdown.UnavailableReason`
+
+Variant of markdown.UnavailableReason.
+
+<a id="def-std_401_2fmarkdown_2fUnavailableReason_23NotPresent"></a>
+
+- `NotPresent -> markdown.UnavailableReason`
+
+Variant of markdown.UnavailableReason.
+
 <a id="def-std_401_2fmarkdown_2fdefault_5foptions"></a>
 
 - `pub fn markdown.default_options() -> Options uses {}`
 
 References: [`std@1/markdown/Options`](#def-std_401_2fmarkdown_2fOptions)
 
+<a id="def-std_401_2fmarkdown_2ffield_5forigin"></a>
+
+- `pub fn markdown.field_origin(node: NodeView, field: SourceField) -> Origin uses {}`
+
+References: [`std@1/markdown/NodeView`](#def-std_401_2fmarkdown_2fNodeView), [`std@1/markdown/Origin`](#def-std_401_2fmarkdown_2fOrigin), [`std@1/markdown/SourceField`](#def-std_401_2fmarkdown_2fSourceField)
+
+<a id="def-std_401_2fmarkdown_2ffirst_5fchild"></a>
+
+- `pub fn markdown.first_child(node: NodeView) -> Option[NodeView] in node uses {}`
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`std@1/markdown/NodeView`](#def-std_401_2fmarkdown_2fNodeView)
+
 <a id="def-std_401_2fmarkdown_2fgfm_5foptions"></a>
 
 - `pub fn markdown.gfm_options() -> Options uses {}`
 
 References: [`std@1/markdown/Options`](#def-std_401_2fmarkdown_2fOptions)
+
+<a id="def-std_401_2fmarkdown_2finto_5fnode"></a>
+
+- `pub fn markdown.into_node(take document: unique ParsedDocument) -> unique Node uses {}`
+
+References: [`std@1/markdown/Node`](#def-std_401_2fmarkdown_2fNode), [`std@1/markdown/ParsedDocument`](#def-std_401_2fmarkdown_2fParsedDocument)
+
+<a id="def-std_401_2fmarkdown_2fkind"></a>
+
+- `pub fn markdown.kind(node: NodeView) -> Kind in node uses {}`
+
+References: [`std@1/markdown/Kind`](#def-std_401_2fmarkdown_2fKind), [`std@1/markdown/NodeView`](#def-std_401_2fmarkdown_2fNodeView)
+
+<a id="def-std_401_2fmarkdown_2fnext_5fsibling"></a>
+
+- `pub fn markdown.next_sibling(node: NodeView) -> Option[NodeView] in node uses {}`
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`std@1/markdown/NodeView`](#def-std_401_2fmarkdown_2fNodeView)
+
+<a id="def-std_401_2fmarkdown_2forigin"></a>
+
+- `pub fn markdown.origin(node: NodeView) -> Origin uses {}`
+
+References: [`std@1/markdown/NodeView`](#def-std_401_2fmarkdown_2fNodeView), [`std@1/markdown/Origin`](#def-std_401_2fmarkdown_2fOrigin)
 
 <a id="def-std_401_2fmarkdown_2fparse"></a>
 
@@ -11447,6 +11632,15 @@ successful tree. This removes a consumer's completed-tree ownership copy.
 
 References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/markdown/Node`](#def-std_401_2fmarkdown_2fNode), [`std@1/markdown/Options`](#def-std_401_2fmarkdown_2fOptions), [`std@1/markdown/ParseBudget`](#def-std_401_2fmarkdown_2fParseBudget), [`std@1/markdown/ParseLimit`](#def-std_401_2fmarkdown_2fParseLimit)
 
+<a id="def-std_401_2fmarkdown_2fparse_5flocated_5fbounded"></a>
+
+- `pub fn markdown.parse_located_bounded(take source: String, options: Options, budget: ParseBudget) -> Result[ unique ParsedDocument, ParseLimit ] uses {}`
+
+SourceBytes precedes all metadata allocation. Located-only records consume
+the same cumulative work allowance; no refund and no partially located tree.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/markdown/Options`](#def-std_401_2fmarkdown_2fOptions), [`std@1/markdown/ParseBudget`](#def-std_401_2fmarkdown_2fParseBudget), [`std@1/markdown/ParseLimit`](#def-std_401_2fmarkdown_2fParseLimit), [`std@1/markdown/ParsedDocument`](#def-std_401_2fmarkdown_2fParsedDocument)
+
 <a id="def-std_401_2fmarkdown_2fparse_5fowned"></a>
 
 - `pub fn markdown.parse_owned(take source: String, options: Options) -> unique Node uses {}`
@@ -11456,6 +11650,12 @@ temporary parser records. Payload construction still allocates and copies.
 Borrow for validation, then move or freeze the completed tree without copying.
 
 References: [`core@1/String`](#def-core_401_2fString), [`std@1/markdown/Node`](#def-std_401_2fmarkdown_2fNode), [`std@1/markdown/Options`](#def-std_401_2fmarkdown_2fOptions)
+
+<a id="def-std_401_2fmarkdown_2fpoint"></a>
+
+- `pub fn markdown.point(document: ParsedDocument, offset: u64) -> Option[SourcePoint] uses {}`
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/u64`](#def-core_401_2fu64), [`std@1/markdown/ParsedDocument`](#def-std_401_2fmarkdown_2fParsedDocument), [`std@1/markdown/SourcePoint`](#def-std_401_2fmarkdown_2fSourcePoint)
 
 <a id="def-std_401_2fmarkdown_2frender_5fhtml"></a>
 
@@ -11493,6 +11693,18 @@ References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/u64`](#def-core_
 Render an AST with explicit safety and GFM tag filter options.
 
 References: [`core@1/String`](#def-core_401_2fString), [`std@1/markdown/Node`](#def-std_401_2fmarkdown_2fNode), [`std@1/markdown/Options`](#def-std_401_2fmarkdown_2fOptions)
+
+<a id="def-std_401_2fmarkdown_2froot"></a>
+
+- `pub fn markdown.root(document: ParsedDocument) -> NodeView in document uses {}`
+
+References: [`std@1/markdown/NodeView`](#def-std_401_2fmarkdown_2fNodeView), [`std@1/markdown/ParsedDocument`](#def-std_401_2fmarkdown_2fParsedDocument)
+
+<a id="def-std_401_2fmarkdown_2fsource_5flength"></a>
+
+- `pub fn markdown.source_length(document: ParsedDocument) -> u64 uses {}`
+
+References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/markdown/ParsedDocument`](#def-std_401_2fmarkdown_2fParsedDocument)
 
 <a id="def-std_401_2fmarkdown_2fto_5fhtml"></a>
 
