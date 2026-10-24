@@ -659,3 +659,25 @@ fn sealed_storage_dictionary_constant_33_allocation_retains_origin() {
         "unique xs",
     );
 }
+
+#[test]
+fn sealed_storage_dictionary_forms_33_literal_allocation_origin() {
+    rejected(
+        &region(
+            "fn(root:List[u64])->u64{let ops=READ;ops.read(root)}",
+            "type ReadOps{read:fn(List[u64])->u64 uses{}}\nconst READ:ReadOps=ReadOps(read:fn(xs:List[u64])->u64 uses{}{let copied=unique xs;list.len(copied)});",
+        ),
+        "unique xs",
+    );
+}
+
+#[test]
+fn sealed_storage_dictionary_forms_33_generic_allocation_origin() {
+    rejected(
+        &region(
+            "fn(root:List[u64])->u64{let ops=READ;ops.read(root)}",
+            "type ReadOps{read:fn(List[u64])->u64 uses{}}\nconst READ:ReadOps=ReadOps(read:read);\nfn read[T:plain](xs:List[T])->u64 uses{}{let copied=unique xs;list.len(copied)}",
+        ),
+        "unique xs",
+    );
+}

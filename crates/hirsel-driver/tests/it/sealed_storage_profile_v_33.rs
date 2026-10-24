@@ -1435,3 +1435,17 @@ fn sealed_storage_dictionary_v_33_open_constant_code_refuses_before_closing() {
     input.storage_profiles = validate(&input).profiles;
     map_unknown(validate(&input));
 }
+
+#[test]
+fn sealed_storage_dictionary_forms_33_literal_alias_projection() {
+    export_and_import(
+        "type ReadOps{read:fn(List[u64])->u64 uses{}}\nconst BASE:ReadOps=ReadOps(read:fn(xs:List[u64])->u64 uses{}{list.len(xs)});\nconst ALIAS:ReadOps=BASE;\nconst READ:ReadOps=ReadOps(read:(ALIAS).read);\npub fn main(){let mut r=arena.with(fn(a:Arena)->Region[List[u64]]{let root:List[u64] in a=[7u64];arena.seal(take a,take root)});let n=region.with(mut r,fn(root:List[u64])->u64{let ops=READ;ops.read(root)});}",
+    );
+}
+
+#[test]
+fn sealed_storage_dictionary_forms_33_closed_generic_member() {
+    export_and_import(
+        "type ReadOps{read:fn(List[u64])->u64 uses{}}\nconst READ:ReadOps=ReadOps(read:read);\nfn read[T](xs:List[T])->u64 uses{}{list.len(xs)}\npub fn main(){let mut r=arena.with(fn(a:Arena)->Region[List[u64]]{let root:List[u64] in a=[7u64];arena.seal(take a,take root)});let n=region.with(mut r,fn(root:List[u64])->u64{let ops=READ;ops.read(root)});}",
+    );
+}
