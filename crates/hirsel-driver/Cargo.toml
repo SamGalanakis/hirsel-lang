@@ -7,7 +7,6 @@ rust-version.workspace = true
 
 [dependencies]
 hirsel-validate = { path = "../hirsel-validate" }
-hirsel-artifact-store = { path = "../hirsel-artifact-store" }
 base64 = "=0.22.1"
 hirsel-graph = { path = "../hirsel-graph" }
 hirsel-guard = { path = "../hirsel-guard" }
@@ -54,6 +53,7 @@ sha2 = "0.10"
 sha2 = "0.10"
 
 [dev-dependencies]
+hirsel-artifact-store = { path = "../hirsel-artifact-store" }
 hirsel-intern = { path = "../hirsel-intern", features = ["id-salt"] }
 hirsel-lexer = { path = "../hirsel-lexer" }
 hirsel-parser = { path = "../hirsel-parser" }

@@ -1,8 +1,8 @@
 //! Runtime archives and derivations are ordinary products in the selected store.
 //! Files here are materializations only; no archive/receipt cache grants reuse.
 use super::{NativeError, StageName, TargetSpec};
-use hirsel_artifact_store::{Action, Address, Domain, Reference};
 use hirsel_engine::store::ResultStore;
+use hirsel_engine::store::{Action, Address, Domain, Reference};
 use hirsel_syntax::ContentHash;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};

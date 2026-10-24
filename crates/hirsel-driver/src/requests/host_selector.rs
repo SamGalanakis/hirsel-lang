@@ -599,7 +599,7 @@ mod tests {
                     growth: 0,
                 },
             )?;
-            let error = hirsel_artifact_store::Domain {
+            let error = hirsel_engine::store::Domain {
                 kind: 0x4600_00fe,
                 schema: 1,
             }

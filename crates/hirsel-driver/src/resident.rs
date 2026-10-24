@@ -89,7 +89,7 @@ pub enum RequestError<E> {
     /// The owning transport host shut down before query completion.
     Cancelled,
     /// Runtime-owned immutable diagnostics. A failed query never runs readiness.
-    Query(hirsel_artifact_store::Reference),
+    Query(hirsel_engine::store::Reference),
     Output(E),
 }
 

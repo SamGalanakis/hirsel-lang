@@ -1,7 +1,7 @@
 //! Native query descriptors. Content references convey integrity, never proof
 //! authority; materialization independently checks the native stage and inputs.
-use hirsel_artifact_store::Reference;
 pub use hirsel_engine::runtime::ProductRef;
+use hirsel_engine::store::Reference;
 pub use hirsel_rc::arena_credit::equations::LocalArenaEquations;
 use hirsel_syntax::ContentHash;
 use std::sync::Arc;
@@ -32,7 +32,7 @@ impl NativeRootKey {
             .map_err(|e| e.to_string())?;
         Ok(hirsel_engine::runtime::QueryId {
             kind: ROOT_KIND,
-            address: hirsel_artifact_store::Address(ContentHash::of_parts(
+            address: hirsel_engine::store::Address(ContentHash::of_parts(
                 "hirsel.native.root-address.v1",
                 [selection.as_slice()],
             )),
@@ -88,8 +88,8 @@ impl InstanceAddress {
             address: self.address(READY_KIND),
         }
     }
-    pub fn address(&self, kind: u32) -> hirsel_artifact_store::Address {
-        hirsel_artifact_store::Address(ContentHash::of_parts(
+    pub fn address(&self, kind: u32) -> hirsel_engine::store::Address {
+        hirsel_engine::store::Address(ContentHash::of_parts(
             "hirsel.native.instance-address.v1",
             [
                 kind.to_le_bytes().as_slice(),
@@ -128,7 +128,7 @@ pub struct ComponentKey {
 }
 
 impl ComponentKey {
-    pub fn address(&self) -> Result<hirsel_artifact_store::Address, String> {
+    pub fn address(&self) -> Result<hirsel_engine::store::Address, String> {
         if self.members.is_empty()
             || self
                 .members
@@ -161,7 +161,7 @@ impl ComponentKey {
             parts.push(a.to_le_bytes().to_vec());
             parts.push(b.to_le_bytes().to_vec());
         }
-        Ok(hirsel_artifact_store::Address(ContentHash::of_parts(
+        Ok(hirsel_engine::store::Address(ContentHash::of_parts(
             "hirsel.native.component-address.v1",
             parts.iter().map(Vec::as_slice),
         )))
@@ -365,7 +365,7 @@ pub fn ready_product(
         if !seen.insert(address) || record.domain != READY_RECORD_DOMAIN {
             return Err("duplicate or foreign optimizer descriptor".into());
         }
-        let address = hirsel_artifact_store::Address(address);
+        let address = hirsel_engine::store::Address(address);
         let current = store
             .lookup_product(address)
             .ok_or("missing optimizer association")?;
@@ -389,7 +389,7 @@ pub fn ready_product(
     })
 }
 
-pub const READY_RECORD_DOMAIN: hirsel_artifact_store::Domain = hirsel_artifact_store::Domain {
+pub const READY_RECORD_DOMAIN: hirsel_engine::store::Domain = hirsel_engine::store::Domain {
     kind: READY_KIND,
     schema: 1,
 };

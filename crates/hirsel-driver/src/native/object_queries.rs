@@ -6,7 +6,7 @@
 //! outputs before loading a body, and retain equal recomputation's output.
 //! Changed manifests still invoke the platform linker; no image patching.
 use super::queries::{InstanceAddress, NativeProducts, ReadyProduct};
-use hirsel_artifact_store::{Action, Address, Domain, MAX_RECORD, Output, Reference};
+use hirsel_engine::store::{Action, Address, Domain, MAX_RECORD, Output, Reference};
 use hirsel_codec::{Snapshot, snapshot_struct};
 use hirsel_engine::runtime::ProductRef;
 use hirsel_engine::store::{ResultStore, VerifyStore};
@@ -545,7 +545,7 @@ fn action(domain: &str, address: Address, reads: &[Reference]) -> Action {
 fn require(
     store: &dyn ResultStore,
     reference: Reference,
-) -> Result<hirsel_artifact_store::Bytes, String> {
+) -> Result<hirsel_engine::store::Bytes, String> {
     store
         .get_content(reference)
         .ok_or_else(|| "missing or corrupt native product content".into())
