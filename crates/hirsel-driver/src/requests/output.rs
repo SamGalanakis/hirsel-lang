@@ -106,12 +106,21 @@ impl TirProvider for ExecutionProvider<'_> {
         self.0.instance_body(path, actuals)
     }
 }
+/// Compact linked observation tables. Site ordinals use the selected source
+/// anchors, including generated definitions; no Ready/Value body is retained.
+#[derive(Clone, Debug, Default)]
+pub struct NativeObservation {
+    pub failure_rules: Vec<String>,
+    pub sites: std::collections::BTreeMap<u64, (DefPath, hirsel_lir::ir::SiteRange)>,
+    pub anchors: std::collections::BTreeMap<DefPath, Vec<hirsel_span::Anchor>>,
+}
 /// Executable readiness includes a materialized executable and frozen launch
 /// metadata. Construction follows successful Link/materialization checks; the
 /// admission/scratch owner lives until the last output user releases it.
 pub struct NativeExecution {
     pub executable: PathBuf,
     pub product: hirsel_engine::runtime::ProductRef,
+    pub observation: NativeObservation,
     pub entry: DefPath,
     pub signature: SignatureRef,
     pub sources: SourceMap,
