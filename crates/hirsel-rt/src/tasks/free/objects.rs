@@ -11,8 +11,10 @@
 //! begins, and the role path registers its wait. A completed put or send whose
 //! successor is registered unlocks the cell, then notifies it under the role.
 //! The quantum's end, a placement correction, pending root releases, a
-//! deferred child, replay and every creation, close or failure keep the role
-//! path. This follows Tokio's reserve-oldest then unlock-before-wake order
+//! deferred child and every creation, close or failure keep the role path.
+//! Replay admits an immediate op through the task's own token, captured once
+//! under the role: the cut, the op's Done and its object's version order are
+//! the task's cursor and the shared version cells, never the scheduler. This follows Tokio's reserve-oldest then unlock-before-wake order
 //! (`tokio/src/sync/batch_semaphore.rs:334-402`, ce685ee6) and Verona's
 //! single-resource successor handoff (`src/rt/boc/behaviourcore.h:648-677`).
 
@@ -38,6 +40,8 @@ pub(crate) struct OpLocal {
     endpoints: Leases<Endpoint>,
     /// The last role observation that this task was not canceled.
     uncanceled: Option<Uncanceled>,
+    /// This task's replay reservation; set once, under the role.
+    replay: Option<super::replay::Token>,
 }
 
 struct Endpoint {
@@ -80,11 +84,21 @@ impl<T> Leases<T> {
 
 /// Resolution under the role: remember a mutex cell for later operations.
 pub(super) fn keep_mutex(ctx: *mut TaskCtx, word: u64, cell: &Arc<crate::sync::MutexCell>) {
+    keep_replay(ctx);
     unsafe { (*ctx).free_ops.mutexes.keep(word, || cell.clone()) };
 }
 
 pub(super) fn keep_image(ctx: *mut TaskCtx, word: u64, image: &Arc<crate::sync::AtomicImage>) {
+    keep_replay(ctx);
     unsafe { (*ctx).free_ops.images.keep(word, || image.clone()) };
+}
+
+/// A lease is useless in replay without the token, so take both together.
+fn keep_replay(ctx: *mut TaskCtx) {
+    if super::replay::on(ctx) && unsafe { (*ctx).free_ops.replay.is_none() } {
+        let token = super::replay::token(ctx);
+        unsafe { (*ctx).free_ops.replay = token };
+    }
 }
 
 pub(super) fn keep_endpoint(
@@ -94,6 +108,7 @@ pub(super) fn keep_endpoint(
     sender: bool,
     cell: &Arc<crate::channels::ChannelCell>,
 ) {
+    keep_replay(ctx);
     unsafe {
         (*ctx).free_ops.endpoints.keep(word, || Endpoint {
             channel,
@@ -136,7 +151,7 @@ fn admitted(ctx: *mut TaskCtx) -> bool {
         return false;
     }
     task.run_ref().free_objects.load(Ordering::Acquire)
-        && !task.run_ref().free_replay
+        && (!task.run_ref().free_replay || task.free_ops.replay.is_some())
         && task.role_depth == 0
         && task.free_ops.deferred.is_none()
         && !task.roots.has_pending()
@@ -144,10 +159,32 @@ fn admitted(ctx: *mut TaskCtx) -> bool {
         && crate::stop::observe(ctx).is_ok()
 }
 
+/// The replay binding of an op from its task's token, `Some(None)` outside
+/// replay. `None` leaves the op unbegun for the role path.
+fn replayed(
+    ctx: *mut TaskCtx,
+    handle: Option<hirsel_free::session::Handle>,
+) -> Option<Option<super::replay::Token>> {
+    match unsafe { &(*ctx).free_ops.replay } {
+        None => Some(None),
+        Some(token) => token.immediate(handle).then(|| Some(token.clone())),
+    }
+}
+
+/// Begin an admitted immediate op: its replay token already passed the cut.
+fn begin(ctx: *mut TaskCtx, replay: Option<&super::replay::Token>) {
+    match replay {
+        None => super::record::begin(ctx),
+        Some(token) => super::record::begin_replayed(ctx, token),
+    }
+}
+
 /// The end of an immediate operation: its quantum continues here, or the
-/// role path gives up the worker.
+/// role path gives up the worker. A replayed task that reached its cut parks
+/// at the role path's boundary, as its role-held op would.
 unsafe fn tail(ctx: *mut TaskCtx) -> Stopped<()> {
-    if unsafe { crate::pool::free::proceed(ctx) } {
+    let cut = unsafe { (*ctx).free_ops.replay.as_ref() }.is_some_and(|token| token.at_cut());
+    if !cut && unsafe { crate::pool::free::proceed(ctx) } {
         if let Some(metrics) = &unsafe { (*ctx).run_ref() }.worker_metrics {
             metrics.elision();
         }
@@ -183,22 +220,32 @@ pub(crate) unsafe fn mutex_take(
     // The lease outlives this op: only the role path adds or drops leases.
     let cell = Arc::as_ptr(unsafe { (*ctx).free_ops.mutexes.get(word) }?);
     let cell = unsafe { &*cell };
+    let replay = replayed(ctx, Some((crate::free::MUTEX, word)))?;
+    let replay = replay.map(|token| token.bind((crate::free::MUTEX, word)));
     let me = unsafe { (*ctx).task_id };
     let mut state = cell.lock();
     // A reserved front waiter owns the next permit; never overtake it.
     if !state.permit.ready_for(me) {
         return None;
     }
-    super::record::begin(ctx);
+    begin(ctx, replay.as_ref().map(|object| object.token()));
     let mut result = Acquired::Pending;
-    let publication = super::mutex::touched(ctx, Phase::Done, cell, &mut state, None, |state| {
-        result = state.permit.acquire(me, &mut false);
-        if result == Acquired::Payload {
-            unsafe { cell.take(state, payload) };
-        }
-        "take"
-    });
+    let publication = super::mutex::touched(
+        ctx,
+        Phase::Done,
+        cell,
+        &mut state,
+        replay.as_ref(),
+        |state| {
+            result = state.permit.acquire(me, &mut false);
+            if result == Acquired::Payload {
+                unsafe { cell.take(state, payload) };
+            }
+            "take"
+        },
+    );
     drop(state);
+    drop(replay);
     Some(publication.and_then(|()| {
         unsafe { out.write(u32::from(result == Acquired::Dead)) };
         unsafe { tail(ctx) }
@@ -217,16 +264,26 @@ pub(crate) unsafe fn mutex_put(
     }
     let cell = Arc::as_ptr(unsafe { (*ctx).free_ops.mutexes.get(word) }?);
     let cell = unsafe { &*cell };
-    super::record::begin(ctx);
+    let replay = replayed(ctx, Some((crate::free::MUTEX, word)))?;
+    let replay = replay.map(|token| token.bind((crate::free::MUTEX, word)));
+    begin(ctx, replay.as_ref().map(|object| object.token()));
     let mut state = cell.lock();
     let mut next = None;
     let mut token = None;
-    let publication = super::mutex::touched(ctx, Phase::Done, cell, &mut state, None, |state| {
-        next = unsafe { cell.put(state, payload) };
-        token = next.and_then(|next| state.take_token(next));
-        "put"
-    });
+    let publication = super::mutex::touched(
+        ctx,
+        Phase::Done,
+        cell,
+        &mut state,
+        replay.as_ref(),
+        |state| {
+            next = unsafe { cell.put(state, payload) };
+            token = next.and_then(|next| state.take_token(next));
+            "put"
+        },
+    );
     drop(state);
+    drop(replay);
     Some(publication.and_then(|()| match (next, token) {
         (None, _) => unsafe { tail(ctx) },
         // The permit is reserved for next before its wake, after the unlock.
@@ -257,11 +314,11 @@ pub(crate) unsafe fn atomic_load(
     if image.size() as u64 != size {
         return None;
     }
-    super::record::begin(ctx);
-    Some(
-        unsafe { super::record::load_image(ctx, image, slot, size, None) }
-            .and_then(|()| unsafe { scheduling_op(ctx) }),
-    )
+    let replay = replayed(ctx, None)?;
+    begin(ctx, replay.as_ref());
+    let result = unsafe { super::record::load_image(ctx, image, slot, size, replay.as_ref()) };
+    drop(replay);
+    Some(result.and_then(|()| unsafe { scheduling_op(ctx) }))
 }
 
 /// # Safety
@@ -279,11 +336,11 @@ pub(crate) unsafe fn atomic_store(
     if image.size() as u64 != size {
         return None;
     }
-    super::record::begin(ctx);
-    Some(
-        unsafe { super::record::store_image(ctx, image, value, None) }
-            .and_then(|()| unsafe { scheduling_op(ctx) }),
-    )
+    let replay = replayed(ctx, None)?;
+    begin(ctx, replay.as_ref());
+    let result = unsafe { super::record::store_image(ctx, image, value, replay.as_ref()) };
+    drop(replay);
+    Some(result.and_then(|()| unsafe { scheduling_op(ctx) }))
 }
 
 /// Atomic entries end at yield_now's scheduling point, which counts its op.
@@ -311,11 +368,13 @@ pub(crate) unsafe fn channel_send(
     }
     let channel = endpoint.channel;
     let cell = unsafe { &*Arc::as_ptr(&endpoint.cell) };
-    super::record::begin(ctx);
+    let handle = (crate::free::CHANNEL, u64::from(channel));
+    let replay = replayed(ctx, Some(handle))?.map(|token| token.bind(handle));
+    begin(ctx, replay.as_ref().map(|object| object.token()));
     let mut state = cell.lock();
     cell.prepare_send(&mut state);
     // Send deliberately does not observe cancellation (CONC-3).
-    let publication = super::channel::sent(ctx, cell, &mut state, message, out, None);
+    let publication = super::channel::sent(ctx, cell, &mut state, message, out, replay.as_ref());
     // A receiver registers before its first poll takes this latch, so reading
     // under the latch cannot miss one that will not see this message. The
     // oldest receiver that parked with a token is woken after the unlock.
@@ -325,6 +384,7 @@ pub(crate) unsafe fn channel_send(
     let token = if done { state.next_token() } else { None };
     let parked = cell.parked();
     drop(state);
+    drop(replay);
     Some(publication.and_then(|status| {
         if let Some(token) = token {
             unsafe { crate::pool::free::notify((*ctx).run_ptr(), &token) };
@@ -347,7 +407,9 @@ pub(crate) unsafe fn channel_receive(
     message: *mut u8,
     out: *mut u32,
 ) -> Option<Stopped<()>> {
-    if !admitted(ctx) {
+    // A replayed receive keeps its role path: its cancel outcome and retry
+    // wait are the scheduler's.
+    if !admitted(ctx) || unsafe { (*ctx).free_ops.replay.is_some() } {
         return None;
     }
     let shield = unsafe { (*ctx).shield };

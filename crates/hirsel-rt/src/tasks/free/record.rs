@@ -339,6 +339,13 @@ pub(super) fn begin(ctx: *mut TaskCtx) {
     }
 }
 
+/// [`begin`] for an immediate op whose task token checked its cut: replay
+/// keeps no recorder ordinal, and entry has nothing pending to apply.
+pub(super) fn begin_replayed(ctx: *mut TaskCtx, replay: &super::replay::Token) {
+    entry(ctx);
+    replay.begin();
+}
+
 /// Publish another phase of the current ordinal; no section escapes action.
 pub(super) fn publish<T>(
     ctx: *mut TaskCtx,

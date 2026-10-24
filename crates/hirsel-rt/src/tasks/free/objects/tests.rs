@@ -147,11 +147,18 @@ struct Disjoint {
     endpoints: [u64; 2],
     atomic: u64,
     window: *const Window,
+    /// This child's own role acquisitions across its measured rounds'
+    /// mutex, send and atomic ops; a replayed receive keeps the role path.
+    roles: AtomicU64,
 }
 
-unsafe fn round(ctx: *mut TaskCtx, objects: &mut Disjoint, value: u64) {
+/// One round; returns the calling thread's role acquisitions outside its
+/// receive.
+unsafe fn round(ctx: *mut TaskCtx, objects: &mut Disjoint, value: u64) -> u64 {
     let mut payload = [0u64; 2];
+    let mut message = [1u64, value];
     let mut status = 99;
+    let before = role::thread_acquisitions();
     unsafe {
         hirsel_rt_v2_mutex_take(
             ctx,
@@ -163,7 +170,6 @@ unsafe fn round(ctx: *mut TaskCtx, objects: &mut Disjoint, value: u64) {
         payload[1] += 1;
         hirsel_rt_v2_mutex_put(ctx, &objects.mutex, payload.as_mut_ptr().cast());
         assert_eq!(payload, [0, 0]);
-        let mut message = [1u64, value];
         hirsel_rt_v2_channel_send(
             ctx,
             &mut status,
@@ -171,6 +177,9 @@ unsafe fn round(ctx: *mut TaskCtx, objects: &mut Disjoint, value: u64) {
             message.as_mut_ptr().cast(),
         );
         assert_eq!((status, message), (crate::channels::DONE, [0, 0]));
+    }
+    let roles = role::thread_acquisitions() - before;
+    unsafe {
         hirsel_rt_v2_channel_receive(
             ctx,
             0,
@@ -180,11 +189,15 @@ unsafe fn round(ctx: *mut TaskCtx, objects: &mut Disjoint, value: u64) {
             message.as_mut_ptr().cast(),
         );
         assert_eq!((status, message), (crate::channels::DONE, [1, value]));
+    }
+    let before = role::thread_acquisitions();
+    unsafe {
         hirsel_rt_v2_atomic_store(ctx, &objects.atomic, (&raw const value).cast(), 8);
         let mut loaded = 0u64;
         hirsel_rt_v2_atomic_load(ctx, &objects.atomic, (&raw mut loaded).cast(), 8);
         assert_eq!(loaded, value);
     }
+    roles + role::thread_acquisitions() - before
 }
 
 unsafe extern "C" fn disjoint_child(ctx: *mut TaskCtx, env: *mut Header, _: u64, _: u64) -> u8 {
@@ -196,13 +209,114 @@ unsafe extern "C" fn disjoint_child(ctx: *mut TaskCtx, env: *mut Header, _: u64,
     unsafe { crate::pool::free::renew(ctx) };
     window.ready.fetch_add(1, Ordering::AcqRel);
     wait_until("the window opens", || window.go.load(Ordering::Acquire));
+    let mut roles = 0;
     for value in 1..=ROUNDS {
-        unsafe { round(ctx, objects, value) };
+        roles += unsafe { round(ctx, objects, value) };
     }
+    objects.roles.store(roles, Ordering::Release);
     window.done.fetch_add(1, Ordering::AcqRel);
     wait_until("the window closes", || {
         window.release.load(Ordering::Acquire)
     });
+    STATUS_OK
+}
+
+/// The measured window's run-wide role acquisitions, and the children's own
+/// outside their receives.
+#[derive(Default)]
+struct Measured {
+    window: AtomicU64,
+    ops: AtomicU64,
+}
+
+/// Two children run immediate rounds on disjoint objects inside a window.
+unsafe fn immediate(ctx: *mut TaskCtx, measured: &Measured) -> u8 {
+    unsafe {
+        let start = (*(*ctx).run_ptr()).role.acquisitions();
+        let window = Window {
+            ready: AtomicU32::new(0),
+            go: AtomicBool::new(false),
+            done: AtomicU32::new(0),
+            release: AtomicBool::new(false),
+        };
+        let mut objects = Vec::new();
+        for _ in 0..2 {
+            let mutex = mutex(ctx, 0);
+            let mut endpoints = [0; 2];
+            let none = [0u64; 2];
+            hirsel_rt_v2_channel_open(
+                ctx,
+                std::ptr::null_mut(),
+                endpoints.as_mut_ptr(),
+                &0,
+                none.as_ptr().cast(),
+                2,
+            );
+            let mut atomic = 0;
+            hirsel_rt_v2_atomic_create(
+                ctx,
+                std::ptr::null_mut(),
+                &mut atomic,
+                (&0u64 as *const u64).cast(),
+                8,
+                0,
+                8,
+            );
+            objects.push(Disjoint {
+                mutex,
+                endpoints,
+                atomic,
+                window: &window,
+                roles: AtomicU64::new(0),
+            });
+        }
+        let mut scope = 0;
+        hirsel_rt_v2_task_scope_enter(ctx, std::ptr::null_mut(), &mut scope, &0);
+        for objects in &mut objects {
+            spawn(
+                ctx,
+                &scope,
+                disjoint_child,
+                (objects as *mut Disjoint).cast(),
+            );
+        }
+        wait_until("both children resolve their leases", || {
+            window.ready.load(Ordering::Acquire) == 2
+        });
+        let role = &(*(*ctx).run_ptr()).role;
+        let before = role.acquisitions();
+        assert!(
+            before > start,
+            "this run counts R: creation, spawn and resolution entered it"
+        );
+        window.go.store(true, Ordering::Release);
+        wait_until("both immediate loops finish", || {
+            window.done.load(Ordering::Acquire) == 2
+        });
+        measured
+            .window
+            .store(role.acquisitions() - before, Ordering::Release);
+        let ops = objects
+            .iter()
+            .map(|objects| objects.roles.load(Ordering::Acquire))
+            .sum();
+        measured.ops.store(ops, Ordering::Release);
+        window.release.store(true, Ordering::Release);
+        hirsel_rt_v2_task_scope_exit(ctx, 0, 0, &scope, 0);
+        // Each mutex kept one payload through every take and put.
+        for objects in &objects {
+            let mut payload = [0u64; 2];
+            let mut status = 99;
+            hirsel_rt_v2_mutex_take(
+                ctx,
+                &mut status,
+                &objects.mutex,
+                payload.as_mut_ptr().cast(),
+            );
+            assert_eq!((status, payload), (0, [1, ROUNDS + 1]));
+            hirsel_rt_v2_mutex_put(ctx, &objects.mutex, payload.as_mut_ptr().cast());
+        }
+    }
     STATUS_OK
 }
 
@@ -215,16 +329,24 @@ fn runtime50_immediate_objects_do_not_enter_role() {
         return;
     }
     let layouts = Layouts::new(Box::leak(Box::new(plain(16))), wrapper());
-    for recorded in [false, true] {
-        let recording = recorded.then(|| record::Recording::new(b"runtime50 immediate", false));
-        let install = recording.clone();
-        let acquisitions = Arc::new(AtomicU64::new(u64::MAX));
-        let observed = acquisitions.clone();
+    let run = || {
         let mut run = crate::host::BodyRun::new(4, false);
         run.free = true;
         let mut pointers = Vec::new();
         layouts.install(&mut run, &mut pointers);
         unsafe { run.use_physical_dispatch() };
+        (run, pointers)
+    };
+    let mut tape = None;
+    for recorded in [false, true] {
+        let recording = recorded.then(|| record::Recording::new(b"runtime50 immediate", false));
+        let install = recording.clone();
+        let measured = Arc::new(Measured {
+            window: AtomicU64::new(u64::MAX),
+            ..Default::default()
+        });
+        let observed = measured.clone();
+        let (run, _pointers) = run();
         let outcome = run.run(
             move |ctx| unsafe {
                 super::super::enable(ctx);
@@ -232,94 +354,17 @@ fn runtime50_immediate_objects_do_not_enter_role() {
                     recording.root(ctx);
                 }
             },
-            move |ctx| unsafe {
-                let start = (*(*ctx).run_ptr()).role.acquisitions();
-                let window = Window {
-                    ready: AtomicU32::new(0),
-                    go: AtomicBool::new(false),
-                    done: AtomicU32::new(0),
-                    release: AtomicBool::new(false),
-                };
-                let mut objects = Vec::new();
-                for _ in 0..2 {
-                    let mutex = mutex(ctx, 0);
-                    let mut endpoints = [0; 2];
-                    let none = [0u64; 2];
-                    hirsel_rt_v2_channel_open(
-                        ctx,
-                        std::ptr::null_mut(),
-                        endpoints.as_mut_ptr(),
-                        &0,
-                        none.as_ptr().cast(),
-                        2,
-                    );
-                    let mut atomic = 0;
-                    hirsel_rt_v2_atomic_create(
-                        ctx,
-                        std::ptr::null_mut(),
-                        &mut atomic,
-                        (&0u64 as *const u64).cast(),
-                        8,
-                        0,
-                        8,
-                    );
-                    objects.push(Disjoint {
-                        mutex,
-                        endpoints,
-                        atomic,
-                        window: &window,
-                    });
-                }
-                let mut scope = 0;
-                hirsel_rt_v2_task_scope_enter(ctx, std::ptr::null_mut(), &mut scope, &0);
-                for objects in &mut objects {
-                    spawn(
-                        ctx,
-                        &scope,
-                        disjoint_child,
-                        (objects as *mut Disjoint).cast(),
-                    );
-                }
-                wait_until("both children resolve their leases", || {
-                    window.ready.load(Ordering::Acquire) == 2
-                });
-                let role = &(*(*ctx).run_ptr()).role;
-                let before = role.acquisitions();
-                assert!(
-                    before > start,
-                    "this run counts R: creation, spawn and resolution entered it"
-                );
-                window.go.store(true, Ordering::Release);
-                wait_until("both immediate loops finish", || {
-                    window.done.load(Ordering::Acquire) == 2
-                });
-                observed.store(role.acquisitions() - before, Ordering::Release);
-                window.release.store(true, Ordering::Release);
-                hirsel_rt_v2_task_scope_exit(ctx, 0, 0, &scope, 0);
-                // Each mutex kept one payload through every take and put.
-                for objects in &objects {
-                    let mut payload = [0u64; 2];
-                    let mut status = 99;
-                    hirsel_rt_v2_mutex_take(
-                        ctx,
-                        &mut status,
-                        &objects.mutex,
-                        payload.as_mut_ptr().cast(),
-                    );
-                    assert_eq!((status, payload), (0, [1, ROUNDS + 1]));
-                    hirsel_rt_v2_mutex_put(ctx, &objects.mutex, payload.as_mut_ptr().cast());
-                }
-                STATUS_OK
-            },
+            move |ctx| unsafe { immediate(ctx, &observed) },
         );
         assert_eq!(outcome.ended, Ok(STATUS_OK), "recorded {recorded}");
         assert_eq!(outcome.pending, 0);
         assert_eq!(
-            acquisitions.load(Ordering::Acquire),
+            measured.window.load(Ordering::Acquire),
             0,
             "recorded {recorded}: {} immediate ops entered R",
             2 * 6 * ROUNDS
         );
+        assert_eq!(measured.ops.load(Ordering::Acquire), 0);
         if let Some(recording) = recording {
             let cut = recording
                 .recorder
@@ -335,8 +380,48 @@ fn runtime50_immediate_objects_do_not_enter_role() {
                     cut.progress[&child]
                 );
             }
+            let trace = recording.trace();
+            let bytes = Arc::try_unwrap(recording)
+                .ok()
+                .unwrap()
+                .recorder
+                .into_sink()
+                .bytes;
+            tape = Some((bytes, trace));
         }
     }
+    // Replay admits each op from the task's own token: its mutex, send and
+    // atomic ops take no R. Its receives keep the role path.
+    let (bytes, trace) = tape.unwrap();
+    let parsed = hirsel_free::tape::parse(&bytes).unwrap();
+    let replay = super::super::replay::Replay::new(&bytes).unwrap();
+    let install = replay.clone();
+    let measured = Arc::new(Measured::default());
+    let observed = measured.clone();
+    let (run, _pointers) = run();
+    let outcome = run.run(
+        move |ctx| unsafe {
+            super::super::enable(ctx);
+            install.root(ctx);
+        },
+        move |ctx| unsafe { immediate(ctx, &observed) },
+    );
+    assert!(
+        matches!(
+            outcome.ended,
+            Ok(STATUS_OK) | Err(crate::stop::Stop::Blocked(_))
+        ),
+        "{outcome:?}"
+    );
+    assert_eq!(
+        measured.ops.load(Ordering::Acquire),
+        0,
+        "replayed mutex, send and atomic ops entered R"
+    );
+    assert_eq!(
+        replay.finish().unwrap(),
+        hirsel_free::projection::Projection::new("returned", &parsed.cut, &trace)
+    );
 }
 
 /// A contended mutex: waiters register in a forced order around a holder's

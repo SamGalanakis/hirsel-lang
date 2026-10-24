@@ -312,6 +312,8 @@ pub(super) unsafe fn thaw(
 /// An owner-local replay reservation captured under the scheduler role,
 /// before taking any independent atomic/object access. No scheduler lookup
 /// or role acquisition occurs while this token publishes or substitutes.
+/// A task's token never changes, so its immediate ops keep one (objects.rs).
+#[derive(Clone)]
 pub(super) struct Token {
     shared: Arc<Replay>,
     task: Arc<TaskReplay>,
@@ -421,6 +423,44 @@ impl Token {
     /// Lock this task's own replay state for one bounded step.
     fn with<T>(&self, action: impl FnOnce(&mut TaskState) -> T) -> T {
         action(&mut self.task.state.lock().unwrap())
+    }
+
+    /// The role-free begin's and boundary's cut check, as for [`at_cut`].
+    pub(super) fn at_cut(&self) -> bool {
+        self.with(|task| !task.cursor.starts() || task.cursor.cut() == Some(task.progress))
+    }
+
+    /// Whether this task's next op completes whole from here: the cut is not
+    /// reached, admits its Done and, on an object, its version order enables
+    /// it. Read-only, so a false leaves the op unbegun for the role path,
+    /// which parks at the cut, waits for the version or reports divergence.
+    pub(super) fn immediate(&self, handle: Option<Handle>) -> bool {
+        let id = match handle.map(|handle| self.shared.object(handle)) {
+            None => None,
+            Some(Ok(id)) => Some(id),
+            Some(Err(_)) => return false,
+        };
+        self.with(|task| {
+            let Some(op) = task.op.checked_add(1) else {
+                return false;
+            };
+            task.cursor.starts()
+                && task.cursor.cut() != Some(task.progress)
+                && task.cursor.admits(Progress::new(op, Phase::Done))
+                && id.is_none_or(|id| task.cursor.enabled(op, 0, &id).unwrap_or(false))
+        })
+    }
+
+    /// The role-free [`begin`].
+    pub(super) fn begin(&self) {
+        self.with(|task| task.op = task.op.checked_add(1).expect("native op ordinal overflow"));
+    }
+
+    pub(super) fn bind(&self, handle: Handle) -> Object {
+        Object {
+            token: self.clone(),
+            handle,
+        }
     }
 
     fn admits(&self, phase: Phase) -> bool {
