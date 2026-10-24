@@ -17,6 +17,17 @@ fn fixture() -> (
     ClosureSite,
     ReceiptEntry,
 ) {
+    fixture_with_once(false)
+}
+fn fixture_with_once(
+    once: bool,
+) -> (
+    LirUnit<Value>,
+    LayoutTable,
+    FnAbi,
+    ClosureSite,
+    ReceiptEntry,
+) {
     let target = TargetSpec::x86_64_unknown_linux_gnu();
     let owners = Owners::default();
     let types = hirsel_types::TypeInterner::new(None);
@@ -25,12 +36,16 @@ fn fixture() -> (
     ));
     let mut builder = LayoutBuilder::new(&target, &owners);
     let scalar = builder.layout(&types, ty).unwrap();
+    let mut ordinary = vec![(scalar, hirsel_core_contract::Passing::Borrow)];
+    if once {
+        ordinary.push((scalar, hirsel_core_contract::Passing::Take));
+    }
     let base = builder
         .environment_data(
             &DefPath::core("receipt_closure_fixture"),
             0,
-            &[(scalar, hirsel_core_contract::Passing::Borrow)],
-            &[],
+            &ordinary,
+            if once { &[1] } else { &[] },
         )
         .unwrap();
     let hash = ContentHash::of_bytes(b"complete closure source profile");
@@ -61,7 +76,11 @@ fn fixture() -> (
             receipt_contract: Some(contract.content().unwrap()),
         },
         shape: CallableShape::Closure,
-        multiplicity: CallMultiplicity::Many,
+        multiplicity: if once {
+            CallMultiplicity::Once
+        } else {
+            CallMultiplicity::Many
+        },
         context: true,
         environment: true,
         caller_site: false,
@@ -117,14 +136,44 @@ fn fixture() -> (
     ];
     unit.captures.push(ValueId(0));
     unit.slots.push(SlotInfo {
+        ty: LirTypeId(0),
+        kind: SlotKind::Capture(0),
+        scope: ScopeId(0),
+    });
+    unit.slots.push(SlotInfo {
         ty: LirTypeId(1),
         kind: SlotKind::ReceiptCapture(0),
         scope: ScopeId(0),
     });
+    if once {
+        let live = table.layouts[base.0 as usize].fields.last().unwrap().layout;
+        unit.types.push(LirType {
+            repr: ValueRepr::Scalar(ScalarKind::U64),
+            layout: live,
+        });
+        for ordinal in [1, 2] {
+            let ty = if ordinal == 2 {
+                LirTypeId(2)
+            } else {
+                LirTypeId(0)
+            };
+            let value = ValueId(unit.values.len() as u32);
+            unit.values.push(ValueInfo {
+                ty,
+                holding: Holding::Plain,
+            });
+            unit.captures.push(value);
+            unit.slots.push(SlotInfo {
+                ty,
+                kind: SlotKind::Capture(ordinal),
+                scope: ScopeId(0),
+            });
+        }
+    }
     unit.addresses.push(AddressInfo {
         source_place: None,
         unchecked: vec![],
-        base: AddressBase::Slot(SlotId(0)),
+        base: AddressBase::Slot(SlotId(1)),
         projection: PoolRange::EMPTY,
         ty: LirTypeId(1),
     });
@@ -185,7 +234,7 @@ fn fixture() -> (
         parameters: vec![],
         captures: vec![ReceiptEntrySlot {
             source: 0,
-            slot: SlotId(0),
+            slot: SlotId(1),
             version: ValueId(2),
         }],
         result: None,
@@ -326,5 +375,72 @@ fn receipt_closure_33_absence_preserves_both_legacy_encodings_and_hash_streams()
     assert_eq!(
         hirsel_codec::from_text::<ReceiptEntry>(&text).unwrap(),
         entry
+    );
+}
+
+#[test]
+fn receipt_closure_33_entry_rejects_mismatched_original_capture_storage() {
+    let (unit, table, abi, _, entry) = fixture();
+    for mutation in 0..8 {
+        let mut unit = unit.clone();
+        let mut table = table.clone();
+        let wrapper = entry.environment.unwrap();
+        let base = table.layouts[wrapper.0 as usize].fields[0].layout;
+        match mutation {
+            0 => unit
+                .slots
+                .retain(|s| !matches!(s.kind, SlotKind::Capture(_))),
+            1 => unit.slots.push(unit.slots[0].clone()),
+            2 => unit.slots[0].kind = SlotKind::Capture(1),
+            3 => unit.slots[0].ty = LirTypeId(1),
+            4 => unit.values[0].ty = LirTypeId(1),
+            5 => table.layouts[base.0 as usize].fields[0].offset = 8,
+            6 => table.layouts[base.0 as usize].fields[0].unaligned = true,
+            7 => table.layouts[base.0 as usize].size = SizeSpec::Fixed(16),
+            _ => unreachable!(),
+        }
+        assert!(
+            entry.check(&abi, &unit, &table).is_err(),
+            "mutation {mutation}"
+        );
+    }
+}
+
+#[test]
+fn receipt_closure_33_entry_preserves_complete_once_capture_storage() {
+    let (unit, table, abi, _, entry) = fixture_with_once(true);
+    entry.check(&abi, &unit, &table).unwrap();
+    let wrapper = entry.environment.unwrap();
+    let (base, companions) = hirsel_lir::receipt_closure::borrowed_environment(
+        &table,
+        wrapper,
+        abi.receipts.as_ref().unwrap(),
+    )
+    .unwrap();
+    let base = &table.layouts[base.0 as usize];
+    assert_eq!(unit.captures.len(), 3);
+    assert_eq!(base.fields[2].offset, 16); // Existing once live word.
+    assert_eq!(companions[0].offset, 24); // Strictly after the complete base.
+    let mut bad = unit.clone();
+    bad.slots.retain(|s| s.kind != SlotKind::Capture(2));
+    assert!(entry.check(&abi, &bad, &table).is_err());
+}
+
+#[test]
+fn receipt_closure_33_environment_rejects_a_selector_for_the_once_live_word() {
+    let (_, mut table, abi, _, entry) = fixture_with_once(true);
+    let wrapper = entry.environment.unwrap();
+    let base = table.layouts[wrapper.0 as usize].fields[0].layout;
+    let original = abi.receipts.as_ref().unwrap();
+    let mut captures = original.captures.clone();
+    captures[0].ordinal = 2; // The live word is not an original source capture.
+    let contract = ReceiptContract::new(vec![], None, captures, vec![]).unwrap();
+    table.layouts[wrapper.0 as usize].key = hirsel_lir::receipt_closure::environment_key(
+        &table.layouts[base.0 as usize].key,
+        contract.content().unwrap(),
+    );
+    assert_eq!(
+        hirsel_lir::receipt_closure::borrowed_environment(&table, wrapper, &contract),
+        Err("receipt environment names a foreign original capture")
     );
 }

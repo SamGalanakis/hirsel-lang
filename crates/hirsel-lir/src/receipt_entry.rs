@@ -68,8 +68,8 @@ impl ReceiptEntry {
     }
 
     /// Check namespace, coverage, local types and version-only entry names.
-    /// Full source type/profile pairing, environment offsets, aliasing and
-    /// lifetime/edge publication remain independent executable obligations.
+    /// Full source type/profile pairing, aliasing and lifetime/edge
+    /// publication remain independent executable obligations.
     pub fn check<S>(
         &self,
         abi: &FnAbi,
@@ -85,7 +85,9 @@ impl ReceiptEntry {
             return Err("receipt entry names a different complete contract");
         }
         if let Some(environment) = self.environment {
-            crate::receipt_closure::borrowed_environment(layouts, environment, contract)?;
+            let (base, _) =
+                crate::receipt_closure::borrowed_environment(layouts, environment, contract)?;
+            self.check_capture_storage(base, unit, layouts)?;
         }
         if self.parameters.len() != contract.parameters.len()
             || self.captures.len() != contract.captures.len()
@@ -141,6 +143,79 @@ impl ReceiptEntry {
         }
         if let Some(result) = self.result {
             Self::slot(result, SlotKind::ReceiptResult, unit, layouts)?;
+        }
+        Ok(())
+    }
+
+    /// The complete base includes the once live word, represented by its own
+    /// final Capture slot. Metadata companions never replace an ordinary field.
+    fn check_capture_storage<S>(
+        &self,
+        base: LayoutId,
+        unit: &LirUnit<S>,
+        layouts: &LayoutTable,
+    ) -> Result<(), &'static str> {
+        let base = layouts
+            .layout(base)
+            .ok_or("receipt entry base is missing")?;
+        let mut slots: Vec<_> = unit
+            .slots
+            .iter()
+            .filter_map(|slot| {
+                if let SlotKind::Capture(ordinal) = slot.kind {
+                    Some((ordinal, slot.ty))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        slots.sort_by_key(|s| s.0);
+        if slots.len() != base.fields.len() || slots.len() != unit.captures.len() {
+            return Err("receipt entry base differs from ordinary capture storage");
+        }
+        let mut offset = 0u64;
+        let mut align = 1u32;
+        for (index, ((ordinal, ty), field)) in slots.iter().zip(&base.fields).enumerate() {
+            let capture = unit
+                .captures
+                .get(index)
+                .and_then(|id| unit.values.get(id.index()))
+                .ok_or("receipt entry has no ordinary capture version")?;
+            let ty_record = unit
+                .types
+                .get(ty.index())
+                .ok_or("receipt entry has a foreign ordinary capture type")?;
+            let child = layouts
+                .layout(ty_record.layout)
+                .ok_or("receipt entry has a foreign ordinary capture layout")?;
+            if !child.align.is_power_of_two() {
+                return Err("receipt entry has an invalid ordinary capture alignment");
+            }
+            offset = crate::layout::align_up(offset, u64::from(child.align))
+                .map_err(|_| "receipt entry capture offset overflow")?;
+            if *ordinal as usize != index
+                || field.ordinal != *ordinal
+                || capture.ty != *ty
+                || field.layout != ty_record.layout
+                || field.offset != offset
+                || field.unaligned
+            {
+                return Err("receipt entry base field disagrees with its ordinary capture slot");
+            }
+            offset = offset
+                .checked_add(
+                    child
+                        .size
+                        .storage()
+                        .ok_or("receipt entry capture has no finite storage")?,
+                )
+                .ok_or("receipt entry capture extent overflow")?;
+            align = align.max(child.align);
+        }
+        let size = crate::layout::align_up(offset, u64::from(align))
+            .map_err(|_| "receipt entry capture extent overflow")?;
+        if base.align != align || base.size != crate::layout_types::SizeSpec::Fixed(size) {
+            return Err("receipt entry base extent differs from its ordinary capture storage");
         }
         Ok(())
     }

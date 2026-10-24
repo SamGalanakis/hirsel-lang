@@ -154,6 +154,17 @@ pub fn borrowed_environment<'a>(
     {
         return Err("receipt environment wrapper disagrees with its base or complete contract");
     }
+    let ordinary_count = base.fields.len().saturating_sub(usize::from(matches!(
+        base.kind,
+        LayoutKind::Environment { .. }
+    )));
+    if contract
+        .captures
+        .iter()
+        .any(|c| c.ordinal as usize >= ordinary_count)
+    {
+        return Err("receipt environment names a foreign original capture");
+    }
     let SizeSpec::Fixed(mut offset) = base.size else {
         return Err("receipt environment base is not fixed size");
     };
