@@ -12,7 +12,7 @@ pub fn invocation_coverage(
     definition: &Definition,
     signatures: &dyn SignatureLookup,
 ) -> Result<Vec<(u32, u32, u32, bool)>, &'static str> {
-    coverage(types, definition, &Reader::new(signatures))
+    coverage(types, definition, &Reader::new(types, signatures))
 }
 
 pub(crate) fn coverage(

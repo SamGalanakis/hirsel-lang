@@ -265,3 +265,26 @@ fn propagation_reads_borrowed_result_payloads_through_their_carrier() {
     );
     assert_ne!(body.places[destination.0 as usize].ty, body.result);
 }
+
+/// Short-circuit RHS calls return directly to the enclosing tail consumer.
+/// The left operand and a surrounding boolean operator still have work left.
+#[test]
+fn self_tail_witnesses_follow_short_circuit_right_operands() {
+    for (expression, witnesses) in [
+        ("n == 0u64 || main(n - 1u64)", 1),
+        ("n != 0u64 && main(n - 1u64)", 1),
+        ("main(n - 1u64) || n == 0u64", 0),
+        ("main(n - 1u64) && n != 0u64", 0),
+        ("!(n == 0u64 || main(n - 1u64))", 0),
+    ] {
+        let source = format!("fn main(n:u64)->bool {{ {expression} }}");
+        let (_, definition) = source_definition(&source);
+        assert_eq!(
+            definition.bodies[definition.entry.0 as usize]
+                .tail_sites
+                .len(),
+            witnesses,
+            "{source}"
+        );
+    }
+}

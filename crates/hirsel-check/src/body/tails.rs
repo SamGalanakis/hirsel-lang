@@ -201,7 +201,8 @@ impl Checker<'_, '_> {
                         } => {
                             todo.push(Visit::Fork(
                                 vec![
-                                    Branch::expression(right, false, barrier),
+                                    // Only the selected RHS supplies the enclosing result.
+                                    Branch::expression(right, tail, barrier),
                                     Branch::unchanged(),
                                 ],
                                 state,

@@ -1175,3 +1175,32 @@ fn implicit_codec_check_exact() {
 fn implicit_codec_check_rejection_is_fatal_before_sibling_cleanup() {
     hirsel_engine::with_compiler_stack(|| implicit_codec_check(true));
 }
+
+#[test]
+fn short_circuit_self_restarts_preserve_the_invocation_boundary() {
+    hirsel_engine::with_compiler_stack(|| {
+        for (name, expression, expected, iterations, rules) in [
+            ("tail-or", "n == 0u64 || f(n - 1u64)", true, 2048, &[][..]),
+            ("tail-and", "n != 0u64 && f(n - 1u64)", false, 2048, &[][..]),
+            (
+                "left-or",
+                "if n == 0u64 {true} else {f(n - 1u64) || false}",
+                true,
+                1023,
+                &["LANG-10"][..],
+            ),
+            (
+                "left-and",
+                "if n == 0u64 {true} else {f(n - 1u64) && true}",
+                true,
+                1023,
+                &["LANG-10"][..],
+            ),
+        ] {
+            let source = format!(
+                "fn f(n:u64)->bool {{ {expression} }}\npub fn main()->Result[(), ()] {{let actual = f({iterations}u64); let _ = 1u64 / (if actual == {expected} {{1u64}} else {{0u64}}); Ok(())}}"
+            );
+            agreement(name, &source, rules);
+        }
+    });
+}
