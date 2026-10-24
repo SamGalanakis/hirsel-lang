@@ -283,12 +283,21 @@ impl QueryTask for NativeTask {
 pub struct CodegenTasks {
     native: Arc<NativeTasks>,
     requests: BTreeMap<Id, CodegenKey>,
+    whole: BTreeMap<Id, crate::native::object_queries::whole::WholeCodegenKey>,
     weight: MemoryWeight,
 }
 impl CodegenTasks {
     pub fn new(
         native: Arc<NativeTasks>,
         keys: Vec<CodegenKey>,
+        weight: MemoryWeight,
+    ) -> Result<Arc<Self>, String> {
+        Self::with_whole_modules(native, keys, vec![], weight)
+    }
+    pub fn with_whole_modules(
+        native: Arc<NativeTasks>,
+        keys: Vec<CodegenKey>,
+        whole: Vec<crate::native::object_queries::whole::WholeCodegenKey>,
         weight: MemoryWeight,
     ) -> Result<Arc<Self>, String> {
         let mut requests = BTreeMap::new();
@@ -302,9 +311,29 @@ impl CodegenTasks {
                 return Err("unknown or duplicate Codegen request".into());
             }
         }
+        let mut whole_requests = BTreeMap::new();
+        for key in whole {
+            if key
+                .retained_bytes()
+                .saturating_add(std::mem::size_of::<ObjectTaskRequest>() as u64)
+                > weight.retained
+            {
+                return Err("whole-module Codegen exceeds retained allowance".into());
+            }
+            if key.units().iter().any(|unit| {
+                !native
+                    .snapshot
+                    .owners
+                    .contains_key(&unit.owner.ready_query_id().address.0)
+            }) || whole_requests.insert(id(key.query_id()), key).is_some()
+            {
+                return Err("unknown or duplicate whole-module Codegen request".into());
+            }
+        }
         Ok(Arc::new(Self {
             native,
             requests,
+            whole: whole_requests,
             weight,
         }))
     }
@@ -321,6 +350,12 @@ impl ObjectTaskSnapshot for CodegenTasks {
         self.native.snapshot.store.as_ref()
     }
     fn request(&self, key: QueryId) -> Result<ObjectTaskRequest, Reference> {
+        if let Some(key) = self.whole.get(&id(key)) {
+            return Ok(ObjectTaskRequest::WholeCodegen {
+                key: key.clone(),
+                weight: self.weight,
+            });
+        }
         let key = self
             .requests
             .get(&id(key))

@@ -92,6 +92,7 @@ impl CompilationTasks {
                         backend.profile_options,
                         backend.runtime_abi,
                         backend.linker_options,
+                        backend.executor.codegen_partition(),
                     )
                 })
                 .collect::<Vec<_>>(),
@@ -232,6 +233,7 @@ impl CompilationTasks {
             self.weight,
         )?;
         let mut codegen = Vec::new();
+        let mut whole_codegen = Vec::new();
         let mut plans = Vec::new();
         let mut links = Vec::new();
         for backend in &self.backends {
@@ -246,7 +248,14 @@ impl CompilationTasks {
                     runtime_abi: backend.runtime_abi,
                 })
                 .collect::<Vec<_>>();
-            codegen.extend(fragments.iter().cloned());
+            match backend.executor.codegen_partition() {
+                super::link_tasks::CodegenPartition::PerInstance => {
+                    codegen.extend(fragments.iter().cloned())
+                }
+                super::link_tasks::CodegenPartition::WholeModule => whole_codegen.push(
+                    crate::native::object_queries::whole::WholeCodegenKey::new(fragments.clone())?,
+                ),
+            }
             let key = LinkKey {
                 roots: owners.clone(),
                 target: self.root.target_abi,
@@ -262,7 +271,8 @@ impl CompilationTasks {
                 weight: self.weight,
             });
         }
-        let objects = CodegenTasks::new(native.clone(), codegen, self.weight)?;
+        let objects =
+            CodegenTasks::with_whole_modules(native.clone(), codegen, whole_codegen, self.weight)?;
         let link = LinkTasks::new(roots.clone(), plans, self.weight)?;
         let leaf: Arc<dyn QueryFactory> = Arc::new(LinkInputFactory::new(link.clone()));
         let factories: BTreeMap<u32, Arc<dyn QueryFactory>> = BTreeMap::from([

@@ -59,6 +59,12 @@ pub struct LinkedProduct {
 
 pub trait ObjectProducts {
     fn codegen(&mut self, key: &CodegenKey) -> Result<Arc<FragmentProduct>, String>;
+    fn codegen_whole(
+        &mut self,
+        _key: &whole::WholeCodegenKey,
+    ) -> Result<Arc<FragmentProduct>, String> {
+        Err("whole-module Codegen is not registered".into())
+    }
     fn link(&mut self, key: &LinkKey, inputs: &LinkInputs) -> Result<Arc<LinkedProduct>, String>;
 }
 
@@ -203,6 +209,13 @@ impl<N: NativeProducts, L> ObjectProducts for ObjectQueries<N, L>
 where
     L: FnMut(&LinkKey, &LinkInputs, &[ObjectArtifact]) -> Result<Vec<u8>, String>,
 {
+    fn codegen_whole(
+        &mut self,
+        key: &whole::WholeCodegenKey,
+    ) -> Result<Arc<FragmentProduct>, String> {
+        whole::codegen(self, key).map(Arc::new)
+    }
+
     fn codegen(&mut self, key: &CodegenKey) -> Result<Arc<FragmentProduct>, String> {
         let backend = match key.backend.as_str() {
             "llvm" => super::Backend::Llvm,
@@ -324,7 +337,38 @@ fn codegen_checked(
     reads.extend(optimizer.iter().map(|p| p.record));
     // References bind domains/lengths as well as content. Action revisions are
     // deliberately absent: equal settled outputs cut off downstream work.
-    let action = action("hirsel.codegen.action.v2", address, &reads);
+    fragment_checked(
+        store,
+        FragmentIdentity {
+            address,
+            owner: key.owner.instance.encoding().to_vec(),
+            summary: ready.unit_summary,
+        },
+        &reads,
+        verify_store,
+        compute,
+    )
+}
+
+struct FragmentIdentity {
+    address: Address,
+    owner: Vec<u8>,
+    summary: Reference,
+}
+
+fn fragment_checked(
+    store: &dyn ResultStore,
+    identity: FragmentIdentity,
+    reads: &[Reference],
+    verify_store: VerifyStore,
+    compute: impl FnOnce() -> Result<ObjectArtifact, String>,
+) -> Result<FragmentProduct, String> {
+    let FragmentIdentity {
+        address,
+        owner,
+        summary,
+    } = identity;
+    let action = action("hirsel.codegen.action.v2", address, reads);
     let mut cached = None;
     if let Some(previous) = store.lookup_product(address).filter(|p| p.action == action) {
         let product = ProductRef {
@@ -333,7 +377,7 @@ fn codegen_checked(
             record: previous.reference,
         };
         if let Ok(fragment) = fragment_product(store, product)
-            && fragment.summary == ready.unit_summary
+            && fragment.summary == summary
         {
             if verify_store == VerifyStore::Off {
                 return Ok(fragment);
@@ -358,9 +402,9 @@ fn codegen_checked(
         store,
         FRAGMENT,
         &FragmentRecord {
-            owner: key.owner.instance.encoding().to_vec(),
+            owner,
             object: object.into(),
-            summary: ready.unit_summary.into(),
+            summary: summary.into(),
         },
     )?;
     if cached.is_some_and(|old| old.product.record != record) {
@@ -374,7 +418,7 @@ fn codegen_checked(
             record,
         },
         object,
-        summary: ready.unit_summary,
+        summary,
     })
 }
 
@@ -851,6 +895,7 @@ mod tests;
 
 pub mod tasks;
 pub mod thin;
+pub mod whole;
 pub use tasks::{
     CODEGEN_KIND, LINK_KIND, LinkDependencies, ObjectTaskFactory, ObjectTaskRequest,
     ObjectTaskSnapshot,

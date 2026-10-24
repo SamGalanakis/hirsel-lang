@@ -69,7 +69,7 @@ fn one_native_runtime_produces_cold_instances_both_arena_strata_ready_roots_and_
 {
     with_compiler_stack(|| {
         for jobs in [1, 4] {
-            run(jobs, false, false, false, false);
+            run(jobs, false, false, false, false, false);
         }
     });
 }
@@ -77,7 +77,7 @@ fn one_native_runtime_produces_cold_instances_both_arena_strata_ready_roots_and_
 fn frozen_platform_links_standalone_after_original_tool_kit_runtime_and_foreign_paths_disappear() {
     with_compiler_stack(|| {
         for jobs in [1, 4] {
-            run(jobs, true, false, false, false);
+            run(jobs, true, false, false, false, false);
         }
     });
 }
@@ -85,7 +85,7 @@ fn frozen_platform_links_standalone_after_original_tool_kit_runtime_and_foreign_
 fn optimized_codegen_reads_transitive_recursive_templates_without_recursive_ready_dependencies() {
     with_compiler_stack(|| {
         for jobs in [1, 4] {
-            run(jobs, false, true, false, false);
+            run(jobs, false, true, false, false, false);
         }
     });
 }
@@ -93,7 +93,7 @@ fn optimized_codegen_reads_transitive_recursive_templates_without_recursive_read
 fn frozen_platform_restores_root_bound_runner_images_after_link_hits() {
     with_compiler_stack(|| {
         for jobs in [1, 4] {
-            run(jobs, true, false, true, false);
+            run(jobs, true, false, true, false, false);
         }
     });
 }
@@ -101,7 +101,15 @@ fn frozen_platform_restores_root_bound_runner_images_after_link_hits() {
 fn frozen_test_dispatchers_keep_ordered_seeds_and_reopen_body_free_link_hits() {
     with_compiler_stack(|| {
         for jobs in [1, 4] {
-            run(jobs, true, false, false, true);
+            run(jobs, true, false, false, true, false);
+        }
+    });
+}
+#[test]
+fn release_lto_emits_one_whole_module_and_reopens_body_free_hits_after_leaf_edits() {
+    with_compiler_stack(|| {
+        for jobs in [1, 4] {
+            run(jobs, true, true, false, false, true);
         }
     });
 }
@@ -122,6 +130,9 @@ struct CountedPlatform {
     calls: Arc<AtomicU64>,
 }
 impl native::queries::link_tasks::NativeLinkExecutor for CountedPlatform {
+    fn codegen_partition(&self) -> native::queries::link_tasks::CodegenPartition {
+        self.inner.codegen_partition()
+    }
     fn link(
         &self,
         native: &mut native::queries::roots::RootProducts,
@@ -137,6 +148,7 @@ fn run(
     optimized: bool,
     requested_run: bool,
     test_dispatch: bool,
+    lto: bool,
 ) {
     let directory = tempfile::tempdir().unwrap();
     let store = Arc::new(store::DirStore::new(directory.path().join("products")));
@@ -249,6 +261,7 @@ fn run(
     let policy = ContentHash::of_bytes(b"one runtime cold native Link control");
     let mut previous = None;
     let mut previous_actions = std::collections::BTreeMap::new();
+    let mut previous_whole_action = None;
     let mut previous_ready = std::collections::BTreeMap::new();
     let mut reference = None;
     let mut second_reference = None;
@@ -400,6 +413,7 @@ fn run(
         let calls = Arc::new(AtomicU64::new(0));
         let backends = [native::Backend::Llvm, native::Backend::Cranelift]
             .into_iter()
+            .filter(|backend| !lto || *backend == native::Backend::Llvm)
             .map(|backend| CompilationBackend {
                 backend: backend.name().into(),
                 backend_version: ContentHash::of_parts(
@@ -414,7 +428,9 @@ fn run(
                 }),
                 runtime_abi: ContentHash::of_bytes(&hirsel_lir::RUNTIME_ABI_VERSION.to_le_bytes()),
                 linker_options: if let Some(platform) = &frozen {
-                    if test_dispatch {
+                    if lto {
+                        platform.linker_options_for_lto(&main).unwrap()
+                    } else if test_dispatch {
                         platform.linker_options_for_tests(backend, &main).unwrap()
                     } else if requested_run {
                         platform.linker_options_for_run(backend, &main).unwrap()
@@ -437,7 +453,12 @@ fn run(
                     .map_or_else(Vec::new, |platform| platform.foreign_inputs().to_vec()),
                 executor: if let Some(platform) = &frozen {
                     Arc::new(CountedPlatform {
-                        inner: if test_dispatch {
+                        inner: if lto {
+                            platform.executor_for_lto(
+                                main.clone(),
+                                directory.path().join(format!("lto-{literal}-{fresh}")),
+                            )
+                        } else if test_dispatch {
                             platform.executor_for_tests(
                                 backend,
                                 main.clone(),
@@ -541,10 +562,14 @@ fn run(
             )
         })[0];
         let results = compilation.outputs(selected).unwrap().to_vec();
-        assert_eq!(results.len(), 2);
+        let backend_count = if lto { 1 } else { 2 };
+        assert_eq!(results.len(), backend_count);
         let native = compilation.native(selected).unwrap();
         let roots = compilation.roots(selected).unwrap();
-        assert_eq!(calls.load(Ordering::Relaxed), if fresh { 0 } else { 2 });
+        assert_eq!(
+            calls.load(Ordering::Relaxed),
+            if fresh { 0 } else { backend_count as u64 }
+        );
         assert_eq!(roots.publications.load(Ordering::Relaxed), 1);
         let request = runtime.request(&[instances.discovery_id()]);
         let discovery = runtime.wait(request).unwrap()[0];
@@ -573,6 +598,8 @@ fn run(
             native.snapshot.ready_materializations(),
             if fresh {
                 0
+            } else if lto {
+                completed.len() as u64
             } else if optimized {
                 // Every one of the 13 roots emits once per backend. The
                 // recursive leaf/middle each copy one body; main copies two.
@@ -612,7 +639,89 @@ fn run(
         ] {
             assert!(events.iter().any(|event| matches!(event, RuntimeEvent::Read {query, dependency} if query.kind == from && dependency.kind == to)), "missing actual edge {from:x}->{to:x}");
         }
-        if optimized {
+        if lto {
+            assert_eq!(completed.len(), 13);
+            let whole_key = native::object_queries::whole::WholeCodegenKey::new(
+                completed
+                    .iter()
+                    .map(|(owner, _)| native::object_queries::CodegenKey {
+                        owner: owner.clone(),
+                        backend: "llvm".into(),
+                        backend_version: ContentHash::of_bytes(b"resource refusal"),
+                        target_features: target.digest(),
+                        profile_options: ContentHash::of_bytes(b"default opt"),
+                        runtime_abi: ContentHash::of_bytes(
+                            &hirsel_lir::RUNTIME_ABI_VERSION.to_le_bytes(),
+                        ),
+                    })
+                    .collect(),
+            )
+            .unwrap();
+            assert!(
+                native::queries::tasks::CodegenTasks::with_whole_modules(
+                    native.clone(),
+                    vec![],
+                    vec![whole_key],
+                    MemoryWeight {
+                        retained: 0,
+                        ..weight
+                    },
+                )
+                .is_err(),
+                "whole-module key retention needs admission"
+            );
+            let whole = events
+                .iter()
+                .filter_map(|event| match event {
+                    RuntimeEvent::Read { query, dependency }
+                        if query.kind == native::object_queries::CODEGEN_KIND
+                            && dependency.kind == READY_KIND =>
+                    {
+                        Some(query.address.0)
+                    }
+                    _ => None,
+                })
+                .collect::<std::collections::BTreeSet<_>>();
+            assert_eq!(whole.len(), 1, "LTO emits one whole module");
+            let query = *whole.first().unwrap();
+            let reached = events
+                .iter()
+                .filter_map(|event| match event {
+                    RuntimeEvent::Read {
+                        query: q,
+                        dependency,
+                    } if q.address.0 == query
+                        && q.kind == native::object_queries::CODEGEN_KIND
+                        && dependency.kind == READY_KIND =>
+                    {
+                        Some(dependency.address.0)
+                    }
+                    _ => None,
+                })
+                .collect::<std::collections::BTreeSet<_>>();
+            assert_eq!(
+                reached,
+                completed
+                    .iter()
+                    .map(|(key, _)| key.ready_query_id().address.0)
+                    .collect()
+            );
+            let current = store
+                .lookup_product(hirsel_artifact_store::Address(query))
+                .unwrap()
+                .action;
+            if let Some(old) = previous_whole_action.replace(current) {
+                if fresh {
+                    assert_eq!(current, old);
+                } else {
+                    assert_ne!(
+                        current, old,
+                        "changed leaf invalidates whole-module Codegen"
+                    );
+                }
+            }
+        }
+        if optimized && !lto {
             assert_eq!(completed.len(), 13);
             assert_eq!(
                 completed
@@ -760,11 +869,20 @@ fn run(
                     assert_eq!(calls.load(Ordering::Relaxed), 0);
                 }
             }
-            for backend in [native::Backend::Llvm, native::Backend::Cranelift] {
+            for backend in [native::Backend::Llvm, native::Backend::Cranelift]
+                .into_iter()
+                .filter(|backend| !lto || *backend == native::Backend::Llvm)
+            {
                 let key = native::object_queries::LinkKey {
                     roots: root.instances.clone(),
                     target: target.digest(),
-                    linker_options: if test_dispatch {
+                    linker_options: if lto {
+                        frozen
+                            .as_ref()
+                            .unwrap()
+                            .linker_options_for_lto(&hirsel_engine::entry_path(&default_context()))
+                            .unwrap()
+                    } else if test_dispatch {
                         frozen
                             .as_ref()
                             .unwrap()
@@ -805,7 +923,11 @@ fn run(
         }
         let before = trace.totals();
         let bodies = native.snapshot.ready_materializations();
-        for (index, backend) in ["llvm", "cranelift"].into_iter().enumerate() {
+        for (index, backend) in ["llvm", "cranelift"]
+            .into_iter()
+            .take(backend_count)
+            .enumerate()
+        {
             let linked =
                 native::object_queries::linked_product(store.as_ref(), results[index]).unwrap();
             let directory = directory
@@ -815,7 +937,7 @@ fn run(
             let executable = directory.join("program");
             native::object_queries::materialize_executable(store.as_ref(), &linked, &executable)
                 .unwrap();
-            if freeze_platform && !requested_run && !test_dispatch {
+            if freeze_platform && !requested_run && !test_dispatch && !lto {
                 use object::Object as _;
                 let bytes = std::fs::read(&executable).unwrap();
                 let elf = object::File::parse(bytes.as_slice()).unwrap();
@@ -871,7 +993,7 @@ fn run(
                             .callee_metadata()
                             .expect("actual checked runner metadata");
                         assert!(callees.request_schemas.is_some());
-                        if freeze_platform {
+                        if freeze_platform && !lto {
                             assert!(
                                 callees.facts.keys().any(|path| path.ends_with("/worker")),
                                 "referenced entry facts survive body-free link assembly"

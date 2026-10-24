@@ -23,6 +23,7 @@ const PLATFORM: Domain = Domain {
 #[serde(rename_all = "snake_case")]
 enum Launch {
     Standalone,
+    ReleaseLto,
     Run,
     Tests,
 }
@@ -274,6 +275,12 @@ impl FrozenPlatform {
     ) -> Result<ContentHash, String> {
         self.linker_options_mode(backend, entry, false, Launch::Run)
     }
+    pub fn linker_options_for_lto(
+        &self,
+        entry: &hirsel_syntax::DefPath,
+    ) -> Result<ContentHash, String> {
+        self.linker_options_mode(Backend::Llvm, entry, false, Launch::ReleaseLto)
+    }
     pub fn linker_options_for_tests(
         &self,
         backend: Backend,
@@ -350,6 +357,20 @@ impl FrozenPlatform {
             launch: Launch::Run,
         })
     }
+    pub fn executor_for_lto(
+        self: &Arc<Self>,
+        entry: hirsel_syntax::DefPath,
+        directory: PathBuf,
+    ) -> Arc<dyn NativeLinkExecutor> {
+        Arc::new(Executor {
+            platform: self.clone(),
+            backend: Backend::Llvm,
+            entry,
+            directory,
+            debug_sources: false,
+            launch: Launch::ReleaseLto,
+        })
+    }
     pub fn executor_for_tests(
         self: &Arc<Self>,
         backend: Backend,
@@ -410,6 +431,13 @@ struct Executor {
     launch: Launch,
 }
 impl NativeLinkExecutor for Executor {
+    fn codegen_partition(&self) -> super::link_tasks::CodegenPartition {
+        if self.launch == Launch::ReleaseLto {
+            super::link_tasks::CodegenPartition::WholeModule
+        } else {
+            super::link_tasks::CodegenPartition::PerInstance
+        }
+    }
     fn link(&self, native: &mut RootProducts, input: LinkExecution<'_>) -> Result<Vec<u8>, String> {
         let platform = &self.platform;
         if input.key.target != platform.target.digest()
@@ -435,7 +463,7 @@ impl NativeLinkExecutor for Executor {
         let requested = native.requested_run(input.root)?;
         let tests = native.test_entries(input.root)?;
         let matches = match self.launch {
-            Launch::Standalone => requested.is_none() && tests.is_empty(),
+            Launch::Standalone | Launch::ReleaseLto => requested.is_none() && tests.is_empty(),
             Launch::Run => {
                 tests.is_empty()
                     && requested

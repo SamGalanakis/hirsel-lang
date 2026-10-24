@@ -22,7 +22,15 @@ const MANIFEST: Domain = Domain {
 /// Frozen host platform inputs remain owned by the executor. The native side
 /// supplies only the settled descriptor scope; this interface conveys no proof.
 pub trait NativeLinkExecutor: Send + Sync {
+    fn codegen_partition(&self) -> CodegenPartition {
+        CodegenPartition::PerInstance
+    }
     fn link(&self, native: &mut RootProducts, input: LinkExecution<'_>) -> Result<Vec<u8>, String>;
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
+pub enum CodegenPartition {
+    PerInstance,
+    WholeModule,
 }
 pub struct LinkExecution<'a> {
     pub key: &'a LinkKey,
@@ -48,6 +56,7 @@ struct Plan {
     foreign: Vec<QueryId>,
     launch_input: QueryId,
     ready: Vec<QueryId>,
+    fragments: Vec<QueryId>,
 }
 #[derive(Clone, Copy)]
 enum Leaf {
@@ -188,6 +197,17 @@ impl LinkTasks {
             let foreign = leaves(&input.foreign_inputs)?;
             let manifest = address(LINK_MANIFEST_KIND, &input.key.address().0.0);
             let ready = owners.iter().map(InstanceAddress::ready_query_id).collect();
+            let fragments = match input.executor.codegen_partition() {
+                CodegenPartition::PerInstance => {
+                    input.fragments.iter().map(CodegenKey::query_id).collect()
+                }
+                CodegenPartition::WholeModule => vec![
+                    crate::native::object_queries::whole::WholeCodegenKey::new(
+                        input.fragments.clone(),
+                    )?
+                    .query_id(),
+                ],
+            };
             let plan = Arc::new(Plan {
                 input,
                 manifest,
@@ -196,6 +216,7 @@ impl LinkTasks {
                 foreign,
                 launch_input,
                 ready,
+                fragments,
             });
             if plans
                 .insert(plan.input.key.address().0, plan.clone())
@@ -415,12 +436,7 @@ impl ObjectTaskSnapshot for LinkTasks {
     fn link_dependencies(&self, manifest: ProductRef) -> Result<LinkDependencies, Reference> {
         let (plan, _, _) = self.manifest(manifest).map_err(|e| self.failure(&e))?;
         Ok(LinkDependencies {
-            fragments: plan
-                .input
-                .fragments
-                .iter()
-                .map(CodegenKey::query_id)
-                .collect(),
+            fragments: plan.fragments.clone(),
             native_reads: plan.ready.clone(),
             static_manifest: plan.static_input,
             runtime_archives: plan.runtime.clone(),
@@ -450,12 +466,7 @@ impl ObjectTaskSnapshot for LinkTasks {
         let compute = || -> Result<Box<dyn ObjectProducts>, String> {
             let manifest = *settled.first().ok_or("missing settled Link manifest")?;
             let (plan, root_ref, root) = self.manifest(manifest)?;
-            let mut expected = plan
-                .input
-                .fragments
-                .iter()
-                .map(CodegenKey::query_id)
-                .collect::<Vec<_>>();
+            let mut expected = plan.fragments.clone();
             expected.push(plan.static_input);
             expected.extend(&plan.runtime);
             expected.extend(&plan.foreign);
