@@ -28,20 +28,33 @@ struct Reads {
 pub struct QueryReads(Rc<RefCell<Reads>>);
 impl QueryReads {
     pub async fn read(&self, query: QueryId) -> Outcome {
-        poll_fn(|_| {
-            let mut reads = self.0.borrow_mut();
-            if let Some(result) = reads.completed.get(&key(query)) {
-                return Poll::Ready(*result);
+        poll_fn(|_| self.poll_read(query, false)).await
+    }
+    /// Consume one completed mailbox row. The query runtime keeps its settled
+    /// latch and the producer keeps its product and admission owners; a later
+    /// read subscribes to that same latch without rerunning the producer.
+    /// Use this after each result is taken into independently admitted state,
+    /// so sequential dependencies need only their concurrently live rows.
+    pub async fn read_consuming(&self, query: QueryId) -> Outcome {
+        poll_fn(|_| self.poll_read(query, true)).await
+    }
+    fn poll_read(&self, query: QueryId, consuming: bool) -> Poll<Outcome> {
+        let mut reads = self.0.borrow_mut();
+        let selected = if consuming {
+            reads.completed.remove(&key(query))
+        } else {
+            reads.completed.get(&key(query)).copied()
+        };
+        if let Some(result) = selected {
+            return Poll::Ready(result);
+        }
+        if !reads.requested.contains_key(&key(query)) {
+            if reads.completed.len() + reads.requested.len() >= reads.limit {
+                return Poll::Ready(Err(reads.resource));
             }
-            if !reads.requested.contains_key(&key(query)) {
-                if reads.completed.len() + reads.requested.len() >= reads.limit {
-                    return Poll::Ready(Err(reads.resource));
-                }
-                reads.requested.insert(key(query), query);
-            }
-            Poll::Pending
-        })
-        .await
+            reads.requested.insert(key(query), query);
+        }
+        Poll::Pending
     }
 }
 
@@ -250,6 +263,54 @@ mod tests {
                 }
             }
         }
+    }
+    #[test]
+    fn consuming_reads_reuse_rows_and_deliver_dependency_failures() {
+        async fn consume(reads: QueryReads) -> Outcome {
+            for n in 1..=64 {
+                // Repeated identities go through the same settled latch too.
+                for _ in 0..2 {
+                    let id = query(n);
+                    let result = reads.read_consuming(id).await;
+                    if n == 32 {
+                        assert_eq!(result, Err(error()));
+                    } else {
+                        assert_eq!(result, Ok(product(id)));
+                    }
+                    let state = reads.0.borrow();
+                    assert!(state.completed.is_empty());
+                    assert!(state.requested.is_empty());
+                    assert_eq!(state.limit, 2);
+                }
+            }
+            Ok(product(query(0)))
+        }
+        struct Settled;
+        impl QueryContext for Settled {
+            fn read(&mut self, id: QueryId) -> Poll<Outcome> {
+                Poll::Ready(if id == query(32) {
+                    Err(error())
+                } else {
+                    Ok(product(id))
+                })
+            }
+        }
+        let frame = std::mem::size_of_val(&consume(reads()));
+        let retained = LocalFutureTask::retained_bytes_for(frame, 2).unwrap();
+        let mut task = LocalFutureTask::new(
+            query(0),
+            MemoryWeight {
+                retained,
+                ..Default::default()
+            },
+            2,
+            errors(),
+            consume,
+        )
+        .unwrap();
+        assert!(
+            matches!(task.poll(&mut Settled), QueryPoll::Complete(value) if value == product(query(0)))
+        );
     }
     #[test]
     fn insufficient_future_frame_refuses_before_construction_and_overflow_is_checked() {
