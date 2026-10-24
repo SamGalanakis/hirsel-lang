@@ -19,6 +19,29 @@ pub struct SettledArenaGraph {
     /// Components in deterministic callee-first order in each stratum.
     pub candidates: Vec<Arc<ArenaSummary>>,
     pub chosen: Vec<Arc<ArenaSummary>>,
+    chosen_by_owner: BTreeMap<Function, Arc<ArenaSummary>>,
+}
+
+impl SettledArenaGraph {
+    /// Only components read by one local Ready query: its own chosen claim and
+    /// its direct callees' chosen claims. The descriptor index is built once
+    /// during settlement, so a hit does not scan unrelated graph components.
+    pub fn chosen_reads(
+        &self,
+        owner: &InstanceAddress,
+        callees: &[Function],
+    ) -> Result<Vec<Arc<ArenaSummary>>, String> {
+        let mut reads = BTreeMap::new();
+        let own = function(owner);
+        for member in std::iter::once(&own).chain(callees) {
+            let summary = self
+                .chosen_by_owner
+                .get(member)
+                .ok_or("missing chosen arena dependency")?;
+            reads.insert(summary.product.address.0, summary.clone());
+        }
+        Ok(reads.into_values().collect())
+    }
 }
 
 fn function(address: &InstanceAddress) -> Function {
@@ -152,5 +175,18 @@ pub fn settle_arena_queries(
             }
         }
     }
-    Ok(SettledArenaGraph { candidates, chosen })
+    let chosen_by_owner = chosen
+        .iter()
+        .flat_map(|summary| {
+            summary
+                .candidates
+                .iter()
+                .map(|(owner, _)| (function(owner), summary.clone()))
+        })
+        .collect();
+    Ok(SettledArenaGraph {
+        candidates,
+        chosen,
+        chosen_by_owner,
+    })
 }

@@ -64,6 +64,7 @@ struct Discovery {
     callees: Vec<hirsel_rc::arena_credit::equations::Function>,
     requests: Vec<Request>,
     selection_reads: Vec<SelectionRead>,
+    constant_reads: Vec<hirsel_syntax::DefPath>,
 }
 
 /// The descriptor returned after one demand has been admitted by actual C or
@@ -74,6 +75,7 @@ pub struct DiscoveredInstance {
     pub callees: Vec<hirsel_rc::arena_credit::equations::Function>,
     pub dependencies: Vec<InstanceAddress>,
     pub selection_reads: Vec<SelectionRead>,
+    pub constant_reads: Vec<hirsel_syntax::DefPath>,
 }
 
 /// One immutable request snapshot. Source/native proof authority stays in the
@@ -256,6 +258,7 @@ impl DemandInstances {
         request: &Request,
         options: &super::super::Options,
         selection_reads: &[SelectionRead],
+        constant_reads: &[hirsel_syntax::DefPath],
     ) -> Result<Action, String> {
         let source = if request.recipe.domain == SOURCE_RECIPE {
             let source = declarations
@@ -273,6 +276,27 @@ impl DemandInstances {
         } else {
             None
         };
+        let constants = constant_reads
+            .iter()
+            .map(|path| {
+                let current = declarations
+                    .program
+                    .constants
+                    .get(path)
+                    .map(|value| -> Result<ContentHash, String> {
+                        let bytes = self
+                            .records
+                            .encode(engine, value)
+                            .ok_or("current static input cannot be encoded")?;
+                        Ok(ContentHash::of_parts(
+                            "hirsel.native.materialized-static-read.v1",
+                            [bytes.as_slice()],
+                        ))
+                    })
+                    .transpose()?;
+                Ok((path, current))
+            })
+            .collect::<Result<Vec<_>, String>>()?;
         let bytes = serde_json::to_vec(&(
             1u32,
             crate::COMPILER_IDENTITY.as_slice(),
@@ -291,10 +315,11 @@ impl DemandInstances {
                 .iter()
                 .map(|read| read.current(&declarations.program.instance_bodies))
                 .collect::<Vec<_>>(),
+            constants,
         ))
         .map_err(|e| e.to_string())?;
         Ok(Action(ContentHash::of_parts(
-            "hirsel.native.demand-import-action.v3",
+            "hirsel.native.demand-import-action.v4",
             [bytes.as_slice()],
         )))
     }
@@ -309,13 +334,14 @@ impl DemandInstances {
             .get_content(product.discovery)
             .ok_or("missing native discovery")?;
         let discovery: Discovery = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
-        if discovery.schema != 2
+        if discovery.schema != 3
             || discovery.owner.bind()? != key.instance
             || discovery
                 .requests
                 .windows(2)
                 .any(|w| w[0].key.encoding >= w[1].key.encoding)
             || discovery.callees.windows(2).any(|w| w[0] >= w[1])
+            || discovery.constant_reads.windows(2).any(|w| w[0] >= w[1])
             || discovery.selection_reads.iter().any(|read| !read.valid())
             || discovery.selection_reads.windows(2).any(|w| {
                 (&w[0].declaration, &w[0].arguments) >= (&w[1].declaration, &w[1].arguments)
@@ -344,6 +370,7 @@ impl DemandInstances {
             callees: discovery.callees,
             dependencies,
             selection_reads: discovery.selection_reads,
+            constant_reads: discovery.constant_reads,
         });
         self.completed
             .insert(key.instance.encoding().to_vec(), output.clone());
@@ -379,7 +406,17 @@ impl DemandInstances {
         let selection_reads = previous
             .as_ref()
             .map_or(&[][..], |record| record.selection_reads.as_slice());
-        let action = self.action(engine, declarations, &request, options, selection_reads)?;
+        let constant_reads = previous
+            .as_ref()
+            .map_or(&[][..], |record| record.constant_reads.as_slice());
+        let action = self.action(
+            engine,
+            declarations,
+            &request,
+            options,
+            selection_reads,
+            constant_reads,
+        )?;
         if previous.is_some()
             && let Some(output) = self.completed.get(key.instance.encoding())
             && output.product.product.action == action
@@ -528,16 +565,40 @@ impl DemandInstances {
         callees.sort();
         callees.dedup();
         let selection_reads = instances.selection_reads();
-        let action = self.action(engine, declarations, &request, options, &selection_reads)?;
+        let mut constant_reads = unit
+            .instructions
+            .iter()
+            .filter_map(|instruction| {
+                let hirsel_lir::ir::Inst::ReadStatic { symbol, .. } = instruction else {
+                    return None;
+                };
+                let symbol = &unit.tables.symbols[symbol.index()];
+                (symbol.kind == hirsel_lir::ir::SymbolKind::Constant
+                    && symbol.definition != hirsel_rc::import::empty_sequence()
+                    && symbol.definition != hirsel_rc::import::nullary_variant())
+                .then(|| symbol.definition.clone())
+            })
+            .collect::<Vec<_>>();
+        constant_reads.sort();
+        constant_reads.dedup();
+        let action = self.action(
+            engine,
+            declarations,
+            &request,
+            options,
+            &selection_reads,
+            &constant_reads,
+        )?;
         let discovery = self.put(
             INSTANCE_DISCOVERY_DOMAIN,
             &serde_json::to_vec(&Discovery {
-                schema: 2,
+                schema: 3,
                 owner: NamedKey::of(&key.instance),
                 ready_source,
                 callees,
                 requests,
                 selection_reads,
+                constant_reads,
             })
             .map_err(|e| e.to_string())?,
         )?;

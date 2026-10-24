@@ -26,6 +26,14 @@ type FinalizerRows = Vec<(
     bool,
 )>;
 
+/// Ordinary emission inputs for one instance. The request's immutable profile
+/// and the selected unit's static bytes are distinct explicit dependencies.
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct UnitEmissionContext {
+    pub request: Reference,
+    pub statics_finalizers: Reference,
+}
+
 fn function(key: &InstanceAddress) -> Function {
     (key.instance.definition().clone(), key.instance.digest())
 }
@@ -76,8 +84,21 @@ impl LocalReadyQueries {
             return Err("local Ready request environment differs".into());
         }
         let (owner, _) = instances.admitted(key, environment)?;
+        let context = UnitEmissionContext {
+            request: emission_context,
+            statics_finalizers: owner.product.statics_finalizers,
+        };
+        let context_bytes = serde_json::to_vec(&context).map_err(|e| e.to_string())?;
+        let emission_context = self
+            .store
+            .put_content(EMISSION_CONTEXT_DOMAIN, &context_bytes)
+            .ok_or("local emission context publication failed")?;
+        if EMISSION_CONTEXT_DOMAIN.reference(&context_bytes) != Some(emission_context) {
+            return Err("local emission context identity differs".into());
+        }
         let mut chosen = BTreeMap::new();
-        for summary in &arena.chosen {
+        let selected_summaries = arena.chosen_reads(key, &owner.callees)?;
+        for summary in &selected_summaries {
             let product = summary.product;
             let association = self
                 .store

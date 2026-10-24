@@ -14,7 +14,7 @@ pub const INSTANCE_RECORD_DOMAIN: Domain = Domain {
 };
 pub const INSTANCE_DISCOVERY_DOMAIN: Domain = Domain {
     kind: 0x4e00_0011,
-    schema: 2,
+    schema: 3,
 };
 pub const STATICS_FINALIZERS_DOMAIN: Domain = Domain {
     kind: 0x4e00_0012,
