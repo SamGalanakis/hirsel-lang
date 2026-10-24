@@ -234,6 +234,30 @@ impl CapturedPlatform {
             reads,
         })
     }
+    /// Owned object, vector capacities, filenames and current-input path buffers.
+    /// Stored tool/runtime bytes remain charged by the selected provider; an
+    /// outer Arc/header belongs to its caller's existing owner reservation.
+    pub fn retained_metadata_bytes(&self) -> u64 {
+        let mut bytes = std::mem::size_of::<Self>();
+        let mut add = |amount| bytes = bytes.saturating_add(amount);
+        add(self.runtime_archive.name.capacity());
+        add(self
+            .foreign
+            .capacity()
+            .saturating_mul(std::mem::size_of::<NamedLinkInput>()));
+        for input in &self.foreign {
+            add(input.name.capacity());
+        }
+        add(self
+            .reads
+            .capacity()
+            .saturating_mul(std::mem::size_of::<PlatformRead>()));
+        for read in &self.reads {
+            add(read.path.capacity());
+        }
+        u64::try_from(bytes).unwrap_or(u64::MAX)
+    }
+
     pub fn linker(&self) -> FrozenLinker {
         self.linker
     }
