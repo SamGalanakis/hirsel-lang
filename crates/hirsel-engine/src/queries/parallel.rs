@@ -9,7 +9,10 @@ mod compact;
 mod scheduled;
 pub(crate) use compact::CompactCompleted;
 use compact::{FrontResult, WorkerCompleted};
-pub use scheduled::{FRONT_BODY_KIND, FrontBodyOutput, FrontBodyQueries};
+pub use scheduled::{
+    FRONT_BODY_KIND, FRONT_STORAGE_KIND, FrontBodyOutput, FrontBodyQueries, FrontCheckedOutput,
+    FrontInputFootprint, FrontStorageOutput, FrontStorageQueries,
+};
 
 /// One input's outcome, including the phase that completed or stopped it.
 /// Results from `mode_definitions` always retain the caller's input order.
@@ -316,11 +319,13 @@ impl Worker<'_> {
                 None => Err(QueryError::NotImplemented),
             };
             if let Ok(output) = &mut result {
-                arm_fixes::place(
+                arm_fixes::place_with(
                     output,
                     &mut stage.observed.representations,
-                    self.sources,
-                    self.items,
+                    |owner, site| {
+                        arm_fixes::insertion(self.sources, self.items, owner, site)
+                            .or_else(|| self.citations.arm_insertion(owner, site))
+                    },
                 );
             }
             stage.complete(result, PhaseProducts::default());

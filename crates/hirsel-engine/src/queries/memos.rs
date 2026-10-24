@@ -136,7 +136,7 @@ fn missing_lookup(result: &Result<DefPath, LookupError>) -> bool {
         Err(LookupError::Missing | LookupError::MissingMember(_))
     )
 }
-fn manifest_value(
+pub(crate) fn manifest_value(
     result: &Result<DefPath, LookupError>,
     namespace: Option<hirsel_resolve::Namespace>,
 ) -> ContentHash {

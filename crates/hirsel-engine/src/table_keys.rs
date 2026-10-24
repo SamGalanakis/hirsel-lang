@@ -12,6 +12,41 @@ use hirsel_types::{
 };
 use std::collections::{BTreeMap, BTreeSet};
 
+/// Compact checked input. The source rule keeps generic call arguments and
+/// lexical sites, without retaining a TypedBody or invoking a body controller.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub(crate) struct TableKeyUse {
+    owner: hirsel_syntax::LexicalOwner,
+    generics: hirsel_types::GenericDeclarations,
+    calls: Vec<TableKeyCall>,
+}
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct TableKeyCall {
+    callee: DefPath,
+    site: Span,
+    arguments: Vec<GenericArgument>,
+}
+impl TableKeyUse {
+    pub(crate) fn capture(body: &crate::TypedBody) -> Self {
+        Self {
+            owner: body.syntax.owner(),
+            generics: body.checked.resolution.generic_declarations.clone(),
+            calls: body
+                .checked
+                .instantiations
+                .iter()
+                .map(|call| TableKeyCall {
+                    callee: call.callee.clone(),
+                    site: body.syntax.tree.expressions[call.expression.0 as usize]
+                        .origin
+                        .span,
+                    arguments: call.arguments.clone(),
+                })
+                .collect(),
+        }
+    }
+}
+
 struct Argument {
     forbidden: bool,
     parameters: BTreeSet<usize>,

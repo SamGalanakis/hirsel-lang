@@ -154,6 +154,17 @@ impl CompactCompleted {
         rows
     }
 
+    pub(super) fn checked_product(&self) -> Option<(Arc<CheckedSummary>, Arc<Reads>)> {
+        let stage = self.checked.as_ref()?;
+        if !stage.consistent || stage.error.is_some() {
+            return None;
+        }
+        Some((
+            Arc::new(self.checked_summary.as_ref()?.clone()),
+            stage.reads.clone(),
+        ))
+    }
+
     pub(super) fn outcome(&self) -> &PublishedResult {
         &self.outcome
     }
@@ -251,7 +262,10 @@ impl CompactCompleted {
                 persistent::capture_mode(
                     records,
                     types,
-                    worker.items,
+                    |anchor| {
+                        persistent::anchor_owner(worker.items, anchor)
+                            .or_else(|| worker.citations.record_owner(anchor))
+                    },
                     &result,
                     checked_output
                         .as_ref()

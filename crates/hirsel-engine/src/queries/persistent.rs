@@ -520,7 +520,7 @@ fn persisted_execution_reads(
     }
     Reads::from_vec(reads).ok()
 }
-fn evaluation_subject(key: &EntryKey, payload: &[u8]) -> ContentHash {
+pub(super) fn evaluation_subject(key: &EntryKey, payload: &[u8]) -> ContentHash {
     ContentHash::of_parts(
         "hirsel.validate.evaluated-output.v1",
         [key.0.0.as_slice(), key.1.0.as_slice(), payload],
@@ -642,7 +642,7 @@ impl hirsel_artifact_store::Contents for Contents {
 pub(super) fn capture_mode(
     records: &TypeRecords,
     types: Arc<hirsel_types::TypeInterner>,
-    items: &BTreeMap<DefPath, Vec<Arc<ItemSyntax>>>,
+    owner: impl Fn(Anchor) -> Option<(DefPath, u32)>,
     result: &Result<Arc<QueryOutput<AnalyzedBody>>, QueryError>,
     checked: Option<(&QueryOutput<TypedBody>, &DependencyReads)>,
     phases: Vec<(Diagnostic, String)>,
@@ -666,16 +666,92 @@ pub(super) fn capture_mode(
         dependencies: output.dependencies.clone(),
         detail: canonical_detail(detail.clone()),
     });
-    encode_record(
-        records,
-        items,
+    records.encode_record(
         &ModeRecord {
             checked,
             phases,
             output,
             detail: canonical_detail(detail),
         },
+        owner,
     )
+}
+
+pub(super) struct FrozenMode {
+    pub(super) outcome: ModeResult,
+    pub(super) checked: Option<(Arc<CheckedSummary>, Arc<Reads>)>,
+    pub(super) table_keys: Option<Arc<crate::table_keys::TableKeyUse>>,
+}
+/// Decode only after the caller has validated the ordinary S0 variant reads.
+/// This uses the existing Modes codec and type/lexical validation; no engine
+/// query or registration controller is reachable from this helper.
+pub(super) fn restore_frozen_mode(
+    records: &Arc<TypeRecords>,
+    types: &hirsel_types::TypeInterner,
+    syntax: Arc<ItemSyntax>,
+    citations: &crate::snapshot::OwnedSourceContext,
+    text: ContentHash,
+    bytes: &[u8],
+    reads: Arc<Reads>,
+) -> Option<FrozenMode> {
+    let record: ModeRecord = records.decode_record(bytes, |path, occurrence| {
+        citations
+            .items
+            .get(path)
+            .and_then(|items| items.iter().find(|item| item.occurrence == occurrence))
+            .map(|item| item.anchor)
+            .or_else(|| citations.catalog.anchor(path, occurrence))
+    })?;
+    let (encoded, roots) =
+        hirsel_types::with_table_collection(|| bincode::serialize_into(std::io::sink(), &record));
+    encoded.ok()?;
+    if !roots.iter().all(|id| types.get(*id).is_some()) || !record.valid(&syntax) {
+        return None;
+    }
+    let mut table_keys = None;
+    let checked = record.checked.map(|checked| {
+        let typed = TypedBody {
+            syntax: syntax.clone(),
+            checked: checked.checked,
+            plans: checked.plans,
+            unit: checked.unit,
+            boolean: checked.boolean,
+        };
+        table_keys = Some(Arc::new(crate::table_keys::TableKeyUse::capture(&typed)));
+        let (summary, growth) = summarize(types, &typed);
+        (Arc::new(CheckedSummary { summary, growth }), reads.clone())
+    });
+    let result = record.output.map(|output| {
+        Arc::new(QueryOutput {
+            value: output.value.restore(syntax.clone()),
+            diagnostics: output.diagnostics,
+            dependencies: output.dependencies,
+        })
+    });
+    let summary = result.as_ref().ok().map(|output| {
+        let (summary, growth) = summarize(types, &output.value.typed);
+        Arc::new(PublishedSummary {
+            definition: DefId::intern(&syntax.item.definition),
+            summary,
+            growth,
+            storage: None,
+            checked: checked.as_ref().map(|(checked, _)| (**checked).clone()),
+            reads: reads.clone(),
+            text,
+        })
+    });
+    Some(FrozenMode {
+        outcome: ModeResult {
+            definition: syntax.item.definition.clone(),
+            phase: result.is_err().then_some(QueryKind::Modes),
+            result,
+            summary,
+            reads,
+            diagnostic_phases: record.phases,
+        },
+        checked,
+        table_keys,
+    })
 }
 
 /// Immutable writer shared by serial and worker publication. Keys and expected
@@ -1307,7 +1383,7 @@ impl QueryEngine {
             capture_mode(
                 &records,
                 engine.types.clone(),
-                &engine.items,
+                |anchor| engine.record_anchor_owner(anchor),
                 &output,
                 checked
                     .as_ref()

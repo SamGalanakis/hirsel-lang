@@ -10,7 +10,8 @@ mod parallel;
 pub(crate) mod s1;
 mod scheduled_lower;
 pub use parallel::{
-    FRONT_BODY_KIND, FrontBodyOutput, FrontBodyQueries, ModeResult, PublishedDefinition,
+    FRONT_BODY_KIND, FRONT_STORAGE_KIND, FrontBodyOutput, FrontBodyQueries, FrontCheckedOutput,
+    FrontInputFootprint, FrontStorageOutput, FrontStorageQueries, ModeResult, PublishedDefinition,
     PublishedResult,
 };
 pub use s1::{LoweringResult, S1LowerWork};
