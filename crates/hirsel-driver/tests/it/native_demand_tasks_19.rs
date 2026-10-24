@@ -175,3 +175,70 @@ fn native_demand_tasks_import_and_reuse_actual_settled_source_without_a_controll
         }
     });
 }
+
+#[test]
+fn native_source_metadata_debits_one_grant_and_outlives_the_instance_registry() {
+    with_compiler_stack(|| {
+        let store: Arc<dyn ResultStore> = Arc::new(store::MemStore::default());
+        let mut engine = QueryEngine::new(default_environment(), compiler_adapters())
+            .with_result_store(store.clone());
+        let file = engine
+            .sources
+            .add("metadata-admission.hir", "pub fn main()->u64{1u64}".into())
+            .unwrap();
+        engine.parse_file(file, &default_context()).unwrap();
+        let mut cache = NativeDiscoveryCache::new(engine.types().clone(), store.clone());
+        let declarations = NativeDeclarations::collect(&mut engine, &mut cache, &[]).unwrap();
+        let paths = declarations
+            .context
+            .sources
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        let context = engine.native_original_context(&paths).unwrap();
+        let reader = context.reader(std::iter::empty(), store.clone()).unwrap();
+        let inputs = NativeInstanceInputs::from_products(declarations, reader).unwrap();
+        drop(engine);
+        drop(cache);
+        let copied = inputs.retained_metadata_bytes();
+        assert!(copied > 0);
+        let budget = ProcessBudget::new(16 << 20);
+        let make = |grant| {
+            InstanceTasks::new(
+                inputs.clone(),
+                store.clone(),
+                native::Options::new(hirsel_lir::TargetSpec::x86_64_unknown_linux_gnu()),
+                hirsel_syntax::ContentHash::of_bytes(b"metadata-admission"),
+                MemoryWeight {
+                    scratch: 16 << 20,
+                    retained: 1 << 20,
+                    stack: 0,
+                },
+                grant,
+            )
+        };
+        let error = match make(budget.reserve(copied - 1).unwrap()) {
+            Ok(_) => panic!("insufficient copied metadata grant was admitted"),
+            Err(error) => error,
+        };
+        assert_eq!(error, "native source metadata exceeds retained allowance");
+        assert_eq!(budget.reserved(), 0);
+        let tasks = make(budget.reserve(16 << 20).unwrap()).unwrap();
+        let retained = tasks.retained_source_allowance();
+        assert_eq!(retained.bytes(), copied);
+        assert_eq!(budget.reserved(), 16 << 20);
+        drop(tasks);
+        assert_eq!(budget.reserved(), copied);
+        // A second registry uses the already held input debit without a second
+        // split; its independent registry portion still fits the original cap.
+        let tasks = make(budget.reserve((16 << 20) - copied).unwrap()).unwrap();
+        assert!(Arc::ptr_eq(&retained, &tasks.retained_source_allowance()));
+        drop(tasks);
+        assert_eq!(budget.reserved(), copied);
+        drop(make);
+        drop(inputs);
+        assert_eq!(budget.reserved(), copied);
+        drop(retained);
+        assert_eq!(budget.reserved(), 0);
+    });
+}

@@ -8,7 +8,7 @@ use hirsel_engine::{
 };
 use hirsel_span::Anchor;
 use hirsel_syntax::{ContentHash, DefPath};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 pub type SourceObservation = (
     ContentHash,
@@ -54,6 +54,8 @@ pub struct NativeInstanceInputs {
     pub declarations: NativeDeclarations,
     lower: NativeOriginalReader,
     codec: Arc<NativeRecordContext>,
+    metadata_bytes: u64,
+    metadata_owner: Mutex<Option<Arc<hirsel_engine::runtime::MemoryReservation>>>,
 }
 fn check_binding(
     declarations: &NativeDeclarations,
@@ -89,11 +91,50 @@ impl NativeInstanceInputs {
                 .and_then(|(output, _, _, _)| output.cloned());
         }
         let codec = lower.record_context();
+        let metadata_bytes = declarations
+            .retained_metadata_bytes()
+            .map_err(invalid)?
+            .saturating_add(lower.retained_metadata_bytes())
+            .saturating_add(size_of::<Self>() as u64)
+            .saturating_add((2 * size_of::<usize>()) as u64);
         Ok(Arc::new(Self {
             declarations,
             lower,
             codec,
+            metadata_bytes,
+            metadata_owner: Mutex::new(None),
         }))
+    }
+    /// Copied bodyless metadata only; shared front allocations retain their
+    /// original owners. The constructor measures this before publishing the Arc.
+    pub fn retained_metadata_bytes(&self) -> u64 {
+        self.metadata_bytes
+    }
+    /// Transfer the copied metadata's one charge out of the supplied native
+    /// allowance. The last input owner releases it, independently of task life.
+    pub(super) fn retain_metadata(
+        &self,
+        allowance: &mut hirsel_engine::runtime::MemoryReservation,
+    ) -> Result<(), String> {
+        let mut owner = self
+            .metadata_owner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if owner.is_none() {
+            *owner =
+                Some(Arc::new(allowance.split(self.metadata_bytes).ok_or(
+                    "native source metadata exceeds retained allowance",
+                )?));
+        }
+        Ok(())
+    }
+    pub(super) fn metadata_allowance(
+        &self,
+    ) -> Option<Arc<hirsel_engine::runtime::MemoryReservation>> {
+        self.metadata_owner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
     pub fn provider(self: &Arc<Self>) -> FrozenNativeSource {
         FrozenNativeSource {
