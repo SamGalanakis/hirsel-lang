@@ -177,6 +177,10 @@ fn physical_inspection_counts_survive_revisions_eviction_and_detached_snapshot_o
                 inspected.work.recomputations, 0,
                 "inspection must execute no compiler phase"
             );
+            assert_eq!(
+                inspected.work.store_adoptions, 0,
+                "inspection must restore no compiler product"
+            );
             let CompileResult::Inspect(inspection) = &inspected.result else {
                 panic!("wrong inspection result")
             };

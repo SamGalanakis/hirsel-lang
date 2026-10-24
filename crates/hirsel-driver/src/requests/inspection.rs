@@ -164,6 +164,7 @@ pub(super) struct SourceInspection {
     pub owner: Arc<MemoryReservation>,
 }
 struct Previous {
+    store_adoptions: u64,
     counts: BTreeMap<DefPath, Counters>,
     initial: Option<RequestWork>,
     stats: Option<MemoStats>,
@@ -194,6 +195,7 @@ impl GraphMeter {
             memos: source.memos,
             hold_bytes,
             previous: Mutex::new(Previous {
+                store_adoptions: 0,
                 counts: BTreeMap::new(),
                 initial: Some(source.initial),
                 stats: Some(source.stats),
@@ -242,7 +244,16 @@ impl GraphMeter {
             })
             .collect::<Result<BTreeMap<_, _>, _>>()?;
         self.ledger.add(&delta, previous.stats.as_ref())?;
+        let adoptions = self.front.store_adoptions();
+        let adoption_delta = adoptions
+            .checked_sub(previous.store_adoptions)
+            .ok_or_else(unavailable)?;
         let mut work = previous.initial.take().unwrap_or_default();
+        work.store_adoptions = work
+            .store_adoptions
+            .checked_add(adoption_delta)
+            .ok_or_else(unavailable)?;
+        previous.store_adoptions = adoptions;
         previous.stats = None;
         previous.counts = current;
         work.hold_bytes = self.hold_bytes;
