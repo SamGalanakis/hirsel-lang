@@ -87,8 +87,11 @@ impl Drop for Scratch {
 /// timeout stops and collects this child's descendants before killing them.
 fn run(engine: &[&str], program: &Path, grants: &str, hook: &str) -> Output {
     use std::time::{Duration, Instant};
-    let stdout = program.with_extension("child.stdout");
-    let stderr = program.with_extension("child.stderr");
+    // Concurrent replays of one recording each capture their own output.
+    static CHILD: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let child = CHILD.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let stdout = program.with_extension(format!("child-{child}.stdout"));
+    let stderr = program.with_extension(format!("child-{child}.stderr"));
     let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
     command
         .arg("run")
@@ -356,16 +359,28 @@ fn verify(engine: &[&str], grants: &str, outcome: &str, recorded: &Recorded) {
         "{what}: the replay under seed {REPLAY_SEED}"
     );
     let bytes = std::fs::read(&tape).unwrap();
-    let prefix = recorded.scratch.path("prefix");
-    for (offset, projection) in &recorded.cuts[..recorded.cuts.len() - 1] {
-        for extra in [0, TORN] {
-            std::fs::write(&prefix, &bytes[..(offset + extra).min(bytes.len())]).unwrap();
-            assert_eq!(
-                replayed(engine, &program, grants, &prefix, 3),
-                format!("replayed {projection}"),
-                "{what}: the cut at {offset} (+{extra})"
-            );
-        }
+    // Every cut of this one recording, truncated and torn. A replay is one
+    // single-threaded process, so they run together on the action's CPUs.
+    let prefixes: Vec<_> = recorded.cuts[..recorded.cuts.len() - 1]
+        .iter()
+        .flat_map(|(offset, projection)| [0, TORN].map(|extra| (*offset, extra, projection)))
+        .collect();
+    let width = std::thread::available_parallelism().map_or(1, |n| n.get());
+    for group in prefixes.chunks(width) {
+        std::thread::scope(|scope| {
+            for &(offset, extra, projection) in group {
+                let (program, bytes) = (&program, &bytes);
+                scope.spawn(move || {
+                    let prefix = recorded.scratch.path(&format!("prefix-{offset}-{extra}"));
+                    std::fs::write(&prefix, &bytes[..(offset + extra).min(bytes.len())]).unwrap();
+                    assert_eq!(
+                        replayed(engine, program, grants, &prefix, 3),
+                        format!("replayed {projection}"),
+                        "{what}: the cut at {offset} (+{extra})"
+                    );
+                });
+            }
+        });
     }
 }
 
