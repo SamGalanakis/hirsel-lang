@@ -203,6 +203,14 @@ fn admitted_lower_consumes_many_constant_dependencies_with_original_mailbox_boun
                 1
             );
             assert_eq!(front.live_body_count(), 0);
+            let stats = runtime.stats();
+            let retained_tasks = stats.charged_bytes
+                - stats.bookkeeping_bytes
+                - stats.workers as u64 * hirsel_intern::jobs::COMPILER_STACK_BYTES as u64;
+            assert!(
+                retained_tasks < weight.retained,
+                "completed Lower frames must retire after destruction; producer outputs keep their separate grant: {stats:?}"
+            );
             assert!(lower.retained_bytes() <= 32 << 20);
             let held = output.clone();
             runtime.shutdown();
