@@ -77,21 +77,9 @@ struct RequestCapture<S> {
 fn compose_requests<S: Copy>(limit: u32, requests: &[DepthRequest<S>]) -> DepthEvidence<S> {
     let mut result = DepthEvidence::leaf(limit);
     for request in requests {
-        let (child, height) = match request {
-            DepthRequest::Frame(child, _) => (child, child.height + 1),
-            DepthRequest::Transparent(child) => (child, child.height),
-        };
-        debug_assert_eq!(child.limit(), limit, "evidence under one limit");
-        result.height = result.height.max(height);
-        // Slot zero is meaningful for a transparent trace, including L=0.
-        for n in 0..=limit {
-            let slot = &mut result.first[n as usize];
-            if slot.is_none() {
-                *slot = match request {
-                    DepthRequest::Frame(child, site) => child.request(n, *site).err(),
-                    DepthRequest::Transparent(child) => child.first[n as usize],
-                };
-            }
+        match request {
+            DepthRequest::Frame(child, site) => result.observe_frame(child, *site),
+            DepthRequest::Transparent(child) => result.observe_transparent(child),
         }
     }
     result

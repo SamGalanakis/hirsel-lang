@@ -3,6 +3,7 @@
 //! into a source namespace remains a separate ordered transaction.
 use super::*;
 use crate::comptime::{EvaluationInput, PreparingSource, ValuePreparation};
+use crate::memo::{DepthEvidence, dependency_limit};
 use crate::runtime::*;
 use crate::store::{Domain, EntryKey, Reference, ResultStore};
 use hirsel_tir::{DefinitionRef, Materialized, MaterializedRef};
@@ -19,15 +20,15 @@ pub const FRONT_LOWER_KIND: u32 = 0x4600_0003;
 pub const FRONT_EVALUATE_KIND: u32 = 0x4600_0004;
 const FAILURE: Domain = Domain {
     kind: 0x4600_0005,
-    schema: 1,
+    schema: 2,
 };
 const LOWER_DESCRIPTOR: Domain = Domain {
     kind: 0x4600_0006,
-    schema: 1,
+    schema: 2,
 };
 const CONSTANT_DESCRIPTOR: Domain = Domain {
     kind: 0x4600_0007,
-    schema: 1,
+    schema: 2,
 };
 /// Physical producer work, including work before an eventual failure.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -40,6 +41,7 @@ struct Input {
     lower: EntryKey,
     evaluate: EntryKey,
     implementation: ContentHash,
+    site: Span,
 }
 #[derive(Clone)]
 enum Value {
@@ -69,6 +71,7 @@ impl LowerProduct {
 struct Outcome {
     result: Result<Value, QueryError>,
     reads: Reads,
+    depth: DepthEvidence<Span>,
 }
 /// A held Lower product keeps immutable source/output admission alive. The
 /// ordinary archive is data; native consumers independently validate it.
@@ -76,6 +79,7 @@ struct Outcome {
 pub struct FrontLowerOutput {
     pub output: QueryOutput<DefinitionRef>,
     pub reads: Reads,
+    pub depth: DepthEvidence<Span>,
     pub body: Reference,
     pub implementation_revision: ContentHash,
     pub signature: ContentHash,
@@ -173,6 +177,7 @@ impl FrontLowerQueries {
         };
         let lower = lower.clone();
         let reads = outcome.reads.clone();
+        let depth = outcome.depth.clone();
         drop(outcomes);
         let output = lower.decode(self)?;
         let input = self.inputs.get(lower.definition.path())?;
@@ -185,6 +190,7 @@ impl FrontLowerQueries {
         Some(FrontLowerOutput {
             output,
             reads,
+            depth,
             body: lower.body,
             implementation_revision: input.implementation,
             signature,
@@ -245,8 +251,20 @@ impl FrontLowerQueries {
             owner: self.clone(),
             reads,
             observed: Rc::new(RefCell::new(ReadsBuilder::new())),
+            depth: Rc::new(RefCell::new(DepthEvidence::leaf(dependency_limit(
+                self.limits.call_depth,
+            )))),
+            framed: id.kind == FRONT_EVALUATE_KIND,
         };
-        let result = self.compute(id.kind, &path, &mut source).await;
+        let result = if source.framed && source.depth.borrow().limit() == 0 {
+            Err(source.overflow(self.inputs[&path].site))
+        } else {
+            self.compute(id.kind, &path, &mut source).await
+        };
+        let mut depth = source.depth.borrow().clone();
+        if source.framed {
+            depth.first[0] = None;
+        }
         let observed = std::mem::take(&mut *source.observed.borrow_mut())
             .finish()
             .map_err(|_| self.errors.protocol)?;
@@ -265,14 +283,15 @@ impl FrontLowerQueries {
                     &lower.diagnostics,
                     &lower.dependencies,
                     &observed,
+                    &depth,
                 ),
             ),
             Ok(Value::Constant(value, substitutions)) => self
                 .records
-                .encode(&self.anchors, &(value, substitutions, &observed)),
+                .encode(&self.anchors, &(value, substitutions, &observed, &depth)),
             Err(error) => self
                 .records
-                .encode(&self.anchors, &(&path, error, &observed)),
+                .encode(&self.anchors, &(&path, error, &observed, &depth)),
         }
         .ok_or(self.errors.resource)?;
         if bytes.len() as u64 > self.weight.retained {
@@ -312,6 +331,7 @@ impl FrontLowerQueries {
                     Outcome {
                         result,
                         reads: observed,
+                        depth,
                     },
                 ),
             );
@@ -511,8 +531,21 @@ struct Source {
     owner: Arc<FrontLowerQueries>,
     reads: QueryReads,
     observed: Rc<RefCell<ReadsBuilder>>,
+    depth: Rc<RefCell<DepthEvidence<Span>>>,
+    framed: bool,
 }
 impl Source {
+    fn overflow(&self, site: Span) -> QueryError {
+        let limit = hirsel_tir::ToolingLimit {
+            kind: hirsel_tir::ToolingLimitKind::CallDepth,
+            limit: dependency_limit(self.owner.limits.call_depth) as u64,
+            site: Some(site),
+        };
+        QueryError::Operational(hirsel_types::OperationalFailure {
+            operation: "compile-time tooling limit".into(),
+            message: format!("{limit:?}"),
+        })
+    }
     fn merge(&self, reads: &Reads) {
         self.observed.borrow_mut().merge(reads);
     }
@@ -528,7 +561,7 @@ impl Source {
         self.merge(&observed.finish().map_err(|_| QueryError::NotImplemented)?);
         result
     }
-    async fn value(&self, path: &DefPath, kind: u32) -> Result<Value, QueryError> {
+    async fn value(&self, path: &DefPath, kind: u32, site: Span) -> Result<Value, QueryError> {
         let id = self
             .owner
             .id(path, kind)
@@ -539,6 +572,17 @@ impl Source {
             .selected(id, selected)
             .ok_or(QueryError::NotImplemented)?;
         self.merge(&outcome.reads);
+        let n = u32::from(self.framed);
+        let overflow = if kind == FRONT_EVALUATE_KIND {
+            self.depth.borrow_mut().observe_frame(&outcome.depth, site);
+            outcome.depth.request(n, site).err()
+        } else {
+            self.depth.borrow_mut().observe_transparent(&outcome.depth);
+            outcome.depth.first[n.min(outcome.depth.limit()) as usize]
+        };
+        if let Some(site) = overflow {
+            return Err(self.overflow(site));
+        }
         self.record(
             ReadKey::ExecutedBody(DefId::intern(path)),
             memos::optional(Some(self.owner.inputs[path].implementation)),
@@ -549,7 +593,22 @@ impl Source {
         &self,
         path: &DefPath,
     ) -> Result<(Materialized, Vec<(hirsel_syntax::ExprId, Materialized)>), QueryError> {
-        match self.value(path, FRONT_EVALUATE_KIND).await? {
+        self.constant_at(
+            path,
+            self.owner
+                .inputs
+                .get(path)
+                .ok_or(QueryError::NotImplemented)?
+                .site,
+        )
+        .await
+    }
+    async fn constant_at(
+        &self,
+        path: &DefPath,
+        site: Span,
+    ) -> Result<(Materialized, Vec<(hirsel_syntax::ExprId, Materialized)>), QueryError> {
+        match self.value(path, FRONT_EVALUATE_KIND, site).await? {
             Value::Constant(v, c) => Ok((v, c)),
             _ => Err(QueryError::NotImplemented),
         }
@@ -557,7 +616,7 @@ impl Source {
 }
 impl s1::AsyncDependencySource for Source {
     async fn definition(&mut self, path: &DefPath) -> s1::DependencyProduct<DefinitionRef> {
-        let result = match self.value(path, FRONT_LOWER_KIND).await {
+        let result = match self.value(path, FRONT_LOWER_KIND, Span::default()).await {
             Ok(Value::Lower(lower)) => {
                 for d in &lower.dependencies {
                     self.record(ReadKey::ExecutedSignature(d.definition), d.fingerprint);
@@ -624,13 +683,13 @@ impl PreparingSource for Values {
     ) -> Poll<Result<hirsel_types::SignatureRef, QueryError>> {
         Poll::Ready(self.source.signature(path))
     }
-    fn constant(&mut self, path: &DefPath, _: Span) -> Poll<Result<Materialized, QueryError>> {
+    fn constant(&mut self, path: &DefPath, site: Span) -> Poll<Result<Materialized, QueryError>> {
         if self.pending.is_none() {
             let source = self.source.clone();
             let path = path.clone();
             self.pending = Some(Box::pin(async move {
                 Ok(s1::DependencyProduct {
-                    result: source.constant_value(&path).await.map(|(v, _)| v),
+                    result: source.constant_at(&path, site).await.map(|(v, _)| v),
                     reads: Reads::empty(),
                 })
             }));
@@ -808,6 +867,7 @@ impl QueryEngine {
                         .store_key(path, QueryKind::Evaluate)
                         .ok_or_else(refusal)?,
                     implementation: syntax.text_hash,
+                    site: syntax.item.name_span,
                 },
             );
         }
