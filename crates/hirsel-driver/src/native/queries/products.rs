@@ -276,7 +276,16 @@ impl SettledProducts {
             let product = inner
                 .local
                 .queries
-                .lookup(owner, read.action, &snapshot.environment())
+                .lookup(
+                    owner,
+                    read.action,
+                    &NativeEnvironment {
+                        operations: &snapshot
+                            .instances
+                            .operations(owner, &snapshot.environment())?,
+                        ..snapshot.environment()
+                    },
+                )
                 .ok_or("settled Ready dependency lost current C admission")?;
             if product.product != *read || ready.insert(read.address.0, product).is_some() {
                 return Err("duplicate or changed settled Ready dependency".into());
@@ -305,7 +314,14 @@ impl NativeProducts for SettledProducts {
             .lookup(
                 key,
                 product.product.action,
-                &self.inner.snapshot.environment(),
+                &NativeEnvironment {
+                    operations: &self
+                        .inner
+                        .snapshot
+                        .instances
+                        .operations(key, &self.inner.snapshot.environment())?,
+                    ..self.inner.snapshot.environment()
+                },
             )
             .ok_or("object task lost Ready C admission")?;
         if current.product != product.product {
@@ -428,7 +444,12 @@ impl NativeProducts for DemandProducts {
             {
                 return Err("unit emission context differs from the request".into());
             }
-            captured.push(self.local.queries.read(&owner, product, &environment)?);
+            let operations = snapshot.instances.operations(&owner, &environment)?;
+            let scoped = NativeEnvironment {
+                operations: &operations,
+                ..environment
+            };
+            captured.push(self.local.queries.read(&owner, product, &scoped)?);
             contexts.push(context);
         }
         let closures = captured

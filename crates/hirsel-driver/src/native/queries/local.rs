@@ -134,12 +134,6 @@ impl LocalReadyQueries {
             return Err("local Ready request environment differs".into());
         }
         let (owner, _) = instances.admitted(key, environment)?;
-        let operations = instances.operations(key, environment)?;
-        let scoped = NativeEnvironment {
-            operations: &operations,
-            ..*environment
-        };
-        let environment = &scoped;
         let context = UnitEmissionContext {
             request: emission_context,
             statics_finalizers: owner.product.statics_finalizers,
@@ -237,6 +231,14 @@ impl LocalReadyQueries {
             "hirsel.native.local-ready-action.v1",
             [bytes.as_slice()],
         ));
+        // Callee admissions above consume the complete independent snapshot.
+        // Only this owner's own C lookup/publication uses its base read scope.
+        let operations = instances.operations(key, environment)?;
+        let scoped = NativeEnvironment {
+            operations: &operations,
+            ..*environment
+        };
+        let environment = &scoped;
         if let Some(hit) = self.queries.lookup(key, action, environment) {
             return Ok(hit);
         }
