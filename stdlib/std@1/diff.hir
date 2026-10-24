@@ -9,8 +9,8 @@
 // Patience follows Bram Cohen's description of patience diff, with Myers
 // between anchors where none are found. The output is checked against
 // imara-diff and against git diff --no-indent-heuristic.
-/// `Myers()` stops minimizing a costly search the way git does; `MyersMinimal()`
-/// always finds a minimal script.
+/// `Myers()` uses heuristic pruning and search cutoffs, as git does;
+/// `MyersMinimal()` always finds a minimal script.
 pub type Algorithm = Myers | MyersMinimal | Histogram | Patience
 
 /// One run of an edit script: `Keep(old, new, count)` keeps `count` lines from
@@ -275,7 +275,16 @@ fn prune_common(status: List[Occurrence], pos: u64) -> bool uses {} {
 
 // preprocess.rs:108-131: the tokens the search keeps and their original
 // indexes; the others are marked changed.
-fn prune(xs: List[u64], start: u64, status: List[Occurrence], mut changed: List[bool]) -> (
+// Unlike upstream, minimal mode keeps every shared token: Common pruning is
+// heuristic, and can discard an entire LCS (imara-diff myers.rs:30 and
+// preprocess.rs:120-124 apply it even when `minimal` is true).
+fn prune(
+  xs: List[u64],
+  start: u64,
+  status: List[Occurrence],
+  mut changed: List[bool],
+  minimal: bool
+) -> (
   unique List[u64],
   unique List[u64]
 ) uses {} {
@@ -285,7 +294,7 @@ fn prune(xs: List[u64], start: u64, status: List[Occurrence], mut changed: List[
     let pruned = match status[i] {
       Absent() => true,
       Present() => false,
-      Common() => prune_common(status, i),
+      Common() => !minimal && prune_common(status, i),
     }
     if pruned {
       changed[start + i] = true
@@ -654,8 +663,8 @@ fn myers(
   minimal: bool
 ) -> () uses {} {
   let (status1, status2) = occurrences(a, start1, end1, b, start2, end2)
-  let (h1, rows1) = prune(a, start1, status1, mut removed)
-  let (h2, rows2) = prune(b, start2, status2, mut added)
+  let (h1, rows1) = prune(a, start1, status1, mut removed, minimal)
+  let (h2, rows2) = prune(b, start2, status2, mut added, minimal)
   let n1 = core@1/list.len(h1)
   let n2 = core@1/list.len(h2)
   let base = wide(n2) + 1
@@ -1175,12 +1184,13 @@ fn changes(old: List[String], new: List[String], algorithm: Algorithm) -> (
 /// The edit script turning `old` into `new`, as runs of kept, deleted and
 /// inserted lines (`Edit`). Lines compare whole, terminators included; the
 /// common head and tail are kept first. `MyersMinimal()` finds a minimal script
-/// by Myers' algorithm after dropping lines the other side lacks (and lines
-/// matching many others among them), in O((N + M) D) time and O(N + M) memory
-/// for N and M lines and D changed lines. `Myers()` does the same but, as git
-/// does, gives up minimality to bound the search: past a cost of 256 a split
-/// may stop at a run of 20 equal lines, and past the square root of N + M (at
-/// least 256) it stops at the furthest point reached. `Histogram()` splits on the longest
+/// by Myers' algorithm after dropping only lines the other side lacks, in
+/// O((N + M) D) time and O(N + M) memory for N and M lines and D changed lines.
+/// `Myers()` is heuristic: it may also drop frequent shared lines surrounded
+/// by absent lines, and gives up minimality to bound the search, as git does:
+/// past a cost of 256 a split may stop at a run of 20 equal lines, and past the
+/// square root of N + M (at least 256) it stops at the furthest point reached.
+/// `Histogram()` splits on the longest
 /// common run of the rarest lines, falling back to `Myers()` where every shared
 /// line occurs more than 63 times. `Patience()` anchors on lines that occur
 /// once on each side, falling back to `Myers()` between anchors with none.

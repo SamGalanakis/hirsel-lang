@@ -1,0 +1,16 @@
+pub type AppError = Grant(GrantError) | Output(OutputError) | Arg(ArgError)
+pub fn main(rt: Io, args: Args) -> Result[(), AppError] {
+  let old = if arg.len(args) == 2 { arg.text(args, 0)? } else { "x\nc\nx\nc\nx\nc\nx\nc\nx\nc\nx\nc\nx\nc\nx\nc\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\n" }
+  let new = if arg.len(args) == 2 { arg.text(args, 1)? } else { "y\nc\ny\nc\ny\nc\ny\nc\ny\nc\ny\nc\ny\nc\ny\nc\ny\ny\ny\ny\ny\ny\ny\ny\ny\ny\ny\ny\ny\ny\ny\ny\ny\n" }
+  let a = diff.split_lines(old)
+  let b = diff.split_lines(new)
+  let output = io.stdout(rt)?
+  for edit in diff.edits(a, b, MyersMinimal()) {
+    match edit {
+      Keep(i,j,n) => out.print(output, f"K {i} {j} {n}\n")?,
+      Delete(i,j,n) => out.print(output, f"D {i} {j} {n}\n")?,
+      Insert(i,j,n) => out.print(output, f"I {i} {j} {n}\n")?,
+    }
+  }
+  Ok(())
+}
