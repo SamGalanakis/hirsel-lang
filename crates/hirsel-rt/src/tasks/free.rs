@@ -79,13 +79,13 @@ pub(super) unsafe fn try_yield(ctx: &mut TaskCtx) -> Stopped<()> {
     // and cancellation with no role or parked-context borrow.
     unsafe { super::readiness::poll_free(scheduler(ctx)) };
     unsafe { dispatch_ready(ctx) };
-    if ctx
+    let waits = ctx
         .run_ref()
         .host_waits
         .load(std::sync::atomic::Ordering::Acquire)
         != 0
-        || unsafe { host::concurrent::pending(ctx.run_ptr()) }
-    {
+        || unsafe { host::concurrent::pending(ctx.run_ptr()) };
+    if home_rechecks(scheduler(ctx), waits) {
         unsafe { crate::pool::wake_home(ctx.run_ptr()) };
     }
     let s = scheduler(ctx);
@@ -100,6 +100,20 @@ pub(super) unsafe fn try_yield(ctx: &mut TaskCtx) -> Stopped<()> {
         unsafe { suspend(ctx, true) };
     }
     crate::stop::observe(ctx)
+}
+
+/// Whether an immediate op must wake home to recheck saved host waits. Home
+/// already rechecks after every save and on its readiness, job and timer
+/// wakes; an op can end a saved host wait only by changing cancellation,
+/// which advances the cancellation generation. Event-driven, as Pony's
+/// activity generation (scheduler.c:259-296), not a per-op home service.
+fn home_rechecks(s: &mut super::Scheduler, waits: bool) -> bool {
+    let epoch = s.cancel_epoch.load();
+    if !waits || s.home_epoch == epoch {
+        return false;
+    }
+    s.home_epoch = epoch;
+    true
 }
 
 /// # Safety
@@ -562,5 +576,22 @@ mod tests {
         assert_eq!(waits[0].kind, "free.retry");
         assert!(waits[0].spawn_path.is_empty());
         assert_eq!(outcome.pending, 0);
+    }
+
+    #[test]
+    fn runtime50_immediate_ops_wake_home_only_for_new_cancellation() {
+        let mut s = super::super::Scheduler::default();
+        // Thousands of immediate ops with saved host waits and no cancellation.
+        assert!((0..4096).all(|_| !home_rechecks(&mut s, true)));
+        s.cancel_epoch.changed();
+        // No saved host wait: nothing for home to recheck, and the change
+        // stays unobserved until one exists.
+        assert!(!home_rechecks(&mut s, false));
+        assert!(home_rechecks(&mut s, true));
+        assert!(!home_rechecks(&mut s, true));
+        s.cancel_epoch.changed();
+        s.cancel_epoch.changed();
+        assert!(home_rechecks(&mut s, true), "one wake covers both changes");
+        assert!(!home_rechecks(&mut s, true));
     }
 }

@@ -274,6 +274,8 @@ enum Logical {
 pub(crate) struct Scheduler {
     logical: Logical,
     cancel_epoch: hirsel_free::cancel::Epoch,
+    /// The cancellation generation home last rechecked saved host waits for.
+    home_epoch: u64,
     cancel_metrics: Option<std::sync::Arc<crate::pool::WorkerMetrics>>,
     tasks: Vec<Option<Task>>,
     task_slots: registry::TaskSlots,
