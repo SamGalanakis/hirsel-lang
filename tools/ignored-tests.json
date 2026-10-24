@@ -116,5 +116,133 @@
   "state_model_checker_34::state_model_checker_34_ordered_cranelift": {
     "source": "crates/hirsel-cli/tests/cli/state_model_checker_34.rs",
     "inputs": []
+  },
+  "decision_tree_35::decision_tree_35_simulation": {
+    "source": "crates/hirsel-cli/tests/cli/decision_tree_35.rs",
+    "inputs": []
+  },
+  "decision_tree_35::decision_tree_35_native_record_replay": {
+    "source": "crates/hirsel-cli/tests/cli/decision_tree_35.rs",
+    "inputs": []
+  },
+  "decision_tree_35::decision_tree_35_cell": {
+    "source": "crates/hirsel-cli/tests/cli/decision_tree_35.rs",
+    "inputs": [
+      "DECISION_TREE_35_ROOT",
+      "DECISION_TREE_35_ROW_FILE",
+      "DECISION_TREE_35_PHASE"
+    ]
+  },
+  "decision_tree_35::decision_tree_35_ordered_capacity": {
+    "source": "crates/hirsel-cli/tests/cli/decision_tree_35.rs",
+    "inputs": [
+      "DECISION_TREE_35_BACKEND",
+      "DECISION_TREE_35_WIDTH",
+      "DECISION_TREE_35_KIND"
+    ]
+  },
+  "decision_tree_35::decision_tree_35_scripted_ordered": {
+    "source": "crates/hirsel-cli/tests/cli/decision_tree_35.rs",
+    "inputs": [
+      "DECISION_TREE_35_CASE",
+      "DECISION_TREE_35_BACKEND",
+      "DECISION_TREE_35_SCRIPTED_WIDTH"
+    ]
+  },
+  "decision_tree_35::decision_tree_35_scripted_tape_comparison": {
+    "source": "crates/hirsel-cli/tests/cli/decision_tree_35.rs",
+    "inputs": [
+      "DECISION_TREE_35_TAPES_DIR"
+    ]
+  },
+  "flow_audit_36::flow_audit_36_ordered_capacity": {
+    "source": "crates/hirsel-cli/tests/cli/flow_audit_36.rs",
+    "inputs": [
+      "FLOW_AUDIT_36_ORDERED"
+    ]
+  },
+  "merge_audit_37::merge_audit_37_refusals_and_independent_files": {
+    "source": "crates/hirsel-cli/tests/cli/merge_audit_37.rs",
+    "inputs": []
+  },
+  "merge_audit_37::merge_audit_37_native_full_main_replay": {
+    "source": "crates/hirsel-cli/tests/cli/merge_audit_37.rs",
+    "inputs": []
+  },
+  "merge_audit_37::merge_audit_37_ordered_capacity": {
+    "source": "crates/hirsel-cli/tests/cli/merge_audit_37.rs",
+    "inputs": [
+      "MERGE_AUDIT_37_WIDTH"
+    ]
+  },
+  "merge_audit_37::merge_audit_37_cap_source_exact": {
+    "source": "crates/hirsel-cli/tests/cli/merge_audit_37.rs",
+    "inputs": []
+  },
+  "merge_audit_37::merge_audit_37_cap_lines_exact": {
+    "source": "crates/hirsel-cli/tests/cli/merge_audit_37.rs",
+    "inputs": []
+  },
+  "merge_audit_37::merge_audit_37_cap_total_exact": {
+    "source": "crates/hirsel-cli/tests/cli/merge_audit_37.rs",
+    "inputs": []
+  },
+  "merge_audit_37::merge_audit_37_cap_total_over": {
+    "source": "crates/hirsel-cli/tests/cli/merge_audit_37.rs",
+    "inputs": []
+  },
+  "merge_audit_37::merge_audit_37_cap_decisions_exact": {
+    "source": "crates/hirsel-cli/tests/cli/merge_audit_37.rs",
+    "inputs": []
+  },
+  "merge_audit_37::merge_audit_37_cap_conflicts_exact": {
+    "source": "crates/hirsel-cli/tests/cli/merge_audit_37.rs",
+    "inputs": []
+  },
+  "merge_audit_37::merge_audit_37_cap_conflicts_over": {
+    "source": "crates/hirsel-cli/tests/cli/merge_audit_37.rs",
+    "inputs": []
+  },
+  "policy_evaluator_33::policy_evaluator_33_ordered_capacity": {
+    "source": "crates/hirsel-cli/tests/cli/policy_evaluator_33.rs",
+    "inputs": [
+      "POLICY_EVALUATOR_33_ORDERED"
+    ]
+  },
+  "relation_query_33::relation_query_33_ordered_capacity": {
+    "source": "crates/hirsel-cli/tests/cli/relation_query_33.rs",
+    "inputs": [
+      "RELATION_QUERY_33_ORDERED"
+    ]
+  },
+  "route_planner_33::route_planner_33_ordered_capacity": {
+    "source": "crates/hirsel-cli/tests/cli/route_planner_33.rs",
+    "inputs": [
+      "ROUTE_PLANNER_33_ORDERED"
+    ]
+  },
+  "spectral_audit_35::spectral_audit_35_original_caps": {
+    "source": "crates/hirsel-cli/tests/cli/spectral_audit_35.rs",
+    "inputs": []
+  },
+  "spectral_audit_35::spectral_audit_35_unrounded_oracle": {
+    "source": "crates/hirsel-cli/tests/cli/spectral_audit_35.rs",
+    "inputs": []
+  },
+  "spectral_audit_35::spectral_audit_35_ordered_capacity": {
+    "source": "crates/hirsel-cli/tests/cli/spectral_audit_35.rs",
+    "inputs": [
+      "SPECTRAL_AUDIT_35_BACKEND",
+      "SPECTRAL_AUDIT_35_WIDTH",
+      "SPECTRAL_AUDIT_35_KIND"
+    ]
+  },
+  "merge_audit_37::merge_audit_37_cap_report_exact": {
+    "source": "crates/hirsel-cli/tests/cli/merge_audit_37.rs",
+    "inputs": []
+  },
+  "merge_audit_37::merge_audit_37_cap_report_over": {
+    "source": "crates/hirsel-cli/tests/cli/merge_audit_37.rs",
+    "inputs": []
   }
 }

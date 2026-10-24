@@ -1627,13 +1627,6 @@ fn cap_case(kind: &str) {
     });
 }
 macro_rules! cap_test {
-    ($name:ident,$case:literal,$reason:literal) => {
-        #[test]
-        #[ignore = $reason]
-        fn $name() {
-            cap_case($case)
-        }
-    };
     ($name:ident,$case:literal) => {
         #[test]
         fn $name() {
@@ -1641,47 +1634,47 @@ macro_rules! cap_test {
         }
     };
 }
-cap_test!(
-    merge_audit_37_cap_source_exact,
-    "source-exact",
-    "original reference reaches Steps1M in SHA; escalation @agentlang-24"
-);
+#[test]
+#[ignore = "original reference reaches Steps1M in SHA; escalation @agentlang-24"]
+fn merge_audit_37_cap_source_exact() {
+    cap_case("source-exact")
+}
 cap_test!(merge_audit_37_cap_source_over, "source-over");
-cap_test!(
-    merge_audit_37_cap_lines_exact,
-    "lines-exact",
-    "original reference reaches Steps1M in SHA; escalation @agentlang-24"
-);
+#[test]
+#[ignore = "original reference reaches Steps1M in SHA; escalation @agentlang-24"]
+fn merge_audit_37_cap_lines_exact() {
+    cap_case("lines-exact")
+}
 cap_test!(merge_audit_37_cap_lines_over, "lines-over");
 cap_test!(merge_audit_37_cap_unicode_over, "unicode-byte-over");
-cap_test!(
-    merge_audit_37_cap_total_exact,
-    "total-exact",
-    "original reference reaches Steps1M in SHA; escalation @agentlang-24"
-);
-cap_test!(
-    merge_audit_37_cap_total_over,
-    "total-over",
-    "original reference reaches Steps1M in SHA; escalation @agentlang-24"
-);
+#[test]
+#[ignore = "original reference reaches Steps1M in SHA; escalation @agentlang-24"]
+fn merge_audit_37_cap_total_exact() {
+    cap_case("total-exact")
+}
+#[test]
+#[ignore = "original reference reaches Steps1M in SHA; escalation @agentlang-24"]
+fn merge_audit_37_cap_total_over() {
+    cap_case("total-over")
+}
 cap_test!(merge_audit_37_cap_files_over, "files-over");
-cap_test!(
-    merge_audit_37_cap_decisions_exact,
-    "decisions-exact",
-    "original reference reaches Steps1M in JSON; escalation @agentlang-24"
-);
+#[test]
+#[ignore = "original reference reaches Steps1M in JSON; escalation @agentlang-24"]
+fn merge_audit_37_cap_decisions_exact() {
+    cap_case("decisions-exact")
+}
 cap_test!(merge_audit_37_cap_decisions_over, "decisions-over");
-cap_test!(
-    merge_audit_37_cap_conflicts_exact,
-    "conflicts-exact",
-    "original reference reaches Steps1M in SHA; escalation @agentlang-24"
-);
+#[test]
+#[ignore = "original reference reaches Steps1M in SHA; escalation @agentlang-24"]
+fn merge_audit_37_cap_conflicts_exact() {
+    cap_case("conflicts-exact")
+}
 
-cap_test!(
-    merge_audit_37_cap_conflicts_over,
-    "conflicts-over",
-    "original reference reaches Steps1M in SHA; escalation @agentlang-24"
-);
+#[test]
+#[ignore = "original reference reaches Steps1M in SHA; escalation @agentlang-24"]
+fn merge_audit_37_cap_conflicts_over() {
+    cap_case("conflicts-over")
+}
 
 // Adapted from width_capacity_36::fixture_capacity; assertions and public APIs
 // are preserved. The lane installs only its capped runtime wrapper and object seal.
@@ -1843,16 +1836,16 @@ fn width_running(m: &Value, width: u64) -> bool {
         && m["width"]["pending"] == 0
 }
 
-cap_test!(
-    merge_audit_37_cap_report_exact,
-    "report-exact",
-    "original reference reaches Steps1M in SHA; escalation @agentlang-24"
-);
-cap_test!(
-    merge_audit_37_cap_report_over,
-    "report-over",
-    "original reference reaches Steps1M in SHA; escalation @agentlang-24"
-);
+#[test]
+#[ignore = "original reference reaches Steps1M in SHA; escalation @agentlang-24"]
+fn merge_audit_37_cap_report_exact() {
+    cap_case("report-exact")
+}
+#[test]
+#[ignore = "original reference reaches Steps1M in SHA; escalation @agentlang-24"]
+fn merge_audit_37_cap_report_over() {
+    cap_case("report-over")
+}
 // This is separate native qualification of the same full-main original report
 // vectors; reference/checked Steps stops remain separate, never replaced.
 #[test]
