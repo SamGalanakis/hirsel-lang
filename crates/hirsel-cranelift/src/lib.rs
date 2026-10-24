@@ -32,6 +32,7 @@ mod ownership_trace;
 mod places;
 mod profile;
 mod program;
+mod receipt;
 mod scalar;
 mod soa;
 mod structural;

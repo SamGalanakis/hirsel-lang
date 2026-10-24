@@ -61,6 +61,9 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
     /// every block parameter an edge passes one to.
     pub(super) fn find_versions(&mut self) -> Emitted {
         let unit = self.unit;
+        if let Some(entry) = &unit.tables.receipt_entry {
+            self.versions.extend(entry.versions());
+        }
         for inst in &unit.instructions {
             match *inst {
                 Inst::Store { version, .. }
@@ -242,12 +245,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             match slot.kind {
                 SlotKind::ReceiptParameter(_)
                 | SlotKind::ReceiptCapture(_)
-                | SlotKind::ReceiptResult => {
-                    return Err(CodegenError::Unsupported {
-                        definition: self.definition().clone(),
-                        what: "receipt entry slot transport is not implemented".into(),
-                    });
-                }
+                | SlotKind::ReceiptResult => continue,
                 // Bound to their environment fields at entry.
                 SlotKind::Parameter(_) | SlotKind::Capture(_) => continue,
                 SlotKind::Local

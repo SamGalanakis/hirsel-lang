@@ -176,7 +176,8 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 }
             }
         }
-        self.bind_captures()
+        self.bind_captures()?;
+        self.bind_receipt_entry()
     }
 
     /// A by-value parameter from its physical slots: none for unit, one scalar, or the

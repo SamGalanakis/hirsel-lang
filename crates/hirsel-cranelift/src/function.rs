@@ -754,6 +754,9 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
     /// every block parameter an edge passes one to.
     fn find_versions(&mut self) -> Emitted {
         let unit = self.unit;
+        if let Some(entry) = &unit.tables.receipt_entry {
+            self.versions.extend(entry.versions());
+        }
         for inst in &unit.instructions {
             match *inst {
                 Inst::Store { version, .. }
@@ -929,12 +932,7 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
             match slot.kind {
                 SlotKind::ReceiptParameter(_)
                 | SlotKind::ReceiptCapture(_)
-                | SlotKind::ReceiptResult => {
-                    return Err(CodegenError::Unsupported {
-                        definition: self.definition().clone(),
-                        what: "receipt entry slot transport is not implemented".into(),
-                    });
-                }
+                | SlotKind::ReceiptResult => continue,
                 SlotKind::Parameter(_) | SlotKind::Capture(_) => continue,
                 SlotKind::Local
                 | SlotKind::Temporary
@@ -1067,7 +1065,8 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
                 }
             }
         }
-        self.bind_captures()
+        self.bind_captures()?;
+        self.bind_receipt_entry()
     }
 
     /// Binds each capture slot to its field of the environment the body was entered with:
