@@ -63,8 +63,13 @@ impl<'a> FnEmitter<'_, 'a, '_> {
                 ScanStep::Uncounted { .. } | ScanStep::Handle { .. } => {}
                 ScanStep::Inline { offset, layout } => {
                     let child = self.offset(base, *offset);
-                    let scan = &self.layout(*layout)?.scan;
-                    self.dup_scan(child, scan)?;
+                    self.dup_holders(Place {
+                        ptr: child,
+                        layout: *layout,
+                        align: 1,
+                        block: None,
+                        columns: None,
+                    })?;
                 }
                 ScanStep::Repeat {
                     offset,
@@ -72,10 +77,15 @@ impl<'a> FnEmitter<'_, 'a, '_> {
                     stride,
                     element,
                 } => {
-                    let scan = &self.layout(*element)?.scan;
                     for i in 0..*count {
                         let child = self.offset(base, offset + i * stride);
-                        self.dup_scan(child, scan)?;
+                        self.dup_holders(Place {
+                            ptr: child,
+                            layout: *element,
+                            align: 1,
+                            block: None,
+                            columns: None,
+                        })?;
                     }
                 }
                 ScanStep::ActiveVariant {
@@ -109,8 +119,7 @@ impl<'a> FnEmitter<'_, 'a, '_> {
                 } => {
                     let count = self.load_ty(types::I64, base, *count_offset);
                     let first = self.offset(base, *offset);
-                    let scan = &self.layout(*element)?.scan;
-                    self.dup_elements(first, count, *stride, scan)?;
+                    self.dup_elements(first, count, *stride, *element)?;
                 }
                 ScanStep::Columns(columns) => {
                     let count = self.load_ty(types::I64, base, columns.count_offset);
@@ -119,8 +128,7 @@ impl<'a> FnEmitter<'_, 'a, '_> {
                         let offset = self.b.ins().imul_imm_s(capacity, column.prefix as i64);
                         let data = self.offset(base, columns.data_offset);
                         let first = self.offset_by(data, offset);
-                        let scan = &self.layout(column.layout)?.scan;
-                        self.dup_elements(first, count, column.stride, scan)?;
+                        self.dup_elements(first, count, column.stride, column.layout)?;
                     }
                 }
             }
@@ -133,9 +141,10 @@ impl<'a> FnEmitter<'_, 'a, '_> {
         first: Value,
         count: Value,
         stride: u64,
-        scan: &'a [ScanStep],
+        layout: LayoutId,
     ) -> Emitted {
-        if scan.is_empty() {
+        let record = self.layout(layout)?;
+        if record.scan.is_empty() && !matches!(record.kind, LayoutKind::PayloadReceipt { .. }) {
             return Ok(());
         }
         let head = self.b.create_block();
@@ -150,7 +159,13 @@ impl<'a> FnEmitter<'_, 'a, '_> {
         self.b.switch_to_block(body);
         let offset = self.b.ins().imul_imm_s(index, stride as i64);
         let child = self.offset_by(first, offset);
-        self.dup_scan(child, scan)?;
+        self.dup_holders(Place {
+            ptr: child,
+            layout,
+            align: 1,
+            block: None,
+            columns: None,
+        })?;
         let next = self.b.ins().iadd_imm_s(index, 1);
         self.b.ins().jump(head, &[next.into()]);
         self.b.switch_to_block(done);

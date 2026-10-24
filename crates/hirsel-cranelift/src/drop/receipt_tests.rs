@@ -181,8 +181,30 @@ fn execute(target: &TargetSpec, bytes: Vec<u8>, label: &str) {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
-fn probe(target: &TargetSpec, malformed: bool) -> Vec<u8> {
-    let (table, unit, abi) = fixture(target);
+fn probe(target: &TargetSpec, malformed: bool, nested: bool) -> Vec<u8> {
+    let (mut table, unit, abi) = fixture(target);
+    if nested {
+        let mut parent = table.layouts[0].clone();
+        parent.kind = LayoutKind::Aggregate;
+        parent.size = SizeSpec::Fixed(16);
+        parent.fields = vec![FieldLayout {
+            ordinal: 0,
+            offset: 8,
+            layout: LayoutId(0),
+            unaligned: false,
+        }];
+        parent.scan = vec![ScanStep::Inline {
+            offset: 8,
+            layout: LayoutId(0),
+        }];
+        parent.drop = vec![DropStep::Child {
+            offset: 8,
+            layout: LayoutId(0),
+        }];
+        parent.copy = CopyRecipe::Fields;
+        parent.abi.scalars.clear();
+        table.layouts.push(parent);
+    }
     let keys = hirsel_lir::LayoutKeys::new(&table);
     let manifest = Manifest::skeleton([]);
     let input = InputIdentity {
@@ -257,13 +279,22 @@ fn probe(target: &TargetSpec, malformed: bool) -> Vec<u8> {
             assert!(em.manifested.imports.is_empty());
             return vec![];
         }
-        if stored {
-            let place = f.stack(LayoutId(0)).unwrap();
+        if stored || nested {
+            let place = f.stack(LayoutId(u32::from(nested))).unwrap();
+            let field = if nested {
+                Place {
+                    ptr: f.offset(place.ptr, 8),
+                    layout: LayoutId(0),
+                    ..place
+                }
+            } else {
+                place
+            };
             let value = f.get(ValueId(0)).unwrap();
             f.store(
                 crate::function::Shape::Scalar(ScalarKind::Pointer),
                 value,
-                place,
+                field,
             )
             .unwrap();
             f.dup_holders(place).unwrap();
@@ -298,11 +329,26 @@ fn probe(target: &TargetSpec, malformed: bool) -> Vec<u8> {
 #[test]
 fn receipt_holders_execute_through_only_the_metadata_abi_on_both_targets() {
     for target in TargetSpec::executed() {
-        execute(&target, probe(&target, false), "cranelift-receipt-holders");
+        execute(
+            &target,
+            probe(&target, false, false),
+            "cranelift-receipt-holders",
+        );
     }
 }
 
 #[test]
 fn receipt_partial_release_and_reuse_refuse_before_importing_runtime_helpers() {
-    probe(&TargetSpec::x86_64_unknown_linux_gnu(), true);
+    probe(&TargetSpec::x86_64_unknown_linux_gnu(), true, false);
+}
+
+#[test]
+fn nested_receipt_copy_uses_metadata_custody_on_both_targets() {
+    for target in TargetSpec::executed() {
+        execute(
+            &target,
+            probe(&target, false, true),
+            "cranelift-receipt-child-copy",
+        );
+    }
 }

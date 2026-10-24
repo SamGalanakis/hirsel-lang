@@ -58,8 +58,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 ScanStep::Uncounted { .. } | ScanStep::Handle { .. } => {}
                 ScanStep::Inline { offset, layout } => {
                     let child = self.field_place(place, *offset, *layout, false)?;
-                    let scan = &self.layout(*layout)?.scan;
-                    self.dup_scan(child, scan)?;
+                    self.dup_holders(child)?;
                 }
                 ScanStep::Repeat {
                     offset,
@@ -67,11 +66,10 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                     stride,
                     element,
                 } => {
-                    let scan = &self.layout(*element)?.scan;
                     for i in 0..*count {
                         let child =
                             self.field_place(place, offset + i * stride, *element, false)?;
-                        self.dup_scan(child, scan)?;
+                        self.dup_holders(child)?;
                     }
                 }
                 ScanStep::ActiveVariant {
@@ -226,6 +224,14 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             emitted.and_then(|()| glue::define(self.module, self.inputs.layouts, runtime, pending));
         if let Err(glue::GlueError(what)) = defined {
             return self.invalid(what);
+        }
+        // Walk declares this only when a reached drop step needs it. Keep empty-demand
+        // modules free of receipt imports, including ordinary compiled drop glue.
+        if self
+            .module
+            .declares(RuntimeEntry::ReceiptRelease.declaration().symbol)
+        {
+            self.runtime(RuntimeEntry::ReceiptRelease)?;
         }
         Ok(self.builder.load(i8_ty, status, 1))
     }

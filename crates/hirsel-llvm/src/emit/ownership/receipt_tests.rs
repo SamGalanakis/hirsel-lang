@@ -170,12 +170,34 @@ fn execute(target: &TargetSpec, bytes: Vec<u8>, label: &str) {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
-fn probe(target: &TargetSpec, malformed: bool) -> Vec<u8> {
+fn probe(target: &TargetSpec, malformed: bool, nested: bool) -> Vec<u8> {
     let context = Context::new();
     let module = Module::new(&context, "receipt-holder-probes");
     let machine = machine(target, false).unwrap();
     module.set_target(&machine);
-    let (table, unit, abi) = fixture(target);
+    let (mut table, unit, abi) = fixture(target);
+    if nested {
+        let mut parent = table.layouts[0].clone();
+        parent.kind = LayoutKind::Aggregate;
+        parent.size = SizeSpec::Fixed(16);
+        parent.fields = vec![FieldLayout {
+            ordinal: 0,
+            offset: 8,
+            layout: LayoutId(0),
+            unaligned: false,
+        }];
+        parent.scan = vec![ScanStep::Inline {
+            offset: 8,
+            layout: LayoutId(0),
+        }];
+        parent.drop = vec![DropStep::Child {
+            offset: 8,
+            layout: LayoutId(0),
+        }];
+        parent.copy = CopyRecipe::Fields;
+        parent.abi.scalars.clear();
+        table.layouts.push(parent);
+    }
     let keys = hirsel_lir::LayoutKeys::new(&table);
     let manifest = Manifest::skeleton([]);
     let input = InputIdentity {
@@ -242,18 +264,37 @@ fn probe(target: &TargetSpec, malformed: bool) -> Vec<u8> {
             assert!(manifested.imports.is_empty());
             break;
         }
-        if stored {
-            let place = f.stack(LayoutId(0)).unwrap();
+        if stored || nested {
+            let place = f.stack(LayoutId(u32::from(nested))).unwrap();
+            let field = if nested {
+                f.field_place(place, 8, LayoutId(0), false).unwrap()
+            } else {
+                place
+            };
             f.store(
                 Shape::Scalar(ScalarKind::Pointer),
                 f.get(ValueId(0)).unwrap(),
-                place,
+                field,
             );
             f.dup_holders(place).unwrap();
+            if nested {
+                let anchor = f.const_u64(0);
+                f.drop_glue(anchor, |walk| {
+                    walk.steps(
+                        &glue::Scope::of(LayoutId(1)),
+                        place.ptr,
+                        8,
+                        &table.layouts[1].drop,
+                    )
+                })
+                .unwrap();
+            }
         } else {
             f.instruction(&Inst::Dup { value: ValueId(0) }).unwrap();
         }
-        f.instruction(&release(MaskRef::All, LayoutId(0))).unwrap();
+        if !nested {
+            f.instruction(&release(MaskRef::All, LayoutId(0))).unwrap();
+        }
         f.instruction(&release(MaskRef::All, LayoutId(0))).unwrap();
         f.builder.ret(module.const_int(module.int_type(8), 0));
     }
@@ -261,17 +302,19 @@ fn probe(target: &TargetSpec, malformed: bool) -> Vec<u8> {
         return vec![];
     }
     module.verify().unwrap();
-    assert_eq!(
-        manifested
-            .imports
-            .keys()
-            .map(String::as_str)
-            .collect::<Vec<_>>(),
-        [
-            "hirsel_rt_v2_receipt_release",
-            "hirsel_rt_v2_receipt_retain"
-        ]
-    );
+    if !nested {
+        assert_eq!(
+            manifested
+                .imports
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            [
+                "hirsel_rt_v2_receipt_release",
+                "hirsel_rt_v2_receipt_retain"
+            ]
+        );
+    }
     let text = module.text();
     assert!(
         !text.contains("load i32"),
@@ -283,11 +326,26 @@ fn probe(target: &TargetSpec, malformed: bool) -> Vec<u8> {
 #[test]
 fn receipt_holders_execute_through_only_the_metadata_abi_on_both_targets() {
     for target in TargetSpec::executed() {
-        execute(&target, probe(&target, false), "llvm-receipt-holders");
+        execute(
+            &target,
+            probe(&target, false, false),
+            "llvm-receipt-holders",
+        );
     }
 }
 
 #[test]
 fn receipt_partial_release_and_reuse_refuse_before_importing_runtime_helpers() {
-    probe(&TargetSpec::x86_64_unknown_linux_gnu(), true);
+    probe(&TargetSpec::x86_64_unknown_linux_gnu(), true, false);
+}
+
+#[test]
+fn nested_receipt_copy_and_compiled_child_drop_execute_on_both_targets() {
+    for target in TargetSpec::executed() {
+        execute(
+            &target,
+            probe(&target, false, true),
+            "llvm-receipt-child-drop",
+        );
+    }
 }

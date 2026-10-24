@@ -100,11 +100,11 @@ fn plain(layouts: &LayoutTable, steps: &[DropStep]) -> bool {
         DropStep::Finalize
         | DropStep::ColumnsReverse(_)
         | DropStep::Thaw { .. }
-        | DropStep::ReleaseSealed { .. }
-        | DropStep::ReleaseReceipt { .. } => false,
+        | DropStep::ReleaseSealed { .. } => false,
         // A Shared root's release is a runtime call under the root count contract.
         DropStep::Release { .. }
         | DropStep::ReleaseRoot { .. }
+        | DropStep::ReleaseReceipt { .. }
         | DropStep::Environment { .. }
         | DropStep::CloseHandle { .. } => true,
         DropStep::ActiveVariant { variants, .. } => {
@@ -220,8 +220,8 @@ fn infallible(layouts: &LayoutTable, layout: LayoutId) -> bool {
             | DropStep::RepeatReverse {
                 element: layout, ..
             } => inline(*layout, seen),
+            DropStep::ReleaseReceipt { .. } => true,
             DropStep::ReleaseSealed { .. }
-            | DropStep::ReleaseReceipt { .. }
             | DropStep::Finalize
             | DropStep::Environment { .. }
             | DropStep::CloseHandle { .. }
@@ -727,8 +727,22 @@ impl<'m, 'g> Walk<'m, 'g> {
             DropStep::ReleaseSealed { .. } => {
                 invalid("sealed owner drop requires linked runtime emission")
             }
-            DropStep::ReleaseReceipt { .. } => {
-                invalid("receipt metadata drop requires linked runtime emission")
+            DropStep::ReleaseReceipt { offset } => {
+                let receipt = self
+                    .builder
+                    .load(ptr_ty, self.at(base, *offset), word(*offset));
+                let entry = hirsel_lir::runtime_abi::RuntimeEntry::ReceiptRelease;
+                let release = self
+                    .module
+                    .function(
+                        entry.declaration().symbol,
+                        self.module
+                            .function_type(self.module.void_type(), &[ptr_ty]),
+                    )
+                    .map_err(GlueError)?;
+                crate::runtime::substrate(self.module, release, entry);
+                self.builder.call(release, &[receipt]);
+                Ok(())
             }
             DropStep::Finalize => invalid("compiled drop code that reaches a finalizer"),
             DropStep::Thaw { .. } => invalid("compiled drop code that reaches a frozen value"),

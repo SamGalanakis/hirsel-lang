@@ -65,6 +65,8 @@ fn glue_covers_every_root_without_a_finalizer_and_frees_through_the_runtime() {
         for opt in OPTS {
             let object = emit(&corpus, opt);
             let imports: Vec<_> = object.imports.iter().map(|i| i.name.as_str()).collect();
+            assert!(!imports.contains(&"hirsel_rt_v2_receipt_retain"));
+            assert!(!imports.contains(&"hirsel_rt_v2_receipt_release"));
             // The free of a dead block, the runtime's release for children glue leaves to
             // it, and the handle close.
             for entry in [
