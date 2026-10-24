@@ -29,6 +29,8 @@ pub(crate) trait Observer {
     #[inline(always)]
     fn after_step(&mut self, _task: u64, _frame: &Frame, _success: bool) {}
     #[inline(always)]
+    fn call_entered(&mut self, _task: u64, _caller: &Frame, _callee: &Frame) {}
+    #[inline(always)]
     fn drop_place(
         &mut self,
         _task: u64,
@@ -40,7 +42,24 @@ pub(crate) trait Observer {
     ) {
     }
     #[inline(always)]
-    fn finish_frame(&mut self, _task: u64, _frame: &Frame, _sources: &SourceMap) {}
+    fn released_without_finalizer(
+        &mut self,
+        _task: u64,
+        _frame: &Frame,
+        _value: &Value,
+        _site: Span,
+        _sources: &SourceMap,
+    ) {
+    }
+    #[inline(always)]
+    fn finish_frame(
+        &mut self,
+        _task: u64,
+        _frame: &Frame,
+        _ending: &crate::resources::Ending,
+        _sources: &SourceMap,
+    ) {
+    }
     #[inline(always)]
     fn forgotten(&mut self, _task: u64, _frame: &Frame, _site: Span, _sources: &SourceMap) {}
 }

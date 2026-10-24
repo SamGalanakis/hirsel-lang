@@ -14,6 +14,14 @@ struct FrameState {
     id: u64,
     finalizer: bool,
     aliases: BTreeMap<u32, Owner>,
+    return_to: Option<Owner>,
+    returned: Option<(Owner, Context)>,
+}
+struct CallState {
+    definition: DefPath,
+    arguments: Vec<(u32, UseKind, Owner)>,
+    destination: Option<Owner>,
+    context: Context,
 }
 enum Pending {
     Create {
@@ -44,6 +52,7 @@ pub(super) struct Resources {
     pending: Option<Pending>,
     forget_source: Option<Owner>,
     forget: Option<DefPath>,
+    call: Option<CallState>,
     error: Option<TraceError>,
 }
 impl Resources {
@@ -57,6 +66,7 @@ impl Resources {
             pending: None,
             forget_source: None,
             forget,
+            call: None,
             error: None,
         }
     }
@@ -116,14 +126,14 @@ impl Resources {
         Self::context(frame.definition.path, frame.body_id, span, sources)
     }
     fn slot(&self, local: u32) -> Option<Owner> {
-        Some(Owner {
+        Some(Self::frame_slot(self.frames.last()?.id, local))
+    }
+    fn frame_slot(frame: u64, slot: u32) -> Owner {
+        Owner {
             task: Some(TaskPath::default()),
-            storage: Storage::Slot {
-                frame: self.frames.last()?.id,
-                slot: local,
-            },
+            storage: Storage::Slot { frame, slot },
             path: vec![],
-        })
+        }
     }
     fn place(&self, frame: &Frame, place: PlaceId) -> Option<Owner> {
         let place = frame.place(place).ok()?;
@@ -210,6 +220,10 @@ impl Observer for Resources {
             self.unsupported("task resource transport");
             return;
         }
+        if self.call.is_some() {
+            self.unsupported("call did not commit an observed user-frame entry");
+            return;
+        }
         if frames.len() < self.frames.len() {
             self.unsupported("unobserved frame retirement");
             return;
@@ -227,6 +241,8 @@ impl Observer for Resources {
                 id,
                 finalizer,
                 aliases: BTreeMap::new(),
+                return_to: None,
+                returned: None,
             });
             if let Some((local, anchor, _)) = frame.finalized.as_deref() {
                 let Some(from) = self.releases.pop_front() else {
@@ -365,19 +381,110 @@ impl Observer for Resources {
                         self.forget_source = arguments
                             .first()
                             .and_then(|a| self.place(frame, a.value.place));
+                    } else if let hirsel_tir::Callee::Definition { path, .. } = callee {
+                        let mut incoming = vec![];
+                        for argument in arguments {
+                            let Ok(value) = frame.observe(argument.value.place) else {
+                                self.unsupported("call argument is unavailable");
+                                return;
+                            };
+                            if crate::checked::resources_in(value) == 0 {
+                                continue;
+                            }
+                            if !Self::resource(value) {
+                                self.unsupported("aggregate call argument");
+                                return;
+                            }
+                            let Some(owner) = self.place(frame, argument.value.place) else {
+                                self.unsupported("call argument owner unavailable");
+                                return;
+                            };
+                            if !matches!(
+                                argument.value.usage,
+                                UseKind::Take | UseKind::Borrow | UseKind::Mut
+                            ) {
+                                self.unsupported("copied resource call argument");
+                                return;
+                            }
+                            incoming.push((argument.parameter.0, argument.value.usage, owner));
+                        }
+                        let Terminator::Call { returns, .. } = terminator else {
+                            unreachable!()
+                        };
+                        let destination = match returns {
+                            Some(returns) => {
+                                let Some(owner) = self.destination(frame, returns.destination)
+                                else {
+                                    self.unsupported("call return owner unavailable");
+                                    return;
+                                };
+                                Some(owner)
+                            }
+                            None => None,
+                        };
+                        self.call = Some(CallState {
+                            definition: path.clone(),
+                            arguments: incoming,
+                            destination,
+                            context,
+                        });
                     } else {
-                        self.unsupported("ordinary call resource transport");
+                        self.unsupported("indirect call resource transport");
                     }
                 } else if let Terminator::Return { value, .. } = terminator
                     && frame
                         .observe(value.place)
                         .is_ok_and(|v| crate::checked::resources_in(v) > 0)
                 {
-                    self.unsupported("returned resource transport");
+                    let Some(owner) = self.place(frame, value.place) else {
+                        self.unsupported("return owner unavailable");
+                        return;
+                    };
+                    if value.usage != UseKind::Take {
+                        self.unsupported("borrowed resource return");
+                        return;
+                    }
+                    self.frames.last_mut().unwrap().returned = Some((owner, context));
                 }
             }
             _ => (),
         }
+    }
+    fn call_entered(&mut self, _task: u64, _caller: &Frame, callee: &Frame) {
+        if self.error.is_some() {
+            return;
+        }
+        let Some(call) = self.call.take() else {
+            self.unsupported("user call entered without its source call");
+            return;
+        };
+        if callee.definition.path.path() != &call.definition || callee.bounded.is_some() {
+            self.unsupported("call target or bounded transport changed");
+            return;
+        }
+        let id = self.next_frame;
+        self.next_frame += 1;
+        let mut state = FrameState {
+            id,
+            finalizer: false,
+            aliases: BTreeMap::new(),
+            return_to: call.destination,
+            returned: None,
+        };
+        for (parameter, usage, from) in call.arguments {
+            let Some(local) = callee.body().parameters.get(parameter as usize) else {
+                self.unsupported("callee parameter is unavailable");
+                return;
+            };
+            let to = Self::frame_slot(id, local.0);
+            if usage == UseKind::Take {
+                let result = self.tracker.move_tree(&call.context, &from, &to);
+                self.checked(result);
+            } else {
+                state.aliases.insert(local.0, from);
+            }
+        }
+        self.frames.push(state);
     }
     fn after_step(&mut self, _task: u64, frame: &Frame, success: bool) {
         if self.error.is_some() {
@@ -478,7 +585,13 @@ impl Observer for Resources {
             self.releases.push_back(owner);
         }
     }
-    fn finish_frame(&mut self, _task: u64, frame: &Frame, sources: &SourceMap) {
+    fn finish_frame(
+        &mut self,
+        _task: u64,
+        frame: &Frame,
+        ending: &crate::resources::Ending,
+        sources: &SourceMap,
+    ) {
         if self.error.is_some() {
             return;
         }
@@ -498,8 +611,63 @@ impl Observer for Resources {
             let context = Self::context(anchor.definition, anchor.body, anchor.site, sources);
             let result = self.tracker.drop_value(&context, &owner);
             self.checked(result);
+        } else if let crate::resources::Ending::Return(value) = ending {
+            let returned = state.returned.clone();
+            let destination = state.return_to.clone();
+            if let Some(Owner {
+                storage: Storage::Slot { frame, slot },
+                path,
+                ..
+            }) = &destination
+                && path.is_empty()
+                && let Some(caller) = self.frames.iter_mut().rev().nth(1)
+                && caller.id == *frame
+            {
+                caller.aliases.remove(slot);
+            }
+            if crate::checked::resources_in(value) == 0 {
+                self.frames.pop();
+                return;
+            }
+            if !Self::resource(value) {
+                self.unsupported("aggregate resource return");
+                return;
+            }
+            let Some((from, context)) = returned else {
+                self.unsupported("resource return has no observed source");
+                return;
+            };
+            let Some(to) = destination else {
+                self.unsupported("externally returned resource transport");
+                return;
+            };
+            let result = self.tracker.move_tree(&context, &from, &to);
+            self.checked(result);
         }
         self.frames.pop();
+    }
+    fn released_without_finalizer(
+        &mut self,
+        _task: u64,
+        frame: &Frame,
+        value: &Value,
+        site: Span,
+        sources: &SourceMap,
+    ) {
+        if self.error.is_some() || crate::checked::resources_in(value) == 0 {
+            return;
+        }
+        if !Self::resource(value) || crate::checked::resources_in(value) != 1 {
+            self.unsupported("compound resource destruction without a finalizer");
+            return;
+        }
+        let Some(owner) = self.releases.pop_front() else {
+            self.unsupported("resource destruction has no observed incoming owner");
+            return;
+        };
+        let context = Self::at(frame, site, sources);
+        let result = self.tracker.drop_value(&context, &owner);
+        self.checked(result);
     }
     fn forgotten(&mut self, _task: u64, frame: &Frame, site: Span, sources: &SourceMap) {
         if self.error.is_some() {

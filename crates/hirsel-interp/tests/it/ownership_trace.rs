@@ -105,6 +105,233 @@ fn observed(definitions: Vec<Definition>, runtime: &RuntimeTypes) -> ResourceExe
     traced
 }
 
+fn call(builder: &mut Builder, name: &str, value: Operand, result: TypeKind) -> PlaceId {
+    let destination = builder.local(result, Storage::Temporary);
+    builder.block(
+        Terminator::Call {
+            callee: Callee::Definition {
+                path: path(name),
+                arguments: vec![],
+            },
+            arguments: vec![CallArgument {
+                parameter: ParamId(0),
+                value,
+            }],
+            returns: Some(CallReturn {
+                destination,
+                next: BlockId(builder.body.blocks.len() as u32 + 1),
+            }),
+            on_failure: CleanupId(0),
+        },
+        3,
+    );
+    destination
+}
+
+#[test]
+fn ownership_reference_calls_and_returns_preserve_the_same_resource_token() {
+    let mut identity = Builder::new();
+    let parameter = identity.parameter(kind());
+    let identity = identity.finish("identity", parameter);
+    let mut builder = Builder::new();
+    let first = token(&mut builder);
+    let second = call(&mut builder, "identity", take(first), kind());
+    call(&mut builder, "identity", take(second), kind());
+    let result = builder.unit();
+    let traced = observed(
+        vec![builder.finish("main", result), identity, finalizer(false)],
+        &runtime_types(),
+    );
+    let trace = traced.trace.unwrap();
+    let analysis = trace.analyze([9; 32], 100).unwrap();
+    assert_eq!(
+        (analysis.created, analysis.dropped, analysis.live.len()),
+        (1, 1, 0)
+    );
+    let tokens: std::collections::BTreeSet<_> =
+        trace.events.iter().map(|e| e.action.token()).collect();
+    assert_eq!(tokens.len(), 1);
+    assert_eq!(
+        trace
+            .events
+            .iter()
+            .filter(|e| matches!(e.action, Action::Move { .. }))
+            .count(),
+        6
+    );
+}
+
+#[test]
+fn ownership_reference_borrowed_call_keeps_custody_with_the_caller() {
+    let mut inspect = Builder::new();
+    inspect.borrowed_parameter(kind());
+    let result = inspect.unit();
+    let inspect = inspect.finish("inspect", result);
+    let mut builder = Builder::new();
+    let resource = token(&mut builder);
+    let loan = LoanId(0);
+    builder.emit(
+        InstructionKind::BeginLoan {
+            id: loan,
+            place: resource,
+            mutable: false,
+            if_inactive: false,
+        },
+        3,
+        CleanupId(0),
+    );
+    let access = builder.through_loan(resource, loan);
+    builder.body.set_cleanup(
+        CleanupId(0),
+        vec![
+            CleanupAction::EndLoan {
+                loan,
+                if_active: true,
+            },
+            drop(resource),
+        ],
+    );
+    let result = call(
+        &mut builder,
+        "inspect",
+        Operand {
+            place: access,
+            usage: hirsel_types::UseKind::Borrow,
+        },
+        TypeKind::Tuple(vec![].into()),
+    );
+    builder.emit(
+        InstructionKind::EndLoan {
+            loan,
+            if_active: false,
+        },
+        4,
+        CleanupId(0),
+    );
+    let traced = observed(
+        vec![builder.finish("main", result), inspect, finalizer(false)],
+        &runtime_types(),
+    );
+    let trace = traced.trace.unwrap();
+    let analysis = trace.analyze([9; 32], 100).unwrap();
+    assert_eq!(
+        (analysis.created, analysis.dropped, analysis.live.len()),
+        (1, 1, 0)
+    );
+    // Only cleanup custody and finalizer entry move the token; borrowing does not.
+    assert_eq!(
+        trace
+            .events
+            .iter()
+            .filter(|e| matches!(e.action, Action::Move { .. }))
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn ownership_reference_failed_callee_cleans_its_actual_taken_resource() {
+    let mut fail = Builder::new();
+    fail.parameter(kind());
+    fail.block(
+        Terminator::Fail {
+            rule: const { hirsel_diag::RuleId::of("FAIL-1") },
+            cleanup: CleanupId(0),
+        },
+        9,
+    );
+    let fail = fail.definition("fail");
+    let mut builder = Builder::new();
+    let resource = token(&mut builder);
+    let result = call(
+        &mut builder,
+        "fail",
+        take(resource),
+        TypeKind::Tuple(vec![].into()),
+    );
+    let traced = observed(
+        vec![builder.finish("main", result), fail, finalizer(false)],
+        &runtime_types(),
+    );
+    assert!(matches!(traced.execution.outcome, Outcome::Failed(_)));
+    let analysis = traced.trace.unwrap().analyze([9; 32], 100).unwrap();
+    assert_eq!(
+        (analysis.created, analysis.dropped, analysis.live.len()),
+        (1, 1, 0)
+    );
+}
+
+#[test]
+fn ownership_reference_equal_resources_remain_distinct_across_separate_calls() {
+    let mut consume = Builder::new();
+    consume.parameter(kind());
+    let result = consume.unit();
+    let consume = consume.finish("consume", result);
+    let mut builder = Builder::new();
+    let first = token(&mut builder);
+    let second = token(&mut builder);
+    call(
+        &mut builder,
+        "consume",
+        take(first),
+        TypeKind::Tuple(vec![].into()),
+    );
+    let result = call(
+        &mut builder,
+        "consume",
+        take(second),
+        TypeKind::Tuple(vec![].into()),
+    );
+    let traced = observed(
+        vec![builder.finish("main", result), consume, finalizer(false)],
+        &runtime_types(),
+    );
+    let analysis = traced.trace.unwrap().analyze([9; 32], 100).unwrap();
+    assert_eq!(
+        (analysis.created, analysis.dropped, analysis.live.len()),
+        (2, 2, 0)
+    );
+}
+
+#[test]
+fn ownership_reference_resource_without_user_finalizer_still_ends_its_lifetime() {
+    let mut runtime = runtime_types();
+    runtime.nominals[0].finalizer = None;
+    let mut builder = Builder::new();
+    token(&mut builder);
+    let result = builder.unit();
+    let traced = observed(vec![builder.finish("main", result)], &runtime);
+    let trace = traced.trace.unwrap();
+    let analysis = trace.analyze([9; 32], 100).unwrap();
+    assert_eq!(
+        (analysis.created, analysis.dropped, analysis.live.len()),
+        (1, 1, 0)
+    );
+    assert_eq!(trace.events.len(), 3);
+}
+
+#[test]
+fn ownership_reference_callee_can_create_a_resource_and_return_it_to_its_actual_caller() {
+    let mut runtime = runtime_types();
+    runtime.nominals[0].finalizer = None;
+    let mut create = Builder::new();
+    create.parameter(TypeKind::Tuple(vec![].into()));
+    let resource = token(&mut create);
+    let create = create.finish("create", resource);
+    let mut builder = Builder::new();
+    let argument = builder.unit();
+    call(&mut builder, "create", take(argument), kind());
+    let result = builder.unit();
+    let traced = observed(vec![builder.finish("main", result), create], &runtime);
+    let trace = traced.trace.unwrap();
+    let analysis = trace.analyze([9; 32], 100).unwrap();
+    assert_eq!(
+        (analysis.created, analysis.dropped, analysis.live.len()),
+        (1, 1, 0)
+    );
+    assert_eq!(trace.events.len(), 4);
+}
+
 #[test]
 fn ownership_reference_equal_pointer_free_resources_are_created_and_dropped_individually() {
     let mut builder = Builder::new();

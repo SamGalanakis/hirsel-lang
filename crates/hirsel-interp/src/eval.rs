@@ -1628,6 +1628,13 @@ pub(crate) async fn execute_frames<O: crate::ownership_trace::Observer>(
                                     caller.as_ref(),
                                 );
                                 frame.ending = Some(crate::resources::Ending::Failed);
+                                observer.released_without_finalizer(
+                                    task,
+                                    frame,
+                                    &value,
+                                    anchor.site,
+                                    sources,
+                                );
                                 release_fields(frame, &mut value, anchor, caller)?;
                                 continue;
                             };
@@ -1678,6 +1685,7 @@ pub(crate) async fn execute_frames<O: crate::ownership_trace::Observer>(
                             continue;
                         }
                     }
+                    observer.released_without_finalizer(task, frame, &value, anchor.site, sources);
                     release_fields(frame, &mut value, anchor, caller)?;
                 }
             }
@@ -1801,7 +1809,7 @@ pub(crate) async fn execute_frames<O: crate::ownership_trace::Observer>(
         if frames.last().unwrap().ending.is_some()
             && let Some(ending) = frames.last_mut().unwrap().ending.take()
         {
-            observer.finish_frame(task, frames.last().unwrap(), sources);
+            observer.finish_frame(task, frames.last().unwrap(), &ending, sources);
             let mut finished = frames.pop().unwrap();
             // Map the result and mut write-backs into the caller's lifetimes, then
             // end every instance the frame owns (MODE-1, MEM-10, MEM-4).
@@ -2916,6 +2924,7 @@ pub(crate) async fn execute_frames<O: crate::ownership_trace::Observer>(
                     on_failure,
                     writebacks,
                 });
+                observer.call_entered(task, frame, &callee);
                 frames.push(callee);
                 if let Some(path) = path {
                     execution.trace.push(TraceEvent::Enter {
