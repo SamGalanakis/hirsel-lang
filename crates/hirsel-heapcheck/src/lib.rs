@@ -12,10 +12,10 @@ hirsel_guard::install!();
 
 pub mod build;
 mod exec;
+mod invocations;
 pub mod ledger;
 pub mod observe;
 pub mod program;
-mod invocations;
 mod scalar;
 mod snapshot;
 pub mod violation;

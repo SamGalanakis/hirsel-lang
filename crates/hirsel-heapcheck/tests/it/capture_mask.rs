@@ -83,7 +83,7 @@ fn program(empty_resource: bool, overwrite: bool) -> Program<Ready> {
     body.ret(None);
     Program {
         invocations: Default::default(),
-            invocation_bodies: Vec::new(),
+        invocation_bodies: Vec::new(),
         pretransfer_adapters: Vec::new(),
         target,
         layouts: table.clone(),
