@@ -5,7 +5,10 @@ use super::*;
 use crate::runtime::*;
 use crate::snapshot::OwnedSourceContext;
 use crate::store::{Domain, EntryKey, Reference, ResultStore, VariantRef};
-use std::sync::Mutex;
+use std::sync::{
+    Mutex,
+    atomic::{AtomicU64, Ordering::Relaxed},
+};
 
 pub const FRONT_BODY_KIND: u32 = 0x4600_0001;
 const FAILURE: Domain = Domain {
@@ -39,6 +42,8 @@ pub struct FrontBodyQueries {
     work: Mutex<BTreeMap<(DefPath, QueryKind), u64>>,
     table_keys: Mutex<BTreeMap<Key, Arc<crate::table_keys::TableKeyUse>>>,
     memos: Mutex<BTreeMap<crate::memo::MemoKey, Arc<Reads>>>,
+    store_adoptions: AtomicU64,
+    verify_store: crate::store::VerifyStore,
     outcomes: Mutex<BTreeMap<Key, (Reference, ModeResult, CheckedProduct)>>,
     errors: RuntimeErrors,
     // Own immutable snapshot and output metadata admission until every task and
@@ -63,6 +68,98 @@ pub struct FrontCheckedOutput {
 }
 impl FrontBodyQueries {
     /// Actual phase invocations, including failed or discarded producers.
+    pub fn store_adoptions(&self) -> u64 {
+        self.store_adoptions.load(Relaxed)
+    }
+    fn observe(&self, owner: &DefPath, read: &ReadKey) -> Option<ContentHash> {
+        use crate::memo::LookupSource;
+        Some(match *read {
+            ReadKey::Signature(id) | ReadKey::ExecutedSignature(id) => memos::signature_value(
+                self.snapshot
+                    .signature(id)
+                    .and_then(Result::ok)
+                    .map(|signature| signature.fingerprint),
+            ),
+            ReadKey::FailedSignature(id) => {
+                if self
+                    .snapshot
+                    .signature(id)
+                    .is_some_and(|result| result.is_ok())
+                {
+                    ContentHash::of_parts("hirsel.read.signature-ok", std::iter::empty::<&[u8]>())
+                } else {
+                    self.snapshot.failed_signature_receipt(id)
+                }
+            }
+            ReadKey::Lookup(key) => {
+                let context = key.context();
+                let qualifier = key.qualifier();
+                let segments = key.segments();
+                let path = hirsel_syntax::Path {
+                    package: qualifier.clone(),
+                    segments: segments.iter().map(|part| Symbol::intern(part)).collect(),
+                };
+                let index = self.declarations.index(context.package.clone());
+                match key.source {
+                    LookupSource::Provider => {
+                        memos::provider_value(&self.snapshot.lookup(&context, &path).result)
+                    }
+                    LookupSource::Manifest => {
+                        let result = index.lookup(&context, &path);
+                        let namespace = result
+                            .as_ref()
+                            .ok()
+                            .and_then(|path| index.entry(path))
+                            .map(|entry| entry.namespace);
+                        memos::manifest_value(&result, namespace)
+                    }
+                    LookupSource::Candidates => {
+                        index.lookup_candidates_revision(&context, qualifier.as_ref(), &segments)
+                    }
+                    LookupSource::Head => ContentHash::of_parts(
+                        "hirsel.read.head",
+                        [&[u8::from(index.has_head(&context, segments.first()?))][..]],
+                    ),
+                }
+            }
+            ReadKey::Representation(id) => self
+                .snapshot
+                .representation(id)
+                .and_then(Result::ok)
+                .map_or_else(ContentHash::default, |(_, digest)| digest.0),
+            ReadKey::CitedText(id) => self.citations.cited_text(id),
+            ReadKey::DeclarationCandidates(id) => self
+                .snapshot
+                .declaration_candidates(id)
+                .or_else(|| self.candidates.get(id.path()).copied())
+                .unwrap_or_else(memos::no_candidates),
+            ReadKey::Environment => self.environment,
+            ReadKey::ValidationView(id) => self
+                .snapshot
+                .validation(&owner.0.package)
+                .view(id)
+                .map_or_else(ContentHash::default, |input| input.digest().0),
+            ReadKey::ValidationUniverse(package) => {
+                self.snapshot.validation_input_digest(&package.id())
+            }
+            ReadKey::UniverseErrors => {
+                self.snapshot
+                    .validation(&owner.0.package)
+                    .universe_errors()
+                    .0
+            }
+            ReadKey::FirstHeap => self
+                .snapshot
+                .validation(&owner.0.package)
+                .first_heap()
+                .map_or_else(ContentHash::default, |(id, _)| id.path().fingerprint()),
+            // A front product must not execute a dependency to decide a hit.
+            // Unknown source/registration facts safely miss this ordinary codec.
+            ReadKey::ExecutedBody(_) | ReadKey::LayoutBody(_) | ReadKey::NameSet(..) => {
+                return None;
+            }
+        })
+    }
     /// Actual completed phase read rows, captured by the same compact phase
     /// finisher as scalar publication. This inspection executes no query.
     pub fn memo_snapshot(&self) -> Vec<(crate::memo::MemoKey, Arc<Reads>)> {
@@ -203,9 +300,87 @@ fn finish(result: Result<ProductRef, Reference>) -> QueryPoll {
     }
 }
 impl BodyTask {
+    fn load(&self) -> Option<Result<ProductRef, Reference>> {
+        let queries = &self.queries;
+        let input = queries.inputs.get(&self.query.address.0)?;
+        let mut entry = crate::store::Entry::load(&*queries.store, &input.key);
+        entry
+            .variants
+            .retain(|variant| variant.inputs == input.key.1 && variant.valid(&input.key));
+        let variant = entry.hit(|read| queries.observe(&input.task.definition, read))?;
+        if variant.output.len > self.weight.retained {
+            return None;
+        }
+        let bytes = queries.store.get_content(variant.output)?;
+        let (outcome, checked) = persistent::restore_frozen_mode(
+            &queries.records,
+            &queries.types,
+            input.task.syntax.clone(),
+            &queries.citations,
+            input.key.1,
+            &bytes,
+            Arc::new(variant.reads.clone()),
+        )?;
+        let failed = outcome.result.is_err();
+        let definition = DefId::intern(&input.task.definition);
+        let mut memos = queries.memos.lock().unwrap_or_else(|e| e.into_inner());
+        memos.insert(
+            crate::memo::MemoKey::new(QueryKind::Modes, definition),
+            outcome.reads.clone(),
+        );
+        if let Some((_, reads)) = &checked {
+            memos.insert(
+                crate::memo::MemoKey::new(QueryKind::Check, definition),
+                reads.clone(),
+            );
+        }
+        drop(memos);
+        queries
+            .outcomes
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(self.query.address.0, (variant.output, outcome, checked));
+        queries.store_adoptions.fetch_add(1, Relaxed);
+        timings::count(Count::StoreHits);
+        if failed {
+            return Some(Err(variant.output));
+        }
+        let action = variant.action(&input.key);
+        queries
+            .store
+            .associate_product(self.query.address, action, variant.output);
+        Some(Ok(ProductRef {
+            address: self.query.address,
+            action,
+            record: variant.output,
+        }))
+    }
     fn run(&mut self) -> Result<ProductRef, Reference> {
+        if self.queries.verify_store == crate::store::VerifyStore::Off {
+            if let Some(hit) = self.load() {
+                return hit;
+            }
+        }
         let queries = &self.queries;
         let input = &queries.inputs[&self.query.address.0];
+        let expected = if queries.verify_store == crate::store::VerifyStore::Recompute {
+            let mut entry = crate::store::Entry::load(&*queries.store, &input.key);
+            entry.variants.retain(|variant| {
+                variant.inputs == input.key.1
+                    && variant.valid(&input.key)
+                    && variant.output.len <= self.weight.retained
+            });
+            entry
+                .hit(|read| queries.observe(&input.task.definition, read))
+                .and_then(|variant| {
+                    queries
+                        .store
+                        .get_content(variant.output)
+                        .map(|bytes| (variant.reads.clone(), bytes))
+                })
+        } else {
+            None
+        };
         let worker = queries.worker();
         let done = worker.run(self.task.take().ok_or(queries.errors.protocol)?);
         for kind in done.recomputed() {
@@ -285,6 +460,47 @@ impl BodyTask {
         if bytes.len() as u64 > self.weight.retained {
             return Err(queries.errors.resource);
         }
+        if let Some((reads, expected)) = expected {
+            if failed || reads != *outcome.reads || expected.as_ref() != bytes.as_slice() {
+                let error = QueryError::Operational(hirsel_types::OperationalFailure {
+                    operation: "verify-cache".into(),
+                    message: format!(
+                        "{}: Modes differs from its cached result",
+                        input.task.definition
+                    ),
+                });
+                let failure = queries
+                    .records
+                    .encode_record(
+                        &(
+                            &input.task.definition,
+                            &error,
+                            QueryKind::Modes.phase_name(),
+                            &*outcome.reads,
+                        ),
+                        |anchor| persistent::anchor_owner(&queries.citations.items, anchor),
+                    )
+                    .ok_or(queries.errors.resource)?;
+                let record = queries
+                    .store
+                    .put_content(FAILURE, &failure)
+                    .ok_or(queries.errors.resource)?;
+                let output = ModeResult {
+                    definition: input.task.definition.clone(),
+                    result: Err(error),
+                    phase: Some(QueryKind::Modes),
+                    summary: None,
+                    reads: outcome.reads,
+                    diagnostic_phases: vec![],
+                };
+                queries
+                    .outcomes
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .insert(self.query.address.0, (record, output, None));
+                return Err(record);
+            }
+        }
         let (record, action) = if failed {
             let record = queries
                 .store
@@ -309,6 +525,14 @@ impl BodyTask {
                 &bytes,
             )
             .ok_or(queries.errors.resource)?;
+            let mut entry = crate::store::Entry::load(&*queries.store, &input.key);
+            entry.insert(variant.clone());
+            queries.store.put_query(
+                input.key.2,
+                &input.key,
+                entry.action(&input.key),
+                &entry.encode_for(&input.key),
+            );
             (variant.output, variant.action(&input.key))
         };
         queries
@@ -460,6 +684,8 @@ impl QueryEngine {
             work: Mutex::new(BTreeMap::new()),
             table_keys: Mutex::new(BTreeMap::new()),
             memos: Mutex::new(BTreeMap::new()),
+            store_adoptions: AtomicU64::new(0),
+            verify_store: self.verify_store,
             errors,
             _allowance: allowance,
         }))

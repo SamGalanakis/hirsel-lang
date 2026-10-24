@@ -678,6 +678,75 @@ pub(super) fn capture_mode(
     )
 }
 
+/// Decode only after the caller has validated the ordinary S0 variant reads.
+/// This uses the existing Modes codec and type/lexical validation; no engine
+/// query or registration controller is reachable from this helper.
+pub(super) fn restore_frozen_mode(
+    records: &Arc<TypeRecords>,
+    types: &hirsel_types::TypeInterner,
+    syntax: Arc<ItemSyntax>,
+    citations: &crate::snapshot::OwnedSourceContext,
+    text: ContentHash,
+    bytes: &[u8],
+    reads: Arc<Reads>,
+) -> Option<(ModeResult, Option<(Arc<CheckedSummary>, Arc<Reads>)>)> {
+    let record: ModeRecord = records.decode_record(bytes, |path, occurrence| {
+        citations
+            .items
+            .get(path)
+            .and_then(|items| items.iter().find(|item| item.occurrence == occurrence))
+            .map(|item| item.anchor)
+            .or_else(|| citations.catalog.anchor(path, occurrence))
+    })?;
+    let (encoded, roots) =
+        hirsel_types::with_table_collection(|| bincode::serialize_into(std::io::sink(), &record));
+    encoded.ok()?;
+    if !roots.iter().all(|id| types.get(*id).is_some()) || !record.valid(&syntax) {
+        return None;
+    }
+    let checked = record.checked.map(|checked| {
+        let typed = TypedBody {
+            syntax: syntax.clone(),
+            checked: checked.checked,
+            plans: checked.plans,
+            unit: checked.unit,
+            boolean: checked.boolean,
+        };
+        let (summary, growth) = summarize(types, &typed);
+        (Arc::new(CheckedSummary { summary, growth }), reads.clone())
+    });
+    let result = record.output.map(|output| {
+        Arc::new(QueryOutput {
+            value: output.value.restore(syntax.clone()),
+            diagnostics: output.diagnostics,
+            dependencies: output.dependencies,
+        })
+    });
+    let summary = result.as_ref().ok().map(|output| {
+        let (summary, growth) = summarize(types, &output.value.typed);
+        Arc::new(PublishedSummary {
+            definition: DefId::intern(&syntax.item.definition),
+            summary,
+            growth,
+            storage: None,
+            checked: checked.as_ref().map(|(checked, _)| (**checked).clone()),
+            reads: reads.clone(),
+            text,
+        })
+    });
+    Some((
+        ModeResult {
+            definition: syntax.item.definition.clone(),
+            phase: result.is_err().then_some(QueryKind::Modes),
+            result,
+            summary,
+            reads,
+            diagnostic_phases: record.phases,
+        },
+        checked,
+    ))
+}
+
 /// Immutable writer shared by serial and worker publication. Keys and expected
 /// verification bytes are selected by the engine before freezing; provider I/O
 /// owns no query state and retains no encoded payload after write returns.
