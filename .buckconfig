@@ -28,6 +28,9 @@ threads = 4
 # The daemon otherwise starts one async worker per CPU (24–32 seen per lane).
 num_tokio_workers = 4
 [buck2]
+# Idle daemons exit after 20 min instead of buck2's 4-day default; side
+# worktrees otherwise leave daemons holding host memory.
+daemon_idle_timeout_s = 1200
 digest_algorithms = SHA256
 # Prune inactive outputs hourly after 6 h; below 10% free, adapt down to 1 h.
 # Keep active artifacts and the adaptive minimum TTL protected.
