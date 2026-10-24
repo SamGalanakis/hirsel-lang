@@ -70,6 +70,12 @@ pub trait ConcurrentAdapter: Send + Sync {
     ) -> (Result<Completion, AdapterError>, Option<u64>) {
         (self.call_at(token, request), None)
     }
+    /// Whether `request` may block in the kernel for an unbounded time without a
+    /// readiness source (built-in file calls). Free runs it as an owned bounded
+    /// job, so its compute worker keeps executing Hirsel tasks meanwhile.
+    fn blocking(&self, _request: &Request) -> bool {
+        false
+    }
     fn finish(&self, _token: u64) {}
     fn parked(&self, _token: u64) {}
     fn cancellable(&self, _token: u64) -> bool {

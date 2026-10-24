@@ -323,6 +323,34 @@ impl ConcurrentAdapter for ConcurrentIo {
         let result = self.attempt_observed(token, request, &mut output);
         (result, output)
     }
+    fn blocking(&self, request: &Request) -> bool {
+        use Request as R;
+        matches!(
+            request,
+            R::Open { .. }
+                | R::OpenAppend { .. }
+                | R::Create { .. }
+                | R::FileRead { .. }
+                | R::FileWrite { .. }
+                | R::FileAppend { .. }
+                | R::ReadDirPage { .. }
+                | R::Metadata { .. }
+                | R::Mkdir { .. }
+                | R::Rename { .. }
+                | R::RemoveDir { .. }
+                | R::SetPermissions { .. }
+                | R::RemoveAll { .. }
+                | R::Size { .. }
+                | R::Read { .. }
+                | R::Write { .. }
+                | R::Remove { .. }
+                | R::CreateAtomic { .. }
+                | R::WriteAll { .. }
+                | R::Commit { .. }
+                | R::Sync { .. }
+                | R::PutNew { .. }
+        ) && !self.core.lock().unwrap().state.is_fake_request(request)
+    }
     fn finish(&self, token: u64) {
         self.core.lock().unwrap().finish(token);
     }
