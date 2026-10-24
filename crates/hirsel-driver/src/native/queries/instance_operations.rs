@@ -53,6 +53,13 @@ impl OperationDeclarations for InstanceOperations<'_> {
     fn pretransfer_adapters(&self) -> &[hirsel_lir::pretransfer::AdapterReference] {
         self.declarations.pretransfer_adapters()
     }
+    fn pretransfer_abi(
+        &self,
+        reference: &hirsel_lir::pretransfer::AdapterReference,
+        target: &TargetSpec,
+    ) -> Option<(FnAbi, LayoutTable)> {
+        self.declarations.pretransfer_abi(reference, target)
+    }
     fn requires_structural_reference(&self) -> bool {
         self.source.is_some() && self.declarations.requires_structural_reference()
     }
