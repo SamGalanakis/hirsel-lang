@@ -416,3 +416,9 @@ pub mod compilation_tasks;
 pub mod link_tasks;
 pub mod root_tasks;
 pub mod roots;
+
+pub mod arena_tasks;
+pub mod local;
+pub mod products;
+pub mod ready;
+pub mod tasks;
