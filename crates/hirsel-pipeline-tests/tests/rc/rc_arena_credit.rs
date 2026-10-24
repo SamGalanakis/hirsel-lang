@@ -8,6 +8,79 @@ fn sealed_regions_33_native_scope_grant_closes_without_dropping_borrowed_storage
     check("fn main() { arena.with(fn(a: Arena) {}); }", &[], &[]);
 }
 
+#[test]
+fn sealed_regions_33_native_grant_cleanup_refuses_unqualified_source_claims() {
+    use hirsel_lir::validate::ViolationKind;
+    use std::sync::Arc;
+
+    // The accepted control is the exact source above, already exercised through
+    // C/Ready/H. Mutate after portable import to test the downstream producer
+    // boundary, rather than counting a source/V rejection as a C adversary.
+    let original = rc_support::compile("fn main() { arena.with(fn(a: Arena) {}); }");
+    let path = rc_support::path("main");
+    let body = original.definitions[&path]
+        .bodies
+        .iter()
+        .position(|body| body.arena_scope_grant.is_some())
+        .expect("qualified callback control");
+    for mutation in 0..5 {
+        let mut program = original.clone();
+        let definition = Arc::make_mut(program.definitions.get_mut(&path).unwrap());
+        let body = &mut definition.bodies[body];
+        match mutation {
+            0 => body.arena_scope_grant = None,
+            1 => {
+                body.arena_scope_grant.as_mut().unwrap().arena_parameter = hirsel_types::ParamId(1)
+            }
+            2 => {
+                body.arena_scope_grant.as_mut().unwrap().callback_parameter =
+                    hirsel_types::ParamId(1)
+            }
+            3 => {
+                body.arena_scope_grant.as_mut().unwrap().intrinsic = rc_support::path("arena.with")
+            }
+            4 => {
+                let root = body.parameters[0];
+                let place = body
+                    .cleanup_nodes
+                    .iter()
+                    .find_map(|node| match node.action {
+                        hirsel_tir::CleanupAction::Drop { place, .. }
+                            if body.places[place.0 as usize].root == root =>
+                        {
+                            Some(place)
+                        }
+                        _ => None,
+                    })
+                    .expect("original formal grant cleanup");
+                body.places[place.0 as usize].projection =
+                    vec![hirsel_tir::Projection::Field(0)].into();
+            }
+            _ => unreachable!(),
+        }
+        let lowered = hirsel_rc::import::lower(&program, &rc_support::target());
+        if mutation == 4 {
+            // Arena has no field zero. A projected cleanup must be refused by
+            // typed import, before it can erase a whole formal's grant cleanup.
+            assert!(matches!(
+                lowered,
+                Err(hirsel_rc::import::LowerError::Import(_, _))
+            ));
+        } else {
+            let lowered = lowered.expect("unqualified metadata does not change the storage type");
+            assert!(
+                rc_support::violations(&program, &lowered)
+                    .iter()
+                    .any(|(_, rows)| {
+                        rows.iter()
+                            .any(|row| matches!(row.kind, ViolationKind::BorrowedStorage(_)))
+                    }),
+                "mutation {mutation} erased borrowed storage cleanup"
+            );
+        }
+    }
+}
+
 fn check(source: &str, expected: &[(&str, Option<u32>)], elided: &[(&str, bool)]) {
     let program = rc_support::compile(source);
     for target in TargetSpec::executed() {
