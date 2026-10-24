@@ -1,0 +1,11 @@
+type Owner[T] { current: T, frontier: List[T] }
+fn create[T: inert](take value: unique T) -> unique Owner[T] uses {} {
+  Owner(current: take value, frontier: [])
+}
+fn invoke(f: fn() -> u64 uses {}) -> u64 uses {} { f() }
+fn inspect[T: inert](x: T) -> u64 uses {} { 7 }
+fn probe[T: copyable + inert](take value: unique T) -> u64 uses {} {
+  let mut state = create(take value)
+  invoke(fn() -> u64 uses {} { inspect(state.current) })
+}
+pub fn main() { let _ = probe([11i64]) }

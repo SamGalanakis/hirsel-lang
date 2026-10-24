@@ -1,0 +1,8 @@
+pub fn main()->Result[(),()] {
+ let source:unique strategy.Strategy[List[i64]]=strategy.Strategy(draw:fn(seed:u64)->Result[unique List[i64],strategy.GenError] uses {} {Ok([11i64])},reduce:fn(xs:List[i64])->unique List[unique List[i64]] uses {} {shrink.lists(xs)},depth:1)
+ let property:unique fn(List[i64])->Result[runner.Outcome,runner.PropertyError] uses {}=fn(xs:List[i64])->Result[runner.Outcome,runner.PropertyError] uses {} {Ok(Fail(7))}
+ let root=shared.freeze(take source)
+ let callback=shared.freeze(take property)
+ let _=runner.minimize(root,callback,[11i64],7,64)
+ Ok(())
+}

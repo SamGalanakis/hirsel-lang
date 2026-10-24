@@ -3338,7 +3338,6 @@ impl<'a> Checker<'a> {
                     });
                 }
                 let mut authority = AuthoritySummary::inert();
-                let mut sendability = Sendability::Sendable;
                 let mut once = false;
                 for capture in captures {
                     let source = self.place_type(capture.place);
@@ -3400,31 +3399,6 @@ impl<'a> Checker<'a> {
                     // Provisional spec #37 option B: a resource borrow alone
                     // permits Many; owned noncopyable captures require Once.
                     once |= !copyable && !matches!(capture.usage, UseKind::Borrow | UseKind::Mut);
-                    let derived = if capture.usage == UseKind::Copy {
-                        hirsel_types::sendability_after_sharing(
-                            &store,
-                            captured,
-                            &generics,
-                            &mut lookup,
-                        )
-                    } else {
-                        hirsel_types::content_sendability(&store, captured, &generics, &mut lookup)
-                    }
-                    .unwrap_or_else(|error| {
-                        self.proof_failure(error, hirsel_types::Sendability::NotSendable)
-                    });
-                    sendability = match (sendability, derived) {
-                        (Sendability::NotSendable, _) | (_, Sendability::NotSendable) => {
-                            Sendability::NotSendable
-                        }
-                        (Sendability::Sendable, b) | (b, Sendability::Sendable) => b,
-                        (Sendability::DependsOn(mut a), Sendability::DependsOn(b)) => {
-                            a.extend(b);
-                            a.sort();
-                            a.dedup();
-                            Sendability::DependsOn(a)
-                        }
-                    };
                 }
                 let uses = authority.clone();
                 let store = self.t;
@@ -3449,13 +3423,17 @@ impl<'a> Checker<'a> {
                     });
                 }
                 let claimed = &self.t.get(ty).unwrap().modes.sendability;
-                // Current unconditional evidence is checked against live
-                // capture operands during flow replay. A physical storage row
-                // can underclaim a freshly replaced referent's proof.
-                if matches!(claimed, Sendability::DependsOn(_)) && *claimed != sendability {
-                    self.error(ViolationKind::TypeMismatch {
-                        entity: "closure sendability",
-                    });
+                if matches!(claimed, Sendability::DependsOn(_))
+                    && *claimed != self.closure_sendability(None, captures)
+                {
+                    // A physical receiving row can underclaim current content.
+                    // Live flow must discharge this independently; a construction
+                    // on an unvisited edge or in an unvisited body stays invalid.
+                    self.scratch.closure_receipts.borrow_mut().insert((
+                        self.site.body.0,
+                        self.site.block.map(|block| block.0),
+                        self.site.instruction,
+                    ));
                 }
                 let nested = &self.definition.bodies[body.0 as usize];
                 let slots: Vec<_> = nested

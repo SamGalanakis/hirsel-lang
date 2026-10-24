@@ -225,6 +225,44 @@ impl Checker<'_> {
             }
         }
     }
+    /// A closure's crossing receipt concerns the captures' current content,
+    /// not the physical receiving rows. Keep symbolic obligations as well as
+    /// unconditional evidence; a counted copy must reprove after sharing.
+    pub(crate) fn closure_sendability(
+        &self,
+        state: Option<&State>,
+        captures: &[Operand],
+    ) -> Sendability {
+        let store = self.t;
+        captures
+            .iter()
+            .fold(Sendability::Sendable, |joined, capture| {
+                let ty = state.map_or_else(
+                    || self.place_type(capture.place),
+                    |state| self.transferred_type(state, capture, store),
+                );
+                let query = if capture.usage == UseKind::Copy {
+                    super::proofs::Proof::AfterSharing
+                } else {
+                    super::proofs::Proof::Content
+                };
+                let proof = self
+                    .proof(store, ty, query, self.generic_declarations())
+                    .unwrap_or_else(|error| self.proof_failure(error, Sendability::NotSendable));
+                match (joined, proof) {
+                    (Sendability::NotSendable, _) | (_, Sendability::NotSendable) => {
+                        Sendability::NotSendable
+                    }
+                    (Sendability::Sendable, other) | (other, Sendability::Sendable) => other,
+                    (Sendability::DependsOn(mut a), Sendability::DependsOn(b)) => {
+                        a.extend(b);
+                        a.sort();
+                        a.dedup();
+                        Sendability::DependsOn(a)
+                    }
+                }
+            })
+    }
     pub(super) fn rvalue_sendable(
         &self,
         state: &State,
@@ -258,17 +296,9 @@ impl Checker<'_> {
                 let ty = self.transferred_type(state, &field.value, store);
                 store.get(ty).unwrap().modes.sendability == Sendability::Sendable
             }),
-            Rvalue::Closure { captures, .. } => captures.iter().all(|capture| {
-                let ty = self.transferred_type(state, capture, store);
-                let query = if capture.usage == UseKind::Copy {
-                    super::proofs::Proof::AfterSharing
-                } else {
-                    super::proofs::Proof::Content
-                };
-                let proof = self.proof(store, ty, query, self.generic_declarations());
-                proof.unwrap_or_else(|error| self.proof_failure(error, Sendability::NotSendable))
-                    == Sendability::Sendable
-            }),
+            Rvalue::Closure { captures, .. } => {
+                self.closure_sendability(Some(state), captures) == Sendability::Sendable
+            }
             Rvalue::Unary {
                 op: hirsel_syntax::UnaryOp::Unique,
                 value,
@@ -743,6 +773,25 @@ impl Checker<'_> {
             _ => (),
         }
         let row = self.t.get(ty).unwrap();
+        if let (Sendability::DependsOn(_), Rvalue::Closure { captures, .. }) =
+            (&row.modes.sendability, rvalue)
+        {
+            if row.modes.sendability != self.closure_sendability(Some(state), captures) {
+                self.flow_error(
+                    report,
+                    ViolationKind::TypeMismatch {
+                        entity: "closure sendability",
+                    },
+                );
+            }
+            if report {
+                self.scratch.closure_receipts.borrow_mut().remove(&(
+                    self.site.body.0,
+                    self.site.block.map(|block| block.0),
+                    self.site.instruction,
+                ));
+            }
+        }
         if let (Sendability::DependsOn(promised), Rvalue::Use(value)) =
             (&row.modes.sendability, rvalue)
             && erased_environment(&row.kind)

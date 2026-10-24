@@ -801,6 +801,34 @@ fn a_closure_type_claims_the_crossing_mode_of_its_captures() {
         .broken(mismatch("closure sendability"));
 }
 
+/// A symbolic mismatch on a dead branch still needs an independent proof;
+/// moving live receipts out of typing must not silently omit that construction.
+#[test]
+fn a_dead_closure_construction_keeps_its_symbolic_obligation() {
+    let build = |claim| {
+        let mut f = claimed_sendability(claim);
+        let original = f.body().blocks[0].clone();
+        let condition = f.slot(TypeKind::Primitive(Primitive::Bool), Storage::Temporary);
+        f.body().blocks[0] = block(
+            vec![],
+            Terminator::Branch {
+                condition: copy(condition),
+                yes: BlockId(1),
+                no: BlockId(2),
+            },
+        );
+        f.assign(condition, Rvalue::Constant(Constant::Bool(true)), 0);
+        f.body()
+            .blocks
+            .push(block(vec![original.instructions[0].clone()], ret(0, 0)));
+        f.body().blocks.push(original);
+        f
+    };
+    let t = TypeParameterRef::body(scoped(NameSite::Item), TypeParamId(0));
+    build(Sendability::Sendable).valid();
+    build(Sendability::DependsOn(vec![t].into())).broken(mismatch("closure sendability"));
+}
+
 /// `match n { start..=end => .., .. }` over a borrowed scalar of `primitive`,
 /// one returning arm per range, in order.
 fn range_match(primitive: Primitive, ranges: &[(Constant, Constant)]) -> Fixture {

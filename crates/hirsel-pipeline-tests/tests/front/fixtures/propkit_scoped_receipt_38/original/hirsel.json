@@ -1,0 +1,1 @@
+{"schema": 1, "package": {"name": "witness", "version": "1"}, "entry": {"module": [], "name": "main"}, "sources": [{"path": "main.hir", "module": []}, {"path": "runner.hir", "module": ["runner"]}, {"path": "shrink.hir", "module": ["shrink"]}, {"path": "strategy.hir", "module": ["strategy"]}], "dependencies": []}

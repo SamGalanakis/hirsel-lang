@@ -6,6 +6,9 @@ pub(super) type Acquisitions =
     std::collections::BTreeMap<(u32, Option<u32>), Vec<(hirsel_tir::PlaceId, &'static str)>>;
 
 pub(super) struct Scratch {
+    /// Symbolic construction receipts whose storage-row proof needs live flow.
+    pub(super) closure_receipts:
+        RefCell<std::collections::BTreeSet<(u32, Option<u32>, Option<u32>)>>,
     pub(super) origin_types: Vec<super::origin_types::Types>,
     pub(super) frame_authorities: Vec<std::cell::OnceCell<Option<hirsel_types::AuthoritySummary>>>,
     definition_inputs: std::cell::OnceCell<DefinitionInputs>,
@@ -42,6 +45,7 @@ pub(super) struct Scratch {
 impl Scratch {
     pub(super) fn new(bodies: usize) -> Self {
         Self {
+            closure_receipts: RefCell::default(),
             origin_types: (0..bodies)
                 .map(|_| super::origin_types::Types::default())
                 .collect(),

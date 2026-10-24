@@ -1,0 +1,113 @@
+// All semantic selection follows add order, even when later cases finish first.
+pub type Outcome = Pass | Fail(u64) | Reject
+
+pub type PropertyError = Fault(u64)
+
+pub type RunError = Config | Generation(strategy.GenError) | Property(PropertyError) | Canceled
+
+pub type Config {
+  seed: u64,
+  cases: u64,
+  jobs: u64,
+  shrinks: u64,
+}
+
+pub type Case[T] {
+  value: Option[Shared[T]],
+  verdict: Outcome,
+}
+
+pub type Report[T] {
+  passed: u64,
+  rejected: u64,
+  exhausted: u64,
+  index: Option[u64],
+  category: u64,
+  value: Option[T],
+  candidates: u64,
+}
+
+pub fn validate(config: Config) -> Result[(), RunError] uses {} {
+  if config.cases == 0 || config.cases > 64 || config.jobs == 0 || config.jobs > 4 || config.shrinks > 64 {
+    return Error(Config())
+  }
+  Ok(())
+}
+
+fn generate[T: copyable + inert](source: Shared[strategy.Strategy[T]], seed: u64) -> Result[
+  unique T,
+  strategy.GenError
+] uses {} {
+  shared.with(
+    source,
+    fn(s: strategy.Strategy[T]) -> Result[unique T, strategy.GenError] uses {} {
+      s.draw(seed)
+    }
+  )
+}
+
+fn judge[T: inert](
+  property: Shared[fn(T) -> Result[Outcome, PropertyError] uses {}],
+  value: T
+) -> Result[Outcome, PropertyError] uses {} {
+  shared.with(
+    property,
+    fn(f: fn(T) -> Result[Outcome, PropertyError] uses {}) -> Result[
+      Outcome,
+      PropertyError
+    ] uses {} {
+      f(value)
+    }
+  )
+}
+
+fn execute[T: copyable + inert](
+  source: Shared[strategy.Strategy[T]],
+  property: Shared[fn(T) -> Result[Outcome, PropertyError] uses {}],
+  seed: u64
+) -> Result[Case[T], RunError] uses {} {
+  let value = match generate(source, seed) {
+    Ok(value) => take value,
+    Error(Exhausted()) => return Ok(Case(value: None(), verdict: Reject())),
+    Error(error) => return Error(Generation(error)),
+  }
+  let verdict = judge(property, value) ? property_error
+  Ok(Case(value: Some(shared.freeze(take value)), verdict: verdict))
+}
+
+pub fn minimize[T: copyable + inert](
+  source: Shared[strategy.Strategy[T]],
+  property: Shared[fn(T) -> Result[Outcome, PropertyError] uses {}],
+  take initial: unique T,
+  category: u64,
+  budget: u64
+) -> Result[(unique T, u64), RunError] uses {} {
+  let frontier = shared.with(
+    source,
+    fn(s: strategy.Strategy[T]) -> unique List[unique T] uses {} {
+      s.reduce(initial)
+    }
+  )
+  let mut state = shrink.tree(take initial, take frontier)
+  let mut tested = 0u64
+  while tested < budget && shrink.simplify(mut state) {
+    tested += 1
+    let verdict = judge(property, state.current) ? property_error
+    if verdict == Fail(category) {
+      let next = shared.with(
+        source,
+        fn(s: strategy.Strategy[T]) -> unique List[unique T] uses {} {
+          s.reduce(state.current)
+        }
+      )
+      let current = unique state.current
+      state = shrink.tree(take current, take next)
+    } else {
+      let _ = shrink.complicate(mut state)
+    }
+  }
+  Ok((unique state.current, tested))
+}
+
+
+fn property_error(e:PropertyError)->RunError uses {} {Property(e)}

@@ -1,0 +1,2 @@
+pub type GenError = Bounds | Exhausted
+pub type Strategy[T] {draw:fn(u64)->Result[unique T,GenError] uses {},reduce:fn(T)->unique List[unique T] uses {},depth:u64}

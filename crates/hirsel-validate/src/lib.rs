@@ -536,6 +536,16 @@ fn validate_input(
         errors.extend(checker.proof_errors.into_inner());
         errors.extend(checker.errors);
     }
+    errors.extend(scratch.closure_receipts.into_inner().into_iter().map(
+        |(body, block, instruction)| Violation {
+            body: Some(BodyId(body)),
+            block: block.map(BlockId),
+            instruction,
+            kind: ViolationKind::TypeMismatch {
+                entity: "closure sendability",
+            },
+        },
+    ));
     Validation { violations: errors }
 }
 
