@@ -497,8 +497,10 @@ them into a shared directory.
 
 ## Cost-balanced test shards
 
-`hirsel-cli-test-examples` uses one shard per declared test case (`CASE_SHARDED`
-in `sync.py`), including its ignored native cases. The existing launcher deals
+`hirsel-cli-test-examples` and `hirsel-cli-test-free` use one shard per
+declared test case (`CASE_SHARDED` in `sync.py`), including ignored native
+cases. A Free replay matrix case needs most of one action's 600 s limit, and
+its one-permit cells must not share a CPU with a co-scheduled case. The existing launcher deals
 these equal-cost cases by name, preserving compiled test identities and exact
 filters; an exact example runs through `hirsel-cli-test-examples-shard-1`.
 Rerun `sync.py` after adding or removing an example test.

@@ -142,6 +142,7 @@ fn bounded_output(command: &mut Command, program: &Path, cell: &str) -> Output {
         .stdout(std::fs::File::create(&stdout).unwrap())
         .stderr(std::fs::File::create(&stderr).unwrap());
     eprintln!("Free matrix start {cell}");
+    let started = Instant::now();
     let mut child = command.spawn().unwrap();
     let deadline = Instant::now() + Duration::from_secs(120);
     let mut timed_out = false;
@@ -166,7 +167,11 @@ fn bounded_output(command: &mut Command, program: &Path, cell: &str) -> Output {
         !timed_out,
         "{cell}: {command:?} exceeded 120 seconds: {output:?}"
     );
-    eprintln!("Free matrix ended {cell}: {}", output.status);
+    eprintln!(
+        "Free matrix ended {cell}: {} in {:.1}s",
+        output.status,
+        started.elapsed().as_secs_f64()
+    );
     output
 }
 
@@ -791,6 +796,35 @@ fn f1_corpus_matrix_with_live(
 
 type LiveWitness = fn(&Output, &hirsel_free::tape::Tape, &Scratch, &str);
 
+/// A bounded part of a full matrix: these recording levels, each replayed on
+/// these engines at every width and permit count. A case whose whole matrix
+/// exceeds one test action's limit runs one part per case.
+#[derive(Clone, Copy)]
+struct Cells {
+    levels: &'static [&'static str],
+    engines: &'static [&'static [&'static str]],
+}
+
+impl Cells {
+    const ALL: Cells = Cells {
+        levels: &["record", "durable"],
+        engines: &ENGINES,
+    };
+    const INTERPRETER: &'static [&'static [&'static str]] = &[&[]];
+    const NATIVE: &'static [&'static [&'static str]] =
+        &[&["--native"], &["--native", "--backend", "cranelift"]];
+    const fn part(durable: bool, native: bool) -> Cells {
+        Cells {
+            levels: if durable { &["durable"] } else { &["record"] },
+            engines: if native {
+                Cells::NATIVE
+            } else {
+                Cells::INTERPRETER
+            },
+        }
+    }
+}
+
 /// Check the required live state before comparing its complete replay matrix.
 fn f1_corpus_matrix_with_witness(
     name: &str,
@@ -798,7 +832,19 @@ fn f1_corpus_matrix_with_witness(
     grants: impl FnOnce(&Scratch) -> serde_json::Value,
     expected: (i32, LiveWitness),
     stdin: &[u8],
+    live_peer: impl FnMut() -> Box<dyn FnOnce()>,
+) {
+    f1_corpus_matrix_cells(name, text, grants, expected, stdin, live_peer, Cells::ALL);
+}
+
+fn f1_corpus_matrix_cells(
+    name: &str,
+    text: &str,
+    grants: impl FnOnce(&Scratch) -> serde_json::Value,
+    expected: (i32, LiveWitness),
+    stdin: &[u8],
     mut live_peer: impl FnMut() -> Box<dyn FnOnce()>,
+    cells: Cells,
 ) {
     let scratch = Scratch::new(name);
     let mut grants = grants(&scratch);
@@ -807,7 +853,7 @@ fn f1_corpus_matrix_with_witness(
     let input = scratch.path("live-stdin");
     std::fs::write(&program, text).unwrap();
     std::fs::write(&input, stdin).unwrap();
-    for level in ["record", "durable"] {
+    for &level in cells.levels {
         let tape = scratch.path(level);
         let report = scratch.path("projection");
         grants["recording"] = level.into();
@@ -865,7 +911,7 @@ fn f1_corpus_matrix_with_witness(
                 (host, saved)
             })
             .collect();
-        for engine in ENGINES {
+        for &engine in cells.engines {
             for width in ["1", "8"] {
                 for permits in [1, 8] {
                     let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
@@ -1896,8 +1942,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), E] {
     );
 }
 
-#[test]
-fn f1_tls_server_mutual_auth_replays_without_handshakes() {
+fn f1_tls_server_matrix(cells: Cells) {
     const CA: &str = include_str!("../../hirsel-rt/tests/it/tls-data/ca.cert");
     const CHAIN: &str = include_str!("../../hirsel-rt/tests/it/tls-data/end.fullchain");
     const KEY: &str = include_str!("../../hirsel-rt/tests/it/tls-data/end.key");
@@ -1949,16 +1994,44 @@ pub fn main(rt: Io, args: Args) -> Result[(), E] {
       .replace("{{CHAIN}}", &format!("{CHAIN:?}"))
       .replace("{{KEY}}", &format!("{KEY:?}"))
       .replace("{{CA}}", &format!("{CA:?}"));
-    f1_corpus_matrix_with_io("tls-server", &source, |_| {
-        serde_json::json!({"tasks":"tasks.free@1","dirs":[],
+    let grants = |_: &Scratch| {
+        serde_json::json!({"io":{"tasks":"tasks.free@1","dirs":[],
         "net":{"provider":"net.stream@1","rules":[
             {"address":"127.0.0.1","service":port.to_string(),"operation":"listen_tls"},
-            {"address":"127.0.0.1","service":port.to_string(),"operation":"connect"}]}})
-    });
+            {"address":"127.0.0.1","service":port.to_string(),"operation":"connect"}]}},"args":[]})
+    };
+    f1_corpus_matrix_cells(
+        "tls-server",
+        &source,
+        grants,
+        (0, |_, _, _, _| {}),
+        b"",
+        || Box::new(|| {}),
+        cells,
+    );
 }
 
 #[test]
-fn f1_unix_streams_replay_without_socket_paths() {
+fn f1_tls_server_mutual_auth_replays_without_handshakes_record_interpreter() {
+    f1_tls_server_matrix(Cells::part(false, false));
+}
+
+#[test]
+fn f1_tls_server_mutual_auth_replays_without_handshakes_record_native() {
+    f1_tls_server_matrix(Cells::part(false, true));
+}
+
+#[test]
+fn f1_tls_server_mutual_auth_replays_without_handshakes_durable_interpreter() {
+    f1_tls_server_matrix(Cells::part(true, false));
+}
+
+#[test]
+fn f1_tls_server_mutual_auth_replays_without_handshakes_durable_native() {
+    f1_tls_server_matrix(Cells::part(true, true));
+}
+
+fn f1_unix_stream_matrix(cells: Cells) {
     let socket = Scratch::new("unix-endpoint");
     let path = socket.path("peer.sock");
     let source = r#"pub type E = Grant(GrantError) | Network(NetError)
@@ -1991,13 +2064,42 @@ pub fn main(rt: Io, args: Args) -> Result[(), E] {
   })
 }
 "#.replace("SOCKET", &format!("{:?}", path.to_str().unwrap()));
-    f1_corpus_matrix_with_io("unix-stream", &source, |_| {
-        serde_json::json!({"tasks":"tasks.free@1","dirs":[],
+    let grants = |_: &Scratch| {
+        serde_json::json!({"io":{"tasks":"tasks.free@1","dirs":[],
         "net":{"provider":"net.stream@1","rules":[
             {"address":path,"service":"0","operation":"unix_listen"},
-            {"address":path,"service":"0","operation":"unix_connect"}]}})
-    });
+            {"address":path,"service":"0","operation":"unix_connect"}]}},"args":[]})
+    };
+    f1_corpus_matrix_cells(
+        "unix-stream",
+        &source,
+        grants,
+        (0, |_, _, _, _| {}),
+        b"",
+        || Box::new(|| {}),
+        cells,
+    );
     assert!(!path.exists(), "owned listener must unlink its socket");
+}
+
+#[test]
+fn f1_unix_streams_replay_without_socket_paths_record_interpreter() {
+    f1_unix_stream_matrix(Cells::part(false, false));
+}
+
+#[test]
+fn f1_unix_streams_replay_without_socket_paths_record_native() {
+    f1_unix_stream_matrix(Cells::part(false, true));
+}
+
+#[test]
+fn f1_unix_streams_replay_without_socket_paths_durable_interpreter() {
+    f1_unix_stream_matrix(Cells::part(true, false));
+}
+
+#[test]
+fn f1_unix_streams_replay_without_socket_paths_durable_native() {
+    f1_unix_stream_matrix(Cells::part(true, true));
 }
 
 #[test]
@@ -4962,4 +5064,237 @@ pub fn main(rt: Io, args: Args) -> Result[(), AppError] {
             vec![b'x'; 32]
         );
     }
+}
+
+/// Whole-runtime replay identity (runtime-cutover-50): a program records on
+/// both native backends at width 8 with eight permits. The LLVM tape replays on
+/// the reference interpreter and both backends at widths 1/8 and permits 1/8,
+/// the Cranelift tape on every engine at width/permits 1/1 and 8/8, each to the
+/// same exit, bytes and full normalized projection (outputs, cuts, per-object
+/// sequences and key epochs). Damaged and truncated-invalid tapes refuse before
+/// any program output. This qualifies the F1 phase path only; the superseded
+/// default-off path records no phases to compare.
+#[derive(Clone, Copy, PartialEq)]
+enum Runtime50 {
+    Whole,
+    LlvmWidth1,
+    LlvmWidth8,
+    Cranelift,
+    Refusals,
+}
+
+fn runtime50_matrix(name: &str, text: &str, part: Runtime50) {
+    if !hirsel_rt::free_driver::admission_enabled() {
+        return;
+    }
+    const BACKENDS: [&[&str]; 2] = [&["--native"], &["--native", "--backend", "cranelift"]];
+    let grants = r#"{"io":{"stdout":"stdout.bytes@1","tasks":"tasks.free@1","dirs":[]},"args":[]}"#;
+    let (mut replays, mut refusals) = (0, 0);
+    let scratch = Scratch::new(&format!("runtime50-{name}"));
+    let program = scratch.path("main.hir");
+    std::fs::write(&program, text).unwrap();
+    let report = scratch.path("projection");
+    for (index, backend) in BACKENDS.iter().enumerate() {
+        let llvm = index == 0;
+        let records = match part {
+            Runtime50::Whole => true,
+            Runtime50::Cranelift => !llvm,
+            _ => llvm,
+        };
+        if !records {
+            continue;
+        }
+        let tape = scratch.path(&format!("tape-{index}"));
+        let _ = std::fs::remove_file(&report);
+        let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+        command
+            .arg("run")
+            .args(*backend)
+            .arg(&program)
+            .args(["--grants", grants, "--cores", "8", "--record"])
+            .arg(&tape)
+            .stdin(std::process::Stdio::null())
+            .env(hirsel_rt::free_replay::Report::VAR, &report);
+        f1_permits(&mut command, 8);
+        let live = bounded_output(
+            &mut command,
+            &program,
+            &format!("runtime50 {name} live {backend:?} width 8 permits 8"),
+        );
+        assert_eq!(live.status.code(), Some(0), "{name} live: {live:?}");
+        let bytes = std::fs::read(&tape).unwrap();
+        assert!(
+            bytes.starts_with(hirsel_free::tape::MAGIC),
+            "{name}: F1 tape"
+        );
+        let parsed = hirsel_free::tape::parse(&bytes).unwrap();
+        assert!(
+            !parsed.torn && parsed.end.is_some(),
+            "{name}: complete tape"
+        );
+        assert!(!parsed.cut.is_empty(), "{name}: a terminal cut");
+        let projection = std::fs::read_to_string(&report).unwrap();
+        let cells: &[(&str, usize)] = match (part, llvm) {
+            (Runtime50::Refusals, _) => &[],
+            (Runtime50::LlvmWidth1, _) => &[("1", 1), ("1", 8)],
+            (Runtime50::LlvmWidth8, _) => &[("8", 1), ("8", 8)],
+            (_, true) => &[("1", 1), ("1", 8), ("8", 1), ("8", 8)],
+            (_, false) => &[("1", 1), ("8", 8)],
+        };
+        for engine in ENGINES {
+            for &(width, permits) in cells {
+                let cell = format!(
+                    "runtime50 {name} recorded {backend:?} replay {engine:?} \
+                     width {width} permits {permits}"
+                );
+                let _ = std::fs::remove_file(&report);
+                let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+                command
+                    .arg("run")
+                    .args(engine)
+                    .arg(&program)
+                    .arg("--replay")
+                    .arg(&tape)
+                    .args(["--cores", width])
+                    .stdin(std::process::Stdio::null())
+                    .env(hirsel_rt::free_replay::Report::VAR, &report);
+                f1_permits(&mut command, permits);
+                let replay = bounded_output(&mut command, &program, &cell);
+                assert_eq!(
+                    replay.status.code(),
+                    live.status.code(),
+                    "{cell}: {replay:?}"
+                );
+                assert_eq!(replay.stdout, live.stdout, "{cell}");
+                assert_eq!(replay.stderr, live.stderr, "{cell}");
+                assert_eq!(
+                    std::fs::read_to_string(&report).unwrap(),
+                    projection,
+                    "{cell}: full normalized projection"
+                );
+                replays += 1;
+            }
+        }
+        // Refusal is a tape-format property: check it on the LLVM tape.
+        if !llvm || !matches!(part, Runtime50::Whole | Runtime50::Refusals) {
+            continue;
+        }
+        let header = hirsel_free::tape::MAGIC.len();
+        let length = u32::from_le_bytes(bytes[header..header + 4].try_into().unwrap()) as usize;
+        assert!(
+            bytes.len() > header + 8 + length,
+            "{name}: frames after the header"
+        );
+        let mut damaged = bytes.clone();
+        damaged[header + 8 + length / 2] ^= 0x01;
+        let invalid = [
+            ("truncated magic", bytes[..7].to_vec()),
+            ("foreign magic", {
+                let mut foreign = bytes.clone();
+                foreign[0] ^= 0x20;
+                foreign
+            }),
+            // The header frame itself torn: no binding remains to admit.
+            (
+                "truncated header frame",
+                bytes[..header + 8 + length / 2].to_vec(),
+            ),
+            // A damaged frame followed by more frames is corruption, not a tear.
+            ("damaged header frame", damaged),
+        ];
+        for (what, damaged) in invalid {
+            let path = scratch.path("invalid");
+            std::fs::write(&path, &damaged).unwrap();
+            // The magic check is engine-independent launch validation; the
+            // frame-level refusals run on every engine.
+            let engines: &[&[&str]] = if what.ends_with("magic") {
+                &ENGINES[..1]
+            } else {
+                &ENGINES
+            };
+            for engine in engines {
+                let cell = format!("runtime50 {name} {what} replay {engine:?}");
+                let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+                command
+                    .arg("run")
+                    .args(*engine)
+                    .arg(&program)
+                    .arg("--replay")
+                    .arg(&path)
+                    .stdin(std::process::Stdio::null());
+                let refused = bounded_output(&mut command, &program, &cell);
+                assert!(!refused.status.success(), "{cell}: {refused:?}");
+                assert!(refused.stdout.is_empty(), "{cell}: output before refusal");
+                refusals += 1;
+            }
+        }
+    }
+    let expected = match part {
+        Runtime50::Whole => (ENGINES.len() * 6, 2 + 2 * ENGINES.len()),
+        Runtime50::Refusals => (0, 2 + 2 * ENGINES.len()),
+        _ => (ENGINES.len() * 2, 0),
+    };
+    assert_eq!((replays, refusals), expected);
+    eprintln!("runtime50 {name} replay matrix: {replays} replays, {refusals} refusals");
+}
+
+fn corpus(path: &str) -> String {
+    std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(path)).unwrap()
+}
+
+#[test]
+fn runtime50_end_to_end_engine_replay_matrix_channel_gap() {
+    runtime50_matrix("gap", source("gap"), Runtime50::Whole);
+}
+
+#[test]
+fn runtime50_end_to_end_engine_replay_matrix_mutex() {
+    runtime50_matrix(
+        "mutex",
+        &corpus("../../conformance/CLO/CLO-3-child-mutex-capture-run.hir"),
+        Runtime50::Whole,
+    );
+}
+
+const ATOMIC: &str = "../../conformance/CLO/CLO-3-child-atomic-capture-run.hir";
+const TASK_SET: &str = "../../conformance/CONC/CONC-2-task-set-first-completed-run.hir";
+
+#[test]
+fn runtime50_end_to_end_engine_replay_matrix_atomic_llvm_width1() {
+    runtime50_matrix("atomic", &corpus(ATOMIC), Runtime50::LlvmWidth1);
+}
+
+#[test]
+fn runtime50_end_to_end_engine_replay_matrix_atomic_llvm_width8() {
+    runtime50_matrix("atomic", &corpus(ATOMIC), Runtime50::LlvmWidth8);
+}
+
+#[test]
+fn runtime50_end_to_end_engine_replay_matrix_atomic_cranelift() {
+    runtime50_matrix("atomic", &corpus(ATOMIC), Runtime50::Cranelift);
+}
+
+#[test]
+fn runtime50_end_to_end_engine_replay_matrix_atomic_refusals() {
+    runtime50_matrix("atomic", &corpus(ATOMIC), Runtime50::Refusals);
+}
+
+#[test]
+fn runtime50_end_to_end_engine_replay_matrix_task_set_llvm_width1() {
+    runtime50_matrix("task-set", &corpus(TASK_SET), Runtime50::LlvmWidth1);
+}
+
+#[test]
+fn runtime50_end_to_end_engine_replay_matrix_task_set_llvm_width8() {
+    runtime50_matrix("task-set", &corpus(TASK_SET), Runtime50::LlvmWidth8);
+}
+
+#[test]
+fn runtime50_end_to_end_engine_replay_matrix_task_set_cranelift() {
+    runtime50_matrix("task-set", &corpus(TASK_SET), Runtime50::Cranelift);
+}
+
+#[test]
+fn runtime50_end_to_end_engine_replay_matrix_task_set_refusals() {
+    runtime50_matrix("task-set", &corpus(TASK_SET), Runtime50::Refusals);
 }

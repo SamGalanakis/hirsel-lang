@@ -237,10 +237,14 @@ SHARDED = [
     "hirsel-pipeline-tests-test-rc",
     "hirsel-rt-test-it",
 ]
-# Example cases each build and exercise a program. Keep one compiled test case
-# per shard, using the launcher's existing equal-cost assignment by name.
+# Example and Free matrix cases each build and exercise programs. Keep one
+# compiled test case per shard, using the launcher's existing equal-cost
+# assignment by name.
 CASE_SHARDED = {
     "hirsel-cli-test-examples": "crates/hirsel-cli/tests/examples.rs",
+    # Each F1 matrix case alone takes most of the pool's 600 s action limit on
+    # its eight exact CPUs; co-scheduled cases also share the one-permit CPU.
+    "hirsel-cli-test-free": "crates/hirsel-cli/tests/free.rs",
 }
 SHARD_SECONDS = 40
 COSTS = HERE / "test-costs"
