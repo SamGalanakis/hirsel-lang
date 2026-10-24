@@ -177,3 +177,4 @@ mod native_source_inputs_19;
 mod native_instance_products_19;
 mod native_demand_tasks_19;
 mod native_compilation_tasks_19;
+mod native_ready_tasks_19;
