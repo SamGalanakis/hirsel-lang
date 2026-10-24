@@ -3,8 +3,8 @@
 //! the complete action. Ordinary producer associations alone never accept a hit.
 use super::arena::EQUATIONS_DOMAIN;
 use super::*;
-use hirsel_engine::store::{Action, Contents, Domain, Reference};
 use hirsel_engine::store::ResultStore;
+use hirsel_engine::store::{Action, Contents, Domain, Reference};
 use hirsel_lir::stage::{StageKind, ValidatedUnit, Value};
 use hirsel_lir::validate::{Inputs, NativeCache, NativeEnvironment};
 

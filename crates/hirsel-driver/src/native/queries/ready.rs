@@ -2,8 +2,8 @@
 //! existing pass implementation; actual final C owns every accepted envelope.
 use super::*;
 use crate::native::stages::lower_local_raw;
-use hirsel_engine::store::{Action, Contents, Domain, Reference};
 use hirsel_engine::store::ResultStore;
+use hirsel_engine::store::{Action, Contents, Domain, Reference};
 use hirsel_lir::stage::{Ready, StageKind, ValidatedUnit, Value};
 use hirsel_lir::validate::{Inputs, NativeCache, NativeEnvironment, ValidationContext};
 

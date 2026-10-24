@@ -1,7 +1,7 @@
 //! Native query descriptors. Content references convey integrity, never proof
 //! authority; materialization independently checks the native stage and inputs.
-use hirsel_engine::store::Reference;
 pub use hirsel_engine::runtime::ProductRef;
+use hirsel_engine::store::Reference;
 pub use hirsel_rc::arena_credit::equations::LocalArenaEquations;
 use hirsel_syntax::ContentHash;
 use std::sync::Arc;

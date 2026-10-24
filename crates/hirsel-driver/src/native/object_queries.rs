@@ -6,9 +6,9 @@
 //! outputs before loading a body, and retain equal recomputation's output.
 //! Changed manifests still invoke the platform linker; no image patching.
 use super::queries::{InstanceAddress, NativeProducts, ReadyProduct};
-use hirsel_engine::store::{Action, Address, Domain, MAX_RECORD, Output, Reference};
 use hirsel_codec::{Snapshot, snapshot_struct};
 use hirsel_engine::runtime::ProductRef;
+use hirsel_engine::store::{Action, Address, Domain, MAX_RECORD, Output, Reference};
 use hirsel_engine::store::{ResultStore, VerifyStore};
 use hirsel_lir::stage::ObjectArtifact;
 use hirsel_syntax::ContentHash;
