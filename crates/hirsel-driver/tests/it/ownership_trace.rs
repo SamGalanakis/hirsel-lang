@@ -335,3 +335,89 @@ fn canceled_capture(t: Test) {
         1,
     );
 }
+
+#[test]
+fn ownership_results_await_moves_the_child_aggregate_into_the_receiving_parent() {
+    let trace = observed_task_source(
+        r#"
+resource type Token {}
+drop(x) {}
+@test
+fn awaited_result(t: Test) {
+  let tasks = test.tasks(t)
+  task.scope(tasks, fn(s: Scope) {
+    let child = task.async(s, fn() { (Token(), Token()) })
+    let received = task.await(s, take child)
+  })
+}
+"#,
+        2,
+    );
+    use hirsel_run_schema::ownership_trace::{Action, Storage};
+    let acquired: Vec<_> = trace
+        .events
+        .iter()
+        .filter(|event| {
+            matches!(&event.action,
+        Action::Move {from, owner, ..} if from.task.is_none()
+        && matches!(&from.storage, Storage::Object {name, ..} if name == "task.result")
+        && owner.task.as_ref().is_some_and(|task| task.0.is_empty()))
+        })
+        .collect();
+    assert_eq!(acquired.len(), 2);
+    assert!(
+        acquired
+            .iter()
+            .all(|event| event.action.token().task.0.len() == 1)
+    );
+}
+
+#[test]
+fn ownership_results_a_finished_child_drops_its_retained_value_in_its_rest() {
+    let trace = observed_task_source(
+        r#"
+resource type Token {}
+drop(x) {}
+@test
+fn retained_result(t: Test) {
+  let tasks = test.tasks(t)
+  task.scope(tasks, fn(s: Scope) {
+    let child = task.async(s, fn() { Token() })
+    task.detach(s, take child)
+  })
+}
+"#,
+        1,
+    );
+    use hirsel_run_schema::ownership_trace::{Action, Storage};
+    assert!(trace.events.iter().any(|event| matches!(&event.action,
+        Action::Move {from, owner, ..} if from.task.is_none()
+        && matches!(&from.storage, Storage::Object {name, ..} if name == "task.result")
+        && owner.task.as_ref().is_some_and(|task| !task.0.is_empty()))));
+}
+
+#[test]
+fn ownership_results_an_already_detached_child_disposes_its_return_before_completion() {
+    observed_task_source(
+        r#"
+resource type Token {}
+drop(x) {}
+@test
+fn detached_result(t: Test) {
+  let tasks = test.tasks(t)
+  task.scope(tasks, fn(s: Scope) {
+    let (gate_tx, gate_rx): (Sender[u8], Receiver[u8]) = channel.open(tasks)
+    let child = task.async(s, fn() {
+      let mut gate = take gate_rx
+      let _ = channel.receive(tasks, mut gate)
+      Token()
+    })
+    task.detach(s, take child)
+    let mut gate = take gate_tx
+    let _ = channel.send(tasks, mut gate, 7u8)
+  })
+}
+"#,
+        1,
+    );
+}

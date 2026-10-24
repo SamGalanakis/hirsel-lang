@@ -47,6 +47,17 @@ enum Pending {
     },
 }
 
+struct ResultState {
+    count: u64,
+    context: Context,
+}
+
+struct AwaitState {
+    child: u64,
+    destination: Option<Owner>,
+    context: Context,
+}
+
 struct SpawnState {
     definition: DefPath,
     body: hirsel_tir::BodyId,
@@ -70,6 +81,8 @@ pub(super) struct Resources {
     suspended: BTreeMap<u64, TaskState>,
     task_limit: usize,
     spawns: BTreeMap<u64, SpawnState>,
+    results: BTreeMap<u64, ResultState>,
+    awaits: BTreeMap<u64, AwaitState>,
     tracker: Tracker,
     frames: Vec<FrameState>,
     next_frame: u64,
@@ -90,6 +103,8 @@ impl Resources {
             suspended: BTreeMap::new(),
             task_limit: event_limit,
             spawns: BTreeMap::new(),
+            results: BTreeMap::new(),
+            awaits: BTreeMap::new(),
             tracker: Tracker::new(event_limit),
             frames: vec![],
             next_frame: 0,
@@ -260,6 +275,17 @@ impl Resources {
             children(value, |_, child| work.push(child));
         }
         true
+    }
+    fn result_owner(task: u64) -> Owner {
+        Owner {
+            task: None,
+            storage: Storage::Object {
+                name: "task.result".into(),
+                id: task,
+                item: 0,
+            },
+            path: vec![],
+        }
     }
     fn scratch(&mut self) -> Owner {
         let owner = Owner {
@@ -484,6 +510,9 @@ impl Observer for Resources {
         sources: &SourceMap,
     ) {
         self.pending = None;
+        if let Some(state) = self.frames.last() {
+            self.awaits.remove(&state.id);
+        }
         if self.error.is_some() {
             return;
         }
@@ -833,6 +862,24 @@ impl Observer for Resources {
             self.unsupported("builtin entered without its actual source call");
             return;
         };
+        if call.definition.is_core("task.await") {
+            if let Some(Value::Handle { kind, id }) = arguments.get(1)
+                && kind == "Task"
+            {
+                let Some(state) = self.frames.last() else {
+                    self.unsupported("await has no observed caller frame");
+                    return;
+                };
+                self.awaits.insert(
+                    state.id,
+                    AwaitState {
+                        child: *id,
+                        destination: call.destination.clone(),
+                        context: call.context.clone(),
+                    },
+                );
+            }
+        }
         if call.arguments.is_empty() {
             return;
         }
@@ -929,8 +976,102 @@ impl Observer for Resources {
         );
     }
     fn builtin_returned(&mut self, _task: u64, _frame: &Frame, value: &Value) {
-        if resources_in(value) != 0 {
+        if self.error.is_some() {
+            return;
+        }
+        let count = resources_in(value);
+        let awaiting = self
+            .frames
+            .last()
+            .and_then(|state| self.awaits.remove(&state.id));
+        if count == 0 {
+            return;
+        }
+        let Some(awaiting) = awaiting else {
             self.unsupported("builtin returned resources without an observed transport");
+            return;
+        };
+        let Some(destination) = awaiting.destination else {
+            self.unsupported("resource await has no receiving place");
+            return;
+        };
+        if self
+            .results
+            .remove(&awaiting.child)
+            .map(|result| result.count)
+            != Some(count)
+            || !Self::supported_tree(value)
+        {
+            self.unsupported("await result inventory differs from the child return");
+            return;
+        }
+        let from = Self::result_owner(awaiting.child);
+        let result = self
+            .tracker
+            .move_tree(&awaiting.context, &from, &destination);
+        if let Some(tokens) = self.checked(result)
+            && tokens.len() as u64 != count
+        {
+            self.unsupported("await result lineage inventory differs");
+        }
+    }
+    fn return_discarded(&mut self, _task: u64, _frame: &Frame, value: &Value) {
+        if self.error.is_some() || resources_in(value) == 0 {
+            return;
+        }
+        let Some((from, context)) = self
+            .frames
+            .last_mut()
+            .and_then(|state| state.returned.take())
+        else {
+            self.unsupported("discarded task result has no observed returned owner");
+            return;
+        };
+        let to = self.scratch();
+        let result = self.tracker.move_tree(&context, &from, &to);
+        if let Some(tokens) = self.checked(result) {
+            if tokens.len() as u64 != resources_in(value) {
+                self.unsupported("discarded result lineage inventory differs");
+                return;
+            }
+            self.releases.push_back(to);
+        }
+    }
+    fn rest_entered(&mut self, task: u64, frame: &Frame) {
+        if self.error.is_some() {
+            return;
+        }
+        let values: Vec<_> = frame
+            .work
+            .iter()
+            .filter_map(|work| match work {
+                crate::resources::Work::Release(value, ..) if resources_in(value) != 0 => {
+                    Some(value)
+                }
+                _ => None,
+            })
+            .collect();
+        if values.is_empty() {
+            return;
+        }
+        let Some(result) = self.results.remove(&task) else {
+            self.unsupported("task rest has no observed retained result");
+            return;
+        };
+        if self.current_task != task || values.len() != 1 || resources_in(values[0]) != result.count
+        {
+            self.unsupported("task rest differs from retained result custody");
+            return;
+        }
+        let from = Self::result_owner(task);
+        let to = self.scratch();
+        let moved = self.tracker.move_tree(&result.context, &from, &to);
+        if let Some(tokens) = self.checked(moved) {
+            if tokens.len() as u64 != result.count {
+                self.unsupported("task rest lineage inventory differs");
+                return;
+            }
+            self.releases.push_back(to);
         }
     }
     fn after_step(&mut self, _task: u64, frame: &Frame, success: bool) {
@@ -1093,7 +1234,9 @@ impl Observer for Resources {
                 caller.aliases.remove(slot);
             }
             if resources_in(value) == 0 {
-                self.frames.pop();
+                if let Some(state) = self.frames.pop() {
+                    self.awaits.remove(&state.id);
+                }
                 return;
             }
             if !Self::supported_tree(value) {
@@ -1104,14 +1247,36 @@ impl Observer for Resources {
                 self.unsupported("resource return has no observed source");
                 return;
             };
-            let Some(to) = destination else {
-                self.unsupported("externally returned resource transport");
-                return;
+            let to = match destination {
+                Some(to) => to,
+                None if self.current_task != 0 && self.frames.len() == 1 => {
+                    if self
+                        .results
+                        .insert(
+                            self.current_task,
+                            ResultState {
+                                count: resources_in(value),
+                                context: context.clone(),
+                            },
+                        )
+                        .is_some()
+                    {
+                        self.unsupported("task result custody reused");
+                        return;
+                    }
+                    Self::result_owner(self.current_task)
+                }
+                None => {
+                    self.unsupported("externally returned resource transport");
+                    return;
+                }
             };
             let result = self.tracker.move_tree(&context, &from, &to);
             self.checked(result);
         }
-        self.frames.pop();
+        if let Some(state) = self.frames.pop() {
+            self.awaits.remove(&state.id);
+        }
     }
     fn released_without_finalizer(
         &mut self,

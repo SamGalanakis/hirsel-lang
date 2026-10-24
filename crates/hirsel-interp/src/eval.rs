@@ -325,11 +325,13 @@ struct HandOff {
     rests: std::collections::VecDeque<crate::TaskRest>,
 }
 /// Holding child `rest.child`'s stack for its rest: its ended frame, dropping the values.
-fn rest_stack(
+fn rest_stack<O: crate::ownership_trace::Observer>(
     holding: &mut std::collections::HashMap<u64, Frame>,
     rest: crate::TaskRest,
     template: &Frame,
     operations: &(impl Operations + ?Sized),
+    observer: &mut O,
+    sources: &SourceMap,
 ) -> Result<(u64, Vec<Frame>), Error> {
     let mut frame = match holding.remove(&rest.child) {
         Some(frame) => frame,
@@ -344,6 +346,10 @@ fn rest_stack(
             anchor(&frame, site),
             frame.caller.clone(),
         ));
+    }
+    if O::ENABLED {
+        observer.sync(rest.child, std::slice::from_ref(&frame), sources);
+        observer.rest_entered(rest.child, &frame);
     }
     Ok((rest.child, vec![frame]))
 }
@@ -703,6 +709,8 @@ pub(crate) async fn execute_frames<O: crate::ownership_trace::Observer>(
                     first,
                     hand_offs.last().unwrap().frames.last().unwrap(),
                     operations,
+                    observer,
+                    sources,
                 )?;
                 operations.enter_task(task, false);
                 continue;
@@ -1732,6 +1740,9 @@ pub(crate) async fn execute_frames<O: crate::ownership_trace::Observer>(
         // A finalizer failure then belongs to this child and its scope's chain.
         if task != 0 && frames.len() == 1 && operations.discard_task_result(task) {
             let frame = frames.last_mut().unwrap();
+            if let Some(crate::resources::Ending::Return(value)) = &frame.ending {
+                observer.return_discarded(task, frame, value);
+            }
             if let Some(crate::resources::Ending::Return(value)) = &mut frame.ending
                 && *value != Value::Unit
             {
@@ -1764,6 +1775,7 @@ pub(crate) async fn execute_frames<O: crate::ownership_trace::Observer>(
                         anchor: Some(&root_anchor),
                     },
                 )? {
+                    observer.return_discarded(task, frame, value);
                     returned_snapshot = Some(value.clone());
                     *entry_consumed = true;
                     let Some(crate::resources::Ending::Return(value)) = frame.ending.take() else {
@@ -1803,6 +1815,8 @@ pub(crate) async fn execute_frames<O: crate::ownership_trace::Observer>(
                     next,
                     hand_off.frames.last().unwrap(),
                     operations,
+                    observer,
+                    sources,
                 )?;
             } else {
                 let hand_off = hand_offs.swap_remove(index);

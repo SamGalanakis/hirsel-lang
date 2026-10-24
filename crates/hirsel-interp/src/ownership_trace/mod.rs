@@ -46,6 +46,10 @@ pub(crate) trait Observer {
     #[inline(always)]
     fn builtin_returned(&mut self, _task: u64, _frame: &Frame, _value: &Value) {}
     #[inline(always)]
+    fn return_discarded(&mut self, _task: u64, _frame: &Frame, _value: &Value) {}
+    #[inline(always)]
+    fn rest_entered(&mut self, _task: u64, _frame: &Frame) {}
+    #[inline(always)]
     fn drop_place(
         &mut self,
         _task: u64,
