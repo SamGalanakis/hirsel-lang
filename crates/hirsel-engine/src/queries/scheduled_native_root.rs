@@ -33,7 +33,9 @@ pub struct FrontNativeProducts {
     pub originals: Vec<crate::NativeOriginalProduct>,
     pub original_context: Arc<crate::NativeOriginalContext>,
     pub signatures: Arc<SignatureSnapshot>,
+    pub run: Arc<FrontRunOutput>,
     pub semantic: Arc<crate::NativeSemanticProgram>,
+    _owner: Arc<Ownership>,
 }
 pub struct FrontNativeOutput {
     pub products: Arc<FrontNativeProducts>,
@@ -56,6 +58,11 @@ pub struct FrontNativeQueries {
     weight: MemoryWeight,
     errors: RuntimeErrors,
     output_budget: u64,
+    ownership: Arc<Ownership>,
+}
+struct Ownership {
+    _run: Arc<FrontRunQueries>,
+    _definitions: Arc<FrontNativeDefinitionQueries>,
     _allowance: MemoryReservation,
 }
 impl FrontNativeQueries {
@@ -405,6 +412,8 @@ impl Task {
             original_context: owner.definitions.original_context(),
             signatures,
             semantic: run.semantic.clone(),
+            run,
+            _owner: owner.ownership.clone(),
         };
         *owner.completed.lock().unwrap_or_else(|e| e.into_inner()) =
             Some((product, Arc::new(products)));
@@ -603,8 +612,8 @@ impl QueryEngine {
             constants,
             registry: self.registry.clone(),
             memo: self.memo.clone(),
-            run,
-            definitions,
+            run: run.clone(),
+            definitions: definitions.clone(),
             records: crate::NativeRecords::new(self.types.clone(), store.clone()),
             anchors: crate::NativeRecordContext::capture(self),
             store,
@@ -613,7 +622,11 @@ impl QueryEngine {
             weight,
             errors,
             output_budget: allowance.bytes() - required,
-            _allowance: allowance,
+            ownership: Arc::new(Ownership {
+                _run: run.clone(),
+                _definitions: definitions.clone(),
+                _allowance: allowance,
+            }),
         }))
     }
 }
