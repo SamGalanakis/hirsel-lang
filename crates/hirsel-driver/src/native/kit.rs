@@ -483,6 +483,44 @@ mod tests {
             .unwrap();
             assert_eq!(plan.build_id, id);
             assert!(!plan.arguments.iter().any(|arg| arg == "-o"));
+            // The selected package and Ubuntu's LLD differ in .comment producer
+            // text. Keep the stock kit-line oracle for every allocated section,
+            // then compare replay byte-for-byte with this exact selected tool.
+            let package = input("HIRSEL_CAPTURE_LINKER");
+            let direct = original.join("selected-tool-output");
+            let output = Command::new(package.join("lib/ld-linux-x86-64.so.2"))
+                .env_clear()
+                .arg("--library-path")
+                .arg(package.join("lib"))
+                .arg(package.join("bin/ld.lld"))
+                .args(&plan.arguments)
+                .arg("-o")
+                .arg(&direct)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let selected = std::fs::read(&direct).unwrap();
+            {
+                use object::{Object as _, ObjectSection as _};
+                let stock = object::File::parse(expected.as_slice()).unwrap();
+                let actual = object::File::parse(selected.as_slice()).unwrap();
+                for section in stock.sections() {
+                    if matches!(section.flags(), object::SectionFlags::Elf { sh_flags, .. } if sh_flags.contains(object::elf::SHF_ALLOC))
+                    {
+                        let other = actual.section_by_name(section.name().unwrap()).unwrap();
+                        assert!(
+                            section.data().unwrap() == other.data().unwrap(),
+                            "selected tool changed allocated section {}",
+                            section.name().unwrap()
+                        );
+                    }
+                }
+            }
+            let expected = selected;
             let captured = plan
                 .capture(
                     &store,
