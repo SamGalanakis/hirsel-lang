@@ -26,10 +26,70 @@ use std::{
     task::Poll,
 };
 
+// Preserve the real directory provider and its validator capabilities while
+// reporting the I/O error that its ordinary Option publication seam omits.
+struct DiagnosedStore(store::DirStore);
+impl ResultStore for DiagnosedStore {
+    fn local_product_store(&self) -> Option<hirsel_artifact_store::Store> {
+        self.0.local_product_store()
+    }
+    fn verifier(&self) -> Option<Arc<hirsel_validate::VerifierCache>> {
+        self.0.verifier()
+    }
+    fn enabled(&self) -> bool {
+        self.0.enabled()
+    }
+    fn name(&self) -> &'static str {
+        self.0.name()
+    }
+    fn get(&self, key: &store::EntryKey) -> Option<store::Bytes> {
+        self.0.get(key)
+    }
+    fn put(&self, key: &store::EntryKey, bytes: &[u8]) {
+        self.0.put(key, bytes);
+    }
+    fn get_content(&self, reference: store::Reference) -> Option<store::Bytes> {
+        self.0.get_content(reference)
+    }
+    fn put_content(&self, domain: store::Domain, bytes: &[u8]) -> Option<store::Reference> {
+        // Exactly DirStore's one physical put: no retry or fallback provider.
+        match self.0.local_product_store()?.put(domain, bytes) {
+            Ok(reference) => Some(reference),
+            Err(error) => {
+                eprintln!(
+                    "directory publication refused: domain={domain:?} bytes={} error={error:?}",
+                    bytes.len()
+                );
+                None
+            }
+        }
+    }
+    fn lookup_product(&self, address: store::Address) -> Option<store::Association> {
+        self.0.lookup_product(address)
+    }
+    fn associate_product(
+        &self,
+        address: store::Address,
+        action: store::Action,
+        reference: store::Reference,
+    ) {
+        self.0.associate_product(address, action, reference);
+    }
+    fn put_query(
+        &self,
+        kind: QueryKind,
+        key: &store::EntryKey,
+        action: store::Action,
+        bytes: &[u8],
+    ) {
+        self.0.put_query(kind, key, action, bytes);
+    }
+}
+
 // The platform is explicit fixture input. Production frozen-tool/foreign
 // admission remains a separate owner; this tests native query composition.
 struct Platform {
-    store: Arc<store::DirStore>,
+    store: Arc<DiagnosedStore>,
     tools: native::Toolchain,
     target: native::TargetSpec,
     backend: native::Backend,
@@ -114,7 +174,9 @@ fn immutable_native_compilation_links_both_backends_and_reopens_body_free_hits_a
 }
 fn run(jobs: usize) {
     let directory = tempfile::tempdir().unwrap();
-    let store = Arc::new(store::DirStore::new(directory.path().join("products")));
+    let store = Arc::new(DiagnosedStore(store::DirStore::new(
+        directory.path().join("products"),
+    )));
     let target = native::TargetSpec::x86_64_unknown_linux_gnu();
     let tools =
         native::Toolchain::in_tree_diagnostic(&directory.path().join("runtime"), &[&target])
@@ -324,7 +386,7 @@ fn run(jobs: usize) {
         let request = runtime.request(&[compilation.query_id()]);
         let selected = runtime.wait(request).unwrap_or_else(|error| {
             panic!(
-                "{}",
+                "jobs={jobs} literal={literal} fresh={fresh}: {}",
                 String::from_utf8_lossy(&store.get_content(error).unwrap())
             )
         })[0];
