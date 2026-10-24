@@ -32,6 +32,11 @@ pub enum CompileResult {
         checked: CheckOutput,
         reach: Option<(DefPath, Option<UnsafeReach>)>,
     },
+    CheckedProducts {
+        checked: CheckOutput,
+        products: Arc<hirsel_engine::CheckedProducts>,
+    },
+    RecomputeCounts(Vec<(DefPath, hirsel_engine::QueryKind, u64)>),
     Tir(Arc<TirExecution>),
     Native(Arc<NativeExecution>),
 }
@@ -58,6 +63,13 @@ pub struct TirExecution {
     pub signature: SignatureRef,
     pub sources: SourceMap,
     pub runtime: Arc<hirsel_interp::aggregate::RuntimeTypes>,
+    pub checked_runtime: Arc<hirsel_interp::checked::CheckedRuntime>,
+    pub code: hirsel_run_schema::CodeReach,
+    pub callees: std::collections::BTreeMap<String, hirsel_run_schema::CalleeFacts>,
+    pub entries: std::collections::BTreeMap<
+        String,
+        (hirsel_run_schema::CalleeFacts, hirsel_run_schema::CallForm),
+    >,
     pub revision: hirsel_run_schema::ProgramRevision,
     pub foreign_unreplayable: bool,
     pub(crate) products: Arc<dyn TirProducts>,
@@ -104,6 +116,9 @@ pub struct NativeExecution {
     pub sources: SourceMap,
     pub revision: hirsel_run_schema::ProgramRevision,
     pub request: NativeRequest,
+    pub types: Arc<hirsel_types::TypeInterner>,
+    pub code: hirsel_run_schema::CodeReach,
+    pub callees: std::collections::BTreeMap<String, hirsel_run_schema::CalleeFacts>,
     pub toolchain: Arc<crate::native::Toolchain>,
     pub run: Option<Arc<hirsel_run_config::ValidatedRun>>,
     pub foreign_unreplayable: bool,
@@ -120,6 +135,7 @@ impl NativeExecution {
 /// is installed by the selector; hosts receive this only inside SelectedRequest.
 pub struct CompilerReadiness {
     pub(crate) materialize: Arc<Materialize>,
+    pub(crate) failure: Arc<dyn Fn(hirsel_engine::store::Reference) -> ToolError + Send + Sync>,
 }
 pub(crate) type Materialize = dyn Fn(&[hirsel_engine::runtime::ProductRef]) -> Result<Arc<CompileOutput>, ToolError>
     + Send
@@ -128,6 +144,9 @@ pub(crate) type Materialize = dyn Fn(&[hirsel_engine::runtime::ProductRef]) -> R
 impl hirsel_engine::requests::OutputReadiness for CompilerReadiness {
     type Output = Arc<CompileOutput>;
     type Error = ToolError;
+    fn failed(&mut self, failure: hirsel_engine::store::Reference) -> Option<Self::Error> {
+        Some((self.failure)(failure))
+    }
     fn ready(
         &mut self,
         products: &[hirsel_engine::runtime::ProductRef],
