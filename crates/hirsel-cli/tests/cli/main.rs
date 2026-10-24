@@ -503,7 +503,11 @@ fn simulation_input_errors_are_tool_errors() {
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(3));
-    assert!(String::from_utf8_lossy(&output.stderr).contains("expected string values"));
+    // 4e992dc7 accepts text or byte arrays and identifies the invalid file field.
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("files.a: expected text or an array of bytes")
+    );
     for path in [source, config] {
         std::fs::remove_file(path).unwrap();
     }
