@@ -31,6 +31,10 @@ pub(crate) trait Observer {
     #[inline(always)]
     fn call_entered(&mut self, _task: u64, _caller: &Frame, _callee: &Frame) {}
     #[inline(always)]
+    fn builtin_entered(&mut self, _task: u64, _frame: &Frame) {}
+    #[inline(always)]
+    fn builtin_returned(&mut self, _task: u64, _frame: &Frame, _value: &Value) {}
+    #[inline(always)]
     fn drop_place(
         &mut self,
         _task: u64,
@@ -82,6 +86,13 @@ impl std::fmt::Display for TraceError {
     }
 }
 impl std::error::Error for TraceError {}
+
+/// Semantic binding and diagnostic bound supplied by an admitted consumer.
+#[derive(Clone, Copy, Debug)]
+pub struct ResourceBinding {
+    pub program: [u8; 32],
+    pub event_limit: usize,
+}
 
 pub struct ResourceRequest<'a> {
     pub configuration: &'a RunConfiguration,

@@ -571,6 +571,23 @@ impl Observer for Resources {
         }
         self.frames.push(state);
     }
+    fn builtin_entered(&mut self, _task: u64, _frame: &Frame) {
+        if self.error.is_some() {
+            return;
+        }
+        let Some(call) = self.call.take() else {
+            self.unsupported("builtin entered without its actual source call");
+            return;
+        };
+        if !call.arguments.is_empty() {
+            self.unsupported("builtin resource transport");
+        }
+    }
+    fn builtin_returned(&mut self, _task: u64, _frame: &Frame, value: &Value) {
+        if crate::checked::resources_in(value) != 0 {
+            self.unsupported("builtin returned resources without an observed transport");
+        }
+    }
     fn after_step(&mut self, _task: u64, frame: &Frame, success: bool) {
         if self.error.is_some() {
             return;

@@ -1297,6 +1297,7 @@ pub(crate) async fn execute_frames<O: crate::ownership_trace::Observer>(
                                     .unwrap_or_default()
                                     .for_value(&value);
                                 frame.assign_shadow(destination, value, shadow)?;
+                                observer.builtin_returned(task, frame, frame.observe(destination)?);
                                 frame.goto(next);
                             }
                         }
@@ -2741,6 +2742,7 @@ pub(crate) async fn execute_frames<O: crate::ownership_trace::Observer>(
                             None
                         };
                         if let Some(mut result) = result {
+                            observer.builtin_entered(task, frame);
                             if frame.check.is_none()
                                 && !budgets.run.metered()
                                 && target
@@ -2758,6 +2760,13 @@ pub(crate) async fn execute_frames<O: crate::ownership_trace::Observer>(
                                     returns,
                                 )?
                             {
+                                if let Some(returns) = returns {
+                                    observer.builtin_returned(
+                                        task,
+                                        frame,
+                                        frame.observe(returns.destination)?,
+                                    );
+                                }
                                 continue;
                             }
                             // MODE-2: a native operation's parameter declared
