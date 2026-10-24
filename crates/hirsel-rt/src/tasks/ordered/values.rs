@@ -1903,6 +1903,78 @@ mod tests {
     }
 
     #[test]
+    fn linked_sequential_packed_values_reject_trailing_payload_bytes() {
+        use hirsel_layout::layout::{LayoutBuilder, Owners};
+        use hirsel_lir::layout_types::{LayoutKind, TargetSpec};
+        use hirsel_types::{BuiltinType, GenericArgument, Primitive, testing::Types};
+        for target in TargetSpec::executed() {
+            let mut types = Types::default();
+            let number = types.p(Primitive::U64);
+            let option = types.variant(&[&[], &[number]]);
+            let packed = types.builtin(BuiltinType::Packed, vec![GenericArgument::Type(option)]);
+            let list = types.list(packed);
+            let owners = Owners::default();
+            let mut builder = LayoutBuilder::new(&target, &owners);
+            let root = builder.layout(&types.store, list).unwrap();
+            let table = builder.finish();
+            let LayoutKind::Block { payload } = table.layouts[root.0 as usize].kind else {
+                panic!("list")
+            };
+            let LayoutKind::Sequential { element } = table.layouts[payload.0 as usize].kind else {
+                panic!("sequential")
+            };
+            let packed = &table.layouts[element.0 as usize];
+            let value_offset = packed.tag.as_ref().unwrap().variants[1].fields[0].offset as usize;
+            let align = packed.align as usize;
+            let absent = (4 + align - 1) & !(align - 1);
+            let present = (value_offset + 8 + align - 1) & !(align - 1);
+            let used = absent + present;
+            let (_words, layouts) = native_layouts(&table, 0);
+            let pointers: Vec<_> = [
+                vec![&layouts[0] as *const crate::Layout; 2],
+                layouts.iter().map(|r| r as *const crate::Layout).collect(),
+            ]
+            .concat();
+            let program = unsafe {
+                Program::from_layouts(root.0 + 2, pointers.len() as u32, |id| {
+                    pointers[id as usize]
+                })
+            }
+            .unwrap();
+            let mut heap = crate::alloc::Heap::new(pointers.into_boxed_slice(), false, 0);
+            let mut view = crate::alloc::View::new();
+            unsafe {
+                heap.bind(&mut view);
+                let (block, _) = heap.allocate(payload.0 + 2, (16 + used + 64) as u64, 8);
+                let at = block.add(1).cast::<u8>();
+                at.cast::<u64>().write(2);
+                at.add(8).cast::<u64>().write(used as u64);
+                at.add(16).cast::<u32>().write(0);
+                at.add(16 + absent).cast::<u32>().write(1);
+                at.add(16 + absent + value_offset).cast::<u64>().write(42);
+                let expected = [
+                    &2u64.to_le_bytes()[..],
+                    &0u32.to_le_bytes(),
+                    &1u32.to_le_bytes(),
+                    &42u64.to_le_bytes(),
+                ]
+                .concat();
+                assert_eq!(
+                    program.encode((&block as *const *mut crate::Header).cast(), |_, _| None),
+                    Ok(expected)
+                );
+                // The two active values still fit, but one trailing byte is invalid.
+                at.add(8).cast::<u64>().write((used + 1) as u64);
+                assert_eq!(
+                    program.encode((&block as *const *mut crate::Header).cast(), |_, _| None),
+                    Err(Error::Value)
+                );
+                heap.free(block);
+            }
+        }
+    }
+
+    #[test]
     fn linked_sequential_packed_values_read_only_active_arms_and_used_bytes() {
         use hirsel_layout::layout::{LayoutBuilder, Owners};
         use hirsel_lir::layout_types::{LayoutKind, TargetSpec};

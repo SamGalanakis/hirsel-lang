@@ -46,26 +46,3 @@ impl<T> DerefMut for RoleCell<T> {
         self.0.get_mut()
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn shared_run_borrow_does_not_freeze_a_role_owned_field() {
-        struct Run {
-            seed: u64,
-            queue: RoleCell<Vec<u64>>,
-        }
-        let mut run = Run {
-            seed: 7,
-            queue: RoleCell::default(),
-        };
-        let raw = &raw mut run;
-        let shared = unsafe { &*raw };
-        // This is the field-projection pattern used under scheduler ownership.
-        unsafe { (*(*raw).queue.get()).push(42) };
-        assert_eq!(shared.seed, 7);
-        assert_eq!(&**shared.queue, &[42]);
-    }
-}

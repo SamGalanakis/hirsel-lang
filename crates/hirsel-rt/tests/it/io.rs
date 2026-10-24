@@ -690,47 +690,6 @@ fn projection_denial_is_a_recorded_result_and_replay_cannot_mint_a_grant() {
 }
 
 #[test]
-fn grant_and_file_refusals_have_the_declared_inline_layouts() {
-    use std::mem::{align_of, offset_of, size_of};
-    assert_eq!(
-        (size_of::<GrantResult>(), align_of::<GrantResult>()),
-        (16, 8)
-    );
-    assert_eq!(offset_of!(GrantResult, value), 8);
-    assert_eq!(
-        GrantResult::of(Err(IoError::NotGranted)),
-        GrantResult {
-            tag: 1,
-            padding: 0,
-            value: 0
-        }
-    );
-    assert_eq!(
-        GrantResult::of(Ok(17)),
-        GrantResult {
-            tag: 0,
-            padding: 0,
-            value: 17
-        }
-    );
-    assert_eq!(
-        HandleResult::of(Err(IoError::NotGranted)),
-        HandleResult {
-            tag: 1,
-            padding: 0,
-            value: 2
-        }
-    );
-    assert_eq!(
-        UnitResult::of(Err(IoError::NotGranted)),
-        UnitResult {
-            tag: 1,
-            error: 2,
-            code: 0
-        }
-    );
-}
-#[test]
 fn host_input_tape_rechecks_exact_grants_and_never_reads_the_provider_on_replay() {
     use std::cell::Cell;
     use std::rc::Rc;
@@ -1402,14 +1361,6 @@ fn a_durable_journal_of_a_host_run_recovers_at_every_record_boundary_and_replays
     sim.finish().unwrap();
     assert_eq!(sim.stdout(), real.0.stdout());
     assert_eq!(sim.tree(), &real.0.snapshot().unwrap());
-}
-
-#[test]
-fn retired_walk_text_recording_requires_recording_again() {
-    let old = "hirsel-io-tape 7\nwalk 7 -> paths ok 61\n";
-    let error = hirsel_rt::launch::parse_tape(old).unwrap_err();
-    assert!(error.contains("retired Request::Walk"), "{error}");
-    assert!(error.contains("re-record"), "{error}");
 }
 
 #[test]

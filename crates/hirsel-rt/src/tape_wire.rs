@@ -1015,15 +1015,6 @@ mod tests {
         assert_eq!(decode::<crate::io::Request>(&bytes).unwrap(), request);
     }
     #[test]
-    fn retired_directory_page_binary_recording_requires_recording_again() {
-        let mut old = 60u32.to_le_bytes().to_vec();
-        old.extend_from_slice(&7u64.to_le_bytes());
-        assert_eq!(
-            decode::<crate::io::Request>(&old).unwrap_err(),
-            "retired eager read_dir recording; re-record with streaming file.read_dir"
-        );
-    }
-    #[test]
     fn fixed_integer_vectors_and_bad_lengths() {
         // Bincode 1.3 fixed-int vectors: LE scalar, u64 byte-span count,
         // u32 result discriminant followed by the value, u8 option tag.

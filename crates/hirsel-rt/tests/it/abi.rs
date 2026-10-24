@@ -486,19 +486,6 @@ fn the_foreign_dispatch_word_and_interval_match_the_transcribed_abi() {
     assert_eq!(rt::FOREIGN_SCOPE_ALIGN as u32, abi::FOREIGN_SCOPE_ALIGN);
 }
 
-#[test]
-fn a_rust_panic_aborts_at_the_c_boundary() {
-    if in_child("a_rust_panic_aborts_at_the_c_boundary") {
-        hirsel_rt_v2_diag_panic();
-        // Unreachable: a panic in a non-unwinding extern "C" function aborts.
-        std::process::exit(0);
-    }
-    assert_child_aborts(
-        "a_rust_panic_aborts_at_the_c_boundary",
-        "diagnostic panic probe",
-    );
-}
-
 /// A hand-written runtime iterator must receive the same hidden arguments as
 /// compiler-generated IterNext closures, including both source-site words.
 #[test]

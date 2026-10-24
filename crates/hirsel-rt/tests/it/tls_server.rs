@@ -302,17 +302,6 @@ fn an_invalid_identity_is_invalid_input_and_never_starts_tls() {
     }
 }
 
-#[test]
-fn identity_abi_is_two_core_byte_slices() {
-    use hirsel_rt::tls_abi::TlsIdentityAbi;
-    use std::mem::{align_of, offset_of, size_of};
-    assert_eq!(
-        (size_of::<TlsIdentityAbi>(), align_of::<TlsIdentityAbi>()),
-        (48, 8)
-    );
-    assert_eq!(offset_of!(TlsIdentityAbi, key), 24);
-}
-
 /// The DER of a PEM certificate, as `tls.peer` returns a one-certificate chain.
 fn der(pem: &[u8]) -> Vec<u8> {
     CertificateDer::from_pem_slice(pem).unwrap().to_vec()

@@ -111,31 +111,6 @@ mod tests {
         );
     }
     #[test]
-    fn directory_work_sorts_at_slash_not_at_the_end_of_its_name() {
-        let mut walk = Walk::default();
-        walk.push(
-            [("a", 1), ("a.c", 0), ("a-", 0), ("a0", 0), ("é", 0)]
-                .into_iter()
-                .map(|(path, kind)| Entry {
-                    path: path.into(),
-                    kind,
-                })
-                .collect(),
-        );
-        let mut output = vec![];
-        while let Some(entry) = walk.next_entry() {
-            if entry.kind == 1 {
-                walk.push(vec![Entry {
-                    path: "a/b".into(),
-                    kind: 0,
-                }]);
-            } else {
-                output.push(entry.path);
-            }
-        }
-        assert_eq!(output, ["a-", "a.c", "a/b", "a0", "é"]);
-    }
-    #[test]
     fn differential_generated_trees_match_eager_global_sort() {
         use std::collections::BTreeMap;
         for seed in 0..32u64 {

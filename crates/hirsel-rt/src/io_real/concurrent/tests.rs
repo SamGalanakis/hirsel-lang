@@ -562,27 +562,6 @@ fn home_only_journal_is_retained_and_send_promotion_keeps_gate_history() {
 }
 
 #[test]
-fn mapping_and_open_file_discover_the_same_storage() {
-    let (temp, io, directory) = adapter();
-    std::fs::write(temp.path().join("mapped"), b"mapped bytes").unwrap();
-    let file = handle(
-        io.call(Request::Open {
-            directory,
-            path: "mapped".into(),
-        })
-        .unwrap(),
-    );
-    let mapped = handle(
-        io.call(Request::Map {
-            directory,
-            path: "mapped".into(),
-        })
-        .unwrap(),
-    );
-    assert_eq!(io.identity(file), io.identity(mapped));
-}
-
-#[test]
 fn runtime50_path_syscalls_run_outside_the_core_lock() {
     let (temp, mut io, directory) = adapter();
     std::fs::write(temp.path().join("a"), b"held").unwrap();

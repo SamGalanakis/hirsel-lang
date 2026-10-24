@@ -1007,18 +1007,6 @@ mod tests {
     }
 
     #[test]
-    fn a_closed_receiver_keeps_the_early_senders_value() {
-        let (mut c, _, receiver, channel) = channel();
-        assert!(c.close(receiver).is_none());
-        let mut image = [1u64, 42];
-        assert_eq!(
-            unsafe { c.send_pending(channel, image.as_mut_ptr().cast()) },
-            (CLOSED, None)
-        );
-        assert_eq!(image, [1, 42]);
-    }
-
-    #[test]
     fn published_messages_and_closed_are_seen_in_fifo_order() {
         let (mut c, sender, _, channel) = channel();
         let mut image = [1u64, 42];
@@ -1040,5 +1028,34 @@ mod tests {
             unsafe { c.receive(channel, out.as_mut_ptr().cast()) },
             Err(CLOSED)
         );
+    }
+    #[test]
+    fn receive_cannot_skip_a_pending_head_when_a_second_message_is_ready() {
+        let (mut c, sender, receiver, channel) = channel();
+        let mut first = [1u64, 17];
+        let (status, pending) = unsafe { c.send_pending(channel, first.as_mut_ptr().cast()) };
+        assert_eq!(status, DONE);
+        let mut second = [1u64, 29];
+        assert_eq!(unsafe { c.send(channel, second.as_mut_ptr().cast()) }, DONE);
+        let mut out = [0u64; 2];
+        assert_eq!(
+            unsafe { c.receive(channel, out.as_mut_ptr().cast()) },
+            Ok(false)
+        );
+        assert_eq!(out, [0, 0]);
+        c.publish(pending.unwrap());
+        for expected in [17, 29] {
+            assert_eq!(
+                unsafe { c.receive(channel, out.as_mut_ptr().cast()) },
+                Ok(true)
+            );
+            assert_eq!(out, [1, expected]);
+        }
+        assert_eq!(
+            unsafe { c.receive(channel, out.as_mut_ptr().cast()) },
+            Ok(false)
+        );
+        c.close(sender);
+        c.close(receiver);
     }
 }

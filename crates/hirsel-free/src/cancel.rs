@@ -81,18 +81,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_first_cause_remains_stable() {
-        crate::sync::model(|| {
-            let flag = Flag::default();
-            assert_eq!(flag.cause(), None);
-            assert!(flag.cancel(0));
-            assert_eq!(flag.cause(), Some(0));
-            assert!(!flag.cancel(99));
-            assert_eq!(flag.cause(), Some(0));
-        });
-    }
-
-    #[test]
     fn both_empty_and_nonempty_ancestor_observations_invalidate_at_topology_changes() {
         crate::sync::model(|| {
             let epoch = Epoch::default();

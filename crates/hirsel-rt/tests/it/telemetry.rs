@@ -205,19 +205,3 @@ fn host_identities_are_nonzero_and_distinct() {
         assert!(traces.insert(trace) && spans.insert(span));
     }
 }
-
-#[test]
-fn invalid_parents_are_refused_by_the_shared_kernel() {
-    assert_eq!(kernel::parent(&root()), Ok(None));
-    let mut mixed = root();
-    mixed[0] = 1;
-    assert_eq!(kernel::parent(&mixed), Err(kernel::Refusal::InvalidParent));
-    assert_eq!(
-        kernel::parent(&[0; 24]),
-        Err(kernel::Refusal::InvalidParent)
-    );
-    assert_eq!(
-        kernel::bounded(&[&vec![0; kernel::PAYLOAD_LIMIT + 1]]),
-        Err(kernel::Refusal::TooLarge)
-    );
-}

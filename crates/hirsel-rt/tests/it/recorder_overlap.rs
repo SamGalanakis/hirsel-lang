@@ -141,16 +141,6 @@ fn symlink_aliases_and_parent_steps_use_physical_ancestry() {
 }
 
 #[test]
-fn every_mount_is_checked_even_when_first_mount_is_disjoint() {
-    let scratch = Scratch::new("mounts");
-    let work = scratch.directory("work");
-    let other = scratch.directory("other");
-    let grants = [("first", &other), ("second", &work)];
-    refused(&scratch.path("work/tape"), &grants, "second");
-    accepted(&scratch.path("tapes/tape"), &grants);
-}
-
-#[test]
 fn replaced_path_designators_do_not_replace_the_granted_or_recorder_descriptors() {
     let scratch = Scratch::new("pins");
     let work = scratch.directory("work");

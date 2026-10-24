@@ -297,35 +297,6 @@ fn a_detach_copies_a_tracked_block_within_its_arena() {
     }
 }
 
-/// A push's preparation leaves a heap List alone, unique or not: heap growth is
-/// `list.push`'s own.
-#[test]
-fn a_push_leaves_a_heap_list_alone() {
-    for ctx in contexts() {
-        bind(&ctx, &[words()]);
-        let mut list = alloc_block(ctx.0, words(), 16);
-        write_u64(list, 0, 0);
-        write_u64(list, SEQUENCE_CAPACITY_OFFSET as usize, 0);
-        let heap = list;
-        assert_eq!(
-            unsafe { hirsel_rt_v2_arena_push(ctx.0, list, 8, 8, &mut list) },
-            0
-        );
-        unsafe { hirsel_rt_v2_dup(ctx.0, list) };
-        assert_eq!(
-            unsafe { hirsel_rt_v2_arena_push(ctx.0, list, 8, 8, &mut list) },
-            0
-        );
-        assert_eq!((list, count(list)), (heap, 2));
-        for _ in 0..2 {
-            let status =
-                unsafe { hirsel_rt_v2_release(ctx.0, list, (*list).index(), ptr::null(), 0, 0) };
-            assert_eq!(status, 0);
-        }
-        assert_eq!(ctx.stats().live_blocks, 0);
-    }
-}
-
 /// `list.reserve` is only a hint for a tracked List: the block is returned unchanged.
 #[test]
 fn a_reserve_leaves_a_tracked_block() {

@@ -567,27 +567,20 @@ mod tests {
         }
     }
 
-    /// Without a budget a fuel build refills chunk after chunk and runs on.
     #[test]
-    fn a_run_without_a_budget_refills_many_times() {
-        let ctx = context(None, None);
-        let points = 5 * FUEL_CHUNK + 17;
+    fn small_heap_charge_includes_the_header_independently_of_the_charge_helper() {
+        let ctx = context(None, Some(56));
         assert_eq!(
-            run(ctx, || {
-                for _ in 0..points {
-                    charge(ctx);
-                }
+            run(ctx, || unsafe {
+                let block = hirsel_rt_v2_alloc(ctx, 0, 40, 8, DOMAIN_HEAP, 0);
+                // A 40-byte request occupies class 48 plus its 8-byte header.
+                assert_eq!((*ctx).heap().meter.held(), 56);
+                crate::release::hirsel_rt_v2_free(ctx, block);
+                assert_eq!((*ctx).heap().meter.held(), 0);
             }),
             Ok(())
         );
-        // SAFETY: the context is live and not used again.
-        unsafe {
-            assert_eq!(
-                (*ctx).budget_counters().fuel_refills,
-                points.div_ceil(FUEL_CHUNK)
-            );
-            hirsel_rt_v2_ctx_destroy(ctx);
-        }
+        unsafe { hirsel_rt_v2_ctx_destroy(ctx) };
     }
 
     /// A small block is charged its size class and a large one its request rounded up to

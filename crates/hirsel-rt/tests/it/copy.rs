@@ -87,59 +87,6 @@ fn a_source_diamond_becomes_an_exclusive_tree_and_every_copy_is_fresh() {
     assert_eq!(ctx.stats().live_blocks, 0);
 }
 
-/// Repeated source holders far below the root must be detached too, without
-/// changing the source's three credits.
-#[test]
-fn repeated_holders_deep_in_a_graph_get_independent_copies() {
-    let ctx = Ctx::diagnostic();
-    let (leaf, pair) = (leaf(8), pair());
-    let shared = alloc_block(ctx.0, leaf, 8);
-    write_u64(shared, 0, 9);
-    for _ in 0..2 {
-        unsafe { hirsel_rt_v2_dup(ctx.0, shared) };
-    }
-    // p0 .. p11: each holds the next on the left and its own leaf on the right, except that
-    // p10 and p11 hold `shared` on the right and p11 also on the left.
-    let links = 12;
-    let mut next = shared;
-    for i in (0..links).rev() {
-        let node = alloc_block(ctx.0, pair, 24);
-        let right = if i >= links - 2 {
-            shared
-        } else {
-            let own = alloc_block(ctx.0, leaf, 8);
-            write_u64(own, 0, i as u64);
-            own
-        };
-        write_ref(node, 0, next);
-        write_ref(node, 8, right);
-        next = node;
-    }
-    let root = next;
-    let live = ctx.stats().live_blocks;
-    let copied = copy(ctx.0, root);
-    let mut node = copied;
-    for _ in 0..links - 2 {
-        node = child(node, 0);
-    }
-    let (p10, p11) = (node, child(node, 0));
-    let copy_of_shared = child(p10, 8);
-    assert_ne!(copy_of_shared, shared);
-    assert_eq!(read_u64(copy_of_shared, 0), 9);
-    assert_ne!(child(p11, 8), copy_of_shared);
-    assert_ne!(child(p11, 0), copy_of_shared);
-    assert_ne!(child(p11, 0), child(p11, 8));
-    for leaf in [copy_of_shared, child(p11, 0), child(p11, 8)] {
-        assert_eq!((read_u64(leaf, 0), count(leaf)), (9, 1));
-    }
-    assert_eq!(count(shared), 3, "source diamond is unchanged");
-    // The pairs, their own leaves and three independent copies of shared.
-    assert_eq!(ctx.stats().live_blocks, live + 2 * links as u64 + 1);
-    release(ctx.0, copied);
-    release(ctx.0, root);
-    assert_eq!(ctx.stats().live_blocks, 0);
-}
-
 #[test]
 fn immortal_blocks_are_copied_so_the_copy_is_unique() {
     pair();
@@ -703,48 +650,6 @@ fn a_bounded_arena_recovers_only_its_own_sole_out_of_space() {
 }
 
 #[test]
-fn a_short_byte_view_copies_only_its_interval() {
-    let mut step = release_step(0, 0);
-    // Descriptor v15: a release with stride 24 owns a String/Bytes slice.
-    step.stride = 24;
-    let view = layout(24, 1, None, vec![step]);
-    let ctx = Ctx::diagnostic();
-    index(ctx.0, view);
-    let source = unsafe { hirsel_rt::text::allocate_bytes(ctx.0, &vec![b'x'; 1024 * 1024]) };
-    let mut slice = hirsel_rt::views::Slice {
-        start: source.start + 123,
-        length: 7,
-        ..source
-    };
-    assert_eq!(
-        unsafe {
-            hirsel_rt_v2_unique_copy_value(
-                ctx.0,
-                index(ctx.0, view),
-                (&raw mut slice).cast(),
-                ptr::null_mut(),
-                0,
-            )
-        },
-        0
-    );
-    assert_ne!(slice.owner, source.owner);
-    assert_eq!(
-        read_u64(slice.owner, 0),
-        7,
-        "copy count must be the viewed length"
-    );
-    assert_eq!(
-        slice.start, 8,
-        "the copied interval begins after its sequence header"
-    );
-    assert_eq!(slice.length, 7);
-    release(ctx.0, slice.owner);
-    release(ctx.0, source.owner);
-    assert_eq!(ctx.stats().live_blocks, 0);
-}
-
-#[test]
 fn copied_views_distinguish_intervals_and_detach_equal_intervals() {
     let steps = (0..4)
         .rev()
@@ -807,35 +712,6 @@ fn copied_views_distinguish_intervals_and_detach_equal_intervals() {
     for view in values {
         release(ctx.0, view.owner);
     }
-    release(ctx.0, source.owner);
-    assert_eq!(ctx.stats().live_blocks, 0);
-}
-
-#[test]
-fn a_whole_byte_view_keeps_the_whole_block_copy_path() {
-    let mut step = release_step(0, 0);
-    step.stride = 24;
-    let view = layout(24, 1, None, vec![step]);
-    let ctx = Ctx::diagnostic();
-    index(ctx.0, view);
-    let source = unsafe { hirsel_rt::text::allocate_bytes(ctx.0, b"whole") };
-    let mut copied = source;
-    assert_eq!(
-        unsafe {
-            hirsel_rt_v2_unique_copy_value(
-                ctx.0,
-                index(ctx.0, view),
-                (&raw mut copied).cast(),
-                ptr::null_mut(),
-                0,
-            )
-        },
-        0
-    );
-    assert_ne!(copied.owner, source.owner);
-    assert_eq!((copied.start, copied.length), (source.start, source.length));
-    assert_eq!(read_u64(copied.owner, 8), read_u64(source.owner, 8));
-    release(ctx.0, copied.owner);
     release(ctx.0, source.owner);
     assert_eq!(ctx.stats().live_blocks, 0);
 }

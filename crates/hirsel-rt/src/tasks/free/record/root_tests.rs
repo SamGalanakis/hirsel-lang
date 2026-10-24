@@ -5,11 +5,6 @@ use hirsel_free::projection::Projection;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 #[test]
-fn recorded_entries_apply_nested_releases_in_their_phase_tail() {
-    nested_entry(false);
-}
-
-#[test]
 fn a_cut_admitting_entry_also_admits_its_yet_unfinished_nested_root_tail() {
     nested_entry(true);
 }

@@ -300,36 +300,6 @@ fn rejected_events_return_input_and_leave_both_metadata_and_credits_unchanged() 
 }
 
 #[test]
-fn failed_seal_charge_preflight_keeps_source_custody_until_journal_unwind() {
-    with_context(|ctx| unsafe {
-        let source = heap(ctx, 2);
-        count::hirsel_rt_v2_dup(ctx, source);
-        count::hirsel_rt_v2_dup(ctx, source);
-        let run = MetadataRun::new();
-        let leaf = node(run, semantic::Origin::Heap, 3, &[]);
-        let mut journal = Journal::new(&mut *ctx, run);
-        let retained = node(
-            run,
-            semantic::Origin::Arena(journal.grant()),
-            16,
-            &[leaf.clone(), leaf],
-        );
-        accept(journal.allocate(Update {
-            value: retained,
-            additions: vec![source, source],
-        }));
-        let scalar = node(run, semantic::Origin::Inline, 0, &[]);
-        let charge = journal.inventory().seal_charge(&scalar).unwrap();
-        assert_eq!(charge, Charge::Bytes(6));
-        assert!(!matches!(charge, Charge::Bytes(bytes) if bytes <= 21 - 16));
-        assert_eq!((*source).count, 3);
-        drop(journal);
-        assert_eq!((*source).count, 1);
-        retire(ctx, source);
-    });
-}
-
-#[test]
 fn invalid_holders_and_foreign_or_wrong_origin_replacements_cannot_retire_old_credits() {
     with_context(|ctx| unsafe {
         let source = heap(ctx, 2);

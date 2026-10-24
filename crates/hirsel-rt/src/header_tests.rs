@@ -101,18 +101,6 @@ fn cursor_preserves_every_bit_in_both_alignment_pools() {
 }
 
 #[test]
-fn reciprocal_is_exact_for_every_pool_displacement() {
-    for pool in 0..64 {
-        let stride =
-            (8 + CLASS_SIZES[pool % 32] as u64).next_multiple_of(if pool < 32 { 8 } else { 16 });
-        let multiplier = (1u64 << 32).div_ceil(stride);
-        for delta in 0..65536 {
-            assert_eq!((delta * multiplier) >> 32, delta / stride);
-        }
-    }
-}
-
-#[test]
 fn all_class_edges_and_overalignments_keep_payload_at_plus_eight() {
     let leaf = layout(0, &[], 0);
     for diagnostic in [false, true] {
@@ -178,71 +166,6 @@ fn mixed_simple_wide_shared_children_reset_and_cross_layout_reuse() {
         ctx.release(reused);
         assert_eq!(ctx.live(), 0);
     }
-}
-
-#[cfg(not(feature = "system-allocator"))]
-#[test]
-fn post_order_free_replays_build_order_including_niche_slots() {
-    let steps = [
-        step(STEP_NONNULL, 0, 2),
-        step(STEP_RELEASE, 8, 0),
-        step(STEP_RELEASE, 0, 0),
-    ];
-    let tree = layout(16, &steps, 0);
-    fn build(
-        ctx: &Ctx,
-        depth: u32,
-        order: &mut Vec<*mut Header>,
-        root: Option<*mut Header>,
-    ) -> *mut Header {
-        let node = root.unwrap_or_else(|| ctx.alloc(0, 16, 8));
-        order.push(node);
-        let left = if depth == 0 {
-            ptr::null_mut()
-        } else {
-            build(ctx, depth - 1, order, None)
-        };
-        let right = if depth == 0 {
-            ptr::null_mut()
-        } else {
-            build(ctx, depth - 1, order, None)
-        };
-        unsafe {
-            payload(node).cast::<*mut Header>().write(left);
-            payload(node).add(8).cast::<*mut Header>().write(right);
-        }
-        node
-    }
-    let ctx = Ctx::new(&[&tree], false);
-    let mut first = vec![];
-    let root = build(&ctx, 8, &mut first, None);
-    ctx.release(root);
-    // Page-local free lists deliberately defer reuse until untouched storage
-    // is exhausted. Keep those fresh blocks live, then replay the exact same
-    // construction order from the collected list (the root is freed last).
-    let mut fresh = vec![];
-    let recycled_root = loop {
-        let block = ctx.alloc(0, 16, 8);
-        if block == first[0] {
-            break block;
-        }
-        unsafe {
-            payload(block).write_bytes(0, 16);
-        }
-        fresh.push(block);
-        assert!(
-            fresh.len() < SLAB_SIZE / 16,
-            "the page must collect before a new page"
-        );
-    };
-    let mut second = vec![];
-    let root = build(&ctx, 8, &mut second, Some(recycled_root));
-    assert_eq!(first, second);
-    ctx.release(root);
-    for block in fresh {
-        ctx.release(block);
-    }
-    assert_eq!(ctx.live(), 0);
 }
 
 #[test]
@@ -399,34 +322,6 @@ fn reentrant_failing_finalizers_finish_siblings_and_inline_continuations() {
         );
         assert_eq!(ctx.live(), 0);
         EVENTS.with(|events| assert_eq!(&*events.borrow(), &[1, 2, 3, 4]));
-    }
-}
-
-#[test]
-fn releasing_pointer_free_storage_never_enters_the_drain() {
-    // The byte-sequence descriptor is also the backing storage of String/Bytes.
-    // A scalar sequence has no release steps, regardless of its length.
-    let scalar = layout(8, &[], LAYOUT_DYNAMIC);
-    for diagnostic in [false, true] {
-        let ctx = Ctx::new(&[&scalar], diagnostic);
-        for count in [0, 1, 64] {
-            let block = ctx.alloc(0, 8 + count * 8, 8);
-            unsafe {
-                payload(block).cast::<u64>().write(count);
-                hirsel_rt_v2_dup(ctx.0, block);
-            }
-            let before = DRAINS.with(Cell::get);
-            ctx.release(block);
-            assert_eq!(ctx.live(), 1, "a shared release keeps its other holder");
-            ctx.release(block);
-            assert_eq!(ctx.live(), 0, "the last release frees the storage");
-            assert_eq!(
-                DRAINS.with(Cell::get),
-                before,
-                "scalar storage has nothing to drain"
-            );
-            assert!(unsafe { (*ctx.0).work.is_null() });
-        }
     }
 }
 

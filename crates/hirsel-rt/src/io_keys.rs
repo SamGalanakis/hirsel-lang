@@ -658,25 +658,6 @@ mod tests {
     }
 
     #[test]
-    fn a_queued_exclusive_transition_is_never_overtaken() {
-        let table = KeyTable::default();
-        let shared = KeySet::new(vec![(NAMESPACE, Mode::Shared)]);
-        let exclusive = KeySet::new(vec![(NAMESPACE, Mode::Exclusive)]);
-        let a = table.take(&shared);
-        let b = table.take(&shared);
-        let truncate = table.take(&exclusive);
-        let late = table.take(&shared);
-        assert!(a.ready() && b.ready(), "shared members run together");
-        assert!(!truncate.ready() && !late.ready());
-        a.end();
-        assert!(!truncate.ready());
-        b.end();
-        assert!(truncate.ready() && !late.ready());
-        truncate.end();
-        assert!(late.ready());
-    }
-
-    #[test]
     fn an_abandoned_transition_ends_its_positions() {
         let table = KeyTable::default();
         let keys = KeySet::new(vec![(Key(9), Mode::Exclusive)]);

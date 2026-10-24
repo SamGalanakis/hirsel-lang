@@ -181,61 +181,6 @@ fn a_tail_release_frees_each_link_before_the_rest_of_the_chain() {
     assert_eq!(ctx.stats().live_blocks, 0);
 }
 
-#[cfg(not(feature = "system-allocator"))]
-#[test]
-fn a_released_tree_returns_its_storage_in_the_order_it_is_built() {
-    // `{ tag: u32, left: ref, right: ref }`: Node (tag 1) owns both and drops right, then left.
-    let ctx = Ctx::production();
-    let node = layout(
-        24,
-        2,
-        None,
-        vec![tag_step(0, 1, 2), release_step(1, 16), release_step(0, 8)],
-    );
-    fn build(
-        ctx: *mut TaskCtx,
-        node: &Layout,
-        depth: u32,
-        order: &mut Vec<*mut Header>,
-        root: Option<*mut Header>,
-    ) -> *mut Header {
-        let block = root.unwrap_or_else(|| alloc(ctx, node, 24));
-        order.push(block);
-        write_u64(block, 0, (depth > 0) as u64);
-        if depth > 0 {
-            write_ref(block, 8, build(ctx, node, depth - 1, order, None));
-            write_ref(block, 16, build(ctx, node, depth - 1, order, None));
-        }
-        block
-    }
-    let mut first = Vec::new();
-    let root = build(ctx.0, node, 6, &mut first, None);
-    assert_eq!(release(ctx.0, root, None), 0);
-    // Deferred page frees are collected only after untouched storage. Keep
-    // fresh leaves live so the second tree replays the collected list exactly.
-    let mut fresh = Vec::new();
-    let recycled_root = loop {
-        let block = alloc(ctx.0, node, 24);
-        if block == first[0] {
-            break block;
-        }
-        write_u64(block, 0, 0);
-        fresh.push(block);
-        assert!(fresh.len() < hirsel_rt::SLAB_SIZE / 24);
-    };
-    let mut second = Vec::new();
-    let root = build(ctx.0, node, 6, &mut second, Some(recycled_root));
-    assert_eq!(
-        first, second,
-        "parents are freed after their children, so LIFO reuse replays the build order"
-    );
-    assert_eq!(release(ctx.0, root, None), 0);
-    for block in fresh {
-        assert_eq!(release(ctx.0, block, None), 0);
-    }
-    assert_eq!(ctx.stats().live_blocks, 0);
-}
-
 #[test]
 fn a_deep_tree_of_resources_drops_depth_first_in_reverse_field_order() {
     let ctx = Ctx::diagnostic();

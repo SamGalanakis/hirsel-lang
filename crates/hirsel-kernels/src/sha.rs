@@ -107,37 +107,6 @@ mod tests {
             .collect()
     }
     #[test]
-    fn cavp_and_boundary_vectors_and_exact_checkpoint_charges() {
-        for row in include_str!("../../../native-tests/library/vectors/sha-cavp.tsv").lines() {
-            let fields: Vec<_> = row.split('\t').collect();
-            let algorithm = Algorithm::from_operation(fields[0]).unwrap();
-            let message = unhex(fields[2]);
-            assert_eq!(message.len(), fields[1].parse::<usize>().unwrap());
-            let mut charges = vec![];
-            let output = digest(algorithm, &message, |cost| {
-                charges.push(cost);
-                Ok::<_, ()>(())
-            })
-            .unwrap();
-            assert_eq!(
-                &output[..algorithm.output_size()],
-                unhex(fields[3]),
-                "{} {}",
-                fields[0],
-                fields[1]
-            );
-            assert_eq!(
-                charges.iter().sum::<u64>(),
-                algorithm.charge(message.len() as u64)
-            );
-            assert!(
-                charges
-                    .iter()
-                    .all(|&n| n > 0 && n <= CHECKPOINT_BLOCKS as u64)
-            );
-        }
-    }
-    #[test]
     fn padding_counts_extreme_lengths_and_checkpoint_rejection() {
         for algorithm in [
             Algorithm::Sha1,

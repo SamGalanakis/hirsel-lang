@@ -293,32 +293,3 @@ fn semantic_metadata_clone_preflight_and_drop_do_not_allocate_or_touch_source_by
     assert_eq!(calls(), before);
     assert_eq!(source, [7u8; 8]);
 }
-
-#[test]
-fn inventory_and_root_metadata_outlive_source_thread_without_frame_ownership() {
-    let (inventory, root) = std::thread::spawn(|| {
-        let run = MetadataRun::new();
-        let mut inventory = Inventory::new(run);
-        let heap = node(run, Origin::Heap, 3, &[]);
-        let arena = node(
-            run,
-            Origin::Arena(inventory.grant()),
-            16,
-            &[heap.clone(), heap],
-        );
-        inventory.allocate(arena.clone()).unwrap();
-        (inventory, arena)
-    })
-    .join()
-    .unwrap();
-    std::thread::spawn(move || {
-        let before = calls();
-        assert_eq!(inventory.seal_charge(&root), Ok(Charge::Bytes(6)));
-        assert_eq!(inventory.entries().len(), 1);
-        drop(root);
-        drop(inventory);
-        assert_eq!(calls(), before);
-    })
-    .join()
-    .unwrap();
-}

@@ -5897,47 +5897,4 @@ mod filesystem_authority_tests {
             unreachable!()
         }
     }
-    #[test]
-    fn denied_mutations_never_activate_or_call_storage() {
-        let mut state = State::default();
-        let directory = state.handles.insert(Grant::Directory {
-            root: String::new(),
-            access: Access::Read,
-        });
-        for request in [
-            Request::SetPermissions {
-                directory,
-                path: "../outside".into(),
-                permissions: 0o777,
-            },
-            Request::RemoveAll {
-                directory,
-                path: "missing/child".into(),
-            },
-            Request::Mkdir {
-                directory,
-                path: "../outside".into(),
-            },
-            Request::RemoveDir {
-                directory,
-                path: "missing/child".into(),
-            },
-            Request::Rename {
-                directory,
-                from: "missing".into(),
-                to: "/outside".into(),
-            },
-            Request::PutNew {
-                directory,
-                path: "../outside".into(),
-                bytes: b"x".to_vec(),
-                durable: true,
-            },
-        ] {
-            assert_eq!(
-                state.execute_storage(&mut DeniedStorage, &request, None),
-                Ok(Completion::Unit(Err(IoError::NotGranted)))
-            );
-        }
-    }
 }

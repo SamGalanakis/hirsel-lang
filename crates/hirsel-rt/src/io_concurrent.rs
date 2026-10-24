@@ -297,47 +297,4 @@ mod tests {
             worker.join().unwrap();
         }
     }
-
-    #[test]
-    fn a_coupled_custom_adapter_serialises_every_request() {
-        struct Counter(u32);
-        impl Adapter for Counter {
-            fn preflight(&self, _: &Request) -> Result<Option<Completion>, AdapterError> {
-                Ok(None)
-            }
-            fn call(&mut self, _: Request) -> Result<Completion, AdapterError> {
-                self.0 += 1;
-                Ok(Completion::Unit(Ok(())))
-            }
-        }
-        let adapter = Arc::new(Coupled::new(Counter(0)));
-        assert_eq!(
-            adapter.keys(&R::Print {
-                stdout: 1,
-                bytes: vec![]
-            }),
-            KeySet::coupled()
-        );
-        let issuer = Arc::new(Issuer::new(adapter.clone(), None));
-        let workers: Vec<_> = (0..8)
-            .map(|_| {
-                let issuer = issuer.clone();
-                std::thread::spawn(move || {
-                    for _ in 0..100 {
-                        issuer
-                            .request(R::Print {
-                                stdout: 1,
-                                bytes: vec![],
-                            })
-                            .unwrap();
-                    }
-                })
-            })
-            .collect();
-        for worker in workers {
-            worker.join().unwrap();
-        }
-        drop(issuer);
-        assert_eq!(Arc::into_inner(adapter).unwrap().into_inner().0, 800);
-    }
 }

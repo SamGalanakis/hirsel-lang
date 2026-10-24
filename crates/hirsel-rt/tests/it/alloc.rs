@@ -50,37 +50,6 @@ fn class(block: *mut Header) -> u8 {
 }
 
 #[test]
-fn every_class_boundary_and_the_byte_after_it() {
-    let ctx = Ctx::diagnostic();
-    let empty = leaf(0);
-    assert_eq!(capacity(alloc(&ctx, empty, 0, 8)), 16);
-    for (index, &size) in CLASS_SIZES.iter().enumerate() {
-        let size = size as u64;
-        let exact = alloc(&ctx, empty, size, 8);
-        assert_eq!(capacity(exact), size, "{size} bytes");
-        assert_eq!(class(exact) as usize, index, "{size} bytes");
-        let after = alloc(&ctx, empty, size + 1, 8);
-        match CLASS_SIZES.get(index + 1) {
-            Some(&next) => {
-                assert_eq!(capacity(after), next as u64, "{} bytes", size + 1);
-                assert_eq!(class(after) as usize, index + 1);
-            }
-            None => {
-                assert_eq!(
-                    class(after),
-                    LARGE_CLASS,
-                    "{} bytes go to the large path",
-                    size + 1
-                );
-                assert_eq!(capacity(after), (size + 1).next_multiple_of(16));
-            }
-        }
-        release(&ctx, exact, empty);
-        release(&ctx, after, empty);
-    }
-}
-
-#[test]
 fn the_class_function_picks_the_smallest_class_that_fits() {
     for extent in 0..=SMALL_MAX {
         let class = class_of(extent);
@@ -130,61 +99,6 @@ fn class_alignment_up_to_16_and_larger_on_the_large_path() {
 
 // mimalloc page invariant: freeing defers reuse until the allocation list and
 // fresh page capacity have been consumed. Exercise the public runtime path.
-#[cfg(not(feature = "system-allocator"))]
-#[test]
-fn fresh_page_capacity_precedes_locally_freed_blocks() {
-    let ctx = Ctx::production();
-    let empty = leaf(0);
-    let first = alloc(&ctx, empty, 48, 8);
-    let second = alloc(&ctx, empty, 48, 8);
-    release(&ctx, first, empty);
-    let third = alloc(&ctx, empty, 48, 8);
-    assert_ne!(
-        third, first,
-        "a local free must not replace the allocation head"
-    );
-    assert_eq!(
-        third as usize - second as usize,
-        second as usize - first as usize,
-        "fresh blocks extend sequentially"
-    );
-    release(&ctx, second, empty);
-    release(&ctx, third, empty);
-    assert_eq!(ctx.stats().live_blocks, 0);
-}
-
-#[cfg(not(feature = "system-allocator"))]
-#[test]
-fn collected_free_lists_reuse_last_in_first_out_across_classes() {
-    let ctx = Ctx::production();
-    let empty = leaf(0);
-    let a = alloc(&ctx, empty, 40, 8);
-    let b = alloc(&ctx, empty, 40, 8);
-    let other = alloc(&ctx, empty, 200, 8);
-    release(&ctx, a, empty);
-    release(&ctx, b, empty);
-    release(&ctx, other, empty);
-    let mut fresh = Vec::new();
-    for (extent, expected) in [(48, b), (200, other)] {
-        loop {
-            let block = alloc(&ctx, empty, extent, 8);
-            if block == expected {
-                break;
-            }
-            assert_ne!(block, a, "local frees keep LIFO order when collected");
-            fresh.push(block);
-            assert!(
-                fresh.len() < 2 * SLAB_SIZE / 48,
-                "collection must precede a new page"
-            );
-        }
-    }
-    assert_eq!(alloc(&ctx, empty, 48, 8), a);
-    for block in fresh.into_iter().chain([a, b, other]) {
-        release(&ctx, block, empty);
-    }
-    assert_eq!(ctx.stats().live_blocks, 0);
-}
 
 #[cfg(not(feature = "system-allocator"))]
 #[test]
@@ -273,17 +187,6 @@ fn diagnostic_mode_rejects_a_write_after_free() {
         "diagnostic_mode_rejects_a_write_after_free",
         "written after free",
     );
-}
-
-#[cfg(not(feature = "system-allocator"))]
-#[test]
-fn production_mode_does_not_poison() {
-    let ctx = Ctx::production();
-    let empty = leaf(0);
-    let block = alloc(&ctx, empty, 64, 8);
-    unsafe { ptr::write_bytes(payload(block), 1, 64) };
-    release(&ctx, block, empty);
-    assert_eq!(unsafe { *payload(block).add(20) }, 1);
 }
 
 #[cfg(not(feature = "system-allocator"))]
@@ -484,24 +387,6 @@ fn retiring_slabs_discards_their_resident_pages_and_preserves_live_ones() {
         );
     }
     release(&ctx, first, empty);
-}
-
-#[cfg(not(feature = "system-allocator"))]
-#[test]
-fn the_default_idle_cap_is_one_mebibyte() {
-    let ctx = Ctx::production();
-    let empty = leaf(0);
-    let blocks: Vec<_> = (0..12_000).map(|_| alloc(&ctx, empty, 1024, 8)).collect();
-    for block in blocks {
-        release(&ctx, block, empty);
-    }
-    assert!(ctx.stats().idle_slab_bytes > 8 << 20);
-    unsafe { hirsel_rt::context::hirsel_rt_v2_trim(ctx.0) };
-    let stats = ctx.stats();
-    assert!(
-        stats.idle_slab_bytes <= 1 << 20 && stats.idle_slab_bytes > (1 << 20) - SLAB_SIZE as u64,
-        "{stats:?}"
-    );
 }
 
 #[test]

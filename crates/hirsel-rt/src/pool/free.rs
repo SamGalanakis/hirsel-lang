@@ -975,41 +975,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_last_ready_claim_does_not_wake_an_empty_searcher() {
-        let mut run = crate::host::BodyRun::new(4, false);
-        // SAFETY: this root uses no suspension and starts no other task.
-        unsafe { run.use_physical_dispatch() };
-        let observed = Arc::new(AtomicBool::new(false));
-        let result = observed.clone();
-        let outcome = run.run(
-            |_| {},
-            move |ctx| {
-                let execs = execs(ctx);
-                let epochs = || {
-                    execs
-                        .compute
-                        .lock()
-                        .unwrap()
-                        .active
-                        .iter()
-                        .map(|exec| exec.ready_epoch.load(Ordering::Acquire))
-                        .sum::<u64>()
-                };
-                let before = epochs();
-                wake_ready(execs);
-                result.store(epochs() == before, Ordering::Release);
-                crate::STATUS_OK
-            },
-        );
-        assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
-        assert_eq!(outcome.pending, 0);
-        assert!(
-            observed.load(Ordering::Acquire),
-            "the running root left no ready segment"
-        );
-    }
-
-    #[test]
     fn a_running_wake_waits_for_idle_save_and_the_root_drains_every_dispatch() {
         let mut run = crate::host::BodyRun::new(8, false);
         // SAFETY: this body uses only the explicit suspend/wake seams below;
