@@ -15,8 +15,8 @@
 //! one instance.
 use hirsel_core_contract::{OperationId, Passing};
 use hirsel_layout::instance::{
-    ActualBinder, CallableConvention, CaptureView, InstanceKey, InstanceKeyError, InstanceView,
-    ParameterView, Substitution,
+    ActualBinder, CallableConvention, CaptureView, InstanceDeclaration, InstanceKey,
+    InstanceKeyError, InstanceView, ParameterView, Substitution,
 };
 use hirsel_layout::layout::{LayoutBuilder, Owners};
 use hirsel_lir::abi_types::{CallMultiplicity, CallableShape, FnAbiId};
@@ -207,6 +207,52 @@ impl From<hirsel_layout::instance::InstanceBodyError> for InstanceError {
     }
 }
 
+/// A native CT-5 lookup, including a declaration-absence read. Arguments use
+/// the existing canonical CT-5 spellings, so rechecking needs no TypeId decode.
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, serde::Serialize, serde::Deserialize)]
+pub struct SelectionRead {
+    pub declaration: DefPath,
+    pub arguments: Option<Vec<String>>,
+    pub generated: bool,
+    pub selected: Option<DefPath>,
+}
+impl SelectionRead {
+    pub fn current(&self, bodies: &hirsel_tir::InstanceBodies) -> Self {
+        let declaration = DefId::intern(&self.declaration);
+        let generated = bodies.declarations.contains(&declaration);
+        let selected = if generated {
+            self.arguments.as_ref().and_then(|arguments| {
+                bodies
+                    .instances
+                    .get(&declaration)
+                    .and_then(|rows| {
+                        rows.iter().find(|(key, _)| {
+                            key.spellings()
+                                .iter()
+                                .copied()
+                                .eq(arguments.iter().map(String::as_str))
+                        })
+                    })
+                    .map(|(_, row)| row.definition.path().clone())
+            })
+        } else {
+            None
+        };
+        Self {
+            generated,
+            selected,
+            ..self.clone()
+        }
+    }
+    pub fn valid(&self) -> bool {
+        if self.generated {
+            self.arguments.is_some() && self.selected.is_some()
+        } else {
+            self.arguments.is_none() && self.selected.is_none()
+        }
+    }
+}
+
 /// The expanded program: instance views in discovery order, their roles, the
 /// `FnAbi` of each and a key index.
 pub struct Instances {
@@ -235,8 +281,10 @@ pub struct Instances {
     /// Generic function names with no runtime environment: calls name code
     /// directly, and captures/storage of these lexical names are unnecessary.
     pub elided: HashMap<InstanceId, std::collections::HashSet<hirsel_tir::LocalId>>,
+    selection_reads: std::sync::Mutex<std::collections::BTreeSet<SelectionRead>>,
     by_key: HashMap<InstanceKey, InstanceId>,
-    producers: HashMap<(DefPath, BodyId, hirsel_tir::LocalId), Option<Producer>>,
+    function_entries: BTreeMap<DefPath, BodyId>,
+    producers: BTreeMap<DefPath, HashMap<(BodyId, hirsel_tir::LocalId), Option<Producer>>>,
 }
 
 /// One ordinary data parameter of a statically bound nested function.
@@ -247,6 +295,232 @@ pub struct DirectCapture {
 }
 
 impl Instances {
+    /// An empty demand registry owns no source bodies or native Values.
+    pub fn new(types: Arc<TypeInterner>, memo: Arc<TypeMemo>) -> Self {
+        Self {
+            types,
+            memo,
+            views: Vec::new(),
+            roles: Vec::new(),
+            callables: Vec::new(),
+            abis: Vec::new(),
+            actuals: Vec::new(),
+            environments: Vec::new(),
+            data_environments: HashMap::new(),
+            data_locals: HashMap::new(),
+            direct_captures: HashMap::new(),
+            direct_calls: HashMap::new(),
+            elided: HashMap::new(),
+            selection_reads: Default::default(),
+            by_key: HashMap::new(),
+            function_entries: BTreeMap::new(),
+            producers: BTreeMap::new(),
+        }
+    }
+
+    pub fn selection_reads(&self) -> Vec<SelectionRead> {
+        self.selection_reads
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .cloned()
+            .collect()
+    }
+
+    /// The sole CT-5 resolution used by source discovery and native import.
+    /// Successful ordinary and generated lookups record their exact read.
+    pub fn resolve_generated(
+        &self,
+        program: &Program,
+        path: DefId,
+        arguments: &[GenericArgument],
+    ) -> Result<Option<DefId>, hirsel_types::QueryError> {
+        let selected = program
+            .instance_bodies
+            .resolve(path, &program.types, arguments)?;
+        let generated = program.instance_bodies.declarations.contains(&path);
+        let arguments = if generated {
+            Some(
+                hirsel_tir::InstanceBodies::key(&program.types, arguments)
+                    .expect("a successful CT-5 resolution has a closed key")
+                    .spellings()
+                    .into_iter()
+                    .map(str::to_owned)
+                    .collect(),
+            )
+        } else {
+            None
+        };
+        self.selection_reads
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(SelectionRead {
+                declaration: path.path().clone(),
+                arguments,
+                generated,
+                selected: selected.map(|path| path.path().clone()),
+            });
+        Ok(selected)
+    }
+
+    /// Register a source callable from its compact declaration and concrete
+    /// actuals. Only a subsequent miss may attach its demanded source body.
+    pub fn register_function(
+        &mut self,
+        program: &Program,
+        declaration: Arc<InstanceDeclaration>,
+        entry: BodyId,
+        actuals: Actuals,
+        layouts: &mut dyn crate::library::builder::Layouts,
+    ) -> Result<(InstanceId, bool), InstanceError> {
+        let path = &declaration.definition;
+        let signature = program
+            .signatures
+            .get(path)
+            .ok_or_else(|| InstanceError::MissingSignature(path.clone()))?;
+        let SignatureKind::Function(function) = &signature.kind else {
+            return Err(InstanceError::Malformed(format!(
+                "{path:?} is called but is not a function"
+            )));
+        };
+        if !Arc::ptr_eq(&self.types, &program.types)
+            || declaration.signature != signature.fingerprint
+            || entry.0 >= declaration.body_count
+        {
+            return Err(InstanceError::Malformed(format!(
+                "{path:?}: stale or foreign instance declaration"
+            )));
+        }
+        let key = key_of(&self.types, path, entry, &actuals, None, None)?;
+        if let Some(id) = self.get(&key) {
+            return Ok((id, false));
+        }
+        let callable = instantiate_function(
+            &self.types,
+            &self.memo,
+            function,
+            hirsel_types::Modes::global(),
+            &actuals,
+        )
+        .map_err(|e| InstanceError::Substitution(path.clone(), e))?;
+        let substitution = actuals.substitution(path)?;
+        let parameters = parameter_views(&self.types, callable);
+        let view = InstanceView::from_declaration(
+            key,
+            declaration,
+            entry,
+            CallableShape::Definition,
+            substitution,
+            parameters,
+            Vec::new(),
+            false,
+        );
+        self.push(
+            layouts,
+            view,
+            InstanceRole::Function,
+            callable,
+            actuals,
+            CallableShape::Definition,
+            None,
+        )
+    }
+
+    /// Register a source finalizer from its compact self-parameter contract.
+    /// This is the same construction used by nominal discovery, without a TIR
+    /// body or native Value. Only a miss attaches the independently checked body.
+    pub fn register_finalizer(
+        &mut self,
+        program: &Program,
+        source: &SourceDeclaration,
+        actuals: Actuals,
+        layouts: &mut dyn crate::library::builder::Layouts,
+    ) -> Result<(InstanceId, bool), InstanceError> {
+        if !Arc::ptr_eq(&self.types, &program.types)
+            || source.entry.0 >= source.declaration.body_count
+        {
+            return Err(InstanceError::Malformed(
+                "foreign finalizer declaration".into(),
+            ));
+        }
+        let finalizer = &source.declaration.definition;
+        let key = key_of(
+            &program.types,
+            finalizer,
+            source.entry,
+            &actuals,
+            None,
+            None,
+        )?;
+        if let Some(id) = self.get(&key) {
+            return Ok((id, false));
+        }
+        // The independently supplied source contract gives the finalizer's
+        // self parameter without demanding that implementation body.
+        let types = &*program.types;
+        let parameter = source
+            .entry_parameters
+            .first()
+            .ok_or_else(|| InstanceError::Malformed(format!("{finalizer:?} has no self")))?;
+        let self_ty = substitute(types, &program.memo, *parameter, &actuals, false)
+            .map_err(|e| InstanceError::Substitution(finalizer.clone(), e))?;
+        let unit = types.intern(Type::unit());
+        let callable = types.intern(Type::with_kind(TypeKind::Function(FunctionType {
+            state_promises: Default::default(),
+            generics: Vec::new().into(),
+            parameters: vec![hirsel_types::Parameter {
+                name: None,
+                label: None,
+                passing: hirsel_syntax::PassingMode::Borrow,
+                ty: self_ty,
+            }]
+            .into(),
+            result: unit,
+            error: None,
+            allocation: hirsel_types::Allocation::MayAllocate,
+            authority: AuthoritySummary::Unknown,
+            uses: hirsel_types::Uses::Unrestricted,
+            contracts: Vec::new().into(),
+            incomplete: false,
+            foreign: None,
+        })));
+        let view = InstanceView::from_declaration(
+            key,
+            source.declaration.clone(),
+            source.entry,
+            CallableShape::Definition,
+            actuals.substitution(finalizer)?,
+            parameter_views(types, callable),
+            Vec::new(),
+            false,
+        );
+        self.push(
+            layouts,
+            view,
+            InstanceRole::Finalizer,
+            callable,
+            actuals,
+            CallableShape::Definition,
+            None,
+        )
+    }
+
+    /// Attach one demanded implementation and index its lexical producers once
+    /// per source owner. Other source bodies are neither traversed nor retained.
+    pub fn attach_definition(
+        &mut self,
+        id: InstanceId,
+        definition: DefinitionRef,
+    ) -> Result<(), InstanceError> {
+        self.views[id.index()].attach_definition(definition.clone())?;
+        let path = definition.path.path();
+        if !self.producers.contains_key(path) {
+            let producers = lexical_producers(&self.types, &definition);
+            self.producers.insert(path.clone(), producers);
+        }
+        Ok(())
+    }
+
     pub fn len(&self) -> usize {
         self.views.len()
     }
@@ -273,17 +547,27 @@ impl Instances {
         (0..self.views.len() as u32).map(InstanceId)
     }
     /// The instance of `definition`'s entry body with these actuals.
+    /// Whether an ordinary source callable has a registered entry contract.
+    /// This lookup never observes an implementation body.
+    pub fn has_function(&self, definition: &DefPath) -> bool {
+        self.function_entries.contains_key(definition)
+    }
+
     pub fn find(
         &self,
         program: &Program,
         definition: &DefPath,
         actuals: &Actuals,
     ) -> Result<InstanceId, InstanceError> {
-        let def = program
-            .definitions
+        if !program.signatures.contains_key(definition) {
+            return Err(InstanceError::MissingSignature(definition.clone()));
+        }
+        let entry = self
+            .function_entries
             .get(definition)
-            .ok_or_else(|| InstanceError::MissingDefinition(definition.clone()))?;
-        let key = key_of(&self.types, definition, def.entry, actuals, None, None)?;
+            .copied()
+            .ok_or_else(|| InstanceError::MissingInstance(definition.clone()))?;
+        let key = key_of(&self.types, definition, entry, actuals, None, None)?;
         self.get(&key)
             .ok_or_else(|| InstanceError::MissingInstance(definition.clone()))
     }
@@ -335,6 +619,19 @@ impl Instances {
             abi
         };
         view.caller_destination = layouts.table().fn_abis[abi.0 as usize].destination;
+        if role == InstanceRole::Function {
+            if self
+                .function_entries
+                .get(view.key.definition())
+                .is_some_and(|b| *b != view.body)
+            {
+                return Err(InstanceError::Malformed(
+                    "function entry declaration changed".into(),
+                ));
+            }
+            self.function_entries
+                .insert(view.key.definition().clone(), view.body);
+        }
         let id = InstanceId(self.views.len() as u32);
         self.by_key.insert(view.key.clone(), id);
         self.views.push(view);
@@ -358,7 +655,7 @@ impl Instances {
 /// ordinal order. A generic nested function's instance (LIR schema revision 9)
 /// also binds its enclosing functions' generics, which its body names: `outer`
 /// lists each enclosing binder's arguments, innermost first.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Actuals {
     pub binder: Option<SiteRef>,
     pub arguments: Vec<GenericArgument>,
@@ -624,60 +921,126 @@ pub fn capture_passing(usage: CaptureUse) -> Passing {
     }
 }
 
+/// Source implementation contracts needed to register an instance before its
+/// executable body is demanded. These observations carry no source V authority.
+#[derive(Clone, Debug)]
+pub struct SourceDeclaration {
+    pub entry: BodyId,
+    pub declaration: Arc<InstanceDeclaration>,
+    pub entry_parameters: Vec<TypeId>,
+}
+impl SourceDeclaration {
+    pub fn of(definition: &hirsel_tir::Definition) -> Result<Self, InstanceError> {
+        let entry = definition
+            .bodies
+            .get(definition.entry.0 as usize)
+            .ok_or_else(|| {
+                InstanceError::Malformed("source entry outside body contracts".into())
+            })?;
+        let entry_parameters = entry
+            .parameters
+            .iter()
+            .map(|id| {
+                entry
+                    .locals
+                    .get(id.0 as usize)
+                    .map(|local| local.ty)
+                    .ok_or_else(|| {
+                        InstanceError::Malformed("source parameter outside body contracts".into())
+                    })
+            })
+            .collect::<Result<_, _>>()?;
+        Ok(Self {
+            entry: definition.entry,
+            declaration: Arc::new(InstanceDeclaration::of(definition)),
+            entry_parameters,
+        })
+    }
+}
+
+/// Immutable discovery inputs. Requirements belong to their source-owner
+/// products; this registry contains no implementation bodies or native Values.
+#[derive(Clone, Debug, Default)]
+pub struct DiscoveryContext {
+    pub sources: BTreeMap<DefPath, SourceDeclaration>,
+    pub requirements: BTreeMap<DefPath, Vec<Requirement>>,
+}
+impl DiscoveryContext {
+    pub fn of(program: &Program) -> Result<Self, InstanceError> {
+        let mut context = Self::default();
+        for (path, definition) in &program.definitions {
+            context
+                .sources
+                .insert(path.clone(), SourceDeclaration::of(definition)?);
+        }
+        for requirement in &program.requirements {
+            context
+                .requirements
+                .entry(requirement.owner.clone())
+                .or_default()
+                .push(requirement.clone());
+        }
+        Ok(context)
+    }
+}
+
 struct Expander<'p, 'l, 'o> {
     program: &'p Program,
     layouts: &'l mut LayoutBuilder<'o>,
     out: Instances,
-    queue: VecDeque<InstanceId>,
-    /// Requirements by owner, in collection order.
-    by_owner: BTreeMap<&'p DefPath, Vec<&'p Requirement>>,
+    context: &'p DiscoveryContext,
     /// Nominal instances already visited (recursive representations).
     nominals: std::collections::HashSet<InstanceKey>,
 }
 
-/// Expand every instance the program executes.
-pub fn expand(
+/// Discover precisely one demanded source instance. Callee registration reads
+/// compact contracts only; their bodies remain unavailable until separate
+/// demands. The returned IDs include source, closure and library discoveries.
+pub fn discover_instance(
     program: &Program,
+    context: &DiscoveryContext,
     layouts: &mut LayoutBuilder<'_>,
-) -> Result<Instances, InstanceError> {
+    mut instances: Instances,
+    id: InstanceId,
+    definition: DefinitionRef,
+) -> Result<(Instances, Vec<InstanceId>), InstanceError> {
+    let first = instances.len();
+    instances.attach_definition(id, definition)?;
+    let mut discovery = Expander {
+        program,
+        layouts,
+        out: instances,
+        context,
+        nominals: Default::default(),
+    };
+    discovery.visit(id)?;
+    let required = (first..discovery.out.len())
+        .map(|i| InstanceId(i as u32))
+        .collect();
+    Ok((discovery.out, required))
+}
+
+/// Register source, nominal-finalizer and registry-constant roots using only
+/// compact contracts. Every returned source instance starts without a body.
+pub fn seed_instances(
+    program: &Program,
+    context: &DiscoveryContext,
+    layouts: &mut LayoutBuilder<'_>,
+) -> Result<(Instances, Vec<InstanceId>), InstanceError> {
     // Explicit scoped capture specialization erases only dead callable carriers
     // to Unit; reserve its ordinary layout before the table is sealed.
     layouts
         .layout(&program.types, program.types.intern(Type::unit()))
         .map_err(|e| InstanceError::Layout(DefPath::core("Unit"), e))?;
-    let mut by_owner: BTreeMap<&DefPath, Vec<&Requirement>> = BTreeMap::new();
-    for requirement in &program.requirements {
-        by_owner
-            .entry(&requirement.owner)
-            .or_default()
-            .push(requirement);
-    }
     let mut e = Expander {
         program,
         layouts,
-        out: Instances {
-            types: program.types.clone(),
-            memo: program.memo.clone(),
-            views: Vec::new(),
-            roles: Vec::new(),
-            callables: Vec::new(),
-            abis: Vec::new(),
-            actuals: Vec::new(),
-            environments: Vec::new(),
-            data_environments: HashMap::new(),
-            data_locals: HashMap::new(),
-            direct_captures: HashMap::new(),
-            direct_calls: HashMap::new(),
-            elided: HashMap::new(),
-            by_key: HashMap::new(),
-            producers: lexical_producers(program),
-        },
-        queue: VecDeque::new(),
-        by_owner,
+        out: Instances::new(program.types.clone(), program.memo.clone()),
+        context,
         nominals: Default::default(),
     };
     for (path, signature) in &program.signatures {
-        if !program.definitions.contains_key(path) {
+        if !context.sources.contains_key(path) {
             continue;
         }
         match &signature.kind {
@@ -706,11 +1069,7 @@ pub fn expand(
                     definition,
                     arguments,
                 } => {
-                    let request = if let Some(adapter) =
-                        crate::library::keyed::request(program, definition, arguments.clone())?
-                    {
-                        Some(adapter)
-                    } else if let Some(body) = crate::library::body_index(definition) {
+                    let request = if let Some(body) = crate::library::body_index(definition) {
                         Some(crate::library::Request::operation(
                             program,
                             body,
@@ -718,7 +1077,7 @@ pub fn expand(
                             arguments.clone(),
                         )?)
                     } else if program.operations.contains_key(definition)
-                        && !program.definitions.contains_key(definition)
+                        && !context.sources.contains_key(definition)
                         && crate::library::value::forwards(definition)
                     {
                         Some(crate::library::Request::operation_value(
@@ -738,10 +1097,36 @@ pub fn expand(
             }
         }
     }
-    while let Some(id) = e.queue.pop_front() {
-        e.visit(id)?;
+    let roots = e.out.ids().collect();
+    Ok((e.out, roots))
+}
+
+/// Expand every instance the program executes. The current whole-program
+/// caller uses the same registration and one-instance discovery operations;
+/// query consumers demand these operations independently.
+pub fn expand(
+    program: &Program,
+    layouts: &mut LayoutBuilder<'_>,
+) -> Result<Instances, InstanceError> {
+    let context = DiscoveryContext::of(program)?;
+    let (mut instances, roots) = seed_instances(program, &context, layouts)?;
+    let mut pending: VecDeque<_> = roots.into();
+    while let Some(id) = pending.pop_front() {
+        if instances.roles[id.index()].is_library() {
+            continue;
+        }
+        let path = instances.view(id).key.definition();
+        let definition = program
+            .definitions
+            .get(path)
+            .ok_or_else(|| InstanceError::MissingDefinition(path.clone()))?
+            .clone();
+        let (next, required) =
+            discover_instance(program, &context, layouts, instances, id, definition)?;
+        instances = next;
+        pending.extend(required);
     }
-    Ok(e.out)
+    Ok(instances)
 }
 
 impl Expander<'_, '_, '_> {
@@ -771,57 +1156,28 @@ impl Expander<'_, '_, '_> {
             environment,
         )?;
         if fresh {
-            self.queue.push_back(id);
+            if let Ok(definition) = self.out.view(id).definition().cloned() {
+                self.out.attach_definition(id, definition)?;
+            }
         }
         Ok(id)
     }
 
     /// The entry-body instance of a function definition.
     fn function(&mut self, path: &DefPath, actuals: Actuals) -> Result<InstanceId, InstanceError> {
-        let signature = self.signature(path)?.clone();
-        let SignatureKind::Function(function) = &signature.kind else {
-            return Err(InstanceError::Malformed(format!(
-                "{path:?} is called but is not a function"
-            )));
-        };
-        let definition = self
-            .program
-            .definitions
+        let source = self
+            .context
+            .sources
             .get(path)
-            .ok_or_else(|| InstanceError::MissingDefinition(path.clone()))?
-            .clone();
-        let program = self.program;
-        let key = key_of(&program.types, path, definition.entry, &actuals, None, None)?;
-        if let Some(&id) = self.out.by_key.get(&key) {
-            return Ok(id);
-        }
-        let callable = instantiate_function(
-            &program.types,
-            &program.memo,
-            function,
-            hirsel_types::Modes::global(),
-            &actuals,
-        )
-        .map_err(|e| InstanceError::Substitution(path.clone(), e))?;
-        let parameters = parameter_views(&program.types, callable);
-        let view = InstanceView::from_definition(
-            key,
-            definition.clone(),
-            definition.entry,
-            CallableShape::Definition,
-            actuals.substitution(path)?,
-            parameters,
-            Vec::new(),
-            false,
-        );
-        self.insert(
-            view,
-            InstanceRole::Function,
-            callable,
+            .ok_or_else(|| InstanceError::MissingDefinition(path.clone()))?;
+        let (id, _) = self.out.register_function(
+            self.program,
+            source.declaration.clone(),
+            source.entry,
             actuals,
-            CallableShape::Definition,
-            None,
-        )
+            self.layouts,
+        )?;
+        Ok(id)
     }
 
     /// A nominal instance: its finalizer, if it declares one, and the
@@ -853,73 +1209,11 @@ impl Expander<'_, '_, '_> {
             return Ok(());
         };
         // A library finalizer is runtime code, not a TIR body.
-        let Some(definition) = self.program.definitions.get(finalizer).cloned() else {
+        let Some(source) = self.context.sources.get(finalizer) else {
             return Ok(());
         };
-        let key = key_of(
-            &program.types,
-            finalizer,
-            definition.entry,
-            &actuals,
-            None,
-            None,
-        )?;
-        if self.out.by_key.contains_key(&key) {
-            return Ok(());
-        }
-        // The finalizer receives its value borrowed and returns unit (DROP-2).
-        let types = &*program.types;
-        let body = &definition.bodies[definition.entry.0 as usize];
-        let parameter = body
-            .parameters
-            .first()
-            .ok_or_else(|| InstanceError::Malformed(format!("{finalizer:?} has no self")))?;
-        let self_ty = substitute(
-            types,
-            &program.memo,
-            body.locals[parameter.0 as usize].ty,
-            &actuals,
-            false,
-        )
-        .map_err(|e| InstanceError::Substitution(path.clone(), e))?;
-        let unit = types.intern(Type::unit());
-        let callable = types.intern(Type::with_kind(TypeKind::Function(FunctionType {
-            state_promises: Default::default(),
-            generics: Vec::new().into(),
-            parameters: vec![hirsel_types::Parameter {
-                name: None,
-                label: None,
-                passing: hirsel_syntax::PassingMode::Borrow,
-                ty: self_ty,
-            }]
-            .into(),
-            result: unit,
-            error: None,
-            allocation: hirsel_types::Allocation::MayAllocate,
-            authority: AuthoritySummary::Unknown,
-            uses: hirsel_types::Uses::Unrestricted,
-            contracts: Vec::new().into(),
-            incomplete: false,
-            foreign: None,
-        })));
-        let view = InstanceView::from_definition(
-            key,
-            definition.clone(),
-            definition.entry,
-            CallableShape::Definition,
-            actuals.substitution(finalizer)?,
-            parameter_views(types, callable),
-            Vec::new(),
-            false,
-        );
-        self.insert(
-            view,
-            InstanceRole::Finalizer,
-            callable,
-            actuals,
-            CallableShape::Definition,
-            None,
-        )?;
+        self.out
+            .register_finalizer(program, source, actuals, self.layouts)?;
         Ok(())
     }
 
@@ -935,18 +1229,15 @@ impl Expander<'_, '_, '_> {
         let actuals = self.out.actuals[id.index()].clone();
         let path = view.key.definition().clone();
         let body = &view.definition()?.bodies[view.body.0 as usize];
-        let elided = body
-            .locals
-            .iter()
-            .enumerate()
-            .filter_map(|(local, row)| {
-                let local = hirsel_tir::LocalId(local as u32);
-                (generic_function(types, row.ty)
-                    && nested_function(&self.out, id, local)
-                        .is_some_and(|(_, _, _, _, empty)| empty))
-                .then_some(local)
-            })
-            .collect();
+        let mut elided = std::collections::HashSet::new();
+        for (local, row) in body.locals.iter().enumerate() {
+            let local = hirsel_tir::LocalId(local as u32);
+            if generic_function(types, row.ty)
+                && nested_function(&self.out, id, local)?.is_some_and(|(_, _, _, _, empty)| empty)
+            {
+                elided.insert(local);
+            }
+        }
         self.out.elided.insert(id, elided);
         for (i, local) in body.locals.iter().enumerate() {
             let local_id = hirsel_tir::LocalId(i as u32);
@@ -964,6 +1255,27 @@ impl Expander<'_, '_, '_> {
             }
             InstanceRole::Closure { .. } => {}
             _ => self.follow(&path, &actuals, None)?,
+        }
+        // Whole-program expansion seeded nongeneric callees in advance. A
+        // demanded instance must register those ordinary calls/references from
+        // its own body, without loading any callee implementation.
+        for block in &body.blocks {
+            if let hirsel_tir::Terminator::Call {
+                callee: hirsel_tir::Callee::Definition { path, arguments },
+                ..
+            } = &block.terminator
+            {
+                self.source_reference(path, arguments, &actuals)?;
+            }
+        }
+        for value in &body.rvalues {
+            if let Rvalue::FunctionReference {
+                definition,
+                arguments,
+            } = value
+            {
+                self.source_reference(definition, arguments, &actuals)?;
+            }
         }
         for block in &body.blocks {
             for instruction in &block.instructions {
@@ -1015,10 +1327,12 @@ impl Expander<'_, '_, '_> {
                 continue;
             }
             let local = body.places[value.place.0 as usize].root;
-            let (producer, closure, ty, captures, empty) = nested_function(&self.out, id, local)
-                .ok_or_else(|| InstanceError::Malformed(format!(
+            let (producer, closure, ty, captures, empty) = nested_function(&self.out, id, local)?
+                .ok_or_else(|| {
+                InstanceError::Malformed(format!(
                     "{path:?}: a generic callee with no lexical nested-function producer (spec #42)"
-                )))?;
+                ))
+            })?;
             let captures = captures.to_vec();
             let producer_view = self.out.view(producer).clone();
             let producer_actuals = self.out.actuals[producer.index()].clone();
@@ -1040,6 +1354,45 @@ impl Expander<'_, '_, '_> {
         Ok(())
     }
 
+    fn source_reference(
+        &mut self,
+        path: &DefPath,
+        arguments: &[GenericArgument],
+        owner_actuals: &Actuals,
+    ) -> Result<(), InstanceError> {
+        let generated = self
+            .program
+            .instance_bodies
+            .declarations
+            .contains(&DefId::intern(path));
+        if !generated && !self.context.sources.contains_key(path) {
+            return Ok(());
+        }
+        let actuals = callee_actuals(
+            &self.program.types,
+            &self.program.memo,
+            if generated {
+                None
+            } else {
+                self.program.binders.get(path).copied()
+            },
+            arguments,
+            owner_actuals,
+            false,
+            path,
+        )?;
+        let selected = self
+            .out
+            .resolve_generated(self.program, DefId::intern(path), &actuals.arguments)
+            .map_err(|e| InstanceError::Malformed(format!("generated source reference: {e:?}")))?;
+        if let Some(selected) = selected {
+            self.function(selected.path(), Actuals::none())?;
+        } else {
+            self.function(path, actuals)?;
+        }
+        Ok(())
+    }
+
     fn data_local(
         &mut self,
         id: InstanceId,
@@ -1048,8 +1401,8 @@ impl Expander<'_, '_, '_> {
         if let Some(&layout) = self.out.data_locals.get(&(id, local)) {
             return Ok(layout);
         }
-        let (parent, body, _, captures, empty) =
-            nested_function(&self.out, id, local).ok_or_else(|| {
+        let (parent, body, _, captures, empty) = nested_function(&self.out, id, local)?
+            .ok_or_else(|| {
                 InstanceError::Malformed("generic environment has no lexical producer".into())
             })?;
         if empty {
@@ -1116,7 +1469,7 @@ impl Expander<'_, '_, '_> {
                 [operand.place.0 as usize]
                 .root;
             if generic_function(types, local.ty)
-                && nested_function(&self.out, parent, source)
+                && nested_function(&self.out, parent, source)?
                     .is_some_and(|(_, _, _, _, empty)| empty)
             {
                 continue;
@@ -1235,7 +1588,7 @@ impl Expander<'_, '_, '_> {
         let shape = CallableShape::Definition;
         let view = InstanceView::from_definition(
             key,
-            definition.clone(),
+            definition,
             body_id,
             shape,
             actuals.substitution(&path)?,
@@ -1261,12 +1614,14 @@ impl Expander<'_, '_, '_> {
                 .map(|(i, _)| hirsel_tir::LocalId(i as u32))
                 .collect();
             // Static generic names have no field in this record.
-            let locals: Vec<_> = locals
-                .into_iter()
-                .filter(|local| {
-                    !nested_function(&self.out, id, *local).is_some_and(|(_, _, _, _, empty)| empty)
-                })
-                .collect();
+            let mut retained = Vec::new();
+            for local in locals {
+                if !nested_function(&self.out, id, local)?.is_some_and(|(_, _, _, _, empty)| empty)
+                {
+                    retained.push(local);
+                }
+            }
+            let locals = retained;
             let fields = self.layouts.record(environment).fields.clone();
             let mut explicit = Vec::new();
             let mut parameters = Vec::new();
@@ -1348,7 +1703,11 @@ impl Expander<'_, '_, '_> {
     ) -> Result<(), InstanceError> {
         let program = self.program;
         let types = &*program.types;
-        let requirements = self.by_owner.get(owner).cloned().unwrap_or_default();
+        let requirements = self
+            .context
+            .requirements
+            .get(owner)
+            .map_or(&[][..], Vec::as_slice);
         for requirement in requirements {
             let named = body_scopes(types, &requirement.arguments);
             let bound: Vec<SiteRef> = actuals.binders().map(|(s, _)| s).collect();
@@ -1379,7 +1738,7 @@ impl Expander<'_, '_, '_> {
                             callee_actuals.arguments,
                         )?;
                         crate::library::instantiate(self.layouts, &mut self.out, request)?;
-                    } else if self.program.definitions.contains_key(callee) {
+                    } else if self.context.sources.contains_key(callee) {
                         self.function(callee, callee_actuals)?;
                     }
                 }
@@ -1438,149 +1797,147 @@ enum ProducerSource {
 /// paths once. Instance ancestry selects actuals later; generic binder
 /// identities never enter an ordinal-only lookup.
 fn lexical_producers(
-    program: &Program,
-) -> HashMap<(DefPath, BodyId, hirsel_tir::LocalId), Option<Producer>> {
-    let types = &*program.types;
+    types: &TypeInterner,
+    definition: &hirsel_tir::Definition,
+) -> HashMap<(BodyId, hirsel_tir::LocalId), Option<Producer>> {
     let mut out = HashMap::new();
-    for (path, definition) in &program.definitions {
-        let mut sources = HashMap::new();
-        let mut creators = HashMap::new();
-        for (b, body) in definition.bodies.iter().enumerate() {
-            let owner = BodyId(b as u32);
-            for (r, value) in body.rvalues.iter().enumerate() {
-                if let Rvalue::Closure { body: child, .. } = value {
-                    creators
-                        .entry(*child)
-                        .and_modify(|p| *p = None)
-                        .or_insert(Some((owner, hirsel_tir::RvalueId(r as u32))));
-                }
-            }
-            for instruction in body.blocks.iter().flat_map(|b| &b.instructions) {
-                let hirsel_tir::InstructionKind::Assign { destination, value } = instruction.kind
-                else {
-                    continue;
-                };
-                let d = &body.places[destination.0 as usize];
-                if !d.projection.is_empty() || !generic_function(types, d.ty) {
-                    continue;
-                }
-                let source = match &body.rvalues[value.0 as usize] {
-                    Rvalue::Closure { .. } => Some(ProducerSource::Literal(Producer {
-                        owner,
-                        value,
-                        ty: d.ty,
-                        empty: false,
-                    })),
-                    Rvalue::Use(operand) => {
-                        let p = &body.places[operand.place.0 as usize];
-                        p.projection
-                            .is_empty()
-                            .then_some(ProducerSource::Alias(owner, p.root))
-                    }
-                    _ => None,
-                };
-                sources
-                    .entry((owner, d.root))
+    let mut sources = HashMap::new();
+    let mut creators = HashMap::new();
+    for (b, body) in definition.bodies.iter().enumerate() {
+        let owner = BodyId(b as u32);
+        for (r, value) in body.rvalues.iter().enumerate() {
+            if let Rvalue::Closure { body: child, .. } = value {
+                creators
+                    .entry(*child)
                     .and_modify(|p| *p = None)
-                    .or_insert(source);
+                    .or_insert(Some((owner, hirsel_tir::RvalueId(r as u32))));
             }
         }
-        for (b, body) in definition.bodies.iter().enumerate() {
-            let owner = BodyId(b as u32);
-            let Some(Some((parent, value))) = creators.get(&owner).copied() else {
+        for instruction in body.blocks.iter().flat_map(|b| &b.instructions) {
+            let hirsel_tir::InstructionKind::Assign { destination, value } = instruction.kind
+            else {
                 continue;
             };
-            let parent_body = &definition.bodies[parent.0 as usize];
-            let Rvalue::Closure { captures, .. } = &parent_body.rvalues[value.0 as usize] else {
-                unreachable!();
-            };
-            for ((local, row), operand) in body
-                .locals
-                .iter()
-                .enumerate()
-                .filter(|(_, l)| l.storage == Storage::Capture)
-                .zip(captures)
-            {
-                if !generic_function(types, row.ty) {
-                    continue;
-                }
-                let p = &parent_body.places[operand.place.0 as usize];
-                sources.insert(
-                    (owner, hirsel_tir::LocalId(local as u32)),
+            let d = &body.places[destination.0 as usize];
+            if !d.projection.is_empty() || !generic_function(types, d.ty) {
+                continue;
+            }
+            let source = match &body.rvalues[value.0 as usize] {
+                Rvalue::Closure { .. } => Some(ProducerSource::Literal(Producer {
+                    owner,
+                    value,
+                    ty: d.ty,
+                    empty: false,
+                })),
+                Rvalue::Use(operand) => {
+                    let p = &body.places[operand.place.0 as usize];
                     p.projection
                         .is_empty()
-                        .then_some(ProducerSource::Alias(parent, p.root)),
-                );
-            }
-        }
-        let mut resolved = HashMap::new();
-        for &start in sources.keys() {
-            let mut at = start;
-            let mut visited = std::collections::HashSet::new();
-            let result = loop {
-                if let Some(&result) = resolved.get(&at) {
-                    break result;
+                        .then_some(ProducerSource::Alias(owner, p.root))
                 }
-                if !visited.insert(at) {
-                    break None;
-                }
-                match sources.get(&at).copied().flatten() {
-                    Some(ProducerSource::Literal(producer)) => break Some(producer),
-                    Some(ProducerSource::Alias(body, local)) => at = (body, local),
-                    None => break None,
-                }
+                _ => None,
             };
-            for key in visited {
-                resolved.insert(key, result);
+            sources
+                .entry((owner, d.root))
+                .and_modify(|p| *p = None)
+                .or_insert(source);
+        }
+    }
+    for (b, body) in definition.bodies.iter().enumerate() {
+        let owner = BodyId(b as u32);
+        let Some(Some((parent, value))) = creators.get(&owner).copied() else {
+            continue;
+        };
+        let parent_body = &definition.bodies[parent.0 as usize];
+        let Rvalue::Closure { captures, .. } = &parent_body.rvalues[value.0 as usize] else {
+            unreachable!();
+        };
+        for ((local, row), operand) in body
+            .locals
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| l.storage == Storage::Capture)
+            .zip(captures)
+        {
+            if !generic_function(types, row.ty) {
+                continue;
+            }
+            let p = &parent_body.places[operand.place.0 as usize];
+            sources.insert(
+                (owner, hirsel_tir::LocalId(local as u32)),
+                p.projection
+                    .is_empty()
+                    .then_some(ProducerSource::Alias(parent, p.root)),
+            );
+        }
+    }
+    let mut resolved = HashMap::new();
+    for &start in sources.keys() {
+        let mut at = start;
+        let mut visited = std::collections::HashSet::new();
+        let result = loop {
+            if let Some(&result) = resolved.get(&at) {
+                break result;
+            }
+            if !visited.insert(at) {
+                break None;
+            }
+            match sources.get(&at).copied().flatten() {
+                Some(ProducerSource::Literal(producer)) => break Some(producer),
+                Some(ProducerSource::Alias(body, local)) => at = (body, local),
+                None => break None,
+            }
+        };
+        for key in visited {
+            resolved.insert(key, result);
+        }
+    }
+    // An environment containing only other static generic names needs
+    // no runtime data either. Propagate ordinary-data requirements over
+    // reverse edges; cycles of function names alone remain empty.
+    let literals: HashMap<_, _> = resolved
+        .values()
+        .copied()
+        .flatten()
+        .map(|p| ((p.owner, p.value), p))
+        .collect();
+    let mut dependents: HashMap<_, Vec<_>> = HashMap::new();
+    let mut nonempty = std::collections::HashSet::new();
+    let mut queue = VecDeque::new();
+    for (&key, producer) in &literals {
+        let body = &definition.bodies[producer.owner.0 as usize];
+        let Rvalue::Closure { captures, .. } = &body.rvalues[producer.value.0 as usize] else {
+            unreachable!();
+        };
+        for operand in captures {
+            let place = &body.places[operand.place.0 as usize];
+            let dependency = generic_function(types, place.ty)
+                .then(|| {
+                    resolved
+                        .get(&(producer.owner, place.root))
+                        .copied()
+                        .flatten()
+                })
+                .flatten();
+            if let Some(p) = dependency {
+                dependents.entry((p.owner, p.value)).or_default().push(key);
+            } else if nonempty.insert(key) {
+                queue.push_back(key);
             }
         }
-        // An environment containing only other static generic names needs
-        // no runtime data either. Propagate ordinary-data requirements over
-        // reverse edges; cycles of function names alone remain empty.
-        let literals: HashMap<_, _> = resolved
-            .values()
-            .copied()
-            .flatten()
-            .map(|p| ((p.owner, p.value), p))
-            .collect();
-        let mut dependents: HashMap<_, Vec<_>> = HashMap::new();
-        let mut nonempty = std::collections::HashSet::new();
-        let mut queue = VecDeque::new();
-        for (&key, producer) in &literals {
-            let body = &definition.bodies[producer.owner.0 as usize];
-            let Rvalue::Closure { captures, .. } = &body.rvalues[producer.value.0 as usize] else {
-                unreachable!();
-            };
-            for operand in captures {
-                let place = &body.places[operand.place.0 as usize];
-                let dependency = generic_function(types, place.ty)
-                    .then(|| {
-                        resolved
-                            .get(&(producer.owner, place.root))
-                            .copied()
-                            .flatten()
-                    })
-                    .flatten();
-                if let Some(p) = dependency {
-                    dependents.entry((p.owner, p.value)).or_default().push(key);
-                } else if nonempty.insert(key) {
-                    queue.push_back(key);
-                }
+    }
+    while let Some(key) = queue.pop_front() {
+        for &dependent in dependents.get(&key).into_iter().flatten() {
+            if nonempty.insert(dependent) {
+                queue.push_back(dependent);
             }
         }
-        while let Some(key) = queue.pop_front() {
-            for &dependent in dependents.get(&key).into_iter().flatten() {
-                if nonempty.insert(dependent) {
-                    queue.push_back(dependent);
-                }
-            }
+    }
+    for ((body, local), mut producer) in resolved {
+        if let Some(p) = &mut producer {
+            p.empty = !nonempty.contains(&(p.owner, p.value));
         }
-        for ((body, local), mut producer) in resolved {
-            if let Some(p) = &mut producer {
-                p.empty = !nonempty.contains(&(p.owner, p.value));
-            }
-            out.insert((path.clone(), body, local), producer);
-        }
+        out.insert((body, local), producer);
     }
     out
 }
@@ -1591,25 +1948,35 @@ fn nested_function(
     instances: &Instances,
     mut instance: InstanceId,
     local: hirsel_tir::LocalId,
-) -> Option<(InstanceId, BodyId, TypeId, &[hirsel_tir::Operand], bool)> {
+) -> Result<Option<(InstanceId, BodyId, TypeId, &[hirsel_tir::Operand], bool)>, InstanceError> {
     let view = instances.view(instance);
-    let producer = instances
+    let Some(producer) = instances
         .producers
-        .get(&(view.key.definition().clone(), view.body, local))
+        .get(view.key.definition())
+        .and_then(|owner| owner.get(&(view.body, local)))
         .copied()
-        .flatten()?;
+        .flatten()
+    else {
+        return Ok(None);
+    };
     loop {
         let view = instances.view(instance);
         if view.body == producer.owner {
-            let body = &view.definition().ok()?.bodies[producer.owner.0 as usize];
+            let body = &view.definition()?.bodies[producer.owner.0 as usize];
             let Rvalue::Closure { body, captures, .. } = &body.rvalues[producer.value.0 as usize]
             else {
-                return None;
+                return Ok(None);
             };
-            return Some((instance, *body, producer.ty, captures, producer.empty));
+            return Ok(Some((
+                instance,
+                *body,
+                producer.ty,
+                captures,
+                producer.empty,
+            )));
         }
         let InstanceRole::Closure { parent } = instances.roles[instance.index()] else {
-            return None;
+            return Ok(None);
         };
         instance = parent;
     }
