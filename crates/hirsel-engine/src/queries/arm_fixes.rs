@@ -21,8 +21,28 @@ pub(super) fn place(
     sources: &SourceMap,
     items: &BTreeMap<DefPath, Vec<Arc<ItemSyntax>>>,
 ) {
+    place_with(output, representations, |owner, site| {
+        insertion(sources, items, owner, site)
+    });
+}
+pub(super) fn insertion(
+    sources: &SourceMap,
+    items: &BTreeMap<DefPath, Vec<Arc<ItemSyntax>>>,
+    owner: &DefPath,
+    site: Span,
+) -> Option<(Span, ContentHash)> {
+    Some((
+        arm_insertion(sources, items, owner, site)?,
+        items.get(owner)?.first()?.text_hash,
+    ))
+}
+pub(super) fn place_with(
+    output: &mut QueryOutput<TypedBody>,
+    representations: &mut BTreeMap<DefPath, ContentHash>,
+    mut insertion: impl FnMut(&DefPath, Span) -> Option<(Span, ContentHash)>,
+) {
     for fix in std::mem::take(&mut output.value.plans.arm_fixes) {
-        let Some(span) = arm_insertion(sources, items, &fix.owner, fix.site) else {
+        let Some((span, hash)) = insertion(&fix.owner, fix.site) else {
             continue;
         };
         let Some(diagnostic) = output
@@ -49,14 +69,30 @@ pub(super) fn place(
                 fix.arm, fix.target
             ),
         });
-        if let Some(hash) = items
-            .get(&fix.owner)
-            .and_then(|v| v.first())
-            .map(|s| s.text_hash)
-        {
-            representations.insert(fix.owner, hash);
-        }
+        representations.insert(fix.owner, hash);
     }
+}
+/// Capture the existing eligible edit sites while S0 syntax is borrowed.
+/// A worker later reads these exact source facts without retaining an AST.
+pub(super) fn capture(
+    sources: &SourceMap,
+    items: &BTreeMap<DefPath, Vec<Arc<ItemSyntax>>>,
+) -> BTreeMap<DefPath, (Span, FileId, ContentHash)> {
+    items
+        .iter()
+        .filter_map(|(path, candidates)| {
+            let syntax = candidates.first()?;
+            let span = arm_insertion(sources, items, path, syntax.item.name_span)?;
+            Some((
+                path.clone(),
+                (
+                    span,
+                    sources.resolve(syntax.item.name_span).file,
+                    syntax.text_hash,
+                ),
+            ))
+        })
+        .collect()
 }
 /// The empty span just after the last arm of `owner`'s variant
 /// declaration, when that declaration is in the file of `site` and ends

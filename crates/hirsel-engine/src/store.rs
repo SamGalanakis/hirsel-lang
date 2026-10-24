@@ -193,6 +193,20 @@ pub(crate) fn payload_reads_hash(reads: &Reads) -> ContentHash {
     ContentHash::of_parts("hirsel.result.reads.v1", rows.iter().map(Vec::as_slice))
 }
 
+/// The complete ordinary-query action, shared by S0 variants and already
+/// settled immutable query owners. Reclaiming an evicted runtime node need
+/// not depend on an optional durable index or reconstruct its body.
+pub(crate) fn query_action(key: &EntryKey, inputs: ContentHash, reads: &Reads) -> Action {
+    Action(ContentHash::of_parts(
+        "hirsel.result.action.v1",
+        [
+            key.0.0.as_slice(),
+            inputs.0.as_slice(),
+            payload_reads_hash(reads).0.as_slice(),
+        ],
+    ))
+}
+
 /// An action index references immutable content without reading its pages.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VariantRef {
@@ -219,14 +233,7 @@ impl VariantRef {
         Some(variant)
     }
     pub(crate) fn action(&self, key: &EntryKey) -> Action {
-        Action(ContentHash::of_parts(
-            "hirsel.result.action.v1",
-            [
-                key.0.0.as_slice(),
-                self.inputs.0.as_slice(),
-                payload_reads_hash(&self.reads).0.as_slice(),
-            ],
-        ))
+        query_action(key, self.inputs, &self.reads)
     }
     fn binding(&self, key: &EntryKey) -> ContentHash {
         ContentHash::of_parts(

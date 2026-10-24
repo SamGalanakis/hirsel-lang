@@ -469,3 +469,474 @@ fn admitted_lower_reserves_outputs_only_for_demanded_definitions() {
         );
     });
 }
+
+#[test]
+fn admitted_front_store_hits_validate_signature_reads_before_materializing_bodies() {
+    with_compiler_stack(|| {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("main.hir");
+        let store = Arc::new(MemStore::default());
+        for (source, main_hit, spare_hit, verify_cache) in [
+            (
+                "fn spare()->u8{1u8}\npub fn main(){let _=spare()}\n",
+                false,
+                false,
+                false,
+            ),
+            (
+                "fn spare()->u8{1u8}\npub fn main(){let _=spare()}\n",
+                true,
+                true,
+                false,
+            ),
+            (
+                "fn spare()->u8{2u8}\npub fn main(){let _=spare()}\n",
+                true,
+                false,
+                false,
+            ),
+            (
+                "fn spare()->u16{2u16}\npub fn main(){let _=spare()}\n",
+                false,
+                false,
+                false,
+            ),
+            (
+                "fn spare()->u16{2u16}\npub fn main(){let _=spare()}\n",
+                false,
+                false,
+                true,
+            ),
+            (
+                "fn spare()->u16{2u16}\npub fn main(){let _=spare()}\n",
+                false,
+                true,
+                false,
+            ),
+        ] {
+            std::fs::write(&path, source).unwrap();
+            let mut program = COMPILER
+                .with_config(hirsel_engine::CompileConfig {
+                    store: store.clone(),
+                    verify_store: if verify_cache {
+                        hirsel_engine::store::VerifyStore::Recompute
+                    } else {
+                        hirsel_engine::store::VerifyStore::Off
+                    },
+                    ..Default::default()
+                })
+                .with_owned_engines()
+                .load_program(&path)
+                .unwrap();
+            let mut spare = program.entry.clone();
+            spare.0.name = "spare".into();
+            let definitions = vec![program.entry.clone(), spare.clone()];
+            let budget = ProcessBudget::new(1 << 30);
+            let mut runtime = AdmittedRuntime::new(
+                hirsel_intern::jobs::Jobs::new(1),
+                budget.reserve(512 << 20).unwrap(),
+                errors(),
+            )
+            .unwrap();
+            let weight = MemoryWeight {
+                retained: 1 << 20,
+                scratch: 8 << 20,
+                stack: 0,
+            };
+            let front = program
+                .engine
+                .front_body_queries(
+                    &definitions,
+                    weight,
+                    budget.reserve(8 << 20).unwrap(),
+                    errors(),
+                )
+                .unwrap();
+            runtime.register(FRONT_BODY_KIND, front.factory()).unwrap();
+            let request = runtime.request(
+                &definitions
+                    .iter()
+                    .map(|path| front.query(path).unwrap())
+                    .collect::<Vec<_>>(),
+            );
+            let products = runtime
+                .wait(request)
+                .unwrap_or_else(|error| panic!("{:?}", front.outcome(error).map(|o| o.outcome)));
+            for (definition, hit) in [(&program.entry, main_hit), (&spare, spare_hit)] {
+                for kind in [QueryKind::Resolve, QueryKind::Check, QueryKind::Modes] {
+                    assert_eq!(
+                        front.recompute_count(definition, kind),
+                        u64::from(!hit),
+                        "{definition} {kind:?}, verification={verify_cache}"
+                    );
+                }
+            }
+            assert_eq!(
+                front.store_adoptions(),
+                u64::from(main_hit) + u64::from(spare_hit)
+            );
+            for product in &products {
+                assert!(
+                    front
+                        .outcome(product.record)
+                        .unwrap()
+                        .outcome
+                        .result
+                        .is_ok()
+                );
+            }
+            runtime.shutdown();
+            if verify_cache {
+                let damaged = products[0].record.output.0;
+                let mut corrupted = 0;
+                for (key, bytes) in store.take() {
+                    if key.0 == damaged {
+                        store.put(&key, &bytes[..bytes.len() / 2]);
+                        corrupted += 1;
+                    } else {
+                        store.put(&key, &bytes);
+                    }
+                }
+                assert_eq!(corrupted, 1, "damage only the completed main body record");
+            }
+        }
+    });
+}
+
+#[test]
+fn admitted_front_zero_hold_retains_only_archives_after_settlement() {
+    with_compiler_stack(|| {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("main.hir");
+        std::fs::write(&path, "pub fn main()->u8{1u8}\n").unwrap();
+        struct ContentOnly(MemStore);
+        impl ResultStore for ContentOnly {
+            fn get(
+                &self,
+                key: &hirsel_engine::store::EntryKey,
+            ) -> Option<hirsel_engine::store::Bytes> {
+                (key.2 == QueryKind::Interpret)
+                    .then(|| self.0.get(key))
+                    .flatten()
+            }
+            fn put(&self, key: &hirsel_engine::store::EntryKey, value: &[u8]) {
+                if key.2 == QueryKind::Interpret {
+                    self.0.put(key, value);
+                }
+            }
+            fn name(&self) -> &'static str {
+                "active-content-only-test"
+            }
+        }
+        let store = Arc::new(ContentOnly(MemStore::default()));
+        let mut program = COMPILER
+            .with_config(CompileConfig {
+                store,
+                hold_bytes: 0,
+                ..Default::default()
+            })
+            .with_owned_engines()
+            .load_program(&path)
+            .unwrap();
+        let budget = ProcessBudget::new(1 << 30);
+        let mut runtime = AdmittedRuntime::new(
+            hirsel_intern::jobs::Jobs::ONE,
+            budget.reserve(512 << 20).unwrap(),
+            errors(),
+        )
+        .unwrap();
+        let weight = MemoryWeight {
+            retained: 1 << 20,
+            scratch: 8 << 20,
+            stack: 0,
+        };
+        let front = program
+            .engine
+            .front_body_queries(
+                &[program.entry.clone()],
+                weight,
+                budget.reserve(8 << 20).unwrap(),
+                errors(),
+            )
+            .unwrap();
+        runtime.register(FRONT_BODY_KIND, front.factory()).unwrap();
+        let query = front.query(&program.entry).unwrap();
+        let request = runtime.request(&[query]);
+        let product = runtime.wait(request).unwrap()[0];
+        assert_eq!(
+            front.live_body_count(),
+            0,
+            "query owners retain no checked/analyzed body after settlement"
+        );
+        let first = front.outcome(product.record).unwrap();
+        assert_eq!(front.live_body_count(), 1);
+        let second = front.outcome(product.record).unwrap();
+        assert!(
+            Arc::ptr_eq(
+                first.outcome.result.as_ref().unwrap(),
+                second.outcome.result.as_ref().unwrap()
+            ),
+            "concurrent decoders share an active body"
+        );
+        drop(first);
+        drop(second);
+        assert_eq!(front.live_body_count(), 0);
+        runtime.evict_to(0);
+        let request = runtime.request(&[query]);
+        let repeated = runtime.wait(request).unwrap()[0];
+        assert_eq!(product, repeated);
+        assert_eq!(front.live_body_count(), 0);
+        for kind in [QueryKind::Resolve, QueryKind::Check, QueryKind::Modes] {
+            assert_eq!(
+                front.recompute_count(&program.entry, kind),
+                1,
+                "archive demand does not repeat transformation"
+            );
+        }
+        runtime.shutdown();
+        let held = front.outcome(product.record).unwrap();
+        assert!(held.outcome.result.is_ok());
+        drop(front);
+        assert!(
+            budget.reserved() > 0,
+            "held output retains admitted immutable owner after shutdown"
+        );
+        drop(held);
+    });
+}
+
+#[test]
+fn admitted_storage_recipe_waits_for_checked_body_and_matches_scalar_adapter() {
+    with_compiler_stack(|| {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("main.hir");
+        std::fs::write(
+            &path,
+            "fn helper(x:u8)->u8{x}\npub fn main()->u8{helper(1u8)}\n",
+        )
+        .unwrap();
+        for jobs in [1, 2] {
+            let store = Arc::new(MemStore::default());
+            let mut program = COMPILER
+                .with_config(CompileConfig {
+                    store: store.clone(),
+                    hold_bytes: 0,
+                    jobs: hirsel_intern::jobs::Jobs::new(jobs),
+                    ..Default::default()
+                })
+                .with_owned_engines()
+                .load_program(&path)
+                .unwrap();
+            let budget = ProcessBudget::new(1 << 30);
+            let mut runtime = AdmittedRuntime::new(
+                hirsel_intern::jobs::Jobs::new(jobs),
+                budget.reserve(512 << 20).unwrap(),
+                errors(),
+            )
+            .unwrap();
+            let weight = MemoryWeight {
+                retained: 1 << 20,
+                scratch: 8 << 20,
+                stack: 0,
+            };
+            let front = program
+                .engine
+                .front_body_queries(
+                    &[program.entry.clone()],
+                    weight,
+                    budget.reserve(8 << 20).unwrap(),
+                    errors(),
+                )
+                .unwrap();
+            let storage = program
+                .engine
+                .front_storage_queries(
+                    front.clone(),
+                    weight,
+                    budget.reserve(8 << 20).unwrap(),
+                    errors(),
+                )
+                .unwrap();
+            runtime.register(FRONT_BODY_KIND, front.factory()).unwrap();
+            runtime
+                .register(FRONT_STORAGE_KIND, storage.factory())
+                .unwrap();
+            let query = storage.query(&program.entry).unwrap();
+            let request = runtime.request(&[query]);
+            let product = runtime
+                .wait(request)
+                .unwrap_or_else(|error| panic!("{:?}", storage.failure(error)))[0];
+            let actual = storage.outcome(product).unwrap();
+            assert_eq!(storage.executions(), 1);
+            assert_eq!(
+                front.live_body_count(),
+                0,
+                "storage equations retain no analyzed body"
+            );
+            let analyzed = program.engine.mode_definition(&program.entry).unwrap();
+            let snapshot = program.engine.signature_snapshot();
+            let signature = snapshot
+                .signature(hirsel_syntax::DefId::intern(&program.entry))
+                .unwrap()
+                .unwrap();
+            let mut reads = hirsel_engine::ReadsBuilder::new();
+            let mut provider = hirsel_engine::FrozenProvider::for_body(
+                &snapshot,
+                program.entry.0.package.clone(),
+                &mut reads,
+            );
+            let expected = ModeAdapter
+                .storage(
+                    program.engine.types(),
+                    &hirsel_types::TypeMemo::new(),
+                    &analyzed.value,
+                    signature,
+                    &mut provider,
+                )
+                .unwrap();
+            let records = NativeRecords::new(program.engine.types().clone(), store.clone());
+            assert_eq!(
+                records.encode(&program.engine, &actual.output.value),
+                records.encode(&program.engine, &expected.value)
+            );
+            let expected_reads = reads.finish().unwrap();
+            for (key, value) in expected_reads.iter() {
+                assert!(
+                    actual.reads.iter().any(
+                        |(actual_key, actual_value)| actual_key == key && actual_value == value
+                    ),
+                    "missing actual storage signature read"
+                );
+            }
+            let repeated = runtime.request(&[query]);
+            assert_eq!(runtime.wait(repeated).unwrap(), vec![product]);
+            assert_eq!(
+                storage.executions(),
+                1,
+                "second consumer performs no storage transformation"
+            );
+            assert_eq!(
+                runtime.stats().claims,
+                2,
+                "storage and its actual P dependency only"
+            );
+            runtime.shutdown();
+        }
+    });
+}
+
+#[test]
+fn frozen_checked_runtime_matches_declared_heap_facts_without_body_queries() {
+    with_compiler_stack(|| {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("main.hir");
+        std::fs::write(&path, "pub fn main(){}\n").unwrap();
+        let mut program = COMPILER
+            .with_config(CompileConfig {
+                store: Arc::new(MemStore::default()),
+                hold_bytes: 0,
+                ..Default::default()
+            })
+            .with_owned_engines()
+            .load_program(&path)
+            .unwrap();
+        let snapshot = program.engine.signature_snapshot();
+        let before = program.engine.memo_snapshot();
+        let actual = snapshot
+            .checked_runtime(Some(&hirsel_syntax::DefPath::core(
+                hirsel_interp::library::FORGET_OPERATION,
+            )))
+            .unwrap();
+        assert_eq!(
+            program.engine.memo_snapshot(),
+            before,
+            "frozen H declarations perform no body query"
+        );
+        let expected = program
+            .engine
+            .checked_runtime_types()
+            .unwrap()
+            .checked
+            .unwrap();
+        assert_eq!(actual.noalloc, expected.noalloc);
+        assert_eq!(actual.noalloc_drop, expected.noalloc_drop);
+        assert_eq!(actual.flat, expected.flat);
+        assert_eq!(actual.arena_with, expected.arena_with);
+        assert_eq!(
+            actual
+                .operations
+                .iter()
+                .map(|(path, signature)| (path, signature.fingerprint))
+                .collect::<Vec<_>>(),
+            expected
+                .operations
+                .iter()
+                .map(|(path, signature)| (path, signature.fingerprint))
+                .collect::<Vec<_>>()
+        );
+    });
+}
+
+#[test]
+fn admitted_front_actual_output_debit_refuses_insufficient_producer_allowance() {
+    with_compiler_stack(|| {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("main.hir");
+        std::fs::write(&path, "pub fn main()->u8{1u8}\n").unwrap();
+        let store = Arc::new(MemStore::default());
+        for extra in [1, 8 << 20] {
+            let mut program = COMPILER
+                .with_config(CompileConfig {
+                    store: store.clone(),
+                    ..Default::default()
+                })
+                .with_owned_engines()
+                .load_program(&path)
+                .unwrap();
+            let definitions = vec![program.entry.clone()];
+            let footprint = program.engine.front_input_footprint(&definitions).unwrap();
+            assert!(footprint.source_headers > 0);
+            let budget = ProcessBudget::new(1 << 30);
+            let weight = MemoryWeight {
+                retained: 64 << 10,
+                scratch: 8 << 20,
+                stack: 0,
+            };
+            let front = program
+                .engine
+                .front_body_queries(
+                    &definitions,
+                    weight,
+                    budget.reserve(footprint.front_inputs + extra).unwrap(),
+                    errors(),
+                )
+                .unwrap();
+            let mut runtime = AdmittedRuntime::new(
+                hirsel_intern::jobs::Jobs::ONE,
+                budget.reserve(512 << 20).unwrap(),
+                errors(),
+            )
+            .unwrap();
+            runtime.register(FRONT_BODY_KIND, front.factory()).unwrap();
+            let request = runtime.request(&[front.query(&program.entry).unwrap()]);
+            let result = runtime.wait(request);
+            if extra == 1 {
+                assert_eq!(result.unwrap_err(), errors().resource);
+                assert_eq!(
+                    front.recompute_count(&program.entry, QueryKind::Modes),
+                    1,
+                    "the real bounded producer ran; retention debit refused its publication"
+                );
+            } else {
+                let products = result.unwrap();
+                let output = front.outcome(products[0].record).unwrap();
+                assert!(output.outcome.result.is_ok());
+                assert_eq!(front.store_adoptions(), 1, "reuse remains real S0 adoption");
+                drop(output);
+            }
+            runtime.shutdown();
+            drop(front);
+            assert_eq!(budget.reserved(), 0);
+        }
+    });
+}
