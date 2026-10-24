@@ -45,16 +45,16 @@ pub fn main(rt:Io)->Result[(),GrantError] {
   let total=task.scope(tasks,fn(s:Scope)->u64 {
     let (sender,receiver):(Sender[u64],Receiver[u64])=channel.open(tasks)
     let mut rx=take receiver
-    let mut set:TaskSet[u64] of s=task.set(s)
+    let mut set:TaskSet[Result[u64,()]] of s=task.set(s)
     for seed in 1u64..5u64 {
       let dup=sender.dup(tasks,sender)
-      task.add(s,mut set,task.async(s,fn()->u64 {
+      task.add(s,mut set,task.async(s,fn()->Result[u64,()] {
         let mut tx=take dup
         let mut held:List[u64]=[seed,seed*3u64]
         list.push(mut held,seed*5u64)
         let _=channel.send(tasks,mut tx,held[0])
         let _=channel.send(tasks,mut tx,held[1])
-        held[2]
+        Ok(held[2])
       }))
     }
     let mut sum=0u64
