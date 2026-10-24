@@ -662,6 +662,18 @@ fn own_exec() -> *const Exec {
     EXEC.with(Cell::get)
 }
 
+/// Whether this running task/driver is on its run's admission thread.
+/// # Safety
+/// The caller owns a live task or saved-frame claim in `run`. A null EXEC is
+/// admission's direct path; all compute/pool/commit threads install their Exec.
+pub(crate) unsafe fn on_home(run: *mut RunShared) -> bool {
+    let Some(execs) = (unsafe { (*(*run).execs.get()).as_deref() }) else {
+        return false;
+    };
+    let current = own_exec();
+    current.is_null() || std::ptr::eq(current, Arc::as_ptr(&execs.home))
+}
+
 /// Whether the calling thread is one of a run's blocking-pool threads.
 #[inline(never)]
 pub(crate) fn on_pool() -> bool {
@@ -1875,6 +1887,10 @@ pub(crate) unsafe fn home_posts(run: *mut RunShared) -> bool {
     let execs = unsafe { (*(*run).execs.get()).as_deref().unwrap() };
     !execs.home.inbox.lock().unwrap().posts.is_empty()
 }
+
+#[cfg(test)]
+#[path = "pool/modules.rs"]
+mod audit_modules;
 
 #[cfg(test)]
 mod progress_tests;

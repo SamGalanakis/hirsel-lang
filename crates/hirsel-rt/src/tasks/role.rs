@@ -61,8 +61,13 @@ impl Role {
     /// library/std/src/sync/poison/condvar.rs:182-193), check the complete
     /// predicate under the notification lock. Hirsel's home thread must also
     /// run synchronous bridges: the role owner may be waiting for one.
-    unsafe fn acquire_idle_home(&self, run: *mut RunShared) {
+    unsafe fn acquire_home(&self, run: *mut RunShared, task: usize) {
         let mut owner = self.owner.lock().unwrap_or_else(|e| e.into_inner());
+        // Same-task reentry owns R already and must not service another loan.
+        // Idle callbacks remain nonreentrant even for the same marker.
+        if task != IDLE_OWNER && *owner == Some(task) {
+            return;
+        }
         self.home_waiting.store(true, Ordering::Relaxed);
         while owner.is_some() {
             if let Some(call) = unsafe { crate::pool::take_home_call(run) } {
@@ -78,7 +83,7 @@ impl Role {
             }
         }
         self.home_waiting.store(false, Ordering::Relaxed);
-        *owner = Some(IDLE_OWNER);
+        *owner = Some(task);
     }
 
     #[cfg(test)]
@@ -165,7 +170,7 @@ impl IdleGuard {
         let role = unsafe { &(*run).role };
         let enabled = role.enabled.load(Ordering::Acquire);
         if enabled {
-            unsafe { role.acquire_idle_home(run) };
+            unsafe { role.acquire_home(run, IDLE_OWNER) };
         }
         Self {
             run: if enabled { run } else { std::ptr::null_mut() },
@@ -224,7 +229,11 @@ pub(crate) unsafe fn claim(run: *mut crate::context::RunShared, task: u32) -> *m
         let role = &(*run).role;
         let claim = ((task as usize) << 1) | 1;
         if role.enabled.load(Ordering::Acquire) {
-            role.acquire(claim);
+            if crate::pool::on_home(run) {
+                role.acquire_home(run, claim);
+            } else {
+                role.acquire(claim);
+            }
         }
         let ctx = (*(*run).tasks.get())
             .as_deref_mut()
@@ -248,11 +257,19 @@ pub(crate) unsafe fn claim(run: *mut crate::context::RunShared, task: u32) -> *m
 /// acquiring. The run outlives every caller.
 pub(crate) unsafe fn enter(ctx: *mut TaskCtx) {
     // SAFETY: caller contract; these immutable fields outlive every worker.
-    let role = unsafe { &(*(*ctx).run_ptr()).role };
+    let run = unsafe { (*ctx).run_ptr() };
+    let role = unsafe { &(*run).role };
     if !role.enabled.load(Ordering::Acquire) {
         return;
     }
-    role.acquire(ctx.addr());
+    // A home foreign callback can wait for a child's R while that child
+    // synchronously loans runtime work to home. No scheduler or adapter
+    // borrow survives entry, so serve that loan before claiming our own R.
+    if unsafe { crate::pool::on_home(run) } {
+        unsafe { role.acquire_home(run, ctx.addr()) };
+    } else {
+        role.acquire(ctx.addr());
+    }
     // SAFETY: the role exclusively owns the scheduler. This intentionally
     // avoids scheduler(), which itself checks the running task's stop word.
     unsafe {
