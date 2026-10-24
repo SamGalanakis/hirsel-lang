@@ -2350,6 +2350,15 @@ pub(crate) fn runtime_archive<'a>(
 /// `lib<name>.a` in the host's system library directories, as `ld -l` searches
 /// them. Host libraries are the one link input outside the kit; they enter the
 /// build ID by content.
+pub(crate) fn selected_foreign_inputs(
+    toolchain: &Toolchain,
+    target: &TargetSpec,
+    links: &[hirsel_engine::LinkInput],
+) -> Result<Vec<PathBuf>, NativeError> {
+    let kit = super::kit::Kit::load(&toolchain.kit)?;
+    foreign_inputs(&kit, &target.triple, links)
+}
+
 fn foreign_inputs(
     kit: &super::kit::Kit,
     triple: &str,
