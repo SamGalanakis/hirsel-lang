@@ -1308,6 +1308,7 @@ impl Example {
         let output = command
             .arg("--hirsel-grants")
             .arg(grants)
+            .arg("--")
             .args(args)
             .env_clear()
             .output()

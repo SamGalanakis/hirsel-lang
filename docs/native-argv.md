@@ -63,29 +63,30 @@ hirsel run examples/argv-contract/hirsel.json --grants "$recipe_dir/grants.json"
 Add `--native --backend llvm` (or `cranelift`) before `--` to run through that
 backend using `hirsel run`. The vectors and exit codes stay the same.
 
-A built executable consumes `--hirsel-grants` and the next operand as launcher
-configuration. Every remaining operand is an application argument. The template
-Args are **always replaced**, including when there are zero trailing operands:
+A built executable reads runtime options up to the first application operand
+or an explicit `--`. Put `--` after the grants path when forwarding an arbitrary
+argument list, so literal runtime-option spellings reach the app. The template
+Args are **always replaced**, including when there are zero application operands:
 
 ```sh
-"$recipe_dir/argv-contract" --hirsel-grants "$recipe_dir/grants.json"
+"$recipe_dir/argv-contract" --hirsel-grants "$recipe_dir/grants.json" --
 # []
-"$recipe_dir/argv-contract" --hirsel-grants "$recipe_dir/grants.json" 'foo bar'
+"$recipe_dir/argv-contract" --hirsel-grants "$recipe_dir/grants.json" -- 'foo bar'
 # ["foo bar"]
-"$recipe_dir/argv-contract" --hirsel-grants "$recipe_dir/grants.json" ''
+"$recipe_dir/argv-contract" --hirsel-grants "$recipe_dir/grants.json" -- ''
 # [""]
-"$recipe_dir/argv-contract" --hirsel-grants "$recipe_dir/grants.json" --follow
+"$recipe_dir/argv-contract" --hirsel-grants "$recipe_dir/grants.json" -- --follow
 # ["--follow"]
-"$recipe_dir/argv-contract" --hirsel-grants "$recipe_dir/grants.json" '羊' 'café'
+"$recipe_dir/argv-contract" --hirsel-grants "$recipe_dir/grants.json" -- '羊' 'café'
 # ["羊","café"]
-"$recipe_dir/argv-contract" --hirsel-grants "$recipe_dir/grants.json" 'foo bar' baz
+"$recipe_dir/argv-contract" --hirsel-grants "$recipe_dir/grants.json" -- 'foo bar' baz
 # ["foo bar","baz"]
-"$recipe_dir/argv-contract" --hirsel-grants "$recipe_dir/grants.json" 'foo bar' '' --follow '羊' baz
+"$recipe_dir/argv-contract" --hirsel-grants "$recipe_dir/grants.json" -- 'foo bar' '' --follow '羊' baz
 # ["foo bar","","--follow","羊","baz"]
 ```
 
-The native template path is already the argument boundary. Adding `--` after it
-passes a literal `"--"` to the app. The separate native form `program -- args...`
+The first `--` ends runtime-option parsing and is omitted from Args. A second
+`--` is literal application data. The separate native form `program -- args...`
 grants only Args; this example also requests Io, so that form exits 3 with no
 application output. It cannot print without an explicit stdout grant.
 
@@ -102,7 +103,7 @@ To pass the spelling of a launcher option as data, place it after the boundary:
 
 ```sh
 hirsel run examples/argv-contract/hirsel.json --grants "$recipe_dir/grants.json" -- --hirsel-grants literal.json
-"$recipe_dir/argv-contract" --hirsel-grants "$recipe_dir/grants.json" --hirsel-grants literal.json
+"$recipe_dir/argv-contract" --hirsel-grants "$recipe_dir/grants.json" -- --hirsel-grants literal.json
 # Both: ["--hirsel-grants","literal.json"] (exit 0)
 ```
 
@@ -140,7 +141,7 @@ terminal when copying the Unicode operands.
 
 ```sh
 "$recipe_dir/argv-contract" --hirsel-record "$recipe_dir/argv.tape" \
-  --hirsel-grants "$recipe_dir/grants.json" 'foo bar' '' --follow '羊' baz
+  --hirsel-grants "$recipe_dir/grants.json" -- 'foo bar' '' --follow '羊' baz
 # ["foo bar","","--follow","羊","baz"]
 "$recipe_dir/argv-contract" --hirsel-replay "$recipe_dir/argv.tape"
 # ["foo bar","","--follow","羊","baz"]

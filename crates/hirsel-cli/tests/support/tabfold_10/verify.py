@@ -87,7 +87,7 @@ def verify(hirsel, root, output, prebuilt=None):
             return [hirsel, 'run', selection, '--grants', policy,
                     *(['--record', tape] if tape else []), '--', *args]
         return [binaries[engine], *(['--hirsel-record', tape] if tape else []),
-                '--hirsel-grants', policy, *args]
+                '--hirsel-grants', policy, '--', *args]
 
     def fail(error):
         return 1, b'', f'error: {error}\n'.encode()
