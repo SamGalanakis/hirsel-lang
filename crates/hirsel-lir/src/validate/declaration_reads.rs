@@ -49,12 +49,11 @@ fn invocation_identity(rows: Option<&[crate::invocations::ReferenceInvocation]>)
         rows.iter()
             .map(|row| {
                 (
-                    row.body,
-                    row.block,
-                    row.statement,
-                    row.restart,
-                    row.primitive.clone(),
-                    row.callee.clone(),
+                    (row.body, row.block),
+                    (
+                        (row.statement, row.restart),
+                        (row.primitive.clone(), row.callee.clone()),
+                    ),
                 )
             })
             .collect::<Vec<_>>()
