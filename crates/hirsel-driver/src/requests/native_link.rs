@@ -12,7 +12,7 @@ use crate::native::{
     queries::{
         compilation_tasks::CompilationBackend,
         link_tasks::{CodegenPartition, LinkExecution, NativeLinkExecutor},
-        roots::{RootFrozenExecutableInputs, RootProducts},
+        roots::{RootCapturedExecutableInputs, RootProducts},
     },
 };
 use hirsel_engine::{runtime::MemoryReservation, store::ResultStore};
@@ -169,58 +169,26 @@ impl NativeLinkExecutor for FrozenPlatform {
             return Err("native Link received another selected platform".into());
         }
         let scratch = tempfile::tempdir().map_err(|error| error.to_string())?;
-        let runtime_dir = scratch.path().join("runtime");
-        let foreign_dir = scratch.path().join("foreign");
-        std::fs::create_dir(&runtime_dir).map_err(|error| error.to_string())?;
-        std::fs::create_dir(&foreign_dir).map_err(|error| error.to_string())?;
-        let runtime = runtime_dir.join(&self.inputs.platform.runtime_archive().name);
-        object_queries::materialize_link_input(
-            self.store.as_ref(),
-            self.inputs.platform.runtime_archive().content,
-            &runtime,
-            false,
-        )?;
-        let foreign = self
-            .inputs
-            .platform
-            .foreign()
-            .iter()
-            .enumerate()
-            .map(|(index, input)| {
-                let directory = foreign_dir.join(index.to_string());
-                std::fs::create_dir(&directory).map_err(|error| error.to_string())?;
-                let path = directory.join(&input.name);
-                object_queries::materialize_link_input(
-                    self.store.as_ref(),
-                    input.content,
-                    &path,
-                    false,
-                )?;
-                Ok(path)
-            })
-            .collect::<Result<Vec<_>, String>>()?;
-        let plan = native.plan_frozen_executable(
+        let plan = native.plan_captured_executable(
             input.root,
             input.ready,
-            RootFrozenExecutableInputs {
+            RootCapturedExecutableInputs {
                 entry: &self.entry,
                 backend: self.backend,
                 objects: input.objects,
                 directory: scratch.path(),
                 requested: self.requested.as_deref(),
                 standalone: self.requested.is_none(),
-                platform: native::FrozenExecutableLinkInputs {
+                platform: native::CapturedExecutableLinkInputs {
                     store: self.store.as_ref(),
-                    kit: self.inputs.platform.kit(),
-                    runtime: &runtime,
-                    foreign: &foreign,
+                    platform: &self.inputs.platform,
                     loader: None,
                 },
             },
         )?;
         let capture = plan.capture(
             self.store.as_ref(),
-            self.inputs.platform.linker(),
+            &self.inputs.platform,
             self.inputs.limits,
         )?;
         capture.validate(self.store.as_ref())?;
