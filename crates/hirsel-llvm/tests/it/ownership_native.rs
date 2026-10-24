@@ -106,6 +106,7 @@ fn inputs(program: &support::programs::Program) -> EmitInputs<'_> {
         std::sync::OnceLock::new();
     EmitInputs {
         ahead: None,
+        continuation: None,
         alternate: false,
         verify_backend: true,
         index: None,
