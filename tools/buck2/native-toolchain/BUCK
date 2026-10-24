@@ -37,3 +37,5 @@ toolchain_proof(name = "source-entry-proof", tools = [":llvm", "root//:hirsel-dr
 export_file(name = "environment.tsv", visibility = ["PUBLIC"])
 
 toolchain_proof(name = "native-compilation-proof", tools = [":llvm", ":kit", "root//:hirsel-rt-archives", "root//:hirsel-driver-test-it-harness"], script = "native_compilation_proof.sh")
+
+toolchain_proof(name = "root-observation-proof", tools = [":llvm", ":kit", "root//:hirsel-rt-archives", "root//:hirsel-driver-test-it-harness"], script = "root_observation_proof.sh")

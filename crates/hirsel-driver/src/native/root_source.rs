@@ -223,6 +223,10 @@ impl NativeLinkSource {
     pub fn test_entries(&self) -> &[(DefPath, u64)] {
         &self.test_entries
     }
+    /// Exact settled source anchors, including generated-source ordinals.
+    pub fn source_anchors(&self) -> &BTreeMap<DefPath, Vec<Anchor>> {
+        &self.anchors
+    }
     pub fn sites(&self) -> super::Sites<'_> {
         super::Sites::from_anchors(
             &self.sources,
