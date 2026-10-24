@@ -68,7 +68,7 @@ unsafe extern "C" fn older(ctx: *mut TaskCtx, env: *mut Header, _: u64, _: u64) 
     STATUS_OK
 }
 
-fn terminal_run(mode: u64) {
+pub(crate) fn terminal_run(mode: u64) {
     let layout = crate::Layout {
         magic: crate::LAYOUT_MAGIC,
         version: crate::LAYOUT_VERSION,
@@ -252,11 +252,14 @@ fn returned_error_sink_and_yielding_cleanup_follow_older_turns_on_the_production
         scan: std::ptr::null(),
         scan_words: 0,
     };
-    let result = crate::Layout {
-        finalizer: Some(returned_cleanup),
-        ..environment
-    };
-    let layouts = [&environment as *const crate::Layout, &result];
+    let result = super::drops::tests::finalized(
+        crate::Layout {
+            finalizer: Some(returned_cleanup),
+            ..environment
+        },
+        &[],
+    );
+    let layouts = [&environment as *const crate::Layout, result];
     let node = crate::exit_report::Node {
         kind: 2,
         a: 8,
@@ -697,7 +700,7 @@ fn dedicated_commit_preserves_first_budget_stop_and_truncates_younger_suffix() {
     );
 }
 
-fn budget_terminal_trace_truncates_actual_younger_suffix_and_accumulates_live_head_charges_commit(
+pub(crate) fn budget_terminal_trace_truncates_actual_younger_suffix_and_accumulates_live_head_charges_commit(
     commit: hirsel_run_config::Commit,
 ) {
     use super::events::{CanonicalItem, CanonicalOutcome, Transition};
@@ -971,7 +974,7 @@ fn dedicated_commit_preserves_exact_budget_charges_across_partial_head_settlemen
     );
 }
 
-fn exact_charge_trace_preserves_fuel_before_and_after_a_free_across_head_settlements_commit(
+pub(crate) fn exact_charge_trace_preserves_fuel_before_and_after_a_free_across_head_settlements_commit(
     commit: hirsel_run_config::Commit,
 ) {
     use crate::budget::stretch_trace::Charge;

@@ -14,6 +14,8 @@ pub(crate) mod foreign;
 pub(crate) mod home;
 pub(crate) mod host;
 pub(crate) mod lifecycle;
+#[cfg(test)]
+mod runtime50_tests;
 pub(crate) mod sets;
 #[cfg(test)]
 mod terminal_tests;

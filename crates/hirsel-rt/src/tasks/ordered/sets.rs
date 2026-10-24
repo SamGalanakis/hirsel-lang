@@ -350,7 +350,7 @@ pub(crate) unsafe fn release(
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::ordered::Policy;
 
@@ -406,7 +406,7 @@ mod tests {
         STATUS_OK
     }
 
-    fn run_mode(width: u32, mode: u64) {
+    pub(crate) fn run_mode(width: u32, mode: u64) {
         use hirsel_core_contract::handle_scan::TYPED_HANDLE;
         let scan = [
             TYPED_HANDLE,

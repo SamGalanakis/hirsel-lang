@@ -929,7 +929,7 @@ pub(super) fn retire_detached(s: &mut Scheduler, task: u32) {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::ordered::Policy;
 
@@ -1022,7 +1022,7 @@ mod tests {
         STATUS_OK
     }
 
-    fn run_logged_detach(bulk: bool) {
+    pub(crate) fn run_logged_detach(bulk: bool) {
         use std::sync::{Arc, atomic::Ordering};
         let layout = crate::Layout {
             magic: crate::LAYOUT_MAGIC,
@@ -1664,7 +1664,7 @@ mod tests {
         }
     }
 
-    fn receive_run(
+    pub(crate) fn receive_run(
         width: u32,
         sender: bool,
         observing: bool,
