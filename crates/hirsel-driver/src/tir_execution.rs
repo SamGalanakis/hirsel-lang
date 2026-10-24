@@ -3,7 +3,7 @@
 //! host effects, admission, recording, cancellation and budgets.
 use crate::launch_binding::LaunchSelection;
 use crate::requests::TirExecution;
-use crate::{HostLaunch, RunOutcome, ToolError, call_schemas, network};
+use crate::{HostLaunch, HostRun, RunOutcome, ToolError, call_schemas, network};
 use std::path::Path;
 
 pub(crate) fn run_tir_on_host(
