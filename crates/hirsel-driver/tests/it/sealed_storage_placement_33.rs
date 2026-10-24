@@ -668,3 +668,11 @@ fn sealed_storage_dictionary_forms_33_generic_allocation_origin() {
         "unique xs",
     );
 }
+
+#[test]
+fn sealed_storage_task_33_scope_allocation_retains_origin() {
+    rejected(
+        "fn inspect(tasks:Tasks)->u64{let mut r=arena.with(fn(a:Arena)->Region[List[u64]]{let root:List[u64] in a=[7u64];arena.seal(take a,take root)});region.with(mut r,fn(root:List[u64])->u64{task.scope(tasks,fn(s:Scope)->u64{let copied=unique root;list.len(copied)})})}\npub fn main(){}",
+        "unique root",
+    );
+}

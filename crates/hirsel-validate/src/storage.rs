@@ -624,6 +624,49 @@ impl Producer<'_> {
         let SignatureKind::Function(function) = &signature.kind else {
             return unknown_callee();
         };
+        // Independently check the executable operation's original declaration.
+        // Only the real callback body contributes effects and result producers.
+        if path.is_core("task.scope") {
+            let reviewed = signature.definition.path() == path
+                && match &signature.kind {
+                    SignatureKind::Function(function) => {
+                        function.generics.len() == 1
+                            && matches!(&function.generics[0], GenericParameter::Type { bounds, .. } if bounds.is_empty())
+                            && function.parameters.len() == 2
+                            && !function.incomplete
+                            && function.foreign.is_none()
+                            && function.error.is_none()
+                            && function.allocation == Allocation::MayAllocate
+                            && function.parameters[0].passing == PassingMode::Borrow
+                            && matches!(&self.types.row(function.parameters[0].ty).kind, TypeKind::Named { definition, arguments } if definition.path().is_core("Tasks") && arguments.is_empty())
+                            && function.parameters[1].passing == PassingMode::Borrow
+                            && self.types.row(function.parameters[1].ty).modes.multiplicity
+                                == Multiplicity::Once
+                            && matches!(
+                                &self.types.row(function.result).kind,
+                                TypeKind::Parameter(TypeParameterRef::Bound {
+                                    depth: 0,
+                                    parameter: TypeParamId(0)
+                                })
+                            )
+                            && matches!(&self.types.row(function.parameters[1].ty).kind,
+                                    TypeKind::Function(callback) if callback.generics.is_empty()
+                                        && callback.parameters.len() == 1
+                                        && callback.parameters[0].passing == PassingMode::Borrow
+                                        && matches!(&self.types.row(callback.parameters[0].ty).kind, TypeKind::Named { definition, arguments } if definition.path().is_core("Scope") && arguments.is_empty())
+                                        && matches!(&self.types.row(callback.result).kind, TypeKind::Parameter(TypeParameterRef::Bound { depth: 1, parameter: TypeParamId(0) })))
+                    }
+                    _ => false,
+                };
+            return if reviewed {
+                StorageCallee::ScopeCallback {
+                    callback: ParamId(1),
+                    result_path: Default::default(),
+                }
+            } else {
+                unknown_callee()
+            };
+        }
         if path.is_core("copy_to") {
             let reviewed = signature.definition.path() == path
                 && function.parameters.len() == 2 && function.generics.len() == 1

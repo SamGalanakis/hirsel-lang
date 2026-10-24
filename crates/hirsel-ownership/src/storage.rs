@@ -779,6 +779,57 @@ impl Producer<'_, '_> {
                     result_path: Default::default(),
                 }
             }
+            // CONC-2 scope entry invokes this original body with a fresh Scope;
+            // it does not infer effects or code from the callback's result type.
+            CallTarget::Definition(path) if path.is_core("task.scope") => {
+                let signature = self.signatures.read(
+                    DefId::intern(path),
+                    Arc::make_mut(&mut self.checked.resolution.reads),
+                )?;
+                let reviewed = signature.definition.path() == path
+                    && match &signature.kind {
+                        SignatureKind::Function(function) => {
+                            function.generics.len() == 1
+                                && matches!(&function.generics[0], GenericParameter::Type { bounds, .. } if bounds.is_empty())
+                                && function.parameters.len() == 2
+                                && !function.incomplete
+                                && function.foreign.is_none()
+                                && function.error.is_none()
+                                && function.allocation == Allocation::MayAllocate
+                                && function.parameters[0].passing == PassingMode::Borrow
+                                && matches!(&self.types.row(function.parameters[0].ty).kind, TypeKind::Named { definition, arguments } if definition.path().is_core("Tasks") && arguments.is_empty())
+                                && function.parameters[1].passing == PassingMode::Borrow
+                                && self.types.row(function.parameters[1].ty).modes.multiplicity
+                                    == Multiplicity::Once
+                                && matches!(
+                                    &self.types.row(function.result).kind,
+                                    TypeKind::Parameter(TypeParameterRef::Bound {
+                                        depth: 0,
+                                        parameter: TypeParamId(0)
+                                    })
+                                )
+                                && matches!(&self.types.row(function.parameters[1].ty).kind,
+                                    TypeKind::Function(callback) if callback.generics.is_empty()
+                                        && callback.parameters.len() == 1
+                                        && callback.parameters[0].passing == PassingMode::Borrow
+                                        && matches!(&self.types.row(callback.parameters[0].ty).kind, TypeKind::Named { definition, arguments } if definition.path().is_core("Scope") && arguments.is_empty())
+                                        && matches!(&self.types.row(callback.result).kind, TypeKind::Parameter(TypeParameterRef::Bound { depth: 1, parameter: TypeParamId(0) })))
+                        }
+                        _ => false,
+                    };
+                if reviewed {
+                    StorageCallee::ScopeCallback {
+                        callback: ParamId(1),
+                        result_path: Default::default(),
+                    }
+                } else {
+                    StorageCallee::Declared {
+                        allocations: vec![],
+                        results: vec![],
+                        complete: false,
+                    }
+                }
+            }
             CallTarget::Definition(path) if path.is_core("copy_to") => {
                 let signature = self.signatures.read(
                     DefId::intern(path),
