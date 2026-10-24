@@ -10,6 +10,10 @@ macro_rules! work_stats {
             $($(#[$doc])* pub $field: u64,)*
         }
         impl WorkStats {
+            /// Accumulate completed request work without retaining its products.
+            pub fn accumulate(&mut self, work: Self) {
+                $(self.$field = self.$field.saturating_add(work.$field);)*
+            }
             /// Work since an earlier observation of this same engine.
             pub fn since(self, earlier: Self) -> Self {
                 Self { $($field: self.$field.saturating_sub(earlier.$field),)* }
