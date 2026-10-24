@@ -45,6 +45,133 @@ struct Seed {
     environment: bool,
 }
 
+/// The existing task_main capture specialization, distinct from parameter
+/// seeds. This is request data; the consumer still admits original C and ABI.
+#[derive(Clone, Debug)]
+pub struct TaskCaptureRequest {
+    pub key: InstanceKey,
+    pub target: CallableTarget,
+}
+fn task_capture_key(
+    source: &InstanceKey,
+    definition: &DefPath,
+    instance: Option<ContentHash>,
+    environment: bool,
+) -> InstanceKey {
+    source.derived(
+        "hirsel.task-capture-target-specialization.v1",
+        &[
+            &definition.fingerprint().0,
+            &instance.unwrap_or_default().0,
+            &[u8::from(environment)],
+        ],
+    )
+}
+impl TaskCaptureRequest {
+    pub fn new(source: &InstanceKey, target: CallableTarget) -> Result<Self, String> {
+        if !source.definition().is_core("$native.task_main")
+            || target.symbol.kind != SymbolKind::Function
+        {
+            return Err(
+                "task capture requires the original task_main and a function target".into(),
+            );
+        }
+        let key = task_capture_key(
+            source,
+            &target.symbol.definition,
+            target.symbol.instance,
+            target.environment,
+        );
+        Ok(Self { key, target })
+    }
+}
+
+/// Canonical portable capture binding. It retains neither an IR body nor a
+/// numeric ABI selector, and grants no source or native admission authority.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskCaptureRecipe {
+    schema: u32,
+    definition: DefPath,
+    body: u32,
+    source: Vec<u8>,
+    target: Seed,
+}
+impl TaskCaptureRecipe {
+    pub fn capture(
+        source: &InstanceKey,
+        request: &TaskCaptureRequest,
+        table: &LayoutTable,
+    ) -> Result<Self, String> {
+        let target = &request.target;
+        let recipe = Self {
+            schema: 1,
+            definition: source.definition().clone(),
+            body: source.body(),
+            source: source.encoding().to_vec(),
+            target: Seed {
+                parameter: 0,
+                definition: target.symbol.definition.clone(),
+                instance: target.symbol.instance,
+                abi: LayoutKeys::new(table)
+                    .fn_abi_of(table, target.abi)
+                    .ok_or("missing task capture target ABI")?,
+                environment: target.environment,
+            },
+        };
+        if target.symbol.kind != SymbolKind::Function || recipe.key()? != request.key {
+            return Err("task capture recipe differs from selected request".into());
+        }
+        Ok(recipe)
+    }
+    pub fn source(&self) -> Result<InstanceKey, String> {
+        if self.schema != 1
+            || self.target.parameter != 0
+            || !self.definition.is_core("$native.task_main")
+        {
+            return Err("noncanonical task capture recipe".into());
+        }
+        InstanceKey::from_encoding(&self.definition, self.body, self.source.clone())
+            .map_err(|error| format!("task capture source key: {error:?}"))
+    }
+    fn target(&self, abi: hirsel_lir::FnAbiId) -> CallableTarget {
+        CallableTarget {
+            symbol: Symbol {
+                kind: SymbolKind::Function,
+                definition: self.target.definition.clone(),
+                instance: self.target.instance,
+            },
+            abi,
+            environment: self.target.environment,
+        }
+    }
+    pub fn key(&self) -> Result<InstanceKey, String> {
+        Ok(task_capture_key(
+            &self.source()?,
+            &self.target.definition,
+            self.target.instance,
+            self.target.environment,
+        ))
+    }
+    pub fn bind(
+        &self,
+        expected: &InstanceKey,
+        binding: &Binding,
+    ) -> Result<TaskCaptureRequest, String> {
+        let key = self.key()?;
+        if &key != expected {
+            return Err("task capture recipe has another requested owner".into());
+        }
+        let abi = binding
+            .abi(self.target.abi)
+            .ok_or("missing task capture target ABI")?;
+        Ok(TaskCaptureRequest {
+            key,
+            target: self.target(abi),
+        })
+    }
+}
+
 /// No FnAbiId, TypeId, source body or Value is retained. The full original key
 /// and canonical ABI hashes survive process/table rebinding. A recipe alone
 /// grants neither source proof nor C authority nor admission under the caps.

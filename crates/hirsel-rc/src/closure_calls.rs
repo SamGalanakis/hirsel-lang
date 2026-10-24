@@ -10,7 +10,7 @@ use hirsel_syntax::ContentHash;
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 
 mod request;
-pub use request::CallableRecipe;
+pub use request::{CallableRecipe, TaskCaptureRecipe, TaskCaptureRequest};
 
 pub const MAX_PER_FUNCTION: usize = 16;
 pub const MAX_SPECIALIZATIONS: usize = 256;
@@ -282,6 +282,34 @@ pub fn rewrite_instance(
     )
 }
 
+/// The owned task_main adapter's first capture carries callable code while
+/// retaining its original environment, move mask and TaskFinish ownership.
+pub fn rewrite_task_capture(
+    unit: &mut LirUnit<Value>,
+    table: &hirsel_lir::layout_types::LayoutTable,
+    entries: &HashMap<Symbol, CallableEntry>,
+    request: &TaskCaptureRequest,
+    request_specialization: impl FnMut(&CallableEntry, &CallableRequest) -> bool,
+) -> Result<BTreeSet<ContentHash>, String> {
+    if !unit.header.definition.is_core("$native.task_main")
+        || unit.header.definition != *request.key.definition()
+    {
+        return Err("captured callable request is not the selected task_main adapter".into());
+    }
+    let value = *unit
+        .captures
+        .first()
+        .ok_or("task_main has no callable capture")?;
+    Ok(rewrite_seeded_instance(
+        unit,
+        table,
+        entries,
+        &[(value, request.target.clone())],
+        0,
+        request_specialization,
+    ))
+}
+
 fn rewrite_seeded_instance(
     unit: &mut LirUnit<Value>,
     table: &hirsel_lir::layout_types::LayoutTable,
@@ -499,15 +527,12 @@ pub fn specialize(lowered: &mut Lowered) -> Specializations {
             let Some(&value) = source.captures.first() else {
                 continue;
             };
-            let digest = ContentHash::of_parts(
-                "hirsel.task-capture-target-specialization.v1",
-                [
-                    source.header.instance.0.as_slice(),
-                    target.symbol.definition.fingerprint().0.as_slice(),
-                    target.symbol.instance.unwrap_or_default().0.as_slice(),
-                    &[u8::from(target.environment)],
-                ],
-            );
+            let request = TaskCaptureRequest::new(
+                &lowered.instances.view(InstanceId(original as u32)).key,
+                target.clone(),
+            )
+            .expect("independently selected task_main capture");
+            let digest = request.key.digest();
             let key = (original, digest);
             let specialized = if let Some(&i) = cache.get(&key) {
                 i

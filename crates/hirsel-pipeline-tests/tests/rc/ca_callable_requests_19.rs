@@ -181,3 +181,176 @@ fn callable_requests_preserve_refusal_names_and_rebind_canonical_abis() {
     );
     validate_value(body, &inputs).unwrap();
 }
+
+#[test]
+fn task_capture_requests_preserve_existing_adapter_identity_and_owned_finish() {
+    use hirsel_lir::{LayoutKeys, stage::Value};
+    use hirsel_rc::closure_calls::{
+        CallableTarget, TaskCaptureRecipe, TaskCaptureRequest, rewrite_task_capture,
+    };
+    let program = support::compile(
+        "fn main(tasks:Tasks)->u64 {task.scope(tasks,fn(s:Scope)->u64 {let n=42u64;let child=task.async(s,fn()->u64 {n});task.await(s,take child)})}",
+    );
+    let target = support::target();
+    let lowered = hirsel_rc::import::lower(&program, &target).unwrap();
+    let manifest = support::manifest(&program);
+    let operations = lowered.operation_registry(&program);
+    let inputs = Inputs {
+        memo: Default::default(),
+        target: &target,
+        layouts: &lowered.table,
+        manifest: &manifest,
+        operations: &operations,
+        discharge: Some(&lowered.native_discharge),
+    };
+    let id = lowered
+        .instances
+        .ids()
+        .find(|id| {
+            lowered
+                .instances
+                .view(*id)
+                .key
+                .definition()
+                .is_core("$native.task_main")
+        })
+        .unwrap();
+    let source = &lowered.instances.view(id).key;
+    let body = &lowered.units[id.index()];
+    assert!(
+        body.tables
+            .calls
+            .iter()
+            .any(|call| matches!(call.callee, Callee::Indirect(_)))
+    );
+    let target_body = lowered
+        .units
+        .iter()
+        .take(lowered.instances.len())
+        .find(|unit| {
+            unit.header.origin == hirsel_lir::ir::UnitOrigin::Source
+                && unit.parameters.is_empty()
+                && !unit.captures.is_empty()
+        })
+        .unwrap();
+    let symbol = Symbol {
+        kind: SymbolKind::Function,
+        definition: target_body.header.definition.clone(),
+        instance: Some(target_body.header.instance),
+    };
+    let request = TaskCaptureRequest::new(
+        source,
+        CallableTarget {
+            symbol: symbol.clone(),
+            abi: target_body.header.abi,
+            environment: true,
+        },
+    )
+    .unwrap();
+    let expected = hirsel_syntax::ContentHash::of_parts(
+        "hirsel.task-capture-target-specialization.v1",
+        [
+            source.digest().0.as_slice(),
+            symbol.definition.fingerprint().0.as_slice(),
+            symbol.instance.unwrap().0.as_slice(),
+            &[1],
+        ],
+    );
+    assert_eq!(request.key.digest(), expected);
+    assert!(
+        lowered
+            .units
+            .iter()
+            .any(|unit| unit.header.instance == expected),
+        "the unchanged batch transform must select exactly this task capture"
+    );
+    let recipe = TaskCaptureRecipe::capture(source, &request, &lowered.table).unwrap();
+    let recipe: TaskCaptureRecipe =
+        serde_json::from_slice(&serde_json::to_vec(&recipe).unwrap()).unwrap();
+    assert_eq!(recipe.source().unwrap(), *source);
+    assert_eq!(recipe.key().unwrap(), request.key);
+    let checked = validate_value(body.clone(), &inputs).unwrap();
+    let (closure, body) = LayoutClosure::capture(&checked, &inputs, &[]).unwrap();
+    let target_checked = validate_value(target_body.clone(), &inputs).unwrap();
+    let target_closure = LayoutClosure::capture(&target_checked, &inputs, &[])
+        .unwrap()
+        .0;
+    let binding = Binding::new(&target, &[&target_closure, &closure]).unwrap();
+    let rebound = recipe.bind(&request.key, &binding).unwrap();
+    assert_eq!(
+        LayoutKeys::new(&binding.table)
+            .fn_abi(&binding.table.fn_abis[rebound.target.abi.0 as usize]),
+        LayoutKeys::new(&lowered.table)
+            .fn_abi(&lowered.table.fn_abis[request.target.abi.0 as usize])
+    );
+    assert!(recipe.bind(source, &binding).is_err());
+    assert!(
+        recipe
+            .bind(&request.key, &Binding::new(&target, &[]).unwrap())
+            .is_err()
+    );
+    let mut unit = binding.materialize::<Value>(&body).unwrap();
+    let entries = HashMap::from([(
+        symbol,
+        CallableEntry {
+            key: lowered
+                .instances
+                .view(
+                    lowered
+                        .instances
+                        .ids()
+                        .find(|id| {
+                            lowered.instances.view(*id).key.digest() == target_body.header.instance
+                        })
+                        .unwrap(),
+                )
+                .key
+                .clone(),
+            abi: rebound.target.abi,
+            origin: target_body.header.origin,
+            op_free: false,
+        },
+    )]);
+    rewrite_task_capture(&mut unit, &binding.table, &entries, &rebound, |_, _| false).unwrap();
+    unit.header.instance = rebound.key.digest();
+    assert!(
+        !unit
+            .tables
+            .calls
+            .iter()
+            .any(|call| matches!(call.callee, Callee::Indirect(_)))
+    );
+    assert!(
+        unit.tables
+            .calls
+            .iter()
+            .any(|call| matches!(call.callee, Callee::Bound { .. }))
+    );
+    assert!(
+        unit.tables
+            .calls
+            .iter()
+            .any(|call| matches!(call.callee, Callee::Operation(op)
+        if unit.tables.operations[op.index()].definition.is_core("$intrinsic.TaskFinish")))
+    );
+    validate_value(
+        unit,
+        &Inputs {
+            memo: Default::default(),
+            layouts: &binding.table,
+            ..inputs
+        },
+    )
+    .unwrap();
+    let mut malformed = serde_json::to_value(&recipe).unwrap();
+    malformed["target"]["parameter"] = 1.into();
+    assert!(
+        serde_json::from_value::<TaskCaptureRecipe>(malformed)
+            .unwrap()
+            .key()
+            .is_err()
+    );
+    let mut wrong_kind = request.target.clone();
+    wrong_kind.symbol.kind = SymbolKind::Constant;
+    assert!(TaskCaptureRequest::new(source, wrong_kind).is_err());
+}
