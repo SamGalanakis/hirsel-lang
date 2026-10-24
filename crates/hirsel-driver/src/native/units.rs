@@ -277,19 +277,16 @@ pub(crate) fn lower(
     }
     // Task bodies routed through their dispatchers read the same prospective
     // bodies as the ahead plan, and so the same plans as the resume object.
-    let continuation = match program.objects.backend {
-        Backend::Cranelift => hirsel_lir::continuation::ContinuationPlans::build(
-            &ahead.iter().map(Arc::as_ref).collect::<Vec<_>>(),
-            &hirsel_lir::continuation::PlanInputs {
-                table: program.table,
-                target: program.emit.target,
-                environments: &environments,
-                runtime: super::continuation::runtime_identity(),
-                classify: &super::continuation::classify,
-            },
-        ),
-        Backend::Llvm => Default::default(),
-    };
+    let continuation = hirsel_lir::continuation::ContinuationPlans::build(
+        &ahead.iter().map(Arc::as_ref).collect::<Vec<_>>(),
+        &hirsel_lir::continuation::PlanInputs {
+            table: program.table,
+            target: program.emit.target,
+            environments: &environments,
+            runtime: super::continuation::runtime_identity(),
+            classify: &super::continuation::classify,
+        },
+    );
     if continuation.resumable() {
         for key in &mut keys {
             key.0 = ContentHash::of_parts(

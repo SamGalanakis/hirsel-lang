@@ -732,6 +732,13 @@ fn plan_unit(
             Vec::new(),
             Vec::new(),
         ),
+        // A compiler-local region's record is a stack slot of the frame that
+        // entered it; until records are frame-resident its body stays stackful.
+        Ok((_, states)) if states.iter().any(|s| !s.regions.is_empty()) => (
+            Representation::Stackful("region record live across a boundary".into()),
+            Vec::new(),
+            Vec::new(),
+        ),
         Ok((storage, states)) => (Representation::Resumable, storage, states),
     };
     let cost = PlacementCost {

@@ -71,6 +71,7 @@ mod pair;
 mod places;
 mod program;
 mod receipt;
+mod resume;
 pub use program::emit_glue;
 mod sequence_state;
 mod soa;
@@ -310,7 +311,7 @@ fn emit_object_inner(
     profile: Profile<'_>,
     ownership: bool,
 ) -> Result<ObjectArtifact, CodegenError> {
-    let (bytes, manifested, plan) = lower(units, inputs, profile, ownership, |module, machine| {
+    let (bytes, manifested, plan) = lower(units, inputs, profile, ownership, None, |module, machine| {
         optimize_and_emit(
             module,
             machine,
@@ -363,6 +364,21 @@ fn emit_object_inner(
     Ok(artifact)
 }
 
+/// Every resumable plan's state alternates and dispatcher (`resume`), as one object.
+pub fn emit_resume_object(
+    units: &[&ValidatedUnit<Ready>],
+    inputs: &EmitInputs<'_>,
+    plans: &hirsel_lir::continuation::ContinuationPlans,
+) -> Result<ObjectArtifact, CodegenError> {
+    let (bytes, manifested, _) = lower(units, inputs, Profile::default(), false, Some(plans), |module, machine| {
+        optimize_and_emit(module, machine, inputs.opt, verify_backend(inputs), false)
+    })?;
+    let file = ObjectFile::read(inputs.target, bytes)
+        .map_err(|message| CodegenError::Object { message })?;
+    artifact(file, manifested, inputs, &toolchain())
+        .map_err(|problem| CodegenError::Manifest { problem })
+}
+
 /// The verified, optimized LLVM IR `emit_object` would emit as an object: the text
 /// codegen controls inspect.
 pub fn emit_optimized_ir(
@@ -374,6 +390,7 @@ pub fn emit_optimized_ir(
         inputs,
         Profile::default(),
         false,
+        None,
         |module, machine| {
             optimize(module, machine, inputs.opt, true)?;
             Ok(module.text())
@@ -387,7 +404,7 @@ pub fn emit_ir(
     units: &[&ValidatedUnit<Ready>],
     inputs: &EmitInputs<'_>,
 ) -> Result<String, CodegenError> {
-    lower(units, inputs, Profile::default(), false, |module, _| {
+    lower(units, inputs, Profile::default(), false, None, |module, _| {
         Ok(module.text())
     })
     .map(|(text, ..)| text)
@@ -398,7 +415,7 @@ pub fn emit_ir_ownership(
     units: &[&ValidatedUnit<Ready>],
     inputs: &EmitInputs<'_>,
 ) -> Result<String, CodegenError> {
-    lower(units, inputs, Profile::default(), true, |module, _| {
+    lower(units, inputs, Profile::default(), true, None, |module, _| {
         Ok(module.text())
     })
     .map(|(text, ..)| text)
@@ -410,6 +427,7 @@ fn lower<T>(
     inputs: &EmitInputs<'_>,
     profile: Profile<'_>,
     ownership: bool,
+    resume: Option<&hirsel_lir::continuation::ContinuationPlans>,
     finish: impl FnOnce(&Module<'_>, &TargetMachine) -> Result<T, CodegenError>,
 ) -> Result<(T, Manifested, Option<crate::debug::DebugPlan>), CodegenError> {
     check_loaded()?;
@@ -477,6 +495,9 @@ fn lower<T>(
         let mut plan = crate::debug::DebugPlan::default();
         let mut functions = Vec::new();
         for unit in units {
+            if resume.is_some() {
+                break;
+            }
             let unit = unit.unit();
             let template = !inputs.alternate
                 && (unit.header.origin == UnitOrigin::Library
@@ -657,6 +678,24 @@ fn lower<T>(
                 );
             }
             functions.push((unit, function, signature));
+        }
+        let resumed = match resume {
+            Some(plans) => resume::declare(&module, inputs, units, plans, &mut manifested)?,
+            None => Vec::new(),
+        };
+        for (unit, plan, state, function) in resumed {
+            let abi = fn_abi(inputs.layouts, unit.header.abi, &unit.header.definition)?;
+            let signature = Signature::of(&module, inputs.layouts, abi, &unit.header.definition)?;
+            let frame = module.parameter(function, signature.types.len() as u32);
+            let mut emitter =
+                FnEmitter::new(&module, inputs, unit, function, signature, &mut manifested);
+            emitter.resume = Some(resume::Resume {
+                plan,
+                state,
+                frame,
+                resuming: None,
+            });
+            emitter.emit()?;
         }
         for (unit, function, signature) in functions {
             let rooted = !signature.roots.is_empty();
@@ -1106,6 +1145,8 @@ struct FnEmitter<'m, 'a> {
     ahead_counter: Option<Value<'m>>,
     ownership: Option<&'a hirsel_lir::ownership_trace::native::LeafPlan>,
     ownership_frame: Option<Value<'m>>,
+    /// A resumable state alternate (`resume`).
+    resume: Option<resume::Resume<'a, 'm>>,
 }
 
 type Emitted<T = ()> = Result<T, CodegenError>;

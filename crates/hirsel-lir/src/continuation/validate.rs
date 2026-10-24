@@ -582,6 +582,9 @@ pub fn validate(
                         &plan.storage,
                         base,
                     )?;
+                    if !state.regions.is_empty() {
+                        return Err(ContinuationError::RegionToken(*id, i as u32));
+                    }
                 }
             }
             // A refused compact form is always safe.

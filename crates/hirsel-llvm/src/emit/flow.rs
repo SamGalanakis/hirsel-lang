@@ -4,6 +4,15 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
     // The function.
 
     pub(super) fn emit(mut self) -> Emitted {
+        if self.resume.is_some() {
+            return self.emit_resume();
+        }
+        if !self.inputs.alternate
+            && self.ownership.is_none()
+            && let Some(plan) = self.inputs.continuation.and_then(|p| p.task_entry(self.unit))
+        {
+            return self.emit_resume_entry(plan);
+        }
         self.find_versions()?;
         self.fresh_detaches = self
             .unit
@@ -270,6 +279,6 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         for _ in &unit.tables.regions {
             self.regions.push(self.prologue.alloca(record, 8));
         }
-        Ok(())
+        self.resume_storage()
     }
 }
