@@ -306,7 +306,8 @@ host-stop checks follow fuel-refill stop behaviour and add no tape event.
 Incremental std `new/update/finish` retains its source-level checks and costs;
 one-shot hashing does not execute or double-charge those wrappers.
 
-The SHA primitive cutover resets ordinary tapes to binary v9. Semantic revisions
+The SHA primitive cutover resets ordinary tapes from v9 to binary v10 and adds
+the six exports at runtime ABI57. Semantic revisions
 bind the primitive source and resolved RustCrypto dependency versions/checksums;
 old-generation tapes are refused before entry, never upgraded into new passes.
 
@@ -507,7 +508,7 @@ that issues no request, is never journaled.
 
 ### Durable journal
 
-An ordinary tape starts with `hirsel-io-tape 9` followed by NUL; a durable
+An ordinary tape starts with `hirsel-io-tape 10` followed by NUL; a durable
 journal starts with `hirsel-journal 3` followed by newline. Both use the same
 binary frame envelope: a 32-bit little-endian payload length, 32-bit CRC32C,
 64-bit little-endian sequence number starting at zero, a kind byte, then the raw

@@ -56,7 +56,9 @@ fn sha_primitive_38_native_tapes_replay_and_refuse_changed_program_or_old_format
         std::fs::write(&source, &text).unwrap();
         let mut bytes = std::fs::read(&tape).unwrap();
         assert!(bytes.starts_with(hirsel_run_schema::tape::MAGIC));
-        bytes[b"hirsel-io-tape ".len()] = b'8';
+        let previous = hirsel_run_schema::tape::VERSION - 1;
+        let historical = format!("hirsel-io-tape {previous}\0");
+        bytes.splice(..hirsel_run_schema::tape::MAGIC.len(), historical.bytes());
         std::fs::write(&tape, bytes).unwrap();
         let old = replay();
         assert!(

@@ -90,8 +90,8 @@ fn sha256_kilobyte_reference_witness() {
         assert_eq!(default.observation, plain.observation);
 
         // docs/spec/determinism.md, "Long pure primitives": SHA-256 adds one
-        // call unit plus one per padded64-byte block.1024 bytes have16 data
-        // blocks and one padding block, so the additional charge is18.
+        // call unit plus one per padded 64-byte block. 1024 bytes have 16 data
+        // blocks and one padding block, so the additional charge is 18.
         const SHA_WORK: u64 = 1 + 1024 / 64 + 1;
         let mut primitive_steps = Vec::new();
         for operation in ["len", "sha256"] {
