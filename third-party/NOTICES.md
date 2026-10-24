@@ -1768,3 +1768,10 @@ whose pair-table structure is `src/lib.rs:264-320` at the retained 1577ed9 refer
 Diff line scanning follows imara-diff `src/sources.rs` ByteLines::next: find LF,
 include it, and retain a final unterminated line; Hirsel uses its existing bulk
 byte search/append and returns owned strings (existing Apache-2.0 notice above).
+
+Float parsing also ports Rust core `library/core/src/num/imp/dec2flt/decimal.rs:39-85`
+and `mod.rs:108-179` at `f6c1107f8be13e48465e12c0fd26e6a39fe18e4f` (MIT):
+Clinger conversion through an exactly representable mantissa and power of ten.
+Hirsel uses its existing binary32/binary64 rounded scalar operations; the x87
+precision guard and disguised fast path are unnecessary and omitted. Boundary
+and fallback twins use an independently generated exact-rational rounding oracle.

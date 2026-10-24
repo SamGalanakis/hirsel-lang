@@ -26,7 +26,7 @@ fn run(
     checked: bool,
     steps: Option<u64>,
     fuel: Option<u64>,
-) -> Result<Execution, hirsel_interp::Error> {
+) -> Result<Execution, hirsel_interp::ExecutionError> {
     let sources = engine.sources.clone();
     let config = RunConfiguration {
         entry: entry_path(&default_context()),
@@ -60,13 +60,13 @@ fn minimum_fuel(engine: &mut QueryEngine, checked: bool) -> u64 {
     let (mut low, mut high) = (0, 256);
     while low < high {
         let mid = (low + high) / 2;
-        if run(engine, checked, None, Some(mid)).is_ok() {
+        if matches!(run(engine, checked, None, Some(mid)).unwrap().outcome, Outcome::Returned { .. }) {
             high = mid;
         } else {
             low = mid + 1;
         }
     }
-    assert!(run(engine, checked, None, Some(low)).is_ok());
+    assert!(matches!(run(engine, checked, None, Some(low)).unwrap().outcome, Outcome::Returned { .. }));
     low
 }
 #[test]
