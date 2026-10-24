@@ -3749,6 +3749,7 @@ mod malformed_tests {
                 };
                 let mut published = PublishedSummary {
                     definition: summary.owner,
+                    storage: None,
                     checked: Some(CheckedSummary {
                         summary: summary.clone(),
                         growth: Default::default(),
