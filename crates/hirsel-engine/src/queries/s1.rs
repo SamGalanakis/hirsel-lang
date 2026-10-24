@@ -35,6 +35,52 @@ pub(crate) trait DependencySource {
     ) -> DependencyProduct<Option<DefPath>>;
 }
 
+/// Saved dependency futures retain the same source request and read evidence
+/// across suspension. Their output confers no additional verifier authority.
+pub(crate) trait AsyncDependencySource {
+    fn definition(
+        &mut self,
+        path: &DefPath,
+    ) -> impl std::future::Future<Output = DependencyProduct<DefinitionRef>>;
+    fn constant(
+        &mut self,
+        path: &DefPath,
+    ) -> impl std::future::Future<Output = DependencyProduct<MaterializedRef>>;
+    fn constant_instance(
+        &mut self,
+        path: &DefPath,
+        arguments: &[u64],
+    ) -> impl std::future::Future<Output = DependencyProduct<MaterializedRef>>;
+    fn instance_body(
+        &mut self,
+        path: &DefPath,
+        arguments: &[GenericArgument],
+    ) -> impl std::future::Future<Output = DependencyProduct<Option<DefPath>>>;
+}
+struct ReadyDependencies<'a, S>(&'a mut S);
+impl<S: DependencySource> AsyncDependencySource for ReadyDependencies<'_, S> {
+    async fn definition(&mut self, path: &DefPath) -> DependencyProduct<DefinitionRef> {
+        self.0.definition(path)
+    }
+    async fn constant(&mut self, path: &DefPath) -> DependencyProduct<MaterializedRef> {
+        self.0.constant(path)
+    }
+    async fn constant_instance(
+        &mut self,
+        path: &DefPath,
+        arguments: &[u64],
+    ) -> DependencyProduct<MaterializedRef> {
+        self.0.constant_instance(path, arguments)
+    }
+    async fn instance_body(
+        &mut self,
+        path: &DefPath,
+        arguments: &[GenericArgument],
+    ) -> DependencyProduct<Option<DefPath>> {
+        self.0.instance_body(path, arguments)
+    }
+}
+
 /// An immutable private artifact after V admission. It can execute with any
 /// task-local dependency source and a worker's runtime; it owns no session.
 /// Lowering stays in EvaluationInput::lower, so a failed lower never forces
@@ -109,6 +155,27 @@ impl ValidatedEvaluation {
         runtime: &hirsel_interp::aggregate::RuntimeTypes,
         source: &mut impl DependencySource,
     ) -> EvaluationOutcome {
+        use std::{
+            future::Future,
+            task::{Context, Poll, Waker},
+        };
+        let mut source = ReadyDependencies(source);
+        let mut execution = std::pin::pin!(self.run_async(sources, limits, runtime, &mut source));
+        match execution
+            .as_mut()
+            .poll(&mut Context::from_waker(Waker::noop()))
+        {
+            Poll::Ready(product) => product,
+            Poll::Pending => unreachable!("synchronous S1 dependency source suspended"),
+        }
+    }
+    pub(crate) async fn run_async(
+        self,
+        sources: &SourceMap,
+        limits: hirsel_interp::Limits,
+        runtime: &hirsel_interp::aggregate::RuntimeTypes,
+        source: &mut impl AsyncDependencySource,
+    ) -> EvaluationOutcome {
         let configuration = RunConfiguration {
             entry: self.definition.path.path().clone(),
             hash_seed: 0,
@@ -123,7 +190,8 @@ impl ValidatedEvaluation {
             site: self.site,
             ty: self.ty,
         }
-        .run(&mut provider);
+        .run_async(&mut provider)
+        .await;
         let mut reads = ReadsBuilder::new();
         let recorded = provider.finish();
         if let Ok(recorded) = &recorded {
@@ -148,12 +216,12 @@ impl ValidatedEvaluation {
 /// A private evaluation root plus its task-local dependency requestor. Every
 /// request merges its complete reads before returning its success or failure.
 /// Constants remain lazy: interpreting a root never enumerates other constants.
-pub(crate) struct EvaluationProvider<'a, S: DependencySource> {
+pub(crate) struct EvaluationProvider<'a, S> {
     root: DefinitionRef,
     source: &'a mut S,
     reads: ReadsBuilder,
 }
-impl<'a, S: DependencySource> EvaluationProvider<'a, S> {
+impl<'a, S> EvaluationProvider<'a, S> {
     pub(crate) fn new(root: DefinitionRef, source: &'a mut S) -> Self {
         Self {
             root,
@@ -198,6 +266,39 @@ impl<S: DependencySource> TirProvider for EvaluationProvider<'_, S> {
         self.merge(product)
     }
     fn constant_definitions(&mut self) -> Result<Vec<DefPath>, QueryError> {
+        Ok(vec![])
+    }
+}
+
+impl<S: AsyncDependencySource> hirsel_interp::AsyncTirProvider for EvaluationProvider<'_, S> {
+    async fn definition(&mut self, path: &DefPath) -> Result<DefinitionRef, QueryError> {
+        if path == self.root.path.path() {
+            return Ok(self.root.clone());
+        }
+        let product = self.source.definition(path).await;
+        self.merge(product)
+    }
+    async fn constant(&mut self, path: &DefPath) -> Result<MaterializedRef, QueryError> {
+        let product = self.source.constant(path).await;
+        self.merge(product)
+    }
+    async fn constant_instance(
+        &mut self,
+        path: &DefPath,
+        arguments: &[u64],
+    ) -> Result<MaterializedRef, QueryError> {
+        let product = self.source.constant_instance(path, arguments).await;
+        self.merge(product)
+    }
+    async fn instance_body(
+        &mut self,
+        path: &DefPath,
+        arguments: &[GenericArgument],
+    ) -> Result<Option<DefPath>, QueryError> {
+        let product = self.source.instance_body(path, arguments).await;
+        self.merge(product)
+    }
+    async fn constant_definitions(&mut self) -> Result<Vec<DefPath>, QueryError> {
         Ok(vec![])
     }
 }
@@ -341,6 +442,258 @@ mod tests {
         }
     }
 
+    struct DeferredSource {
+        dependencies: crate::runtime::QueryReads,
+        query: crate::runtime::QueryId,
+        types: Arc<hirsel_types::TypeInterner>,
+        reads: Reads,
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+    }
+    impl AsyncDependencySource for DeferredSource {
+        async fn definition(&mut self, _: &DefPath) -> DependencyProduct<DefinitionRef> {
+            DependencyProduct {
+                result: Err(QueryError::NotImplemented),
+                reads: Reads::empty(),
+            }
+        }
+        async fn constant(&mut self, _: &DefPath) -> DependencyProduct<MaterializedRef> {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let result = self
+                .dependencies
+                .read(self.query)
+                .await
+                .map(|_| {
+                    Arc::new(hirsel_tir::Materialized {
+                        root: hirsel_tir::ValueNode {
+                            ty: self.types.intern(hirsel_types::Type::unit()),
+                            kind: hirsel_tir::ValueKind::Constant(hirsel_tir::Constant::Unit),
+                        },
+                    })
+                })
+                .map_err(|_| QueryError::NotImplemented);
+            DependencyProduct {
+                result,
+                reads: self.reads.clone(),
+            }
+        }
+        async fn constant_instance(
+            &mut self,
+            path: &DefPath,
+            _: &[u64],
+        ) -> DependencyProduct<MaterializedRef> {
+            self.constant(path).await
+        }
+        async fn instance_body(
+            &mut self,
+            _: &DefPath,
+            _: &[GenericArgument],
+        ) -> DependencyProduct<Option<DefPath>> {
+            DependencyProduct {
+                result: Ok(None),
+                reads: Reads::empty(),
+            }
+        }
+    }
+    fn reference(text: &[u8]) -> crate::store::Reference {
+        crate::store::Domain {
+            kind: 0x5300_00ff,
+            schema: 1,
+        }
+        .reference(text)
+        .unwrap()
+    }
+    fn errors() -> crate::runtime::RuntimeErrors {
+        crate::runtime::RuntimeErrors {
+            resource: reference(b"resource"),
+            protocol: reference(b"protocol"),
+            cycle: reference(b"cycle"),
+            panicked: reference(b"panicked"),
+            cancelled: reference(b"cancelled"),
+        }
+    }
+    fn query(kind: u32) -> crate::runtime::QueryId {
+        crate::runtime::QueryId {
+            kind,
+            address: crate::store::Address(ContentHash::of_bytes(&kind.to_le_bytes())),
+        }
+    }
+    fn product(query: crate::runtime::QueryId) -> crate::runtime::ProductRef {
+        crate::runtime::ProductRef {
+            address: query.address,
+            action: crate::store::Action(query.address.0),
+            record: reference(&query.address.0.0),
+        }
+    }
+    struct Leaf(bool);
+    impl crate::runtime::QueryFactory for Leaf {
+        fn create(
+            &self,
+            query: crate::runtime::QueryId,
+        ) -> Result<Box<dyn crate::runtime::QueryTask>, crate::store::Reference> {
+            Ok(Box::new(LeafTask {
+                query,
+                fail: self.0,
+            }))
+        }
+    }
+    struct LeafTask {
+        query: crate::runtime::QueryId,
+        fail: bool,
+    }
+    impl crate::runtime::QueryTask for LeafTask {
+        fn id(&self) -> crate::runtime::QueryId {
+            self.query
+        }
+        fn weight(&self) -> crate::runtime::MemoryWeight {
+            Default::default()
+        }
+        fn poll(&mut self, _: &mut dyn crate::runtime::QueryContext) -> crate::runtime::QueryPoll {
+            if self.fail {
+                crate::runtime::QueryPoll::Failed(errors().protocol)
+            } else {
+                crate::runtime::QueryPoll::Complete(product(self.query))
+            }
+        }
+    }
+    struct EvaluationFactory {
+        types: Arc<hirsel_types::TypeInterner>,
+        snapshot: Arc<SignatureSnapshot>,
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+        fail: bool,
+    }
+    impl crate::runtime::LocalQueryFactory for EvaluationFactory {
+        fn weight(
+            &self,
+            _: crate::runtime::QueryId,
+        ) -> Result<crate::runtime::MemoryWeight, crate::store::Reference> {
+            Ok(crate::runtime::MemoryWeight {
+                retained: 1 << 20,
+                scratch: 1 << 20,
+                stack: 0,
+            })
+        }
+        fn create(
+            &self,
+            query: crate::runtime::QueryId,
+        ) -> Result<Box<dyn crate::runtime::LocalQueryTask>, crate::store::Reference> {
+            let types = self.types.clone();
+            let snapshot = self.snapshot.clone();
+            let calls = self.calls.clone();
+            let fail = self.fail;
+            let task = crate::runtime::LocalFutureTask::new(
+                query,
+                self.weight(query)?,
+                1,
+                errors(),
+                |dependencies| async move {
+                    let root = DefPath::core("saved-private-root");
+                    let dependency = DefPath::core("saved-private-dependency");
+                    let prepared = reading_artifact(&types, &root, &dependency);
+                    let admitted = ValidatedEvaluation::recorded(
+                        prepared,
+                        &snapshot,
+                        Verify::On,
+                        Span::default(),
+                    );
+                    assert!(
+                        admitted
+                            .reads
+                            .get(&ReadKey::ValidationUniverse(crate::memo::PackageKey::of(
+                                &root.0.package
+                            )))
+                            .is_some()
+                    );
+                    let validated = admitted.result.unwrap();
+                    let runtime = hirsel_interp::aggregate::RuntimeTypes::new(types.clone());
+                    let expected = Reads::from_vec(vec![(
+                        ReadKey::ExecutedBody(DefId::intern(&dependency)),
+                        ContentHash::of_bytes(b"selected leaf"),
+                    )])
+                    .unwrap();
+                    let mut source = DeferredSource {
+                        dependencies,
+                        query: super::tests::query(1),
+                        types,
+                        reads: expected.clone(),
+                        calls,
+                    };
+                    let outcome = validated
+                        .run_async(
+                            &SourceMap::default(),
+                            Default::default(),
+                            &runtime,
+                            &mut source,
+                        )
+                        .await;
+                    assert_eq!(outcome.value.reads, expected);
+                    assert!(outcome.limit.is_none());
+                    if fail {
+                        assert!(matches!(
+                            outcome.value.result,
+                            Err(QueryError::NotImplemented)
+                        ));
+                    } else {
+                        assert!(matches!(
+                            outcome.value.result,
+                            Ok((hirsel_interp::Value::Unit, _))
+                        ));
+                    }
+                    Ok(product(query))
+                },
+            )?;
+            Ok(Box::new(task))
+        }
+    }
+    #[test]
+    fn validated_private_evaluation_suspends_on_s5_with_one_worker_and_complete_failure_reads() {
+        use crate::runtime::{AdmittedRuntime, ProcessBudget, QueryRuntime};
+        crate::with_compiler_stack(|| {
+            for fail in [false, true] {
+                let types = hirsel_types::TypeInterner::new(None);
+                let dependency = DefPath::core("saved-private-dependency");
+                let prepared =
+                    reading_artifact(&types, &DefPath::core("saved-private-root"), &dependency);
+                let mut signature = prepared.signature;
+                signature.definition = DefId::intern(&dependency);
+                let snapshot = Arc::new(SignatureSnapshot::new(
+                    Revision::FIRST,
+                    types.clone(),
+                    [(signature.definition, Ok(Arc::new(signature)))],
+                    [],
+                    None,
+                ));
+                let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+                let budget = ProcessBudget::new(256 << 20);
+                let mut runtime = AdmittedRuntime::new(
+                    hirsel_intern::jobs::Jobs::new(1),
+                    budget.reserve(256 << 20).unwrap(),
+                    errors(),
+                )
+                .unwrap();
+                runtime.register(1, Arc::new(Leaf(fail))).unwrap();
+                runtime
+                    .register_local(
+                        2,
+                        Arc::new(EvaluationFactory {
+                            types,
+                            snapshot,
+                            calls: calls.clone(),
+                            fail,
+                        }),
+                    )
+                    .unwrap();
+                let request = runtime.request(&[query(2)]);
+                assert_eq!(runtime.wait(request), Ok(vec![product(query(2))]));
+                assert_eq!(runtime.stats().claims, 2);
+                assert_eq!(runtime.stats().waits, 1);
+                assert_eq!(
+                    calls.load(std::sync::atomic::Ordering::SeqCst),
+                    1,
+                    "resume must not reissue or replay the initializer's source demand"
+                );
+            }
+        });
+    }
     #[test]
     fn immutable_evaluation_keeps_dependency_and_reflection_reads_after_failure() {
         crate::with_compiler_stack(|| {
