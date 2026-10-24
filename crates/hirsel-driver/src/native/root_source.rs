@@ -159,9 +159,12 @@ impl NativeLinkSource {
                 )));
             }
             if let Some((Some(output), _, _, _)) = lower.input(path)
-                && *body >= output.invocations().body_count()
+                && (*body >= output.invocations().body_count()
+                    || *body != output.invocations().entry_body())
             {
-                return Err(failed(format!("entry body outside settled Lower {path}")));
+                return Err(failed(format!(
+                    "entry body differs from V's settled Lower entry {path}"
+                )));
             }
         }
         let profiles = super::profile_sources_for_owners(
