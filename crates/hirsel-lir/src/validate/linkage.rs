@@ -221,6 +221,7 @@ mod tests {
             key: FnAbiKey {
                 callable: hash("callable"),
                 abi_version: crate::ABI_VERSION,
+                receipt_contract: None,
             },
             shape: CallableShape::Definition,
             multiplicity: CallMultiplicity::Many,
@@ -237,6 +238,7 @@ mod tests {
             nonretaining_captures: vec![],
             scoped_contract: crate::abi::scoped_contract_digest(&[], &[]),
             scoped_entries: vec![],
+            receipts: None,
         }
     }
     fn unit(name: &str, table: &LayoutTable) -> LirUnit<Value> {
@@ -266,6 +268,8 @@ mod tests {
         });
         caller.tables.calls.push(CallSite {
             forward_caller: false,
+            pretransfer_failure: None,
+            receipts: None,
             callee: Callee::Direct(SymbolId(0)),
             operation_arguments: vec![],
             abi: FnAbiId(1),
