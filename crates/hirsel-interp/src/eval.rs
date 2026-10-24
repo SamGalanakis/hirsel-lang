@@ -5177,7 +5177,8 @@ fn checked_callee(
             return Ok((callee, None, None));
         }
         let cap = bounded.then(|| bounded_capacity(arguments)).transpose()?;
-        let (definition, body, captures, _, sizes, type_arguments) = arena_callback(arguments)?;
+        let (definition, body, captures, _, sizes, type_arguments) =
+            arena_callback(arguments, &mut budgets.storage)?;
         let id = budgets.issue();
         budgets.storage.open(id)?;
         *arguments = vec![Value::Handle {
@@ -5212,7 +5213,7 @@ fn checked_callee(
     }
     let cap = bounded.then(|| bounded_capacity(arguments)).transpose()?;
     let (definition, body, captures, owned_captures, sizes, type_arguments) =
-        arena_callback(arguments)?;
+        arena_callback(arguments, &mut budgets.storage)?;
     let arena = state.arena();
     budgets.storage.open(arena.into())?;
     let shadow = checks.pop().unwrap_or_default().shadow;
@@ -5262,23 +5263,26 @@ type Callback = (
     crate::value::SizeBindings,
     crate::type_arguments::Bindings,
 );
-/// The one closure argument of `arena.with`. Calling it invokes the once
-/// closure, so its owned captures move to the call and the caller's drop of
-/// the closure discards them (OWN-2, MODE-3).
-fn arena_callback(arguments: &mut Vec<Value>) -> Result<Callback, Error> {
-    if let [callee] = arguments.as_slice() {
-        callee.begin_call();
-    }
-    let [
-        Value::Closure {
-            definition,
-            body,
-            captures,
-            environment,
-            ..
-        },
-    ] = <[Value; 1]>::try_from(std::mem::take(arguments))
-        .map_err(|_| invalid("arena.with takes one callback"))?
+/// The one closure argument of `arena.with`.
+fn arena_callback(
+    arguments: &mut Vec<Value>,
+    storage: &mut crate::sealed_storage::Storage,
+) -> Result<Callback, Error> {
+    let [callback] = <[Value; 1]>::try_from(std::mem::take(arguments))
+        .map_err(|_| invalid("arena.with takes one callback"))?;
+    // Callback admission has succeeded before this adapter runs. Transfer a
+    // Once environment's owned captures just as an ordinary indirect call
+    // does, so its caller's snapshot no longer releases them after the body.
+    storage.environment_entry(&callback)?;
+    callback.begin_call();
+    let Value::Closure {
+        definition,
+        body,
+        captures,
+        environment,
+        ..
+    } = callback
+
     else {
         return Err(invalid("arena.with callback must be a closure"));
     };
