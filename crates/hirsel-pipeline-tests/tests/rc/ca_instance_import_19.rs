@@ -96,10 +96,15 @@ fn explicit_instance_import_keeps_source_invocations_without_program_bodies() {
     }
     // Removing independent source associations refuses an otherwise unchanged
     // imported candidate; its own invocation markers grant no authority.
+    drop(inputs);
     operations.invocation_bodies.clear();
     let refused_inputs = Inputs {
         operations: &operations,
-        ..inputs
+        target: &target,
+        layouts: &table,
+        manifest: &manifest,
+        discharge: None,
+        memo: Default::default(),
     };
     assert!(
         units
