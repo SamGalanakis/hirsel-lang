@@ -92,3 +92,31 @@ fn settled_native_declaration_assembly_runs_without_a_source_controller() {
         }
     });
 }
+
+#[test]
+fn native_declaration_metadata_bound_tracks_copied_buffers_without_bodies() {
+    with_compiler_stack(|| {
+        let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
+        let file = engine
+            .sources
+            .add("native-metadata.hir", "pub fn main()->u64{1u64}".into())
+            .unwrap();
+        engine.parse_file(file, &default_context()).unwrap();
+        let store: Arc<dyn store::ResultStore> = Arc::new(store::MemStore::default());
+        let mut cache = NativeDiscoveryCache::new(engine.types().clone(), store);
+        let mut declarations = NativeDeclarations::collect(&mut engine, &mut cache, &[]).unwrap();
+        assert!(declarations.program.definitions.is_empty());
+        drop(engine);
+        drop(cache);
+        let before = declarations.retained_metadata_bytes().unwrap();
+        let old = declarations.constant_definitions.capacity();
+        declarations.constant_definitions.reserve_exact(old + 64);
+        let added = declarations.constant_definitions.capacity() - old;
+        let after = declarations.retained_metadata_bytes().unwrap();
+        assert_eq!(
+            after - before,
+            (added * size_of::<hirsel_syntax::DefPath>()) as u64
+        );
+        assert!(declarations.program.definitions.is_empty());
+    });
+}
