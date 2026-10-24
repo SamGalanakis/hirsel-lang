@@ -17,6 +17,7 @@ const FAILURE: Domain = Domain {
     schema: 1,
 };
 struct SourceOwnership {
+    _allowance: MemoryReservation,
     _front: Arc<FrontBodyQueries>,
     _lower: Arc<FrontLowerQueries>,
 }
@@ -50,7 +51,7 @@ pub struct FrontNativeDefinitionQueries {
     remaining: Mutex<u64>,
     weight: MemoryWeight,
     errors: RuntimeErrors,
-    _allowance: MemoryReservation,
+    _ownership: Arc<SourceOwnership>,
 }
 impl FrontNativeDefinitionQueries {
     pub(crate) fn with_selection(
@@ -545,12 +546,7 @@ impl QueryEngine {
         if !Arc::ptr_eq(&snapshot, &self.signature_inputs()) {
             return Err(refuse());
         }
-        let original_context = Arc::new(self.native_original_context(definitions)?.retain_owner(
-            Arc::new(SourceOwnership {
-                _front: front.clone(),
-                _lower: lower.clone(),
-            }),
-        ));
+        let original_context = self.native_original_context(definitions)?;
         let store = self
             .result_store
             .clone()
@@ -616,6 +612,13 @@ impl QueryEngine {
         if required > allowance.bytes() {
             return Err(refuse());
         }
+        let output_budget = allowance.bytes() - required;
+        let ownership = Arc::new(SourceOwnership {
+            _front: front.clone(),
+            _lower: lower.clone(),
+            _allowance: allowance,
+        });
+        let original_context = Arc::new(original_context.retain_owner(ownership.clone()));
         Ok(Arc::new(FrontNativeDefinitionQueries {
             selection: None,
             inputs,
@@ -628,10 +631,10 @@ impl QueryEngine {
             store,
             completed: Mutex::new(BTreeMap::new()),
             failures: Mutex::new(BTreeMap::new()),
-            remaining: Mutex::new(allowance.bytes() - required),
+            remaining: Mutex::new(output_budget),
             weight,
             errors,
-            _allowance: allowance,
+            _ownership: ownership,
         }))
     }
 }
