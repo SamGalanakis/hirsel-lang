@@ -311,6 +311,10 @@ impl NativeLinkSource {
             .clone()
     }
 
+    /// Exact settled foreign policy used by the ordinary native emitter.
+    pub fn foreign_dispatch(&self) -> BTreeMap<DefPath, u64> {
+        super::foreign::dispatch(&self.view())
+    }
     pub fn input(&self) -> &InputIdentity {
         &self.input
     }

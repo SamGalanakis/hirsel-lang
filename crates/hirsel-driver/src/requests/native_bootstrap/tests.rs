@@ -193,7 +193,6 @@ fn actual_native_bootstrap_suspends_attaches_once_and_preserves_link_refusal_aft
                     verify_backend: true,
                     measurement: false,
                     fuel: false,
-                    foreign: BTreeMap::new(),
                     requested_run: None,
                     backends: vec![CompilationBackend {
                         backend: "cranelift".into(),
