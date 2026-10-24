@@ -32,6 +32,7 @@ pub struct FrontNativeDefinitionOutput {
     _owner: Arc<FrontNativeDefinitionQueries>,
 }
 pub struct FrontNativeDefinitionQueries {
+    selection: Option<(Arc<FrontRunQueries>, DefPath)>,
     inputs: BTreeMap<DefPath, Input>,
     ids: BTreeMap<DefPath, QueryId>,
     original_context: Arc<crate::NativeOriginalContext>,
@@ -48,6 +49,37 @@ pub struct FrontNativeDefinitionQueries {
     _allowance: MemoryReservation,
 }
 impl FrontNativeDefinitionQueries {
+    pub(crate) fn with_selection(
+        mut self: Arc<Self>,
+        run: Arc<FrontRunQueries>,
+        root: DefPath,
+    ) -> Result<Arc<Self>, QueryError> {
+        if !run.matches_inputs(&self.front, &self.lower) {
+            return Err(native_selection_error(
+                "native catalogue and Run have different immutable inputs",
+            ));
+        }
+        let query = run
+            .query(&root)
+            .ok_or_else(|| native_selection_error("native selection root is missing"))?;
+        let this = Arc::get_mut(&mut self).ok_or_else(|| {
+            native_selection_error("native selection requires an unshared catalogue")
+        })?;
+        for id in this.ids.values_mut() {
+            id.address = hirsel_artifact_store::Address(ContentHash::of_parts(
+                "hirsel.front.native-selected-address.v1",
+                [id.address.0.0.as_slice(), query.address.0.0.as_slice()],
+            ));
+        }
+        this.selection = Some((run, root));
+        Ok(self)
+    }
+    pub(crate) fn inputs_contains(&self, path: &DefPath) -> bool {
+        self.inputs.contains_key(path)
+    }
+    pub(crate) fn constant_reads(&self, path: &DefPath) -> Option<Arc<Reads>> {
+        self.lower.settled_reads(path, QueryKind::Evaluate)
+    }
     pub fn original_context(&self) -> Arc<crate::NativeOriginalContext> {
         self.original_context.clone()
     }
@@ -188,6 +220,24 @@ impl Task {
     }
     fn advance(&mut self, cx: &mut dyn QueryContext) -> Poll<Result<ProductRef, Reference>> {
         let owner = self.owner.clone();
+        if let Some((run, root)) = &owner.selection {
+            let Some(id) = run.query(root) else {
+                return Poll::Ready(Err(owner.errors.protocol));
+            };
+            let product = match self.read(cx, id) {
+                Poll::Pending => return Poll::Pending,
+                Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
+                Poll::Ready(Ok(product)) => product,
+            };
+            let Some(output) = run.outcome(product) else {
+                return Poll::Ready(Err(owner.errors.protocol));
+            };
+            if !output.semantic.semantic_contains(&self.path) {
+                return Poll::Ready(Err(owner.fail(native_selection_error(
+                    "definition is outside the native source selection",
+                ))));
+            }
+        }
         let input = &owner.inputs[&self.path];
         let Some(id) = owner.front.query(&self.path) else {
             return Poll::Ready(Err(owner.errors.protocol));
@@ -444,6 +494,21 @@ impl Task {
                 if !owner.inputs.contains_key(path) {
                     return Ok(None);
                 }
+                if let Some((run, root)) = &owner.selection {
+                    let selected = run.query(root).and_then(|id| run.completed_product(id));
+                    let Some(selected) = selected.and_then(|p| run.outcome(p)) else {
+                        return Err(QueryError::NotImplemented);
+                    };
+                    if !selected.semantic.semantic_contains(path) {
+                        return Ok(None);
+                    }
+                }
+                if !native_declaration(
+                    owner.lower.signatures().types(),
+                    &owner.inputs[path].signature,
+                ) {
+                    return Ok(None);
+                }
                 let (syntax, _) = owner
                     .front
                     .native_input(path)
@@ -543,6 +608,7 @@ impl QueryEngine {
             return Err(refuse());
         }
         Ok(Arc::new(FrontNativeDefinitionQueries {
+            selection: None,
             inputs,
             ids,
             original_context,
@@ -559,4 +625,17 @@ impl QueryEngine {
             _allowance: allowance,
         }))
     }
+}
+
+fn native_selection_error(message: impl Into<String>) -> QueryError {
+    QueryError::Operational(hirsel_types::OperationalFailure {
+        operation: "native source selection".into(),
+        message: message.into(),
+    })
+}
+pub(crate) fn native_declaration(
+    types: &hirsel_types::TypeInterner,
+    signature: &SignatureRef,
+) -> bool {
+    !matches!(&signature.kind,SignatureKind::Function(function) if function.generics.is_empty() && function.parameters.iter().map(|p|p.ty).chain([function.result]).any(|ty|hirsel_types::mentions_compile_time_only(types,ty)))
 }
