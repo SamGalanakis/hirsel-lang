@@ -26,6 +26,7 @@ mod plan;
 mod proofs;
 pub mod queries;
 pub(crate) mod request_output;
+pub mod root_source;
 mod runner;
 mod runtime_cache;
 pub use runtime_cache::RuntimeInputs;
@@ -108,32 +109,44 @@ fn generator_site(syntax: &hirsel_syntax::ItemSyntax) -> Option<u32> {
 
 /// Retain immutable source ownership for line/site profiling without querying a backend.
 pub fn profile_sources(input: &hirsel_engine::NativeInput) -> ProfileSources {
-    input
-        .source_owners
-        .iter()
-        .filter_map(|(definition, owner)| {
-            let syntax = &owner.syntax;
-            let (file, base) = input.sources.anchor(syntax.anchor)?;
-            let file = input.sources.file(file)?;
-            let generated = generator_site(syntax);
+    profile_sources_for_owners(
+        &input.sources,
+        input.source_owners.iter().map(|(path, owner)| {
+            let anchors = input.definitions.get(path).map_or_else(
+                || vec![owner.syntax.anchor],
+                |body| hirsel_tir::source_anchors(body),
+            );
+            (path, owner, anchors)
+        }),
+    )
+}
+
+fn profile_sources_for_owners<'a>(
+    sources: &hirsel_span::SourceMap,
+    owners: impl Iterator<
+        Item = (
+            &'a hirsel_syntax::DefPath,
+            &'a hirsel_engine::NativeSource,
+            Vec<hirsel_span::Anchor>,
+        ),
+    >,
+) -> ProfileSources {
+    owners
+        .filter_map(|(definition, owner, anchors)| {
+            let (file, base) = sources.anchor(owner.syntax.anchor)?;
+            let file = sources.file(file)?;
             Some((
                 definition.clone(),
                 ProfileSource {
                     path: file.path.clone(),
                     file: file.clone(),
                     base,
-                    generated,
-                    anchors: input
-                        .definitions
-                        .get(definition)
-                        .map_or_else(
-                            || vec![owner.syntax.anchor],
-                            |d| hirsel_tir::source_anchors(d),
-                        )
+                    generated: generator_site(&owner.syntax),
+                    anchors: anchors
                         .into_iter()
                         .filter_map(|anchor| {
-                            let (file, base) = input.sources.anchor(anchor)?;
-                            Some((input.sources.file(file)?.clone(), base))
+                            let (file, base) = sources.anchor(anchor)?;
+                            Some((sources.file(file)?.clone(), base))
                         })
                         .collect(),
                 },
