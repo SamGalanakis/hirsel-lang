@@ -838,8 +838,8 @@ not add task-result inputs to the host tape or journal.
 
 This is a trace format reset from `hirsel.ordered.events@1`, accompanied by layout
 format 9 and runtime ABI 56. Old trace schemas and incompatible compiled layouts
-are not upgraded or recovered by the reset. The host-tape schema remains 8:
-its requests and completions are unchanged, and replay still requires compatible
+are not upgraded or recovered by the reset. The host-tape schema is 9; this trace
+extension adds no tape requests or completions. Replay still requires compatible
 program and run bindings.
 
 ### Offline observation views
