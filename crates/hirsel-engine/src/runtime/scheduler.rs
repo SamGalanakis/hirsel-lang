@@ -187,6 +187,19 @@ impl RuntimeCompletion {
     }
 }
 
+// Same policy as Jobs::worker_count_with_cap, also used with smaller
+// test stacks. Both public capacity planning and construction share it.
+fn runtime_layout(jobs: Jobs, budget: u64, stack: usize) -> Option<(usize, u64)> {
+    let stack = u64::try_from(stack).ok()?;
+    if stack == 0 || budget < stack {
+        return None;
+    }
+    let count = jobs
+        .get()
+        .min((budget / stack.checked_mul(2)?).max(1) as usize);
+    Some((count, budget - count as u64 * stack))
+}
+
 impl AdmittedRuntime {
     pub fn new(
         jobs: Jobs,
@@ -194,6 +207,35 @@ impl AdmittedRuntime {
         errors: RuntimeErrors,
     ) -> std::io::Result<Self> {
         Self::with_reservation(jobs, reservation, errors, COMPILER_STACK_BYTES)
+    }
+    /// Reserve scheduler rows for the immutable query inventory within the
+    /// supplied runtime grant. Worker stacks and task working memory use its
+    /// remainder; this never obtains an additional process reservation.
+    pub fn with_query_capacity(
+        jobs: Jobs,
+        reservation: MemoryReservation,
+        errors: RuntimeErrors,
+        entries: usize,
+    ) -> std::io::Result<Self> {
+        Self::with_metadata(
+            jobs,
+            reservation,
+            errors,
+            COMPILER_STACK_BYTES,
+            Some(entries),
+        )
+    }
+    /// Conservative allocation bound shared by admission planning and the
+    /// constructor. Includes node indexes, four edges, roots and traversal.
+    pub fn query_capacity_bytes(entries: usize) -> Option<u64> {
+        u64::try_from(entries).ok()?.checked_mul(ENTRY_BYTES)
+    }
+    /// Original constructor capacity, including its effective worker-stack
+    /// selection. Hosts can preserve subscriber/factory headroom when a small
+    /// query inventory would otherwise reserve fewer rows than `new`.
+    pub fn default_query_capacity(jobs: Jobs, runtime_bytes: u64) -> Option<usize> {
+        let (_, working) = runtime_layout(jobs, runtime_bytes, COMPILER_STACK_BYTES)?;
+        Some(((working / 16) / ENTRY_BYTES).min(usize::MAX as u64) as usize)
     }
     #[cfg(test)]
     fn with_stack(
@@ -215,18 +257,25 @@ impl AdmittedRuntime {
         errors: RuntimeErrors,
         stack: usize,
     ) -> std::io::Result<Self> {
+        Self::with_metadata(jobs, reservation, errors, stack, None)
+    }
+    fn with_metadata(
+        jobs: Jobs,
+        reservation: MemoryReservation,
+        errors: RuntimeErrors,
+        stack: usize,
+        entries: Option<usize>,
+    ) -> std::io::Result<Self> {
         let budget = reservation.bytes();
-        if budget < stack as u64 {
-            return Err(std::io::Error::other(
-                "query budget cannot reserve one compiler stack",
-            ));
-        }
-        // Same policy as Jobs::worker_count_with_cap, also exercised with
-        // smaller test stacks so requested parallel controls really run in parallel.
-        let count = jobs
-            .get()
-            .min((budget / (2 * stack as u64)).max(1) as usize);
-        let metadata = (budget - count as u64 * stack as u64) / 16;
+        let (count, working) = runtime_layout(jobs, budget, stack).ok_or_else(|| {
+            std::io::Error::other("query budget cannot reserve one compiler stack")
+        })?;
+        let metadata = match entries {
+            None => working / 16,
+            Some(entries) => Self::query_capacity_bytes(entries)
+                .filter(|bytes| entries != 0 && *bytes <= working)
+                .ok_or_else(|| std::io::Error::other("query inventory exceeds runtime grant"))?,
+        };
         let shared = Arc::new(Shared {
             state: Mutex::new(State {
                 factories: BTreeMap::new(),
