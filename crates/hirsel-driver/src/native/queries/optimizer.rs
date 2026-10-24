@@ -1,7 +1,6 @@
 //! The existing per-object template closure over compact instance facts.
 //! Ready transformations never depend on other Ready bodies merely for LLVM
 //! copying: those are Codegen reads, avoiding artificial recursive Ready cycles.
-use super::*;
 use hirsel_lir::ir::{LirUnit, UnitOrigin};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
