@@ -171,7 +171,7 @@ fn fixture(heap_child: bool, escape: bool, held: Leaf) -> (Program<Rc>, ValueId)
         Program {
             invocations: Default::default(),
             invocation_bodies: Vec::new(),
-        pretransfer_adapters: Vec::new(),
+            pretransfer_adapters: Vec::new(),
             target,
             layouts,
             units: vec![unit],

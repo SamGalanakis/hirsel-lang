@@ -292,7 +292,7 @@ Ok(())
         dispose: PoolRange::EMPTY,
     }];
     unit.tables.calls = vec![CallSite {
-            pretransfer_failure: None,
+        pretransfer_failure: None,
         forward_caller: true,
         operation_arguments: Vec::new(),
         callee: Callee::Operation(OperationRef(0)),

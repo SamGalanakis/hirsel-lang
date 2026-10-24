@@ -72,7 +72,7 @@ fn reopened_slot(stale: bool) -> Program<Ready> {
     b.term(entry, Terminator::Return(None));
     Program {
         invocations: Default::default(),
-            invocation_bodies: Vec::new(),
+        invocation_bodies: Vec::new(),
         pretransfer_adapters: Vec::new(),
         target,
         units: vec![b.finish_with_layouts(&layouts)],

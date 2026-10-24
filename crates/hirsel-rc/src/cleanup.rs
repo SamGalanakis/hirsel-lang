@@ -400,8 +400,14 @@ fn retie_versions(ed: &mut Editor<Ready>, facts: &Facts, lay: Lay<'_>) {
                 }
                 for failure in term.failure_edges(&ed.unit.tables) {
                     let state = if let Terminator::Call { call, .. } = term {
-                        if ed.unit.tables.calls[call.index()].pretransfer_failure == Some(failure) {pre} else {post}
-                    } else {post};
+                        if ed.unit.tables.calls[call.index()].pretransfer_failure == Some(failure) {
+                            pre
+                        } else {
+                            post
+                        }
+                    } else {
+                        post
+                    };
                     record(ed.unit.tables.failures[failure.index()].cleanup, state);
                 }
             }
@@ -669,8 +675,16 @@ impl VersionInputs {
                     }
                     for failure in term.failure_edges(&ed.unit.tables) {
                         let state = if let Terminator::Call { call, .. } = term {
-                            if ed.unit.tables.calls[call.index()].pretransfer_failure == Some(failure) {pre} else {post}
-                        } else {post};
+                            if ed.unit.tables.calls[call.index()].pretransfer_failure
+                                == Some(failure)
+                            {
+                                pre
+                            } else {
+                                post
+                            }
+                        } else {
+                            post
+                        };
                         record(ed.unit.tables.failures[failure.index()].cleanup, i, state);
                     }
                 }

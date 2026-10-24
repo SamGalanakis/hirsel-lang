@@ -218,7 +218,10 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 Ok(())
             }
             Terminator::RejectTransfer => {
-                self.return_status(hirsel_lir::runtime_abi::STATUS_PRETRANSFER_FAILURE as u128, None)?;
+                self.return_status(
+                    hirsel_lir::runtime_abi::STATUS_PRETRANSFER_FAILURE as u128,
+                    None,
+                )?;
                 Ok(())
             }
             Terminator::Propagate => {
@@ -643,8 +646,14 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         if let Some(rejected) = site.pretransfer_failure {
             let rejected = self.failure_block(rejected)?;
             let entered = self.module.append_block(self.function);
-            let pending = self.builder.icmp(IntPredicate::Eq, status,
-                self.module.const_int(self.module.int_type(8), hirsel_lir::runtime_abi::STATUS_PRETRANSFER_FAILURE as u128));
+            let pending = self.builder.icmp(
+                IntPredicate::Eq,
+                status,
+                self.module.const_int(
+                    self.module.int_type(8),
+                    hirsel_lir::runtime_abi::STATUS_PRETRANSFER_FAILURE as u128,
+                ),
+            );
             self.builder.cond_br(pending, rejected, entered);
             self.builder.position(entered);
         }
