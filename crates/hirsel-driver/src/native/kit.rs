@@ -20,7 +20,7 @@ use std::ffi::OsString;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 /// One target's part of the kit, as paths in link order.
 #[derive(Debug)]
@@ -47,15 +47,9 @@ fn failed(message: impl Into<String>) -> NativeError {
 }
 
 impl Kit {
-    /// The kit at `root`, read once per process.
+    /// Read and check the currently selected kit manifest.
     pub(crate) fn load(root: &Path) -> Result<Arc<Kit>, NativeError> {
-        static KITS: Mutex<BTreeMap<PathBuf, Arc<Kit>>> = Mutex::new(BTreeMap::new());
-        if let Some(kit) = KITS.lock().unwrap().get(root) {
-            return Ok(kit.clone());
-        }
-        let kit = Arc::new(Self::read(root)?);
-        KITS.lock().unwrap().insert(root.to_path_buf(), kit.clone());
-        Ok(kit)
+        Self::read(root).map(Arc::new)
     }
 
     fn read(root: &Path) -> Result<Self, NativeError> {
@@ -330,6 +324,41 @@ impl Link<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn load_rechecks_changed_and_corrupt_manifests_at_the_same_path() {
+        fn write(root: &Path, option: &str) {
+            use sha2::Digest;
+            let bytes = serde_json::to_vec(&serde_json::json!({
+                "targets": { "test": {
+                    "interpreter": "/loader", "options": [option],
+                    "start": [], "unwind": "unwind.a", "libraries": [],
+                    "nonshared": "nonshared.a", "end": []
+                }}
+            }))
+            .unwrap();
+            let digest = sha2::Sha256::digest(&bytes)
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>();
+            std::fs::write(root.join("manifest.json"), bytes).unwrap();
+            std::fs::write(root.join("digest"), digest).unwrap();
+        }
+        let root = tempfile::tempdir().unwrap();
+        write(root.path(), "first");
+        let first = Kit::load(root.path()).unwrap();
+        assert_eq!(first.target("test").unwrap().options, ["first"]);
+        write(root.path(), "second");
+        let second = Kit::load(root.path()).unwrap();
+        assert_ne!(first.digest, second.digest);
+        assert_eq!(second.target("test").unwrap().options, ["second"]);
+        std::fs::write(
+            root.path().join("manifest.json"),
+            b"corrupt current manifest",
+        )
+        .unwrap();
+        assert!(Kit::load(root.path()).is_err());
+    }
     use hirsel_lir::emission::OptLevel;
     use hirsel_lir::layout_types::TargetSpec;
 
