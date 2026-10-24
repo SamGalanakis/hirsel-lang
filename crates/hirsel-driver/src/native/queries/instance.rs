@@ -150,7 +150,8 @@ impl InstanceQueries {
 
     /// Adopt only after both the ordinary complete action and C's independently
     /// rechecked receipt agree. This reads descriptors/content integrity; it
-    /// never decodes a Value, binds layouts, or constructs an instance body.
+    /// never decodes a Value or constructs an instance body. C may bind layout
+    /// metadata to reconstruct an independently consumed structural declaration.
     pub fn lookup(
         &mut self,
         key: &InstanceAddress,
