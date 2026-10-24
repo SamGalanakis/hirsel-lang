@@ -60,6 +60,7 @@ REQUIRED = (
     "lib/libedit.so.2",
     "lib/libxml2.so.2",
     "lib/libz3.so.4",
+    "lib/libcurl.so.4",
     "bin/hirsel-clang",
     "bin/hirsel-clang++",
     "bin/hirsel-llvm-ar",

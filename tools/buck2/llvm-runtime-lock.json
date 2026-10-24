@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "about": "Ubuntu noble libraries libLLVM 23 and clang load that a minimal Ubuntu 24.04 (minbase) worker image lacks. bootstrap_llvm.py unpacks their shared objects into the LLVM tree's lib/, beside libLLVM (RUNPATH $ORIGIN/../lib).",
+  "about": "Pinned Ubuntu noble shared-library closure for LLVM 23, clang and llvm-objdump on minimal pool workers. bootstrap_llvm.py installs these verified shared objects beside libLLVM; objdump also directly links libcurl.",
   "debs": [
     {
       "name": "libedit2_3.1-20230828-1build1_amd64.deb",
@@ -44,6 +44,286 @@
       "size": 5836188,
       "urls": [
         "https://archive.ubuntu.com/ubuntu/pool/universe/z/z3/libz3-4_4.8.12-3.1build1_amd64.deb"
+      ]
+    },
+    {
+      "name": "libbrotli1_1.1.0-2build2_amd64.deb",
+      "sha256": "74492419b8fda803774b8c9acef6afc5d2f9ff31782635aae212906adae7b277",
+      "size": 330730,
+      "urls": [
+        "https://archive.ubuntu.com/ubuntu/pool/main/b/brotli/libbrotli1_1.1.0-2build2_amd64.deb",
+        "https://security.ubuntu.com/ubuntu/pool/main/b/brotli/libbrotli1_1.1.0-2build2_amd64.deb",
+        "https://launchpad.net/ubuntu/+archive/primary/+files/libbrotli1_1.1.0-2build2_amd64.deb"
+      ]
+    },
+    {
+      "name": "libcom-err2_1.47.0-2.4~exp1ubuntu4.1_amd64.deb",
+      "sha256": "7ab24d3057dabf86db8f771ad6e43f073ed86b6b950d6e8ba22cb9fe6707bbc9",
+      "size": 22982,
+      "urls": [
+        "https://archive.ubuntu.com/ubuntu/pool/main/e/e2fsprogs/libcom-err2_1.47.0-2.4~exp1ubuntu4.1_amd64.deb",
+        "https://security.ubuntu.com/ubuntu/pool/main/e/e2fsprogs/libcom-err2_1.47.0-2.4~exp1ubuntu4.1_amd64.deb",
+        "https://launchpad.net/ubuntu/+archive/primary/+files/libcom-err2_1.47.0-2.4~exp1ubuntu4.1_amd64.deb"
+      ]
+    },
+    {
+      "name": "libcurl4t64_8.5.0-2ubuntu10.16_amd64.deb",
+      "sha256": "8196381b41f0078083a2a52b43f7e7ca9b0b79e5325451bf3948e4af7693cd8d",
+      "size": 344412,
+      "urls": [
+        "https://archive.ubuntu.com/ubuntu/pool/main/c/curl/libcurl4t64_8.5.0-2ubuntu10.16_amd64.deb",
+        "https://security.ubuntu.com/ubuntu/pool/main/c/curl/libcurl4t64_8.5.0-2ubuntu10.16_amd64.deb",
+        "https://launchpad.net/ubuntu/+archive/primary/+files/libcurl4t64_8.5.0-2ubuntu10.16_amd64.deb"
+      ]
+    },
+    {
+      "name": "libdb5.3t64_5.3.28+dfsg2-7_amd64.deb",
+      "sha256": "a78a25c8fad8fdd0b7bc6b297da5d5685579be1e57732aa47870830e4a13161e",
+      "size": 734100,
+      "urls": [
+        "https://archive.ubuntu.com/ubuntu/pool/main/d/db5.3/libdb5.3t64_5.3.28+dfsg2-7_amd64.deb",
+        "https://security.ubuntu.com/ubuntu/pool/main/d/db5.3/libdb5.3t64_5.3.28+dfsg2-7_amd64.deb",
+        "https://launchpad.net/ubuntu/+archive/primary/+files/libdb5.3t64_5.3.28+dfsg2-7_amd64.deb"
+      ]
+    },
+    {
+      "name": "libffi8_3.4.6-1build1_amd64.deb",
+      "sha256": "637e6a7744de08cd331a41f4efd0d24e6ea9064843dea9d1c6ca87bdb5f038a2",
+      "size": 24718,
+      "urls": [
+        "https://archive.ubuntu.com/ubuntu/pool/main/libf/libffi/libffi8_3.4.6-1build1_amd64.deb",
+        "https://security.ubuntu.com/ubuntu/pool/main/libf/libffi/libffi8_3.4.6-1build1_amd64.deb",
+        "https://launchpad.net/ubuntu/+archive/primary/+files/libffi8_3.4.6-1build1_amd64.deb"
+      ]
+    },
+    {
+      "name": "libgmp10_6.3.0+dfsg-2ubuntu6.1_amd64.deb",
+      "sha256": "285f8a505dfa8e1b33f357a9d8d3477ad35bf18c0b34771a6df4c25923f3ae0d",
+      "size": 253460,
+      "urls": [
+        "https://archive.ubuntu.com/ubuntu/pool/main/g/gmp/libgmp10_6.3.0+dfsg-2ubuntu6.1_amd64.deb",
+        "https://security.ubuntu.com/ubuntu/pool/main/g/gmp/libgmp10_6.3.0+dfsg-2ubuntu6.1_amd64.deb",
+        "https://launchpad.net/ubuntu/+archive/primary/+files/libgmp10_6.3.0+dfsg-2ubuntu6.1_amd64.deb"
+      ]
+    },
+    {
+      "name": "libgnutls30t64_3.8.3-1.1ubuntu3.6_amd64.deb",
+      "sha256": "b8944756260c5ea6b7fac019745f931f905aa7a4df0763676b1b25c911b692e2",
+      "size": 1002902,
+      "urls": [
+        "https://archive.ubuntu.com/ubuntu/pool/main/g/gnutls28/libgnutls30t64_3.8.3-1.1ubuntu3.6_amd64.deb",
+        "https://security.ubuntu.com/ubuntu/pool/main/g/gnutls28/libgnutls30t64_3.8.3-1.1ubuntu3.6_amd64.deb",
+        "https://launchpad.net/ubuntu/+archive/primary/+files/libgnutls30t64_3.8.3-1.1ubuntu3.6_amd64.deb"
+      ]
+    },
+    {
+      "name": "libgssapi-krb5-2_1.20.1-6ubuntu2.10_amd64.deb",
+      "sha256": "0d4a0187bcdbbe3e6a10bfa574100087d12052d0d0ef28614fd6210021c587b2",
+      "size": 142830,
+      "urls": [
+        "https://archive.ubuntu.com/ubuntu/pool/main/k/krb5/libgssapi-krb5-2_1.20.1-6ubuntu2.10_amd64.deb",
+        "https://security.ubuntu.com/ubuntu/pool/main/k/krb5/libgssapi-krb5-2_1.20.1-6ubuntu2.10_amd64.deb",
+        "https://launchpad.net/ubuntu/+archive/primary/+files/libgssapi-krb5-2_1.20.1-6ubuntu2.10_amd64.deb"
+      ]
+    },
+    {
+      "name": "libhogweed6t64_3.9.1-2.2build1.1_amd64.deb",
+      "sha256": "a9b5f7e9d49ba9060e1c933567046fbc6feab6096799cbf550b7214dc9b0f49b",
+      "size": 198548,
+      "urls": [
+        "https://archive.ubuntu.com/ubuntu/pool/main/n/nettle/libhogweed6t64_3.9.1-2.2build1.1_amd64.deb",
+        "https://security.ubuntu.com/ubuntu/pool/main/n/nettle/libhogweed6t64_3.9.1-2.2build1.1_amd64.deb",
+        "https://launchpad.net/ubuntu/+archive/primary/+files/libhogweed6t64_3.9.1-2.2build1.1_amd64.deb"
+      ]
+    },
+    {
+      "name": "libidn2-0_2.3.7-2build1.1_amd64.deb",
+      "sha256": "46bfd10df095a23b65f58115de47a547c9a2d14627749bd0423ae78c14be77d3",
+      "size": 66242,
+      "urls": [
+        "https://archive.ubuntu.com/ubuntu/pool/main/libi/libidn2/libidn2-0_2.3.7-2build1.1_amd64.deb",
+        "https://security.ubuntu.com/ubuntu/pool/main/libi/libidn2/libidn2-0_2.3.7-2build1.1_amd64.deb",
+        "https://launchpad.net/ubuntu/+archive/primary/+files/libidn2-0_2.3.7-2build1.1_amd64.deb"
+      ]
+    },
+    {
+      "name": "libk5crypto3_1.20.1-6ubuntu2.10_amd64.deb",
+      "sha256": "273f7cc95a68d927d7f71c3e78b7717a16a8d86e646a206bae7bf797150ae9db",
+      "size": 81944,
+      "urls": [
+        "https://archive.ubuntu.com/ubuntu/pool/main/k/krb5/libk5crypto3_1.20.1-6ubuntu2.10_amd64.deb",
+        "https://security.ubuntu.com/ubuntu/pool/main/k/krb5/libk5crypto3_1.20.1-6ubuntu2.10_amd64.deb",
+        "https://launchpad.net/ubuntu/+archive/primary/+files/libk5crypto3_1.20.1-6ubuntu2.10_amd64.deb"
+      ]
+    },
+    {
+      "name": "libkeyutils1_1.6.3-3build1_amd64.deb",
+      "sha256": "0679f198b0128179e46cdf956fb2022c23c758664c00bc8efa0382d509683a8a",
+      "size": 9490,
+      "urls": [
+        "https://archive.ubuntu.com/ubuntu/pool/main/k/keyutils/libkeyutils1_1.6.3-3build1_amd64.deb",
+        "https://security.ubuntu.com/ubuntu/pool/main/k/keyutils/libkeyutils1_1.6.3-3build1_amd64.deb",
+        "https://launchpad.net/ubuntu/+archive/primary/+files/libkeyutils1_1.6.3-3build1_amd64.deb"
+      ]
+    },
+    {
+      "name": "libkrb5-3_1.20.1-6ubuntu2.10_amd64.deb",
+      "sha256": "60b48c5a3233f1d8caba30d6573edc8e131911ab6d63adcd664f7cbe62708362",
+      "size": 347568,
+      "urls": [
+        "https://archive.ubuntu.com/ubuntu/pool/main/k/krb5/libkrb5-3_1.20.1-6ubuntu2.10_amd64.deb",
+        "https://security.ubuntu.com/ubuntu/pool/main/k/krb5/libkrb5-3_1.20.1-6ubuntu2.10_amd64.deb",
+        "https://launchpad.net/ubuntu/+archive/primary/+files/libkrb5-3_1.20.1-6ubuntu2.10_amd64.deb"
+      ]
+    },
+    {
+      "name": "libkrb5support0_1.20.1-6ubuntu2.10_amd64.deb",
+      "sha256": "9224ede3246a82a845ea97652ecfae57f88e8d8f520d8a186f9157167574fb34",
+      "size": 34942,
+      "urls": [
+        "https://archive.ubuntu.com/ubuntu/pool/main/k/krb5/libkrb5support0_1.20.1-6ubuntu2.10_amd64.deb",
+        "https://security.ubuntu.com/ubuntu/pool/main/k/krb5/libkrb5support0_1.20.1-6ubuntu2.10_amd64.deb",
+        "https://launchpad.net/ubuntu/+archive/primary/+files/libkrb5support0_1.20.1-6ubuntu2.10_amd64.deb"
+      ]
+    },
+    {
+      "name": "libldap2_2.6.10+dfsg-0ubuntu0.24.04.1_amd64.deb",
+      "sha256": "7f3f8e565401256f21d5aa562c9f92dbb63537b73aaea6283e4db5264f1598f4",
+      "size": 197620,
+      "urls": [
+        "https://archive.ubuntu.com/ubuntu/pool/main/o/openldap/libldap2_2.6.10+dfsg-0ubuntu0.24.04.1_amd64.deb",
+        "https://security.ubuntu.com/ubuntu/pool/main/o/openldap/libldap2_2.6.10+dfsg-0ubuntu0.24.04.1_amd64.deb",
+        "https://launchpad.net/ubuntu/+archive/primary/+files/libldap2_2.6.10+dfsg-0ubuntu0.24.04.1_amd64.deb"
+      ]
+    },
+    {
+      "name": "libnettle8t64_3.9.1-2.2build1.1_amd64.deb",
+      "sha256": "6d97fbc1972633083f08f51ccab433606c97bbceb897c631c66495117ca3406f",
+      "size": 181636,
+      "urls": [
+        "https://archive.ubuntu.com/ubuntu/pool/main/n/nettle/libnettle8t64_3.9.1-2.2build1.1_amd64.deb",
+        "https://security.ubuntu.com/ubuntu/pool/main/n/nettle/libnettle8t64_3.9.1-2.2build1.1_amd64.deb",
+        "https://launchpad.net/ubuntu/+archive/primary/+files/libnettle8t64_3.9.1-2.2build1.1_amd64.deb"
+      ]
+    },
+    {
+      "name": "libnghttp2-14_1.59.0-1ubuntu0.4_amd64.deb",
+      "sha256": "73adcbb9df32cd7c9d46b1c7598bbbbcf249be705d62d966694cfc9976a15dfe",
+      "size": 74590,
+      "urls": [
+        "https://archive.ubuntu.com/ubuntu/pool/main/n/nghttp2/libnghttp2-14_1.59.0-1ubuntu0.4_amd64.deb",
+        "https://security.ubuntu.com/ubuntu/pool/main/n/nghttp2/libnghttp2-14_1.59.0-1ubuntu0.4_amd64.deb",
+        "https://launchpad.net/ubuntu/+archive/primary/+files/libnghttp2-14_1.59.0-1ubuntu0.4_amd64.deb"
+      ]
+    },
+    {
+      "name": "libp11-kit0_0.25.3-4ubuntu2.2_amd64.deb",
+      "sha256": "e7c58aeac19d89f5f1492dfaa52b8623bcd56edc40983f5243ad56d94f477bf2",
+      "size": 297270,
+      "urls": [
+        "https://archive.ubuntu.com/ubuntu/pool/main/p/p11-kit/libp11-kit0_0.25.3-4ubuntu2.2_amd64.deb",
+        "https://security.ubuntu.com/ubuntu/pool/main/p/p11-kit/libp11-kit0_0.25.3-4ubuntu2.2_amd64.deb",
+        "https://launchpad.net/ubuntu/+archive/primary/+files/libp11-kit0_0.25.3-4ubuntu2.2_amd64.deb"
+      ]
+    },
+    {
+      "name": "libpsl5t64_0.21.2-1.1build1_amd64.deb",
+      "sha256": "a6c85d1303ae90b6a3209d73c4f047f82c27cdc963c48adfd95dd7abca64f039",
+      "size": 57072,
+      "urls": [
+        "https://archive.ubuntu.com/ubuntu/pool/main/libp/libpsl/libpsl5t64_0.21.2-1.1build1_amd64.deb",
+        "https://security.ubuntu.com/ubuntu/pool/main/libp/libpsl/libpsl5t64_0.21.2-1.1build1_amd64.deb",
+        "https://launchpad.net/ubuntu/+archive/primary/+files/libpsl5t64_0.21.2-1.1build1_amd64.deb"
+      ]
+    },
+    {
+      "name": "librtmp1_2.4+20151223.gitfa8646d.1-2build7_amd64.deb",
+      "sha256": "967a39dbc14236d1580ede01d80fd78444668572e716734e1ac66c175052594e",
+      "size": 56342,
+      "urls": [
+        "https://archive.ubuntu.com/ubuntu/pool/main/r/rtmpdump/librtmp1_2.4+20151223.gitfa8646d.1-2build7_amd64.deb",
+        "https://security.ubuntu.com/ubuntu/pool/main/r/rtmpdump/librtmp1_2.4+20151223.gitfa8646d.1-2build7_amd64.deb",
+        "https://launchpad.net/ubuntu/+archive/primary/+files/librtmp1_2.4+20151223.gitfa8646d.1-2build7_amd64.deb"
+      ]
+    },
+    {
+      "name": "libsasl2-2_2.1.28+dfsg1-5ubuntu3.1_amd64.deb",
+      "sha256": "eda097f98dcb3a08b9ce157d6191d140e4885c1cba47b683c94b8ca45e88f458",
+      "size": 53194,
+      "urls": [
+        "https://archive.ubuntu.com/ubuntu/pool/main/c/cyrus-sasl2/libsasl2-2_2.1.28+dfsg1-5ubuntu3.1_amd64.deb",
+        "https://security.ubuntu.com/ubuntu/pool/main/c/cyrus-sasl2/libsasl2-2_2.1.28+dfsg1-5ubuntu3.1_amd64.deb",
+        "https://launchpad.net/ubuntu/+archive/primary/+files/libsasl2-2_2.1.28+dfsg1-5ubuntu3.1_amd64.deb"
+      ]
+    },
+    {
+      "name": "libsasl2-modules-db_2.1.28+dfsg1-5ubuntu3.1_amd64.deb",
+      "sha256": "1f13548b1774cd9c70c50b8c3267204a101334a4d2f979338896ba5a4c6f81b8",
+      "size": 20354,
+      "urls": [
+        "https://archive.ubuntu.com/ubuntu/pool/main/c/cyrus-sasl2/libsasl2-modules-db_2.1.28+dfsg1-5ubuntu3.1_amd64.deb",
+        "https://security.ubuntu.com/ubuntu/pool/main/c/cyrus-sasl2/libsasl2-modules-db_2.1.28+dfsg1-5ubuntu3.1_amd64.deb",
+        "https://launchpad.net/ubuntu/+archive/primary/+files/libsasl2-modules-db_2.1.28+dfsg1-5ubuntu3.1_amd64.deb"
+      ]
+    },
+    {
+      "name": "libssh-4_0.10.6-2ubuntu0.5_amd64.deb",
+      "sha256": "2448ce5f99e49721d12f8b227f2472dd08ed7a78184dd819fd03a42693024a16",
+      "size": 191284,
+      "urls": [
+        "https://archive.ubuntu.com/ubuntu/pool/main/libs/libssh/libssh-4_0.10.6-2ubuntu0.5_amd64.deb",
+        "https://security.ubuntu.com/ubuntu/pool/main/libs/libssh/libssh-4_0.10.6-2ubuntu0.5_amd64.deb",
+        "https://launchpad.net/ubuntu/+archive/primary/+files/libssh-4_0.10.6-2ubuntu0.5_amd64.deb"
+      ]
+    },
+    {
+      "name": "libssl3t64_3.0.13-0ubuntu3.16_amd64.deb",
+      "sha256": "219f43b1cd836a4da550938db5fda93160d269d39a4edcf1f1ce698a470db797",
+      "size": 1945300,
+      "urls": [
+        "https://archive.ubuntu.com/ubuntu/pool/main/o/openssl/libssl3t64_3.0.13-0ubuntu3.16_amd64.deb",
+        "https://security.ubuntu.com/ubuntu/pool/main/o/openssl/libssl3t64_3.0.13-0ubuntu3.16_amd64.deb",
+        "https://launchpad.net/ubuntu/+archive/primary/+files/libssl3t64_3.0.13-0ubuntu3.16_amd64.deb"
+      ]
+    },
+    {
+      "name": "libtasn1-6_4.19.0-3ubuntu0.24.04.2_amd64.deb",
+      "sha256": "f82c9ad142f952ea523bda5bfca7bb0802af3a50b8c0f0dd9ec18cdfa104bde7",
+      "size": 44468,
+      "urls": [
+        "https://archive.ubuntu.com/ubuntu/pool/main/libt/libtasn1-6/libtasn1-6_4.19.0-3ubuntu0.24.04.2_amd64.deb",
+        "https://security.ubuntu.com/ubuntu/pool/main/libt/libtasn1-6/libtasn1-6_4.19.0-3ubuntu0.24.04.2_amd64.deb",
+        "https://launchpad.net/ubuntu/+archive/primary/+files/libtasn1-6_4.19.0-3ubuntu0.24.04.2_amd64.deb"
+      ]
+    },
+    {
+      "name": "libunistring5_1.1-2build1.1_amd64.deb",
+      "sha256": "203d7657b5f54633fba1a9c9b784d556ef83c9f6787b3185ba55a88e07b865a3",
+      "size": 535554,
+      "urls": [
+        "https://archive.ubuntu.com/ubuntu/pool/main/libu/libunistring/libunistring5_1.1-2build1.1_amd64.deb",
+        "https://security.ubuntu.com/ubuntu/pool/main/libu/libunistring/libunistring5_1.1-2build1.1_amd64.deb",
+        "https://launchpad.net/ubuntu/+archive/primary/+files/libunistring5_1.1-2build1.1_amd64.deb"
+      ]
+    },
+    {
+      "name": "libzstd1_1.5.5+dfsg2-2build1.1_amd64.deb",
+      "sha256": "dfcf25061e07aad7efd3f4f880ba5ad4d4d09ebe7fc8cc77ab6b8a161d6d4727",
+      "size": 299472,
+      "urls": [
+        "https://archive.ubuntu.com/ubuntu/pool/main/libz/libzstd/libzstd1_1.5.5+dfsg2-2build1.1_amd64.deb",
+        "https://security.ubuntu.com/ubuntu/pool/main/libz/libzstd/libzstd1_1.5.5+dfsg2-2build1.1_amd64.deb",
+        "https://launchpad.net/ubuntu/+archive/primary/+files/libzstd1_1.5.5+dfsg2-2build1.1_amd64.deb"
+      ]
+    },
+    {
+      "name": "zlib1g_1.3.dfsg-3.1ubuntu2.3_amd64.deb",
+      "sha256": "376249c8de139568221dbb242318cc8cb8f02299e3a62b7432948e1754fbddf9",
+      "size": 63158,
+      "urls": [
+        "https://archive.ubuntu.com/ubuntu/pool/main/z/zlib/zlib1g_1.3.dfsg-3.1ubuntu2.3_amd64.deb",
+        "https://security.ubuntu.com/ubuntu/pool/main/z/zlib/zlib1g_1.3.dfsg-3.1ubuntu2.3_amd64.deb",
+        "https://launchpad.net/ubuntu/+archive/primary/+files/zlib1g_1.3.dfsg-3.1ubuntu2.3_amd64.deb"
       ]
     }
   ]
