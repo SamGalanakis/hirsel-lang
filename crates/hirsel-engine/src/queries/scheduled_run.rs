@@ -219,6 +219,9 @@ impl Task {
             let Some(output) = self.queries.check.outcome(product) else {
                 return Poll::Ready(Err(self.queries.errors.protocol));
             };
+            if output.checked.completion != CheckCompletion::Complete {
+                return Poll::Ready(Err(self.queries.failure_record(QueryError::NotImplemented)));
+            }
             if has_errors(&output.checked.diagnostics) {
                 return Poll::Ready(Err(self
                     .queries
@@ -373,6 +376,9 @@ impl Task {
                         Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
                         Poll::Ready(Ok(_)) => {}
                     }
+                    if let Some(reads) = queries.lower.settled_reads(path, QueryKind::Evaluate) {
+                        extend_reads(&mut dependencies, &reads);
+                    }
                     let value = match queries.lower.settled_constant(path, &[]) {
                         Ok(value) => value,
                         Err(error) => return Poll::Ready(Err(queries.failure_record(error))),
@@ -439,7 +445,9 @@ impl Task {
         let bodies = self.contents.values().try_fold(0u64, |n, content| {
             let bytes = match content {
                 DefinitionContent::Body { tir: Some(tir), .. } => {
-                    bincode::serialized_size(tir).ok()?
+                    hirsel_types::with_table_collection(|| bincode::serialized_size(tir))
+                        .0
+                        .ok()?
                 }
                 _ => 0,
             };
