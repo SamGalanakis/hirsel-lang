@@ -155,7 +155,7 @@ def _rust(rule, name, **attrs):
     if attrs.get("crate") == "hirsel_rt":
         if read_root_config("hirsel", "operation_latency", "false") == "true":
             attrs["features"] = attrs.get("features", []) + ["operation-latency"]
-        if read_root_config("hirsel", "ownership_trace", "false") == "true" and "ownership-trace" not in attrs.get("features", []):
+        if name == "hirsel-rt" and read_root_config("hirsel", "ownership_trace", "false") == "true" and "ownership-trace" not in attrs.get("features", []):
             attrs["features"] = attrs.get("features", []) + ["ownership-trace"]
         if FREE_QUALIFICATION:
             attrs["features"] = attrs.get("features", []) + ["free-qualification"]

@@ -744,11 +744,11 @@ fn ownership_native_source_emission_binds_checked_metadata_and_preserves_ordinar
             let after = ordinary();
             assert_eq!(before, after);
             assert_eq!(
-                traced.program,
+                traced.program(),
                 ready.revision(&loaded.entry).unwrap().digest()
             );
             let creates: Vec<_> = traced
-                .units
+                .metadata()
                 .values()
                 .flat_map(|unit| unit.values())
                 .filter(|marker| marker.action == 0)
@@ -757,7 +757,135 @@ fn ownership_native_source_emission_binds_checked_metadata_and_preserves_ordinar
             assert!(creates[0].value_type.ends_with("::Token"));
             assert!(creates[0].source.file.ends_with("main.hir"));
             assert_eq!(creates[0].source.line, 4);
-            assert!(!traced.objects[0].bytes.is_empty());
+            assert!(!traced.objects()[0].bytes.is_empty());
+        }
+    });
+}
+
+#[test]
+fn ownership_native_selected_runtime_decodes_the_same_source_lifetimes_on_four_engines() {
+    hirsel_engine::with_compiler_stack(|| {
+        use hirsel_driver::native::{
+            self, Backend, OptLevel, Options, RuntimeBuild, Sites, TargetSpec, Toolchain,
+        };
+        use hirsel_run_schema::ownership_trace::Action;
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("main.hir");
+        std::fs::write(&source, "resource type Token { value: u64 }\ndrop(x) {}\npub fn main() -> Result[(), ()] {\n let first = Token(value: 7u64)\n let second = Token(value: 7u64)\n let moved = take first\n Ok(())\n}\n").unwrap();
+        let mut traces = vec![];
+        let mut host_outcome = None;
+        for checked in [false, true] {
+            let run = run_resources_on_host(
+                &source,
+                HostLaunch::Live {
+                    config: LaunchConfig::Grants {
+                        input: std::ffi::OsStr::new("{}"),
+                        arguments: None,
+                    },
+                    record: None,
+                    revocations: None,
+                },
+                Some(100_000),
+                Verify::On,
+                checked,
+                1000,
+            )
+            .unwrap_or_else(|error| panic!("reference fixture: {error}"));
+            if let Some(outcome) = &host_outcome {
+                assert_eq!(&run.outcome, outcome);
+            } else {
+                host_outcome = Some(run.outcome.clone());
+            }
+            traces.push(run.trace.unwrap());
+        }
+        assert_eq!(traces[0], traces[1]);
+        let mut loaded = hirsel_driver::load_program(&source)
+            .unwrap_or_else(|error| panic!("source fixture: {error}"));
+        loaded.check_for_execution().unwrap();
+        let input = loaded.engine.export_native_input().unwrap();
+        let checked = loaded.engine.import_native_input(input).unwrap();
+        let target = TargetSpec::x86_64_unknown_linux_gnu();
+        let ready = native::build(&checked, &Options::new(target.clone())).unwrap();
+        let sites = Sites::new(checked.snapshot());
+        let variants = [
+            RuntimeBuild::default(),
+            RuntimeBuild {
+                ownership_trace: true,
+                ..Default::default()
+            },
+        ];
+        let tools =
+            Toolchain::in_tree_with_runtimes(&dir.path().join("tools"), &[&target], &variants)
+                .unwrap();
+        // The opt-in configuration must not put diagnostic exports into the
+        // archive whose product still promises the default runtime variant.
+        let default_bytes = std::fs::read(tools.archive(&target.triple).unwrap()).unwrap();
+        let archive = object::read::archive::ArchiveFile::parse(&*default_bytes).unwrap();
+        for member in archive.members() {
+            let member = member.unwrap();
+            if let Ok(object) = object::File::parse(member.data(default_bytes.as_slice()).unwrap()) {
+                use object::{Object, ObjectSymbol};
+                assert!(!object.symbols().any(|symbol| {
+                    symbol.is_definition()
+                        && symbol
+                            .name()
+                            .is_ok_and(|name| name.starts_with("hirsel_rt_v2_ownership_"))
+                }));
+            }
+        }
+        let selected = tools.with_runtime(variants[1]);
+        for backend in [Backend::Llvm, Backend::Cranelift] {
+            let objects = native::ownership_trace::emit_leaf(
+                &ready,
+                &loaded.entry,
+                &sites,
+                backend,
+                OptLevel::None,
+            )
+            .unwrap();
+            assert!(
+                objects
+                    .launch(&ready, &tools, &dir.path().join("refused"), 1000)
+                    .is_err()
+            );
+            let run = objects
+                .launch(&ready, &selected, &dir.path().join(backend.name()), 1000)
+                .unwrap_or_else(|error| panic!("{backend:?} native launch: {error}"));
+            assert_eq!(run.execution.exit, Some(0));
+            assert!(run.execution.stdout.is_empty());
+            assert!(
+                run.execution.stderr.is_empty(),
+                "{}",
+                String::from_utf8_lossy(&run.execution.stderr)
+            );
+            let trace = run
+                .trace
+                .unwrap_or_else(|error| panic!("{backend:?} native trace: {error}"));
+            let analysis = trace.analyze(run.program, 1000).unwrap();
+            assert_eq!(
+                (analysis.created, analysis.dropped, analysis.live.len()),
+                (2, 2, 0)
+            );
+            traces.push(trace);
+        }
+        assert_eq!(traces[2], traces[3]);
+        // Compiler storage moves differ from evaluator storage moves. Compare
+        // the actual logical token lifetimes, retaining identity and order.
+        let lifecycle = |trace: &hirsel_run_schema::ownership_trace::Trace| {
+            trace
+                .events
+                .iter()
+                .filter_map(|event| match &event.action {
+                    Action::Create {
+                        token, value_type, ..
+                    } => Some((0, token.clone(), Some(value_type.clone()))),
+                    Action::Drop { token, .. } => Some((1, token.clone(), None)),
+                    Action::Move { .. } => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        for trace in &traces[1..] {
+            assert_eq!(lifecycle(&traces[0]), lifecycle(trace));
         }
     });
 }

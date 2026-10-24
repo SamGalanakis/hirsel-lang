@@ -13,9 +13,10 @@ use std::collections::{BTreeMap, BTreeSet};
 /// Objects and immutable row expectations derived from the checked program,
 /// independently of any runtime log. This is the conservative leaf adapter.
 pub struct LeafObjects {
-    pub objects: Vec<ObjectArtifact>,
-    pub units: Units,
-    pub program: [u8; 32],
+    objects: Vec<ObjectArtifact>,
+    units: Units,
+    program: [u8; 32],
+    entry: DefPath,
 }
 fn name(path: &DefPath) -> String {
     format!(
@@ -170,5 +171,80 @@ pub fn emit_leaf(
         objects: vec![object, glue],
         units,
         program: revision,
+        entry: entry.clone(),
     })
+}
+
+/// The native language outcome remains available even if the diagnostic log
+/// is missing, truncated, overflowed or inconsistent with checked metadata.
+pub struct LeafExecution {
+    pub execution: super::Launched,
+    pub program: [u8; 32],
+    pub trace: Result<hirsel_run_schema::ownership_trace::Trace, String>,
+}
+impl LeafObjects {
+    pub fn objects(&self) -> &[ObjectArtifact] {
+        &self.objects
+    }
+    pub fn metadata(&self) -> &Units {
+        &self.units
+    }
+    pub fn program(&self) -> [u8; 32] {
+        self.program
+    }
+
+    /// Link through the selected runtime product and decode only after its
+    /// process is quiescent. Private objects/metadata prevent replacing the
+    /// checked producer with unobserved objects at this consumer seam.
+    pub fn launch(
+        &self,
+        program: &ReadyProgram,
+        toolchain: &super::Toolchain,
+        dir: &std::path::Path,
+        event_limit: usize,
+    ) -> Result<LeafExecution, NativeError> {
+        if program
+            .revision(&self.entry)
+            .map(|revision| revision.digest())
+            != Some(self.program)
+        {
+            return Err(NativeError::new(
+                StageName::Link,
+                "ownership objects belong to another semantic program",
+            ));
+        }
+        if !toolchain.runtime_build.ownership_trace {
+            return Err(NativeError::new(
+                StageName::Link,
+                "ownership objects require the explicitly selected runtime product",
+            ));
+        }
+        std::fs::create_dir_all(dir)
+            .map_err(|error| NativeError::new(StageName::Link, error.to_string()))?;
+        let runnable =
+            super::link_runnable(program, &self.entry, &self.objects, toolchain, dir, None)?;
+        let sidecar = dir.join("ownership.rows.json");
+        let execution =
+            super::link::launch_ownership(&runnable, &program.target, toolchain, dir, &sidecar)?;
+        let trace = (|| -> Result<_, String> {
+            use std::io::Read;
+            let file = std::fs::File::open(&sidecar)
+                .map_err(|error| format!("ownership sidecar: {error}"))?;
+            // Bound a corrupt external log before serde allocates its rows.
+            let log = serde_json::from_reader(std::io::BufReader::new(file).take(32 * 1024 * 1024))
+                .map_err(|error| format!("ownership sidecar: {error}"))?;
+            hirsel_run_schema::ownership_trace::native::decode_leaf(
+                &log,
+                self.program,
+                &self.units,
+                event_limit,
+            )
+            .map_err(|error| error.to_string())
+        })();
+        Ok(LeafExecution {
+            execution,
+            program: self.program,
+            trace,
+        })
+    }
 }

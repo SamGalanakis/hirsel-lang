@@ -2568,7 +2568,38 @@ pub fn launch_runnable(
     tape: Tape<'_>,
 ) -> Result<Launched, NativeError> {
     launch_impl(
-        runnable, target, toolchain, dir, diagnostic, tape, None, None,
+        runnable, target, toolchain, dir, diagnostic, tape, None, None, None,
+    )
+}
+
+/// Explicit diagnostic launch; the admitted program's environment and tape
+/// remain unchanged. The selected runtime product owns observer admission.
+pub(crate) fn launch_ownership(
+    runnable: &Runnable,
+    target: &TargetSpec,
+    toolchain: &Toolchain,
+    dir: &Path,
+    destination: &Path,
+) -> Result<Launched, NativeError> {
+    if !toolchain.runtime_build.ownership_trace {
+        return Err(NativeError::new(
+            StageName::Launch,
+            "ownership launch requires the explicitly selected runtime product",
+        ));
+    }
+    launch_impl(
+        runnable,
+        target,
+        toolchain,
+        dir,
+        false,
+        Tape::Live {
+            record: None,
+            revocations: None,
+        },
+        None,
+        None,
+        Some(destination),
     )
 }
 
@@ -2657,6 +2688,7 @@ pub fn launch_fixture(
         tape,
         None,
         Some(fixture),
+        None,
     )
 }
 
@@ -2722,6 +2754,7 @@ fn launch_impl(
     tape: Tape<'_>,
     live: Option<LiveRun<'_>>,
     fixture: Option<&super::Fixture>,
+    ownership: Option<&Path>,
 ) -> Result<Launched, NativeError> {
     let is_fixture = fixture.is_some();
     let default = super::Fixture::default();
@@ -2747,6 +2780,9 @@ fn launch_impl(
         .env("HIRSEL_RT_ROOT", &root)
         .env("HIRSEL_RT_OBSERVATION", &record)
         .env("HIRSEL_RT_REFUSAL", &refusal);
+    if let Some(path) = ownership {
+        command.env("HIRSEL_OWNERSHIP_TRACE", absolute(path)?);
+    }
     if is_fixture {
         command.env(
             "HIRSEL_RT_FIXTURE_FILES",
@@ -3103,6 +3139,7 @@ pub(crate) fn launch_live(
         false,
         tape,
         Some(live),
+        None,
         None,
     )
 }
