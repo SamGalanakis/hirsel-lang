@@ -600,3 +600,8 @@ mod stack;
 pub use stack::{COMPILER_STACK_BYTES, with_compiler_stack};
 
 pub mod runtime;
+
+pub use queries::native_discovery::{
+    NATIVE_DISCOVERY_KIND, NativeBodyContracts, NativeDiscoveryCache, NativeDiscoveryCounts,
+    NativeDiscoveryProduct,
+};
