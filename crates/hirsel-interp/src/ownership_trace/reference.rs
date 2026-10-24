@@ -13,6 +13,8 @@ use std::collections::{BTreeMap, VecDeque};
 
 mod channels;
 use channels::Channels;
+mod callbacks;
+use callbacks::Callbacks;
 
 struct FrameState {
     id: u64,
@@ -88,6 +90,7 @@ pub(super) struct Resources {
     awaits: BTreeMap<u64, AwaitState>,
     tracker: Tracker,
     channels: Channels,
+    callbacks: Callbacks,
     frames: Vec<FrameState>,
     next_frame: u64,
     next_scratch: u64,
@@ -111,6 +114,7 @@ impl Resources {
             awaits: BTreeMap::new(),
             tracker: Tracker::new(event_limit),
             channels: Channels::default(),
+            callbacks: Callbacks::default(),
             frames: vec![],
             next_frame: 0,
             next_scratch: 0,
@@ -891,6 +895,7 @@ impl Observer for Resources {
             }
         }
         if call.arguments.is_empty() {
+            self.callback_called(call, result);
             return;
         }
         if !call.definition.is_core("task.async") || !call.captures.is_empty() {
@@ -985,6 +990,9 @@ impl Observer for Resources {
             },
         );
     }
+    fn callback_entered(&mut self, _task: u64, _caller: &Frame, callee: &Frame) {
+        self.callback_frame(callee);
+    }
     fn builtin_completed(&mut self, _task: u64, _frame: &Frame, result: &crate::OperationResult) {
         if let Some(state) = self.frames.last() {
             self.channel_committed(state.id, result);
@@ -1012,7 +1020,7 @@ impl Observer for Resources {
             return;
         }
         let count = resources_in(value);
-        if self.channel_returned(value) {
+        if self.channel_returned(value) || self.callback_returned(value) {
             return;
         }
         let awaiting = self
@@ -1233,6 +1241,7 @@ impl Observer for Resources {
         if self.error.is_some() {
             return;
         }
+        self.callback_retiring(ending);
         let Some(state) = self.frames.last() else {
             self.unsupported("frame retirement without an entry");
             return;

@@ -564,3 +564,59 @@ fn canceled_receive(t: Test) {
         1,
     );
 }
+
+#[test]
+fn ownership_callbacks_scope_returns_an_owned_aggregate_without_losing_lineage() {
+    observed_task_source(
+        r#"
+resource type Token {}
+drop(x) {}
+@test
+fn scope_result(t: Test) {
+  let tasks = test.tasks(t)
+  let received = task.scope(tasks, fn(s: Scope) { (Token(), Token()) })
+}
+"#,
+        2,
+    );
+}
+
+#[test]
+fn ownership_callbacks_nested_mutex_and_shared_results_keep_the_created_identity() {
+    observed_task_source(
+        r#"
+resource type Token {}
+drop(x) {}
+@test
+fn nested_results(t: Test) {
+  let tasks = test.tasks(t)
+  let board = mutex.create(tasks, unique 0u64)
+  let frozen = shared.freeze(unique 3u64)
+  let received = mutex.with(tasks, board, fn(mut n: unique u64) -> Token uses {} {
+    shared.with(frozen, fn(value: u64) -> Token uses {} { Token() })
+  })
+}
+"#,
+        1,
+    );
+}
+
+#[test]
+fn ownership_callbacks_failed_mutex_body_releases_its_local_resource() {
+    observed_task_source(
+        r#"
+resource type Token {}
+drop(x) {}
+@test
+fn failed_callback(t: Test) {
+  let tasks = test.tasks(t)
+  let board = mutex.create(tasks, unique 0u64)
+  mutex.with(tasks, board, fn(mut n: unique u64) -> () uses {} {
+    let token = Token()
+    failure.check(false, Arithmetic())
+  })
+}
+"#,
+        1,
+    );
+}

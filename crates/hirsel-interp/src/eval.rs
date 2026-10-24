@@ -1197,6 +1197,7 @@ pub(crate) async fn execute_frames<O: crate::ownership_trace::Observer>(
                         writebacks,
                     }));
                     callback.depth_failure = depth >= limits.call_depth;
+                    observer.callback_entered(task, frame, &callback);
                     frames.push(callback);
                     if runtime.trace_mode == TraceMode::Full {
                         execution.trace.push(TraceEvent::Enter {
