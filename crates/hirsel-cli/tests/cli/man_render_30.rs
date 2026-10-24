@@ -569,7 +569,7 @@ fn markdown_parse_budget_39_mdman_consumer() {
 #[test]
 fn man_render_30_owned_ast_40_consumer() {
     let source = include_str!("../../../../examples/mdman/document.hir");
-    assert!(source.contains("markdown.parse_bounded_owned("));
+    assert!(source.contains("markdown.parse_located_bounded("));
     assert!(source.contains("Ok(tree) => take tree,"));
     assert!(!source.contains("Ok(tree) => unique tree,"));
     scripted(
@@ -578,4 +578,31 @@ fn man_render_30_owned_ast_40_consumer() {
             .filter(|r| ["cmark-nowrap", "html-block"].contains(&r["id"].as_str().unwrap()))
             .collect(),
     );
+}
+
+#[test]
+fn markdown_source_map_41_mdman_consumer() {
+    let mut row = cases()
+        .into_iter()
+        .find(|r| r["id"] == "html-inline")
+        .unwrap();
+    row["id"] = "guide-located".into();
+    row["files"] = serde_json::json!({"guide.md": "# Demo\n\nText <b>unsafe</b>.\n"});
+    row["args"] = serde_json::json!(["render", "guide.md", "out.1", "TEST", "1"]);
+    row["stdout"] =
+        "guide.md:3:6–3:9: unsupported raw HTML (bytes [13,16), end exclusive)\n".into();
+    let mut selected = vec![row];
+    selected.extend(cases().into_iter().filter(|r| {
+        [
+            "empty",
+            "cmark-nowrap",
+            "html-block",
+            "html-inline",
+            "table",
+            "batch-no-publish",
+            "pending-cancel-queued",
+        ]
+        .contains(&r["id"].as_str().unwrap())
+    }));
+    scripted(selected);
 }

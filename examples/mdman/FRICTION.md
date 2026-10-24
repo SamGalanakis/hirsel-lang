@@ -6,7 +6,6 @@ That directory is archival, never a runtime dependency. Active minutes are appro
 | Attempt | Actual diagnostic or behavior / expected contract | Workaround and allocation cost | Minutes | Disposition / owner / witness |
 | --- | --- | --- | ---: | --- |
 | Enforce AST limits before `markdown.parse` | `parse_bounded` now admits original UTF-8 bytes, cumulative parser records and nesting before construction. | Keep16KiB source, add131072 parser work/128 nesting, then validate final depth32 (root one)/nodes8192; output caps and render-admission/worker-return copies remain. Counters are not RSS or final AST counts. | 4 | Addressed by markdown-parse-budget-39; original cap/tape acceptance receipts below remain historical, new refusals are reported separately |
-| Report source line spans | `Node {kind, children}` has no source coordinates. | Filename plus zero-based AST child path; short bounded path allocations. | 1 | Intended API limitation; document.inspect |
 | Reserved `where`, module-head `out`, shadowed `argument`, foreign record pattern, unblocked match assignment, sort callback without `@noalloc` | LANG-14/LANG-4/parser/MEM-5 rejections (check01–05). | Rename, owner helper and `replace` for foreign fields, block match arm, annotate pure comparator. No additional data copies. | 8 | Intended authoring contracts; draft01–05 and check logs |
 | Send parser result as unique | `parse_bounded_owned` now carries deep uniqueness from the shared literal/general builders. | document.load borrows for validation then takes the tree into Parsed, removing its completed-AST copy. Coordinator render-admission AST and worker-return output copies remain. Payload construction copies remain. | 2 | Addressed by markdown-owned-ast-40; no ownership relaxation |
 | Consume qualified results inside carried batching loop | Source accepted; V rejects ListConsume_open call result at body1/block21. Four-module witness reproduces without Markdown/std. | document.append receives owners outside coordinator loop; no additional copy/allocation. | 16 | OPEN; while-consume-mode-30 owns repair; witness-modules/batch-01.hir, check01/09, scripted02 |
@@ -20,8 +19,8 @@ That directory is archival, never a runtime dependency. Active minutes are appro
 | New native seeded fixture template | Explicit `inputs` lacked required hash/random/test seed fields; launcher refused before entry. | Add explicit zero seed snapshots, rerun only new failed/unrun fixtures. No app change. | 1 | Fixed setup; native-llvm-additional01 |
 | Initial config refusal vector | Serializing changed config via generic JSON changed canonical field order; refusal was noncanonical-header validation. | Preserve initial4 format-refusal receipts; replace only this control with byte-preserving canonical Args change and run its4 affected engine cells. | 2 | Harness control refinement; controls01 and controls-canonical01 |
 
-The app is923 Hirsel lines: main51, manifest312, document104, roff268, batch115,
-publish73. No existing application or std source changed. Five focused Rust test
+The original man-render-30 app was923 Hirsel lines: main51, manifest312, document104, roff268, batch115,
+publish73. That original lane changed no existing application or std source. Five focused Rust test
 identities are registered through exactly one `modules.rs` declaration. The initial
 harness listed439 identities (436 prior plus the initial3); adding2 focused test
 identities yields441 on this base, independently of later main registrations.
@@ -77,6 +76,7 @@ Parser admission (markdown-parse-budget-39) qualifies the historical results abo
 the original `depth32` source used a depth-zero document root and now refuses
 `AST depth` with root depth one at the unchanged32 cap. Its bytes and the original
 receipts remain unchanged; current expected refusal is explicit in the fixture.
-Parser work131072/nesting128 supplement final node/depth checks, and do not solve
-source coordinates or the archived replay limitations. The additive owned parser
+Parser work131072/nesting128 supplement final node/depth checks, and do not solve the archived replay limitations.
+Source coordinates are now supplied by the bounded immutable ParsedDocument;
+validation drops its views before consuming into_node for rendering. The additive owned parser
 APIs address the producer ownership gap without changing these admission limits.

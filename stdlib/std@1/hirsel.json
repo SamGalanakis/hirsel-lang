@@ -1355,6 +1355,12 @@
       "module": [
         "regex"
       ]
+    },
+    {
+      "path": "markdown_source.hir",
+      "module": [
+        "markdown"
+      ]
     }
   ],
   "dependencies": []

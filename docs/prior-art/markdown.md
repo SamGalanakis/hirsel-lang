@@ -179,3 +179,22 @@ The exact tiny-case and 1x/2x/4x family totals are independently enumerated in
 `markdown-parse-budget-39.hir`; existing generated CommonMark/GFM expectations
 remain independent unchanged oracles. Original mdman `depth32` bytes now refuse
 under root-one32, explicitly qualifying the archived root-zero acceptance.
+
+## Original source positions (markdown-source-map-41)
+
+Block capture follows commonmark.js `lib/blocks.js:98,929` at the pin above;
+inline token boundaries follow cmark-gfm `src/inlines.c:85` and its
+`api_test/main.c:995-1060` source-position input. The independent 30-vector
+oracle and BSD notice are in `tests/fixtures/markdown-source-map-41`.
+Temporary affine/rewrite runs carry original bytes through CR/NUL normalization,
+container stripping, delimiter resolution, reference lookup, tables, decoded
+email recognition and footnote relocation. No equal-text search recovers positions.
+
+Intentional deviations: original UTF-8 bytes and half-open ends replace upstream
+inclusive line columns/JavaScript UTF-16 offsets; Document includes the final
+terminator, inline Code includes its backticks, and real breaks have extents.
+Trailing container separator lines are excluded; generated nodes have explicit
+synthetic reasons. Reference-use extents and definition-field extents are separate.
+The immutable opaque flat result and borrowed views enforce Hirsel ownership;
+editable Node and rendering carry no source metadata. Adjacent Text segmentation
+continues to follow this parser, rather than cmark's merged Text nodes.

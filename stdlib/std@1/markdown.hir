@@ -47,13 +47,14 @@ pub type ParseBudget {
 pub type ParseLimit = SourceBytes | WorkItems | Nesting
 
 type ParseState {
-  bounded: bool,
+  // 0: unrestricted; 1: bounded; 2: bounded with source metadata.
+  mode: u8,
   work: u64,
   nesting: u64,
 }
 
 fn admit(mut budget: ParseState, count: u64) -> Result[(), ParseLimit] uses {} {
-  if budget.bounded {
+  if budget.mode != 0 {
     if count > budget.work {
       return Error(WorkItems())
     }
@@ -63,7 +64,7 @@ fn admit(mut budget: ParseState, count: u64) -> Result[(), ParseLimit] uses {} {
 }
 
 fn admit_nesting(budget: ParseState, count: u64) -> Result[(), ParseLimit] uses {} {
-  if budget.bounded && count > budget.nesting {
+  if budget.mode != 0 && count > budget.nesting {
     return Error(Nesting())
   }
   Ok(())
@@ -75,7 +76,7 @@ fn child_depth(budget: ParseState, nodes: List[Entry], parent: u64) -> Result[
   ParseLimit
 ] uses {} {
   let mut remaining = budget.nesting
-  if !budget.bounded {
+  if budget.mode == 0 {
     return Ok(())
   }
   if remaining == 0 {
@@ -146,11 +147,15 @@ type Entry {
 }
 
 type Reference {
+  destination_origin: SourceSpan,
+  title_origin: SourceSpan,
   destination: String,
   title: String,
 }
 
 type Parser {
+  sources: List[EntrySource],
+  maps: List[LineMap],
   nodes: List[Entry],
   tip: u64,
   line: String,
@@ -169,9 +174,9 @@ type Parser {
   options: Options,
 }
 
-fn entry(kind: u8) -> Entry uses {} {
+fn entry(tag: u8) -> Entry uses {} {
   Entry(
-    kind: kind,
+    kind: tag,
     value: "",
     info: "",
     title: "",
@@ -272,56 +277,63 @@ fn run(s: String, at: u64, c: u8) -> u64 uses {} {
   end - at
 }
 
-fn new_child(mut budget: ParseState, mut nodes: List[Entry], parent: u64, kind: u8) -> Result[
+fn new_child(mut budget: ParseState, mut p: Parser, parent: u64, tag: u8) -> Result[
   u64,
   ParseLimit
 ] uses {} {
-  child_depth(budget, nodes, parent)?
-  admit(mut budget, 1)?
-  let id = core@1/list.len(nodes)
-  let mut node = entry(kind)
-  node.parent = parent
-  node.prev = nodes[parent].last
-  core@1/list.push(mut nodes, take node)
-  let last = nodes[parent].last
-  if last != 0 {
-    nodes[last].next = id
-  } else {
-    nodes[parent].first = id
+  if budget.mode != 0 {
+    child_depth(budget, p.nodes, parent)?
+    admit(mut budget, 1)?
   }
-  nodes[parent].last = id
+  let id = core@1/list.len(p.nodes)
+  let mut node = entry(tag)
+  if budget.mode == 2 {
+    // Parallel source row and run-list descriptor; absent for plain parse.
+    admit(mut budget, 2)?
+    core@1/list.push(mut p.sources, empty_source())
+  }
+  node.parent = parent
+  node.prev = p.nodes[parent].last
+  core@1/list.push(mut p.nodes, take node)
+  let last = p.nodes[parent].last
+  if last != 0 {
+    p.nodes[last].next = id
+  } else {
+    p.nodes[parent].first = id
+  }
+  p.nodes[parent].last = id
   Ok(id)
 }
 
-fn unlink(mut nodes: List[Entry], id: u64) -> () uses {} {
-  let parent = nodes[id].parent
-  let prev = nodes[id].prev
-  let next = nodes[id].next
+fn unlink(mut p: Parser, id: u64) -> () uses {} {
+  let parent = p.nodes[id].parent
+  let prev = p.nodes[id].prev
+  let next = p.nodes[id].next
   if prev != 0 {
-    nodes[prev].next = next
+    p.nodes[prev].next = next
   } else {
-    nodes[parent].first = next
+    p.nodes[parent].first = next
   }
   if next != 0 {
-    nodes[next].prev = prev
+    p.nodes[next].prev = prev
   } else {
-    nodes[parent].last = prev
+    p.nodes[parent].last = prev
   }
-  nodes[id].prev = 0
-  nodes[id].next = 0
+  p.nodes[id].prev = 0
+  p.nodes[id].next = 0
 }
 
-fn move_child(mut nodes: List[Entry], id: u64, parent: u64) -> () uses {} {
-  unlink(mut nodes, id)
-  let last = nodes[parent].last
-  nodes[id].parent = parent
-  nodes[id].prev = last
+fn move_child(mut p: Parser, id: u64, parent: u64) -> () uses {} {
+  unlink(mut p, id)
+  let last = p.nodes[parent].last
+  p.nodes[id].parent = parent
+  p.nodes[id].prev = last
   if last != 0 {
-    nodes[last].next = id
+    p.nodes[last].next = id
   } else {
-    nodes[parent].first = id
+    p.nodes[parent].first = id
   }
-  nodes[parent].last = id
+  p.nodes[parent].last = id
 }
 
 fn find_nonspace(mut p: Parser) -> () uses {} {
@@ -376,28 +388,76 @@ fn advance_nonspace(mut p: Parser) -> () uses {} {
   p.partial = false
 }
 
-fn add_line(mut p: Parser) -> () uses {} {
+fn add_line(mut budget: ParseState, mut p: Parser) -> Result[(), ParseLimit] uses {} {
   let mut out: List[u8] = []
   text.append(mut out, p.nodes[p.tip].value)
+  let mut mapped_offset = if budget.mode == 2 {
+    size(p.nodes[p.tip].value)
+  } else {
+    0
+  }
   if p.partial {
     let mut n: u64 = 4 - p.column % 4
     while n > 0 {
       core@1/list.push(mut out, 32u8)
       n -= 1
     }
+    if budget.mode == 2 {
+      let range = mapped_origin(p.maps[p.line_number - 1].runs, p.offset, p.offset + 1)
+      if range.tag != 0 {
+        return Error(WorkItems())
+      }
+      append_run(
+        mut budget,
+        mut p.sources[p.tip].runs,
+        OriginRun(
+          start: mapped_offset,
+          end: mapped_offset + 4 - p.column % 4,
+          original: range,
+          affine: false
+        )
+      )?
+      mapped_offset += 4 - p.column % 4
+    }
     p.offset += 1
+  }
+  let target = p.tip
+  let content_start = p.offset
+  let content_end = size(p.line)
+  if budget.mode == 2 {
+    append_content(mut budget, mut p, target, content_start, content_end, mapped_offset)?
+  }
+  if budget.mode == 2 {
+    let range = p.maps[p.line_number - 1].terminator
+    if range.tag == 0 {
+      let at = mapped_offset + size(p.line) - p.offset
+      append_run(
+        mut budget,
+        mut p.sources[target].runs,
+        OriginRun(
+          start: at,
+          end: at + 1,
+          original: range,
+          affine: range.end - range.start == 1
+        )
+      )?
+    }
   }
   text.append(mut out, piece(p.line, p.offset, size(p.line)))
   core@1/list.push(mut out, 10u8)
   let value = text.finish_valid(take out)
   p.nodes[p.tip].value = value
+  if budget.mode == 2 {
+    extend_blocks(mut p, target)
+  }
+  Ok(())
 }
 
-fn can_contain(kind: u8, child: u8) -> bool uses {} {
-  if kind == 4 {
+fn can_contain(tag: u8, child: u8) -> bool uses {} {
+  if tag == 4 {
     child == 5
   } else {
-    (kind == 0 || kind == 3 || kind == 5 || kind == 22) && child != 5
+    (tag == 0 || tag == 3 || tag == 5 || tag == 22) && child != 5
   }
 }
 
@@ -415,8 +475,22 @@ fn finish_at(mut budget: ParseState, id: u64, line: u64, mut p: Parser) -> Resul
   if p.nodes[id].kind == 6 {
     if p.nodes[id].fence != 0 {
       if let Some((info, rest)) = string.split_once(p.nodes[id].value, "\n") {
+        let info_origin = if budget.mode == 2 {
+          let (a, b) = trim_bounds(info)
+          if a == b {
+            absent_span(2)
+          } else {
+            mapped_origin(p.sources[id].runs, a, b)
+          }
+        } else {
+          absent_span(1)
+        }
         let decoded = unescape(trim(info), true)
         let literal = unique rest
+        if budget.mode == 2 {
+          admit(mut budget, 1)?
+          p.sources[id].row.info = info_origin
+        }
         p.nodes[id].info = decoded
         p.nodes[id].value = literal
       }
@@ -436,6 +510,14 @@ fn finish_at(mut budget: ParseState, id: u64, line: u64, mut p: Parser) -> Resul
         blank_lines += 1
       }
       let literal = piece(value, 0, end)
+      if budget.mode == 2 {
+        let end_content = if end > 0 && byte(value, end - 1) == 10 {
+          end - 1
+        } else {
+          end
+        }
+        p.sources[id].row.primary = mapped_origin(p.sources[id].runs, 0, end_content)
+      }
       p.nodes[id].value = literal
       p.nodes[id].end_line -= blank_lines
     }
@@ -490,15 +572,23 @@ fn close_unmatched(mut budget: ParseState, mut p: Parser) -> Result[(), ParseLim
   Ok(())
 }
 
-fn add_block(mut budget: ParseState, mut p: Parser, kind: u8) -> Result[u64, ParseLimit] uses {} {
-  while !can_contain(p.nodes[p.tip].kind, kind) {
+fn add_block(mut budget: ParseState, mut p: Parser, tag: u8) -> Result[u64, ParseLimit] uses {} {
+  while !can_contain(p.nodes[p.tip].kind, tag) {
     let close_id = p.tip
     let close_line = p.line_number - 1
     finish_at(mut budget, close_id, close_line, mut p)?
   }
   let tip = p.tip
-  let id = new_child(mut budget, mut p.nodes, tip, kind)?
+  let id = new_child(mut budget, mut p, tip, tag)?
   p.nodes[id].start_line = p.line_number
+  if budget.mode == 2 {
+    let (_, end) = trim_bounds(p.line)
+    p.sources[id].row.primary = mapped_origin(
+      p.maps[p.line_number - 1].runs,
+      p.nonspace,
+      end
+    )
+  }
   p.tip = id
   Ok(id)
 }
@@ -655,20 +745,20 @@ fn html_block_type(s: String, paragraph: bool) -> u8 uses {} {
   0
 }
 
-fn html_closed(s: String, kind: u8) -> bool uses {} {
-  if kind == 1 {
+fn html_closed(s: String, tag: u8) -> bool uses {} {
+  if tag == 1 {
     let lower = string.ascii_lower(s)
     string.contains(lower, "</script>") || string.contains(lower, "</pre>") || string.contains(
       lower,
       "</style>"
     ) || string.contains(lower, "</textarea>")
-  } else if kind == 2 {
+  } else if tag == 2 {
     string.contains(s, "-->")
-  } else if kind == 3 {
+  } else if tag == 3 {
     string.contains(s, "?>")
-  } else if kind == 4 {
+  } else if tag == 4 {
     string.contains(s, ">")
-  } else if kind == 5 {
+  } else if tag == 5 {
     string.contains(s, "]]>")
   } else {
     false
@@ -725,11 +815,11 @@ fn continue_block(mut budget: ParseState, mut p: Parser, id: u64) -> Result[
   u8,
   ParseLimit
 ] uses {} {
-  let kind = p.nodes[id].kind
-  if kind == 0 || kind == 4 {
+  let tag = p.nodes[id].kind
+  if tag == 0 || tag == 4 {
     return Ok(0)
   }
-  if kind == 3 {
+  if tag == 3 {
     if p.indent < 4 && byte(p.line, p.nonspace) == 62 {
       advance_nonspace(mut p)
       advance(mut p, 1, false)
@@ -740,7 +830,7 @@ fn continue_block(mut budget: ParseState, mut p: Parser, id: u64) -> Result[
     }
     return Ok(1)
   }
-  if kind == 22 {
+  if tag == 22 {
     if p.indent >= 4 {
       advance(mut p, 4, true)
     } else if p.blank {
@@ -750,7 +840,7 @@ fn continue_block(mut budget: ParseState, mut p: Parser, id: u64) -> Result[
     }
     return Ok(0)
   }
-  if kind == 5 {
+  if tag == 5 {
     let padding = p.nodes[id].indent + p.nodes[id].padding
     if p.indent >= padding {
       advance(mut p, padding, true)
@@ -761,7 +851,7 @@ fn continue_block(mut budget: ParseState, mut p: Parser, id: u64) -> Result[
     }
     return Ok(0)
   }
-  if kind == 19 {
+  if tag == 19 {
     let s = piece(p.line, p.nonspace, size(p.line))
     if p.blank || p.indent < 4 && (thematic(s) || byte(s, 0) == 62 || byte(s, 0) == 35 || byte(
       s,
@@ -774,15 +864,30 @@ fn continue_block(mut budget: ParseState, mut p: Parser, id: u64) -> Result[
     }
     return Ok(0)
   }
-  if kind == 2 || kind == 8 {
+  if tag == 2 || tag == 8 {
     return Ok(1)
   }
-  if kind == 6 {
+  if tag == 6 {
     if p.nodes[id].fence != 0 {
       let n = run(p.line, p.nonspace, p.nodes[id].marker)
       if p.indent <= 3 && n >= p.nodes[id].fence && size(
         trim(piece(p.line, p.nonspace + n, size(p.line)))
       ) == 0 {
+        if budget.mode == 2 {
+          let endpoint = mapped_origin(
+            p.maps[p.line_number - 1].runs,
+            p.nonspace + n,
+            p.nonspace + n
+          )
+          let mut current = id
+          while current != 0 {
+            p.sources[current].row.primary = hull(
+              p.sources[current].row.primary,
+              endpoint
+            )
+            current = p.nodes[current].parent
+          }
+        }
         let close_id = id
         let close_line = p.line_number
         finish_at(mut budget, close_id, close_line, mut p)?
@@ -802,7 +907,7 @@ fn continue_block(mut budget: ParseState, mut p: Parser, id: u64) -> Result[
     }
     return Ok(0)
   }
-  if kind == 7 {
+  if tag == 7 {
     return Ok(
       if p.blank && p.nodes[id].html >= 6 {
         1
@@ -811,7 +916,7 @@ fn continue_block(mut budget: ParseState, mut p: Parser, id: u64) -> Result[
       }
     )
   }
-  if kind == 1 {
+  if tag == 1 {
     return Ok(
       if p.blank {
         1
@@ -857,6 +962,11 @@ fn start_block(mut budget: ParseState, mut p: Parser, container: u64) -> Result[
       } else {
         copy raw
       }
+      if budget.mode == 2 {
+        let (left, _) = trim_bounds(piece(p.line, p.offset, size(p.line)))
+        let begin = p.offset + left
+        append_content(mut budget, mut p, id, begin, begin + size(value), 0)?
+      }
       p.nodes[id].value = unique value
       p.offset = size(p.line)
       return Ok(2)
@@ -895,6 +1005,9 @@ fn start_block(mut budget: ParseState, mut p: Parser, container: u64) -> Result[
         if remaining {
           close_unmatched(mut budget, mut p)?
           p.nodes[container].kind = 2
+          if budget.mode == 2 {
+            extend_blocks(mut p, container)
+          }
           p.nodes[container].number = if c == 61 {
             1
           } else {
@@ -1010,18 +1123,29 @@ fn incorporate(mut budget: ParseState, mut p: Parser, take line: String) -> Resu
     leaf = res == 2
   }
   if !p.closed && !p.blank && p.nodes[p.tip].kind == 1 {
-    add_line(mut p)
+    add_line(mut budget, mut p)?
   } else {
     close_unmatched(mut budget, mut p)?
-    let kind = p.nodes[container].kind
-    if kind == 19 {
+    let tag = p.nodes[container].kind
+    if tag == 19 {
       if p.offset < size(p.line) {
         let row_source = piece(p.line, p.offset, size(p.line))
-        add_table_row(mut budget, container, row_source, false, mut p)?
+        let mapping = if budget.mode == 2 {
+          slice_runs(
+            mut budget,
+            p.maps[p.line_number - 1].runs,
+            p.offset,
+            size(p.line),
+            0
+          )?
+        } else {
+          []
+        }
+        add_table_row(mut budget, container, row_source, false, mapping, mut p)?
       }
-    } else if kind == 1 || kind == 6 || kind == 7 {
-      add_line(mut p)
-      if kind == 7 && html_closed(
+    } else if tag == 1 || tag == 6 || tag == 7 {
+      add_line(mut budget, mut p)?
+      if tag == 7 && html_closed(
         piece(p.line, p.offset, size(p.line)),
         p.nodes[container].html
       ) {
@@ -1032,8 +1156,12 @@ fn incorporate(mut budget: ParseState, mut p: Parser, take line: String) -> Resu
     } else if p.offset < size(p.line) && !p.blank {
       add_block(mut budget, mut p, 1)?
       advance_nonspace(mut p)
-      add_line(mut p)
+      add_line(mut budget, mut p)?
     }
+  }
+  if budget.mode == 2 && p.nodes[p.tip].kind == 19 {
+    let table_id = p.tip
+    extend_blocks(mut p, table_id)
   }
   Ok(())
 }
@@ -1334,10 +1462,13 @@ fn line_end(s: String, at: u64) -> Option[u64] uses {} {
   }
 }
 
-fn reference(mut budget: ParseState, s: String, mut refs: Map[String, Reference]) -> Result[
-  u64,
-  ParseLimit
-] uses {} {
+fn reference(
+  mut budget: ParseState,
+  s: String,
+  runs: List[OriginRun],
+  base: u64,
+  mut refs: Map[String, Reference]
+) -> Result[u64, ParseLimit] uses {} {
   let n = label_end(s, 0)
   if n == 0 || byte(s, n) != 58 {
     return Ok(0)
@@ -1346,17 +1477,22 @@ fn reference(mut budget: ParseState, s: String, mut refs: Map[String, Reference]
   if label == "" {
     return Ok(0)
   }
-  let Some((dest, end)) = destination(s, skip_space(s, n + 1)) else {
+  let dest_start = skip_space(s, n + 1)
+  let Some((dest, end)) = destination(s, dest_start) else {
     return Ok(0)
   }
   let after_space = skip_space(s, end)
   let mut title = ""
+  let mut title_origin = absent_span(2)
   let mut consumed = line_end(s, end)
   if after_space > end {
     if let Some((value, after)) = link_title(s, after_space) {
       if let Some(final) = line_end(s, after) {
         consumed = Some(final)
         title = value
+        if budget.mode == 2 {
+          title_origin = mapped_origin(runs, base + after_space + 1, base + after - 1)
+        }
       }
     }
   }
@@ -1365,7 +1501,34 @@ fn reference(mut budget: ParseState, s: String, mut refs: Map[String, Reference]
   }
   if core@1/map.get(refs, label) == None() {
     admit(mut budget, 1)?
-    core@1/map.insert(mut refs, take label, Reference(destination: dest, title: title))
+    let mut destination_origin = absent_span(2)
+    if budget.mode == 2 {
+      admit(mut budget, 1)?
+      let angle = byte(s, dest_start) == 60
+      destination_origin = mapped_origin(
+        runs,
+        base + dest_start + if angle {
+          1
+        } else {
+          0
+        },
+        base + end - if angle {
+          1
+        } else {
+          0
+        }
+      )
+    }
+    core@1/map.insert(
+      mut refs,
+      take label,
+      Reference(
+        destination_origin: destination_origin,
+        title_origin: title_origin,
+        destination: dest,
+        title: title
+      )
+    )
   }
   Ok(final)
 }
@@ -1375,14 +1538,31 @@ fn remove_references(mut budget: ParseState, mut p: Parser, id: u64) -> Result[
   ParseLimit
 ] uses {} {
   let mut value = unique p.nodes[id].value
+  let mut removed = 0u64
   while byte(value, 0) == 91 {
-    let n = reference(mut budget, value, mut p.refs)?
+    let n = reference(
+      mut budget,
+      value,
+      if budget.mode == 2 {
+        p.sources[id].runs
+      } else {
+        []
+      },
+      removed,
+      mut p.refs
+    )?
     if n == 0 {
       break
     }
+    removed += n
     value = piece(value, n, size(value))
   }
+  content_slice(mut budget, mut p, id, removed, removed + size(value))?
   let remains = size(trim(value)) != 0
+  if budget.mode == 2 && removed > 0 {
+    let (a, b) = trim_bounds(value)
+    p.sources[id].row.primary = mapped_origin(p.sources[id].runs, a, b)
+  }
   p.nodes[id].value = unique value
   Ok(remains)
 }
@@ -1408,6 +1588,7 @@ type Bracket {
 }
 
 type InlineParser {
+  runs: List[OriginRun],
   source: String,
   at: u64,
   delimiters: List[Delimiter],
@@ -1415,15 +1596,12 @@ type InlineParser {
   brackets: unique List[Bracket],
 }
 
-fn text_node(
-  mut budget: ParseState,
-  mut nodes: List[Entry],
-  parent: u64,
-  value: String,
-  kind: u8
-) -> Result[u64, ParseLimit] uses {} {
-  let id = new_child(mut budget, mut nodes, parent, kind)?
-  nodes[id].value = unique value
+fn text_node(mut budget: ParseState, mut p: Parser, parent: u64, value: String, tag: u8) -> Result[
+  u64,
+  ParseLimit
+] uses {} {
+  let id = new_child(mut budget, mut p, parent, tag)?
+  p.nodes[id].value = unique value
   Ok(id)
 }
 
@@ -1442,7 +1620,7 @@ fn remove_delimiter(mut ip: unique InlineParser, id: u64) -> () uses {} {
 
 fn process_emphasis(
   mut budget: ParseState,
-  mut nodes: List[Entry],
+  mut p: Parser,
   mut ip: unique InlineParser,
   bottom: u64
 ) -> Result[(), ParseLimit] uses {} {
@@ -1457,7 +1635,9 @@ fn process_emphasis(
   let mut bounds: List[u64] = []
   let mut k: u64 = 0
   while k < 18 {
-    admit(mut budget, 1)?
+    if budget.mode != 0 {
+      admit(mut budget, 1)?
+    }
     core@1/list.push(mut bounds, bottom)
     k += 1
   }
@@ -1504,16 +1684,30 @@ fn process_emphasis(
     }
     let left = ip.delimiters[opener].node
     let right = ip.delimiters[closer].node
+    let left_size = size(p.nodes[left].value)
+    let right_size = size(p.nodes[right].value)
+    let extent = if budget.mode == 2 {
+      hull(
+        mapped_origin(p.sources[left].runs, left_size - used, left_size),
+        mapped_origin(p.sources[right].runs, 0, used)
+      )
+    } else {
+      absent_span(1)
+    }
     ip.delimiters[opener].count -= used
     ip.delimiters[closer].count -= used
-    let left_text = copy piece(nodes[left].value, 0, size(nodes[left].value) - used)
-    let right_text = copy piece(nodes[right].value, 0, size(nodes[right].value) - used)
-    nodes[left].value = left_text
-    nodes[right].value = right_text
-    let parent = nodes[left].parent
+    let left_text = copy piece(p.nodes[left].value, 0, left_size - used)
+    let right_text = copy piece(
+      p.nodes[right].value,
+      0,
+      size(p.nodes[right].value) - used
+    )
+    p.nodes[left].value = left_text
+    p.nodes[right].value = right_text
+    let parent = p.nodes[left].parent
     let emph = new_child(
       mut budget,
-      mut nodes,
+      mut p,
       parent,
       if marker == 126 {
         18
@@ -1523,31 +1717,46 @@ fn process_emphasis(
         15
       }
     )?
-    let mut current = nodes[left].next
+    if budget.mode == 2 {
+      p.sources[emph].row.primary = extent
+      p.sources[left].row.primary = mapped_origin(
+        p.sources[left].runs,
+        0,
+        left_size - used
+      )
+      p.sources[right].row.primary = mapped_origin(
+        p.sources[right].runs,
+        used,
+        right_size
+      )
+      content_slice(mut budget, mut p, left, 0, left_size - used)?
+      content_slice(mut budget, mut p, right, used, right_size)?
+    }
+    let mut current = p.nodes[left].next
     while current != right && current != 0 && current != emph {
-      let next = nodes[current].next
-      move_child(mut nodes, current, emph)
+      let next = p.nodes[current].next
+      move_child(mut p, current, emph)
       current = next
     }
     // Insert the new emphasis immediately after the opener.
-    unlink(mut nodes, emph)
-    let next = nodes[left].next
-    nodes[emph].prev = left
-    nodes[emph].next = next
-    nodes[left].next = emph
+    unlink(mut p, emph)
+    let next = p.nodes[left].next
+    p.nodes[emph].prev = left
+    p.nodes[emph].next = next
+    p.nodes[left].next = emph
     if next != 0 {
-      nodes[next].prev = emph
+      p.nodes[next].prev = emph
     } else {
-      nodes[parent].last = emph
+      p.nodes[parent].last = emph
     }
     ip.delimiters[opener].next = closer
     ip.delimiters[closer].prev = opener
     if ip.delimiters[opener].count == 0 {
-      unlink(mut nodes, left)
+      unlink(mut p, left)
       remove_delimiter(mut ip, opener)
     }
     if ip.delimiters[closer].count == 0 {
-      unlink(mut nodes, right)
+      unlink(mut p, right)
       let next_closer = ip.delimiters[closer].next
       remove_delimiter(mut ip, closer)
       closer = next_closer
@@ -1589,7 +1798,7 @@ fn adjacent_class(s: String, at: u64, previous: bool) -> (bool, bool) uses {} {
 
 fn handle_delimiter(
   mut budget: ParseState,
-  mut nodes: List[Entry],
+  mut p: Parser,
   parent: u64,
   mut ip: unique InlineParser
 ) -> Result[(), ParseLimit] uses {} {
@@ -1601,13 +1810,8 @@ fn handle_delimiter(
   let right = !before_ws && (!before_punct || after_ws || after_punct)
   let opens = left && (c != 95 || !right || before_punct)
   let closes = right && (c != 95 || !left || after_punct)
-  let id = text_node(
-    mut budget,
-    mut nodes,
-    parent,
-    piece(ip.source, ip.at, ip.at + n),
-    9
-  )?
+  let id = text_node(mut budget, mut p, parent, piece(ip.source, ip.at, ip.at + n), 9)?
+  inline_source(mut budget, mut p, id, ip.runs, ip.at, ip.at + n, false)?
   if (opens || closes) && (c != 126 || n <= 2) {
     let d = core@1/list.len(ip.delimiters)
     if ip.top != 0 {
@@ -1699,22 +1903,49 @@ fn close_bracket(
   ip.at += 1
   let after = ip.at
   let Some(bracket) = core@1/list.pop(mut ip.brackets) else {
-    let _ = text_node(mut budget, mut p.nodes, parent, "]", 9)?
+    let text_id_0 = text_node(mut budget, mut p, parent, "]", 9)?
+    if budget.mode == 2 {
+      inline_source(mut budget, mut p, text_id_0, ip.runs, after - 1, after, false)?
+    }
     return Ok(())
   }
   if !bracket.active {
-    let _ = text_node(mut budget, mut p.nodes, parent, "]", 9)?
+    let text_id_1 = text_node(mut budget, mut p, parent, "]", 9)?
+    if budget.mode == 2 {
+      inline_source(mut budget, mut p, text_id_1, ip.runs, after - 1, after, false)?
+    }
     return Ok(())
   }
   let mut dest = ""
   let mut title = ""
   let mut matched = false
+  let mut dest_origin = absent_span(2)
+  let mut title_extent = absent_span(2)
   if byte(ip.source, after) == 40 {
     let begin = skip_space(ip.source, after + 1)
     if let Some((value, end)) = destination(ip.source, begin) {
+      if budget.mode == 2 {
+        let angle = byte(ip.source, begin) == 60
+        dest_origin = mapped_origin(
+          ip.runs,
+          begin + if angle {
+            1
+          } else {
+            0
+          },
+          end - if angle {
+            1
+          } else {
+            0
+          }
+        )
+      }
       let mut next = skip_space(ip.source, end)
       if next > end {
         if let Some((title_value, end_title)) = link_title(ip.source, next) {
+          if budget.mode == 2 {
+            title_extent = mapped_origin(ip.runs, next + 1, end_title - 1)
+          }
           title = title_value
           next = skip_space(ip.source, end_title)
         }
@@ -1738,6 +1969,8 @@ fn close_bracket(
       if let Some(ref) = core@1/map.get(p.refs, label) {
         dest = unique ref.destination
         title = unique ref.title
+        dest_origin = ref.destination_origin
+        title_extent = ref.title_origin
         matched = true
         ip.at = if end > after {
           end
@@ -1760,19 +1993,29 @@ fn close_bracket(
       let mut child = p.nodes[bracket.node].next
       while child != 0 {
         let next = p.nodes[child].next
-        unlink(mut p.nodes, child)
+        unlink(mut p, child)
         child = next
+      }
+      if budget.mode == 2 {
+        p.sources[bracket.node].row.primary = mapped_origin(
+          ip.runs,
+          bracket.index,
+          after
+        )
       }
       p.nodes[bracket.node].kind = 23
       p.nodes[bracket.node].value = label
       return Ok(())
     }
-    let _ = text_node(mut budget, mut p.nodes, parent, "]", 9)?
+    let text_id_2 = text_node(mut budget, mut p, parent, "]", 9)?
+    if budget.mode == 2 {
+      inline_source(mut budget, mut p, text_id_2, ip.runs, after - 1, after, false)?
+    }
     return Ok(())
   }
   let id = new_child(
     mut budget,
-    mut p.nodes,
+    mut p,
     parent,
     if bracket.image {
       17
@@ -1780,16 +2023,25 @@ fn close_bracket(
       16
     }
   )?
+  if budget.mode == 2 {
+    admit(mut budget, 1)?
+    p.sources[id].row.primary = hull(
+      p.sources[bracket.node].row.primary,
+      mapped_origin(ip.runs, after - 1, ip.at)
+    )
+    p.sources[id].row.destination = dest_origin
+    p.sources[id].row.title = title_extent
+  }
   p.nodes[id].info = dest
   p.nodes[id].title = title
   let mut current = p.nodes[bracket.node].next
   while current != 0 && current != id {
     let next = p.nodes[current].next
-    move_child(mut p.nodes, current, id)
+    move_child(mut p, current, id)
     current = next
   }
-  process_emphasis(mut budget, mut p.nodes, mut ip, bracket.delimiter)?
-  unlink(mut p.nodes, bracket.node)
+  process_emphasis(mut budget, mut p, mut ip, bracket.delimiter)?
+  unlink(mut p, bracket.node)
   if !bracket.image {
     let mut i: u64 = 0
     while i < core@1/list.len(ip.brackets) {
@@ -1807,6 +2059,17 @@ fn parse_inlines(mut budget: ParseState, mut p: Parser, parent: u64) -> Result[
   ParseLimit
 ] uses {} {
   let source = trim(p.nodes[parent].value)
+  let runs = if budget.mode == 2 {
+    let (source_start, source_end) = trim_bounds(p.nodes[parent].value)
+    slice_runs(mut budget, p.sources[parent].runs, source_start, source_end, 0)?
+  } else {
+    []
+  }
+  if budget.mode == 2 && (p.nodes[parent].kind == 1 || p.nodes[parent].kind == 21 && size(
+    source
+  ) != 0) {
+    p.sources[parent].row.primary = mapped_origin(runs, 0, size(source))
+  }
   let markers = if p.options.strikethrough {
     b"\n`\\*_[]!<&~"
   } else {
@@ -1820,12 +2083,20 @@ fn parse_inlines(mut budget: ParseState, mut p: Parser, parent: u64) -> Result[
   ) == size(source) {
     if size(source) != 0 {
       let literal = unique source
-      let _ = text_node(mut budget, mut p.nodes, parent, literal, 9)?
+      let text_id_3 = text_node(mut budget, mut p, parent, literal, 9)?
+      if budget.mode == 2 {
+        inline_source(mut budget, mut p, text_id_3, runs, 0, size(source), false)?
+      }
+    }
+    if budget.mode == 2 {
+      p.sources[parent].runs = []
     }
     p.nodes[parent].value = ""
     return Ok(())
   }
-  admit(mut budget, 1)?
+  if budget.mode != 0 {
+    admit(mut budget, 1)?
+  }
   let sentinel = Delimiter(
     node: 0,
     marker: 0,
@@ -1837,6 +2108,7 @@ fn parse_inlines(mut budget: ParseState, mut p: Parser, parent: u64) -> Result[
     next: 0
   )
   let mut ip: unique InlineParser = unique InlineParser(
+    runs: runs,
     source: source,
     at: 0,
     delimiters: [sentinel],
@@ -1848,15 +2120,23 @@ fn parse_inlines(mut budget: ParseState, mut p: Parser, parent: u64) -> Result[
     let c = byte(ip.source, start)
     if p.options.autolinks && core@1/list.len(ip.brackets) == 0 {
       if let Some((dest, end)) = extended_autolink(ip.source, start) {
-        let link = new_child(mut budget, mut p.nodes, parent, 16)?
+        let link = new_child(mut budget, mut p, parent, 16)?
         p.nodes[link].info = dest
-        let _ = text_node(
+        if budget.mode == 2 {
+          admit(mut budget, 1)?
+          p.sources[link].row.primary = mapped_origin(ip.runs, start, end)
+          p.sources[link].row.destination = mapped_origin(ip.runs, start, end)
+        }
+        let text_id_4 = text_node(
           mut budget,
-          mut p.nodes,
+          mut p,
           link,
           unescape(piece(ip.source, start, end), false),
           9
         )?
+        if budget.mode == 2 {
+          inline_source(mut budget, mut p, text_id_4, ip.runs, start, end, true)?
+        }
         ip.at = end
         continue
       }
@@ -1887,44 +2167,64 @@ fn parse_inlines(mut budget: ParseState, mut p: Parser, parent: u64) -> Result[
         ) < size(value) {
           value = piece(value, 1, size(value) - 1)
         }
-        let _ = text_node(mut budget, mut p.nodes, parent, value, 12)?
+        let text_id_5 = text_node(mut budget, mut p, parent, value, 12)?
+        if budget.mode == 2 {
+          inline_source(mut budget, mut p, text_id_5, ip.runs, start, end + n, true)?
+        }
         ip.at = end + n
       } else {
-        let _ = text_node(
+        let text_id_6 = text_node(
           mut budget,
-          mut p.nodes,
+          mut p,
           parent,
           piece(ip.source, start, ip.at),
           9
         )?
+        if budget.mode == 2 {
+          inline_source(mut budget, mut p, text_id_6, ip.runs, start, ip.at, false)?
+        }
       }
       continue
     }
     if c == 92 {
       let next = byte(ip.source, start + 1)
       if next == 10 {
-        new_child(mut budget, mut p.nodes, parent, 11)?
+        let break_id = new_child(mut budget, mut p, parent, 11)?
+        if budget.mode == 2 {
+          p.sources[break_id].row.primary = mapped_origin(ip.runs, start, start + 2)
+        }
         ip.at = start + 2
         while space(byte(ip.source, ip.at)) {
           ip.at += 1
         }
       } else if punctuation(next) {
-        let _ = text_node(
+        let text_id_7 = text_node(
           mut budget,
-          mut p.nodes,
+          mut p,
           parent,
           piece(ip.source, start + 1, start + 2),
           9
         )?
+        if budget.mode == 2 {
+          inline_source(mut budget, mut p, text_id_7, ip.runs, start, start + 2, true)?
+        }
         ip.at += 2
       } else {
-        let _ = text_node(mut budget, mut p.nodes, parent, "\\", 9)?
+        let text_id_8 = text_node(mut budget, mut p, parent, "\\", 9)?
+        if budget.mode == 2 {
+          inline_source(mut budget, mut p, text_id_8, ip.runs, start, start + 1, false)?
+        }
         ip.at += 1
       }
       continue
     }
     if c == 10 {
       let mut hard = false
+      let mut break_extent = if budget.mode == 2 {
+        mapped_origin(ip.runs, start, start + 1)
+      } else {
+        absent_span(1)
+      }
       let last = p.nodes[parent].last
       if last != 0 && p.nodes[last].kind == 9 {
         let value = unique p.nodes[last].value
@@ -1933,12 +2233,22 @@ fn parse_inlines(mut budget: ParseState, mut p: Parser, parent: u64) -> Result[
           end -= 1
         }
         hard = size(value) - end >= 2
+        if hard && budget.mode == 2 {
+          break_extent = hull(
+            mapped_origin(p.sources[last].runs, end, size(value)),
+            break_extent
+          )
+        }
+        if budget.mode == 2 {
+          p.sources[last].row.primary = mapped_origin(p.sources[last].runs, 0, end)
+          content_slice(mut budget, mut p, last, 0, end)?
+        }
         let value_trimmed = copy piece(value, 0, end)
         p.nodes[last].value = value_trimmed
       }
-      new_child(
+      let break_id = new_child(
         mut budget,
-        mut p.nodes,
+        mut p,
         parent,
         if hard {
           11
@@ -1946,6 +2256,9 @@ fn parse_inlines(mut budget: ParseState, mut p: Parser, parent: u64) -> Result[
           10
         }
       )?
+      if budget.mode == 2 {
+        p.sources[break_id].row.primary = break_extent
+      }
       ip.at += 1
       while space(byte(ip.source, ip.at)) {
         ip.at += 1
@@ -1953,7 +2266,7 @@ fn parse_inlines(mut budget: ParseState, mut p: Parser, parent: u64) -> Result[
       continue
     }
     if c == 42 || c == 95 || c == 126 && p.options.strikethrough {
-      handle_delimiter(mut budget, mut p.nodes, parent, mut ip)?
+      handle_delimiter(mut budget, mut p, parent, mut ip)?
       continue
     }
     if c == 91 || c == 33 && byte(ip.source, start + 1) == 91 {
@@ -1963,19 +2276,16 @@ fn parse_inlines(mut budget: ParseState, mut p: Parser, parent: u64) -> Result[
       } else {
         1
       }
-      let id = text_node(
-        mut budget,
-        mut p.nodes,
-        parent,
-        piece(ip.source, start, ip.at),
-        9
-      )?
+      let id = text_node(mut budget, mut p, parent, piece(ip.source, start, ip.at), 9)?
+      if budget.mode == 2 {
+        inline_source(mut budget, mut p, id, ip.runs, start, ip.at, false)?
+      }
       let len = core@1/list.len(ip.brackets)
       if len != 0 {
         ip.brackets[len - 1].bracket_after = true
       }
       // Root plus the pending bracket stack.
-      if budget.bounded && len >= budget.nesting - 1 {
+      if budget.mode != 0 && len >= budget.nesting - 1 {
         return Error(Nesting())
       }
       admit(mut budget, 1)?
@@ -2010,7 +2320,7 @@ fn parse_inlines(mut budget: ParseState, mut p: Parser, parent: u64) -> Result[
         let email = email_address(content)
         if email || uri_scheme(content) {
           let value = unescape(content, false)
-          let id = new_child(mut budget, mut p.nodes, parent, 16)?
+          let id = new_child(mut budget, mut p, parent, 16)?
           p.nodes[id].info = normalize_uri(
             if email {
               string.concat("mailto:", value)
@@ -2018,27 +2328,41 @@ fn parse_inlines(mut budget: ParseState, mut p: Parser, parent: u64) -> Result[
               value
             }
           )
-          let _ = text_node(mut budget, mut p.nodes, id, value, 9)?
+          if budget.mode == 2 {
+            admit(mut budget, 1)?
+            p.sources[id].row.primary = mapped_origin(ip.runs, start, end + 1)
+            p.sources[id].row.destination = mapped_origin(ip.runs, start + 1, end)
+          }
+          let text_id_10 = text_node(mut budget, mut p, id, value, 9)?
+          if budget.mode == 2 {
+            inline_source(mut budget, mut p, text_id_10, ip.runs, start + 1, end, true)?
+          }
           ip.at = end + 1
           continue
         }
       }
       let html_end = html_tag_end(ip.source, start)
       if html_end > start {
-        let _ = text_node(
+        let text_id_11 = text_node(
           mut budget,
-          mut p.nodes,
+          mut p,
           parent,
           piece(ip.source, start, html_end),
           13
         )?
+        if budget.mode == 2 {
+          inline_source(mut budget, mut p, text_id_11, ip.runs, start, html_end, false)?
+        }
         ip.at = html_end
         continue
       }
     }
     if c == 38 {
       if let Some((value, end)) = entity(ip.source, start) {
-        let _ = text_node(mut budget, mut p.nodes, parent, value, 9)?
+        let text_id_12 = text_node(mut budget, mut p, parent, value, 9)?
+        if budget.mode == 2 {
+          inline_source(mut budget, mut p, text_id_12, ip.runs, start, end, true)?
+        }
         ip.at = end
         continue
       }
@@ -2062,10 +2386,22 @@ fn parse_inlines(mut budget: ParseState, mut p: Parser, parent: u64) -> Result[
         end += 1
       }
     }
-    let _ = text_node(mut budget, mut p.nodes, parent, piece(ip.source, start, end), 9)?
+    let text_id_13 = text_node(
+      mut budget,
+      mut p,
+      parent,
+      piece(ip.source, start, end),
+      9
+    )?
+    if budget.mode == 2 {
+      inline_source(mut budget, mut p, text_id_13, ip.runs, start, end, false)?
+    }
     ip.at = end
   }
-  process_emphasis(mut budget, mut p.nodes, mut ip, 0)?
+  process_emphasis(mut budget, mut p, mut ip, 0)?
+  if budget.mode == 2 {
+    p.sources[parent].runs = []
+  }
   p.nodes[parent].value = ""
   Ok(())
 }
@@ -2080,8 +2416,10 @@ fn build_node(nodes: List[Entry], mut budget: ParseState) -> Result[
   unique Node,
   ParseLimit
 ] uses {} {
-  admit_nesting(budget, 1)?
-  admit(mut budget, 1)?
+  if budget.mode != 0 {
+    admit_nesting(budget, 1)?
+    admit(mut budget, 1)?
+  }
   let mut stack: unique List[BuildFrame] = [
     BuildFrame(id: 0, next: nodes[0].first, children: [])
   ]
@@ -2089,23 +2427,27 @@ fn build_node(nodes: List[Entry], mut budget: ParseState) -> Result[
     let len = core@1/list.len(stack)
     let child = stack[len - 1].next
     if child != 0 {
-      if budget.bounded && len >= budget.nesting {
+      if budget.mode != 0 && len >= budget.nesting {
         return Error(Nesting())
       }
-      admit(mut budget, 1)?
+      if budget.mode != 0 {
+        admit(mut budget, 1)?
+      }
       stack[len - 1].next = nodes[child].next
       core@1/list.push(
         mut stack,
         BuildFrame(id: child, next: nodes[child].first, children: [])
       )
     } else {
-      admit(mut budget, 1)?
+      if budget.mode != 0 {
+        admit(mut budget, 1)?
+      }
       let Some(frame) = core@1/list.pop(mut stack) else {
         return Error(WorkItems())
       }
       let BuildFrame(id: id, next: _, children: children) = take frame
       let n = nodes[id]
-      let kind: Kind = match n.kind {
+      let payload_kind: Kind = match n.kind {
         0 => Document(),
         1 => Paragraph(),
         2 => Heading(n.number),
@@ -2132,7 +2474,7 @@ fn build_node(nodes: List[Entry], mut budget: ParseState) -> Result[
         20 => TableRow(n.flag),
         _ => TableCell(n.html),
       }
-      let owned_kind = unique kind
+      let owned_kind = unique payload_kind
       let node: unique Node = Node(kind: take owned_kind, children: take children)
       if len == 1 {
         return Ok(take node)
@@ -2167,7 +2509,9 @@ fn normalized_lines(mut budget: ParseState, source: String) -> Result[
     let mut begin = 0u64
     while begin < len {
       let end = core@1/bytes.find_any(data, b"\n", begin)
-      admit(mut budget, 1)?
+      if budget.mode != 0 {
+        admit(mut budget, 1)?
+      }
       core@1/list.push(mut lines, piece(source, begin, end))
       if end == len {
         return Ok(take lines)
@@ -2186,12 +2530,16 @@ fn normalized_lines(mut budget: ParseState, source: String) -> Result[
     }
     let c = data[end]
     if c == 0 {
-      admit(mut budget, 2)?
+      if budget.mode != 0 {
+        admit(mut budget, 2)?
+      }
       text.append(mut prefix, piece(source, begin, end))
       text.append(mut prefix, "\u{fffd}")
       begin = end + 1
     } else {
-      admit(mut budget, 1)?
+      if budget.mode != 0 {
+        admit(mut budget, 1)?
+      }
       core@1/list.push(mut lines, normalized_line(source, begin, end, take prefix))
       prefix = []
       begin = end + 1
@@ -2202,7 +2550,9 @@ fn normalized_lines(mut budget: ParseState, source: String) -> Result[
     at = begin
   }
   if begin < len || core@1/list.len(prefix) != 0 {
-    admit(mut budget, 1)?
+    if budget.mode != 0 {
+      admit(mut budget, 1)?
+    }
     core@1/list.push(mut lines, normalized_line(source, begin, len, take prefix))
   }
   Ok(take lines)
@@ -2251,12 +2601,15 @@ fn literal_document(mut budget: ParseState, source: String) -> Result[
   let mut nodes: unique List[Node] = []
   let mut paragraph: unique List[Node] = []
   for line in take lines {
-    let bytes = core@1/string.as_bytes(line)
-    let len = core@1/bytes.len(bytes)
+    let len = size(line)
     if len == 0 || line == "---" {
       if core@1/list.len(paragraph) != 0 {
-        admit_nesting(budget, 2)?
-        admit(mut budget, 2)?
+        if budget.mode != 0 {
+          admit_nesting(budget, 2)?
+        }
+        if budget.mode != 0 {
+          admit(mut budget, 2)?
+        }
         core@1/list.push(
           mut nodes,
           Node(
@@ -2270,24 +2623,40 @@ fn literal_document(mut budget: ParseState, source: String) -> Result[
         )
         paragraph = []
       } else if len != 0 {
-        admit_nesting(budget, 2)?
-        admit(mut budget, 2)?
+        if budget.mode != 0 {
+          admit_nesting(budget, 2)?
+        }
+        if budget.mode != 0 {
+          admit(mut budget, 2)?
+        }
         core@1/list.push(mut nodes, Node(kind: ThematicBreak(), children: []))
       }
     } else {
       if core@1/list.len(paragraph) != 0 {
-        admit_nesting(budget, 3)?
-        admit(mut budget, 2)?
+        if budget.mode != 0 {
+          admit_nesting(budget, 3)?
+        }
+        if budget.mode != 0 {
+          admit(mut budget, 2)?
+        }
         core@1/list.push(mut paragraph, Node(kind: SoftBreak(), children: []))
       }
-      admit_nesting(budget, 3)?
-      admit(mut budget, 2)?
+      if budget.mode != 0 {
+        admit_nesting(budget, 3)?
+      }
+      if budget.mode != 0 {
+        admit(mut budget, 2)?
+      }
       core@1/list.push(mut paragraph, Node(kind: Text(unique line), children: []))
     }
   }
   if core@1/list.len(paragraph) != 0 {
-    admit_nesting(budget, 2)?
-    admit(mut budget, 2)?
+    if budget.mode != 0 {
+      admit_nesting(budget, 2)?
+    }
+    if budget.mode != 0 {
+      admit(mut budget, 2)?
+    }
     core@1/list.push(mut nodes, Node(kind: Paragraph(), children: take paragraph))
   }
   Ok(Node(kind: Document(), children: take nodes))
@@ -2303,7 +2672,7 @@ pub fn parse(take source: String, options: Options) -> Node uses {} {
 /// temporary parser records. Payload construction still allocates and copies.
 /// Borrow for validation, then move or freeze the completed tree without copying.
 pub fn parse_owned(take source: String, options: Options) -> unique Node uses {} {
-  let mut budget = ParseState(bounded: false, work: 0, nesting: 0)
+  let mut budget = ParseState(mode: 0, work: 0, nesting: 0)
   let parsed = parse_shared(take source, options, mut budget)
   match take parsed {
     Ok(node) => take node,
@@ -2335,11 +2704,7 @@ pub fn parse_bounded_owned(take source: String, options: Options, budget: ParseB
   if size(source) > budget.source_bytes {
     return Error(SourceBytes())
   }
-  let mut state = ParseState(
-    bounded: true,
-    work: budget.work_items,
-    nesting: budget.nesting
-  )
+  let mut state = ParseState(mode: 1, work: budget.work_items, nesting: budget.nesting)
   parse_shared(take source, options, mut state)
 }
 
@@ -2347,14 +2712,37 @@ fn parse_shared(take source: String, options: Options, mut budget: ParseState) -
   unique Node,
   ParseLimit
 ] uses {} {
-  admit_nesting(budget, 1)?
+  if budget.mode != 0 {
+    admit_nesting(budget, 1)?
+  }
   // Root construction frame + output Node on the literal path.
   if literal_eligible(source, options) {
-    admit(mut budget, 2)?
+    if budget.mode != 0 {
+      admit(mut budget, 2)?
+    }
     return literal_document(mut budget, source)
   }
-  admit(mut budget, 1)?
+  let p = parse_arena(take source, options, [], mut budget)?
+  build_node(p.nodes, mut budget)
+}
+
+fn parse_arena(
+  take source: String,
+  options: Options,
+  take maps: List[LineMap],
+  mut budget: ParseState
+) -> Result[Parser, ParseLimit] uses {} {
+  if budget.mode != 0 {
+    admit(mut budget, 1)?
+  }
+  let mut sources: List[EntrySource] = []
+  if budget.mode == 2 {
+    admit(mut budget, 2)?
+    core@1/list.push(mut sources, empty_source())
+  }
   let mut p = Parser(
+    sources: take sources,
+    maps: take maps,
     nodes: [entry(0)],
     tip: 0,
     line: "",
@@ -2384,7 +2772,7 @@ fn parse_shared(take source: String, options: Options, mut budget: ParseState) -
   let mut empty_id: u64 = 1
   while empty_id < count {
     if p.nodes[empty_id].kind == 1 && p.nodes[empty_id].value == "" {
-      unlink(mut p.nodes, empty_id)
+      unlink(mut p, empty_id)
     }
     empty_id += 1
   }
@@ -2399,6 +2787,12 @@ fn parse_shared(take source: String, options: Options, mut budget: ParseState) -
         ) || byte(value, 1) == 120 || byte(value, 1) == 88) && byte(value, 2) == 93 && whitespace(
           byte(value, 3)
         ) {
+          if budget.mode == 2 {
+            admit(mut budget, 1)?
+            p.sources[parent].row.task = mapped_origin(p.sources[id].runs, 0, 3)
+            let (a, b) = trim_bounds(piece(value, 3, size(value)))
+            content_slice(mut budget, mut p, id, a + 3, b + 3)?
+          }
           let checked = byte(value, 1) == 120 || byte(value, 1) == 88
           let rest = copy trim(piece(value, 3, size(value)))
           p.nodes[parent].checked = Some(checked)
@@ -2410,12 +2804,12 @@ fn parse_shared(take source: String, options: Options, mut budget: ParseState) -
     id += 1
   }
   if options.autolinks {
-    autolink_emails(mut budget, mut p.nodes)?
+    autolink_emails(mut budget, mut p)?
   }
   if options.footnotes {
-    process_footnotes(mut budget, mut p.nodes)?
+    process_footnotes(mut budget, mut p)?
   }
-  build_node(p.nodes, mut budget)
+  Ok(take p)
 }
 
 fn table_cells(mut budget: ParseState, s: String) -> Result[List[String], ParseLimit] uses {} {
@@ -2512,15 +2906,39 @@ fn add_table_row(
   table: u64,
   source: String,
   header: bool,
+  runs: List[OriginRun],
   mut p: Parser
 ) -> Result[(), ParseLimit] uses {} {
   let cells = table_cells(mut budget, source)?
-  let row = new_child(mut budget, mut p.nodes, table, 20)?
+  let locations = if budget.mode == 2 {
+    cell_sources(mut budget, source, runs)?
+  } else {
+    []
+  }
+  let (a, b) = trim_bounds(source)
+  let extent = if budget.mode == 2 {
+    mapped_origin(runs, a, b)
+  } else {
+    absent_span(1)
+  }
+  let row = new_child(mut budget, mut p, table, 20)?
   p.nodes[row].flag = header
+  if budget.mode == 2 {
+    p.sources[row].row.primary = extent
+  }
   let columns = size(p.nodes[table].info)
   let mut i: u64 = 0
   while i < columns {
-    let id = new_child(mut budget, mut p.nodes, row, 21)?
+    let id = new_child(mut budget, mut p, row, 21)?
+    if budget.mode == 2 {
+      if i < core@1/list.len(locations) {
+        p.sources[id].row.primary = locations[i].extent
+        admit(mut budget, core@1/list.len(locations[i].runs))?
+        p.sources[id].runs = unique locations[i].runs
+      } else {
+        p.sources[id].row.primary = synthetic_span(5, extent)
+      }
+    }
     p.nodes[id].html = byte(p.nodes[table].info, i) - 48u8
     p.nodes[id].value = if i < core@1/list.len(cells) {
       unique cells[i]
@@ -2549,6 +2967,18 @@ fn start_table(mut budget: ParseState, mut p: Parser, container: u64) -> Result[
     return Ok(false)
   }
   let header = unique lines[len - 1]
+  let header_start = size(p.nodes[container].value) - size(header) - 1
+  let header_runs = if budget.mode == 2 {
+    slice_runs(
+      mut budget,
+      p.sources[container].runs,
+      header_start,
+      header_start + size(header),
+      0
+    )?
+  } else {
+    []
+  }
   // Setext headings precede tables; a single aligned column needs no pipe.
   // cmark-gfm extensions/ext_scanners.re:40-49 and src/blocks.c setext pass.
   let hyphens = run(delimiter, 0, 45)
@@ -2568,6 +2998,7 @@ fn start_table(mut budget: ParseState, mut p: Parser, container: u64) -> Result[
       core@1/list.push(mut previous, 10u8)
       i += 1
     }
+    content_slice(mut budget, mut p, container, 0, header_start)?
     p.nodes[container].value = text.finish_valid(take previous)
     let close_id = container
     let close_line = p.line_number - 2
@@ -2577,8 +3008,17 @@ fn start_table(mut budget: ParseState, mut p: Parser, container: u64) -> Result[
     p.nodes[container].kind = 19
     p.nodes[container].value = ""
   }
+  if budget.mode == 2 {
+    let (a, b) = trim_bounds(header)
+    let (_, delimiter_end) = trim_bounds(p.line)
+    p.sources[table].row.primary = hull(
+      mapped_origin(header_runs, a, b),
+      mapped_origin(p.maps[p.line_number - 1].runs, p.nonspace, delimiter_end)
+    )
+    p.sources[table].runs = []
+  }
   p.nodes[table].info = align
-  add_table_row(mut budget, table, header, true, mut p)?
+  add_table_row(mut budget, table, header, true, header_runs, mut p)?
   p.offset = size(p.line)
   Ok(true)
 }
@@ -2719,73 +3159,110 @@ fn extended_email(s: String, at: u64) -> Option[(String, u64)] uses {} {
 }
 
 // cmark-gfm's autolink postprocess: consolidate text, then skip link subtrees.
-fn sibling_after(
-  mut budget: ParseState,
-  mut nodes: List[Entry],
-  previous: u64,
-  kind: u8
-) -> Result[u64, ParseLimit] uses {} {
-  let parent = nodes[previous].parent
-  let next = nodes[previous].next
-  let id = new_child(mut budget, mut nodes, parent, kind)?
-  unlink(mut nodes, id)
-  nodes[id].prev = previous
-  nodes[id].next = next
-  nodes[previous].next = id
+fn sibling_after(mut budget: ParseState, mut p: Parser, previous: u64, tag: u8) -> Result[
+  u64,
+  ParseLimit
+] uses {} {
+  let parent = p.nodes[previous].parent
+  let next = p.nodes[previous].next
+  let id = new_child(mut budget, mut p, parent, tag)?
+  unlink(mut p, id)
+  p.nodes[id].prev = previous
+  p.nodes[id].next = next
+  p.nodes[previous].next = id
   if next != 0 {
-    nodes[next].prev = id
+    p.nodes[next].prev = id
   } else {
-    nodes[parent].last = id
+    p.nodes[parent].last = id
   }
   Ok(id)
 }
 
-fn autolink_emails(mut budget: ParseState, mut nodes: List[Entry]) -> Result[
-  (),
-  ParseLimit
-] uses {} {
-  let count = core@1/list.len(nodes)
+fn autolink_emails(mut budget: ParseState, mut p: Parser) -> Result[(), ParseLimit] uses {} {
+  let count = core@1/list.len(p.nodes)
   let mut id: u64 = 1
   while id < count {
-    if nodes[id].kind != 9 || nodes[id].value == "" {
+    if p.nodes[id].kind != 9 || p.nodes[id].value == "" {
       id += 1
       continue
     }
-    let mut ancestor = nodes[id].parent
+    let mut ancestor = p.nodes[id].parent
     let mut in_link = false
     while ancestor != 0 {
-      if nodes[ancestor].kind == 16 {
+      if p.nodes[ancestor].kind == 16 {
         in_link = true
         break
       }
-      ancestor = nodes[ancestor].parent
+      ancestor = p.nodes[ancestor].parent
     }
     if in_link {
       id += 1
       continue
     }
-    let mut value = unique nodes[id].value
-    let mut next = nodes[id].next
-    while next != 0 && nodes[next].kind == 9 {
-      value = string.concat(value, nodes[next].value)
-      let following = nodes[next].next
-      nodes[next].value = ""
-      unlink(mut nodes, next)
+    let mut value = unique p.nodes[id].value
+    let mut next = p.nodes[id].next
+    while next != 0 && p.nodes[next].kind == 9 {
+      if budget.mode == 2 {
+        let copied = slice_runs(
+          mut budget,
+          p.sources[next].runs,
+          0,
+          size(p.nodes[next].value),
+          size(value)
+        )?
+        for segment in take copied {
+          core@1/list.push(mut p.sources[id].runs, take segment)
+        }
+        p.sources[id].row.primary = hull(
+          p.sources[id].row.primary,
+          p.sources[next].row.primary
+        )
+        p.sources[next].runs = []
+      }
+      value = string.concat(value, p.nodes[next].value)
+      let following = p.nodes[next].next
+      p.nodes[next].value = ""
+      unlink(mut p, next)
       next = following
     }
-    nodes[id].value = piece(value, 0, size(value))
+    p.nodes[id].value = piece(value, 0, size(value))
+    let mapping = if budget.mode == 2 {
+      admit(mut budget, core@1/list.len(p.sources[id].runs))?
+      unique p.sources[id].runs
+    } else {
+      []
+    }
     let mut current = id
     let mut begin: u64 = 0
     let mut at: u64 = 0
     while at < size(value) {
       if let Some((dest, end)) = extended_email(value, at) {
         let prefix = piece(value, begin, at)
-        nodes[current].value = prefix
-        let link = sibling_after(mut budget, mut nodes, current, 16)?
-        nodes[link].info = dest
-        let _ = text_node(mut budget, mut nodes, link, piece(value, at, end), 9)?
-        let post = sibling_after(mut budget, mut nodes, link, 9)?
-        nodes[post].value = piece(value, end, size(value))
+        p.nodes[current].value = prefix
+        let link = sibling_after(mut budget, mut p, current, 16)?
+        p.nodes[link].info = dest
+        let label = text_node(mut budget, mut p, link, piece(value, at, end), 9)?
+        if budget.mode == 2 {
+          inline_source(mut budget, mut p, label, mapping, at, end, false)?
+        }
+        if budget.mode == 2 {
+          admit(mut budget, 1)?
+          let extent = mapped_origin(mapping, at, end)
+          p.sources[link].row.primary = extent
+          p.sources[link].row.destination = extent
+          p.sources[current].runs = []
+          inline_source(mut budget, mut p, current, mapping, begin, at, false)?
+          if at == begin {
+            p.sources[current].row.primary = synthetic_span(8, extent)
+          }
+        }
+        let _ = label
+        let post = sibling_after(mut budget, mut p, link, 9)?
+        p.nodes[post].value = piece(value, end, size(value))
+        inline_source(mut budget, mut p, post, mapping, end, size(value), false)?
+        if budget.mode == 2 && end == size(value) {
+          p.sources[post].row.primary = synthetic_span(8, p.sources[link].row.primary)
+        }
         current = post
         begin = end
         at = end

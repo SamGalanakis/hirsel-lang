@@ -13,9 +13,9 @@ cases=[
  page('blocks','# NAME\n\n> quote\n\n```sh\n.rm unsafe\n\\escape - x\n```\n\n---\n','.SH\nNAME\n.RS\n.PP\nquote\n.RE\n.IP\n.nf\n\\f[C]\n\\&.rm unsafe\n\\eescape \\- x\n\\f[]\n.fi\n.PP\n  *  *  *  *  *\n'),
  page('nested','3. **bold *italic* bold**\n   - `code`\n\n[x](https://example/x-y) ![alt](image)\n','.IP "3." 4\n\\f[B]bold \\f[I]italic\\f[B] bold\\f[]\n.IP \\[bu] 2\n\\f[C]code\\f[]\n.PP\nx (https://example/x\\-y) [IMAGE: alt]\n'),
  page('hardbreak','a  \nb\n','.PP\na.PD 0\n.P\n.PD\nb\n'),
- error('html-block','<div>raw</div>','in.md: AST/0: unsupported raw HTML'),
- error('html-inline','x <i>y</i>','in.md: AST/0/1: unsupported raw HTML'),
- error('table','a | b\n--- | ---\nx | y\n','in.md: AST/0: unsupported table'),
+ error('html-block','<div>raw</div>','in.md:1:1–1:15: unsupported raw HTML (bytes [0,14), end exclusive)'),
+ error('html-inline','x <i>y</i>','in.md:1:3–1:6: unsupported raw HTML (bytes [2,5), end exclusive)'),
+ error('table','a | b\n--- | ---\nx | y\n','in.md:1:1–3:6: unsupported table (bytes [0,21), end exclusive)'),
  error('utf8',[255],'in.md: invalid UTF-8'),
 ]
 for id,title,section,date in [('invalid-section','TEST','0',''),('metadata-control','bad\n.rm','1',''),('metadata65','x'*65,'1',''),('date33','TEST','1','x'*33)]:
@@ -34,7 +34,7 @@ for id,n in [('pages16',16),('pages17',17)]:
  cases.append(r)
 r=page('batch-order','','');r.update(args=['render','--manifest','pages.tsv'],files={'pages.tsv':'b.md\tz.1\tTEST\t1\t\t\t\na.md\ta.1\tTEST\t1\t\t\t\n','a.md':'a','b.md':'b'},outputs={'z.1':TH+'.PP\nb\n','a.1':TH+'.PP\na\n'},stdout='rendered 2 pages; published 2; failed 0\n');cases.append(r)
 for id,blocked in [('batch-no-publish',False),('pending-cancel',True)]:
- r=error(id,'','b.md: AST/0: unsupported raw HTML');r.update(args=['render','--manifest','pages.tsv'],files={'pages.tsv':'a.md\ta.1\tTEST\t1\t\t\t\nb.md\tb.1\tTEST\t1\t\t\t\nc.md\tc.1\tTEST\t1\t\t\t\n','a.md':'a','b.md':'<div>bad</div>','c.md':'c'})
+ r=error(id,'','b.md:1:1–1:15: unsupported raw HTML (bytes [0,14), end exclusive)');r.update(args=['render','--manifest','pages.tsv'],files={'pages.tsv':'a.md\ta.1\tTEST\t1\t\t\t\nb.md\tb.1\tTEST\t1\t\t\t\nc.md\tc.1\tTEST\t1\t\t\t\n','a.md':'a','b.md':'<div>bad</div>','c.md':'c'})
  if blocked:r['pending']='data/a.md'
  cases.append(r)
 for n in [16384,16385]:
@@ -77,7 +77,7 @@ for length in [128,129]:
  name='p'*length;r=page(f'path{length}','','');r['args'][1]=name;r['files']={name:''}
  if length==129:r.update(exit=2,stdout=name+': invalid path\n',outputs={})
  cases.append(r)
-r=error('pending-cancel-queued','','b.md: AST/0: unsupported raw HTML');r.update(args=['render','--manifest','pages.tsv'],files={'pages.tsv':''.join(f'{c}.md\t{c}.1\tTEST\t1\t\t\t\n' for c in 'abcde'),**{f'{c}.md':('<div>bad</div>' if c=='b' else c) for c in 'abcde'}},pending='data/a.md');cases.append(r)
+r=error('pending-cancel-queued','','b.md:1:1–1:15: unsupported raw HTML (bytes [0,14), end exclusive)');r.update(args=['render','--manifest','pages.tsv'],files={'pages.tsv':''.join(f'{c}.md\t{c}.1\tTEST\t1\t\t\t\n' for c in 'abcde'),**{f'{c}.md':('<div>bad</div>' if c=='b' else c) for c in 'abcde'}},pending='data/a.md');cases.append(r)
 r=page('reordered-batch','','',scheduler_seed=3);r.update(args=['render','--manifest','pages.tsv'],files={'pages.tsv':'a.md\ta.1\tTEST\t1\t\t\t\nb.md\tb.1\tTEST\t1\t\t\t\n','a.md':'a'*64,'b.md':'b'},outputs={'a.1':TH+'.PP\n'+'a'*64+'\n','b.1':TH+'.PP\nb\n'},stdout='rendered 2 pages; published 2; failed 0\n');cases.append(r)
 r=page('publication-continues','','',commit_fault=True);r.update(args=['render','--manifest','pages.tsv'],files={'pages.tsv':'a.md\ta.1\tTEST\t1\t\t\t\nb.md\tz.1\tTEST\t1\t\t\t\n','a.md':'a','b.md':'b'},outputs={'z.1':TH+'.PP\nb\n'},stdout='a.1: publish permission denied\nrendered 2 pages; published 1; failed 1\n',exit=2);cases.append(r)
 for field in ['origin','manual']:

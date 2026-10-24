@@ -1,0 +1,957 @@
+// Original-byte provenance follows commonmark.js blocks.js open/finalize and
+// cmark-gfm inlines.c consumed-token boundaries. See docs/prior-art/markdown.md.
+// The temporary affine/rewrite runs never escape ParsedDocument construction.
+pub type ByteRange {
+  start: u64,
+  end: u64,
+}
+
+pub type SourcePoint {
+  line: u64,
+  byte_column: u64,
+}
+
+pub type SyntheticReason = InsertedBreak | MissingTableCell | FootnoteBackrefs | FootnoteSpacer | EmptyAutolinkFragment | GeneratedField
+
+pub type UnavailableReason = DetachedNode | NotPresent | NotApplicable
+
+pub type Origin = Cover(ByteRange) | Synthetic(SyntheticReason, Option[ByteRange]) | Unavailable(
+  UnavailableReason
+)
+
+pub type SourceField = Destination | Title | CodeInfo | TaskMarker
+
+// 0: cover; 1: not applicable; 2: not present. Synthetic reasons use
+// 4..9 in declaration order, plus 6 when a causal cover is present.
+// Endpoints retain the full u64 range, independently of the tag.
+type SourceSpan {
+  tag: u8,
+  start: u64,
+  end: u64,
+}
+
+type FlatNode {
+  kind: Kind,
+  first: u64,
+  next: u64,
+  children: u64,
+}
+
+type SourceRow {
+  primary: SourceSpan,
+  destination: SourceSpan,
+  title: SourceSpan,
+  info: SourceSpan,
+  task: SourceSpan,
+}
+
+type SourceLine {
+  start: u64,
+  content_end: u64,
+  next_start: u64,
+}
+
+/// One immutable record AST, scalar source rows and original line index. No source
+/// String, parser arena or editable Node is retained.
+pub opaque type ParsedDocument: copyable + inert + noalloc_drop uses {} {
+  nodes: List[FlatNode],
+  rows: List[SourceRow],
+  lines: List[SourceLine],
+  length: u64,
+}
+
+/// An unforgeable local borrow of one document, never an independently usable ID.
+@loop_source(node_children_open, node_children_next)
+pub opaque type NodeView: copyable + inert + noalloc_drop uses {} {
+  nodes: List[FlatNode],
+  rows: List[SourceRow],
+  slot: u64,
+}
+
+// The existing lending-loop facade lets a child view expire before the cursor
+// advances. It carries the same owner, without exposing a scalar node ID.
+pub opaque type NodeChildren: copyable + inert + noalloc_drop uses {} {
+  nodes: List[FlatNode],
+  rows: List[SourceRow],
+  slot: u64,
+}
+
+fn node_children_open(node: NodeView) -> NodeChildren in node uses {} {
+  NodeChildren(
+    nodes: copy node.nodes,
+    rows: copy node.rows,
+    slot: node.nodes[node.slot].first
+  )
+}
+
+fn node_children_next(mut cursor: NodeChildren) -> Option[NodeView] in cursor uses {} {
+  let slot = cursor.slot
+  if slot == 0 {
+    return None()
+  }
+  cursor.slot = cursor.nodes[slot].next
+  Some(NodeView(nodes: copy cursor.nodes, rows: copy cursor.rows, slot: slot))
+}
+
+pub fn root(document: ParsedDocument) -> NodeView in document uses {} {
+  NodeView(nodes: copy document.nodes, rows: copy document.rows, slot: 0)
+}
+
+pub fn kind(node: NodeView) -> Kind in node uses {} {
+  copy node.nodes[node.slot].kind
+}
+
+pub fn first_child(node: NodeView) -> Option[NodeView] in node uses {} {
+  let slot = node.nodes[node.slot].first
+  if slot == 0 {
+    None()
+  } else {
+    Some(NodeView(nodes: copy node.nodes, rows: copy node.rows, slot: slot))
+  }
+}
+
+pub fn next_sibling(node: NodeView) -> Option[NodeView] in node uses {} {
+  let slot = node.nodes[node.slot].next
+  if slot == 0 {
+    None()
+  } else {
+    Some(NodeView(nodes: copy node.nodes, rows: copy node.rows, slot: slot))
+  }
+}
+
+pub fn origin(node: NodeView) -> Origin uses {} {
+  decode_span(node.rows[node.slot].primary)
+}
+
+pub fn field_origin(node: NodeView, field: SourceField) -> Origin uses {} {
+  let row = node.rows[node.slot]
+  decode_span(
+    match field {
+      Destination() => row.destination,
+      Title() => row.title,
+      CodeInfo() => row.info,
+      TaskMarker() => row.task,
+    }
+  )
+}
+
+pub fn source_length(document: ParsedDocument) -> u64 uses {} {
+  document.length
+}
+
+pub fn point(document: ParsedDocument, offset: u64) -> Option[SourcePoint] uses {} {
+  if offset > document.length {
+    return None()
+  }
+  let mut low = 0u64
+  let mut high = core@1/list.len(document.lines)
+  while low + 1 < high {
+    let middle = low + (high - low) / 2
+    if document.lines[middle].start <= offset {
+      low = middle
+    } else {
+      high = middle
+    }
+  }
+  Some(SourcePoint(line: low + 1, byte_column: offset - document.lines[low].start + 1))
+}
+
+// Flat records are in preorder. Draining from the end moves every Kind once;
+// construction frames and output Nodes were reserved by located admission.
+pub fn into_node(take document: unique ParsedDocument) -> unique Node uses {} {
+  let ParsedDocument(nodes: storage, rows: _, lines: _, length: _) = take document
+  let mut nodes = take storage
+  let mut stack: unique List[Node] = []
+  while let Some(record) = core@1/list.pop(mut nodes) {
+    let FlatNode(kind: payload, first: _, next: _, children: count) = take record
+    let mut children: unique List[Node] = []
+    if count != 0 {
+      // The first child is the most recently completed subtree. Its sibling
+      // count is stored with the private topology during compaction.
+      let mut child = count
+      while child != 0 {
+        let Some(completed) = core@1/list.pop(mut stack) else {
+          core@1/failure.check(false, TextInvariant())
+          return Node(kind: Document(), children: [])
+        }
+        core@1/list.push(mut children, take completed)
+        child -= 1
+      }
+    }
+    core@1/list.push(mut stack, Node(kind: take payload, children: take children))
+  }
+  let Some(output_node) = core@1/list.pop(mut stack) else {
+    return Node(kind: Document(), children: [])
+  }
+  take output_node
+}
+
+type OriginRun {
+  start: u64,
+  end: u64,
+  original: SourceSpan,
+  affine: bool,
+}
+
+type EntrySource {
+  row: SourceRow,
+  runs: List[OriginRun],
+}
+
+type SourceIndex {
+  lines: List[SourceLine],
+  maps: List[LineMap],
+}
+
+type LineMap {
+  runs: List[OriginRun],
+  terminator: SourceSpan,
+}
+
+fn empty_row() -> SourceRow uses {} {
+  SourceRow(
+    primary: absent_span(1),
+    destination: absent_span(1),
+    title: absent_span(1),
+    info: absent_span(1),
+    task: absent_span(1)
+  )
+}
+
+fn empty_source() -> EntrySource uses {} {
+  EntrySource(row: empty_row(), runs: [])
+}
+
+// Internal rows use only scalar fields. Public origin enums are decoded at
+// the view boundary, so ordinary parsing does not register their variant graph.
+fn cover(a: u64, b: u64) -> SourceSpan uses {} {
+  SourceSpan(tag: 0, start: a, end: b)
+}
+
+fn absent_span(tag: u8) -> SourceSpan uses {} {
+  SourceSpan(tag: tag, start: 0, end: 0)
+}
+
+fn synthetic_span(tag: u8, extent: SourceSpan) -> SourceSpan uses {} {
+  SourceSpan(
+    tag: if extent.tag == 0 {
+      tag + 6u8
+    } else {
+      tag
+    },
+    start: extent.start,
+    end: extent.end
+  )
+}
+
+fn decode_span(span: SourceSpan) -> Origin uses {} {
+  if span.tag == 0 {
+    return Cover(ByteRange(start: span.start, end: span.end))
+  }
+  if span.tag == 1 {
+    return Unavailable(NotApplicable())
+  }
+  if span.tag == 2 {
+    return Unavailable(NotPresent())
+  }
+  let reason: SyntheticReason = match if span.tag >= 10 {
+    span.tag - 6u8
+  } else {
+    span.tag
+  } {
+    4 => InsertedBreak(),
+    5 => MissingTableCell(),
+    6 => FootnoteBackrefs(),
+    7 => FootnoteSpacer(),
+    8 => EmptyAutolinkFragment(),
+    _ => GeneratedField(),
+  }
+  Synthetic(
+    reason,
+    if span.tag >= 10 {
+      Some(ByteRange(start: span.start, end: span.end))
+    } else {
+      None()
+    }
+  )
+}
+
+fn hull(a: SourceSpan, b: SourceSpan) -> SourceSpan uses {} {
+  if a.tag == 0 && b.tag == 0 {
+    cover(
+      if a.start < b.start {
+        a.start
+      } else {
+        b.start
+      },
+      if a.end > b.end {
+        a.end
+      } else {
+        b.end
+      }
+    )
+  } else if b.tag == 0 {
+    b
+  } else {
+    a
+  }
+}
+
+fn run_origin(segment: OriginRun, a: u64, b: u64) -> SourceSpan uses {} {
+  if segment.affine {
+    cover(
+      segment.original.start + a - segment.start,
+      segment.original.start + b - segment.start
+    )
+  } else {
+    segment.original
+  }
+}
+
+fn mapped_origin(runs: List[OriginRun], a: u64, b: u64) -> SourceSpan uses {} {
+  let mut out = absent_span(2)
+  for segment in runs {
+    let lo = if a > segment.start {
+      a
+    } else {
+      segment.start
+    }
+    let hi = if b < segment.end {
+      b
+    } else {
+      segment.end
+    }
+    if lo < hi {
+      out = hull(out, run_origin(segment, lo, hi))
+    }
+  }
+  if a == b {
+    for segment in runs {
+      if a >= segment.start && a <= segment.end {
+        let at = if segment.affine {
+          segment.original.start + a - segment.start
+        } else if a == segment.end {
+          segment.original.end
+        } else {
+          segment.original.start
+        }
+        return cover(at, at)
+      }
+    }
+  }
+  out
+}
+
+@preserves_unique(runs)
+fn append_run(mut budget: ParseState, mut runs: List[OriginRun], segment: OriginRun) -> Result[
+  (),
+  ParseLimit
+] uses {} {
+  admit(mut budget, 1)?
+  core@1/list.push(mut runs, segment)
+  Ok(())
+}
+
+fn slice_runs(
+  mut budget: ParseState,
+  runs: List[OriginRun],
+  a: u64,
+  b: u64,
+  offset: u64
+) -> Result[unique List[OriginRun], ParseLimit] uses {} {
+  let mut out: unique List[OriginRun] = []
+  for segment in runs {
+    let lo = if a > segment.start {
+      a
+    } else {
+      segment.start
+    }
+    let hi = if b < segment.end {
+      b
+    } else {
+      segment.end
+    }
+    if lo < hi {
+      let original = run_origin(segment, lo, hi)
+      if original.tag != 0 {
+        return Error(WorkItems())
+      }
+      append_run(
+        mut budget,
+        mut out,
+        OriginRun(
+          start: offset + lo - a,
+          end: offset + hi - a,
+          original: original,
+          affine: segment.affine
+        )
+      )?
+    }
+  }
+  if a == b {
+    let original = mapped_origin(runs, a, b)
+    if original.tag == 0 {
+      append_run(
+        mut budget,
+        mut out,
+        OriginRun(start: offset, end: offset, original: original, affine: true)
+      )?
+    }
+  }
+  Ok(take out)
+}
+
+fn trim_bounds(source: String) -> (u64, u64) uses {} {
+  let mut a = 0u64
+  let mut b = size(source)
+  while a < b && (space(byte(source, a)) || byte(source, a) == 10 || byte(source, a) == 13) {
+    a += 1
+  }
+  while b > a && (space(byte(source, b - 1)) || byte(source, b - 1) == 10 || byte(
+    source,
+    b - 1
+  ) == 13) {
+    b -= 1
+  }
+  (a, b)
+}
+
+// Called before normalization, preserving CRLF width and NUL rewrite atoms.
+fn source_index(mut budget: ParseState, source: String) -> Result[
+  unique SourceIndex,
+  ParseLimit
+] uses {} {
+  let mut lines: unique List[SourceLine] = []
+  let mut maps: unique List[LineMap] = []
+  let mut begin = 0u64
+  while true {
+    let mut end = begin
+    while end < size(source) && byte(source, end) != 10 && byte(source, end) != 13 {
+      end += 1
+    }
+    let mut next = end
+    if next < size(source) {
+      next += 1
+      if byte(source, end) == 13 && byte(source, next) == 10 {
+        next += 1
+      }
+    }
+    admit(mut budget, 1)?
+    core@1/list.push(
+      mut lines,
+      SourceLine(start: begin, content_end: end, next_start: next)
+    )
+    if begin == size(source) {
+      break
+    }
+    let mut runs: unique List[OriginRun] = []
+    let mut at = begin
+    let mut output = 0u64
+    while at < end {
+      let start = at
+      if byte(source, at) == 0 {
+        append_run(
+          mut budget,
+          mut runs,
+          OriginRun(
+            start: output,
+            end: output + 3,
+            original: cover(at, at + 1),
+            affine: false
+          )
+        )?
+        output += 3
+        at += 1
+      } else {
+        while at < end && byte(source, at) != 0 {
+          at += 1
+        }
+        append_run(
+          mut budget,
+          mut runs,
+          OriginRun(
+            start: output,
+            end: output + at - start,
+            original: cover(start, at),
+            affine: true
+          )
+        )?
+        output += at - start
+      }
+    }
+    admit(mut budget, 1)?
+    core@1/list.push(
+      mut maps,
+      LineMap(
+        runs: take runs,
+        terminator: if next > end {
+          cover(end, next)
+        } else {
+          synthetic_span(4, absent_span(1))
+        }
+      )
+    )
+    if next == end {
+      break
+    }
+    begin = next
+  }
+  Ok(SourceIndex(lines: take lines, maps: take maps))
+}
+
+fn append_content(
+  mut budget: ParseState,
+  mut p: Parser,
+  id: u64,
+  a: u64,
+  b: u64,
+  output: u64
+) -> Result[(), ParseLimit] uses {} {
+  if budget.mode != 2 {
+    return Ok(())
+  }
+  let line_map = p.maps[p.line_number - 1]
+  let added = slice_runs(mut budget, line_map.runs, a, b, output)?
+  for segment in take added {
+    core@1/list.push(mut p.sources[id].runs, take segment)
+  }
+  Ok(())
+}
+
+fn content_slice(mut budget: ParseState, mut p: Parser, id: u64, a: u64, b: u64) -> Result[
+  (),
+  ParseLimit
+] uses {} {
+  if budget.mode == 2 {
+    let runs = slice_runs(mut budget, p.sources[id].runs, a, b, 0)?
+    p.sources[id].runs = take runs
+  }
+  Ok(())
+}
+
+fn inline_source(
+  mut budget: ParseState,
+  mut p: Parser,
+  id: u64,
+  runs: List[OriginRun],
+  a: u64,
+  b: u64,
+  rewrite: bool
+) -> Result[(), ParseLimit] uses {} {
+  if budget.mode != 2 {
+    return Ok(())
+  }
+  let extent = mapped_origin(runs, a, b)
+  p.sources[id].row.primary = extent
+  if rewrite {
+    let range = extent
+    if range.tag == 0 {
+      let length = size(p.nodes[id].value)
+      if length != 0 {
+        append_run(
+          mut budget,
+          mut p.sources[id].runs,
+          OriginRun(start: 0, end: length, original: range, affine: false)
+        )?
+      }
+    }
+  } else {
+    let copied = slice_runs(mut budget, runs, a, b, 0)?
+    p.sources[id].runs = take copied
+  }
+  Ok(())
+}
+
+fn entry_kind(n: Entry) -> unique Kind uses {} {
+  let payload: Kind = match n.kind {
+    0 => Document(),
+    1 => Paragraph(),
+    2 => Heading(n.number),
+    3 => BlockQuote(),
+    4 => ListBlock(n.flag, n.number, n.tight),
+    5 => Item(n.checked),
+    6 => CodeBlock(n.value, n.info),
+    7 => HtmlBlock(n.value),
+    8 => ThematicBreak(),
+    9 => Text(n.value),
+    10 => SoftBreak(),
+    11 => HardBreak(),
+    12 => Code(n.value),
+    13 => HtmlInline(n.value),
+    14 => Emphasis(),
+    15 => Strong(),
+    16 => Link(n.info, n.title),
+    17 => Image(n.info, n.title),
+    18 => Strikethrough(),
+    19 => Table(),
+    20 => TableRow(n.flag),
+    21 => TableCell(n.html),
+    22 => FootnoteDefinition(n.value),
+    23 => FootnoteReference(n.value, n.number, n.fence),
+    _ => FootnoteBackrefs(n.value, n.number, n.fence),
+  }
+  unique payload
+}
+
+fn extend_blocks(mut p: Parser, id: u64) -> () uses {} {
+  if core@1/list.len(p.maps) == 0 || p.blank && p.nodes[id].kind != 6 && p.nodes[id].kind != 7 {
+    return
+  }
+  let mut last = size(p.line)
+  let tag = p.nodes[id].kind
+  if tag != 6 && tag != 7 {
+    while last > 0 && space(byte(p.line, last - 1)) {
+      last -= 1
+    }
+  }
+  let mapped = mapped_origin(p.maps[p.line_number - 1].runs, last, last)
+  let endpoint = if last == 0 {
+    let terminator = p.maps[p.line_number - 1].terminator
+    if terminator.tag == 0 {
+      cover(terminator.start, terminator.start)
+    } else {
+      mapped
+    }
+  } else {
+    mapped
+  }
+  let mut current = id
+  while current != 0 {
+    let old = p.sources[current].row.primary
+    p.sources[current].row.primary = hull(old, endpoint)
+    current = p.nodes[current].parent
+  }
+}
+
+fn compact_document(
+  mut budget: ParseState,
+  p: Parser,
+  take lines: unique List[SourceLine],
+  length: u64
+) -> Result[unique ParsedDocument, ParseLimit] uses {} {
+  let mut ids: List[u64] = []
+  let mut remap: Map[u64, u64] = core@1/map.empty()
+  let mut current = 0u64
+  while true {
+    let mut depth = 1u64
+    let mut ancestor = current
+    while ancestor != 0 {
+      depth += 1
+      ancestor = p.nodes[ancestor].parent
+    }
+    admit_nesting(budget, depth)?
+    // Traversal descriptor, remap, final topology, final row, strip frame/Node.
+    admit(mut budget, 6)?
+    let slot = core@1/list.len(ids)
+    core@1/map.insert(mut remap, current, slot)
+    core@1/list.push(mut ids, current)
+    if p.nodes[current].first != 0 {
+      current = p.nodes[current].first
+    } else {
+      while current != 0 && p.nodes[current].next == 0 {
+        current = p.nodes[current].parent
+      }
+      if current == 0 {
+        break
+      }
+      current = p.nodes[current].next
+    }
+  }
+  let mut nodes: unique List[FlatNode] = []
+  let mut rows: unique List[SourceRow] = []
+  for id in ids {
+    let n = p.nodes[id]
+    let mut count = 0u64
+    let mut child = n.first
+    while child != 0 {
+      count += 1
+      child = p.nodes[child].next
+    }
+    let first = if let Some(slot) = core@1/map.get(remap, n.first) {
+      slot
+    } else {
+      0
+    }
+    let next = if let Some(slot) = core@1/map.get(remap, n.next) {
+      slot
+    } else {
+      0
+    }
+    core@1/list.push(
+      mut nodes,
+      FlatNode(
+        kind: entry_kind(n),
+        first: if n.first == 0 {
+          0
+        } else {
+          first
+        },
+        next: if n.next == 0 {
+          0
+        } else {
+          next
+        },
+        children: count
+      )
+    )
+    let mut row = p.sources[id].row
+    if id == 0 {
+      row.primary = cover(0, length)
+    }
+    if n.kind == 16 || n.kind == 17 {
+      if row.title == absent_span(1) {
+        row.title = absent_span(2)
+      }
+    }
+    if n.kind == 6 && row.info == absent_span(1) {
+      row.info = absent_span(2)
+    }
+    if n.kind == 5 && row.task == absent_span(1) {
+      row.task = absent_span(2)
+    }
+    core@1/list.push(mut rows, row)
+  }
+  let parsed: unique ParsedDocument = ParsedDocument(
+    nodes: take nodes,
+    rows: take rows,
+    lines: take lines,
+    length: length
+  )
+  located_success(take parsed)
+}
+
+/// SourceBytes precedes all metadata allocation. Located-only records consume
+/// the same cumulative work allowance; no refund and no partially located tree.
+pub fn parse_located_bounded(take source: String, options: Options, budget: ParseBudget) -> Result[
+  unique ParsedDocument,
+  ParseLimit
+] uses {} {
+  if size(source) > budget.source_bytes {
+    return Error(SourceBytes())
+  }
+  let mut state = ParseState(mode: 2, work: budget.work_items, nesting: budget.nesting)
+  admit_nesting(state, 1)?
+  let length = size(source)
+  if length == 0 {
+    admit(mut state, 5)?
+    let mut row = empty_row()
+    row.primary = cover(0, 0)
+    let parsed: unique ParsedDocument = ParsedDocument(
+      nodes: [FlatNode(kind: Document(), first: 0, next: 0, children: 0)],
+      rows: [row],
+      lines: [SourceLine(start: 0, content_end: 0, next_start: 0)],
+      length: 0
+    )
+    return located_success(take parsed)
+  }
+  let indexed = source_index(mut state, source)?
+  let SourceIndex(lines: lines, maps: maps) = take indexed
+  if literal_eligible(source, options) {
+    return literal_located(mut state, source, take lines, maps)
+  }
+  let p = parse_arena(take source, options, take maps, mut state)?
+  compact_document(mut state, p, take lines, length)
+}
+
+type CellSource {
+  extent: SourceSpan,
+  runs: List[OriginRun],
+}
+
+// Mirror table_cells' structural scan, carrying raw segments through the one
+// permitted rewrite (escaped pipe). It never searches for decoded cell text.
+fn cell_sources(mut budget: ParseState, source: String, runs: List[OriginRun]) -> Result[
+  List[CellSource],
+  ParseLimit
+] uses {} {
+  let (begin, end) = trim_bounds(source)
+  let mut cells: List[CellSource] = []
+  if begin == end || piece(source, begin, end) == "|" {
+    return Ok(take cells)
+  }
+  let mut at = begin + if byte(source, begin) == 124 {
+    1
+  } else {
+    0
+  }
+  while at < end {
+    let start = at
+    while at < end {
+      if byte(source, at) == 92 && byte(source, at + 1) == 124 {
+        at += 2
+      } else if byte(source, at) == 124 {
+        break
+      } else {
+        at += 1
+      }
+    }
+    let (left, right) = trim_bounds(piece(source, start, at))
+    let a = start + left
+    let b = start + right
+    let extent = mapped_origin(runs, a, b)
+    let mut mapping: List[OriginRun] = []
+    let mut input = a
+    let mut output = 0u64
+    while input < b {
+      if byte(source, input) == 92 && byte(source, input + 1) == 124 {
+        let range = mapped_origin(runs, input, input + 2)
+        if range.tag == 0 {
+          append_run(
+            mut budget,
+            mut mapping,
+            OriginRun(start: output, end: output + 1, original: range, affine: false)
+          )?
+        }
+        input += 2
+        output += 1
+      } else {
+        let first = input
+        while input < b && !(byte(source, input) == 92 && byte(source, input + 1) == 124) {
+          input += 1
+        }
+        let copied = slice_runs(mut budget, runs, first, input, output)?
+        for segment in take copied {
+          core@1/list.push(mut mapping, take segment)
+        }
+        output += input - first
+      }
+    }
+    admit(mut budget, 1)?
+    core@1/list.push(mut cells, CellSource(extent: extent, runs: take mapping))
+    if at == end {
+      break
+    }
+    at += 1
+  }
+  Ok(take cells)
+}
+
+fn literal_push(
+  mut budget: ParseState,
+  mut nodes: unique List[FlatNode],
+  mut rows: unique List[SourceRow],
+  parent: u64,
+  previous: u64,
+  depth: u64,
+  take payload: unique Kind,
+  extent: SourceSpan
+) -> Result[u64, ParseLimit] uses {} {
+  admit_nesting(budget, depth)?
+  admit(mut budget, 4)?
+  let id = core@1/list.len(nodes)
+  core@1/list.push(
+    mut nodes,
+    FlatNode(kind: take payload, first: 0, next: 0, children: 0)
+  )
+  let mut row = empty_row()
+  row.primary = extent
+  core@1/list.push(mut rows, row)
+  if previous != 0 {
+    nodes[previous].next = id
+  } else {
+    nodes[parent].first = id
+  }
+  nodes[parent].children += 1
+  Ok(id)
+}
+
+fn literal_located(
+  mut budget: ParseState,
+  source: String,
+  take lines: unique List[SourceLine],
+  maps: List[LineMap]
+) -> Result[unique ParsedDocument, ParseLimit] uses {} {
+  admit(mut budget, 4)?
+  let mut nodes: unique List[FlatNode] = [
+    FlatNode(kind: Document(), first: 0, next: 0, children: 0)
+  ]
+  let mut rows: unique List[SourceRow] = []
+  let mut row = empty_row()
+  row.primary = cover(0, size(source))
+  core@1/list.push(mut rows, row)
+  let mut paragraph = 0u64
+  let mut previous_block = 0u64
+  let mut previous_inline = 0u64
+  let mut line_number = 0u64
+  for line in normalized_lines(mut budget, source)? {
+    let length = size(line)
+    let extent = if length == 0 {
+      cover(lines[line_number].start, lines[line_number].start)
+    } else {
+      mapped_origin(maps[line_number].runs, 0, length)
+    }
+    if length == 0 || line == "---" {
+      if paragraph != 0 {
+        if length != 0 {
+          nodes[paragraph].kind = Heading(2)
+          rows[paragraph].primary = hull(rows[paragraph].primary, extent)
+        }
+        paragraph = 0
+      } else if length != 0 {
+        previous_block = literal_push(
+          mut budget,
+          mut nodes,
+          mut rows,
+          0,
+          previous_block,
+          2,
+          ThematicBreak(),
+          extent
+        )?
+      }
+    } else {
+      if paragraph == 0 {
+        paragraph = literal_push(
+          mut budget,
+          mut nodes,
+          mut rows,
+          0,
+          previous_block,
+          2,
+          Paragraph(),
+          extent
+        )?
+        previous_block = paragraph
+        previous_inline = 0
+      } else {
+        previous_inline = literal_push(
+          mut budget,
+          mut nodes,
+          mut rows,
+          paragraph,
+          previous_inline,
+          3,
+          SoftBreak(),
+          maps[line_number - 1].terminator
+        )?
+        rows[paragraph].primary = hull(rows[paragraph].primary, extent)
+      }
+      previous_inline = literal_push(
+        mut budget,
+        mut nodes,
+        mut rows,
+        paragraph,
+        previous_inline,
+        3,
+        Text(unique line),
+        extent
+      )?
+    }
+    line_number += 1
+  }
+  let parsed: unique ParsedDocument = ParsedDocument(
+    nodes: take nodes,
+    rows: take rows,
+    lines: take lines,
+    length: size(source)
+  )
+  located_success(take parsed)
+}
+
+// As lru.success does, keep the opaque cleanup contract at the Result boundary.
+fn located_success(take parsed: unique ParsedDocument) -> Result[
+  unique ParsedDocument,
+  ParseLimit
+] uses {} {
+  Ok(take parsed)
+}
