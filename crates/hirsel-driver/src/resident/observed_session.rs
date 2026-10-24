@@ -14,7 +14,7 @@ use hirsel_engine::{
     runtime::AdmittedRuntime,
 };
 use std::{
-    cell::Cell,
+    cell::{Cell, RefCell},
     collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
     sync::Arc,
@@ -39,6 +39,10 @@ where
     stats: SessionStats,
     input_work: Cell<SessionInputWork>,
     work: WorkStats,
+    hold_bytes: u64,
+    store_adoptions: u64,
+    recomputations: u64,
+    polled_metadata: RefCell<BTreeSet<PathBuf>>,
     touched: Vec<MemoKey>,
     delivery_error: Option<std::io::Error>,
     pending_discovery_delivery: bool,
@@ -75,6 +79,10 @@ where
             stats: SessionStats::default(),
             input_work: Cell::new(SessionInputWork::default()),
             work: WorkStats::default(),
+            hold_bytes: 0,
+            store_adoptions: 0,
+            recomputations: 0,
+            polled_metadata: RefCell::new(BTreeSet::new()),
             touched: vec![],
             delivery_error: None,
             pending_discovery_delivery: false,
@@ -95,6 +103,16 @@ where
     }
     pub fn work_stats(&self) -> WorkStats {
         self.work
+    }
+    /// Retained-body allowance reported by the last selected front owner.
+    pub fn hold_bytes(&self) -> u64 {
+        self.hold_bytes
+    }
+    pub fn store_adoptions(&self) -> u64 {
+        self.store_adoptions
+    }
+    pub fn recomputations(&self) -> u64 {
+        self.recomputations
     }
     pub fn touched_memos(&self) -> &[MemoKey] {
         &self.touched
@@ -127,8 +145,13 @@ where
         work.polled_files += files;
         work.polled_bytes += bytes;
         self.input_work.set(work);
-        prior
-            .changed_operations(&now)
+        let changed = prior.changed_operations(&now);
+        *self.polled_metadata.borrow_mut() = changed
+            .iter()
+            .filter(|operation| !matches!(operation, Operation::Read(_)))
+            .map(|operation| operation.path().to_owned())
+            .collect();
+        changed
             .into_iter()
             .map(|operation| operation.path().to_owned())
             .collect::<BTreeSet<_>>()
@@ -140,6 +163,7 @@ where
             .collect()
     }
     pub fn apply(&mut self, changes: Vec<FileChange>) -> u64 {
+        let metadata = self.polled_metadata.take();
         let changes = changes
             .into_iter()
             .filter(|change| {
@@ -149,17 +173,19 @@ where
                 let observed = inputs.operations().any(
                     |operation| matches!(operation, Operation::Read(path) if path == &change.path),
                 );
-                !observed
+                metadata.contains(&change.path)
+                    || !observed
                     || inputs.read(&change.path).ok().map(|bytes| bytes.to_vec()) != change.bytes
             })
             .collect::<Vec<_>>();
         if changes.is_empty() {
             return self.stats.revision;
         }
-        if changes
-            .iter()
-            .any(|change| change.bytes.is_none() || !self.observer.is_source(&change.path))
-        {
+        if changes.iter().any(|change| {
+            metadata.contains(&change.path)
+                || change.bytes.is_none()
+                || !self.observer.is_source(&change.path)
+        }) {
             self.observer.rediscover();
             self.pending_discovery_delivery = true;
         } else {
@@ -251,6 +277,24 @@ where
             .and_then(|()| self.check_applied())
             .or_else(check_error)
     }
+    pub fn check_safe(
+        &mut self,
+    ) -> Result<
+        (
+            CheckOutput,
+            Option<(hirsel_syntax::DefPath, Option<hirsel_engine::UnsafeReach>)>,
+        ),
+        ToolError,
+    > {
+        self.request(CompileOperation::SafeCheck)
+            .and_then(|output| match &output.result {
+                CompileResult::SafeCheck { checked, reach } => Ok((checked.clone(), reach.clone())),
+                _ => Err(ToolError::Runtime(
+                    "safe-check request returned another operation".into(),
+                )),
+            })
+            .or_else(|error| check_error(error).map(|checked| (checked, None)))
+    }
     /// Explicitly delivered source bytes select their own immutable graph,
     /// without polling newer unrelated filesystem state.
     pub fn check_applied(&mut self) -> Result<CheckOutput, ToolError> {
@@ -309,6 +353,13 @@ where
             })?;
         self.logical_entry = Some(output.entry.clone());
         self.work.accumulate(output.work.front);
+        self.hold_bytes = output.work.hold_bytes;
+        self.store_adoptions = self
+            .store_adoptions
+            .saturating_add(output.work.store_adoptions);
+        self.recomputations = self
+            .recomputations
+            .saturating_add(output.work.recomputations);
         Ok(output)
     }
     pub fn logical_entry(&self) -> Option<&hirsel_syntax::DefPath> {
@@ -549,6 +600,35 @@ mod tests {
             assert!(session.watched().any(|path| path == source));
         });
     }
+    #[cfg(unix)]
+    #[test]
+    fn observed_session_applies_same_byte_alias_retarget_as_loader_change() {
+        hirsel_engine::with_compiler_stack(|| {
+            let directory = fixture();
+            let source = directory.path().join("main.hir");
+            let first = directory.path().join("first.hir");
+            let second = directory.path().join("second.hir");
+            std::fs::rename(&source, &first).unwrap();
+            std::fs::copy(&first, &second).unwrap();
+            std::os::unix::fs::symlink(&first, &source).unwrap();
+            let mut session = session(directory.path(), None, Arc::new(AtomicUsize::new(0)));
+            assert!(session.check().unwrap().diagnostics.is_empty());
+            let revision = session.stats().revision;
+            std::fs::remove_file(&source).unwrap();
+            std::os::unix::fs::symlink(&second, &source).unwrap();
+            let changes = session.poll();
+            assert!(
+                !changes.is_empty(),
+                "a new canonical target is an input change even with equal source bytes"
+            );
+            session.apply(changes);
+            assert!(session.check_applied().unwrap().diagnostics.is_empty());
+            assert_eq!(session.stats().loads, 2);
+            assert_eq!(session.stats().revision, revision + 1);
+            assert!(session.poll().is_empty());
+        });
+    }
+
     #[test]
     fn observed_session_preserves_non_diagnostic_loader_query_errors() {
         hirsel_engine::with_compiler_stack(|| {
