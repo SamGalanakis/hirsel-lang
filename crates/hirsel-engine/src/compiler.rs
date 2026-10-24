@@ -19,6 +19,7 @@ impl FormattedSource {
 #[derive(Clone)]
 pub struct Compiler {
     owned_engines: bool,
+    adapter_factory: Option<fn() -> PhaseAdapters>,
     phases: fn() -> Arc<dyn Phases>,
     /// Digest of the compiler's own sources, bound by ordinary query products.
     identity: [u8; 32],
@@ -37,6 +38,7 @@ impl Compiler {
     pub const fn new(phases: fn() -> Arc<dyn Phases>, identity: [u8; 32]) -> Self {
         Self {
             owned_engines: false,
+            adapter_factory: None,
             phases,
             identity,
             verify: Verify::On,
@@ -70,6 +72,36 @@ impl Compiler {
         self.verify_store = config.verify_store;
         self.result_store = Some(config.store);
         self
+    }
+    /// Capture the ordinary host defaults once for an immutable request host.
+    /// An explicitly configured provider (including none@1) takes precedence.
+    pub fn configuration(&self) -> CompileConfig {
+        let mut config = CompileConfig::default();
+        config.verify = self.verify;
+        config.retention = self.retention;
+        config.lowering = self.lowering;
+        config.jobs = self.jobs.unwrap_or(config.jobs);
+        config.hold_bytes = self.hold_bytes.unwrap_or(config.hold_bytes);
+        config.verify_store = self.verify_store;
+        if let Some(store) = &self.result_store {
+            config.store = store.clone();
+        } else if crate::policy::uses_persistent_results() {
+            let name = std::env::var("HIRSEL_RESULTS").unwrap_or_else(|_| "dir@1".into());
+            if crate::policy::verifies_cached_results()
+                || std::env::var_os("HIRSEL_VERIFY_CACHE").is_some_and(|v| v != "0")
+            {
+                config.verify_store = crate::store::VerifyStore::Recompute;
+            }
+            if let Ok(store) = crate::store::store_by_name(
+                &name,
+                std::env::var_os("HIRSEL_RESULTS_DIR")
+                    .filter(|v| !v.is_empty())
+                    .map(Into::into),
+            ) {
+                config.store = store;
+            }
+        }
+        config
     }
     /// Engines opened by a library host always reclaim their private domains,
     /// even if a CLI has selected process-exit reclamation globally.
@@ -126,9 +158,24 @@ impl Compiler {
     pub(crate) fn identity(&self) -> ContentHash {
         ContentHash(self.identity)
     }
+    /// Select an explicit phase factory and its compiler identity before any
+    /// snapshot is loaded. Alternate adapters cannot reuse ordinary products
+    /// under the ordinary compiler identity.
+    pub fn with_phase_adapters(
+        mut self,
+        factory: fn() -> PhaseAdapters,
+        identity: [u8; 32],
+    ) -> Self {
+        self.adapter_factory = Some(factory);
+        self.identity = identity;
+        self
+    }
     /// A fresh complete adapter set with immutable shared front phases.
     pub fn adapters(&self) -> PhaseAdapters {
-        PhaseAdapters::compiler((self.phases)())
+        self.adapter_factory.map_or_else(
+            || PhaseAdapters::compiler((self.phases)()),
+            |factory| factory(),
+        )
     }
     pub(crate) fn load(&self, path: &Path) -> Result<(QueryEngine, FileId), ToolError> {
         self.load_inputs(path, &crate::loader_inputs::DiskInputs)
@@ -544,6 +591,63 @@ pub(crate) mod tests {
     }
     pub(crate) fn phases() -> Arc<dyn Phases> {
         Arc::new(DeclarationPhases)
+    }
+
+    #[test]
+    fn request_host_captures_explicit_policy_and_adapter_identity() {
+        struct Unavailable;
+        impl LexerPhase for Unavailable {
+            fn lex(&self, _: FileId, _: &SourceMap) -> Result<QueryOutput<Vec<Token>>, QueryError> {
+                Err(QueryError::Operational(hirsel_types::OperationalFailure {
+                    operation: "request-lexer".into(),
+                    message: "disconnected".into(),
+                }))
+            }
+        }
+        fn adapters() -> PhaseAdapters {
+            let mut adapters = PhaseAdapters::compiler(phases());
+            adapters.lexer = Some(Arc::new(Unavailable));
+            adapters
+        }
+        with_compiler_stack(|| {
+            let store: Arc<dyn crate::store::ResultStore> =
+                Arc::new(crate::store::MemStore::default());
+            let config = CompileConfig {
+                jobs: hirsel_intern::jobs::Jobs::new(8),
+                verify: Verify::Off,
+                retention: crate::memo::Retention::Resident,
+                lowering: LoweringPolicy::Reachable,
+                hold_bytes: 0,
+                store: store.clone(),
+                verify_store: crate::store::VerifyStore::Recompute,
+            };
+            let compiler = Compiler::new(phases, [1; 32])
+                .with_config(config)
+                .with_phase_adapters(adapters, [2; 32])
+                .with_owned_engines();
+            let captured = compiler.configuration();
+            assert!(Arc::ptr_eq(&captured.store, &store));
+            assert_eq!(captured.jobs.get(), 8);
+            assert_eq!(captured.verify, Verify::Off);
+            assert_eq!(captured.retention, crate::memo::Retention::Resident);
+            assert_eq!(captured.lowering, LoweringPolicy::Reachable);
+            assert_eq!(captured.hold_bytes, 0);
+            assert_eq!(captured.verify_store, crate::store::VerifyStore::Recompute);
+            let mut engine = compiler.engine(default_environment());
+            assert_eq!(engine.store_identity, ContentHash([2; 32]));
+            let file = engine
+                .sources
+                .add("request-lexer.hir", "fn main() {}".into())
+                .unwrap();
+            let error = engine.parse_file(file, &default_context()).unwrap_err();
+            assert_eq!(
+                error,
+                QueryError::Operational(hirsel_types::OperationalFailure {
+                    operation: "request-lexer".into(),
+                    message: "disconnected".into(),
+                })
+            );
+        });
     }
 
     struct Fixture(std::path::PathBuf);
