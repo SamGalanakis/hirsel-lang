@@ -664,7 +664,39 @@ pub(super) fn install(
     } else {
         None
     };
-    let mut runtime = AdmittedRuntime::new(config.jobs, runtime, errors).map_err(ToolError::Io)?;
+    // The ordinary source namespace is immutable before the first request.
+    // Preserve the original small-graph subscription/factory headroom while
+    // admitting every actual P/Lower/Evaluate/Run address of larger packages.
+    let mut inventory = std::collections::BTreeSet::new();
+    for path in &definitions {
+        for query in [
+            front.query(path),
+            lower.query(path),
+            lower.evaluate_query(path),
+            run.as_ref().and_then(|run| run.query(path)),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            inventory.insert((query.kind, query.address.0));
+        }
+    }
+    for query in [
+        Some(growth.query()),
+        Some(check.query()),
+        safe.as_ref().map(|safe| safe.query()),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        inventory.insert((query.kind, query.address.0));
+    }
+    let default_capacity =
+        AdmittedRuntime::default_query_capacity(config.jobs, limits.runtime_bytes)
+            .ok_or_else(uninstalled)?;
+    let capacity = inventory.len().max(default_capacity);
+    let mut runtime = AdmittedRuntime::with_query_capacity(config.jobs, runtime, errors, capacity)
+        .map_err(ToolError::Io)?;
     runtime
         .register(hirsel_engine::FRONT_BODY_KIND, front.factory())
         .map_err(registration)?;

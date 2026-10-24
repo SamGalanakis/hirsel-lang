@@ -617,3 +617,40 @@ fn source_transport_scratch_keeps_the_selected_provider_and_lives_through_detach
         assert_eq!(budget.reserved(), 0);
     });
 }
+
+#[test]
+fn immutable_query_capacity_preserves_sixteen_real_coalesced_subscribers() {
+    hirsel_engine::with_compiler_stack(|| {
+        let (_directory, entry, _source) = fixture();
+        let mut selected = request(&entry);
+        let budget = ProcessBudget::new(512 << 20);
+        let mut host = Host::new(selector(budget.clone()));
+        let leases = (0..16)
+            .map(|_| host.request(&selected).unwrap())
+            .collect::<Vec<_>>();
+        assert!(Arc::ptr_eq(
+            &leases[0].subscription.runtime,
+            &leases[15].subscription.runtime
+        ));
+        let outputs = leases
+            .into_iter()
+            .map(|lease| lease.wait().unwrap())
+            .collect::<Vec<_>>();
+        for output in &outputs {
+            assert!(checked(output).diagnostics.is_empty());
+        }
+        selected.operation = CompileOperation::RecomputeCounts {
+            queries: vec![(outputs[0].entry.clone(), hirsel_engine::QueryKind::Check)],
+        };
+        let counts = host.request(&selected).unwrap().wait().unwrap();
+        let CompileResult::RecomputeCounts(counts) = &counts.result else {
+            panic!("unexpected counter output");
+        };
+        assert_eq!(
+            counts[0].2, 1,
+            "sixteen subscriptions must share one real source check"
+        );
+        drop(outputs);
+        drop(host);
+    });
+}
