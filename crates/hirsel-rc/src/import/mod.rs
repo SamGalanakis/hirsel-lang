@@ -434,7 +434,7 @@ pub fn lower_cached_with_roots(
 /// Finish code-target-dependent cleanup before any strict C qualification.
 /// The validator independently reconstructs necessity; this only removes the
 /// speculative caller-owned branch for dispatch proven ordinary by the producer.
-pub(crate) fn prune_pretransfer(
+pub fn prune_pretransfer(
     units: &mut [LirUnit<Value>],
     table: &LayoutTable,
     inventory: &[hirsel_lir::pretransfer::AdapterReference],

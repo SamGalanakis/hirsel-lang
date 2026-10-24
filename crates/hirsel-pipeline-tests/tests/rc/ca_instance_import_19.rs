@@ -78,6 +78,7 @@ fn explicit_instance_import_keeps_source_invocations_without_program_bodies() {
     assert!(program.definitions.is_empty());
     assert!(units.len() >= 5);
     let table = layouts.finish();
+    hirsel_rc::import::prune_pretransfer(&mut units, &table, &operations.pretransfer_adapters);
     let inputs = Inputs {
         target: &target,
         layouts: &table,
