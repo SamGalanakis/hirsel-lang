@@ -16,6 +16,10 @@ const FAILURE: Domain = Domain {
     kind: 0x4600_0019,
     schema: 1,
 };
+struct SourceOwnership {
+    _front: Arc<FrontBodyQueries>,
+    _lower: Arc<FrontLowerQueries>,
+}
 struct Input {
     signature: SignatureRef,
     representation: Option<crate::representation::OwnerRecord>,
@@ -541,7 +545,12 @@ impl QueryEngine {
         if !Arc::ptr_eq(&snapshot, &self.signature_inputs()) {
             return Err(refuse());
         }
-        let original_context = Arc::new(self.native_original_context(definitions)?);
+        let original_context = Arc::new(self.native_original_context(definitions)?.retain_owner(
+            Arc::new(SourceOwnership {
+                _front: front.clone(),
+                _lower: lower.clone(),
+            }),
+        ));
         let store = self
             .result_store
             .clone()
