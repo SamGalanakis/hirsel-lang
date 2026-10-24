@@ -36,6 +36,38 @@ pub fn input_identity(input: &NativeInput) -> InputIdentity {
         parts.push(owner.implementation_revision.0.to_vec());
     }
     for (path, record) in &input.representations {
+        parts.push(path.fingerprint().0.to_vec());
+        parts.push(match record {
+            Some(record) => record.representation_revision.0.to_vec(),
+            None => Vec::new(),
+        });
+    }
+    for edge in &input.instances.edges {
+        parts.push(edge.owner.fingerprint().0.to_vec());
+        parts.push(edge.callee.fingerprint().0.to_vec());
+        parts.push(format!("{:?}", (edge.kind, edge.site.start, edge.site.end)).into_bytes());
+    }
+    for link in &input.foreign_links {
+        parts.push(format!("{link:?}").into_bytes());
+    }
+    if input.foreign_unreplayable {
+        parts.push(b"foreign-unreplayable".to_vec());
+    }
+    for (package, threads) in &input.foreign_threads {
+        parts.push(format!("threads {package:?} {}", threads.name()).into_bytes());
+    }
+    InputIdentity {
+        interface_version: input.environment.interface_version,
+        digest: ContentHash::of_parts("hirsel.native-input.v2", parts.iter().map(Vec::as_slice)),
+    }
+}
+
+/// The program the native passes expand, with the owner representations
+/// layout derivation reads.
+pub fn program(validated: &ValidatedNativeInput) -> Program {
+    let input = validated.snapshot();
+    let mut owners = Owners::default();
+    for (path, record) in &input.representations {
         add_owner(&mut owners, path, &input.signatures[path], record.as_ref());
     }
     Program {
