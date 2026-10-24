@@ -1,12 +1,5 @@
 use super::*;
 
-fn shape() -> ResumeShape {
-    ResumeShape {
-        plan: [7; 32],
-        bytes: vec![24, 16],
-    }
-}
-
 #[test]
 fn a_started_continuation_never_reenters_its_entry() {
     let mut c = Continuation::default();
@@ -25,31 +18,24 @@ fn a_started_continuation_never_reenters_its_entry() {
         }));
         assert!(result.is_err());
     }
-    let frame = OwnedResumeFrame::save(&shape(), 1, &[1, 2]).unwrap();
+    let mut frame = OwnedResumeFrame::new(40);
+    unsafe { frame.as_mut_ptr().cast::<u32>().write(1) };
     c.save(SavedRepr::Resumable(frame));
     let SavedRepr::Resumable(frame) = c.activate() else {
         panic!("representation changed across save")
     };
-    assert_eq!(frame.state, 1);
+    assert_eq!(frame.state(), 1);
     c.complete();
     assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| c.start())).is_err());
 }
 
 #[test]
-fn compact_frames_materialize_exact_state_images_and_refuse_foreign_shapes() {
-    let s = shape();
-    let frame = OwnedResumeFrame::save(&s, 2, &[9]).unwrap();
-    assert_eq!(&*frame.image, &[2, 9]);
-    assert!(frame.check(&s));
-    assert!(OwnedResumeFrame::save(&s, 1, &[9]).is_none());
-    assert!(OwnedResumeFrame::save(&s, 0, &[]).is_none());
-    assert!(OwnedResumeFrame::save(&s, 3, &[]).is_none());
-    let mut other = s.clone();
-    other.plan[0] = 8;
-    assert!(!frame.check(&other));
-    let mut wrong = OwnedResumeFrame::save(&s, 2, &[9]).unwrap();
-    wrong.state = 1;
-    assert!(!wrong.check(&s));
+fn compact_frames_start_at_entry_with_aligned_whole_images() {
+    for (bytes, rounded) in [(8, 16), (40, 48), (184, 192)] {
+        let mut frame = OwnedResumeFrame::new(bytes);
+        assert_eq!((frame.state(), frame.bytes()), (0, rounded));
+        assert_eq!(frame.as_mut_ptr() as usize % 16, 0);
+    }
 }
 
 #[test]

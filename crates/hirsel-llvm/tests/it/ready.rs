@@ -246,6 +246,7 @@ fn emit(program: &Program, opt: OptLevel) -> Vec<u8> {
     let input = input();
     let inputs = EmitInputs {
         ahead: None,
+        continuation: None,
         alternate: false,
         index: None,
         verify_backend: true,

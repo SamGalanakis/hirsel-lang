@@ -676,6 +676,8 @@ pub const ENTRIES: &[Entry] = &[
     // Ahead execution is physical progress, not a semantic operation.
     entry("hirsel_rt_v2_ahead_barrier", Local),
     entry("hirsel_rt_v2_ahead_state", Local),
+    entry("hirsel_rt_v2_resume_point", Physical),
+    entry("hirsel_rt_v2_resume_run", Physical),
     entry("hirsel_rt_v2_ahead_handoff", Local),
     // Arm validates task-owned recipe/buffer custody under the scheduler role;
     // it creates neither a read nor an ordinal. Private leaf helpers inspect

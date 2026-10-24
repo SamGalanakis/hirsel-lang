@@ -47,6 +47,7 @@ fn metadata(
     let empty = BTreeSet::new();
     let inputs = EmitInputs {
         ahead: Some(plan),
+        continuation: None,
         alternate: true,
         index: None,
         input: &program.input,

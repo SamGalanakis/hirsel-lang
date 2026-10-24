@@ -73,6 +73,9 @@ pub fn validate_stages() -> bool {
 pub struct EmitInputs<'a> {
     /// Program-wide proof built from complete Ready content before partitioning.
     pub ahead: Option<&'a crate::ahead::AheadPlan>,
+    /// Validated continuation plans: a resumable task body enters its dispatcher
+    /// through the runtime (`crate::continuation`).
+    pub continuation: Option<&'a crate::continuation::ContinuationPlans>,
     /// Emit only the real alternate definitions selected by `ahead`.
     pub alternate: bool,
     /// Borrow-bound lookup index shared by unit workers. Raw callers may omit it.
@@ -479,6 +482,9 @@ pub fn artifact(
     if let Some(plan) = inputs.ahead.filter(|plan| !plan.roots.is_empty()) {
         options.push_str(&format!(" plan:{:?}", plan.identity));
     }
+    if let Some(plans) = inputs.continuation.filter(|plans| plans.resumable()) {
+        options.push_str(&format!(" resume:{:?}", plans.identity));
+    }
     if inputs.measurement {
         options.push_str(" measurement");
     }
@@ -734,6 +740,7 @@ mod tests {
         let keys = crate::layout_keys::LayoutKeys::new(&layouts);
         let inputs = EmitInputs {
             ahead,
+            continuation: None,
             alternate: false,
             index: None,
             verify_backend: true,

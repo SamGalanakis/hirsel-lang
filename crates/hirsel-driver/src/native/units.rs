@@ -275,6 +275,29 @@ pub(crate) fn lower(
             );
         }
     }
+    // Task bodies routed through their dispatchers read the same prospective
+    // bodies as the ahead plan, and so the same plans as the resume object.
+    let continuation = match program.objects.backend {
+        Backend::Cranelift => hirsel_lir::continuation::ContinuationPlans::build(
+            &ahead.iter().map(Arc::as_ref).collect::<Vec<_>>(),
+            &hirsel_lir::continuation::PlanInputs {
+                table: program.table,
+                target: program.emit.target,
+                environments: &environments,
+                runtime: super::continuation::runtime_identity(),
+                classify: &super::continuation::classify,
+            },
+        ),
+        Backend::Llvm => Default::default(),
+    };
+    if continuation.resumable() {
+        for key in &mut keys {
+            key.0 = ContentHash::of_parts(
+                "hirsel.object.continuation-plan.v1",
+                [key.0.0.as_slice(), continuation.identity.0.as_slice()],
+            );
+        }
+    }
     let layout_ids: HashMap<hirsel_lir::LayoutKey, LayoutId> = program
         .keys
         .all()
@@ -389,7 +412,7 @@ pub(crate) fn lower(
                         }
                     }
                 }
-                let object = timed(Phase::Codegen, || emit(program, &selected, &ahead_plan))?;
+                let object = timed(Phase::Codegen, || emit(program, &selected, &ahead_plan, &continuation))?;
                 let summary = |unit: &ValidatedUnit<Ready>| {
                     UnitSummary::of(
                         unit.unit(),
@@ -541,6 +564,7 @@ fn emit(
     program: &Program<'_>,
     selected: &[&ValidatedUnit<Ready>],
     ahead: &hirsel_lir::ahead::AheadPlan,
+    continuation: &hirsel_lir::continuation::ContinuationPlans,
 ) -> Result<hirsel_lir::stage::ObjectArtifact, NativeError> {
     let profile = hirsel_lir::debug::Profile {
         debug: program.objects.debug,
@@ -553,6 +577,7 @@ fn emit(
         .collect();
     let inputs = EmitInputs {
         ahead: Some(ahead),
+        continuation: Some(continuation),
         available_externally: &copies,
         ..program.emit.clone()
     };

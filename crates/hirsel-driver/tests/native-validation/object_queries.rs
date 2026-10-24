@@ -424,6 +424,7 @@ impl NativeProducts for NativeFixture {
         let units = [&program.units[self.owner]];
         let inputs = hirsel_lir::emission::EmitInputs {
             ahead: None,
+            continuation: None,
             alternate: false,
             index: None,
             input: &program.input,

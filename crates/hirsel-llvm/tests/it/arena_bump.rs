@@ -85,6 +85,7 @@ fn inputs<'a>(
         std::collections::BTreeSet::new();
     EmitInputs {
         ahead: None,
+        continuation: None,
         alternate: false,
         index: None,
         verify_backend: true,

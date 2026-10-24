@@ -17,7 +17,7 @@
 extern "C" {
 #endif
 
-#define HIRSEL_RT_V2_ABI_VERSION 62
+#define HIRSEL_RT_V2_ABI_VERSION 63
 /* TaskSpawn trailing flags: compiler proofs, ignored in ordered execution and replay. */
 #define HIRSEL_RT_V2_SPAWN_IMMEDIATE_AWAIT 1
 #define HIRSEL_RT_V2_SPAWN_OP_FREE 2
@@ -36,6 +36,8 @@ extern "C" {
 #define HIRSEL_RT_V2_STATUS_EXHAUSTED 2
 /* Private compiler adapter protocol: all actuals remain in caller custody. */
 #define HIRSEL_RT_V2_STATUS_PRETRANSFER_FAILURE 3
+/* A resumable continuation alternate saved its frame at a boundary whose call has not run. */
+#define HIRSEL_RT_V2_STATUS_SUSPENDED 4
 
 #define HIRSEL_RT_V2_LAUNCH_OK 0
 #define HIRSEL_RT_V2_LAUNCH_ABI_MISMATCH 2
@@ -821,6 +823,10 @@ void hirsel_rt_v2_host_arm(hirsel_rt_v2_ctx *ctx, const hirsel_rt_v2_host_read_r
 void hirsel_rt_v2_host_enter(hirsel_rt_v2_ahead_physical *state, const hirsel_rt_v2_host_read_recipe *recipe);
 uint8_t hirsel_rt_v2_host_active(hirsel_rt_v2_ahead_physical *state);
 void hirsel_rt_v2_host_defer(hirsel_rt_v2_ahead_physical *state, uint32_t slot, hirsel_rt_v2_header *block, uint64_t fuel);
+/* A resumable frame at a boundary: 0 proceeds with the boundary call, 1 suspends. */
+uint8_t hirsel_rt_v2_resume_point(hirsel_rt_v2_ctx *ctx, uint8_t *frame, uint32_t state);
+/* A resumable task body: its dispatcher runs over an owned compact frame, saved at each suspension. */
+uint8_t hirsel_rt_v2_resume_run(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_header *environment, uint64_t caller_site, uint64_t operation_site, void *dispatcher, uint32_t bytes);
 
 
 /* A fuel point found the running task's chunk spent (its fuel word is negative): the runtime

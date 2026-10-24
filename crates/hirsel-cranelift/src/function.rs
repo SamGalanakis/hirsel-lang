@@ -157,6 +157,8 @@ pub(crate) struct FnEmitter<'e, 'a, 'f> {
     pub(crate) ahead_counter: Option<cranelift_frontend::Variable>,
     pub(crate) ownership: Option<&'a hirsel_lir::ownership_trace::native::LeafPlan>,
     pub(crate) ownership_frame: Option<Value>,
+    /// Set while emitting one state of a resumable continuation alternate.
+    pub(crate) resume: Option<crate::resume::Resume<'a>>,
 }
 
 /// Bytes of a `hirsel_rt_v2_region` record.
@@ -243,6 +245,7 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
             ahead_counter: None,
             ownership: None,
             ownership_frame: None,
+            resume: None,
         }
     }
 
@@ -717,6 +720,21 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
     // The function.
 
     pub(crate) fn emit(mut self) -> Emitted {
+        if self.resume.is_some() {
+            return self.emit_resume();
+        }
+        let unit = self.unit;
+        if !self.em.inputs.unit().alternate
+            && self.ownership.is_none()
+            && let Some(plan) = self
+                .em
+                .inputs
+                .unit()
+                .continuation
+                .and_then(|p| p.task_entry(unit))
+        {
+            return self.emit_resume_entry(plan);
+        }
         self.ownership_init()?;
         self.ahead_init()?;
         self.find_versions()?;
@@ -966,6 +984,62 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
             let (record, _) = self.stack_bytes(REGION_RECORD_BYTES, 8);
             self.regions.push(record);
         }
+        self.resume_storage()
+    }
+
+    /// One state of a resumable alternate: state 0 enters the body; state k
+    /// reloads its live values and reissues its boundary call. Only blocks that
+    /// start reaches are emitted; no boundary lies on a cycle.
+    fn emit_resume(mut self) -> Emitted {
+        let resume = self.resume.as_ref().unwrap();
+        let (plan, state) = (resume.plan, resume.state);
+        let frame = *self.entry_params.last().unwrap();
+        self.resume.as_mut().unwrap().frame = Some(frame);
+        if !self.unit.parameters.is_empty() {
+            return self.unsupported("a resumable body with declared parameters");
+        }
+        self.find_versions()?;
+        for _ in &self.unit.blocks {
+            let block = self.b.create_block();
+            self.blocks.push(block);
+        }
+        self.create_params()?;
+        self.allocate_slots()?;
+        self.bind_parameters()?;
+        let start = if state == 0 {
+            let entry = self.blocks[self.unit.entry.index()];
+            self.b.ins().jump(entry, &[]);
+            self.unit.entry
+        } else {
+            let Some(s) = plan.states.get(state as usize - 1) else {
+                return self.invalid("a resume state outside its plan");
+            };
+            self.reload(s)?;
+            self.resume.as_mut().unwrap().resuming = Some(s.boundary.call);
+            let block = s.boundary.block;
+            let unit = self.unit;
+            self.terminator(&unit.terminators[block.index()])?;
+            block
+        };
+        let count = self.unit.blocks.len();
+        let adjacent: Vec<Vec<usize>> = (0..count)
+            .map(|b| self.successors(b))
+            .collect::<Emitted<_>>()?;
+        let order = hirsel_graph::reverse_postorder(&adjacent, start.index());
+        for b in order {
+            if state != 0 && b == start.index() {
+                continue;
+            }
+            self.emit_block(BlockId(b as u32))?;
+        }
+        while let Some((location, profile, deferred)) = self.deferred.pop() {
+            self.b.set_srcloc(location);
+            self.profile = profile;
+            self.fill_deferred(deferred)?;
+        }
+        self.b.seal_all_blocks();
+        let config = self.em.module.target_config();
+        self.b.finalize(config);
         Ok(())
     }
 
@@ -1619,6 +1693,15 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
 
     // Terminators.
 
+    /// A resumable alternate's suspension: its frame holds the recorded state.
+    pub(crate) fn return_suspended(&mut self) -> Emitted {
+        self.return_status(i64::from(hirsel_lir::runtime_abi::STATUS_SUSPENDED), None)
+    }
+
+    pub(crate) fn versions_contains(&self, value: ValueId) -> bool {
+        self.versions.contains(&value)
+    }
+
     /// Returns `status` and, with a register result, `value` (a zero word when absent).
     fn return_status(&mut self, status: i64, value: Option<V>) -> Emitted {
         self.ownership_leave()?;
@@ -1930,6 +2013,7 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
         if abi.shape == CallableShape::Foreign {
             return self.foreign_call(call, abi, normal);
         }
+        let nested = self.resume_boundary(call)?;
         let arguments = self.pool(site.arguments, &unit.pools.call_arguments)?;
         let mut runtime_primitive = false;
         let (code, environment, name): (Option<Value>, Option<Value>, Option<String>) = match site
@@ -2112,7 +2196,18 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
                 .map(|root| (*root, p.identity))
         });
         let mut physical_signature = signature.ir.clone();
-        let name = if let Some((root, identity)) = ahead_root {
+        let name = if let Some((frame, callee)) = nested {
+            // A resumable callee continues in its own frame inside this one.
+            args.push(frame);
+            physical_signature.params.push(ir::AbiParam::new(PTR));
+            let (Callee::Direct(symbol) | Callee::Bound { code: symbol, .. }) = site.callee else {
+                return self.invalid("a nested resumable call without a known callee");
+            };
+            let symbol = &unit.tables.symbols[symbol.index()];
+            let name = hirsel_lir::continuation::resume_name(&symbol.definition, callee.body, None);
+            self.em.manifest_import(&name, ObjectSymbolKind::Function, None, None);
+            Some(name)
+        } else if let Some((root, identity)) = ahead_root {
             let metadata = hirsel_lir::ahead::metadata_name(root, identity);
             self.em
                 .manifest_import(&metadata, ObjectSymbolKind::Data, None, None);
@@ -2145,6 +2240,9 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
         };
         self.ahead_reload();
         let status = returned[usize::from(signature.value.is_some())];
+        if nested.is_some() {
+            self.resume_propagate(status)?;
+        }
         if let Some(rejected) = site.pretransfer_failure {
             let rejected = self.failure_block(rejected)?;
             let entered = self.b.create_block();

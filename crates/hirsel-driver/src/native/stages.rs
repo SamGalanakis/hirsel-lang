@@ -849,6 +849,7 @@ fn build_units(
     preflight(&validation)?;
     let emit = hirsel_lir::emission::EmitInputs {
         ahead: None,
+        continuation: None,
         alternate: false,
         verify_backend: options.validation == Validation::EveryStage,
         index: Some(validation.index()),

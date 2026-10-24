@@ -84,7 +84,74 @@ pub fn classify(definition: &DefPath) -> Option<CalleeClass> {
 fn units(
     program: &ReadyProgram,
 ) -> Vec<&hirsel_lir::stage::ValidatedUnit<hirsel_lir::stage::Ready>> {
-    program.units.iter().collect()
+    if program.unit_objects.is_some() {
+        program
+            .ahead_units
+            .iter()
+            .map(std::sync::Arc::as_ref)
+            .collect()
+    } else {
+        program.units.iter().collect()
+    }
+}
+
+/// The plans a backend's task bodies enter through: Cranelift emits the
+/// resumable alternates; LLVM bodies stay stackful.
+pub(super) fn routed(program: &ReadyProgram, backend: super::emit::Backend) -> ContinuationPlans {
+    match backend {
+        super::emit::Backend::Cranelift => plans(program),
+        super::emit::Backend::Llvm => ContinuationPlans::default(),
+    }
+}
+
+/// Every resumable plan's state alternates and dispatcher, in one object.
+pub(super) fn objects(
+    program: &ReadyProgram,
+    backend: super::emit::Backend,
+    opt: hirsel_lir::emission::OptLevel,
+) -> Result<Vec<hirsel_lir::stage::ObjectArtifact>, NativeError> {
+    let plans = routed(program, backend);
+    if !plans.resumable() {
+        return Ok(Vec::new());
+    }
+    let units: Vec<_> = units(program)
+        .into_iter()
+        .filter(|u| {
+            plans.get(u.unit().header.instance).is_some_and(|p| {
+                p.representation == hirsel_lir::continuation::Representation::Resumable
+            })
+        })
+        .collect();
+    static EMPTY: std::collections::BTreeSet<ContentHash> = std::collections::BTreeSet::new();
+    let inputs = hirsel_lir::emission::EmitInputs {
+        ahead: None,
+        continuation: Some(&plans),
+        alternate: false,
+        index: None,
+        input: &program.input,
+        target: &program.target,
+        layouts: &program.table,
+        keys: &program.keys,
+        manifest: &program.manifest,
+        statics: &program.statics,
+        inline_instances: &program.inline_instances,
+        available_externally: &EMPTY,
+        callbacks: !program.callbacks.is_empty(),
+        tracking: program.tracking(),
+        foreign: &program.foreign_dispatch,
+        opt,
+        measurement: false,
+        fuel: program.fuel,
+        verify_backend: program.validation == super::stages::Validation::EveryStage,
+    };
+    let object = match backend {
+        super::emit::Backend::Cranelift => {
+            hirsel_cranelift::emit_resume_object(&units, &inputs, &plans)
+                .map_err(|e| NativeError::new(StageName::Emission, e.to_string()))?
+        }
+        super::emit::Backend::Llvm => return Ok(Vec::new()),
+    };
+    Ok(vec![object])
 }
 
 /// Derive the program's plans from its complete Ready bodies.

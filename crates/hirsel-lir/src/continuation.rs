@@ -28,6 +28,16 @@ pub use validate::{
     AheadCertificate, CallerProof, ContinuationError, FrameDag, ResultCleanupProof, validate,
 };
 
+/// The continuation alternates of a resumable body: its dispatcher (`None`),
+/// which enters the state its frame header names, or one state's entry.
+pub fn resume_name(definition: &DefPath, instance: ContentHash, state: Option<u32>) -> String {
+    let base = crate::emission::symbol_name(definition, Some(&instance));
+    match state {
+        None => format!("{base}_resume"),
+        Some(k) => format!("{base}_resume{k}"),
+    }
+}
+
 /// Fixed header of a resumable frame: the resume state and a reserved word.
 pub const FRAME_HEADER_BYTES: u64 = 8;
 /// Larger live images stay stackful: the frame must stay compact.
@@ -828,5 +838,20 @@ impl ContinuationPlans {
 
     pub fn get(&self, body: ContentHash) -> Option<&ContinuationPlan> {
         self.plans.get(&body)
+    }
+
+    /// Whether any body runs through its resumable alternates.
+    pub fn resumable(&self) -> bool {
+        self.plans
+            .values()
+            .any(|p| p.representation == Representation::Resumable)
+    }
+
+    /// The plan of a task body that enters through its dispatcher.
+    pub fn task_entry(&self, unit: &LirUnit<Ready>) -> Option<&ContinuationPlan> {
+        self.get(unit.header.instance).filter(|p| {
+            p.representation == Representation::Resumable
+                && unit.header.definition.is_core("$native.task_main")
+        })
     }
 }
