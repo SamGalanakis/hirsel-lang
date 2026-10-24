@@ -21,7 +21,7 @@ const STATIC_MANIFEST: Domain = Domain {
 };
 const LAUNCH_MANIFEST: Domain = Domain {
     kind: 0x4e00_001a,
-    schema: 2,
+    schema: 3,
 };
 
 /// Explicit platform linker inputs for a selected root. The object query owns
@@ -210,6 +210,16 @@ impl RootProducts {
     ) -> Result<Arc<crate::native::ProfileSources>, String> {
         self.admitted_root(root)?;
         Ok(self.source.profiles())
+    }
+    /// Host launch input selected by this admitted root, never an independent
+    /// record supplied to the linker after its action has been chosen.
+    pub fn requested_run(
+        &self,
+        root: &Arc<NativeRootProduct>,
+    ) -> Result<Option<(hirsel_syntax::DefPath, Arc<hirsel_run_config::ValidatedRun>)>, String>
+    {
+        self.admitted_root(root)?;
+        Ok(self.source.requested_run())
     }
     fn launch_bytes(&self) -> Result<Vec<u8>, String> {
         let snapshot = &self.inner.snapshot;

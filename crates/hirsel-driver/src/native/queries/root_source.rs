@@ -28,6 +28,7 @@ pub struct NativeLinkSource {
     foreign_unreplayable: bool,
     foreign_threads: BTreeMap<hirsel_syntax::PackageId, ForeignThreads>,
     callees: Option<hirsel_rt::program::CalleeMetadata>,
+    requested_run: Option<(DefPath, Arc<hirsel_run_config::ValidatedRun>)>,
 }
 impl NativeLinkSource {
     pub fn capture(
@@ -66,6 +67,7 @@ impl NativeLinkSource {
             foreign_unreplayable: declarations.roots.foreign_unreplayable,
             foreign_threads: declarations.roots.foreign_threads.clone(),
             callees: None,
+            requested_run: None,
         })
     }
 
@@ -85,6 +87,50 @@ impl NativeLinkSource {
         })?;
         source.callees = Some(crate::native::callee_metadata(engine, entry)?);
         Ok(source)
+    }
+
+    /// Capture the host's already bound run as an input of this exact root.
+    /// This checks its source revision; runtime grant admission remains at the
+    /// executable boundary. Link executors never accept a separate run record.
+    pub fn capture_for_run(
+        engine: &mut QueryEngine,
+        declarations: &NativeDeclarations,
+        entry: &DefPath,
+        run: Arc<hirsel_run_config::ValidatedRun>,
+    ) -> Result<Self, NativeError> {
+        let mut source = Self::capture_for_entry(engine, declarations, entry)?;
+        source.bind_run(entry, run)?;
+        Ok(source)
+    }
+
+    fn bind_run(
+        &mut self,
+        entry: &DefPath,
+        run: Arc<hirsel_run_config::ValidatedRun>,
+    ) -> Result<(), NativeError> {
+        let error = |message: String| NativeError::new(crate::native::StageName::Manifest, message);
+        let revision = self
+            .semantic
+            .semantic_program_revision(entry)
+            .map_err(|e| error(format!("native run source revision: {e:?}")))?;
+        let kind = self
+            .launches()
+            .remove(entry)
+            .ok_or_else(|| error("native run has no launchable source entry".into()))?;
+        let kind = match kind {
+            crate::native::link::LaunchKind::Test => hirsel_run_schema::LaunchKind::Test,
+            crate::native::link::LaunchKind::Zero | crate::native::link::LaunchKind::Main(_) => {
+                hirsel_run_schema::LaunchKind::Main
+            }
+        };
+        run.check_revision(&revision, kind)
+            .map_err(|e| error(format!("native run source binding: {e}")))?;
+        self.requested_run = Some((entry.clone(), run));
+        Ok(())
+    }
+
+    pub(super) fn requested_run(&self) -> Option<(DefPath, Arc<hirsel_run_config::ValidatedRun>)> {
+        self.requested_run.clone()
     }
 
     /// Bind the independently checked source closure to selected native unit
@@ -207,7 +253,7 @@ impl NativeLinkSource {
             .collect::<Vec<_>>();
         let dispatch = crate::native::foreign::dispatch(&self.view());
         serde_json::to_vec(&(
-            3u32,
+            4u32,
             self.input.digest,
             revisions,
             positions,
@@ -219,6 +265,9 @@ impl NativeLinkSource {
             self.callees
                 .as_ref()
                 .map(hirsel_rt::program::CalleeMetadata::json),
+            self.requested_run
+                .as_ref()
+                .map(|(entry, run)| (entry, run.launch_bytes())),
         ))
         .map_err(|e| e.to_string())
     }
@@ -289,6 +338,64 @@ mod tests {
     use hirsel_engine::{
         DefinitionQueries, NativeDiscoveryCache, default_context, default_environment,
     };
+
+    #[test]
+    fn launch_manifest_binds_the_selected_run_and_refuses_cross_wired_entries() {
+        hirsel_engine::with_compiler_stack(|| {
+            let store = Arc::new(hirsel_engine::store::MemStore::default());
+            let mut engine = QueryEngine::new(default_environment(), crate::compiler_adapters())
+                .with_result_store(store.clone());
+            let file = engine
+                .sources
+                .add(
+                    "root-run.hir",
+                    "pub fn main()->Result[(),()] {Ok(())}".into(),
+                )
+                .unwrap();
+            engine.parse_file(file, &default_context()).unwrap();
+            let mut cache = NativeDiscoveryCache::new(engine.types().clone(), store.clone());
+            let declarations = NativeDeclarations::collect(&mut engine, &mut cache, &[]).unwrap();
+            let inputs = super::super::source_inputs::NativeInstanceInputs::complete(
+                &mut engine,
+                declarations,
+                store,
+            )
+            .unwrap();
+            let entry = hirsel_engine::entry_path(&default_context());
+            let mut source =
+                NativeLinkSource::capture_for_entry(&mut engine, &inputs.declarations, &entry)
+                    .unwrap();
+            let unbound = source.manifest_bytes().unwrap();
+            let revision = source.semantic.semantic_program_revision(&entry).unwrap();
+            let mut record = hirsel_run_config::RunConfig::for_program(
+                &revision,
+                hirsel_run_schema::LaunchKind::Main,
+            );
+            let first = Arc::new(record.validated().unwrap());
+            source.bind_run(&entry, first.clone()).unwrap();
+            let bound = source.manifest_bytes().unwrap();
+            assert_ne!(unbound, bound);
+            record.inputs.hash_seed = 42;
+            let second = Arc::new(record.validated().unwrap());
+            source.bind_run(&entry, second.clone()).unwrap();
+            let changed = source.manifest_bytes().unwrap();
+            assert_ne!(changed, bound);
+            assert_eq!(
+                source.requested_run(),
+                Some((entry.clone(), second.clone()))
+            );
+            let wrong_kind = hirsel_run_config::RunConfig::for_program(
+                &revision,
+                hirsel_run_schema::LaunchKind::Test,
+            )
+            .validated()
+            .unwrap();
+            assert!(source.bind_run(&entry, Arc::new(wrong_kind)).is_err());
+            assert!(source.bind_run(&DefPath::core("other"), first).is_err());
+            assert_eq!(source.manifest_bytes().unwrap(), changed);
+            assert_eq!(source.requested_run(), Some((entry, second)));
+        });
+    }
 
     #[test]
     fn launch_manifest_binds_every_profile_field_and_preserves_physical_relocation() {
