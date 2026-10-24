@@ -41,6 +41,28 @@ impl<S: Copy> DepthEvidence<S> {
             bounded: true,
         }
     }
+    /// Accumulate one framed request in semantic request order. Only the
+    /// bounded overflow table is retained, even when a loop repeats a demand.
+    pub(crate) fn observe_frame(&mut self, child: &Self, site: S) {
+        debug_assert_eq!(self.limit(), child.limit());
+        self.height = self.height.max(child.height.saturating_add(1));
+        for n in 0..=self.limit() {
+            if self.first[n as usize].is_none() {
+                self.first[n as usize] = child.request(n, site).err();
+            }
+        }
+    }
+    /// Lower does not add a dependency frame. Replay its request table at the
+    /// caller's current depth, preserving the first overflowing source site.
+    pub(crate) fn observe_transparent(&mut self, child: &Self) {
+        debug_assert_eq!(self.limit(), child.limit());
+        self.height = self.height.max(child.height);
+        for n in 0..=self.limit() {
+            if self.first[n as usize].is_none() {
+                self.first[n as usize] = child.first[n as usize];
+            }
+        }
+    }
     pub fn limit(&self) -> u32 {
         (self.first.len() - 1) as u32
     }

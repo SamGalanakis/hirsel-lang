@@ -236,3 +236,92 @@ fn admitted_lower_saved_work_and_native_metadata_survive_dependency_suspension()
         }
     });
 }
+
+#[test]
+fn admitted_lower_depth_matches_scalar_after_warm_constant_dependencies() {
+    hirsel_engine::with_compiler_stack(|| {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("main.hir");
+        std::fs::write(&path,"const A:u8=comptime 1u8;\nconst B:u8=comptime A;\nconst C:u8=comptime B;\npub fn main()->u8{C}\n").unwrap();
+        for jobs in [1, 2] {
+            for limit in [0, 1, 2, 3, 4] {
+                for warm in [false, true] {
+                    let store = Arc::new(MemStore::default());
+                    let mut program = COMPILER
+                        .with_config(CompileConfig {
+                            store: store.clone(),
+                            jobs: hirsel_intern::jobs::Jobs::new(jobs),
+                            ..Default::default()
+                        })
+                        .with_comptime_limits(hirsel_interp::Limits {
+                            call_depth: limit,
+                            ..Default::default()
+                        })
+                        .with_owned_engines()
+                        .load_program(&path)
+                        .unwrap();
+                    let definitions: Vec<_> = ["A", "B", "C", "main"]
+                        .iter()
+                        .map(|name| {
+                            let mut path = program.entry.clone();
+                            path.0.name = (*name).into();
+                            path
+                        })
+                        .collect();
+                    let budget = ProcessBudget::new(1 << 30);
+                    let mut runtime = AdmittedRuntime::new(
+                        hirsel_intern::jobs::Jobs::new(jobs),
+                        budget.reserve(512 << 20).unwrap(),
+                        errors(),
+                    )
+                    .unwrap();
+                    let weight = MemoryWeight {
+                        retained: 2 << 20,
+                        scratch: 8 << 20,
+                        stack: 0,
+                    };
+                    let front = program
+                        .engine
+                        .front_body_queries(
+                            &definitions,
+                            weight,
+                            budget.reserve(16 << 20).unwrap(),
+                            errors(),
+                        )
+                        .unwrap();
+                    let lower = program
+                        .engine
+                        .front_lower_queries(
+                            &definitions,
+                            front.clone(),
+                            weight,
+                            32,
+                            budget.reserve(32 << 20).unwrap(),
+                            errors(),
+                        )
+                        .unwrap();
+                    runtime.register(FRONT_BODY_KIND, front.factory()).unwrap();
+                    runtime
+                        .register_local(FRONT_LOWER_KIND, lower.factory())
+                        .unwrap();
+                    runtime
+                        .register_local(FRONT_EVALUATE_KIND, lower.factory())
+                        .unwrap();
+                    if warm {
+                        let request =
+                            runtime.request(&[lower.evaluate_query(&definitions[1]).unwrap()]);
+                        let _ = runtime.wait(request);
+                    }
+                    let request = runtime.request(&[lower.query(&program.entry).unwrap()]);
+                    let actual = runtime
+                        .wait(request)
+                        .map(|_| ())
+                        .map_err(|reference| lower.failure(reference).unwrap());
+                    let expected = program.engine.lower_to_tir(&program.entry).map(|_| ());
+                    assert_eq!(actual, expected, "jobs={jobs}, limit={limit}, warm={warm}");
+                    runtime.shutdown();
+                }
+            }
+        }
+    });
+}
