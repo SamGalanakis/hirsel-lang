@@ -77,8 +77,9 @@ impl InstanceTasks {
         options: crate::native::Options,
         policy: ContentHash,
         weight: MemoryWeight,
-        allowance: MemoryReservation,
+        mut allowance: MemoryReservation,
     ) -> Result<Arc<Self>, String> {
+        source.retain_metadata(&mut allowance)?;
         let provider = source.provider();
         let native = InstanceQueries::validator(&store);
         let mut initial = DemandInstances::with_validator(
@@ -160,11 +161,27 @@ impl InstanceTasks {
         if tasks.front.is_some() {
             return Err("native front Lower dispatch is already bound".into());
         }
+        let mut metadata = hirsel_engine::NativeMetadataWeight::default();
+        metadata.map(&front.bindings, |w, path, _| w.path(path));
+        let mut registry = tasks.registry.lock().unwrap_or_else(|e| e.into_inner());
+        registry.charged = registry
+            .charged
+            .checked_add(metadata.bytes())
+            .filter(|total| *total <= tasks.allowance.bytes())
+            .ok_or("native front dispatch metadata exceeds retained allowance")?;
+        drop(registry);
         tasks.front = Some(front);
         Ok(self)
     }
     pub(super) fn retained_allowance(&self) -> Arc<MemoryReservation> {
         self.allowance.clone()
+    }
+    /// Keep copied source declarations charged when a settled native snapshot
+    /// outlives this task registry. The registry allowance is a separate slice.
+    pub fn retained_source_allowance(&self) -> Arc<MemoryReservation> {
+        self.source
+            .metadata_allowance()
+            .expect("instance source metadata admitted at construction")
     }
     fn producer(&self) -> DemandInstances {
         DemandInstances::with_validator(
