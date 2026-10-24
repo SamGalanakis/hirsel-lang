@@ -2,7 +2,7 @@
 //! local claims, not original-source authority or executable custody proofs.
 use crate::abi_types::FnAbi;
 use crate::ir::{Holding, LirUnit, Ref, SlotId, SlotKind, ValueId, ValueRepr};
-use crate::layout_types::{LayoutKind, LayoutTable};
+use crate::layout_types::{LayoutId, LayoutKind, LayoutTable};
 use hirsel_codec::snapshot_struct;
 use hirsel_syntax::ContentHash;
 use std::collections::BTreeSet;
@@ -15,7 +15,7 @@ pub struct ReceiptEntrySlot {
     pub version: ValueId,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReceiptEntry {
     pub contract: ContentHash,
     pub parameters: Vec<ReceiptEntrySlot>,
@@ -23,6 +23,21 @@ pub struct ReceiptEntry {
     /// Alias of the caller's empty output slot. Publication is normal-only;
     /// rejected admission and entered failure publish no result receipt.
     pub result: Option<SlotId>,
+    /// Exact physical wrapper when borrowed capture companions are present.
+    pub environment: Option<LayoutId>,
+}
+
+impl std::hash::Hash for ReceiptEntry {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.contract.hash(state);
+        self.parameters.hash(state);
+        self.captures.hash(state);
+        self.result.hash(state);
+        if let Some(environment) = self.environment {
+            "hirsel.receipt-entry-environment.v1".hash(state);
+            environment.hash(state);
+        }
+    }
 }
 
 impl ReceiptEntry {
@@ -40,6 +55,9 @@ impl ReceiptEntry {
     }
 
     pub(crate) fn visit(&self, visit: &mut impl FnMut(Ref)) {
+        if let Some(environment) = self.environment {
+            visit(Ref::Layout(environment));
+        }
         for binding in self.parameters.iter().chain(&self.captures) {
             visit(Ref::Slot(binding.slot));
             visit(Ref::Value(binding.version));
@@ -65,6 +83,9 @@ impl ReceiptEntry {
             .ok_or("receipt entry has no callee contract")?;
         if self.contract != contract.content()? {
             return Err("receipt entry names a different complete contract");
+        }
+        if let Some(environment) = self.environment {
+            crate::receipt_closure::borrowed_environment(layouts, environment, contract)?;
         }
         if self.parameters.len() != contract.parameters.len()
             || self.captures.len() != contract.captures.len()
@@ -189,4 +210,4 @@ snapshot_struct!(ReceiptEntry {
     parameters,
     captures,
     result
-});
+} trailing_optional environment);

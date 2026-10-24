@@ -975,6 +975,7 @@ impl Importer<'_> {
                     PoolRange::push(&mut self.out.pools.captures, values.iter().copied());
                 let closure = hirsel_lir::ir::ClosureId(self.out.tables.closures.len() as u32);
                 self.out.tables.closures.push(ClosureSite {
+                    receipts: None,
                     scoped: *context == hirsel_types::CaptureContext::Scoped,
                     code,
                     environment,

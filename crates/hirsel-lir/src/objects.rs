@@ -364,6 +364,13 @@ fn for_each_table_id<S>(unit: &mut LirUnit<S>, f: &mut impl FnMut(TableId<'_>)) 
         }
     }
     let tables = &mut unit.tables;
+    if let Some(environment) = tables
+        .receipt_entry
+        .as_mut()
+        .and_then(|entry| entry.environment.as_mut())
+    {
+        f(TableId::Layout(environment));
+    }
     for descriptor in &mut tables.seal_descriptors {
         f(TableId::Layout(&mut descriptor.root_layout));
         for node in &mut descriptor.projection.nodes {
@@ -444,6 +451,14 @@ pub fn references<S>(unit: &LirUnit<S>) -> (Vec<LayoutId>, Vec<FnAbiId>) {
         }
     }
     abis.extend(unit.tables.calls.iter().map(|call| call.abi));
+    if let Some(environment) = unit
+        .tables
+        .receipt_entry
+        .as_ref()
+        .and_then(|entry| entry.environment)
+    {
+        layouts.insert(environment);
+    }
     layouts.extend(unit.tables.constructs.iter().map(|site| site.layout));
     for site in &unit.tables.closures {
         abis.extend(site.code.iter().map(|code| code.abi));

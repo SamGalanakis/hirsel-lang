@@ -277,6 +277,7 @@ impl Inline for Importer<'_> {
         let captures = PoolRange::push(&mut self.out.pools.captures, values.iter().copied());
         let closure = hirsel_lir::ir::ClosureId(self.out.tables.closures.len() as u32);
         self.out.tables.closures.push(ClosureSite {
+            receipts: None,
             scoped: false,
             code: Some(ClosureCode {
                 symbol: code,

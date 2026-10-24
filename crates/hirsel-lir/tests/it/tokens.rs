@@ -628,6 +628,7 @@ fn closure_donor(mutant: bool) -> Vec<K> {
         }],
     );
     t.builder.unit.tables.closures.push(ClosureSite {
+        receipts: None,
         scoped: false,
         code: Some(ClosureCode {
             symbol: env,

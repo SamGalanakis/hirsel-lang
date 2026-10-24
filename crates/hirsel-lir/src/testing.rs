@@ -165,6 +165,7 @@ impl<S: Stage> UnitBuilder<S> {
                 .map(|&(value, usage)| CaptureValue { value, usage }),
         );
         self.unit.tables.closures.push(ClosureSite {
+            receipts: None,
             scoped: false,
             code: Some(ClosureCode {
                 symbol: code,

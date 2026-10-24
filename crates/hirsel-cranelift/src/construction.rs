@@ -311,6 +311,10 @@ impl<'a> FnEmitter<'_, 'a, '_> {
         let Some(site) = unit.tables.closures.get(closure.index()) else {
             return self.invalid("a closure outside the closure table");
         };
+        if site.receipts.is_some() {
+            return self
+                .unsupported("receipt closure construction requires physical capture transport");
+        }
         // A generic nested function's value has no code of its own: its code word is null.
         let code = match site.code {
             Some(c) => {

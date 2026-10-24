@@ -3946,6 +3946,11 @@ pub(crate) fn remap_values<S>(unit: &mut LirUnit<S>, map: &impl Fn(ValueId) -> V
     if let Some(entry) = &mut unit.tables.receipt_entry {
         entry.remap_values(map);
     }
+    for closure in &mut unit.tables.closures {
+        if let Some(receipts) = &mut closure.receipts {
+            receipts.remap_values(map);
+        }
+    }
     for call in &mut unit.tables.calls {
         if let Some(receipts) = &mut call.receipts {
             receipts.remap_values(map);

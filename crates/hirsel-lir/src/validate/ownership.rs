@@ -2692,6 +2692,11 @@ impl<S: Stage> Walker<'_, '_, S> {
                         }
                     }
                 }
+                if let Some(receipts) = &c.receipts {
+                    for capture in &receipts.captures {
+                        self.borrow(site, st, cr, capture.receipt);
+                    }
+                }
                 self.region_placement(site, st, c.placement);
                 self.create(site, st, cr, result);
             }

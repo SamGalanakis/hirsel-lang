@@ -11,6 +11,7 @@
 use crate::abi_types::FnAbiId;
 use crate::effect::Effects;
 use crate::layout_types::{LayoutId, ScalarKind};
+pub use crate::receipt_closure::{ReceiptClosure, ReceiptClosureCapture};
 pub use crate::receipt_entry::{ReceiptEntry, ReceiptEntrySlot};
 pub use crate::receipt_transport::{ReceiptArgument, ReceiptCall};
 use crate::stage::{Stage, StageKind};
@@ -1333,7 +1334,7 @@ pub struct CaptureValue {
 /// A generic nested function's value (LIR schema revision 9) has no code of
 /// its own: spec #42 lets it be only a direct callee, so it is called only
 /// through `Callee::Bound`, which names each instantiation's code.
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ClosureSite {
     pub scoped: bool,
     pub code: Option<ClosureCode>,
@@ -1342,6 +1343,24 @@ pub struct ClosureSite {
     pub destination: DestinationClass,
     pub placement: Option<Placement>,
     pub anchor: SourceAnchorId,
+    /// Optional private capture companions, in a separate metadata namespace.
+    pub receipts: Option<ReceiptClosure>,
+}
+
+impl std::hash::Hash for ClosureSite {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.scoped.hash(state);
+        self.code.hash(state);
+        self.environment.hash(state);
+        self.captures.hash(state);
+        self.destination.hash(state);
+        self.placement.hash(state);
+        self.anchor.hash(state);
+        if let Some(receipts) = &self.receipts {
+            "hirsel.receipt-closure.v1".hash(state);
+            receipts.hash(state);
+        }
+    }
 }
 
 /// A closure's own code: its body's instance and that instance's `FnAbi`.
@@ -3130,6 +3149,9 @@ impl<S: Stage> LirUnit<S> {
             push(Ref::SourceAnchor(site.anchor));
         }
         for site in &t.closures {
+            if let Some(receipts) = &site.receipts {
+                receipts.visit(&mut push);
+            }
             if let Some(code) = site.code {
                 push(Ref::Symbol(code.symbol));
                 push(Ref::Abi(code.abi));
@@ -3537,7 +3559,7 @@ snapshot_struct!(ClosureSite {
     destination,
     placement,
     anchor
-});
+} trailing_optional receipts);
 snapshot_enum!(Callee {
     Direct(symbol),
     Indirect(value),

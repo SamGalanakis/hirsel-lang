@@ -139,6 +139,7 @@ fn compaction_keeps_entry_versions_without_minting_owning_values() {
     unit.captures = vec![ValueId(2)];
     let contract = ContentHash::of_bytes(b"entry contract");
     unit.tables.receipt_entry = Some(ReceiptEntry {
+        environment: None,
         contract,
         parameters: vec![ReceiptEntrySlot {
             source: 0,
@@ -244,4 +245,46 @@ fn local_producer_33_remap_preserves_binding_and_all_pooled_pairs() {
             },
         ]
     );
+}
+
+#[test]
+fn borrowed_receipt_closure_33_liveness_and_remap_keep_metadata_in_its_own_namespace() {
+    let mut unit = unit();
+    let captures = PoolRange::push(
+        &mut unit.pools.captures,
+        [CaptureValue {
+            value: ValueId(1),
+            usage: CaptureUse::Borrow,
+        }],
+    );
+    unit.tables.closures.push(ClosureSite {
+        scoped: true,
+        code: None,
+        environment: hirsel_lir::LayoutId(0),
+        captures,
+        destination: DestinationClass::Heap,
+        placement: None,
+        anchor: SourceAnchorId(0),
+        receipts: Some(ReceiptClosure {
+            contract: ContentHash([5; 32]),
+            captures: vec![ReceiptClosureCapture {
+                ordinal: 0,
+                receipt: ValueId(10),
+            }],
+        }),
+    });
+    let inst = Inst::Closure {
+        result: ValueId(14),
+        closure: ClosureId(0),
+        failure: FailureId(0),
+    };
+    let mut uses = crate::liveness::inst_uses(&unit, &inst);
+    uses.sort_unstable();
+    assert_eq!(uses, [ValueId(1), ValueId(10)]);
+    crate::insert::remap_values(&mut unit, &|v| ValueId(v.0 + 20));
+    assert_eq!(unit.pools.captures[0].value, ValueId(21));
+    let receipts = unit.tables.closures[0].receipts.as_ref().unwrap();
+    assert_eq!(receipts.captures[0].ordinal, 0);
+    assert_eq!(receipts.captures[0].receipt, ValueId(30));
+    assert_eq!(receipts.contract, ContentHash([5; 32]));
 }

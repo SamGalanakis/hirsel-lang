@@ -89,6 +89,7 @@ fn fixture() -> (Lir<Value>, ReceiptEntry) {
     )
     .unwrap();
     let entry = ReceiptEntry {
+        environment: None,
         contract: contract.content().unwrap(),
         parameters,
         captures,
@@ -214,6 +215,7 @@ fn receipt_entry_absence_preserves_legacy_side_table_encoding_and_hash() {
     let empty = ReceiptContract::new(vec![], None, vec![], vec![]).unwrap();
     let mut demanded = tables;
     demanded.receipt_entry = Some(ReceiptEntry {
+        environment: None,
         contract: empty.content().unwrap(),
         parameters: vec![],
         captures: vec![],

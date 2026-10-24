@@ -247,6 +247,9 @@ pub fn inst_uses<S: Stage>(unit: &LirUnit<S>, inst: &Inst) -> Vec<ValueId> {
         }
         Inst::Closure { closure, .. } => {
             let site = &unit.tables.closures[closure.index()];
+            if let Some(receipts) = &site.receipts {
+                out.extend(receipts.captures.iter().map(|c| c.receipt));
+            }
             out.extend(
                 site.captures
                     .get(&unit.pools.captures)

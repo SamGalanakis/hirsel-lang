@@ -616,6 +616,7 @@ fn fixture_unit<S: Stage>(table: &LayoutTable) -> LirUnit<S> {
     })
     .collect();
     t.closures = vec![ClosureSite {
+        receipts: None,
         scoped: false,
         code: Some(ClosureCode {
             symbol: SymbolId(0),

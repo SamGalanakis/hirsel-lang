@@ -1969,6 +1969,7 @@ fn call_alias(second: Second, mutant: bool) -> Vec<K> {
                     }],
                 );
                 t.builder.unit.tables.closures.push(ClosureSite {
+                    receipts: None,
                     scoped: false,
                     code: Some(ClosureCode { symbol: code, abi }),
                     environment: l::ENV_BLK,

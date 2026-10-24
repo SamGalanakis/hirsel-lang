@@ -57,6 +57,7 @@ fn closure(
     );
     let id = ClosureId(u.builder.unit.tables.closures.len() as u32);
     u.builder.unit.tables.closures.push(ClosureSite {
+        receipts: None,
         scoped: false,
         code: Some(ClosureCode {
             symbol,

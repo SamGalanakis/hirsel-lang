@@ -6733,6 +6733,12 @@ impl<'p, S: Stage> Machine<'p, S> {
             .closures
             .get(closure.index())
             .ok_or_else(|| err(V::Malformed, format!("unknown closure {closure:?}")))?;
+        if site.receipts.is_some() {
+            return fail(
+                V::Unsupported,
+                "receipt closure transport requires independent H cells",
+            );
+        }
         let code = match site.code {
             Some(c) => Some(self.program.function(self.symbol(f.unit, c.symbol)?)?),
             None => None,

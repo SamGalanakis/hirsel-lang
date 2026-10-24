@@ -167,6 +167,7 @@ pub(crate) fn fixture(target: &TargetSpec) -> (LayoutTable, LirUnit<Ready>, FnAb
     )
     .unwrap();
     let entry = ReceiptEntry {
+        environment: None,
         contract: contract.content().unwrap(),
         parameters,
         captures: vec![],

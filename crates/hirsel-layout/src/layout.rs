@@ -22,6 +22,7 @@ use hirsel_types::{
 use std::collections::{BTreeMap, HashMap};
 
 use hirsel_lir::layout::*;
+mod receipt_environment;
 
 /// Tooling limits on instance expansion; reaching one is operational, never a
 /// source rejection (generic code).

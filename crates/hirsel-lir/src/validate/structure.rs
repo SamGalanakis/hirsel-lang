@@ -2291,6 +2291,9 @@ impl<S: Stage> Checker<'_, '_, S> {
                 result, closure, ..
             } => {
                 let c = &unit.tables.closures[closure.index()];
+                if c.receipts.is_some() {
+                    self.add(site, K::Sealed("receipt closure transport requires independent source and carrier validation".into()));
+                }
                 let specialized = match layouts.get(self.layout_of(result)) {
                     Some(LayoutRecord {
                         kind:
@@ -4630,14 +4633,20 @@ pub(super) fn inst_operands<S>(cx: &Cx<'_, S>, inst: &Inst) -> Vec<(ValueId, Usa
             out.push(op(token));
             out.extend(construct_values(cx, construct).map(op));
         }
-        Inst::Closure { closure, .. } => out.extend(
-            unit.tables.closures[closure.index()]
-                .captures
-                .get(&unit.pools.captures)
-                .unwrap_or(&[])
-                .iter()
-                .map(|c| op(c.value)),
-        ),
+        Inst::Closure { closure, .. } => {
+            let closure = &unit.tables.closures[closure.index()];
+            out.extend(
+                closure
+                    .captures
+                    .get(&unit.pools.captures)
+                    .unwrap_or(&[])
+                    .iter()
+                    .map(|c| op(c.value)),
+            );
+            if let Some(receipts) = &closure.receipts {
+                out.extend(receipts.captures.iter().map(|c| op(c.receipt)));
+            }
+        }
         Inst::Release { value, live, .. } | Inst::Reset { value, live, .. } => {
             out.push(op(value));
             if let MaskRef::Dynamic(mask) = live {

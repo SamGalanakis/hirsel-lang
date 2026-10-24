@@ -405,6 +405,7 @@ fn carrier_retainer(scoped: bool, sink: CarrierSink) -> Vec<K> {
             );
             let closure = ClosureId(t.builder.unit.tables.closures.len() as u32);
             t.builder.unit.tables.closures.push(ClosureSite {
+                receipts: None,
                 scoped: false,
                 code: Some(ClosureCode { symbol, abi }),
                 environment: container,
@@ -611,6 +612,7 @@ fn linked_body_claims_cover_calls_and_closure_entries() {
         });
         if closure {
             caller.tables.closures.push(ClosureSite {
+                receipts: None,
                 scoped: true,
                 code: Some(ClosureCode {
                     symbol,
