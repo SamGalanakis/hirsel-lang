@@ -235,7 +235,20 @@ fn admitted_native_roots_preserve_selection_constants_and_detached_metadata_owne
                     expected_codec.encode(&scalar.engine, &expected_extra)
                 );
                 assert_eq!(actual.roots.environment, expected_roots.environment);
+                let sources = actual.roots.sources.clone();
+                let file = sources.file(FileId(0)).unwrap().clone();
                 drop(actual);
+                assert!(
+                    budget.reserved() > 0,
+                    "extracted map retains source admission"
+                );
+                assert!(file.text().contains("pub fn main"));
+                drop(sources);
+                assert!(
+                    budget.reserved() > 0,
+                    "extracted file retains source admission"
+                );
+                drop(file);
                 assert_eq!(budget.reserved(), 0);
             }
         }

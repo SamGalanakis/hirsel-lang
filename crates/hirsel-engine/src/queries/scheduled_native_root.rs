@@ -267,6 +267,17 @@ impl Task {
             .ok_or(QueryError::NotImplemented)?;
         let signatures = owner.definitions.signatures();
         let selected_set = selected.iter().cloned().collect::<BTreeSet<_>>();
+        // Decorating the external map copies its file/path metadata. Shared
+        // text, lines and anchors keep their original producer reservations.
+        // Refuse before allocating the copy, within the existing output grant.
+        let source_metadata = owner.template.sources.retained_snapshot_metadata_bytes();
+        let used = self
+            .used
+            .checked_add(source_metadata)
+            .ok_or_else(|| invalid("native source metadata overflow"))?;
+        if used > owner.output_budget {
+            return Err(invalid("native source metadata exceeds admission"));
+        }
         let mut roots = owner.template.clone();
         roots.definitions = selected.clone();
         roots
@@ -389,7 +400,7 @@ impl Task {
             )
             .ok_or(QueryError::NotImplemented)?;
         if (bytes.len() as u64)
-            .checked_add(self.used)
+            .checked_add(used)
             .is_none_or(|used| used > owner.output_budget)
         {
             return Err(invalid("native root outputs exceed admission"));
@@ -410,6 +421,9 @@ impl Task {
             action,
             record,
         };
+        // Keep the producer template undecorated: an external map or file
+        // can outlive this root, without the owner retaining itself in a cycle.
+        roots.sources = roots.sources.retain_owner(owner.ownership.clone());
         let products = FrontNativeProducts {
             roots,
             statics,
