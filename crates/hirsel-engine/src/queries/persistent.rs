@@ -622,7 +622,7 @@ fn encode_record<T: Serialize>(
 ) -> Option<Vec<u8>> {
     records.encode_record(record, |anchor| anchor_owner(items, anchor))
 }
-struct Contents(Arc<dyn crate::store::ResultStore>);
+pub(super) struct Contents(pub(super) Arc<dyn crate::store::ResultStore>);
 impl hirsel_artifact_store::Contents for Contents {
     fn get_content(&self, reference: crate::store::Reference) -> Option<crate::store::Bytes> {
         self.0.get_content(reference)
@@ -985,6 +985,26 @@ impl QueryEngine {
             kind,
             LoweringPolicy::Reachable,
         ))
+    }
+    /// Current owned source identity, including literal generated bodies. The
+    /// generated owner includes its exact text hash; arbitrary persisted ids
+    /// cannot name an anchor in another source generation.
+    pub(crate) fn record_anchor_owner(&self, anchor: Anchor) -> Option<(DefPath, u32)> {
+        artifact_anchor_owner(&self.items, &self.sources, &self.generated, anchor)
+            .or_else(|| self.catalog.owner(anchor))
+    }
+    pub(crate) fn record_anchor(&self, path: &DefPath, occurrence: u32) -> Option<Anchor> {
+        self.items
+            .get(path)
+            .and_then(|items| items.iter().find(|item| item.occurrence == occurrence))
+            .map(|item| item.anchor)
+            .or_else(|| self.catalog.anchor(path, occurrence))
+            .or_else(|| {
+                self.sources.anchors().find_map(|(anchor, _, _)| {
+                    (self.record_anchor_owner(anchor) == Some((path.clone(), occurrence)))
+                        .then_some(anchor)
+                })
+            })
     }
     pub(super) fn encode_record<T: Serialize>(&self, record: &T) -> Option<Vec<u8>> {
         let records = self.type_records()?;

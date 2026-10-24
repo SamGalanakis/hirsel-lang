@@ -74,6 +74,7 @@ pub use hirsel_tir::{CapabilityEvent, RunConfiguration, TirProvider};
 use hirsel_types::{CheckedBody, Resolution, Signature};
 pub use hirsel_types::{QueryError, QueryOutput, SignatureDependency, SignatureProvider};
 pub use package::*;
+pub use queries::native_records::{NativeRecordContext, NativeRecordSource, NativeRecords};
 pub use queries::*;
 use std::{fmt, io::Write};
 pub use tools::*;

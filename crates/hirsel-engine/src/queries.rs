@@ -33,6 +33,7 @@ pub(crate) use memos::{Entry, Observed, Table};
 mod program_revision;
 pub use program_revision::ForeignUse;
 pub(crate) use program_revision::SemanticProgram;
+pub(crate) mod native_records;
 mod persistent;
 mod retention;
 mod safety;
