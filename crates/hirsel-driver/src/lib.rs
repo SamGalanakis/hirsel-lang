@@ -16,6 +16,7 @@ pub mod dependency_card;
 pub mod native;
 mod network;
 pub mod observation_view;
+pub mod requests;
 mod pipeline;
 pub mod serve;
 pub mod session;
