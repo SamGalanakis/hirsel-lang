@@ -1796,7 +1796,8 @@ fn frozen_lowering_prefix_keeps_demanded_closure_and_final_outcomes_across_edits
                         assert_eq!(
                             placed_evidence(&candidate.sources, format!("{:?}", outcome.depth)),
                             placed_evidence(&control.sources, format!("{depth:?}")),
-                            "jobs={jobs} warm={warm} root={} revision={revision}", outcome.definition
+                            "jobs={jobs} warm={warm} root={} revision={revision}",
+                            outcome.definition
                         );
                     }
                     let actual: Vec<_> = actual

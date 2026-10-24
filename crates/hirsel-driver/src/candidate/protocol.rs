@@ -687,12 +687,8 @@ mod matrix {
             jobs: hirsel_intern::jobs::Jobs::new(jobs),
             ..CompileConfig::default()
         };
-        let workspace = CandidateWorkspace::new(
-            config.clone(),
-            Default::default(),
-            Limits::default(),
-        )
-        .unwrap();
+        let workspace =
+            CandidateWorkspace::new(config.clone(), Default::default(), Limits::default()).unwrap();
         let mut c = Connection::new(workspace, root.clone()).unwrap();
         let base =
             c.handle(&json!({"version":1,"op":"capture","entry":"hirsel.json"}))["ok"].clone();
@@ -724,10 +720,7 @@ mod matrix {
                     .clone()
                     .with_config(config.clone())
                     .with_owned_engines()
-                    .load_program_source(
-                        &cold.join("hirsel.json"),
-                        None,
-                    )
+                    .load_program_source(&cold.join("hirsel.json"), None)
                     .unwrap();
                 let output = p.check(LoweringPolicy::Comptime).unwrap();
                 assert_eq!(output.completion, CheckCompletion::Complete);

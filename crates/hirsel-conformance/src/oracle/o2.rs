@@ -6,8 +6,8 @@
 //! - `resident`: one `Session` across the edit.
 //! - `disk`: two processes sharing a `dir@1` store.
 use super::{
-    Artifacts, Config, Report, Verdict, difference, edits::Scenario,
-    o1::produce_in_child, produce, produce_with_store, program_artifacts, switches,
+    Artifacts, Config, Report, Verdict, difference, edits::Scenario, o1::produce_in_child, produce,
+    produce_with_store, program_artifacts, switches,
 };
 use hirsel_driver::session::{FileChange, Session};
 use hirsel_engine::store::MemStore;
@@ -92,9 +92,9 @@ fn one(
     report.add(
         name("mem"),
         compare(
-            warmed.map_err(Verdict::Todo).and_then(|_| {
-                produce_with_store(&entry, after, store).map_err(Verdict::Todo)
-            }),
+            warmed
+                .map_err(Verdict::Todo)
+                .and_then(|_| produce_with_store(&entry, after, store).map_err(Verdict::Todo)),
         ),
     );
     report.add(
