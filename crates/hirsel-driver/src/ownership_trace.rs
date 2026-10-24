@@ -57,3 +57,59 @@ pub fn run_resources_on_host(
         })?,
     })
 }
+
+pub struct ResourceSimulation {
+    pub execution: hirsel_engine::ObservedExecution,
+    pub program: [u8; 32],
+    pub trace: Result<Trace, TraceError>,
+}
+
+/// Execute one discovered source test under the ordinary simulator. Resource
+/// diagnostics use that generated entry's checked semantic closure and never
+/// become part of its semantic observation or its capability tape.
+pub fn execute_test_resources(
+    program: &mut hirsel_engine::LoadedProgram,
+    test: &crate::testing::Test,
+    checked: bool,
+    hash_seed: u64,
+    limits: hirsel_interp::Limits,
+    event_limit: usize,
+) -> Result<ResourceSimulation, ToolError> {
+    let binding = program
+        .engine
+        .native_semantic_program([test.entry.clone()])
+        .and_then(|semantic| semantic.semantic_program_revision(&test.entry))
+        .map_err(|error| program.error(error))?
+        .digest();
+    let previous =
+        program
+            .engine
+            .adapters
+            .interpreter
+            .replace(Box::new(hirsel_engine::InterpreterAdapter {
+                limits,
+                resource_binding: Some(hirsel_interp::ownership_trace::ResourceBinding {
+                    program: binding,
+                    event_limit,
+                }),
+                ..Default::default()
+            }));
+    let execution = crate::testing::execute(program, test, checked, hash_seed);
+    let trace = program
+        .engine
+        .adapters
+        .interpreter
+        .as_mut()
+        .and_then(|adapter| adapter.take_resource_trace())
+        .unwrap_or_else(|| {
+            Err(TraceError::Unsupported(
+                "simulation did not complete ownership observations".into(),
+            ))
+        });
+    program.engine.adapters.interpreter = previous;
+    Ok(ResourceSimulation {
+        execution: execution?,
+        program: binding,
+        trace,
+    })
+}

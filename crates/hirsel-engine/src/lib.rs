@@ -393,6 +393,17 @@ pub trait LoweringPhase: Send + Sync {
 }
 /// Runtime output includes failure cause data; stdout is delivered as exact bytes (FAIL-2; issue #12).
 pub trait InterpreterPhase: Send {
+    /// Consume only the most recent run's separately requested resource diagnostics.
+    fn take_resource_trace(
+        &mut self,
+    ) -> Option<
+        Result<
+            hirsel_run_schema::ownership_trace::Trace,
+            hirsel_interp::ownership_trace::TraceError,
+        >,
+    > {
+        None
+    }
     /// Replace only the tooling step bound, returning the previous policy.
     /// Adapters without reference step accounting refuse bounded execution.
     fn replace_step_limit(&mut self, _limit: Option<u64>) -> Result<Option<u64>, NotImplemented> {

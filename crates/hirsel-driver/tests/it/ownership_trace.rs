@@ -106,3 +106,60 @@ fn ownership_host_plain_builtin_calls_preserve_live_resource_custody_in_both_eng
     }
     assert_eq!(traces[0], traces[1]);
 }
+
+#[test]
+fn ownership_simulation_test_entry_preserves_source_results_and_restores_the_adapter() {
+    use hirsel_driver::ownership_trace::execute_test_resources;
+    use hirsel_driver::{
+        COMPILER,
+        testing::{self, Selection},
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("tests.hir");
+    std::fs::write(&source,"resource type Token {}\ndrop(x) {}\n@test\nfn resource_lifetime(t: Test) {\n let first = Token()\n let second = take first\n test.check(t, true)\n}\n").unwrap();
+    let mut program = COMPILER
+        .with_verify(Verify::On)
+        .load_test_package(&source)
+        .unwrap_or_else(|error| panic!("source fixture: {error}"));
+    let tests = testing::discover(&mut program, &[], Some(49), Selection::Tests)
+        .unwrap_or_else(|error| panic!("source fixture: {error}"));
+    assert_eq!(tests.len(), 1);
+    let mut traces = vec![];
+    for checked in [false, true] {
+        let ordinary = testing::execute(&mut program, &tests[0], checked, 0)
+            .unwrap_or_else(|error| panic!("source fixture: {error}"));
+        let traced = execute_test_resources(
+            &mut program,
+            &tests[0],
+            checked,
+            0,
+            hirsel_interp::Limits::default(),
+            100,
+        )
+        .unwrap_or_else(|error| panic!("source fixture: {error}"));
+        assert_eq!(
+            ordinary.outcome.as_ref().unwrap(),
+            traced.execution.outcome.as_ref().unwrap()
+        );
+        assert_eq!(ordinary.observation, traced.execution.observation);
+        assert_eq!(ordinary.step_usage, traced.execution.step_usage);
+        let trace = traced.trace.unwrap();
+        let analysis = trace.analyze(traced.program, 100).unwrap();
+        assert_eq!(
+            (analysis.created, analysis.dropped, analysis.live.len()),
+            (1, 1, 0)
+        );
+        assert!(
+            program
+                .engine
+                .adapters
+                .interpreter
+                .as_mut()
+                .unwrap()
+                .take_resource_trace()
+                .is_none()
+        );
+        traces.push(trace);
+    }
+    assert_eq!(traces[0], traces[1]);
+}

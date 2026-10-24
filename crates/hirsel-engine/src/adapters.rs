@@ -63,6 +63,14 @@ pub struct InterpreterAdapter {
     pub sources: SourceMap,
     pub arguments: Vec<hirsel_interp::Value>,
     pub limits: hirsel_interp::Limits,
+    /// Opt-in resource diagnostics, separate from semantic observations.
+    pub resource_binding: Option<hirsel_interp::ownership_trace::ResourceBinding>,
+    pub resource_trace: Option<
+        Result<
+            hirsel_run_schema::ownership_trace::Trace,
+            hirsel_interp::ownership_trace::TraceError,
+        >,
+    >,
 }
 impl Default for InterpreterAdapter {
     /// An empty placeholder interner: `prepare` installs the session's runtime before a run.
@@ -76,10 +84,22 @@ impl Default for InterpreterAdapter {
             sources: Default::default(),
             arguments: Vec::new(),
             limits: Default::default(),
+            resource_binding: None,
+            resource_trace: None,
         }
     }
 }
 impl InterpreterPhase for InterpreterAdapter {
+    fn take_resource_trace(
+        &mut self,
+    ) -> Option<
+        Result<
+            hirsel_run_schema::ownership_trace::Trace,
+            hirsel_interp::ownership_trace::TraceError,
+        >,
+    > {
+        self.resource_trace.take()
+    }
     fn replace_step_limit(
         &mut self,
         limit: Option<u64>,
@@ -148,29 +168,48 @@ impl InterpreterPhase for InterpreterAdapter {
         definitions: &mut dyn TirProvider,
         sources: &SourceMap,
     ) -> Result<ObservedExecution, RuntimeError> {
+        self.resource_trace = None;
         let mut final_state = None;
         let mut exit_report = None;
         let execution = if let Some(signature) = &self.entry_signature {
-            hirsel_interp::library::launch_with_runtime(
-                definitions,
-                sources,
-                signature,
-                config,
-                self.simulation.clone(),
-                self.limits,
-                &self.runtime,
-            )
-            .map(|mut launched| {
-                exit_report = launched.exit_report.take();
-                final_state = Some(launched.final_state);
-                launched.execution
-            })
-            .map_err(|error| match error {
-                hirsel_interp::library::LaunchError::Execution { cause, stdout } => {
-                    (launch_error(*cause), Some(stdout))
-                }
-                error => (launch_error(error), None),
-            })
+            let launched = if let Some(binding) = self.resource_binding {
+                hirsel_interp::library::launch_resources_with_runtime(
+                    definitions,
+                    sources,
+                    signature,
+                    config,
+                    self.simulation.clone(),
+                    self.limits,
+                    &self.runtime,
+                    binding,
+                )
+                .map(|(launched, trace)| {
+                    self.resource_trace = Some(trace);
+                    launched
+                })
+            } else {
+                hirsel_interp::library::launch_with_runtime(
+                    definitions,
+                    sources,
+                    signature,
+                    config,
+                    self.simulation.clone(),
+                    self.limits,
+                    &self.runtime,
+                )
+            };
+            launched
+                .map(|mut launched| {
+                    exit_report = launched.exit_report.take();
+                    final_state = Some(launched.final_state);
+                    launched.execution
+                })
+                .map_err(|error| match error {
+                    hirsel_interp::library::LaunchError::Execution { cause, stdout } => {
+                        (launch_error(*cause), Some(stdout))
+                    }
+                    error => (launch_error(error), None),
+                })
         } else {
             hirsel_interp::run(
                 definitions,

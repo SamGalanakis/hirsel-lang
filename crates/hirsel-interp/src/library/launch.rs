@@ -140,6 +140,60 @@ pub fn launch_with_runtime(
     limits: Limits,
     runtime: &crate::aggregate::RuntimeTypes,
 ) -> Result<LaunchedExecution, LaunchError> {
+    launch_resource_impl(
+        provider, sources, signature, run, config, limits, runtime, None,
+    )
+    .map(|(launched, _)| launched)
+}
+
+/// The same simulator admission and execution, with separate resource diagnostics.
+pub fn launch_resources_with_runtime(
+    provider: &mut dyn TirProvider,
+    sources: &SourceMap,
+    signature: &Signature,
+    run: &RunConfiguration,
+    config: SimulationConfig,
+    limits: Limits,
+    runtime: &crate::aggregate::RuntimeTypes,
+    binding: crate::ownership_trace::ResourceBinding,
+) -> Result<
+    (
+        LaunchedExecution,
+        Result<hirsel_run_schema::ownership_trace::Trace, crate::ownership_trace::TraceError>,
+    ),
+    LaunchError,
+> {
+    launch_resource_impl(
+        provider,
+        sources,
+        signature,
+        run,
+        config,
+        limits,
+        runtime,
+        Some(binding),
+    )
+    .map(|(launched, trace)| (launched, trace.expect("requested resource diagnostics")))
+}
+
+fn launch_resource_impl(
+    provider: &mut dyn TirProvider,
+    sources: &SourceMap,
+    signature: &Signature,
+    run: &RunConfiguration,
+    config: SimulationConfig,
+    limits: Limits,
+    runtime: &crate::aggregate::RuntimeTypes,
+    ownership: Option<crate::ownership_trace::ResourceBinding>,
+) -> Result<
+    (
+        LaunchedExecution,
+        Option<
+            Result<hirsel_run_schema::ownership_trace::Trace, crate::ownership_trace::TraceError>,
+        >,
+    ),
+    LaunchError,
+> {
     if *signature.definition.path() != run.entry {
         return Err(LaunchError::InvalidEntry(
             "selected signature does not name entry".into(),
@@ -147,15 +201,33 @@ pub fn launch_with_runtime(
     }
     let mut library = Library::new(run, config).map_err(runtime_error)?;
     let arguments = library.entry_arguments(&runtime.types, signature)?;
-    let execution = run_with_runtime(
-        provider,
-        sources,
-        run,
-        arguments,
-        limits,
-        &mut library,
-        runtime,
-    )
+    let (execution, trace) = if let Some(binding) = ownership {
+        crate::ownership_trace::run_resources(
+            provider,
+            sources,
+            crate::ownership_trace::ResourceRequest {
+                configuration: run,
+                program: binding.program,
+                event_limit: binding.event_limit,
+            },
+            arguments,
+            limits,
+            &mut library,
+            runtime,
+        )
+        .map(|result| (result.execution, Some(result.trace)))
+    } else {
+        run_with_runtime(
+            provider,
+            sources,
+            run,
+            arguments,
+            limits,
+            &mut library,
+            runtime,
+        )
+        .map(|execution| (execution, None))
+    }
     .map_err(|error| LaunchError::Execution {
         cause: Box::new(runtime_error(error.error)),
         stdout: error.stdout,
@@ -206,12 +278,15 @@ pub fn launch_with_runtime(
             ));
         }
     }
-    Ok(LaunchedExecution {
-        exit_report: library.exit_report.take(),
-        execution,
-        final_state: library.simulation.observed_state(),
-        events: library.simulation.events,
-    })
+    Ok((
+        LaunchedExecution {
+            exit_report: library.exit_report.take(),
+            execution,
+            final_state: library.simulation.observed_state(),
+            events: library.simulation.events,
+        },
+        trace,
+    ))
 }
 fn runtime_error(e: Error) -> LaunchError {
     match e {

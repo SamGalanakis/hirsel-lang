@@ -16,7 +16,10 @@ mod shape;
 mod signals;
 pub use dispatch::{Library, error, i32_value, none, ok, path, some, u32_value, u64_value};
 mod launch;
-pub use launch::{LaunchError, LaunchedExecution, core_runtime_types, launch, launch_with_runtime};
+pub use launch::{
+    LaunchError, LaunchedExecution, core_runtime_types, launch, launch_resources_with_runtime,
+    launch_with_runtime,
+};
 
 mod callbacks;
 pub mod race;
