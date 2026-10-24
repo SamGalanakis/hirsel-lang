@@ -26,7 +26,6 @@ pub(super) struct SafeCheck {
     id: QueryId,
     check: Arc<FrontCheckQueries>,
     run: Arc<FrontRunQueries>,
-    entry: Option<DefPath>,
     launch: Option<QueryId>,
     store: Arc<dyn ResultStore>,
     errors: RuntimeErrors,
@@ -71,7 +70,6 @@ impl SafeCheck {
             id,
             check,
             run,
-            entry,
             launch,
             store,
             errors,
@@ -113,11 +111,10 @@ impl SafeCheck {
                 let facts = self.run.outcome(product).ok_or_else(|| {
                     ToolError::Runtime("safe-check Run product is unavailable".into())
                 })?;
-                let entry = self
-                    .entry
-                    .as_ref()
-                    .ok_or_else(|| ToolError::Runtime("safe-check entry is unavailable".into()))?;
-                Some((entry.clone(), facts.semantic.unsafe_reach(entry)))
+                Some((
+                    facts.entry.clone(),
+                    facts.semantic.unsafe_reach(&facts.entry),
+                ))
             }
             None => None,
         };
