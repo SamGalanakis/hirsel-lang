@@ -1244,6 +1244,7 @@ fn f1_atomic_at(name: &str, ty: &str, level: &'static [&'static str; 1]) {
         Cells {
             levels: level,
             engines: &ENGINES,
+            dimensions: Cells::DIMENSIONS,
         },
     );
 }
@@ -1347,6 +1348,7 @@ fn runtime50_object_phase_cross_engine_replay() {
     runtime50_objects_at(Cells {
         levels: &["record"],
         engines: &ENGINES,
+        dimensions: Cells::DIMENSIONS,
     });
 }
 
@@ -1355,6 +1357,7 @@ fn runtime50_object_phase_cross_engine_replay_durable() {
     runtime50_objects_at(Cells {
         levels: &["durable"],
         engines: &ENGINES,
+        dimensions: Cells::DIMENSIONS,
     });
 }
 
