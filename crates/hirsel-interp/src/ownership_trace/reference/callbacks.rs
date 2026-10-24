@@ -55,12 +55,41 @@ impl Resources {
             }
             return;
         };
-        if !call.arguments.is_empty()
-            || callee
-                .slots
+        let mut aliases = BTreeMap::new();
+        let callback_parameter = if call.definition.is_core("mutex.with") {
+            2
+        } else {
+            1
+        };
+        if let Some((_, _, environment)) = call
+            .views
+            .iter()
+            .find(|(parameter, _, _)| *parameter == callback_parameter)
+        {
+            for (capture, (local, _)) in callee
+                .body()
+                .locals
                 .iter()
-                .flatten()
-                .any(|value| resources_in(value) != 0)
+                .enumerate()
+                .filter(|(_, local)| local.storage == hirsel_tir::Storage::Capture)
+                .enumerate()
+            {
+                let mut from = environment.clone();
+                from.path.push(super::Step::Field {
+                    field: capture as u32,
+                });
+                if let Some(target) = self.borrow_target(&from) {
+                    aliases.insert(local as u32, target);
+                } else if self.has_borrows(&from) {
+                    aliases.insert(local as u32, from);
+                }
+            }
+        }
+        if !call.arguments.is_empty()
+            || callee.slots.iter().enumerate().any(|(local, value)| {
+                value.as_ref().is_some_and(|value| resources_in(value) != 0)
+                    && !aliases.contains_key(&(local as u32))
+            })
         {
             self.unsupported("resource callback parameters or captures need an observed transport");
             return;
@@ -81,7 +110,7 @@ impl Resources {
         self.frames.push(FrameState {
             id,
             finalizer: false,
-            aliases: BTreeMap::new(),
+            aliases,
             return_to: Some(owner),
             returned: None,
         });
@@ -119,6 +148,13 @@ impl Resources {
             return true;
         }
         if output.count == 0 {
+            if self.has_borrows(&output.owner) {
+                let Some(destination) = output.destination else {
+                    self.unsupported("callback borrowed environment has no receiving place");
+                    return true;
+                };
+                self.move_borrows(&output.owner, &destination, false);
+            }
             return false;
         }
         let Some(destination) = output.destination else {

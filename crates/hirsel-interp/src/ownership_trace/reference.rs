@@ -13,6 +13,7 @@ use std::collections::{BTreeMap, VecDeque};
 
 mod channels;
 use channels::Channels;
+mod borrows;
 mod callbacks;
 use callbacks::Callbacks;
 
@@ -27,6 +28,9 @@ struct CallState {
     definition: DefPath,
     body: Option<hirsel_tir::BodyId>,
     captures: Vec<(u32, Owner)>,
+    borrowed_captures: Vec<(u32, Owner)>,
+    capture_views: Vec<(u32, Owner, bool)>,
+    views: Vec<(u32, UseKind, Owner)>,
     arguments: Vec<(u32, UseKind, Owner)>,
     destination: Option<Owner>,
     context: Context,
@@ -35,12 +39,19 @@ enum Pending {
     Create {
         destination: PlaceId,
         fields: Vec<(Owner, u32, u64)>,
+        borrowed: Vec<(u32, Owner)>,
+        views: Vec<(Owner, u32, bool)>,
         context: Context,
     },
     Move {
         from: Owner,
         to: Owner,
         context: Context,
+    },
+    BorrowMove {
+        from: Owner,
+        to: Owner,
+        copy: bool,
     },
     Alias {
         local: u32,
@@ -91,6 +102,7 @@ pub(super) struct Resources {
     tracker: Tracker,
     channels: Channels,
     callbacks: Callbacks,
+    borrows: BTreeMap<Owner, Owner>,
     frames: Vec<FrameState>,
     next_frame: u64,
     next_scratch: u64,
@@ -115,6 +127,7 @@ impl Resources {
             tracker: Tracker::new(event_limit),
             channels: Channels::default(),
             callbacks: Callbacks::default(),
+            borrows: BTreeMap::new(),
             frames: vec![],
             next_frame: 0,
             next_scratch: 0,
@@ -216,7 +229,7 @@ impl Resources {
                 }
             });
         }
-        Some(owner)
+        Some(self.borrow_target(&owner).unwrap_or(owner))
     }
     fn destination(&self, frame: &Frame, place: PlaceId) -> Option<Owner> {
         let at = frame.place(place).ok()?;
@@ -231,6 +244,16 @@ impl Resources {
             value,
             Value::Resource { .. } | Value::ResourceVariant { .. }
         )
+    }
+    fn capture_local(frame: &Frame, capture: u32) -> Option<u32> {
+        frame
+            .body()
+            .locals
+            .iter()
+            .enumerate()
+            .filter(|(_, local)| local.storage == hirsel_tir::Storage::Capture)
+            .nth(capture as usize)
+            .map(|(local, _)| local as u32)
     }
     fn type_name(value: &Value) -> Option<String> {
         let (Value::Resource { definition, .. } | Value::ResourceVariant { definition, .. }) =
@@ -531,11 +554,22 @@ impl Observer for Resources {
                 match frame.body().rvalues.get(value.0 as usize) {
                     Some(Rvalue::Construct { fields, .. }) => {
                         let mut incoming = vec![];
+                        let mut views = vec![];
                         for field in fields {
                             let Ok(value) = frame.observe(field.value.place) else {
                                 self.unsupported("construction field is unavailable");
                                 return;
                             };
+                            let owner = self.place(frame, field.value.place);
+                            if let Some(owner) = &owner
+                                && self.has_borrows(owner)
+                            {
+                                views.push((
+                                    owner.clone(),
+                                    field.field,
+                                    field.value.usage != UseKind::Take,
+                                ));
+                            }
                             let count = resources_in(value);
                             if count == 0 {
                                 continue;
@@ -544,7 +578,7 @@ impl Observer for Resources {
                                 self.unsupported("unsupported construction field transport");
                                 return;
                             }
-                            let Some(owner) = self.place(frame, field.value.place) else {
+                            let Some(owner) = owner else {
                                 self.unsupported("construction field owner unavailable");
                                 return;
                             };
@@ -553,33 +587,53 @@ impl Observer for Resources {
                         self.pending = Some(Pending::Create {
                             destination: *destination,
                             fields: incoming,
+                            borrowed: vec![],
+                            views,
                             context,
-                        })
+                        });
                     }
                     Some(Rvalue::Closure { captures, .. }) => {
                         let mut incoming = vec![];
+                        let mut borrowed = vec![];
+                        let mut views = vec![];
                         for (index, operand) in captures.iter().enumerate() {
                             let Ok(value) = frame.observe(operand.place) else {
                                 self.unsupported("closure capture is unavailable");
                                 return;
                             };
+                            let owner = self.place(frame, operand.place);
+                            if let Some(owner) = &owner
+                                && self.has_borrows(owner)
+                            {
+                                views.push((
+                                    owner.clone(),
+                                    index as u32,
+                                    operand.usage != UseKind::Take,
+                                ));
+                            }
                             let count = resources_in(value);
                             if count == 0 {
                                 continue;
                             }
-                            if operand.usage != UseKind::Take || !Self::supported_tree(value) {
-                                self.unsupported("borrowed or copied resource capture");
-                                return;
-                            }
-                            let Some(owner) = self.place(frame, operand.place) else {
+                            let Some(owner) = owner else {
                                 self.unsupported("closure capture owner unavailable");
                                 return;
                             };
-                            incoming.push((owner, index as u32, count));
+                            if matches!(operand.usage, UseKind::Borrow | UseKind::Mut) {
+                                borrowed.push((index as u32, owner));
+                            } else if operand.usage == UseKind::Take && Self::supported_tree(value)
+                            {
+                                incoming.push((owner, index as u32, count));
+                            } else {
+                                self.unsupported("copied resource capture");
+                                return;
+                            }
                         }
                         self.pending = Some(Pending::Create {
                             destination: *destination,
                             fields: incoming,
+                            borrowed,
+                            views,
                             context,
                         });
                     }
@@ -589,6 +643,16 @@ impl Observer for Resources {
                             return;
                         };
                         if resources_in(value) == 0 {
+                            if let (Some(from), Some(to)) = (
+                                self.place(frame, operand.place),
+                                self.destination(frame, *destination),
+                            ) {
+                                self.pending = Some(Pending::BorrowMove {
+                                    from,
+                                    to,
+                                    copy: operand.usage != UseKind::Take,
+                                });
+                            }
                             return;
                         }
                         if !Self::supported_tree(value) {
@@ -670,6 +734,8 @@ impl Observer for Resources {
                             .first()
                             .and_then(|a| self.place(frame, a.value.place));
                     } else {
+                        let mut borrowed_captures = vec![];
+                        let mut capture_views = vec![];
                         let (definition, body, captures) = match callee {
                             hirsel_tir::Callee::Definition { path, .. } => {
                                 (path.clone(), None, vec![])
@@ -708,18 +774,6 @@ impl Observer for Resources {
                                         let Some(value) = value else {
                                             continue;
                                         };
-                                        if resources_in(value) == 0 {
-                                            continue;
-                                        }
-                                        if !*owned
-                                            || invoked.is_none()
-                                            || operand.usage != UseKind::Take
-                                        {
-                                            self.unsupported(
-                                                "borrowed or reusable resource closure invocation",
-                                            );
-                                            return;
-                                        }
                                         let Some(mut from) = self.place(frame, operand.place)
                                         else {
                                             self.unsupported("invoked closure owner unavailable");
@@ -728,18 +782,52 @@ impl Observer for Resources {
                                         from.path.push(Step::Field {
                                             field: index as u32,
                                         });
-                                        incoming.push((index as u32, from));
+                                        if resources_in(value) == 0 && self.has_borrows(&from) {
+                                            capture_views.push((
+                                                index as u32,
+                                                from.clone(),
+                                                *owned,
+                                            ));
+                                        }
+                                        if resources_in(value) == 0 {
+                                            continue;
+                                        }
+                                        if !owned {
+                                            let Some(target) = self.borrow_target(&from) else {
+                                                self.unsupported(
+                                                    "borrowed capture has no observed owner",
+                                                );
+                                                return;
+                                            };
+                                            borrowed_captures.push((index as u32, target));
+                                        } else if invoked.is_some()
+                                            && operand.usage == UseKind::Take
+                                        {
+                                            incoming.push((index as u32, from));
+                                        } else {
+                                            self.unsupported(
+                                                "reusable owned resource closure invocation",
+                                            );
+                                            return;
+                                        }
                                     }
                                     (definition.path().clone(), Some(*body), incoming)
                                 }
                             }
                         };
                         let mut incoming = vec![];
+                        let mut views = vec![];
                         for argument in arguments {
                             let Ok(value) = frame.observe(argument.value.place) else {
                                 self.unsupported("call argument is unavailable");
                                 return;
                             };
+                            if resources_in(value) == 0
+                                && let Some(owner) = self.place(frame, argument.value.place)
+                                && self.has_borrows(&owner)
+                            {
+                                views.push((argument.parameter.0, argument.value.usage, owner));
+                            }
                             if resources_in(value) == 0 {
                                 continue;
                             }
@@ -778,21 +866,31 @@ impl Observer for Resources {
                             definition,
                             body,
                             captures,
+                            borrowed_captures,
+                            capture_views,
+                            views,
                             arguments: incoming,
                             destination,
                             context,
                         });
                     }
                 } else if let Terminator::Return { value, .. } = terminator
-                    && frame
-                        .observe(value.place)
-                        .is_ok_and(|v| resources_in(v) > 0)
+                    && frame.observe(value.place).is_ok_and(|v| {
+                        resources_in(v) > 0
+                            || self
+                                .place(frame, value.place)
+                                .is_some_and(|owner| self.has_borrows(&owner))
+                    })
                 {
                     let Some(owner) = self.place(frame, value.place) else {
                         self.unsupported("return owner unavailable");
                         return;
                     };
-                    if value.usage != UseKind::Take {
+                    if value.usage != UseKind::Take
+                        && frame
+                            .observe(value.place)
+                            .is_ok_and(|v| resources_in(v) > 0)
+                    {
                         self.unsupported("borrowed resource return");
                         return;
                     }
@@ -835,8 +933,21 @@ impl Observer for Resources {
             if usage == UseKind::Take {
                 let result = self.tracker.move_tree(&call.context, &from, &to);
                 self.checked(result);
+                self.move_borrows(&from, &to, false);
             } else {
                 state.aliases.insert(local.0, from);
+            }
+        }
+        for (parameter, usage, from) in call.views {
+            let Some(local) = callee.body().parameters.get(parameter as usize) else {
+                self.unsupported("borrowed environment parameter unavailable");
+                return;
+            };
+            let to = self.frame_slot(id, local.0);
+            if matches!(usage, UseKind::Borrow | UseKind::Mut) {
+                state.aliases.insert(local.0, from);
+            } else {
+                self.move_borrows(&from, &to, usage != UseKind::Take);
             }
         }
         for (capture, from) in call.captures {
@@ -854,6 +965,26 @@ impl Observer for Resources {
             let to = self.frame_slot(id, local as u32);
             let result = self.tracker.move_tree(&call.context, &from, &to);
             self.checked(result);
+            self.move_borrows(&from, &to, false);
+        }
+        for (capture, target) in call.borrowed_captures {
+            let Some(local) = Self::capture_local(callee, capture) else {
+                self.unsupported("borrowed capture local unavailable");
+                return;
+            };
+            state.aliases.insert(local, target);
+        }
+        for (capture, from, owned) in call.capture_views {
+            let Some(local) = Self::capture_local(callee, capture) else {
+                self.unsupported("captured environment local unavailable");
+                return;
+            };
+            let to = self.frame_slot(id, local);
+            if owned {
+                self.move_borrows(&from, &to, false);
+            } else {
+                state.aliases.insert(local, from);
+            }
         }
         self.frames.push(state);
     }
@@ -1130,6 +1261,8 @@ impl Observer for Resources {
             Some(Pending::Create {
                 destination,
                 fields,
+                borrowed,
+                views,
                 context,
             }) => {
                 let Ok(value) = frame.observe(destination) else {
@@ -1137,12 +1270,6 @@ impl Observer for Resources {
                     return;
                 };
                 let count = resources_in(value);
-                if count == 0 {
-                    if !fields.is_empty() {
-                        self.unsupported("construction discarded tracked resource fields");
-                    }
-                    return;
-                }
                 if !Self::supported_tree(value)
                     || count
                         != fields.iter().map(|f| f.2).sum::<u64>()
@@ -1164,6 +1291,21 @@ impl Observer for Resources {
                     self.unsupported("construction owner unavailable");
                     return;
                 };
+                self.forget_borrows(&owner);
+                for (from, field, copy) in views {
+                    let Some(step) = Self::field(value, field) else {
+                        self.unsupported("borrowed environment field projection unavailable");
+                        return;
+                    };
+                    let mut to = owner.clone();
+                    to.path.push(step);
+                    self.move_borrows(&from, &to, copy);
+                }
+                for (field, target) in borrowed {
+                    let mut at = owner.clone();
+                    at.path.push(Step::Field { field });
+                    self.insert_borrow(at, target);
+                }
                 for (from, field, expected) in fields {
                     let Some(step) = Self::field(value, field) else {
                         self.unsupported("unsupported construction field projection");
@@ -1193,6 +1335,16 @@ impl Observer for Resources {
                 }
                 let result = self.tracker.move_tree(&context, &from, &to);
                 self.checked(result);
+                self.move_borrows(&from, &to, false);
+            }
+            Some(Pending::BorrowMove { from, to, copy }) => {
+                if let Storage::Slot { frame, slot } = to.storage
+                    && to.path.is_empty()
+                    && self.frames.last().is_some_and(|state| state.id == frame)
+                {
+                    self.frames.last_mut().unwrap().aliases.remove(&slot);
+                }
+                self.move_borrows(&from, &to, copy);
             }
             Some(Pending::Alias { local, from }) => {
                 self.frames.last_mut().unwrap().aliases.insert(local, from);
@@ -1278,8 +1430,18 @@ impl Observer for Resources {
                 caller.aliases.remove(slot);
             }
             if resources_in(value) == 0 {
+                if let Some((from, _)) = returned
+                    && self.has_borrows(&from)
+                {
+                    let Some(to) = destination else {
+                        self.unsupported("external borrowed environment return");
+                        return;
+                    };
+                    self.move_borrows(&from, &to, true);
+                }
                 if let Some(state) = self.frames.pop() {
                     self.awaits.remove(&state.id);
+                    self.retired_frame(state.id);
                 }
                 return;
             }
@@ -1317,9 +1479,11 @@ impl Observer for Resources {
             };
             let result = self.tracker.move_tree(&context, &from, &to);
             self.checked(result);
+            self.move_borrows(&from, &to, false);
         }
         if let Some(state) = self.frames.pop() {
             self.awaits.remove(&state.id);
+            self.retired_frame(state.id);
         }
     }
     fn released_without_finalizer(

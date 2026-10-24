@@ -176,7 +176,22 @@ fn observed_task_source(body: &str, creates: usize) -> hirsel_run_schema::owners
     let mut program = COMPILER
         .with_verify(Verify::On)
         .load_test_package(&source)
-        .unwrap_or_else(|error| panic!("task fixture: {error}"));
+        .unwrap_or_else(|error| {
+            if let hirsel_engine::ToolError::Query {
+                error: hirsel_engine::QueryError::Diagnostics(diagnostics),
+                sources,
+                ..
+            } = &error
+            {
+                let rendered = diagnostics
+                    .iter()
+                    .take(4)
+                    .map(|diagnostic| diagnostic.render_human(sources))
+                    .collect::<String>();
+                panic!("task fixture: {rendered}");
+            }
+            panic!("task fixture: {error}");
+        });
     let tests = testing::discover(&mut program, &[], Some(49), Selection::Tests)
         .unwrap_or_else(|error| panic!("task fixture: {error}"));
     assert_eq!(tests.len(), 1);
@@ -615,6 +630,68 @@ fn failed_callback(t: Test) {
     let token = Token()
     failure.check(false, Arithmetic())
   })
+}
+"#,
+        1,
+    );
+}
+
+#[test]
+fn ownership_borrows_reusable_moved_closure_keeps_the_single_original_resource_owner() {
+    observed_task_source(
+        r#"
+resource type Token { value: u64 }
+drop(x) {}
+fn read(token: Token) -> u64 { token.value }
+@test
+fn borrowed_reader(t: Test) {
+  let token = Token(value: 7u64)
+  let reader = fn() -> u64 uses {} { read(token) }
+  let moved = take reader
+  let first = moved()
+  let second = moved()
+  test.check(t, first == 7u64 && second == 7u64)
+}
+"#,
+        1,
+    );
+}
+
+#[test]
+fn ownership_borrows_an_environment_survives_aggregate_and_generic_call_returns() {
+    observed_task_source(
+        r#"
+resource type Token { value: u64 }
+drop(x) {}
+fn identity[T](take value: T in value) -> T in value { take value }
+@test
+fn returned_reader(t: Test) {
+  let token = Token(value: 7u64)
+  let wrapped = (fn() -> u64 uses {} { token.value }, 9u64)
+  let (reader, number) = identity(take wrapped)
+  test.check(t, reader() == 7u64 && number == 9u64)
+}
+"#,
+        1,
+    );
+}
+
+#[test]
+fn ownership_borrows_a_mutex_callback_reads_its_captured_resource_without_owning_it() {
+    observed_task_source(
+        r#"
+resource type Token { value: u64 }
+drop(x) {}
+fn read(token: Token) -> u64 { token.value }
+@test
+fn callback_reader(t: Test) {
+  let tasks = test.tasks(t)
+  let board = mutex.create(tasks, unique 0u64)
+  let token = Token(value: 7u64)
+  let answer = mutex.with(tasks, board, fn(mut n: unique u64) -> u64 uses {} {
+    read(token)
+  })
+  test.check(t, answer == 7u64)
 }
 "#,
         1,
