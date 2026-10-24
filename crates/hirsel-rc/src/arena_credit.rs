@@ -496,3 +496,5 @@ pub fn elide(unit: &mut LirUnit<Placed>, table: &LayoutTable) {
         }
     }
 }
+
+pub mod equations;
