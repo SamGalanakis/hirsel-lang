@@ -361,6 +361,7 @@ pub struct LayoutBuilder<'o> {
     owners: &'o Owners,
     table: LayoutTable,
     memo: HashMap<Vec<u8>, LayoutId>,
+    product_memo: HashMap<ContentHash, LayoutId>,
     done: Vec<bool>,
     pub(crate) abi_memo:
         HashMap<(ContentHash, hirsel_lir::abi_types::CallableShape), hirsel_lir::FnAbiId>,
@@ -376,12 +377,43 @@ impl<'o> LayoutBuilder<'o> {
             owners,
             table: LayoutTable::new(target),
             memo: HashMap::new(),
+            product_memo: HashMap::new(),
             done: Vec::new(),
             abi_memo: HashMap::new(),
             receipt_abi_memo: HashMap::new(),
             depth: 0,
         }
     }
+    /// Extend a temporary binding of selected immutable products on a native
+    /// miss. Stored layout bytes are ordinary data; actual C still validates
+    /// the resulting unit against current independent declarations.
+    pub fn from_products(
+        target: &TargetSpec,
+        owners: &'o Owners,
+        products: &[&hirsel_lir::products::LayoutClosure],
+    ) -> Result<Self, LayoutError> {
+        let binding =
+            hirsel_lir::products::Binding::new(target, products).map_err(LayoutError::Invalid)?;
+        let mut builder = Self::new(target, owners);
+        builder.done.resize(binding.table.layouts.len(), true);
+        let keys = hirsel_lir::LayoutKeys::new(&binding.table);
+        for (index, record) in binding.table.layouts.iter().enumerate() {
+            let Some(request) = record.key.instance else {
+                continue;
+            };
+            let id = LayoutId(index as u32);
+            if let Some(previous) = builder.product_memo.insert(request, id)
+                && keys.key(previous) != keys.key(id)
+            {
+                return Err(LayoutError::Invalid(
+                    "conflicting native layout requests".into(),
+                ));
+            }
+        }
+        builder.table = binding.table;
+        Ok(builder)
+    }
+
     pub fn target(&self) -> &TargetSpec {
         &self.target
     }
@@ -433,7 +465,7 @@ impl<'o> LayoutBuilder<'o> {
         };
         key.tag("payload-receipt.v1");
         key.tag(&hirsel_codec::to_text(root));
-        if let Some(&id) = self.memo.get(&key.bytes) {
+        if let Some(&id) = self.memo_id(&key.bytes) {
             return id;
         }
         let mut record = self.blank(
@@ -467,7 +499,7 @@ impl<'o> LayoutBuilder<'o> {
         };
         key.tag("header");
         key.number(u64::from(hirsel_lir::RUNTIME_ABI_VERSION));
-        if let Some(&id) = self.memo.get(&key.bytes) {
+        if let Some(&id) = self.memo_id(&key.bytes) {
             return id;
         }
         let fields = HEADER_V2
@@ -548,7 +580,7 @@ impl<'o> LayoutBuilder<'o> {
                 });
                 b.encode(&walk, *ty, 0, &mut key)?;
             }
-            if let Some(&id) = b.memo.get(&key.bytes) {
+            if let Some(&id) = b.memo_id(&key.bytes) {
                 return Ok(id);
             }
             let mut pieces = Vec::new();
@@ -636,7 +668,7 @@ impl<'o> LayoutBuilder<'o> {
             {
                 return invalid("invalid movable environment captures");
             }
-            if let Some(&id) = b.memo.get(&key.bytes) {
+            if let Some(&id) = b.memo_id(&key.bytes) {
                 return Ok(id);
             }
             let mut pieces = Vec::new();
@@ -812,7 +844,7 @@ impl<'o> LayoutBuilder<'o> {
             hirsel_lir::abi_types::CallMultiplicity::Many => "many",
             hirsel_lir::abi_types::CallMultiplicity::Once => "once",
         });
-        if let Some(&id) = self.memo.get(&key.bytes) {
+        if let Some(&id) = self.memo_id(&key.bytes) {
             return id;
         }
         let record = self.callable_record(&key.bytes, Some(environment), multiplicity);
@@ -832,6 +864,20 @@ impl<'o> LayoutBuilder<'o> {
             self.depth = 0;
         }
         result
+    }
+
+    /// Reuse the original derivation request of a bound layout. Reconstructing
+    /// its type must return the same local id that captured fields already use;
+    /// equal content in two distinct ids is not interchangeable to strict C.
+    fn memo_id(&self, key: &[u8]) -> Option<&LayoutId> {
+        self.memo.get(key).or_else(|| {
+            if self.product_memo.is_empty() {
+                None
+            } else {
+                self.product_memo
+                    .get(&ContentHash::of_parts("hirsel.layout-key.v1", [key]))
+            }
+        })
     }
 
     fn key(&self, bytes: &[u8]) -> LayoutIdentity {
@@ -898,7 +944,7 @@ impl<'o> LayoutBuilder<'o> {
         key: &[u8],
         through_block: bool,
     ) -> Result<(LayoutId, bool), LayoutError> {
-        if let Some(&id) = self.memo.get(key) {
+        if let Some(&id) = self.memo_id(key) {
             if self.done[id.0 as usize] || through_block {
                 return Ok((id, false));
             }
@@ -1009,7 +1055,7 @@ impl<'o> LayoutBuilder<'o> {
         key.tag("memory");
         key.tag("primitive");
         key.tag(primitive_name(Primitive::U8));
-        if let Some(&id) = self.memo.get(&key.bytes) {
+        if let Some(&id) = self.memo_id(&key.bytes) {
             return id;
         }
         let record = self.scalar_record(&key.bytes, ScalarKind::U8);
@@ -1023,7 +1069,7 @@ impl<'o> LayoutBuilder<'o> {
         };
         key.tag("scalar");
         key.tag(scalar_name(scalar));
-        if let Some(&id) = self.memo.get(&key.bytes) {
+        if let Some(&id) = self.memo_id(&key.bytes) {
             return id;
         }
         let record = self.scalar_record(&key.bytes, scalar);
@@ -1571,7 +1617,7 @@ impl<'o> LayoutBuilder<'o> {
         record.scan = vec![ScanStep::Handle {
             offset: 0,
             kind,
-            ty: self.memo.get(key).copied(),
+            ty: self.memo_id(key).copied(),
             obtains,
         }];
         record
@@ -1582,7 +1628,7 @@ impl<'o> LayoutBuilder<'o> {
     /// it and back.
     pub fn cursor_source(&mut self) -> LayoutId {
         let key = b"cursor-source".to_vec();
-        if let Some(&id) = self.memo.get(&key) {
+        if let Some(&id) = self.memo_id(&key) {
             return id;
         }
         let payload_key = b"cursor-source-payload".to_vec();
@@ -1607,7 +1653,7 @@ impl<'o> LayoutBuilder<'o> {
         };
         key.tag("flat-builder");
         key.atom(&instance);
-        if let Some(&id) = self.memo.get(&key.bytes) {
+        if let Some(&id) = self.memo_id(&key.bytes) {
             return Ok(id);
         }
         let mut payload_key = Encoder {
@@ -2388,7 +2434,7 @@ impl<'o> LayoutBuilder<'o> {
                                 handle.scan = vec![ScanStep::Handle {
                                     offset: 0,
                                     kind: HandleKind::TaskSet,
-                                    ty: self.memo.get(key).copied(),
+                                    ty: self.memo_id(key).copied(),
                                     obtains: Some(result),
                                 }];
                             }
@@ -2397,7 +2443,7 @@ impl<'o> LayoutBuilder<'o> {
                             handle.scan = vec![ScanStep::Handle {
                                 offset: 0,
                                 kind: HandleKind::Scope,
-                                ty: self.memo.get(key).copied(),
+                                ty: self.memo_id(key).copied(),
                                 obtains: None,
                             }]
                         }
@@ -2859,7 +2905,7 @@ impl<'o> LayoutBuilder<'o> {
                 // metadata belongs to this instantiated payload type.
                 let mut handle_key = key.to_vec();
                 handle_key.extend(b"/mutex-cell-handle");
-                let handle = match self.memo.get(&handle_key) {
+                let handle = match self.memo_id(&handle_key) {
                     Some(&id) => id,
                     None => {
                         let mut record = self.typed_handle_record(
@@ -2869,7 +2915,7 @@ impl<'o> LayoutBuilder<'o> {
                             Some(value),
                         );
                         if let ScanStep::Handle { ty, .. } = &mut record.scan[0] {
-                            *ty = self.memo.get(key).copied();
+                            *ty = self.memo_id(key).copied();
                         }
                         self.insert(handle_key, record)
                     }
