@@ -4972,8 +4972,8 @@ References: [`core@1/List`](#def-core_401_2fList), [`core@1/f64`](#def-core_401_
 
 - `pub type diff.Algorithm = Myers | MyersMinimal | Histogram | Patience`
 
-`Myers()` stops minimizing a costly search the way git does; `MyersMinimal()`
-always finds a minimal script.
+`Myers()` uses heuristic pruning and search cutoffs, as git does;
+`MyersMinimal()` always finds a minimal script.
 
 <a id="def-std_401_2fdiff_2fAlgorithm_23Histogram"></a>
 
@@ -5085,12 +5085,13 @@ References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-co
 The edit script turning `old` into `new`, as runs of kept, deleted and
 inserted lines (`Edit`). Lines compare whole, terminators included; the
 common head and tail are kept first. `MyersMinimal()` finds a minimal script
-by Myers' algorithm after dropping lines the other side lacks (and lines
-matching many others among them), in O((N + M) D) time and O(N + M) memory
-for N and M lines and D changed lines. `Myers()` does the same but, as git
-does, gives up minimality to bound the search: past a cost of 256 a split
-may stop at a run of 20 equal lines, and past the square root of N + M (at
-least 256) it stops at the furthest point reached. `Histogram()` splits on the longest
+by Myers' algorithm after dropping only lines the other side lacks, in
+O((N + M) D) time and O(N + M) memory for N and M lines and D changed lines.
+`Myers()` is heuristic: it may also drop frequent shared lines surrounded
+by absent lines, and gives up minimality to bound the search, as git does:
+past a cost of 256 a split may stop at a run of 20 equal lines, and past the
+square root of N + M (at least 256) it stops at the furthest point reached.
+`Histogram()` splits on the longest
 common run of the rarest lines, falling back to `Myers()` where every shared
 line occurs more than 63 times. `Patience()` anchors on lines that occur
 once on each side, falling back to `Myers()` between anchors with none.
