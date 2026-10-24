@@ -5,6 +5,7 @@ use super::{
     CompileOperation, CompileOutput, CompileRequest, CompileResult, CompilerReadiness,
     RequestLimits, RequestWork,
     host_selector::{GraphAdmission, GraphBudget, GraphProducts, InstalledGraph, SnapshotPlan},
+    inspection::{Counters, GraphMeter, InspectionLedger, KINDS, MeterOwner, SourceInspection},
 };
 use hirsel_engine::{
     CompileConfig, Compiler, FrontBodyQueries, FrontCheckPlan, FrontCheckQueries,
@@ -28,16 +29,14 @@ struct SourceProducts {
     sources: SourceMap,
     store: Arc<RequestStore>,
     errors: RuntimeErrors,
-    definitions: Arc<Vec<DefPath>>,
-    work: Arc<Mutex<(Option<RequestWork>, u64)>>,
-    hold_bytes: u64,
-    _source: MemoryReservation,
+    meter: Arc<GraphMeter>,
 }
 
 impl GraphProducts for SourceProducts {
     fn accepts(&self, operation: &CompileOperation) -> bool {
         match operation {
             CompileOperation::Check { lowering } => *lowering == self.lowering,
+            CompileOperation::Inspect { .. } | CompileOperation::RecomputeCounts { .. } => true,
             _ => false,
         }
     }
@@ -45,25 +44,23 @@ impl GraphProducts for SourceProducts {
         &self,
         operation: &CompileOperation,
     ) -> Result<(Vec<QueryId>, CompilerReadiness), ToolError> {
-        let CompileOperation::Check { lowering } = operation else {
-            return Err(uninstalled());
+        let roots = match operation {
+            CompileOperation::Check { lowering } if *lowering == self.lowering => {
+                vec![self.check.query()]
+            }
+            CompileOperation::Inspect { .. } | CompileOperation::RecomputeCounts { .. } => vec![],
+            _ => return Err(uninstalled()),
         };
-        if *lowering != self.lowering {
-            return Err(uninstalled());
-        }
+        let operation = operation.clone();
         let check = self.check.clone();
         let expected = check.query();
         let entry = self.entry.clone();
         let inputs = self.inputs.clone();
-        let work = self.work.clone();
-        let definitions = self.definitions.clone();
-        let front = self.front.clone();
-        let lower = self.lower.clone();
-        let hold_bytes = self.hold_bytes;
+        let meter = self.meter.clone();
         let store = self.store.clone();
         let failure = self.failure_reader();
         Ok((
-            vec![expected],
+            roots,
             CompilerReadiness {
                 materialize: Arc::new(move |products| {
                     if store.exhausted() {
@@ -71,40 +68,37 @@ impl GraphProducts for SourceProducts {
                             "compiler product transport allowance exhausted".into(),
                         ));
                     }
-                    let [product] = products else {
-                        return Err(ToolError::Runtime(
-                            "source check readiness requires exactly one root".into(),
-                        ));
+                    let work = meter.flush()?;
+                    let result = match &operation {
+                        CompileOperation::Check { .. } => {
+                            let [product] = products else {
+                                return Err(ToolError::Runtime(
+                                    "source check readiness requires exactly one root".into(),
+                                ));
+                            };
+                            if product.address != expected.address {
+                                return Err(ToolError::Runtime(
+                                    "source check readiness received another root".into(),
+                                ));
+                            }
+                            let completed = check.outcome(*product).ok_or_else(|| {
+                                ToolError::Runtime("selected check product is unavailable".into())
+                            })?;
+                            CompileResult::Check(completed.checked)
+                        }
+                        CompileOperation::Inspect { definitions } if products.is_empty() => {
+                            CompileResult::Inspect(meter.inspect(definitions)?)
+                        }
+                        CompileOperation::RecomputeCounts { queries } if products.is_empty() => {
+                            CompileResult::RecomputeCounts(meter.counts(queries)?)
+                        }
+                        _ => return Err(uninstalled()),
                     };
-                    if product.address != expected.address {
-                        return Err(ToolError::Runtime(
-                            "source check readiness received another root".into(),
-                        ));
-                    }
-                    let completed = check.outcome(*product).ok_or_else(|| {
-                        ToolError::Runtime("selected check product is unavailable".into())
-                    })?;
-                    let recomputations = definitions.iter().fold(0u64, |sum, definition| {
-                        let lower = lower.work(definition);
-                        [QueryKind::Resolve, QueryKind::Check, QueryKind::Modes]
-                            .into_iter()
-                            .fold(sum, |sum, kind| {
-                                sum.saturating_add(front.recompute_count(definition, kind))
-                            })
-                            .saturating_add(lower.lowerings)
-                            .saturating_add(lower.initializers)
-                    });
-                    let mut prior = work.lock().unwrap_or_else(|error| error.into_inner());
-                    let mut work = prior.0.take().unwrap_or_default();
-                    work.hold_bytes = hold_bytes;
-                    work.recomputations = recomputations.saturating_sub(prior.1);
-                    prior.1 = recomputations;
-                    drop(prior);
                     Ok(Arc::new(CompileOutput::new(
                         entry.clone(),
                         inputs.clone(),
                         work,
-                        CompileResult::Check(completed.checked),
+                        result,
                     )))
                 }),
                 failure,
@@ -252,6 +246,7 @@ pub(super) fn install(
     limits: RequestLimits,
     budget: &GraphBudget,
     request: &CompileRequest,
+    ledger: Arc<InspectionLedger>,
 ) -> Result<Arc<InstalledGraph>, ToolError> {
     let CompileOperation::Check { lowering } = request.operation else {
         return Err(uninstalled());
@@ -265,11 +260,6 @@ pub(super) fn install(
         Err(error) => return Err(loading.failed(error)),
     };
     let sources = program.engine.sources.clone();
-    let query_error = |error| ToolError::Query {
-        error,
-        phase: None,
-        sources: sources.clone(),
-    };
     let definitions = program.engine.indexed_definitions();
     let plan = Plan::new(
         limits,
@@ -287,6 +277,12 @@ pub(super) fn install(
         check,
         transport,
     } = loading.finish(plan.snapshots)?;
+    let source = Arc::new(source);
+    let query_error = |error| ToolError::Query {
+        error,
+        phase: None,
+        sources: sources.clone().retain_owner(source.clone()),
+    };
     let store = Arc::new(RequestStore::new(config.store.clone(), transport));
     program.engine = program.engine.with_result_store(store.clone());
     let errors = runtime_errors(store.as_ref())?;
@@ -356,6 +352,35 @@ pub(super) fn install(
         input_bytes,
         ..Default::default()
     };
+    let counts = definitions
+        .iter()
+        .map(|path| {
+            let phases = KINDS.map(|kind| program.engine.recompute_count(path, kind) as u64);
+            (
+                path.clone(),
+                Counters {
+                    phases,
+                    validations: program.engine.body_validation_runs(path),
+                    lower_calls: program.engine.s1_lower_work(path).adapter_calls,
+                },
+            )
+        })
+        .collect();
+    let meter = GraphMeter::new(
+        ledger,
+        front.clone(),
+        lower.clone(),
+        SourceInspection {
+            counts,
+            memos: program.engine.memo_snapshot(),
+            stats: program.engine.memo_stats().clone(),
+            initial,
+            owner: source,
+        },
+    );
+    runtime
+        .observe(Arc::new(MeterOwner(meter.clone())))
+        .map_err(registration)?;
     let products = Arc::new(SourceProducts {
         entry: program.entry,
         inputs: request.inputs.clone(),
@@ -367,10 +392,7 @@ pub(super) fn install(
         sources,
         store,
         errors,
-        definitions: Arc::new(definitions),
-        work: Arc::new(Mutex::new((Some(initial), 0))),
-        hold_bytes: config.hold_bytes,
-        _source: source,
+        meter,
     });
     Ok(Arc::new(InstalledGraph {
         path: request.path.clone(),
