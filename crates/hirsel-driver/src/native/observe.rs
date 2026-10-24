@@ -291,19 +291,28 @@ pub(super) fn source_definition<'a>(
 /// Every site code emission can pass to `hirsel_rt_v2_failure_begin`, mapped
 /// back to its definition and byte range.
 pub fn site_codes(program: &ReadyProgram) -> BTreeMap<u64, (DefPath, SiteRange)> {
+    site_codes_from(
+        program.summaries.iter().map(|summary| {
+            (
+                &summary.definition,
+                &summary.implementation_revision,
+                summary.sites.as_slice(),
+            )
+        }),
+        |definition| source_definition(program, definition).clone(),
+    )
+}
+
+pub(crate) fn site_codes_from<'a>(
+    summaries: impl IntoIterator<Item = (&'a DefPath, &'a hirsel_syntax::ContentHash, &'a [SiteRange])>,
+    owner: impl Fn(&DefPath) -> DefPath,
+) -> BTreeMap<u64, (DefPath, SiteRange)> {
     let mut codes = BTreeMap::new();
-    for summary in &program.summaries {
-        for &site in &summary.sites {
+    for (definition, revision, sites) in summaries {
+        for &site in sites {
             codes.insert(
-                hirsel_lir::emission::site_code(
-                    &summary.definition,
-                    &summary.implementation_revision,
-                    site,
-                ),
-                (
-                    source_definition(program, &summary.definition).clone(),
-                    site,
-                ),
+                hirsel_lir::emission::site_code(definition, revision, site),
+                (owner(definition), site),
             );
         }
     }
