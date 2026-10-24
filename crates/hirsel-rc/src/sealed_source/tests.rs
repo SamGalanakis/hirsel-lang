@@ -371,7 +371,7 @@ fn semantic_destination_33_arena_retains_original_parameter_lineage() {
     assert_eq!(arena.capture_slot, None);
 }
 
-fn witness_definition(body: Body) -> DefinitionRef {
+pub(super) fn witness_definition(body: Body) -> DefinitionRef {
     std::sync::Arc::new(hirsel_tir::Definition {
         caller_bodies: vec![BodyId(0)],
         protocol_associations: vec![],
@@ -388,7 +388,7 @@ fn witness_definition(body: Body) -> DefinitionRef {
 fn witness_input(tag: u8) -> hirsel_syntax::ContentHash {
     hirsel_syntax::ContentHash([tag; 32])
 }
-fn witness_key(
+pub(super) fn witness_key(
     types: &TypeInterner,
     definition: &DefinitionRef,
 ) -> hirsel_layout::instance::InstanceKey {

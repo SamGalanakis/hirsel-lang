@@ -9,6 +9,9 @@ use hirsel_tir::{DefinitionRef, InstructionKind, Rvalue, Terminator};
 use hirsel_types::{TypeId, TypeInterner};
 use std::collections::BTreeMap;
 
+mod entry;
+pub use entry::{SourceCallableEntry, SourceCapture, SourceEntryKind, SourceParameter};
+
 /// Capture at the actual original-Lower miss, before discovery/import/drop.
 /// The source-query identity and owner revision come from the actual query owner.
 #[derive(Clone)]
