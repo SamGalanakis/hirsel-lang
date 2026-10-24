@@ -783,6 +783,24 @@ impl FrontLowerQueries {
     }
 }
 struct Factory(Arc<FrontLowerQueries>);
+// This producer's settled Outcome allocations and provider archives have
+// independent owners. Only the saved future/mailbox/working state belongs to
+// the runtime continuation, and S5 retires it after destruction at home.
+struct LowerTask(LocalFutureTask);
+impl LocalQueryTask for LowerTask {
+    fn id(&self) -> QueryId {
+        self.0.id()
+    }
+    fn weight(&self) -> MemoryWeight {
+        self.0.weight()
+    }
+    fn continuation_bytes(&self) -> u64 {
+        self.0.weight().retained
+    }
+    fn poll(&mut self, cx: &mut dyn QueryContext) -> QueryPoll {
+        self.0.poll(cx)
+    }
+}
 impl LocalQueryFactory for Factory {
     fn weight(&self, id: QueryId) -> Result<MemoryWeight, Reference> {
         if !matches!(id.kind, FRONT_LOWER_KIND | FRONT_EVALUATE_KIND) || self.0.path(id).is_none() {
@@ -794,13 +812,13 @@ impl LocalQueryFactory for Factory {
         let weight = self.weight(id)?;
         let path = self.0.path(id).ok_or(self.0.errors.protocol)?;
         let owner = self.0.clone();
-        Ok(Box::new(LocalFutureTask::new(
+        Ok(Box::new(LowerTask(LocalFutureTask::new(
             id,
             weight,
             self.0.max_reads,
             self.0.errors,
             move |reads| owner.run(id, path, reads),
-        )?))
+        )?)))
     }
 }
 #[derive(Clone)]
