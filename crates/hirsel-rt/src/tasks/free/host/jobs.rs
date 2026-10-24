@@ -232,7 +232,7 @@ impl Owned {
         Owned {
             reservation: None,
             slot: None,
-            destination: crate::tasks::scheduler(ctx).lease(slot),
+            destination: crate::tasks::role::with_role(ctx, |s| s.lease(slot)),
         }
     }
 }

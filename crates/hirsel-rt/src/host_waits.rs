@@ -958,7 +958,7 @@ pub(crate) unsafe fn arm(
     // also refreshes the run's armed/parked count before returning.
     // Both policies copy the issuer before the home callback leaves the role.
     let task = crate::tasks::current_path(ctx);
-    let owner = crate::tasks::scheduler(ctx).scope_key(scope);
+    let owner = crate::tasks::role::with_role(ctx, |s| s.scope_key(scope));
     unsafe {
         at_home(ctx, || {
             arm_here(ctx, scope, generation, owner, clock, at, &task)

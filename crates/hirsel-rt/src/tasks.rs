@@ -1070,16 +1070,16 @@ fn wake_in(tasks: &mut [Option<Task>], woken: &mut Vec<u32>, task: u32) {
     }
 }
 
-/// The run's scheduler, created with the root task at the first scope, which the root reaches
-/// first.
-#[inline(always)]
+/// Test fixtures' broad access to the run's scheduler. Production code
+/// borrows the tables only lexically, through [`role::with_role`].
+#[cfg(test)]
 pub(crate) fn scheduler(ctx: *mut TaskCtx) -> &'static mut Scheduler {
     role::unlent("a broad scheduler access");
     role_tables(ctx)
 }
 
-/// Enter the role and reach the tables, for [`role::with_role`] (and the
-/// remaining broad accessor) only.
+/// Enter the role and reach the tables, creating them with the root task at
+/// its first scope, for [`role::with_role`] and the test fixtures' accessor.
 #[inline(always)]
 fn role_tables(ctx: *mut TaskCtx) -> &'static mut Scheduler {
     // SAFETY: callers retain no scheduler reference across a role leave.
@@ -1140,7 +1140,7 @@ unsafe fn snapshot_shield(s: &mut Scheduler, ctx: *mut TaskCtx) {
     }
 }
 
-/// [`scheduler`]'s first call, kept out of every caller.
+/// [`role_tables`]' first call, kept out of every caller.
 #[cold]
 #[inline(never)]
 fn create_scheduler(ctx: *mut TaskCtx) -> &'static mut Scheduler {
