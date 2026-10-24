@@ -16,7 +16,7 @@ pub(crate) unsafe fn service(run: *mut RunShared) -> bool {
         return false;
     }
     let idle = unsafe { crate::pool::busy(&*run) } == 0;
-    let (scopes, waits, canceled, idle) = {
+    let (canceled, idle) = {
         let Some(_guard) = (unsafe { role::IdleGuard::try_new(run) }) else {
             return false;
         };
@@ -34,38 +34,20 @@ pub(crate) unsafe fn service(run: *mut RunShared) -> bool {
                 row.state != super::super::State::Ready
                     && row.dispatch.as_ref().is_none_or(|frame| frame.is_saved())
             });
-        let scopes = s
-            .scopes
-            .iter()
-            .enumerate()
-            .filter_map(|(index, row)| {
-                let row = row.as_ref()?;
-                let deadline = row.deadline.as_ref()?;
-                deadline
-                    .token
-                    .map(|token| (index as u32, row.generation, token))
-            })
-            .collect::<Vec<_>>();
-        let waits = s
-            .tasks
-            .iter()
-            .enumerate()
-            .filter_map(|(task, row)| {
-                let row = row.as_ref()?;
-                let super::super::Wait::Host { token } = row.wait? else {
-                    return None;
-                };
-                readiness::saved(s, task as u32).then_some((task as u32, row.generation, token))
-            })
-            .collect::<Vec<_>>();
+        let waits = s.tasks.iter().enumerate().filter_map(|(task, row)| {
+            let row = row.as_ref()?;
+            let super::super::Wait::Host { token } = row.wait? else {
+                return None;
+            };
+            Some((task as u32, token))
+        });
         let canceled = waits
-            .iter()
-            .filter_map(|&(task, _, token)| {
-                let shield = s.task(task).shield();
+            .filter_map(|(task, token)| {
+                let shield = s.tasks[task as usize].as_ref().unwrap().shield();
                 s.canceled_task(task, shield).map(|_| token)
             })
             .collect::<Vec<_>>();
-        (scopes, waits, canceled, idle)
+        (canceled, idle)
     };
     // The home thread serializes this call with all worker home bridges.
     // Never retain the scheduler role while an adapter blocks or calls back.
@@ -82,32 +64,21 @@ pub(crate) unsafe fn service(run: *mut RunShared) -> bool {
         }
     };
     let s = unsafe { (*(*run).tasks.get()).as_deref_mut().unwrap() };
-    let mut changed = !expired.is_empty();
-    for index in expired {
-        let valid = scopes.iter().any(|&(scope, generation, token)| {
-            scope == index
-                && s.scopes
-                    .get(index as usize)
-                    .and_then(Option::as_ref)
-                    .is_some_and(|row| {
-                        row.generation == generation
-                            && row
-                                .deadline
-                                .as_ref()
-                                .is_some_and(|d| d.token == Some(token))
-                    })
-        });
-        if valid {
-            s.expire(index);
+    let mut changed = false;
+    let mut acknowledged = Vec::new();
+    for expiry in expired {
+        if valid_expiry(s, &expiry) {
+            s.expire(expiry.scope);
+            changed = true;
+            acknowledged.push(expiry.token);
+        } else if stale_expiry(s, &expiry) {
+            acknowledged.push(expiry.token);
         }
     }
-    let canceled: Vec<u64> = waits
-        .iter()
-        .filter_map(|&(task, _, token)| {
-            let shield = s.task(task).shield();
-            s.canceled_task(task, shield).map(|_| token)
-        })
-        .collect();
+    let canceled: Vec<u64> = hosts.iter().filter_map(|host| {
+        let shield = s.task(host.task).shield();
+        s.canceled_task(host.task, shield).map(|_| host.token)
+    }).collect();
     drop(_guard);
     let batch = unsafe { crate::host_waits::process_batch_home(run, &canceled) };
     let _guard = unsafe { role::IdleGuard::home(run) };
@@ -122,13 +93,10 @@ pub(crate) unsafe fn service(run: *mut RunShared) -> bool {
     let mut notified = Vec::new();
     for mut host in hosts {
         host.ready |= batch.contains(host.token);
-        let valid = host.ready
-            && waits.iter().any(|&(task, generation, token)| {
-                task == host.task && token == host.token && s.tasks.get(task as usize)
-                .and_then(Option::as_ref).is_some_and(|row| row.generation == generation
-                    && matches!(row.wait, Some(super::super::Wait::Host { token: t }) if t == token)
-                    && readiness::saved(s, task))
-            });
+        let valid = host.ready && s.tasks.get(host.task as usize)
+            .and_then(Option::as_ref).is_some_and(|row| row.generation == host.generation
+                && matches!(row.wait, Some(super::super::Wait::Host { token }) if token == host.token)
+                && readiness::saved(s, host.task));
         if valid {
             s.unpark(host.task);
             notified.push(host.token);
@@ -143,7 +111,10 @@ pub(crate) unsafe fn service(run: *mut RunShared) -> bool {
         unsafe { super::check_quiet(run) };
     }
     drop(_guard);
-    unsafe { crate::host_waits::native_notified_home(run, &notified) };
+    unsafe {
+        crate::host_waits::native_notified_home(run, &notified);
+        crate::host_waits::expired_ack_home(run, &acknowledged);
+    };
     // If no event fired while workers run, let their queued home calls run.
     // Repeated readiness probes must never starve a synchronous bridge.
     changed || idle
@@ -180,7 +151,7 @@ pub(crate) unsafe fn service_child(run: *mut RunShared) -> crate::stop::Stopped<
     if unsafe { (*run).host_waits.load(Ordering::Acquire) } == 0 {
         return Ok(false);
     }
-    let (scopes, waits) = {
+    let waits = {
         let Some(_guard) = (unsafe { role::IdleGuard::try_new(run) }) else {
             return Ok(false);
         };
@@ -200,40 +171,23 @@ pub(crate) unsafe fn service_child(run: *mut RunShared) -> crate::stop::Stopped<
             }
             waits.push((task as u32, row.generation, token));
         }
-        let scopes = s
-            .scopes
-            .iter()
-            .enumerate()
-            .filter_map(|(scope, row)| {
-                let row = row.as_ref()?;
-                Some((scope as u32, row.generation, row.deadline.as_ref()?.token?))
-            })
-            .collect::<Vec<_>>();
-        (scopes, waits)
+        waits
     };
     let crate::host_waits::HomeReady { expired, hosts } =
         unsafe { crate::host_waits::ready_home(run) }?;
+    let mut acknowledged = Vec::new();
     let candidates = {
         let _guard = unsafe { role::IdleGuard::home(run) };
         if unsafe { (*run).control.stopped().is_some() } {
             return Ok(false);
         }
         let s = unsafe { (*(*run).tasks.get()).as_deref_mut().unwrap() };
-        for index in expired {
-            if scopes.iter().any(|&(scope, generation, token)| {
-                index == scope
-                    && s.scopes
-                        .get(index as usize)
-                        .and_then(Option::as_ref)
-                        .is_some_and(|row| {
-                            row.generation == generation
-                                && row
-                                    .deadline
-                                    .as_ref()
-                                    .is_some_and(|deadline| deadline.token == Some(token))
-                        })
-            }) {
-                s.expire(index);
+        for expiry in expired {
+            if valid_expiry(s, &expiry) {
+                s.expire(expiry.scope);
+                acknowledged.push(expiry.token);
+            } else if stale_expiry(s, &expiry) {
+                acknowledged.push(expiry.token);
             }
         }
         hosts.into_iter().filter_map(|host| {
@@ -249,6 +203,7 @@ pub(crate) unsafe fn service_child(run: *mut RunShared) -> crate::stop::Stopped<
             Some((host, *generation, cause))
         }).collect::<Vec<_>>()
     };
+    unsafe { crate::host_waits::expired_ack_home(run, &acknowledged) };
     let mut completed = Vec::new();
     for (host, generation, cause) in candidates {
         if unsafe { crate::host_waits::poll_home(run, host.token, cause, host.ready) }? {
@@ -314,4 +269,24 @@ pub(crate) unsafe fn runner_cancel(run: *mut RunShared) {
     s.cancel(super::super::ROOT, super::super::CANCEL_PARENT);
     unsafe { readiness::poll_free(s) };
     unsafe { super::publish_ready(s, run) };
+}
+
+fn valid_expiry(s: &super::super::Scheduler, expiry: &crate::host_waits::ExpiredScope) -> bool {
+    s.scopes
+        .get(expiry.scope as usize)
+        .and_then(Option::as_ref)
+        .is_some_and(|row| {
+            row.generation == expiry.generation
+                && row
+                    .deadline
+                    .as_ref()
+                    .is_some_and(|d| d.token == Some(expiry.token))
+        })
+}
+
+fn stale_expiry(s: &super::super::Scheduler, expiry: &crate::host_waits::ExpiredScope) -> bool {
+    s.scopes
+        .get(expiry.scope as usize)
+        .and_then(Option::as_ref)
+        .is_none_or(|row| row.generation != expiry.generation || row.deadline.is_none())
 }

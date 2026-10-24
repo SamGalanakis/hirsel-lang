@@ -82,11 +82,11 @@ pub(super) unsafe fn poll(run: *mut RunShared, retiring: bool, idle: bool) -> St
             let _guard = unsafe { role::IdleGuard::home(run) };
             let s = unsafe { (*(*run).tasks.get()).as_deref_mut().unwrap() };
             for scope in expired {
-                super::events::expire(s, scope);
+                super::events::expire(s, scope.scope);
             }
             let mut hosts: Vec<_> = hosts
                 .into_iter()
-                .filter_map(|crate::host_waits::ReadyHost { task, token, deadline, ready }| {
+                .filter_map(|crate::host_waits::ReadyHost { task, token, deadline, ready, .. }| {
                     if (token & super::host::concurrent::CONCURRENT != 0
                         && !unsafe { (*run).ordered_io.get().unwrap() }.valid(token, task, s.task(task).generation))
                         || !readiness::saved(s, task)

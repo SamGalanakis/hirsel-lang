@@ -90,12 +90,13 @@ impl Service {
             .unwrap()
             .iter()
             .filter_map(|(&token, row)| {
-                let (task, _) = row.task?;
+                let (task, generation) = row.task?;
                 let deadline = match row.request {
                     Request::SleepUntil { deadline, .. } => Some(deadline),
                     _ => None,
                 };
                 Some(crate::host_waits::ReadyHost {
+                    generation,
                     task,
                     token,
                     deadline,

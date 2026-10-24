@@ -160,8 +160,11 @@ pub(crate) struct Waits {
     /// Free requests retry on their owning fiber, inside recorded phases.
     /// Home observes readiness only; it never calls these requests at a poll.
     native: IdMap<Native>,
+    native_ready: crate::id_map::IdSet,
+    native_injected: crate::id_map::IdSet,
     /// Armed scope deadlines (CONC-3) by token: the scope and its timer request.
-    armed: IdMap<(u32, Request)>,
+    armed: IdMap<(u32, u32, Request)>,
+    armed_due: std::collections::BTreeSet<(u64, u64)>,
 }
 impl Waits {
     fn scope_only(&self) -> bool {
@@ -183,6 +186,7 @@ struct Parked {
     borrowed: Option<*mut crate::io::NetBuffer<'static>>,
     /// The task that issued it, once it parked.
     task: Option<u32>,
+    generation: u32,
     /// The re-issued request's outcome, from the poll that ended the wait.
     completion: Option<Result<Completion, AdapterError>>,
 }
@@ -190,6 +194,7 @@ struct Parked {
 struct Native {
     request: Request,
     task: Option<u32>,
+    generation: u32,
     notified: bool,
     ready: bool,
 }
@@ -204,11 +209,15 @@ pub(crate) unsafe fn native_begin_home(
     let binding = unsafe { &mut *(*run).io_binding().cast::<Binding>() };
     let token = binding.waits.next;
     binding.waits.next += 1;
+    if binding.adapter.injected_wait(request) {
+        binding.waits.native_injected.insert(token);
+    }
     binding.waits.native.insert(
         token,
         Native {
             request: request.clone(),
             task: None,
+            generation: 0,
             notified: false,
             ready: false,
         },
@@ -246,6 +255,7 @@ pub(crate) unsafe fn native_call_home(
         .expect("a native attempt");
     row.task = None;
     row.ready = false;
+    binding.waits.native_ready.remove(&token);
     let request = row.request.clone();
     binding.adapter.enter(token);
     if let Some(cause) = cause
@@ -265,6 +275,8 @@ pub(crate) unsafe fn native_finish_home(run: *mut crate::context::RunShared, tok
     let binding = unsafe { &mut *(*run).io_binding().cast::<Binding>() };
     binding.adapter.finish(token);
     assert!(binding.waits.native.remove(&token).is_some());
+    binding.waits.native_ready.remove(&token);
+    binding.waits.native_injected.remove(&token);
     unsafe { native_count_home(run, binding) };
 }
 
@@ -281,6 +293,7 @@ pub(crate) unsafe fn native_notified_home(run: *mut crate::context::RunShared, t
             .get_mut(token)
             .expect("a native readiness owner")
             .notified = true;
+        binding.waits.native_ready.remove(token);
     }
 }
 
@@ -306,27 +319,45 @@ fn native_ready_binding(binding: &mut Binding, canceled: &[u64]) -> Stopped<Home
     // Adapter readiness may consume an edge before an owner is fully saved
     // (or even before its parked notification reaches home). Retain it until
     // that owner's next bounded attempt, independently of task registration.
-    let available: Vec<_> = binding
-        .waits
-        .native
-        .iter_unordered()
-        .filter_map(|(token, row)| {
-            (ready.contains(token)
-                || binding.adapter.injected_wait(&row.request)
-                || (canceled.contains(&token)
-                    && binding.adapter.cancellable(token)
-                    && crate::io_checks::cancellation_result(&row.request, 0).is_some()))
-            .then_some(token)
-        })
-        .collect();
-    for token in available {
-        binding.waits.native.get_mut(&token).unwrap().ready = true;
+    let mut available = crate::id_map::IdSet::default();
+    match ready {
+        Ready::Tokens(tokens) => {
+            for token in tokens {
+                if binding.waits.native.contains_key(&token) {
+                    available.insert(token);
+                }
+            }
+        }
+        Ready::Every => {
+            for (token, _) in binding.waits.native.iter_unordered() {
+                available.insert(token);
+            }
+        }
+    }
+    for token in binding.waits.native_injected.members_unordered() {
+        available.insert(token);
+    }
+    for &token in canceled {
+        if let Some(row) = binding.waits.native.get(&token)
+            && binding.adapter.cancellable(token)
+            && crate::io_checks::cancellation_result(&row.request, 0).is_some()
+        {
+            available.insert(token);
+        }
+    }
+    for token in available.members_unordered() {
+        let row = binding.waits.native.get_mut(&token).unwrap();
+        if !row.notified {
+            row.ready = true;
+            binding.waits.native_ready.insert(token);
+        }
     }
     let hosts = binding
         .waits
-        .native
-        .iter_unordered()
-        .filter_map(|(token, row)| {
+        .native_ready
+        .members_unordered()
+        .filter_map(|token| {
+            let row = binding.waits.native.get(&token)?;
             let task = row.task?;
             if row.notified {
                 return None;
@@ -337,6 +368,7 @@ fn native_ready_binding(binding: &mut Binding, canceled: &[u64]) -> Stopped<Home
                 None
             };
             Some(ReadyHost {
+                generation: row.generation,
                 task,
                 token,
                 deadline,
@@ -645,6 +677,7 @@ unsafe fn issue_here(
             request: request.take(false),
             borrowed: None,
             task: None,
+            generation: 0,
             completion: None,
         },
     );
@@ -752,6 +785,7 @@ pub(crate) unsafe fn send(ctx: *mut TaskCtx, request: Request) -> Stopped<Result
             request: retry,
             borrowed: None,
             task: None,
+            generation: 0,
             completion: None,
         },
     );
@@ -858,6 +892,7 @@ pub(crate) unsafe fn issue_net(
             // the run, including its wait table; no pointer escapes the run.
             borrowed: Some((buffer as *mut crate::io::NetBuffer<'_>).cast()),
             task: None,
+            generation: 0,
             completion: None,
         },
     );
@@ -929,7 +964,10 @@ unsafe fn arm_here(
     match binding.adapter.scope_timer(request.clone()) {
         Err(AdapterError::Blocked) => {
             binding.adapter.parked(token);
-            binding.waits.armed.insert(token, (scope, request));
+            binding
+                .waits
+                .armed
+                .insert(token, (scope, generation, request));
             Ok(Some(token))
         }
         Ok(Completion::Wait(_)) => {
@@ -948,7 +986,7 @@ unsafe fn arm_here(
 /// `ctx` is live; with no Binding bound nothing is armed.
 pub(crate) unsafe fn expired(ctx: *mut TaskCtx, ready: &Ready) -> Stopped<Vec<u32>> {
     // SAFETY: caller contract.
-    if matches!(ready, Ready::Tokens(tokens) if tokens.is_empty()) || unsafe { quiet(ctx) } {
+    if unsafe { quiet(ctx) } {
         return Ok(Vec::new());
     }
     // SAFETY: caller contract.
@@ -964,13 +1002,19 @@ unsafe fn expired_here(ctx: *mut TaskCtx, ready: &Ready) -> Stopped<Vec<u32>> {
     if binding.waits.armed.is_empty() {
         return Ok(Vec::new());
     }
-    expired_binding(binding, ready)
+    let expired = expired_binding(binding, ready)?;
+    acknowledge_expired(
+        binding,
+        &expired.iter().map(|e| e.token).collect::<Vec<_>>(),
+    );
+    Ok(expired.into_iter().map(|e| e.scope).collect())
 }
 
-fn expired_binding(binding: &mut Binding, ready: &Ready) -> Stopped<Vec<u32>> {
+fn expired_binding(binding: &mut Binding, ready: &Ready) -> Stopped<Vec<ExpiredScope>> {
     let mut armed = std::collections::BTreeSet::new();
     let mut select = |token| {
-        if let Some((_, Request::SleepUntil { deadline, .. })) = binding.waits.armed.get(&token) {
+        if let Some((_, _, Request::SleepUntil { deadline, .. })) = binding.waits.armed.get(&token)
+        {
             armed.insert((*deadline, token));
         }
     };
@@ -983,9 +1027,11 @@ fn expired_binding(binding: &mut Binding, ready: &Ready) -> Stopped<Vec<u32>> {
             .map(|(t, _)| t)
             .for_each(&mut select),
     }
-    let mut due = Vec::new();
-    for (_, token) in armed {
-        let (scope, request) = binding.waits.armed[&token].clone();
+    for (at, token) in armed {
+        if binding.waits.armed_due.contains(&(at, token)) {
+            continue;
+        }
+        let (_, _, request) = binding.waits.armed[&token].clone();
         binding.adapter.enter(token);
         match binding.adapter.scope_timer(request) {
             Err(AdapterError::Blocked) => continue,
@@ -994,10 +1040,43 @@ fn expired_binding(binding: &mut Binding, ready: &Ready) -> Stopped<Vec<u32>> {
             Err(error) => return Err(Stop::refusal(error)),
         }
         binding.adapter.finish(token);
-        binding.waits.armed.remove(&token);
-        due.push(scope);
+        binding.waits.armed_due.insert((at, token));
     }
-    Ok(due)
+    Ok(binding
+        .waits
+        .armed_due
+        .iter()
+        .map(|&(_, token)| {
+            let (scope, generation, _) = &binding.waits.armed[&token];
+            ExpiredScope {
+                scope: *scope,
+                generation: *generation,
+                token,
+            }
+        })
+        .collect())
+}
+
+fn acknowledge_expired(binding: &mut Binding, tokens: &[u64]) {
+    for token in tokens {
+        if let Some((_, _, Request::SleepUntil { deadline, .. })) =
+            binding.waits.armed.remove(token)
+        {
+            binding.waits.armed_due.remove(&(deadline, *token));
+        }
+    }
+}
+
+/// Home only, after the generation-qualified role merge, outside the role.
+/// Tokens are unique throughout a run; a delayed acknowledgement cannot name
+/// another scope's timer. Unpublished expiries remain latched in armed_due.
+pub(crate) unsafe fn expired_ack_home(run: *mut crate::context::RunShared, tokens: &[u64]) {
+    if tokens.is_empty() {
+        return;
+    }
+    let binding = unsafe { &mut *(*run).io_binding().cast::<Binding>() };
+    acknowledge_expired(binding, tokens);
+    unsafe { native_count_home(run, binding) };
 }
 
 /// Compatibility entry for a timer-only logical policy.
@@ -1014,7 +1093,7 @@ pub(crate) unsafe fn timers_home(
             "timer-only policy has parked host requests"
         );
         if !idle || !expired.is_empty() {
-            return Ok((expired, true));
+            return Ok((expired.into_iter().map(|e| e.scope).collect(), true));
         }
         if !unsafe { wait_home(run) }? {
             return Ok((Vec::new(), false));
@@ -1023,11 +1102,19 @@ pub(crate) unsafe fn timers_home(
 }
 
 pub(crate) struct HomeReady {
-    pub(crate) expired: Vec<u32>,
+    pub(crate) expired: Vec<ExpiredScope>,
     pub(crate) hosts: Vec<ReadyHost>,
 }
 
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct ExpiredScope {
+    pub(crate) scope: u32,
+    pub(crate) generation: u32,
+    pub(crate) token: u64,
+}
+
 pub(crate) struct ReadyHost {
+    pub(crate) generation: u32,
     pub(crate) task: u32,
     pub(crate) token: u64,
     pub(crate) deadline: Option<u64>,
@@ -1059,6 +1146,12 @@ unsafe fn ready_binding_home(run: *mut crate::context::RunShared) -> Stopped<Hom
     let binding = unsafe { &mut *(*run).io_binding().cast::<Binding>() };
     let ready = binding.adapter.ready().map_err(Stop::refusal)?;
     let expired = expired_binding(binding, &ready)?;
+    if !unsafe { (*run).free_mode } {
+        acknowledge_expired(
+            binding,
+            &expired.iter().map(|e| e.token).collect::<Vec<_>>(),
+        );
+    }
     let hosts = binding
         .waits
         .parked
@@ -1072,6 +1165,7 @@ unsafe fn ready_binding_home(run: *mut crate::context::RunShared) -> Stopped<Hom
             };
             let ready = ready.contains(token) || binding.adapter.injected_wait(&parked.request);
             Some(ReadyHost {
+                generation: parked.generation,
                 task,
                 token,
                 deadline,
@@ -1270,8 +1364,11 @@ unsafe fn disarm_here(ctx: *mut TaskCtx, token: u64) {
         return;
     }
     let binding = unsafe { Binding::get(ctx) };
-    binding.adapter.finish(token);
-    binding.waits.armed.remove(&token);
+    if let Some((_, _, Request::SleepUntil { deadline, .. })) = binding.waits.armed.remove(&token) {
+        if !binding.waits.armed_due.remove(&(deadline, token)) {
+            binding.adapter.finish(token);
+        }
+    }
 }
 
 /// Original absolute timer ticks for scheduler ordering, alike in live runs and replay.
@@ -1304,17 +1401,31 @@ pub(crate) unsafe fn park(ctx: *mut TaskCtx, token: u64, task: u32) {
         return;
     }
     // SAFETY: caller contract.
-    unsafe { crate::stop::check(ctx, at_home(ctx, || park_here(ctx, token, task))) }
+    let (owner, generation) = crate::tasks::free::home::runner_waiter(ctx);
+    assert_eq!(owner, task);
+    unsafe {
+        crate::stop::check(
+            ctx,
+            at_home(ctx, || park_here(ctx, token, task, generation)),
+        )
+    }
 }
 
-unsafe fn park_here(ctx: *mut TaskCtx, token: u64, task: u32) {
+unsafe fn park_here(ctx: *mut TaskCtx, token: u64, task: u32, generation: u32) {
     let binding = unsafe { Binding::get(ctx) };
     if let Some(native) = binding.waits.native.get_mut(&token) {
         native.task = Some(task);
+        native.generation = generation;
         native.notified = false;
+        if native.ready {
+            binding.waits.native_ready.insert(token);
+        }
     } else {
         match binding.waits.parked.get_mut(&token) {
-            Some(parked) => parked.task = Some(task),
+            Some(parked) => {
+                parked.task = Some(task);
+                parked.generation = generation;
+            }
             None => crate::fault("a park of an unknown host wait"),
         }
     }
@@ -1839,6 +1950,7 @@ mod native_tests {
                     deadline: 100,
                 },
                 task: None,
+                generation: 0,
                 notified: false,
                 ready: false,
             },
@@ -1869,3 +1981,7 @@ mod native_tests {
 
 #[cfg(test)]
 mod ordered_poll_tests;
+
+#[cfg(test)]
+#[path = "host_waits/modules.rs"]
+mod runtime50;

@@ -45,6 +45,7 @@ fn binding(cancellable: bool) -> (Binding, Arc<AtomicU32>, Arc<AtomicU32>) {
             },
             borrowed: None,
             task: Some(3),
+            generation: 0,
             completion: None,
         },
     );
@@ -113,18 +114,21 @@ fn ordered_mixed_home_every_and_concurrent_tokens_support_binary_search_for_ever
         vec![9, 1, 7, 9],
         vec![
             ReadyHost {
+                generation: 0,
                 task: 3,
                 token: CONCURRENT | 2,
                 deadline: None,
                 ready: true,
             },
             ReadyHost {
+                generation: 0,
                 task: 4,
                 token: CONCURRENT | 1,
                 deadline: None,
                 ready: false,
             },
             ReadyHost {
+                generation: 0,
                 task: 5,
                 token: CONCURRENT | 2,
                 deadline: None,
@@ -148,6 +152,7 @@ fn ordered_mixed_home_every_keeps_armed_deadlines_for_expiry_with_concurrent_wai
         3,
         (
             42,
+            0,
             Request::SleepUntil {
                 clock: 99,
                 deadline: 5,
@@ -159,6 +164,7 @@ fn ordered_mixed_home_every_keeps_armed_deadlines_for_expiry_with_concurrent_wai
         Native {
             request: Request::ReadStdin { stdin: 2, max: 1 },
             task: Some(6),
+            generation: 0,
             notified: false,
             ready: false,
         },
@@ -167,6 +173,7 @@ fn ordered_mixed_home_every_keeps_armed_deadlines_for_expiry_with_concurrent_wai
         Ready::Every,
         binding.waits.every_tokens(),
         vec![ReadyHost {
+            generation: 0,
             task: 4,
             token: CONCURRENT | 1,
             deadline: None,
@@ -178,8 +185,17 @@ fn ordered_mixed_home_every_keeps_armed_deadlines_for_expiry_with_concurrent_wai
     // conversion of the home adapter's Every snapshot.
     assert!(expired_binding(&mut binding, &ready).unwrap().is_empty());
     assert_eq!(calls.load(Ordering::Relaxed), 1);
-    assert_eq!(expired_binding(&mut binding, &ready).unwrap(), [42]);
+    assert_eq!(
+        expired_binding(&mut binding, &ready).unwrap(),
+        [ExpiredScope {
+            scope: 42,
+            generation: 0,
+            token: 3
+        }]
+    );
+    acknowledge_expired(&mut binding, &[3]);
     assert!(binding.waits.armed.is_empty());
+    assert!(binding.waits.armed_due.is_empty());
 }
 
 #[test]
@@ -221,6 +237,7 @@ fn ordered_home_poll_does_not_retain_another_tasks_result_under_the_running_call
                     request: Request::ReadStdin { stdin: 12, max: 3 },
                     borrowed: None,
                     task: Some(42),
+                    generation: 0,
                     completion: None,
                 },
             );
@@ -296,6 +313,7 @@ fn an_injected_parked_wait_is_polled_even_with_a_published_future_scope_timer() 
                         },
                         borrowed: None,
                         task: None,
+                        generation: 0,
                         completion: None,
                     },
                 );
@@ -365,6 +383,7 @@ fn home_readiness_releases_the_role_before_reacquiring_a_compute_permit() {
                             request: Request::ReadStdin { stdin: 12, max: 1 },
                             borrowed: None,
                             task: None,
+                            generation: 0,
                             completion: None,
                         },
                     );
