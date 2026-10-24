@@ -47,9 +47,9 @@ pub fn main(rt:Io)->Result[(),GrantError] {
     let mut rx=take receiver
     let mut set:TaskSet[u64] of s=task.set(s)
     for seed in 1u64..5u64 {
-      let tx=sender
+      let dup=sender.dup(tasks,sender)
       task.add(s,mut set,task.async(s,fn()->u64 {
-        let mut tx=take tx
+        let mut tx=take dup
         let mut held:List[u64]=[seed,seed*3u64]
         list.push(mut held,seed*5u64)
         let _=channel.send(tasks,mut tx,held[0])
