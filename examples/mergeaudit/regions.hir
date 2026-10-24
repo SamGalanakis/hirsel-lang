@@ -1,0 +1,230 @@
+// node-diff3 diff3.mjs:208-319 (MIT; NOTICE): bounded indexed overlap sweep.
+// Touching endpoints join a piece, including insertions at either boundary.
+// Sorting explicitly breaks ties by side and ordinal. No mutable text graph.
+pub type Kind = Base | Left | Right | Identical | Conflict
+
+pub type Region {
+  kind: Kind,
+  base: edits.Span,
+  left: edits.Span,
+  right: edits.Span,
+  conflict: u64,
+}
+
+pub type Plan {
+  source: model.Triple,
+  regions: List[Region],
+  conflicts: u64,
+}
+
+fn push(mut rows: List[Region], take piece: Region) -> Result[(), model.Problem] uses {} {
+  let _ = model.admit(list.len(rows), 1, 4 * model.LINES + 1, "region_count")?
+  list.push(mut rows, take piece)
+  Ok(())
+}
+
+fn side_span(
+  hunks: List[edits.Hunk],
+  first: u64,
+  end: u64,
+  side: u64,
+  start: u64,
+  finish: u64,
+  cursor: u64,
+  length: u64
+) -> Result[edits.Span, model.Problem] uses {} {
+  let mut removed = 0u64
+  let mut inserted = 0u64
+  let mut side_cursor = cursor
+  let mut base_cursor = start
+  for i in first..end {
+    let h = hunks[i]
+    if h.side != side {
+      continue
+    }
+    if h.base.start < base_cursor {
+      return Error(model.invalid("hunk_overlap"))
+    }
+    let keep = h.base.start - base_cursor
+    side_cursor = model.admit(side_cursor, keep, length, "hunk_coverage")?
+    if side_cursor != h.replacement.start {
+      return Error(model.invalid("hunk_coverage"))
+    }
+    side_cursor = model.admit(
+      side_cursor,
+      h.replacement.length,
+      length,
+      "hunk_coverage"
+    )?
+    base_cursor = h.base.start + h.base.length
+    removed = model.admit(removed, h.base.length, finish - start, "hunk_coverage")?
+    inserted = model.admit(inserted, h.replacement.length, model.LINES, "hunk_coverage")?
+  }
+  let remaining = finish - start - removed
+  let count = model.admit(remaining, inserted, model.LINES, "span")?
+  let _ = model.admit(cursor, count, length, "span")?
+  Ok(edits.span(cursor, count))
+}
+
+// Public common-hunk seam for independent reference qualification. Producers
+// supply canonical side-ordered intervals; validate each hunk before sorting.
+pub fn sweep(source: model.Triple, take changes: unique List[edits.Hunk]) -> Result[
+  List[Region],
+  model.Problem
+] uses {} {
+  if list.len(changes) > 2 * model.LINES {
+    return Error(model.invalid("hunk_count"))
+  }
+  let mut hunks = take changes
+  for h in hunks {
+    let _ = edits.check_span(source.base.lines, h.base)?
+    let lines = if h.side == 0 {
+      source.left.lines
+    } else {
+      source.right.lines
+    }
+    let _ = edits.check_span(lines, h.replacement)?
+    if h.side > 1 || h.base.length == 0 && h.replacement.length == 0 {
+      return Error(model.invalid("hunk"))
+    }
+  }
+  list.sort(mut hunks, edits.order)
+  let mut rows: List[Region] = []
+  let mut p = 0u64
+  let mut a = 0u64
+  let mut b = 0u64
+  let mut next = 0u64
+  let mut conflicts = 0u64
+  while next < list.len(hunks) {
+    let first = next
+    let start = hunks[first].base.start
+    let mut end = start + hunks[first].base.length
+    if start < p {
+      return Error(model.invalid("hunk_overlap"))
+    }
+    if start > p {
+      let count = start - p
+      let _ = model.admit(a, count, list.len(source.left.lines), "coverage")?
+      let _ = model.admit(b, count, list.len(source.right.lines), "coverage")?
+      push(
+        mut rows,
+        Region(
+          kind: Base(),
+          base: edits.span(p, count),
+          left: edits.span(a, count),
+          right: edits.span(b, count),
+          conflict: 0
+        )
+      )?
+      a += count
+      b += count
+    }
+    next += 1
+    while next < list.len(hunks) && hunks[next].base.start <= end {
+      let finish = hunks[next].base.start + hunks[next].base.length
+      if finish > end {
+        end = finish
+      }
+      next += 1
+    }
+    let left = side_span(
+      hunks,
+      first,
+      next,
+      0,
+      start,
+      end,
+      a,
+      list.len(source.left.lines)
+    )?
+    let right = side_span(
+      hunks,
+      first,
+      next,
+      1,
+      start,
+      end,
+      b,
+      list.len(source.right.lines)
+    )?
+    let mut has_left = false
+    let mut has_right = false
+    for i in first..next {
+      if hunks[i].side == 0 {
+        has_left = true
+      } else {
+        has_right = true
+      }
+    }
+    let kind: Kind = if !has_right {
+      Left()
+    } else if !has_left {
+      Right()
+    } else if edits.equal(
+      edits.view(source.left.lines, left),
+      edits.view(source.right.lines, right)
+    ) {
+      Identical()
+    } else {
+      Conflict()
+    }
+    let ordinal = conflicts
+    if kind == Conflict() {
+      conflicts = model.admit(conflicts, 1, model.CONFLICTS, "conflict_limit")?
+    }
+    push(
+      mut rows,
+      Region(
+        kind: kind,
+        base: edits.span(start, end - start),
+        left: left,
+        right: right,
+        conflict: ordinal
+      )
+    )?
+    p = end
+    a += left.length
+    b += right.length
+  }
+  let count = list.len(source.base.lines) - p
+  if count > 0 {
+    let _ = model.admit(a, count, list.len(source.left.lines), "coverage")?
+    let _ = model.admit(b, count, list.len(source.right.lines), "coverage")?
+    push(
+      mut rows,
+      Region(
+        kind: Base(),
+        base: edits.span(p, count),
+        left: edits.span(a, count),
+        right: edits.span(b, count),
+        conflict: 0
+      )
+    )?
+    a += count
+    b += count
+  }
+  if a != list.len(source.left.lines) || b != list.len(source.right.lines) {
+    return Error(model.invalid("coverage"))
+  }
+  Ok(take rows)
+}
+
+pub fn plan(take source: model.Triple) -> Result[Plan, model.Problem] uses {} {
+  let left = edits.canonical(source.base.lines, source.left.lines, 0)?
+  let right = edits.canonical(source.base.lines, source.right.lines, 1)?
+  let mut hunks: unique List[edits.Hunk] = []
+  for h in left {
+    list.push(mut hunks, h)
+  }
+  for h in right {
+    list.push(mut hunks, h)
+  }
+  let rows = sweep(source, take hunks)?
+  let mut conflicts = 0u64
+  for row in rows {
+    if row.kind == Conflict() {
+      conflicts += 1
+    }
+  }
+  Ok(Plan(source: take source, regions: take rows, conflicts: conflicts))
+}

@@ -1,0 +1,229 @@
+// Manifest and decisions are bounded before std.json parsing. Source paths are
+// explicit manifest leaf names under input, never diff labels or output text.
+pub const SOURCE_BYTES: u64 = 32768
+
+pub const TOTAL_BYTES: u64 = 131072
+
+pub const LINES: u64 = 256
+
+pub const FILES: u64 = 4
+
+pub const CONFLICTS: u64 = 128
+
+pub const DECISION_BYTES: u64 = 16384
+
+pub const OUTPUT_BYTES: u64 = 262144
+
+pub const ENVELOPE_BYTES: u64 = 16384
+
+pub type Problem = Invalid(String) | Files(FileError) | Grant | Canceled
+
+pub type Entry {
+  name: String,
+  base: String,
+  left: String,
+  right: String,
+}
+
+pub type Manifest {
+  digest: String,
+  files: List[Entry],
+}
+
+pub type Source {
+  lines: List[String],
+  digest: String,
+}
+
+pub type Triple {
+  name: String,
+  base: Source,
+  left: Source,
+  right: Source,
+}
+
+pub type Choice = Base | Left | Right | Manual(String)
+
+pub type Decision {
+  id: String,
+  choice: Choice,
+}
+
+pub type Decisions {
+  binding: String,
+  choices: List[Decision],
+}
+
+pub type Selected {
+  name: String,
+  text: String,
+}
+
+pub fn invalid(kind: String) -> unique Problem uses {} {
+  Invalid(unique kind)
+}
+
+// Subtraction admits the sum before it is formed; callers check before push.
+pub fn admit(total: u64, extra: u64, limit: u64, kind: String) -> Result[u64, Problem] uses {} {
+  if total > limit || extra > limit - total {
+    return Error(invalid(kind))
+  }
+  Ok(total + extra)
+}
+
+pub fn leaf(name: String) -> Result[(), Problem] uses {} {
+  if string.byte_len(name) == 0 || string.byte_len(name) > 128 || name == "." || name == ".." {
+    return Error(invalid("path"))
+  }
+  for byte in string.as_bytes(name) {
+    if byte < 32u8 || byte == 127u8 || byte == b'/' || byte == b'\\' || byte == b':' {
+      return Error(invalid("path"))
+    }
+  }
+  Ok(())
+}
+
+pub fn read(d: Dir, name: String, limit: u64) -> Result[unique Bytes, Problem] {
+  leaf(name)?
+  let mut input = file.open(d, path.of(name)) ? Files
+  match file.read_all_bounded(d, mut input, limit) {
+    Ok(data) => Ok(take data),
+    Error(Limit()) => Error(invalid("bytes_limit")),
+    Error(File(error)) => Error(Files(take error)),
+  }
+}
+
+pub fn source(take data: unique Bytes) -> Result[unique Source, Problem] uses {} {
+  if bytes.len(data) > SOURCE_BYTES {
+    return Error(invalid("source_bytes_limit"))
+  }
+  let digest = sha256.digest_hex(data)
+  let Ok(text) = string.from_bytes(take data) else {
+    return Error(invalid("utf8"))
+  }
+  let raw = string.as_bytes(text)
+  let mut count = 0u64
+  for byte in raw {
+    if byte == b'\n' {
+      count = admit(count, 1, LINES, "lines_limit")?
+    }
+  }
+  if bytes.len(raw) > 0 && raw[bytes.len(raw) - 1] != b'\n' {
+    count = admit(count, 1, LINES, "lines_limit")?
+  }
+  let lines = diff.split_lines(text)
+  Ok(Source(lines: take lines, digest: take digest))
+}
+
+pub fn text_field(fields: Map[String, json.Value], key: String) -> Result[
+  unique String,
+  Problem
+] uses {} {
+  let Some(Text(value)) = map.get(fields, key) else {
+    return Error(invalid("fields"))
+  }
+  Ok(unique value)
+}
+
+fn object(take data: Bytes, limit: u64) -> Result[Map[String, json.Value], Problem] uses {} {
+  if bytes.len(data) > limit {
+    return Error(invalid("bytes_limit"))
+  }
+  let Ok(text) = string.from_bytes(take data) else {
+    return Error(invalid("utf8"))
+  }
+  let Ok(Object(fields)) = json.parse(take text) else {
+    return Error(invalid("json"))
+  }
+  if map.get(fields, "schema") != Some(Number("1")) {
+    return Error(invalid("schema"))
+  }
+  Ok(take fields)
+}
+
+@noalloc
+fn entry_order(a: Entry, b: Entry) -> i32 uses {} {
+  string.compare(a.name, b.name)
+}
+
+pub fn manifest(take data: Bytes) -> Result[Manifest, Problem] uses {} {
+  let digest = sha256.digest_hex(data)
+  let fields = object(take data, ENVELOPE_BYTES)?
+  let Some(Array(records)) = map.get(fields, "files") else {
+    return Error(invalid("files"))
+  }
+  if map.len(fields) != 2 || list.len(records) == 0 || list.len(records) > FILES {
+    return Error(invalid("file_count_limit"))
+  }
+  let mut files: unique List[Entry] = []
+  for record in records {
+    let Object(item) = record else {
+      return Error(invalid("record"))
+    }
+    if map.len(item) != 4 {
+      return Error(invalid("fields"))
+    }
+    let name = text_field(item, "name")?
+    let base = text_field(item, "base")?
+    let left = text_field(item, "left")?
+    let right = text_field(item, "right")?
+    leaf(name)?
+    leaf(base)?
+    leaf(left)?
+    leaf(right)?
+    for previous in files {
+      if previous.name == name {
+        return Error(invalid("duplicate_file"))
+      }
+    }
+    list.push(
+      mut files,
+      Entry(name: take name, base: take base, left: take left, right: take right)
+    )
+  }
+  list.sort(mut files, entry_order)
+  Ok(Manifest(digest: take digest, files: take files))
+}
+
+pub fn decisions(take data: Bytes) -> Result[Decisions, Problem] uses {} {
+  let fields = object(take data, DECISION_BYTES)?
+  let binding = text_field(fields, "binding")?
+  let Some(Array(records)) = map.get(fields, "choices") else {
+    return Error(invalid("choices"))
+  }
+  if map.len(fields) != 3 {
+    return Error(invalid("fields"))
+  }
+  if list.len(records) > FILES * CONFLICTS {
+    return Error(invalid("choices"))
+  }
+  let mut choices: List[Decision] = []
+  for record in records {
+    let Object(item) = record else {
+      return Error(invalid("decision"))
+    }
+    if map.len(item) != 3 {
+      return Error(invalid("fields"))
+    }
+    let id = text_field(item, "id")?
+    let kind = text_field(item, "choice")?
+    let text = text_field(item, "text")?
+    if kind != "manual" && text != "" {
+      return Error(invalid("decision_text"))
+    }
+    let choice: Choice = match kind {
+      "base" => Base(),
+      "left" => Left(),
+      "right" => Right(),
+      "manual" => Manual(unique text),
+      _ => return Error(invalid("choice")),
+    }
+    for previous in choices {
+      if previous.id == id {
+        return Error(invalid("duplicate_decision"))
+      }
+    }
+    list.push(mut choices, Decision(id: take id, choice: take choice))
+  }
+  Ok(Decisions(binding: take binding, choices: take choices))
+}

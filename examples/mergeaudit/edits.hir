@@ -1,0 +1,181 @@
+// Generic borrowed spans keep immutable line owners alive during planning.
+// No substring, terminator or replacement text is copied into the edit graph.
+pub type Span {
+  start: u64,
+  length: u64,
+}
+
+pub type View[T] {
+  items: List[T],
+  span: Span,
+}
+
+pub type Hunk {
+  side: u64,
+  ordinal: u64,
+  base: Span,
+  replacement: Span,
+}
+
+pub fn span(start: u64, length: u64) -> Span uses {} {
+  Span(start: start, length: length)
+}
+
+pub fn check_span[T](items: List[T], part: Span) -> Result[(), model.Problem] uses {} {
+  if part.start > list.len(items) || part.length > list.len(items) - part.start {
+    return Error(model.invalid("span"))
+  }
+  Ok(())
+}
+
+pub fn view[T](items: List[T], part: Span) -> View[T] in items uses {} {
+  View(items: items, span: part)
+}
+
+pub fn equal[T: data](a: View[T], b: View[T]) -> bool uses {} {
+  if a.span.length != b.span.length {
+    return false
+  }
+  for i in 0u64..a.span.length {
+    if a.items[a.span.start + i] != b.items[b.span.start + i] {
+      return false
+    }
+  }
+  true
+}
+
+// Materialize exactly once at report/output boundaries. The complete span is
+// byte-counted before the output builder grows, including CR in CRLF tokens.
+pub fn materialize(source: List[String], part: Span) -> Result[
+  unique String,
+  model.Problem
+] uses {} {
+  check_span(source, part)?
+  let v = view(source, part)
+  let mut size = 0u64
+  for i in 0u64..v.span.length {
+    size = model.admit(
+      size,
+      string.byte_len(v.items[v.span.start + i]),
+      model.OUTPUT_BYTES,
+      "output_bytes_limit"
+    )?
+  }
+  let mut data: List[u8] = []
+  list.reserve(mut data, size)
+  for i in 0u64..v.span.length {
+    bytes.append(mut data, string.as_bytes(v.items[v.span.start + i]))
+  }
+  let Ok(text) = string.from_bytes(bytes.from_list(take data)) else {
+    return Error(model.invalid("utf8"))
+  }
+  Ok(take text)
+}
+
+pub fn canonical(base: List[String], side: List[String], which: u64) -> Result[
+  unique List[Hunk],
+  model.Problem
+] uses {} {
+  if list.len(base) > model.LINES || list.len(side) > model.LINES || which > 1 {
+    return Error(model.invalid("lines_limit"))
+  }
+  // At most n+m nonempty runs; std's minimal script cannot exceed 512 here.
+  let script = diff.edits(base, side, MyersMinimal())
+  if list.len(script) > 2 * model.LINES {
+    return Error(model.invalid("edit_count"))
+  }
+  let mut values: unique List[Hunk] = []
+  let mut old = 0u64
+  let mut new = 0u64
+  let mut begin_old = 0u64
+  let mut begin_new = 0u64
+  let mut changing = false
+  for edit in script {
+    let (a, b, count) = match edit {
+      Keep(a, b, count) => (a, b, count),
+      Delete(a, b, count) => (a, b, count),
+      Insert(a, b, count) => (a, b, count),
+    }
+    if a != old || b != new || count == 0 {
+      return Error(model.invalid("edit_coverage"))
+    }
+    if let Keep(_, _, _) = edit {
+      if changing {
+        let _ = model.admit(list.len(values), 1, model.LINES, "hunk_count")?
+        let ordinal = list.len(values)
+        list.push(
+          mut values,
+          Hunk(
+            side: which,
+            ordinal: ordinal,
+            base: span(begin_old, old - begin_old),
+            replacement: span(begin_new, new - begin_new)
+          )
+        )
+        changing = false
+      }
+      let next_old = model.admit(old, count, list.len(base), "edit_coverage")?
+      let next_new = model.admit(new, count, list.len(side), "edit_coverage")?
+      if !equal(view(base, span(old, count)), view(side, span(new, count))) {
+        return Error(model.invalid("edit_keep"))
+      }
+      old = next_old
+      new = next_new
+    } else {
+      if !changing {
+        begin_old = old
+        begin_new = new
+        changing = true
+      }
+      match edit {
+        Delete(_, _, _) => {
+          old = model.admit(old, count, list.len(base), "edit_coverage")?
+        },
+        Insert(_, _, _) => {
+          new = model.admit(new, count, list.len(side), "edit_coverage")?
+        },
+        Keep(_, _, _) => (),
+      }
+    }
+  }
+  if changing {
+    let _ = model.admit(list.len(values), 1, model.LINES, "hunk_count")?
+    let ordinal = list.len(values)
+    list.push(
+      mut values,
+      Hunk(
+        side: which,
+        ordinal: ordinal,
+        base: span(begin_old, old - begin_old),
+        replacement: span(begin_new, new - begin_new)
+      )
+    )
+  }
+  if old != list.len(base) || new != list.len(side) {
+    return Error(model.invalid("edit_coverage"))
+  }
+  Ok(take values)
+}
+
+@noalloc
+pub fn order(a: Hunk, b: Hunk) -> i32 uses {} {
+  if a.base.start < b.base.start {
+    return -1
+  }
+  if a.base.start > b.base.start {
+    return 1
+  }
+  if a.side < b.side {
+    return -1
+  }
+  if a.side > b.side {
+    return 1
+  }
+  if a.ordinal < b.ordinal {
+    return -1
+  }
+  if a.ordinal > b.ordinal {
+    return 1
+  }
+  0
+}

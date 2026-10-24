@@ -1,0 +1,69 @@
+// Additional pure algorithm probe; full-main qualification uses shipped main.
+pub type OracleError = Arguments(ArgError) | Grant(GrantError) | Output(OutputError) | Domain(
+  model.Problem
+)
+
+pub fn main(rt: Io, args: Args) -> Result[(), OracleError] {
+  failure.check(
+    model.admit(0, 128, model.CONFLICTS, "conflict_limit") == Ok(128u64),
+    Arithmetic()
+  )
+  failure.check(
+    model.admit(0, 129, model.CONFLICTS, "conflict_limit") == Error(
+      Invalid("conflict_limit")
+    ),
+    Arithmetic()
+  )
+  failure.check(
+    model.admit(0, 262144, model.OUTPUT_BYTES, "output_bytes_limit") == Ok(262144u64),
+    Arithmetic()
+  )
+  failure.check(
+    model.admit(0, 262145, model.OUTPUT_BYTES, "output_bytes_limit") == Error(
+      Invalid("output_bytes_limit")
+    ),
+    Arithmetic()
+  )
+  let source = model.Triple(
+    name: "result",
+    base: model.source(unique string.as_bytes(arg.text(args, 0)?))?,
+    left: model.source(unique string.as_bytes(arg.text(args, 1)?))?,
+    right: model.source(unique string.as_bytes(arg.text(args, 2)?))?
+  )
+  let a = edits.canonical(source.base.lines, source.left.lines, 0)?
+  let b = edits.canonical(source.base.lines, source.right.lines, 1)?
+  let mut hs: List[json.Value] = []
+  for h in a {
+    list.push(
+      mut hs,
+      Array(
+        [
+          Number(f"{h.side}"),
+          Number(f"{h.base.start}"),
+          Number(f"{h.base.length}"),
+          Number(f"{h.replacement.start}"),
+          Number(f"{h.replacement.length}")
+        ]
+      )
+    )
+  }
+  for h in b {
+    list.push(
+      mut hs,
+      Array(
+        [
+          Number(f"{h.side}"),
+          Number(f"{h.base.start}"),
+          Number(f"{h.base.length}"),
+          Number(f"{h.replacement.start}"),
+          Number(f"{h.replacement.length}")
+        ]
+      )
+    )
+  }
+  let hunks = report.encode(Array(take hs))?
+  let plan = regions.plan(take source)?
+  let rendered = report.render([take plan], "probe")?
+  out.print(io.stdout(rt)?, f"{hunks}\n{rendered}\n")?
+  Ok(())
+}

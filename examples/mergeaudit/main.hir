@@ -1,0 +1,255 @@
+pub type AppError = Output(OutputError)
+
+type Options {
+  command: String,
+  manifest: String,
+  argument: String,
+  output: Path,
+  interruptible: bool,
+}
+
+fn arguments(args: Args) -> Result[Options, model.Problem] uses {args} {
+  if arg.len(args) < 3 {
+    return Error(model.invalid("usage"))
+  }
+  let Ok(command) = arg.text(args, 0) else {
+    return Error(model.invalid("usage"))
+  }
+  let count = if command == "plan" {
+    3u64
+  } else if command == "resolve" {
+    4u64
+  } else {
+    return Error(model.invalid("usage"))
+  }
+  if arg.len(args) != count && arg.len(args) != count + 1 {
+    return Error(model.invalid("usage"))
+  }
+  let interruptible = arg.len(args) == count + 1
+  if interruptible {
+    let Ok(flag) = arg.text(args, count) else {
+      return Error(model.invalid("usage"))
+    }
+    if flag != "--interruptible" {
+      return Error(model.invalid("usage"))
+    }
+  }
+  let Ok(manifest) = arg.text(args, 1) else {
+    return Error(model.invalid("usage"))
+  }
+  let Ok(argument) = arg.text(args, 2) else {
+    return Error(model.invalid("usage"))
+  }
+  model.leaf(manifest)?
+  model.leaf(argument)?
+  let output = if command == "resolve" {
+    let Ok(value) = arg.path(args, 3) else {
+      return Error(model.invalid("usage"))
+    }
+    value
+  } else {
+    path.of("output")
+  }
+  Ok(
+    Options(
+      command: unique command,
+      manifest: unique manifest,
+      argument: unique argument,
+      output: output,
+      interruptible: interruptible
+    )
+  )
+}
+
+// Bound the next read by the unspent aggregate budget as well as the
+// per-source cap, so even a refused input cannot grow retained source bytes.
+fn read_source(d: Dir, name: String, total: u64) -> Result[unique Bytes, model.Problem] {
+  let remaining = model.TOTAL_BYTES - total
+  let limit = if remaining < model.SOURCE_BYTES {
+    remaining
+  } else {
+    model.SOURCE_BYTES
+  }
+  match model.read(d, name, limit) {
+    Error(Invalid(kind)) => if kind == "bytes_limit" && remaining < model.SOURCE_BYTES {
+      Error(model.invalid("total_bytes_limit"))
+    } else {
+      Error(Invalid(unique kind))
+    },
+    other => take other,
+  }
+}
+
+fn read_sources(d: Dir, manifest: model.Manifest) -> Result[
+  unique List[unique model.Triple],
+  model.Problem
+] {
+  let mut values: unique List[unique model.Triple] = []
+  let mut total = 0u64
+  for entry in manifest.files {
+    let base = read_source(d, entry.base, total)?
+    total = model.admit(total, bytes.len(base), model.TOTAL_BYTES, "total_bytes_limit")?
+    let left = read_source(d, entry.left, total)?
+    total = model.admit(total, bytes.len(left), model.TOTAL_BYTES, "total_bytes_limit")?
+    let right = read_source(d, entry.right, total)?
+    total = model.admit(total, bytes.len(right), model.TOTAL_BYTES, "total_bytes_limit")?
+    list.push(
+      mut values,
+      model.Triple(
+        name: unique entry.name,
+        base: model.source(take base)?,
+        left: model.source(take left)?,
+        right: model.source(take right)?
+      )
+    )
+  }
+  Ok(take values)
+}
+
+// One owned job per independent file triple. Await in manifest's sorted order;
+// no child mutates an edit graph or publishes output. No Free scheduling.
+fn plan(tasks: Tasks, take sources: unique List[unique model.Triple]) -> Result[
+  List[regions.Plan],
+  model.Problem
+] {
+  task.scope(
+    tasks,
+    fn(s: Scope) -> Result[List[regions.Plan], model.Problem] {
+      let count = list.len(sources)
+      let mut pending: TaskSet[unique Result[regions.Plan, model.Problem]] of s = task.set(
+        s
+      )
+      for source in take sources {
+        task.add(
+          s,
+          mut pending,
+          task.async(
+            s,
+            fn() -> unique Result[regions.Plan, model.Problem] {
+              unique regions.plan(take source)
+            }
+          )
+        )
+      }
+      let mut plans: List[regions.Plan] = []
+      for slot in 0u64..count {
+        let completed = task.await_at(s, mut pending, slot)
+        match take completed {
+          Ok(value) => {
+            list.push(mut plans, take value)
+          },
+          Error(problem) => {
+            task.cancel_all(s, take pending)
+            return Error(take problem)
+          },
+        }
+      }
+      task.cancel_all(s, take pending)
+      Ok(take plans)
+    }
+  )
+}
+
+fn execute(rt: Io, options: Options) -> Result[u64, model.Problem] {
+  let Ok(input) = io.dir(rt, path.of("input")) else {
+    return Error(Grant())
+  }
+  let Ok(output) = io.dir(rt, options.output) else {
+    return Error(Grant())
+  }
+  let Ok(tasks) = io.tasks(rt) else {
+    return Error(Grant())
+  }
+  let manifest = model.manifest(
+    model.read(input, options.manifest, model.ENVELOPE_BYTES)?
+  )?
+  let sources = read_sources(input, manifest)?
+  let binding = report.bind_inputs(manifest, sources)?
+  let count = list.len(sources)
+  let plans = plan(tasks, take sources)?
+  if options.command == "plan" {
+    let text = report.render(plans, binding)?
+    report.publish(output, options.argument, text)?
+  } else {
+    let decisions = model.decisions(
+      model.read(input, options.argument, model.DECISION_BYTES)?
+    )?
+    let selected = resolve.all(plans, binding, decisions)?
+    for value in selected {
+      report.publish(output, value.name, value.text)?
+    }
+  }
+  Ok(count)
+}
+
+// Optional signal subscription is explicit authority. task.select cancels and
+// joins the losing branch, closing a Pending file before returning canceled.
+fn interrupt_run(rt: Io, take options: unique Options) -> Result[u64, model.Problem] {
+  let Ok(tasks) = io.tasks(rt) else {
+    return Error(Grant())
+  }
+  let Ok(signals) = io.signals(rt) else {
+    return Error(Grant())
+  }
+  task.scope(
+    tasks,
+    fn(s: Scope) -> Result[u64, model.Problem] {
+      let mut pending: TaskSet[unique Result[u64, model.Problem]] of s = task.set(s)
+      task.add(
+        s,
+        mut pending,
+        task.async(
+          s,
+          fn() -> unique Result[u64, model.Problem] {
+            let settings = take options
+            unique execute(rt, settings)
+          }
+        )
+      )
+      task.add(
+        s,
+        mut pending,
+        task.async(
+          s,
+          fn() -> unique Result[u64, model.Problem] {
+            let _ = signal.wait(signals, [Interrupt()])
+            unique Error(Canceled())
+          }
+        )
+      )
+      let (_, values) = task.select(s, take pending)
+      values
+    }
+  )
+}
+
+pub fn main(rt: Io, args: Args) -> Result[process.ExitCode, AppError] {
+  let values = match arguments(args) {
+    Ok(options) => if options.interruptible {
+      interrupt_run(rt, unique options)
+    } else {
+      execute(rt, options)
+    },
+    Error(problem) => Error(take problem),
+  }
+  match values {
+    Ok(count) => {
+      let command = arg.text(args, 0)
+      let verb = if command == Ok("plan") {
+        "planned"
+      } else {
+        "resolved"
+      }
+      if let Ok(stdout) = io.stdout(rt) {
+        out.print(stdout, f"mergeaudit: {verb} {count} files\n")?
+      }
+      Ok(process.SUCCESS)
+    },
+    Error(problem) => {
+      if let Ok(stderr) = io.stderr(rt) {
+        err.print(stderr, report.diagnostic(problem))?
+      }
+      Ok(process.exit_code(2u8))
+    },
+  }
+}

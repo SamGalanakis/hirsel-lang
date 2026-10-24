@@ -1,0 +1,111 @@
+// The manifest owns path authority; only typed per-conflict choices select
+// bytes. All files are resolved and totalled before the first AtomicFile.
+pub fn id(name: String, ordinal: u64) -> unique String uses {} {
+  f"{name}:{ordinal}"
+}
+
+fn choice(decisions: model.Decisions, name: String, ordinal: u64) -> Result[
+  unique model.Choice,
+  model.Problem
+] uses {} {
+  let wanted = id(name, ordinal)
+  for decision in decisions.choices {
+    if decision.id == wanted {
+      return Ok(unique decision.choice)
+    }
+  }
+  Error(model.invalid("missing_decision"))
+}
+
+fn selected(plan: regions.Plan, piece: regions.Region, decision: model.Choice) -> Result[
+  unique String,
+  model.Problem
+] uses {} {
+  match decision {
+    Base() => edits.materialize(plan.source.base.lines, piece.base),
+    Left() => edits.materialize(plan.source.left.lines, piece.left),
+    Right() => edits.materialize(plan.source.right.lines, piece.right),
+    Manual(text) => Ok(unique text),
+  }
+}
+
+fn one(plan: regions.Plan, decisions: model.Decisions) -> Result[
+  unique model.Selected,
+  model.Problem
+] uses {} {
+  let mut chunks: List[String] = []
+  let mut size = 0u64
+  for piece in plan.regions {
+    let decision: model.Choice = match piece.kind {
+      Base() => Base(),
+      Left() => Left(),
+      Right() => Right(),
+      Identical() => Left(),
+      Conflict() => choice(decisions, plan.source.name, piece.conflict)?,
+    }
+    let text = selected(plan, piece, decision)?
+    size = model.admit(
+      size,
+      string.byte_len(text),
+      model.OUTPUT_BYTES,
+      "output_bytes_limit"
+    )?
+    list.push(mut chunks, take text)
+  }
+  let mut data: List[u8] = []
+  list.reserve(mut data, size)
+  for chunk in chunks {
+    bytes.append(mut data, string.as_bytes(chunk))
+  }
+  let Ok(text) = string.from_bytes(bytes.from_list(take data)) else {
+    return Error(model.invalid("utf8"))
+  }
+  Ok(model.Selected(name: unique plan.source.name, text: take text))
+}
+
+pub fn all(plans: List[regions.Plan], binding: String, decisions: model.Decisions) -> Result[
+  List[model.Selected],
+  model.Problem
+] uses {} {
+  if decisions.binding != binding {
+    return Error(model.invalid("binding"))
+  }
+  let mut required = 0u64
+  for plan in plans {
+    required += plan.conflicts
+  }
+  // Unknown decisions get their own diagnostic, including unknown IDs when
+  // the count happens to equal the number of conflicts.
+  for decision in decisions.choices {
+    let mut found = false
+    for plan in plans {
+      for piece in plan.regions {
+        if piece.kind == Conflict() && decision.id == id(
+          plan.source.name,
+          piece.conflict
+        ) {
+          found = true
+        }
+      }
+    }
+    if !found {
+      return Error(model.invalid("unknown_decision"))
+    }
+  }
+  if list.len(decisions.choices) != required {
+    return Error(model.invalid("missing_decision"))
+  }
+  let mut output: List[model.Selected] = []
+  let mut total = 0u64
+  for plan in plans {
+    let value = one(plan, decisions)?
+    total = model.admit(
+      total,
+      string.byte_len(value.text),
+      model.OUTPUT_BYTES,
+      "output_bytes_limit"
+    )?
+    list.push(mut output, take value)
+  }
+  Ok(take output)
+}

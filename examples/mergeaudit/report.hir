@@ -1,0 +1,177 @@
+// Stable std JSON reports. Object keys follow explicit insertion order.
+// Every reported piece includes all three exact line spans and byte strings.
+pub fn encode(take value: json.Value) -> Result[unique String, model.Problem] uses {} {
+  let Ok(text) = json.stringify(take value) else {
+    return Error(model.invalid("json"))
+  }
+  Ok(take text)
+}
+
+pub fn bind_inputs(manifest: model.Manifest, sources: List[model.Triple]) -> Result[
+  unique String,
+  model.Problem
+] uses {} {
+  let mut hashes: List[json.Value] = []
+  for source in sources {
+    list.push(mut hashes, Text(unique source.base.digest))
+    list.push(mut hashes, Text(unique source.left.digest))
+    list.push(mut hashes, Text(unique source.right.digest))
+  }
+  let mut fields: Map[String, json.Value] = map.empty()
+  map.insert(mut fields, "manifest", Text(unique manifest.digest))
+  map.insert(mut fields, "sources", Array(take hashes))
+  let text = encode(Object(take fields))?
+  Ok(sha256.digest_hex(string.as_bytes(text)))
+}
+
+fn span(part: edits.Span) -> unique json.Value uses {} {
+  Array([Number(f"{part.start}"), Number(f"{part.length}")])
+}
+
+pub fn kind_name(value: regions.Kind) -> String uses {} {
+  match value {
+    Base() => "base",
+    Left() => "left",
+    Right() => "right",
+    Identical() => "identical",
+    Conflict() => "conflict",
+  }
+}
+
+// Every content scalar is at most 32KiB before escaping, so std's temporary
+// quoted string is at most 196610 bytes. Count it and discard it before the
+// final report builder exists; do not duplicate std's escaping rules.
+fn content_size(value: String) -> Result[u64, model.Problem] uses {} {
+  if string.byte_len(value) > model.SOURCE_BYTES {
+    return Error(model.invalid("output_bytes_limit"))
+  }
+  let Ok(quoted) = json.stringify(Text(value)) else {
+    return Error(model.invalid("json"))
+  }
+  let count = string.byte_len(quoted)
+  if count < 2 {
+    return Error(model.invalid("json"))
+  }
+  Ok(count - 2)
+}
+
+pub fn render(plans: List[regions.Plan], binding: String) -> Result[
+  unique String,
+  model.Problem
+] uses {} {
+  if list.len(plans) > model.FILES || string.byte_len(binding) > 64 {
+    return Error(model.invalid("report_shape"))
+  }
+  let mut head: Map[String, json.Value] = map.empty()
+  map.insert(mut head, "schema", Number("1"))
+  map.insert(mut head, "binding", Text(unique binding))
+  map.insert(mut head, "files", Array([]))
+  let header = encode(Object(unique copy head))?
+  let mut total = model.admit(
+    0,
+    string.byte_len(header),
+    model.OUTPUT_BYTES,
+    "output_bytes_limit"
+  )?
+  let mut files: List[json.Value] = []
+  for plan in plans {
+    // Names are manifest leaves; this also keeps the metadata-only temporary
+    // bounded for callers of the pure report seam.
+    model.leaf(plan.source.name)?
+    let mut file_fields: Map[String, json.Value] = map.empty()
+    map.insert(mut file_fields, "name", Text(unique plan.source.name))
+    map.insert(mut file_fields, "regions", Array([]))
+    let file_shell = encode(Object(unique copy file_fields))?
+    if list.len(files) > 0 {
+      total = model.admit(total, 1, model.OUTPUT_BYTES, "output_bytes_limit")?
+    }
+    total = model.admit(
+      total,
+      string.byte_len(file_shell),
+      model.OUTPUT_BYTES,
+      "output_bytes_limit"
+    )?
+    let mut rows: List[json.Value] = []
+    for piece in plan.regions {
+      let mut fields: Map[String, json.Value] = map.empty()
+      map.insert(mut fields, "base", span(piece.base))
+      map.insert(mut fields, "left", span(piece.left))
+      map.insert(mut fields, "right", span(piece.right))
+      map.insert(mut fields, "kind", Text(kind_name(piece.kind)))
+      let id = if piece.kind == Conflict() {
+        resolve.id(plan.source.name, piece.conflict)
+      } else {
+        ""
+      }
+      map.insert(mut fields, "id", Text(take id))
+      map.insert(mut fields, "base_text", Text(""))
+      map.insert(mut fields, "left_text", Text(""))
+      map.insert(mut fields, "right_text", Text(""))
+      let row_shell = encode(Object(unique copy fields))?
+      if list.len(rows) > 0 {
+        total = model.admit(total, 1, model.OUTPUT_BYTES, "output_bytes_limit")?
+      }
+      total = model.admit(
+        total,
+        string.byte_len(row_shell),
+        model.OUTPUT_BYTES,
+        "output_bytes_limit"
+      )?
+      let base_text = edits.materialize(plan.source.base.lines, piece.base)?
+      total = model.admit(
+        total,
+        content_size(base_text)?,
+        model.OUTPUT_BYTES,
+        "output_bytes_limit"
+      )?
+      map.insert(mut fields, "base_text", Text(take base_text))
+      let left_text = edits.materialize(plan.source.left.lines, piece.left)?
+      total = model.admit(
+        total,
+        content_size(left_text)?,
+        model.OUTPUT_BYTES,
+        "output_bytes_limit"
+      )?
+      map.insert(mut fields, "left_text", Text(take left_text))
+      let right_text = edits.materialize(plan.source.right.lines, piece.right)?
+      total = model.admit(
+        total,
+        content_size(right_text)?,
+        model.OUTPUT_BYTES,
+        "output_bytes_limit"
+      )?
+      map.insert(mut fields, "right_text", Text(take right_text))
+      list.push(mut rows, Object(take fields))
+    }
+    map.insert(mut file_fields, "regions", Array(take rows))
+    list.push(mut files, Object(take file_fields))
+  }
+  map.insert(mut head, "files", Array(take files))
+  let encoded = encode(Object(take head))?
+  if string.byte_len(encoded) != total {
+    return Error(model.invalid("report_size"))
+  }
+  Ok(take encoded)
+}
+
+pub fn publish(d: Dir, name: String, text: String) -> Result[(), model.Problem] {
+  model.leaf(name)?
+  let mut file = file.create_atomic(d, path.of(name)) ? Files
+  file.write_all(d, mut file, string.as_bytes(text)) ? Files
+  file.commit(d, take file) ? Files
+  Ok(())
+}
+
+pub fn diagnostic(problem: model.Problem) -> unique String uses {} {
+  let kind = match problem {
+    Invalid(kind) => unique kind,
+    Grant() => "grant",
+    Canceled() => "canceled",
+    Files(NotGranted()) => "grant",
+    Files(NotFound()) => "file_not_found",
+    Files(Canceled(_)) => "canceled",
+    Files(PermissionDenied()) => "permission_denied",
+    Files(_) => "file_error",
+  }
+  f"mergeaudit: {kind}\n"
+}
