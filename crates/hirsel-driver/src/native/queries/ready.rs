@@ -221,6 +221,25 @@ impl ReadyQueries {
         Some(Arc::new(product))
     }
 
+    /// Obtain only C's own linkage observations after the same current
+    /// descriptor/environment checks used by Ready admission. No body decode.
+    pub fn linkage(
+        &self,
+        key: &InstanceAddress,
+        action: Action,
+        environment: &NativeEnvironment<'_>,
+    ) -> Option<hirsel_lir::validate::CheckedLinkage> {
+        self.lookup_inner(key, action, environment)?;
+        self.native
+            .lookup(
+                subject(key, action),
+                key.policy,
+                StageKind::Ready,
+                environment,
+            )
+            .map(|accepted| accepted.linkage())
+    }
+
     /// One actual local miss and final C. No proof is inferred from the input
     /// references, the pass outputs, or a producer's supplied summary.
     pub fn publish_from_value(

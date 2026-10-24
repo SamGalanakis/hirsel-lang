@@ -29,7 +29,7 @@ const READY_BODY: Domain = Domain {
 };
 const LAYOUTS: Domain = Domain {
     kind: 0x4300_0004,
-    schema: 1,
+    schema: 2,
 };
 
 fn body_domain(stage: StageKind) -> Option<Domain> {

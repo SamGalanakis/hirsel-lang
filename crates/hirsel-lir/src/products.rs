@@ -131,7 +131,11 @@ impl LayoutClosure {
         }
         let keys = LayoutKeys::new(table);
         let index = LayoutIndex::new(table);
-        let mut roots = layout_roots.to_vec();
+        // The passes select their synthetic rows by first match. Preserve the
+        // source table's selected rows ahead of same-kind source type layouts,
+        // including when several closures share a temporary binding table.
+        let mut roots = index.introduced().collect::<Vec<_>>();
+        roots.extend_from_slice(layout_roots);
         for id in abi_ids {
             let abi = table
                 .fn_abis
@@ -140,7 +144,6 @@ impl LayoutClosure {
             roots.extend(abi.parameters.iter().map(|p| p.layout));
             roots.extend(abi.result.iter().map(|r| r.layout));
         }
-        roots.extend(index.introduced());
         // Canonical first-use traversal preserves multiplicity within recursive
         // components. Equal rooted keys must not collapse a symmetric cycle.
         let mut ids = BTreeMap::new();
@@ -302,6 +305,15 @@ impl Binding {
             layouts,
             abis,
         })
+    }
+
+    /// Resolve content identities within this binding's temporary table. These
+    /// maps are owned here; no second publication/global layout map is needed.
+    pub fn layout(&self, key: ContentHash) -> Option<LayoutId> {
+        self.layouts.get(&key).copied()
+    }
+    pub fn abi(&self, key: ContentHash) -> Option<FnAbiId> {
+        self.abis.get(&key).copied()
     }
 
     /// Decode only on demand; the returned unit is raw, with no reused seal.

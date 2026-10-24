@@ -371,3 +371,327 @@ fn native_checked_linkage_survives_body_release_and_layout_relocation() {
             .is_none()
     );
 }
+
+#[test]
+fn local_arena_binding_and_ready_match_global_results_without_other_value_bodies() {
+    use hirsel_driver::native::{
+        Options,
+        queries::{
+            InstanceAddress,
+            arena::{ArenaQueryCounts, EQUATIONS_DOMAIN, EquationProduct},
+            extract_local_arena,
+            graph::{ArenaNode, settle_arena_queries},
+            ready::{EMISSION_CONTEXT_DOMAIN, ReadyMiss, ReadyQueries, ReadySourceFacts},
+        },
+    };
+    use hirsel_engine::store::{Action, Domain, MemStore, ResultStore};
+    use hirsel_lir::validate::{NativeEnvironment, check_arena_scoped_links};
+    use hirsel_syntax::ContentHash;
+    use std::{collections::BTreeMap, sync::Arc};
+    const BEFORE: &str = "type Item { n: u64 }\nfn first(a: Arena, n: u64) -> (box Item) in a {\n  if n == 0u64 { box Item(n:6u64) }\n  else { second(a,n-1u64) }\n}\nfn second(a: Arena, n: u64) -> (box Item) in a { first(a,n) }\nfn wrapper(a: Arena) -> (box Item) in a { second(a,2u64) }\nfn main() { arena.with(fn(a: Arena) { let item = wrapper(a); }); }\n";
+    const AFTER: &str = "type Item { n: u64 }\nfn first(a: Arena, n: u64) -> (box Item) in a {\n  if n == 0u64 { let h: (box Item) in heap = box Item(n:6u64); h }\n  else { second(a,n-1u64) }\n}\nfn second(a: Arena, n: u64) -> (box Item) in a { first(a,n) }\nfn wrapper(a: Arena) -> (box Item) in a { second(a,2u64) }\nfn main() { arena.with(fn(a: Arena) { let item = wrapper(a); }); }\n";
+    let target = hirsel_lir::TargetSpec::x86_64_unknown_linux_gnu();
+    let options = Options::new(target.clone());
+    let store = Arc::new(MemStore::default());
+    let mut ready_queries = ReadyQueries::new(store.clone());
+    let policy = ContentHash::of_bytes(b"local arena Ready equivalence");
+    let emission = store.put_content(EMISSION_CONTEXT_DOMAIN, b"{}").unwrap();
+    let body_domain = Domain {
+        kind: 0x4e00_001c,
+        schema: 1,
+    };
+    let mut earlier: BTreeMap<
+        hirsel_rc::arena_credit::equations::Function,
+        (
+            hirsel_engine::store::Reference,
+            hirsel_engine::store::Reference,
+        ),
+    > = BTreeMap::new();
+    for (round, source) in [BEFORE, AFTER].into_iter().enumerate() {
+        let mut program = rc_support::compile(source);
+        let lowered = hirsel_rc::import::lower(&program, &target).unwrap();
+        let expected = hirsel_driver::native::build_program(
+            &program,
+            rc_support::manifest(&program),
+            &options,
+        )
+        .unwrap();
+        let operations = program.operation_registry();
+        let manifest = rc_support::manifest(&program);
+        let expected_inputs = Inputs {
+            memo: Default::default(),
+            target: &target,
+            layouts: &expected.table,
+            operations: &operations,
+            manifest: &manifest,
+            discharge: None,
+        };
+        let expected_bodies = expected
+            .units
+            .iter()
+            .map(|unit| {
+                let (_, body) = LayoutClosure::capture(unit, &expected_inputs, &[]).unwrap();
+                (
+                    (
+                        unit.unit().header.definition.clone(),
+                        unit.unit().header.instance,
+                    ),
+                    body,
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        drop(expected);
+        let mut base_table = lowered.table.clone();
+        for abi in &mut base_table.fn_abis {
+            abi.result_arena = None;
+        }
+        let base_inputs = Inputs {
+            memo: Default::default(),
+            target: &target,
+            layouts: &base_table,
+            operations: &operations,
+            manifest: &manifest,
+            discharge: None,
+        };
+        let finalizers = hirsel_rc::cleanup::Finalizers::planned(&lowered.instances, &base_table);
+        let keys = hirsel_lir::LayoutKeys::new(&base_table);
+        let introduced = hirsel_lir::LayoutIndex::new(&base_table)
+            .introduced()
+            .map(|id| keys.key(id).0)
+            .collect::<Vec<_>>();
+        let mut products = Vec::new();
+        let mut nodes = Vec::new();
+        let mut sources = Vec::new();
+        let mut owners = Vec::new();
+        let mut header_abis = BTreeMap::new();
+        let mut reached = Vec::new();
+        for (index, raw) in lowered.units.iter().cloned().enumerate() {
+            let owner = InstanceAddress {
+                instance: lowered.unit_keys[index].clone(),
+                target_abi: target.digest(),
+                policy,
+            };
+            let unit = hirsel_lir::validate::validate_value(raw, &base_inputs).unwrap();
+            let local = extract_local_arena(&owner, &unit, &base_table).unwrap();
+            let equations = store
+                .put_content(EQUATIONS_DOMAIN, &serde_json::to_vec(&local).unwrap())
+                .unwrap();
+            nodes.push(ArenaNode {
+                equations: EquationProduct {
+                    owner: owner.clone(),
+                    reference: equations,
+                },
+                callees: local.callees().to_vec(),
+            });
+            let cleanups = finalizers
+                .reached(unit.unit(), &base_table)
+                .into_iter()
+                .map(|(layout, finalizer)| {
+                    (
+                        keys.key(layout).0,
+                        finalizer.clone(),
+                        keys.fn_abi(&base_table.fn_abis[finalizer.abi.0 as usize]),
+                    )
+                })
+                .collect::<Vec<_>>();
+            let extra = cleanups
+                .iter()
+                .map(|(_, finalizer, _)| finalizer.abi)
+                .collect::<Vec<_>>();
+            let (closure, body) = LayoutClosure::capture(&unit, &base_inputs, &extra).unwrap();
+            let reference = store
+                .put_content(body_domain, hirsel_codec::to_text(&body).as_bytes())
+                .unwrap();
+            let function = (
+                unit.unit().header.definition.clone(),
+                unit.unit().header.instance,
+            );
+            header_abis.insert(
+                function,
+                (
+                    products.len(),
+                    keys.fn_abi(&base_table.fn_abis[unit.unit().header.abi.0 as usize]),
+                ),
+            );
+            products.push((closure, body, reference));
+            reached.push(cleanups);
+            sources.push(ReadySourceFacts::for_instance(
+                &lowered.instances,
+                lowered.unit_origins[index],
+            ));
+            owners.push(owner);
+        }
+        nodes.sort_by(|a, b| a.equations.owner.canonical_cmp(&b.equations.owner));
+        let settled = settle_arena_queries(
+            store.as_ref(),
+            &nodes,
+            &[],
+            0,
+            &mut ArenaQueryCounts::default(),
+        )
+        .unwrap();
+        let claims = settled
+            .chosen
+            .iter()
+            .flat_map(|summary| {
+                summary.candidates.iter().map(move |(owner, candidates)| {
+                    (
+                        (owner.instance.definition().clone(), owner.instance.digest()),
+                        (candidates.first().copied(), summary.product.record),
+                    )
+                })
+            })
+            .collect::<BTreeMap<_, _>>();
+        for name in ["first", "second", "wrapper"] {
+            let (_, (claim, _)) = claims
+                .iter()
+                .find(|((path, _), _)| path.0.name == name)
+                .unwrap();
+            assert_eq!(*claim, if round == 0 { Some(0) } else { None });
+        }
+        let definitions = program
+            .definitions
+            .values()
+            .map(Arc::downgrade)
+            .collect::<Vec<_>>();
+        program.definitions.clear();
+        drop(lowered);
+        drop(base_table);
+        assert!(definitions.iter().all(|body| body.upgrade().is_none()));
+        let environment = NativeEnvironment {
+            target: &target,
+            manifest: &manifest,
+            operations: &operations,
+            discharge: None,
+        };
+        let mut links = Vec::new();
+        for (index, owner) in owners.iter().enumerate() {
+            let function = (owner.instance.definition().clone(), owner.instance.digest());
+            let node = nodes
+                .iter()
+                .find(|node| node.equations.owner == *owner)
+                .unwrap();
+            let mut reads = vec![claims[&function].1];
+            reads.extend(node.callees.iter().map(|callee| claims[callee].1));
+            let action_bytes = serde_json::to_vec(&(products[index].2, &reads)).unwrap();
+            let action = Action(ContentHash::of_parts(
+                "local arena Ready test action",
+                [action_bytes.as_slice()],
+            ));
+            let trace = hirsel_lir::construction::ValueTrace::default();
+            let _observe = trace.enter();
+            let ready = if let Some(ready) = ready_queries.lookup(owner, action, &environment) {
+                ready
+            } else {
+                let mut closures = vec![&products[index].0];
+                for callee in &node.callees {
+                    closures.push(&products[header_abis[callee].0].0);
+                }
+                let mut binding = Binding::new(&target, &closures).unwrap();
+                let bound_keys = hirsel_lir::LayoutKeys::new(&binding.table);
+                assert_eq!(
+                    hirsel_lir::LayoutIndex::new(&binding.table)
+                        .introduced()
+                        .map(|id| bound_keys.key(id).0)
+                        .collect::<Vec<_>>(),
+                    introduced,
+                    "binding must preserve the actual synthetic layout selections"
+                );
+                let mut unit = binding.materialize::<Value>(&products[index].1).unwrap();
+                let mut callees = Vec::new();
+                for callee in &node.callees {
+                    let base = binding.abi(header_abis[callee].1).unwrap();
+                    let mut abi = binding.table.fn_abis[base.0 as usize].clone();
+                    abi.result_arena = claims[callee].0;
+                    let id = hirsel_lir::FnAbiId(binding.table.fn_abis.len() as u32);
+                    binding.table.fn_abis.push(abi);
+                    callees.push((callee.clone(), id));
+                }
+                hirsel_rc::arena_credit::bind_local(
+                    &mut unit,
+                    &mut binding.table,
+                    claims[&function].0,
+                    &callees,
+                )
+                .unwrap();
+                let finalizers = hirsel_rc::cleanup::Finalizers(
+                    reached[index]
+                        .iter()
+                        .map(|(layout, finalizer, abi)| {
+                            let mut finalizer = finalizer.clone();
+                            finalizer.abi = binding.abi(*abi).unwrap();
+                            (binding.layout(*layout).unwrap(), finalizer)
+                        })
+                        .collect(),
+                );
+                let inputs = Inputs {
+                    memo: Default::default(),
+                    target: &target,
+                    layouts: &binding.table,
+                    operations: &operations,
+                    manifest: &manifest,
+                    discharge: None,
+                };
+                let (checked, ready) = ready_queries
+                    .publish_from_value(
+                        owner,
+                        action,
+                        ReadyMiss {
+                            value: unit,
+                            options: &options,
+                            source: &sources[index],
+                            finalizers: &finalizers,
+                            inputs: &inputs,
+                            additional_abis: &[],
+                            statics: &[],
+                            emission_context: emission,
+                            debug: true,
+                            optimizer_reads: vec![],
+                        },
+                    )
+                    .unwrap();
+                let (_, body) = LayoutClosure::capture(&checked, &inputs, &[]).unwrap();
+                assert_eq!(
+                    body, expected_bodies[&function],
+                    "canonical Ready {}",
+                    function.0.0.name
+                );
+                ready
+            };
+            assert!(
+                trace
+                    .snapshot()
+                    .keys()
+                    .all(|observed| observed == &function),
+                "another Value body was materialized"
+            );
+            if round == 1 && ["second", "wrapper"].contains(&function.0.0.name.as_str()) {
+                assert_eq!(
+                    products[index].2, earlier[&function].0,
+                    "unchanged base Value"
+                );
+                assert_ne!(
+                    ready.product.record, earlier[&function].1,
+                    "changed arena facts must invalidate Ready"
+                );
+            }
+            earlier.insert(function, (products[index].2, ready.product.record));
+            drop(_observe);
+            let trace = hirsel_lir::construction::ValueTrace::default();
+            let _observe = trace.enter();
+            assert_eq!(
+                ready_queries
+                    .lookup(owner, action, &environment)
+                    .unwrap()
+                    .product,
+                ready.product
+            );
+            links.push(ready_queries.linkage(owner, action, &environment).unwrap());
+            assert_eq!(
+                trace.totals(),
+                hirsel_lir::construction::ValueCounts::default()
+            );
+        }
+        check_arena_scoped_links(&links).unwrap();
+    }
+}

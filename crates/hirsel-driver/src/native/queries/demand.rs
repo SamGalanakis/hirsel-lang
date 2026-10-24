@@ -25,7 +25,7 @@ const LIBRARY_RECIPE: Domain = Domain {
 };
 const REQUEST_LAYOUTS: Domain = Domain {
     kind: 0x4e00_0018,
-    schema: 1,
+    schema: 2,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

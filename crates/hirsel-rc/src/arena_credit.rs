@@ -374,6 +374,70 @@ pub fn summarize(units: &mut [LirUnit<Value>], table: &mut LayoutTable) {
     }
 }
 
+/// Bind one demanded base Value to its settled positive arena claims. Callee
+/// ABIs belong to this temporary table and come from content-bound descriptor
+/// products; no other unit body is read. Actual C and cross-unit linkage must
+/// still validate the rewritten artifact before it becomes a Ready product.
+pub fn bind_local(
+    unit: &mut LirUnit<Value>,
+    table: &mut LayoutTable,
+    own: Option<u32>,
+    callees: &[(equations::Function, FnAbiId)],
+) -> Result<(), String> {
+    if callees.windows(2).any(|w| w[0].0 >= w[1].0) {
+        return Err("noncanonical local arena callee bindings".into());
+    }
+    for (_, id) in callees {
+        if table.fn_abis.get(id.0 as usize).is_none() {
+            return Err("local arena callee ABI outside table".into());
+        }
+    }
+    let mut abi = table
+        .fn_abis
+        .get(unit.header.abi.0 as usize)
+        .ok_or("local arena owner ABI outside table")?
+        .clone();
+    if abi.result_arena.is_some() {
+        return Err("local arena binding requires an unannotated base Value".into());
+    }
+    if let Some(parameter) = own {
+        if !abi.parameters.iter().any(|p| {
+            p.source == parameter
+                && p.convention == hirsel_core_contract::Passing::Borrow
+                && table
+                    .layout(p.layout)
+                    .is_some_and(|r| r.kind == LayoutKind::Arena)
+        }) {
+            return Err("local arena claim is not an immutable arena parameter".into());
+        }
+        abi.result_arena = Some(parameter);
+        unit.header.abi = FnAbiId(table.fn_abis.len() as u32);
+        table.fn_abis.push(abi);
+    }
+    for call in &mut unit.tables.calls {
+        if let Callee::Direct(symbol) = call.callee {
+            let symbol = unit
+                .tables
+                .symbols
+                .get(symbol.index())
+                .ok_or("local arena symbol outside table")?;
+            if let Some(instance) = symbol.instance
+                && let Ok(index) = callees.binary_search_by(|(target, _)| {
+                    target.cmp(&(symbol.definition.clone(), instance))
+                })
+            {
+                let selected = callees[index].1;
+                // Preserve summarize's exact positive-claim substitution. A
+                // raw base unit has no previous settled arena annotation.
+                if table.fn_abis[selected.0 as usize].result_arena.is_some() {
+                    call.abi = selected;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Placement is final before the construction flag is selected.
 pub fn elide(unit: &mut LirUnit<Placed>, table: &LayoutTable) {
     let d = Discovery::new(unit, table);
