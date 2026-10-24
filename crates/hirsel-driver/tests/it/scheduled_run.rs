@@ -32,11 +32,11 @@ fn admitted_run_root_matches_scalar_semantic_and_launch_facts() {
                 stack: 0,
             };
             let lower_weight = MemoryWeight {
-                retained: 2 << 20,
+                retained: 64 << 10,
                 ..front_weight
             };
             let growth_weight = MemoryWeight {
-                retained: 8 << 20,
+                retained: 64 << 10,
                 ..front_weight
             };
             let run_weight = MemoryWeight {

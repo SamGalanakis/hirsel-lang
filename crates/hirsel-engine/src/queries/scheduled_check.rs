@@ -216,12 +216,10 @@ impl Task {
                     for file in &self.files {
                         if file.input.error.is_none() && !has_errors(&file.input.diagnostics) {
                             for (path, _) in &file.input.paths {
-                                let id = self
-                                    .queries
-                                    .plan
-                                    .front
-                                    .query(path)
-                                    .ok_or(self.queries.errors.protocol)?;
+                                let id = self.queries.plan.front.query(path).ok_or_else(|| {
+                                    eprintln!("[DEBUG-s5-protocol] Check missing P {path}");
+                                    self.queries.errors.protocol
+                                })?;
                                 let _ = cx.read(id);
                             }
                         }
@@ -464,7 +462,7 @@ impl Task {
                 ),
             )
             .ok_or(queries.errors.resource)?;
-        if bytes.len() as u64 > queries.weight.retained {
+        if bytes.len() as u64 > queries.weight.scratch {
             return Err(queries.errors.resource);
         }
         let record = queries
