@@ -1612,11 +1612,35 @@ pub struct SideTables {
     /// None preserves the ordinary side-table identity.
     pub receipt_entry: Option<ReceiptEntry>,
     pub seal_descriptors: Vec<crate::sealed::SealDescriptor>,
+    pub seal_payloads: Vec<crate::sealed_payload::PayloadTable>,
 }
 
 impl std::hash::Hash for SideTables {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        let Self { calls, constructs, closures, constants, symbols, operations, loans, failures, edges, masks, regions, arenas, shared, task_domains, source_anchors, cleanup_anchors, init_flags, codecs, structural, receipt_entry, seal_descriptors } = self;
+        let Self {
+            calls,
+            constructs,
+            closures,
+            constants,
+            symbols,
+            operations,
+            loans,
+            failures,
+            edges,
+            masks,
+            regions,
+            arenas,
+            shared,
+            task_domains,
+            source_anchors,
+            cleanup_anchors,
+            init_flags,
+            codecs,
+            structural,
+            receipt_entry,
+            seal_descriptors,
+            seal_payloads,
+        } = self;
         calls.hash(state);
         constructs.hash(state);
         closures.hash(state);
@@ -1636,8 +1660,16 @@ impl std::hash::Hash for SideTables {
         init_flags.hash(state);
         codecs.hash(state);
         structural.hash(state);
-        if let Some(entry) = receipt_entry { "hirsel.receipt-entry.v1".hash(state); entry.hash(state); }
-        if !seal_descriptors.is_empty() { seal_descriptors.hash(state); }
+        if let Some(entry) = receipt_entry {
+            "hirsel.receipt-entry.v1".hash(state);
+            entry.hash(state);
+        }
+        if !seal_descriptors.is_empty() {
+            seal_descriptors.hash(state);
+        }
+        if !seal_payloads.is_empty() {
+            seal_payloads.hash(state);
+        }
     }
 }
 
@@ -2946,6 +2978,15 @@ impl<S: Stage> LirUnit<S> {
         if let Some(entry) = &t.receipt_entry {
             entry.visit(&mut push);
         }
+        for payloads in &t.seal_payloads {
+            push(Ref::SealDescriptor(payloads.descriptor));
+            for binding in &payloads.bindings {
+                binding
+                    .values
+                    .iter()
+                    .for_each(|&value| push(Ref::Value(value)));
+            }
+        }
         for descriptor in &t.seal_descriptors {
             descriptor
                 .layouts()
@@ -3492,7 +3533,7 @@ snapshot_struct!(SideTables {
     init_flags,
     codecs,
     structural
-} trailing_optional receipt_entry trailing_empty seal_descriptors);
+} trailing_optional receipt_entry trailing_empty seal_descriptors, seal_payloads);
 snapshot_struct!(Pools {
     values,
     addresses,

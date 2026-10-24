@@ -3612,6 +3612,13 @@ fn prune_anchors<S>(unit: &mut LirUnit<S>) {
 /// Rename every value the unit names through `map`. Exhaustive over the
 /// rows that hold values, so a new value-holding field fails to compile here.
 pub(crate) fn remap_values<S>(unit: &mut LirUnit<S>, map: &impl Fn(ValueId) -> ValueId) {
+    for payloads in &mut unit.tables.seal_payloads {
+        for binding in &mut payloads.bindings {
+            for value in &mut binding.values {
+                *value = map(*value);
+            }
+        }
+    }
     let mask = |m: &mut MaskRef| {
         if let MaskRef::Dynamic(v) = m {
             *v = map(*v);

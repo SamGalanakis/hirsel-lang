@@ -421,6 +421,59 @@ impl<'a, C> Reader<'a, C> {
 /// of `Snapshot<()>`.
 #[macro_export]
 macro_rules! snapshot_struct {
+    // A populated later trailer retains all earlier positional prefixes.
+    ($ty:ident { $($field:ident),* $(,)? } trailing_optional $optional:ident trailing_empty $first:ident, $second:ident) => {
+        impl $crate::Snapshot for $ty {
+            fn write(&self, w: &mut $crate::Writer) {
+                w.open(stringify!($ty));
+                $($crate::Snapshot::write(&self.$field, w);)*
+                if self.$optional.is_some() || !self.$first.is_empty() || !self.$second.is_empty() {
+                    $crate::Snapshot::write(&self.$optional, w);
+                }
+                if !self.$first.is_empty() || !self.$second.is_empty() {
+                    $crate::Snapshot::write(&self.$first, w);
+                }
+                if !self.$second.is_empty() { $crate::Snapshot::write(&self.$second, w); }
+                w.close();
+            }
+            fn read(r: &mut $crate::Reader<'_>) -> Result<Self, $crate::DecodeError> {
+                r.open(stringify!($ty))?;
+                $(let $field = $crate::Snapshot::read(r)?;)*
+                let $optional = if r.next_kind() == $crate::Next::Close { None }
+                    else { $crate::Snapshot::read(r)? };
+                let $first = if r.next_kind() == $crate::Next::Close { Default::default() }
+                    else { $crate::Snapshot::read(r)? };
+                let $second = if r.next_kind() == $crate::Next::Close { Default::default() }
+                    else { $crate::Snapshot::read(r)? };
+                r.close()?;
+                Ok(Self { $($field,)* $optional, $first, $second })
+            }
+        }
+    };
+    // Omit only the empty suffix; a populated second pool retains its prefix.
+    ($ty:ident { $($field:ident),* $(,)? } trailing_empty $first:ident, $second:ident) => {
+        impl $crate::Snapshot for $ty {
+            fn write(&self, w: &mut $crate::Writer) {
+                w.open(stringify!($ty));
+                $($crate::Snapshot::write(&self.$field, w);)*
+                if !self.$first.is_empty() || !self.$second.is_empty() {
+                    $crate::Snapshot::write(&self.$first, w);
+                }
+                if !self.$second.is_empty() { $crate::Snapshot::write(&self.$second, w); }
+                w.close();
+            }
+            fn read(r: &mut $crate::Reader<'_>) -> Result<Self, $crate::DecodeError> {
+                r.open(stringify!($ty))?;
+                $(let $field = $crate::Snapshot::read(r)?;)*
+                let $first = if r.next_kind() == $crate::Next::Close { Default::default() }
+                    else { $crate::Snapshot::read(r)? };
+                let $second = if r.next_kind() == $crate::Next::Close { Default::default() }
+                    else { $crate::Snapshot::read(r)? };
+                r.close()?;
+                Ok(Self { $($field,)* $first, $second })
+            }
+        }
+    };
     ($ty:ident { $($field:ident),* $(,)? } trailing_optional $optional:ident trailing_empty $pool:ident) => {
         impl $crate::Snapshot for $ty {
             fn write(&self, w: &mut $crate::Writer) {
@@ -1048,6 +1101,45 @@ mod tests {
         // 'é' is two bytes and one scalar: the 'x' after it is column 2.
         assert_eq!(line_column("é\néx", 5), (2, 2));
         assert_eq!(line_column("é\néx", 3), (2, 1));
+    }
+
+    #[test]
+    fn two_empty_vector_trailers_preserve_each_previous_prefix() {
+        #[derive(Debug, PartialEq)]
+        struct Pools {
+            base: u32,
+            first: Vec<u32>,
+            second: Vec<u32>,
+        }
+        snapshot_struct!(Pools { base } trailing_empty first, second);
+        for (first, second) in [
+            (vec![], vec![]),
+            (vec![1], vec![]),
+            (vec![], vec![2]),
+            (vec![1], vec![2]),
+        ] {
+            let value = Pools {
+                base: 7,
+                first,
+                second,
+            };
+            let text = to_text(&value);
+            assert_eq!(from_text::<Pools>(&text).unwrap(), value);
+            if value.second.is_empty() {
+                assert_eq!(
+                    text,
+                    if value.first.is_empty() {
+                        "(Pools 7)"
+                    } else {
+                        "(Pools 7\n  (list 1))"
+                    }
+                );
+            }
+        }
+        assert_eq!(
+            from_text::<Pools>("(Pools 7 (list 1))").unwrap().second,
+            vec![]
+        );
     }
 
     #[test]

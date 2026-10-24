@@ -57,6 +57,7 @@ mod ownership;
 mod ready;
 mod scoped_transport;
 mod sealed;
+mod sealed_payload;
 mod structure;
 mod tokens;
 pub use scoped_transport::{
@@ -808,6 +809,7 @@ fn check_with_context<S: Stage>(
             }
         }
         sealed::check(&cx, &facts, &mut report);
+        sealed_payload::check(&cx, &mut report);
         ownership::check(&cx, &facts, &mut report);
         aliasing::check(&cx, &facts, &mut report);
         if strict_scoped {

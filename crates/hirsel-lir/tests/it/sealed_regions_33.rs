@@ -42,6 +42,7 @@ use hirsel_lir::stage::Rc as TestStage;
 struct Declarations {
     registry: hirsel_layout::operation::OperationRegistry,
     expected: Option<Vec<SourceEvent>>,
+    payloads: Option<Vec<hirsel_lir::sealed_payload_source::SourcePayload>>,
 }
 impl OperationDeclarations for Declarations {
     fn derive(
@@ -69,6 +70,13 @@ impl OperationDeclarations for Declarations {
         target: &TargetSpec,
     ) -> Result<hirsel_lir::sealed::SealDescriptor, hirsel_lir::layout::LayoutError> {
         self.registry.seal_descriptor(root, table, target)
+    }
+    fn seal_payloads(
+        &self,
+        _: &hirsel_syntax::DefPath,
+        _: hirsel_syntax::ContentHash,
+    ) -> Option<Vec<hirsel_lir::sealed_payload_source::SourcePayload>> {
+        self.payloads.clone()
     }
     fn seal_events(
         &self,
@@ -194,6 +202,7 @@ fn transition_fixture_with_root(
     t.builder.ret(support::ENTRY, Some(owner));
     let declarations = Declarations {
         registry: t.operations.clone(),
+        payloads: None,
         expected: Some(vec![SourceEvent {
             anchor: t.builder.unit.tables.source_anchors[0].clone(),
             kind: SourceEventKind::Seal,
@@ -248,6 +257,7 @@ fn source_correspondence_survives_candidate_event_deletion() {
     let (unit, table, manifest) = missing.finish();
     let empty = Declarations {
         registry: d.registry.clone(),
+        payloads: None,
         expected: Some(vec![]),
     };
     assert!(checked_raw(unit.clone(), &table, &manifest, &empty).is_empty());
@@ -543,4 +553,141 @@ fn sealed_descriptor_objects_erase_and_rebind_complete_physical_projection() {
             .map(|id| LayoutId(id.0 + 100))
             .collect::<Vec<_>>()
     );
+}
+
+fn payload_fixture() -> (support::Lir<TestStage>, Declarations, ValueId) {
+    use hirsel_lir::sealed_payload::*;
+    let (mut t, mut declarations, _, root) = transition_fixture();
+    let root_type = t.builder.unit.tables.seal_descriptors[0].root_type.clone();
+    let recipe = PayloadRecipe {
+        source: t.builder.unit.tables.source_anchors[0].clone(),
+        operation: PayloadOperation::Transfer { previous: 1 },
+        inputs: vec![PayloadOperand {
+            place: 1,
+            ty: root_type.clone(),
+            producer: PayloadProducer::Parameter(1),
+            capture_slot: None,
+        }],
+    };
+    declarations.payloads = Some(vec![SourcePayload {
+        root_type,
+        recipe: recipe.clone(),
+    }]);
+    t.builder.unit.tables.seal_payloads.push(PayloadTable {
+        descriptor: SealDescriptorId(0),
+        bindings: vec![PayloadBinding {
+            recipe,
+            values: vec![root],
+        }],
+    });
+    (t, declarations, root)
+}
+
+#[test]
+fn semantic_payload_33_valid_source_recipe_binds_the_actual_operand_and_roundtrips() {
+    let (t, declarations, _) = payload_fixture();
+    let table = &t.builder.unit.tables.seal_payloads[0];
+    let bytes = hirsel_codec::to_text(table);
+    assert_eq!(
+        hirsel_codec::from_text::<hirsel_lir::sealed_payload::PayloadTable>(&bytes).unwrap(),
+        *table
+    );
+    assert!(checked(t, &declarations).is_empty());
+}
+
+#[test]
+fn semantic_payload_33_forged_recipe_is_permanently_refused_by_public_c() {
+    use hirsel_lir::sealed_payload::*;
+    let (mut t, declarations, _) = payload_fixture();
+    t.builder.unit.tables.seal_payloads[0].bindings[0]
+        .recipe
+        .operation = PayloadOperation::Allocate {
+        destination: PayloadDestination::Heap,
+    };
+    sealed_rejection(
+        &checked(t, &declarations),
+        "recipes differ from independent source",
+    );
+}
+
+#[test]
+fn semantic_payload_33_operand_substitution_cannot_launder_source_lineage() {
+    let (mut t, declarations, _) = payload_fixture();
+    let grant = t.builder.unit.parameters[0];
+    t.builder.unit.tables.seal_payloads[0].bindings[0].values[0] = grant;
+    sealed_rejection(
+        &checked(t, &declarations),
+        "operand producer lineage differs",
+    );
+}
+
+#[test]
+fn semantic_payload_33_missing_recipe_cannot_delete_its_expected_source_obligation() {
+    let (mut t, declarations, _) = payload_fixture();
+    t.builder.unit.tables.seal_payloads.clear();
+    sealed_rejection(
+        &checked(t, &declarations),
+        "recipes differ from independent source",
+    );
+}
+
+#[test]
+fn semantic_payload_33_unavailable_source_never_authorizes_candidate_recipes() {
+    let (t, mut declarations, _) = payload_fixture();
+    declarations.payloads = None;
+    sealed_rejection(
+        &checked(t, &declarations),
+        "recipes differ from independent source",
+    );
+}
+
+#[test]
+fn semantic_payload_33_agreeing_false_recipe_claims_do_not_replace_ssa_proof() {
+    use hirsel_lir::sealed_payload::*;
+    let (mut t, mut declarations, _) = payload_fixture();
+    // Even matching recipe/source declarations cannot assert that parameter 1
+    // was produced by parameter 0. C follows the candidate value independently.
+    declarations.payloads.as_mut().unwrap()[0].recipe.inputs[0].producer =
+        PayloadProducer::Parameter(0);
+    t.builder.unit.tables.seal_payloads[0].bindings[0]
+        .recipe
+        .inputs[0]
+        .producer = PayloadProducer::Parameter(0);
+    sealed_rejection(
+        &checked(t, &declarations),
+        "operand producer lineage differs",
+    );
+}
+
+#[test]
+fn semantic_payload_33_zero_sized_parameter_keeps_original_source_ordinal() {
+    use hirsel_lir::sealed_payload::*;
+    let (mut t, mut declarations, _) = payload_fixture();
+    let old = t.builder.unit.header.abi.0 as usize;
+    let owner = t.table.fn_abis[old].result.as_ref().unwrap().layout;
+    let root = t.builder.unit.tables.seal_descriptors[0].root_layout;
+    let unit = t.plain(support::l::UNIT);
+    t.builder.unit.parameters.insert(1, unit);
+    let abi = t.abi(
+        &[
+            (Passing::Take, support::l::ARENA),
+            (Passing::Take, support::l::UNIT),
+            (Passing::Take, root),
+        ],
+        Some(owner),
+    );
+    t.builder.unit.header.abi = abi;
+    assert!(
+        t.table.fn_abis[abi.0 as usize].parameters[1]
+            .slots
+            .is_empty()
+    );
+    declarations.payloads.as_mut().unwrap()[0].recipe.inputs[0].producer =
+        PayloadProducer::Parameter(2);
+    t.builder.unit.tables.seal_payloads[0].bindings[0]
+        .recipe
+        .inputs[0]
+        .producer = PayloadProducer::Parameter(2);
+    let errors = checked(t, &declarations);
+    assert!(errors.is_empty(), "{errors:?}");
 }
