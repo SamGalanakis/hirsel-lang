@@ -798,10 +798,15 @@ fn sendable<'a>(
                     BuiltinType::Shared | BuiltinType::Sender | BuiltinType::Mutex => true,
                     BuiltinType::Receiver | BuiltinType::Task => false,
                     BuiltinType::Iter => captures(obligations),
-                    BuiltinType::Atomic
-                    | BuiltinType::Region
-                    | BuiltinType::Inline
-                    | BuiltinType::Simd => all(obligations),
+                    // MEM-4 preserves the sealed payload's own receipt. The
+                    // affine owner's uniqueness never upgrades that payload.
+                    BuiltinType::Region => at
+                        .parts()
+                        .into_iter()
+                        .all(|part| sendable(world, part, false, false, crossing, obligations)),
+                    BuiltinType::Atomic | BuiltinType::Inline | BuiltinType::Simd => {
+                        all(obligations)
+                    }
                     _ => unique && all(obligations),
                 },
                 _ => false,
