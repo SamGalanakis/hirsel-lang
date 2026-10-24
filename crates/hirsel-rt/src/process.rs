@@ -3146,4 +3146,60 @@ mod timed_provider_tests {
         assert!(!io.process_sources());
         io.call(Request::Close { handle: child }).unwrap();
     }
+    #[test]
+    fn timed_intermediate_pipeline_gate_does_not_keep_an_unready_token_runnable() {
+        let grant: hirsel_run_schema::ProcessGrant = serde_json::from_str(r#"{"provider":"process.script.timed@1","clock":"run.monotonic","rules":[{"program":"/fixture/a"},{"program":"/fixture/b"}],"runs":[],"children":[{"program":"/fixture/a","args":[],"steps":[{"at":3},{"print":[97]},{"exit":{"exited":0}}]},{"program":"/fixture/b","args":[],"steps":[{"at":5},{"expect":[97,98]},{"exit":{"exited":0}}]}]}"#).unwrap();
+        let mut io = live(&grant);
+        let Completion::Handle(Ok(process)) = io.call(Request::Process { io: 1 }).unwrap() else {
+            panic!()
+        };
+        let command = |program: &str| Command {
+            program: program.into(),
+            args: vec![],
+            env: None,
+            directory: None,
+            own_group: false,
+        };
+        let Completion::Spawned(Ok(child)) = io
+            .call(Request::ProcessSpawnPipeline {
+                process,
+                stages: vec![command("/fixture/a"), command("/fixture/b")],
+                max_stderr: 2,
+            })
+            .unwrap()
+        else {
+            panic!()
+        };
+        io.enter(17);
+        assert_eq!(
+            io.call(Request::ChildRead {
+                process,
+                child,
+                stream: ChildStream::Stdout,
+                max: 100
+            }),
+            Err(AdapterError::Blocked)
+        );
+        io.parked(17);
+        assert!(io.wait().unwrap());
+        io.ready().unwrap();
+        assert!(
+            matches!(io.process_batch(&[]).unwrap(), Ready::Tokens(tokens) if tokens.is_empty())
+        );
+        assert_eq!(io.readiness().unwrap().virtual_time(), Some(3));
+        assert!(
+            !io.has_ready().unwrap(),
+            "an intermediate gate with no downstream output cannot keep the read eligible"
+        );
+        assert!(io.wait().unwrap());
+        assert_eq!(io.readiness().unwrap().virtual_time(), Some(5));
+        io.ready().unwrap();
+        assert!(
+            matches!(io.process_batch(&[]), Err(AdapterError::ProcessFailed { child: failed, .. }) if failed == child)
+        );
+        assert_eq!(io.stdout(), b"test failure: child /fixture/b expected b\"ab\" but its input stage /fixture/a closed its output after writing b\"a\"\n");
+        io.call(Request::Close { handle: child }).unwrap();
+        io.finish(17);
+        assert!(!io.process_sources());
+    }
 }

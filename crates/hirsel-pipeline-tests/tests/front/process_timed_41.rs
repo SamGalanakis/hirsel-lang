@@ -60,12 +60,18 @@ fn campaign_mode(
                 failures: vec![],
                 roots: vec![],
             };
-            if id == "E04" {
+            if matches!(id, "E04" | "L02") {
                 expected.exit_code = None;
                 let (line, text) = source
                     .lines()
                     .enumerate()
-                    .find(|(_, text)| text.contains("child.close_stdin"))
+                    .find(|(_, text)| {
+                        text.contains(if id == "L02" {
+                            "proc.spawn_pipeline"
+                        } else {
+                            "child.close_stdin"
+                        })
+                    })
                     .unwrap();
                 expected.failures.push(Failure {
                     rule: "LANG-9".into(),
@@ -159,8 +165,12 @@ fn campaign_mode(
             eprintln!("TIMED_PASS {id} checked-H");
             expected
         };
+        eprintln!("TIMED_PHASE {id} native-export start");
         let input = loaded.engine.export_native_input().unwrap();
+        eprintln!("TIMED_PHASE {id} native-export done");
+        eprintln!("TIMED_PHASE {id} native-import start");
         let input = loaded.engine.import_native_input(input).unwrap();
+        eprintln!("TIMED_PHASE {id} native-import done");
         let options = Options::new(TargetSpec::x86_64_unknown_linux_gnu());
         let matrix = [
             Configuration {
@@ -196,12 +206,15 @@ fn campaign_mode(
                 libs.display().to_string(),
             ]);
         }
+        eprintln!("TIMED_PHASE {id} native-build start");
         let ready = build(&input, &options).unwrap();
+        eprintln!("TIMED_PHASE {id} native-build done");
         let sites = Sites::new(input.snapshot());
         let mut runnables = vec![];
         for backend in [Backend::Llvm, Backend::Cranelift] {
             let dir = root.join(format!("{backend:?}"));
             std::fs::create_dir_all(&dir).unwrap();
+            eprintln!("TIMED_PHASE {id} {backend:?}-emit start");
             let objects = emit_backend_objects(
                 &ready,
                 backend,
@@ -211,9 +224,11 @@ fn campaign_mode(
                 None,
             )
             .unwrap();
+            eprintln!("TIMED_PHASE {id} {backend:?}-emit done; link start");
             let runnable =
                 link_fixture_runnable(&ready, &loaded.entry, &objects, &tools, &dir, &fixture)
                     .unwrap();
+            eprintln!("TIMED_PHASE {id} {backend:?}-link done");
             let image = match &runnable {
                 Runnable::Executable(path) => path.clone(),
                 Runnable::Image(image) => {
@@ -226,7 +241,7 @@ fn campaign_mode(
             runnables.push((runnable, dir));
         }
         let mut producers = Vec::new();
-        if id == "R04" || id == "E04" || !native_only {
+        if matches!(id, "R04" | "E04" | "L02" | "S01") || !native_only {
             for (name, checked) in [("reference", false), ("checked-H", true)] {
                 let tape = root.join(format!("{name}-recording"));
                 bind_artifact(format!("{name}-tape"), &tape);
@@ -265,7 +280,7 @@ fn campaign_mode(
                 "before",
                 Some(&tools),
             );
-            let recorded = launch_fixture(
+            let recording_result = launch_fixture(
                 recorder,
                 &ready.target,
                 &tools,
@@ -276,8 +291,7 @@ fn campaign_mode(
                     revocations: None,
                 },
                 &fixture,
-            )
-            .unwrap();
+            );
             inner_receipt(
                 id,
                 &format!("{:?}-record", dir.file_name().unwrap()),
@@ -285,12 +299,18 @@ fn campaign_mode(
                 Some(&tools),
             );
             let bytes = std::fs::read(&tape).unwrap_or_default();
+            let tape_kind = if recording_result.is_ok() {
+                "TIMED_TAPE"
+            } else {
+                "TIMED_PARTIAL_TAPE"
+            };
             eprintln!(
-                "TIMED_TAPE {id} {:?} sha256={} hex={}",
+                "{tape_kind} {id} {:?} sha256={} hex={}",
                 dir.file_name().unwrap(),
                 tape_sha(&bytes),
                 bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()
             );
+            let recorded = recording_result.unwrap();
             assert_eq!(
                 observe(&recorded, &ready, &sites).unwrap(),
                 expected,
@@ -1061,8 +1081,7 @@ fn timed_l01_pipeline_feed_precedes_upstream_close() {
         b"2:cd\nstatuses 0 3; stderr empty\nat 5\n",
     );
 }
-#[test]
-fn timed_l02_pipeline_deferred_close_reports_at_downstream_gate() {
+fn l02_case() -> (String, Fixture, Vec<u8>) {
     let source = pipeline_program(
         r#"
       let mut buffer: List[u8] = []
@@ -1074,16 +1093,33 @@ fn timed_l02_pipeline_deferred_close_reports_at_downstream_gate() {
         json!([{"at":3},{"print":[97]},{"exit":{"exited":0}}]),
         json!([{"at":5},{"expect":[97,98]},{"exit":{"exited":0}}]),
     );
-    campaign(
-        "L02",
-        &source,
+    (
+        source,
         fixture,
         oracle("L02")["expected"]["report"]
             .as_str()
             .unwrap()
-            .as_bytes(),
-    );
+            .as_bytes()
+            .to_vec(),
+    )
 }
+#[test]
+fn timed_l02_pipeline_deferred_close_reports_at_downstream_gate() {
+    if bounded_test_child("L02") {
+        return;
+    }
+    let (source, fixture, output) = l02_case();
+    campaign("L02", &source, fixture, &output);
+}
+#[test]
+fn timed_l02_missing_native_complement() {
+    if bounded_test_child("L02-native") {
+        return;
+    }
+    let (source, fixture, output) = l02_case();
+    campaign_mode("L02", &source, fixture, &output, true, false);
+}
+
 fn stderr_cap_case(cap: u64) {
     let source = pipeline_program(
         r#"
@@ -1628,4 +1664,32 @@ fn timed_r02_forged_at_behind_unmet_expect_four_consumers() {
         oracle_fixture("G03"),
         b"",
     );
+}
+
+// Keep the test supervisor alive on a CPU cap so Buck retains the child's
+// precise stage receipts instead of discarding the whole action at RE600.
+fn bounded_test_child(id: &str) -> bool {
+    if std::env::var("HIRSEL_TIMED_TEST_CHILD").as_deref() == Ok(id) {
+        return false;
+    }
+    let name = std::thread::current().name().unwrap().to_string();
+    let output = std::process::Command::new("/bin/sh")
+        .args([
+            "-c",
+            r#"ulimit -t 60; ulimit -d 2097152; exec "$@""#,
+            "timed-test-caps",
+        ])
+        .arg(std::env::current_exe().unwrap())
+        .args(["--exact", &name, "--nocapture"])
+        .env("HIRSEL_TIMED_TEST_CHILD", id)
+        .output()
+        .unwrap();
+    eprintln!("{}", String::from_utf8_lossy(&output.stdout));
+    eprintln!("{}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "{id} bounded test child: {}",
+        output.status
+    );
+    true
 }

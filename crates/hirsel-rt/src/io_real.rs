@@ -1365,10 +1365,15 @@ impl<S: Streams> RealCore<S> {
         let mut tokens = readiness.ready()?;
         if self.state.timed_process {
             tokens.retain(|token| {
-                self.state
+                let ready = self
+                    .state
                     .timed_requests
                     .get(token)
-                    .is_none_or(|request| self.state.process_ready(request))
+                    .is_none_or(|request| self.state.process_ready(request));
+                if !ready {
+                    readiness.acknowledge_scripted(*token);
+                }
+                ready
             });
         }
         if let Some(clock) = &self.test_clock {

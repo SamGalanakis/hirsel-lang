@@ -329,6 +329,19 @@ impl Readiness {
         let progress = self.0.lock().unwrap().progress;
         self.pending().scripted = Some(ScriptedWait::Progress(progress));
     }
+    /// A provider inspected this scripted candidate and it is still blocked.
+    /// Acknowledge the current progress without publishing a false wake; the
+    /// next idle wait can then consider the provider's next virtual deadline.
+    pub(crate) fn acknowledge_scripted(&self, token: u64) {
+        let token = self.tag(token);
+        let mut state = self.0.lock().unwrap();
+        let progress = state.progress;
+        if let Some(pending) = state.pending.get_mut(&token)
+            && matches!(pending.scripted, Some(ScriptedWait::Progress(_)))
+        {
+            pending.scripted = Some(ScriptedWait::Progress(progress));
+        }
+    }
     /// An unbounded Unanswered connect has no readiness source (CONC-8).
     pub(crate) fn scripted_connect(&self) {
         self.pending().scripted = Some(ScriptedWait::UnansweredConnect);
