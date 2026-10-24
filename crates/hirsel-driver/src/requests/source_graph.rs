@@ -368,6 +368,7 @@ pub(super) fn install(
     budget: &GraphBudget,
     request: &CompileRequest,
     ledger: Arc<InspectionLedger>,
+    scratch_parent: &std::path::Path,
 ) -> Result<Arc<InstalledGraph>, ToolError> {
     let (lowering, needs_run) = match &request.operation {
         CompileOperation::Check { lowering } => (*lowering, false),
@@ -378,10 +379,20 @@ pub(super) fn install(
     // The loader reads exactly the supplied immutable observations. Declaration
     // indexing/signature metadata is S0; no P body or Lower task runs here.
     let mut loading = budget.begin(limits)?;
-    let store = Arc::new(RequestStore::new(
+    let disk_bytes = limits
+        .runtime_bytes
+        .checked_add(limits.snapshot_bytes)
+        .and_then(|bytes| bytes.checked_add(limits.transport_bytes))
+        .ok_or_else(uninstalled)?;
+    let store = match RequestStore::with_scratch(
         config.store.clone(),
         loading.take_transport(),
-    ));
+        scratch_parent,
+        disk_bytes,
+    ) {
+        Ok(store) => Arc::new(store),
+        Err(error) => return Err(loading.failed(ToolError::Io(error))),
+    };
     let mut selected_config = config.clone();
     selected_config.store = store.clone();
     let selected_compiler = compiler.clone().with_config(selected_config);

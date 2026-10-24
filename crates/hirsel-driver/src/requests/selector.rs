@@ -23,6 +23,7 @@ pub struct CompilerRequests {
     config: CompileConfig,
     budget: Arc<ProcessBudget>,
     limits: RequestLimits,
+    scratch_parent: std::path::PathBuf,
     toolchain: Option<Arc<crate::native::Toolchain>>,
 }
 // Host constructors share one process allowance, including different Sessions.
@@ -70,8 +71,15 @@ impl CompilerRequests {
             config,
             budget,
             limits,
+            scratch_parent: std::env::temp_dir(),
             toolchain: None,
         }
+    }
+    /// Physical request transport policy, captured before any source read.
+    pub fn with_scratch_parent(mut self, parent: std::path::PathBuf) -> Self {
+        self.scratch_parent = parent;
+        self.graphs = super::host_selector::GraphSelections::new(&self.budget);
+        self
     }
     pub fn with_toolchain(mut self, toolchain: Arc<crate::native::Toolchain>) -> Self {
         self.toolchain = Some(toolchain);
@@ -144,8 +152,17 @@ impl hirsel_engine::requests::RequestEngine for CompilerRequests {
         let compiler = &self.compiler;
         let config = &self.config;
         let limits = self.limits;
+        let scratch_parent = &self.scratch_parent;
         self.graphs.select(request, |budget| {
-            super::source_graph::install(compiler, config, limits, budget, request, ledger)
+            super::source_graph::install(
+                compiler,
+                config,
+                limits,
+                budget,
+                request,
+                ledger,
+                scratch_parent,
+            )
         })
     }
 }

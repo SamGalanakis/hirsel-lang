@@ -570,3 +570,50 @@ fn selected_footprint_planner_admits_many_small_definitions_under_the_same_snaps
         assert_eq!(budget.reserved(), 0);
     });
 }
+
+#[test]
+fn source_transport_scratch_keeps_the_selected_provider_and_lives_through_detached_source_files() {
+    hirsel_engine::with_compiler_stack(|| {
+        let (_directory, entry, source) = fixture();
+        let selected = request(&entry);
+        let parent = tempfile::tempdir().unwrap();
+        let budget = ProcessBudget::new(512 << 20);
+        let mut host =
+            Host::new(selector(budget.clone()).with_scratch_parent(parent.path().to_owned()));
+        assert_eq!(std::fs::read_dir(parent.path()).unwrap().count(), 0);
+        let output = host.request(&selected).unwrap().wait().unwrap();
+        assert!(checked(&output).diagnostics.is_empty());
+        assert_eq!(
+            output.work.store_adoptions, 0,
+            "none@1 must not claim a persistent adoption"
+        );
+        let held_file = checked(&output)
+            .sources
+            .anchors()
+            .find_map(|(_, file, _)| {
+                checked(&output)
+                    .sources
+                    .file(file)
+                    .filter(|file| file.path == source)
+                    .cloned()
+            })
+            .expect("checked source file");
+        assert_eq!(std::fs::read_dir(parent.path()).unwrap().count(), 1);
+        drop(host);
+        drop(output);
+        assert_eq!(held_file.text(), ORIGINAL);
+        assert_eq!(
+            std::fs::read_dir(parent.path()).unwrap().count(),
+            1,
+            "an external source file retains its original graph transport"
+        );
+        assert!(budget.reserved() > 0);
+        drop(held_file);
+        assert_eq!(
+            std::fs::read_dir(parent.path()).unwrap().count(),
+            0,
+            "last source owner removes its private request files"
+        );
+        assert_eq!(budget.reserved(), 0);
+    });
+}
