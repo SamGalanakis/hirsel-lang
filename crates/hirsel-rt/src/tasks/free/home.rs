@@ -217,8 +217,10 @@ pub(crate) unsafe fn service_child(run: *mut RunShared) -> crate::stop::Stopped<
 }
 
 pub(crate) fn runner_waiter(ctx: *mut crate::TaskCtx) -> (u32, u32) {
-    let s = super::super::scheduler(ctx);
-    (s.current, s.task(s.current).generation)
+    role::with_role(ctx, |s| {
+        let me = s.current;
+        (me, s.task(me).generation)
+    })
 }
 
 /// # Safety

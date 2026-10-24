@@ -75,11 +75,7 @@ pub(super) unsafe fn request(
         while !unsafe { (*pending).positions.as_ref().unwrap().ready() } {
             // The predecessor ends under the same role and wakes this list.
             // Register before saving so its end cannot strand a live waiter.
-            let s = scheduler(ctx);
-            let me = s.current;
-            if !s.retrying.contains(&me) {
-                s.retrying.push(me);
-            }
+            super::super::replay::retry_later(ctx);
             unsafe { try_block(&mut *ctx, Wait::Retry { cancelable: false }, false, 0) }?;
         }
         crate::stop::observe(ctx)?;
@@ -96,7 +92,7 @@ pub(super) unsafe fn request(
             if crate::io_checks::cancellation_result(unsafe { (*pending).request.buffers() }, 0)
                 .is_some()
             {
-                scheduler(ctx).canceled(unsafe { (*ctx).shield })
+                role::with_role(ctx, |s| s.canceled(unsafe { (*ctx).shield }))
             } else {
                 None
             };

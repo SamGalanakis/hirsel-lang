@@ -24,11 +24,11 @@ pub(crate) unsafe fn open(
     none: *const u8,
     descriptor: u32,
 ) -> Stopped<()> {
-    let s = scheduler(ctx) as *mut Scheduler;
+    role::admit(ctx);
     let layout = unsafe { (*ctx).descriptor(descriptor) };
     let element = unsafe { crate::channels::Element::new(descriptor, layout, none) };
     let cell = crate::channels::Channels::prepare_open(element, unsafe { &*layout });
-    let reservation = unsafe { (*s).channels.reserve_open() };
+    let reservation = unsafe { role::with_held(ctx, |s| s.channels.reserve_open()) };
     let channel = reservation.channel();
     let (sender, receiver) = reservation.words();
     super::record::begin(ctx);
@@ -41,7 +41,7 @@ pub(crate) unsafe fn open(
         if let Some(replay) = &replay {
             replay.create()?;
         }
-        (*s).channels.initialize_open_cell(reservation, cell);
+        role::with_held(ctx, |s| s.channels.initialize_open_cell(reservation, cell));
         out.write(sender);
         out.add(1).write(receiver);
         if let Some(writer) = writer {
@@ -58,12 +58,14 @@ pub(crate) unsafe fn open(
 /// The role is held; sender is open and out writable.
 pub(crate) unsafe fn dup(ctx: *mut TaskCtx, sender: u64, out: *mut u64) -> Stopped<()> {
     super::record::begin(ctx);
-    let s = scheduler(ctx) as *mut Scheduler;
-    let channel = unsafe { (*s).channels.channel(sender, true) };
+    let channel = role::with_role(ctx, |s| s.channels.channel(sender, true));
     unsafe { super::replay::wait_object(ctx, (crate::free::CHANNEL, u64::from(channel))) }?;
     let replay = super::replay::object(ctx, (crate::free::CHANNEL, u64::from(channel)));
-    let cell = unsafe { (*s).channels.payload(channel) };
-    let reservation = unsafe { (*s).channels.reserve_dup() };
+    let (cell, reservation) = unsafe {
+        role::with_held(ctx, |s| {
+            (s.channels.payload(channel), s.channels.reserve_dup())
+        })
+    };
     let word = reservation.word();
     let mut state = cell.lock();
     super::record::track(ctx, cell.object.get());
@@ -75,7 +77,9 @@ pub(crate) unsafe fn dup(ctx: *mut TaskCtx, sender: u64, out: *mut u64) -> Stopp
             cell.dup(&mut state);
             let version = cell.next_event();
             unsafe {
-                (*s).channels.initialize_dup_endpoint(reservation, channel);
+                role::with_held(ctx, |s| {
+                    s.channels.initialize_dup_endpoint(reservation, channel)
+                });
                 out.write(word);
             }
             if let Some(writer) = writer {
@@ -107,11 +111,10 @@ pub(crate) unsafe fn send(
     out: *mut u32,
 ) -> Stopped<()> {
     super::record::begin(ctx);
-    let s = scheduler(ctx) as *mut Scheduler;
-    let channel = unsafe { (*s).channels.channel(sender, true) };
+    let channel = role::with_role(ctx, |s| s.channels.channel(sender, true));
     unsafe { super::replay::wait_object(ctx, (crate::free::CHANNEL, u64::from(channel))) }?;
     let replay = super::replay::object(ctx, (crate::free::CHANNEL, u64::from(channel)));
-    let cell = unsafe { (*s).channels.payload(channel) };
+    let cell = unsafe { role::with_held(ctx, |s| s.channels.payload(channel)) };
     super::objects::keep_endpoint(ctx, sender, channel, true, &cell);
     unsafe { role::release(ctx) };
     let mut state = cell.lock();
@@ -123,7 +126,7 @@ pub(crate) unsafe fn send(
     drop(replay);
     unsafe { role::enter(ctx) };
     if publication? == crate::channels::DONE {
-        scheduler(ctx).channels.touch(channel);
+        role::with_role(ctx, |s| s.channels.touch(channel));
     }
     unsafe { try_yield(&mut *ctx) }
 }
@@ -176,8 +179,7 @@ pub(crate) unsafe fn receive(
     caller_site: u64,
 ) -> Stopped<()> {
     super::record::begin(ctx);
-    let s = scheduler(ctx) as *mut Scheduler;
-    let channel = unsafe { (*s).channels.channel(receiver, false) };
+    let channel = role::with_role(ctx, |s| s.channels.channel(receiver, false));
     let mut entered = false;
     loop {
         // Cancellation flags and the shield snapshot remain stable while
@@ -190,7 +192,11 @@ pub(crate) unsafe fn receive(
         }
         let live = unsafe { canceled(ctx) };
         if live.is_none() {
-            super::objects::keep_uncanceled(ctx, unsafe { &*s }, unsafe { (*ctx).shield });
+            unsafe {
+                role::with_held(ctx, |s| {
+                    super::objects::keep_uncanceled(ctx, s, (*ctx).shield)
+                })
+            };
         }
         let cause = replay
             .as_ref()
@@ -198,16 +204,20 @@ pub(crate) unsafe fn receive(
             .map(|object| object.token().cancel_peek(live))
             .unwrap_or(live);
         let canceled_outcome = cause.map(|cause| format!("canceled {cause}"));
-        let cell = unsafe { (*s).channels.payload(channel) };
+        let (cell, me, owner) = unsafe {
+            role::with_held(ctx, |s| {
+                let me = s.current;
+                let row = s.task(me);
+                let owner = if row.pinned { Owner::Any } else { row.owner };
+                (s.channels.payload(channel), me, owner)
+            })
+        };
         super::objects::keep_endpoint(ctx, receiver, channel, false, &cell);
         // A parking receiver's wake needs no role: a send that makes a message
         // visible takes the oldest token. Replay keeps its retry wait.
-        let me = unsafe { (*s).current };
         let mut token = if replay.is_some() {
             None
         } else {
-            let row = unsafe { (*s).task(me) };
-            let owner = if row.pinned { Owner::Any } else { row.owner };
             unsafe { crate::pool::free::token((*ctx).run_ptr(), me, owner) }
         };
         let mut state = cell.lock();
@@ -280,17 +290,13 @@ pub(crate) unsafe fn receive(
             if cause.is_some() {
                 // A send may have woken this receiver alone: a canceled one
                 // takes no message, so the policy serves the next in park order.
-                scheduler(ctx).channels.touch(channel);
+                role::with_role(ctx, |s| s.channels.touch(channel));
             }
             return unsafe { try_yield(&mut *ctx) };
         }
         entered = true;
         let wait = if replaying {
-            let s = scheduler(ctx);
-            let me = s.current;
-            if !s.retrying.contains(&me) {
-                s.retrying.push(me);
-            }
+            super::replay::retry_later(ctx);
             Wait::Retry { cancelable: false }
         } else {
             Wait::ReceiveReady { channel }
@@ -326,12 +332,16 @@ unsafe fn close_inner(
     operation_site: u64,
 ) -> Stopped<u8> {
     super::record::begin(ctx);
-    let s = scheduler(ctx) as *mut Scheduler;
-    let (channel, sender) = unsafe { (*s).channels.endpoint_of(word) };
+    let (channel, sender) = role::with_role(ctx, |s| s.channels.endpoint_of(word));
     unsafe { super::replay::wait_object(ctx, (crate::free::CHANNEL, u64::from(channel))) }?;
     let replay = super::replay::object(ctx, (crate::free::CHANNEL, u64::from(channel)));
-    let cell = unsafe { (*s).channels.payload(channel) };
-    unsafe { (*s).channels.prepare_close() };
+    let cell = unsafe {
+        role::with_held(ctx, |s| {
+            let cell = s.channels.payload(channel);
+            s.channels.prepare_close();
+            cell
+        })
+    };
     let inert = cell.element.inert;
     let mut state = cell.lock();
     let outcome = if sender {
@@ -345,7 +355,9 @@ unsafe fn close_inner(
         Phase::Done,
         replay.as_ref().map(|object| object.token()),
         |writer| {
-            let left = unsafe { (*s).channels.close_locked(word, &cell, &mut state) };
+            let left = unsafe {
+                role::with_held(ctx, |s| s.channels.close_locked(word, &cell, &mut state))
+            };
             let version = cell.next_event();
             if let Some(writer) = writer {
                 writer.touch(
@@ -367,10 +379,13 @@ unsafe fn close_inner(
     // Close is Keep: it still publishes runnable receivers before returning
     // to a segment that may never yield. No stop-aware ctx accessor can
     // abandon a detached ring on this frame.
-    unsafe {
-        super::super::readiness::poll_free(&mut *s);
-        super::publish_ready(&mut *s, (*ctx).run_ptr());
-    }
+    let ready = unsafe {
+        role::with_held(ctx, |s| {
+            super::super::readiness::poll_free(s);
+            super::take_ready(s)
+        })
+    };
+    unsafe { super::schedule_ready((*ctx).run_ptr(), ready) };
     let Some((left, descriptor)) = left else {
         return Ok(STATUS_OK);
     };

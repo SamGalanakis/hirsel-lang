@@ -13,7 +13,7 @@ pub(crate) const OP_FREE: u64 = 2;
 pub(super) fn allowed(ctx: *mut TaskCtx, flags: u64) -> bool {
     !super::replay::on(ctx)
         && flags & (IMMEDIATE | OP_FREE) != 0
-        && scheduler(ctx).task(unsafe { (*ctx).task_id }).owner == Owner::Any
+        && role::with_role(ctx, |s| s.task(unsafe { (*ctx).task_id }).owner) == Owner::Any
         && (flags & IMMEDIATE != 0 || !super::record::on(ctx))
         // Replay always retains independent fibers; recorded immediate children
         // retain per-task logs while borrowing a fiber until replay.
@@ -28,20 +28,22 @@ pub(super) unsafe fn flush(ctx: *mut TaskCtx) {
     let Some(child) = (unsafe { (*ctx).free_ops.deferred.take() }) else {
         return;
     };
-    let s = scheduler(ctx);
+    role::admit(ctx);
     let stack = unsafe { (*ctx).worker().idle_stacks.take() };
     let target = stack.context();
-    let row = s.task(child);
-    let owned = row
-        .inline_context
-        .take()
-        .expect("unpublished child context");
     unsafe {
-        target.write((*owned).into_inner());
-        (*target).task_sp = stack.prepare(task_entry, target.cast(), child as usize as *mut u8);
-    }
-    row.ctx = target;
-    row.stack = Some(stack);
+        role::with_held(ctx, |s| {
+            let row = s.task(child);
+            let owned = row
+                .inline_context
+                .take()
+                .expect("unpublished child context");
+            target.write((*owned).into_inner());
+            (*target).task_sp = stack.prepare(task_entry, target.cast(), child as usize as *mut u8);
+            row.ctx = target;
+            row.stack = Some(stack);
+        })
+    };
     unsafe { crate::pool::free::schedule_saved((*ctx).run_ptr(), child, Owner::Any) };
 }
 
@@ -53,9 +55,8 @@ pub(super) unsafe fn run(
     child: u32,
     result: Option<(*mut u8, u64)>,
 ) -> Stopped<()> {
-    let s = scheduler(ctx);
-    let parent = s.current;
-    let (target, code, environment, site) = {
+    let (parent, target, code, environment, site) = role::with_role(ctx, |s| {
+        let parent = s.current;
         let frame = s.task(parent).dispatch.clone();
         s.task(parent).state = State::Parked;
         if let Some((slot, size)) = result {
@@ -66,8 +67,8 @@ pub(super) unsafe fn run(
         row.inline_running = true;
         row.dispatch = frame;
         let (code, environment, site) = row.code.take().expect("an unstarted fast child");
-        (row.ctx, code, environment, site)
-    };
+        (parent, row.ctx, code, environment, site)
+    });
     // No runtime borrow crosses user code. The physical image changes before
     // the child can suspend; a saved child never publishes the parent twice.
     unsafe {
@@ -88,12 +89,13 @@ pub(super) unsafe fn run(
     // A cut during the child's end abandons the child's running image, never
     // the parent's currently unbound context below it on the lent stack.
     unsafe { crate::stop::check(target, super::lifecycle::completion(target, child, status)) };
-    let s = scheduler(target);
-    let row = s.task(child);
-    row.finishing = false;
-    row.inline_running = false;
-    row.state = State::Done;
-    row.dispatch = None;
+    role::with_role(target, |s| {
+        let row = s.task(child);
+        row.finishing = false;
+        row.inline_running = false;
+        row.state = State::Done;
+        row.dispatch = None;
+    });
     // The child may have migrated; restore onto its actual worker, not the
     // worker on which the parent originally entered this optimization.
     unsafe {
@@ -105,9 +107,11 @@ pub(super) unsafe fn run(
         TaskCtx::switch_in(ctx, worker);
         role::enter(ctx);
     }
-    let row = scheduler(ctx).task(parent);
-    row.wait = None;
-    row.state = State::Ready;
+    role::with_role(ctx, |s| {
+        let row = s.task(parent);
+        row.wait = None;
+        row.state = State::Ready;
+    });
     Ok(())
 }
 
@@ -121,32 +125,38 @@ pub(super) unsafe fn finish(
     none: *const u8,
     size: u64,
 ) -> Stopped<bool> {
-    let s = scheduler(ctx);
-    let me = s.current;
-    let row = s.task(me);
-    if !row.inline_running {
+    let (me, inline) = role::with_role(ctx, |s| {
+        let me = s.current;
+        (me, s.task(me).inline_running)
+    });
+    if !inline {
         return Ok(false);
     }
     // The physical stack loan does not remove TaskFinish's result-ready op.
     // Replay uses independent fibers and must reach this same child ordinal
     // before its distinct cleanup/completion op.
-    let s = s as *mut Scheduler;
     super::record::end(ctx, || unsafe {
-        (*s).task(me).ended = true;
-        (*s).order(me);
+        role::with_held(ctx, |s| {
+            s.task(me).ended = true;
+            s.order(me);
+        })
     })?;
-    let row = unsafe { (*s).task(me) };
-    if let Some((out, expected)) = row.inline_result.take() {
-        assert_eq!(expected, size);
-        unsafe { std::ptr::copy_nonoverlapping(slot, out, size as usize) };
-    } else {
-        // Only the OP_FREE proof permits this branch: no result finalizer or
-        // root is lost when a scope discards the raw image.
-        let size = usize::try_from(size).expect("result image fits address space");
-        let mut image = vec![0u128; size.div_ceil(16)];
-        unsafe { std::ptr::copy_nonoverlapping(slot, image.as_mut_ptr().cast(), size) };
-        row.inline_value = Some((image, size));
-    }
+    unsafe {
+        role::with_held(ctx, |s| {
+            let row = s.task(me);
+            if let Some((out, expected)) = row.inline_result.take() {
+                assert_eq!(expected, size);
+                std::ptr::copy_nonoverlapping(slot, out, size as usize);
+            } else {
+                // Only the OP_FREE proof permits this branch: no result finalizer
+                // or root is lost when a scope discards the raw image.
+                let size = usize::try_from(size).expect("result image fits address space");
+                let mut image = vec![0u128; size.div_ceil(16)];
+                std::ptr::copy_nonoverlapping(slot, image.as_mut_ptr().cast(), size);
+                row.inline_value = Some((image, size));
+            }
+        })
+    };
     unsafe { std::ptr::copy_nonoverlapping(none, slot, size as usize) };
     Ok(true)
 }

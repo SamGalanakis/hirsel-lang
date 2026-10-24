@@ -7,13 +7,19 @@ use hirsel_free::record::ObjectId;
 /// # Safety
 /// The task holds the role and no C frame of this outer call lies below it.
 pub(crate) unsafe fn enter(ctx: *mut TaskCtx, gate: u32, site: u64) -> Stopped<bool> {
-    let me = scheduler(ctx).current;
-    if scheduler(ctx).gate(gate).owner == Some(me) {
-        let row = scheduler(ctx).gate(gate);
-        row.depth = row
-            .depth
-            .checked_add(1)
-            .expect("serial gate depth overflow");
+    let (me, nested) = role::with_role(ctx, |s| {
+        let me = s.current;
+        let row = s.gate(gate);
+        let nested = row.owner == Some(me);
+        if nested {
+            row.depth = row
+                .depth
+                .checked_add(1)
+                .expect("serial gate depth overflow");
+        }
+        (me, nested)
+    });
+    if nested {
         return Ok(false);
     }
     let started = unsafe { (*ctx).run_ref() }
@@ -23,39 +29,40 @@ pub(crate) unsafe fn enter(ctx: *mut TaskCtx, gate: u32, site: u64) -> Stopped<b
     super::record::begin(ctx);
     let mut entered = false;
     loop {
-        let s = scheduler(ctx) as *mut Scheduler;
-        unsafe { (*s).task(me).retried = false };
+        role::with_role(ctx, |s| s.task(me).retried = false);
         let replay = super::replay::token(ctx);
         let enabled = replay
             .as_ref()
             .map(|token| token.gate_ready(ctx, gate))
             .transpose()?
             .unwrap_or(true);
-        if enabled && unsafe { (*s).gate(gate).owner.is_none() } {
+        if enabled && unsafe { role::with_held(ctx, |s| s.gate(gate).owner.is_none()) } {
             let object = super::record::on(ctx).then(|| ObjectId::Gate(format!("package:{gate}")));
             super::record::track(ctx, object.as_ref());
             let publication = super::record::publish(ctx, Phase::Done, |writer| unsafe {
-                let row = (*s).gate(gate);
-                row.owner = Some(me);
-                row.depth = 1;
-                row.waiters.retain(|&task| task != me);
-                row.version = row
-                    .version
-                    .checked_add(1)
-                    .expect("serial gate version overflow");
-                if let Some(writer) = writer {
-                    // The public counter starts at zero; compressed objects
-                    // exist from admission at version one without a create op.
-                    writer.touch(
-                        object.as_ref().expect("a recorded gate identity"),
-                        row.version.checked_add(1).unwrap(),
-                        0,
-                        "gate enter",
-                    );
-                } else if let Some(replay) = &replay {
-                    replay.gate_touch(gate, "gate enter")?;
-                }
-                Ok(())
+                role::with_held(ctx, |s| {
+                    let row = s.gate(gate);
+                    row.owner = Some(me);
+                    row.depth = 1;
+                    row.waiters.retain(|&task| task != me);
+                    row.version = row
+                        .version
+                        .checked_add(1)
+                        .expect("serial gate version overflow");
+                    if let Some(writer) = writer {
+                        // The public counter starts at zero; compressed objects
+                        // exist from admission at version one without a create op.
+                        writer.touch(
+                            object.as_ref().expect("a recorded gate identity"),
+                            row.version.checked_add(1).unwrap(),
+                            0,
+                            "gate enter",
+                        );
+                    } else if let Some(replay) = &replay {
+                        replay.gate_touch(gate, "gate enter")?;
+                    }
+                    Ok(())
+                })
             });
             drop(object);
             drop(replay);
@@ -69,20 +76,21 @@ pub(crate) unsafe fn enter(ctx: *mut TaskCtx, gate: u32, site: u64) -> Stopped<b
         }
         let replaying = replay.is_some();
         drop(replay);
-        let row = unsafe { (*s).gate(gate) };
-        if !row.waiters.contains(&me) {
-            row.waiters.reserve(1);
-            row.waiters.push(me);
-        }
+        unsafe {
+            role::with_held(ctx, |s| {
+                let row = s.gate(gate);
+                if !row.waiters.contains(&me) {
+                    row.waiters.reserve(1);
+                    row.waiters.push(me);
+                }
+            })
+        };
         if !entered {
             super::record::publish(ctx, Phase::Entered, |_| ())?;
             entered = true;
         }
         if replaying {
-            let s = scheduler(ctx);
-            if !s.retrying.contains(&me) {
-                s.retrying.push(me);
-            }
+            super::replay::retry_later(ctx);
         }
         unsafe { try_block(&mut *ctx, Wait::Retry { cancelable: false }, false, site) }?;
     }
@@ -91,18 +99,23 @@ pub(crate) unsafe fn enter(ctx: *mut TaskCtx, gate: u32, site: u64) -> Stopped<b
 /// # Safety
 /// The task holds the role and is leaving its own active gate interval.
 pub(crate) unsafe fn leave(ctx: *mut TaskCtx, gate: u32, outermost: bool) -> Stopped<()> {
-    let s = scheduler(ctx) as *mut Scheduler;
-    let me = unsafe { (*s).current };
-    let row = unsafe { (*s).gate(gate) };
-    if row.owner != Some(me) || row.depth == 0 || (row.depth == 1) != outermost {
-        fault("a serial gate left by a task that does not hold it");
-    }
-    if !outermost {
-        row.depth -= 1;
+    let left = role::with_role(ctx, |s| {
+        let me = s.current;
+        let row = s.gate(gate);
+        if row.owner != Some(me) || row.depth == 0 || (row.depth == 1) != outermost {
+            fault("a serial gate left by a task that does not hold it");
+        }
+        if !outermost {
+            row.depth -= 1;
+            return true;
+        }
+        let waiters = row.waiters.len();
+        s.woken.reserve(waiters);
+        false
+    });
+    if left {
         return Ok(());
     }
-    let waiters = row.waiters.len();
-    unsafe { (*s).woken.reserve(waiters) };
     super::record::begin(ctx);
     let replay = super::replay::token(ctx);
     if let Some(replay) = &replay
@@ -115,37 +128,40 @@ pub(crate) unsafe fn leave(ctx: *mut TaskCtx, gate: u32, outermost: bool) -> Sto
     let object = super::record::on(ctx).then(|| ObjectId::Gate(format!("package:{gate}")));
     super::record::track(ctx, object.as_ref());
     let publication = super::record::publish(ctx, Phase::Done, |writer| unsafe {
-        let row = (*s).gate(gate);
-        row.depth = 0;
-        row.owner = None;
-        row.version = row
-            .version
-            .checked_add(1)
-            .expect("serial gate version overflow");
-        if let Some(writer) = writer {
-            writer.touch(
-                object.as_ref().expect("a recorded gate identity"),
-                row.version.checked_add(1).unwrap(),
-                0,
-                "gate leave",
-            );
-        } else if let Some(replay) = &replay {
-            replay.gate_touch(gate, "gate leave")?;
-        }
-        Ok(std::mem::take(&mut row.waiters))
+        role::with_held(ctx, |s| {
+            let row = s.gate(gate);
+            row.depth = 0;
+            row.owner = None;
+            row.version = row
+                .version
+                .checked_add(1)
+                .expect("serial gate version overflow");
+            if let Some(writer) = writer {
+                writer.touch(
+                    object.as_ref().expect("a recorded gate identity"),
+                    row.version.checked_add(1).unwrap(),
+                    0,
+                    "gate leave",
+                );
+            } else if let Some(replay) = &replay {
+                replay.gate_touch(gate, "gate leave")?;
+            }
+            Ok(std::mem::take(&mut row.waiters))
+        })
     });
     drop(object);
     drop(replay);
     let waiters = publication??;
-    for task in waiters {
-        unsafe {
-            (*s).task(task).retried = true;
-            (*s).wake(task);
-        }
-    }
-    unsafe {
-        readiness::poll_free(&mut *s);
-        super::publish_ready(&mut *s, (*ctx).run_ptr());
-    }
+    let ready = unsafe {
+        role::with_held(ctx, |s| {
+            for task in waiters {
+                s.task(task).retried = true;
+                s.wake(task);
+            }
+            readiness::poll_free(s);
+            super::take_ready(s)
+        })
+    };
+    unsafe { super::schedule_ready((*ctx).run_ptr(), ready) };
     Ok(())
 }

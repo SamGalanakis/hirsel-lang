@@ -391,7 +391,7 @@ pub(crate) unsafe fn channel_send(
             unsafe { tail(ctx) }
         } else if status == crate::channels::DONE && parked {
             let _role = unsafe { role::Guard::new(ctx) };
-            scheduler(ctx).channels.touch(channel);
+            role::with_role(ctx, |s| s.channels.touch(channel));
             unsafe { super::try_yield(&mut *ctx) }
         } else {
             unsafe { tail(ctx) }

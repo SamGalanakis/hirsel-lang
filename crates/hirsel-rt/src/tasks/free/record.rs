@@ -10,6 +10,7 @@
 
 use crate::TaskCtx;
 use crate::stop::{Stop, Stopped};
+use crate::tasks::role;
 use hirsel_free::concurrent::{ExecutorSlot, Recorder, Writer};
 use hirsel_free::phase::{Phase, Progress};
 use hirsel_free::projection::Stamped;
@@ -511,16 +512,14 @@ pub(crate) unsafe fn atomic_create(
     payload_size: u64,
 ) -> Stopped<()> {
     entry(ctx);
-    // scheduler() observes a runtime stop and can abandon its calling fiber.
-    // Resolve it before opening the section, whose RAII owner must be dropped
-    // normally before any stop/suspension. The role keeps this pointer stable.
-    let scheduler = crate::tasks::scheduler(ctx) as *mut crate::tasks::Scheduler;
+    // The section's RAII owner must be dropped normally before any stop or
+    // suspension, so the borrow inside it observes no stop.
     phase(ctx, |_| unsafe {
-        out.write(
-            (*scheduler)
-                .sync
-                .create_image(value, size, payload_offset, payload_size),
-        );
+        let word = role::with_held(ctx, |s| {
+            s.sync
+                .create_image(value, size, payload_offset, payload_size)
+        });
+        out.write(word);
     })
 }
 
@@ -534,7 +533,7 @@ pub(crate) unsafe fn atomic_load(
 ) -> Stopped<()> {
     begin(ctx);
     let replay = super::replay::token(ctx);
-    let image = crate::tasks::scheduler(ctx).sync.image(word, size);
+    let image = role::with_role(ctx, |s| s.sync.image(word, size));
     super::objects::keep_image(ctx, word, &image);
     unsafe { crate::tasks::role::release(ctx) };
     let result = unsafe { load_image(ctx, &image, slot, size, replay.as_ref()) };
@@ -593,7 +592,7 @@ pub(crate) unsafe fn atomic_store(
 ) -> Stopped<()> {
     begin(ctx);
     let replay = super::replay::token(ctx);
-    let image = crate::tasks::scheduler(ctx).sync.image(word, size);
+    let image = role::with_role(ctx, |s| s.sync.image(word, size));
     super::objects::keep_image(ctx, word, &image);
     unsafe { crate::tasks::role::release(ctx) };
     let result = unsafe { store_image(ctx, &image, value, replay.as_ref()) };

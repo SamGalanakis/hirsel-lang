@@ -34,53 +34,56 @@ unsafe fn exit_scope(
     out: Option<*mut u8>,
 ) -> Stopped<u8> {
     super::record::begin(ctx);
-    let s = scheduler(ctx) as *mut Scheduler;
-    let scope = unsafe { (*s).scope_handle(word) };
-    let me = unsafe { (*s).current };
-    let failing = error != 0 || unsafe { (*ctx).failure.active() };
-    let mut cancellations = Vec::new();
-    if failing {
-        for child in unsafe { (*s).scope(scope).children.clone() } {
-            cancellations.push((child, unsafe { (*s).prepare_cancel(child) }));
+    let (scope, me, cancellations) = role::with_role(ctx, |s| {
+        let scope = s.scope_handle(word);
+        let me = s.current;
+        let failing = error != 0 || unsafe { (*ctx).failure.active() };
+        let mut cancellations = Vec::new();
+        if failing {
+            for child in s.scope(scope).children.clone() {
+                cancellations.push((child, s.prepare_cancel(child)));
+            }
         }
-    }
+        (scope, me, cancellations)
+    });
     super::record::publish(ctx, Phase::Entered, |_| unsafe {
-        assert_eq!((*s).task(me).scopes.pop(), Some(scope));
-        (*s).cancel_epoch.changed();
-        for (child, targets) in &cancellations {
-            (*s).cancel_prepared(*child, CANCEL_PARENT, targets);
-        }
+        role::with_held(ctx, |s| {
+            assert_eq!(s.task(me).scopes.pop(), Some(scope));
+            s.cancel_epoch.changed();
+            for (child, targets) in &cancellations {
+                s.cancel_prepared(*child, CANCEL_PARENT, targets);
+            }
+        })
     })?;
     drop(cancellations);
     let ready = unsafe {
-        let children = (*s).scope(scope).children.clone();
-        children.iter().all(|&child| {
-            readiness::saved(&*s, child)
-                && matches!(
-                    (&(*s).tasks)[child as usize].as_ref().unwrap().state,
-                    State::Holding | State::Done
-                )
+        role::with_held(ctx, |s| {
+            let children = s.scope(scope).children.clone();
+            children.iter().all(|&child| {
+                readiness::saved(s, child)
+                    && matches!(
+                        s.tasks[child as usize].as_ref().unwrap().state,
+                        State::Holding | State::Done
+                    )
+            })
         })
     };
     if !ready {
         unsafe { try_block(&mut *ctx, Wait::Exit { scope }, false, caller_site) }?;
     }
-    let children = scheduler(ctx).scope(scope).children.clone();
+    let children = role::with_role(ctx, |s| s.scope(scope).children.clone());
     for &child in children.iter().rev() {
-        if scheduler(ctx).task(child).state == State::Holding {
-            scheduler(ctx).task(child).slot = None;
+        if role::with_role(ctx, |s| take_held(s, child)) {
             unsafe { hand_off(&mut *ctx, child) };
         }
     }
-    let s = scheduler(ctx) as *mut Scheduler;
-    let own_path = unsafe { (*s).task(me).path.clone() };
-    let mut retired = Vec::with_capacity(children.len());
-    unsafe {
-        (*s).reserve_retirements(children.len());
-        (*s).scope_slots.reserve(1);
+    let (own_path, token) = role::with_role(ctx, |s| {
+        let own_path = s.task(me).path.clone();
+        s.reserve_retirements(children.len());
+        s.scope_slots.reserve(1);
         // Simulate reverse retirement's child promotion counts before the
         // section. Each actual parent precedes its descendants in spawn order.
-        let mut counts: Vec<_> = (*s)
+        let mut counts: Vec<_> = s
             .tasks
             .iter()
             .map(|row| row.as_ref().map_or(0, |row| row.children.len()))
@@ -88,25 +91,28 @@ unsafe fn exit_scope(
         let mut capacity = counts.clone();
         for &child in children.iter().rev() {
             let (state, parent) = {
-                let row = (*s).task(child);
+                let row = s.task(child);
                 (row.state, row.parent)
             };
             assert_eq!(state, State::Done);
-            assert!(readiness::saved(&*s, child));
+            assert!(readiness::saved(s, child));
             if let Some((parent, _)) = parent {
                 counts[parent as usize] = counts[parent as usize] - 1 + counts[child as usize];
                 capacity[parent as usize] = capacity[parent as usize].max(counts[parent as usize]);
             }
         }
         for (index, maximum) in capacity.into_iter().enumerate() {
-            if let Some(row) = (&mut (*s).tasks)[index].as_mut() {
+            if let Some(row) = s.tasks[index].as_mut() {
                 row.children.reserve(maximum - row.children.len());
             }
         }
-    }
+        let token = s.scope(scope).deadline.as_ref().and_then(|d| d.token);
+        (own_path, token)
+    });
+    let mut retired = Vec::with_capacity(children.len());
     // The timer is owned by this scope until all called child rests return.
     // Removing its host interest may bridge to home, outside every section.
-    if let Some(token) = unsafe { (*s).scope(scope).deadline.as_ref().and_then(|d| d.token) } {
+    if let Some(token) = token {
         // Home may be merging a readiness snapshot under the role. No table
         // borrow may cross its synchronous bridge, or both threads can wait
         // for one another. This scope and its child rests remain owner-held.
@@ -115,24 +121,25 @@ unsafe fn exit_scope(
     }
     let replay = super::replay::token(ctx);
     let publication = super::record::publish(ctx, Phase::Done, |writer| unsafe {
-        let s = &mut *s;
-        let mut expired = s.scope(scope).deadline.as_ref().map(|d| d.expired);
-        if let Some(value) = expired.as_mut() {
-            if let Some(writer) = writer {
-                writer.expired(*value);
-            } else if let Some(replay) = &replay {
-                *value = replay.expired(*value)?;
+        role::with_held(ctx, |s| {
+            let mut expired = s.scope(scope).deadline.as_ref().map(|d| d.expired);
+            if let Some(value) = expired.as_mut() {
+                if let Some(writer) = writer {
+                    writer.expired(*value);
+                } else if let Some(replay) = &replay {
+                    *value = replay.expired(*value)?;
+                }
             }
-        }
-        for &child in children.iter().rev() {
-            let chain = s.task(child).failure.take();
-            retired.push((s.retire_task(child), chain));
-        }
-        let row = s.take_scope(scope);
-        if let Some(out) = out {
-            out.write(u8::from(expired.unwrap_or(false)));
-        }
-        Ok(row)
+            for &child in children.iter().rev() {
+                let chain = s.task(child).failure.take();
+                retired.push((s.retire_task(child), chain));
+            }
+            let row = s.take_scope(scope);
+            if let Some(out) = out {
+                out.write(u8::from(expired.unwrap_or(false)));
+            }
+            Ok(row)
+        })
     });
     drop(replay);
     let retired_scope = publication??;
@@ -155,48 +162,77 @@ unsafe fn exit_scope(
     Ok(status)
 }
 
+/// Take a holding child's result slot for its owner to resume the rest.
+fn take_held(s: &mut Scheduler, child: u32) -> bool {
+    let row = s.task(child);
+    let holding = row.state == State::Holding;
+    if holding {
+        row.slot = None;
+    }
+    holding
+}
+
+/// Reserve `child`'s retirement: a row and its promoted children's links.
+fn reserve_retirement(s: &mut Scheduler, child: u32) {
+    s.reserve_retirements(1);
+    let row = s.task(child);
+    if let Some((parent, _)) = row.parent {
+        let children = row.children.len();
+        s.task(parent).children.reserve(children);
+    }
+}
+
 /// # Safety
 /// As for TaskDetach. The role owns the child metadata; a held result is
 /// touched only after its physical image reaches idle.
 pub(crate) unsafe fn detach(ctx: *mut TaskCtx, scope: u64, word: u64) -> Stopped<()> {
     super::record::begin(ctx);
-    let s = scheduler(ctx) as *mut Scheduler;
-    let scope = unsafe { (*s).scope_handle(scope) };
-    let child = unsafe { (*s).task_handle(word, scope) };
-    let saved = unsafe { readiness::saved(&*s, child) };
-    let state = unsafe { (*s).task(child).state };
+    let (scope, child, saved, state) = role::with_role(ctx, |s| {
+        let scope = s.scope_handle(scope);
+        let child = s.task_handle(word, scope);
+        (
+            scope,
+            child,
+            readiness::saved(s, child),
+            s.task(child).state,
+        )
+    });
     if saved && state == State::Holding {
         // The called rest can run finalizers or suspend. Keep the parent at
         // entry until it returns; no recorder section spans the user code.
         super::record::publish(ctx, Phase::Entered, |_| unsafe {
-            let row = (*s).task(child);
-            row.detached = true;
-            row.slot = None;
+            role::with_held(ctx, |s| {
+                let row = s.task(child);
+                row.detached = true;
+                row.slot = None;
+            })
         })?;
         unsafe { hand_off(&mut *ctx, child) };
         // Successful detached completion retired the row at idle; a failure
         // remains owned by the scope. Never look it up through its old index.
         super::record::publish(ctx, Phase::Done, |_| ())?;
     } else {
-        let retire = saved && state == State::Done && unsafe { (*s).task(child).failure.is_none() };
-        if retire {
-            unsafe {
-                (*s).reserve_retirements(1);
-                let row = (*s).task(child);
-                if let Some((parent, _)) = row.parent {
-                    let children = row.children.len();
-                    (*s).task(parent).children.reserve(children);
-                }
-            }
-        }
+        let retire = saved
+            && state == State::Done
+            && unsafe {
+                role::with_held(ctx, |s| {
+                    let retire = s.task(child).failure.is_none();
+                    if retire {
+                        reserve_retirement(s, child);
+                    }
+                    retire
+                })
+            };
         let retired = super::record::publish(ctx, Phase::Done, |_| unsafe {
-            (*s).task(child).detached = true;
-            if retire {
-                (*s).scope(scope).children.retain(|&id| id != child);
-                Some((*s).retire_task(child))
-            } else {
-                None
-            }
+            role::with_held(ctx, |s| {
+                s.task(child).detached = true;
+                if retire {
+                    s.scope(scope).children.retain(|&id| id != child);
+                    Some(s.retire_task(child))
+                } else {
+                    None
+                }
+            })
         })?;
         drop(retired);
         // A not-yet-saved Holding frame observes detached in after_save and
@@ -216,31 +252,36 @@ pub(crate) unsafe fn join(
     caller_site: u64,
 ) -> Stopped<u8> {
     // Claim an unpublished adjacent child before begin() flushes deferred work.
-    let inline = {
-        let s = scheduler(ctx);
+    let inline = role::with_role(ctx, |s| {
         let scope_id = s.scope_handle(scope);
         let child = s.task_handle(task, scope_id);
         (unsafe { (*ctx).free_ops.deferred } == Some(child)).then(|| {
             unsafe { (*ctx).free_ops.deferred = None };
             child
         })
-    };
+    });
     super::record::begin(ctx);
     if let Some(child) = inline {
         super::record::publish(ctx, Phase::Entered, |_| ())?;
         unsafe { super::spawn::run(ctx, child, Some((slot, size))) }?;
     }
-    let s = scheduler(ctx);
-    let scope = s.scope_handle(scope);
-    let child = s.task_handle(task, scope);
-    let state = if readiness::saved(s, child) {
-        s.task(child).state
-    } else {
-        State::Parked
-    };
+    let (scope, child, state, image) = role::with_role(ctx, |s| {
+        let scope = s.scope_handle(scope);
+        let child = s.task_handle(task, scope);
+        let state = if readiness::saved(s, child) {
+            s.task(child).state
+        } else {
+            State::Parked
+        };
+        let image = match state {
+            State::Done => s.task(child).inline_value.take(),
+            _ => None,
+        };
+        (scope, child, state, image)
+    });
     match state {
         State::Done => {
-            if let Some((image, expected)) = s.task(child).inline_value.take() {
+            if let Some((image, expected)) = image {
                 assert_eq!(expected as u64, size);
                 unsafe {
                     std::ptr::copy_nonoverlapping(image.as_ptr().cast::<u8>(), slot, expected)
@@ -249,11 +290,9 @@ pub(crate) unsafe fn join(
         }
         State::Holding => {
             super::record::publish(ctx, Phase::Entered, |_| ())?;
-            let held = scheduler(ctx)
-                .task(child)
-                .slot
-                .take()
-                .expect("a saved held result");
+            let held = role::with_role(ctx, |s| {
+                s.task(child).slot.take().expect("a saved held result")
+            });
             unsafe {
                 deliver(held, slot, size);
                 hand_off(&mut *ctx, child);
@@ -269,29 +308,24 @@ pub(crate) unsafe fn join(
                     caller_site,
                 )
             }?;
-            if scheduler(ctx).task(child).state == State::Holding {
+            if role::with_role(ctx, |s| s.task(child).state == State::Holding) {
                 // The saved-frame poll moved the result. Only its owner
                 // resumes the rest, outside the recorder section.
                 unsafe { hand_off(&mut *ctx, child) };
             }
         }
     }
-    let s = scheduler(ctx) as *mut Scheduler;
-    unsafe {
-        assert_eq!((*s).task(child).state, State::Done);
-        assert!(readiness::saved(&*s, child));
-        (*s).reserve_retirements(1);
-        let row = (*s).task(child);
-        if let Some((parent, _)) = row.parent {
-            let children = row.children.len();
-            (*s).task(parent).children.reserve(children);
-        }
-    }
+    role::with_role(ctx, |s| {
+        assert_eq!(s.task(child).state, State::Done);
+        assert!(readiness::saved(s, child));
+        reserve_retirement(s, child);
+    });
     let (retired, chain) = super::record::publish(ctx, Phase::Done, |_| unsafe {
-        let s = &mut *s;
-        let chain = s.task(child).failure.take();
-        s.scope(scope).children.retain(|&id| id != child);
-        (s.retire_task(child), chain)
+        role::with_held(ctx, |s| {
+            let chain = s.task(child).failure.take();
+            s.scope(scope).children.retain(|&id| id != child);
+            (s.retire_task(child), chain)
+        })
     })?;
     drop(retired);
     let status = if let Some(chain) = chain {
@@ -315,16 +349,20 @@ pub(crate) unsafe fn finish(
     if unsafe { super::spawn::finish(ctx, slot, none, size) }? {
         return Ok(STATUS_OK);
     }
-    let s = scheduler(ctx) as *mut Scheduler;
-    let me = unsafe { (*s).current };
-    let row = unsafe { (*s).task(me) };
-    assert!(row.scope.is_some(), "the root cannot finish as a child");
-    if row.detached {
+    let (me, detached) = role::with_role(ctx, |s| {
+        let me = s.current;
+        let row = s.task(me);
+        assert!(row.scope.is_some(), "the root cannot finish as a child");
+        (me, row.detached)
+    });
+    if detached {
         // Detachment changes result ownership, not the child's semantic ops.
         // A replay may reach this point on either side of the parent's detach.
         super::record::end(ctx, || unsafe {
-            (*s).task(me).ended = true;
-            (*s).order(me);
+            role::with_held(ctx, |s| {
+                s.task(me).ended = true;
+                s.order(me);
+            })
         })?;
         return Ok(STATUS_OK);
     }
@@ -333,15 +371,21 @@ pub(crate) unsafe fn finish(
         none,
         size: usize::try_from(size).expect("a result slot fits memory"),
     };
-    unsafe { (*s).woken.reserve((*s).set_waiters.len() + 2) };
+    unsafe {
+        role::with_held(ctx, |s| {
+            let additional = s.set_waiters.len() + 2;
+            s.woken.reserve(additional);
+        })
+    };
     super::record::end(ctx, || unsafe {
-        let s = &mut *s;
-        let row = s.task(me);
-        row.ended = true;
-        row.slot = Some(held);
-        row.state = State::Holding;
-        s.order(me);
-        s.settle(me);
+        role::with_held(ctx, |s| {
+            let row = s.task(me);
+            row.ended = true;
+            row.slot = Some(held);
+            row.state = State::Holding;
+            s.order(me);
+            s.settle(me);
+        })
     })?;
     unsafe { run_next(&mut *ctx) }?;
     super::replay::start(ctx);
@@ -351,9 +395,11 @@ pub(crate) unsafe fn finish(
 /// # Safety
 /// This is the running child after body/environment cleanup, with the role.
 pub(super) unsafe fn completion(ctx: *mut TaskCtx, index: u32, status: u8) -> Stopped<()> {
-    let s = scheduler(ctx) as *mut Scheduler;
-    let path = unsafe { (*s).task(index).path.clone() };
-    let first_end = !unsafe { (*s).task(index).ended };
+    let (path, first_end, scope) = role::with_role(ctx, |s| {
+        let row = s.task(index);
+        let scope = row.scope.expect("a child has a scope");
+        (row.path.clone(), !row.ended, scope)
+    });
     let chain = unsafe { (*ctx).failure.take_chain(&path) };
     let failed = status != STATUS_OK;
     assert_eq!(
@@ -362,36 +408,42 @@ pub(super) unsafe fn completion(ctx: *mut TaskCtx, index: u32, status: u8) -> St
         "a task status agrees with its failures"
     );
     let chain = failed.then_some(chain);
-    let scope = unsafe { (*s).task(index).scope.expect("a child has a scope") };
-    let mut cancellations = Vec::new();
-    if failed {
-        let siblings = unsafe { (*s).scope(scope).children.clone() };
-        for sibling in siblings {
-            if sibling != index {
-                cancellations.push((sibling, unsafe { (*s).prepare_cancel(sibling) }));
+    let cancellations = unsafe {
+        role::with_held(ctx, |s| {
+            let mut cancellations = Vec::new();
+            if failed {
+                let siblings = s.scope(scope).children.clone();
+                for sibling in siblings {
+                    if sibling != index {
+                        cancellations.push((sibling, s.prepare_cancel(sibling)));
+                    }
+                }
             }
-        }
-    }
-    unsafe { (*s).woken.reserve((*s).tasks.len()) };
+            let tasks = s.tasks.len();
+            s.woken.reserve(tasks);
+            cancellations
+        })
+    };
     let effect = || unsafe {
-        let s = &mut *s;
-        let row = s.task(index);
-        row.ended = true;
-        row.finishing = true;
-        row.state = State::Ready;
-        if !failed && first_end {
-            s.order(index);
-        }
-        if failed {
-            assert!(s.task(index).failure.is_none());
-            s.task(index).failure = chain;
-            s.order(index);
-            s.cancel_scope(scope, CANCEL_CHILD_FAILED);
-            s.wake_owner(scope);
-            for (sibling, targets) in &cancellations {
-                s.cancel_prepared(*sibling, CANCEL_CHILD_FAILED, targets);
+        role::with_held(ctx, |s| {
+            let row = s.task(index);
+            row.ended = true;
+            row.finishing = true;
+            row.state = State::Ready;
+            if !failed && first_end {
+                s.order(index);
             }
-        }
+            if failed {
+                assert!(s.task(index).failure.is_none());
+                s.task(index).failure = chain;
+                s.order(index);
+                s.cancel_scope(scope, CANCEL_CHILD_FAILED);
+                s.wake_owner(scope);
+                for (sibling, targets) in &cancellations {
+                    s.cancel_prepared(*sibling, CANCEL_CHILD_FAILED, targets);
+                }
+            }
+        })
     };
     // TaskFinish published result readiness; actual frame completion is a
     // distinct op even when its rest released no roots. This keeps ordinals
@@ -421,12 +473,10 @@ pub(crate) unsafe fn spawn(
         .worker_metrics
         .as_ref()
         .map(|_| std::time::Instant::now());
-    let s = scheduler(ctx) as *mut Scheduler;
-    let (scope, current, generation, index, path, canceled) = unsafe {
-        let s = &mut *s;
+    let (scope, current, generation, index, path, canceled) = role::with_role(ctx, |s| {
         let scope = s.scope_handle(scope);
         let current = s.current;
-        let canceled = s.canceled((*ctx).shield).map(|_| CANCEL_PARENT);
+        let canceled = s.canceled(unsafe { (*ctx).shield }).map(|_| CANCEL_PARENT);
         let parent = s.task(current);
         let mut path = parent.path.clone();
         path.push(parent.spawned);
@@ -434,7 +484,7 @@ pub(crate) unsafe fn spawn(
         s.scope(scope).children.reserve(1);
         let (index, generation) = s.take_task_slot();
         (scope, current, generation, index, path, canceled)
-    };
+    });
     let fast = super::spawn::allowed(ctx, flags);
     let stack = (!fast).then(|| unsafe { (*ctx).worker().idle_stacks.take() });
     let mut owned = fast.then(|| {
@@ -471,16 +521,17 @@ pub(crate) unsafe fn spawn(
             task.state = State::Parked;
             task.wait = Some(Wait::Final);
         }
-        let s = &mut *s;
-        let parent = s.task(current);
-        parent.spawned = parent
-            .spawned
-            .checked_add(1)
-            .expect("spawn path ordinal overflow");
-        assert!(s.tasks[index as usize].is_none());
-        s.tasks[index as usize] = Some(task);
-        s.scope(scope).children.push(index);
-        s.link_child(current, index);
+        role::with_held(ctx, |s| {
+            let parent = s.task(current);
+            parent.spawned = parent
+                .spawned
+                .checked_add(1)
+                .expect("spawn path ordinal overflow");
+            assert!(s.tasks[index as usize].is_none());
+            s.tasks[index as usize] = Some(task);
+            s.scope(scope).children.push(index);
+            s.link_child(current, index);
+        });
         out.write(handle(index, generation));
     })?;
     if let (Some(started), Some(metrics)) =
@@ -515,10 +566,10 @@ pub(crate) unsafe fn spawn(
 /// The role is held and out is writable for the scope word.
 pub(crate) unsafe fn scope_enter(ctx: *mut TaskCtx, out: *mut u64) -> Stopped<()> {
     super::record::begin(ctx);
-    let (s, index, current, row) = prepare_scope(ctx, None);
+    let (index, current, row) = prepare_scope(ctx, None);
     let generation = row.generation;
     super::record::publish(ctx, Phase::Done, |_| unsafe {
-        install_scope(s, index, current, row);
+        role::with_held(ctx, |s| install_scope(s, index, current, row));
         out.write(handle(index, generation));
     })?;
     unsafe { try_yield(&mut *ctx) }
@@ -533,7 +584,7 @@ pub(crate) unsafe fn scope_enter_until(
 ) -> Stopped<()> {
     let [clock, at] = unsafe { deadline.read() };
     super::record::begin(ctx);
-    let (s, index, current, row) = prepare_scope(
+    let (index, current, row) = prepare_scope(
         ctx,
         Some(ScopeDeadline {
             token: None,
@@ -542,7 +593,7 @@ pub(crate) unsafe fn scope_enter_until(
     );
     let generation = row.generation;
     super::record::publish(ctx, Phase::Entered, |_| unsafe {
-        install_scope(s, index, current, row);
+        role::with_held(ctx, |s| install_scope(s, index, current, row));
     })?;
     // Replay observes recorded cancellation checks and exit expiry. It has
     // no timer request or readiness source on this host.
@@ -555,29 +606,23 @@ pub(crate) unsafe fn scope_enter_until(
     // A fresh scope has no children or inner scopes, so immediate expiration
     // needs no allocation or graph walk inside this publication.
     super::record::publish(ctx, Phase::Done, |_| unsafe {
-        let s = &mut *s;
-        match token {
+        role::with_held(ctx, |s| match token {
             Some(token) => s.scope(index).deadline.as_mut().unwrap().token = Some(token),
             None if !replay => s.expire(index),
             None => {}
-        }
+        });
         out.write(handle(index, generation));
     })?;
     unsafe { try_yield(&mut *ctx) }
 }
 
-fn prepare_scope(
-    ctx: *mut TaskCtx,
-    deadline: Option<ScopeDeadline>,
-) -> (*mut Scheduler, u32, u32, Scope) {
-    let s = scheduler(ctx) as *mut Scheduler;
-    let (index, generation, current) = unsafe {
-        let s = &mut *s;
+fn prepare_scope(ctx: *mut TaskCtx, deadline: Option<ScopeDeadline>) -> (u32, u32, Scope) {
+    let (index, generation, current) = role::with_role(ctx, |s| {
         let (index, generation) = s.take_scope_slot();
         let current = s.current;
         s.task(current).scopes.reserve(1);
         (index, generation, current)
-    };
+    });
     let row = Scope {
         generation,
         owner: current,
@@ -586,11 +631,10 @@ fn prepare_scope(
         deadline,
         completions: AtomicU64::new(0),
     };
-    (s, index, current, row)
+    (index, current, row)
 }
 
-unsafe fn install_scope(s: *mut Scheduler, index: u32, current: u32, row: Scope) {
-    let s = unsafe { &mut *s };
+fn install_scope(s: &mut Scheduler, index: u32, current: u32, row: Scope) {
     assert!(s.scopes[index as usize].is_none());
     s.scopes[index as usize] = Some(row);
     s.task(current).scopes.push(index);

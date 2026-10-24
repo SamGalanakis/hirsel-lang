@@ -13,17 +13,20 @@ mod tests;
 /// The role is held, scope is live, and out is writable.
 pub(crate) unsafe fn create(ctx: *mut TaskCtx, scope: u64, out: *mut u64) -> Stopped<()> {
     super::record::begin(ctx);
-    let s = scheduler(ctx) as *mut Scheduler;
-    let scope = unsafe { (*s).scope_handle(scope) };
-    let (index, generation) = unsafe { (*s).take_set_slot() };
+    let (scope, (index, generation)) = role::with_role(ctx, |s| {
+        let scope = s.scope_handle(scope);
+        (scope, s.take_set_slot())
+    });
     let row = TaskSet {
         generation,
         scope,
         members: Vec::new(),
     };
     super::record::publish(ctx, Phase::Done, |_| unsafe {
-        assert!((&(*s).sets)[index as usize].is_none());
-        (&mut (*s).sets)[index as usize] = Some(row);
+        role::with_held(ctx, |s| {
+            assert!(s.sets[index as usize].is_none());
+            s.sets[index as usize] = Some(row);
+        });
         out.write(
             crate::channels::ENDPOINT | TASK_SET | u64::from(generation) << 32 | u64::from(index),
         );
@@ -32,22 +35,25 @@ pub(crate) unsafe fn create(ctx: *mut TaskCtx, scope: u64, out: *mut u64) -> Sto
 }
 
 fn set(ctx: *mut TaskCtx, scope: u64, word: u64) -> u32 {
-    let s = scheduler(ctx);
-    let scope = s.scope_handle(scope);
-    s.set_handle(word, scope)
+    role::with_role(ctx, |s| {
+        let scope = s.scope_handle(scope);
+        s.set_handle(word, scope)
+    })
 }
 
 /// # Safety
 /// The role is held and the task/set handles belong to the live scope.
 pub(crate) unsafe fn add(ctx: *mut TaskCtx, scope: u64, word: u64, task: u64) -> Stopped<()> {
     super::record::begin(ctx);
-    let s = scheduler(ctx) as *mut Scheduler;
-    let scope = unsafe { (*s).scope_handle(scope) };
-    unsafe { (*s).task_handle(task, scope) };
-    let set = unsafe { (*s).set_handle(word, scope) };
-    unsafe { (*s).set(set).members.reserve(1) };
+    let set = role::with_role(ctx, |s| {
+        let scope = s.scope_handle(scope);
+        s.task_handle(task, scope);
+        let set = s.set_handle(word, scope);
+        s.set(set).members.reserve(1);
+        set
+    });
     super::record::publish(ctx, Phase::Done, |_| unsafe {
-        (*s).set(set).members.push(Some(task))
+        role::with_held(ctx, |s| s.set(set).members.push(Some(task)))
     })?;
     unsafe { try_yield(&mut *ctx) }
 }
@@ -63,12 +69,13 @@ pub(crate) unsafe fn has(
 ) -> Stopped<()> {
     super::record::begin(ctx);
     let set = set(ctx, scope, word);
-    let s = scheduler(ctx) as *mut Scheduler;
     super::record::publish(ctx, Phase::Done, |_| unsafe {
-        let has = usize::try_from(index)
-            .ok()
-            .and_then(|index| (*s).set(set).members.get(index))
-            .is_some_and(Option::is_some);
+        let has = role::with_held(ctx, |s| {
+            usize::try_from(index)
+                .ok()
+                .and_then(|index| s.set(set).members.get(index))
+                .is_some_and(Option::is_some)
+        });
         out.write(u8::from(has));
     })?;
     unsafe { try_yield(&mut *ctx) }
@@ -85,13 +92,14 @@ pub(crate) unsafe fn take(
 ) -> Stopped<()> {
     super::record::begin(ctx);
     let set = set(ctx, scope, word);
-    let s = scheduler(ctx) as *mut Scheduler;
     super::record::publish(ctx, Phase::Done, |_| unsafe {
-        let task = usize::try_from(index)
-            .ok()
-            .and_then(|index| (*s).set(set).members.get_mut(index))
-            .and_then(Option::take)
-            .expect("an unawaited task set member");
+        let task = role::with_held(ctx, |s| {
+            usize::try_from(index)
+                .ok()
+                .and_then(|index| s.set(set).members.get_mut(index))
+                .and_then(Option::take)
+                .expect("an unawaited task set member")
+        });
         out.write(task);
     })?;
     unsafe { try_yield(&mut *ctx) }
@@ -108,7 +116,8 @@ pub(crate) unsafe fn await_any(
 ) -> Stopped<()> {
     super::record::begin(ctx);
     let set = set(ctx, scope, word);
-    let waiting = scheduler(ctx).set(set).members.iter().any(Option::is_some);
+    let waiting =
+        unsafe { role::with_held(ctx, |s| s.set(set).members.iter().any(Option::is_some)) };
     let member = if waiting {
         super::replay::token(ctx)
             .map(|token| token.await_member(ctx))
@@ -117,10 +126,11 @@ pub(crate) unsafe fn await_any(
         None
     };
     if let Some(index) = member
-        && usize::try_from(index)
-            .ok()
-            .and_then(|index| scheduler(ctx).set(set).members.get(index))
-            .is_none_or(Option::is_none)
+        && usize::try_from(index).ok().is_none_or(|index| unsafe {
+            role::with_held(ctx, |s| {
+                s.set(set).members.get(index).is_none_or(Option::is_none)
+            })
+        })
     {
         return Err(crate::stop::Stop::Diverged(
             "a recorded await_any member is absent from its set".into(),
@@ -129,10 +139,10 @@ pub(crate) unsafe fn await_any(
     let index = if waiting {
         let mut entered = false;
         loop {
-            let completed = match member {
-                Some(index) => scheduler(ctx).member_completed(set, index).then_some(index),
-                None => scheduler(ctx).first_completed(set),
-            };
+            let completed = role::with_role(ctx, |s| match member {
+                Some(index) => s.member_completed(set, index).then_some(index),
+                None => s.first_completed(set),
+            });
             if let Some(index) = completed {
                 break Some(index);
             }
@@ -168,19 +178,18 @@ pub(crate) unsafe fn await_any(
 /// The role is held and word is a live task-set endpoint owned by this task.
 pub(crate) unsafe fn close(ctx: *mut TaskCtx, word: u64) -> Stopped<()> {
     super::record::begin(ctx);
-    let s = scheduler(ctx) as *mut Scheduler;
     let index = word as u32;
-    let row = unsafe {
-        (&(*s).sets)[index as usize]
-            .as_ref()
-            .expect("a live task set")
-    };
-    assert_eq!(
-        row.generation,
-        ((word & !(crate::channels::ENDPOINT | TASK_SET)) >> 32) as u32
-    );
-    unsafe { (*s).set_slots.reserve(1) };
-    let row = super::record::publish(ctx, Phase::Done, |_| unsafe { (*s).take_set(index) })?;
+    role::with_role(ctx, |s| {
+        let row = s.sets[index as usize].as_ref().expect("a live task set");
+        assert_eq!(
+            row.generation,
+            ((word & !(crate::channels::ENDPOINT | TASK_SET)) >> 32) as u32
+        );
+        s.set_slots.reserve(1);
+    });
+    let row = super::record::publish(ctx, Phase::Done, |_| unsafe {
+        role::with_held(ctx, |s| s.take_set(index))
+    })?;
     drop(row);
     Ok(())
 }
@@ -240,75 +249,93 @@ pub(crate) unsafe fn release(
     caller_site: u64,
 ) -> Stopped<()> {
     super::record::begin(ctx);
-    let s = scheduler(ctx) as *mut Scheduler;
-    let scope = unsafe { (*s).scope_handle(scope) };
-    let set = unsafe { (*s).set_handle(word, scope) };
-    let members: Vec<_> = unsafe { (*s).set(set).members.iter().flatten().copied().collect() };
+    let (scope, set, members) = role::with_role(ctx, |s| {
+        let scope = s.scope_handle(scope);
+        let set = s.set_handle(word, scope);
+        let members: Vec<_> = s.set(set).members.iter().flatten().copied().collect();
+        if members.is_empty() {
+            s.set_slots.reserve(1);
+        }
+        (scope, set, members)
+    });
     if members.is_empty() {
-        unsafe { (*s).set_slots.reserve(1) };
-        let row = super::record::publish(ctx, Phase::Done, |_| unsafe { (*s).take_set(set) })?;
+        let row = super::record::publish(ctx, Phase::Done, |_| unsafe {
+            role::with_held(ctx, |s| s.take_set(set))
+        })?;
         drop(row);
         return unsafe { try_yield(&mut *ctx) };
     }
-    let children: Vec<_> = members
-        .iter()
-        .map(|&word| unsafe { (*s).task_handle(word, scope) })
-        .collect();
-    let cancellations: Vec<_> = if cancel {
-        children
-            .iter()
-            .map(|&child| (child, unsafe { (*s).prepare_cancel(child) }))
-            .collect()
-    } else {
-        Vec::new()
+    let (children, cancellations) = unsafe {
+        role::with_held(ctx, |s| {
+            let children: Vec<_> = members
+                .iter()
+                .map(|&word| s.task_handle(word, scope))
+                .collect();
+            let cancellations: Vec<_> = if cancel {
+                children
+                    .iter()
+                    .map(|&child| (child, s.prepare_cancel(child)))
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            let tasks = s.tasks.len();
+            s.woken.reserve(tasks);
+            (children, cancellations)
+        })
     };
-    unsafe { (*s).woken.reserve((*s).tasks.len()) };
     super::record::publish(ctx, Phase::Entered, |_| unsafe {
-        for (child, targets) in &cancellations {
-            (*s).cancel_prepared(*child, CANCEL_REQUESTED, targets);
-        }
-        for &child in &children {
-            (*s).task(child).detached = true;
-        }
+        role::with_held(ctx, |s| {
+            for (child, targets) in &cancellations {
+                s.cancel_prepared(*child, CANCEL_REQUESTED, targets);
+            }
+            for &child in &children {
+                s.task(child).detached = true;
+            }
+        })
     })?;
     drop(cancellations);
     drop(children);
     for &word in &members {
         // A preceding called rest may have completed/vacated another member.
         // Native handles are generation-qualified; never reuse its old index.
-        let s = scheduler(ctx);
-        if let Some(child) = s.member(word)
-            && readiness::saved(s, child)
-            && s.task(child).state == State::Holding
-        {
-            s.task(child).slot = None;
+        let holding = role::with_role(ctx, |s| {
+            let child = s.member(word)?;
+            (readiness::saved(s, child) && s.task(child).state == State::Holding).then(|| {
+                s.task(child).slot = None;
+                child
+            })
+        });
+        if let Some(child) = holding {
             unsafe { hand_off(&mut *ctx, child) };
         }
     }
-    if cancel && !unsafe { poll_drained(scheduler(ctx), set) } {
+    if cancel && !role::with_role(ctx, |s| unsafe { poll_drained(s, set) }) {
         unsafe { try_block(&mut *ctx, Wait::Drain { set }, false, caller_site) }?;
     }
-    let s = scheduler(ctx) as *mut Scheduler;
-    let retiring: Vec<_> = members
-        .iter()
-        .filter_map(|&word| unsafe {
-            let child = (*s).member(word)?;
-            let row = (*s).task(child);
-            (row.state == State::Done && row.failure.is_none() && readiness::saved(&*s, child))
-                .then_some(child)
-        })
-        .collect();
+    let retiring = role::with_role(ctx, |s| {
+        let retiring: Vec<_> = members
+            .iter()
+            .filter_map(|&word| {
+                let child = s.member(word)?;
+                let row = s.task(child);
+                (row.state == State::Done && row.failure.is_none() && readiness::saved(s, child))
+                    .then_some(child)
+            })
+            .collect();
+        prepare_retirement(s, &retiring);
+        s.set_slots.reserve(1);
+        retiring
+    });
     let mut retired = Vec::with_capacity(retiring.len());
-    unsafe {
-        prepare_retirement(&mut *s, &retiring);
-        (*s).set_slots.reserve(1);
-    }
     let set_row = super::record::publish(ctx, Phase::Done, |_| unsafe {
-        for &child in &retiring {
-            (*s).scope(scope).children.retain(|&id| id != child);
-            retired.push((*s).retire_task(child));
-        }
-        (*s).take_set(set)
+        role::with_held(ctx, |s| {
+            for &child in &retiring {
+                s.scope(scope).children.retain(|&id| id != child);
+                retired.push(s.retire_task(child));
+            }
+            s.take_set(set)
+        })
     })?;
     drop(set_row);
     drop(retired);

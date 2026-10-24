@@ -1749,7 +1749,7 @@ pub(crate) unsafe fn woken(ctx: *mut TaskCtx, ready: &Ready) -> Vec<u32> {
         unsafe { crate::stop::check(ctx, at_home(ctx, || woken_here(ctx, ready))) }
     };
     if let Some(io) = unsafe { (*ctx).run_ref().ordered_io.get() } {
-        woken.extend(io.woken(crate::tasks::scheduler(ctx), ready));
+        woken.extend(crate::tasks::role::with_role(ctx, |s| io.woken(s, ready)));
     }
     woken
 }

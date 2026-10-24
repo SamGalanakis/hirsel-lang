@@ -109,8 +109,10 @@ impl Replay {
             self.authorities.root(env);
         }
         unsafe { (*ctx).run().free_replay = true };
-        scheduler(ctx).logical = Logical::Free(super::Driver {
-            replay: Some(self.clone()),
+        role::with_role(ctx, |s| {
+            s.logical = Logical::Free(super::Driver {
+                replay: Some(self.clone()),
+            })
         });
     }
 
@@ -300,11 +302,7 @@ pub(super) unsafe fn thaw(
         if at_cut(ctx) {
             return Err(Stop::Requested);
         }
-        let s = scheduler(ctx);
-        let me = s.current;
-        if !s.retrying.contains(&me) {
-            s.retrying.push(me);
-        }
+        retry_later(ctx);
         unsafe { try_block(&mut *ctx, Wait::Retry { cancelable: false }, false, 0) }?;
     }
 }
@@ -355,13 +353,19 @@ pub(super) unsafe fn wait_object(
                 entered = true;
             }
         }
-        let s = scheduler(ctx);
+        retry_later(ctx);
+        unsafe { try_block(&mut *ctx, Wait::Retry { cancelable: false }, false, 0) }?;
+    }
+}
+
+/// Queue the running task for the next replay publication.
+pub(super) fn retry_later(ctx: *mut TaskCtx) {
+    role::with_role(ctx, |s| {
         let me = s.current;
         if !s.retrying.contains(&me) {
             s.retrying.push(me);
         }
-        unsafe { try_block(&mut *ctx, Wait::Retry { cancelable: false }, false, 0) }?;
-    }
+    });
 }
 
 impl Object {

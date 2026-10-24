@@ -135,7 +135,6 @@ pub(crate) unsafe fn prepare_with_keys(
     pending.path = path;
     pending.entered = entered;
     let pending = pending as *mut Pending;
-    let s = scheduler(ctx) as *mut Scheduler;
     let shield = unsafe { (*ctx).shield };
     // Prepared, a position per key, a cancellation change and the request observation.
     super::record::reserve(ctx, unsafe {
@@ -150,7 +149,7 @@ pub(crate) unsafe fn prepare_with_keys(
         let writer = writer.expect("a recorded host entry");
         writer.prepare(&(*pending).request);
         take_positions(&mut *pending, writer);
-        observe_cancel(&mut *pending, &mut *s, shield, writer);
+        role::with_held(ctx, |s| observe_cancel(&mut *pending, s, shield, writer));
         if let Some(bytes) = &(*pending).request_observation {
             writer.observation(bytes);
         }
@@ -688,11 +687,7 @@ unsafe fn wait_keys(ctx: *mut TaskCtx) -> Stopped<()> {
         if ready {
             return Ok(());
         }
-        let s = scheduler(ctx);
-        let me = s.current;
-        if !s.retrying.contains(&me) {
-            s.retrying.push(me);
-        }
+        super::replay::retry_later(ctx);
         unsafe { try_block(&mut *ctx, Wait::Retry { cancelable: false }, false, 0) }?;
     }
 }
@@ -708,7 +703,7 @@ pub(crate) unsafe fn attempt(ctx: *mut TaskCtx) -> Stopped<()> {
             .checked_add(1)
             .expect("host attempt overflow")
     };
-    let s = scheduler(ctx) as *mut Scheduler;
+    role::admit(ctx);
     let shield = unsafe { (*ctx).shield };
     // Ready, a position per key and a cancellation change.
     super::record::reserve(
@@ -720,7 +715,7 @@ pub(crate) unsafe fn attempt(ctx: *mut TaskCtx) -> Stopped<()> {
         let writer = writer.expect("a recorded host attempt");
         writer.ready();
         take_positions(&mut *pending, writer);
-        observe_cancel(&mut *pending, &mut *s, shield, writer);
+        role::with_held(ctx, |s| observe_cancel(&mut *pending, s, shield, writer));
     })?;
     unsafe { wait_keys(ctx) }
 }
@@ -953,11 +948,7 @@ unsafe fn replay_wait_keys(ctx: *mut TaskCtx) -> Stopped<()> {
         if super::replay::at_cut(ctx) {
             return Err(Stop::Requested);
         }
-        let s = scheduler(ctx);
-        let me = s.current;
-        if !s.retrying.contains(&me) {
-            s.retrying.push(me);
-        }
+        super::replay::retry_later(ctx);
         unsafe { try_block(&mut *ctx, Wait::Retry { cancelable: false }, false, 0) }?;
     }
 }

@@ -1100,6 +1100,18 @@ fn role_tables(ctx: *mut TaskCtx) -> &'static mut Scheduler {
     }
 }
 
+/// The tables of a role the caller already holds, for [`role::with_held`].
+/// # Safety
+/// As for [`role::with_held`].
+#[inline(always)]
+unsafe fn held_tables(ctx: *mut TaskCtx) -> &'static mut Scheduler {
+    // SAFETY: the held role exclusively owns the tables; see role_tables.
+    match unsafe { (&mut *(*(*ctx).run_ptr()).tasks.get()).as_deref_mut() } {
+        Some(s) => s,
+        None => fault("a held role without its tables"),
+    }
+}
+
 /// A finalizer changed this owner's shield. Publish while its semantic entry
 /// owns the role (or W1's cooperative token); do not create a scheduler here.
 /// # Safety

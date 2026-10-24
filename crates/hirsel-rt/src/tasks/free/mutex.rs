@@ -61,14 +61,14 @@ pub(crate) unsafe fn create(
 ) -> Stopped<()> {
     // Allocation and prepared image capacity precede the op section. No
     // stop-aware scheduler accessor may abandon a Rust-owned prepared cell.
-    let s = scheduler(ctx) as *mut Scheduler;
+    role::admit(ctx);
     let block = unsafe {
         crate::alloc::hirsel_rt_v2_alloc(ctx, wrapper, 8, 8, crate::alloc::DOMAIN_HEAP, 0)
     };
     let layout = unsafe { (*ctx).descriptor(descriptor) };
     let element = unsafe { crate::channels::Element::new(descriptor, layout, none) };
     let cell = crate::sync::Synchronizers::prepare_mutex(element, unsafe { &*layout });
-    let reservation = unsafe { (*s).sync.reserve_mutex() };
+    let reservation = unsafe { role::with_held(ctx, |s| s.sync.reserve_mutex()) };
     let word = reservation.word();
     super::record::begin(ctx);
     let object = super::record::object(ctx);
@@ -80,7 +80,9 @@ pub(crate) unsafe fn create(
         if let Some(replay) = &replay {
             replay.create()?;
         }
-        (*s).sync.initialize_mutex_cell(reservation, cell, payload);
+        role::with_held(ctx, |s| {
+            s.sync.initialize_mutex_cell(reservation, cell, payload)
+        });
         block.add(1).cast::<u64>().write(word);
         out.write(block as u64);
         if let Some(writer) = writer {
@@ -94,11 +96,12 @@ pub(crate) unsafe fn create(
 }
 
 pub(super) fn notify(ctx: *mut TaskCtx, task: u32) {
-    let s = scheduler(ctx);
-    // Set this before testing Parked: a running queued waiter may still be
-    // between releasing the object lock and registering its Retry wait.
-    s.task(task).retried = true;
-    s.wake(task);
+    role::with_role(ctx, |s| {
+        // Set this before testing Parked: a running queued waiter may still be
+        // between releasing the object lock and registering its Retry wait.
+        s.task(task).retried = true;
+        s.wake(task);
+    });
 }
 
 /// # Safety
@@ -111,21 +114,26 @@ pub(crate) unsafe fn take(
 ) -> Stopped<()> {
     super::record::begin(ctx);
     unsafe { super::replay::wait_object(ctx, (crate::free::MUTEX, word)) }?;
-    let me = scheduler(ctx).current;
-    scheduler(ctx).task(me).retried = false;
+    let me = role::with_role(ctx, |s| {
+        let me = s.current;
+        s.task(me).retried = false;
+        me
+    });
     let mut queued = false;
     let mut entered = false;
     loop {
         let replay = super::replay::object(ctx, (crate::free::MUTEX, word));
-        let cell = scheduler(ctx).sync.mutex(word);
+        let cell = role::with_role(ctx, |s| s.sync.mutex(word));
         super::objects::keep_mutex(ctx, word, &cell);
         // A registering waiter's wake needs no role: its token captures the
         // frame and the owner its park leaves it with.
         let mut token = if entered {
             None
         } else {
-            let row = scheduler(ctx).task(me);
-            let owner = if row.pinned { Owner::Any } else { row.owner };
+            let owner = role::with_role(ctx, |s| {
+                let row = s.task(me);
+                if row.pinned { Owner::Any } else { row.owner }
+            });
             unsafe { crate::pool::free::token((*ctx).run_ptr(), me, owner) }
         };
         unsafe { role::release(ctx) };
@@ -178,7 +186,7 @@ pub(crate) unsafe fn take(
             }
             Acquired::Payload | Acquired::Dead => {
                 unsafe { out.write(u32::from(result == Acquired::Dead)) };
-                scheduler(ctx).task(me).retried = false;
+                role::with_role(ctx, |s| s.task(me).retried = false);
                 return unsafe { try_yield(&mut *ctx) };
             }
         }
@@ -191,7 +199,7 @@ pub(crate) unsafe fn put(ctx: *mut TaskCtx, word: u64, payload: *mut u8) -> Stop
     super::record::begin(ctx);
     unsafe { super::replay::wait_object(ctx, (crate::free::MUTEX, word)) }?;
     let replay = super::replay::object(ctx, (crate::free::MUTEX, word));
-    let cell = scheduler(ctx).sync.mutex(word);
+    let cell = role::with_role(ctx, |s| s.sync.mutex(word));
     super::objects::keep_mutex(ctx, word, &cell);
     unsafe { role::release(ctx) };
     let mut state = cell.lock();
@@ -229,10 +237,12 @@ pub(crate) unsafe fn kill(ctx: *mut TaskCtx, word: u64) -> Stopped<()> {
     let replay = super::replay::object(ctx, (crate::free::MUTEX, word));
     // Capture the chain only after the replay wait, then avoid stop-aware
     // accessors while this frame owns it or the detached wake list.
-    let s = unsafe { (*(*(*ctx).run_ptr()).tasks.get()).as_deref_mut().unwrap() };
-    let me = s.current;
-    let chain = unsafe { (*ctx).failure.chain(&s.task(me).path) };
-    let cell = s.sync.mutex(word);
+    let (chain, cell) = unsafe {
+        role::with_held(ctx, |s| {
+            let me = s.current;
+            ((*ctx).failure.chain(&s.task(me).path), s.sync.mutex(word))
+        })
+    };
     // The role also protects the failure-chain metadata through this phase.
     // Acquire the per-object lock before opening it; no syscall or user drop
     // runs in the action and no scheduler accessor observes a stop there.
@@ -247,17 +257,21 @@ pub(crate) unsafe fn kill(ctx: *mut TaskCtx, word: u64) -> Stopped<()> {
         |state| {
             state.permit.kill_into(&mut waiters);
             state.drop_tokens();
-            s.sync.set_dead(word, chain);
+            unsafe { role::with_held(ctx, |s| s.sync.set_dead(word, chain)) };
             "kill"
         },
     )?;
     drop(state);
     drop(cell);
     drop(replay);
-    for task in waiters {
-        s.task(task).retried = true;
-        s.wake(task);
-    }
+    unsafe {
+        role::with_held(ctx, |s| {
+            for task in waiters {
+                s.task(task).retried = true;
+                s.wake(task);
+            }
+        })
+    };
     unsafe { try_yield(&mut *ctx) }
 }
 
@@ -287,8 +301,7 @@ unsafe fn close_inner(
     super::record::begin(ctx);
     unsafe { super::replay::wait_object(ctx, (crate::free::MUTEX, word)) }?;
     let replay = super::replay::object(ctx, (crate::free::MUTEX, word));
-    let s = scheduler(ctx) as *mut Scheduler;
-    let cell = unsafe { (*s).sync.mutex(word) };
+    let cell = role::with_role(ctx, |s| s.sync.mutex(word));
     let empty = crate::channels::Ring::new(cell.element.size, 1);
     let mut state = cell.lock();
     super::record::track(ctx, cell.object.get());
@@ -308,7 +321,9 @@ unsafe fn close_inner(
             } else if let Some(replay) = &replay {
                 replay.touch("close mutex")?;
             }
-            Ok(unsafe { (*s).sync.close_locked(word, &cell, &mut state, empty) })
+            Ok(unsafe {
+                role::with_held(ctx, |s| s.sync.close_locked(word, &cell, &mut state, empty))
+            })
         },
     );
     drop(state);
@@ -342,11 +357,10 @@ pub(crate) unsafe fn cause(ctx: *mut TaskCtx, word: u64) -> Stopped<()> {
     super::record::begin(ctx);
     unsafe { super::replay::wait_object(ctx, (crate::free::MUTEX, word)) }?;
     let replay = super::replay::object(ctx, (crate::free::MUTEX, word));
-    let s = scheduler(ctx) as *mut Scheduler;
-    let cell = unsafe { (*s).sync.mutex(word) };
-    let chain = unsafe { (*s).sync.dead(word) }
-        .expect("a dead mutex cause")
-        .clone();
+    let (cell, chain) = role::with_role(ctx, |s| {
+        let chain = s.sync.dead(word).expect("a dead mutex cause").clone();
+        (s.sync.mutex(word), chain)
+    });
     let mut state = cell.lock();
     touched(
         ctx,

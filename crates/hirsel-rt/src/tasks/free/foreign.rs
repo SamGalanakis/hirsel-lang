@@ -8,19 +8,21 @@ pub(crate) fn pin(ctx: *mut TaskCtx) -> bool {
     let Some(owner) = crate::pool::pin_foreign_compute() else {
         return false;
     };
-    let s = scheduler(ctx);
-    let me = s.current;
-    let row = s.task(me);
-    unpin(row);
-    assert_eq!(row.owner, Owner::Any);
-    row.owner = owner;
+    role::with_role(ctx, |s| {
+        let me = s.current;
+        let row = s.task(me);
+        unpin(row);
+        assert_eq!(row.owner, Owner::Any);
+        row.owner = owner;
+    });
     true
 }
 
 pub(crate) fn unpin_compute(ctx: *mut TaskCtx) {
-    let s = scheduler(ctx);
-    let me = s.current;
-    let owner = std::mem::replace(&mut s.task(me).owner, Owner::Any);
+    let owner = role::with_role(ctx, |s| {
+        let me = s.current;
+        std::mem::replace(&mut s.task(me).owner, Owner::Any)
+    });
     crate::pool::unpin_foreign_compute(owner);
 }
 
@@ -29,22 +31,22 @@ pub(crate) fn unpin_compute(ctx: *mut TaskCtx) {
 /// # Safety
 /// The C interval returned and slot owns this running task.
 pub(crate) unsafe fn from_pool(ctx: &mut TaskCtx, slot: u16) {
-    {
-        let s = scheduler(ctx);
+    role::with_role(ctx, |s| {
         let me = s.current;
         assert_eq!(
             std::mem::replace(&mut s.task(me).owner, Owner::Any),
             Owner::Pool(slot)
         );
-    }
+    });
     crate::pool::release(ctx, slot);
     let available = crate::pool::has_slot(ctx);
-    let s = scheduler(ctx);
-    for task in s.pool_waiters.clone() {
-        s.wake(task);
-    }
+    role::with_role(ctx, |s| {
+        for task in s.pool_waiters.clone() {
+            s.wake(task);
+        }
+        unsafe { readiness::poll_free_with_pool(s, available) };
+    });
     unsafe {
-        readiness::poll_free_with_pool(s, available);
         super::dispatch_ready(ctx);
         super::migrate(ctx);
     }

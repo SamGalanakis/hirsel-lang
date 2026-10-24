@@ -11,12 +11,15 @@ mod tests;
 /// The role is held; the handles name a child in the given live scope.
 pub(crate) unsafe fn cancel(ctx: *mut TaskCtx, scope: u64, task: u64) -> Stopped<()> {
     super::record::begin(ctx);
-    let s = scheduler(ctx) as *mut Scheduler;
-    let scope = unsafe { (*s).scope_handle(scope) };
-    let child = unsafe { (*s).task_handle(task, scope) };
-    let targets = unsafe { (*s).prepare_cancel(child) };
+    let (child, targets) = role::with_role(ctx, |s| {
+        let scope = s.scope_handle(scope);
+        let child = s.task_handle(task, scope);
+        (child, s.prepare_cancel(child))
+    });
     let publication = super::record::publish(ctx, Phase::Done, |_| unsafe {
-        (*s).cancel_prepared(child, CANCEL_REQUESTED, &targets);
+        role::with_held(ctx, |s| {
+            s.cancel_prepared(child, CANCEL_REQUESTED, &targets)
+        });
     });
     drop(targets);
     publication?;
@@ -27,11 +30,10 @@ pub(crate) unsafe fn cancel(ctx: *mut TaskCtx, scope: u64, task: u64) -> Stopped
 /// The role is held, ctx is the current owner, and out writable.
 pub(crate) unsafe fn check(ctx: *mut TaskCtx, out: *mut u32) -> Stopped<()> {
     super::record::begin(ctx);
-    let s = scheduler(ctx) as *mut Scheduler;
     let shield = unsafe { (*ctx).shield };
     let replay = super::replay::token(ctx);
     let publication = super::record::publish(ctx, Phase::Done, |writer| {
-        let mut cause = unsafe { (*s).canceled(shield) };
+        let mut cause = unsafe { role::with_held(ctx, |s| s.canceled(shield)) };
         if shield == 0 {
             if let Some(writer) = writer {
                 writer.cancel(cause);

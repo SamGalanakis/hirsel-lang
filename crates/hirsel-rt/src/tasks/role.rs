@@ -231,6 +231,30 @@ pub(crate) fn with_role<T>(ctx: *mut TaskCtx, f: impl FnOnce(&mut RoleTables<'_>
     })
 }
 
+/// Enter the role and observe a stop as [`with_role`] does, without lending
+/// the tables: for an operation whose table accesses all lie in its section.
+pub(crate) fn admit(ctx: *mut TaskCtx) {
+    super::role_tables(ctx);
+}
+
+/// As [`with_role`], for a caller that already holds the role and must not
+/// observe a stop here: inside a recording section, whose owner ends normally
+/// before any stop or suspension, or after the operation's own entry.
+/// # Safety
+/// `ctx`'s task holds the role, and the run's tables exist.
+#[inline(always)]
+pub(crate) unsafe fn with_held<T>(
+    ctx: *mut TaskCtx,
+    f: impl FnOnce(&mut RoleTables<'_>) -> T,
+) -> T {
+    let tables = unsafe { super::held_tables(ctx) };
+    let _lent = Lent::new();
+    f(&mut RoleTables {
+        tables,
+        _local: std::marker::PhantomData,
+    })
+}
+
 /// No role table borrow may span `boundary` on this thread. Like every
 /// runtime panic, this aborts at the compiled-code boundary.
 #[inline(always)]

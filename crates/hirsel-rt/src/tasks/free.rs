@@ -36,7 +36,7 @@ pub(crate) struct Driver {
 /// Admission only, before the root starts. The body uses only saved-stack
 /// dispatch and supported waits; it cannot invoke cooperative switch paths.
 pub(crate) unsafe fn enable(ctx: *mut TaskCtx) {
-    scheduler(ctx).logical = Logical::Free(Driver::default());
+    role::with_role(ctx, |s| s.logical = Logical::Free(Driver::default()));
     unsafe { (*ctx).run_ref() }
         .free_objects
         .store(true, std::sync::atomic::Ordering::Release);
@@ -69,29 +69,37 @@ pub(crate) fn finalized(base: crate::Layout) -> &'static crate::Layout {
 }
 
 pub(crate) fn enabled(ctx: *mut TaskCtx) -> bool {
-    matches!(scheduler(ctx).logical, Logical::Free(_))
+    role::with_role(ctx, |s| matches!(s.logical, Logical::Free(_)))
 }
 
 /// # Safety
 /// The calling task holds the role and no table borrow crosses publication.
 pub(super) unsafe fn dispatch_ready(ctx: *mut TaskCtx) {
     let run = unsafe { (*ctx).run_ptr() };
-    unsafe { publish_ready(scheduler(ctx), run) };
+    let ready = role::with_role(ctx, |s| take_ready(s));
+    unsafe { schedule_ready(run, ready) };
 }
 
 /// Publish already committed runtime wakes without a stop-aware ctx accessor.
 /// # Safety
 /// The role owns s and run; no table borrow survives queue publication.
 pub(super) unsafe fn publish_ready(s: &mut Scheduler, run: *mut crate::context::RunShared) {
-    if s.runnable.is_empty() {
+    unsafe { schedule_ready(run, take_ready(s)) };
+}
+
+fn take_ready(s: &mut Scheduler) -> Vec<(u32, Owner)> {
+    std::mem::take(&mut s.runnable)
+        .into_iter()
+        .map(|task| (task, s.task(task).owner))
+        .collect()
+}
+
+/// # Safety
+/// The role owns run's tables; the caller's table borrow has ended.
+unsafe fn schedule_ready(run: *mut crate::context::RunShared, ready: Vec<(u32, Owner)>) {
+    if ready.is_empty() {
         return;
     }
-    let ready = {
-        std::mem::take(&mut s.runnable)
-            .into_iter()
-            .map(|task| (task, s.task(task).owner))
-            .collect::<Vec<_>>()
-    };
     let mut batch = unsafe { crate::pool::free::ReadyBatch::new(run) };
     for (task, owner) in ready {
         unsafe { batch.schedule(task, owner) };
@@ -110,13 +118,13 @@ pub(super) unsafe fn try_yield(ctx: &mut TaskCtx) -> Stopped<()> {
 /// # Safety
 /// As for try_yield.
 pub(super) unsafe fn boundary(ctx: &mut TaskCtx, proceed: bool) -> Stopped<()> {
-    replay::wake(scheduler(ctx));
+    role::with_role(ctx, |s| replay::wake(s));
     if replay::at_cut(ctx) {
         park_final(ctx);
     }
     // Runtime polling performs no adapter effects. Home observes readiness
     // and cancellation with no role or parked-context borrow.
-    unsafe { super::readiness::poll_free(scheduler(ctx)) };
+    role::with_role(ctx, |s| unsafe { super::readiness::poll_free(s) });
     unsafe { dispatch_ready(ctx) };
     let waits = ctx
         .run_ref()
@@ -126,12 +134,13 @@ pub(super) unsafe fn boundary(ctx: &mut TaskCtx, proceed: bool) -> Stopped<()> {
         || unsafe { host::concurrent::pending(ctx.run_ptr()) };
     // Without a saved host wait there is nothing for home to recheck; skip
     // the role-entering accessor on every other immediate op.
-    if waits && home_rechecks(scheduler(ctx), waits) {
+    if waits && role::with_role(ctx, |s| home_rechecks(s, waits)) {
         unsafe { crate::pool::wake_home(ctx.run_ptr()) };
     }
-    let s = scheduler(ctx);
-    let me = s.current;
-    unpin(s.task(me));
+    role::with_role(ctx, |s| {
+        let me = s.current;
+        unpin(s.task(me));
+    });
     if proceed {
         if let Some(metrics) = &ctx.run_ref().worker_metrics {
             metrics.elision();
@@ -169,12 +178,11 @@ pub(super) unsafe fn suspend(ctx: &mut TaskCtx, yielded: bool) {
 /// # Safety
 /// As for try_yield, including any foreign-affine ownership transition.
 pub(super) unsafe fn migrate(ctx: &mut TaskCtx) {
-    let s = scheduler(ctx);
-    let me = s.current;
-    let (owner, last) = {
+    let (me, owner, last) = role::with_role(ctx, |s| {
+        let me = s.current;
         let row = s.task(me);
-        (row.owner, row.last)
-    };
+        (me, row.owner, row.last)
+    });
     if crate::pool::target(ctx, owner, last).is_some() {
         unsafe {
             crate::pool::free::schedule_saved(ctx.run_ptr(), me, owner);
