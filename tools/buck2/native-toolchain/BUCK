@@ -33,6 +33,12 @@ unpack_toolchain(
 export_file(name = "unpack.py")
 export_file(name = "link_kit.py")
 toolchain_proof(name = "proof", tools = [":llvm", ":arm", ":qemu", ":valgrind"], script = "proof.sh")
+toolchain_proof(name = "linker-input-proof", tools = [":linker", "toolchains//:llvm"],
+    script = "linker_input_probe.py", interpreter = "python3")
+toolchain_proof(name = "linker-store-proof", tools = [":linker", "toolchains//:llvm", "root//:hirsel-driver-unittest-harness"],
+    script = "linker_store_probe.py", interpreter = "python3")
+toolchain_proof(name = "linker-store-unit-proof", tools = ["toolchains//:llvm", "root//:hirsel-driver-unittest-harness"],
+    script = "linker_store_units.py", interpreter = "python3")
 toolchain_proof(name = "source-entry-proof", tools = [":llvm", "root//:hirsel-driver-unittest-harness"], script = "source_entry_proof.sh")
 export_file(name = "environment.tsv", visibility = ["PUBLIC"])
 
