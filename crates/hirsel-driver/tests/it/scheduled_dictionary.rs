@@ -66,12 +66,15 @@ fn admitted_dictionary_matches_scalar_named_callables_and_resumes_data_dependenc
                 .wait(request)
                 .unwrap_or_else(|r| panic!("dictionary {r:?}: {:?}", lower.failure(r)));
             let actual = lower.settled_constant(&dictionary, &[]).unwrap();
+            let codec = NativeRecords::new(program.engine.types().clone(), store.clone());
+            let actual_bytes = codec.encode(&program.engine, &*actual).unwrap();
             let ordinary = lower.outcome(products[1]).unwrap();
             assert!(
                 ordinary
                     .materialized
                     .iter()
-                    .any(|(_, value)| value == &*actual)
+                    .any(|(_, value)| codec.encode(&program.engine, value).as_deref()
+                        == Some(actual_bytes.as_slice()))
             );
             let hirsel_tir::ValueKind::Construct { fields, .. } = &actual.root.kind else {
                 panic!("not a dictionary");
@@ -92,8 +95,7 @@ fn admitted_dictionary_matches_scalar_named_callables_and_resumes_data_dependenc
                 1,
                 "suspension must not replay the field initializer"
             );
-            let codec = NativeRecords::new(program.engine.types().clone(), store.clone());
-            let actual_bytes = codec.encode(&program.engine, &*actual).unwrap();
+
             let mut cold = COMPILER
                 .with_config(CompileConfig {
                     store: Arc::new(MemStore::default()),
@@ -109,6 +111,7 @@ fn admitted_dictionary_matches_scalar_named_callables_and_resumes_data_dependenc
                 actual_bytes,
                 expected_codec.encode(&cold.engine, &expected).unwrap()
             );
+            drop(actual);
             runtime.shutdown();
             assert!(runtime.stats().peak_bytes <= 512 << 20);
             drop(ordinary);
