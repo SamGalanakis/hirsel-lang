@@ -352,6 +352,9 @@ impl Derived {
                             .write_unaligned(leaf)
                     };
                 }
+                DropStep::ReleaseReceipt { .. } => {
+                    panic!("ordinary generated corpus cannot manufacture private receipt custody")
+                }
                 DropStep::Thaw { .. } | DropStep::ReleaseRoot { .. } => {
                     panic!("generated layouts hold no Shared root")
                 }
@@ -455,6 +458,9 @@ impl Derived {
                     out.push(Event::Finalize(super::payload(child) as u64));
                 }
                 DropStep::CloseHandle { offset } => out.push(Event::Close(read(base, *offset))),
+                DropStep::ReleaseReceipt { .. } => {
+                    panic!("ordinary generated corpus cannot manufacture private receipt custody")
+                }
                 DropStep::Thaw { .. } | DropStep::ReleaseRoot { .. } => {
                     panic!("generated layouts hold no Shared root")
                 }
