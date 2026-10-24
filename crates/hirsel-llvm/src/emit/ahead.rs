@@ -58,9 +58,12 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             self.module.const_int(i64t, 1),
         );
         self.builder.store(left, counter, 8);
+        // Initialization/refill supply 1024; Saved adoption supplies i64::MAX.
+        // Each point hands off at zero and reloads a positive word before the
+        // next subtraction, so expiry cannot be skipped or wrap through zero.
         let expired = self
             .builder
-            .icmp(IntPredicate::Sle, left, self.module.const_zero(i64t));
+            .icmp(IntPredicate::Eq, left, self.module.const_zero(i64t));
         let mut reason = self.builder.select(
             expired,
             self.module.const_int(i32t, 1),
