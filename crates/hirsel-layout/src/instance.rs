@@ -695,7 +695,8 @@ pub struct Substitution {
 #[derive(Clone, Debug)]
 pub struct InstanceView {
     pub key: InstanceKey,
-    pub definition: hirsel_tir::DefinitionRef,
+    definition: Option<hirsel_tir::DefinitionRef>,
+    declaration: std::sync::Arc<InstanceDeclaration>,
     pub body: hirsel_tir::BodyId,
     pub owner: hirsel_lir::abi_types::CallableShape,
     pub substitution: Substitution,
@@ -705,11 +706,153 @@ pub struct InstanceView {
     pub caller_destination: bool,
 }
 
+/// Immutable declaration, caller and scoped-capture contract observations,
+/// retained independently of the source implementation body.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InstanceDeclaration {
+    pub definition: DefPath,
+    pub signature: ContentHash,
+    pub body_count: u32,
+    pub caller_bodies: Vec<hirsel_tir::BodyId>,
+    pub scoped_parameters: Vec<Vec<hirsel_lir::abi_types::ParameterPath>>,
+}
+impl InstanceDeclaration {
+    pub fn of(definition: &hirsel_tir::Definition) -> Self {
+        Self {
+            definition: definition.path.path().clone(),
+            signature: definition.signature_hash,
+            body_count: definition.bodies.len() as u32,
+            caller_bodies: definition.caller_bodies.clone(),
+            scoped_parameters: definition
+                .bodies
+                .iter()
+                .map(|b| {
+                    b.scoped_parameters
+                        .iter()
+                        .map(|p| hirsel_lir::abi_types::ParameterPath {
+                            parameter: p.parameter,
+                            fields: p.fields.clone(),
+                        })
+                        .collect()
+                })
+                .collect(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum InstanceBodyError {
+    Missing { definition: DefPath, body: u32 },
+    Mismatch { definition: DefPath, body: u32 },
+}
+impl std::fmt::Display for InstanceBodyError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Missing { definition, body } => write!(
+                f,
+                "source body {body} of {definition} has not been demanded"
+            ),
+            Self::Mismatch { definition, body } => write!(
+                f,
+                "source body {body} of {definition} differs from its declaration descriptor"
+            ),
+        }
+    }
+}
+impl std::error::Error for InstanceBodyError {}
+
 impl InstanceView {
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_definition(
+        key: InstanceKey,
+        definition: hirsel_tir::DefinitionRef,
+        body: hirsel_tir::BodyId,
+        owner: hirsel_lir::abi_types::CallableShape,
+        substitution: Substitution,
+        parameters: Vec<ParameterView>,
+        captures: Vec<CaptureView>,
+        caller_destination: bool,
+    ) -> Self {
+        let declaration = std::sync::Arc::new(InstanceDeclaration::of(&definition));
+        Self {
+            key,
+            definition: Some(definition),
+            declaration,
+            body,
+            owner,
+            substitution,
+            parameters,
+            captures,
+            caller_destination,
+        }
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_declaration(
+        key: InstanceKey,
+        declaration: std::sync::Arc<InstanceDeclaration>,
+        body: hirsel_tir::BodyId,
+        owner: hirsel_lir::abi_types::CallableShape,
+        substitution: Substitution,
+        parameters: Vec<ParameterView>,
+        captures: Vec<CaptureView>,
+        caller_destination: bool,
+    ) -> Self {
+        Self {
+            key,
+            definition: None,
+            declaration,
+            body,
+            owner,
+            substitution,
+            parameters,
+            captures,
+            caller_destination,
+        }
+    }
+    pub fn declaration(&self) -> &std::sync::Arc<InstanceDeclaration> {
+        &self.declaration
+    }
+    pub fn tracks_caller(&self) -> bool {
+        self.declaration.caller_bodies.contains(&self.body)
+    }
+    pub fn definition(&self) -> Result<&hirsel_tir::DefinitionRef, InstanceBodyError> {
+        self.definition
+            .as_ref()
+            .ok_or_else(|| InstanceBodyError::Missing {
+                definition: self.key.definition().clone(),
+                body: self.body.0,
+            })
+    }
+    /// Drop retention only; query/dependency identity is unchanged.
+    pub fn release_definition(&mut self) {
+        self.definition = None;
+    }
+    /// Attach an actually demanded source product. This is referential checking,
+    /// not source V authority; the caller must obtain V acceptance independently.
+    pub fn attach_definition(
+        &mut self,
+        definition: hirsel_tir::DefinitionRef,
+    ) -> Result<(), InstanceBodyError> {
+        if InstanceDeclaration::of(&definition) != *self.declaration
+            || definition.path.path() != self.key.definition()
+            || self.body.0 >= self.declaration.body_count
+        {
+            return Err(InstanceBodyError::Mismatch {
+                definition: self.key.definition().clone(),
+                body: self.body.0,
+            });
+        }
+        self.definition = Some(definition);
+        Ok(())
+    }
+
     /// Referential integrity: the body exists, every substituted TypeId is a
     /// row of `types`, and parameter remapping is a bijection.
     pub fn check_identity(&self, types: &hirsel_types::TypeInterner) -> Result<(), SchemaError> {
-        let bodies = self.definition.bodies.len();
+        let definition = self
+            .definition()
+            .map_err(|_| SchemaError::Stale("instance source body has not been demanded"))?;
+        let bodies = definition.bodies.len();
         if self.body.0 as usize >= bodies {
             return Err(SchemaError::ForeignId {
                 kind: "TIR body",
@@ -717,7 +860,7 @@ impl InstanceView {
                 bound: bodies,
             });
         }
-        if self.definition.path.path() != self.key.definition() || self.key.body() != self.body.0 {
+        if definition.path.path() != self.key.definition() || self.key.body() != self.body.0 {
             return Err(SchemaError::Stale("instance key names another body"));
         }
         for (ordinal, (_, ty)) in self.substitution.types.iter().enumerate() {

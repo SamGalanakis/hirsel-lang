@@ -1909,16 +1909,16 @@ mod instance_keys {
             contracts: Vec::new(),
         });
         let key = InstanceKey::new(&path("f"), 0, &[], &store, None, None).unwrap();
-        let view = InstanceView {
+        let view = InstanceView::from_definition(
             key,
-            definition,
-            body: hirsel_tir::BodyId(0),
-            owner: CallableShape::Definition,
-            substitution: Substitution {
+            definition.clone(),
+            hirsel_tir::BodyId(0),
+            CallableShape::Definition,
+            Substitution {
                 types: vec![(TypeParameterRef::bound(TypeParamId(0)), unit_ty)],
                 sizes: vec![(SizeParameterRef::bound(SizeParamId(0)), 8)],
             },
-            parameters: vec![
+            vec![
                 ParameterView {
                     source: 0,
                     instance: 1,
@@ -1930,14 +1930,43 @@ mod instance_keys {
                     passing: Passing::Take,
                 },
             ],
-            captures: vec![CaptureView {
+            vec![CaptureView {
                 scoped: false,
                 ordinal: 0,
                 usage: CaptureUse::Borrow,
             }],
-            caller_destination: false,
-        };
+            false,
+        );
         assert_eq!(view.check_identity(&store), Ok(()));
+        let mut detached = InstanceView::from_declaration(
+            view.key.clone(),
+            view.declaration().clone(),
+            view.body,
+            view.owner,
+            view.substitution.clone(),
+            view.parameters.clone(),
+            view.captures.clone(),
+            view.caller_destination,
+        );
+        assert!(detached.definition().is_err());
+        assert!(matches!(
+            detached.check_identity(&store),
+            Err(SchemaError::Stale(_))
+        ));
+        let original = view.definition().unwrap().clone();
+        let mut wrong = original.as_ref().clone();
+        wrong.signature_hash = ContentHash::default();
+        assert!(
+            detached
+                .attach_definition(std::sync::Arc::new(wrong))
+                .is_err()
+        );
+        assert!(detached.definition().is_err());
+        detached.attach_definition(original).unwrap();
+        assert_eq!(detached.check_identity(&store), Ok(()));
+        detached.release_definition();
+        assert!(detached.definition().is_err());
+
         let mut foreign = view.clone();
         foreign.substitution.types[0].1 = hirsel_types::TypeId::DANGLING;
         assert!(matches!(

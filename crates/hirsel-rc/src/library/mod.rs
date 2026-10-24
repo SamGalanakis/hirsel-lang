@@ -481,16 +481,16 @@ pub fn instantiate(
     if let Some(id) = instances.get(&key) {
         return Ok(id);
     }
-    let view = InstanceView {
+    let view = InstanceView::from_definition(
         key,
-        definition: declaration(&request.path),
-        body: tir::BodyId(0),
-        owner: request.shape,
-        substitution: request.actuals.substitution(&request.path)?,
-        parameters: crate::instance::parameter_views(&instances.types, request.callable),
-        captures: Vec::new(),
-        caller_destination: false,
-    };
+        declaration(&request.path),
+        tir::BodyId(0),
+        request.shape,
+        request.actuals.substitution(&request.path)?,
+        crate::instance::parameter_views(&instances.types, request.callable),
+        Vec::new(),
+        false,
+    );
     let (id, _) = instances.push(
         layouts,
         view,
