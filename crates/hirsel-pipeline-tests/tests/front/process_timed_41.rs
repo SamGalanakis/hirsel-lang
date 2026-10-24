@@ -1,5 +1,5 @@
 //! Timed process fixtures share the byte machine and existing quiescent timer seam.
-use hirsel_driver::{native::*, replay_observations, replay_observations_checked};
+use hirsel_driver::{native::*, record_loaded_fixture_observations, replay_loaded_observations};
 use hirsel_engine::{
     RunConfiguration, run_observed_checked, run_observed_snapshot, with_compiler_stack,
 };
@@ -20,8 +20,21 @@ fn campaign_mode(
     with_compiler_stack(|| {
         let scratch = tempfile::tempdir().unwrap();
         let root = scratch.path();
-        ARTIFACTS.with(|items| items.borrow_mut().clear());
-        let path = if id == "S01" {
+        let retained_source =
+            std::env::var_os("HIRSEL_TIMED_RETAINED_SOURCE").map(std::path::PathBuf::from);
+        let mut _restored_source = None;
+        let path = if let Some(original) = retained_source {
+            let parent = original.parent().unwrap();
+            assert!(parent.starts_with(std::env::temp_dir()));
+            assert_eq!(original.file_name().unwrap(), "main.hir");
+            std::fs::create_dir(parent).unwrap();
+            _restored_source = Some(RestoredSource(parent.to_owned()));
+            assert_eq!(
+                tape_sha(source.as_bytes()),
+                std::env::var("HIRSEL_TIMED_RETAINED_SOURCE_SHA").unwrap()
+            );
+            original
+        } else if id == "S01" {
             std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("../../examples/suite-runner/hirsel.json")
         } else {
@@ -29,22 +42,15 @@ fn campaign_mode(
         };
         if id != "S01" {
             std::fs::write(&path, source).unwrap();
-            eprintln!(
-                "TIMED_PROGRAM {id} sha256={} hex={}",
-                tape_sha(source.as_bytes()),
-                source
-                    .as_bytes()
-                    .iter()
-                    .map(|b| format!("{b:02x}"))
-                    .collect::<String>()
-            );
         }
+        eprintln!("TIMED_PHASE {id} source-load start");
         let mut loaded = hirsel_driver::load_program(&path).unwrap_or_else(|e| panic!("{id}: {e}"));
-        bind_artifact("source", &path);
+        eprintln!("TIMED_PHASE {id} source-load done; source-check start");
         loaded.check_for_execution().unwrap_or_else(|e| match e {
             hirsel_engine::ToolError::Query { error, .. } => panic!("{id}: {error:?}"),
             e => panic!("{id}: {e}"),
         });
+        eprintln!("TIMED_PHASE {id} source-check done");
         let run = RunConfiguration {
             entry: loaded.entry.clone(),
             hash_seed: 0,
@@ -78,7 +84,14 @@ fn campaign_mode(
                     definition: loaded.entry.clone(),
                     file: path.display().to_string(),
                     line: line as u32 + 1,
-                    column: (text.len() - text.trim_start().len()) as u32 + 1,
+                    column: text
+                        .find(if id == "L02" {
+                            "proc.spawn_pipeline"
+                        } else {
+                            "child.close_stdin"
+                        })
+                        .unwrap() as u32
+                        + 1,
                     operation: None,
                 });
             }
@@ -89,10 +102,8 @@ fn campaign_mode(
                 );
             }
             if checked_only {
-                inner_receipt(id, "checked-H", "before", None);
                 let checked =
                     run_observed_checked(&mut loaded.engine, &run, (&fixture).into()).unwrap();
-                inner_receipt(id, "checked-H", "after", None);
                 eprintln!("TIMED_CHECKED_OUTCOME {id} {:?}", checked.outcome);
                 assert_eq!(
                     Observation::of_reference(checked.observation.as_ref().unwrap()),
@@ -103,10 +114,8 @@ fn campaign_mode(
             expected
         } else {
             eprintln!("TIMED_STARTED {id} reference");
-            inner_receipt(id, "reference", "before", None);
             let reference =
                 run_observed_snapshot(&mut loaded.engine, &run, (&fixture).into()).unwrap();
-            inner_receipt(id, "reference", "after", None);
             let observable = reference.observation.as_ref().unwrap();
             let expected = Observation::of_reference(observable);
             let failed = matches!(
@@ -154,10 +163,8 @@ fn campaign_mode(
                 String::from_utf8_lossy(&expected.output)
             );
             eprintln!("TIMED_PASS {id} reference");
-            inner_receipt(id, "checked-H", "before", None);
             let checked =
                 run_observed_checked(&mut loaded.engine, &run, (&fixture).into()).unwrap();
-            inner_receipt(id, "checked-H", "after", None);
             if checked.observation != reference.observation {
                 eprintln!("TIMED_CHECKED_OUTCOME {id} {:?}", checked.outcome);
                 panic!("{id} checked H differs from the full reference observation");
@@ -229,113 +236,147 @@ fn campaign_mode(
                 link_fixture_runnable(&ready, &loaded.entry, &objects, &tools, &dir, &fixture)
                     .unwrap();
             eprintln!("TIMED_PHASE {id} {backend:?}-link done");
-            let image = match &runnable {
-                Runnable::Executable(path) => path.clone(),
-                Runnable::Image(image) => {
-                    bind_artifact(format!("{backend:?}-runner"), &image.runner.path);
-                    image.path.clone()
-                }
-            };
-            bind_artifact(format!("{backend:?}-image"), image);
-            bind_artifact(format!("{backend:?}-run"), dir.join("run.json"));
             runnables.push((runnable, dir));
         }
         let mut producers = Vec::new();
-        if matches!(id, "R04" | "E04" | "L02" | "S01") || !native_only {
-            for (name, checked) in [("reference", false), ("checked-H", true)] {
-                let tape = root.join(format!("{name}-recording"));
-                bind_artifact(format!("{name}-tape"), &tape);
-                inner_receipt(id, &format!("{name}-record"), "before", Some(&tools));
-                let observed = hirsel_driver::record_fixture_observations(
-                    &path,
-                    &runnables[0].1.join("run.json"),
-                    &fixture,
-                    &tape,
-                    checked,
-                )
-                .unwrap();
-                let bytes = std::fs::read(&tape).unwrap();
-                eprintln!(
-                    "TIMED_TAPE {id} {name} sha256={} hex={}",
-                    tape_sha(&bytes),
-                    bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()
-                );
-                inner_receipt(id, &format!("{name}-record"), "after", Some(&tools));
+        let recovery = std::env::var("HIRSEL_TIMED_RECOVERY_TAPES_JSON").ok();
+        if let Some(json) = &recovery {
+            let originals: Vec<(String, Vec<u8>)> = serde_json::from_str(json).unwrap();
+            for (producer, bytes) in originals {
+                let original = hirsel_rt::launch::parse_recording_bytes(&bytes).unwrap();
+                let current = fixture_run_record(&ready, &loaded.entry, &fixture).unwrap();
                 assert_eq!(
-                    Observation::of_reference(&observed),
-                    expected,
-                    "{id} {name} producer"
+                    original.bound_run().unwrap().canonical(),
+                    current.canonical()
                 );
-                eprintln!("TIMED_PASS {id} {name} live");
-                producers.push((name.to_string(), tape));
+                assert_eq!(original.run_identity, current.identity());
+                let path = root.join(format!("retained-{producer}"));
+                std::fs::write(&path, &bytes).unwrap();
+                eprintln!(
+                    "TIMED_INTEGRITY {id} {producer} complete sha256={}",
+                    tape_sha(&bytes)
+                );
+                producers.push((producer, path));
             }
         }
-        for (recorder, dir) in &runnables {
-            eprintln!("TIMED_STARTED {id} {:?}", dir.file_name().unwrap());
-            let tape = dir.join("recording");
-            bind_artifact(format!("{:?}-tape", dir.file_name().unwrap()), &tape);
-            inner_receipt(
-                id,
-                &format!("{:?}-record", dir.file_name().unwrap()),
-                "before",
-                Some(&tools),
-            );
-            let recording_result = launch_fixture(
-                recorder,
-                &ready.target,
-                &tools,
-                dir,
-                true,
-                Tape::Live {
-                    record: Some(&tape),
-                    revocations: None,
-                },
-                &fixture,
-            );
-            inner_receipt(
-                id,
-                &format!("{:?}-record", dir.file_name().unwrap()),
-                "after",
-                Some(&tools),
-            );
-            let bytes = std::fs::read(&tape).unwrap_or_default();
-            let tape_kind = if recording_result.is_ok() {
-                "TIMED_TAPE"
-            } else {
-                "TIMED_PARTIAL_TAPE"
-            };
-            eprintln!(
-                "{tape_kind} {id} {:?} sha256={} hex={}",
-                dir.file_name().unwrap(),
-                tape_sha(&bytes),
-                bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()
-            );
-            let recorded = recording_result.unwrap();
+        let retained = if matches!(id, "L02" | "S01") {
+            std::env::var("HIRSEL_TIMED_RETAINED_TAPE_JSON").ok()
+        } else {
+            None
+        };
+        if let Some(json) = &retained {
+            let bytes: Vec<u8> = serde_json::from_str(json).unwrap();
             assert_eq!(
-                observe(&recorded, &ready, &sites).unwrap(),
-                expected,
-                "{id}: {recorded:?}"
+                tape_sha(&bytes),
+                std::env::var("HIRSEL_TIMED_RETAINED_TAPE_SHA").unwrap()
             );
-            let record = hirsel_rt::launch::parse_recording_bytes(&bytes).unwrap();
-            assert!(
-                record
-                    .events
-                    .iter()
-                    .any(|e| matches!(e.request, hirsel_rt::io::Request::ProcessTime { .. }))
-                    || id == "R02-hidden"
-                    || id == "D04"
-                    || id.starts_with("U")
-                    || id == "C03-before"
-                    || id == "C03-cancel-first"
-                    || matches!(id, "E05" | "B02" | "B03" | "G03"),
-                "{id}: no time advance recorded"
+            let original = hirsel_rt::launch::parse_recording_bytes(&bytes).unwrap();
+            let bound = original.bound_run().unwrap();
+            let current = fixture_run_record(&ready, &loaded.entry, &fixture).unwrap();
+            assert_eq!(
+                bound.canonical(),
+                current.canonical(),
+                "original producer binding must match without rewriting"
             );
+            assert_eq!(original.run_identity, current.identity());
+            let advances: Vec<_> = original
+                .events
+                .iter()
+                .filter_map(|e| match e.request {
+                    hirsel_rt::io::Request::ProcessTime { from, to } => Some((from, to)),
+                    _ => None,
+                })
+                .collect();
+            if id == "S01" {
+                assert_suite_record(&original, &expected.output);
+            } else {
+                assert_eq!(advances, [(0, 3), (3, 5)]);
+            }
+            let tape = root.join("retained-reference-recording");
+            std::fs::write(&tape, &bytes).unwrap();
             eprintln!(
-                "TIMED_PASS {id} {:?} live events={}",
-                dir.file_name().unwrap(),
-                record.events.len()
+                "TIMED_INTEGRITY {id} original-reference complete sha256={}",
+                tape_sha(&bytes)
             );
-            producers.push((format!("{:?}", dir.file_name().unwrap()), tape));
+            producers.push(("reference-retained".to_owned(), tape));
+        }
+        if recovery.is_none() {
+            if matches!(id, "R04" | "E04" | "L02" | "S01") || !native_only {
+                for (name, checked) in [("reference", false), ("checked-H", true)] {
+                    if retained.is_some() && name == "reference" {
+                        continue;
+                    }
+                    let tape = root.join(format!("{name}-recording"));
+                    let observed = record_loaded_fixture_observations(
+                        &mut loaded,
+                        &runnables[0].1.join("run.json"),
+                        &fixture,
+                        &tape,
+                        checked,
+                    )
+                    .unwrap();
+                    let bytes = std::fs::read(&tape).unwrap();
+                    assert_eq!(
+                        Observation::of_reference(&observed),
+                        expected,
+                        "{id} {name} producer"
+                    );
+                    if id == "S01" {
+                        assert_suite_record(
+                            &hirsel_rt::launch::parse_recording_bytes(&bytes).unwrap(),
+                            &expected.output,
+                        );
+                    }
+                    eprintln!("TIMED_PASS {id} {name} live");
+                    producers.push((name.to_string(), tape));
+                }
+            }
+            for (recorder, dir) in &runnables {
+                eprintln!("TIMED_STARTED {id} {:?}", dir.file_name().unwrap());
+                let tape = dir.join("recording");
+                let recording_result = launch_fixture(
+                    recorder,
+                    &ready.target,
+                    &tools,
+                    dir,
+                    true,
+                    Tape::Live {
+                        record: Some(&tape),
+                        revocations: None,
+                    },
+                    &fixture,
+                );
+                let bytes = std::fs::read(&tape).unwrap_or_default();
+                let recorded = recording_result.unwrap();
+                assert_eq!(
+                    observe(&recorded, &ready, &sites).unwrap(),
+                    expected,
+                    "{id}: {recorded:?}"
+                );
+                let record = hirsel_rt::launch::parse_recording_bytes(&bytes).unwrap();
+                if id == "S01" {
+                    assert_suite_record(&record, &expected.output);
+                }
+                assert!(
+                    record
+                        .events
+                        .iter()
+                        .any(|e| matches!(e.request, hirsel_rt::io::Request::ProcessTime { .. }))
+                        || id == "R02-hidden"
+                        || id == "D04"
+                        || id.starts_with("U")
+                        || id == "C03-before"
+                        || id == "C03-cancel-first"
+                        || matches!(id, "E05" | "B02" | "B03" | "G03"),
+                    "{id}: no time advance recorded"
+                );
+                eprintln!(
+                    "TIMED_PASS {id} {:?} live events={}",
+                    dir.file_name().unwrap(),
+                    record.events.len()
+                );
+                producers.push((format!("{:?}", dir.file_name().unwrap()), tape));
+            }
         }
         let mut replay_errors = Vec::new();
         for (producer, tape) in producers {
@@ -345,69 +386,62 @@ fn campaign_mode(
                 monotonic: None,
                 ..fixture.clone()
             };
-            for (runnable, replay_dir) in &runnables {
-                let consumer = format!(
-                    "{:?}->{:?}-replay",
-                    producer,
-                    replay_dir.file_name().unwrap()
-                );
-                inner_receipt(id, &consumer, "before", Some(&tools));
-                let replayed = launch_fixture(
-                    runnable,
-                    &ready.target,
-                    &tools,
-                    replay_dir,
-                    true,
-                    Tape::Replay(&tape),
-                    &replay_fixture,
-                );
-                inner_receipt(id, &consumer, "after", Some(&tools));
-                let replayed = match replayed.and_then(|r| observe(&r, &ready, &sites)) {
-                    Ok(actual) if actual == expected => actual,
-                    result => {
-                        eprintln!("TIMED_FAIL {id} {consumer}: {result:?}");
-                        replay_errors.push(consumer);
-                        continue;
-                    }
-                };
-                assert_eq!(replayed, expected);
-                eprintln!(
-                    "TIMED_PASS {id} {:?} -> {:?} replay",
-                    producer,
-                    replay_dir.file_name().unwrap()
-                );
-            }
-            for (name, replay) in [
-                (
-                    "reference",
-                    replay_observations as fn(&std::path::Path, &std::path::Path, Option<u64>) -> _,
-                ),
-                ("checked-H", replay_observations_checked),
-            ] {
-                let consumer = format!("{producer}->{name}-replay");
-                inner_receipt(id, &consumer, "before", Some(&tools));
-                let result = replay(&path, &tape, None);
-                inner_receipt(id, &consumer, "after", Some(&tools));
-                let result = match result {
-                    Ok(actual) if Observation::of_reference(&actual) == expected => actual,
-                    result => {
-                        eprintln!(
-                            "TIMED_FAIL {id} {consumer}: {}",
-                            result
-                                .as_ref()
-                                .err()
-                                .map(|e| e.to_string())
-                                .unwrap_or_else(|| "observation mismatch".into())
-                        );
-                        replay_errors.push(consumer);
-                        continue;
-                    }
-                };
-                if id == "S01" {
-                    assert_suite_state(&result, &expected.output);
+            let valid_producers = std::env::var("HIRSEL_TIMED_VALID_REPLAY_PRODUCERS").ok();
+            if valid_producers
+                .as_ref()
+                .is_none_or(|names| names.split(',').any(|name| name == producer))
+            {
+                for (runnable, replay_dir) in &runnables {
+                    let consumer = format!(
+                        "{:?}->{:?}-replay",
+                        producer,
+                        replay_dir.file_name().unwrap()
+                    );
+                    let replayed = launch_fixture(
+                        runnable,
+                        &ready.target,
+                        &tools,
+                        replay_dir,
+                        true,
+                        Tape::Replay(&tape),
+                        &replay_fixture,
+                    );
+                    let replayed = match replayed.and_then(|r| observe(&r, &ready, &sites)) {
+                        Ok(actual) if actual == expected => actual,
+                        result => {
+                            eprintln!("TIMED_FAIL {id} {consumer}: {result:?}");
+                            replay_errors.push(consumer);
+                            continue;
+                        }
+                    };
+                    assert_eq!(replayed, expected);
+                    eprintln!(
+                        "TIMED_PASS {id} {:?} -> {:?} replay",
+                        producer,
+                        replay_dir.file_name().unwrap()
+                    );
                 }
-                assert_eq!(Observation::of_reference(&result), expected);
-                eprintln!("TIMED_PASS {id} {:?} -> {name} replay", producer);
+                for (name, checked) in [("reference", false), ("checked-H", true)] {
+                    let consumer = format!("{producer}->{name}-replay");
+                    let result = replay_loaded_observations(&mut loaded, &tape, None, checked);
+                    let result = match result {
+                        Ok(actual) if Observation::of_reference(&actual) == expected => actual,
+                        result => {
+                            eprintln!(
+                                "TIMED_FAIL {id} {consumer}: {}",
+                                result
+                                    .as_ref()
+                                    .err()
+                                    .map(|e| e.to_string())
+                                    .unwrap_or_else(|| "observation mismatch".into())
+                            );
+                            replay_errors.push(consumer);
+                            continue;
+                        }
+                    };
+                    assert_eq!(Observation::of_reference(&result), expected);
+                    eprintln!("TIMED_PASS {id} {:?} -> {name} replay", producer);
+                }
             }
             if matches!(id, "R02" | "R02-hidden") && producer.contains("Llvm") {
                 let replay_fixture = Fixture {
@@ -418,7 +452,7 @@ fn campaign_mode(
                 };
                 replay_errors.extend(timed_refusal_controls(
                     id,
-                    &path,
+                    &mut loaded,
                     &tape,
                     &runnables,
                     &ready,
@@ -648,95 +682,6 @@ fn timed_s01_checked_outcome_diagnostic() {
     campaign_mode("S01", "", suite_fixture(), S01_BYTES, false, true);
 }
 
-fn inner_receipt(id: &str, consumer: &str, phase: &str, tools: Option<&Toolchain>) {
-    use sha2::{Digest, Sha256};
-    use std::collections::BTreeSet;
-    use std::io::Read;
-    use std::os::unix::fs::PermissionsExt;
-    fn digest(
-        path: &std::path::Path,
-        seen: &mut BTreeSet<std::path::PathBuf>,
-        members: &mut u64,
-    ) -> String {
-        let mut hash = Sha256::new();
-        if path.is_symlink() {
-            hash.update(
-                std::fs::read_link(path)
-                    .unwrap()
-                    .as_os_str()
-                    .as_encoded_bytes(),
-            );
-        }
-        if path.is_dir() {
-            let canonical = path.canonicalize().unwrap();
-            if !seen.insert(canonical) {
-                return "directory-alias".into();
-            }
-            let mut entries: Vec<_> = std::fs::read_dir(path)
-                .unwrap()
-                .map(|p| p.unwrap().path())
-                .collect();
-            entries.sort();
-            for entry in entries {
-                hash.update(entry.file_name().unwrap().as_encoded_bytes());
-                hash.update(
-                    std::fs::metadata(&entry)
-                        .unwrap()
-                        .permissions()
-                        .mode()
-                        .to_le_bytes(),
-                );
-                hash.update(digest(&entry, seen, members));
-            }
-        } else {
-            let mut file = std::fs::File::open(path).unwrap();
-            let mut bytes = [0; 65536];
-            loop {
-                let n = file.read(&mut bytes).unwrap();
-                if n == 0 {
-                    break;
-                }
-                hash.update(&bytes[..n]);
-            }
-            *members += 1;
-        }
-        format!("{:x}", hash.finalize())
-    }
-    let mut paths = vec![("harness".to_string(), std::env::current_exe().unwrap())];
-    ARTIFACTS.with(|items| {
-        paths.extend(
-            items
-                .borrow()
-                .iter()
-                .filter(|(_, path)| path.exists())
-                .cloned(),
-        )
-    });
-    if let Some(image) = std::env::var_os("HIRSEL_IMAGE") {
-        paths.push(("image".into(), image.into()));
-    }
-    if let Some(tools) = tools {
-        paths.extend([
-            ("clang".into(), tools.clang.clone()),
-            ("linker".into(), tools.lld.clone()),
-            ("kit".into(), tools.kit.clone()),
-        ]);
-        if let Some(floor) = &tools.glibc_floor {
-            paths.push(("loader-libraries".into(), floor.join(ready_target_triple())));
-        }
-        for ((target, variant), path) in &tools.runtime {
-            if target == "x86_64-unknown-linux-gnu" && *variant == tools.runtime_build {
-                paths.push(("runtime".into(), path.clone()));
-            }
-        }
-    }
-    let rows: Vec<_> = paths.into_iter().map(|(kind, path)| { let mut members=0; let hash=digest(&path,&mut BTreeSet::new(),&mut members); json!({"kind":kind,"path":path,"sha256":hash,"mode":std::fs::metadata(&path).unwrap().permissions().mode(),"members":members}) }).collect();
-    eprintln!(
-        "TIMED_INNER {}",
-        json!({"id":id,"consumer":consumer,"phase":phase,"inputs":rows})
-    );
-}
-
 fn tape_sha(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
     format!("{:x}", Sha256::digest(bytes))
@@ -760,13 +705,6 @@ fn timed_e04_delayed_close_is_lang9() {
         },
         vector["expected"]["at_5"].as_str().unwrap().as_bytes(),
     );
-}
-
-thread_local! {
-    static ARTIFACTS: std::cell::RefCell<Vec<(String, std::path::PathBuf)>> = const { std::cell::RefCell::new(Vec::new()) };
-}
-fn bind_artifact(kind: impl Into<String>, path: impl Into<std::path::PathBuf>) {
-    ARTIFACTS.with(|items| items.borrow_mut().push((kind.into(), path.into())));
 }
 
 #[test]
@@ -1001,18 +939,93 @@ pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
     );
 }
 
-fn assert_suite_state(observable: &hirsel_interp::observation::Observable, output: &[u8]) {
-    let state = observable.final_state.as_ref().unwrap();
-    assert_eq!(state.stderr, b"");
-    assert!(state.trees.values().any(|(_, files)| {
-        files
-            .values()
-            .any(|bytes| bytes == &output[..output.len() - 1])
-    }));
-    assert!(!state.handles.values().any(|g| matches!(
-        g,
-        hirsel_interp::library::simulation::ObservedGrant::Child { .. }
-    )));
+// Host-tape observations carry no interpreter SimulationState. Validate the
+// report publication and resource lifecycle from the exact validated effects;
+// snapshot runs above additionally compare the full final SimulationState.
+fn assert_suite_record(record: &hirsel_rt::launch::Recording, output: &[u8]) {
+    use hirsel_rt::io::{Completion as C, Request as R};
+    assert_s01_time(record);
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(output).unwrap(),
+        oracle("S01")["expected"]["summary"]
+    );
+    let mut atomic = None;
+    let mut report = Vec::new();
+    let mut published = false;
+    let mut stdout = Vec::new();
+    let mut children = std::collections::BTreeSet::new();
+    let mut canceled_waits = 0;
+    let mut pending_waits = std::collections::BTreeSet::new();
+    let mut canceled_children = std::collections::BTreeSet::new();
+    for event in &record.events {
+        match (&event.request, &event.completion) {
+            (R::CreateAtomic { directory, path }, C::Handle(Ok(file))) if path == "report.json" => {
+                assert!(atomic.replace((*directory, *file)).is_none());
+            }
+            (
+                R::WriteAll {
+                    directory,
+                    file,
+                    bytes,
+                },
+                C::Unit(Ok(())),
+            ) if atomic == Some((*directory, *file)) => report.extend_from_slice(bytes),
+            (R::Commit { directory, file }, C::Unit(Ok(())))
+                if atomic == Some((*directory, *file)) =>
+            {
+                assert!(!published);
+                assert_eq!(report, output[..output.len() - 1]);
+                published = true;
+            }
+            (R::Print { bytes, .. }, C::Unit(Ok(()))) => {
+                assert!(published, "report commits before stdout");
+                stdout.extend_from_slice(bytes);
+            }
+            (R::PrintStderr { bytes, .. }, _) => assert!(bytes.is_empty()),
+            (_, C::Spawned(Ok(child))) => {
+                assert!(children.insert(*child));
+            }
+            (
+                R::ChildWait {
+                    child, deadline, ..
+                },
+                C::Blocked { .. },
+            ) => {
+                assert_eq!(deadline.as_ref().map(|at| at.ticks), Some(5_000_000));
+                pending_waits.insert(*child);
+            }
+            (R::ProcessSettle { canceled }, C::Ready) => {
+                canceled_children.extend(canceled.iter().copied())
+            }
+            (R::ChildWait { child, .. }, C::ChildExit(result)) => {
+                assert!(children.remove(child));
+                pending_waits.remove(child);
+                assert!(matches!(
+                    result,
+                    Err(hirsel_run_schema::ProcessFailure::Canceled(3))
+                ));
+                canceled_waits += 1;
+            }
+            (R::Close { handle }, C::Unit(Ok(()))) => {
+                // io_checks::cancel returns the typed Canceled result without
+                // recording a second wait. Its consuming close is recorded.
+                if pending_waits.remove(handle) {
+                    assert!(canceled_children.contains(handle));
+                    canceled_waits += 1;
+                }
+                children.remove(handle);
+            }
+            (_, C::ChildBytes(Ok(bytes))) => {
+                assert!(bytes.is_empty(), "no delayed child output delivered")
+            }
+            _ => (),
+        }
+    }
+    assert!(published);
+    assert_eq!(stdout, output);
+    assert_eq!(canceled_waits, 1);
+    assert!(pending_waits.is_empty());
+    assert!(children.is_empty());
 }
 #[test]
 fn timed_e04_native_and_host_tape_complement() {
@@ -1105,17 +1118,11 @@ fn l02_case() -> (String, Fixture, Vec<u8>) {
 }
 #[test]
 fn timed_l02_pipeline_deferred_close_reports_at_downstream_gate() {
-    if bounded_test_child("L02") {
-        return;
-    }
     let (source, fixture, output) = l02_case();
     campaign("L02", &source, fixture, &output);
 }
 #[test]
 fn timed_l02_missing_native_complement() {
-    if bounded_test_child("L02-native") {
-        return;
-    }
     let (source, fixture, output) = l02_case();
     campaign_mode("L02", &source, fixture, &output, true, false);
 }
@@ -1168,7 +1175,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
   let output = io.stdout(rt)?
   let c = io.monotonic_clock(rt)?
   let p = io.process(rt)?
-  let q = match proc.narrow(p, [ProcessRule(program: path.of("/bin/cat"), env: [])]) { Ok(q) => q, Error(_) => return Ok(()), }
+  let q = match proc.narrow(p, [ProcessRule(program: "/bin/cat", env: [])]) { Ok(q) => q, Error(_) => return Ok(()), }
   let mut a = match proc.spawn(p, Command(program: path.of("/bin/cat"), args: [], dir: None(), env: None(), own_group: false)) { Ok(ch) => take ch, Error(_) => return Ok(()), }
   let mut b = match proc.spawn(q, Command(program: path.of("/bin/cat"), args: [], dir: None(), env: None(), own_group: false)) { Ok(ch) => take ch, Error(_) => return Ok(()), }
   read_at(p, mut a, c, output)
@@ -1203,10 +1210,10 @@ pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
   let p = io.process(rt)?
   let tasks = io.tasks(rt)?
   task.scope(tasks, fn(s: Scope) -> () {
+    let mut child = match proc.spawn(p, Command(program: path.of("/bin/cat"), args: [], dir: None(), env: None(), own_group: false)) { Ok(ch) => take ch, Error(_) => return (), }
     let sibling = task.async(s, fn() -> () {
       for i in 0u64..3u64 { match clock.monotonic(c) { Ok(now) => { let _ = out.print(output, f"runnable {instant.ticks(now)}\n") }, Error(_) => (), } }
     })
-    let mut child = match proc.spawn(p, Command(program: path.of("/bin/cat"), args: [], dir: None(), env: None(), own_group: false)) { Ok(ch) => take ch, Error(_) => return (), }
     let mut buffer: List[u8] = []
     match child.read_stdout(p, mut child, mut buffer, 100u64) { Ok(n) => { let _ = out.print(output, f"{n}:{utf8(take buffer)}\n") }, Error(_) => (), }
     let _ = child.wait(p, take child, None())
@@ -1463,7 +1470,7 @@ fn timed_a03_max_tick_and_checked_add_overflow() {
 // native and host-tape consumer. No header or runtime revision is rebound.
 fn timed_refusal_controls(
     id: &str,
-    path: &std::path::Path,
+    loaded: &mut hirsel_engine::LoadedProgram,
     tape: &std::path::Path,
     runnables: &[(Runnable, std::path::PathBuf)],
     ready: &ReadyProgram,
@@ -1474,7 +1481,7 @@ fn timed_refusal_controls(
     let original = std::fs::read(tape).unwrap();
     let record = hirsel_rt::launch::parse_recording_bytes(&original).unwrap();
     let mut failures = Vec::new();
-    let modes = if id == "R02-hidden" {
+    let mut modes = if id == "R02-hidden" {
         vec!["hidden-at"]
     } else {
         vec![
@@ -1488,8 +1495,20 @@ fn timed_refusal_controls(
             "early-eof",
             "missing",
             "suffix",
+            "unknown-provider",
+            "host-clock",
+            "host-wall",
+            "host-network",
+            "unknown-tape-version",
+            "corrupt-frame",
+            "truncated-frame",
+            "incomplete-due-batch",
         ]
     };
+    if let Ok(selected) = std::env::var("HIRSEL_TIMED_REFUSAL_MODES") {
+        modes.retain(|mode| selected.split(',').any(|selected| selected == *mode));
+        assert!(!modes.is_empty());
+    }
     for mode in modes {
         let mut changed = record.clone();
         let expected_error = match mode {
@@ -1511,6 +1530,37 @@ fn timed_refusal_controls(
                         .to_vec();
                 "recording.run_identity".to_string()
             }
+            "unknown-provider" | "host-clock" | "host-wall" | "host-network" => {
+                let binding = changed.binding.as_mut().unwrap();
+                let mut run: serde_json::Value =
+                    serde_json::from_slice(&binding.canonical).unwrap();
+                let field = match mode {
+                    "unknown-provider" => {
+                        run["io"]["process"]["provider"] = json!("process.script.timed@99");
+                        "io.process"
+                    }
+                    "host-clock" => {
+                        run["inputs"]["fixture_monotonic"] = serde_json::Value::Null;
+                        "io.process.clock"
+                    }
+                    "host-wall" => {
+                        run["io"]["wall_clock"] = json!("clock.wall.unix_ns@1");
+                        "io.process.clock"
+                    }
+                    _ => {
+                        run["io"]["net"] = json!({"provider":"net.stream@1","rules":[]});
+                        "io.process.clock"
+                    }
+                };
+                binding.canonical = serde_json::to_vec(&run).unwrap();
+                let error = changed.bound_run().unwrap_err().to_string();
+                assert!(error.contains(field), "{mode}: {error}");
+                field.to_owned()
+            }
+            "unknown-tape-version"
+            | "corrupt-frame"
+            | "truncated-frame"
+            | "incomplete-due-batch" => String::new(),
             "program-binding" => {
                 changed.run_identity[0] ^= 1;
                 "recording.run_identity".into()
@@ -1572,33 +1622,53 @@ fn timed_refusal_controls(
             _ => unreachable!(),
         };
         let candidate = tape.with_file_name(format!("timed-refused-{mode}"));
-        let bytes = hirsel_rt::launch::render_recording(&changed).unwrap();
-        std::fs::write(&candidate, bytes.as_bytes()).unwrap();
-        bind_artifact(format!("{id}-{mode}-tape"), &candidate);
-        eprintln!(
-            "TIMED_TAPE {id}-{mode} forged sha256={} hex={}",
-            tape_sha(bytes.as_bytes()),
-            bytes
-                .as_bytes()
-                .iter()
-                .map(|b| format!("{b:02x}"))
-                .collect::<String>()
-        );
-        for (name, replay) in [
-            (
-                "reference",
-                replay_observations as fn(&std::path::Path, &std::path::Path, Option<u64>) -> _,
-            ),
-            ("checked-H", replay_observations_checked),
-        ] {
+        let mut bytes = hirsel_rt::launch::render_recording(&changed)
+            .unwrap()
+            .into_bytes();
+        let expected_error = if matches!(
+            mode,
+            "unknown-tape-version" | "corrupt-frame" | "truncated-frame" | "incomplete-due-batch"
+        ) {
+            let mut header = record.clone();
+            header.events.clear();
+            bytes.clear();
+            {
+                let mut writer = hirsel_rt::tape_binary::Writer::new(&mut bytes, &header).unwrap();
+                for event in &record.events {
+                    writer.append(event).unwrap();
+                    if mode == "incomplete-due-batch"
+                        && matches!(event.request, R::ProcessTime { .. })
+                    {
+                        break;
+                    }
+                }
+                if mode != "incomplete-due-batch" {
+                    writer.finish().unwrap();
+                }
+            }
+            match mode {
+                "unknown-tape-version" => bytes[15] = b'9',
+                "corrupt-frame" => {
+                    *bytes.last_mut().unwrap() ^= 1;
+                }
+                "truncated-frame" => {
+                    bytes.pop();
+                }
+                _ => (),
+            }
+            hirsel_rt::launch::parse_recording_bytes(&bytes).unwrap_err()
+        } else {
+            expected_error
+        };
+        std::fs::write(&candidate, &bytes).unwrap();
+        for (name, checked) in [("reference", false), ("checked-H", true)] {
             let consumer = format!("refusal-{mode}-{name}");
-            inner_receipt(id, &consumer, "before", Some(tools));
-            let error = match replay(path, &candidate, None) {
-                Err(e) => e.to_string(),
-                Ok(o) => format!("unexpected success: {o:?}"),
-            };
-            inner_receipt(id, &consumer, "after", Some(tools));
-            if error.contains(&expected_error) {
+            let (error, refused) =
+                match replay_loaded_observations(loaded, &candidate, None, checked) {
+                    Err(e) => (e.to_string(), true),
+                    Ok(o) => (format!("unexpected success: {o:?}"), false),
+                };
+            if refused && error.contains(&expected_error) {
                 eprintln!("TIMED_REFUSAL_PASS {id} {mode} {name} {error}");
             } else {
                 failures.push(format!(
@@ -1608,7 +1678,6 @@ fn timed_refusal_controls(
         }
         for (runnable, dir) in runnables {
             let consumer = format!("refusal-{mode}-{:?}", dir.file_name().unwrap());
-            inner_receipt(id, &consumer, "before", Some(tools));
             let (error, refused) = match launch_fixture(
                 runnable,
                 &ready.target,
@@ -1621,7 +1690,6 @@ fn timed_refusal_controls(
                 Err(e) => (e.message, true),
                 Ok(o) => (o.record, o.exit == Some(3)),
             };
-            inner_receipt(id, &consumer, "after", Some(tools));
             if refused && error.contains(&expected_error) {
                 eprintln!(
                     "TIMED_REFUSAL_PASS {id} {mode} {:?} {error}",
@@ -1643,7 +1711,7 @@ fn timed_refusal_controls(
 }
 #[test]
 fn timed_r01_r02_r03_four_consumer_refusals() {
-    campaign(
+    campaign_mode(
         "R02",
         READ,
         Fixture {
@@ -1654,6 +1722,8 @@ fn timed_r01_r02_r03_four_consumer_refusals() {
             ..Default::default()
         },
         b"read 1\nat 5\n",
+        std::env::var_os("HIRSEL_TIMED_RECOVERY_TAPES_JSON").is_some(),
+        false,
     );
 }
 #[test]
@@ -1666,30 +1736,25 @@ fn timed_r02_forged_at_behind_unmet_expect_four_consumers() {
     );
 }
 
-// Keep the test supervisor alive on a CPU cap so Buck retains the child's
-// precise stage receipts instead of discarding the whole action at RE600.
-fn bounded_test_child(id: &str) -> bool {
-    if std::env::var("HIRSEL_TIMED_TEST_CHILD").as_deref() == Ok(id) {
-        return false;
-    }
-    let name = std::thread::current().name().unwrap().to_string();
-    let output = std::process::Command::new("/bin/sh")
-        .args([
-            "-c",
-            r#"ulimit -t 60; ulimit -d 2097152; exec "$@""#,
-            "timed-test-caps",
-        ])
-        .arg(std::env::current_exe().unwrap())
-        .args(["--exact", &name, "--nocapture"])
-        .env("HIRSEL_TIMED_TEST_CHILD", id)
-        .output()
-        .unwrap();
-    eprintln!("{}", String::from_utf8_lossy(&output.stdout));
-    eprintln!("{}", String::from_utf8_lossy(&output.stderr));
-    assert!(
-        output.status.success(),
-        "{id} bounded test child: {}",
-        output.status
+fn assert_s01_time(record: &hirsel_rt::launch::Recording) {
+    let advances: Vec<_> = record
+        .events
+        .iter()
+        .filter_map(|event| match event.request {
+            hirsel_rt::io::Request::ProcessTime { from, to } => Some((from, to)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        advances,
+        [(0, 5_000_000)],
+        "S01 removes both the 6ms child gate and 20ms global timer on completion"
     );
-    true
+}
+
+struct RestoredSource(std::path::PathBuf);
+impl Drop for RestoredSource {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
 }

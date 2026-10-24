@@ -217,6 +217,37 @@ clock world grants both clocks and configures their initial values:
 `projections: ["monotonic_clock"]` remains invalid and points to this grant
 recipe. Merely setting `monotonic` or `wall` grants no clock access.
 
+For delayed child fixtures, select `process.script.timed@1`, grant
+`MonotonicClock`, and set the fixture's `monotonic` initial tick. Its process
+object uses the ordinary rules and one-shot `runs`, with a separate child schema:
+
+```json
+{
+  "provider": "process.script.timed@1",
+  "clock": "run.monotonic",
+  "rules": [{"program": "/fixture/child", "env": []}],
+  "runs": [],
+  "children": [{"program": "/fixture/child", "args": [], "steps": [
+    {"at": 5000000}, {"print": [120]}, {"exit": {"exited": 0}}
+  ]}]
+}
+```
+
+`at` is an absolute u64 nanosecond tick in the shared granted virtual domain.
+Gates must be nondecreasing; equal ticks and u64::MAX are valid. A gate behind
+an unmet `expect` is ineligible. Polling leaves time unchanged; quiescence uses
+the existing timer seam. Writes remain immediate. At equality, scope
+cancellation precedes a process-wait timeout, which precedes child readiness.
+Closing stdin before a gate defers an unmet-expect failure until that gate;
+dropping the child removes its future gates without advancing time.
+
+The timed domain refuses live host clocks and effects. Bound run records carry
+`inputs.fixture_monotonic`; fixtures derive it from `monotonic`. Recording binds
+the entire initial clock, grant and script, and replay requires that binding and
+full tape consumption. The separate provider leaves `process.script@1`, public
+`ChildStep`, and their byte encodings unchanged. Historical tapes retain the
+ordinary runtime-revision compatibility check.
+
 These fresh, small adapter reproductions reduce the existing pnmtiles pending
 Interrupt race and treelearn commit-denial fixtures. Their identities are
 `simulation-world-cli-39/pending-interrupt` and

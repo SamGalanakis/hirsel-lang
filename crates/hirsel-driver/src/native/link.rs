@@ -1261,12 +1261,25 @@ pub fn link_fixture_runnable(
     dir: &Path,
     fixture: &super::Fixture,
 ) -> Result<Runnable, NativeError> {
-    use hirsel_run_schema::{IoGrants, Mount, ProviderContract as P};
     hirsel_run_schema::validate_file_faults(&fixture.file_faults)
         .map_err(|e| NativeError::new(StageName::Link, e))?;
     if !matches!(program.launches.get(entry), Some(LaunchKind::Main(_))) {
         return link_runnable(program, entry, objects, toolchain, dir, None);
     }
+    let run = fixture_run_record(program, entry, fixture)?;
+    link_runnable(program, entry, objects, toolchain, dir, Some(&run))
+}
+
+/// The exact fixture binding shared by native links and reference/checked tape producers.
+/// Building this record performs no link or host operation.
+pub fn fixture_run_record(
+    program: &ReadyProgram,
+    entry: &DefPath,
+    fixture: &super::Fixture,
+) -> Result<hirsel_run_config::ValidatedRun, NativeError> {
+    use hirsel_run_schema::{IoGrants, Mount, ProviderContract as P};
+    hirsel_run_schema::validate_file_faults(&fixture.file_faults)
+        .map_err(|e| NativeError::new(StageName::Link, e))?;
     let revision = program
         .revisions
         .get(entry)
@@ -1335,10 +1348,9 @@ pub fn link_fixture_runnable(
         }),
         ..Default::default()
     });
-    let run = record
+    record
         .validated()
-        .map_err(|e| NativeError::new(StageName::Link, e.to_string()))?;
-    link_runnable(program, entry, objects, toolchain, dir, Some(&run))
+        .map_err(|e| NativeError::new(StageName::Link, e.to_string()))
 }
 
 /// A standalone executable `dir/program`, including DWARF for a `debug_info` toolchain.

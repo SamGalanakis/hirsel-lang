@@ -716,27 +716,60 @@ pub fn record_fixture_observations(
     tape: &Path,
     checked: bool,
 ) -> Result<hirsel_interp::observation::Observable, ToolError> {
+    session::with_program(path, hirsel_engine::Verify::On, |program| {
+        record_loaded_fixture_observations(program, run, fixture, tape, checked)
+    })
+}
+
+/// Record a fresh fixture execution while reusing this program's checked query graph.
+/// Provider state, grants, admission and the recording are new for every call.
+pub fn record_loaded_fixture_observations(
+    program: &mut LoadedProgram,
+    run: &Path,
+    fixture: &native::Fixture,
+    tape: &Path,
+    checked: bool,
+) -> Result<hirsel_interp::observation::Observable, ToolError> {
     let mut observed = None;
-    let (outcome, _) = session::with_program(path, hirsel_engine::Verify::On, |program| {
-        let host = hirsel_rt::host_launch::HostGrants::snapshot(
-            fixture.files.clone(),
-            fixture.stdin.clone(),
-            fixture.monotonic.unwrap_or(0),
-        );
-        run_loaded_on_host_with_checks(
-            program,
-            HostLaunch::Live {
-                config: LaunchConfig::Record(run.as_os_str()),
-                record: Some(tape),
-                revocations: None,
-            },
-            fixture.steps,
-            Some(&mut observed),
-            None,
-            checked,
-            Some(host),
-        )
-    })?;
+    let host = hirsel_rt::host_launch::HostGrants::snapshot(
+        fixture.files.clone(),
+        fixture.stdin.clone(),
+        fixture.monotonic.unwrap_or(0),
+    );
+    let outcome = run_loaded_on_host_with_checks(
+        program,
+        HostLaunch::Live {
+            config: LaunchConfig::Record(run.as_os_str()),
+            record: Some(tape),
+            revocations: None,
+        },
+        fixture.steps,
+        Some(&mut observed),
+        None,
+        checked,
+        Some(host),
+    );
+    let (outcome, _) = outcome?;
+    replay_observation(observed, &outcome)
+}
+
+/// Replay a bound tape with fresh replay state, retaining immutable compiler queries.
+pub fn replay_loaded_observations(
+    program: &mut LoadedProgram,
+    tape: &Path,
+    max_steps: Option<u64>,
+    checked: bool,
+) -> Result<hirsel_interp::observation::Observable, ToolError> {
+    let mut observed = None;
+    let (outcome, _) = run_loaded_on_host_with_checks(
+        program,
+        HostLaunch::Replay(tape),
+        max_steps,
+        Some(&mut observed),
+        None,
+        checked,
+        None,
+    )?;
     replay_observation(observed, &outcome)
 }
 
