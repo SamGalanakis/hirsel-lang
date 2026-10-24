@@ -15,6 +15,7 @@ pub mod instance;
 pub mod instance_tasks;
 pub mod link_tasks;
 pub mod local;
+pub mod platform;
 pub mod products;
 pub mod ready;
 pub mod recipes;

@@ -12,6 +12,7 @@ use native::queries::{
     declarations::NativeDeclarations,
     instance_tasks::{DISCOVERY_KIND, INSTANCE_INPUT_KIND, InstanceTaskFactory, InstanceTasks},
     link_tasks::{LINK_INPUT_KIND, LINK_MANIFEST_KIND},
+    platform::FrozenPlatform,
     products::EmissionOptions,
     root_source::NativeLinkSource,
     source_inputs::NativeInstanceInputs,
@@ -68,11 +69,45 @@ fn one_native_runtime_produces_cold_instances_both_arena_strata_ready_roots_and_
 {
     with_compiler_stack(|| {
         for jobs in [1, 4] {
-            run(jobs);
+            run(jobs, false);
         }
     });
 }
-fn run(jobs: usize) {
+#[test]
+fn frozen_platform_links_standalone_after_original_tool_kit_runtime_and_foreign_paths_disappear() {
+    with_compiler_stack(|| {
+        for jobs in [1, 4] {
+            run(jobs, true);
+        }
+    });
+}
+fn copy_files(source: &std::path::Path, destination: &std::path::Path) {
+    std::fs::create_dir_all(destination).unwrap();
+    for entry in std::fs::read_dir(source).unwrap() {
+        let path = entry.unwrap().path();
+        let target = destination.join(path.file_name().unwrap());
+        if path.is_dir() {
+            copy_files(&path, &target);
+        } else {
+            std::fs::copy(&path, &target).unwrap();
+        }
+    }
+}
+struct CountedPlatform {
+    inner: Arc<dyn native::queries::link_tasks::NativeLinkExecutor>,
+    calls: Arc<AtomicU64>,
+}
+impl native::queries::link_tasks::NativeLinkExecutor for CountedPlatform {
+    fn link(
+        &self,
+        native: &mut native::queries::roots::RootProducts,
+        input: native::queries::link_tasks::LinkExecution<'_>,
+    ) -> Result<Vec<u8>, String> {
+        self.calls.fetch_add(1, Ordering::Relaxed);
+        self.inner.link(native, input)
+    }
+}
+fn run(jobs: usize, freeze_platform: bool) {
     let directory = tempfile::tempdir().unwrap();
     let store = Arc::new(store::DirStore::new(directory.path().join("products")));
     let target = native::TargetSpec::x86_64_unknown_linux_gnu();
@@ -95,6 +130,60 @@ fn run(jobs: usize) {
             COMPILER_IDENTITY.as_slice(),
         ],
     );
+    let frozen = if freeze_platform {
+        let source = directory.path().join("mutable-platform");
+        let tree = tools.lld.parent().unwrap().parent().unwrap();
+        std::fs::create_dir_all(source.join("llvm/bin")).unwrap();
+        std::fs::copy(&tools.lld, source.join("llvm/bin/ld.lld")).unwrap();
+        // Only regular top-level linker runtime libraries are consumed.
+        std::fs::create_dir_all(source.join("llvm/lib")).unwrap();
+        for entry in std::fs::read_dir(tree.join("lib")).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_file() {
+                std::fs::copy(
+                    &path,
+                    source.join("llvm/lib").join(path.file_name().unwrap()),
+                )
+                .unwrap();
+            }
+        }
+        copy_files(&tools.kit, &source.join("kit"));
+        std::fs::copy(
+            tools.archive(&target.triple).unwrap(),
+            source.join("runtime.a"),
+        )
+        .unwrap();
+        let foreign = source.join("foreign.a");
+        std::fs::write(&foreign, b"!<arch>\n").unwrap();
+        let mut selected = tools.clone();
+        selected.lld = source.join("llvm/bin/ld.lld");
+        selected.kit = source.join("kit");
+        selected.runtime.insert(
+            (target.triple.clone(), selected.runtime_build),
+            source.join("runtime.a"),
+        );
+        let frozen = FrozenPlatform::capture(
+            store.clone(),
+            &selected,
+            &target,
+            &[LinkInput::File(foreign)],
+        )
+        .unwrap();
+        let manifest = store.get_content(frozen.manifest()).unwrap();
+        assert!(
+            !std::str::from_utf8(&manifest)
+                .unwrap()
+                .contains(source.to_str().unwrap()),
+            "platform identities contain no admission directory"
+        );
+        std::fs::rename(&source, directory.path().join("retired-platform")).unwrap();
+        assert!(!selected.lld.exists());
+        assert!(!selected.kit.exists());
+        assert!(!selected.archive(&target.triple).unwrap().exists());
+        Some(frozen)
+    } else {
+        None
+    };
     let policy = ContentHash::of_bytes(b"one runtime cold native Link control");
     let mut previous = None;
     let mut reference = None;
@@ -189,23 +278,44 @@ fn run(jobs: usize) {
                 target_features: target.digest(),
                 profile_options: ContentHash::of_bytes(b"debug opt none"),
                 runtime_abi: ContentHash::of_bytes(&hirsel_lir::RUNTIME_ABI_VERSION.to_le_bytes()),
-                linker_options: ContentHash::of_parts(
-                    "fixture selected backend",
-                    [platform.0.as_slice(), backend.name().as_bytes()],
-                ),
-                runtime_archives: vec![archive],
-                foreign_inputs: vec![],
-                executor: Arc::new(Platform {
-                    store: store.clone(),
-                    tools: tools.clone(),
-                    target: target.clone(),
-                    backend,
-                    entry: main.clone(),
-                    directory: directory
-                        .path()
-                        .join(format!("{literal}-{fresh}-{}", backend.name())),
-                    calls: calls.clone(),
-                }),
+                linker_options: if let Some(platform) = &frozen {
+                    platform.linker_options(backend, &main).unwrap()
+                } else {
+                    ContentHash::of_parts(
+                        "fixture selected backend",
+                        [platform.0.as_slice(), backend.name().as_bytes()],
+                    )
+                },
+                runtime_archives: frozen
+                    .as_ref()
+                    .map_or_else(|| vec![archive], |platform| platform.runtime_archives()),
+                foreign_inputs: frozen
+                    .as_ref()
+                    .map_or_else(Vec::new, |platform| platform.foreign_inputs().to_vec()),
+                executor: if let Some(platform) = &frozen {
+                    Arc::new(CountedPlatform {
+                        inner: platform.executor(
+                            backend,
+                            main.clone(),
+                            directory
+                                .path()
+                                .join(format!("{literal}-{fresh}-{}", backend.name())),
+                        ),
+                        calls: calls.clone(),
+                    })
+                } else {
+                    Arc::new(Platform {
+                        store: store.clone(),
+                        tools: tools.clone(),
+                        target: target.clone(),
+                        backend,
+                        entry: main.clone(),
+                        directory: directory
+                            .path()
+                            .join(format!("{literal}-{fresh}-{}", backend.name())),
+                        calls: calls.clone(),
+                    })
+                },
             })
             .collect();
         let compilation = CompilationTasks::new(

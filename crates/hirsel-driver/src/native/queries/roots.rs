@@ -114,25 +114,72 @@ impl RootProducts {
         products: &[Arc<ReadyProduct>],
         inputs: RootLinkInputs<'_>,
     ) -> Result<Vec<u8>, String> {
+        self.link_with(
+            root,
+            products,
+            inputs.backend,
+            inputs.objects,
+            |program, objects| {
+                crate::native::link_objects(
+                    program,
+                    inputs.entry,
+                    objects,
+                    inputs.toolchain,
+                    inputs.directory,
+                )
+                .map_err(|e| e.to_string())
+            },
+        )
+    }
+    /// Production standalone linkage over the selected frozen tool/foreign
+    /// inputs. It shares glue emission and all semantic/manifest checks.
+    pub fn link_standalone(
+        &mut self,
+        root: &Arc<NativeRootProduct>,
+        products: &[Arc<ReadyProduct>],
+        inputs: RootLinkInputs<'_>,
+        foreign: &[std::path::PathBuf],
+    ) -> Result<Vec<u8>, String> {
+        self.link_with(
+            root,
+            products,
+            inputs.backend,
+            inputs.objects,
+            |program, objects| {
+                crate::native::link::link_standalone_frozen(
+                    program,
+                    inputs.entry,
+                    objects,
+                    inputs.toolchain,
+                    inputs.directory,
+                    foreign,
+                )
+                .map_err(|e| e.to_string())
+            },
+        )
+    }
+    fn link_with(
+        &mut self,
+        root: &Arc<NativeRootProduct>,
+        products: &[Arc<ReadyProduct>],
+        backend: crate::native::Backend,
+        objects: &[hirsel_lir::stage::ObjectArtifact],
+        link: impl FnOnce(
+            &crate::native::ReadyProgram,
+            &[hirsel_lir::stage::ObjectArtifact],
+        ) -> Result<std::path::PathBuf, String>,
+    ) -> Result<Vec<u8>, String> {
         self.with_link_context(root, products, |program| {
             crate::native::check_runtime_calls(program).map_err(|e| e.to_string())?;
             let registry = hirsel_lir::descriptor_registry::DescriptorRegistry::new(
                 &program.table,
                 &program.finalizers,
             );
-            let mut objects = inputs.objects.to_vec();
+            let mut objects = objects.to_vec();
             objects.push(
-                crate::native::emit_glue(program, inputs.backend, &registry)
-                    .map_err(|e| e.to_string())?,
+                crate::native::emit_glue(program, backend, &registry).map_err(|e| e.to_string())?,
             );
-            let path = crate::native::link_objects(
-                program,
-                inputs.entry,
-                &objects,
-                inputs.toolchain,
-                inputs.directory,
-            )
-            .map_err(|e| e.to_string())?;
+            let path = link(program, &objects)?;
             std::fs::read(path).map_err(|e| e.to_string())
         })
     }

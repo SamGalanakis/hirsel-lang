@@ -176,6 +176,19 @@ struct Import {
     version: Option<(String, String)>,
 }
 
+/// Whether a frozen foreign ELF can keep its loader name after relocation.
+/// Reuse the runner's existing object/ELF metadata interpretation.
+pub(crate) fn frozen_foreign_name(bytes: &[u8]) -> Result<(), NativeError> {
+    let header = Elf::parse(bytes).map_err(|e| failed(format!("a frozen foreign ELF: {e}")))?;
+    let endian = header.endian().map_err(|e| failed(e.to_string()))?;
+    if header.e_type(endian) == elf::ET_DYN && interface(bytes)?.soname.is_none() {
+        return Err(failed(
+            "a foreign shared library without SONAME needs a preserved loader-path binding",
+        ));
+    }
+    Ok(())
+}
+
 fn interface(bytes: &[u8]) -> Result<Interface, NativeError> {
     let err = |e: object::Error| failed(format!("an ELF file: {e}"));
     let header = Elf::parse(bytes).map_err(err)?;

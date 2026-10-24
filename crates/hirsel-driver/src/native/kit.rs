@@ -115,6 +115,21 @@ impl Kit {
         })
     }
 
+    /// Exact files the existing executable link line reads for one target.
+    /// Ordering remains in the manifest; the snapshot itself is a file set.
+    pub(crate) fn link_files(&self, triple: &str) -> Result<Vec<PathBuf>, NativeError> {
+        let target = self.target(triple)?;
+        let mut files = vec![self.root.join("manifest.json"), self.root.join("digest")];
+        files.extend(target.start.iter().cloned());
+        files.push(target.unwind.clone());
+        files.extend(target.libraries.iter().cloned());
+        files.push(target.nonshared.clone());
+        files.extend(target.end.iter().cloned());
+        files.sort();
+        files.dedup();
+        Ok(files)
+    }
+
     pub(crate) fn root(&self) -> &Path {
         &self.root
     }

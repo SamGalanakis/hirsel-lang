@@ -1105,8 +1105,10 @@ pub(crate) fn link_objects_with_run(
     dir: &Path,
     requested: Option<&hirsel_run_config::ValidatedRun>,
 ) -> Result<PathBuf, NativeError> {
-    link_objects_impl(program, entry, objects, toolchain, dir, requested, false)
-        .map(|linked| linked.path)
+    link_objects_impl(
+        program, entry, objects, toolchain, dir, requested, false, None,
+    )
+    .map(|linked| linked.path)
 }
 
 /// Link `objects` to launch with `entry` as the launch entry, bound to `requested` (or the
@@ -1137,6 +1139,7 @@ pub fn link_runnable(
         dir,
         Output::Image(&runner),
         &[main],
+        None,
     )?;
     Ok(linked.runnable())
 }
@@ -1229,7 +1232,30 @@ pub(crate) fn link_standalone(
     toolchain: &Toolchain,
     dir: &Path,
 ) -> Result<Linked, NativeError> {
-    link_objects_impl(program, entry, objects, toolchain, dir, None, true)
+    link_objects_impl(program, entry, objects, toolchain, dir, None, true, None)
+}
+
+/// The same standalone launcher/linker with foreign files already resolved
+/// and frozen by native input admission. No ambient library lookup occurs.
+pub(crate) fn link_standalone_frozen(
+    program: &ReadyProgram,
+    entry: &DefPath,
+    objects: &[hirsel_lir::stage::ObjectArtifact],
+    toolchain: &Toolchain,
+    dir: &Path,
+    foreign: &[PathBuf],
+) -> Result<PathBuf, NativeError> {
+    link_objects_impl(
+        program,
+        entry,
+        objects,
+        toolchain,
+        dir,
+        None,
+        true,
+        Some(foreign),
+    )
+    .map(|linked| linked.path)
 }
 
 /// Link already emitted objects as a standalone executable, accepting fresh grants at
@@ -1274,6 +1300,7 @@ pub fn link_library(
         dir,
         Output::Image(&runner),
         &[main],
+        None,
     )?;
     match linked.image {
         Some(image) => Ok(Library {
@@ -1390,6 +1417,7 @@ fn link_objects_impl(
     dir: &Path,
     requested: Option<&hirsel_run_config::ValidatedRun>,
     standalone: bool,
+    resolved_foreign: Option<&[PathBuf]>,
 ) -> Result<Linked, NativeError> {
     let _timing = hirsel_intern::timings::interval(hirsel_intern::timings::Interval::Link);
     let main = launcher_object(program, entry, objects, dir, requested, standalone, "main")?;
@@ -1399,7 +1427,16 @@ fn link_objects_impl(
     } else {
         Output::Launched
     };
-    link_launcher(program, entry, objects, toolchain, dir, output, &[main])
+    link_launcher(
+        program,
+        entry,
+        objects,
+        toolchain,
+        dir,
+        output,
+        &[main],
+        resolved_foreign,
+    )
 }
 
 fn write(dir: &Path, name: &str, bytes: &[u8]) -> Result<PathBuf, NativeError> {
@@ -1781,6 +1818,7 @@ fn link_launcher(
     dir: &Path,
     mut output: Output<'_>,
     launchers: &[PathBuf],
+    resolved_foreign: Option<&[PathBuf]>,
 ) -> Result<Linked, NativeError> {
     let (symbol, _, _) = entry_result(program, entry)?;
     let target = &program.target;
@@ -1851,7 +1889,10 @@ fn link_launcher(
         }
     }
     // The externs resolve against the root's `unsafe ffi` libraries (PROG-4).
-    let foreign = foreign_inputs(&kit, &target.triple, &program.foreign_links)?;
+    let foreign = match resolved_foreign {
+        Some(files) => files.to_vec(),
+        None => foreign_inputs(&kit, &target.triple, &program.foreign_links)?,
+    };
     let debug = toolchain.debug_info;
     let (kind, runtime) = match output {
         Output::Image(_) => unreachable!("an image links above"),
@@ -1942,7 +1983,7 @@ pub(crate) fn runtime_archive<'a>(
 /// `lib<name>.a` in the host's system library directories, as `ld -l` searches
 /// them. Host libraries are the one link input outside the kit; they enter the
 /// build ID by content.
-fn foreign_inputs(
+pub(crate) fn foreign_inputs(
     kit: &super::kit::Kit,
     triple: &str,
     links: &[hirsel_engine::LinkInput],
@@ -2062,6 +2103,7 @@ refuse:\n ret i32 3\n}}\n",
         dir,
         runner.as_ref().map_or(Output::Launched, Output::Image),
         &launchers,
+        None,
     )
     .map(Linked::runnable)
 }
