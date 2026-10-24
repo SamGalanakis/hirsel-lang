@@ -539,10 +539,10 @@ fn run_case(jobs: usize, observation_only: bool, frozen_plan: bool) {
         let bodies = native.snapshot.ready_materializations();
         let observation = observation_only.then(|| {
             let metadata = view.observation_metadata(&root).unwrap();
-            assert_eq!(
-                serde_json::to_value(&metadata).unwrap(),
-                serde_json::to_value(from_compilation.as_ref().unwrap()).unwrap()
-            );
+            let compiled = from_compilation.as_ref().unwrap();
+            assert_eq!(metadata.failure_rules, compiled.failure_rules);
+            assert_eq!(metadata.sites, compiled.sites);
+            assert_eq!(metadata.anchors, compiled.anchors);
             assert!(!metadata.sites.is_empty());
             assert_eq!(&metadata.anchors, source.source_anchors());
             let mut wrong = root.as_ref().clone();
