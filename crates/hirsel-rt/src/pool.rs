@@ -122,7 +122,7 @@ pub(crate) struct Exec {
     busy: AtomicBool,
     /// Touched only by the exec's own thread: its idle fiber's stack pointer, the post its
     /// idle fiber makes on regaining control, its worker and whether it holds a permit.
-    idle: Cell<*mut u8>,
+    pub(crate) idle: Cell<*mut u8>,
     deferred: Cell<Option<(*const Exec, Post)>>,
     worker: Cell<*mut Worker>,
     held: AtomicBool,
@@ -130,7 +130,7 @@ pub(crate) struct Exec {
     lost: AtomicBool,
     ready: Cell<Option<hirsel_free::work::Worker<free::Saved>>>,
     active: Cell<Option<free::Active>>,
-    leaving: Cell<Option<free::Leave>>,
+    pub(crate) leaving: Cell<Option<free::Leave>>,
     ready_epoch: AtomicU64,
     /// Foreign frames may suspend here, but may never resume on another thread.
     foreign_frames: AtomicU32,
@@ -902,6 +902,9 @@ pub(crate) unsafe fn hand_off(
 unsafe fn idle_of(ctx: *mut TaskCtx, execs: &Execs, me: *const Exec) -> *mut u8 {
     // SAFETY: caller contract.
     unsafe {
+        if !(*ctx).ahead_physical.is_null() {
+            return (*(*ctx).ahead_physical).idle_sp;
+        }
         if (*me).idle.get().is_null() {
             if (*me).kind != Kind::Home {
                 fault("a worker thread without its idle fiber");

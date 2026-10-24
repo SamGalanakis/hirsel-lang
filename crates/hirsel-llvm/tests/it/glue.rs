@@ -22,6 +22,8 @@ fn emit(corpus: &Corpus, opt: OptLevel) -> hirsel_lir::stage::ObjectArtifact {
     let input = input();
     let program = &corpus.program;
     let inputs = EmitInputs {
+        ahead: None,
+        alternate: false,
         index: None,
         verify_backend: true,
         input: &input,

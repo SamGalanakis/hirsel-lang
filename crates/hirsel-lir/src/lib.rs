@@ -9,6 +9,7 @@ hirsel_guard::install!();
 
 pub mod abi;
 pub mod abi_types;
+pub mod ahead;
 pub mod codec;
 pub mod debug;
 pub mod descriptor_registry;

@@ -84,6 +84,8 @@ fn program(target: &TargetSpec) -> Program {
 fn object(program: &Program, opt: OptLevel) -> Vec<u8> {
     let input = input();
     let inputs = EmitInputs {
+        ahead: None,
+        alternate: false,
         index: None,
         verify_backend: true,
         input: &input,

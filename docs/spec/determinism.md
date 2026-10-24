@@ -159,6 +159,21 @@ threads. Scheduling points, synchronising operations, host requests, `shared.tha
 failures, stops and budget charges take effect in the order the selected scheduler gives.
 Execution width is a placement member and never part of identity.
 
+An implementation may evaluate private computation before its logical turn,
+including a child whose spawn is reserved but has not taken effect. This is not a
+semantic task start, scheduling point, completion, cancellation check or effect.
+Synchronizing operations, task-tree changes, completion ranks, host requests,
+failures, stops, destruction and logical budget charges retain their original
+serial positions. Provisional results and handles cannot become observable before
+their producing operation takes effect. Work outside the committed prefix has no
+observable result, failure, effect, destruction or logical budget charge.
+
+Physical resource management may pause or abandon this private evaluation without
+adding a cancellation observation or scheduling point. If logical execution later
+requires it, the original computation must be preserved. Provisional work must not
+prevent logical-head progress, and work that cannot occur in the resulting
+execution must be safely withdrawn.
+
 `tasks.free@1` supplies structured tasks with free scheduling. Suspension at a point
 CONC-1 permits is allowed, not required; a task yields at least every 128 operations, and
 a spawned child may run at once. A `Shared` release that leaves other holders takes effect

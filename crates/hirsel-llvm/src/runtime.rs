@@ -31,6 +31,7 @@ pub(crate) fn substrate(module: &Module<'_>, function: Function<'_>, entry: Runt
         R::HashBegin | R::Shielded | R::FailureActive | R::FailureCauseCount => {
             (MemoryEffects::ArgumentRead, true, &[0])
         }
+        R::AheadState => (MemoryEffects::ArgumentRead, true, &[]),
         R::HashBytes => (MemoryEffects::ArgumentRead, true, &[1]),
         R::HashInit => (MemoryEffects::ArgumentReadWrite, true, &[0]),
         // The state pointer is carried as u64, so its accesses are not LLVM
@@ -66,6 +67,9 @@ pub(crate) fn substrate(module: &Module<'_>, function: Function<'_>, entry: Runt
         | R::CtxStats
         | R::Trim
         | R::Alloc
+        | R::TaskSpawnAhead
+        | R::AheadBarrier
+        | R::AheadHandoff
         | R::Release
         | R::RootRelease
         | R::RootDrop

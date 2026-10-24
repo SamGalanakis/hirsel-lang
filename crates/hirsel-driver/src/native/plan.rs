@@ -17,8 +17,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 // Deliberately not an option that a cache receipt can turn on.
 const PRODUCTION_REUSE: bool = false;
-const SCHEMA: u32 = 1;
-const MAGIC: &[u8] = b"HIRNPL01";
+const SCHEMA: u32 = 2;
+const MAGIC: &[u8] = b"HIRNPL02";
 #[cfg(test)]
 #[path = "seed_parity_tests.rs"]
 mod seed_parity_tests;
@@ -150,6 +150,8 @@ pub(super) fn save_calls(
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct NativePlan {
+    ahead_units: Vec<LirUnit<hirsel_lir::stage::Ready>>,
+    ahead_environments: Vec<(ContentHash, Option<hirsel_lir::LayoutId>)>,
     schema: u32,
     producer: ContentHash,
     action: ContentHash,
@@ -165,6 +167,8 @@ struct NativePlan {
     records: Vec<Record>,
 }
 snapshot_struct!(NativePlan {
+    ahead_units,
+    ahead_environments,
     schema,
     producer,
     action,
@@ -342,6 +346,12 @@ impl NativePlan {
             .as_ref()
             .ok_or_else(|| failed("no plan production evidence"))?;
         Ok(Self {
+            ahead_units: ready.ahead_units.iter().map(|u| u.unit().clone()).collect(),
+            ahead_environments: ready
+                .ahead_environments
+                .iter()
+                .map(|(k, v)| (*k, *v))
+                .collect(),
             schema: SCHEMA,
             producer: ContentHash(crate::COMPILER_IDENTITY),
             action,
@@ -490,7 +500,19 @@ fn assemble(
     hirsel_lir::validate::ValidationContext::new(&inputs)
         .preflight()
         .map_err(|e| failed(format!("plan layout preflight: {e:?}")))?;
+    let ahead_units = plan
+        .ahead_units
+        .iter()
+        .cloned()
+        .map(|unit| {
+            hirsel_lir::validate::validate_ready(unit, &inputs)
+                .map(std::sync::Arc::new)
+                .map_err(|e| failed(format!("cached ahead Ready validation: {e:?}")))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     let mut ready = ReadyProgram {
+        ahead_units,
+        ahead_environments: plan.ahead_environments.iter().copied().collect(),
         entries: super::stages::summary_entries(&summaries),
         callee_facts: None,
         foreign_dispatch: BTreeMap::new(),

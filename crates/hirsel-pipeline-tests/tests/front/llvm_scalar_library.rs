@@ -1213,6 +1213,8 @@ fn every_target_agrees_with_the_interpreter_on_every_scalar_library_operation() 
             let dir = scratch(&format!("scalar-library-{}-{opt:?}", target.triple));
             let bytes = {
                 let inputs = EmitInputs {
+                    ahead: None,
+                    alternate: false,
                     index: None,
                     verify_backend: true,
                     input: &input,

@@ -293,6 +293,7 @@ pub struct Reproducibility {
 /// built in (`crate::glue`).
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct ObjectArtifact {
+    pub ahead: Option<crate::ahead::MachineEvidence>,
     pub target: ContentHash,
     pub format: ObjectFormat,
     pub bytes: Vec<u8>,
@@ -355,6 +356,7 @@ snapshot_struct!(Reproducibility {
     runtime_abi_version
 });
 snapshot_struct!(ObjectArtifact {
+    ahead,
     target,
     format,
     bytes,

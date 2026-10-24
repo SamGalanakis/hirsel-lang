@@ -162,3 +162,25 @@ impl fmt::Display for CodegenError {
 }
 
 impl std::error::Error for CodegenError {}
+
+/// Emits real alternate definitions and reads final caller-SP frame extents.
+pub fn emit_ahead_object(
+    units: &[&hirsel_lir::stage::ValidatedUnit<hirsel_lir::stage::Ready>],
+    inputs: &hirsel_lir::emission::EmitInputs<'_>,
+) -> Result<
+    (
+        hirsel_lir::stage::ObjectArtifact,
+        std::collections::BTreeMap<String, u64>,
+    ),
+    CodegenError,
+> {
+    let inputs = hirsel_lir::emission::EmitInputs {
+        alternate: true,
+        available_externally: &Default::default(),
+        ..inputs.clone()
+    };
+    let object = emit_object(units, &inputs)?;
+    let frames = hirsel_lir::object::llvm_stack_sizes(&object.bytes)
+        .map_err(|message| CodegenError::Object { message })?;
+    Ok((object, frames))
+}

@@ -39,12 +39,15 @@ import bootstrap_store
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 LOCK = ROOT / "tools/native-toolchain/llvm-23.lock"
+CXX_LOCK = pathlib.Path(__file__).with_name("llvm-cxx-headers-lock.json")
 RUNTIME_LOCK = pathlib.Path(__file__).with_name("llvm-runtime-lock.json")
 INSTALL = ROOT / "tools/native-toolchain/install"
 DEFAULT_OUTPUT = pathlib.Path(__file__).with_name("toolchains") / "llvm-files"
 RECEIPT = ".hirsel-llvm.json"
-LAYOUT = 6
+LAYOUT = 7
 REQUIRED = (
+    "sysroot/usr/include/c++/13/vector",
+    "sysroot/usr/include/features.h",
     "bin/clang",
     "bin/clang-23",
     "bin/llvm-config",
@@ -74,6 +77,7 @@ def identity() -> dict:
     return {
         "layout": LAYOUT,
         "lock_sha256": hashlib.sha256(LOCK.read_bytes()).hexdigest(),
+        "cxx_headers_lock_sha256": hashlib.sha256(CXX_LOCK.read_bytes()).hexdigest(),
         "runtime_lock_sha256": hashlib.sha256(RUNTIME_LOCK.read_bytes()).hexdigest(),
     }
 
@@ -145,6 +149,10 @@ def build(stage: pathlib.Path, wanted: dict) -> None:
         for name in ("llvm", "llvm-c"):
             place_tree(prefix / "include" / name, stage / "include" / name)
         place_runtime_libraries(stage, pathlib.Path(raw))
+        headers = pathlib.Path(raw) / "cxx-headers"
+        for deb in json.loads(CXX_LOCK.read_text())["debs"]:
+            subprocess.run(["dpkg-deb", "-x", fetch_deb(deb, pathlib.Path(raw)), headers], check=True)
+        place_tree(headers / "usr/include", stage / "sysroot/usr/include")
     for name in ("clang", "clang++", "llvm-ar"):
         wrapper = stage / "bin" / f"hirsel-{name}"
         wrapper.write_text(WRAPPER % (name, name), encoding="utf-8")

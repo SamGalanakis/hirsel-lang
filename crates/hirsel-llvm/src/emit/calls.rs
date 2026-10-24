@@ -29,6 +29,8 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
 
     /// Returns `status` and, on success with a register result, `value`.
     pub(super) fn return_status(&mut self, status: u128, value: Option<Value<'m>>) -> Emitted {
+        self.ahead_point(false)?;
+        self.ahead_flush();
         let status_byte = self.module.const_int(self.module.int_type(8), status);
         let mut returned = self.module.const_zero(self.signature.returns);
         if let (true, Some((kind, _))) = (self.signature.roots.is_empty(), self.signature.value) {
@@ -248,7 +250,22 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         if symbol.kind != SymbolKind::Function {
             return self.invalid("a call of a symbol that is not a function");
         }
-        let name = symbol_name(&symbol.definition, symbol.instance.as_ref());
+        let name = if self.inputs.alternate {
+            let id = symbol.instance.ok_or_else(|| CodegenError::Invalid {
+                definition: self.definition().clone(),
+                what: "unknown alternate callee".into(),
+            })?;
+            if !self
+                .inputs
+                .ahead
+                .is_some_and(|p| p.bodies.contains_key(&id))
+            {
+                return self.invalid("missing real alternate callee");
+            }
+            hirsel_lir::ahead::alternate_name(&symbol.definition, id)
+        } else {
+            symbol_name(&symbol.definition, symbol.instance.as_ref())
+        };
         self.manifested
             .imports
             .entry(name.clone())
@@ -595,10 +612,27 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 self.flush_length(slot)?;
             }
         }
+        let ahead_root = self.inputs.ahead.and_then(|p| {
+            p.spawns
+                .get(&(unit.header.instance, call))
+                .map(|root| (*root, p.identity))
+        });
+        let function = if let Some((root, identity)) = ahead_root {
+            let metadata = hirsel_lir::ahead::metadata_name(root, identity);
+            args.push(self.glue_cell(&metadata, self.module.int_type(8)));
+            Some(self.runtime(RuntimeEntry::TaskSpawnAhead)?)
+        } else {
+            function
+        };
+        if matches!(site.callee, Callee::Operation(_)) {
+            self.ahead_barrier()?;
+        }
+        self.ahead_flush();
         let returned = match function {
             Some(function) => self.builder.call(function, &args),
             None => self.builder.call_typed(signature.ty, callee, &args),
         };
+        self.ahead_reload();
         signature.attribute_call(self.module, returned);
         // Publish temporary mutations even when the callee failed.
         for (destination, temporary) in temporary_returns {
@@ -659,6 +693,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             let here = self.builder.current();
             self.builder.position(block);
             let (caller, operation) = self.failure_sites_for(self.anchor_code(site.anchor)?, false);
+            self.ahead_barrier()?;
             let reanchor = self.runtime(RuntimeEntry::FailureReanchor)?;
             self.builder
                 .call(reanchor, &[self.context, caller, operation]);
@@ -679,6 +714,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             let here = self.builder.current();
             let record = self.module.append_block(self.function);
             self.builder.position(record);
+            self.ahead_barrier()?;
             let begin = self.runtime(RuntimeEntry::FailureBegin)?;
             let (site, operation) =
                 self.failure_sites_for(self.anchor_code(site.anchor)?, site.forward_caller);

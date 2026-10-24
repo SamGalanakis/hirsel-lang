@@ -17,7 +17,7 @@
 extern "C" {
 #endif
 
-#define HIRSEL_RT_V2_ABI_VERSION 54
+#define HIRSEL_RT_V2_ABI_VERSION 55
 /* TaskSpawn trailing flags: compiler proofs, ignored in ordered execution and replay. */
 #define HIRSEL_RT_V2_SPAWN_IMMEDIATE_AWAIT 1
 #define HIRSEL_RT_V2_SPAWN_OP_FREE 2
@@ -725,6 +725,59 @@ void hirsel_rt_v2_callback_failed(hirsel_rt_v2_ctx *ctx);
 /* A callback thunk returns to C: the compute permit its Hirsel code took at
    callback_context goes back. */
 void hirsel_rt_v2_callback_leave(hirsel_rt_v2_ctx *ctx);
+
+/* Additive spawn-ahead metadata (ABI 55). Physical entry/checkpoints only. */
+typedef uint8_t (*hirsel_rt_v2_task_code)(hirsel_rt_v2_ctx *, hirsel_rt_v2_header *, uint64_t, uint64_t);
+typedef struct hirsel_rt_v2_spawn_ahead_info {
+    uint32_t version;
+    uint32_t flags;
+    hirsel_rt_v2_task_code entry;
+} hirsel_rt_v2_spawn_ahead_info;
+/* Version 2 extends the immutable v1 prefix; unsupported versions/flags are
+ * refused before reading the entry or any pointed-to recipe. */
+typedef struct hirsel_rt_v2_ahead_recipe {
+    uint32_t wrapper_descriptor, source_descriptor;
+    uint32_t wrapper_extent, callable_offset, live_word_offset, source_extent;
+    uint64_t live_mask;
+    const void *source_code;
+} hirsel_rt_v2_ahead_recipe;
+typedef struct hirsel_rt_v2_spawn_ahead_info_v2 {
+    hirsel_rt_v2_spawn_ahead_info prefix;
+    uint64_t stack_bytes;
+    const hirsel_rt_v2_ahead_recipe *recipe;
+} hirsel_rt_v2_spawn_ahead_info_v2;
+typedef struct hirsel_rt_v2_ahead_physical {
+    int64_t points_left;
+    void *saved_sp, *idle_sp;
+    uint32_t reason, reserved_zero;
+} hirsel_rt_v2_ahead_physical;
+HIRSEL_RT_V2_ASSERT_SIZE(hirsel_rt_v2_spawn_ahead_info, 16);
+_Static_assert(offsetof(hirsel_rt_v2_spawn_ahead_info, version) == 0, "hirsel_rt_v2_spawn_ahead_info.version offset");
+_Static_assert(offsetof(hirsel_rt_v2_spawn_ahead_info, flags) == 4, "hirsel_rt_v2_spawn_ahead_info.flags offset");
+_Static_assert(offsetof(hirsel_rt_v2_spawn_ahead_info, entry) == 8, "hirsel_rt_v2_spawn_ahead_info.entry offset");
+HIRSEL_RT_V2_ASSERT_SIZE(hirsel_rt_v2_ahead_recipe, 40);
+_Static_assert(offsetof(hirsel_rt_v2_ahead_recipe, wrapper_descriptor) == 0, "hirsel_rt_v2_ahead_recipe.wrapper_descriptor offset");
+_Static_assert(offsetof(hirsel_rt_v2_ahead_recipe, source_descriptor) == 4, "hirsel_rt_v2_ahead_recipe.source_descriptor offset");
+_Static_assert(offsetof(hirsel_rt_v2_ahead_recipe, wrapper_extent) == 8, "hirsel_rt_v2_ahead_recipe.wrapper_extent offset");
+_Static_assert(offsetof(hirsel_rt_v2_ahead_recipe, callable_offset) == 12, "hirsel_rt_v2_ahead_recipe.callable_offset offset");
+_Static_assert(offsetof(hirsel_rt_v2_ahead_recipe, live_word_offset) == 16, "hirsel_rt_v2_ahead_recipe.live_word_offset offset");
+_Static_assert(offsetof(hirsel_rt_v2_ahead_recipe, source_extent) == 20, "hirsel_rt_v2_ahead_recipe.source_extent offset");
+_Static_assert(offsetof(hirsel_rt_v2_ahead_recipe, live_mask) == 24, "hirsel_rt_v2_ahead_recipe.live_mask offset");
+_Static_assert(offsetof(hirsel_rt_v2_ahead_recipe, source_code) == 32, "hirsel_rt_v2_ahead_recipe.source_code offset");
+HIRSEL_RT_V2_ASSERT_SIZE(hirsel_rt_v2_spawn_ahead_info_v2, 32);
+_Static_assert(offsetof(hirsel_rt_v2_spawn_ahead_info_v2, prefix) == 0, "hirsel_rt_v2_spawn_ahead_info_v2.prefix offset");
+_Static_assert(offsetof(hirsel_rt_v2_spawn_ahead_info_v2, stack_bytes) == 16, "hirsel_rt_v2_spawn_ahead_info_v2.stack_bytes offset");
+_Static_assert(offsetof(hirsel_rt_v2_spawn_ahead_info_v2, recipe) == 24, "hirsel_rt_v2_spawn_ahead_info_v2.recipe offset");
+HIRSEL_RT_V2_ASSERT_SIZE(hirsel_rt_v2_ahead_physical, 32);
+_Static_assert(offsetof(hirsel_rt_v2_ahead_physical, points_left) == 0, "hirsel_rt_v2_ahead_physical.points_left offset");
+_Static_assert(offsetof(hirsel_rt_v2_ahead_physical, saved_sp) == 8, "hirsel_rt_v2_ahead_physical.saved_sp offset");
+_Static_assert(offsetof(hirsel_rt_v2_ahead_physical, idle_sp) == 16, "hirsel_rt_v2_ahead_physical.idle_sp offset");
+_Static_assert(offsetof(hirsel_rt_v2_ahead_physical, reason) == 24, "hirsel_rt_v2_ahead_physical.reason offset");
+_Static_assert(offsetof(hirsel_rt_v2_ahead_physical, reserved_zero) == 28, "hirsel_rt_v2_ahead_physical.reserved_zero offset");
+hirsel_rt_v2_ahead_physical *hirsel_rt_v2_ahead_state(hirsel_rt_v2_ctx *ctx);
+void hirsel_rt_v2_ahead_handoff(hirsel_rt_v2_ahead_physical *state, uint32_t reason);
+uint8_t hirsel_rt_v2_task_spawn_ahead(hirsel_rt_v2_ctx *ctx, uint64_t caller_site, uint64_t operation_site, void *destination, uint64_t *out, const uint64_t *scope, hirsel_rt_v2_task_code code, hirsel_rt_v2_header *environment, uint64_t flags, const hirsel_rt_v2_spawn_ahead_info *info);
+void hirsel_rt_v2_ahead_barrier(hirsel_rt_v2_ctx *ctx);
 
 /* A fuel point found the running task's chunk spent (its fuel word is negative): the runtime
    stores the next chunk, less the point the failed charge spent, in the word and returns, so

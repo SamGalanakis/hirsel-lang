@@ -857,7 +857,16 @@ def _runtime_archives_impl(ctx):
         ctx.actions.run(command, category = "runtime_parts", identifier = path.replace("/", "-"))
         entries[path + "/libhirsel_rt.a"] = stripped
         entries[path + "/debug/libhirsel_rt.a"] = archive
-    return [DefaultInfo(default_output = ctx.actions.symlinked_dir(ctx.label.name, entries))]
+    # Qualification consumers can request one target/variant without building
+    # unrelated archives. Each view also carries that target's compiler builtins.
+    views = {}
+    for path in ctx.attrs.archives:
+        triple, variant = path.split("/")
+        selected = {key: artifact for key, artifact in entries.items()
+                    if key.startswith(path + "/") or key == triple + "/libhirsel_builtins.a"}
+        view = triple.split("-")[0] + "-" + variant
+        views[view] = [DefaultInfo(default_output = ctx.actions.symlinked_dir(view, selected))]
+    return [DefaultInfo(default_output = ctx.actions.symlinked_dir(ctx.label.name, entries), sub_targets = views)]
 
 _runtime_archives = rule(
     impl = _runtime_archives_impl,

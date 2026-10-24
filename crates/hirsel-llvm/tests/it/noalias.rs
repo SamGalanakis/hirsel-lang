@@ -22,6 +22,8 @@ fn ir(program: &Program, opt: OptLevel, callbacks: &BTreeSet<DefPath>) -> String
     let input = input();
     let none = BTreeSet::new();
     let inputs = EmitInputs {
+        ahead: None,
+        alternate: false,
         index: None,
         verify_backend: true,
         input: &input,

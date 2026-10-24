@@ -13,6 +13,7 @@
 #[cfg(test)]
 hirsel_guard::install!();
 
+mod ahead;
 mod bounded;
 mod compare;
 mod construction;
@@ -129,7 +130,8 @@ pub fn emit_object(
     units: &[&ValidatedUnit<Ready>],
     inputs: &EmitInputs<'_>,
 ) -> Result<ObjectArtifact, CodegenError> {
-    caught(|| module::emit(units, inputs, false, Default::default())).map(|(artifact, _)| artifact)
+    caught(|| module::emit(units, inputs, false, Default::default()))
+        .map(|(artifact, _, _)| artifact)
 }
 
 /// Emits `units` as `emit_object` does, recording what `profile` asks for beside the code:
@@ -140,7 +142,7 @@ pub fn emit_object_profile(
     inputs: &EmitInputs<'_>,
     profile: hirsel_lir::debug::Profile<'_>,
 ) -> Result<ObjectArtifact, CodegenError> {
-    caught(|| module::emit(units, inputs, false, profile)).map(|(artifact, _)| artifact)
+    caught(|| module::emit(units, inputs, false, profile)).map(|(artifact, _, _)| artifact)
 }
 
 /// The Cranelift IR of every function `emit_object` defines, before compilation, as text:
@@ -150,7 +152,7 @@ pub fn emit_clif(
     inputs: &EmitInputs<'_>,
 ) -> Result<String, CodegenError> {
     caught(|| module::emit(units, inputs, true, Default::default()))
-        .map(|(_, clif)| clif.unwrap_or_default())
+        .map(|(_, clif, _)| clif.unwrap_or_default())
 }
 
 /// A panic in Cranelift or in this crate is a refused compilation, never a crash of the
@@ -181,4 +183,28 @@ pub fn test_dispatcher_object(
     entries: &[&str],
 ) -> Result<Vec<u8>, CodegenError> {
     caught(|| dispatcher::emit(target, entries))
+}
+
+/// Emits real alternate definitions and reads their final x86 SysV frame metadata.
+pub fn emit_ahead_object(
+    units: &[&ValidatedUnit<Ready>],
+    inputs: &EmitInputs<'_>,
+) -> Result<(ObjectArtifact, std::collections::BTreeMap<String, u64>), CodegenError> {
+    let inputs = EmitInputs {
+        alternate: true,
+        available_externally: &Default::default(),
+        ..inputs.clone()
+    };
+    caught(|| module::emit(units, &inputs, false, Default::default()))
+        .map(|(object, _, frames)| (object, frames))
+}
+
+/// Emits backend-independent immutable scalar capture and frame records.
+pub fn emit_ahead_metadata(
+    inputs: &EmitInputs<'_>,
+    plan: &hirsel_lir::ahead::AheadPlan,
+    bounds: &std::collections::BTreeMap<hirsel_syntax::ContentHash, u64>,
+    registry: &hirsel_lir::descriptor_registry::DescriptorRegistry,
+) -> Result<ObjectArtifact, CodegenError> {
+    caught(|| ahead::metadata(inputs, plan, bounds, registry))
 }

@@ -337,3 +337,78 @@ fn a_child_returning_an_owned_result_retains_its_cleanup_fiber() {
     assert!(flags.contains(&1), "flags: {flags:?}");
     assert!(!flags.iter().any(|f| f & 2 != 0));
 }
+
+#[test]
+fn a_known_spawned_callable_reaches_its_owned_task_main_adapter() {
+    let (_, lowered) = lower_valid(
+        "fn main(tasks: Tasks)->u64 {task.scope(tasks, fn(s:Scope)->u64 {let n=42u64; let child=task.async(s,fn()->u64 {n}); task.await(s,take child)})}",
+    );
+    let adapters: Vec<_> = lowered
+        .units
+        .iter()
+        .filter(|u| u.header.definition.is_core("$native.task_main"))
+        .collect();
+    assert!(
+        adapters.iter().any(|u| u
+            .tables
+            .calls
+            .iter()
+            .any(|c| matches!(c.callee, Callee::Indirect(_)))),
+        "the dynamic control remains available"
+    );
+    let specialized = adapters
+        .iter()
+        .find(|u| {
+            u.tables
+                .calls
+                .iter()
+                .any(|c| matches!(c.callee, Callee::Bound { .. }))
+        })
+        .expect("known callable code must cross the task_main capture");
+    assert!(
+        !specialized
+            .tables
+            .calls
+            .iter()
+            .any(|c| matches!(c.callee, Callee::Indirect(_)))
+    );
+    assert!(specialized.tables.calls.iter().any(|c| matches!(c.callee, Callee::Operation(op) if specialized.tables.operations[op.index()].definition.is_core("$intrinsic.TaskFinish"))), "holding-result ownership still belongs to TaskFinish");
+    assert!(
+        lowered
+            .units
+            .iter()
+            .any(|u| u.tables.closures.iter().any(|c| c
+                .code
+                .is_some_and(|code| u.tables.symbols[code.symbol.index()].instance
+                    == Some(specialized.header.instance)))),
+        "spawn must actually reference the specialized adapter"
+    );
+}
+
+#[test]
+fn nonadjacent_result_spawn_preserves_code_identity_without_a_fast_hint() {
+    let (_, lowered) = lower_valid(
+        "fn work(seed:u64,count:u64)->u64 uses {} {let mut x=seed;for i in 0u64..count {x=int.wrapping_add(int.wrapping_mul(x ^ (x >> 7),0x9e3779b97f4a7c15u64),i)};x}\nfn main(tasks:Tasks)->u64 {task.scope(tasks,fn(s:Scope)->u64 {let mut set:TaskSet[Result[u64,()]] of s=task.set(s);for seed in 1u64..5u64 {task.add(s,mut set,task.async(s,fn()->Result[u64,()]{Ok(work(seed,64u64))}))};let mut sum=0u64;if let Ok(rows)=std@1/task.all(s,take set){for x in rows {sum=sum ^ x}};sum})}",
+    );
+    let adapters: Vec<_> = lowered
+        .units
+        .iter()
+        .filter(|u| u.header.definition.is_core("$native.task_main"))
+        .collect();
+    assert!(
+        adapters.iter().any(|u| u
+            .tables
+            .calls
+            .iter()
+            .any(|c| matches!(c.callee, Callee::Bound { .. }))),
+        "the ordinary nonadjacent Result child needs a specialized owned adapter"
+    );
+    assert!(
+        adapters.iter().any(|u| u
+            .tables
+            .calls
+            .iter()
+            .any(|c| matches!(c.callee, Callee::Indirect(_)))),
+        "the original erased adapter must remain available"
+    );
+}

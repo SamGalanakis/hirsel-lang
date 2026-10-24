@@ -15,6 +15,7 @@ pub struct Captures {
     pub handles: BTreeSet<u64>,
     pub typed: BTreeSet<Handle>,
     pub unknown: bool,
+    pub roots: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
@@ -166,6 +167,7 @@ unsafe fn scan_with(
                         out.handles.insert(address.cast::<u64>().read_unaligned());
                     }
                     BLOCK | ROOT => {
+                        out.roots |= op[0] == ROOT;
                         let block = address.cast::<*const Header>().read_unaligned();
                         if block.is_null() || !blocks.insert(block.addr()) {
                             continue;

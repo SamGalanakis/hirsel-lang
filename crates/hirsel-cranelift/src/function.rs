@@ -152,6 +152,8 @@ pub(crate) struct FnEmitter<'e, 'a, 'f> {
     globals: HashMap<DataId, GlobalValue>,
     /// Per block, whether it charges fuel (`hirsel_lir::fuel`); empty without `inputs.fuel`.
     fuel_points: Vec<bool>,
+    pub(crate) ahead_state: Option<Value>,
+    pub(crate) ahead_counter: Option<cranelift_frontend::Variable>,
 }
 
 /// Bytes of a `hirsel_rt_v2_region` record.
@@ -202,7 +204,7 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
             .hidden_index(Hidden::Environment)
             .map(|index| entry_params[index]);
         let constant_slots = hirsel_lir::statics::constant_slots(unit, em.inputs.unit().statics);
-        let fuel_points = if em.inputs.unit().fuel {
+        let fuel_points = if em.inputs.unit().fuel || em.inputs.unit().alternate {
             hirsel_lir::fuel::fuel_points(unit)
         } else {
             Vec::new()
@@ -233,6 +235,8 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
             funcs: HashMap::new(),
             globals: HashMap::new(),
             fuel_points,
+            ahead_state: None,
+            ahead_counter: None,
         }
     }
 
@@ -687,6 +691,7 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
     // The function.
 
     pub(crate) fn emit(mut self) -> Emitted {
+        self.ahead_init()?;
         self.find_versions()?;
         let order = self.reverse_postorder()?;
         for _ in &self.unit.blocks {
@@ -1199,6 +1204,9 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
     /// task's chunk, loses one, and a negative result calls `hirsel_rt_v2_fuel_refill`, which
     /// stores the next chunk (or stops the run) and returns to the code after the charge.
     fn charge_fuel(&mut self) -> Emitted {
+        if self.em.inputs.unit().alternate {
+            return self.ahead_point(true);
+        }
         let offset = hirsel_lir::runtime_abi::CTX_FUEL_OFFSET;
         let fuel = self.load_ty(types::I64, self.context, offset);
         let left = self.b.ins().iadd_imm(fuel, -1);
@@ -1350,6 +1358,7 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
         match deferred {
             Deferred::Failure { block, failure } => {
                 self.b.switch_to_block(block);
+                self.ahead_barrier()?;
                 let edge = self.failure_edge(failure)?;
                 if edge.rule.as_deref() == Some("MEM-9") {
                     let site = self.anchor_code(edge.anchor)?;
@@ -1375,6 +1384,7 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
             }
             Deferred::CallBoundary { block, site, then } => {
                 self.b.switch_to_block(block);
+                self.ahead_barrier()?;
                 let (site, operation) = self.failure_sites_for(site, false);
                 let context = self.context;
                 self.rt(RuntimeEntry::FailureReanchor, &[context, site, operation])?;
@@ -1389,6 +1399,7 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
                 then,
             } => {
                 self.b.switch_to_block(block);
+                self.ahead_barrier()?;
                 self.failure_begin_for(&rule, site, forward_caller)?;
                 self.b.ins().jump(then, &[]);
                 Ok(())
@@ -1400,6 +1411,7 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
                 failure,
             } => {
                 self.b.switch_to_block(block);
+                self.ahead_barrier()?;
                 let (kind, rule) = self.failure_code(hirsel_lir::emission::BOUNDED_RULE)?;
                 let (site, operation_site) = self.failure_sites(site);
                 let context = self.context;
@@ -1432,6 +1444,7 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
         self.failure_begin_for(rule, site, true)
     }
     fn failure_begin_for(&mut self, rule: &str, site: u64, forward: bool) -> Emitted {
+        self.ahead_barrier()?;
         let (kind, rule) = self.failure_code(rule)?;
         let (site, operation) = self.failure_sites_for(site, forward);
         let context = self.context;
@@ -1560,6 +1573,8 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
 
     /// Returns `status` and, with a register result, `value` (a zero word when absent).
     fn return_status(&mut self, status: i64, value: Option<V>) -> Emitted {
+        self.ahead_point(false)?;
+        self.ahead_flush();
         let status = self.b.ins().iconst(types::I8, status);
         match self.sig.value {
             Some(kind) => {
@@ -1762,7 +1777,23 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
         if symbol.kind != SymbolKind::Function {
             return self.invalid("a call of a symbol that is not a function");
         }
-        let name = symbol_name(&symbol.definition, symbol.instance.as_ref());
+        let name = if self.em.inputs.unit().alternate {
+            let Some(id) = symbol.instance else {
+                return self.invalid("unknown alternate callee");
+            };
+            if !self
+                .em
+                .inputs
+                .unit()
+                .ahead
+                .is_some_and(|p| p.bodies.contains_key(&id))
+            {
+                return self.invalid("missing real alternate callee");
+            }
+            hirsel_lir::ahead::alternate_name(&symbol.definition, id)
+        } else {
+            symbol_name(&symbol.definition, symbol.instance.as_ref())
+        };
         self.em.manifest_import(
             &name,
             ObjectSymbolKind::Function,
@@ -1959,9 +1990,35 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
         if args.len() != signature.ir.params.len() {
             return self.invalid("a call whose arguments differ from its signature");
         }
+        if matches!(site.callee, Callee::Operation(_)) {
+            self.ahead_barrier()?;
+        }
+        self.ahead_flush();
+        let ahead_root = self.em.inputs.unit().ahead.and_then(|p| {
+            p.spawns
+                .get(&(unit.header.instance, call))
+                .map(|root| (*root, p.identity))
+        });
+        let mut physical_signature = signature.ir.clone();
+        let name = if let Some((root, identity)) = ahead_root {
+            let metadata = hirsel_lir::ahead::metadata_name(root, identity);
+            self.em
+                .manifest_import(&metadata, ObjectSymbolKind::Data, None, None);
+            let (id, _) = self
+                .em
+                .declare_data(&metadata, cranelift_module::Linkage::Import)?;
+            args.push(self.data_addr(id, 0));
+            physical_signature.params.push(ir::AbiParam::new(PTR));
+            let name = RuntimeEntry::TaskSpawnAhead.declaration().symbol.to_owned();
+            self.em
+                .manifest_import(&name, ObjectSymbolKind::Runtime, None, None);
+            Some(name)
+        } else {
+            name
+        };
         let returned = match (&name, code) {
             (Some(name), _) => {
-                let id = self.em.import_function(name, &signature.ir)?;
+                let id = self.em.import_function(name, &physical_signature)?;
                 self.call(id, &args)
             }
             (None, Some(code)) => {
@@ -1974,6 +2031,7 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
             }
             (None, None) => return self.invalid("a call without a callee"),
         };
+        self.ahead_reload();
         // Both continuations observe the callee's mutations, including partial failure.
         for (destination, temporary) in column_returns {
             let shape = self.layout_shape(destination.layout)?;

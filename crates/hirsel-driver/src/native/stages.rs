@@ -178,6 +178,8 @@ pub struct ReadyProgram {
     /// Every Ready unit; empty when the build emitted its units itself
     /// (`Options::objects`), whose objects are `unit_objects`.
     pub units: Vec<ValidatedUnit<Ready>>,
+    pub ahead_units: Vec<std::sync::Arc<ValidatedUnit<Ready>>>,
+    pub ahead_environments: BTreeMap<ContentHash, Option<LayoutId>>,
     /// What program assembly reads from each unit (`hirsel_lir::fragment`), in unit order.
     pub summaries: Vec<hirsel_lir::fragment::UnitSummary>,
     /// The units' objects when the build emitted them, with the backend and optimization
@@ -631,6 +633,7 @@ pub(super) fn build_program_roots(
     })
     .map_err(|e| NativeError::new(StageName::Import, e))?;
     let value_units = std::mem::take(&mut lowered.units);
+    let ahead_environments = hirsel_lir::ahead::environments(&value_units);
     hirsel_intern::memory::checkpoint("global Value complete");
     let table = &lowered.table;
     let operations = program.operation_registry();
@@ -747,6 +750,8 @@ pub(super) fn build_program_roots(
         table: lowered.table,
         manifest,
         units,
+        ahead_units: Vec::new(),
+        ahead_environments,
         summaries,
         unit_objects: None,
         inline_instances: lowered.inline_instances,
@@ -764,6 +769,8 @@ pub(super) fn build_program_roots(
 /// A program whose units the per-unit pipeline lowered or loaded (`Options::objects`),
 /// before it owns the lowering's tables.
 struct BuiltUnits {
+    ahead_units: Vec<std::sync::Arc<ValidatedUnit<Ready>>>,
+    ahead_environments: BTreeMap<ContentHash, Option<LayoutId>>,
     records: Vec<super::plan::Record>,
     summaries: Vec<hirsel_lir::fragment::UnitSummary>,
     objects: UnitObjectArtifacts,
@@ -807,6 +814,8 @@ fn build_units(
     let validation = hirsel_lir::validate::ValidationContext::new(&inputs);
     preflight(&validation)?;
     let emit = hirsel_lir::emission::EmitInputs {
+        ahead: None,
+        alternate: false,
         verify_backend: options.validation == Validation::EveryStage,
         index: Some(validation.index()),
         input: &program.input,
@@ -841,6 +850,9 @@ fn build_units(
         },
         units,
     )?;
+    let ahead_units = lowered_units.ahead;
+    let ahead_environments = lowered_units.environments;
+    let lowered_units = lowered_units.units;
     let mut summaries = Vec::with_capacity(lowered_units.len());
     let mut records = Vec::with_capacity(lowered_units.len());
     let mut artifacts = Vec::with_capacity(lowered_units.len());
@@ -863,6 +875,8 @@ fn build_units(
         artifacts.push(fragment.object);
     }
     Ok(BuiltUnits {
+        ahead_units,
+        ahead_environments,
         records,
         summaries,
         objects: UnitObjectArtifacts {
@@ -940,6 +954,8 @@ impl BuiltUnits {
             table: lowered.table,
             manifest,
             units: Vec::new(),
+            ahead_units: self.ahead_units,
+            ahead_environments: self.ahead_environments,
             summaries: self.summaries,
             unit_objects: Some(self.objects),
             inline_instances: lowered.inline_instances,

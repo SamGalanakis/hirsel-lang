@@ -43,6 +43,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         self.allocate_slots()?;
         self.bind_parameters()?;
         self.allocate_sequence_states()?;
+        self.ahead_init()?;
         for b in order {
             self.emit_block(BlockId(b as u32))?;
         }

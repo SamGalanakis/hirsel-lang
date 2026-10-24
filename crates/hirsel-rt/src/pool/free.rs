@@ -84,7 +84,8 @@ pub(super) struct Active {
     lease: Lease,
 }
 
-pub(super) enum Leave {
+#[derive(Clone, Copy)]
+pub(crate) enum Leave {
     Suspend { owner: Owner, yielded: bool },
     Complete,
 }
@@ -594,6 +595,33 @@ pub(super) unsafe fn resume(run: *mut RunShared, exec: &Exec, saved: Saved) {
     unsafe {
         crate::tasks::role::enter(ctx);
         debug_assert_eq!((*ctx).task_id, task);
+        if !crate::tasks::ordered::ahead::dispatch_ready(ctx) {
+            // Promotion may precede the claim of the reservation's original
+            // physical queue token. It must not claim an unselected logical
+            // row. No task code or context switch has run: return the exact
+            // image to Saved, without a semantic save callback. The role
+            // excludes selection until the token's save is published.
+            let queued = running.save(false);
+            crate::tasks::role::release(ctx);
+            execs.permits.release(exec);
+            exec.busy.store(false, Ordering::SeqCst);
+            if let Some(queued) = queued {
+                publish(
+                    execs,
+                    Saved {
+                        queued,
+                        frame,
+                        lease,
+                    },
+                    false,
+                    true,
+                );
+            } else {
+                drop(lease);
+            }
+            wake(&execs.home);
+            return;
+        }
         crate::tasks::record_dispatch(run, task, compute_index());
         frame.saved.store(false, Ordering::Release);
         TaskCtx::switch_in(ctx, exec.worker.get());
@@ -607,7 +635,11 @@ pub(super) unsafe fn resume(run: *mut RunShared, exec: &Exec, saved: Saved) {
                 }))
                 .is_none()
         );
-        fiber::switch(exec.idle.as_ptr(), sp);
+        if !(*ctx).ahead_physical.is_null() {
+            crate::tasks::ordered::ahead::native::run(ctx, exec, sp);
+        } else {
+            fiber::switch(exec.idle.as_ptr(), sp);
+        }
     }
 }
 

@@ -157,11 +157,17 @@ was established under its contract; an unknown outcome is not a cancellation res
 Programs are data-race-free by construction: tasks share no mutable or counted memory
 except mutex payloads (under the lock), `Shared` root counts and atomics. Every execution
 is explained by a sequentially consistent order of synchronising events: spawn before the
-child starts; child completion before its join and the scope's exit; send before receive;
+child semantically starts; child completion before its join and the scope's exit; send before receive;
 mutex release before the next acquire; atomic operations; suspend before resume; and the
 releases of a root that a `shared.thaw` of it observes, before that thaw. The outermost
 entry of a `serial` package's foreign gate is also a synchronising event
 ([PROG-4](programs.md#prog-4-interop)); nested re-entry is not.
+
+An implementation may evaluate a reserved child's private computation before its
+logical turn. This evaluation is not a semantic start, scheduling point or effect.
+Every synchronizing operation, task-tree change, host request, failure, stop,
+destruction and budget charge retains its serial position. Provisional results
+are unobservable, and abandoned private work leaves no observable trace.
 
 ### CONC-5: Mutexes
 

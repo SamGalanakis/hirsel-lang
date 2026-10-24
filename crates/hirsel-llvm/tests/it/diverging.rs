@@ -45,6 +45,8 @@ fn a_diverging_call_branches_on_status_without_noreturn() {
     assert!(program.table.table.fn_abis[program.table.abi("stop").0 as usize].diverges);
     let input = input();
     let inputs = EmitInputs {
+        ahead: None,
+        alternate: false,
         index: None,
         verify_backend: true,
         input: &input,

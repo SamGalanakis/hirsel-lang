@@ -19,6 +19,9 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 hirsel_lir::profile::instruction_site(unit, b, inst),
                 &format!("{:?}", inst.opcode()),
             )?;
+            if matches!(inst, Inst::Release { .. }) {
+                self.ahead_barrier()?;
+            }
             self.instruction(inst)?;
         }
         let terminator = unit.terminators[b.index()].clone();
@@ -33,6 +36,9 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
     /// task's chunk, loses one, and a negative result calls `hirsel_rt_v2_fuel_refill`, which
     /// stores the next chunk (or stops the run) and returns to the code after the charge.
     fn charge_fuel(&mut self) -> Emitted {
+        if self.inputs.alternate {
+            return self.ahead_point(true);
+        }
         use crate::context::{BinOp, IntPredicate};
         let refill = self.runtime(RuntimeEntry::FuelRefill)?;
         let i64_ty = self.module.int_type(64);
@@ -220,6 +226,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         let here = self.builder.current();
         let block = self.module.append_block(self.function);
         self.builder.position(block);
+        self.ahead_barrier()?;
         if edge.rule.as_deref() == Some("MEM-9") {
             let stop = self.runtime(RuntimeEntry::UncheckedAddOverflow)?;
             let site = self.anchor_code(edge.anchor)?;

@@ -6,6 +6,10 @@
 
 use crate::layout_types::TargetSpec;
 
+#[path = "stack_sizes.rs"]
+mod stack_sizes;
+pub use stack_sizes::llvm_stack_sizes;
+
 /// The ELF `e_machine` of a target's objects, or None for a triple this crate cannot read.
 fn elf_machine(target: &TargetSpec) -> Option<u16> {
     match target.triple.split('-').next() {

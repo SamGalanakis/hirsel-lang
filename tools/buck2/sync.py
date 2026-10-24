@@ -824,8 +824,8 @@ def compiler_identity_inputs(meta: dict) -> list[str]:
     inputs = []
     for name in sorted(closure):
         directory = relative(pathlib.Path(packages[name]["manifest_path"]).parent)
-        inputs += [f"{directory}/Cargo.toml", f"{directory}/build.rs", f"{directory}/src/**", f"{directory}/include/**"]
-    return inputs + ["Cargo.lock", "rust-toolchain.toml", "native-tests/library/operations.tsv"]
+        inputs += [f"{directory}/Cargo.toml", f"{directory}/build.rs", f"{directory}/src/**", f"{directory}/include/**", f"{directory}/bridge/**"]
+    return inputs + ["Cargo.lock", "rust-toolchain.toml", "native-tests/library/operations.tsv", "tools/native-toolchain/llvm-23.lock", "tools/buck2/llvm-cxx-headers-lock.json"]
 
 
 def first_party(meta: dict) -> str:
@@ -874,7 +874,7 @@ def first_party(meta: dict) -> str:
         lib = next((t for t in package["targets"] if set(t["kind"]) & {"lib", "rlib", "staticlib"}), None)
         build = next((t for t in package["targets"] if t["kind"] == ["custom-build"]), None)
         build_script = None
-        if build:
+        if build and name != "hirsel-llvm":
             build_script = f"{name}-build-script"
             src = pathlib.Path(build["src_path"])
             out.append("\n" + call(
@@ -887,6 +887,8 @@ def first_party(meta: dict) -> str:
                 features=features,
                 **common,
             ))
+        if name == "hirsel-llvm":
+            deps["normal"].add("//crates/hirsel-llvm/bridge:bridge")
         normal = sorted(deps["normal"])
         test_deps = sorted(deps["normal"] | deps["dev"])
         if lib:

@@ -81,7 +81,7 @@ prebuilt_cxx_library(
     name = "libllvm",
     shared_lib = "llvm-files/lib/libLLVM.so.23.1",
     soname = "libLLVM.so.23.1",
-    header_dirs = ["llvm-files/include"],
+    header_dirs = ["llvm-files/include", "llvm-files/sysroot"],
     preferred_linkage = "shared",
     visibility = ["PUBLIC"],
 )

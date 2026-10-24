@@ -117,6 +117,10 @@ fn fuel_state(ctx: *mut TaskCtx) -> (TaskId, &'static mut Driver) {
 }
 
 pub(crate) fn fuel_in(ctx: *mut TaskCtx) {
+    if super::ahead::private(ctx) {
+        super::ahead::fuel_in(ctx);
+        return;
+    }
     let initial = unsafe { (*ctx).run_ref().fuel.remaining() };
     let memory_limit = unsafe { (*ctx).heap_ref().meter.limit() };
     let memory_level = unsafe { (*ctx).heap_ref().meter.held() };
@@ -203,6 +207,10 @@ fn capture_fuel(ctx: *mut TaskCtx) {
 }
 
 pub(crate) fn fuel_out(ctx: *mut TaskCtx) {
+    if super::ahead::private(ctx) {
+        super::ahead::fuel_out(ctx);
+        return;
+    }
     capture_fuel(ctx);
     let (task, driver) = fuel_state(ctx);
     let nonhead = driver
@@ -240,6 +248,10 @@ fn settle_head(ctx: *mut TaskCtx, before: &Stretch) -> Stopped<()> {
 
 fn settle_head_here(ctx: *mut TaskCtx, before: &Stretch) -> Stopped<()> {
     let task = current(ctx);
+    assert!(
+        driver(ctx).head_ready(task),
+        "retire owned work before head charges"
+    );
     let result = driver(ctx)
         .frontier
         .as_mut()
@@ -253,10 +265,15 @@ fn settle_head_here(ctx: *mut TaskCtx, before: &Stretch) -> Stopped<()> {
 /// Before taking a worker heap/pool borrow. A denied reservation leaves the
 /// request and logical budget untouched; only head promotion can resume it.
 pub(crate) fn reserve_allocation(ctx: *mut TaskCtx, bytes: u64) -> Stopped<()> {
+    unsafe { super::ahead::barrier(ctx) };
     let task = current(ctx);
     driver(ctx).enter(task, crate::pool::compute_index().unwrap_or(0));
     capture_fuel(ctx);
     advance(ctx)?;
+    if driver(ctx).frontier.as_ref().unwrap().head() == Some(task) && !driver(ctx).head_ready(task)
+    {
+        at_head(ctx)?;
+    }
     let memory = driver(ctx).memory;
     let budgets = driver(ctx).budgets;
     let envelope_full = memory
@@ -282,7 +299,7 @@ pub(crate) fn reserve_allocation(ctx: *mut TaskCtx, bytes: u64) -> Stopped<()> {
         at_head(ctx)?;
     }
     if memory {
-        let head = driver(ctx).frontier.as_ref().unwrap().head() == Some(task);
+        let head = driver(ctx).head_ready(task);
         if head {
             let before = stretch(ctx);
             settle_head(ctx, &before)?;
@@ -345,6 +362,10 @@ pub(crate) fn fuel_refill(ctx: *mut TaskCtx) -> Stopped<()> {
     capture_fuel(ctx);
     advance(ctx)?;
     let task = current(ctx);
+    if driver(ctx).frontier.as_ref().unwrap().head() == Some(task) && !driver(ctx).head_ready(task)
+    {
+        at_head(ctx)?;
+    }
     let must_wait = {
         let driver = driver(ctx);
         let frontier = driver.frontier.as_ref().unwrap();
@@ -356,7 +377,7 @@ pub(crate) fn fuel_refill(ctx: *mut TaskCtx) -> Stopped<()> {
     if must_wait {
         at_head(ctx)?;
     }
-    if driver(ctx).frontier.as_ref().unwrap().head() == Some(task) {
+    if driver(ctx).head_ready(task) {
         let before = stretch(ctx);
         settle_head(ctx, &before)?;
     }
@@ -459,9 +480,16 @@ fn advance(ctx: *mut TaskCtx) -> Stopped<()> {
     loop {
         let progress =
             with_frontier(ctx, |f, backend| f.absorb(backend)).map_err(Stop::BudgetExceeded)?;
+        // A successful retry has discharged the save wait. The owned log,
+        // rather than a notification alone, remains the readiness authority.
+        driver(ctx).awaiting_save = matches!(progress, Progress::NeedSave(_));
         match progress {
             Progress::Poll => poll(ctx)?,
             Progress::Absorbed(_) | Progress::Called(_) | Progress::Retired => {}
+            Progress::NeedSave(_) => {
+                driver(ctx).awaiting_save = true;
+                break;
+            }
             Progress::NeedSegment(_) | Progress::Idle => break,
             Progress::Stopped => return Err(Stop::Failed),
         }
@@ -492,7 +520,7 @@ pub(super) fn at_head(ctx: *mut TaskCtx) -> Stopped<()> {
     driver(ctx).enter(task, crate::pool::compute_index().unwrap_or(0));
     loop {
         advance(ctx)?;
-        if driver(ctx).frontier.as_ref().unwrap().head() == Some(task) {
+        if driver(ctx).head_ready(task) {
             let before = stretch(ctx);
             settle_head(ctx, &before)?;
             fuel_in(ctx);
@@ -774,10 +802,25 @@ pub(super) fn submit(
         advance(ctx)?;
         let head = driver(ctx).frontier.as_ref().unwrap().head();
         if head == Some(task) {
+            if !driver(ctx).head_ready(task) {
+                suspend(ctx, task, true);
+                continue;
+            }
             accepted(ctx, task, true);
             let progress =
                 with_frontier(ctx, |f, backend| f.apply_head(before, operation, backend))
                     .map_err(Stop::BudgetExceeded)?;
+            if matches!(progress, Progress::NeedSave(_)) {
+                driver(ctx).awaiting_save = true;
+                loop {
+                    suspend(ctx, task, true);
+                    advance(ctx)?;
+                    if let Some(result) = driver(ctx).returned.remove(&task) {
+                        fuel_in(ctx);
+                        return Ok(Some(result));
+                    }
+                }
+            }
             if progress == Progress::Poll {
                 poll(ctx)?;
             }
@@ -2178,4 +2221,31 @@ mod tests {
         assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
         assert_eq!(outcome.pending, 0);
     }
+}
+
+/// Idle-side counterpart of fuel_refill. It never saves a Rust idle frame as
+/// the task's continuation. A blocked refill retains its already charged point
+/// in the ordinary stretch until head readiness permits canonical settlement.
+pub(crate) fn ahead_refill(ctx: *mut TaskCtx) -> Stopped<bool> {
+    capture_fuel(ctx);
+    advance(ctx)?;
+    let task = current(ctx);
+    let wait = {
+        let d = driver(ctx);
+        let f = d.frontier.as_ref().unwrap();
+        (f.head() == Some(task) && !d.head_ready(task))
+            || (f.head() != Some(task)
+                && f.logged_fuel(task)
+                    .saturating_add(d.stretches.get(&task).map_or(0, Stretch::fuel_charges))
+                    > f.settled.fuel)
+    };
+    if wait {
+        return Ok(false);
+    }
+    if driver(ctx).head_ready(task) {
+        let before = stretch(ctx);
+        settle_head(ctx, &before)?;
+    }
+    fuel_in(ctx);
+    Ok(true)
 }

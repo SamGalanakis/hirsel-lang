@@ -177,6 +177,9 @@ pub struct TaskCtx {
     /// The actual source invocation of a site-carrying host primitive. Task-owned
     /// across a physical save; nested calls restore their caller's site.
     pub(crate) operation_site: u64,
+    /// Private execution ownership; never part of the compiled context view.
+    pub(crate) ahead: Option<Box<crate::tasks::ordered::ahead::Local>>,
+    pub(crate) ahead_physical: *mut crate::tasks::ordered::ahead::native::Physical,
 }
 
 const _: () = assert!(std::mem::offset_of!(TaskCtx, view) == 0);
@@ -352,6 +355,16 @@ pub(crate) struct RunShared {
     pub(crate) free_native_spans: crate::tasks::free::host::native::Spans,
 }
 
+impl Drop for RunShared {
+    fn drop(&mut self) {
+        // The detached reclaim path also drops the heaps wholesale without
+        // TaskCtx::exit. Its last worker owns quiescent metadata at this point.
+        if let Some(scheduler) = self.tasks.as_deref_mut() {
+            scheduler.restore_reserved_custody();
+        }
+    }
+}
+
 impl RunShared {
     pub(crate) fn io_binding(&self) -> *mut std::ffi::c_void {
         self.io_data.load(std::sync::atomic::Ordering::Acquire)
@@ -394,6 +407,8 @@ impl TaskCtx {
             free_terminal: None,
             pending_ordered_host: None,
             operation_site: 0,
+            ahead: None,
+            ahead_physical: std::ptr::null_mut(),
             native_host_result: None,
             replay_host: None,
             ordered_charge_trace: Default::default(),
@@ -693,6 +708,11 @@ impl TaskCtx {
         #[cfg(feature = "measurement")]
         crate::tasks::profile::finish(self);
         crate::tasks::end_run(self);
+        // end_run acknowledged every physical owner. Restore unpublished
+        // callable custody before release_all can unmap its live words.
+        if let Some(scheduler) = self.run().tasks.as_deref_mut() {
+            scheduler.restore_reserved_custody();
+        }
         #[cfg(any(feature = "diagnostic", feature = "measurement"))]
         let audit = self.exit_audit();
         #[cfg(not(any(feature = "diagnostic", feature = "measurement")))]

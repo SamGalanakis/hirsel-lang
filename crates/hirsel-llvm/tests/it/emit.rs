@@ -19,6 +19,8 @@ fn inputs<'a>(program: &'a Program, input: &'a InputIdentity, opt: OptLevel) -> 
     static EMPTY_INLINE: std::collections::BTreeSet<hirsel_syntax::ContentHash> =
         std::collections::BTreeSet::new();
     EmitInputs {
+        ahead: None,
+        alternate: false,
         index: None,
         verify_backend: true,
         input,

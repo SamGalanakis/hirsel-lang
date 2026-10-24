@@ -1,0 +1,434 @@
+//! The bounded x86 SysV boundary. Only these naked instructions run on a
+//! private stack; accounting, roles and stop handling run on idle.
+use super::super::super::TaskCode;
+use super::*;
+use crate::{Header, TaskCtx};
+
+#[repr(C)]
+pub struct Physical {
+    pub points_left: i64,
+    pub saved_sp: *mut u8,
+    pub idle_sp: *mut u8,
+    pub reason: u32,
+    pub reserved_zero: u32,
+}
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct Recipe {
+    pub wrapper_descriptor: u32,
+    pub source_descriptor: u32,
+    pub wrapper_extent: u32,
+    pub callable_offset: u32,
+    pub live_word_offset: u32,
+    pub source_extent: u32,
+    pub live_mask: u64,
+    pub source_code: *const u8,
+}
+#[repr(C)]
+pub struct Info {
+    pub prefix: SpawnAheadInfo,
+    pub stack_bytes: u64,
+    pub recipe: *const Recipe,
+}
+
+pub(crate) struct Certificate {
+    pub entry: TaskCode,
+    pub stack_bytes: u64,
+    live: *mut u64,
+    mask: u64,
+    source: *mut Header,
+}
+#[repr(C)]
+pub(crate) struct Native {
+    pub physical: Physical,
+    entry: TaskCode,
+    environment: *mut Header,
+    operation_site: u64,
+    status: u8,
+    pub pending_refill: bool,
+    ctx: *mut TaskCtx,
+    live: *mut u64,
+    original_mask: u64,
+    source: *mut Header,
+    generation: u32,
+    adopted: bool,
+}
+const _: () = {
+    assert!(std::mem::offset_of!(Physical, points_left) == 0);
+    assert!(std::mem::offset_of!(Physical, reserved_zero) == 28);
+    assert!(std::mem::offset_of!(Recipe, wrapper_descriptor) == 0);
+    assert!(std::mem::offset_of!(Recipe, source_descriptor) == 4);
+    assert!(std::mem::offset_of!(Recipe, wrapper_extent) == 8);
+    assert!(std::mem::offset_of!(Recipe, callable_offset) == 12);
+    assert!(std::mem::offset_of!(Recipe, live_word_offset) == 16);
+    assert!(std::mem::offset_of!(Recipe, source_extent) == 20);
+    assert!(std::mem::offset_of!(Info, prefix) == 0);
+    assert!(size_of::<Physical>() == 32 && align_of::<Physical>() == 8);
+    assert!(std::mem::offset_of!(Physical, saved_sp) == 8);
+    assert!(std::mem::offset_of!(Physical, idle_sp) == 16);
+    assert!(std::mem::offset_of!(Physical, reason) == 24);
+    assert!(size_of::<Recipe>() == 40 && align_of::<Recipe>() == 8);
+    assert!(std::mem::offset_of!(Recipe, live_mask) == 24);
+    assert!(std::mem::offset_of!(Recipe, source_code) == 32);
+    assert!(size_of::<Info>() == 32 && align_of::<Info>() == 8);
+    assert!(std::mem::offset_of!(Info, stack_bytes) == 16);
+    assert!(std::mem::offset_of!(Info, recipe) == 24);
+    assert!(std::mem::offset_of!(Native, entry) == 32);
+    assert!(std::mem::offset_of!(Native, environment) == 40);
+    assert!(std::mem::offset_of!(Native, operation_site) == 48);
+    assert!(std::mem::offset_of!(Native, status) == 56);
+    assert!(std::mem::offset_of!(Native, ctx) == 64);
+};
+
+/// Validate the narrow two-block capture image without weakening plain_layouts.
+/// # Safety
+/// A v2 record and the ordinary owned closure/environment are live and immutable.
+pub(crate) unsafe fn validate(
+    ctx: *mut TaskCtx,
+    environment: *mut Header,
+    info: *const Info,
+) -> Option<Certificate> {
+    unsafe {
+        let info = &*info;
+        let entry = info.prefix.entry?;
+        if !(80..=65536).contains(&info.stack_bytes)
+            || info.recipe.is_null()
+            || environment.is_null()
+        {
+            return None;
+        }
+        let r = &*info.recipe;
+        let count = (*ctx).heap_ref().layout_count();
+        if r.wrapper_descriptor >= count
+            || (r.source_descriptor != u32::MAX && r.source_descriptor >= count)
+            || r.live_mask != 1
+            || r.wrapper_extent > 256
+            || r.source_extent > 256
+            || r.callable_offset
+                .checked_add(16)
+                .is_none_or(|end| end > r.wrapper_extent)
+            || r.live_word_offset
+                .checked_add(8)
+                .is_none_or(|end| end > r.wrapper_extent)
+            || !(r.callable_offset + 16 <= r.live_word_offset
+                || r.live_word_offset + 8 <= r.callable_offset)
+            || r.callable_offset % 8 != 0
+            || r.live_word_offset % 8 != 0
+            || (*environment).count != crate::count::COUNT_UNIQUE
+            || (*environment).index() != r.wrapper_descriptor
+        {
+            return None;
+        }
+        let wrapper = &*(*ctx).descriptor(r.wrapper_descriptor);
+        if wrapper.size != u64::from(r.wrapper_extent)
+            || wrapper.align > 16
+            || wrapper.finalizer.is_some()
+            || wrapper.flags
+                & (crate::LAYOUT_DYNAMIC | crate::LAYOUT_UNSAFE_FFI | crate::LAYOUT_MUTEX_ROOT)
+                != 0
+        {
+            return None;
+        }
+        let payload = crate::alloc::payload(environment);
+        let live = payload.add(r.live_word_offset as usize).cast::<u64>();
+        let mask = live.read();
+        if mask != r.live_mask {
+            return None;
+        }
+        let callable = payload.add(r.callable_offset as usize).cast::<usize>();
+        let source_code = r.source_code as usize;
+        if source_code == 0 {
+            return None;
+        }
+        if callable.read() != source_code {
+            return None;
+        }
+        let source = callable.add(1).read() as *mut Header;
+        if source.is_null() {
+            if r.source_descriptor != u32::MAX || r.source_extent != 0 {
+                return None;
+            }
+        } else {
+            if r.source_descriptor == u32::MAX || (*source).index() != r.source_descriptor {
+                return None;
+            }
+            let layout = &*(*ctx).descriptor(r.source_descriptor);
+            if layout.size != u64::from(r.source_extent)
+                || layout.align > 16
+                || layout.finalizer.is_some()
+                || layout.step_count != 0
+                || !inert_source(ctx, r.source_descriptor)
+                || layout.flags
+                    & (crate::LAYOUT_DYNAMIC | crate::LAYOUT_UNSAFE_FFI | crate::LAYOUT_MUTEX_ROOT)
+                    != 0
+            {
+                return None;
+            }
+        }
+        Some(Certificate {
+            entry,
+            stack_bytes: info.stack_bytes,
+            live,
+            mask,
+            source,
+        })
+    }
+}
+/// A descriptor may contain canonical value/type metadata without scanning any
+/// owner. Follow only fixed inert field edges; general plain_layouts and the
+/// wrapper's TYPE_UNKNOWN remain unchanged. This runs before dispatch.
+unsafe fn inert_source(ctx: *mut TaskCtx, root: u32) -> bool {
+    use hirsel_core_contract::handle_scan::*;
+    let mut pending = vec![root];
+    let mut seen = std::collections::BTreeSet::new();
+    let count = unsafe { (*ctx).heap_ref().layout_count() };
+    let mut work = 0usize;
+    while let Some(id) = pending.pop() {
+        if !seen.insert(id) {
+            continue;
+        }
+        if id >= count || seen.len() > 64 {
+            return false;
+        }
+        let layout = unsafe { &*(*ctx).descriptor(id) };
+        if layout.size > 256
+            || layout.align > 16
+            || layout.finalizer.is_some()
+            || layout.step_count != 0
+            || layout.flags
+                & (crate::LAYOUT_DYNAMIC | crate::LAYOUT_UNSAFE_FFI | crate::LAYOUT_MUTEX_ROOT)
+                != 0
+            || layout.scan_words > 4096
+            || !layout.scan_words.is_multiple_of(WORDS as u64)
+            || (layout.scan_words != 0 && layout.scan.is_null())
+        {
+            return false;
+        }
+        let words = if layout.scan_words == 0 {
+            &[]
+        } else {
+            unsafe { std::slice::from_raw_parts(layout.scan, layout.scan_words as usize) }
+        };
+        for op in words.chunks_exact(WORDS) {
+            work += 1;
+            if work > 4096 {
+                return false;
+            }
+            match op[0] {
+                TYPE_EDGE | VALUE_FIELD => {
+                    let Ok(child) = u32::try_from(op[2]) else {
+                        return false;
+                    };
+                    if child >= count {
+                        return false;
+                    }
+                    if op[0] == VALUE_FIELD {
+                        let size = unsafe { (*(*ctx).descriptor(child)).size };
+                        if op[1].checked_add(size).is_none_or(|end| end > layout.size) {
+                            return false;
+                        }
+                    }
+                    pending.push(child);
+                }
+                VALUE
+                    if matches!(
+                        op[1],
+                        VALUE_BITS | VALUE_BOOL | VALUE_FIELDS | VALUE_VARIANT
+                    ) && op[2] == layout.size => {}
+                _ => return false,
+            }
+        }
+    }
+    true
+}
+
+impl Native {
+    pub(crate) fn new(
+        ctx: *mut TaskCtx,
+        environment: *mut Header,
+        operation_site: u64,
+        generation: u32,
+        certificate: Certificate,
+    ) -> Box<Self> {
+        Box::new(Self {
+            physical: Physical {
+                points_left: 1024,
+                saved_sp: std::ptr::null_mut(),
+                idle_sp: std::ptr::null_mut(),
+                reason: 0,
+                reserved_zero: 0,
+            },
+            entry: certificate.entry,
+            environment,
+            operation_site,
+            status: 0,
+            pending_refill: false,
+            ctx,
+            live: certificate.live,
+            original_mask: certificate.mask,
+            source: certificate.source,
+            generation,
+            adopted: false,
+        })
+    }
+    pub(crate) fn adopt(&mut self, generation: u32) {
+        assert_eq!(
+            generation, self.generation,
+            "stale ahead custody generation"
+        );
+        assert!(!self.adopted, "ahead custody adopted twice");
+        self.adopted = true;
+        self.physical.points_left = i64::MAX;
+    }
+    /// Idle only, generation-matching Saved owner; no RC operation or user code.
+    pub(crate) unsafe fn restore(&mut self, generation: u32) {
+        assert_eq!(
+            generation, self.generation,
+            "stale ahead discard generation"
+        );
+        if !self.adopted {
+            unsafe { self.live.write(self.original_mask) };
+            self.adopted = true;
+        }
+    }
+}
+
+/// # Safety
+/// Only compiler-certified x86 SysV alternates call this fixed-load leaf.
+#[cfg(target_arch = "x86_64")]
+#[unsafe(naked)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_ahead_state(_ctx: *mut TaskCtx) -> *mut Physical {
+    core::arch::naked_asm!("mov rax, [rdi + {offset}]","ret",
+        offset=const std::mem::offset_of!(TaskCtx,ahead_physical));
+}
+/// Exactly 64 bytes: return address, six callee saves, eight control bytes.
+/// # Safety
+/// The exclusive running owner initialized state and its idle continuation.
+#[cfg(target_arch = "x86_64")]
+#[unsafe(naked)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_ahead_handoff(_state: *mut Physical, _reason: u32) {
+    core::arch::naked_asm!("mov [rdi + 24], esi","mov rsi, [rdi + 16]","add rdi, 8",
+        "jmp {switch}",switch=sym crate::fiber::fiber_switch);
+}
+/// fiber_start's call plus the one saved register: 16 bytes of startup extent.
+#[cfg(target_arch = "x86_64")]
+#[unsafe(naked)]
+pub(crate) unsafe extern "C" fn start(_ctx: *mut u8, _native: *mut u8) -> ! {
+    core::arch::naked_asm!(
+        "push rbx","mov rbx, rsi","mov rsi, [rbx + 40]",
+        "mov rdx, [rbx + 48]","mov rcx, rdx","call [rbx + 32]",
+        "mov [rbx + 56], al","mov rdi, rbx","mov esi, 4","call {handoff}",
+        "mov rdi, [rbx + 64]","movzx esi, byte ptr [rbx + 56]","pop rbx","jmp {complete}",
+        handoff=sym hirsel_rt_v2_ahead_handoff,complete=sym super::super::super::ahead_complete,
+    );
+}
+
+/// The dispatcher owns Running and its permit for this entire call. No
+/// physical save is published until the normal idle callback acknowledges it.
+/// # Safety
+/// Idle only, with the installed exclusive image and no role borrow retained.
+pub(crate) unsafe fn run(ctx: *mut TaskCtx, exec: &crate::pool::Exec, mut sp: *mut u8) {
+    unsafe {
+        let native = (*ctx)
+            .ahead
+            .as_mut()
+            .unwrap()
+            .native
+            .as_mut()
+            .unwrap()
+            .as_mut() as *mut Native;
+        let mut returned = false;
+        loop {
+            crate::stop::set_running(std::ptr::null_mut());
+            super::super::super::role::enter(ctx);
+            let run = (*ctx).run_ptr();
+            let mut pause = (*run).control.stopped().is_some();
+            if !returned && !pause && (*native).pending_refill && !private(ctx) {
+                match super::super::engine::ahead_refill(ctx) {
+                    Ok(ready) => {
+                        pause = !ready;
+                        (*native).pending_refill = !ready;
+                    }
+                    Err(stop) => {
+                        (*run).control.request_inside(stop);
+                        pause = true;
+                    }
+                }
+            }
+            if returned && !pause {
+                let reason = (*native).physical.reason;
+                if private(ctx) {
+                    if reason & 2 != 0 {
+                        fuel_out(ctx);
+                        let local = (*ctx).ahead.as_ref().unwrap();
+                        if local.fuel.get() > (*ctx).run_ref().fuel.remaining() {
+                            pause = true;
+                            (*native).pending_refill = true;
+                        } else {
+                            fuel_in(ctx);
+                        }
+                    }
+                    let local = (*ctx).ahead.as_ref().unwrap();
+                    pause |= reason & 4 != 0 || local.save_requested.load(Ordering::Acquire);
+                    (*native).physical.points_left = 1024;
+                } else {
+                    if reason & 2 != 0 && !(*native).pending_refill {
+                        match super::super::engine::ahead_refill(ctx) {
+                            Ok(ready) => {
+                                pause = !ready;
+                                (*native).pending_refill = !ready;
+                            }
+                            Err(stop) => {
+                                (*run).control.request_inside(stop);
+                                pause = true;
+                            }
+                        }
+                    }
+                    (*native).physical.points_left = i64::MAX;
+                }
+            }
+            if pause {
+                if !private(ctx) && (*run).control.stopped().is_none() {
+                    let task = super::super::engine::current(ctx);
+                    super::super::engine::driver(ctx).suspending(task, true);
+                }
+                let owner = super::super::super::dispatch_owner(ctx);
+                (*ctx).switch_out();
+                assert!(
+                    exec.leaving
+                        .replace(Some(crate::pool::free::Leave::Suspend {
+                            owner,
+                            yielded: false
+                        }))
+                        .is_none()
+                );
+                super::super::super::role::release(ctx);
+                return;
+            }
+            (*native).physical.reason = 0;
+            super::super::super::role::release(ctx);
+            crate::stop::set_running(ctx);
+            // Save exactly this idle continuation. Normal post-admission runtime
+            // suspensions read the same pointer through pool::idle_of.
+            crate::fiber::switch(&raw mut (*native).physical.idle_sp, sp);
+            exec.idle.set((*native).physical.idle_sp);
+            crate::stop::set_running(std::ptr::null_mut());
+            if exec.leaving.get().is_some() {
+                return;
+            }
+            (*ctx).task_sp = (*native).physical.saved_sp;
+            sp = (*ctx).task_sp;
+            returned = true;
+        }
+    }
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+pub(crate) unsafe extern "C" fn start(_ctx: *mut u8, _native: *mut u8) -> ! {
+    crate::fault("ahead entry on an unsupported architecture")
+}
+
+#[cfg(test)]
+mod tests;

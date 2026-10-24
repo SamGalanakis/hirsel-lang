@@ -195,6 +195,7 @@ pub(crate) enum Attribute {
     AlwaysInline,
     Cold,
     NoInline,
+    NoRedZone,
     NoUnwind,
     WillReturn,
     CapturesNone,
@@ -287,6 +288,7 @@ impl Attribute {
             Attribute::AlwaysInline => "alwaysinline",
             Attribute::Cold => "cold",
             Attribute::NoInline => "noinline",
+            Attribute::NoRedZone => "noredzone",
             Attribute::NoUnwind => "nounwind",
             Attribute::WillReturn => "willreturn",
             Attribute::CapturesNone => "captures",
@@ -870,6 +872,24 @@ impl<'context> Module<'context> {
     pub(crate) fn parameter<'m>(&'m self, function: Function<'m>, index: u32) -> Value<'m> {
         // SAFETY: the caller passes an index below the function's arity.
         value(unsafe { LLVMGetParam(function.value.raw, index) })
+    }
+
+    pub(crate) fn string_attribute(&self, function: Function<'_>, name: &str, value: &str) {
+        // SAFETY: LLVM copies both strings; the function belongs to this module.
+        unsafe {
+            let attribute = LLVMCreateStringAttribute(
+                self.context.raw,
+                name.as_ptr().cast(),
+                name.len() as u32,
+                value.as_ptr().cast(),
+                value.len() as u32,
+            );
+            LLVMAddAttributeAtIndex(
+                function.value.raw,
+                llvm_sys::LLVMAttributeFunctionIndex,
+                attribute,
+            );
+        }
     }
 
     fn attribute(&self, attribute: Attribute) -> llvm_sys::prelude::LLVMAttributeRef {
@@ -1562,6 +1582,14 @@ impl TargetMachine {
             raw,
             triple: target.triple.clone(),
         })
+    }
+
+    pub(crate) fn stack_sizes(&self) {
+        unsafe extern "C" {
+            fn hirsel_llvm_emit_stack_sizes(machine: *mut std::ffi::c_void);
+        }
+        // SAFETY: the per-machine bridge only sets TargetOptions before emission.
+        unsafe { hirsel_llvm_emit_stack_sizes(self.raw.cast()) };
     }
 
     /// The machine's DataLayout string and the scalar facts it implies.

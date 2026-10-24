@@ -146,10 +146,18 @@ pub(crate) struct LoweredUnit {
 }
 
 /// The units of one program, lowered or loaded, in unit order.
+pub(crate) struct LoweredUnits {
+    pub units: Vec<LoweredUnit>,
+    pub ahead: Vec<Arc<ValidatedUnit<Ready>>>,
+    pub environments: std::collections::BTreeMap<ContentHash, Option<LayoutId>>,
+}
+
 pub(crate) fn lower(
     program: &Program<'_>,
     units: Vec<LirUnit<Value>>,
-) -> Result<Vec<LoweredUnit>, NativeError> {
+) -> Result<LoweredUnits, NativeError> {
+    let ahead_indices = hirsel_lir::ahead::prospective(&units);
+    let environments = hirsel_lir::ahead::environments(&units);
     let index: HashMap<(hirsel_syntax::DefPath, ContentHash), usize> = units
         .iter()
         .enumerate()
@@ -248,6 +256,26 @@ pub(crate) fn lower(
         unit.unit().retained_bytes() as u64
     });
     let ready = |i: usize| bodies.ready(i, |unit| stages(program, unit, program.origins[i]));
+    let ahead = ahead_indices
+        .iter()
+        .map(|&i| ready(i))
+        .collect::<Result<Vec<_>, _>>()?;
+    let ahead_plan = hirsel_lir::ahead::AheadPlan::build(
+        &ahead.iter().map(Arc::as_ref).collect::<Vec<_>>(),
+        program.table,
+        program.emit.target,
+        &environments,
+        program.objects.fuel,
+        super::ahead::helper_identity(),
+    );
+    if !ahead_plan.roots.is_empty() {
+        for key in &mut keys {
+            key.0 = ContentHash::of_parts(
+                "hirsel.object.ahead-plan.v1",
+                [key.0.0.as_slice(), ahead_plan.identity.0.as_slice()],
+            );
+        }
+    }
     let layout_ids: HashMap<hirsel_lir::LayoutKey, LayoutId> = program
         .keys
         .all()
@@ -362,7 +390,7 @@ pub(crate) fn lower(
                         }
                     }
                 }
-                let object = timed(Phase::Codegen, || emit(program, &selected))?;
+                let object = timed(Phase::Codegen, || emit(program, &selected, &ahead_plan))?;
                 let summary = |unit: &ValidatedUnit<Ready>| {
                     UnitSummary::of(
                         unit.unit(),
@@ -435,7 +463,11 @@ pub(crate) fn lower(
     timings::count_peak(Count::NativeActiveBytes, admitted_peak);
     timings::count_peak(Count::NativeBudgetBytes, budget);
     timings::count_peak(Count::NativeReadyBytes, bodies.peak_bytes());
-    results.into_iter().collect()
+    Ok(LoweredUnits {
+        units: results.into_iter().collect::<Result<_, _>>()?,
+        ahead,
+        environments,
+    })
 }
 
 /// The object key of `unit`, the program's unit `index`, with the templates `copies`
@@ -509,6 +541,7 @@ fn stages(
 fn emit(
     program: &Program<'_>,
     selected: &[&ValidatedUnit<Ready>],
+    ahead: &hirsel_lir::ahead::AheadPlan,
 ) -> Result<hirsel_lir::stage::ObjectArtifact, NativeError> {
     let profile = hirsel_lir::debug::Profile {
         debug: program.objects.debug,
@@ -520,6 +553,7 @@ fn emit(
         .map(|u| u.unit().header.instance)
         .collect();
     let inputs = EmitInputs {
+        ahead: Some(ahead),
         available_externally: &copies,
         ..program.emit.clone()
     };

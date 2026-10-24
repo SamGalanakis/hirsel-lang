@@ -135,7 +135,7 @@ pub use release::{
 pub use roots::ROOT_OVERFLOW;
 
 /// The interface version a caller must request in [`Config::abi_version`].
-pub const ABI_VERSION: u32 = 54;
+pub const ABI_VERSION: u32 = 55;
 /// Success status.
 pub const STATUS_OK: u8 = 0;
 /// A language failure. Substrate entries record it in the run context; a library
@@ -280,3 +280,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_unchecked_add_overflow(ctx: *mut TaskCtx, 
 
 #[cfg(test)]
 mod header_tests;
+
+/// Compiler/runtime certificate identity, including the exact bounded helpers.
+#[doc(hidden)]
+pub const AHEAD_HELPERS: &[u8] = include_bytes!("tasks/ordered/ahead/native.rs");
+#[doc(hidden)]
+pub const AHEAD_SWITCH: &[u8] = include_bytes!("fiber.rs");

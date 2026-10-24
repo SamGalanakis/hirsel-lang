@@ -6,6 +6,8 @@
 //! A native failure is a tool outcome (`NativeError`), never a source verdict.
 mod adapt;
 mod admission;
+mod ahead;
+pub use ahead::{check_objects as check_ahead_objects, plan as ahead_plan};
 mod coverage;
 mod differential;
 mod emit;

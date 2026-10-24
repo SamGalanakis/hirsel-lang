@@ -17,6 +17,9 @@ use crate::module::{Emitted, PTR};
 
 impl FnEmitter<'_, '_, '_> {
     pub(crate) fn instruction(&mut self, inst: &Inst) -> Emitted {
+        if matches!(inst, Inst::Release { .. }) {
+            self.ahead_barrier()?;
+        }
         match *inst {
             Inst::Const { result, constant } => {
                 let value = self.constant(constant)?;

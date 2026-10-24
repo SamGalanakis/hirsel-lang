@@ -123,6 +123,8 @@ pub fn emit(
 pub fn emit_ir(program: &ReadyProgram, opt: OptLevel) -> Result<String, NativeError> {
     let units: Vec<_> = program.units.iter().collect();
     let inputs = EmitInputs {
+        ahead: None,
+        alternate: false,
         index: None,
         verify_backend: program.validation == super::stages::Validation::EveryStage,
         input: &program.input,
@@ -150,6 +152,8 @@ pub fn emit_clif(program: &ReadyProgram) -> Result<String, NativeError> {
     check_runtime_calls(program)?;
     let units: Vec<_> = program.units.iter().collect();
     let inputs = EmitInputs {
+        ahead: None,
+        alternate: false,
         index: None,
         verify_backend: program.validation == super::stages::Validation::EveryStage,
         input: &program.input,
@@ -187,7 +191,10 @@ pub(crate) fn emit_registered(
         .filter(|(index, _)| select(*index))
         .map(|(_, unit)| unit)
         .collect();
+    let ahead = super::ahead::plan(program);
     let inputs = EmitInputs {
+        ahead: Some(&ahead),
+        alternate: false,
         index: None,
         verify_backend: program.validation == super::stages::Validation::EveryStage,
         input: &program.input,

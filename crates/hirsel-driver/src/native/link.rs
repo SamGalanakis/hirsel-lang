@@ -822,6 +822,7 @@ pub fn partition_backend_objects_with_jobs(
             ));
         }
         let mut objects = built.objects.clone();
+        objects.extend(super::ahead::objects(program, backend, opt, registry)?);
         objects.push(super::emit::emit_glue(program, backend, registry)?);
         if let Some(sources) = sources {
             objects.push(debug_artifact(program, &objects, sources)?);
@@ -958,6 +959,7 @@ pub fn partition_backend_objects_with_jobs(
     .into_iter()
     .collect::<Result<Vec<_>, _>>()
     .and_then(|mut objects| {
+        objects.extend(super::ahead::objects(program, backend, opt, registry)?);
         objects.push(super::emit::emit_glue(program, backend, registry)?);
         if let Some(sources) = sources {
             objects.push(debug_artifact(program, &objects, sources)?);
@@ -1007,6 +1009,7 @@ fn debug_artifact(
         .map_err(|e| failed(format!("the debug object: {e}")))?;
     let template = objects.last().expect("the glue object");
     Ok(hirsel_lir::stage::ObjectArtifact {
+        ahead: None,
         bytes,
         exports: Vec::new(),
         imports: Vec::new(),
@@ -1430,6 +1433,7 @@ fn launcher_object(
     main_symbol: &str,
 ) -> Result<Vec<u8>, NativeError> {
     program.check_semantic_units(objects)?;
+    super::ahead::check_objects(program, objects)?;
     let (symbol, result_size, caller_site) = entry_result(program, entry)?;
     let registry = hirsel_lir::descriptor_registry::DescriptorRegistry::new(
         &program.table,

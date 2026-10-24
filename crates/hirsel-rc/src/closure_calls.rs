@@ -61,7 +61,7 @@ fn whole(u: &LirUnit<Value>, address: AddressId) -> Option<SlotId> {
 fn discover(
     u: &LirUnit<Value>,
     entries: &HashMap<Symbol, (usize, FnAbiId)>,
-    seeds: &[(usize, Target)],
+    seeds: &[(ValueId, Target)],
 ) -> Vec<Code> {
     hirsel_intern::timings::count(hirsel_intern::timings::Count::ClosureBodyScans);
     let mut inputs = vec![Vec::new(); u.values.len()];
@@ -148,8 +148,8 @@ fn discover(
             }
         }
     }
-    for &(p, ref target) in seeds {
-        constants[u.parameters[p].index()] = Code::Known(target.clone());
+    for &(value, ref target) in seeds {
+        constants[value.index()] = Code::Known(target.clone());
     }
     let mut users = vec![Vec::new(); u.values.len()];
     for (i, args) in inputs.iter().enumerate() {
@@ -248,6 +248,76 @@ pub fn specialize(lowered: &mut Lowered) -> Specializations {
     let mut at = 0;
     while at < lowered.units.len() {
         let codes = discover(&lowered.units[at], &entries, &seeds[at]);
+        // task.async wraps its known callable in task_main's owned environment.
+        // Carry only the code identity through that capture; the environment,
+        // move mask, result slot and holding cleanup remain the original ones.
+        // This is ordinary Bound-call specialization, not ahead eligibility:
+        // an op-free recursive target still needs a separate physical proof.
+        for closure in 0..lowered.units[at].tables.closures.len() {
+            let site = &lowered.units[at].tables.closures[closure];
+            let Some(code) = site.code else { continue };
+            let Some(&(original, _)) =
+                entries.get(&lowered.units[at].tables.symbols[code.symbol.index()])
+            else {
+                continue;
+            };
+            let source = &originals[original];
+            if !source.header.definition.is_core("$native.task_main") {
+                continue;
+            }
+            let Some(capture) = site
+                .captures
+                .get(&lowered.units[at].pools.captures)
+                .and_then(|cs| cs.first())
+            else {
+                continue;
+            };
+            let Code::Known(target) = &codes[capture.value.index()] else {
+                continue;
+            };
+            let Some(&value) = source.captures.first() else {
+                continue;
+            };
+            let digest = ContentHash::of_parts(
+                "hirsel.task-capture-target-specialization.v1",
+                [
+                    source.header.instance.0.as_slice(),
+                    target.symbol.definition.fingerprint().0.as_slice(),
+                    target.symbol.instance.unwrap_or_default().0.as_slice(),
+                    &[u8::from(target.environment)],
+                ],
+            );
+            let key = (original, digest);
+            let specialized = if let Some(&i) = cache.get(&key) {
+                i
+            } else {
+                if counts[original] >= MAX_PER_FUNCTION
+                    || lowered.units.len() - originals.len() >= MAX_SPECIALIZATIONS
+                {
+                    continue;
+                }
+                counts[original] += 1;
+                let i = lowered.units.len();
+                let mut u = source.clone();
+                u.header.instance = digest;
+                lowered.units.push(u);
+                origins.push(InstanceId(original as u32));
+                seeds.push(vec![(value, target.clone())]);
+                spawn_flags.push(0);
+                inline.insert(digest);
+                cache.insert(key, i);
+                i
+            };
+            let target = Symbol {
+                kind: SymbolKind::Function,
+                definition: source.header.definition.clone(),
+                instance: Some(lowered.units[specialized].header.instance),
+            };
+            let u = &mut lowered.units[at];
+            let symbol = symbol(u, &target);
+            u.tables.closures[closure].code.as_mut().unwrap().symbol = symbol;
+        }
+        let codes = discover(&lowered.units[at], &entries, &seeds[at]);
         if spawn_flags[at] != 0 {
             crate::spawn::set_flags(&mut lowered.units[at], spawn_flags[at]);
         }
@@ -345,9 +415,11 @@ pub fn specialize(lowered: &mut Lowered) -> Specializations {
                         {
                             flags |= crate::spawn::OP_FREE;
                         }
-                        if flags == 0 {
-                            continue;
-                        }
+                        // Code identity is useful independently of legacy spawn
+                        // hints. In particular a non-adjacent scalar task whose
+                        // result is wrapped in Result must still specialize its
+                        // owned task_main capture. This grants no execution or
+                        // op-free permission; ahead admission has its own proof.
                     }
                     bound.sort_by_key(|(p, _)| *p);
                     let mut encoded: Vec<u8> = bound
@@ -383,7 +455,12 @@ pub fn specialize(lowered: &mut Lowered) -> Specializations {
                         u.header.instance = digest;
                         lowered.units.push(u);
                         origins.push(InstanceId(original as u32));
-                        seeds.push(bound);
+                        seeds.push(
+                            bound
+                                .into_iter()
+                                .map(|(p, target)| (source.parameters[p], target))
+                                .collect(),
+                        );
                         spawn_flags.push(flags);
                         inline.insert(digest);
                         cache.insert(key, i);

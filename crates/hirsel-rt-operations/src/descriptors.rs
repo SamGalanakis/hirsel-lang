@@ -662,6 +662,7 @@ pub const ENTRIES: &[Entry] = &[
     entry("hirsel_rt_v2_capacity", Local),
     // budget.rs
     entry("hirsel_rt_v2_fuel_refill", Local),
+    entry("hirsel_rt_v2_ahead_barrier", Local),
     // codec.rs
     entry("hirsel_rt_v2_codec_encode", Local),
     // A failed decode drops what it built.
@@ -896,6 +897,7 @@ pub const ENTRIES: &[Entry] = &[
     ops("hirsel_rt_v2_task_scope_exit", &["task.scope_exit"]),
     ops("hirsel_rt_v2_task_scope_exit_until", &["task.scope_exit"]),
     ops("hirsel_rt_v2_task_spawn", &["task.async"]),
+    ops("hirsel_rt_v2_task_spawn_ahead", &["task.async"]),
     ops("hirsel_rt_v2_task_finish", &["task.end"]),
     ops("hirsel_rt_v2_task_join", &["task.join"]),
     ops("hirsel_rt_v2_task_cancel", &["task.cancel"]),

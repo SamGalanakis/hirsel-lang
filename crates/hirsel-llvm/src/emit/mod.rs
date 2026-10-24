@@ -52,6 +52,7 @@ use crate::scalar;
 use crate::{CodegenError, PINNED_LLVM, VerifyStage};
 use hirsel_lir::debug::Profile;
 
+mod ahead;
 mod bindings;
 mod blocks;
 mod bounded;
@@ -376,6 +377,9 @@ fn lower<T>(
     let mut optimizer_only = BTreeSet::new();
     let finished = {
         let machine = machine(inputs.target, inputs.opt != OptLevel::None)?;
+        if inputs.alternate {
+            machine.stack_sizes();
+        }
         let context = Context::new();
         let module = Module::new(&context, "hirsel");
         module.set_target(&machine);
@@ -386,11 +390,16 @@ fn lower<T>(
         let mut functions = Vec::new();
         for unit in units {
             let unit = unit.unit();
-            let template = unit.header.origin == UnitOrigin::Library
-                || inputs.inline_instances.contains(&unit.header.instance);
+            let template = !inputs.alternate
+                && (unit.header.origin == UnitOrigin::Library
+                    || inputs.inline_instances.contains(&unit.header.instance));
             let copy = inputs.available_externally.contains(&unit.header.instance);
             let abi = fn_abi(inputs.layouts, unit.header.abi, &unit.header.definition)?;
-            let name = symbol_name(&unit.header.definition, Some(&unit.header.instance));
+            let name = if inputs.alternate {
+                hirsel_lir::ahead::alternate_name(&unit.header.definition, unit.header.instance)
+            } else {
+                symbol_name(&unit.header.definition, Some(&unit.header.instance))
+            };
             if module.defines(&name)
                 || manifested.exports.contains_key(&name)
                 || manifested.library.contains(&name)
@@ -398,7 +407,7 @@ fn lower<T>(
                 return Err(CodegenError::DuplicateSymbol { name });
             }
             let external = Signature::of(&module, inputs.layouts, abi, &unit.header.definition)?;
-            let signature = if unit.header.origin == UnitOrigin::Library {
+            let signature = if !inputs.alternate && unit.header.origin == UnitOrigin::Library {
                 Signature::of(&module, inputs.layouts, abi, &unit.header.definition)?
                     .with_roots(&module, inputs.layouts)
             } else {
@@ -417,6 +426,12 @@ fn lower<T>(
                 true,
                 Aliasing::of(inputs.callbacks),
             )?;
+            if inputs.alternate {
+                module.add_attribute(function, AttributeSlot::Function, Attribute::NoInline);
+                module.add_attribute(function, AttributeSlot::Function, Attribute::NoRedZone);
+                module.string_attribute(function, "disable-tail-calls", "true");
+                module.string_attribute(function, "frame-pointer", "all");
+            }
             let entry = if signature.roots.is_empty() {
                 function
             } else {
@@ -539,7 +554,7 @@ fn lower<T>(
                     abi: Some(abi_digest(abi)),
                 },
             );
-            if abi.shape == CallableShape::Definition {
+            if !inputs.alternate && abi.shape == CallableShape::Definition {
                 let thunk =
                     function_thunk_name(&unit.header.definition, Some(&unit.header.instance));
                 define_function_thunk(&module, &thunk, function, &signature);
@@ -991,6 +1006,8 @@ struct FnEmitter<'m, 'a> {
     drop_status: Option<Value<'m>>,
     /// Per block, whether it charges fuel (`hirsel_lir::fuel`); empty without `inputs.fuel`.
     fuel_points: Vec<bool>,
+    ahead_state: Option<Value<'m>>,
+    ahead_counter: Option<Value<'m>>,
 }
 
 type Emitted<T = ()> = Result<T, CodegenError>;

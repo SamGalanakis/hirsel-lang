@@ -296,7 +296,11 @@ pub(crate) fn emit(
     inputs: &EmitInputs<'_>,
     clif: bool,
     profile: hirsel_lir::debug::Profile<'_>,
-) -> Emitted<(hirsel_lir::stage::ObjectArtifact, Option<String>)> {
+) -> Emitted<(
+    hirsel_lir::stage::ObjectArtifact,
+    Option<String>,
+    BTreeMap<String, u64>,
+)> {
     let owned;
     let index = match inputs.index.filter(|index| index.matches(inputs.layouts)) {
         Some(index) => index,
@@ -334,20 +338,25 @@ pub(crate) fn emit(
         let unit = unit.unit();
         let header = &unit.header;
         let abi = emitter.fn_abi(header.abi, &header.definition)?;
-        let name = symbol_name(&header.definition, Some(&header.instance));
+        let name = if inputs.alternate {
+            hirsel_lir::ahead::alternate_name(&header.definition, header.instance)
+        } else {
+            symbol_name(&header.definition, Some(&header.instance))
+        };
         if emitter.functions.contains_key(&name) {
             return Err(CodegenError::DuplicateSymbol { name });
         }
         let sig = emitter.entry_signature(abi, &header.definition)?;
-        let library = header.origin == UnitOrigin::Library
-            || inputs.inline_instances.contains(&header.instance);
+        let library = !inputs.alternate
+            && (header.origin == UnitOrigin::Library
+                || inputs.inline_instances.contains(&header.instance));
         let linkage = if library {
             Linkage::Preemptible
         } else {
             Linkage::Export
         };
         let id = emitter.declare_function(&name, linkage, &sig.ir)?;
-        let thunk = (abi.shape == CallableShape::Definition)
+        let thunk = (!inputs.alternate && abi.shape == CallableShape::Definition)
             .then(|| function_thunk_name(&header.definition, Some(&header.instance)));
         let record = |name: &String| ObjectSymbol {
             name: name.clone(),
@@ -374,10 +383,15 @@ pub(crate) fn emit(
         }
         bodies.push((unit, id, sig));
     }
+    let mut frames = BTreeMap::new();
     let mut context = Context::new();
     let mut builder_context = FunctionBuilderContext::new();
     for (unit, id, sig) in bodies {
-        let name = symbol_name(&unit.header.definition, Some(&unit.header.instance));
+        let name = if inputs.alternate {
+            hirsel_lir::ahead::alternate_name(&unit.header.definition, unit.header.instance)
+        } else {
+            symbol_name(&unit.header.definition, Some(&unit.header.instance))
+        };
         context.func = Function::with_name_signature(ir::UserFuncName::default(), sig.ir.clone());
         {
             let builder = FunctionBuilder::new(&mut context.func, &mut builder_context);
@@ -388,6 +402,14 @@ pub(crate) fn emit(
             function.emit()?;
         }
         emitter.compile(&name, id, &mut context)?;
+        if inputs.alternate
+            && let Some(extent) = context
+                .compiled_code()
+                .and_then(|c| c.buffer.frame_layout())
+                .and_then(|f| f.frame_to_fp_offset.checked_add(16))
+        {
+            frames.insert(name.clone(), u64::from(extent));
+        }
         if emitter.debug {
             emitter.debug_functions.push(crate::dwarf::intervals(
                 &name,
@@ -420,6 +442,7 @@ pub(crate) fn emit(
                     ..artifact
                 },
                 clif,
+                frames,
             )
         })
         .map_err(|problem| CodegenError::Manifest { problem })

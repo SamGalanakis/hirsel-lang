@@ -1318,6 +1318,7 @@ fn receipts_artifacts_and_manifests_round_trip_and_bind_the_unit_key() {
     assert_ne!(raw.digest(), stale.digest());
 
     let artifact = ObjectArtifact {
+        ahead: None,
         target: hash("target"),
         format: ObjectFormat::Elf,
         bytes: vec![0x7f, b'E', b'L', b'F'],
@@ -1996,6 +1997,7 @@ fn runtime_declarations_match_the_landed_c_header() {
         .filter_map(|item| {
             let open = item
                 .find("(hirsel_rt_v2_ctx")
+                .or_else(|| item.find("(hirsel_rt_v2_ahead_physical"))
                 .or_else(|| item.find("(void)"))
                 .or_else(|| item.find("(void *out"))
                 .or_else(|| item.find("(const hirsel_rt_v2_config"))

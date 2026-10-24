@@ -154,6 +154,15 @@ impl Stack {
         pages.iter().filter(|&&p| p & 1 != 0).count() as u64 * page as u64
     }
 
+    pub(crate) fn supports_ahead(&self, bytes: u64) -> bool {
+        let bottom = self.base.addr().checked_add(GUARD_BYTES);
+        bottom
+            .and_then(|bottom| self.top().addr().checked_sub(bottom))
+            .is_some_and(|available| {
+                bytes <= 65536 && usize::try_from(bytes).is_ok_and(|n| n <= available)
+            })
+    }
+
     /// The stack pointer of a fiber that, when switched to, calls `entry(first, second)`.
     pub(crate) fn prepare(&self, entry: Entry, first: *mut u8, second: *mut u8) -> *mut u8 {
         // A reused stack's last fiber ended by switching away, never returning: a fresh
@@ -303,7 +312,7 @@ fn initial_frame(entry: Entry, first: *mut u8, second: *mut u8) -> [u64; 8] {
 
 #[cfg(target_arch = "x86_64")]
 #[unsafe(naked)]
-unsafe extern "C" fn fiber_switch(_save: *mut *mut u8, _to: *mut u8) {
+pub(crate) unsafe extern "C" fn fiber_switch(_save: *mut *mut u8, _to: *mut u8) {
     core::arch::naked_asm!(
         "push rbp",
         "push rbx",

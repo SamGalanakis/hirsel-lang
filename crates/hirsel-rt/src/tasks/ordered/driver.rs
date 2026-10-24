@@ -32,6 +32,9 @@ pub(crate) struct Driver {
     pub(super) frontier: Option<Frontier<Command, Outcome>>,
     pub(super) objects: Registry,
     execution: BTreeMap<TaskId, Execution>,
+    pub(super) reserved: BTreeMap<u32, super::ahead::Reserved>,
+    pub(super) awaiting_save: bool,
+    pub(super) private_enabled: bool,
     pub(super) submitted: BTreeMap<TaskId, u64>,
     pub(super) recorded: BTreeMap<TaskId, u64>,
     pub(super) events: Option<super::events::Log>,
@@ -63,6 +66,10 @@ impl Driver {
             frontier: Some(frontier),
             objects,
             execution: BTreeMap::from([(root, Execution::Saved { head_only: false })]),
+            reserved: BTreeMap::new(),
+            awaiting_save: false,
+            private_enabled: policy.run_ahead != 0
+                && policy.reorder == hirsel_run_config::Reorder::Auto,
             submitted: BTreeMap::new(),
             recorded: BTreeMap::new(),
             events: None,
@@ -99,11 +106,21 @@ impl Driver {
         );
     }
 
+    /// Permission for new head work includes all outstanding retirement gates.
+    /// A save notification only enables retry: Frontier still owns the log.
+    pub(super) fn head_ready(&self, task: TaskId) -> bool {
+        !self.awaiting_save
+            && !self.host_poll
+            && !self.poll_deferred()
+            && self.frontier.as_ref().is_some_and(|f| f.head_ready(task))
+    }
+
     /// Return notifications in logical order, without retaining row references.
     /// Selected frames are omitted from later scans until claimed and saved.
     /// During a deferred poll no new turn may be selected before wake merge.
     pub(crate) fn select(&mut self) -> Vec<TaskId> {
-        if self.poll_after_save.is_some() || self.return_after_save.is_some() {
+        if self.awaiting_save || self.poll_after_save.is_some() || self.return_after_save.is_some()
+        {
             return Vec::new();
         }
         let Some(frontier) = &mut self.frontier else {
@@ -147,6 +164,13 @@ impl Driver {
                 "only a head resumes a pending boundary"
             );
         }
+    }
+
+    pub(super) fn dispatch_owned(&self, task: TaskId) -> bool {
+        matches!(
+            self.execution.get(&task),
+            Some(Execution::Selected | Execution::Running)
+        )
     }
 
     pub(super) fn enter(&mut self, task: TaskId, worker: u16) {
@@ -365,6 +389,49 @@ mod tests {
             ),
             Ok(crate::ordered::Progress::Poll)
         );
+    }
+
+    #[test]
+    fn promoted_private_notification_waits_for_logical_selection() {
+        use hirsel_free::frame;
+        let mut driver = Driver::new(
+            0,
+            Policy::admit(&Default::default(), None),
+            Settled {
+                level: 0,
+                limit: u64::MAX,
+                fuel: u64::MAX,
+            },
+            Registry::default(),
+        );
+        assert_eq!(driver.select(), vec![0]);
+        driver.enter(0, 0);
+        // A reservation's existing physical notification is still in flight
+        // when spawn retirement installs its canonical Saved row.
+        let (notification, queued) = frame::prepared((0x1234usize, 73u32));
+        driver.enqueue(1, Held::empty());
+        driver.awaiting_save = true;
+        let running = queued.start();
+        assert!(!driver.dispatch_owned(1));
+        assert!(running.save(false).is_none());
+        assert!(driver.select().is_empty());
+        assert!(!driver.dispatch_owned(1));
+        // The same saved image can be claimed only after the real permission.
+        driver.awaiting_save = false;
+        assert_eq!(driver.select(), vec![1]);
+        let running = notification.notify().unwrap().start();
+        assert!(driver.dispatch_owned(1));
+        assert_eq!(*running.value(), (0x1234, 73));
+        driver.enter(1, 1);
+        assert!(driver.dispatch_owned(1));
+        assert!(notification.notify().is_none());
+        driver.suspending(1, true);
+        driver.saved(1, false);
+        assert!(!driver.dispatch_owned(1));
+        let queued = running
+            .save(false)
+            .expect("remembered wake keeps sole token");
+        assert_eq!(*queued.start().value(), (0x1234, 73));
     }
 
     #[test]

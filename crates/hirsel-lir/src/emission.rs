@@ -71,6 +71,10 @@ pub fn validate_stages() -> bool {
 /// options and the program-wide bits below.
 #[derive(Clone, Debug)]
 pub struct EmitInputs<'a> {
+    /// Program-wide proof built from complete Ready content before partitioning.
+    pub ahead: Option<&'a crate::ahead::AheadPlan>,
+    /// Emit only the real alternate definitions selected by `ahead`.
+    pub alternate: bool,
     /// Borrow-bound lookup index shared by unit workers. Raw callers may omit it.
     pub index: Option<&'a crate::LayoutIndex<'a>>,
     /// The frozen front-end input every unit was built from.
@@ -463,6 +467,12 @@ pub fn artifact(
         inputs.target.cpu,
         inputs.target.features.join(",")
     );
+    if inputs.alternate {
+        options.push_str(" ahead");
+    }
+    if let Some(plan) = inputs.ahead {
+        options.push_str(&format!(" plan:{:?}", plan.identity));
+    }
     if inputs.measurement {
         options.push_str(" measurement");
     }
@@ -562,6 +572,7 @@ fn checked_artifact(
             .map(|h| h.0.as_slice()),
     );
     Ok(ObjectArtifact {
+        ahead: None,
         target: target.digest(),
         format: ObjectFormat::Elf,
         bytes: file.bytes,
@@ -708,6 +719,8 @@ mod tests {
         };
         let keys = crate::layout_keys::LayoutKeys::new(&layouts);
         let inputs = EmitInputs {
+            ahead: None,
+            alternate: false,
             index: None,
             verify_backend: true,
             input: &input,

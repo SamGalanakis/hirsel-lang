@@ -1,0 +1,29 @@
+{
+  "schema": 1,
+  "debs": [
+    {
+      "name": "libstdc++-13-dev_13.3.0-6ubuntu2~24.04.1_amd64.deb",
+      "urls": [
+        "https://archive.ubuntu.com/ubuntu/pool/main/g/gcc-13/libstdc++-13-dev_13.3.0-6ubuntu2~24.04.1_amd64.deb"
+      ],
+      "size": 2419834,
+      "sha256": "ee5633e863e19c3381ed97842ce35ed32ede96a3d1ae4e94c051d3036fe21347"
+    },
+    {
+      "name": "libc6-dev_2.28-10+deb10u1_amd64.deb",
+      "urls": [
+        "https://archive.debian.org/debian/pool/main/g/glibc/libc6-dev_2.28-10+deb10u1_amd64.deb"
+      ],
+      "size": 2691760,
+      "sha256": "76b8413920d91a9a4289f99839933d0d30095e0ec12b05bb4f1a7f27e5ef4a55"
+    },
+    {
+      "name": "linux-libc-dev_4.19.249-2_amd64.deb",
+      "urls": [
+        "https://archive.debian.org/debian/pool/main/l/linux/linux-libc-dev_4.19.249-2_amd64.deb"
+      ],
+      "size": 1530340,
+      "sha256": "c512f30f5abe413464b79ed23b54958df8cc104446c3ae93d83d28e23728a571"
+    }
+  ]
+}

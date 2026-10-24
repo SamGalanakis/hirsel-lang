@@ -472,3 +472,30 @@ alias records its field identity and resource access without creating the
 domain. Materialized resources and auxiliary domains retain explicit creation
 subevents; each handle result field retains its own identity even when its
 resource aliases another handle.
+
+## Private scalar spawn reservations
+
+A reserved child may compute privately before its spawn retires. This is physical
+execution, not a queued logical turn, and grants no early shared-object commit
+permission. Spawn retirement adopts the same generation-qualified saved frame;
+it never restarts the source callable. Task-set insertion remains deferred and
+joins remain result-dependent boundaries. Unknown footprints still block early
+shared-object commit.
+
+On x86-64 SysV, both native backends emit separate scalar DAG bodies with original
+fuel-point identity, independent physical checkpoints and final machine-frame
+evidence. Recursive calls, opaque work, allocation, mutable/resource captures and
+user destruction are refused. A bounded capture recipe keeps task_main's callable
+move, live mask and held Option result intact. A fixed assembly handoff saves to
+the dispatcher's idle stack before any refill, role or stop handling. Saved
+acknowledgement precedes promotion or original-mask restoration on discard.
+Physical progress has no event, logical fuel charge or completion rank of its own.
+
+A pending private notification may outlive spawn retirement. The dispatcher
+revalidates its logical selection before switch-in and returns an unselected
+image to Saved without running code or issuing a logical save callback. A wake
+alone never authorizes a logical turn.
+
+This spawn certificate grants no post-host-return continuation capability.
+Host-return segments require a separate live-resource and active-frame proof;
+existing host finish/save gates stay strict.

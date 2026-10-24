@@ -52,7 +52,7 @@ fn main() {
     let mut selected = vec![];
     for name in &closure {
         let dir = crates.join(name);
-        for part in ["Cargo.toml", "build.rs", "src", "include"] {
+        for part in ["Cargo.toml", "build.rs", "src", "include", "bridge"] {
             files(&dir.join(part), &mut selected);
         }
     }
@@ -60,6 +60,8 @@ fn main() {
         "Cargo.lock",
         "rust-toolchain.toml",
         "native-tests/library/operations.tsv",
+        "tools/native-toolchain/llvm-23.lock",
+        "tools/buck2/llvm-cxx-headers-lock.json",
     ] {
         files(&root.join(part), &mut selected);
     }

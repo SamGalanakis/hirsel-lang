@@ -1,0 +1,327 @@
+use super::*;
+
+unsafe extern "C" fn code(_: *mut TaskCtx, _: *mut Header, _: u64, _: u64) -> u8 {
+    crate::STATUS_OK
+}
+fn certificate(live: *mut u64) -> Certificate {
+    Certificate {
+        entry: code,
+        stack_bytes: 128,
+        live,
+        mask: 1,
+        source: std::ptr::null_mut(),
+    }
+}
+#[test]
+fn saved_custody_restores_only_the_mask_once_without_releasing_the_source() {
+    let mut image = [code as usize as u64, 0, 1, 0x1234567890abcdef];
+    let mut native = Native::new(
+        std::ptr::null_mut(),
+        std::ptr::null_mut(),
+        0,
+        37,
+        certificate(&raw mut image[2]),
+    );
+    image[2] = 0;
+    unsafe { native.restore(37) };
+    assert_eq!(image, [code as usize as u64, 0, 1, 0x1234567890abcdef]);
+    image[2] = 0;
+    unsafe { native.restore(37) };
+    assert_eq!(image[2], 0, "custody restoration must not run twice");
+}
+#[test]
+fn promotion_adopts_the_actual_moved_mask_and_same_physical_record() {
+    let mut mask = 1;
+    let mut native = Native::new(
+        std::ptr::null_mut(),
+        std::ptr::null_mut(),
+        0,
+        73,
+        certificate(&raw mut mask),
+    );
+    let address = &raw const native.physical;
+    mask = 0;
+    native.adopt(73);
+    assert_eq!(&raw const native.physical, address);
+    assert_eq!(native.physical.points_left, i64::MAX);
+    unsafe { native.restore(73) };
+    assert_eq!(mask, 0);
+}
+#[test]
+fn stale_generation_cannot_restore_or_adopt_custody() {
+    let mut mask = 0;
+    let mut native = Native::new(
+        std::ptr::null_mut(),
+        std::ptr::null_mut(),
+        0,
+        91,
+        certificate(&raw mut mask),
+    );
+    for adopt in [false, true] {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            if adopt {
+                native.adopt(92)
+            } else {
+                unsafe { native.restore(92) }
+            }
+        }));
+        assert!(result.is_err());
+        assert_eq!(mask, 0);
+    }
+}
+fn layout(size: u64) -> crate::Layout {
+    crate::Layout {
+        magic: crate::LAYOUT_MAGIC,
+        version: crate::LAYOUT_VERSION,
+        size,
+        align: 8,
+        finalizer: None,
+        steps: std::ptr::null(),
+        step_count: 0,
+        field_count: 2,
+        flags: 0,
+        logical: 0,
+        logical_count: std::ptr::null(),
+        scan: std::ptr::null(),
+        scan_words: 0,
+    }
+}
+#[test]
+fn v2_capture_recipe_binds_code_live_word_descriptor_extent_and_exclusivity() {
+    let wrapper = layout(24);
+    let source = layout(8);
+    let layouts = [&wrapper as *const _, &source as *const _];
+    let mut run = crate::host::BodyRun::new(1, false);
+    run.config.layouts = layouts.as_ptr();
+    run.config.layout_count = 2;
+    let outcome = run.run(
+        |_| {},
+        |ctx| unsafe {
+            let env = crate::alloc::hirsel_rt_v2_alloc(ctx, 2, 24, 8, crate::alloc::DOMAIN_HEAP, 0);
+            let captured =
+                crate::alloc::hirsel_rt_v2_alloc(ctx, 3, 8, 8, crate::alloc::DOMAIN_HEAP, 0);
+            crate::alloc::payload(captured).cast::<u64>().write(19);
+            let image = crate::alloc::payload(env).cast::<[u64; 3]>();
+            image.write([code as usize as u64, captured as u64, 1]);
+            let recipe = Recipe {
+                wrapper_descriptor: 2,
+                source_descriptor: 3,
+                wrapper_extent: 24,
+                callable_offset: 0,
+                live_word_offset: 16,
+                source_extent: 8,
+                live_mask: 1,
+                source_code: code as *const u8,
+            };
+            let mut info = Info {
+                prefix: SpawnAheadInfo {
+                    version: 2,
+                    flags: 0,
+                    entry: Some(code),
+                },
+                stack_bytes: 128,
+                recipe: &recipe,
+            };
+            assert!(validate(ctx, env, &info).is_some());
+            for changed in [
+                Recipe {
+                    wrapper_descriptor: 3,
+                    ..recipe
+                },
+                Recipe {
+                    source_descriptor: 2,
+                    ..recipe
+                },
+                Recipe {
+                    wrapper_extent: 16,
+                    ..recipe
+                },
+                Recipe {
+                    source_extent: 16,
+                    ..recipe
+                },
+                Recipe {
+                    callable_offset: u32::MAX,
+                    ..recipe
+                },
+                Recipe {
+                    live_word_offset: 8,
+                    ..recipe
+                },
+                Recipe {
+                    live_mask: 3,
+                    ..recipe
+                },
+                Recipe {
+                    source_code: std::ptr::null(),
+                    ..recipe
+                },
+            ] {
+                info.recipe = &changed;
+                assert!(validate(ctx, env, &info).is_none());
+            }
+            info.recipe = &recipe;
+            for bound in [0, 79, 65537, u64::MAX] {
+                info.stack_bytes = bound;
+                assert!(validate(ctx, env, &info).is_none());
+            }
+            info.stack_bytes = 128;
+            (*env).count = 2;
+            assert!(validate(ctx, env, &info).is_none());
+            (*env).count = 1;
+            (*image)[2] = 0;
+            assert!(validate(ctx, env, &info).is_none());
+            (*image)[2] = 1;
+            (*image)[0] = 0;
+            assert!(validate(ctx, env, &info).is_none());
+            crate::release::release_block(&mut *ctx, env, std::ptr::null(), 0, 0);
+            crate::release::release_block(&mut *ctx, captured, std::ptr::null(), 0, 0);
+            crate::STATUS_OK
+        },
+    );
+    assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
+}
+
+#[test]
+fn inert_value_metadata_is_admitted_but_owner_and_opaque_scan_programs_are_refused() {
+    use hirsel_core_contract::handle_scan::*;
+    let bits = [VALUE, VALUE_BITS, 8, 0, 0, 0, 0, 0];
+    let mut scalar = layout(8);
+    scalar.scan = bits.as_ptr();
+    scalar.scan_words = 8;
+    let record = [
+        TYPE_EDGE,
+        0,
+        3,
+        0,
+        0,
+        0,
+        0,
+        0,
+        VALUE,
+        VALUE_FIELDS,
+        16,
+        0,
+        0,
+        0,
+        0,
+        0,
+        VALUE_FIELD,
+        0,
+        3,
+        u64::MAX,
+        0,
+        0,
+        0,
+        0,
+        VALUE_FIELD,
+        8,
+        3,
+        u64::MAX,
+        0,
+        0,
+        0,
+        0,
+    ];
+    let mut environment = layout(16);
+    environment.scan = record.as_ptr();
+    environment.scan_words = 32;
+    let layouts = [&environment as *const _, &scalar as *const _];
+    let mut run = crate::host::BodyRun::new(1, false);
+    run.config.layouts = layouts.as_ptr();
+    run.config.layout_count = 2;
+    let outcome = run.run(
+        |_| {},
+        move |ctx| unsafe {
+            assert!(inert_source(ctx, 2));
+            crate::STATUS_OK
+        },
+    );
+    assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
+    for opcode in [
+        HANDLE,
+        BLOCK,
+        ROOT,
+        UNKNOWN,
+        TYPE_UNKNOWN,
+        TYPED_HANDLE,
+        INLINE,
+        SEQUENCE,
+        COLUMN,
+    ] {
+        let scan = [opcode, 0, 0, 0, 0, 0, 0, 0];
+        let mut resource = layout(8);
+        resource.scan = scan.as_ptr();
+        resource.scan_words = 8;
+        let layouts = [&resource as *const _];
+        let mut run = crate::host::BodyRun::new(1, false);
+        run.config.layouts = layouts.as_ptr();
+        run.config.layout_count = 1;
+        let outcome = run.run(
+            |_| {},
+            move |ctx| unsafe {
+                assert!(!inert_source(ctx, 2));
+                crate::STATUS_OK
+            },
+        );
+        assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
+    }
+}
+
+#[test]
+fn stopped_run_restores_saved_custody_before_reclaiming_its_heap() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    let image = layout(24);
+    let layouts = [&image as *const _];
+    let child_allocation = Arc::new(AtomicUsize::new(0));
+    let address = child_allocation.clone();
+    let mut run = crate::host::BodyRun::new(1, false);
+    run.config.layouts = layouts.as_ptr();
+    run.config.layout_count = 1;
+    let outcome = run.run(
+        |ctx| unsafe {
+            super::super::super::engine::enable(
+                ctx,
+                crate::ordered::Policy::admit(&Default::default(), None),
+            );
+        },
+        move |ctx| unsafe {
+            // A never-started Saved reservation still owns its original mask.
+            // The context uses separate owned storage here; Task's Drop owns
+            // its contents, and ManuallyDrop below frees only that allocation.
+            let child = Box::into_raw(Box::new(std::mem::ManuallyDrop::new(TaskCtx::new(
+                std::ptr::from_mut((*ctx).worker()),
+                (*ctx).run_ptr(),
+            ))))
+            .cast::<TaskCtx>();
+            address.store(child as usize, Ordering::Release);
+            (*child).task_id = 1;
+            let environment =
+                crate::alloc::hirsel_rt_v2_alloc(ctx, 2, 24, 8, crate::alloc::DOMAIN_HEAP, 0);
+            let live = crate::alloc::payload(environment).add(16).cast::<u64>();
+            live.write(1);
+            let mut local = Box::new(super::super::Local::new(false));
+            local.native = Some(Native::new(child, environment, 0, 73, certificate(live)));
+            (*child).ahead = Some(local);
+            let mut task = crate::tasks::Task::new(73, child, None, vec![1], None);
+            // No stack code is entered. This owner simply keeps the context
+            // alive through the actual stopped-run heap/row teardown order.
+            task.stack = Some(crate::fiber::Stack::new());
+            super::super::super::engine::driver(ctx).reserved.insert(
+                1,
+                super::super::Reserved {
+                    task: Box::new(task),
+                },
+            );
+            crate::stop::raise(ctx, crate::stop::Stop::Requested)
+        },
+    );
+    assert_eq!(outcome.ended, Err(crate::stop::Stop::Requested));
+    let child = child_allocation.load(Ordering::Acquire);
+    assert_ne!(child, 0);
+    // Task::drop already destroyed the context; do not drop its fields again.
+    unsafe { drop(Box::from_raw(child as *mut std::mem::ManuallyDrop<TaskCtx>)) };
+}

@@ -198,6 +198,7 @@ impl UnitFragment {
             layouts,
             abis,
             object: ObjectArtifact {
+                ahead: None,
                 bytes: Vec::new(),
                 ..self.object.clone()
             },
@@ -265,6 +266,7 @@ impl UnitFragment {
             summary,
             templates: summaries.collect(),
             object: ObjectArtifact {
+                ahead: None,
                 bytes: object.to_vec(),
                 ..wire.object
             },
