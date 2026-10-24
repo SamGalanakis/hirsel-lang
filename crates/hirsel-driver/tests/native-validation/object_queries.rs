@@ -762,6 +762,7 @@ fn task_snapshot(
         ready,
         link: LinkDependencies {
             fragments: vec![],
+            native_reads: vec![],
             static_manifest: query(result),
             runtime_archives: vec![],
             foreign_inputs: vec![],
@@ -871,6 +872,7 @@ fn link_task_waits_for_manifest_then_all_fragments_and_runtime_inputs() {
     let static_p = product(store.as_ref(), "statics");
     let runtime = product(store.as_ref(), "archive");
     let launch = product(store.as_ref(), "launch");
+    let native = product(store.as_ref(), "native link metadata");
     let mut snapshot = task_snapshot(
         ObjectTaskRequest::Link {
             key,
@@ -886,6 +888,7 @@ fn link_task_waits_for_manifest_then_all_fragments_and_runtime_inputs() {
             kind: super::tasks::CODEGEN_KIND,
             address: fragment.product.address,
         }],
+        native_reads: vec![query(native)],
         static_manifest: query(static_p),
         runtime_archives: vec![query(runtime)],
         foreign_inputs: vec![],
@@ -895,7 +898,7 @@ fn link_task_waits_for_manifest_then_all_fragments_and_runtime_inputs() {
     let mut cx = TaskContext::default();
     assert!(matches!(task.poll(&mut cx),QueryPoll::Waiting(ref p) if p==&vec![manifest_id]));
     cx.settled.push((manifest_id, Ok(manifest)));
-    assert!(matches!(task.poll(&mut cx),QueryPoll::Waiting(ref p) if p.len()==4));
+    assert!(matches!(task.poll(&mut cx),QueryPoll::Waiting(ref p) if p.len()==5));
     assert_eq!(snapshot.makes.load(Ordering::SeqCst), 0);
     let deps = &snapshot.link;
     cx.settled.extend([
@@ -904,6 +907,11 @@ fn link_task_waits_for_manifest_then_all_fragments_and_runtime_inputs() {
         (deps.runtime_archives[0], Ok(runtime)),
         (deps.launch_manifest, Ok(launch)),
     ]);
+    assert!(
+        matches!(task.poll(&mut cx),QueryPoll::Waiting(ref p) if p==&vec![deps.native_reads[0]])
+    );
+    assert_eq!(snapshot.makes.load(Ordering::SeqCst), 0);
+    cx.settled.push((deps.native_reads[0], Ok(native)));
     assert!(matches!(task.poll(&mut cx),QueryPoll::Complete(p) if p==result));
     assert_eq!(snapshot.makes.load(Ordering::SeqCst), 1);
 }

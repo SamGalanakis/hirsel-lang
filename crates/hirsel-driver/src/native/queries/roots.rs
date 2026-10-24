@@ -72,6 +72,39 @@ impl RootProducts {
             selected: None,
         })
     }
+    /// Restore only an actual root continuation's completed descriptor scope.
+    /// Ordinary result-store bytes confer no native acceptance; every supplied
+    /// Ready dependency is independently re-admitted through this request's C.
+    pub(super) fn settled(
+        snapshot: Arc<NativeSnapshot>,
+        source: Arc<NativeLinkSource>,
+        key: NativeRootKey,
+        root: Arc<NativeRootProduct>,
+        reads: &[ProductRef],
+    ) -> Result<Self, String> {
+        let mut view = Self::new(snapshot.clone(), source, key)?;
+        view.selected = Some(root);
+        view.admitted_root(view.selected.as_ref().unwrap())?;
+        for read in reads {
+            let owner = snapshot
+                .owners
+                .get(&read.address.0)
+                .ok_or("unknown settled link Ready")?;
+            let current = view
+                .inner
+                .local
+                .queries
+                .lookup(owner, read.action, &snapshot.environment())
+                .ok_or("settled link Ready lost current C admission")?;
+            if current.product != *read
+                || view.inner.selected.insert(read.address.0, *read).is_some()
+            {
+                return Err("duplicate or changed settled link Ready".into());
+            }
+        }
+        Ok(view)
+    }
+
     /// Complete the ordinary object query's Link miss: emit program glue from
     /// selected metadata, then invoke the existing semantic linker/launcher.
     /// No Value or Ready body is opened by either assembly or glue emission.
@@ -233,12 +266,7 @@ impl NativeRoots for RootProducts {
             ))
             .map_err(|e| e.to_string())?,
         )?;
-        let selection = serde_json::to_vec(&(&key.roots, key.target_abi, key.policy))
-            .map_err(|e| e.to_string())?;
-        let address = hirsel_artifact_store::Address(ContentHash::of_parts(
-            "hirsel.native.root-address.v1",
-            [selection.as_slice()],
-        ));
+        let address = key.query_id()?.address;
         let action_bytes = serde_json::to_vec(&(
             crate::COMPILER_IDENTITY.as_slice(),
             &reads,

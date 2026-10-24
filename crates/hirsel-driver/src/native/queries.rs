@@ -15,6 +15,7 @@ pub mod products;
 pub mod ready;
 pub mod recipes;
 pub mod root_source;
+pub mod root_tasks;
 pub mod roots;
 pub mod source;
 pub mod tasks;
@@ -32,6 +33,23 @@ pub struct NativeRootKey {
     pub roots: Vec<hirsel_syntax::DefPath>,
     pub target_abi: ContentHash,
     pub policy: ContentHash,
+}
+
+impl NativeRootKey {
+    pub fn query_id(&self) -> Result<hirsel_engine::runtime::QueryId, String> {
+        if self.roots.windows(2).any(|w| w[0] >= w[1]) {
+            return Err("noncanonical native root selection".into());
+        }
+        let selection = serde_json::to_vec(&(&self.roots, self.target_abi, self.policy))
+            .map_err(|e| e.to_string())?;
+        Ok(hirsel_engine::runtime::QueryId {
+            kind: ROOT_KIND,
+            address: hirsel_artifact_store::Address(ContentHash::of_parts(
+                "hirsel.native.root-address.v1",
+                [selection.as_slice()],
+            )),
+        })
+    }
 }
 
 /// Canonical root discovery and launch descriptors, available before deciding

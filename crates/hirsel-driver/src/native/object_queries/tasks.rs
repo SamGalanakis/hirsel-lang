@@ -59,6 +59,9 @@ impl ObjectTaskRequest {
 #[derive(Clone, Debug)]
 pub struct LinkDependencies {
     pub fragments: Vec<QueryId>,
+    /// Native metadata consumed by Link assembly, read explicitly even on a
+    /// Link hit. These products convey no proof; the native view re-admits C.
+    pub native_reads: Vec<QueryId>,
     pub static_manifest: QueryId,
     pub runtime_archives: Vec<QueryId>,
     pub foreign_inputs: Vec<QueryId>,
@@ -177,6 +180,7 @@ impl<S: ObjectTaskSnapshot> ObjectTask<S> {
                 ids.extend(&deps.runtime_archives);
                 ids.extend(&deps.foreign_inputs);
                 ids.push(deps.launch_manifest);
+                ids.extend(&deps.native_reads);
                 let outputs = read(cx, &ids)?;
                 let n = deps.fragments.len();
                 let fragments = outputs[..n]
