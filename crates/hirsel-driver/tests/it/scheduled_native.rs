@@ -123,7 +123,6 @@ fn admitted_native_definition_products_match_independent_scalar_products() {
                 .read(definitions.iter().find(|p| p.0.name == "main").unwrap())
                 .expect("settled ordinary Lower remains usable after host drop");
             assert_eq!(main.definition().path.path().0.name, "main");
-            drop(main);
             let mut scalar = COMPILER
                 .with_config(CompileConfig {
                     store: Arc::new(MemStore::default()),
@@ -208,6 +207,12 @@ fn admitted_native_definition_products_match_independent_scalar_products() {
             drop(lower);
             assert!(budget.reserved() > 0, "held catalogue owns admission");
             drop(outputs);
+            drop(reader);
+            assert!(
+                budget.reserved() > 0,
+                "held ordinary body retains immutable source admission"
+            );
+            drop(main);
             assert_eq!(budget.reserved(), 0);
         }
     });
