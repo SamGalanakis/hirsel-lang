@@ -40,6 +40,7 @@ pub fn ty() -> hirsel_types::testing::Types {
 pub fn registry() -> hirsel_layout::operation::OperationRegistry {
     hirsel_layout::operation::OperationRegistry {
         pretransfer_adapters: Vec::new(),
+        pretransfer_actuals: Vec::new(),
         invocation_bodies: Vec::new(),
         invocations: Default::default(),
         type_declarations: Default::default(),
@@ -634,6 +635,7 @@ impl<S: Stage> Lir<S> {
         };
         self.operations = hirsel_layout::operation::OperationRegistry {
             pretransfer_adapters: Vec::new(),
+            pretransfer_actuals: Vec::new(),
             invocation_bodies: Vec::new(),
             invocations: Default::default(),
             type_declarations: Default::default(),

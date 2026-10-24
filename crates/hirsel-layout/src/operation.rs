@@ -189,6 +189,13 @@ fn empty_function(result: TypeId) -> FunctionType {
 #[derive(Clone, Debug)]
 pub struct OperationRegistry {
     pub pretransfer_adapters: Vec<hirsel_lir::pretransfer::AdapterReference>,
+    /// Actuals come from the independent materialized primitive plan.
+    pub pretransfer_actuals: Vec<(
+        hirsel_lir::ir::Symbol,
+        hirsel_lir::FnAbiId,
+        OperationId,
+        Vec<OperationArgument>,
+    )>,
     pub invocation_bodies: Vec<hirsel_lir::invocations::ReferenceBody>,
     pub invocations:
         BTreeMap<hirsel_syntax::DefPath, Vec<hirsel_lir::invocations::ReferenceInvocation>>,
@@ -202,6 +209,30 @@ pub struct OperationRegistry {
 impl OperationDeclarations for OperationRegistry {
     fn pretransfer_adapters(&self) -> &[hirsel_lir::pretransfer::AdapterReference] {
         &self.pretransfer_adapters
+    }
+
+    fn pretransfer_abi(
+        &self,
+        reference: &hirsel_lir::pretransfer::AdapterReference,
+        target: &hirsel_lir::TargetSpec,
+    ) -> Option<(FnAbi, hirsel_lir::LayoutTable)> {
+        if hirsel_lir::pretransfer::primitive(&reference.adapter.definition).as_ref()
+            != Some(&reference.primitive.definition)
+        {
+            return None;
+        }
+        let mut matches = self
+            .pretransfer_actuals
+            .iter()
+            .filter(|(adapter, _, _, _)| adapter == &reference.adapter);
+        let (_, abi, operation, arguments) = matches.next()?;
+        if matches.next().is_some()
+            || *abi != reference.abi
+            || operation.definition != reference.primitive.definition
+        {
+            return None;
+        }
+        self.derive(operation, arguments, target).ok()
     }
 
     fn invocation_body(
