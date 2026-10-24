@@ -619,6 +619,7 @@ impl<S: Stage> Checker<'_, '_, S> {
                 (ValueRepr::Arena, LayoutKind::Arena) => true,
                 (ValueRepr::Scalar(ScalarKind::U64), LayoutKind::Path) => true,
                 (ValueRepr::Token, LayoutKind::Header) => true,
+                (ValueRepr::PayloadReceipt, LayoutKind::PayloadReceipt { .. }) => true,
                 (ValueRepr::RegionMark | ValueRepr::InitMask { .. }, LayoutKind::Scalar(_)) => true,
                 (
                     ValueRepr::Aggregate | ValueRepr::Uncounted,
@@ -2602,6 +2603,23 @@ impl<S: Stage> Checker<'_, '_, S> {
                 }
                 self.arena_budget(site, budget);
             }
+            Inst::PayloadReceipt {
+                result,
+                value,
+                shape,
+                ..
+            } => {
+                let descriptor = &unit.tables.seal_descriptors[shape.index()];
+                let valid = matches!(layouts.get(self.layout_of(result)).map(|r| &r.kind),
+                    Some(LayoutKind::PayloadReceipt { root }) if root == &descriptor.root_type);
+                if !valid
+                    || self.ty(result).repr != ValueRepr::PayloadReceipt
+                    || self.layout_of(value) != descriptor.root_layout
+                    || unit.values[result.index()].holding != Holding::Owned
+                {
+                    self.add(site, K::Type("source payload receipt"));
+                }
+            }
             Inst::Forget { .. } => {}
         }
     }
@@ -2766,6 +2784,7 @@ impl<S: Stage> Checker<'_, '_, S> {
     fn release(&mut self, site: Site, value: ValueId, layout: LayoutId, live: MaskRef) {
         let own = self.layout_of(value);
         let admitted = match self.ty(value).repr {
+            ValueRepr::PayloadReceipt => layout == own && live == MaskRef::All,
             ValueRepr::Block => self.cx.layouts.released(own) == Some(layout),
             ValueRepr::Aggregate | ValueRepr::Callable | ValueRepr::Handle => {
                 layout == own && self.cx.owns(value)
@@ -4508,6 +4527,12 @@ pub(super) fn inst_operands<S>(cx: &Cx<'_, S>, inst: &Inst) -> Vec<(ValueId, Usa
     let op = |v| (v, Usage::Operand);
     let mut out = Vec::new();
     match *inst {
+        Inst::PayloadReceipt { value, inputs, .. } => {
+            out.push(op(value));
+            for input in inputs.get(&unit.pools.receipt_inputs).unwrap_or(&[]) {
+                out.extend(input.receipt.map(op));
+            }
+        }
         Inst::SealArena { grant, root, .. } => out.extend([op(grant), op(root)]),
         Inst::BorrowSealedRoot { owner, .. } => out.push(op(owner)),
         Inst::ArenaInventory {

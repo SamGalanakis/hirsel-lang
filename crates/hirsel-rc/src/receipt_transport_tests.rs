@@ -167,3 +167,81 @@ fn compaction_keeps_entry_versions_without_minting_owning_values() {
     assert_eq!(entry.contract, contract);
     assert!(unit.values.iter().all(|v| v.holding == Holding::Plain));
 }
+
+#[test]
+fn local_producer_33_liveness_uses_metadata_without_rereading_consumed_originals() {
+    let mut unit = unit();
+    let inputs = PoolRange::push(
+        &mut unit.pools.receipt_inputs,
+        [
+            ReceiptInput {
+                original: ValueId(1),
+                receipt: Some(ValueId(10)),
+            },
+            ReceiptInput {
+                original: ValueId(3),
+                receipt: None,
+            },
+        ],
+    );
+    let inst = Inst::PayloadReceipt {
+        result: ValueId(14),
+        value: ValueId(4),
+        shape: SealDescriptorId(2),
+        binding: PayloadBindingId(3),
+        inputs,
+    };
+    assert_eq!(Inst::defs(&inst), vec![ValueId(14)]);
+    let mut uses = crate::liveness::inst_uses(&unit, &inst);
+    uses.sort();
+    assert_eq!(uses, vec![ValueId(4), ValueId(10)]);
+}
+
+#[test]
+fn local_producer_33_remap_preserves_binding_and_all_pooled_pairs() {
+    let mut unit = unit();
+    let inputs = PoolRange::push(
+        &mut unit.pools.receipt_inputs,
+        [
+            ReceiptInput {
+                original: ValueId(1),
+                receipt: Some(ValueId(10)),
+            },
+            ReceiptInput {
+                original: ValueId(3),
+                receipt: None,
+            },
+        ],
+    );
+    unit.instructions.push(Inst::PayloadReceipt {
+        result: ValueId(14),
+        value: ValueId(4),
+        shape: SealDescriptorId(2),
+        binding: PayloadBindingId(3),
+        inputs,
+    });
+    crate::insert::remap_values(&mut unit, &|v| ValueId(v.0 + 20));
+    assert_eq!(
+        unit.instructions[0],
+        Inst::PayloadReceipt {
+            result: ValueId(34),
+            value: ValueId(24),
+            shape: SealDescriptorId(2),
+            binding: PayloadBindingId(3),
+            inputs
+        }
+    );
+    assert_eq!(
+        unit.pools.receipt_inputs,
+        vec![
+            ReceiptInput {
+                original: ValueId(21),
+                receipt: Some(ValueId(30))
+            },
+            ReceiptInput {
+                original: ValueId(23),
+                receipt: None
+            },
+        ]
+    );
+}

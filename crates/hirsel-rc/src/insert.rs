@@ -2250,6 +2250,7 @@ impl<S: Stage> Flow<'_, S> {
             | Inst::Weaken { result, .. }
             | Inst::Recast { result, .. }
             | Inst::SealArena { result, .. }
+            | Inst::PayloadReceipt { result, .. }
             | Inst::BorrowSealedRoot { result, .. }
             | Inst::Freeze { result, .. }
             | Inst::Thaw { result, .. }
@@ -3612,6 +3613,10 @@ fn prune_anchors<S>(unit: &mut LirUnit<S>) {
 /// Rename every value the unit names through `map`. Exhaustive over the
 /// rows that hold values, so a new value-holding field fails to compile here.
 pub(crate) fn remap_values<S>(unit: &mut LirUnit<S>, map: &impl Fn(ValueId) -> ValueId) {
+    for input in &mut unit.pools.receipt_inputs {
+        input.original = map(input.original);
+        input.receipt = input.receipt.map(map);
+    }
     for payloads in &mut unit.tables.seal_payloads {
         for binding in &mut payloads.bindings {
             for value in &mut binding.values {
@@ -3788,6 +3793,10 @@ pub(crate) fn remap_values<S>(unit: &mut LirUnit<S>, map: &impl Fn(ValueId) -> V
                 *result = map(*result);
                 *grant = map(*grant);
                 *root = map(*root);
+            }
+            Inst::PayloadReceipt { result, value, .. } => {
+                *result = map(*result);
+                *value = map(*value);
             }
             Inst::BorrowSealedRoot { result, owner, .. } => {
                 *result = map(*result);

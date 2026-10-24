@@ -3505,7 +3505,8 @@ impl<'p, S: Stage> Machine<'p, S> {
         let unit = f.unit;
         let u = self.unit(unit);
         match *inst {
-            Inst::SealArena { .. }
+            Inst::PayloadReceipt { .. }
+            | Inst::SealArena { .. }
             | Inst::BorrowSealedRoot { .. }
             | Inst::ArenaInventory { .. } => {
                 return fail(V::Unsupported, "sealed storage H adapter is not linked");

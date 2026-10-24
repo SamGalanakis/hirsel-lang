@@ -81,6 +81,8 @@ ids!(
     CodecId,
     /// A typed sealed-storage descriptor in SideTables::seal_descriptors.
     SealDescriptorId,
+    /// Flattened original binding ordinal in SideTables::seal_payloads.
+    PayloadBindingId,
 );
 
 /// A typed range in one of the unit's pools.
@@ -1111,6 +1113,16 @@ pub enum Inst {
         shape: SealDescriptorId,
         previous: Option<ValueId>,
     },
+    /// Snapshot the original source semantics before physical rewriting.
+    /// Inputs follow the selected original binding exactly. This retains only
+    /// private metadata holders and acquires no source storage credits.
+    PayloadReceipt {
+        result: ValueId,
+        value: ValueId,
+        shape: SealDescriptorId,
+        binding: PayloadBindingId,
+        inputs: PoolRange<ReceiptInput>,
+    },
 }
 
 /// A control edge with its block arguments.
@@ -1397,6 +1409,14 @@ pub struct CallArgument {
     pub value: ArgumentValue,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub struct ReceiptInput {
+    /// Static source correspondence only; this does not reread a consumed value.
+    pub original: ValueId,
+    /// Absent only for independently reconstructible plain/literal leaves.
+    pub receipt: Option<ValueId>,
+}
+
 /// A call: callee, ABI, arguments, result value and the callee's declared
 /// effects (never body-derived public promises).
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1674,6 +1694,22 @@ impl std::hash::Hash for SideTables {
 }
 
 impl SideTables {
+    /// Resolve a unit-local original binding ordinal across descriptor tables.
+    /// The descriptor is retained so an ordinal cannot be reused at another root.
+    pub fn payload_binding(
+        &self,
+        id: PayloadBindingId,
+    ) -> Option<(SealDescriptorId, &crate::sealed_payload::PayloadBinding)> {
+        let mut ordinal = id.index();
+        for table in &self.seal_payloads {
+            if ordinal < table.bindings.len() {
+                return Some((table.descriptor, &table.bindings[ordinal]));
+            }
+            ordinal -= table.bindings.len();
+        }
+        None
+    }
+
     /// The persistent live word's environment, if this body consumes captures.
     pub fn environment(&self) -> Option<LayoutId> {
         self.init_flags.iter().find_map(|flag| flag.environment)
@@ -1681,7 +1717,7 @@ impl SideTables {
 }
 
 /// Variable-length operand pools.
-#[derive(Clone, Debug, Default, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Pools {
     pub values: Vec<ValueId>,
     pub addresses: Vec<AddressId>,
@@ -1691,6 +1727,35 @@ pub struct Pools {
     pub fields: Vec<FieldValue>,
     pub captures: Vec<CaptureValue>,
     pub mask_words: Vec<u64>,
+    pub receipt_inputs: Vec<ReceiptInput>,
+}
+
+impl std::hash::Hash for Pools {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        let Self {
+            values,
+            addresses,
+            projections,
+            switch_arms,
+            call_arguments,
+            fields,
+            captures,
+            mask_words,
+            receipt_inputs,
+        } = self;
+        values.hash(state);
+        addresses.hash(state);
+        projections.hash(state);
+        switch_arms.hash(state);
+        call_arguments.hash(state);
+        fields.hash(state);
+        captures.hash(state);
+        mask_words.hash(state);
+        if !receipt_inputs.is_empty() {
+            "hirsel.payload-receipt-inputs.v1".hash(state);
+            receipt_inputs.hash(state);
+        }
+    }
 }
 
 /// Where a unit's body came from (LIR schema revision 7).
@@ -1887,6 +1952,7 @@ pub enum Ref {
     Scope(ScopeId),
     Codec(CodecId),
     SealDescriptor(SealDescriptorId),
+    PayloadBinding(PayloadBindingId),
     Values(PoolRange<ValueId>),
     Addresses(PoolRange<AddressId>),
     Projections(PoolRange<ProjectionStep>),
@@ -1896,6 +1962,7 @@ pub enum Ref {
     Captures(PoolRange<CaptureValue>),
     MaskWords(PoolRange<u64>),
     Instructions(PoolRange<Inst>),
+    ReceiptInputs(PoolRange<ReceiptInput>),
 }
 
 impl MaskRef {
@@ -1948,6 +2015,7 @@ impl Inst {
             | Inst::RegionReserve { result, .. }
             | Inst::SealArena { result, .. }
             | Inst::BorrowSealedRoot { result, .. }
+            | Inst::PayloadReceipt { result, .. }
             | Inst::ArenaOpen { result, .. }
             | Inst::ArenaToken { result, .. } => vec![result],
             Inst::Convert { result, flag, .. } | Inst::IntArith { result, flag, .. } => {
@@ -2067,6 +2135,7 @@ impl Inst {
             | Inst::ArenaOpen { .. }
             | Inst::ArenaToken { .. }
             | Inst::ArenaInventory { .. }
+            | Inst::PayloadReceipt { .. }
             | Inst::BorrowSealedRoot { .. }
             | Inst::Defuse { .. }
             | Inst::FinalizeBegin { .. }
@@ -2149,6 +2218,7 @@ impl Inst {
             | Inst::ArenaOpen { .. }
             | Inst::ArenaToken { .. }
             | Inst::ArenaInventory { .. }
+            | Inst::PayloadReceipt { .. }
             | Inst::BorrowSealedRoot { .. }
             | Inst::Defuse { .. }
             | Inst::FinalizeBegin { .. }
@@ -2562,6 +2632,19 @@ impl Inst {
                     f(R::Value(previous));
                 }
             }
+            Self::PayloadReceipt {
+                result,
+                value,
+                shape,
+                binding,
+                inputs,
+            } => {
+                f(R::Value(result));
+                f(R::Value(value));
+                f(R::SealDescriptor(shape));
+                f(R::PayloadBinding(binding));
+                f(R::ReceiptInputs(inputs));
+            }
             Self::ArenaOpen { result, budget } => {
                 f(R::Value(result));
                 if let Some(budget) = budget {
@@ -2917,6 +3000,14 @@ impl<S: Stage> LirUnit<S> {
                 Ref::Scope(v) => id("scope", v.0, self.scopes.len()),
                 Ref::Codec(v) => id("codec", v.0, t.codecs.len()),
                 Ref::SealDescriptor(v) => id("seal descriptor", v.0, t.seal_descriptors.len()),
+                Ref::PayloadBinding(v) => id(
+                    "payload binding",
+                    v.0,
+                    t.seal_payloads
+                        .iter()
+                        .map(|table| table.bindings.len())
+                        .sum(),
+                ),
                 Ref::Values(r) => range("values", r.start, r.len, p.values.len()),
                 Ref::Addresses(r) => range("addresses", r.start, r.len, p.addresses.len()),
                 Ref::Projections(r) => range("projections", r.start, r.len, p.projections.len()),
@@ -2929,6 +3020,9 @@ impl<S: Stage> LirUnit<S> {
                 Ref::MaskWords(r) => range("mask words", r.start, r.len, p.mask_words.len()),
                 Ref::Instructions(r) => {
                     range("instructions", r.start, r.len, self.instructions.len())
+                }
+                Ref::ReceiptInputs(r) => {
+                    range("receipt inputs", r.start, r.len, p.receipt_inputs.len())
                 }
             }
         };
@@ -3123,6 +3217,10 @@ impl<S: Stage> LirUnit<S> {
         }
         p.fields.iter().for_each(|f| push(Ref::Value(f.value)));
         p.captures.iter().for_each(|c| push(Ref::Value(c.value)));
+        for input in &p.receipt_inputs {
+            push(Ref::Value(input.original));
+            input.receipt.iter().for_each(|&r| push(Ref::Value(r)));
+        }
         refs.into_iter().try_for_each(check)
     }
 }
@@ -3348,6 +3446,7 @@ snapshot_enum!(Inst {
     SealArena { result, grant, root, shape, failure, origin },
     BorrowSealedRoot { result, owner, loan, shape },
     ArenaInventory { arena, allocation, value, shape, previous },
+    PayloadReceipt { result, value, shape, binding, inputs },
 });
 snapshot_struct!(Edge { target, arguments });
 snapshot_struct!(SwitchArm { value, edge });
@@ -3454,6 +3553,7 @@ snapshot_struct!(CallArgument {
     passing,
     value
 });
+snapshot_struct!(ReceiptInput { original, receipt });
 snapshot_struct!(CallSite {
     pretransfer_failure,
     forward_caller,
@@ -3543,7 +3643,7 @@ snapshot_struct!(Pools {
     fields,
     captures,
     mask_words
-});
+} trailing_empty receipt_inputs);
 snapshot_enum!(UnitOrigin { Source, Library });
 snapshot_struct!(UnitHeader {
     source_count,

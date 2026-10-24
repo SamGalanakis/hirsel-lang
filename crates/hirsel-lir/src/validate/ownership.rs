@@ -2153,6 +2153,23 @@ impl<S: Stage> Walker<'_, '_, S> {
                 self.borrow(site, st, cr, owner);
                 self.create(site, st, cr, result);
             }
+            Inst::PayloadReceipt {
+                result,
+                value,
+                inputs,
+                ..
+            } => {
+                self.borrow(site, st, cr, value);
+                for input in inputs
+                    .get(&self.cx.unit.pools.receipt_inputs)
+                    .unwrap_or(&[])
+                {
+                    if let Some(receipt) = input.receipt {
+                        self.borrow(site, st, cr, receipt);
+                    }
+                }
+                self.create(site, st, cr, result);
+            }
             Inst::ArenaInventory {
                 arena,
                 value,

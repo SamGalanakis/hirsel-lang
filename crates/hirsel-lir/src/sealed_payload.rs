@@ -1,5 +1,5 @@
 //! Descriptor-bound LIR bindings for independently reconstructed source recipes.
-use crate::ir::{SealDescriptorId, ValueId};
+use crate::ir::{ReceiptInput, SealDescriptorId, ValueId};
 pub use crate::sealed_payload_source::*;
 use hirsel_codec::snapshot_struct;
 
@@ -25,3 +25,23 @@ snapshot_struct!(PayloadTable {
     descriptor,
     bindings
 });
+
+impl PayloadBinding {
+    /// Local ordered operand pairing, not source authority. C separately checks
+    /// the complete recipe against original-source observations.
+    pub fn check_receipt_inputs(&self, inputs: &[ReceiptInput]) -> Result<(), &'static str> {
+        if inputs.len() != self.values.len()
+            || inputs.len() != self.recipe.inputs.len()
+            || !inputs
+                .iter()
+                .zip(&self.values)
+                .all(|(input, original)| input.original == *original)
+        {
+            return Err("payload receipt inputs differ from ordered original binding");
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod receipt_tests;

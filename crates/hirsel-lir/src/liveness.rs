@@ -211,6 +211,11 @@ pub fn inst_uses<S: Stage>(unit: &LirUnit<S>, inst: &Inst) -> Vec<ValueId> {
         }
     });
     match *inst {
+        Inst::PayloadReceipt { inputs, .. } => {
+            for input in inputs.get(&unit.pools.receipt_inputs).unwrap_or(&[]) {
+                out.extend(input.receipt);
+            }
+        }
         Inst::Address { address, .. } => {
             let info = &unit.addresses[address.index()];
             if let AddressBase::Value(v) = info.base {

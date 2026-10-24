@@ -60,6 +60,7 @@ impl StageKind {
     pub const fn admits(self, op: Opcode) -> bool {
         let rank = self as u8;
         match op {
+            Opcode::PayloadReceipt => rank < StageKind::Ready as u8,
             Opcode::Drop | Opcode::Unavailable => rank < StageKind::Ready as u8,
             Opcode::RegionEnter
             | Opcode::RegionReserve

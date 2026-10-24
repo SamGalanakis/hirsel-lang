@@ -691,3 +691,106 @@ fn semantic_payload_33_zero_sized_parameter_keeps_original_source_ordinal() {
     let errors = checked(t, &declarations);
     assert!(errors.is_empty(), "{errors:?}");
 }
+
+#[test]
+fn receipt_local_33_public_c_refuses_producer_before_complete_custody_proof() {
+    use hirsel_lir::layout_types::*;
+    let (t, declarations, root) = payload_fixture();
+    let (mut unit, mut table, manifest) = t.finish();
+    let baseline = checked_raw(unit.clone(), &table, &manifest, &declarations);
+    assert!(baseline.is_empty(), "{baseline:#?}");
+    let cleanup = CleanupAnchorId(unit.tables.cleanup_anchors.len() as u32);
+    unit.tables.cleanup_anchors.push(CleanupAnchor {
+        body: 0,
+        cleanup: INSTRUCTION_DROP,
+        action: 0,
+        site: unit.tables.source_anchors[0].site,
+    });
+    let inputs = PoolRange::push(
+        &mut unit.pools.receipt_inputs,
+        [ReceiptInput {
+            original: root,
+            receipt: None,
+        }],
+    );
+    let mut row = table.layouts[0].clone();
+    row.kind = LayoutKind::PayloadReceipt {
+        root: unit.tables.seal_descriptors[0].root_type.clone(),
+    };
+    row.size = SizeSpec::Fixed(8);
+    row.align = 8;
+    row.fields.clear();
+    row.tag = None;
+    row.scan.clear();
+    row.drop = vec![DropStep::ReleaseReceipt { offset: 0 }];
+    row.copy = CopyRecipe::NotCopyable;
+    row.finalizer = None;
+    row.abi = AbiInputs {
+        scalars: vec![(0, ScalarKind::Pointer)],
+        unaligned: false,
+    };
+    let layout = LayoutId(table.layouts.len() as u32);
+    table.layouts.push(row);
+    let ty = LirTypeId(unit.types.len() as u32);
+    unit.types.push(LirType {
+        repr: ValueRepr::PayloadReceipt,
+        layout,
+    });
+    let result = ValueId(unit.values.len() as u32);
+    unit.values.push(ValueInfo {
+        ty,
+        holding: Holding::Owned,
+    });
+    unit.instructions.insert(
+        1,
+        Inst::PayloadReceipt {
+            result,
+            value: root,
+            shape: SealDescriptorId(0),
+            binding: PayloadBindingId(0),
+            inputs,
+        },
+    );
+    // Failure edges are owned by their operation, even for mechanical metadata.
+    let mut release_failure = unit.tables.failures[0].clone();
+    let release_cleanup = unit.tables.edges[release_failure.cleanup.index()].clone();
+    release_failure.cleanup = EdgeId(unit.tables.edges.len() as u32);
+    unit.tables.edges.push(release_cleanup);
+    let failure = FailureId(unit.tables.failures.len() as u32);
+    unit.tables.failures.push(release_failure);
+    unit.instructions.insert(
+        2,
+        Inst::Release {
+            value: result,
+            layout,
+            live: MaskRef::All,
+            anchor: cleanup,
+            failure,
+        },
+    );
+    for (index, block) in unit.blocks.iter_mut().enumerate() {
+        if index == support::ENTRY.index() {
+            block.instructions.len += 2;
+        } else {
+            block.instructions.start += 2;
+        }
+    }
+    let errors = checked_raw(unit.clone(), &table, &manifest, &declarations);
+    assert!(
+        errors.iter().any(
+            |e| matches!(&e.kind, hirsel_lir::validate::ViolationKind::Schema(text)
+        if text == "private receipt storage requires independent source and custody validation")
+        ),
+        "{errors:#?}"
+    );
+    let mut wrong = unit.clone();
+    if let Inst::PayloadReceipt { binding, .. } = &mut wrong.instructions[1] {
+        *binding = PayloadBindingId(1);
+    }
+    assert!(wrong.check_identity(&table).is_err());
+    let mut wrong = unit;
+    if let Inst::PayloadReceipt { inputs, .. } = &mut wrong.instructions[1] {
+        *inputs = PoolRange::new(0, 2);
+    }
+    assert!(wrong.check_identity(&table).is_err());
+}

@@ -1697,6 +1697,13 @@ fn every_opcode_is_covered_and_admitted_by_a_stage() {
             shape: SealDescriptorId(0),
             previous: None,
         },
+        Inst::PayloadReceipt {
+            result: ValueId(0),
+            value: ValueId(1),
+            shape: SealDescriptorId(0),
+            binding: PayloadBindingId(0),
+            inputs: PoolRange::EMPTY,
+        },
     ] {
         assert_round_trip(&instruction);
         let opcode = instruction.opcode();

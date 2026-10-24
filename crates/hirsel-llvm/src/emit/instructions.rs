@@ -1928,7 +1928,8 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 self.dup_holders(place)?;
                 self.define(result, value)
             }
-            Inst::SealArena { .. }
+            Inst::PayloadReceipt { .. }
+            | Inst::SealArena { .. }
             | Inst::BorrowSealedRoot { .. }
             | Inst::ArenaInventory { .. } => {
                 self.unsupported("sealed storage emission is not linked")

@@ -15,12 +15,79 @@ pub(super) fn check<S: Stage>(cx: &Cx<'_, S>, report: &mut Report) {
         && !unit
             .instructions
             .iter()
-            .any(|i| matches!(i, Inst::ArenaInventory { .. }))
+            .any(|i| matches!(i, Inst::ArenaInventory { .. } | Inst::PayloadReceipt { .. }))
     {
         return;
     }
     let mut observed = vec![];
     let origins = producers(unit, &cx.layouts.0.fn_abis[unit.header.abi.0 as usize]);
+    for inst in &unit.instructions {
+        let Inst::PayloadReceipt {
+            value,
+            shape,
+            binding,
+            inputs,
+            ..
+        } = *inst
+        else {
+            continue;
+        };
+        let Some((descriptor, binding)) = unit.tables.payload_binding(binding) else {
+            continue;
+        };
+        let inputs = inputs.get(&unit.pools.receipt_inputs).unwrap_or(&[]);
+        let mut reject = |text: &str| report.add(Site::UNIT, K::Sealed(text.into()));
+        if descriptor != shape {
+            reject("payload receipt binding selects another descriptor");
+        }
+        if let Err(error) = binding.check_receipt_inputs(inputs) {
+            reject(error);
+        }
+        let source = &binding.recipe.source;
+        if !matches!(origins[value.index()].as_slice(),
+            [PayloadProducer::Construct(actual) | PayloadProducer::Closure(actual) | PayloadProducer::Call(actual)] if actual == source)
+        {
+            reject("payload receipt value differs from original source producer");
+        }
+        for (input, source) in inputs.iter().zip(&binding.recipe.inputs) {
+            match input.receipt {
+                Some(receipt) => {
+                    let kind = cx.layouts.get(cx.value_layout(receipt)).map(|r| &r.kind);
+                    if cx.repr(receipt) != ValueRepr::PayloadReceipt
+                        || !matches!(kind, Some(crate::layout_types::LayoutKind::PayloadReceipt { root }) if root == &source.ty)
+                    {
+                        reject("payload receipt child has another semantic type");
+                    }
+                }
+                None => {
+                    let plain = cx
+                        .operations
+                        .seal_descriptor_for_source(
+                            &unit.header.definition,
+                            unit.header.instance,
+                            &source.ty,
+                            cx.layouts.0,
+                            cx.target,
+                        )
+                        .is_ok_and(|descriptor| {
+                            matches!(
+                                descriptor.logical.shape.nodes.as_slice(),
+                                [crate::structural::Shape::Leaf]
+                            ) && matches!(
+                                descriptor.logical.facts.as_slice(),
+                                [crate::logical_storage::StorageFact {
+                                    class: crate::logical_storage::StorageClass::Inline,
+                                    ..
+                                }]
+                            )
+                        });
+                    if !plain && !matches!(source.producer, PayloadProducer::Literal(_)) {
+                        reject("payload receipt omits demanded original provenance");
+                    }
+                }
+            }
+        }
+    }
     for table in &unit.tables.seal_payloads {
         let descriptor = &unit.tables.seal_descriptors[table.descriptor.index()];
         for binding in &table.bindings {

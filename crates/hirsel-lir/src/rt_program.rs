@@ -916,7 +916,9 @@ impl Lower<'_> {
                     // Descriptor v15: release stride 24 marks a String/Bytes triple.
                     self.steps[step].stride = if slice { 24 } else { 0 };
                 }
-                DropStep::ReleaseSealed { .. } => { return malformed("sealed owner runtime drop is not linked"); }
+                DropStep::ReleaseSealed { .. } => {
+                    return malformed("sealed owner runtime drop is not linked");
+                }
                 DropStep::ReleaseReceipt { offset } => {
                     self.push(StepKind::ReleaseReceipt, at + offset);
                 }

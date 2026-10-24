@@ -183,6 +183,7 @@ opcodes!(
     SealArena,
     BorrowSealedRoot,
     ArenaInventory,
+    PayloadReceipt,
 );
 
 impl Inst {
@@ -255,6 +256,7 @@ impl Inst {
             Self::SealArena { .. } => Opcode::SealArena,
             Self::BorrowSealedRoot { .. } => Opcode::BorrowSealedRoot,
             Self::ArenaInventory { .. } => Opcode::ArenaInventory,
+            Self::PayloadReceipt { .. } => Opcode::PayloadReceipt,
             Self::ArenaOpen { .. } => Opcode::ArenaOpen,
             Self::ArenaToken { .. } => Opcode::ArenaToken,
             Self::FinalizeBegin { .. } => Opcode::FinalizeBegin,
