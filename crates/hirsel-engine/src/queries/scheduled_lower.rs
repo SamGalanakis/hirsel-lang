@@ -94,13 +94,11 @@ impl Outcome {
         match &self.result {
             Ok(Value::Lower(lower)) => {
                 weight.add(
-                    crate::memo::retained_lowering_output_bytes(
-                        &lower.diagnostics,
-                        &lower.dependencies,
-                    )
-                    .try_into()
-                    .ok()?,
+                    crate::memo::retained_lowering_output_bytes(&lower.diagnostics, &Vec::new())
+                        .try_into()
+                        .ok()?,
                 );
+                weight.add(lower.dependencies.retained_bytes());
                 weight.vec(&lower.materialized, |w, (_, value)| w.materialized(value));
                 if let Some(verified) = &lower.verified {
                     weight.add(verified.retained_bytes()?.try_into().ok()?);
