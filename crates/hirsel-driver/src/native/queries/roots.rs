@@ -260,6 +260,13 @@ impl NativeProducts for RootProducts {
     fn ready(&mut self, key: &InstanceAddress) -> Result<Arc<ReadyProduct>, String> {
         self.inner.ready(key)
     }
+    fn codegen_units(
+        &mut self,
+        key: &InstanceAddress,
+        backend: &str,
+    ) -> Result<Vec<Arc<ReadyProduct>>, String> {
+        self.inner.codegen_units(key, backend)
+    }
     fn with_ready<R>(
         &mut self,
         products: &[Arc<ReadyProduct>],

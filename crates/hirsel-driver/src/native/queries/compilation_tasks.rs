@@ -144,7 +144,7 @@ impl CompilationTasks {
         // This bounds dispatch records, not the still-separate source/C-cache
         // memory accounting or the host's final RSS qualification.
         let template_bytes = completed.iter().try_fold(0u64, |total, (_, output)| {
-            serde_json::to_vec(&output.templates)
+            serde_json::to_vec(&(&output.templates, &output.emission))
                 .map(|bytes| total.saturating_add(bytes.len() as u64))
                 .map_err(|error| error.to_string())
         })?;

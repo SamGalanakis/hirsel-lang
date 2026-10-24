@@ -218,6 +218,7 @@ impl InstanceTasks {
             &output.constant_reads,
             &output.templates,
             &output.operation_freedom,
+            &output.emission,
         ))
         .map_err(|e| e.to_string())?;
         let bytes = ordinary

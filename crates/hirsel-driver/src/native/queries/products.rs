@@ -33,6 +33,30 @@ pub struct EmissionOptions {
     pub fuel: bool,
 }
 impl EmissionOptions {
+    /// Host request fields only. The snapshot derives callback, recovery and
+    /// inline selection from its admitted instance graph before publication.
+    pub fn request(
+        input: InputIdentity,
+        opt: OptLevel,
+        debug: bool,
+        foreign: BTreeMap<hirsel_syntax::DefPath, u64>,
+        verify_backend: bool,
+        measurement: bool,
+        fuel: bool,
+    ) -> Self {
+        Self {
+            input,
+            opt,
+            debug,
+            callbacks: false,
+            tracking: false,
+            foreign,
+            inline_instances: BTreeSet::new(),
+            verify_backend,
+            measurement,
+            fuel,
+        }
+    }
     fn encode(&self) -> Result<Vec<u8>, String> {
         serde_json::to_vec(&(
             1u32,
@@ -84,10 +108,20 @@ impl NativeSnapshot {
         instances: DemandInstances,
         arena: SettledArenaGraph,
         options: crate::native::Options,
-        emission: EmissionOptions,
+        mut emission: EmissionOptions,
         manifest: hirsel_core_contract::Manifest,
         operations: Arc<dyn hirsel_lir::operation::OperationDeclarations + Send + Sync>,
     ) -> Result<Arc<Self>, String> {
+        let environment = NativeEnvironment {
+            target: &options.target,
+            manifest: &manifest,
+            operations: operations.as_ref(),
+            discharge: Some(&options.discharge),
+        };
+        let facts = super::emission::select(&instances, &environment)?;
+        emission.callbacks = !facts.callbacks.is_empty();
+        emission.tracking = facts.tracking;
+        emission.inline_instances = facts.inline.into_iter().collect();
         let bytes = emission.encode()?;
         let context = store
             .put_content(EMISSION_CONTEXT_DOMAIN, &bytes)
@@ -193,6 +227,9 @@ impl NativeSnapshot {
             operations: self.operations.as_ref(),
             discharge: Some(&self.options.discharge),
         }
+    }
+    pub fn emission(&self) -> &EmissionOptions {
+        &self.emission
     }
     pub fn ready_materializations(&self) -> u64 {
         self.materializations.load(Ordering::Relaxed)

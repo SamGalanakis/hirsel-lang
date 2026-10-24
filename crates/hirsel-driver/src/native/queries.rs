@@ -10,6 +10,7 @@ pub mod arena_tasks;
 pub mod compilation_tasks;
 pub mod declarations;
 pub mod demand;
+pub mod emission;
 pub mod graph;
 pub mod instance;
 pub mod instance_tasks;

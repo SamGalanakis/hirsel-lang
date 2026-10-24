@@ -72,6 +72,7 @@ struct Discovery {
     constant_reads: Vec<hirsel_syntax::DefPath>,
     templates: super::optimizer::TemplateFacts,
     operation_freedom: hirsel_rc::closure_calls::OperationFreedom,
+    emission: super::emission::EmissionFacts,
 }
 
 /// The descriptor returned after one demand has been admitted by actual C or
@@ -85,6 +86,7 @@ pub struct DiscoveredInstance {
     pub constant_reads: Vec<hirsel_syntax::DefPath>,
     pub templates: super::optimizer::TemplateFacts,
     pub operation_freedom: hirsel_rc::closure_calls::OperationFreedom,
+    pub emission: super::emission::EmissionFacts,
 }
 
 /// One immutable request snapshot. Source/native proof authority stays in the
@@ -412,7 +414,7 @@ impl DemandInstances {
         ))
         .map_err(|e| e.to_string())?;
         Ok(Action(ContentHash::of_parts(
-            "hirsel.native.demand-import-action.v7",
+            "hirsel.native.demand-import-action.v8",
             [bytes.as_slice()],
         )))
     }
@@ -427,7 +429,8 @@ impl DemandInstances {
             .get_content(product.discovery)
             .ok_or("missing native discovery")?;
         let discovery: Discovery = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
-        if discovery.schema != 5
+        if discovery.schema != 6
+            || !discovery.emission.canonical()
             || !discovery.operation_freedom.canonical()
             || !discovery.templates.canonical()
             || discovery.owner.bind()? != key.instance
@@ -468,6 +471,7 @@ impl DemandInstances {
             constant_reads: discovery.constant_reads,
             templates: discovery.templates,
             operation_freedom: discovery.operation_freedom,
+            emission: discovery.emission,
         });
         self.completed
             .insert(key.instance.encoding().to_vec(), output.clone());
@@ -711,7 +715,7 @@ impl DemandInstances {
         let discovery = self.put(
             INSTANCE_DISCOVERY_DOMAIN,
             &serde_json::to_vec(&Discovery {
-                schema: 5,
+                schema: 6,
                 owner: NamedKey::of(&key.instance),
                 ready_source,
                 callees,
@@ -722,6 +726,7 @@ impl DemandInstances {
                 operation_freedom: hirsel_rc::closure_calls::OperationFreedom::extract(
                     &unit, &table,
                 ),
+                emission: super::emission::EmissionFacts::extract(&unit, []),
             })
             .map_err(|e| e.to_string())?,
         )?;

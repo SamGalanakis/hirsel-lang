@@ -72,6 +72,10 @@ impl ReadySourceFacts {
         }
     }
 
+    pub(super) fn origin(&self) -> &hirsel_layout::instance::InstanceKey {
+        &self.origin
+    }
+
     /// Portable metadata only; no TypeId, LayoutId or retained source body.
     pub fn encode(&self) -> Result<Vec<u8>, String> {
         serde_json::to_vec(&(
