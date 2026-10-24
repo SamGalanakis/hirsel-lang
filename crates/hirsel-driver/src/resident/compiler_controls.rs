@@ -343,3 +343,64 @@ fn selected_run_callee_identity_and_cancellation_keep_the_shared_check_live() {
         assert_eq!(input.definition.path.path(), &callee);
     });
 }
+
+#[test]
+fn selected_safe_check_preserves_rejection_and_library_checks_without_run() {
+    hirsel_engine::with_compiler_stack(|| {
+        for library in [false, true] {
+            let (_directory, entry, source) = fixture();
+            if library {
+                std::fs::write(&entry, r#"{"schema":1,"package":{"name":"request","version":"1"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[]}"#).unwrap();
+            } else {
+                std::fs::write(&source, "pub fn main()->u8{true}\n").unwrap();
+            }
+            let mut selected = request(&entry);
+            selected.operation = CompileOperation::SafeCheck;
+            let budget = ProcessBudget::new(768 << 20);
+            let mut host = Host::new(run_selector(budget.clone()));
+            let output = host.request(&selected).unwrap().wait().unwrap();
+            let CompileResult::SafeCheck { checked, reach } = &output.result else {
+                panic!("safe check returned another operation");
+            };
+            assert!(reach.is_none());
+            assert_eq!(checked.diagnostics.is_empty(), library);
+            let mut inspect = selected.clone();
+            inspect.operation = CompileOperation::RecomputeCounts {
+                queries: vec![(output.entry.clone(), hirsel_engine::QueryKind::Lower)],
+            };
+            let counters = host.request(&inspect).unwrap().wait().unwrap();
+            let CompileResult::RecomputeCounts(counts) = &counters.result else {
+                panic!("inspection returned another operation");
+            };
+            assert_eq!(
+                counts[0].2, 0,
+                "rejected and library checks never execute the Run closure"
+            );
+            drop(counters);
+            drop(output);
+            drop(host);
+            assert_eq!(budget.reserved(), 0);
+        }
+    });
+}
+
+#[test]
+fn selected_safe_check_reports_the_settled_entry_escape() {
+    hirsel_engine::with_compiler_stack(|| {
+        let (_directory, entry, _source) = fixture();
+        let mut selected = request(&entry);
+        selected.operation = CompileOperation::SafeCheck;
+        let mut host = Host::new(run_selector(ProcessBudget::new(768 << 20)));
+        let output = host.request(&selected).unwrap().wait().unwrap();
+        let CompileResult::SafeCheck { checked, reach } = &output.result else {
+            panic!("safe check returned another operation");
+        };
+        assert!(checked.diagnostics.is_empty());
+        assert_eq!(
+            reach
+                .as_ref()
+                .map(|(entry, escape)| (entry, escape.is_none())),
+            Some((&output.entry, true))
+        );
+    });
+}

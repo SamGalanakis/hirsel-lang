@@ -8,6 +8,7 @@ use std::path::PathBuf;
 mod host_selector;
 mod inspection;
 mod output;
+mod safe_check;
 mod selector;
 mod source_graph;
 mod tir_products;
