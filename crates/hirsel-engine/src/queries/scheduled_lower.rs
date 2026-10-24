@@ -472,7 +472,9 @@ impl FrontLowerQueries {
                 .encode(&self.anchors, &(&path, error, &observed, &depth, executed)),
         }
         .ok_or(self.errors.resource)?;
-        if bytes.len() as u64 > self.weight.retained {
+        // The archive is an active encoding buffer. Settled descriptor/value
+        // metadata is debited below from this producer's separate grant.
+        if bytes.len() as u64 > self.weight.scratch {
             return Err(self.errors.resource);
         }
         let mut charge = (bytes.len() as u64)
@@ -706,7 +708,9 @@ impl FrontLowerQueries {
             .records
             .encode(&self.anchors, &definition)
             .ok_or(QueryError::NotImplemented)?;
-        if bytes.len() as u64 > self.weight.retained {
+        // Ordinary body bytes belong to the selected provider. Encoding uses
+        // the active scratch reservation, rather than the saved future frame.
+        if bytes.len() as u64 > self.weight.scratch {
             return Err(QueryError::NotImplemented);
         }
         let body = self
