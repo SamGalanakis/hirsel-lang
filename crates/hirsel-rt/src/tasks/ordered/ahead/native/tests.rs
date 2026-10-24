@@ -48,6 +48,58 @@ fn promotion_adopts_the_actual_moved_mask_and_same_physical_record() {
     assert_eq!(mask, 0);
 }
 #[test]
+fn promotion_keeps_live_logical_tokens_sites_and_both_allowances_on_the_same_task() {
+    let config = crate::Config::new();
+    let mut ctx = std::ptr::null_mut();
+    // SAFETY: one exclusively owned context; successful entries retire once in
+    // nesting order, and the adopted physical record never owns the context.
+    unsafe {
+        assert_eq!(
+            crate::context::hirsel_rt_v2_ctx_create(&config, &mut ctx),
+            0
+        );
+        assert_eq!(
+            crate::depth::hirsel_rt_v2_depth_enter_at_site(ctx, 7, 8),
+            crate::STATUS_OK
+        );
+        (*ctx).cleanup_depth = 1;
+        assert_eq!(
+            crate::depth::hirsel_rt_v2_depth_enter_at_site(ctx, 9, 10),
+            crate::STATUS_OK
+        );
+        let tokens = (*ctx).invocation_tokens;
+        let sites = (*ctx).invocation_site_slots;
+        let mut mask = 1;
+        let mut native = Native::new(
+            ctx,
+            std::ptr::null_mut(),
+            10,
+            73,
+            certificate(&raw mut mask),
+        );
+        let physical = &raw mut native.physical;
+        (*ctx).ahead_physical = physical;
+        native.adopt(73);
+        assert_eq!((*ctx).ahead_physical, physical);
+        assert_eq!(native.ctx, ctx);
+        assert_eq!((*ctx).activations.live(), (1, 1));
+        assert_eq!((*ctx).invocation_depth, 2);
+        assert_eq!((*ctx).invocation_tokens, tokens);
+        assert_eq!((*ctx).invocation_site_slots, sites);
+        assert_eq!(sites.read().assume_init(), [7, 8]);
+        assert_eq!(sites.add(1).read().assume_init(), [9, 10]);
+        assert_eq!((*ctx).cleanup_depth, 1);
+        (*ctx).cleanup_depth = 0;
+        crate::depth::hirsel_rt_v2_depth_leave(ctx);
+        assert_eq!((*ctx).activations.live(), (1, 0));
+        crate::depth::hirsel_rt_v2_depth_leave(ctx);
+        assert_eq!((*ctx).activations.live(), (0, 0));
+        (*ctx).ahead_physical = std::ptr::null_mut();
+        drop(native);
+        crate::context::hirsel_rt_v2_ctx_destroy(ctx);
+    }
+}
+#[test]
 fn stale_generation_cannot_restore_or_adopt_custody() {
     let mut mask = 0;
     let mut native = Native::new(

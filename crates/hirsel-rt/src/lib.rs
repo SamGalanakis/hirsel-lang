@@ -287,5 +287,11 @@ mod header_tests;
 /// Compiler/runtime certificate identity, including the exact bounded helpers.
 #[doc(hidden)]
 pub const AHEAD_HELPERS: &[u8] = include_bytes!("tasks/ordered/ahead/native.rs");
+/// Exact task-local depth leaf source, bound into the native ahead certificate.
+#[doc(hidden)]
+pub const DEPTH_HELPERS: &[u8] = include_bytes!("depth/native.rs");
+/// x86 SysV full depth-leaf call extent, including the return address.
+#[doc(hidden)]
+pub const DEPTH_LEAF_STACK_BYTES: u64 = 8;
 #[doc(hidden)]
 pub const AHEAD_SWITCH: &[u8] = include_bytes!("fiber.rs");

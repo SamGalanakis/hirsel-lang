@@ -7,17 +7,26 @@ pub const STRUCTURAL_LIMIT: u64 = 1088;
 
 /// Admission returns a linear retirement token, including which allowance it used.
 /// A rejected admission creates no token and changes neither count.
+#[repr(transparent)]
 #[derive(Debug)]
 pub struct Activation {
     cleanup: bool,
 }
 
 /// One task's foreground and implicit-cleanup allowances (LANG-10, FAIL-3).
+#[repr(C)]
 #[derive(Debug, Default)]
 pub struct Activations {
     foreground: u16,
     cleanup: u16,
 }
+
+// Native fixed leaf operations access these two counters and the token's mode.
+const _: () = {
+    assert!(std::mem::offset_of!(Activations, foreground) == 0);
+    assert!(std::mem::offset_of!(Activations, cleanup) == 2);
+    assert!(std::mem::size_of::<Activation>() == 1);
+};
 
 impl Activations {
     #[inline(always)]

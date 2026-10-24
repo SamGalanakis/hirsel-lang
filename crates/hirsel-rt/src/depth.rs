@@ -7,11 +7,19 @@ pub(crate) const INVOCATION_CAPACITY: usize = hirsel_core_contract::depth::FOREG
     as usize
     + hirsel_core_contract::depth::CLEANUP_LIMIT as usize;
 
+#[cfg(target_arch = "x86_64")]
+mod native;
+#[cfg(target_arch = "x86_64")]
+pub use native::{
+    hirsel_rt_v2_depth_enter, hirsel_rt_v2_depth_enter_at_site, hirsel_rt_v2_depth_leave,
+};
+
 /// Admit one invocation on this task. Failure records belong to the compiler's
 /// LANG-10 edge, so rejection changes no arguments, effects or failure state.
 ///
 /// # Safety
 /// `ctx` is the live running task, exclusively borrowed for this entry.
+#[cfg(not(target_arch = "x86_64"))]
 #[unsafe(no_mangle)]
 #[inline(always)]
 pub unsafe extern "C" fn hirsel_rt_v2_depth_enter(ctx: *mut TaskCtx) -> u8 {
@@ -25,6 +33,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_depth_enter(ctx: *mut TaskCtx) -> u8 {
 ///
 /// # Safety
 /// `ctx` is this thread's live running task, exclusively borrowed for entry.
+#[cfg(not(target_arch = "x86_64"))]
 #[unsafe(no_mangle)]
 #[inline(always)]
 pub unsafe extern "C" fn hirsel_rt_v2_depth_enter_at_site(
@@ -56,7 +65,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_depth_enter_at_site(
         ctx.invocation_sites
             .as_mut_ptr()
             .wrapping_add(index)
-            .write(std::mem::MaybeUninit::new((anchor, operation_site)));
+            .write(std::mem::MaybeUninit::new([anchor, operation_site]));
     }
     ctx.invocation_depth = index.wrapping_add(1);
     STATUS_OK
@@ -69,13 +78,14 @@ fn invocation_site(ctx: &TaskCtx) -> Option<(u64, u64)> {
     } else {
         // SAFETY: entry initialized the complete live prefix before publishing
         // its length; sites are Copy and remain live until matching retirement.
-        Some(unsafe {
+        let [anchor, operation_site] = unsafe {
             ctx.invocation_sites
                 .as_ptr()
                 .wrapping_add(ctx.invocation_depth - 1)
                 .read()
                 .assume_init()
-        })
+        };
+        Some((anchor, operation_site))
     }
 }
 
@@ -99,6 +109,7 @@ pub(crate) unsafe fn enter_callback(ctx: *mut TaskCtx) -> u8 {
 /// # Safety
 /// `ctx` is the live running task and the matching entry succeeded. Validated
 /// native control flow retires each admitted token once, in nesting order.
+#[cfg(not(target_arch = "x86_64"))]
 #[unsafe(no_mangle)]
 #[inline(always)]
 pub unsafe extern "C" fn hirsel_rt_v2_depth_leave(ctx: *mut TaskCtx) {

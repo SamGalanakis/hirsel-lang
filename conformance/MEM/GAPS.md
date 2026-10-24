@@ -5,12 +5,15 @@ count fields and storage reclamation need instrumentation; passing source exampl
 cannot close those claims. See [UNTESTABLE.md](UNTESTABLE.md) and the
 [evidence index](../coverage-ledger.md#memory).
 
-- **Settled depth contract, implementation proof outstanding — MEM-3 / LANG-10:**
-  the [2026-10-23 depth revision](../../docs/spec/index.md#deterministic-depth-revision)
-  defines invocations and complete logical structural-depth preflight, including distinct
-  wrappers. Earlier operational guards and visited-only boundary controls do not establish
-  the new contract. Four-engine observations with independent admission and lowering
-  validation remain required; bounded-arena accounting stays independent.
+- **Implemented finite depth controls — MEM-3 / LANG-10:**
+  the [depth revision](../../docs/spec/index.md#deterministic-depth-revision) has
+  four-engine controls in [logical_depth_31](../../crates/hirsel-conformance/tests/it/logical_depth_31.rs)
+  for invocation and complete logical structural-depth boundaries, distinct
+  wrappers, empty/mismatched operands, shared paths and Flat/Packed/column storage.
+  Independent V/C/H checks reject forged tail claims, deleted invocation events
+  and invalid access bindings. Operational guards and budgets remain tooling
+  controls. These finite checks do not close universal memory or cleanup oracles;
+  bounded-arena charges stay independent.
 - **Settled contract, recovered concrete controls — MEM-6:** bounded-arena logical
   charges are normative in the [runtime table](../../crates/hirsel-rt/README.md#bounded-arenas).
   The old claim that all arena exhaustion boundaries awaited a table is stale.

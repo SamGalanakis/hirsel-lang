@@ -67,3 +67,16 @@ fn stack_proof_refuses_missing_callee_cycle_and_overflow() {
     let frames = BTreeMap::from([(graph.root, 8), (hash("leaf"), 16)]);
     assert_eq!(stack_bound(&graph, &frames, 16, 8, 64), None);
 }
+
+#[test]
+fn final_bound_includes_the_exact_depth_leaf_call_extent() {
+    use hirsel_lir::ahead::stack_bound_with_depth;
+    let graph = graph();
+    let frames = BTreeMap::from([(graph.root, 64), (hash("leaf"), 65392)]);
+    assert_eq!(stack_bound(&graph, &frames, 16, 8, 32), Some(65504));
+    assert_eq!(
+        stack_bound_with_depth(&graph, &frames, 16, 8, 32, 64),
+        Some(65536)
+    );
+    assert_eq!(stack_bound_with_depth(&graph, &frames, 16, 8, 32, 65), None);
+}

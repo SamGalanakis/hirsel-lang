@@ -4,12 +4,14 @@
 [core concurrency types](../../docs/spec/core-library.md#concurrency) define
 `Failure`, `SourceSite` and `FailureKind`. Old section/issue numbers are historical.
 
-- **Settled depth contract, cleanup proof outstanding:**
-  the [2026-10-23 depth revision](../../docs/spec/index.md#deterministic-depth-revision)
-  defines pre-entry admission and a separate 64-invocation cleanup allowance. Tests of
-  operational limits do not establish caller ownership on rejected admission, independent
-  cleanup retirement, cause order or cancellation/isolate recovery. Bounded-arena
-  OutOfSpace accounting remains separately normative under MEM-6; see MEM/GAPS.
+- **Implemented finite depth/cleanup controls — LANG-10 / FAIL-3:**
+  the [depth revision](../../docs/spec/index.md#deterministic-depth-revision) has
+  four-engine controls in [logical_depth_31](../../crates/hirsel-conformance/tests/it/logical_depth_31.rs)
+  for pre-entry Take rejection, independent 64-invocation cleanup, nested field
+  lifetime, primary/ordered causes, cancellation and isolate recovery. Independent
+  C/H adversaries check omitted events and malformed retirement. These finite
+  controls do not close the universal allocation/scheduler oracles below.
+  Bounded-arena OutOfSpace accounting stays independently normative under MEM-6.
 - **Resolved fixture-support history:** `test.check`, test execution/selection,
   entry validation and capability-denial launch controls exist. Failure metadata
   has concrete source controls; they do not prove a universal data ABI.

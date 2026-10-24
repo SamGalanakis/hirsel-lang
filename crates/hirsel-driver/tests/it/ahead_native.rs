@@ -117,6 +117,23 @@ fn both_backends_emit_real_alternate_dags_across_partitions_and_reject_corruptio
                             .any(|s| s.name.starts_with("hirsel_ahead_"))
                     })
                     .unwrap();
+                // The same real source DAG now carries logical invocations;
+                // they remain admitted on private stacks, never all-refused.
+                for helper in [
+                    "hirsel_rt_v2_depth_enter_at_site",
+                    "hirsel_rt_v2_depth_leave",
+                ] {
+                    assert!(
+                        objects[code].imports.iter().any(|s| s.name == helper),
+                        "{backend:?}: missing certified depth helper {helper}"
+                    );
+                }
+                assert!(program.units.iter().any(|u| {
+                    u.unit()
+                        .instructions
+                        .iter()
+                        .any(|inst| matches!(inst, hirsel_lir::ir::Inst::FrameEnter { .. }))
+                }));
                 let evidence = objects[code].ahead.as_ref().unwrap();
                 assert_eq!(evidence.frames.len(), 3);
                 assert_eq!(evidence.bounds.len(), 1);
@@ -381,4 +398,119 @@ fn certificates_bind_transitive_bodies_layouts_fuel_helpers_and_target_options()
         );
         assert_ne!(original.identity, changed.identity);
     });
+}
+
+#[test]
+fn depth_helpers_have_the_certified_fixed_machine_extent_in_every_runtime_variant() {
+    use std::collections::BTreeMap;
+    let target = native::TargetSpec::x86_64_unknown_linux_gnu();
+    let variants = (0..8)
+        .map(|mask| native::RuntimeBuild {
+            diagnostic: mask & 1 != 0,
+            system_allocator: mask & 2 != 0,
+            measurement: mask & 4 != 0,
+            memcheck: false,
+        })
+        .collect::<Vec<_>>();
+    let scratch = tempfile::tempdir().unwrap();
+    let tools =
+        native::Toolchain::in_tree_with_runtimes(scratch.path(), &[&target], &variants).unwrap();
+    let helpers = [
+        "hirsel_rt_v2_depth_enter_at_site",
+        "hirsel_rt_v2_depth_leave",
+    ];
+    for archive in tools.runtime.values() {
+        let output = std::process::Command::new(tools.clang.with_file_name("llvm-objdump"))
+            .arg("--no-show-raw-insn")
+            .arg(format!("--disassemble-symbols={}", helpers.join(",")))
+            .arg(archive)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let text = String::from_utf8(output.stdout).unwrap();
+        let mut bodies = BTreeMap::<&str, Vec<(u64, &str)>>::new();
+        let mut current = None;
+        for line in text.lines() {
+            if let Some(helper) = helpers.iter().find(|h| line.ends_with(&format!("<{h}>:"))) {
+                current = Some(*helper);
+                continue;
+            }
+            if !line.is_empty() && !line.starts_with(char::is_whitespace) {
+                current = None;
+            }
+            if let Some(helper) = current
+                && let Some((address, instruction)) = line.split_once(':')
+                && let Ok(address) = u64::from_str_radix(address.trim(), 16)
+            {
+                bodies
+                    .entry(helper)
+                    .or_default()
+                    .push((address, instruction.trim()));
+            }
+        }
+        for helper in helpers {
+            let body = bodies.get(helper).expect("missing compiled depth helper");
+            assert!(!body.is_empty());
+            assert!(body.iter().any(|(_, i)| *i == "retq"));
+            for (pc, instruction) in body {
+                let opcode = instruction.split_whitespace().next().unwrap();
+                assert!(
+                    matches!(
+                        opcode,
+                        "movq"
+                            | "movl"
+                            | "movb"
+                            | "movw"
+                            | "movzbl"
+                            | "movzwl"
+                            | "cmpq"
+                            | "cmpl"
+                            | "cmpw"
+                            | "testl"
+                            | "xorl"
+                            | "incq"
+                            | "incw"
+                            | "decq"
+                            | "decw"
+                            | "shlq"
+                            | "jne"
+                            | "je"
+                            | "jae"
+                            | "jmp"
+                            | "retq"
+                    ),
+                    "{}: {helper}: nonleaf instruction {instruction}",
+                    archive.display()
+                );
+                // No stack/red-zone use, callee-save clobber, call, trap or
+                // indirect/backward edge can hide an unbounded helper span.
+                for register in [
+                    "%rsp", "%esp", "%rbp", "%ebp", "%rbx", "%ebx", "%r12", "%r13", "%r14", "%r15",
+                ] {
+                    assert!(!instruction.contains(register), "{helper}: {instruction}");
+                }
+                if opcode.starts_with('j') {
+                    assert!(
+                        instruction.contains(&format!("<{helper}+")),
+                        "{instruction}"
+                    );
+                    let destination = instruction
+                        .split_whitespace()
+                        .nth(1)
+                        .unwrap()
+                        .trim_start_matches("0x");
+                    assert!(
+                        u64::from_str_radix(destination, 16).unwrap() > *pc,
+                        "cyclic helper: {instruction}"
+                    );
+                }
+            }
+        }
+    }
+    // Neither helper changes SP: the sole call extent is the pushed return.
+    assert_eq!(hirsel_rt::DEPTH_LEAF_STACK_BYTES, 8);
 }

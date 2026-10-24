@@ -4,10 +4,12 @@ use hirsel_syntax::ContentHash;
 
 pub(super) fn helper_identity() -> ContentHash {
     ContentHash::of_parts(
-        "hirsel.ahead.helpers.v2",
+        "hirsel.ahead.helpers.v3",
         [
             hirsel_rt::AHEAD_HELPERS,
             hirsel_rt::AHEAD_SWITCH,
+            hirsel_rt::DEPTH_HELPERS,
+            hirsel_rt::DEPTH_LEAF_STACK_BYTES.to_le_bytes().as_slice(),
             crate::COMPILER_IDENTITY.as_slice(),
         ],
     )
@@ -89,7 +91,15 @@ pub(super) fn objects(
             if machine_helpers {
                 return None;
             }
-            hirsel_lir::ahead::stack_bound(&root.graph, &frames, 16, 8, 64).map(|n| (*id, n))
+            hirsel_lir::ahead::stack_bound_with_depth(
+                &root.graph,
+                &frames,
+                16,
+                8,
+                64,
+                hirsel_rt::DEPTH_LEAF_STACK_BYTES,
+            )
+            .map(|n| (*id, n))
         })
         .collect();
     let mut metadata = hirsel_cranelift::emit_ahead_metadata(&inputs, &plan, &bounds, registry)
@@ -145,6 +155,10 @@ fn unknown_machine_calls(object: &hirsel_lir::stage::ObjectArtifact, plan: &Ahea
             s.name.as_str(),
             "hirsel_rt_v2_ahead_state"
                 | "hirsel_rt_v2_ahead_handoff"
+                // The helper identity binds these exact naked, eight-byte
+                // call extents. Failure publication still crosses the barrier.
+                | "hirsel_rt_v2_depth_enter_at_site"
+                | "hirsel_rt_v2_depth_leave"
                 | "hirsel_rt_v2_failure_begin"
                 | "hirsel_rt_v2_failure_reanchor"
                 | "hirsel_rt_v2_release"
@@ -218,8 +232,15 @@ pub fn check_objects(
                     if unknown_machine_calls(code, &plan) {
                         return None;
                     }
-                    hirsel_lir::ahead::stack_bound(&root.graph, &frames, 16, 8, 64)
-                        .map(|n| (*id, n))
+                    hirsel_lir::ahead::stack_bound_with_depth(
+                        &root.graph,
+                        &frames,
+                        16,
+                        8,
+                        64,
+                        hirsel_rt::DEPTH_LEAF_STACK_BYTES,
+                    )
+                    .map(|n| (*id, n))
                 })
                 .collect();
             if bounds.iter().map(|(id, n)| (*id, *n)).collect::<Vec<_>>() != e.bounds {

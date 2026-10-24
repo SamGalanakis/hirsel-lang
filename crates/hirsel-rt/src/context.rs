@@ -190,9 +190,14 @@ pub struct TaskCtx {
     pub(crate) cleanup_rejections: usize,
     /// Invoking language sites parallel to admitted compiled invocations. Runtime
     /// callback boundaries inherit these sites without introducing an IR selector.
-    pub(crate) invocation_sites: Box<[std::mem::MaybeUninit<(u64, u64)>]>,
+    pub(crate) invocation_sites: Box<[std::mem::MaybeUninit<[u64; 2]>]>,
     /// Initialized prefix of both fixed-capacity native invocation arrays.
     pub(crate) invocation_depth: usize,
+    /// Stable pointers into the owned boxes above for the certified naked leaf.
+    /// Never serialized or copied to another task; the boxes live with this task.
+    pub(crate) invocation_tokens:
+        *mut std::mem::MaybeUninit<hirsel_core_contract::depth::Activation>,
+    pub(crate) invocation_site_slots: *mut std::mem::MaybeUninit<[u64; 2]>,
 }
 
 const _: () = assert!(std::mem::offset_of!(TaskCtx, view) == 0);
@@ -392,6 +397,14 @@ impl RunShared {
 impl TaskCtx {
     /// A fresh task's context on `worker`, in `run`; nothing binds it yet.
     pub(crate) fn new(worker: *mut Worker, run: *mut RunShared) -> TaskCtx {
+        let mut active_invocations =
+            Box::<[hirsel_core_contract::depth::Activation]>::new_uninit_slice(
+                crate::depth::INVOCATION_CAPACITY,
+            );
+        let mut invocation_sites =
+            Box::<[[u64; 2]]>::new_uninit_slice(crate::depth::INVOCATION_CAPACITY);
+        let invocation_tokens = active_invocations.as_mut_ptr();
+        let invocation_site_slots = invocation_sites.as_mut_ptr();
         TaskCtx {
             view: View::new(),
             worker,
@@ -426,14 +439,16 @@ impl TaskCtx {
             replay_host: None,
             ordered_charge_trace: Default::default(),
             activations: Default::default(),
-            active_invocations: Box::new_uninit_slice(crate::depth::INVOCATION_CAPACITY),
+            active_invocations,
             cleanup_depth: 0,
             cleanup_invocations: Vec::with_capacity(usize::from(
                 hirsel_core_contract::depth::CLEANUP_LIMIT,
             )),
             cleanup_rejections: 0,
-            invocation_sites: Box::new_uninit_slice(crate::depth::INVOCATION_CAPACITY),
+            invocation_sites,
             invocation_depth: 0,
+            invocation_tokens,
+            invocation_site_slots,
         }
     }
 

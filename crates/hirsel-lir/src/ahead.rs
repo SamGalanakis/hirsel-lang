@@ -257,7 +257,11 @@ impl Walker<'_> {
                     unit.tables.constants[constant.index()].value,
                     ConstantValue::Unit | ConstantValue::Bool(_) | ConstantValue::Integer(_)
                 ),
-                Inst::Unary { .. }
+                // Exact native depth leaves are bound by the machine helper
+                // identity and extent; they never publish a failure themselves.
+                Inst::FrameEnter { .. }
+                | Inst::FrameLeave { .. }
+                | Inst::Unary { .. }
                 | Inst::Binary { .. }
                 | Inst::IntArith { .. }
                 | Inst::Check { .. }
@@ -394,6 +398,19 @@ pub fn stack_bound(
     getter: u64,
     handoff: u64,
 ) -> Option<u64> {
+    stack_bound_with_depth(graph, frames, startup, getter, handoff, 0)
+}
+
+/// Compose the same final frame proof with the exact certified depth-leaf
+/// footprint. Callers bind the helper implementation into the plan identity.
+pub fn stack_bound_with_depth(
+    graph: &ScalarGraph,
+    frames: &BTreeMap<ContentHash, u64>,
+    startup: u64,
+    getter: u64,
+    handoff: u64,
+    depth: u64,
+) -> Option<u64> {
     fn visit(
         id: ContentHash,
         graph: &ScalarGraph,
@@ -422,7 +439,7 @@ pub fn stack_bound(
         graph.root,
         graph,
         frames,
-        getter.max(handoff),
+        getter.max(handoff).max(depth),
         &mut BTreeSet::new(),
         &mut BTreeMap::new(),
     )?)?;
