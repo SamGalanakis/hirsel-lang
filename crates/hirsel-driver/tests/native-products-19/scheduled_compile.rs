@@ -125,7 +125,7 @@ fn run(jobs: usize) {
             engine.adapters.lowering = None;
         }
         let mut source_queries = NativeDiscoveryCache::new(engine.types().clone(), store.clone());
-        let mut declarations =
+        let declarations =
             NativeDeclarations::collect(&mut engine, &mut source_queries, &[]).unwrap();
         if fresh {
             assert_eq!(source_queries.counts.body_demands, 0);
@@ -133,16 +133,8 @@ fn run(jobs: usize) {
         let source = Arc::new(NativeLinkSource::capture(&mut engine, &declarations).unwrap());
         let mut originals = Vec::new();
         if !fresh {
-            for owner in declarations
-                .context
-                .sources
-                .keys()
-                .cloned()
-                .collect::<Vec<_>>()
-            {
-                let body = declarations.body(&mut engine, &owner).unwrap();
-                originals.push(Arc::downgrade(&body));
-            }
+            let body = engine.lower_to_tir(&main).unwrap().value;
+            originals.push(Arc::downgrade(&body));
         }
         let emission = EmissionOptions {
             input: declarations.program.input.clone(),
@@ -156,9 +148,8 @@ fn run(jobs: usize) {
             measurement: false,
             fuel: false,
         };
-        let inputs = NativeInstanceInputs::capture(&mut engine, declarations)
-            .unwrap()
-            .unwrap();
+        let inputs =
+            NativeInstanceInputs::complete(&mut engine, declarations, store.clone()).unwrap();
         drop(engine);
         assert!(originals.iter().all(|body| body.upgrade().is_none()));
         let trace = hirsel_lir::construction::ValueTrace::default();

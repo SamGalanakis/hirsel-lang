@@ -15,7 +15,10 @@ pub use native_input::*;
 mod native_semantic;
 pub use native_semantic::NativeSemanticProgram;
 mod native_lower;
-pub use native_lower::{NativeLowerBody, NativeLowerReader};
+pub use native_lower::{
+    NATIVE_ORIGINAL_BODY, NativeLowerBody, NativeLowerReader, NativeOriginalBody,
+    NativeOriginalReader,
+};
 mod native_queries;
 pub use native_queries::*;
 mod representation;
