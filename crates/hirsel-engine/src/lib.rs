@@ -11,6 +11,8 @@ mod native_audit;
 pub use native_audit::{CleanupSite, SourceAudit};
 mod native_semantic;
 pub use native_semantic::NativeSemanticProgram;
+mod native_metadata;
+pub use native_metadata::NativeMetadataWeight;
 mod native_queries;
 pub use native_queries::*;
 mod native_lower;
