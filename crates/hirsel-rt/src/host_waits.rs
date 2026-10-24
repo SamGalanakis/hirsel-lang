@@ -157,6 +157,8 @@ unsafe fn quiet(ctx: *mut TaskCtx) -> bool {
 pub(crate) struct Waits {
     next: u64,
     parked: IdMap<Parked>,
+    parked_ready: crate::id_map::IdSet,
+    parked_injected: crate::id_map::IdSet,
     /// Free requests retry on their owning fiber, inside recorded phases.
     /// Home observes readiness only; it never calls these requests at a poll.
     native: IdMap<Native>,
@@ -167,6 +169,11 @@ pub(crate) struct Waits {
     armed_due: std::collections::BTreeSet<(u64, u64)>,
 }
 impl Waits {
+    fn remove_parked(&mut self, token: u64) -> Option<Parked> {
+        self.parked_ready.remove(&token);
+        self.parked_injected.remove(&token);
+        self.parked.remove(&token)
+    }
     fn scope_only(&self) -> bool {
         self.parked.is_empty() && self.native.is_empty() && !self.armed.is_empty()
     }
@@ -189,6 +196,7 @@ struct Parked {
     generation: u32,
     /// The re-issued request's outcome, from the poll that ended the wait.
     completion: Option<Result<Completion, AdapterError>>,
+    ready: bool,
 }
 
 struct Native {
@@ -295,6 +303,12 @@ pub(crate) unsafe fn native_notified_home(run: *mut crate::context::RunShared, t
             .notified = true;
         binding.waits.native_ready.remove(token);
     }
+}
+
+/// Home only; no Binding loan survives this source-accounting query.
+pub(crate) unsafe fn scope_pending_home(run: *mut crate::context::RunShared) -> bool {
+    let binding = unsafe { &*(*run).io_binding().cast::<Binding>() };
+    !binding.waits.armed.is_empty()
 }
 
 /// Free polls use the existing driver/token readiness surface, but only
@@ -671,6 +685,9 @@ unsafe fn issue_here(
         return Ok((request.take_result(), false));
     }
     drop(request.take_result());
+    if binding.adapter.injected_wait(request.get()) {
+        binding.waits.parked_injected.insert(token);
+    }
     binding.waits.parked.insert(
         token,
         Parked {
@@ -679,6 +696,7 @@ unsafe fn issue_here(
             task: None,
             generation: 0,
             completion: None,
+            ready: false,
         },
     );
     // Invalidate timer-only publication before park can retire a boundary.
@@ -695,8 +713,7 @@ unsafe fn issue_here(
     } else {
         binding
             .waits
-            .parked
-            .remove(&token)
+            .remove_parked(token)
             .and_then(|row| row.completion)
     }
     .unwrap_or_else(|| crate::fault("a host wait resumed without its completion"));
@@ -742,8 +759,7 @@ pub(crate) unsafe fn retire_completed_read(ctx: *mut TaskCtx, token: u64, task: 
         let binding = unsafe { Binding::raw(ctx) };
         let row = binding
             .waits
-            .parked
-            .remove(&token)
+            .remove_parked(token)
             .expect("certified read row");
         assert_eq!(row.task, Some(unsafe { (*ctx).task_id }));
         assert!(row.completion.is_some());
@@ -779,6 +795,9 @@ pub(crate) unsafe fn send(ctx: *mut TaskCtx, request: Request) -> Stopped<Result
         }
         Err(error) => return Err(Stop::refusal(error)),
     }
+    if binding.adapter.injected_wait(&retry) {
+        binding.waits.parked_injected.insert(token);
+    }
     binding.waits.parked.insert(
         token,
         Parked {
@@ -787,6 +806,7 @@ pub(crate) unsafe fn send(ctx: *mut TaskCtx, request: Request) -> Stopped<Result
             task: None,
             generation: 0,
             completion: None,
+            ready: false,
         },
     );
     // Invalidate timer-only publication before park can retire a boundary.
@@ -805,8 +825,7 @@ pub(crate) unsafe fn await_sent(ctx: *mut TaskCtx, token: u64) -> Stopped<Comple
     let binding = unsafe { Binding::get(ctx) };
     match binding
         .waits
-        .parked
-        .remove(&token)
+        .remove_parked(token)
         .and_then(|parked| parked.completion)
     {
         Some(Ok(completion)) => Ok(completion),
@@ -884,6 +903,9 @@ pub(crate) unsafe fn issue_net(
         }
     }
     let request = buffer.request(net, stream);
+    if binding.adapter.injected_wait(&request) {
+        binding.waits.parked_injected.insert(token);
+    }
     binding.waits.parked.insert(
         token,
         Parked {
@@ -894,6 +916,7 @@ pub(crate) unsafe fn issue_net(
             task: None,
             generation: 0,
             completion: None,
+            ready: false,
         },
     );
     // Invalidate timer-only publication before park can retire a boundary.
@@ -902,8 +925,7 @@ pub(crate) unsafe fn issue_net(
     let binding = unsafe { Binding::get(ctx) };
     let completion = binding
         .waits
-        .parked
-        .remove(&token)
+        .remove_parked(token)
         .and_then(|p| p.completion)
         .unwrap_or_else(|| crate::fault("a borrowed host wait resumed without completion"));
     Ok(Some((completion.map(|c| net_result(&request, c)), true)))
@@ -926,13 +948,19 @@ pub(crate) unsafe fn arm(
     // also refreshes the run's armed/parked count before returning.
     // Both policies copy the issuer before the home callback leaves the role.
     let task = crate::tasks::current_path(ctx);
-    unsafe { at_home(ctx, || arm_here(ctx, scope, generation, clock, at, &task)) }?
+    let owner = crate::tasks::scheduler(ctx).scope_key(scope);
+    unsafe {
+        at_home(ctx, || {
+            arm_here(ctx, scope, generation, owner, clock, at, &task)
+        })
+    }?
 }
 
 unsafe fn arm_here(
     ctx: *mut TaskCtx,
     scope: u32,
     generation: u32,
+    owner: Option<crate::tasks::registry::ScopeKey>,
     clock: u64,
     at: u64,
     issuer: &[u32],
@@ -947,7 +975,7 @@ unsafe fn arm_here(
                 .get()
                 .expect("production Free service")
         };
-        return io.arm(scope, generation, clock, at);
+        return io.arm(owner.expect("live scope timer owner"), clock, at);
     }
     let binding = unsafe { Binding::get(ctx) };
     if binding.adapter.wants_issuer() {
@@ -1125,9 +1153,17 @@ pub(crate) struct ReadyHost {
 /// # Safety
 /// Home only; the policy reserves all host effects and retains no role borrow.
 pub(crate) unsafe fn ready_home(run: *mut crate::context::RunShared) -> Stopped<HomeReady> {
+    unsafe { ready_home_canceled(run, &[]) }
+}
+
+/// Home only; the affected cancellation registrations were validated under R.
+pub(crate) unsafe fn ready_home_canceled(
+    run: *mut crate::context::RunShared,
+    canceled: &[u64],
+) -> Stopped<HomeReady> {
     let mut ready = if unsafe { (*run).host_waits.load(std::sync::atomic::Ordering::Acquire) } != 0
     {
-        unsafe { ready_binding_home(run) }?
+        unsafe { ready_binding_home(run, canceled) }?
     } else {
         HomeReady {
             expired: Vec::new(),
@@ -1142,7 +1178,10 @@ pub(crate) unsafe fn ready_home(run: *mut crate::context::RunShared) -> Stopped<
     Ok(ready)
 }
 
-unsafe fn ready_binding_home(run: *mut crate::context::RunShared) -> Stopped<HomeReady> {
+unsafe fn ready_binding_home(
+    run: *mut crate::context::RunShared,
+    canceled: &[u64],
+) -> Stopped<HomeReady> {
     let binding = unsafe { &mut *(*run).io_binding().cast::<Binding>() };
     let ready = binding.adapter.ready().map_err(Stop::refusal)?;
     let expired = expired_binding(binding, &ready)?;
@@ -1152,27 +1191,82 @@ unsafe fn ready_binding_home(run: *mut crate::context::RunShared) -> Stopped<Hom
             &expired.iter().map(|e| e.token).collect::<Vec<_>>(),
         );
     }
-    let hosts = binding
-        .waits
-        .parked
-        .iter_unordered()
-        .filter_map(|(token, parked)| {
-            let task = parked.task?;
-            let deadline = if let Request::SleepUntil { deadline, .. } = &parked.request {
-                Some(*deadline)
-            } else {
-                None
-            };
-            let ready = ready.contains(token) || binding.adapter.injected_wait(&parked.request);
-            Some(ReadyHost {
-                generation: parked.generation,
-                task,
-                token,
-                deadline,
-                ready,
+    let hosts = if unsafe { (*run).free_mode } {
+        let mut available = crate::id_map::IdSet::default();
+        match ready {
+            Ready::Tokens(tokens) => {
+                for token in tokens {
+                    if binding.waits.parked.contains_key(&token) {
+                        available.insert(token);
+                    }
+                }
+            }
+            Ready::Every => {
+                for (token, _) in binding.waits.parked.iter_unordered() {
+                    available.insert(token);
+                }
+            }
+        }
+        for token in binding.waits.parked_injected.members_unordered() {
+            available.insert(token);
+        }
+        for &token in canceled {
+            if let Some(row) = binding.waits.parked.get(&token)
+                && binding.adapter.cancellable(token)
+                && crate::io_checks::cancellation_result(&row.request, 0).is_some()
+            {
+                available.insert(token);
+            }
+        }
+        for token in available.members_unordered() {
+            let row = binding.waits.parked.get_mut(&token).unwrap();
+            if row.completion.is_none() {
+                row.ready = true;
+                binding.waits.parked_ready.insert(token);
+            }
+        }
+        binding
+            .waits
+            .parked_ready
+            .members_unordered()
+            .filter_map(|token| {
+                let row = binding.waits.parked.get(&token)?;
+                Some(ReadyHost {
+                    task: row.task?,
+                    generation: row.generation,
+                    token,
+                    deadline: if let Request::SleepUntil { deadline, .. } = row.request {
+                        Some(deadline)
+                    } else {
+                        None
+                    },
+                    ready: row.ready,
+                })
             })
-        })
-        .collect();
+            .collect()
+    } else {
+        binding
+            .waits
+            .parked
+            .iter_unordered()
+            .filter_map(|(token, parked)| {
+                let task = parked.task?;
+                let deadline = if let Request::SleepUntil { deadline, .. } = &parked.request {
+                    Some(*deadline)
+                } else {
+                    None
+                };
+                let ready = ready.contains(token) || binding.adapter.injected_wait(&parked.request);
+                Some(ReadyHost {
+                    generation: parked.generation,
+                    task,
+                    token,
+                    deadline,
+                    ready,
+                })
+            })
+            .collect()
+    };
     unsafe {
         (*run).timer_hint.scope_only(binding.waits.scope_only());
         (*run).host_waits.store(
@@ -1511,14 +1605,7 @@ unsafe fn ready_binding(ctx: *mut TaskCtx) -> Stopped<Ready> {
     let Ready::Tokens(mut tokens) = ready else {
         return Ok(ready);
     };
-    tokens.extend(
-        binding
-            .waits
-            .parked
-            .iter_unordered()
-            .filter(|(_, parked)| binding.adapter.injected_wait(&parked.request))
-            .map(|(token, _)| token),
-    );
+    tokens.extend(binding.waits.parked_injected.members_unordered());
     tokens.sort_unstable();
     tokens.dedup();
     Ok(Ready::Tokens(tokens))
@@ -1796,6 +1883,8 @@ unsafe fn poll_binding_observed(
     if cause.is_none() && !ready {
         return Ok(false);
     }
+    binding.waits.parked_ready.remove(&token);
+    binding.waits.parked.get_mut(&token).unwrap().ready = false;
     let completion = match cause {
         Some(cause) => {
             binding.adapter.finish(token);

@@ -38,7 +38,17 @@ fn runtime50_timer_index_visits_only_affected() {
         let mut s = Scheduler::new(Schedule::default(), std::ptr::null_mut());
         let mut tokens = Vec::new();
         for slot in 0..idle {
-            let token = io.arm(slot, 2, 11, 100).unwrap().unwrap();
+            let token = io
+                .arm(
+                    ScopeKey {
+                        slot: slot,
+                        generation: 2,
+                    },
+                    11,
+                    100,
+                )
+                .unwrap()
+                .unwrap();
             tokens.push(token);
             s.scopes.push(Some(scope(2, Some(token))));
         }
@@ -95,10 +105,50 @@ fn runtime50_timer_exit_equality_and_reuse() {
     let clock = Arc::new(Clock::default());
     let io = service(clock.clone());
     let mut s = Scheduler::new(Schedule::default(), std::ptr::null_mut());
-    let a = io.arm(0, 2, 11, 100).unwrap().unwrap();
-    let exited = io.arm(1, 3, 11, 100).unwrap().unwrap();
-    let stale = io.arm(2, 4, 11, 100).unwrap().unwrap();
-    let b = io.arm(3, 5, 11, 100).unwrap().unwrap();
+    let a = io
+        .arm(
+            ScopeKey {
+                slot: 0,
+                generation: 2,
+            },
+            11,
+            100,
+        )
+        .unwrap()
+        .unwrap();
+    let exited = io
+        .arm(
+            ScopeKey {
+                slot: 1,
+                generation: 3,
+            },
+            11,
+            100,
+        )
+        .unwrap()
+        .unwrap();
+    let stale = io
+        .arm(
+            ScopeKey {
+                slot: 2,
+                generation: 4,
+            },
+            11,
+            100,
+        )
+        .unwrap()
+        .unwrap();
+    let b = io
+        .arm(
+            ScopeKey {
+                slot: 3,
+                generation: 5,
+            },
+            11,
+            100,
+        )
+        .unwrap()
+        .unwrap();
     s.scopes.extend([
         Some(scope(2, None)),
         Some(scope(3, Some(exited))),

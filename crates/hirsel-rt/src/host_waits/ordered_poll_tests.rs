@@ -47,6 +47,7 @@ fn binding(cancellable: bool) -> (Binding, Arc<AtomicU32>, Arc<AtomicU32>) {
             task: Some(3),
             generation: 0,
             completion: None,
+            ready: false,
         },
     );
     (binding, calls, finishes)
@@ -239,6 +240,7 @@ fn ordered_home_poll_does_not_retain_another_tasks_result_under_the_running_call
                     task: Some(42),
                     generation: 0,
                     completion: None,
+                    ready: false,
                 },
             );
             let (done, completed) = poll_observed_home(run, 7, None, true).unwrap();
@@ -304,6 +306,7 @@ fn an_injected_parked_wait_is_polled_even_with_a_published_future_scope_timer() 
                 let timer = arm(ctx, 0, 1, 11, 100).unwrap().unwrap();
                 // Derived watcher readiness has no driver Pending row. Mirror
                 // the normal parked insertion without inventing a task frame.
+                Binding::raw(ctx).waits.parked_injected.insert(77);
                 Binding::raw(ctx).waits.parked.insert(
                     77,
                     Parked {
@@ -315,6 +318,7 @@ fn an_injected_parked_wait_is_polled_even_with_a_published_future_scope_timer() 
                         task: None,
                         generation: 0,
                         completion: None,
+                        ready: false,
                     },
                 );
                 count(ctx);
@@ -385,6 +389,7 @@ fn home_readiness_releases_the_role_before_reacquiring_a_compute_permit() {
                             task: None,
                             generation: 0,
                             completion: None,
+                            ready: false,
                         },
                     );
                     count(ctx);

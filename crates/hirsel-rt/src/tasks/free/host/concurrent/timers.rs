@@ -2,6 +2,7 @@
 //! the admitted live provider and its shared readiness wait; replay arms none.
 //! Home serializes arm, poll and disarm. No adapter call holds a table or role.
 use super::*;
+use crate::tasks::registry::ScopeKey;
 
 const TIMER: u64 = 1 << 62;
 
@@ -19,8 +20,7 @@ struct Table {
 }
 
 struct Timer {
-    scope: u32,
-    generation: u32,
+    owner: ScopeKey,
     clock: u64,
     at: u64,
     due: bool,
@@ -28,13 +28,7 @@ struct Timer {
 
 impl Service {
     /// Home only, outside the role, while the entering scope retains its owner.
-    pub(crate) fn arm(
-        &self,
-        scope: u32,
-        generation: u32,
-        clock: u64,
-        at: u64,
-    ) -> Stopped<Option<u64>> {
+    pub(crate) fn arm(&self, owner: ScopeKey, clock: u64, at: u64) -> Stopped<Option<u64>> {
         let token = {
             let mut table = self.timers.0.lock().unwrap();
             assert!(table.next < 1 << 48, "timer counter below run tag bits");
@@ -56,8 +50,7 @@ impl Service {
                 table.rows.insert(
                     token,
                     Timer {
-                        scope,
-                        generation,
+                        owner,
                         clock,
                         at,
                         due: false,
@@ -159,16 +152,15 @@ impl Timers {
                 table.visits.fetch_add(1, Ordering::Relaxed);
             }
             let timer = &table.rows[&token];
-            let row = s.scopes.get(timer.scope as usize).and_then(Option::as_ref);
-            let Some(row) = row.filter(|r| r.generation == timer.generation) else {
+            let Some(scope) = s.live_scope(timer.owner) else {
                 table.remove(token);
                 continue;
             };
+            let row = s.scopes[scope as usize].as_ref().unwrap();
             if row.deadline.as_ref().and_then(|d| d.token) != Some(token) {
                 table.due.insert((at, token));
                 continue;
             }
-            let scope = timer.scope;
             table.remove(token);
             s.expire(scope);
             changed = true;
@@ -257,7 +249,17 @@ mod tests {
             }),
             completions: Default::default(),
         }));
-        let token = io.arm(0, 2, 11, 100).unwrap().unwrap();
+        let token = io
+            .arm(
+                ScopeKey {
+                    slot: 0,
+                    generation: 2,
+                },
+                11,
+                100,
+            )
+            .unwrap()
+            .unwrap();
         assert!(io.pending());
         // Home observes readiness while the worker has not published Done.
 
@@ -278,10 +280,30 @@ mod tests {
         assert!(!io.pending());
         io.disarm(token);
         clock.due.store(false, Ordering::Release);
-        let canceled = io.arm(0, 2, 11, 100).unwrap().unwrap();
+        let canceled = io
+            .arm(
+                ScopeKey {
+                    slot: 0,
+                    generation: 2,
+                },
+                11,
+                100,
+            )
+            .unwrap()
+            .unwrap();
         io.disarm(canceled);
         assert!(!io.pending());
-        let abandoned = io.arm(0, 2, 11, 100).unwrap().unwrap();
+        let abandoned = io
+            .arm(
+                ScopeKey {
+                    slot: 0,
+                    generation: 2,
+                },
+                11,
+                100,
+            )
+            .unwrap()
+            .unwrap();
         drop(io);
         assert_eq!(
             *clock.finishes.lock().unwrap(),

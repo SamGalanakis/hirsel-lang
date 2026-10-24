@@ -15,6 +15,7 @@ pub(crate) unsafe fn service(run: *mut RunShared) -> bool {
     if !unsafe { (*run).free_mode } || unsafe { (*run).host_waits.load(Ordering::Acquire) } == 0 {
         return false;
     }
+    let scope_source = unsafe { crate::host_waits::scope_pending_home(run) };
     let idle = unsafe { crate::pool::busy(&*run) } == 0;
     let (canceled, idle) = {
         let Some(_guard) = (unsafe { role::IdleGuard::try_new(run) }) else {
@@ -26,6 +27,9 @@ pub(crate) unsafe fn service(run: *mut RunShared) -> bool {
         if !matches!(s.logical, Logical::Free(_)) {
             return false;
         }
+        if !scope_source && !s.has_saved_host_waiter() {
+            return false;
+        }
         // A timer can wake an owner or a child whose physical save is still
         // pending. Merge only runtime metadata here; poll_free gates slots.
         let idle = idle
@@ -34,19 +38,7 @@ pub(crate) unsafe fn service(run: *mut RunShared) -> bool {
                 row.state != super::super::State::Ready
                     && row.dispatch.as_ref().is_none_or(|frame| frame.is_saved())
             });
-        let waits = s.tasks.iter().enumerate().filter_map(|(task, row)| {
-            let row = row.as_ref()?;
-            let super::super::Wait::Host { token } = row.wait? else {
-                return None;
-            };
-            Some((task as u32, token))
-        });
-        let canceled = waits
-            .filter_map(|(task, token)| {
-                let shield = s.tasks[task as usize].as_ref().unwrap().shield();
-                s.canceled_task(task, shield).map(|_| token)
-            })
-            .collect::<Vec<_>>();
+        let canceled = s.host_cancellations(1 << 63, 0);
         (canceled, idle)
     };
     // The home thread serializes this call with all worker home bridges.
@@ -151,30 +143,21 @@ pub(crate) unsafe fn service_child(run: *mut RunShared) -> crate::stop::Stopped<
     if unsafe { (*run).host_waits.load(Ordering::Acquire) } == 0 {
         return Ok(false);
     }
-    let waits = {
+    let scope_source = unsafe { crate::host_waits::scope_pending_home(run) };
+    let canceled = {
         let Some(_guard) = (unsafe { role::IdleGuard::try_new(run) }) else {
             return Ok(false);
         };
         let Some(s) = (unsafe { (*(*run).tasks.get()).as_deref_mut() }) else {
             return Ok(false);
         };
-        let mut waits = Vec::new();
-        for (task, row) in s.tasks.iter().enumerate() {
-            let Some(row) = row else { continue };
-            let Some(super::super::Wait::Host { token }) = row.wait else {
-                continue;
-            };
-            // Do not consume a readiness edge before its owner is saved.
-            // The physical-save post wakes this execution again.
-            if !readiness::saved(s, task as u32) {
-                return Ok(false);
-            }
-            waits.push((task as u32, row.generation, token));
+        if !scope_source && !s.has_saved_host_waiter() {
+            return Ok(false);
         }
-        waits
+        s.host_cancellations(1 << 63, 0)
     };
     let crate::host_waits::HomeReady { expired, hosts } =
-        unsafe { crate::host_waits::ready_home(run) }?;
+        unsafe { crate::host_waits::ready_home_canceled(run, &canceled) }?;
     let mut acknowledged = Vec::new();
     let candidates = {
         let _guard = unsafe { role::IdleGuard::home(run) };
@@ -191,16 +174,14 @@ pub(crate) unsafe fn service_child(run: *mut RunShared) -> crate::stop::Stopped<
             }
         }
         hosts.into_iter().filter_map(|host| {
-            let (_, generation, _) = waits.iter().find(|&&(task, generation, token)| {
-                task == host.task && token == host.token
-                    && s.tasks.get(task as usize).and_then(Option::as_ref)
-                        .is_some_and(|row| row.generation == generation
-                            && matches!(row.wait, Some(super::super::Wait::Host { token: t }) if t == token)
-                            && readiness::saved(s, task))
-            })?;
-            let shield = s.task(host.task).shield();
-            let cause = s.canceled_task(host.task, shield);
-            Some((host, *generation, cause))
+            let row = s.tasks.get(host.task as usize).and_then(Option::as_ref)?;
+            if row.generation != host.generation
+                || !matches!(row.wait, Some(super::super::Wait::Host {token}) if token == host.token)
+                || !readiness::saved(s, host.task)
+            { return None; }
+            let cause = s.canceled_task(host.task, row.shield());
+            let generation = host.generation;
+            Some((host, generation, cause))
         }).collect::<Vec<_>>()
     };
     unsafe { crate::host_waits::expired_ack_home(run, &acknowledged) };
@@ -271,22 +252,32 @@ pub(crate) unsafe fn runner_cancel(run: *mut RunShared) {
     unsafe { super::publish_ready(s, run) };
 }
 
+fn expiry_scope(
+    s: &super::super::Scheduler,
+    expiry: &crate::host_waits::ExpiredScope,
+) -> Option<u32> {
+    s.live_scope(super::super::registry::ScopeKey {
+        slot: expiry.scope,
+        generation: u64::from(expiry.generation),
+    })
+}
+
 fn valid_expiry(s: &super::super::Scheduler, expiry: &crate::host_waits::ExpiredScope) -> bool {
-    s.scopes
-        .get(expiry.scope as usize)
-        .and_then(Option::as_ref)
+    expiry_scope(s, expiry)
+        .and_then(|scope| s.scopes[scope as usize].as_ref())
         .is_some_and(|row| {
-            row.generation == expiry.generation
-                && row
-                    .deadline
-                    .as_ref()
-                    .is_some_and(|d| d.token == Some(expiry.token))
+            row.deadline
+                .as_ref()
+                .is_some_and(|d| d.token == Some(expiry.token))
         })
 }
 
 fn stale_expiry(s: &super::super::Scheduler, expiry: &crate::host_waits::ExpiredScope) -> bool {
-    s.scopes
-        .get(expiry.scope as usize)
-        .and_then(Option::as_ref)
-        .is_none_or(|row| row.generation != expiry.generation || row.deadline.is_none())
+    expiry_scope(s, expiry)
+        .and_then(|scope| s.scopes[scope as usize].as_ref())
+        .is_none_or(|row| {
+            row.deadline
+                .as_ref()
+                .is_none_or(|d| d.expired || d.token.is_some_and(|t| t != expiry.token))
+        })
 }

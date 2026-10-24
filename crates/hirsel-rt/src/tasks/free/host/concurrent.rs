@@ -363,18 +363,16 @@ pub(crate) unsafe fn service(run: *mut RunShared) -> bool {
             && s.tasks.iter().flatten().all(|row| {
                 row.state != State::Ready && row.dispatch.as_ref().is_none_or(|f| f.is_saved())
             });
+        let notices = s.host_cancellations(CONCURRENT, CONCURRENT);
         let rows = io.rows.lock().unwrap();
-        let canceled = rows
-            .entries
-            .iter()
-            .filter_map(|(&token, row)| {
-                let (task, generation) = row.task?;
-                let task_row = s.tasks.get(task as usize)?.as_ref()?;
-                (task_row.generation == generation
-                    && s.canceled_task(task, task_row.shield()).is_some()
-                    && crate::io_checks::cancellation_result(&row.request, 0).is_some())
-                .then_some(token & !CONCURRENT)
+        let canceled = notices
+            .into_iter()
+            .filter(|token| {
+                rows.entries.get(token).is_some_and(|row| {
+                    crate::io_checks::cancellation_result(&row.request, 0).is_some()
+                })
             })
+            .map(|token| token & !CONCURRENT)
             .collect::<Vec<_>>();
         (idle, canceled)
     };
@@ -443,8 +441,14 @@ pub(crate) unsafe fn service(run: *mut RunShared) -> bool {
                 .is_some_and(|r| {
                     r.generation == generation
                         && matches!(r.wait, Some(Wait::Host { token: t }) if t == token)
-                        && super::super::super::readiness::saved(s, task)
                 });
+            if !valid {
+                continue;
+            }
+            if !super::super::super::readiness::saved(s, task) {
+                rows.ready.insert(token);
+                continue;
+            }
             if valid {
                 row.notified = true;
                 s.unpark(task);

@@ -156,6 +156,7 @@ struct Task {
     control: Option<registry::TaskLease>,
     /// Waiters subscribed to this task's cancellation.
     cancel_subs: Vec<registry::CancelSub>,
+    host_cancel: Option<registry::CancelRegistration>,
     /// Role-owned notification metadata. Remote wakes never read a running
     /// TaskCtx, whose local runtime entries may hold an exclusive borrow.
     dispatch: Option<std::sync::Arc<crate::pool::free::Frame>>,
@@ -303,6 +304,7 @@ pub(crate) struct Scheduler {
     /// Replay enablement and live free-mode object waits.
     retrying: Vec<u32>,
     /// Cancellation subscriptions a cancellation touched, until drained.
+    host_waiters: std::collections::BTreeSet<u32>,
     cancel_notices: Vec<registry::CancelNotice>,
     cancel_registrations: u64,
 }
@@ -409,7 +411,10 @@ impl Scheduler {
         let key = self
             .task_key(task)
             .unwrap_or_else(|| fault("a cancellation subscription of a vacant task row"));
-        self.cancel_registrations += 1;
+        self.cancel_registrations = self
+            .cancel_registrations
+            .checked_add(1)
+            .unwrap_or_else(|| fault("cancellation registration counter exhausted"));
         let registration = self.cancel_registrations;
         self.task(task).cancel_subs.push(registry::CancelSub {
             token,
@@ -478,6 +483,36 @@ impl Scheduler {
                 registration: sub.registration,
             });
         }
+    }
+    /// A prepared request is not yet a parked event source. Only a saved
+    /// host waiter authorizes home readiness without an armed scope timer.
+    /// At most the currently running workers can precede the first saved
+    /// waiter; unrelated task rows are never visited.
+    fn has_saved_host_waiter(&self) -> bool {
+        self.host_waiters
+            .iter()
+            .any(|&task| readiness::saved(self, task))
+    }
+    /// Drain only cancellation events addressed to this host service. The
+    /// registration check rejects delayed notices after retry or row reuse.
+    fn host_cancellations(&mut self, mask: u64, value: u64) -> Vec<u64> {
+        let mut notices = Vec::new();
+        self.drain_cancel_notices_matching(mask, value, &mut notices);
+        notices
+            .into_iter()
+            .filter_map(|notice| {
+                let task = self.live_task(notice.task)?;
+                let row = self.tasks[task as usize].as_ref()?;
+                let registration = row.host_cancel?;
+                if registration.key != notice.task
+                    || registration.registration != notice.registration
+                    || !matches!(row.wait, Some(Wait::Host {token}) if token == notice.token)
+                {
+                    return None;
+                }
+                self.canceled_task(task, row.shield()).map(|_| notice.token)
+            })
+            .collect()
     }
     /// The task a Task word names, which must belong to `scope`.
     fn task_handle(&mut self, word: u64, scope: u32) -> u32 {
@@ -637,6 +672,20 @@ impl Scheduler {
         row.parked_at = at;
         row.woken = true;
         self.woken.push(current);
+        if matches!(wait, Wait::Host { .. }) {
+            self.host_waiters.insert(current);
+        }
+        if matches!(self.logical, Logical::Free(_))
+            && let Wait::Host { token } = wait
+        {
+            let registration = self.subscribe_cancel(current, token);
+            assert!(
+                self.task(current)
+                    .host_cancel
+                    .replace(registration)
+                    .is_none()
+            );
+        }
         match wait {
             Wait::Join { child, .. } => self.task(child).awaited_by = Some(current),
             Wait::Receive { channel, .. } | Wait::ReceiveReady { channel } => {
@@ -668,6 +717,10 @@ impl Scheduler {
     }
     /// A poll ended parked `task`'s wait: it leaves every registration and joins the queue.
     fn unpark(&mut self, task: u32) {
+        self.host_waiters.remove(&task);
+        if let Some(registration) = self.task(task).host_cancel.take() {
+            self.unsubscribe_cancel(registration.key, registration.registration);
+        }
         let row = self.task(task);
         let (at, wait) = (row.parked_at, row.wait.take());
         row.state = State::Ready;
@@ -819,6 +872,7 @@ impl Scheduler {
     }
     /// Detach the row without destroying owned storage in a recording section.
     fn retire_task(&mut self, index: u32) -> Task {
+        self.host_waiters.remove(&index);
         let task = self.tasks[index as usize]
             .take()
             .unwrap_or_else(|| fault("a task completed twice"));
@@ -877,6 +931,7 @@ impl Task {
             generation,
             control: None,
             cancel_subs: Vec::new(),
+            host_cancel: None,
             dispatch: None,
             ctx,
             stack: None,
@@ -4859,3 +4914,7 @@ mod free_policy_tests {
         assert_eq!(s.first_completed(0), Some(0));
     }
 }
+
+#[cfg(test)]
+#[path = "tasks/runtime50/modules.rs"]
+mod runtime50;
