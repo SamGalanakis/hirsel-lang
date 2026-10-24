@@ -87,7 +87,10 @@ land; land says so, and you run it again for them.
 
 A ticket whose commits do not replay leaves the batch with the conflict
 message a single land prints; the rest stay on the tree before it. A
-change that touches generated files is refused the same way. A red batch
+conflict with origin/main is final at once. A conflict with batched changes
+ahead of the ticket stands only if every one of them lands; otherwise the
+ticket stays queued for the next head. A change that touches generated
+files is refused at once. A red batch
 splits into halves, each checked on the green tree before it. A half that
 is already known red is split without another check. A ticket is blamed
 only when a check of its change alone, on a green tree, is red; the culprit
@@ -223,7 +226,8 @@ after losing its ticket. Re-execution retains the ticket and PID identity.
 Batch cases: three clean changes
 land with one check run; one red change in a batch of four is isolated in
 five checks, and the other three land; a conflict in the middle ticket
-leaves only that ticket; a dead lane's ticket is dropped; a batch that
+leaves only that ticket; a conflict with a red ticket ahead stays queued
+and lands next; a dead lane's ticket is dropped; a batch that
 loses a push race is checked again and lands whole; and a ticket queued
 by an older land is batched and later finds nothing to land.
 Further cases cover

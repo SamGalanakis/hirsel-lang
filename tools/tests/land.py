@@ -209,7 +209,7 @@ if pathlib.Path.cwd().name == 'lane':
         checks = self.recording_remote()
         if red:
             with (self.lane / 'tools/buck2/fmt.py').open('a') as out:
-                out.write("if pathlib.Path('red.txt').exists():\n"
+                out.write("if pathlib.Path('red.txt').is_file() and pathlib.Path('red.txt').read_text() == 'red\\n':\n"
                           "    print('Diff in red.txt at line 1:')\n    sys.exit(1)\n")
             self.git(self.lane, 'commit', '-qam', 'red fmt')
         # The fake checks are main's; only each lane's own commit is queued.
@@ -299,6 +299,20 @@ if pathlib.Path.cwd().name == 'lane':
         self.assertEqual(outputs[0].count('pass  workspace build'), 1, outputs[0])
         self.assertEqual(self.main_log()[:3], ['lane 2', 'lane 0', 'record checks'])
         self.assertEqual(self.git(lanes[1], 'status', '--porcelain'), '')
+        self.assertEqual(self.queued(), [])
+
+    def test_a_conflict_with_a_red_ticket_ahead_stays_queued_and_lands_next(self):
+        edits = {0: ('red.txt', 'red\n'), 1: ('red.txt', 'other\n')}
+        checks, lanes, lands, holder = self.batch_lanes(3, edits=edits, red=True)
+        holder.unlink()
+        head = self.finish_land(lands[0], 1)
+        self.assertIn('it stands if the batch ahead of it lands', head)
+        self.assertIn('ticket 3 for lane1 stays queued', head)
+        self.assertIn('refusing to push a red tree', head)
+        # Lane 1 never conflicted with main: once the red head leaves, it lands by itself.
+        self.assertNotIn('conflicts', self.finish_land(lands[1]))
+        self.finish_land(lands[2])
+        self.assertEqual(self.main_log()[:3], ['lane 1', 'lane 2', 'red fmt'])
         self.assertEqual(self.queued(), [])
 
     def test_a_dead_lanes_ticket_is_dropped_from_the_batch(self):
