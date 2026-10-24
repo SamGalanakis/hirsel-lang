@@ -40,16 +40,19 @@ struct Fixture {
 }
 impl Fixture {
     fn new(verify: Verify) -> Self {
+        Self::with_source(
+            verify,
+            "fn helper()->u64{7u64}\npub fn main()->Result[(),u64]{Error(helper())}",
+        )
+    }
+    fn with_source(verify: Verify, source: &str) -> Self {
         let store = Arc::new(CountedStore::default());
         let mut engine = QueryEngine::new(default_environment(), crate::compiler_adapters())
             .with_result_store(store.clone());
         engine.verify = verify;
         let file = engine
             .sources
-            .add(
-                "immutable-launch.hir",
-                "fn helper()->u64{7u64}\npub fn main()->Result[(),u64]{Error(helper())}".into(),
-            )
+            .add("immutable-launch.hir", source.into())
             .unwrap();
         engine.parse_file(file, &default_context()).unwrap();
         let selected = vec![hirsel_engine::entry_path(&default_context())];
@@ -136,6 +139,28 @@ impl Fixture {
             callees: None,
         }
     }
+}
+
+#[test]
+fn immutable_constructor_refuses_a_verified_nonentry_body_within_bounds() {
+    hirsel_engine::with_compiler_stack(|| {
+        let mut fixture = Fixture::with_source(
+            Verify::On,
+            "pub fn main()->Result[(),u64]{let f=fn()->Result[(),u64] uses {}{Error(7u64)};f()}",
+        );
+        let path = fixture.selected[0].clone();
+        let source_entry = fixture.entries[&path];
+        let output = fixture.lower.input(&path).unwrap().0.unwrap();
+        let bodies = output.invocations().body_count();
+        let other = (0..bodies)
+            .find(|body| *body != source_entry)
+            .expect("actual original source has a second body");
+        fixture.entries.insert(path, other);
+        assert!(
+            NativeLinkSource::from_settled(fixture.facts(), &fixture.lower).is_err(),
+            "body {other} is within {bodies} source bodies but is not V's entry {source_entry}"
+        );
+    });
 }
 
 #[test]
