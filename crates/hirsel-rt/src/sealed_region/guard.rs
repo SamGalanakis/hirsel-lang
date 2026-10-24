@@ -141,6 +141,24 @@ impl<'ctx> DemandedGuard<'ctx> {
             .map_err(|(error, input)| (Error::Journal(error), input))
     }
     /// # Safety
+    /// Journal::replace_transfer's source mutation, returned ordinary ownership
+    /// and cleanup contract applies. Consumed guards return input unchanged.
+    pub unsafe fn replace_transfer(
+        &mut self,
+        id: AllocationId,
+        keep: &[usize],
+        take: &[usize],
+        input: Update,
+    ) -> Result<journal::Replacement, (Error, Update)> {
+        let journal = match self.journal_mut() {
+            Ok(journal) => journal,
+            Err(error) => return Err((error, input)),
+        };
+        unsafe { journal.replace_transfer(id, keep, take, input) }
+            .map_err(|(error, input)| (Error::Journal(error), input))
+    }
+
+    /// # Safety
     /// Original source scope entry authorizes setting this MEM-6 bound once.
     pub unsafe fn bound(&mut self, capacity: u64) -> Result<(), Error> {
         self.journal()?;

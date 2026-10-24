@@ -36,6 +36,14 @@ pub enum Error {
 
 pub type Rejected = (Error, Update);
 
+/// Successful mutation output. Transferred words are actual source credits
+/// now owned by the caller's ordinary result/slot, not by this metadata.
+/// Dropping the raw vector itself retires none of them.
+pub struct Replacement {
+    pub previous: Receipt<Record>,
+    pub transferred: Vec<*mut Header>,
+}
+
 mod seal;
 pub use seal::SealError;
 
@@ -129,27 +137,57 @@ impl<'ctx> Journal<'ctx> {
         keep: &[usize],
         input: Update,
     ) -> Result<Receipt<Record>, Rejected> {
+        unsafe { self.replace_transfer(id, keep, &[], input) }.map(|result| result.previous)
+    }
+
+    /// Commit a mutation that transfers some old holders into an ordinary
+    /// result (for example pop), without a duplicate/release round trip.
+    /// `keep` and `take` are increasing, disjoint old holder ordinals. Every
+    /// omitted holder retires only after new metadata/custody are committed.
+    /// On rejection the input and all old source custody remain unchanged.
+    ///
+    /// # Safety
+    /// replace's event/pairing contract applies. Each taken credit transfers
+    /// exactly once into the caller's actual owning result/slot on success.
+    /// Caller supplies its ordinary cleanup and does not treat previous
+    /// snapshot metadata or copied words as an additional owner. Already
+    /// committed mutation/transfer is not rolled back on later entered failure.
+    pub unsafe fn replace_transfer(
+        &mut self,
+        id: AllocationId,
+        keep: &[usize],
+        take: &[usize],
+        input: Update,
+    ) -> Result<Replacement, Rejected> {
         let Some(old) = self.holders.get(&id) else {
             return Err((Error::Semantic(semantic::Error::UnknownAllocation), input));
         };
-        if keep.windows(2).any(|pair| pair[0] >= pair[1])
-            || keep.last().is_some_and(|&index| index >= old.len())
+        let invalid = |indices: &[usize]| {
+            indices.windows(2).any(|pair| pair[0] >= pair[1])
+                || indices.last().is_some_and(|&index| index >= old.len())
+        };
+        if invalid(keep)
+            || invalid(take)
+            || keep.iter().any(|index| take.binary_search(index).is_ok())
         {
             return Err((Error::InvalidRetention, input));
         }
         if input.additions.iter().any(|holder| holder.is_null()) {
             return Err((Error::InvalidHolder, input));
         }
-        // Reserve both new custody and retirement vectors before committing
-        // metadata. These are raw snapshots, acquiring no language holders.
-        let mut next = Vec::with_capacity(keep.len() + input.additions.len());
+        // Stage raw words before metadata commit; staging acquires no holder.
+        let mut next = Vec::with_capacity(keep.len());
         next.extend(keep.iter().map(|&index| old[index]));
         next.extend_from_slice(&input.additions);
-        let mut removed = Vec::with_capacity(old.len() - keep.len());
+        let transferred = take.iter().map(|&index| old[index]).collect();
+        let mut removed = Vec::with_capacity(old.len() - keep.len() - take.len());
         let mut kept = keep.iter().copied().peekable();
+        let mut taken = take.iter().copied().peekable();
         for (index, &holder) in old.iter().enumerate() {
             if kept.peek() == Some(&index) {
                 kept.next();
+            } else if taken.peek() == Some(&index) {
+                taken.next();
             } else {
                 removed.push(holder);
             }
@@ -159,10 +197,12 @@ impl<'ctx> Journal<'ctx> {
             Err(error) => return Err((Error::Semantic(error), input)),
         };
         self.holders.insert(id, next);
-        // Both state components now describe the committed payload. The old
-        // raw holder vector drops without releasing transferred credits.
+        // Kept and taken credits moved, so only omitted credits retire.
         unsafe { Credits::from_owned(removed).release(self.ctx.as_mut()) };
-        Ok(previous)
+        Ok(Replacement {
+            previous,
+            transferred,
+        })
     }
 }
 
