@@ -23,6 +23,7 @@ pub struct DemandBody<'a> {
     pub closures: BTreeMap<u32, usize>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CallDemand {
     /// All possible original targets at this call, including indirect targets.
     /// No clone-budget truncation is permitted in this independently built set.
@@ -32,7 +33,7 @@ pub enum CallDemand {
     External(ExternalDemand),
 }
 
-#[derive(Default)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ExternalDemand {
     /// Unconditional payload requirements (for example, a seal root).
     pub parameters: Vec<u32>,
@@ -56,29 +57,33 @@ pub struct Requirements {
     pub result_inventory: bool,
 }
 
+mod projection;
+pub use projection::{BodyProjection, SourceCall, SourceClosure, SourceOperand};
+
+/// Per-instance projection plus independently selected original target expansion.
+/// Absence remains unavailable; caller-selected/unknown targets never become
+/// an empty contract just because the executable body has been released.
+pub struct CompactBody<'a> {
+    pub source: &'a BodyProjection,
+    pub calls: &'a BTreeMap<u32, CallDemand>,
+    pub closures: &'a BTreeMap<u32, usize>,
+}
+
 struct Graph<'a> {
-    bodies: &'a [DemandBody<'a>],
+    bodies: &'a [CompactBody<'a>],
     offsets: Vec<usize>,
     edges: Vec<Vec<usize>>,
 }
 
 impl Graph<'_> {
-    fn local(&self, body: usize, local: usize, inventory: bool) -> Result<usize, SourceError> {
-        if local >= self.bodies[body].body.locals.len() {
+    fn local(&self, body: usize, local: u32, inventory: bool) -> Result<usize, SourceError> {
+        if local as usize >= self.bodies[body].source.locals {
             return Err(SourceError::Malformed("demand source local"));
         }
-        Ok(self.offsets[body] + local * 2 + usize::from(inventory))
-    }
-    fn place(&self, body: usize, place: PlaceId, inventory: bool) -> Result<usize, SourceError> {
-        let place = self.bodies[body]
-            .body
-            .places
-            .get(place.0 as usize)
-            .ok_or(SourceError::Malformed("demand source place"))?;
-        self.local(body, place.root.0 as usize, inventory)
+        Ok(self.offsets[body] + local as usize * 2 + usize::from(inventory))
     }
     fn result(&self, body: usize, inventory: bool) -> usize {
-        self.offsets[body] + self.bodies[body].body.locals.len() * 2 + usize::from(inventory)
+        self.offsets[body] + self.bodies[body].source.locals * 2 + usize::from(inventory)
     }
     fn edge(&mut self, from: usize, to: usize) {
         self.edges[from].push(to);
@@ -87,30 +92,14 @@ impl Graph<'_> {
         self.edge(a, b);
         self.edge(b, a);
     }
-    fn values(
-        &mut self,
-        body: usize,
-        destination: PlaceId,
-        input: PlaceId,
-    ) -> Result<(), SourceError> {
-        let a = self.place(body, destination, false)?;
-        let b = self.place(body, input, false)?;
+    fn values(&mut self, body: usize, destination: u32, input: u32) -> Result<(), SourceError> {
+        let a = self.local(body, destination, false)?;
+        let b = self.local(body, input, false)?;
         self.edge(a, b);
-        // An Arena token may be forwarded inside a whole-value aggregate or
-        // projected view. Inventory identity must follow both aliases.
-        let a = self.place(body, destination, true)?;
-        let b = self.place(body, input, true)?;
+        let a = self.local(body, destination, true)?;
+        let b = self.local(body, input, true)?;
         self.both(a, b);
         Ok(())
-    }
-    fn capture_locals(&self, body: usize) -> Vec<usize> {
-        self.bodies[body]
-            .body
-            .locals
-            .iter()
-            .enumerate()
-            .filter_map(|(i, l)| (l.storage == Storage::Capture).then_some(i))
-            .collect()
     }
     fn target(&self, target: usize) -> Result<(), SourceError> {
         if target >= self.bodies.len() {
@@ -120,273 +109,157 @@ impl Graph<'_> {
     }
     fn scan(&mut self, body: usize) -> Result<(), SourceError> {
         let bodies = self.bodies;
-        let source = bodies[body].body;
-        for block in &source.blocks {
-            for instruction in &block.instructions {
-                match &instruction.kind {
-                    InstructionKind::Assign { destination, value } => {
-                        let rvalue = source
-                            .rvalues
-                            .get(value.0 as usize)
-                            .ok_or(SourceError::Malformed("demand source rvalue"))?;
-                        let mut inputs = Vec::new();
-                        let allocation = match rvalue {
-                            Rvalue::Use(value) | Rvalue::Unary { value, .. } => {
-                                inputs.push(value.place);
-                                None
-                            }
-                            Rvalue::Binary { left, right, .. } => {
-                                inputs.extend([left.place, right.place]);
-                                None
-                            }
-                            Rvalue::Construct {
-                                fields,
-                                constructor,
-                                destination,
-                            } => {
-                                inputs.extend(fields.iter().map(|f| f.value.place));
-                                if let hirsel_tir::Constructor::SortedMap { by } = constructor {
-                                    inputs.push(by.place);
-                                }
-                                Some(destination)
-                            }
-                            Rvalue::Closure {
-                                captures,
-                                destination: allocation,
-                                ..
-                            } => {
-                                let &target = bodies[body].closures.get(&value.0).ok_or(
-                                    SourceError::Unsupported(
-                                        "demand needs original closure instance",
-                                    ),
-                                )?;
-                                self.target(target)?;
-                                let locals = self.capture_locals(target);
-                                if locals.len() != captures.len() {
-                                    return Err(SourceError::Malformed(
-                                        "demand source capture arity",
-                                    ));
-                                }
-                                for (&local, capture) in locals.iter().zip(captures) {
-                                    let input = self.place(body, capture.place, false)?;
-                                    let formal = self.local(target, local, false)?;
-                                    self.edge(formal, input);
-                                    let environment = self.place(body, *destination, false)?;
-                                    self.edge(formal, environment);
-                                    if capture.usage == UseKind::Mut {
-                                        self.edge(input, formal);
-                                    }
-                                    let input = self.place(body, capture.place, true)?;
-                                    let formal = self.local(target, local, true)?;
-                                    self.both(input, formal);
-                                    inputs.push(capture.place);
-                                }
-                                Some(allocation)
-                            }
-                            Rvalue::Constant(_)
-                            | Rvalue::ReadConstant { .. }
-                            | Rvalue::FunctionReference { .. }
-                            | Rvalue::Size(_)
-                            | Rvalue::Shape(_) => None,
-                        };
-                        for &input in &inputs {
-                            self.values(body, *destination, input)?;
-                        }
-                        if let Some(Destination::Arena(origin)) = allocation {
-                            // Whole-source matching includes all aliases of this
-                            // exact binder. No type-name or physical-domain guess.
-                            let arenas: Vec<_> = source
-                                .places
-                                .iter()
-                                .enumerate()
-                                .filter(|(_, p)| p.binding.as_ref() == Some(origin))
-                                .map(|(i, _)| PlaceId(i as u32))
-                                .collect();
-                            if arenas.is_empty() {
-                                return Err(SourceError::Malformed(
-                                    "demand arena destination lacks source binding",
-                                ));
-                            }
-                            for arena in arenas {
-                                let retained = self.place(body, arena, true)?;
-                                let payload = self.place(body, *destination, false)?;
-                                self.edge(retained, payload);
-                            }
-                        } else if let Some(Destination::Caller(_)) = allocation {
-                            // Caller-selected storage requires the actual source
-                            // destination mapping, not an invented heap placement.
-                            return Err(SourceError::Unsupported(
-                                "demand needs caller destination expansion",
-                            ));
-                        }
+        let source = bodies[body].source;
+        for (from, edges) in source.edges.iter().enumerate() {
+            for &to in edges {
+                self.edge(self.offsets[body] + from, self.offsets[body] + to);
+            }
+        }
+        for (value, instances) in source.closures() {
+            for closure in instances {
+                let &target = bodies[body]
+                    .closures
+                    .get(value)
+                    .ok_or(SourceError::Unsupported(
+                        "demand needs original closure instance",
+                    ))?;
+                self.target(target)?;
+                let captures = &bodies[target].source.captures;
+                if captures.len() != closure.captures.len() {
+                    return Err(SourceError::Malformed("demand source capture arity"));
+                }
+                for (&local, capture) in captures.iter().zip(&closure.captures) {
+                    let input = self.local(body, capture.local, false)?;
+                    let formal = self.local(target, local, false)?;
+                    self.edge(formal, input);
+                    let environment = self.local(body, closure.result, false)?;
+                    self.edge(formal, environment);
+                    if capture.usage == UseKind::Mut {
+                        self.edge(input, formal);
                     }
-                    InstructionKind::Replace {
-                        destination,
-                        value,
-                        displaced,
-                        ..
-                    } => {
-                        self.values(body, *destination, value.place)?;
-                        self.values(body, *displaced, *destination)?;
-                    }
-                    InstructionKind::Snapshot { destination, value } => {
-                        self.values(body, *destination, value.place)?;
-                    }
-                    // Binding metadata, loans, cleanup and liveness do not
-                    // remove source-history requirements. In particular a Drop
-                    // cannot erase a retained semantic allocation.
-                    _ => (),
+                    let input = self.local(body, capture.local, true)?;
+                    let formal = self.local(target, local, true)?;
+                    self.both(input, formal);
                 }
             }
         }
-        for (block, source_block) in source.blocks.iter().enumerate() {
-            match &source_block.terminator {
-                Terminator::Return { value, .. } => {
-                    let output = self.result(body, false);
-                    let input = self.place(body, value.place, false)?;
-                    self.edge(output, input);
-                    let output = self.result(body, true);
-                    let input = self.place(body, value.place, true)?;
-                    self.both(output, input);
-                }
-                Terminator::Call {
-                    callee,
-                    arguments,
-                    returns,
-                    ..
-                } => {
-                    let expansion =
-                        bodies[body]
-                            .calls
-                            .get(&(block as u32))
-                            .ok_or(SourceError::Unsupported(
-                                "demand needs complete original call expansion",
-                            ))?;
-                    let mut actuals = BTreeMap::new();
-                    for argument in arguments {
-                        if actuals
-                            .insert(argument.parameter.0, &argument.value)
-                            .is_some()
-                        {
-                            return Err(SourceError::Malformed("demand duplicate source argument"));
-                        }
+        for (block, call) in source.calls() {
+            let expansion = bodies[body]
+                .calls
+                .get(block)
+                .ok_or(SourceError::Unsupported(
+                    "demand needs complete original call expansion",
+                ))?;
+            let actual = |ordinal: u32| {
+                call.arguments
+                    .get(&ordinal)
+                    .ok_or(SourceError::Malformed("demand source argument selector"))
+            };
+            match expansion {
+                CallDemand::Bodies(targets) => {
+                    if targets.is_empty() {
+                        return Err(SourceError::Unsupported(
+                            "demand has no original call targets",
+                        ));
                     }
-                    let actual = |ordinal: u32| {
-                        actuals
-                            .get(&ordinal)
-                            .copied()
-                            .ok_or(SourceError::Malformed("demand source argument selector"))
-                    };
-                    match expansion {
-                        CallDemand::Bodies(targets) => {
-                            if targets.is_empty() {
-                                return Err(SourceError::Unsupported(
-                                    "demand has no original call targets",
-                                ));
-                            }
-                            for &target in targets {
-                                self.target(target)?;
-                                let parameters = &bodies[target].body.parameters;
-                                if parameters.len() != actuals.len() {
-                                    return Err(SourceError::Malformed("demand source call arity"));
-                                }
-                                for (ordinal, local) in parameters.iter().enumerate() {
-                                    let value = actual(ordinal as u32)?;
-                                    let formal = self.local(target, local.0 as usize, false)?;
-                                    let input = self.place(body, value.place, false)?;
-                                    self.edge(formal, input);
-                                    if value.usage == UseKind::Mut {
-                                        self.edge(input, formal);
-                                    }
-                                    let formal = self.local(target, local.0 as usize, true)?;
-                                    let input = self.place(body, value.place, true)?;
-                                    self.both(formal, input);
-                                }
-                                for local in self.capture_locals(target) {
-                                    let Callee::Indirect { value, .. } = callee else {
-                                        return Err(SourceError::Malformed(
-                                            "demand direct target has captures",
-                                        ));
-                                    };
-                                    let formal = self.local(target, local, false)?;
-                                    let environment = self.place(body, value.place, false)?;
-                                    self.edge(formal, environment);
-                                    if value.usage == UseKind::Mut {
-                                        self.edge(environment, formal);
-                                    }
-                                    let formal = self.local(target, local, true)?;
-                                    let environment = self.place(body, value.place, true)?;
-                                    self.both(formal, environment);
-                                }
-                                if let Some(returned) = returns {
-                                    let output = self.place(body, returned.destination, false)?;
-                                    self.edge(output, self.result(target, false));
-                                    let output = self.place(body, returned.destination, true)?;
-                                    self.both(output, self.result(target, true));
-                                }
-                            }
+                    for &target in targets {
+                        self.target(target)?;
+                        let parameters = &bodies[target].source.parameters;
+                        if parameters.len() != call.arguments.len() {
+                            return Err(SourceError::Malformed("demand source call arity"));
                         }
-                        CallDemand::External(summary) => {
-                            if matches!(callee, Callee::Indirect { .. }) {
-                                return Err(SourceError::Unsupported(
-                                    "demand needs indirect source targets and environment",
-                                ));
+                        for (ordinal, &local) in parameters.iter().enumerate() {
+                            let value = actual(ordinal as u32)?;
+                            let formal = self.local(target, local, false)?;
+                            let input = self.local(body, value.local, false)?;
+                            self.edge(formal, input);
+                            if value.usage == UseKind::Mut {
+                                self.edge(input, formal);
                             }
-                            for &p in &summary.parameters {
-                                let input = self.place(body, actual(p)?.place, false)?;
-                                self.edge(0, input);
+                            let formal = self.local(target, local, true)?;
+                            let input = self.local(body, value.local, true)?;
+                            self.both(formal, input);
+                        }
+                        for &local in &bodies[target].source.captures {
+                            let environment = call.environment.as_ref().ok_or(
+                                SourceError::Malformed("demand direct target has captures"),
+                            )?;
+                            let formal = self.local(target, local, false)?;
+                            let input = self.local(body, environment.local, false)?;
+                            self.edge(formal, input);
+                            if environment.usage == UseKind::Mut {
+                                self.edge(input, formal);
                             }
-                            for &p in &summary.inventory {
-                                let input = self.place(body, actual(p)?.place, true)?;
-                                self.edge(0, input);
-                            }
-                            if let Some(returned) = returns {
-                                for &p in &summary.result {
-                                    self.values(body, returned.destination, actual(p)?.place)?;
-                                }
-                            } else if !summary.result.is_empty() {
-                                return Err(SourceError::Malformed(
-                                    "demand result on diverging source call",
-                                ));
-                            }
-                            for (output, inputs) in &summary.mutations {
-                                let output = actual(*output)?;
-                                if output.usage != UseKind::Mut {
-                                    return Err(SourceError::Malformed(
-                                        "demand mutation lacks mut source argument",
-                                    ));
-                                }
-                                for &input in inputs {
-                                    self.values(body, output.place, actual(input)?.place)?;
-                                }
-                            }
-                            for (grant, inputs) in &summary.retained {
-                                let inventory = self.place(body, actual(*grant)?.place, true)?;
-                                for &input in inputs {
-                                    let payload = self.place(body, actual(input)?.place, false)?;
-                                    self.edge(inventory, payload);
-                                }
-                            }
+                            let formal = self.local(target, local, true)?;
+                            let input = self.local(body, environment.local, true)?;
+                            self.both(formal, input);
+                        }
+                        if let Some(returned) = call.result {
+                            let output = self.local(body, returned, false)?;
+                            self.edge(output, self.result(target, false));
+                            let output = self.local(body, returned, true)?;
+                            self.both(output, self.result(target, true));
                         }
                     }
                 }
-                _ => (),
+                CallDemand::External(summary) => {
+                    if call.environment.is_some() {
+                        return Err(SourceError::Unsupported(
+                            "demand needs indirect source targets and environment",
+                        ));
+                    }
+                    for &p in &summary.parameters {
+                        let input = self.local(body, actual(p)?.local, false)?;
+                        self.edge(0, input);
+                    }
+                    for &p in &summary.inventory {
+                        let input = self.local(body, actual(p)?.local, true)?;
+                        self.edge(0, input);
+                    }
+                    if let Some(returned) = call.result {
+                        for &p in &summary.result {
+                            self.values(body, returned, actual(p)?.local)?;
+                        }
+                    } else if !summary.result.is_empty() {
+                        return Err(SourceError::Malformed(
+                            "demand result on diverging source call",
+                        ));
+                    }
+                    for (output, inputs) in &summary.mutations {
+                        let output = actual(*output)?;
+                        if output.usage != UseKind::Mut {
+                            return Err(SourceError::Malformed(
+                                "demand mutation lacks mut source argument",
+                            ));
+                        }
+                        for &input in inputs {
+                            self.values(body, output.local, actual(input)?.local)?;
+                        }
+                    }
+                    for (grant, inputs) in &summary.retained {
+                        let inventory = self.local(body, actual(*grant)?.local, true)?;
+                        for &input in inputs {
+                            let payload = self.local(body, actual(input)?.local, false)?;
+                            self.edge(inventory, payload);
+                        }
+                    }
+                }
             }
         }
         Ok(())
     }
 }
 
-/// Least conservative whole-value fixed point for this complete source closure.
-/// Each body is one base source instance; all demanded uses share its union.
-/// No source/V identity, spans, physical layouts or derived keys enter output.
-/// Unavailable call/closure/destination expansion is an error, never empty.
-pub fn analyze(bodies: &[DemandBody<'_>]) -> Result<Vec<Requirements>, SourceError> {
+/// Analyze only captured dependency data. No executable body/DefinitionRef is
+/// retained while assembling or solving the complete source instance graph.
+/// Source/V observations and complete target expansions remain independent
+/// query-owner inputs; this function never constructs authority or a contract.
+pub fn analyze_compact(bodies: &[CompactBody<'_>]) -> Result<Vec<Requirements>, SourceError> {
     let mut offsets = Vec::new();
-    let mut nodes = 1; // sole root for all independently supplied sink effects
+    let mut nodes = 1;
     for source in bodies {
         offsets.push(nodes);
-        nodes += source.body.locals.len() * 2 + 2;
+        nodes += source.source.locals * 2 + 2;
     }
     let mut graph = Graph {
         bodies,
@@ -402,15 +275,15 @@ pub fn analyze(bodies: &[DemandBody<'_>]) -> Result<Vec<Requirements>, SourceErr
         .enumerate()
         .map(|(body, source)| {
             let mut requirements = Requirements::default();
-            for local in 0..source.body.locals.len() {
+            for local in 0..source.source.locals {
                 if demanded[graph
-                    .local(body, local, false)
+                    .local(body, local as u32, false)
                     .expect("scanned source local")]
                 {
                     requirements.payload_locals.insert(local as u32);
                 }
                 if demanded[graph
-                    .local(body, local, true)
+                    .local(body, local as u32, true)
                     .expect("scanned source local")]
                 {
                     requirements.inventory_locals.insert(local as u32);
@@ -421,6 +294,25 @@ pub fn analyze(bodies: &[DemandBody<'_>]) -> Result<Vec<Requirements>, SourceErr
             requirements
         })
         .collect())
+}
+
+/// Convenience adapter while an original body closure is already borrowed.
+/// Both entry points use the same projection and compact fixed-point solver.
+pub fn analyze(bodies: &[DemandBody<'_>]) -> Result<Vec<Requirements>, SourceError> {
+    let projections = bodies
+        .iter()
+        .map(|body| BodyProjection::capture(body.body))
+        .collect::<Result<Vec<_>, _>>()?;
+    let compact = bodies
+        .iter()
+        .zip(&projections)
+        .map(|(body, source)| CompactBody {
+            source,
+            calls: &body.calls,
+            closures: &body.closures,
+        })
+        .collect::<Vec<_>>();
+    analyze_compact(&compact)
 }
 
 #[cfg(test)]

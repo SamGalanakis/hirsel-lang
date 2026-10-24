@@ -18,6 +18,30 @@ pub struct SourceInput {
     definition: DefinitionRef,
 }
 
+/// Body-free demand data bound to the actual original source observation and
+/// base instance. This is not a ReceiptContract or a V/C acceptance witness.
+#[derive(Clone)]
+pub struct SourceDemandProjection {
+    reference: hirsel_lir::invocations::ReferenceBody,
+    source: ContentHash,
+    revision: ContentHash,
+    projection: super::demand::BodyProjection,
+}
+impl SourceDemandProjection {
+    pub fn reference(&self) -> &hirsel_lir::invocations::ReferenceBody {
+        &self.reference
+    }
+    pub fn source_identity(&self) -> ContentHash {
+        self.source
+    }
+    pub fn implementation_revision(&self) -> ContentHash {
+        self.revision
+    }
+    pub fn projection(&self) -> &super::demand::BodyProjection {
+        &self.projection
+    }
+}
+
 /// Source-derived expectations for one instance. Unavailable is represented by
 /// a factory error / absent provider row, never by an empty expectation vector.
 #[derive(Clone)]
@@ -54,6 +78,28 @@ impl SourceInput {
             .bodies
             .get(key.body() as usize)
             .ok_or(SourceError::Malformed("source witness body identity"))
+    }
+
+    /// Capture dependency data at the independently observed original-Lower
+    /// miss, using the original base InstanceKey (before profile/demand-derived
+    /// requests). Caller retains and rechecks this observation separately from
+    /// semantic requirements. Actual call/closure expansions remain mandatory
+    /// inputs to analyze_compact, even after this SourceInput is released.
+    pub fn demand_projection(
+        &self,
+        base: &InstanceKey,
+    ) -> Result<SourceDemandProjection, SourceError> {
+        let body = self.demand_body(base)?;
+        Ok(SourceDemandProjection {
+            reference: hirsel_lir::invocations::ReferenceBody {
+                definition: base.definition().clone(),
+                instance: base.digest(),
+                body: base.body(),
+            },
+            source: self.source,
+            revision: self.revision,
+            projection: super::demand::BodyProjection::capture(body)?,
+        })
     }
 
     /// Current closed subset: constructor-only source bodies. Call, mutation

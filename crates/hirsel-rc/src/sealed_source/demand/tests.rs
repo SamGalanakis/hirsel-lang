@@ -488,3 +488,111 @@ fn missing_or_incomplete_source_expansion_is_never_known_empty() {
     );
     assert!(matches!(analyze(&[forged]), Err(SourceError::Malformed(_))));
 }
+
+#[test]
+fn compact_projection_outlives_source_and_keeps_original_call_ports() {
+    let t = types();
+    let projection = {
+        let mut source = body(&[t.arena, t.bytes, t.bytes], 2);
+        assign(&mut source, 2, Rvalue::Use(operand(1)));
+        call(&mut source, &[(0, UseKind::Take), (2, UseKind::Take)], None);
+        BodyProjection::capture(&source).unwrap()
+    };
+    let calls = BTreeMap::from([(0, seal())]);
+    let closures = BTreeMap::new();
+    assert_eq!(projection.local_count(), 3);
+    assert_eq!(projection.parameters(), &[0, 1]);
+    assert_eq!(projection.calls()[&0].arguments[&1].local, 2);
+    assert!(
+        matches!(&projection.calls()[&0].callee, Callee::Definition { path, .. }
+        if path == &hirsel_syntax::DefPath::core("independently_selected_operation"))
+    );
+    let demanded = analyze_compact(&[CompactBody {
+        source: &projection,
+        calls: &calls,
+        closures: &closures,
+    }])
+    .unwrap();
+    assert_eq!(demanded[0].payload_locals, BTreeSet::from([1, 2]));
+    // Bytes payload demand does not itself consume an arena grant. Only the
+    // actual seal grant (local0) seeds retained-inventory history here.
+    assert_eq!(demanded[0].inventory_locals, BTreeSet::from([0]));
+    let missing = BTreeMap::new();
+    assert!(matches!(
+        analyze_compact(&[CompactBody {
+            source: &projection,
+            calls: &missing,
+            closures: &closures
+        }]),
+        Err(SourceError::Unsupported(
+            "demand needs complete original call expansion"
+        ))
+    ));
+}
+
+#[test]
+fn compact_projection_preserves_reused_closure_expression_owner_ports() {
+    let t = types();
+    let (caller, nested) = {
+        let mut caller = body(&[t.bytes, t.scalar, t.callable, t.callable], 1);
+        assign(
+            &mut caller,
+            2,
+            Rvalue::Closure {
+                context: hirsel_types::CaptureContext::Scoped,
+                body: BodyId(1),
+                captures: vec![operand(0)],
+                destination: Destination::Heap,
+            },
+        );
+        caller.blocks[0].instructions.push(Instruction {
+            kind: InstructionKind::Assign {
+                destination: PlaceId(3),
+                value: RvalueId(0),
+            },
+            span: Span::default(),
+            on_failure: CleanupId(0),
+        });
+        let mut nested = body(&[t.arena, t.bytes], 1);
+        nested.locals[1].storage = Storage::Capture;
+        call(
+            &mut nested,
+            &[(0, UseKind::Take), (1, UseKind::Borrow)],
+            None,
+        );
+        (
+            BodyProjection::capture(&caller).unwrap(),
+            BodyProjection::capture(&nested).unwrap(),
+        )
+    };
+    let none = BTreeMap::new();
+    let closures = BTreeMap::from([(0, 1usize)]);
+    let calls = BTreeMap::from([(0, seal())]);
+    assert_eq!(caller.closures()[&0].len(), 2);
+    let demanded = analyze_compact(&[
+        CompactBody {
+            source: &caller,
+            calls: &none,
+            closures: &closures,
+        },
+        CompactBody {
+            source: &nested,
+            calls: &calls,
+            closures: &BTreeMap::new(),
+        },
+    ])
+    .unwrap();
+    assert_eq!(demanded[0].payload_locals, BTreeSet::from([0, 2, 3]));
+    assert_eq!(demanded[1].payload_locals, BTreeSet::from([1]));
+    let missing = BTreeMap::new();
+    assert!(matches!(
+        analyze_compact(&[CompactBody {
+            source: &caller,
+            calls: &none,
+            closures: &missing
+        }]),
+        Err(SourceError::Unsupported(
+            "demand needs original closure instance"
+        ))
+    ));
+}

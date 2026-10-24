@@ -356,4 +356,4 @@ pub fn payloads(
 mod tests;
 
 mod witness;
-pub use witness::{SourceDeclarations, SourceExpectation, SourceInput};
+pub use witness::{SourceDeclarations, SourceDemandProjection, SourceExpectation, SourceInput};
