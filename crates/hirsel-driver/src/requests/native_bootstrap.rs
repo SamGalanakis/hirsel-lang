@@ -76,6 +76,7 @@ pub(super) struct NativeBootstrap {
     failure: Mutex<Option<(Reference, String)>>,
     errors: RuntimeErrors,
     _allowance: MemoryReservation,
+    output_allowance: Mutex<MemoryReservation>,
 }
 impl NativeBootstrap {
     pub fn new(
@@ -87,7 +88,7 @@ impl NativeBootstrap {
         mut plan: NativePlan,
         admission: NativeAdmission,
         weight: MemoryWeight,
-        allowance: MemoryReservation,
+        mut allowance: MemoryReservation,
         errors: RuntimeErrors,
     ) -> Result<Arc<Self>, String> {
         if plan.options.objects.is_some() {
@@ -181,6 +182,9 @@ impl NativeBootstrap {
         if metadata > allowance.bytes() || weight.retained < std::mem::size_of::<Task>() as u64 {
             return Err("native bootstrap inventory exceeds admission".into());
         }
+        // Completed host outputs borrow only the unused part of this original
+        // reservation. The bootstrap's own inventory remains independently held.
+        let output_allowance = allowance.split(allowance.bytes() - metadata).unwrap();
         let query = QueryId {
             kind: KIND,
             address: Address(ContentHash::of_parts(
@@ -202,7 +206,15 @@ impl NativeBootstrap {
             failure: Mutex::new(None),
             errors,
             _allowance: allowance,
+            output_allowance: Mutex::new(output_allowance),
         }))
+    }
+    pub fn reserve_output(&self, bytes: u64) -> Result<MemoryReservation, String> {
+        self.output_allowance
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .split(bytes)
+            .ok_or_else(|| "native output metadata exceeds its original admission".into())
     }
     pub fn selected_store(&self) -> Arc<dyn ResultStore> {
         self.store.clone()
