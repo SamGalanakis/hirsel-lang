@@ -19,7 +19,6 @@ use hirsel_engine::{
 };
 use hirsel_syntax::{ContentHash, DefPath};
 use std::{
-    collections::BTreeMap,
     sync::{Arc, Mutex, OnceLock},
     task::Poll,
 };
@@ -44,7 +43,6 @@ pub(super) struct NativePlan {
     pub verify_backend: bool,
     pub measurement: bool,
     pub fuel: bool,
-    pub foreign: BTreeMap<DefPath, u64>,
     pub backends: Vec<CompilationBackend>,
     pub requested_run: Option<Arc<hirsel_run_config::ValidatedRun>>,
 }
@@ -150,7 +148,6 @@ impl NativeBootstrap {
             plan.verify_backend,
             plan.measurement,
             plan.fuel,
-            &plan.foreign.iter().collect::<Vec<_>>(),
             plan.backends
                 .iter()
                 .map(|backend| {
@@ -319,7 +316,7 @@ impl NativeBootstrap {
             source.input().clone(),
             plan.opt,
             plan.debug,
-            plan.foreign,
+            source.foreign_dispatch(),
             plan.verify_backend,
             plan.measurement,
             plan.fuel,
