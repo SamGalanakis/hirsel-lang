@@ -171,7 +171,12 @@ impl<'a> Observed<'a> {
             reads: Mutex::new(Observations::default()),
         }
     }
-    pub(super) fn finish(&self, table: &LayoutTable, target: &TargetSpec) -> Option<Reads> {
+    pub(super) fn finish(
+        &self,
+        table: &LayoutTable,
+        original: &LayoutTable,
+        target: &TargetSpec,
+    ) -> Option<Reads> {
         let reads = self.reads.lock().unwrap_or_else(|e| e.into_inner());
         if reads.unsupported {
             return None;
@@ -192,9 +197,9 @@ impl<'a> Observed<'a> {
             .collect::<Option<Vec<_>>>()?;
         let pretransfer = if reads.pretransfer {
             let inventory = adapter_inventory(self.declarations, target)?;
-            let keys = crate::LayoutKeys::new(table);
+            let keys = crate::LayoutKeys::new(original);
             for reference in self.declarations.pretransfer_adapters() {
-                let current = table.fn_abis.get(reference.abi.0 as usize)?;
+                let current = original.fn_abis.get(reference.abi.0 as usize)?;
                 let expected = inventory
                     .iter()
                     .find(|row| row.adapter == reference.adapter)?;
