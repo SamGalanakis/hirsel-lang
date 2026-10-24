@@ -234,16 +234,27 @@ impl Task {
                 Stage::Front => {
                     // Request immutable ordinary bodies together, but publish only
                     // in source/file order. No generator or Lower is started here.
+                    let mut pending = Vec::new();
                     for file in &self.files {
                         if file.input.error.is_none() && !has_errors(&file.input.diagnostics) {
                             for (path, _) in &file.input.paths {
-                                let id = self.queries.plan.front.query(path).ok_or_else(|| {
-                                    eprintln!("[DEBUG-s5-protocol] Check missing P {path}");
-                                    self.queries.errors.protocol
-                                })?;
-                                let _ = cx.read(id);
+                                let id = self
+                                    .queries
+                                    .plan
+                                    .front
+                                    .query(path)
+                                    .ok_or(self.queries.errors.protocol)?;
+                                if cx.read(id).is_pending() {
+                                    pending.push(id);
+                                }
                             }
                         }
+                    }
+                    // Every Pending read in this poll must be returned to
+                    // S5. Inspect and publish the completed products in source
+                    // order only after the prefetched ordinary bodies settle.
+                    if !pending.is_empty() {
+                        return Ok(Some(pending));
                     }
                     while self.file < self.files.len() {
                         let file = &mut self.files[self.file];
