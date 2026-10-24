@@ -138,6 +138,8 @@ mod execution_policy;
 mod explain;
 mod measure;
 mod new;
+#[cfg(test)]
+mod ownership_trace;
 mod serve;
 #[cfg(test)]
 mod trace_events_tests;
