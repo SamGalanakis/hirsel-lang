@@ -157,7 +157,7 @@ pub struct LineColumn {
 }
 
 /// Immutable source and its line-start index (LANG-1, SEM-3).
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct SourceFile {
     /// Physical path for diagnostics and reading source; never emit into artifacts.
     pub path: PathBuf,
@@ -172,6 +172,22 @@ pub struct SourceFile {
     /// a resident session's later snapshots of a source keep it, so output
     /// naming a file by id is the same as a fresh process's.
     ordinal: u32,
+    owner: Option<RetainedSourceOwner>,
+}
+// Source ownership is representation/lifetime metadata, never source identity.
+#[derive(Clone)]
+struct RetainedSourceOwner(std::sync::Arc<dyn Send + Sync>);
+impl std::fmt::Debug for SourceFile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SourceFile")
+            .field("path", &self.path)
+            .field("logical_path", &self.logical_path)
+            .field("anchor", &self.anchor)
+            .field("text", &self.text)
+            .field("line_starts", &self.line_starts)
+            .field("ordinal", &self.ordinal)
+            .finish()
+    }
 }
 impl SourceFile {
     pub fn ordinal(&self) -> u32 {
@@ -216,11 +232,20 @@ impl SourceFile {
 /// FileIds are valid only in this map (PROG-5). Both tables are shared on
 /// clone and copied on the next change, so every check's output carries the
 /// map at no cost.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct SourceMap {
     files: std::sync::Arc<Vec<SourceFile>>,
     /// Each placed anchor's file and base offset in it.
     anchors: std::sync::Arc<BTreeMap<Anchor, (FileId, u32)>>,
+    owner: Option<RetainedSourceOwner>,
+}
+impl std::fmt::Debug for SourceMap {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SourceMap")
+            .field("files", &self.files)
+            .field("anchors", &self.anchors)
+            .finish()
+    }
 }
 impl Anchor {
     /// A new anchor, distinct from every other in the process.
@@ -230,6 +255,19 @@ impl Anchor {
     }
 }
 impl SourceMap {
+    /// Retain an admitted source owner through every clone of this map or its
+    /// files. The owner changes no text, anchors, locations or debug encoding.
+    /// Attach it to the external snapshot, leaving the producer's own map
+    /// undecorated so the owner cannot retain itself through its sources.
+    pub fn retain_owner(mut self, owner: std::sync::Arc<dyn Send + Sync>) -> Self {
+        let previous = self.owner.take().map(|owner| owner.0);
+        let owner = RetainedSourceOwner(std::sync::Arc::new((previous, owner)));
+        for file in std::sync::Arc::make_mut(&mut self.files) {
+            file.owner = Some(owner.clone());
+        }
+        self.owner = Some(owner);
+        self
+    }
     /// Returns None when the u32 representation cannot contain this file/map.
     pub fn add(&mut self, path: impl AsRef<Path>, text: String) -> Option<FileId> {
         let logical = Path::new("standalone@0").join(
@@ -262,6 +300,7 @@ impl SourceMap {
             text: text.into(),
             line_starts: line_starts.into(),
             ordinal: id.0,
+            owner: self.owner.clone(),
         });
         Some(id)
     }
@@ -398,5 +437,56 @@ mod tests {
         assert_eq!(sources.slice(nowhere), None);
         assert!(sources.file(sources.resolve(nowhere).file).is_none());
         assert_eq!(sources.slice(Span::default()), None);
+    }
+}
+
+#[cfg(test)]
+mod retained_source_owner_tests {
+    use super::*;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    struct Owner(Arc<AtomicUsize>);
+    impl Drop for Owner {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    #[test]
+    fn extracted_source_file_keeps_snapshot_owner_after_all_maps_drop() {
+        let dropped = Arc::new(AtomicUsize::new(0));
+        let mut sources = SourceMap::default();
+        let file = sources
+            .add("main.hir", "pub fn main() {}\n".into())
+            .unwrap();
+        let original_debug = format!("{sources:?}");
+        let sources = sources.retain_owner(Arc::new(Owner(dropped.clone())));
+        assert_eq!(format!("{sources:?}"), original_debug);
+        let clone = sources.clone();
+        let extracted = sources.file(file).unwrap().clone();
+        drop(sources);
+        drop(clone);
+        assert_eq!(dropped.load(Ordering::SeqCst), 0);
+        assert_eq!(extracted.text(), "pub fn main() {}\n");
+        drop(extracted);
+        assert_eq!(dropped.load(Ordering::SeqCst), 1);
+    }
+    #[test]
+    fn empty_and_extended_maps_retain_all_admitted_owners() {
+        let first = Arc::new(AtomicUsize::new(0));
+        let second = Arc::new(AtomicUsize::new(0));
+        let mut sources = SourceMap::default().retain_owner(Arc::new(Owner(first.clone())));
+        let empty = sources.clone();
+        let file = sources.add("added.hir", "x".into()).unwrap();
+        let sources = sources.retain_owner(Arc::new(Owner(second.clone())));
+        let extracted = sources.file(file).unwrap().clone();
+        drop(sources);
+        drop(empty);
+        assert_eq!(first.load(Ordering::SeqCst), 0);
+        assert_eq!(second.load(Ordering::SeqCst), 0);
+        drop(extracted);
+        assert_eq!(first.load(Ordering::SeqCst), 1);
+        assert_eq!(second.load(Ordering::SeqCst), 1);
     }
 }
