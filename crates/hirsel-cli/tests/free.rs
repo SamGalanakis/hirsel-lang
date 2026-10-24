@@ -2356,32 +2356,69 @@ pub fn main(rt: Io, args: Args) -> Result[(), E] {
     );
 }
 
-#[test]
-fn f1_scope_deadline_phases_replay_with_exact_expiration_causes() {
-    // This matrix qualifies the native Free phase tape, enabled only in its
-    // dedicated build. Legacy Io-tape scheduling has a separate contract.
+// Every part keeps the native recording and every width/permit replay cell.
+// Separate recording levels and engine groups keep each action within RE600.
+fn f1_deadline_matrix(future: bool, cells: Cells) {
     if !hirsel_rt::free_driver::admission_enabled() {
         return;
     }
-    f1_corpus_matrix_with_io(
-        "scope-deadline",
-        include_str!("free/deadline.hir"),
-        |_| serde_json::json!({"stdout":"stdout.bytes@1","tasks":"tasks.free@1","monotonic_clock":"clock.monotonic.ns@1","dirs":[]}),
+    let (name, text) = if future {
+        (
+            "scope-deadline-future",
+            include_str!("free/deadline-future.hir"),
+        )
+    } else {
+        ("scope-deadline", include_str!("free/deadline.hir"))
+    };
+    f1_corpus_matrix_cells(
+        name,
+        text,
+        |_| serde_json::json!({"io":{"stdout":"stdout.bytes@1","tasks":"tasks.free@1","monotonic_clock":"clock.monotonic.ns@1","dirs":[]},"args":[]}),
+        (0, |_, _, _, _| {}),
+        b"",
+        || Box::new(|| {}),
+        cells,
     );
 }
 
 #[test]
-fn f1_future_scope_timers_replay_cancellation_nested_expiry_and_disarm() {
-    // This matrix qualifies the native Free phase tape, enabled only in its
-    // dedicated build. Legacy Io-tape scheduling has a separate contract.
-    if !hirsel_rt::free_driver::admission_enabled() {
-        return;
-    }
-    f1_corpus_matrix_with_io(
-        "scope-deadline-future",
-        include_str!("free/deadline-future.hir"),
-        |_| serde_json::json!({"stdout":"stdout.bytes@1","tasks":"tasks.free@1","monotonic_clock":"clock.monotonic.ns@1","dirs":[]}),
-    );
+fn f1_scope_deadline_phases_replay_with_exact_expiration_causes_record_interpreter() {
+    f1_deadline_matrix(false, Cells::part(false, false));
+}
+
+#[test]
+fn f1_scope_deadline_phases_replay_with_exact_expiration_causes_record_native() {
+    f1_deadline_matrix(false, Cells::part(false, true));
+}
+
+#[test]
+fn f1_scope_deadline_phases_replay_with_exact_expiration_causes_durable_interpreter() {
+    f1_deadline_matrix(false, Cells::part(true, false));
+}
+
+#[test]
+fn f1_scope_deadline_phases_replay_with_exact_expiration_causes_durable_native() {
+    f1_deadline_matrix(false, Cells::part(true, true));
+}
+
+#[test]
+fn f1_future_scope_timers_replay_cancellation_nested_expiry_and_disarm_record_interpreter() {
+    f1_deadline_matrix(true, Cells::part(false, false));
+}
+
+#[test]
+fn f1_future_scope_timers_replay_cancellation_nested_expiry_and_disarm_record_native() {
+    f1_deadline_matrix(true, Cells::part(false, true));
+}
+
+#[test]
+fn f1_future_scope_timers_replay_cancellation_nested_expiry_and_disarm_durable_interpreter() {
+    f1_deadline_matrix(true, Cells::part(true, false));
+}
+
+#[test]
+fn f1_future_scope_timers_replay_cancellation_nested_expiry_and_disarm_durable_native() {
+    f1_deadline_matrix(true, Cells::part(true, true));
 }
 
 const F1_RUNNER_COMPUTE_SOURCE: &str = r#"pub type E = Grant(GrantError) | Output(OutputError)
