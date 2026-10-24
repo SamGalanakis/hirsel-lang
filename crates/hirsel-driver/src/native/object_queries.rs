@@ -6,9 +6,9 @@
 //! outputs before loading a body, and retain equal recomputation's output.
 //! Changed manifests still invoke the platform linker; no image patching.
 use super::queries::{InstanceAddress, NativeProducts, ReadyProduct};
-use hirsel_artifact_store::{Action, Address, Domain, MAX_RECORD, Output, Reference};
 use hirsel_codec::{Snapshot, snapshot_struct};
 use hirsel_engine::runtime::ProductRef;
+use hirsel_engine::store::{Action, Address, Domain, MAX_RECORD, Output, Reference};
 use hirsel_engine::store::{ResultStore, VerifyStore};
 use hirsel_lir::stage::ObjectArtifact;
 use hirsel_syntax::ContentHash;
@@ -539,7 +539,7 @@ fn action(domain: &str, address: Address, reads: &[Reference]) -> Action {
 fn require(
     store: &dyn ResultStore,
     reference: Reference,
-) -> Result<hirsel_artifact_store::Bytes, String> {
+) -> Result<hirsel_engine::store::Bytes, String> {
     store
         .get_content(reference)
         .ok_or_else(|| "missing or corrupt native product content".into())
@@ -697,7 +697,7 @@ pub fn link_input_bytes(store: &dyn ResultStore, reference: Reference) -> Result
 fn blob_chunks(
     store: &dyn ResultStore,
     reference: Reference,
-) -> Result<Vec<hirsel_artifact_store::Bytes>, String> {
+) -> Result<Vec<hirsel_engine::store::Bytes>, String> {
     let blob: BlobRecord = get_record(store, BLOB, reference)?;
     let mut total = 0u64;
     let mut chunks = Vec::with_capacity(blob.chunks.len());

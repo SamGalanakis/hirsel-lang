@@ -1,7 +1,7 @@
 //! Native query descriptors. Content references convey integrity, never proof
 //! authority; materialization independently checks the native stage and inputs.
-use hirsel_artifact_store::Reference;
 pub use hirsel_engine::runtime::ProductRef;
+use hirsel_engine::store::Reference;
 use hirsel_syntax::ContentHash;
 use std::sync::Arc;
 
@@ -31,8 +31,8 @@ impl InstanceAddress {
             address: self.address(READY_KIND),
         }
     }
-    pub fn address(&self, kind: u32) -> hirsel_artifact_store::Address {
-        hirsel_artifact_store::Address(ContentHash::of_parts(
+    pub fn address(&self, kind: u32) -> hirsel_engine::store::Address {
+        hirsel_engine::store::Address(ContentHash::of_parts(
             "hirsel.native.instance-address.v1",
             [
                 kind.to_le_bytes().as_slice(),
