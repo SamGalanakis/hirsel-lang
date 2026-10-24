@@ -123,6 +123,9 @@ fn an_inline_release_reaches_no_finalizer() {
     );
     assert_eq!(release_whole(l::SLICE), []);
     assert_eq!(release_whole(l::BLK), []);
+    // A counted block owns its payload's finalization; this is distinct from
+    // releasing an inline resource before its explicit finalizer.
+    assert_eq!(release_whole(l::RESBLK), []);
 }
 
 fn drop_on_exit<S: Stage>() -> Vec<K> {

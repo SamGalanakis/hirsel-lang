@@ -2786,7 +2786,7 @@ impl<S: Stage> Checker<'_, '_, S> {
             ValueRepr::PayloadReceipt => layout == own && live == MaskRef::All,
             ValueRepr::Block => self.cx.layouts.released(own) == Some(layout),
             ValueRepr::Aggregate | ValueRepr::Callable | ValueRepr::Handle => {
-                layout == own && self.cx.owns(value)
+                layout == own && self.cx.owns(value) && !self.cx.layouts.inline_finalizer(layout)
             }
             _ => false,
         };
