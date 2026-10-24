@@ -32,29 +32,36 @@ pub trait AsyncTirProvider {
 
 /// Runtime interpreters have an already completed program. They use the same
 /// evaluator, with immediately ready dependency reads and no executor or wait.
-pub(crate) struct Immediate<'a, P: ?Sized>(pub &'a mut P);
-impl<P: TirProvider + ?Sized> AsyncTirProvider for Immediate<'_, P> {
+pub struct ImmediateTirProvider<'a, P: ?Sized> {
+    provider: &'a mut P,
+}
+impl<'a, P: ?Sized> ImmediateTirProvider<'a, P> {
+    pub fn new(provider: &'a mut P) -> Self {
+        Self { provider }
+    }
+}
+impl<P: TirProvider + ?Sized> AsyncTirProvider for ImmediateTirProvider<'_, P> {
     async fn definition(&mut self, path: &DefPath) -> Result<DefinitionRef, QueryError> {
-        self.0.definition(path)
+        self.provider.definition(path)
     }
     async fn constant(&mut self, path: &DefPath) -> Result<MaterializedRef, QueryError> {
-        self.0.constant(path)
+        self.provider.constant(path)
     }
     async fn constant_instance(
         &mut self,
         path: &DefPath,
         arguments: &[u64],
     ) -> Result<MaterializedRef, QueryError> {
-        self.0.constant_instance(path, arguments)
+        self.provider.constant_instance(path, arguments)
     }
     async fn constant_definitions(&mut self) -> Result<Vec<DefPath>, QueryError> {
-        self.0.constant_definitions()
+        self.provider.constant_definitions()
     }
     async fn instance_body(
         &mut self,
         path: &DefPath,
         arguments: &[GenericArgument],
     ) -> Result<Option<DefPath>, QueryError> {
-        self.0.instance_body(path, arguments)
+        self.provider.instance_body(path, arguments)
     }
 }

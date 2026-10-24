@@ -258,8 +258,55 @@ pub(crate) struct EvaluationProduct {
     pub(crate) limit: Option<hirsel_tir::ToolingLimit>,
 }
 
+/// Close task-local reflection recording even when an admitted continuation
+/// is cancelled and dropped while a dependency is pending.
+struct EvaluationRecording<'a> {
+    serialization: &'a hirsel_interp::aggregate::Serialization,
+    active: bool,
+}
+impl<'a> EvaluationRecording<'a> {
+    fn new(serialization: &'a hirsel_interp::aggregate::Serialization) -> Self {
+        serialization.record();
+        Self {
+            serialization,
+            active: true,
+        }
+    }
+    fn finish(mut self) -> std::collections::BTreeMap<DefPath, ContentHash> {
+        self.active = false;
+        self.serialization.finish()
+    }
+}
+impl Drop for EvaluationRecording<'_> {
+    fn drop(&mut self) {
+        if self.active {
+            self.serialization.finish();
+        }
+    }
+}
+
 impl EvaluationTask<'_> {
     pub(crate) fn run(self, provider: &mut dyn TirProvider) -> EvaluationProduct {
+        use std::{
+            future::Future,
+            task::{Context, Poll, Waker},
+        };
+        let mut provider = hirsel_interp::ImmediateTirProvider::new(provider);
+        let mut evaluation = std::pin::pin!(self.run_async(&mut provider));
+        match evaluation
+            .as_mut()
+            .poll(&mut Context::from_waker(Waker::noop()))
+        {
+            Poll::Ready(product) => product,
+            Poll::Pending => unreachable!("synchronous compile-time source suspended"),
+        }
+    }
+    /// This future owns the real saved interpreter continuation. A producer
+    /// supplies QueryReads-backed dependencies and polls/drops it only at home.
+    pub(crate) async fn run_async(
+        self,
+        provider: &mut (impl hirsel_interp::AsyncTirProvider + ?Sized),
+    ) -> EvaluationProduct {
         let mut library =
             match hirsel_interp::library::Library::new(&self.configuration, Default::default()) {
                 Ok(library) => library,
@@ -271,8 +318,8 @@ impl EvaluationTask<'_> {
                     };
                 }
             };
-        self.runtime.serialization.record();
-        let execution = hirsel_interp::run_with_runtime(
+        let recording = EvaluationRecording::new(&self.runtime.serialization);
+        let execution = hirsel_interp::run_with_runtime_async(
             provider,
             self.sources,
             &self.configuration,
@@ -280,8 +327,9 @@ impl EvaluationTask<'_> {
             self.limits,
             &mut library,
             self.runtime,
-        );
-        let reflected = self.runtime.serialization.finish();
+        )
+        .await;
+        let reflected = recording.finish();
         let mut limit_reached = None;
         let result = (|| {
             let execution = execution.map_err(|e| match e.error {
@@ -1943,6 +1991,110 @@ mod task_tests {
             path,
             together,
         })
+    }
+    struct Deferred<'a> {
+        runtime: &'a RuntimeTypes,
+        path: DefPath,
+        ready: std::rc::Rc<std::cell::Cell<bool>>,
+        entered: Arc<std::sync::atomic::AtomicUsize>,
+    }
+    impl hirsel_interp::AsyncTirProvider for Deferred<'_> {
+        async fn definition(&mut self, _: &DefPath) -> Result<DefinitionRef, QueryError> {
+            self.entered
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.runtime.serialization.get(&self.path);
+            std::future::poll_fn(|_| {
+                if self.ready.get() {
+                    std::task::Poll::Ready(())
+                } else {
+                    std::task::Poll::Pending
+                }
+            })
+            .await;
+            Err(QueryError::NotImplemented)
+        }
+        async fn constant(
+            &mut self,
+            _: &DefPath,
+        ) -> Result<hirsel_tir::MaterializedRef, QueryError> {
+            Err(QueryError::NotImplemented)
+        }
+        async fn constant_instance(
+            &mut self,
+            _: &DefPath,
+            _: &[u64],
+        ) -> Result<hirsel_tir::MaterializedRef, QueryError> {
+            Err(QueryError::NotImplemented)
+        }
+        async fn constant_definitions(&mut self) -> Result<Vec<DefPath>, QueryError> {
+            Ok(vec![])
+        }
+        async fn instance_body(
+            &mut self,
+            _: &DefPath,
+            _: &[GenericArgument],
+        ) -> Result<Option<DefPath>, QueryError> {
+            Ok(None)
+        }
+    }
+    #[test]
+    fn saved_evaluation_keeps_reflection_reads_and_closes_recording_on_cancel() {
+        use std::{
+            future::Future,
+            task::{Context, Poll, Waker},
+        };
+        for cancel in [false, true] {
+            let runtime = RuntimeTypes::new(hirsel_types::TypeInterner::new(None));
+            let outer = DefPath::core("outer");
+            let inner = DefPath::core("inner");
+            let sources = SourceMap::default();
+            let ready = std::rc::Rc::new(std::cell::Cell::new(false));
+            let entered = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let mut provider = Deferred {
+                runtime: &runtime,
+                path: inner.clone(),
+                ready: ready.clone(),
+                entered: entered.clone(),
+            };
+            runtime.serialization.record();
+            runtime.serialization.get(&outer);
+            let mut evaluation = Box::pin(
+                EvaluationTask {
+                    sources: &sources,
+                    configuration: RunConfiguration {
+                        entry: inner.clone(),
+                        hash_seed: 0,
+                        inputs: vec![],
+                    },
+                    limits: Default::default(),
+                    runtime: &runtime,
+                    site: Span::default(),
+                    ty: runtime.types.intern(hirsel_types::Type::unit()),
+                }
+                .run_async(&mut provider),
+            );
+            let mut cx = Context::from_waker(Waker::noop());
+            assert!(evaluation.as_mut().poll(&mut cx).is_pending());
+            assert!(evaluation.as_mut().poll(&mut cx).is_pending());
+            assert_eq!(entered.load(std::sync::atomic::Ordering::SeqCst), 1);
+            if !cancel {
+                ready.set(true);
+                let Poll::Ready(product) = evaluation.as_mut().poll(&mut cx) else {
+                    panic!("saved dependency did not resume");
+                };
+                assert!(matches!(product.result, Err(QueryError::NotImplemented)));
+                assert_eq!(product.reflected.keys().collect::<Vec<_>>(), [&inner]);
+            }
+            drop(evaluation);
+            let enclosing = runtime.serialization.finish();
+            assert_eq!(enclosing.len(), 2);
+            assert!(enclosing.contains_key(&outer));
+            assert!(enclosing.contains_key(&inner));
+            assert!(
+                runtime.serialization.finish().is_empty(),
+                "pending recording outlived its cancelled task"
+            );
+        }
     }
     #[test]
     fn failed_evaluation_returns_reads_and_preserves_the_outer_recording() {

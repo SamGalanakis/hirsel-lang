@@ -59,7 +59,7 @@ pub fn run_with_runtime(
         future::Future,
         task::{Context, Poll, Waker},
     };
-    let mut immediate = crate::provider::Immediate(provider);
+    let mut immediate = crate::provider::ImmediateTirProvider::new(provider);
     let mut execution = std::pin::pin!(run_with_runtime_async(
         &mut immediate,
         sources,
