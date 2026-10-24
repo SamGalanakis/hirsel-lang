@@ -37,6 +37,25 @@ impl SourceInput {
         }
     }
 
+    /// Select the retained original source body for demand expansion, before
+    /// a native recipe restores or rewrites an instance. The query owner calls
+    /// `capture` at its independently validated original-Lower miss. Numeric
+    /// body selection is scoped by that definition; candidate anchors/IR and
+    /// a consuming derived key cannot substitute another original body.
+    ///
+    /// This supplies data to `demand::analyze`, not proof that a call expansion
+    /// is complete. The query owner still supplies every original target,
+    /// operation/capture expansion and complete closed type/profile product.
+    pub fn demand_body(&self, key: &InstanceKey) -> Result<&hirsel_tir::Body, SourceError> {
+        if self.definition.path.path() != key.definition() {
+            return Err(SourceError::Malformed("source witness definition identity"));
+        }
+        self.definition
+            .bodies
+            .get(key.body() as usize)
+            .ok_or(SourceError::Malformed("source witness body identity"))
+    }
+
     /// Current closed subset: constructor-only source bodies. Call, mutation
     /// and held-environment rules require reviewed source-operation expansion;
     /// they remain explicit refusals rather than a guessed expected-empty row.
@@ -47,14 +66,7 @@ impl SourceInput {
         parameters: &[u32],
         substitute: impl FnMut(TypeId) -> Result<TypeId, SourceError>,
     ) -> Result<SourceExpectation, SourceError> {
-        if self.definition.path.path() != key.definition() {
-            return Err(SourceError::Malformed("source witness definition identity"));
-        }
-        let body = self
-            .definition
-            .bodies
-            .get(key.body() as usize)
-            .ok_or(SourceError::Malformed("source witness body identity"))?;
+        let body = self.demand_body(key)?;
         for block in &body.blocks {
             if matches!(block.terminator, Terminator::Call { .. }) {
                 return Err(SourceError::Unsupported(
