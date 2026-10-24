@@ -8,8 +8,8 @@ use std::path::PathBuf;
 mod output;
 mod selector;
 pub use output::{
-    CompileOutput, CompileResult, CompilerReadiness, NativeExecution, NativeObservation,
-    RequestWork, TirExecution, TirProducts,
+    CompileInspection, CompileOutput, CompileResult, CompilerReadiness, DefinitionWork,
+    NativeExecution, NativeObservation, RequestWork, TirExecution, TirProducts,
 };
 pub use selector::{CompilerRequests, RequestLimits};
 
