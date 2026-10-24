@@ -77,6 +77,30 @@ PROOFS = {
         'target': '//tools/buck2/native-toolchain:scratch-linker-proof',
         'probe': 'tools/buck2/native-toolchain/scratch_linker_proof.py',
     },
+    'native::object_queries::runtime::tests::actual_runtime_products_reopen_changed_leaf_versions_and_refuse_missing_closure': {
+        'source': 'crates/hirsel-driver/tests/native-validation/runtime_products.rs',
+        'target': '//tools/buck2/native-toolchain:runtime-store-proof',
+        'probe': 'tools/buck2/native-toolchain/runtime_store_proof.py',
+        'arguments': ['/original pinned llvm', '/selected auditor', '/selected floor', '/selected qemu', '/selected harness'],
+        'environment': {'LLVM_SYS_231_PREFIX': '/original pinned llvm', 'HIRSEL_AUDITOR_PACKAGE': '/selected auditor',
+                        'HIRSEL_GLIBC_FLOOR': '/selected floor', 'HIRSEL_QEMU': '/selected qemu/qemu-aarch64'},
+    },
+    'native::object_queries::runtime::tests::equal_bytes_keep_distinct_loaded_libraries_and_shared_aliases': {
+        'source': 'crates/hirsel-driver/tests/native-validation/runtime_products.rs',
+        'target': '//tools/buck2/native-toolchain:runtime-identity-case-proof',
+        'probe': 'tools/buck2/native-toolchain/runtime_identity_case_proof.py',
+        'arguments': ['/original pinned llvm', '/selected auditor', '/selected floor', '/selected qemu', '/selected harness'],
+        'environment': {'LLVM_SYS_231_PREFIX': '/original pinned llvm', 'HIRSEL_AUDITOR_PACKAGE': '/selected auditor',
+                        'HIRSEL_GLIBC_FLOOR': '/selected floor', 'HIRSEL_QEMU': '/selected qemu/qemu-aarch64'},
+    },
+    'native::object_queries::runtime::tests::actual_loader_discovers_transitive_runtime_inputs_and_closes_replay': {
+        'source': 'crates/hirsel-driver/tests/native-validation/runtime_products.rs',
+        'target': '//tools/buck2/native-toolchain:runtime-discovery-proof',
+        'probe': 'tools/buck2/native-toolchain/runtime_discovery_proof.py',
+        'arguments': ['/original pinned llvm', '/selected auditor', '/selected floor', '/selected qemu', '/selected harness'],
+        'environment': {'LLVM_SYS_231_PREFIX': '/original pinned llvm', 'HIRSEL_AUDITOR_PACKAGE': '/selected auditor',
+                        'HIRSEL_GLIBC_FLOOR': '/selected floor', 'HIRSEL_QEMU': '/selected qemu/qemu-aarch64'},
+    },
 }
 EXPLICIT = json.loads((ROOT / 'tools/ignored-tests.json').read_text())
 ATTRIBUTE = re.compile(r'^[ \t]*#\[(ignore\b[^\]]*)\]|^[ \t]*#\[cfg_attr\(\s*([^,]+),\s*ignore\b', re.M)

@@ -46,6 +46,7 @@ impl ResultStore for Missing<'_> {
 }
 
 #[test]
+#[ignore = "requires runtime-store-proof loader/auditor inputs"]
 fn actual_runtime_products_reopen_changed_leaf_versions_and_refuse_missing_closure() {
     let llvm = PathBuf::from(std::env::var_os("LLVM_SYS_231_PREFIX").unwrap());
     let auditors = PathBuf::from(std::env::var_os("HIRSEL_AUDITOR_PACKAGE").unwrap());
@@ -220,6 +221,7 @@ fn actual_runtime_products_reopen_changed_leaf_versions_and_refuse_missing_closu
 }
 
 #[test]
+#[ignore = "requires runtime-identity-case-proof loader/auditor inputs"]
 fn equal_bytes_keep_distinct_loaded_libraries_and_shared_aliases() {
     let llvm = PathBuf::from(std::env::var_os("LLVM_SYS_231_PREFIX").unwrap());
     let auditors = PathBuf::from(std::env::var_os("HIRSEL_AUDITOR_PACKAGE").unwrap());
@@ -326,6 +328,7 @@ fn equal_bytes_keep_distinct_loaded_libraries_and_shared_aliases() {
 }
 
 #[test]
+#[ignore = "requires runtime-discovery-proof loader/auditor inputs"]
 fn actual_loader_discovers_transitive_runtime_inputs_and_closes_replay() {
     use discovery::{DiscoveryPolicy, discover};
     let llvm = PathBuf::from(std::env::var_os("LLVM_SYS_231_PREFIX").unwrap());
