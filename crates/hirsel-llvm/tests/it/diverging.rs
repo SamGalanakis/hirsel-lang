@@ -46,6 +46,7 @@ fn a_diverging_call_branches_on_status_without_noreturn() {
     let input = input();
     let inputs = EmitInputs {
         ahead: None,
+        continuation: None,
         alternate: false,
         index: None,
         verify_backend: true,

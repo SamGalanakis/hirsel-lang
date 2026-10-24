@@ -18,6 +18,7 @@ fn inputs<'a>(program: &'a Program, input: &'a InputIdentity, opt: OptLevel) -> 
         std::collections::BTreeSet::new();
     EmitInputs {
         ahead: None,
+        continuation: None,
         alternate: false,
         verify_backend: true,
         index: None,

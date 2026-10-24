@@ -426,6 +426,7 @@ fn every_target_executes_the_scalar_boundary_matrix() {
             let bytes = {
                 let inputs = EmitInputs {
                     ahead: None,
+                    continuation: None,
                     alternate: false,
                     index: None,
                     verify_backend: true,
@@ -626,6 +627,7 @@ fn every_target_executes_the_abi_probes() {
                 let program = abi_program(&target);
                 let inputs = EmitInputs {
                     ahead: None,
+                    continuation: None,
                     alternate: false,
                     index: None,
                     verify_backend: true,
@@ -743,6 +745,7 @@ fn every_target_executes_the_heap_probes() {
                     .collect();
                 let inputs = EmitInputs {
                     ahead: None,
+                    continuation: None,
                     alternate: false,
                     index: None,
                     verify_backend: true,

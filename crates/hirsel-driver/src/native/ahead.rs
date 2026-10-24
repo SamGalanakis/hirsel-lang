@@ -130,6 +130,7 @@ fn inputs<'a>(
     static EMPTY: std::collections::BTreeSet<ContentHash> = std::collections::BTreeSet::new();
     hirsel_lir::emission::EmitInputs {
         ahead: Some(plan),
+        continuation: None,
         alternate: true,
         index: None,
         input: &program.input,

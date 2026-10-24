@@ -221,6 +221,7 @@ fn object(target: &TargetSpec) -> (Vec<u8>, String) {
     };
     let inputs = EmitInputs {
         ahead: None,
+        continuation: None,
         alternate: false,
         index: None,
         verify_backend: true,

@@ -930,6 +930,7 @@ pub fn partition_backend_objects_with_jobs(
         }
         let mut objects = built.objects.clone();
         objects.extend(super::ahead::objects(program, backend, opt, registry)?);
+        objects.extend(super::continuation::objects(program, backend, opt)?);
         objects.push(super::emit::emit_glue(program, backend, registry)?);
         if let Some(sources) = sources {
             objects.push(debug_artifact(program, &objects, sources)?);
@@ -1067,6 +1068,7 @@ pub fn partition_backend_objects_with_jobs(
     .collect::<Result<Vec<_>, _>>()
     .and_then(|mut objects| {
         objects.extend(super::ahead::objects(program, backend, opt, registry)?);
+        objects.extend(super::continuation::objects(program, backend, opt)?);
         objects.push(super::emit::emit_glue(program, backend, registry)?);
         if let Some(sources) = sources {
             objects.push(debug_artifact(program, &objects, sources)?);

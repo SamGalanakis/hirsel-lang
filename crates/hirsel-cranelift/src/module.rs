@@ -669,7 +669,7 @@ impl<'a> Emitter<'a> {
         Ok(())
     }
 
-    fn compile(&mut self, name: &str, id: FuncId, context: &mut Context) -> Emitted {
+    pub(crate) fn compile(&mut self, name: &str, id: FuncId, context: &mut Context) -> Emitted {
         colocate_hirsel_symbols(&self.module, &self.manifested, &mut context.func);
         if let Some(text) = &mut self.clif {
             text.push_str(&format!("; {name}\n{}\n", context.func.display()));

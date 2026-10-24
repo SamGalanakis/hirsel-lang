@@ -12,8 +12,9 @@
 //! `rayon-core/src/join/mod.rs:132-185`: the owner never resumes storage it
 //! already handed off).
 //!
-//! Compact frames and the Saved/Active state are wired by the dispatcher's
-//! saved-continuation cutover (S2); until then only tests construct them.
+//! A resumable task body runs through [`hirsel_rt_v2_resume_run`]; stackful
+//! fibers keep their own switch until the dispatcher's saved-fiber cutover
+//! (S2), so only tests save a `Fiber` here.
 #![cfg_attr(not(test), allow(dead_code))]
 
 /// The resume point of a stackful frame.
@@ -22,55 +23,45 @@ pub(crate) struct SavedFiber {
     pub(crate) sp: *mut u8,
 }
 
-/// A compact frame saved at a validated resume state. The image starts with
-/// the plan's 8-byte header (`hirsel_lir::continuation::FRAME_HEADER_BYTES`).
+/// A 16-byte frame unit: nested frames and frame storage sit at 16-byte offsets.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[repr(C, align(16))]
+pub(crate) struct FrameWord([u64; 2]);
+
+/// The owned compact frame of a validated continuation plan. Compiled state
+/// alternates materialize every live value into it before a suspension; its
+/// 8-byte header (`hirsel_lir::continuation::FRAME_HEADER_BYTES`) holds the
+/// state to resume, and state 0 is the body's entry.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct OwnedResumeFrame {
-    pub(crate) plan: [u8; 32],
-    pub(crate) state: u32,
-    pub(crate) image: Box<[u64]>,
+    image: Box<[FrameWord]>,
 }
 
-/// The runtime half of a validated plan: each state's image bytes.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ResumeShape {
-    pub(crate) plan: [u8; 32],
-    pub(crate) bytes: Vec<u32>,
+impl OwnedResumeFrame {
+    pub(crate) fn new(bytes: u32) -> Self {
+        Self {
+            image: vec![FrameWord::default(); (bytes as usize).div_ceil(16).max(1)]
+                .into_boxed_slice(),
+        }
+    }
+
+    pub(crate) fn state(&self) -> u32 {
+        self.image[0].0[0] as u32
+    }
+
+    pub(crate) fn bytes(&self) -> usize {
+        self.image.len() * 16
+    }
+
+    pub(crate) fn as_mut_ptr(&mut self) -> *mut u8 {
+        self.image.as_mut_ptr().cast()
+    }
 }
 
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum SavedRepr {
     Fiber(SavedFiber),
     Resumable(OwnedResumeFrame),
-}
-
-impl OwnedResumeFrame {
-    /// Materialize every live word before a suspension, wait or cut.
-    pub(crate) fn save(shape: &ResumeShape, state: u32, live: &[u64]) -> Option<Self> {
-        let bytes = *shape.bytes.get(state.checked_sub(1)? as usize)?;
-        if live.len() * 8 + 8 != bytes as usize {
-            return None;
-        }
-        let mut image = Vec::with_capacity(live.len() + 1);
-        image.push(u64::from(state));
-        image.extend_from_slice(live);
-        Some(Self {
-            plan: shape.plan,
-            state,
-            image: image.into_boxed_slice(),
-        })
-    }
-
-    /// Admit an imported frame only against the shape of its own plan.
-    pub(crate) fn check(&self, shape: &ResumeShape) -> bool {
-        self.plan == shape.plan
-            && self.image.first() == Some(&u64::from(self.state))
-            && self
-                .state
-                .checked_sub(1)
-                .and_then(|i| shape.bytes.get(i as usize))
-                .is_some_and(|b| *b as usize == self.image.len() * 8)
-    }
 }
 
 /// The linear Saved/Active protocol shared by every representation.
@@ -173,6 +164,79 @@ impl Custody {
 
     pub(crate) fn private(&self) -> bool {
         matches!(self, Self::Private { .. })
+    }
+}
+
+/// Whether resumable frames save at every resume point (the published form),
+/// under `HIRSEL_RT_RESUME_SAVE` or `HIRSEL_RT_MIGRATE`; otherwise each
+/// boundary proceeds in place (the local form).
+fn saving() -> bool {
+    static SAVING: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *SAVING.get_or_init(|| {
+        std::env::var_os("HIRSEL_RT_RESUME_SAVE").is_some()
+            || std::env::var_os("HIRSEL_RT_MIGRATE").is_some()
+    })
+}
+
+/// A resumable frame reached a boundary with its state materialized. The
+/// decision is physical: it adds no operation, charge or observation.
+///
+/// # Safety
+/// `frame` is the running task's live resumable frame.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_resume_point(
+    _ctx: *mut crate::TaskCtx,
+    frame: *mut u8,
+    state: u32,
+) -> u8 {
+    if unsafe { frame.cast::<u32>().read() } != state {
+        crate::fault("a resume point before its state was recorded");
+    }
+    u8::from(saving())
+}
+
+/// A resumable body's dispatcher: its task entry's arguments and its frame.
+pub type ResumeDispatcher =
+    unsafe extern "C" fn(*mut crate::TaskCtx, *mut crate::Header, u64, u64, *mut u8) -> u8;
+
+/// A resumable task body. Its dispatcher starts at state 0 of a fresh owned
+/// frame; each `STATUS_SUSPENDED` saves the frame, whose header names the next
+/// state, and yields, so the task may resume on another worker. Activation
+/// takes the saved frame back and the dispatcher continues at that state.
+///
+/// # Safety
+/// As for the task entry it replaces; `dispatcher` is the body's compiled
+/// dispatcher and `bytes` its plan's frame size.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_resume_run(
+    ctx: *mut crate::TaskCtx,
+    environment: *mut crate::Header,
+    caller_site: u64,
+    operation_site: u64,
+    dispatcher: ResumeDispatcher,
+    bytes: u32,
+) -> u8 {
+    let mut frame = OwnedResumeFrame::new(bytes);
+    let mut owner = Continuation::Fresh;
+    owner.start();
+    loop {
+        // SAFETY: caller contract; the frame is exclusively this body's.
+        let status =
+            unsafe { dispatcher(ctx, environment, caller_site, operation_site, frame.as_mut_ptr()) };
+        if status != crate::STATUS_SUSPENDED {
+            owner.complete();
+            return status;
+        }
+        if frame.state() == 0 {
+            crate::fault("a resumable frame suspended at its entry");
+        }
+        owner.save(SavedRepr::Resumable(frame));
+        // SAFETY: the context is live and no borrow of it is held.
+        unsafe { crate::tasks::yield_now(&mut *ctx) };
+        let SavedRepr::Resumable(saved) = owner.activate() else {
+            crate::fault("a resumable frame changed representation while saved");
+        };
+        frame = saved;
     }
 }
 

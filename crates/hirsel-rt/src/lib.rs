@@ -144,7 +144,7 @@ pub use release::{
 pub use roots::ROOT_OVERFLOW;
 
 /// The interface version a caller must request in [`Config::abi_version`].
-pub const ABI_VERSION: u32 = 62;
+pub const ABI_VERSION: u32 = 63;
 /// Success status.
 pub const STATUS_OK: u8 = 0;
 /// A language failure. Substrate entries record it in the run context; a library
@@ -154,6 +154,8 @@ pub const STATUS_FAILURE: u8 = 1;
 /// recorded; the caller records the arena's `OutOfSpace`.
 pub const STATUS_EXHAUSTED: u8 = 2;
 pub const STATUS_PRETRANSFER_FAILURE: u8 = 3;
+/// A resumable continuation alternate saved its frame at a boundary whose call has not run.
+pub const STATUS_SUSPENDED: u8 = 4;
 
 /// Report a broken runtime invariant and abort. Never a language failure.
 #[cold]

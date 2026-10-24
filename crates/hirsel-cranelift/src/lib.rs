@@ -31,6 +31,7 @@ mod object;
 mod ownership_trace;
 mod places;
 mod profile;
+mod resume;
 mod program;
 mod receipt;
 mod scalar;
@@ -219,6 +220,15 @@ pub fn emit_ahead_object(
     };
     caught(|| module::emit(units, &inputs, false, Default::default(), false))
         .map(|(object, _, frames)| (object, frames))
+}
+
+/// Emits the continuation alternates and dispatchers of every resumable plan.
+pub fn emit_resume_object(
+    units: &[&ValidatedUnit<Ready>],
+    inputs: &EmitInputs<'_>,
+    plans: &hirsel_lir::continuation::ContinuationPlans,
+) -> Result<ObjectArtifact, CodegenError> {
+    caught(|| resume::emit(units, inputs, plans))
 }
 
 /// Emits backend-independent immutable scalar capture and frame records.

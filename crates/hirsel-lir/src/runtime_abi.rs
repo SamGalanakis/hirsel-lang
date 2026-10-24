@@ -12,7 +12,7 @@
 use crate::layout_types::{ScalarKind, StorageKind};
 use hirsel_codec::snapshot_enum;
 
-pub const ABI_VERSION: u32 = 62;
+pub const ABI_VERSION: u32 = 63;
 /// TaskSpawn physical hint bits: ordered execution and replay ignore both.
 pub const SPAWN_IMMEDIATE_AWAIT: u64 = 1;
 pub const SPAWN_OP_FREE: u64 = 2;
@@ -46,6 +46,12 @@ pub const STATUS_EXHAUSTED: u8 = 2;
 /// Private call status, emitted only by validated keyed-primitive adapters.
 /// Actuals remain caller-owned; this is not an entered-callee failure.
 pub const STATUS_PRETRANSFER_FAILURE: u8 = 3;
+/// A resumable continuation alternate saved its frame at a boundary (runtime ABI 63):
+/// its live state is materialized at the frame header's state and the boundary call
+/// has not run. Only continuation alternates and their callers see it.
+pub const STATUS_SUSPENDED: u8 = 4;
+/// Bytes of a resumable frame's header: the u32 resume state and a reserved u32.
+pub const RESUME_FRAME_HEADER_BYTES: u64 = 8;
 /// Launch uses a separate channel from language failure.
 pub const LAUNCH_OK: u8 = 0;
 pub const LAUNCH_ABI_MISMATCH: u8 = 2;
@@ -551,6 +557,12 @@ pub enum RuntimeEntry {
     HostDefer,
     ReceiptRetain,
     ReceiptRelease,
+    /// A resumable frame reached a boundary with its live state materialized: proceed
+    /// with the boundary call (0) or return `STATUS_SUSPENDED` (1).
+    ResumePoint,
+    /// A resumable task body: run its dispatcher over an owned compact frame, saving the
+    /// frame and yielding at each `STATUS_SUSPENDED`, until it returns.
+    ResumeRun,
 }
 
 /// One C declaration of `hirsel_rt_v2`.
@@ -622,7 +634,7 @@ const OPERATION_SITE: CParam = p("operation_site", U64);
 const REGION: CParam = p("region", ptr(CName::Region, 1));
 
 impl RuntimeEntry {
-    pub const ALL: [RuntimeEntry; 93] = [
+    pub const ALL: [RuntimeEntry; 95] = [
         Self::DepthEnter,
         Self::DepthEnterAtSite,
         Self::DepthLeave,
@@ -714,6 +726,8 @@ impl RuntimeEntry {
         Self::HostEnter,
         Self::HostActive,
         Self::HostDefer,
+        Self::ResumePoint,
+        Self::ResumeRun,
         Self::ReceiptRetain,
         Self::ReceiptRelease,
     ];
@@ -1303,6 +1317,25 @@ impl RuntimeEntry {
                 },
             ),
             Self::AheadBarrier => ("hirsel_rt_v2_ahead_barrier", VOID, const { &[CTX] }),
+            Self::ResumePoint => (
+                "hirsel_rt_v2_resume_point",
+                U8,
+                const { &[CTX, p("frame", ptr(N::U8, 1)), p("state", U32)] },
+            ),
+            Self::ResumeRun => (
+                "hirsel_rt_v2_resume_run",
+                U8,
+                const {
+                    &[
+                        CTX,
+                        p("environment", ptr(N::Header, 1)),
+                        p("caller_site", U64),
+                        OPERATION_SITE,
+                        p("dispatcher", ptr(N::Void, 1)),
+                        p("bytes", U32),
+                    ]
+                },
+            ),
             Self::FuelRefill => ("hirsel_rt_v2_fuel_refill", VOID, const { &[CTX] }),
             Self::WorkerCreate => (
                 "hirsel_rt_v2_worker_create",
@@ -1454,4 +1487,6 @@ snapshot_enum!(RuntimeEntry {
     HostDefer,
     ReceiptRetain,
     ReceiptRelease,
+    ResumePoint,
+    ResumeRun,
 });
