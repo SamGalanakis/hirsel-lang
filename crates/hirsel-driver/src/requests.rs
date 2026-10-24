@@ -55,4 +55,9 @@ pub struct NativeRequest {
     pub target: TargetSpec,
     pub validation: Validation,
     pub launch: LaunchInputs,
+    /// Build-time fuel instrumentation is part of native/emission identity.
+    pub fuel: bool,
+    /// Independently assessed source evidence; its selected discharge policy
+    /// participates in native actions, never a launch-time fallback.
+    pub evidence: Option<std::sync::Arc<crate::native::Evidence>>,
 }
