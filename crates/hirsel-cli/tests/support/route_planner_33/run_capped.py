@@ -10,7 +10,7 @@ if sys.argv[1]=='child':
  sys.exit(p.returncode)
 base=pathlib.Path(sys.argv[1]);target=pathlib.Path(tempfile.mkdtemp(prefix='launch-',dir=base))
 env=os.environ|{'HIRSEL_JOBS':'1','HIRSEL_MEMORY_LIMIT':'2G','PATH':os.defpath}
-cmd=['python3',str(base/'capped'),'--timeout','60','prlimit','--cpu=60:61','--data=2147483648:2147483648','python3',__file__,'child',str(target),*sys.argv[2:]]
+cmd=['python3',str(base/'capped'),'--timeout','60','prlimit','--cpu=60:60','--data=2147483648:2147483648','python3',__file__,'child',str(target),*sys.argv[2:]]
 (target/'command.json').write_text(__import__('json').dumps(cmd))
 p=subprocess.run(cmd,env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
 (target/'cap-stdout').write_bytes(p.stdout);(target/'cap-stderr').write_bytes(p.stderr)

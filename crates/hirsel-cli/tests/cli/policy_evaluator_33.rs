@@ -188,7 +188,7 @@ fn receipt(root: &Path, engine: &str, phase: &str) {
         .append(true)
         .open(root.join("engines.jsonl"))
         .unwrap();
-    writeln!(file, "{}", json!({"engine":engine,"phase":phase})).unwrap();
+    writeln!(file, "{}", json!({"engine":engine,"phase":phase,"generation":recovery_plan().map(|p| p["generation"].clone())})).unwrap();
 }
 
 fn refusals(
@@ -280,7 +280,73 @@ fn semantic(recording: &hirsel_rt::launch::Recording) -> hirsel_rt::launch::Reco
     result
 }
 
+fn recovery_plan() -> Option<Value> {
+    std::env::var_os("POLICY_EVALUATOR_33_RECOVERY_PLAN")
+        .map(|p| serde_json::from_slice(&fs::read(p).unwrap()).unwrap())
+}
+
+fn validate_recovery_plan(plan: &Value, selected: &str) -> Result<(), String> {
+    if plan["case"].as_str() != Some(selected) || selected.contains(',') {
+        return Err("recovery requires exactly the plan's single case".into());
+    }
+    let row = cases().into_iter().find(|r| r["id"] == selected);
+    if row.as_ref() != Some(&plan["row"]) {
+        return Err("recovery row differs from the frozen vector".into());
+    }
+    let phases = plan["phases"].as_array().ok_or("missing recovery phases")?;
+    if phases.is_empty() {
+        return Err("zero selected recovery phases".into());
+    }
+    let mut allowed = vec!["h-differential".to_string()];
+    for recorder in ["Llvm", "Cranelift"] {
+        allowed.push(format!("{recorder}-live"));
+        for player in ["Llvm", "Cranelift", "reference", "checked"] {
+            allowed.push(format!("{recorder}-replay-{player}"));
+        }
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    for phase in phases {
+        let name = phase.as_str().ok_or("non-string recovery phase")?;
+        if !allowed.iter().any(|v| v == name) || !seen.insert(name) {
+            return Err(format!("invalid or duplicate recovery phase: {name}"));
+        }
+        if let Some((recorder, _)) = name.split_once("-replay-") {
+            if !phases.iter().any(|v| v == &format!("{recorder}-live")) {
+                return Err("fresh replay requires its new recording phase".into());
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn recovery_plan_rejects_ambiguous_or_unbound_phases() {
+    let row = cases().into_iter().find(|r| r["id"] == "version").unwrap();
+    let plan =
+        json!({"case":"version", "row":row, "phases":["Llvm-live", "Llvm-replay-reference"]});
+    assert!(validate_recovery_plan(&plan, "version").is_ok());
+    assert!(validate_recovery_plan(&plan, "version,domain-json").is_err());
+    for phases in [
+        json!([]),
+        json!(["unknown"]),
+        json!(["Llvm-live", "Llvm-live"]),
+        json!(["Llvm-replay-reference"]),
+    ] {
+        let mut changed = plan.clone();
+        changed["phases"] = phases;
+        assert!(validate_recovery_plan(&changed, "version").is_err());
+    }
+    let mut changed = plan;
+    changed["row"]["stderr"] = json!("");
+    assert!(validate_recovery_plan(&changed, "version").is_err());
+}
+
 fn accepted(root: &Path, id: &str) -> bool {
+    if let Some(plan) = recovery_plan() {
+        // Historical accepted identities remain external; their markers and
+        // tapes never enter this compiler generation. Only listed phases run.
+        return !plan["phases"].as_array().unwrap().iter().any(|v| v == id);
+    }
     fs::read(root.join("resume.json"))
         .ok()
         .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
@@ -376,6 +442,8 @@ fn native(
             link_fixture_runnable(&ready, &loaded.entry, &objects, &tools, &dir, recipe).unwrap();
         runnables.push((runnable, dir));
     }
+    let recovery = recovery_plan().is_some();
+    let mut recovery_events = None;
     let mut reference = None;
     for (runnable, dir) in &runnables {
         let tape = dir.join("recording.tape");
@@ -388,7 +456,11 @@ fn native(
             }
         );
         let live_id = format!("{recorder_name}-live");
-        if !accepted(root, &live_id) {
+        if recovery && accepted(root, &live_id) {
+            continue;
+        }
+        let newly_recorded = !accepted(root, &live_id);
+        if newly_recorded {
             receipt(root, &live_id, "started");
             let recorded = launch_fixture(
                 runnable,
@@ -403,9 +475,9 @@ fn native(
                 recipe,
             )
             .unwrap();
+            fs::write(dir.join("live-streams.json"), serde_json::to_vec_pretty(&json!({"stdout":recorded.stdout,"stderr":recorded.stderr,"exit":recorded.exit})).unwrap()).unwrap();
             assert_eq!(observe(&recorded, &ready, &sites).unwrap(), *expected);
             assert_eq!(recorded.stderr, row["stderr"].as_str().unwrap().as_bytes());
-            accept(root, &live_id);
         }
         let bytes = fs::read(&tape).unwrap();
         let recording = hirsel_rt::launch::parse_recording_bytes(&bytes).unwrap();
@@ -434,11 +506,45 @@ fn native(
                 )),
                 "native read never parked"
             );
+            if recovery {
+                let file = recording
+                    .events
+                    .iter()
+                    .find_map(|e| match (&e.request, &e.completion) {
+                        (
+                            hirsel_rt::io::Request::FileRead { file, .. },
+                            hirsel_rt::io::Completion::Blocked { committed: false },
+                        ) => Some(*file),
+                        _ => None,
+                    })
+                    .unwrap();
+                assert!(recording.events.iter().any(|e| matches!(e.request, hirsel_rt::io::Request::Close { handle } if handle == file)), "parked file leaked");
+                assert!(
+                    recording.events.iter().any(|e| matches!(
+                        &e.completion,
+                        hirsel_rt::io::Completion::Signal(Ok(
+                            hirsel_run_schema::SignalKind::Interrupt
+                        ))
+                    )),
+                    "scripted Interrupt never delivered"
+                );
+            }
         }
-        if let Some(reference) = &reference {
-            assert_eq!(&semantic(&recording), reference);
+        if newly_recorded {
+            accept(root, &live_id);
         }
-        reference = Some(semantic(&recording));
+        if recovery {
+            if let Some(events) = &recovery_events {
+                assert_eq!(&recording.events, events);
+            }
+            recovery_events = Some(recording.events.clone());
+        }
+        if !recovery {
+            if let Some(reference) = &reference {
+                assert_eq!(&semantic(&recording), reference);
+            }
+            reference = Some(semantic(&recording));
+        }
         let replay_recipe = Fixture {
             files: BTreeMap::new(),
             file_reads: BTreeMap::new(),
@@ -468,6 +574,7 @@ fn native(
             )
             .unwrap();
             assert_eq!(observe(&replayed, &ready, &sites).unwrap(), *expected);
+            assert_eq!(replayed.stderr, row["stderr"].as_str().unwrap().as_bytes());
             accept(root, &replay_id);
         }
         for checked in [false, true] {
@@ -572,6 +679,17 @@ fn ordinary_product_setup_seals_installed_inputs() {
 
 // Selected original vectors remain individually named in the durable receipts.
 fn campaign(phase: &str) {
+    let plan = recovery_plan();
+    if let Some(plan) = &plan {
+        assert_eq!(phase, "native");
+        validate_recovery_plan(plan, &std::env::var("POLICY_EVALUATOR_33_CASE").unwrap()).unwrap();
+        let cell = PathBuf::from(std::env::var_os("POLICY_EVALUATOR_33_RESUME_ROOT").unwrap());
+        assert!(
+            !cell.exists(),
+            "recovery requires a unique new single-cell root"
+        );
+        assert!(!plan["phases"].as_array().unwrap().is_empty());
+    }
     let root = scratch(phase);
     let manifest = package(&root);
     let products = prepare_product_inputs(&root, &manifest);
@@ -588,7 +706,7 @@ fn campaign(phase: &str) {
         fs::write(cell.join("row.json"), row.to_string()).unwrap();
         let output = Command::new("python3")
             .arg(root.join("capped"))
-            .args(["--timeout", "120", "prlimit", "--cpu=60:61"])
+            .args(["--timeout", "120", "prlimit", "--cpu=60:60"])
             .arg(std::env::current_exe().unwrap())
             .args([
                 "--exact",

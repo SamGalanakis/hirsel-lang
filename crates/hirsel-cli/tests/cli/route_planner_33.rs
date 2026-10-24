@@ -406,6 +406,21 @@ fn route_planner_33_reference_checked_workflows() {
 #[test]
 fn route_planner_33_native_four_engine_replay() {
     hirsel_engine::with_compiler_stack(|| {
+        let raw_only = std::env::var("ROUTE_PLANNER_33_LIVE_STDERR_ONLY").as_deref() == Ok("1");
+        if raw_only {
+            assert!(
+                std::env::var_os("ROUTE_PLANNER_33_BASELINE").is_some(),
+                "raw recovery requires an exact-source baseline"
+            );
+            assert!(
+                std::env::var_os("ROUTE_PLANNER_33_CASE").is_some(),
+                "raw recovery requires explicit cases"
+            );
+            assert!(
+                std::env::var_os("ROUTE_PLANNER_33_RECOVER_ROOT").is_none(),
+                "raw recovery requires new recordings"
+            );
+        }
         let root = scratch("native-");
         let path = package(&root);
         let mut loaded = hirsel_driver::load_program(&path).unwrap();
@@ -512,6 +527,7 @@ fn route_planner_33_native_four_engine_replay() {
             fs::write(cell.join("fixture.json"), serde_json::to_vec_pretty(&json!({"args":world.args,"files":world.files,"mounts":world.mounts,"file_reads":world.file_reads,"signals":world.signals})).unwrap()).unwrap();
             // Heap differential is an explicit additional execution, not a V check.
             if ["networkx-xg", "version", "denial", "pending-cancel"].contains(&id)
+                && !raw_only
                 && !std::env::var("ROUTE_PLANNER_33_COMPLETED_DIFFERENTIAL")
                     .unwrap_or_default()
                     .split(',')
@@ -632,6 +648,24 @@ fn route_planner_33_native_four_engine_replay() {
                             hirsel_rt::io::Completion::Blocked { committed: false }
                         )
                     )));
+                }
+                if std::env::var("ROUTE_PLANNER_33_LIVE_STDERR_ONLY").as_deref() == Ok("1") {
+                    assert!(
+                        retained.is_none(),
+                        "raw-stream recovery needs a newly launched recording identity"
+                    );
+                    assert!(
+                        raw_stderr_matches,
+                        "exact returned-live stderr remains incomplete: {id}"
+                    );
+                    receipts.push(json!({"id":id,"backend":dir.file_name().unwrap().to_str(),"selected":true,"started":true,"completed":true,"passed":true,"tape":tape,"recovered":"returned-live stderr only","native_replays":0,"interpreter_replays_completed":0,"replay_disposition":"UNRUN: retain previously completed immutable replay identities"}));
+                    fs::write(
+                        root.join("raw-stderr-receipts.json"),
+                        serde_json::to_vec_pretty(&receipts).unwrap(),
+                    )
+                    .unwrap();
+                    eprintln!("ROUTE_RAW_STDERR_RECOVERED {id} {}", dir.display());
+                    continue;
                 }
                 let replay_world = Fixture {
                     files: BTreeMap::new(),
