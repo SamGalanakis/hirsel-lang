@@ -258,3 +258,84 @@ fn packaged_capture_replays_changed_inputs_without_originals() {
         );
     }
 }
+
+#[test]
+#[ignore = "requires scratch-linker-proof selected linker inputs"]
+fn large_tool_snapshots_and_replays_under_none_and_unwritable_with_original_ram_cap() {
+    use hirsel_engine::{
+        runtime::ProcessBudget,
+        store::{NoneStore, RequestStore},
+    };
+    let package = PathBuf::from(std::env::var_os("HIRSEL_CAPTURE_LINKER").unwrap());
+    let llvm = PathBuf::from(std::env::var_os("HIRSEL_CAPTURE_LLVM").unwrap());
+    for unwritable in [false, true] {
+        let scratch = tempfile::tempdir().unwrap();
+        let blocked = scratch.path().join("not-a-directory");
+        std::fs::write(&blocked, b"selected durable path cannot be written").unwrap();
+        let selected: Arc<dyn ResultStore> = if unwritable {
+            Arc::new(DirStore::new(blocked))
+        } else {
+            Arc::new(NoneStore)
+        };
+        let local = selected.local_product_store().is_some();
+        let verifier = selected.verifier().is_some();
+        let ram = 16 << 20;
+        let budget = ProcessBudget::new(ram);
+        let store = RequestStore::with_scratch(
+            selected,
+            budget.reserve(ram).unwrap(),
+            scratch.path(),
+            256 << 20,
+        )
+        .unwrap();
+        let tool = FrozenLinker::snapshot(&store, &package).unwrap();
+        assert_eq!(store.local_product_store().is_some(), local);
+        assert_eq!(store.verifier().is_some(), verifier);
+        assert!(store.retained_bytes() < ram);
+        let source = scratch.path().join("original");
+        std::fs::create_dir(&source).unwrap();
+        let text = source.join("main.s");
+        let object = source.join("main.o");
+        std::fs::write(
+            &text,
+            ".globl _start\n_start:\n mov $60,%rax\n mov $42,%rdi\n syscall\n",
+        )
+        .unwrap();
+        let compiled = Command::new(llvm.join("bin/llvm-mc"))
+            .env_clear()
+            .env("LD_LIBRARY_PATH", llvm.join("lib"))
+            .args(["-triple=x86_64-unknown-linux", "-filetype=obj"])
+            .arg(&text)
+            .arg("-o")
+            .arg(&object)
+            .output()
+            .unwrap();
+        assert!(
+            compiled.status.success(),
+            "{}",
+            String::from_utf8_lossy(&compiled.stderr)
+        );
+        let captured = tool
+            .capture(
+                &store,
+                &source,
+                &[
+                    "-nostdlib".into(),
+                    "--threads=1".into(),
+                    object.to_str().unwrap().into(),
+                ],
+                LIMITS,
+            )
+            .unwrap();
+        std::fs::remove_dir_all(source).unwrap();
+        let captured = CapturedLink::from_reference(&store, captured.reference()).unwrap();
+        let output = scratch.path().join("program");
+        captured.link(&store, &output).unwrap();
+        assert_eq!(Command::new(output).status().unwrap().code(), Some(42));
+        assert!(store.retained_bytes() <= ram);
+        assert!(!store.exhausted());
+        assert!(budget.reserve(1).is_err());
+        drop(store);
+        assert_eq!(budget.reserved(), 0);
+    }
+}
