@@ -72,6 +72,7 @@ pub struct TirExecution {
     >,
     pub revision: hirsel_run_schema::ProgramRevision,
     pub foreign_unreplayable: bool,
+    pub foreign: hirsel_engine::ForeignUse,
     pub(crate) products: Arc<dyn TirProducts>,
 }
 impl TirExecution {
@@ -122,6 +123,7 @@ pub struct NativeExecution {
     pub toolchain: Arc<crate::native::Toolchain>,
     pub run: Option<Arc<hirsel_run_config::ValidatedRun>>,
     pub foreign_unreplayable: bool,
+    pub foreign: hirsel_engine::ForeignUse,
     pub(crate) owner: Arc<dyn Send + Sync>,
 }
 impl NativeExecution {
