@@ -29,7 +29,7 @@ pub fn derive(
         .ok_or_else(|| {
             LayoutError::Invalid("structural layout differs from its declared type".into())
         })?;
-    at_layout(types, root, lookup, table, root_layout)
+    at_layout_with_owners(types, root, lookup, owners, table, root_layout)
 }
 
 /// Build physical projections at a producer-selected layout. Independent
@@ -44,14 +44,41 @@ pub fn at_layout(
     table: &LayoutTable,
     root_layout: LayoutId,
 ) -> Result<AccessPlan, LayoutError> {
+    at_layout_impl(types, root, lookup, None, table, root_layout)
+}
+
+/// Native access uses independently validated private owner representations
+/// when the public declaration is opaque. Candidate layouts supply no shape.
+pub fn at_layout_with_owners(
+    types: &TypeInterner,
+    root: TypeId,
+    lookup: &mut impl FnMut(DefId) -> Result<Option<SignatureRef>, QueryError>,
+    owners: &Owners,
+    table: &LayoutTable,
+    root_layout: LayoutId,
+) -> Result<AccessPlan, LayoutError> {
+    at_layout_impl(types, root, lookup, Some(owners), table, root_layout)
+}
+
+fn at_layout_impl(
+    types: &TypeInterner,
+    root: TypeId,
+    lookup: &mut impl FnMut(DefId) -> Result<Option<SignatureRef>, QueryError>,
+    owners: Option<&Owners>,
+    table: &LayoutTable,
+    root_layout: LayoutId,
+) -> Result<AccessPlan, LayoutError> {
     let mut arguments = crate::operation::collect_arguments(types, &[GenericArgument::Type(root)])?;
     let Some(OperationArgument::Type(source)) = arguments.pop() else {
         return Err(LayoutError::MissingType);
     };
     let canonical = crate::operation::intern_native(&source, types, 0)?;
-    let graph = crate::structural::derive(types, canonical, lookup)
-        .map_err(|e| LayoutError::Invalid(format!("structural declarations: {e:?}")))?
-        .ok_or_else(|| LayoutError::Invalid("type has no complete structural view".into()))?;
+    let graph = match owners {
+        Some(owners) => crate::structural::derive_with_owners(types, canonical, lookup, owners),
+        None => crate::structural::derive(types, canonical, lookup),
+    }
+    .map_err(|e| LayoutError::Invalid(format!("structural declarations: {e:?}")))?
+    .ok_or_else(|| LayoutError::Invalid("type has no complete structural view".into()))?;
     AccessPlan::derive(source, graph, table, root_layout).map_err(LayoutError::Invalid)
 }
 
@@ -74,3 +101,6 @@ pub fn validate(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod owner_tests;

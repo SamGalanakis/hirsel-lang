@@ -1120,10 +1120,11 @@ impl<'c, 'a> Body<'c, 'a> {
         {
             return Ok(());
         }
-        let plan = hirsel_layout::structural_access::at_layout(
+        let plan = hirsel_layout::structural_access::at_layout_with_owners(
             self.cx.types,
             source,
             &mut |d| Ok(self.cx.program.signatures.get(d.path()).cloned()),
+            self.cx.layouts.owners(),
             self.cx.layouts.table(),
             layout,
         )

@@ -63,10 +63,11 @@ impl Importer<'_> {
             return Ok(());
         }
         let source = self.ty(source)?;
-        let plan = hirsel_layout::structural_access::at_layout(
+        let plan = hirsel_layout::structural_access::at_layout_with_owners(
             self.types,
             source,
             &mut |d| Ok(self.program.signatures.get(d.path()).cloned()),
+            self.layouts.owners(),
             self.layouts.table(),
             layout,
         )
