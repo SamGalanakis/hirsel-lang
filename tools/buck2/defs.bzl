@@ -306,6 +306,8 @@ def _rust_test_impl(ctx):
         env["HIRSEL_TEST_EXACT_CPUS"] = str(EXACT_TEST_CPUS[ctx.attrs.test_binary])
     env.update({name: cmd_args(tree) for name, tree in tools.items()})
     if tools:
+        inputs.append(ctx.attrs._private_native_inputs)
+        env["HIRSEL_PRIVATE_NATIVE_INPUTS"] = cmd_args(ctx.attrs._private_native_inputs)
         inputs.append(ctx.attrs._native_environment)
         env["HIRSEL_NATIVE_ENVIRONMENT"] = cmd_args(ctx.attrs._native_environment)
     if exes:
@@ -390,6 +392,7 @@ _rust_test = rule(
         "shards": attrs.int(default = 0),
         "test_binary": attrs.string(default = ""),
         "_launcher": attrs.source(default = "root//tools/buck2:test_launcher.sh"),
+        "_private_native_inputs": attrs.source(default = "root//tools/buck2:private_native_inputs.py"),
         "_llvm_libraries": attrs.dep(default = "toolchains//:llvm-libraries"),
         "_native_environment": attrs.source(default = "root//tools/buck2/native-toolchain:environment.tsv"),
     },
