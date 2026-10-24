@@ -670,3 +670,126 @@ fn native_products_19_value_trace_tracks_real_construction_and_worker_scopes() {
         "a worker trace never leaks into its parent"
     );
 }
+
+#[test]
+fn native_products_19_unavailable_source_reads_replay_without_promoting_empty_inventories() {
+    use hirsel_lir::operation::{OperationArgument, OperationDeclarations};
+    struct Declarations {
+        registry: hirsel_layout::operation::OperationRegistry,
+        events: bool,
+        payloads: bool,
+    }
+    impl OperationDeclarations for Declarations {
+        fn seal_events(
+            &self,
+            _: &hirsel_syntax::DefPath,
+            _: hirsel_syntax::ContentHash,
+        ) -> Option<Vec<hirsel_lir::sealed_payload_source::SourceEvent>> {
+            self.events.then(Vec::new)
+        }
+        fn seal_payloads(
+            &self,
+            _: &hirsel_syntax::DefPath,
+            _: hirsel_syntax::ContentHash,
+        ) -> Option<Vec<hirsel_lir::sealed_payload_source::SourcePayload>> {
+            self.payloads.then(Vec::new)
+        }
+        fn derive(
+            &self,
+            operation: &hirsel_core_contract::OperationId,
+            arguments: &[OperationArgument],
+            target: &hirsel_lir::TargetSpec,
+        ) -> Result<(hirsel_lir::FnAbi, hirsel_lir::LayoutTable), hirsel_lir::layout::LayoutError>
+        {
+            self.registry.derive(operation, arguments, target)
+        }
+    }
+    let mut fixture = Lir::<Value>::new(&[], None);
+    fixture.builder.ret(ENTRY, None);
+    let (unit, table, manifest) = fixture.finish();
+    let target = hirsel_lir::TargetSpec::x86_64_unknown_linux_gnu();
+    let operations = Declarations {
+        registry: support::registry(),
+        events: false,
+        payloads: false,
+    };
+    let inputs = Inputs {
+        memo: Default::default(),
+        target: &target,
+        layouts: &table,
+        manifest: &manifest,
+        operations: &operations,
+        discharge: None,
+    };
+    let environment = NativeEnvironment {
+        target: &target,
+        manifest: &manifest,
+        operations: &operations,
+        discharge: None,
+    };
+    let cache = NativeCache::new(Arc::new(Memory::default()), None);
+    let subject = hash("unavailable original-source inventory");
+    let policy = hash("exact optional source observation policy");
+    let (_, output) = cache
+        .validate_and_publish(
+            subject,
+            policy,
+            unit.clone(),
+            &inputs,
+            &[],
+            b"ordinary output",
+        )
+        .unwrap();
+    assert!(
+        output.is_some(),
+        "ordinary C output must retain independently observed unavailable inputs"
+    );
+    let trace = hirsel_lir::construction::ValueTrace::default();
+    let observe = trace.enter();
+    assert!(
+        cache
+            .lookup(subject, policy, StageKind::Value, &environment)
+            .is_some()
+    );
+    for (events, payloads) in [(true, false), (false, true), (true, true)] {
+        let changed = Declarations {
+            registry: support::registry(),
+            events,
+            payloads,
+        };
+        let changed_environment = NativeEnvironment {
+            operations: &changed,
+            ..environment
+        };
+        assert!(
+            cache
+                .lookup(subject, policy, StageKind::Value, &changed_environment)
+                .is_none(),
+            "None cannot become Some(empty) without actual C"
+        );
+    }
+    assert_eq!(trace.totals(), Default::default());
+    drop(observe);
+    // Some remains outside this cache support: no source provider/witness or
+    // empty semantic expectation is manufactured by ordinary observation replay.
+    let some = Declarations {
+        registry: support::registry(),
+        events: true,
+        payloads: true,
+    };
+    let some_inputs = Inputs {
+        memo: Default::default(),
+        operations: &some,
+        ..inputs
+    };
+    let (_, output) = cache
+        .validate_output(
+            hash("available source inventory"),
+            policy,
+            unit,
+            &some_inputs,
+            &[],
+        )
+        .unwrap();
+    assert!(output.is_none());
+}
