@@ -26,6 +26,7 @@ struct CallState {
 enum Pending {
     Create {
         destination: PlaceId,
+        fields: Vec<(Owner, u32, u64)>,
         context: Context,
     },
     Move {
@@ -195,6 +196,74 @@ impl Resources {
                 .join(".")
         ))
     }
+    fn field(value: &Value, field: u32) -> Option<Step> {
+        Some(match value {
+            Value::Tuple(_)
+            | Value::Record { .. }
+            | Value::Distinct { .. }
+            | Value::Resource { .. }
+            | Value::Box(_) => Step::Field { field },
+            Value::Variant { variant, .. } | Value::ResourceVariant { variant, .. } => {
+                Step::VariantField {
+                    variant: *variant,
+                    field,
+                }
+            }
+            Value::Sequence { .. } => Step::Index {
+                index: u64::from(field),
+            },
+            _ => return None,
+        })
+    }
+    fn supported_tree(value: &Value) -> bool {
+        let mut work = vec![value];
+        while let Some(value) = work.pop() {
+            if crate::checked::resources_in(value) == 0 {
+                continue;
+            }
+            if Self::field(value, 0).is_none() {
+                return false;
+            }
+            work.extend(value.fields().into_iter().flatten().flatten());
+        }
+        true
+    }
+    fn scratch(&mut self) -> Owner {
+        let owner = Owner {
+            task: Some(TaskPath::default()),
+            storage: Storage::Argument {
+                call: self.next_scratch,
+                parameter: 0,
+            },
+            path: vec![],
+        };
+        self.next_scratch += 1;
+        owner
+    }
+    /// Called at the actual field-release boundary. Match release_fields' push
+    /// front in declaration order, so the next destruction visits high to low.
+    /// Each child's subtree is moved into its own cleanup custody; dropping a
+    /// parent never fabricates drops for its children.
+    fn release_fields(&mut self, value: &Value, owner: &Owner, context: &Context) {
+        let Some(fields) = value.fields() else { return };
+        for (index, child) in fields.iter().enumerate() {
+            let Some(child) = child else { continue };
+            if crate::checked::resources_in(child) == 0 {
+                continue;
+            }
+            let Some(step) = Self::field(value, index as u32) else {
+                self.unsupported("unsupported resource field destruction");
+                return;
+            };
+            let mut from = owner.clone();
+            from.path.push(step);
+            let to = self.scratch();
+            let result = self.tracker.move_tree(context, &from, &to);
+            if self.checked(result).is_some() {
+                self.releases.push_front(to);
+            }
+        }
+    }
     pub fn finish(self, program: [u8; 32], completed: bool) -> Result<Trace, TraceError> {
         if let Some(error) = self.error {
             return Err(error);
@@ -284,9 +353,30 @@ impl Observer for Resources {
         match instruction {
             Some(InstructionKind::Assign { destination, value }) => {
                 match frame.body().rvalues.get(value.0 as usize) {
-                    Some(Rvalue::Construct { .. }) => {
+                    Some(Rvalue::Construct { fields, .. }) => {
+                        let mut incoming = vec![];
+                        for field in fields {
+                            let Ok(value) = frame.observe(field.value.place) else {
+                                self.unsupported("construction field is unavailable");
+                                return;
+                            };
+                            let count = crate::checked::resources_in(value);
+                            if count == 0 {
+                                continue;
+                            }
+                            if field.value.usage != UseKind::Take || !Self::supported_tree(value) {
+                                self.unsupported("unsupported construction field transport");
+                                return;
+                            }
+                            let Some(owner) = self.place(frame, field.value.place) else {
+                                self.unsupported("construction field owner unavailable");
+                                return;
+                            };
+                            incoming.push((owner, field.field, count));
+                        }
                         self.pending = Some(Pending::Create {
                             destination: *destination,
+                            fields: incoming,
                             context,
                         })
                     }
@@ -298,7 +388,7 @@ impl Observer for Resources {
                         if crate::checked::resources_in(value) == 0 {
                             return;
                         }
-                        if !Self::resource(value) {
+                        if !Self::supported_tree(value) {
                             self.unsupported("aggregate resource transport");
                             return;
                         }
@@ -310,12 +400,7 @@ impl Observer for Resources {
                             self.unsupported("unavailable resource destination");
                             return;
                         };
-                        let source = frame.place(operand.place).unwrap();
-                        let alias = self
-                            .frames
-                            .last()
-                            .is_some_and(|f| f.aliases.contains_key(&source.root.0));
-                        if matches!(operand.usage, UseKind::Borrow | UseKind::Mut) || alias {
+                        if matches!(operand.usage, UseKind::Borrow | UseKind::Mut) {
                             let destination = frame.place(*destination).unwrap();
                             if !destination.projection.is_empty() {
                                 self.unsupported("projected resource alias");
@@ -391,7 +476,7 @@ impl Observer for Resources {
                             if crate::checked::resources_in(value) == 0 {
                                 continue;
                             }
-                            if !Self::resource(value) {
+                            if !Self::supported_tree(value) {
                                 self.unsupported("aggregate call argument");
                                 return;
                             }
@@ -498,6 +583,7 @@ impl Observer for Resources {
         match pending {
             Some(Pending::Create {
                 destination,
+                fields,
                 context,
             }) => {
                 let Ok(value) = frame.observe(destination) else {
@@ -506,10 +592,17 @@ impl Observer for Resources {
                 };
                 let count = crate::checked::resources_in(value);
                 if count == 0 {
+                    if !fields.is_empty() {
+                        self.unsupported("construction discarded tracked resource fields");
+                    }
                     return;
                 }
-                if count != 1 || !Self::resource(value) {
-                    self.unsupported("nested resource construction");
+                if !Self::supported_tree(value)
+                    || count
+                        != fields.iter().map(|f| f.2).sum::<u64>()
+                            + u64::from(Self::resource(value))
+                {
+                    self.unsupported("unattributed resource construction");
                     return;
                 }
                 if let Ok(place) = frame.place(destination)
@@ -525,10 +618,25 @@ impl Observer for Resources {
                     self.unsupported("construction owner unavailable");
                     return;
                 };
-                let result = self
-                    .tracker
-                    .create(&context, owner, Self::type_name(value).unwrap());
-                self.checked(result);
+                for (from, field, expected) in fields {
+                    let Some(step) = Self::field(value, field) else {
+                        self.unsupported("unsupported construction field projection");
+                        return;
+                    };
+                    let mut to = owner.clone();
+                    to.path.push(step);
+                    let result = self.tracker.move_tree(&context, &from, &to);
+                    if let Some(tokens) = self.checked(result)
+                        && tokens.len() as u64 != expected
+                    {
+                        self.unsupported("construction field resource inventory differs");
+                        return;
+                    }
+                }
+                if let Some(name) = Self::type_name(value) {
+                    let result = self.tracker.create(&context, owner, name);
+                    self.checked(result);
+                }
             }
             Some(Pending::Move { from, to, context }) => {
                 if let Storage::Slot { frame, slot } = to.storage
@@ -562,7 +670,7 @@ impl Observer for Resources {
         if self.error.is_some() || crate::checked::resources_in(value) == 0 {
             return;
         }
-        if !Self::resource(value) {
+        if !Self::supported_tree(value) {
             self.unsupported("aggregate resource cleanup");
             return;
         }
@@ -571,15 +679,7 @@ impl Observer for Resources {
             return;
         };
         let context = Self::at(frame, site, sources);
-        let owner = Owner {
-            task: Some(TaskPath::default()),
-            storage: Storage::Argument {
-                call: self.next_scratch,
-                parameter: 0,
-            },
-            path: vec![],
-        };
-        self.next_scratch += 1;
+        let owner = self.scratch();
         let result = self.tracker.move_tree(&context, &from, &owner);
         if self.checked(result).is_some() {
             self.releases.push_back(owner);
@@ -611,6 +711,11 @@ impl Observer for Resources {
             let context = Self::context(anchor.definition, anchor.body, anchor.site, sources);
             let result = self.tracker.drop_value(&context, &owner);
             self.checked(result);
+            if let Some(value) = frame.slots.get(local.0 as usize).and_then(Option::as_ref) {
+                self.release_fields(value, &owner, &context);
+            } else {
+                self.unsupported("finalizer self disappeared before field cleanup");
+            }
         } else if let crate::resources::Ending::Return(value) = ending {
             let returned = state.returned.clone();
             let destination = state.return_to.clone();
@@ -629,7 +734,7 @@ impl Observer for Resources {
                 self.frames.pop();
                 return;
             }
-            if !Self::resource(value) {
+            if !Self::supported_tree(value) {
                 self.unsupported("aggregate resource return");
                 return;
             }
@@ -657,7 +762,7 @@ impl Observer for Resources {
         if self.error.is_some() || crate::checked::resources_in(value) == 0 {
             return;
         }
-        if !Self::resource(value) || crate::checked::resources_in(value) != 1 {
+        if !Self::supported_tree(value) {
             self.unsupported("compound resource destruction without a finalizer");
             return;
         }
@@ -666,8 +771,11 @@ impl Observer for Resources {
             return;
         };
         let context = Self::at(frame, site, sources);
-        let result = self.tracker.drop_value(&context, &owner);
-        self.checked(result);
+        if Self::resource(value) {
+            let result = self.tracker.drop_value(&context, &owner);
+            self.checked(result);
+        }
+        self.release_fields(value, &owner, &context);
     }
     fn forgotten(&mut self, _task: u64, frame: &Frame, site: Span, sources: &SourceMap) {
         if self.error.is_some() {

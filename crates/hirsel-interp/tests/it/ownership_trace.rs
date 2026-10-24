@@ -473,7 +473,7 @@ fn ownership_reference_failed_finalizer_still_finishes_that_resource_lifetime() 
 }
 
 #[test]
-fn ownership_reference_unsupported_nested_resource_transport_never_claims_completeness() {
+fn ownership_reference_tuple_fields_retain_their_existing_resource_identity() {
     let mut builder = Builder::new();
     let inner = token(&mut builder);
     let scalar = builder.type_id(kind());
@@ -496,5 +496,190 @@ fn ownership_reference_unsupported_nested_resource_transport_never_claims_comple
         vec![builder.finish("main", result), finalizer(false)],
         &runtime_types(),
     );
+    let analysis = traced.trace.unwrap().analyze([9; 32], 100).unwrap();
+    assert_eq!(
+        (analysis.created, analysis.dropped, analysis.live.len()),
+        (1, 1, 0)
+    );
+}
+
+#[test]
+fn ownership_reference_unsupported_replacement_never_claims_completeness() {
+    let mut builder = Builder::new();
+    let first = token(&mut builder);
+    let second = token(&mut builder);
+    builder.replace(first, take(second), 4);
+    let result = builder.unit();
+    let traced = observed(
+        vec![builder.finish("main", result), finalizer(false)],
+        &runtime_types(),
+    );
     assert!(matches!(traced.trace, Err(TraceError::Unsupported(_))));
+}
+
+fn tuple(builder: &mut Builder, fields: &[PlaceId]) -> PlaceId {
+    let types = fields
+        .iter()
+        .map(|p| builder.body.places[p.0 as usize].ty)
+        .collect::<Vec<_>>();
+    let destination = builder.local(TypeKind::Tuple(types.into()), Storage::Local);
+    builder.assign(
+        destination,
+        Rvalue::Construct {
+            constructor: Constructor::Tuple,
+            fields: fields
+                .iter()
+                .enumerate()
+                .map(|(i, p)| ConstructField {
+                    field: i as u32,
+                    value: take(*p),
+                })
+                .collect(),
+            destination: Destination::Inferred,
+        },
+        4,
+        CleanupId(0),
+    );
+    destination
+}
+
+#[test]
+fn ownership_reference_nested_tuple_moves_and_partial_take_drop_each_leaf_once() {
+    let mut builder = Builder::new();
+    let first = token(&mut builder);
+    let second = token(&mut builder);
+    let inner = tuple(&mut builder, &[first, second]);
+    let outer = tuple(&mut builder, &[inner]);
+    let inner_type = builder.body.places[inner.0 as usize].ty;
+    let token_type = builder.type_id(kind());
+    let projected = builder.project(outer, Projection::Field(0), inner_type);
+    let projected = builder.project(projected, Projection::Field(1), token_type);
+    let destination = builder.local(kind(), Storage::Local);
+    builder.assign(destination, Rvalue::Use(take(projected)), 5, CleanupId(0));
+    let result = builder.unit();
+    let traced = observed(
+        vec![builder.finish("main", result), finalizer(false)],
+        &runtime_types(),
+    );
+    let trace = traced.trace.unwrap();
+    let analysis = trace.analyze([9; 32], 100).unwrap();
+    assert_eq!(
+        (analysis.created, analysis.dropped, analysis.live.len()),
+        (2, 2, 0)
+    );
+    assert!(
+        trace.events.iter().any(
+            |event| matches!(&event.action, Action::Move { from, .. } if from.path.len() == 2)
+        )
+    );
+}
+
+#[test]
+fn ownership_reference_aggregate_call_and_return_move_all_descendant_tokens() {
+    let mut builder = Builder::new();
+    let first = token(&mut builder);
+    let second = token(&mut builder);
+    let aggregate = tuple(&mut builder, &[first, second]);
+    let token_type = builder.type_id(kind());
+    let tuple_type = TypeKind::Tuple(vec![token_type, token_type].into());
+    let mut identity = Builder::new();
+    let parameter = identity.parameter(tuple_type.clone());
+    let identity = identity.finish("identity", parameter);
+    call(&mut builder, "identity", take(aggregate), tuple_type);
+    let result = builder.unit();
+    let traced = observed(
+        vec![builder.finish("main", result), identity, finalizer(false)],
+        &runtime_types(),
+    );
+    let analysis = traced.trace.unwrap().analyze([9; 32], 100).unwrap();
+    assert_eq!(
+        (analysis.created, analysis.dropped, analysis.live.len()),
+        (2, 2, 0)
+    );
+}
+
+#[test]
+fn ownership_reference_parent_finalizer_finishes_before_each_real_child_finalizer() {
+    for fail in [false, true] {
+        let mut builder = Builder::new();
+        let first = token(&mut builder);
+        let second = token(&mut builder);
+        let parent_kind = TypeKind::Named {
+            definition: DefId::intern(&path("Parent")),
+            arguments: vec![].into(),
+        };
+        let parent = builder.local(parent_kind.clone(), Storage::Local);
+        builder.assign(
+            parent,
+            Rvalue::Construct {
+                constructor: Constructor::Record(path("Parent")),
+                fields: vec![
+                    ConstructField {
+                        field: 0,
+                        value: take(first),
+                    },
+                    ConstructField {
+                        field: 1,
+                        value: take(second),
+                    },
+                ],
+                destination: Destination::Inferred,
+            },
+            4,
+            CleanupId(0),
+        );
+        let mut parent_drop = Builder::new();
+        parent_drop.borrowed_parameter(parent_kind);
+        let result = parent_drop.unit();
+        let parent_drop = if fail {
+            parent_drop.block(
+                Terminator::Fail {
+                    rule: const { hirsel_diag::RuleId::of("FAIL-1") },
+                    cleanup: CleanupId(0),
+                },
+                9,
+            );
+            parent_drop.definition("Parent_drop")
+        } else {
+            parent_drop.finish("Parent_drop", result)
+        };
+        let mut runtime = runtime_types();
+        runtime.nominals.push(Nominal {
+            definition: path("Parent"),
+            resource: true,
+            distinct: false,
+            finalizer: Some((path("Parent_drop"), BodyId(0))),
+            fields: 2,
+            representation: None,
+        });
+        let result = builder.unit();
+        let traced = observed(
+            vec![
+                builder.finish("main", result),
+                parent_drop,
+                finalizer(false),
+            ],
+            &runtime,
+        );
+        assert_eq!(matches!(traced.execution.outcome, Outcome::Failed(_)), fail);
+        let trace = traced.trace.unwrap();
+        let analysis = trace.analyze([9; 32], 100).unwrap();
+        assert_eq!(
+            (analysis.created, analysis.dropped, analysis.live.len()),
+            (3, 3, 0)
+        );
+        let drops = trace
+            .events
+            .iter()
+            .filter_map(|event| match &event.action {
+                Action::Drop { token, .. } => Some(token.sequence),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            drops,
+            [2, 1, 0],
+            "parent then reversed child declaration order"
+        );
+    }
 }
