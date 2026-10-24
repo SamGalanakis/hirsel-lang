@@ -383,11 +383,55 @@ impl NativeCache {
             }) {
                 return None;
             }
-            let (closure, body) = LayoutClosure::capture(&checked, inputs, additional_abis).ok()?;
-            let binding = Binding::new(inputs.target, &[&closure]).ok()?;
-            let declarations = observed.finish(&binding.table, inputs.layouts, inputs.target)?;
-            let body = self.put(domain, hirsel_codec::to_text(&body).as_bytes())?;
-            let layouts = self.put(LAYOUTS, hirsel_codec::to_text(&closure).as_bytes())?;
+            let (closure, body) = LayoutClosure::capture(&checked, inputs, additional_abis)
+                .map_err(|error| {
+                    eprintln!(
+                        "[DEBUG-ca-pretransfer] {} layout capture: {error:?}",
+                        header.definition
+                    )
+                })
+                .ok()?;
+            let binding = Binding::new(inputs.target, &[&closure])
+                .map_err(|error| {
+                    eprintln!(
+                        "[DEBUG-ca-pretransfer] {} layout binding: {error:?}",
+                        header.definition
+                    )
+                })
+                .ok()?;
+            let declarations = observed
+                .finish(&binding.table, inputs.layouts, inputs.target)
+                .or_else(|| {
+                    eprintln!(
+                        "[DEBUG-ca-pretransfer] {} declaration capture; adapter ABIs {:?}",
+                        header.definition,
+                        inputs
+                            .operations
+                            .pretransfer_adapters()
+                            .iter()
+                            .map(|r| (
+                                &r.adapter.definition,
+                                inputs
+                                    .operations
+                                    .pretransfer_abi(r, inputs.target)
+                                    .is_some()
+                            ))
+                            .collect::<Vec<_>>()
+                    );
+                    None
+                })?;
+            let body = self
+                .put(domain, hirsel_codec::to_text(&body).as_bytes())
+                .or_else(|| {
+                    eprintln!("[DEBUG-ca-pretransfer] {} body store", header.definition);
+                    None
+                })?;
+            let layouts = self
+                .put(LAYOUTS, hirsel_codec::to_text(&closure).as_bytes())
+                .or_else(|| {
+                    eprintln!("[DEBUG-ca-pretransfer] {} layout store", header.definition);
+                    None
+                })?;
             let environment = NativeEnvironment {
                 target: inputs.target,
                 manifest: inputs.manifest,

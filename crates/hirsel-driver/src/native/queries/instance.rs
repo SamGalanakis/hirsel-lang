@@ -304,7 +304,14 @@ impl InstanceQueries {
                 additional_abis,
             )
             .map_err(|rejected| format!("native Value refused: {:?}", rejected.violations))?;
-        let output = output.ok_or("native Value transport failed")?;
+        let output = output.ok_or_else(|| {
+            format!(
+                "native Value transport failed: {} body {} instance {:?}",
+                key.instance.definition(),
+                key.instance.body(),
+                key.instance.digest()
+            )
+        })?;
         let equations = extract_local_arena(key, &checked, inputs.layouts)?;
         let bytes = serde_json::to_vec(&equations).map_err(|e| e.to_string())?;
         let equations = self
