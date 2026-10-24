@@ -191,6 +191,13 @@ pub fn ordinal(names: List[String], value: String) -> Result[u64, report.Problem
   Error(Endpoint())
 }
 
+fn indexed_ordinal(names: Map[String, u64], value: String) -> Result[u64, report.Problem] uses {} {
+  match map.get(names, value) {
+    Some(index) => Ok(index),
+    None() => Error(Endpoint()),
+  }
+}
+
 pub fn validate(m: Manifest) -> Result[(), report.Problem] uses {} {
   if m.version != 1 {
     return Error(Version())
@@ -213,80 +220,85 @@ pub fn validate(m: Manifest) -> Result[(), report.Problem] uses {} {
   if n * n > 256 || a * 2 > 128 || a * MAX_CAPACITY > 64000000 {
     return Error(Bounds())
   }
+  // Index bounded names as versionaudit does; retain input-order validation.
+  let mut vertex_names: Map[String, u64] = map.empty()
   for i in 0u64..n {
     name(m.vertices[i])?
-    for j in 0u64..i {
-      if m.vertices[i] == m.vertices[j] {
-        return Error(Duplicate())
-      }
+    if map.contains(vertex_names, m.vertices[i]) {
+      return Error(Duplicate())
     }
+    map.insert(mut vertex_names, unique m.vertices[i], i)
   }
-  let source = ordinal(m.vertices, m.source)?
-  let sink = ordinal(m.vertices, m.sink)?
+  let source = indexed_ordinal(vertex_names, m.source)?
+  let sink = indexed_ordinal(vertex_names, m.sink)?
   if source == sink {
     return Error(Endpoint())
   }
+  let mut arc_names: Map[String, u64] = map.empty()
+  // n <=16, so each source's target membership fits in one u64.
+  let mut endpoints = list.filled(n, 0u64)
   for i in 0u64..a {
     let e = m.arcs[i]
     name(e.name)?
-    let u = ordinal(m.vertices, e.source)?
-    let v = ordinal(m.vertices, e.target)?
+    let u = indexed_ordinal(vertex_names, e.source)?
+    let v = indexed_ordinal(vertex_names, e.target)?
     if u == v {
       return Error(Endpoint())
     }
     if e.capacity > MAX_CAPACITY {
       return Error(Capacity())
     }
-    for j in 0u64..i {
-      let previous = m.arcs[j]
-      if previous.name == e.name || previous.source == e.source && previous.target == e.target {
-        return Error(Duplicate())
-      }
+    let target = 1u64 << v
+    if map.contains(arc_names, e.name) || endpoints[u] & target != 0 {
+      return Error(Duplicate())
     }
+    map.insert(mut arc_names, unique e.name, i)
+    endpoints[u] = endpoints[u] | target
   }
+  let mut scenario_names: Map[String, u64] = map.empty()
   for i in 0u64..count {
     let scenario = m.scenarios[i]
     name(scenario.name)?
-    for j in 0u64..i {
-      if m.scenarios[j].name == scenario.name {
-        return Error(Duplicate())
-      }
+    if map.contains(scenario_names, scenario.name) {
+      return Error(Duplicate())
     }
+    map.insert(mut scenario_names, unique scenario.name, i)
     if list.len(scenario.overrides) > MAX_ARCS {
       return Error(Overrides())
     }
+    let mut overrides: Map[String, u64] = map.empty()
     for k in 0u64..list.len(scenario.overrides) {
       let o = scenario.overrides[k]
       if o.capacity > MAX_CAPACITY {
         return Error(Capacity())
       }
-      let mut found = false
-      for e in m.arcs {
-        if e.name == o.arc {
-          found = true
-        }
-      }
-      if !found {
+      if !map.contains(arc_names, o.arc) {
         return Error(Override())
       }
-      for j in 0u64..k {
-        if scenario.overrides[j].arc == o.arc {
-          return Error(Duplicate())
-        }
+      if map.contains(overrides, o.arc) {
+        return Error(Duplicate())
       }
+      map.insert(mut overrides, unique o.arc, k)
     }
   }
   Ok(())
 }
 
 pub fn topology(m: Manifest) -> Result[unique Topology, report.Problem] uses {} {
+  let mut names: Map[String, u64] = map.empty()
+  for i in 0u64..list.len(m.vertices) {
+    // Match ordinal's first occurrence even for a caller's unvalidated manifest.
+    if !map.contains(names, m.vertices[i]) {
+      map.insert(mut names, unique m.vertices[i], i)
+    }
+  }
   let mut arcs: List[Edge] = []
   for e in m.arcs {
     list.push(
       mut arcs,
       Edge(
-        source: ordinal(m.vertices, e.source)?,
-        target: ordinal(m.vertices, e.target)?,
+        source: indexed_ordinal(names, e.source)?,
+        target: indexed_ordinal(names, e.target)?,
         capacity: e.capacity
       )
     )
@@ -294,21 +306,24 @@ pub fn topology(m: Manifest) -> Result[unique Topology, report.Problem] uses {} 
   Ok(
     unique Topology(
       vertices: list.len(m.vertices),
-      source: ordinal(m.vertices, m.source)?,
-      sink: ordinal(m.vertices, m.sink)?,
+      source: indexed_ordinal(names, m.source)?,
+      sink: indexed_ordinal(names, m.sink)?,
       arcs: take arcs
     )
   )
 }
 
 pub fn capacities(m: Manifest, s: Scenario) -> unique List[u64] uses {} {
+  // Match the independent oracle.py capacities dictionary, retaining last-write wins.
+  let mut overrides: Map[String, u64] = map.empty()
+  for o in s.overrides {
+    map.insert(mut overrides, unique o.arc, o.capacity)
+  }
   let mut values: List[u64] = []
   for arc in m.arcs {
-    let mut capacity = arc.capacity
-    for o in s.overrides {
-      if o.arc == arc.name {
-        capacity = o.capacity
-      }
+    let capacity = match map.get(overrides, arc.name) {
+      Some(value) => value,
+      None() => arc.capacity,
     }
     list.push(mut values, capacity)
   }

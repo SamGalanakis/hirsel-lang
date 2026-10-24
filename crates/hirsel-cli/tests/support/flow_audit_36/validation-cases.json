@@ -1,0 +1,32 @@
+[
+  {
+    "id": "duplicate-vertex",
+    "input": "{\"version\":1,\"vertices\":[\"a\",\"b\",\"c\",\"d\",\"a\"],\"arcs\":[{\"name\":\"e0\",\"source\":\"a\",\"target\":\"b\",\"capacity\":1000},{\"name\":\"e1\",\"source\":\"a\",\"target\":\"c\",\"capacity\":1000},{\"name\":\"e2\",\"source\":\"b\",\"target\":\"c\",\"capacity\":1},{\"name\":\"e3\",\"source\":\"b\",\"target\":\"d\",\"capacity\":1000},{\"name\":\"e4\",\"source\":\"c\",\"target\":\"d\",\"capacity\":1000}],\"source\":\"a\",\"sink\":\"d\",\"scenarios\":[{\"name\":\"base\",\"overrides\":[]}]}",
+    "error": "duplicate"
+  },
+  {
+    "id": "duplicate-arc-name",
+    "input": "{\"version\":1,\"vertices\":[\"a\",\"b\",\"c\",\"d\"],\"arcs\":[{\"name\":\"e0\",\"source\":\"a\",\"target\":\"b\",\"capacity\":1000},{\"name\":\"e0\",\"source\":\"a\",\"target\":\"c\",\"capacity\":1000},{\"name\":\"e2\",\"source\":\"b\",\"target\":\"c\",\"capacity\":1},{\"name\":\"e3\",\"source\":\"b\",\"target\":\"d\",\"capacity\":1000},{\"name\":\"e4\",\"source\":\"c\",\"target\":\"d\",\"capacity\":1000}],\"source\":\"a\",\"sink\":\"d\",\"scenarios\":[{\"name\":\"base\",\"overrides\":[]}]}",
+    "error": "duplicate"
+  },
+  {
+    "id": "duplicate-scenario",
+    "input": "{\"version\":1,\"vertices\":[\"a\",\"b\",\"c\",\"d\"],\"arcs\":[{\"name\":\"e0\",\"source\":\"a\",\"target\":\"b\",\"capacity\":1000},{\"name\":\"e1\",\"source\":\"a\",\"target\":\"c\",\"capacity\":1000},{\"name\":\"e2\",\"source\":\"b\",\"target\":\"c\",\"capacity\":1},{\"name\":\"e3\",\"source\":\"b\",\"target\":\"d\",\"capacity\":1000},{\"name\":\"e4\",\"source\":\"c\",\"target\":\"d\",\"capacity\":1000}],\"source\":\"a\",\"sink\":\"d\",\"scenarios\":[{\"name\":\"base\",\"overrides\":[]},{\"name\":\"base\",\"overrides\":[]}]}",
+    "error": "duplicate"
+  },
+  {
+    "id": "duplicate-override",
+    "input": "{\"version\":1,\"vertices\":[\"a\",\"b\",\"c\",\"d\"],\"arcs\":[{\"name\":\"e0\",\"source\":\"a\",\"target\":\"b\",\"capacity\":1000},{\"name\":\"e1\",\"source\":\"a\",\"target\":\"c\",\"capacity\":1000},{\"name\":\"e2\",\"source\":\"b\",\"target\":\"c\",\"capacity\":1},{\"name\":\"e3\",\"source\":\"b\",\"target\":\"d\",\"capacity\":1000},{\"name\":\"e4\",\"source\":\"c\",\"target\":\"d\",\"capacity\":1000}],\"source\":\"a\",\"sink\":\"d\",\"scenarios\":[{\"name\":\"base\",\"overrides\":[{\"arc\":\"e0\",\"capacity\":1},{\"arc\":\"e0\",\"capacity\":2}]}]}",
+    "error": "duplicate"
+  },
+  {
+    "id": "invalid-override-capacity-first",
+    "input": "{\"version\":1,\"vertices\":[\"a\",\"b\",\"c\",\"d\"],\"arcs\":[{\"name\":\"e0\",\"source\":\"a\",\"target\":\"b\",\"capacity\":1000},{\"name\":\"e1\",\"source\":\"a\",\"target\":\"c\",\"capacity\":1000},{\"name\":\"e2\",\"source\":\"b\",\"target\":\"c\",\"capacity\":1},{\"name\":\"e3\",\"source\":\"b\",\"target\":\"d\",\"capacity\":1000},{\"name\":\"e4\",\"source\":\"c\",\"target\":\"d\",\"capacity\":1000}],\"source\":\"a\",\"sink\":\"d\",\"scenarios\":[{\"name\":\"base\",\"overrides\":[{\"arc\":\"absent\",\"capacity\":1000001}]}]}",
+    "error": "capacity"
+  },
+  {
+    "id": "duplicate-arc-capacity-first",
+    "input": "{\"version\":1,\"vertices\":[\"a\",\"b\",\"c\",\"d\"],\"arcs\":[{\"name\":\"e0\",\"source\":\"a\",\"target\":\"b\",\"capacity\":1000},{\"name\":\"e0\",\"source\":\"a\",\"target\":\"c\",\"capacity\":1000001},{\"name\":\"e2\",\"source\":\"b\",\"target\":\"c\",\"capacity\":1},{\"name\":\"e3\",\"source\":\"b\",\"target\":\"d\",\"capacity\":1000},{\"name\":\"e4\",\"source\":\"c\",\"target\":\"d\",\"capacity\":1000}],\"source\":\"a\",\"sink\":\"d\",\"scenarios\":[{\"name\":\"base\",\"overrides\":[]}]}",
+    "error": "capacity"
+  }
+]
