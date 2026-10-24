@@ -829,7 +829,7 @@ fn materialize_blob(
     result
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct WireRef {
     output: ContentHash,
     kind: u32,
@@ -986,4 +986,5 @@ mod transport_tests {
     }
 }
 
+pub mod capture;
 pub mod thin;

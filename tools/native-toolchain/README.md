@@ -58,6 +58,25 @@ relative inputs and includes, filename section selection, thin archives and
 dependent libraries, final-link assertions, and refusal of uncaptured real
 files and thin members.
 
+The driver's `native::object_queries::capture` stores the packaged linker,
+loader, libraries, invocation and captured input files as ordinary bounded
+product records. `FrozenLinker::capture` accepts archive byte/file limits from
+the caller's admission policy. `CapturedLink::validate` checks the complete
+stored closure before Link reuse; `CapturedLink::link` restores it and invokes
+the same stored tool through a closed LLVM VFS. Output placement is the only
+parameter supplied after capture. External LTO configuration and pass plugins
+are refused by this host object/archive/script helper. Target DSO loading is a
+separate runtime obligation; storing linker inputs does not freeze that loader.
+
+```sh
+.buck2/bin/buck2 test //tools/buck2/native-toolchain:linker-store-unit-proof
+.buck2/bin/buck2 test //tools/buck2/native-toolchain:linker-store-proof
+```
+
+The store proof changes an object at the same path, removes all originals,
+reopens the store and runs both captured executable versions. Archive controls
+cover long filenames, content chunking, bounds, truncation and missing content.
+
 ## Pool execution inputs
 
 `BUCK` downloads LLVM's locked Debian packages and their runtime libraries,
