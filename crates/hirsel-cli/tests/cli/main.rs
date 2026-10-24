@@ -1390,7 +1390,8 @@ fn build_run_record(source: &std::path::Path) -> serde_json::Value {
         .semantic_program_revision(&loaded.entry)
         .unwrap();
     serde_json::json!({
-        "schema":1,"program":revision.digest().iter().map(|b|format!("{b:02x}")).collect::<String>(),
+        "schema":1,"depth_semantics":"hirsel.depth.invocations.v1",
+        "program":revision.digest().iter().map(|b|format!("{b:02x}")).collect::<String>(),
         "entry":revision.entry(),"launch":"main",
         "inputs":{"hash_seed":0,"random_seed":0,"test_seed":0,"scheduler":null},
         "io":null,"args":null,"env":null,"unsafe":false,"admission":null
