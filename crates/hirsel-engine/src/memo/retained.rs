@@ -76,6 +76,19 @@ pub(crate) fn retained_lowering_output_bytes(
     weight.bytes
 }
 
+/// Owned staged declaration payloads. Signature Arcs are deduplicated within
+/// the set; interned type rows remain with the pinned source snapshot.
+pub(crate) fn retained_staged_declaration_bytes(registrations: &Vec<StagedRegistration>) -> u64 {
+    let mut weight = Weight::default();
+    weight.vec(registrations, |w, registration| {
+        w.def_path(&registration.path);
+        w.def_path(&registration.constant.owner);
+        w.flat_vec(&registration.constant.inputs);
+        w.signature(&registration.constant.signature);
+    });
+    weight.bytes
+}
+
 /// Owned diagnostic/error buffers, excluding the containing inline enum.
 pub(crate) fn retained_query_error_bytes(error: &hirsel_types::QueryError) -> u64 {
     let mut weight = Weight::default();

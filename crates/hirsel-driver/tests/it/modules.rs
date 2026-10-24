@@ -174,3 +174,4 @@ mod scheduled_lower_debit;
 mod scheduled_native;
 mod scheduled_native_root;
 mod runtime50_continuation;
+mod scheduled_stage;

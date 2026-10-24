@@ -76,6 +76,7 @@ impl NativeRecordSource for NativeRecordContext {
 
 /// One type/anchor codec over the selected provider and the owning interner.
 /// Encoded recipes are ordinary data, never source V or native C authority.
+#[derive(Clone)]
 pub struct NativeRecords {
     records: Arc<TypeRecords>,
     types: Arc<hirsel_types::TypeInterner>,

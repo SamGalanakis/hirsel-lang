@@ -121,6 +121,19 @@ const SOURCE_INPUT: Domain = Domain {
     schema: 1,
 };
 impl FrontBodyQueries {
+    pub(crate) fn stage_source(&self) -> crate::queries::scheduled_stage::StageSource {
+        crate::queries::scheduled_stage::StageSource {
+            snapshot: self.snapshot.clone(),
+            memo: self.memo.clone(),
+            records: self.input_records.clone(),
+            anchors: self.anchors.clone(),
+            store: self.store.clone(),
+        }
+    }
+    /// The exact immutable signature universe selected with these P inputs.
+    pub fn signatures(&self) -> Arc<SignatureSnapshot> {
+        self.snapshot.clone()
+    }
     fn syntax(&self, input: &Input) -> Option<Arc<ItemSyntax>> {
         let bytes = self.store.get_content(input.syntax)?;
         let (mut syntax, occurrence): (ItemSyntax, u32) =
