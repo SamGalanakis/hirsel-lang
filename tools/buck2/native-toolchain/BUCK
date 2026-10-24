@@ -70,3 +70,4 @@ toolchain_proof(name = "source-metadata-proof", tools = [":llvm", ":kit", "root/
 toolchain_proof(name = "executable-plan-proof", tools = [":llvm", ":linker", ":kit", "root//:hirsel-rt-archives", "root//:hirsel-driver-unittest-harness"], script = "executable_plan_proof.py", interpreter = "python3")
 
 toolchain_proof(name = "frozen-kit-proof", tools = [":linker", "toolchains//:llvm", "root//:hirsel-driver-unittest-harness"], script = "frozen_kit_proof.py", interpreter = "python3")
+toolchain_proof(name = "root-plan-proof", tools = [":llvm", ":linker", ":kit", "root//:hirsel-rt-archives", "root//:hirsel-driver-test-it-harness"], script = "root_plan_proof.py", interpreter = "python3")
