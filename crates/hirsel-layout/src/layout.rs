@@ -364,6 +364,8 @@ pub struct LayoutBuilder<'o> {
     done: Vec<bool>,
     pub(crate) abi_memo:
         HashMap<(ContentHash, hirsel_lir::abi_types::CallableShape), hirsel_lir::FnAbiId>,
+    /// Receipt specialization is never installed in the ordinary callable memo.
+    pub(crate) receipt_abi_memo: HashMap<(hirsel_lir::FnAbiId, ContentHash), hirsel_lir::FnAbiId>,
     depth: u32,
 }
 
@@ -376,6 +378,7 @@ impl<'o> LayoutBuilder<'o> {
             memo: HashMap::new(),
             done: Vec::new(),
             abi_memo: HashMap::new(),
+            receipt_abi_memo: HashMap::new(),
             depth: 0,
         }
     }

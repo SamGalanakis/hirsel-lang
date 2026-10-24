@@ -25,6 +25,65 @@ enum Class {
 }
 
 impl<'o> LayoutBuilder<'o> {
+    fn ordinary_abi(&self, id: FnAbiId) -> Result<&FnAbi, LayoutError> {
+        let abi = self
+            .table()
+            .fn_abis
+            .get(id.0 as usize)
+            .ok_or(LayoutError::MissingType)?;
+        if abi.receipts.is_some() || abi.key.receipt_contract.is_some() {
+            return Err(LayoutError::Invalid(
+                "receipt-aware ABI in ordinary request namespace".into(),
+            ));
+        }
+        Ok(abi)
+    }
+
+    fn ordinary_cached(
+        &self,
+        callable: ContentHash,
+        shape: CallableShape,
+    ) -> Result<Option<FnAbiId>, LayoutError> {
+        let Some(&id) = self.abi_memo.get(&(callable, shape)) else {
+            return Ok(None);
+        };
+        self.ordinary_abi(id)?;
+        Ok(Some(id))
+    }
+
+    /// Specialize a completed ordinary ABI in a separate content-keyed request
+    /// namespace. Apply site, capture and scoped decorations before this step.
+    /// The record remains a claim until C compares current source requirements.
+    pub fn receipt_fn_abi(
+        &mut self,
+        base: FnAbiId,
+        contract: &hirsel_lir::sealed_payload_source::ReceiptContract,
+    ) -> Result<FnAbiId, LayoutError> {
+        contract
+            .check_structure()
+            .map_err(|e| LayoutError::Invalid(e.into()))?;
+        let mut abi = self.ordinary_abi(base)?.clone();
+        if abi.shape == CallableShape::Foreign {
+            return Err(LayoutError::Invalid(
+                "receipt carriers require a Hirsel adapter, never a foreign ABI".into(),
+            ));
+        }
+        let content = contract
+            .content()
+            .map_err(|e| LayoutError::Invalid(e.into()))?;
+        if let Some(&id) = self.receipt_abi_memo.get(&(base, content)) {
+            return Ok(id);
+        }
+        abi.key.receipt_contract = Some(content);
+        abi.receipts = Some(contract.clone());
+        hirsel_lir::abi::check_receipt_contract(&abi, self.table())
+            .map_err(|e| LayoutError::Invalid(e.into()))?;
+        let id = FnAbiId(self.table().fn_abis.len() as u32);
+        self.table_mut_fn_abis().push(abi);
+        self.receipt_abi_memo.insert((base, content), id);
+        Ok(id)
+    }
+
     /// The ABI of a declared callable type (a `Function` row of `types`) used
     /// as `shape`. Memoized by the callable's public identity and shape.
     pub fn fn_abi(
@@ -125,7 +184,7 @@ impl<'o> LayoutBuilder<'o> {
         );
         atom(&mut key, &scoped_contract.0);
         let callable_key = ContentHash::of_parts("hirsel.fn-abi-key.v1", [key.as_slice()]);
-        if let Some(&id) = self.abi_memo.get(&(callable_key, shape)) {
+        if let Some(id) = self.ordinary_cached(callable_key, shape)? {
             return Ok(id);
         }
 
@@ -201,11 +260,13 @@ impl<'o> LayoutBuilder<'o> {
             && result.is_some()
             && self.may_hold_blocks(types, function.result, 0)?;
         let abi = FnAbi {
+            receipts: None,
             nonretaining,
             nonretaining_captures: Vec::new(),
             scoped_contract,
             scoped_entries,
             key: FnAbiKey {
+                receipt_contract: None,
                 callable: callable_key,
                 abi_version: hirsel_lir::ABI_VERSION,
             },
@@ -243,12 +304,7 @@ impl<'o> LayoutBuilder<'o> {
         parameters: Vec<ParameterPath>,
         captures: Vec<ParameterPath>,
     ) -> Result<FnAbiId, LayoutError> {
-        let mut abi = self
-            .table()
-            .fn_abis
-            .get(base.0 as usize)
-            .ok_or(LayoutError::MissingType)?
-            .clone();
+        let mut abi = self.ordinary_abi(base)?.clone();
         if abi.nonretaining == parameters && abi.nonretaining_captures == captures {
             return Ok(base);
         }
@@ -263,7 +319,7 @@ impl<'o> LayoutBuilder<'o> {
                 abi.scoped_contract.0.as_slice(),
             ],
         );
-        if let Some(&id) = self.abi_memo.get(&(abi.key.callable, abi.shape)) {
+        if let Some(id) = self.ordinary_cached(abi.key.callable, abi.shape)? {
             return Ok(id);
         }
         let id = FnAbiId(self.table().fn_abis.len() as u32);
@@ -274,12 +330,7 @@ impl<'o> LayoutBuilder<'o> {
 
     /// Add the constant caller-site carrier without changing the callable's language type.
     pub fn with_caller_site(&mut self, base: FnAbiId) -> Result<FnAbiId, LayoutError> {
-        let mut abi = self
-            .table()
-            .fn_abis
-            .get(base.0 as usize)
-            .ok_or(LayoutError::MissingType)?
-            .clone();
+        let mut abi = self.ordinary_abi(base)?.clone();
         if abi.caller_site {
             return Ok(base);
         }
@@ -291,7 +342,7 @@ impl<'o> LayoutBuilder<'o> {
         abi.caller_site = true;
         abi.key.callable =
             ContentHash::of_parts("hirsel.caller-abi.v1", [abi.key.callable.0.as_slice()]);
-        if let Some(&id) = self.abi_memo.get(&(abi.key.callable, abi.shape)) {
+        if let Some(id) = self.ordinary_cached(abi.key.callable, abi.shape)? {
             return Ok(id);
         }
         let id = FnAbiId(self.table().fn_abis.len() as u32);
@@ -308,12 +359,7 @@ impl<'o> LayoutBuilder<'o> {
         captures: &[(LayoutId, Passing)],
         borrows_captures: bool,
     ) -> Result<FnAbiId, LayoutError> {
-        let mut abi = self
-            .table()
-            .fn_abis
-            .get(base.0 as usize)
-            .ok_or(LayoutError::MissingType)?
-            .clone();
+        let mut abi = self.ordinary_abi(base)?.clone();
         let parameter_count = abi.parameters.len() as u32;
         for capture in std::mem::take(&mut abi.nonretaining_captures) {
             abi.nonretaining.push(ParameterPath {
@@ -389,10 +435,7 @@ impl<'o> LayoutBuilder<'o> {
         }
         atom(&mut key, &[u8::from(borrowed_result)]);
         abi.key.callable = ContentHash::of_parts("hirsel.capture-abi.v1", [key.as_slice()]);
-        if let Some(&id) = self
-            .abi_memo
-            .get(&(abi.key.callable, CallableShape::Definition))
-        {
+        if let Some(id) = self.ordinary_cached(abi.key.callable, CallableShape::Definition)? {
             return Ok(id);
         }
         let id = FnAbiId(self.table().fn_abis.len() as u32);
@@ -549,3 +592,6 @@ fn scalar_of(p: Primitive) -> ScalarKind {
 }
 
 use hirsel_lir::abi::{extension_of, slot};
+
+#[cfg(test)]
+mod receipt_tests;

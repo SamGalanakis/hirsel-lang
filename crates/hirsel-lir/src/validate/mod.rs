@@ -632,6 +632,17 @@ fn check_with_context<S: Stage>(
             })
             .collect();
     }
+    let (_, abis) = crate::objects::references(unit);
+    for id in abis {
+        if let Some(abi) = inputs.layouts.fn_abis.get(id.0 as usize)
+            && let Err(error) = crate::abi::check_implemented_transport(abi)
+        {
+            return vec![Violation {
+                site: Site::UNIT,
+                kind: ViolationKind::Schema(error.into()),
+            }];
+        }
+    }
     let cx = Cx {
         unit,
         layouts: Layouts(inputs.layouts),

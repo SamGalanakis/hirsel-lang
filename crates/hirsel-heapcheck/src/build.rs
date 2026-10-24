@@ -30,11 +30,13 @@ impl Layouts {
     pub fn new(target: TargetSpec) -> Self {
         let mut table = LayoutTable::new(&target);
         table.fn_abis.push(FnAbi {
+            receipts: None,
             nonretaining: Vec::new(),
             nonretaining_captures: Vec::new(),
             scoped_contract: hirsel_lir::abi::scoped_contract_digest(&[], &[]),
             scoped_entries: Vec::new(),
             key: FnAbiKey {
+                receipt_contract: None,
                 callable: ContentHash::of_bytes(b"heapcheck fixture abi"),
                 abi_version: hirsel_lir::ABI_VERSION,
             },

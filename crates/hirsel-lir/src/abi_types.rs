@@ -5,6 +5,7 @@
 //! A relation, brand or uniqueness mode never changes an `FnAbi`; only the
 //! declared parameter convention does.
 use crate::layout_types::{LayoutId, ScalarKind};
+use crate::sealed_payload_source::ReceiptContract;
 use hirsel_codec::{snapshot_enum, snapshot_struct};
 use hirsel_core_contract::Passing;
 use hirsel_syntax::ContentHash;
@@ -111,10 +112,12 @@ pub const REGISTER_VALUE_INDEX: usize = 0;
 pub const REGISTER_STATUS_INDEX: usize = 1;
 
 /// Identity of an FnAbi: the declared specialized callable shape and ABI version.
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FnAbiKey {
     pub callable: ContentHash,
     pub abi_version: u32,
+    /// Separate receipt-aware request namespace. None keeps the ordinary key.
+    pub receipt_contract: Option<ContentHash>,
 }
 
 /// Invocation-bounded nonretention of a physical parameter's selected content.
@@ -145,7 +148,7 @@ snapshot_struct!(ScopedEntry {
 /// (0 success, 1 language failure). A runtime primitive always uses its output
 /// pointer. Callable values are the two scalars (code, environment); direct,
 /// bound and erased entries share the same typed result convention.
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FnAbi {
     pub key: FnAbiKey,
     pub shape: CallableShape,
@@ -172,6 +175,9 @@ pub struct FnAbi {
     /// Binds the complete selector lists; independent validation recomputes it.
     pub scoped_contract: ContentHash,
     pub scoped_entries: Vec<ScopedEntry>,
+    /// Original source demand; carriers follow all existing physical slots.
+    /// None preserves the ordinary ABI and its canonical wire encoding.
+    pub receipts: Option<ReceiptContract>,
 }
 
 snapshot_enum!(PhysicalType {
@@ -218,7 +224,7 @@ snapshot_struct!(AbiResult {
 snapshot_struct!(FnAbiKey {
     callable,
     abi_version
-});
+} trailing_optional receipt_contract);
 snapshot_struct!(FnAbi {
     key,
     shape,
@@ -236,7 +242,45 @@ snapshot_struct!(FnAbi {
     nonretaining_captures,
     scoped_contract,
     scoped_entries
-});
+} trailing_optional receipts);
+
+// The ordinary key/hash predates receipts. Hashing an absent Option would add
+// a discriminant and change every ordinary instance's downstream identity.
+impl std::hash::Hash for FnAbiKey {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.callable.hash(state);
+        self.abi_version.hash(state);
+        if let Some(contract) = &self.receipt_contract {
+            "hirsel.receipt-contract.v1".hash(state);
+            contract.hash(state);
+        }
+    }
+}
+
+impl std::hash::Hash for FnAbi {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.key.hash(state);
+        self.shape.hash(state);
+        self.multiplicity.hash(state);
+        self.context.hash(state);
+        self.environment.hash(state);
+        self.caller_site.hash(state);
+        self.destination.hash(state);
+        self.result.hash(state);
+        self.diverges.hash(state);
+        self.result_arena.hash(state);
+        self.parameters.hash(state);
+        self.version.hash(state);
+        self.nonretaining.hash(state);
+        self.nonretaining_captures.hash(state);
+        self.scoped_contract.hash(state);
+        self.scoped_entries.hash(state);
+        if let Some(contract) = &self.receipts {
+            "hirsel.receipt-contract.v1".hash(state);
+            contract.hash(state);
+        }
+    }
+}
 impl hirsel_codec::Snapshot for FnAbiId {
     fn write(&self, w: &mut hirsel_codec::Writer) {
         w.uint(u128::from(self.0));

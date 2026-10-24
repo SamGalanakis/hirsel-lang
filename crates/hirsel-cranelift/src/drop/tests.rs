@@ -249,11 +249,13 @@ fn object(target: &TargetSpec) -> (Vec<u8>, String) {
     )
     .unwrap();
     let abi = FnAbi {
+        receipts: None,
         nonretaining: Vec::new(),
         nonretaining_captures: Vec::new(),
         scoped_contract: hirsel_lir::abi::scoped_contract_digest(&[], &[]),
         scoped_entries: Vec::new(),
         key: FnAbiKey {
+            receipt_contract: None,
             callable: input.digest,
             abi_version: hirsel_lir::ABI_VERSION,
         },

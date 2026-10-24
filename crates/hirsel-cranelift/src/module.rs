@@ -525,14 +525,22 @@ impl<'a> Emitter<'a> {
         id: hirsel_lir::FnAbiId,
         definition: &DefPath,
     ) -> Emitted<&'a FnAbi> {
-        self.inputs
+        let abi = self
+            .inputs
             .layouts
             .fn_abis
             .get(id.0 as usize)
             .ok_or_else(|| CodegenError::Invalid {
                 definition: definition.clone(),
                 what: format!("no FnAbi {}", id.0),
-            })
+            })?;
+        hirsel_lir::abi::check_implemented_transport(abi).map_err(|what| {
+            CodegenError::Invalid {
+                definition: definition.clone(),
+                what: what.into(),
+            }
+        })?;
+        Ok(abi)
     }
 
     pub(crate) fn layouts(&self) -> &'a LayoutTable {

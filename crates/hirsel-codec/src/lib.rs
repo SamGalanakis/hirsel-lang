@@ -421,6 +421,31 @@ impl<'a, C> Reader<'a, C> {
 /// of `Snapshot<()>`.
 #[macro_export]
 macro_rules! snapshot_struct {
+    // An absent additive contract has no wire footprint. Existing fields keep
+    // their exact order and bytes; a present contract is an optional trailer.
+    ($ty:ident { $($field:ident),* $(,)? } trailing_optional $optional:ident) => {
+        impl $crate::Snapshot for $ty {
+            fn write(&self, w: &mut $crate::Writer) {
+                w.open(stringify!($ty));
+                $($crate::Snapshot::write(&self.$field, w);)*
+                if self.$optional.is_some() {
+                    $crate::Snapshot::write(&self.$optional, w);
+                }
+                w.close();
+            }
+            fn read(r: &mut $crate::Reader<'_>) -> Result<Self, $crate::DecodeError> {
+                r.open(stringify!($ty))?;
+                $(let $field = $crate::Snapshot::read(r)?;)*
+                let $optional = if r.next_kind() == $crate::Next::Close {
+                    None
+                } else {
+                    $crate::Snapshot::read(r)?
+                };
+                r.close()?;
+                Ok(Self { $($field,)* $optional })
+            }
+        }
+    };
     ($ty:ident { $($field:ident),* $(,)? }) => {
         $crate::snapshot_struct!($ty { $($field),* } in ());
     };
@@ -979,6 +1004,31 @@ mod tests {
         // 'é' is two bytes and one scalar: the 'x' after it is column 2.
         assert_eq!(line_column("é\néx", 5), (2, 2));
         assert_eq!(line_column("é\néx", 3), (2, 1));
+    }
+
+    #[test]
+    fn absent_optional_trailer_keeps_legacy_bytes_and_present_empty_is_distinct() {
+        #[derive(Debug, PartialEq)]
+        struct Additive {
+            base: u32,
+            contract: Option<Vec<u32>>,
+        }
+        snapshot_struct!(Additive { base } trailing_optional contract);
+        let ordinary = Additive {
+            base: 7,
+            contract: None,
+        };
+        assert_eq!(to_text(&ordinary), "(Additive 7)");
+        assert_eq!(from_text::<Additive>("(Additive 7)").unwrap(), ordinary);
+        let empty = Additive {
+            base: 7,
+            contract: Some(vec![]),
+        };
+        let text = to_text(&empty);
+        assert_ne!(text, to_text(&ordinary));
+        assert_eq!(from_text::<Additive>(&text).unwrap(), empty);
+        let extra = format!("{} (None))", text.strip_suffix(')').unwrap());
+        assert!(from_text::<Additive>(&extra).is_err());
     }
 
     #[test]

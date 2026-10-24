@@ -37,6 +37,9 @@ impl<S: Stage> Program<S> {
         if self.layouts.target != self.target.digest() {
             return fail(V::Malformed, "layout table names another target");
         }
+        for abi in &self.layouts.fn_abis {
+            hirsel_lir::abi::check_implemented_transport(abi).map_err(|e| err(V::Malformed, e))?;
+        }
         for data in &self.statics {
             data.validate(&self.layouts, u64::from(self.target.pointer_bytes))
                 .map_err(|e| err(V::Malformed, e))?;

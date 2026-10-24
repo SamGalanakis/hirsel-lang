@@ -4,6 +4,77 @@ use crate::layout_types::{LayoutId, ScalarKind, TargetSpec};
 use crate::snapshot;
 use hirsel_syntax::ContentHash;
 
+/// Local consistency only. Original selectors, closed profiles and complete
+/// demand still require independently current source declarations in C.
+pub fn check_receipt_contract(
+    abi: &FnAbi,
+    layouts: &crate::LayoutTable,
+) -> Result<(), &'static str> {
+    use crate::sealed_payload_source::{ReceiptGrant, ReceiptMode};
+    let Some(contract) = &abi.receipts else {
+        return if abi.key.receipt_contract.is_none() {
+            Ok(())
+        } else {
+            Err("receipt ABI key without its complete contract")
+        };
+    };
+    contract.check_structure()?;
+    if abi.shape == CallableShape::Foreign {
+        return Err("foreign entries require Hirsel receipt adapters");
+    }
+    if abi.key.receipt_contract != Some(contract.content()?) {
+        return Err("receipt ABI key disagrees with its complete contract");
+    }
+    for demanded in &contract.parameters {
+        let Some(actual) = abi.parameters.iter().find(|p| p.source == demanded.source) else {
+            return Err("receipt parameter is not an original declared parameter");
+        };
+        let valid = match demanded.mode {
+            ReceiptMode::Borrow => actual.convention == hirsel_core_contract::Passing::Borrow,
+            ReceiptMode::Take => actual.convention == hirsel_core_contract::Passing::Take,
+            ReceiptMode::MutSlot => {
+                actual.convention == hirsel_core_contract::Passing::Mut
+                    && actual.passing == ParameterPassing::ExclusiveAddress
+            }
+        };
+        if !valid {
+            return Err("receipt passing mode disagrees with ordinary parameter");
+        }
+    }
+    if contract.result.is_some() && abi.diverges {
+        return Err("diverging entries cannot publish a receipt result");
+    }
+    if !contract.captures.is_empty() && !abi.environment {
+        return Err("capture receipts require an actual environment contract");
+    }
+    for grant in &contract.inventory {
+        let valid = match grant {
+            ReceiptGrant::Parameter(source) => abi
+                .parameters
+                .iter()
+                .find(|p| p.source == *source)
+                .and_then(|p| layouts.layouts.get(p.layout.0 as usize))
+                .is_some_and(|l| l.kind == crate::layout_types::LayoutKind::Arena),
+            ReceiptGrant::Capture(_) => abi.environment,
+            ReceiptGrant::CallerDestination => abi.destination,
+        };
+        if !valid {
+            return Err("receipt inventory selector lacks its arena or environment carrier");
+        }
+    }
+    Ok(())
+}
+
+/// Executable receipt transport is not connected yet. Structural ABI validation
+/// alone cannot authorize dropping carriers or mint original-source evidence.
+/// Ordinary rows retain their existing implementation in C, H and both emitters.
+pub fn check_implemented_transport(abi: &FnAbi) -> Result<(), &'static str> {
+    if abi.receipts.is_some() || abi.key.receipt_contract.is_some() {
+        return Err("receipt ABI transport requires independent source and carrier validation");
+    }
+    Ok(())
+}
+
 /// The value word of a typed Hirsel result, when it fits beside its status.
 /// Wide integers and inline aggregates retain the output pointer.
 pub fn register_kind(kind: &crate::layout_types::LayoutKind) -> Option<ScalarKind> {
@@ -224,12 +295,18 @@ pub(crate) fn scoped_entry_identity_with_keys(
         "scoped-entry-contracts-v1",
         &(abi.nonretaining.clone(), abi.scoped_entries.clone()),
     );
-    ContentHash::of_parts(
-        "hirsel.scoped-entry.v1",
-        [
-            signature.0.as_slice(),
-            contracts.0.as_slice(),
-            &[abi.multiplicity as u8, u8::from(abi.diverges)],
-        ],
-    )
+    let receipt = abi
+        .receipts
+        .as_ref()
+        .map(|contract| snapshot::digest("scoped-entry-receipts-v1", contract));
+    let modes = [abi.multiplicity as u8, u8::from(abi.diverges)];
+    let mut parts = vec![
+        signature.0.as_slice(),
+        contracts.0.as_slice(),
+        modes.as_slice(),
+    ];
+    if let Some(receipt) = &receipt {
+        parts.push(receipt.0.as_slice());
+    }
+    ContentHash::of_parts("hirsel.scoped-entry.v1", parts)
 }

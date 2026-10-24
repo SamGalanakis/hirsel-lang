@@ -786,13 +786,18 @@ fn fn_abi<'a>(
     id: hirsel_lir::FnAbiId,
     definition: &DefPath,
 ) -> Result<&'a FnAbi, CodegenError> {
-    layouts
+    let abi = layouts
         .fn_abis
         .get(id.0 as usize)
         .ok_or_else(|| CodegenError::Invalid {
             definition: definition.clone(),
             what: format!("no FnAbi {}", id.0),
-        })
+        })?;
+    hirsel_lir::abi::check_implemented_transport(abi).map_err(|what| CodegenError::Invalid {
+        definition: definition.clone(),
+        what: what.into(),
+    })?;
+    Ok(abi)
 }
 
 /// Bytes of a `hirsel_rt_v2_region` record (`HIRSEL_RT_V2_ASSERT_SIZE` in the header).
@@ -1050,11 +1055,13 @@ mod tests {
         let context = Context::new();
         let module = Module::new(&context, "root-pointers");
         let abi = FnAbi {
+            receipts: None,
             nonretaining: Vec::new(),
             nonretaining_captures: Vec::new(),
             scoped_contract: hirsel_lir::abi::scoped_contract_digest(&[], &[]),
             scoped_entries: Vec::new(),
             key: FnAbiKey {
+                receipt_contract: None,
                 callable: ContentHash::of_bytes(b"root"),
                 abi_version: 1,
             },

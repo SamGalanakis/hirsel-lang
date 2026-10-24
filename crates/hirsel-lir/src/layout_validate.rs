@@ -1697,6 +1697,9 @@ impl<'a> Validator<'a> {
 
     fn fn_abi(&mut self, id: FnAbiId, abi: &FnAbi) {
         let s = Subject::FnAbi(id);
+        if let Err(detail) = crate::abi::check_receipt_contract(abi, self.table) {
+            self.fail(s.clone(), Obligation::Abi, detail);
+        }
         if abi.version != crate::ABI_VERSION || abi.key.abi_version != crate::ABI_VERSION {
             self.fail(s.clone(), Obligation::Identity, "stale ABI version");
         }

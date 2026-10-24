@@ -709,3 +709,162 @@ fn foreign_abis_have_no_caller_site_carrier() {
                 && v.detail == "an extern has no caller sites")
     );
 }
+
+fn receipt_contract(
+    mode: hirsel_lir::sealed_payload_source::ReceiptMode,
+) -> hirsel_lir::sealed_payload_source::ReceiptContract {
+    use hirsel_lir::sealed_payload_source::*;
+    ReceiptContract::new(
+        vec![ReceiptParameter {
+            source: 0,
+            ty: ReceiptType {
+                source_type: ContentHash::of_bytes(b"original Bytes type"),
+                profile: ContentHash::of_bytes(b"closed Bytes profile"),
+            },
+            mode,
+        }],
+        None,
+        vec![],
+        vec![],
+    )
+    .unwrap()
+}
+
+fn receipt_abi_fixture() -> (TargetSpec, LayoutTable, FnAbiId, FnAbiId) {
+    use hirsel_lir::sealed_payload_source::ReceiptMode;
+    let target = x86();
+    let owners = Owners::default();
+    let mut b = LayoutBuilder::new(&target, &owners);
+    let mut t = crate::support::ty();
+    let bytes = t.p(Primitive::Bytes);
+    let unit = t.tuple(&[]);
+    let callable = t.function(&[(PassingMode::Borrow, bytes)], unit, Multiplicity::Many, 0);
+    let ordinary = b
+        .fn_abi(&t.store, callable, CallableShape::Definition)
+        .unwrap();
+    let aware = b
+        .receipt_fn_abi(ordinary, &receipt_contract(ReceiptMode::Borrow))
+        .unwrap();
+    (target, checked(b), ordinary, aware)
+}
+
+#[test]
+fn receipt_absence_preserves_the_legacy_abi_key_encoding_and_hash() {
+    use std::hash::{Hash, Hasher};
+    let key = FnAbiKey {
+        callable: ContentHash([0x11; 32]),
+        abi_version: 7,
+        receipt_contract: None,
+    };
+    let expected = format!("(FnAbiKey #{} 7)", "11".repeat(32));
+    assert_eq!(hirsel_codec::to_text(&key), expected);
+    let decoded: FnAbiKey = hirsel_codec::from_text(&expected).unwrap();
+    assert_eq!(decoded, key);
+    let mut old = std::hash::DefaultHasher::new();
+    (key.callable, key.abi_version).hash(&mut old);
+    let mut new = std::hash::DefaultHasher::new();
+    key.hash(&mut new);
+    assert_eq!(old.finish(), new.finish());
+}
+
+#[test]
+fn receipt_complete_content_survives_portable_layout_rebinding() {
+    let (_, table, ordinary, aware) = receipt_abi_fixture();
+    let keys = hirsel_lir::LayoutKeys::new(&table);
+    let ordinary_key = keys.fn_abi(&table.fn_abis[ordinary.0 as usize]);
+    let receipt_key = keys.fn_abi(&table.fn_abis[aware.0 as usize]);
+    assert_ne!(ordinary_key, receipt_key);
+    let text = hirsel_codec::to_text(&table);
+    let decoded: LayoutTable = hirsel_codec::from_text(&text).unwrap();
+    let decoded_keys = hirsel_lir::LayoutKeys::new(&decoded);
+    assert_eq!(
+        decoded_keys.fn_abi(&decoded.fn_abis[aware.0 as usize]),
+        receipt_key
+    );
+    let original = &table.fn_abis[ordinary.0 as usize];
+    let receipt = &decoded.fn_abis[aware.0 as usize];
+    assert_ne!(
+        hirsel_lir::abi::scoped_entry_identity(original, &table),
+        hirsel_lir::abi::scoped_entry_identity(receipt, &decoded)
+    );
+    assert_eq!(original.key.callable, receipt.key.callable);
+    assert_eq!(original.parameters, receipt.parameters);
+}
+
+#[test]
+fn receipt_layout_c_refuses_missing_forged_and_incompatible_contracts() {
+    use hirsel_lir::sealed_payload_source::ReceiptMode;
+    let (target, good, _, aware) = receipt_abi_fixture();
+    for mutation in 0..6 {
+        let mut bad = good.clone();
+        let abi = &mut bad.fn_abis[aware.0 as usize];
+        match mutation {
+            0 => abi.receipts = None,
+            1 => abi.key.receipt_contract = None,
+            2 => abi.key.receipt_contract = Some(ContentHash::of_bytes(b"forged contract")),
+            3 => {
+                // A valid hash cannot authorize the wrong declared passing mode.
+                let contract = receipt_contract(ReceiptMode::Take);
+                abi.key.receipt_contract = Some(contract.content().unwrap());
+                abi.receipts = Some(contract);
+            }
+            4 => {
+                abi.receipts.as_mut().unwrap().source_demand =
+                    ContentHash::of_bytes(b"forged semantic output")
+            }
+            5 => {
+                abi.shape = CallableShape::Foreign;
+                abi.context = false;
+            }
+            _ => unreachable!(),
+        }
+        let errors = validate_table(&bad, &target).unwrap_err();
+        assert!(
+            errors.iter().any(
+                |v| v.subject == hirsel_lir::layout_validate::Subject::FnAbi(aware)
+                    && v.obligation == Obligation::Abi
+            ),
+            "mutation {mutation}: {errors:?}"
+        );
+    }
+}
+
+#[test]
+fn receipt_aware_entry_and_callee_are_refused_until_transport_is_checked() {
+    use crate::support::{ENTRY, Lir};
+    use hirsel_lir::sealed_payload_source::ReceiptContract;
+    use hirsel_lir::stage::Value;
+    use hirsel_lir::validate::ViolationKind;
+    // Even an empty physical contract represents an independently demanded
+    // context. Its declaration alone cannot authorize execution or erasure.
+    for target in 0..3 {
+        let mut t = Lir::<Value>::new(&[], None);
+        let next = t.builder.block(hirsel_lir::ir::BlockKind::Body, &[]);
+        let failure = t.builder.propagate();
+        t.call(ENTRY, &[], None, &[], (next, &[]), failure);
+        let called = t.builder.unit.tables.calls[0].abi;
+        t.builder.ret(next, None);
+        if target != 0 {
+            let id = if target == 1 {
+                t.builder.unit.header.abi
+            } else {
+                called
+            };
+            let contract = ReceiptContract::new(vec![], None, vec![], vec![]).unwrap();
+            let abi = &mut t.table.fn_abis[id.0 as usize];
+            abi.key.receipt_contract = Some(contract.content().unwrap());
+            abi.receipts = Some(contract);
+        }
+        let errors = t.check();
+        if target == 0 {
+            assert!(errors.is_empty(), "{errors:?}");
+        } else {
+            assert!(
+                errors.iter().any(
+                    |e| matches!(e, ViolationKind::Schema(s) if s.contains("receipt ABI transport"))
+                ),
+                "{errors:?}"
+            );
+        }
+    }
+}
