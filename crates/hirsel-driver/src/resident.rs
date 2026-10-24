@@ -208,3 +208,6 @@ impl OutputReadiness for ExecutableOutput {
         Ok(self.destination.clone())
     }
 }
+
+#[cfg(test)]
+mod compiler_controls;

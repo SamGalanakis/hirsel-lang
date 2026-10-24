@@ -123,6 +123,9 @@ impl LoadingAdmission {
 /// Implemented only by installed compiler producer views. Public requests
 /// carry no tasks, materializer callbacks or compiler/verifier capabilities.
 pub(super) trait GraphProducts: Send + Sync {
+    fn accepts(&self, _operation: &CompileOperation) -> bool {
+        true
+    }
     fn select(
         &self,
         operation: &CompileOperation,
@@ -248,11 +251,11 @@ impl GraphSelections {
         ToolError,
     > {
         self.live.retain(|graph| graph.strong_count() != 0);
-        let selected = self
-            .live
-            .iter()
-            .filter_map(Weak::upgrade)
-            .find(|graph| graph.path == request.path && graph.inputs == request.inputs);
+        let selected = self.live.iter().filter_map(Weak::upgrade).find(|graph| {
+            graph.path == request.path
+                && graph.inputs == request.inputs
+                && graph.products.accepts(&request.operation)
+        });
         let graph = match selected {
             Some(graph) => graph,
             None => {

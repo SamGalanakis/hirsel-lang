@@ -8,6 +8,7 @@ use std::path::PathBuf;
 mod host_selector;
 mod output;
 mod selector;
+mod source_graph;
 pub use output::{
     CompileInspection, CompileOutput, CompileResult, CompilerReadiness, DefinitionWork,
     NativeExecution, NativeObservation, RequestWork, TirExecution, TirProducts,
