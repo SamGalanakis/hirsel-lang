@@ -454,6 +454,20 @@ impl Checker<'_, '_> {
         self.diagnostics
             .push(Diagnostic::error(rule, span, message));
     }
+    fn expression_type_argument_diagnostic(&mut self, id: ast::ExprId) {
+        // Keep the prohibited index's range and recovery. Unlike Rust's
+        // generic_args_prohibited handler, deletion is not a general repair:
+        // the call may need context that only the written type supplied.
+        let mut diagnostic = Diagnostic::error(
+            const { RuleId::of("LANG-2") },
+            self.span(id),
+            "type arguments are never written in expressions",
+        );
+        diagnostic.notes.push("help: postfix `[...]` indexes values. Generic arguments come from declared signatures, already typed arguments, or expected types; write type arguments in type annotations".into());
+        diagnostic.notes.push("help: for `type Holder[T] { item:T }`, write `let value:Holder[u64]=Holder(item:1u64)`. For `fn id[T](take x:T)->T {take x}`, write `id(1u64)` or `let value:u64=id(1)`".into());
+        diagnostic.notes.push("help: when the result type does not determine a generic parameter, type an argument first, for example `let argument:u64=1; consume(argument)` for `fn consume[T](x:T) {}`. Later arguments never supply a type for an earlier literal".into());
+        self.diagnostics.push(diagnostic);
+    }
     fn error(&mut self) -> TypeId {
         self.ty(TypeKind::Error)
     }
@@ -1300,11 +1314,7 @@ impl Checker<'_, '_> {
                     // LANG-2: postfix brackets take a value index. Recognize a
                     // type through resolution, before its u64 expectation can
                     // produce a secondary LANG-7 mismatch.
-                    self.report(
-                        const { RuleId::of("LANG-2") },
-                        self.span(id),
-                        "type arguments are never written in expressions",
-                    );
+                    self.expression_type_argument_diagnostic(id);
                     let error = self.error();
                     self.put(index, error, None, UseKind::Borrow)?;
                     // The bracketed name is typed as the callee it was meant to

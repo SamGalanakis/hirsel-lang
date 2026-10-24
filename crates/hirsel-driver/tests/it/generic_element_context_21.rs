@@ -10,13 +10,17 @@ fn source(body: &str) -> String {
 
 fn checked(source: &str) -> CheckOutput {
     let mut engine = crate::source_std::engine();
+    checked_in(&mut engine, source)
+}
+
+fn checked_in(engine: &mut QueryEngine, source: &str) -> CheckOutput {
     let file = engine
         .sources
         .add("generic-element.hir", source.into())
         .unwrap();
-    let output = check_progress(&mut engine, file, &default_context()).unwrap();
+    let output = check_progress(engine, file, &default_context()).unwrap();
     assert_eq!(output.completion, CheckCompletion::Complete);
-    let warm = check_progress(&mut engine, file, &default_context()).unwrap();
+    let warm = check_progress(engine, file, &default_context()).unwrap();
     assert_eq!(
         output
             .diagnostics
@@ -33,11 +37,15 @@ fn checked(source: &str) -> CheckOutput {
 
 fn accepted(source: &str) {
     let mut engine = crate::source_std::engine();
+    accepted_in(&mut engine, source);
+}
+
+fn accepted_in(engine: &mut QueryEngine, source: &str) {
     let file = engine
         .sources
         .add("generic-element.hir", source.into())
         .unwrap();
-    let output = check_progress(&mut engine, file, &default_context()).unwrap();
+    let output = check_progress(engine, file, &default_context()).unwrap();
     assert_eq!(output.completion, CheckCompletion::Complete);
     assert!(
         output.diagnostics.is_empty(),
@@ -129,13 +137,16 @@ fn generic_element_context_21_inference_and_storage_controls() {
 #[test]
 fn generic_element_context_21_machine_repairs_apply_check_and_export() {
     with_compiler_stack(|| {
+        // Check every original and repaired program against the same source
+        // dependency graph, preparing std once rather than ten times.
+        let mut engine = crate::source_std::engine();
         for literal in [
             "[\"a\"]",
             "[\"λ🐑\", \"b\\\"c\"]",
             "[[\"a\"], [\"b\", \"c\"]]",
         ] {
             let text = source(&format!("relay({literal})"));
-            let output = checked(&text);
+            let output = checked_in(&mut engine, &text);
             let [d] = &output.diagnostics[..] else {
                 panic!("{text}\n{:?}", output.diagnostics)
             };
@@ -145,12 +156,12 @@ fn generic_element_context_21_machine_repairs_apply_check_and_export() {
             let span = output.sources.resolve(fix.span);
             let mut repaired = text.clone();
             repaired.replace_range(span.start as usize..span.end as usize, &fix.replacement);
-            accepted(&repaired);
+            accepted_in(&mut engine, &repaired);
         }
         // Literal inference uses core's List even with a user type of that
         // name. The edit must keep referring to the builtin at every depth.
         let text = "type List { n:u64 }\nfn relay[T](take source:unique core@1/List[unique T]){}\npub fn main(){relay([[\"a\"]])}";
-        let output = checked(text);
+        let output = checked_in(&mut engine, text);
         let [d] = &output.diagnostics[..] else {
             panic!("{:?}", output.diagnostics)
         };
@@ -163,11 +174,11 @@ fn generic_element_context_21_machine_repairs_apply_check_and_export() {
         let span = output.sources.resolve(fix.span);
         let mut repaired = text.to_owned();
         repaired.replace_range(span.start as usize..span.end as usize, &fix.replacement);
-        accepted(&repaired);
+        accepted_in(&mut engine, &repaired);
         // A new name cannot capture a local, parameter or module declaration.
         let text = source("let saved_2=0u64;relay([\"a\"]);let _=saved_2");
         let text = format!("fn saved() {{}}\n{text}");
-        let output = checked(&text);
+        let output = checked_in(&mut engine, &text);
         let [d] = &output.diagnostics[..] else {
             panic!("{:?}", output.diagnostics)
         };
@@ -176,7 +187,7 @@ fn generic_element_context_21_machine_repairs_apply_check_and_export() {
         let span = output.sources.resolve(fix.span);
         let mut repaired = text.clone();
         repaired.replace_range(span.start as usize..span.end as usize, &fix.replacement);
-        accepted(&repaired);
+        accepted_in(&mut engine, &repaired);
     });
 }
 
