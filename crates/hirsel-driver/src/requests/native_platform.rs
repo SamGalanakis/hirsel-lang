@@ -20,6 +20,7 @@ use std::{path::PathBuf, sync::Arc};
 
 /// Explicit package selection, captured by the host before input observation.
 /// No tool or loader is discovered by an admitted producer's factory.
+#[derive(Clone)]
 pub(super) struct NativePlatformPolicy {
     pub linker: PathBuf,
     pub auditors: PathBuf,
@@ -56,7 +57,7 @@ impl NativePlatformSelection {
         inputs: NativePlatformInputs<'_>,
         limits: CaptureLimits,
         runtime_limits: RuntimeLimits,
-        allowance: MemoryReservation,
+        allowance: impl Into<Arc<MemoryReservation>>,
     ) -> Result<Self, NativeError> {
         let request = inputs.request;
         let failed = |message| NativeError::new(StageName::Link, message);

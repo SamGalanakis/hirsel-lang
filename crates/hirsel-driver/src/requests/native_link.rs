@@ -41,7 +41,7 @@ pub(crate) struct FrozenPlatform {
     target: native::TargetSpec,
     requested: Option<Arc<hirsel_run_config::ValidatedRun>>,
     linker_options: ContentHash,
-    _allowance: MemoryReservation,
+    _allowance: Arc<MemoryReservation>,
 }
 impl FrozenPlatform {
     pub fn new(
@@ -51,8 +51,9 @@ impl FrozenPlatform {
         backend: Backend,
         target: native::TargetSpec,
         requested: Option<Arc<hirsel_run_config::ValidatedRun>>,
-        allowance: MemoryReservation,
+        allowance: impl Into<Arc<MemoryReservation>>,
     ) -> Result<Arc<Self>, String> {
+        let allowance = allowance.into();
         if inputs.limits.archive_bytes == 0 || inputs.limits.files == 0 {
             return Err("invalid selected native platform input bounds".into());
         }
@@ -95,6 +96,9 @@ impl FrozenPlatform {
             linker_options,
             _allowance: allowance,
         }))
+    }
+    pub fn identity(&self) -> ContentHash {
+        self.linker_options
     }
     /// Run this for reopened Link hits too, before exposing any executable.
     pub fn validate_image(&self, image: &Path) -> Result<(), String> {

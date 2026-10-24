@@ -7,15 +7,19 @@ use hirsel_syntax::DefPath;
 use std::path::PathBuf;
 mod host_selector;
 mod inspection;
+mod native_assembly;
 mod native_bootstrap;
 mod native_link;
 mod native_lower;
 mod native_platform;
 mod native_products;
 mod native_routing;
+mod native_selection;
 mod output;
+mod safe_check;
 mod selector;
 mod source_graph;
+mod tir_products;
 pub use output::{
     CompileInspection, CompileOutput, CompileResult, CompilerReadiness, DefinitionWork,
     NativeExecution, NativeObservation, RequestWork, TirExecution, TirProducts,
