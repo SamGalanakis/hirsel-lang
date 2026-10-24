@@ -56,7 +56,7 @@ mod owned_anchors {
 }
 
 impl NativeBodyContracts {
-    fn of(definition: &hirsel_tir::Definition) -> Result<Self, QueryError> {
+    pub(crate) fn of(definition: &hirsel_tir::Definition) -> Result<Self, QueryError> {
         let invalid = || {
             QueryError::Operational(hirsel_types::OperationalFailure {
                 operation: "native source contracts".into(),
@@ -116,6 +116,7 @@ struct Record {
 
 /// A completed ordinary discovery result. Failed cache publication leaves its
 /// current typed result usable but supplies no successful durable association.
+#[derive(Clone)]
 pub struct NativeDiscoveryProduct {
     pub product: Option<crate::runtime::ProductRef>,
     pub source: NativeDefinitionProduct,
