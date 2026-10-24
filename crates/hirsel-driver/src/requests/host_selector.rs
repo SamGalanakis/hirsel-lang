@@ -21,6 +21,7 @@ pub(super) struct SnapshotPlan {
     pub front: u64,
     pub lower: u64,
     pub check: u64,
+    pub growth: u64,
 }
 pub(super) struct GraphAdmission {
     pub runtime: MemoryReservation,
@@ -28,6 +29,7 @@ pub(super) struct GraphAdmission {
     pub front: MemoryReservation,
     pub lower: MemoryReservation,
     pub check: MemoryReservation,
+    pub growth: MemoryReservation,
     pub transport: MemoryReservation,
 }
 impl GraphAdmission {
@@ -40,7 +42,8 @@ impl GraphAdmission {
             .source
             .checked_add(plan.front)
             .and_then(|bytes| bytes.checked_add(plan.lower))
-            .and_then(|bytes| bytes.checked_add(plan.check));
+            .and_then(|bytes| bytes.checked_add(plan.check))
+            .and_then(|bytes| bytes.checked_add(plan.growth));
         if snapshot.is_none_or(|bytes| bytes > limits.snapshot_bytes) {
             return Err(ToolError::Io(std::io::Error::other(
                 "compiler snapshot footprint exceeds admission",
@@ -56,6 +59,7 @@ impl GraphAdmission {
             front: budget.reserve(plan.front).map_err(ToolError::Io)?,
             lower: budget.reserve(plan.lower).map_err(ToolError::Io)?,
             check: budget.reserve(plan.check).map_err(ToolError::Io)?,
+            growth: budget.reserve(plan.growth).map_err(ToolError::Io)?,
             transport: budget
                 .reserve(limits.transport_bytes)
                 .map_err(ToolError::Io)?,
@@ -66,6 +70,9 @@ impl GraphAdmission {
 /// Implemented only by installed compiler producer views. Public requests
 /// carry no tasks, materializer callbacks or compiler/verifier capabilities.
 pub(super) trait GraphProducts: Send + Sync {
+    fn accepts(&self, _operation: &CompileOperation) -> bool {
+        true
+    }
     fn select(
         &self,
         operation: &CompileOperation,
@@ -120,7 +127,8 @@ impl GraphBudget {
             .source
             .checked_add(plan.front)
             .and_then(|bytes| bytes.checked_add(plan.lower))
-            .and_then(|bytes| bytes.checked_add(plan.check));
+            .and_then(|bytes| bytes.checked_add(plan.check))
+            .and_then(|bytes| bytes.checked_add(plan.growth));
         if snapshot.is_none_or(|bytes| bytes > limits.snapshot_bytes) {
             return GraphAdmission::reserve(&self.budget, limits, plan);
         }
@@ -148,7 +156,9 @@ impl GraphBudget {
             let mut discarded = vec![];
             let mut index = 0;
             while index < hot.len() {
-                if Arc::strong_count(&hot[index]) == 1 {
+                if Arc::strong_count(&hot[index]) == 1
+                    && Arc::strong_count(&hot[index].runtime) == 1
+                {
                     discarded.push(hot.remove(index));
                 } else {
                     index += 1;
@@ -179,11 +189,11 @@ impl GraphSelections {
         ToolError,
     > {
         self.live.retain(|graph| graph.strong_count() != 0);
-        let selected = self
-            .live
-            .iter()
-            .filter_map(Weak::upgrade)
-            .find(|graph| graph.path == request.path && graph.inputs == request.inputs);
+        let selected = self.live.iter().filter_map(Weak::upgrade).find(|graph| {
+            graph.path == request.path
+                && graph.inputs == request.inputs
+                && graph.products.accepts(&request.operation)
+        });
         let graph = match selected {
             Some(graph) => graph,
             None => {
@@ -321,6 +331,7 @@ mod tests {
             front: 10,
             lower: 10,
             check: 10,
+            growth: 0,
         };
         let budget = ProcessBudget::new(99);
         assert!(GraphAdmission::reserve(&budget, limits, plan).is_err());
@@ -409,6 +420,7 @@ mod tests {
                     front: 0,
                     lower: 0,
                     check: 0,
+                    growth: 0,
                 },
             )?;
             let error = hirsel_artifact_store::Domain {

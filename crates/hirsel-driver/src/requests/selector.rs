@@ -123,3 +123,23 @@ mod tests {
         assert!(first.input_limits().bytes <= 16 << 20);
     }
 }
+
+impl hirsel_engine::requests::RequestEngine for CompilerRequests {
+    type Request = CompileRequest;
+    type Error = hirsel_engine::ToolError;
+    type Runtime = hirsel_engine::runtime::AdmittedRuntime;
+    type Readiness = CompilerReadiness;
+
+    fn select(
+        &mut self,
+        request: &CompileRequest,
+    ) -> Result<hirsel_engine::requests::SelectedRequest<Self::Runtime, Self::Readiness>, Self::Error>
+    {
+        let compiler = &self.compiler;
+        let config = &self.config;
+        let limits = self.limits;
+        self.graphs.select(request, |budget| {
+            super::source_graph::install(compiler, config, limits, budget, request)
+        })
+    }
+}
