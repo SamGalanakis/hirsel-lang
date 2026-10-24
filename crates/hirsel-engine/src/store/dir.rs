@@ -152,6 +152,17 @@ impl DirStore {
 }
 
 impl ResultStore for DirStore {
+    fn read_scope(&self) -> Option<Box<dyn Send + Sync>> {
+        if self.read_only.is_empty() {
+            return None;
+        }
+        Some(Box::new(
+            self.read_only
+                .iter()
+                .map(|store| store.batch())
+                .collect::<Vec<_>>(),
+        ))
+    }
     fn local_product_store(&self) -> Option<hirsel_artifact_store::Store> {
         self.physical.clone()
     }
@@ -253,6 +264,83 @@ impl ResultStore for DirStore {
             "dir@1"
         } else {
             "none@1"
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::store::{Domain, ResultStore};
+
+    #[test]
+    fn installed_read_scope_reuses_regions_refreshes_and_rejects_damage() {
+        for forwarded in [false, true] {
+            let directory = std::env::temp_dir().join(format!(
+                "hirsel-installed-read-scope-{}-{:?}-{forwarded}",
+                std::process::id(),
+                std::thread::current().id()
+            ));
+            let _ = fs::remove_dir_all(&directory);
+            let installed = directory.join("installed");
+            let local = directory.join("unused-local");
+            let writer = hirsel_artifact_store::Store::new(installed.clone());
+            let domain = Domain {
+                kind: 0x4e0000fa,
+                schema: 1,
+            };
+            let reference = writer.put(domain, b"installed bytes").unwrap();
+            let reader = DirStore::new(local.clone()).with_read_only_root(installed);
+            let statistics = reader.read_only[0].enable_statistics();
+            let reader: std::sync::Arc<dyn ResultStore> = std::sync::Arc::new(reader);
+            let budget = crate::runtime::ProcessBudget::new(4096);
+            let reader: std::sync::Arc<dyn ResultStore> = if forwarded {
+                std::sync::Arc::new(crate::store::RequestStore::new(
+                    reader,
+                    budget.reserve(4096).unwrap(),
+                ))
+            } else {
+                reader
+            };
+            let scope = reader.read_scope();
+            assert_eq!(&*reader.get_content(reference).unwrap(), b"installed bytes");
+            let before = statistics.snapshot();
+            for _ in 0..8 {
+                assert_eq!(&*reader.get_content(reference).unwrap(), b"installed bytes");
+            }
+            let after = statistics.snapshot();
+            for counter in ["IndexLoadAttempts", "IndexStamps", "SegmentOpens"] {
+                assert_eq!(
+                    after.counters[counter], before.counters[counter],
+                    "{counter}"
+                );
+            }
+            assert_eq!(after.counters["RegionCacheHits"], 8);
+            let later = domain.reference(b"next operation").unwrap();
+            assert!(reader.get_content(later).is_none());
+            assert_eq!(writer.put(domain, b"next operation").unwrap(), later);
+            assert!(
+                reader.get_content(later).is_none(),
+                "absence stays pinned within an operation"
+            );
+            drop(scope);
+            let scope = reader.read_scope();
+            assert_eq!(&*reader.get_content(later).unwrap(), b"next operation");
+            drop(scope);
+            fs::write(writer.output_path(reference), b"damaged installed pack").unwrap();
+            let scope = reader.read_scope();
+            assert!(
+                reader.get_content(reference).is_none(),
+                "new operation must reject damaged backing"
+            );
+            drop(scope);
+            assert!(
+                !local.exists(),
+                "read scope creates no writable provider state"
+            );
+            drop(reader);
+            assert_eq!(budget.reserved(), 0);
+            fs::remove_dir_all(directory).unwrap();
         }
     }
 }

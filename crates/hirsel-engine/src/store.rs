@@ -52,6 +52,12 @@ impl EntryKey {
 /// A content-keyed byte store. Implementations never fail a compile: a
 /// missing, unreadable or corrupt entry is a miss.
 pub trait ResultStore: Send + Sync {
+    /// Retain bounded installed-product read state for one compiler operation.
+    /// Dropping the guard refreshes the next operation; it never publishes or
+    /// supplies validator authority. Writable transactions remain independent.
+    fn read_scope(&self) -> Option<Box<dyn Send + Sync>> {
+        None
+    }
     /// Explicit host-local writable storage for independently owned validator
     /// associations. Ordinary product bytes and read-only roots confer no
     /// authority; only the relevant validator may issue its accepted record.

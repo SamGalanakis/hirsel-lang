@@ -429,6 +429,10 @@ pub(crate) fn check_files(
 ) -> Result<Vec<(FileId, FileCheckOutput)>, QueryError> {
     use hirsel_intern::timings::{Interval, interval};
     engine.checked_scope = Default::default();
+    let _reads = engine
+        .result_store
+        .as_ref()
+        .and_then(|store| store.read_scope());
     // Canonical type records are written while queries encode their products,
     // before the per-record writers run. Capacity spills stay private; a
     // completed request explicitly publishes its last bounded subepoch.

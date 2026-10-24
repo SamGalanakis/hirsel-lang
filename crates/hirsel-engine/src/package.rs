@@ -151,6 +151,11 @@ impl LoadedProgram {
     /// `lowering`, each dependency only what compile-time evaluation executes,
     /// and `Reachable` then lowers the dependency bodies the root reaches.
     pub fn check(&mut self, lowering: LoweringPolicy) -> Result<CheckOutput, QueryError> {
+        let _reads = self
+            .engine
+            .result_store
+            .as_ref()
+            .and_then(|store| store.read_scope());
         self.check_with(lowering, |_, _| Ok(()))
     }
     /// `check`, calling `checked` with each file that checked from source
@@ -254,6 +259,11 @@ impl LoadedProgram {
         self.has_launch_entry.then_some(&self.entry)
     }
     pub fn check_for_execution(&mut self) -> Result<(), ToolError> {
+        let _reads = self
+            .engine
+            .result_store
+            .as_ref()
+            .and_then(|store| store.read_scope());
         if !self.has_launch_entry {
             return Err(invalid("launch manifest requires entry"));
         }
@@ -572,6 +582,10 @@ pub(crate) fn load_program_inputs(
         })
         .collect();
     let mut engine = compiler.engine(environment);
+    let _reads = engine
+        .result_store
+        .as_ref()
+        .and_then(|store| store.read_scope());
     let publication = engine
         .result_store
         .as_ref()

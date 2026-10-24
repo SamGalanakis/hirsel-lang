@@ -109,6 +109,9 @@ impl RequestStore {
     }
 }
 impl ResultStore for RequestStore {
+    fn read_scope(&self) -> Option<Box<dyn Send + Sync>> {
+        self.backend.read_scope()
+    }
     fn name(&self) -> &'static str {
         self.backend.name()
     }
