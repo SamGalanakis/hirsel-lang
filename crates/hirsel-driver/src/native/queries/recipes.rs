@@ -15,18 +15,11 @@ use std::collections::BTreeSet;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(super) struct InstancePlan {
     actuals: Actuals,
-    callable: hirsel_types::TypeId,
-    shape: hirsel_rc::effects::Shape,
-    environment: Option<hirsel_syntax::ContentHash>,
 }
 impl InstancePlan {
-    pub fn capture(instances: &Instances, id: InstanceId, table: &hirsel_lir::LayoutTable) -> Self {
+    pub fn capture(instances: &Instances, id: InstanceId) -> Self {
         Self {
             actuals: instances.actuals[id.index()].clone(),
-            callable: instances.callables[id.index()],
-            shape: instances.view(id).owner.into(),
-            environment: instances.environments[id.index()]
-                .map(|layout| hirsel_lir::LayoutKeys::rooted(table, layout).0),
         }
     }
     pub fn register(
@@ -38,17 +31,16 @@ impl InstancePlan {
         layouts: &mut LayoutBuilder<'_>,
         instances: &mut Instances,
     ) -> Result<(), String> {
-        let shape: hirsel_lir::abi_types::CallableShape = self.shape.into();
-        let convention = (shape != hirsel_lir::abi_types::CallableShape::Definition)
-            .then(|| hirsel_rc::instance::convention(&program.types, self.callable))
-            .flatten();
+        let (convention, environment) = key
+            .identity_shape()
+            .map_err(|e| format!("native original key shape: {e:?}"))?;
         let selected = hirsel_rc::instance::key_of(
             &program.types,
             key.definition(),
             hirsel_tir::BodyId(key.body()),
             &self.actuals,
             convention.as_ref(),
-            self.environment,
+            environment,
         )
         .map_err(|e| format!("native original plan key: {e:?}"))?;
         if &selected != key {
