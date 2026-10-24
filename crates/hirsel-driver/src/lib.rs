@@ -13,6 +13,7 @@ use hirsel_engine::{
 pub mod api_index;
 pub mod candidate;
 pub mod dependency_card;
+mod launch_binding;
 pub mod native;
 mod network;
 pub mod observation_view;
@@ -468,49 +469,14 @@ pub(crate) fn bind_launch(
     program: &mut LoadedProgram,
     launch: HostLaunch<'_>,
 ) -> Result<BoundHostRun, ToolError> {
-    let refused =
-        |e: hirsel_run_schema::RunRefusal| ToolError::Runtime(format!("replay refused: {e}"));
-    // A callee run's tape replays its callee entry (RUN-10, RUN-11).
-    let replay = match launch {
-        HostLaunch::Replay(tape) => {
-            let (io, run) = hirsel_rt::host_launch::replay(tape).map_err(refused)?;
-            if run.record().launch == hirsel_run_schema::LaunchKind::Call {
-                program.entry = def_path(&run.record().entry).ok_or_else(|| {
-                    ToolError::Runtime("replay refused: the callee entry's path".into())
-                })?;
-            }
-            Some((io, run))
-        }
-        HostLaunch::Callee { run, .. } => {
-            program.entry = def_path(&run.record().entry)
-                .ok_or_else(|| ToolError::Runtime("launch: the callee entry's path".into()))?;
-            None
-        }
-        HostLaunch::Live { .. } => None,
-    };
-    if replay.is_some()
-        || matches!(
-            launch,
-            HostLaunch::Live {
-                record: Some(_),
-                ..
-            } | HostLaunch::Callee {
-                record: Some(_),
-                ..
-            }
-        )
-    {
+    let selection = launch_binding::LaunchSelection::read(launch)?;
+    if let Some(entry) = selection.entry() {
+        program.entry = entry.clone();
+    }
+    if selection.requires_replayable(launch) {
         program.refuse_unreplayable()?;
     }
     let signature = launch_signature(program)?;
-    let kind = match (&replay, launch) {
-        (Some((_, run)), _) if run.record().launch == hirsel_run_schema::LaunchKind::Call => {
-            hirsel_run_schema::LaunchKind::Call
-        }
-        (_, HostLaunch::Callee { .. }) => hirsel_run_schema::LaunchKind::Call,
-        _ => hirsel_engine::entry_launch_kind(program.engine.types(), &signature)
-            .map_err(ToolError::Launch)?,
-    };
     let revision = program
         .engine
         .semantic_program_revision(&program.entry)
@@ -519,47 +485,7 @@ pub(crate) fn bind_launch(
         None => hirsel_run_schema::CodeReach::Safe,
         Some(reach) => hirsel_run_schema::CodeReach::Escapes(reach.spelled()),
     };
-    match (launch, replay) {
-        (HostLaunch::Live { config, .. }, _) => {
-            let requested = config
-                .read(&revision, kind)
-                .map_err(|e| ToolError::Runtime(e.to_string()))?;
-            let bound = hirsel_engine::bind_run(
-                program.engine.types(),
-                &signature,
-                &revision,
-                kind,
-                Some(&requested),
-                code,
-            )
-            .map_err(ToolError::Launch)?;
-            Ok(BoundHostRun::Live(bound))
-        }
-        (HostLaunch::Callee { run, .. }, _) => {
-            let bound = hirsel_engine::bind_run(
-                program.engine.types(),
-                &signature,
-                &revision,
-                kind,
-                Some(run),
-                code,
-            )
-            .map_err(ToolError::Launch)?;
-            Ok(BoundHostRun::Live(bound))
-        }
-        (HostLaunch::Replay(_), Some((io, run))) => {
-            let roots = hirsel_engine::entry_roots(program.engine.types(), &signature, kind)
-                .map_err(refused)?;
-            let run = run
-                .bind(&hirsel_run_config::ProgramFacts::of(
-                    &revision, kind, roots, code,
-                ))
-                .map_err(refused)?
-                .into_run();
-            Ok(BoundHostRun::Replay { run, io })
-        }
-        (HostLaunch::Replay(_), None) => unreachable!("a replay reads its tape first"),
-    }
+    selection.bind(launch, program.engine.types(), &signature, &revision, code)
 }
 
 /// A definition's canonical spelling (`package@version/module/name`) as a path.
