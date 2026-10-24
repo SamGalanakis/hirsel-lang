@@ -1,5 +1,6 @@
 //! Original-source DATA assembly controls. These are not V/native witnesses,
 //! profile-context selection, complete CT5 coverage or provider activation.
+mod registry_tests;
 use super::*;
 use crate::sealed_source::demand::{CallDemand, ExternalDemand};
 use crate::sealed_source::tests::{assign, body, operand, witness_definition};

@@ -15,6 +15,8 @@ use hirsel_lir::sealed_payload_source::{
 };
 use std::collections::BTreeMap;
 
+pub mod registry;
+
 /// Original entry selector, not a filtered ABI or environment ordinal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub enum Port {
