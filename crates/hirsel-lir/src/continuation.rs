@@ -40,9 +40,8 @@ pub fn resume_name(definition: &DefPath, instance: ContentHash, state: Option<u3
 
 /// The address preparations state `state` (1-based) re-runs before reissuing
 /// its boundary: each `Inst::Address` in a block that state does not emit
-/// (`skipped`) that the resumed code accesses and whose root base is a
-/// parameter or capture slot, frame-resident storage or a reloaded live value,
-/// bases first. Their checks passed before the suspension and read
+/// (`skipped`) that the resumed code accesses and whose root base is a slot
+/// or a reloaded live value, bases first. Their checks passed before the suspension and read
 /// only state the frame retains, so re-running them observes nothing.
 pub fn resume_preparations(
     u: &LirUnit<Ready>,
@@ -71,16 +70,12 @@ pub fn resume_preparations(
         }
     }
     let carried = carried(u, resume.boundary.block).0;
+    // Every alternate has a place for each slot (frame-resident when live at
+    // a boundary); a value base must be one the state reloads.
     let eligible = |a: AddressId| {
         carried.contains(&a)
             && match root(u, a) {
-                // Parameter and capture slots are bound again at every entry.
-                AddressBase::Slot(s) => {
-                    matches!(
-                        u.slots[s.index()].kind,
-                        SlotKind::Parameter(_) | SlotKind::Capture(_)
-                    ) || plan.storage.iter().any(|f| f.slot == s)
-                }
+                AddressBase::Slot(_) => true,
                 AddressBase::Value(v) => resume.live.iter().any(|l| l.value == v),
                 AddressBase::Address(_) => false,
             }
