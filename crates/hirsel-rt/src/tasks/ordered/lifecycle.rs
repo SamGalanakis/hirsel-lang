@@ -271,30 +271,31 @@ pub(crate) unsafe fn spawn_certified(
         Kind::Task,
         word,
     );
-    let safe_capture = !captures.roots
-        && !captures.unknown
-        && captures.handles.is_empty()
-        && captures.typed.is_empty()
-        && driver
-            .plain_layouts
-            .contains(&unsafe { (*environment).index() });
-    let scope_committed = {
-        let s = scheduler(ctx);
-        s.scopes
-            .get(scope as u32 as usize)
-            .and_then(Option::as_ref)
-            .is_some_and(|row| row.generation == (scope >> 32) as u32)
-    };
-    let safe_capture = safe_capture
-        || (certificate.is_some()
-            && !captures.roots
+    let reserve = alternate.is_some() && {
+        let safe_capture = !captures.roots
             && !captures.unknown
             && captures.handles.is_empty()
-            && captures.typed.is_empty());
-    let reserve = alternate.is_some()
-        && safe_capture
-        && scope_committed
-        && engine::driver(ctx).reserved.len() < super::ahead::MAX_RESERVATIONS;
+            && captures.typed.is_empty()
+            && driver
+                .plain_layouts
+                .contains(&unsafe { (*environment).index() });
+        let scope_committed = {
+            let s = scheduler(ctx);
+            s.scopes
+                .get(scope as u32 as usize)
+                .and_then(Option::as_ref)
+                .is_some_and(|row| row.generation == (scope >> 32) as u32)
+        };
+        let safe_capture = safe_capture
+            || (certificate.is_some()
+                && !captures.roots
+                && !captures.unknown
+                && captures.handles.is_empty()
+                && captures.typed.is_empty());
+        safe_capture
+            && scope_committed
+            && engine::driver(ctx).reserved.len() < super::ahead::MAX_RESERVATIONS
+    };
     if let Some(certificate) = certificate {
         if reserve
             && task

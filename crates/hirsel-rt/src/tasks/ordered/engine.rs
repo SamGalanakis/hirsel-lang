@@ -41,6 +41,17 @@ pub(super) fn current(ctx: *mut TaskCtx) -> TaskId {
     handle(task, s.task(task).generation)
 }
 
+/// Read identity and policy under one scheduler access. No borrow returned
+/// here may cross user code, a commit callback, or a physical suspension.
+fn current_driver(ctx: *mut TaskCtx) -> (TaskId, &'static mut Driver) {
+    let s = scheduler(ctx);
+    let task = handle(s.current, s.task(s.current).generation);
+    let Logical::Ordered(driver) = &mut s.logical else {
+        panic!("ordered submission without an ordered driver")
+    };
+    (task, driver)
+}
+
 /// Opt-in for supported native-boundary tests. General admission is not wired.
 /// # Safety
 /// Admission only, with physical dispatch installed and before root start.
@@ -247,17 +258,12 @@ fn settle_head(ctx: *mut TaskCtx, before: &Stretch) -> Stopped<()> {
 }
 
 fn settle_head_here(ctx: *mut TaskCtx, before: &Stretch) -> Stopped<()> {
-    let task = current(ctx);
+    let (task, driver) = current_driver(ctx);
     assert!(
-        driver(ctx).head_ready(task),
+        driver.head_ready(task),
         "retire owned work before head charges"
     );
-    let result = driver(ctx)
-        .frontier
-        .as_mut()
-        .unwrap()
-        .settled
-        .settle(before);
+    let result = driver.frontier.as_mut().unwrap().settled.settle(before);
     super::events::charges::partial(ctx, task, before, result);
     result.map_err(Stop::BudgetExceeded)
 }
@@ -266,21 +272,32 @@ fn settle_head_here(ctx: *mut TaskCtx, before: &Stretch) -> Stopped<()> {
 /// request and logical budget untouched; only head promotion can resume it.
 pub(crate) fn reserve_allocation(ctx: *mut TaskCtx, bytes: u64) -> Stopped<()> {
     unsafe { super::ahead::barrier(ctx) };
-    let task = current(ctx);
-    driver(ctx).enter(task, crate::pool::compute_index().unwrap_or(0));
+    let task = {
+        let (task, driver) = current_driver(ctx);
+        driver.enter(task, crate::pool::compute_index().unwrap_or(0));
+        task
+    };
     capture_fuel(ctx);
     advance(ctx)?;
-    if driver(ctx).frontier.as_ref().unwrap().head() == Some(task) && !driver(ctx).head_ready(task)
-    {
+    let blocked_head = {
+        let driver = driver(ctx);
+        driver.frontier.as_ref().unwrap().head() == Some(task) && !driver.head_ready(task)
+    };
+    if blocked_head {
         at_head(ctx)?;
     }
-    let memory = driver(ctx).memory;
-    let budgets = driver(ctx).budgets;
-    let envelope_full = memory
-        && driver(ctx)
-            .stretches
-            .get(&task)
-            .is_some_and(|stretch| stretch.allocation_pauses(bytes));
+    let (memory, budgets, envelope_full) = {
+        let driver = driver(ctx);
+        (
+            driver.memory,
+            driver.budgets,
+            driver.memory
+                && driver
+                    .stretches
+                    .get(&task)
+                    .is_some_and(|stretch| stretch.allocation_pauses(bytes)),
+        )
+    };
     if envelope_full {
         at_head(ctx)?;
     }
@@ -362,8 +379,11 @@ pub(crate) fn fuel_refill(ctx: *mut TaskCtx) -> Stopped<()> {
     capture_fuel(ctx);
     advance(ctx)?;
     let task = current(ctx);
-    if driver(ctx).frontier.as_ref().unwrap().head() == Some(task) && !driver(ctx).head_ready(task)
-    {
+    let blocked_head = {
+        let driver = driver(ctx);
+        driver.frontier.as_ref().unwrap().head() == Some(task) && !driver.head_ready(task)
+    };
+    if blocked_head {
         at_head(ctx)?;
     }
     let must_wait = {
@@ -474,7 +494,11 @@ fn notify(ctx: *mut TaskCtx) {
 }
 
 fn advance(ctx: *mut TaskCtx) -> Stopped<()> {
-    if driver(ctx).host_poll || driver(ctx).poll_deferred() {
+    let deferred = {
+        let driver = driver(ctx);
+        driver.host_poll || driver.poll_deferred()
+    };
+    if deferred {
         return Ok(());
     }
     loop {
@@ -516,8 +540,11 @@ fn suspend(ctx: *mut TaskCtx, task: TaskId, head_only: bool) {
 /// Wait before any task-tree mutation. This gate keeps a later task's native
 /// arguments on its own stack until its existing log has retired at the head.
 pub(super) fn at_head(ctx: *mut TaskCtx) -> Stopped<()> {
-    let task = current(ctx);
-    driver(ctx).enter(task, crate::pool::compute_index().unwrap_or(0));
+    let task = {
+        let (task, driver) = current_driver(ctx);
+        driver.enter(task, crate::pool::compute_index().unwrap_or(0));
+        task
+    };
     loop {
         advance(ctx)?;
         if driver(ctx).head_ready(task) {
@@ -795,14 +822,23 @@ pub(super) fn submit(
     ctx: *mut TaskCtx,
     mut operation: Operation<Command>,
 ) -> Stopped<Option<Returned>> {
-    let task = current(ctx);
-    driver(ctx).enter(task, crate::pool::compute_index().unwrap_or(0));
+    let task = {
+        let (task, driver) = current_driver(ctx);
+        driver.enter(task, crate::pool::compute_index().unwrap_or(0));
+        task
+    };
     let mut before = stretch(ctx);
     loop {
         advance(ctx)?;
-        let head = driver(ctx).frontier.as_ref().unwrap().head();
+        let (head, ready) = {
+            let driver = driver(ctx);
+            (
+                driver.frontier.as_ref().unwrap().head(),
+                driver.head_ready(task),
+            )
+        };
         if head == Some(task) {
-            if !driver(ctx).head_ready(task) {
+            if !ready {
                 suspend(ctx, task, true);
                 continue;
             }

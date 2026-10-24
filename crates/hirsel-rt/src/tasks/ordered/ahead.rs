@@ -271,8 +271,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_spawn_ahead(
     flags: u64,
     info: *const SpawnAheadInfo,
 ) -> u8 {
-    let (entry, certificate) = if info.is_null() {
-        (None, None)
+    let version = if info.is_null() {
+        0
     } else {
         let version = unsafe { std::ptr::addr_of!((*info).version).read() };
         let flags = unsafe { std::ptr::addr_of!((*info).flags).read() };
@@ -286,7 +286,18 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_spawn_ahead(
                 )
             };
         }
-        if version == 1 {
+        version
+    };
+    if super::engine::on(ctx) {
+        let _role = unsafe { super::super::role::Guard::new(ctx) };
+        // Validate the prefix in every mode, but inspect a certificate only
+        // when this run can use it. W1 and strict execution start ordinary code.
+        let enabled = version != 0
+            && unsafe { (*ctx).run_ref().control.width.load(Ordering::Acquire) > 1 }
+            && super::engine::driver(ctx).private_enabled;
+        let (entry, certificate) = if !enabled {
+            (None, None)
+        } else if version == 1 {
             (unsafe { (*info).entry }, None)
         } else {
             #[cfg(all(target_arch = "x86_64", not(feature = "tsan")))]
@@ -294,10 +305,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_spawn_ahead(
             #[cfg(any(not(target_arch = "x86_64"), feature = "tsan"))]
             let certificate: Option<native::Certificate> = None;
             (certificate.as_ref().map(|c| c.entry), certificate)
-        }
-    };
-    if super::engine::on(ctx) {
-        let _role = unsafe { super::super::role::Guard::new(ctx) };
+        };
         return unsafe {
             crate::stop::check(
                 ctx,
