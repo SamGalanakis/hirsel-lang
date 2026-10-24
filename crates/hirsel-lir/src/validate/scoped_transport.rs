@@ -130,6 +130,13 @@ fn reaching<S: Stage>(cx: &Cx<'_, S>, facts: &Facts) -> BTreeMap<Site, Vec<BTree
                     }
                 })
                 .or_insert_with(|| state.clone());
+            let rejected = match u.terminators[block.index()] {
+                Terminator::Call { call, .. } => u.tables.calls[call.index()]
+                    .pretransfer_failure
+                    .map(|f| u.tables.failures[f.index()].cleanup),
+                _ => None,
+            };
+            let pending = rejected.map(|_| state.clone());
             if let Terminator::Call { call, .. } = u.terminators[block.index()] {
                 for argument in u.tables.calls[call.index()]
                     .arguments
@@ -147,7 +154,12 @@ fn reaching<S: Stage>(cx: &Cx<'_, S>, facts: &Facts) -> BTreeMap<Site, Vec<BTree
             }
             for out in &facts.cfg.succ[block.index()] {
                 if out.origin == super::flow::Origin::Terminator {
-                    edges.push((out.edge, state.clone()));
+                    let outgoing = if rejected == Some(out.edge) {
+                        pending.as_ref().expect("rejected call state")
+                    } else {
+                        &state
+                    };
+                    edges.push((out.edge, outgoing.clone()));
                 }
             }
             edges

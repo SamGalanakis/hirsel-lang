@@ -4,10 +4,12 @@
 [core concurrency types](../../docs/spec/core-library.md#concurrency) define
 `Failure`, `SourceSite` and `FailureKind`. Old section/issue numbers are historical.
 
-- **Deliberately unspecified:** exact language frame-byte and structural scratch
-  budgets remain decisions under LANG-10 / MEM-3. Implementation limit tests do
-  not ratify them. Bounded-arena OutOfSpace accounting is separately normative
-  under MEM-6; the current inherited checker failures remain visible in MEM/GAPS.
+- **Settled depth contract, cleanup proof outstanding:**
+  the [2026-10-23 depth revision](../../docs/spec/index.md#deterministic-depth-revision)
+  defines pre-entry admission and a separate 64-invocation cleanup allowance. Tests of
+  operational limits do not establish caller ownership on rejected admission, independent
+  cleanup retirement, cause order or cancellation/isolate recovery. Bounded-arena
+  OutOfSpace accounting remains separately normative under MEM-6; see MEM/GAPS.
 - **Resolved fixture-support history:** `test.check`, test execution/selection,
   entry validation and capability-denial launch controls exist. Failure metadata
   has concrete source controls; they do not prove a universal data ABI.

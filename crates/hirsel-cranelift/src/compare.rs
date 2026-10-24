@@ -6,8 +6,8 @@
 //! values of its layout at the given addresses and returns one of the `ORDER_*` codes: the
 //! interpreter's order, the first unequal pair deciding, variant ordinals before payloads,
 //! sequences element by element then by length, String and Bytes bytewise then by length,
-//! floats by IEEE with an unordered pair deciding at once. A pair deeper than
-//! `COMPARE_MAX_DEPTH` is the MEM-3 Depth failure.
+//! floats by IEEE with an unordered pair deciding at once. Complete logical
+//! admission precedes this physical traversal; layout wrappers set no language limit.
 //!
 //! A hash function `hirsel.hash.<layout>(at, state, depth, deep, context) -> i64` feeds the scalar
 //! leaves of its value to `hirsel_rt_v2_hash_update` in layout order and returns the
@@ -23,7 +23,7 @@ use cranelift_codegen::ir::{
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Switch};
 use cranelift_module::{FuncId, Module};
 use hirsel_lir::emission::slice_storage_with_index;
-use hirsel_lir::ir::{COMPARE_MAX_DEPTH, CompareOp, FailureId, ValueId};
+use hirsel_lir::ir::{CompareOp, FailureId, ValueId};
 use hirsel_lir::layout::{payload_offset, sequence_elements_offset, slice_data_offset};
 use hirsel_lir::layout_types::{
     FieldLayout, LayoutId, LayoutKind, LayoutRecord, ScalarKind, ScanStep, SizeSpec, TagForm,
@@ -255,13 +255,8 @@ impl Gen<'_, '_> {
     }
 
     /// The comparator's pair at `depth` is too deep: return the Depth code.
-    fn check_depth(&mut self, depth: Value) {
-        let deep =
-            self.b
-                .ins()
-                .icmp_imm_s(IntCC::UnsignedGreaterThan, depth, COMPARE_MAX_DEPTH as i64);
-        let code = self.code(ORDER_DEPTH);
-        self.return_if(deep, code);
+    fn check_depth(&mut self, _depth: Value) {
+        // Logical preflight precedes this physical value traversal.
     }
 
     fn call(&mut self, id: FuncId, args: &[Value]) -> Value {
@@ -945,18 +940,8 @@ impl Gen<'_, '_> {
     }
 
     /// Too deep: set the flag and return `state`; otherwise continue.
-    fn hash_depth(&mut self, depth: Value, state: Value, deep: Value) {
-        let too =
-            self.b
-                .ins()
-                .icmp_imm_s(IntCC::UnsignedGreaterThan, depth, COMPARE_MAX_DEPTH as i64);
-        let (fail, next) = (self.b.create_block(), self.b.create_block());
-        self.b.ins().brif(too, fail, &[], next, &[]);
-        self.b.switch_to_block(fail);
-        let one = self.b.ins().iconst(types::I8, 1);
-        self.b.ins().store(flags(), one, deep, 0);
-        self.b.ins().return_(&[state]);
-        self.b.switch_to_block(next);
+    fn hash_depth(&mut self, _depth: Value, _state: Value, _deep: Value) {
+        // Logical preflight precedes this physical value traversal.
     }
 
     fn define_hasher(mut self, layout: LayoutId) -> Generated {
@@ -1339,20 +1324,30 @@ impl FnEmitter<'_, '_, '_> {
         layout: LayoutId,
         failure: FailureId,
     ) -> Emitted {
-        let definition = self.definition();
-        let comparator = self.em.comparator(
-            layout,
-            matches!(op, CompareOp::Eq | CompareOp::Ne),
-            definition,
-        )?;
+        let comparator = if self.needs_value_program(layout) {
+            None
+        } else {
+            let definition = self.definition();
+            Some(self.em.comparator(
+                layout,
+                matches!(op, CompareOp::Eq | CompareOp::Ne),
+                definition,
+            )?)
+        };
         let shape = self.layout_shape(layout)?;
         let (l, r) = (self.stack(layout)?, self.stack(layout)?);
         let (left, right) = (self.counted_view(left)?, self.counted_view(right)?);
         self.store(shape, left, l)?;
         self.store(shape, right, r)?;
+        self.structural_preflight_at(layout, l.ptr, failure)?;
+        self.structural_preflight_at(layout, r.ptr, failure)?;
         let zero = self.u64c(0);
         let context = self.context;
-        let code = self.call(comparator, &[l.ptr, r.ptr, zero, context])[0];
+        let code = if let Some(comparator) = comparator {
+            self.call(comparator, &[l.ptr, r.ptr, zero, context])[0]
+        } else {
+            self.structural_order_at(layout, l.ptr, r.ptr)?
+        };
         let is = |this: &mut Self, c: u8| this.b.ins().icmp_imm_s(IntCC::Equal, code, i64::from(c));
         let deep = is(self, ORDER_DEPTH);
         self.guard(deep, failure)?;
@@ -1381,7 +1376,16 @@ impl FnEmitter<'_, '_, '_> {
         failure: FailureId,
     ) -> Emitted {
         let context = self.context;
+        self.structural_preflight_value(layout, value, failure)?;
         let seed = self.rt1(RuntimeEntry::HashBegin, &[context])?;
+        if self.needs_value_program(layout) {
+            let at = self.stack(layout)?;
+            let operand = self.counted_view(value)?;
+            let shape = self.layout_shape(layout)?;
+            self.store(shape, operand, at)?;
+            let hash = self.structural_hash_at(layout, at.ptr, seed)?;
+            return self.define(result, V::One(hash));
+        }
         if matches!(self.layout(layout)?.kind, LayoutKind::Scalar(kind)
             if !matches!(kind, ScalarKind::F32 | ScalarKind::F64 | ScalarKind::Pointer))
         {

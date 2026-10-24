@@ -21,7 +21,8 @@ use hirsel_types::{
 /// v9 transports source scoped selectors and closure classification.
 /// v10 adds independently checked fixed-origin borrow cursor claims.
 /// v11 adds contextual consumable arena scope entries (MEM-4).
-pub const TIR_VERSION: u32 = 11;
+/// v12 binds the combined grant and logical invocation semantics.
+pub const TIR_VERSION: u32 = 12;
 
 pub mod representation;
 

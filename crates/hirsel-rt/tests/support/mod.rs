@@ -239,44 +239,86 @@ pub fn elements_step(field: u32, count_offset: u64, offset: u64, stride: u64, sp
     }
 }
 
-/// A leaked descriptor with the given drop program, in drop order.
+/// End an inline resource's finalizer after its fields have drained.
+pub fn end_finalize_step(field: u32, offset: u64, layout: &'static Layout) -> Step {
+    Step {
+        layout,
+        ..step(hirsel_rt::STEP_END_FINALIZE, field, offset)
+    }
+}
+
+/// A leaked descriptor with the given drop program, in drop order. Build its
+/// self-referencing root end before publishing it to the fixture catalogue.
 pub fn layout(
     size: u64,
     field_count: u32,
     finalizer: Option<DropThunk>,
-    steps: Vec<Step>,
+    mut steps: Vec<Step>,
 ) -> &'static Layout {
-    let steps: &'static [Step] = Box::leak(steps.into_boxed_slice());
-    leak(Layout {
+    let flags = if steps
+        .iter()
+        .any(|s| matches!(s.kind, hirsel_rt::STEP_LOOP | hirsel_rt::STEP_COLUMN))
+    {
+        hirsel_rt::release::LAYOUT_WIDE_CURSOR
+    } else {
+        0
+    };
+    let mut descriptor = Box::new(Layout {
         magic: LAYOUT_MAGIC,
         version: LAYOUT_VERSION,
         size,
         align: 8,
         finalizer,
-        steps: steps.as_ptr(),
-        step_count: steps.len() as u64,
+        steps: ptr::null(),
+        step_count: 0,
         field_count,
         logical: 0,
-        logical_count: std::ptr::null(),
-        scan: std::ptr::null(),
+        logical_count: ptr::null(),
+        scan: ptr::null(),
         scan_words: u64::MAX,
-        flags: if steps
-            .iter()
-            .any(|s| matches!(s.kind, hirsel_rt::STEP_LOOP | hirsel_rt::STEP_COLUMN))
-        {
-            hirsel_rt::release::LAYOUT_WIDE_CURSOR
-        } else {
-            0
-        },
-    })
+        flags,
+    });
+    if finalizer.is_some() {
+        steps.push(Step {
+            layout: &*descriptor,
+            variant: 1,
+            ..step(hirsel_rt::STEP_END_FINALIZE, WHOLE_VALUE, 0)
+        });
+    }
+    let steps = Box::leak(steps.into_boxed_slice());
+    descriptor.steps = steps.as_ptr();
+    descriptor.step_count = steps.len() as u64;
+    let descriptor = Box::leak(descriptor);
+    register_fixture(descriptor);
+    descriptor
 }
 
 pub fn leaf(size: u64) -> &'static Layout {
     layout(size, 0, None, Vec::new())
 }
 
-pub fn with_flags(layout: &'static Layout, flags: u32) -> &'static Layout {
-    leak(Layout { flags, ..*layout })
+pub fn with_flags(original: &'static Layout, flags: u32) -> &'static Layout {
+    let mut descriptor = Box::new(Layout { flags, ..*original });
+    let mut steps = if original.step_count == 0 {
+        Vec::new()
+    } else {
+        // SAFETY: fixture descriptors retain their complete immutable step arrays.
+        unsafe { std::slice::from_raw_parts(original.steps, original.step_count as usize) }.to_vec()
+    };
+    for step in &mut steps {
+        if step.kind == hirsel_rt::STEP_END_FINALIZE
+            && step.variant == 1
+            && std::ptr::eq(step.layout, original)
+        {
+            step.layout = &*descriptor;
+        }
+    }
+    let steps = Box::leak(steps.into_boxed_slice());
+    descriptor.steps = steps.as_ptr();
+    descriptor.step_count = steps.len() as u64;
+    let descriptor = Box::leak(descriptor);
+    register_fixture(descriptor);
+    descriptor
 }
 
 /// A fresh heap block of `extent` bytes, aligned to 8, whose header names `layout`.

@@ -48,8 +48,16 @@ fn probe() -> bool {
 "#;
 
 /// `probe` through placement with regions, insertion and elision.
-fn rc_probe(source: &str) -> (Program, LayoutTable, LirUnit<Rc>) {
+fn rc_probe(
+    source: &str,
+) -> (
+    Program,
+    hirsel_layout::operation::OperationRegistry,
+    LayoutTable,
+    LirUnit<Rc>,
+) {
     let (program, lowered) = lower_valid(source);
+    let operations = lowered.operation_registry(&program);
     let table = lowered.table.clone();
     let (i, unit) = lowered
         .units
@@ -67,16 +75,21 @@ fn rc_probe(source: &str) -> (Program, LayoutTable, LirUnit<Rc>) {
     let proofs = Proofs::for_instance(&lowered.instances, id);
     let rc = hirsel_rc::insert::insert(placed, &table, &proofs).expect("insertion");
     let rc = hirsel_rc::elide::elide(rc, &table).expect("elision");
-    (program, table, rc)
+    (program, operations, table, rc)
 }
 
-fn check(program: &Program, table: &LayoutTable, unit: &LirUnit<Rc>) -> Vec<ViolationKind> {
+fn check(
+    program: &Program,
+    operations: &hirsel_layout::operation::OperationRegistry,
+    table: &LayoutTable,
+    unit: &LirUnit<Rc>,
+) -> Vec<ViolationKind> {
     let manifest = manifest(program);
     let target = target();
     let inputs = Inputs {
         memo: Default::default(),
         discharge: None,
-        operations: &program.operation_registry(),
+        operations,
         target: &target,
         layouts: table,
         manifest: &manifest,
@@ -118,8 +131,8 @@ fn copy_and_anchor(ed: &Editor<Rc>) -> ((usize, usize), (usize, usize)) {
 #[test]
 fn a_copied_root_keeps_its_holder_to_its_cleanup_anchor() {
     for source in [COPY_THEN_THAW, AGGREGATE] {
-        let (program, table, rc) = rc_probe(source);
-        let violations = check(&program, &table, &rc);
+        let (program, operations, table, rc) = rc_probe(source);
+        let violations = check(&program, &operations, &table, &rc);
         assert!(violations.is_empty(), "{violations:?}\n{}", dump(&rc));
         // The copy stays a Dup: no holder moves across the thaw.
         let ed = Editor::new(rc.clone());
@@ -132,20 +145,20 @@ fn a_copied_root_keeps_its_holder_to_its_cleanup_anchor() {
             dump(&rc)
         );
     }
-    let ed = Editor::new(rc_probe(COPY_THEN_THAW).2);
+    let ed = Editor::new(rc_probe(COPY_THEN_THAW).3);
     copy_and_anchor(&ed);
 }
 
 #[test]
 fn rc_root_refuses_a_root_released_at_its_last_use() {
-    let (program, table, rc) = rc_probe(COPY_THEN_THAW);
+    let (program, operations, table, rc) = rc_probe(COPY_THEN_THAW);
     let mut ed = Editor::new(rc);
     let ((b, i), (c, j)) = copy_and_anchor(&ed);
     // Move the slot's drop from its cleanup anchor to its last use, the copy.
     let drop = ed.code[c].remove(j);
     ed.code[b].insert(i + 1, drop);
     let mutated = ed.finish();
-    let violations = check(&program, &table, &mutated);
+    let violations = check(&program, &operations, &table, &mutated);
     assert!(
         violations
             .iter()
@@ -157,7 +170,7 @@ fn rc_root_refuses_a_root_released_at_its_last_use() {
 
 #[test]
 fn rc_root_refuses_a_copy_cancelled_across_a_thaw() {
-    let (program, table, rc) = rc_probe(COPY_THEN_THAW);
+    let (program, operations, table, rc) = rc_probe(COPY_THEN_THAW);
     let mut ed = Editor::new(rc);
     let ((b, i), (c, j)) = copy_and_anchor(&ed);
     // Cancel the copy's Dup against the drop at the anchor, past the thaw: the copy
@@ -179,7 +192,7 @@ fn rc_root_refuses_a_copy_cancelled_across_a_thaw() {
     };
     ed.code[c].remove(j);
     let mutated = ed.finish();
-    let violations = check(&program, &table, &mutated);
+    let violations = check(&program, &operations, &table, &mutated);
     assert!(
         violations
             .iter()

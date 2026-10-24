@@ -1,6 +1,7 @@
 mod arguments;
 mod diagnostic_quality;
 mod exit_code_16;
+mod logical_depth_31;
 mod file_identity;
 mod native_gate;
 mod oracle;

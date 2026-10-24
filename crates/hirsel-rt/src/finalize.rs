@@ -47,6 +47,24 @@ pub(crate) unsafe fn run_finalizer(
     let Some(thunk) = finalizer else {
         return STATUS_OK;
     };
+    if flags & crate::release::LAYOUT_IMPLEMENTATION_FINALIZER == 0 {
+        let Some(activation) = ctx.activations.admit_finalizer() else {
+            ctx.cleanup_rejections = ctx
+                .cleanup_rejections
+                .checked_add(1)
+                .unwrap_or_else(|| fault("finalizer scope count overflow"));
+            crate::failure::record_runtime(ctx, "LANG-10", anchor, operation_site);
+            if flags & LAYOUT_UNSAFE_FFI != 0 {
+                terminate_unsafe_ffi();
+            }
+            return STATUS_FAILURE;
+        };
+        // All admitted units share the same 64-unit allowance; this cannot grow.
+        if ctx.cleanup_invocations.len() == ctx.cleanup_invocations.capacity() {
+            fault("finalizer token storage exceeds its task allowance");
+        }
+        ctx.cleanup_invocations.push(activation);
+    }
     // SAFETY: the thunk receives borrowed self and this context.
     let status = shielded(ctx, |ctx| unsafe {
         thunk(ctx, value, anchor, operation_site)
@@ -190,6 +208,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_finalize_begin(ctx: *mut TaskCtx, _anchor:
     // SAFETY: caller contract.
     unsafe {
         (*ctx).shield += 1;
+        (*ctx).cleanup_depth += 1;
         crate::tasks::shield_changed(ctx);
     }
 }
@@ -211,6 +230,10 @@ pub unsafe extern "C" fn hirsel_rt_v2_finalize_end(ctx: *mut TaskCtx, _anchor: u
             fault("a finalizer end without its begin: the context is not shielded");
         }
         ctx.shield -= 1;
+        ctx.cleanup_depth = ctx
+            .cleanup_depth
+            .checked_sub(1)
+            .unwrap_or_else(|| fault("cleanup end without cleanup entry"));
         crate::tasks::shield_changed(ctx);
     }
 }

@@ -398,8 +398,11 @@ fn retie_versions(ed: &mut Editor<Ready>, facts: &Facts, lay: Lay<'_>) {
                 for edge in Terminator::normal_edges(term, &ed.unit.pools) {
                     record(edge, post);
                 }
-                if let Some(failure) = Terminator::failure(term) {
-                    record(ed.unit.tables.failures[failure.index()].cleanup, post);
+                for failure in term.failure_edges(&ed.unit.tables) {
+                    let state = if let Terminator::Call { call, .. } = term {
+                        if ed.unit.tables.calls[call.index()].pretransfer_failure == Some(failure) {pre} else {post}
+                    } else {post};
+                    record(ed.unit.tables.failures[failure.index()].cleanup, state);
                 }
             }
         });
@@ -664,8 +667,11 @@ impl VersionInputs {
                     for edge in term.normal_edges(&ed.unit.pools) {
                         record(edge, i, post);
                     }
-                    if let Some(failure) = term.failure() {
-                        record(ed.unit.tables.failures[failure.index()].cleanup, i, post);
+                    for failure in term.failure_edges(&ed.unit.tables) {
+                        let state = if let Terminator::Call { call, .. } = term {
+                            if ed.unit.tables.calls[call.index()].pretransfer_failure == Some(failure) {pre} else {post}
+                        } else {post};
+                        record(ed.unit.tables.failures[failure.index()].cleanup, i, state);
                     }
                 }
             });
@@ -2244,6 +2250,7 @@ impl Lowering<'_, '_> {
         );
         let id = CallId(self.ed.unit.tables.calls.len() as u32);
         self.ed.unit.tables.calls.push(CallSite {
+            pretransfer_failure: None,
             forward_caller: true,
             operation_arguments: Vec::new(),
             callee: Callee::Direct(symbol),
@@ -2290,7 +2297,7 @@ impl Lowering<'_, '_> {
             out.push(Action::Conditional { condition, actions });
             return Ok(());
         }
-        if !under && !self.inline_finalizer(layout) {
+        if !under && s.fields_pending.at(&paths, &path) == Tri::No {
             out.push(Action::Release {
                 path,
                 layout,
@@ -2423,31 +2430,6 @@ impl Lowering<'_, '_> {
             self.plan(s, inner, field.layout, out)?;
         }
         Ok(())
-    }
-
-    /// Whether a finalizer is reachable from `layout` without crossing a
-    /// block: such content cannot be released whole.
-    fn inline_finalizer(&self, layout: LayoutId) -> bool {
-        let Some(record) = self.lay.get(layout) else {
-            return true;
-        };
-        if record.finalizer.is_some() {
-            return true;
-        }
-        match record.kind {
-            LayoutKind::Block { .. } | LayoutKind::Box { .. } | LayoutKind::Shared { .. } => false,
-            LayoutKind::Inline { element, .. } | LayoutKind::Simd { element, .. } => {
-                self.inline_finalizer(element)
-            }
-            _ => {
-                let variants = record.tag.iter().flat_map(|t| &t.variants);
-                record
-                    .fields
-                    .iter()
-                    .chain(variants.flat_map(|v| &v.fields))
-                    .any(|f| self.inline_finalizer(f.layout))
-            }
-        }
     }
 
     fn layout_kind(&self, layout: LayoutId) -> Result<LayoutKind, PassError> {
@@ -2859,7 +2841,7 @@ mod pending_tests {
             actions
                 .iter()
                 .map(|action| {
-                    let Action::Finalize { path, .. } = action else {
+                    let Action::Release { path, .. } = action else {
                         panic!("unexpected {action:?}")
                     };
                     path.clone()
@@ -2868,10 +2850,7 @@ mod pending_tests {
         };
         let mut actions = vec![];
         lowering.plan(&state, vec![], parent, &mut actions).unwrap();
-        assert_eq!(
-            paths(&actions),
-            [vec![], vec![Step::Field(1)], vec![Step::Field(0)]]
-        );
+        assert_eq!(paths(&actions), [vec![]]);
         state
             .fields_pending
             .set(lowering.facts.intern(&[]), Tri::Yes);

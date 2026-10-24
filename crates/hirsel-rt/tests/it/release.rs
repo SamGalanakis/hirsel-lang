@@ -159,6 +159,7 @@ fn a_tail_release_frees_each_link_before_the_rest_of_the_chain() {
         None,
         vec![
             finalize_step(0, 0, logged),
+            end_finalize_step(0, 0, logged),
             Step {
                 span: 1,
                 ..step(STEP_NONNULL, WHOLE_VALUE, 8)
@@ -408,6 +409,7 @@ fn an_inline_resource_field_is_finalized_before_its_own_fields() {
             release_step(2, 24),
             finalize_step(1, 8, inner),
             release_step(1, 16),
+            end_finalize_step(1, 8, inner),
         ],
     );
     let block = node(ctx.0, outer, 1);

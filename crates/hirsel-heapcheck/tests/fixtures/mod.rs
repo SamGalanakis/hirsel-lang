@@ -1,6 +1,8 @@
 //! Hand-built post-RC programs: each deliberately broken fixture and its
 //! corrected twin, built by one function with `fixed` selecting the twin.
 //! Every pair prints the same bytes, so only the heap audit tells them apart.
+mod structural;
+
 use hirsel_core_contract::{OperationId, Passing};
 use hirsel_heapcheck::build::{CLEANUP, Layouts, fixture_unit, path};
 use hirsel_heapcheck::{OpOutcome, OpValue, Operations, Program, ViolationKind};
@@ -208,9 +210,15 @@ impl<S: Stage> F<S> {
 pub fn program<S: Stage>(
     target: TargetSpec,
     table: LayoutTable,
-    units: Vec<LirUnit<S>>,
+    mut units: Vec<LirUnit<S>>,
 ) -> Program<S> {
+    for unit in &mut units {
+        structural::attach(unit, &table);
+    }
     Program {
+        invocations: Default::default(),
+            invocation_bodies: Vec::new(),
+        pretransfer_adapters: Vec::new(),
         target,
         layouts: table,
         units,

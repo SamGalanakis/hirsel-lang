@@ -573,10 +573,41 @@ fn sum_to(n: u64, acc: u64) -> u64 {
 }
 ```
 
-Stack use is a logical count of frame bytes with a deterministic limit, whose failure is
-`Depth`. **Unspecified:** the logical frame-byte table, and whether tail recursion modulo
-constructor is a guaranteed loop (its constructor-tail contexts are reserved and
-rejected). Runtime call-depth guards in tools are operational limits, not this contract.
+Each task has a foreground activation count initially zero and a limit of 1,024.
+Entering a language function, closure, callback, or declared primitive operation adds
+one activation. The entry function of a task is included. Invocations of ordinary
+library functions follow the same rule. Operators, constructors, projections, pattern
+matching, and runtime implementation helpers add no activation themselves; language
+calls made while evaluating them do. A callback is additional to the still-active
+invocation which called it. A primitive implemented by an adapter has one activation,
+regardless of the number of host helper calls. Compiler-generated adapters add none.
+
+After evaluating the callee and all arguments in their specified order, but before
+transferring taken arguments, starting the callee's contracts, or performing a primitive
+effect, check admission. If the new count would exceed the limit, fail with `Depth`, rule
+LANG-10, at that invocation; do not enter the callee or transfer its arguments. The
+evaluated arguments remain caller-owned and follow ordinary failure cleanup. Attribute
+the failing invocation using FAIL-1 in the invoking context, including its operation
+site; the unentered callee's `@track_caller` annotation has no effect. Task-entry
+admission is attributed to its entry/invocation site when no language caller exists.
+
+An activation remains live through its contracts, result evaluation and implicit
+cleanup; release its unit exactly once when it exits, on every path. A suspended
+activation remains live. Each new task starts its own count; spawning does not copy the
+parent's count. A synchronous isolation callback stays on its task's count; catching
+a failure restores the live count by unwinding, not by resetting it.
+
+An eligible self-tail call, as defined above, reuses one activation. Calls with pending
+cleanup, a current-frame borrow or postconditions retain the ordinary call rule.
+A self-tail restart retains the caller's continuation and performs the existing loop
+ownership handoff without accumulating activations. Other calls retain their semantic
+activation even if inlined, specialized, outlined or compiled as physical tail calls.
+Generics, capture representation, flat or inline layout, arena placement, register
+allocation and optimization cannot change the count. Calls in contracts are counted
+when executed. No type or size binder itself adds a runtime activation.
+
+**Unspecified:** whether tail recursion modulo constructor is a guaranteed loop; its
+constructor-tail contexts remain reserved and rejected.
 
 ### LANG-11: Blocks
 

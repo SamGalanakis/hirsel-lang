@@ -82,6 +82,9 @@ fn program(empty_resource: bool, overwrite: bool) -> Program<Ready> {
     let mut body = F::<Ready>::new("body", common);
     body.ret(None);
     Program {
+        invocations: Default::default(),
+            invocation_bodies: Vec::new(),
+        pretransfer_adapters: Vec::new(),
         target,
         layouts: table.clone(),
         units: vec![main.finish(&table), body.finish(&table)],

@@ -109,6 +109,7 @@ fn a_for_loop_over_a_sequential_list_carries_an_offset_and_the_option_keeps_inde
 
 fn stages(src: &str, enabled: bool) -> hirsel_heapcheck::Program<Rc> {
     let (p, l) = lowered(src, enabled);
+    let operations = l.operation_registry(&p);
     let table = l.table;
     let mut units = vec![];
     for (i, u) in l.units.into_iter().enumerate() {
@@ -131,7 +132,7 @@ fn stages(src: &str, enabled: bool) -> hirsel_heapcheck::Program<Rc> {
             &Inputs {
                 memo: Default::default(),
                 discharge: None,
-                operations: &p.operation_registry(),
+                operations: &operations,
                 target: &target(),
                 layouts: &table,
                 manifest: &manifest(&p),
@@ -141,6 +142,9 @@ fn stages(src: &str, enabled: bool) -> hirsel_heapcheck::Program<Rc> {
         units.push(rc);
     }
     hirsel_heapcheck::Program {
+        invocation_bodies: operations.invocation_bodies.clone(),
+        invocations: operations.invocations.clone(),
+        pretransfer_adapters: operations.pretransfer_adapters.clone(),
         target: target(),
         layouts: table,
         units,
@@ -449,7 +453,7 @@ fn control(forgery: Forgery) -> Vec<ViolationKind> {
         &Inputs {
             memo: Default::default(),
             discharge: None,
-            operations: &p.operation_registry(),
+            operations: &l.operation_registry(&p),
             target: &target(),
             layouts: &l.table,
             manifest: &manifest(&p),

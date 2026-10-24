@@ -365,13 +365,42 @@ impl Importer<'_> {
         Ok(self.failure_edge(edge, None, anchor))
     }
 
-    pub(super) fn save(&self) -> (BlockId, State, PVec<Option<ValueId>>) {
-        (self.current, self.state.clone(), self.versions.clone())
+    pub(super) fn save(
+        &self,
+    ) -> (
+        BlockId,
+        State,
+        PVec<Option<ValueId>>,
+        bool,
+        Option<tir::BlockId>,
+    ) {
+        (
+            self.current,
+            self.state.clone(),
+            self.versions.clone(),
+            self.invocation_live,
+            self.invocation_return,
+        )
     }
 
     /// Restore an emission point; slots created meanwhile stay, dead.
-    pub(super) fn restore(&mut self, saved: (BlockId, State, PVec<Option<ValueId>>)) {
-        (self.current, self.state, self.versions) = saved;
+    pub(super) fn restore(
+        &mut self,
+        saved: (
+            BlockId,
+            State,
+            PVec<Option<ValueId>>,
+            bool,
+            Option<tir::BlockId>,
+        ),
+    ) {
+        (
+            self.current,
+            self.state,
+            self.versions,
+            self.invocation_live,
+            self.invocation_return,
+        ) = saved;
         self.pad();
     }
 

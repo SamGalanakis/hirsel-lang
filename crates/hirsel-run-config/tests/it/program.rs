@@ -136,8 +136,20 @@ fn revision_matches_an_independent_sha256_golden_vector() {
     assert_eq!(encoded.digest(), GOLDEN);
 }
 
+#[test]
+fn legacy_depth_recordings_refuse_before_program_entry() {
+    let record = RunConfig::for_program(&revision(graph()), LaunchKind::Main);
+    let mut json = serde_json::to_value(&record).unwrap();
+    json.as_object_mut().unwrap().remove("depth_semantics");
+    let refusal = RunConfig::validate(&serde_json::to_vec(&json).unwrap()).unwrap_err();
+    assert!(matches!(refusal, RunRefusal::Invalid { field, detail }
+        if field == "depth_semantics" && detail.contains("incompatible depth semantics")));
+    json["depth_semantics"] = "frame-bytes".into();
+    assert!(RunConfig::validate(&serde_json::to_vec(&json).unwrap()).is_err());
+    record.validated().unwrap();
+}
+
 // Independently framed with Python struct.pack("<Q") and hashlib.sha256.
 const GOLDEN: [u8; 32] = [
-    11, 255, 19, 28, 225, 86, 141, 119, 22, 182, 91, 168, 216, 220, 120, 48, 174, 165, 244, 197,
-    57, 55, 38, 176, 65, 42, 234, 68, 6, 110, 127, 103,
+    191, 182, 205, 58, 106, 120, 67, 229, 219, 22, 206, 193, 16, 162, 72, 154, 133, 67, 29, 159, 125, 115, 76, 101, 34, 216, 59, 89, 97, 174, 102, 14,
 ];

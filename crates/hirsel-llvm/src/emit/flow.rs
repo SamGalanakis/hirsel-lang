@@ -150,6 +150,9 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             Ref::SwitchArms(range) => arms = Some(range),
             _ => {}
         });
+        if let Terminator::Call {call,..}=terminator {
+            failures.extend(unit.tables.calls[call.index()].pretransfer_failure);
+        }
         if let Some(range) = arms {
             edges.extend(
                 self.pool(range, &unit.pools.switch_arms)?

@@ -6,6 +6,8 @@ impl Importer<'_> {
     /// equals `prev` at the fixpoint, so each emitted block assumed a state
     /// covering every edge into it.
     pub(super) fn pass(&mut self, prev: &[Option<State>]) -> R<Vec<Option<State>>> {
+        self.invocation_live = false;
+        self.invocation_return = None;
         self.out = Out::default();
         let locals = self.body.locals.len();
         self.state = State {
@@ -431,6 +433,10 @@ impl Importer<'_> {
 
     /// Jump into TIR block `t`, recording the state and versions it receives.
     pub(super) fn enter(&mut self, t: tir::BlockId) -> EdgeId {
+        if self.invocation_live && self.invocation_return == Some(t) {
+            self.push(Inst::FrameLeave);
+            self.invocation_live = false;
+        }
         let target = self.tir_block[t.0 as usize].expect("reachable TIR block");
         let e = self.edge(target, Vec::new());
         let slot = &mut self.incoming[t.0 as usize];
@@ -450,6 +456,8 @@ impl Importer<'_> {
     }
 
     pub(super) fn emit_block(&mut self, t: tir::BlockId, entry: State) -> R<()> {
+        self.invocation_live = false;
+        self.invocation_return = None;
         let b = self.tir_block[t.0 as usize].expect("reachable TIR block");
         let block = &self.body.blocks[t.0 as usize];
         self.current = b;

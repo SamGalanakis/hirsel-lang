@@ -1046,6 +1046,9 @@ pub fn rc_trace_with_config(text: &str, options: &Config) -> Result<String, Stri
     let (max, ops) = parse(text)?;
     let (target, table, objects) = layouts(&ops);
     let program = Program::<Ready> {
+        invocations: Default::default(),
+        invocation_bodies: Vec::new(),
+        pretransfer_adapters: Vec::new(),
         target,
         layouts: table,
         units: Vec::new(),

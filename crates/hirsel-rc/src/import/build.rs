@@ -52,6 +52,29 @@ impl Importer<'_> {
         Ok(t)
     }
 
+    pub(super) fn structural_access(&mut self, source: TypeId, layout: LayoutId) -> R<()> {
+        if self
+            .out
+            .tables
+            .structural
+            .iter()
+            .any(|p| p.root_layout() == layout)
+        {
+            return Ok(());
+        }
+        let source = self.ty(source)?;
+        let plan = hirsel_layout::structural_access::at_layout(
+            self.types,
+            source,
+            &mut |d| Ok(self.program.signatures.get(d.path()).cloned()),
+            self.layouts.table(),
+            layout,
+        )
+        .map_err(|e| PassError::Layout(self.def.path.path().clone(), e))?;
+        self.out.tables.structural.push(plan);
+        Ok(())
+    }
+
     /// Whether a block of the TIR type `ty` whose payload is `payload` is one
     /// MEM-6 tracks in an arena: a List or Array of rows, a Map or a Set.
     pub(super) fn tracked_block(&mut self, ty: TypeId, payload: LayoutId) -> R<bool> {

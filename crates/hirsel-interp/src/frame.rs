@@ -99,6 +99,10 @@ pub(crate) struct DropWait {
     pub caller: Option<CallerSite>,
 }
 pub(crate) struct Frame {
+    pub depth: crate::depth::Task,
+    pub activation: Option<crate::depth::Guard>,
+    /// Arena primitive remains active while its synchronous callback executes.
+    pub enclosing_activation: Option<crate::depth::Guard>,
     pub caller: Option<CallerSite>,
     pub definition: DefinitionRef,
     /// The session interner the definition's TypeIds are rows of.
@@ -243,7 +247,12 @@ impl Frame {
             slots[index] = value;
         }
         let block = body.entry;
+        let depth = crate::depth::Task::default();
+        let activation = depth.admit();
         Ok(Self {
+            depth,
+            activation,
+            enclosing_activation: None,
             caller: None,
             type_arguments: Default::default(),
             sizes,
@@ -295,6 +304,8 @@ impl Frame {
             self.sizes.clone(),
         )?;
         frame.slots.fill(None);
+        frame.activation = None;
+        frame.depth = self.depth.clone();
         frame.type_arguments = self.type_arguments.clone();
         frame.block = self.block;
         frame.caller = self.caller.clone();
@@ -1093,7 +1104,7 @@ impl Frame {
                 Work::Release(value, ..) => value.logical_bytes(),
                 Work::Resume(result, callback) => crate::resources::result_bytes(result)
                     .saturating_add(callback.state.logical_bytes()),
-                Work::Action(..) | Work::Chain(..) => 0,
+                Work::Action(..) | Work::Chain(..) | Work::Retire(..) => 0,
             });
         }
         total
@@ -1112,7 +1123,9 @@ impl Drop for Frame {
                 crate::resources::Work::Resume(result, _) => {
                     crate::resources::discard_result(result)
                 }
-                crate::resources::Work::Action(..) | crate::resources::Work::Chain(..) => (),
+                crate::resources::Work::Action(..)
+                | crate::resources::Work::Chain(..)
+                | crate::resources::Work::Retire(..) => (),
             }
         }
         if let Some(crate::resources::Ending::Return(value)) = self.ending.take() {

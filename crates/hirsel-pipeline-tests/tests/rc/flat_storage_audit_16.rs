@@ -23,6 +23,7 @@ fn sum(xs: Batch) -> u64 {
 fn program(source: &str, regions: bool) -> hirsel_heapcheck::Program<Rc> {
     let input = compile(source);
     let lowered = hirsel_rc::import::lower(&input, &target()).unwrap();
+    let operations = lowered.operation_registry(&input);
     assert!(violations(&input, &lowered).is_empty());
     let units = lowered
         .units
@@ -48,7 +49,7 @@ fn program(source: &str, regions: bool) -> hirsel_heapcheck::Program<Rc> {
                 &Inputs {
                     memo: Default::default(),
                     discharge: None,
-                    operations: &input.operation_registry(),
+                    operations: &operations,
                     target: &target(),
                     layouts: &lowered.table,
                     manifest: &manifest(&input),
@@ -59,6 +60,9 @@ fn program(source: &str, regions: bool) -> hirsel_heapcheck::Program<Rc> {
         })
         .collect();
     hirsel_heapcheck::Program {
+        invocation_bodies: operations.invocation_bodies.clone(),
+        invocations: operations.invocations.clone(),
+        pretransfer_adapters: operations.pretransfer_adapters.clone(),
         target: target(),
         layouts: lowered.table,
         units,

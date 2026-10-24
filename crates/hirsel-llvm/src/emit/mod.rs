@@ -72,6 +72,7 @@ mod program;
 pub use program::emit_glue;
 mod sequence_state;
 mod soa;
+mod structural;
 use soa::ColumnRow;
 mod signature;
 mod values;

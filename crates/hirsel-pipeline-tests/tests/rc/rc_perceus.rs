@@ -34,12 +34,14 @@ const MODES: [Mode; 3] = [
 ];
 
 struct Built {
+    operations: hirsel_layout::operation::OperationRegistry,
     rc: Vec<LirUnit<Rc>>,
     table: hirsel_lir::layout_types::LayoutTable,
 }
 
 fn check_stage<S: Stage>(
     program: &Program,
+    operations: &hirsel_layout::operation::OperationRegistry,
     table: &hirsel_lir::layout_types::LayoutTable,
     units: &[LirUnit<S>],
     source: &str,
@@ -49,7 +51,7 @@ fn check_stage<S: Stage>(
     let inputs = Inputs {
         memo: Default::default(),
         discharge: None,
-        operations: &program.operation_registry(),
+        operations,
         target: &target,
         layouts: table,
         manifest: &manifest,
@@ -69,6 +71,7 @@ fn check_stage<S: Stage>(
 /// Lower, place, insert (and elide when optimizing), checking every stage.
 fn build(source: &str, mode: Mode) -> Built {
     let (program, lowered) = lower_valid(source);
+    let operations = lowered.operation_registry(&program);
     let table = lowered.table.clone();
     assert_eq!(lowered.units.len(), lowered.unit_origins.len());
     let placed: Vec<_> = lowered
@@ -80,7 +83,7 @@ fn build(source: &str, mode: Mode) -> Built {
             hirsel_rc::placement::place(u, &table, &options).expect("placement")
         })
         .collect();
-    check_stage(&program, &table, &placed, source);
+    check_stage(&program, &operations, &table, &placed, source);
     let mut rc = Vec::new();
     for (u, &origin) in placed.iter().zip(&lowered.unit_origins) {
         let proofs = Proofs::for_instance(&lowered.instances, origin);
@@ -90,12 +93,19 @@ fn build(source: &str, mode: Mode) -> Built {
         }
         rc.push(r);
     }
-    check_stage(&program, &table, &rc, source);
-    Built { rc, table }
+    check_stage(&program, &operations, &table, &rc, source);
+    Built {
+        operations,
+        rc,
+        table,
+    }
 }
 
 fn execute(built: &Built) -> hirsel_heapcheck::Run {
     let program = hirsel_heapcheck::Program {
+        invocation_bodies: built.operations.invocation_bodies.clone(),
+        invocations: built.operations.invocations.clone(),
+        pretransfer_adapters: built.operations.pretransfer_adapters.clone(),
         target: target(),
         layouts: built.table.clone(),
         units: built.rc.clone(),
@@ -362,7 +372,7 @@ fn elision_leaves_an_insertion_fault_to_the_rc_validator() {
     let table = lowered.table.clone();
     let manifest = manifest(&program);
     let target = target();
-    let operations = program.operation_registry();
+    let operations = lowered.operation_registry(&program);
     let inputs = Inputs {
         memo: Default::default(),
         discharge: None,
@@ -446,6 +456,7 @@ fn a_flat_record_from_ordinary_values_copies_its_bytes() {
 /// before the write: the run returns `u`'s untouched 1.
 fn shared_write() -> (
     Program,
+    hirsel_layout::operation::OperationRegistry,
     hirsel_lir::layout_types::LayoutTable,
     Vec<LirUnit<hirsel_lir::stage::Value>>,
 ) {
@@ -456,6 +467,7 @@ fn shared_write() -> (
     let source =
         format!("{P}fn main() -> u64 {{ let t: box P = box P(a: 1, b: 2); let u = copy t; 3 }}");
     let (program, lowered) = lower_valid(&source);
+    let operations = lowered.operation_registry(&program);
     let table = lowered.table.clone();
     let mut units = lowered.units;
     let m = units
@@ -626,18 +638,18 @@ fn shared_write() -> (
         ],
     );
     units[m] = ed.finish();
-    (program, table, units)
+    (program, operations, table, units)
 }
 
 #[test]
 fn copy_on_write_detaches_a_shared_block_before_a_write() {
-    let (program, table, units) = shared_write();
+    let (program, operations, table, units) = shared_write();
     let manifest = manifest(&program);
     let target = target();
     let inputs = Inputs {
         memo: Default::default(),
         discharge: None,
-        operations: &program.operation_registry(),
+        operations: &operations,
         target: &target,
         layouts: &table,
         manifest: &manifest,
@@ -656,6 +668,7 @@ fn copy_on_write_detaches_a_shared_block_before_a_write() {
             assert!(v.is_empty(), "{}\n{v:?}", dump(u));
         }
         execute(&Built {
+            operations: operations.clone(),
             rc,
             table: table.clone(),
         })

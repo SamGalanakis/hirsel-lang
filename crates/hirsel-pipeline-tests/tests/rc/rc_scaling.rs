@@ -157,7 +157,7 @@ fn middle_end(
     let inputs = Inputs {
         memo: Default::default(),
         discharge: None,
-        operations: &program.operation_registry(),
+        operations: &lowered.operation_registry(program),
         target: &target,
         layouts: table,
         manifest: &manifest,

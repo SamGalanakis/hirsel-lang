@@ -411,6 +411,7 @@ fn every_export_is_declared_in_the_header_and_nothing_else_is() {
         "hirsel_rt_v2_unicode_scalars_next",
         "hirsel_rt_v2_scalar_positions_open",
         "hirsel_rt_v2_scalar_positions_next",
+        "hirsel_rt_v2_structural_order",
     ] {
         assert!(exported.contains(symbol), "{symbol} is not exported");
     }
@@ -426,11 +427,13 @@ fn every_export_is_declared_in_the_header_and_nothing_else_is() {
         "_f64_bits",
         "_from_bits",
     ] {
-        // `instant.checked_add` advances a branded Instant, not an integer.
+        // `instant.checked_add` advances a branded Instant. StructuralOrder
+        // traverses complete validated values; it is not a scalar fallback.
+        // Keep every obsolete scalar-family negative below intact.
         assert!(
-            !exported
-                .iter()
-                .any(|s| s.ends_with(family) && s != "hirsel_rt_v2_instant_checked_add"),
+            !exported.iter().any(|s| s.ends_with(family)
+                && s != "hirsel_rt_v2_instant_checked_add"
+                && s != "hirsel_rt_v2_structural_order"),
             "a scalar runtime entry `*{family}` outlived its instruction"
         );
     }

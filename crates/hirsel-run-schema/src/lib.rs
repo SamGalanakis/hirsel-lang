@@ -41,6 +41,7 @@ pub use outcome::{
 };
 mod program;
 pub use program::{ProgramNode, ProgramRevision, RevisionError};
+pub const DEPTH_SEMANTICS: &str = hirsel_core_contract::depth::SEMANTICS;
 mod net;
 pub use net::{
     NetClient, NetConnection, NetGrant, NetListener, NetPeer, NetRule, NetStep, PeerTls,

@@ -126,6 +126,8 @@ pub struct Table {
     pub abis: BTreeMap<&'static str, FnAbiId>,
     /// The block header layout: a reuse token's.
     pub header: LayoutId,
+    pub structural: BTreeMap<LayoutId, hirsel_lir::structural_access::AccessPlan>,
+    pub declarations: hirsel_layout::operation::OperationRegistry,
 }
 
 impl Table {
@@ -292,7 +294,96 @@ impl Schema {
             layouts,
             abis,
             header,
+            structural: BTreeMap::new(),
+            declarations: hirsel_layout::operation::OperationRegistry {
+                types: self.types.store.clone(),
+                owners: self.owners.clone(),
+                type_declarations: self
+                    .owners
+                    .nominals
+                    .keys()
+                    .filter_map(|&definition| {
+                        self.declaration(definition).map(|row| (definition, row))
+                    })
+                    .collect(),
+                signatures: BTreeMap::new(),
+                invocations: BTreeMap::new(),
+                invocation_bodies: Vec::new(),
+                pretransfer_adapters: Vec::new(),
+            },
         }
+    }
+
+    fn declaration(&self, definition: hirsel_syntax::DefId) -> Option<SignatureRef> {
+        let Some(OwnerRepresentation::Defined(record)) = self.owners.nominals.get(&definition)
+        else {
+            return None;
+        };
+        Some(std::sync::Arc::new(Signature {
+            metadata: SignatureMetadata::default(),
+            definition,
+            fingerprint: record.representation_revision,
+            kind: SignatureKind::Type(TypeDefinition {
+                loop_source: None,
+                format: None,
+                destructor_allocation: Allocation::MayAllocate,
+                generics: record.generics.clone(),
+                representation: Some(record.private_shape),
+                bounds: vec![],
+                authority: AuthoritySummary::Known(Default::default()),
+                capability: None,
+                implementation_authority: None,
+                serializable: false,
+                serializable_check: None,
+                layout: record.layout_promises.clone(),
+                distinct: false,
+                resource: record.resource,
+                drop: record
+                    .finalizer
+                    .as_ref()
+                    .map(|(definition, _)| definition.clone()),
+                fact: None,
+                captures: None,
+            }),
+        }))
+    }
+
+    /// Logical operand declarations belong to the original component schema,
+    /// independently of the instructions later built against its table.
+    pub fn structural_plans(
+        &self,
+        table: &Table,
+        names: &[&str],
+    ) -> BTreeMap<LayoutId, hirsel_lir::structural_access::AccessPlan> {
+        let mut lookup = |definition| {
+            Ok(table
+                .declarations
+                .type_declarations
+                .get(&definition)
+                .cloned())
+        };
+        names
+            .iter()
+            .map(|name| {
+                let ty = self
+                    .named
+                    .iter()
+                    .find(|(key, _)| key == name)
+                    .unwrap_or_else(|| panic!("structural fixture source {name}"))
+                    .1;
+                let plan = hirsel_layout::structural_access::derive(
+                    &self.types.store,
+                    ty,
+                    &mut lookup,
+                    &self.owners,
+                    &table.target,
+                    &table.table,
+                )
+                .unwrap_or_else(|e| panic!("structural fixture {name}: {e:?}"));
+                assert_eq!(plan.root_layout(), table.layout(name));
+                (plan.root_layout(), plan)
+            })
+            .collect()
     }
 }
 
@@ -838,6 +929,7 @@ impl<'t> Unit<'t> {
         );
         let result = fn_abi.result.as_ref().map(|r| self.plain(r.layout));
         self.builder.unit.tables.calls.push(CallSite {
+            pretransfer_failure: None,
             forward_caller: true,
             operation_arguments: Vec::new(),
             callee,
@@ -866,6 +958,7 @@ impl<'t> Unit<'t> {
     pub fn diverging_call(&mut self, b: BlockId, callee: Callee, abi: &str, failure: FailureId) {
         let abi = self.table.abi(abi);
         self.builder.unit.tables.calls.push(CallSite {
+            pretransfer_failure: None,
             forward_caller: true,
             operation_arguments: Vec::new(),
             callee,
@@ -900,7 +993,7 @@ pub fn seal(table: &Table, manifest: &Manifest, unit: LirUnit<Ready>) -> Validat
         &Inputs {
             memo: Default::default(),
             discharge: None,
-            operations: &(),
+            operations: &table.declarations,
             target: &table.target,
             layouts: &table.table,
             manifest,

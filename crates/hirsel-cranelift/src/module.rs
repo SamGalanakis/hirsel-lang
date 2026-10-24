@@ -930,6 +930,17 @@ fn launch_object(
     let entry_id = module
         .declare_function(entry, Linkage::Import, &entry_sig)
         .map_err(refuse(entry))?;
+    let mut admission_sig = ir::Signature::new(call_conv);
+    admission_sig.params.push(AbiParam::new(PTR));
+    admission_sig.returns.push(AbiParam::new(types::I8).uext());
+    let admission_id = module
+        .declare_function("hirsel_rt_v2_depth_enter", Linkage::Import, &admission_sig)
+        .map_err(refuse("hirsel_rt_v2_depth_enter"))?;
+    let mut retirement_sig = ir::Signature::new(call_conv);
+    retirement_sig.params.push(AbiParam::new(PTR));
+    let retirement_id = module
+        .declare_function("hirsel_rt_v2_depth_leave", Linkage::Import, &retirement_sig)
+        .map_err(refuse("hirsel_rt_v2_depth_leave"))?;
     let mut adapter_sig = ir::Signature::new(call_conv);
     adapter_sig
         .params
@@ -959,6 +970,8 @@ fn launch_object(
         b.append_block_params_for_function_params(block);
         b.switch_to_block(block);
         let params = b.block_params(block).to_vec();
+        let admit = module.declare_func_in_func(admission_id, b.func);
+        b.ins().call(admit, &[params[0]]);
         let mut args = vec![params[0]];
         if !callee_entry && caller_site {
             let zero = b.ins().iconst(types::I64, 0);
@@ -1000,6 +1013,8 @@ fn launch_object(
             .call(callee, &[params[0], params[2], index, offset, node]);
         b.ins().jump(done, &[]);
         b.switch_to_block(done);
+        let retire = module.declare_func_in_func(retirement_id, b.func);
+        b.ins().call(retire, &[params[0]]);
         b.ins().return_(&[status]);
         b.seal_all_blocks();
         b.finalize(module.target_config());

@@ -25,11 +25,12 @@ fn main() {
         let manifest = hirsel_driver::native::manifest(validated.snapshot()).unwrap();
         let target = TargetSpec::x86_64_unknown_linux_gnu();
         let lower = hirsel_rc::import::lower(&program, &target).unwrap();
+        let operations = lower.operation_registry(&program);
         let table: LayoutTable = lower.table;
         let inputs = Inputs {
             memo: Default::default(),
             discharge: None,
-            operations: &program.operation_registry(),
+            operations: &operations,
             target: &target,
             layouts: &table,
             manifest: &manifest,
@@ -52,6 +53,9 @@ fn main() {
             rc.push(validate(elided, &inputs).unwrap().into_raw());
         }
         let rc_program = hirsel_heapcheck::Program {
+            invocation_bodies: operations.invocation_bodies.clone(),
+            invocations: operations.invocations.clone(),
+            pretransfer_adapters: operations.pretransfer_adapters.clone(),
             target: target.clone(),
             layouts: table,
             units: rc,
@@ -65,12 +69,7 @@ fn main() {
         let built =
             hirsel_driver::native::build(&validated, &hirsel_driver::native::Options::new(target))
                 .unwrap();
-        let ready: hirsel_heapcheck::Program<Ready> = hirsel_heapcheck::Program {
-            target: built.target.clone(),
-            layouts: built.table.clone(),
-            units: built.raw_units(),
-            statics: built.statics.clone(),
-        };
+        let ready: hirsel_heapcheck::Program<Ready> = built.heap_program();
         std::fs::write(
             format!("{}.ready.lir", arguments[1]),
             hirsel_codec::to_text(&ready),

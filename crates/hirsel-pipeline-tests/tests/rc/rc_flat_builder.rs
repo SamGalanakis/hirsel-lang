@@ -68,7 +68,7 @@ pub(crate) fn ready(source: &str, lowered: Lowered) -> hirsel_heapcheck::Program
     let table = lowered.table.clone();
     let manifest = manifest(&program);
     let target = target();
-    let operations = program.operation_registry();
+    let operations = lowered.operation_registry(&program);
     let inputs = Inputs {
         memo: Default::default(),
         discharge: None,
@@ -101,6 +101,9 @@ pub(crate) fn ready(source: &str, lowered: Lowered) -> hirsel_heapcheck::Program
         checked("ready", hirsel_lir::validate::check(u, &inputs), dump(u));
     }
     hirsel_heapcheck::Program {
+        invocation_bodies: operations.invocation_bodies.clone(),
+        invocations: operations.invocations.clone(),
+        pretransfer_adapters: operations.pretransfer_adapters.clone(),
         target,
         layouts: table,
         units,
@@ -299,7 +302,10 @@ pub(crate) fn violations(
 ) -> Vec<ViolationKind> {
     let compiled = compile(source);
     let manifest = manifest(&compiled);
-    let operations = compiled.operation_registry();
+    let mut operations = compiled.operation_registry();
+    operations.invocations = program.invocations.clone();
+    operations.invocation_bodies = program.invocation_bodies.clone();
+    operations.pretransfer_adapters = program.pretransfer_adapters.clone();
     let inputs = Inputs {
         memo: Default::default(),
         discharge: None,

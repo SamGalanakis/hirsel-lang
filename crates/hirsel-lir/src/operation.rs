@@ -146,6 +146,44 @@ pub trait OperationDeclarations {
     ) -> Option<Vec<crate::sealed_payload_source::SourcePayload>> {
         None
     }
+    fn pretransfer_adapters(&self) -> &[crate::pretransfer::AdapterReference] {
+        &[]
+    }
+
+    fn requires_structural_reference(&self) -> bool {
+        false
+    }
+
+    fn structural_access(
+        &self,
+        _source: &NativeType,
+        _table: &crate::LayoutTable,
+        _target: &crate::TargetSpec,
+    ) -> Result<crate::structural_access::AccessPlan, LayoutError> {
+        Err(LayoutError::Invalid(
+            "independent structural declarations are missing".into(),
+        ))
+    }
+
+    fn requires_invocation_reference(&self) -> bool {
+        false
+    }
+
+    fn invocations(
+        &self,
+        _definition: &DefPath,
+    ) -> Option<&[crate::invocations::ReferenceInvocation]> {
+        None
+    }
+
+    fn invocation_body(
+        &self,
+        _definition: &DefPath,
+        _instance: hirsel_syntax::ContentHash,
+    ) -> Option<u32> {
+        None
+    }
+
     fn derive(
         &self,
         operation: &OperationId,

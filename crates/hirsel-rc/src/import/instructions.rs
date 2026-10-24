@@ -611,7 +611,30 @@ impl Importer<'_> {
                 definition,
                 arguments,
             } => {
-                let (symbol, _) = self.direct(definition, arguments)?;
+                let actuals = crate::instance::callee_actuals(
+                    self.types,
+                    &self.program.memo,
+                    self.program.binders.get(definition).copied(),
+                    arguments,
+                    self.actuals,
+                    false,
+                    definition,
+                )?;
+                let (symbol, _) = if let Some(request) =
+                    crate::library::keyed::request(self.program, definition, actuals.arguments)?
+                {
+                    let direct = self.require(request)?;
+                    (
+                        self.symbol(
+                            SymbolKind::Function,
+                            &direct.symbol.definition,
+                            direct.symbol.instance,
+                        ),
+                        direct.abi,
+                    )
+                } else {
+                    self.direct(definition, arguments)?
+                };
                 let result = self.fresh(ty);
                 self.push(Inst::FunctionRef { result, symbol });
                 result

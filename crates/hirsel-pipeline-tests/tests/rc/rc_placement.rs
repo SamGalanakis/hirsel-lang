@@ -16,6 +16,7 @@ use support::*;
 const P: &str = "type P { a: u64, b: u64 }\n";
 
 struct Placed_ {
+    operations: hirsel_layout::operation::OperationRegistry,
     program: Program,
     table: hirsel_lir::layout_types::LayoutTable,
     units: Vec<LirUnit<Placed>>,
@@ -24,6 +25,7 @@ struct Placed_ {
 
 fn place(source: &str, regions: bool) -> Result<Placed_, PlaceError> {
     let (program, lowered) = lower_valid(&format!("{P}{source}"));
+    let operations = lowered.operation_registry(&program);
     let mut units = Vec::new();
     let mut proofs = Vec::new();
     for (i, u) in lowered.units.into_iter().enumerate() {
@@ -33,6 +35,7 @@ fn place(source: &str, regions: bool) -> Result<Placed_, PlaceError> {
         proofs.push(Proofs::for_instance(&lowered.instances, id));
     }
     Ok(Placed_ {
+        operations,
         program,
         table: lowered.table,
         units,
@@ -46,7 +49,7 @@ fn check<S: Stage>(p: &Placed_, unit: &LirUnit<S>) -> Vec<ViolationKind> {
     let inputs = Inputs {
         memo: Default::default(),
         discharge: None,
-        operations: &p.program.operation_registry(),
+        operations: &p.operations,
         target: &target,
         layouts: &p.table,
         manifest: &manifest,
@@ -78,6 +81,9 @@ fn run(p: &Placed_) -> hirsel_heapcheck::Run {
         assert_eq!(check(p, u), Vec::new(), "{}", dump(u));
     }
     let program = hirsel_heapcheck::Program {
+        invocation_bodies: p.operations.invocation_bodies.clone(),
+        invocations: p.operations.invocations.clone(),
+        pretransfer_adapters: p.operations.pretransfer_adapters.clone(),
         target: target(),
         layouts: p.table.clone(),
         units,
@@ -580,6 +586,9 @@ fn a_failing_return_construction_keeps_the_region_active_until_preparation_finis
     let violations = hirsel_lir::validate::check(&caller, &inputs);
     assert!(violations.is_empty(), "{violations:?}\n{}", dump(&caller));
     let program = hirsel_heapcheck::Program {
+        invocation_bodies: Vec::new(),
+        invocations: Default::default(),
+        pretransfer_adapters: Vec::new(),
         target,
         layouts: table,
         units: vec![caller, rc],
@@ -613,6 +622,7 @@ fn payload_observers_accept_uncounted_region_operands() {
     let source = "@noalloc fn main() -> u64 { let v: List[u64] = [1, 2]; list.len(v) }";
     for observer in ["length", "capacity", "hash"] {
         let (program, mut lowered) = lower_valid(source);
+        let operations = lowered.operation_registry(&program);
         let main = lowered
             .units
             .iter_mut()
@@ -643,6 +653,7 @@ fn payload_observers_accept_uncounted_region_operands() {
         };
         for regions in [true, false] {
             let mut p = Placed_ {
+                operations: operations.clone(),
                 program: program.clone(),
                 table: lowered.table.clone(),
                 units: vec![],

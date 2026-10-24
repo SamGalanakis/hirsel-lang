@@ -14,6 +14,28 @@ fn nest(n: usize) -> Value {
     }
     v
 }
+
+#[test]
+fn complete_preflight_precedes_mismatch_and_map_pairs_are_transparent() {
+    let a = Value::Tuple(vec![Some(int(0)), Some(nest(MAX_DEPTH))]);
+    let b = Value::Tuple(vec![Some(int(1)), Some(nest(MAX_DEPTH))]);
+    assert_eq!(binary(B::Eq, &a, &b), Err(StructuralError::Depth));
+    a.discard();
+    b.discard();
+    let map = Value::map(vec![Some(Value::Tuple(vec![
+        Some(nest(MAX_DEPTH - 1)),
+        Some(int(0)),
+    ]))]);
+    assert_eq!(preflight(&map), Ok(()));
+    assert!(hash(&map, 0).is_ok());
+    map.discard();
+    let map = Value::map(vec![Some(Value::Tuple(vec![
+        Some(nest(MAX_DEPTH)),
+        Some(int(0)),
+    ]))]);
+    assert_eq!(hash(&map, 0), Err(StructuralError::Depth));
+    map.discard();
+}
 #[test]
 fn float_nan_and_signed_zero_keep_language_equality_inside_aggregates() {
     let a = Value::Tuple(vec![Some(value::f64_value(f64::NAN))]);

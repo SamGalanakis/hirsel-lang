@@ -33,6 +33,7 @@ mod profile;
 mod program;
 mod scalar;
 mod soa;
+mod structural;
 
 use std::fmt;
 

@@ -16,6 +16,7 @@
 hirsel_guard::install!(crate::io_real::borrowed_net_tests::Count: crate::io_real::borrowed_net_tests::Count);
 
 mod base64;
+mod depth;
 pub mod handles;
 mod host_child;
 pub mod host_launch;
@@ -126,12 +127,12 @@ pub use failure::FailureRecord;
 pub use finalize::{Cleanup, CloseThunk, DropThunk};
 pub use region::{Builder, REGION_POOL_IDLE_CAP, Region, SEGMENT_SIZE};
 pub use release::{
-    LAYOUT_COLUMNS, LAYOUT_DYNAMIC, LAYOUT_FROZEN, LAYOUT_KEYED, LAYOUT_LOGICAL_PER_ELEMENT,
-    LAYOUT_MAGIC, LAYOUT_MUTEX_ROOT, LAYOUT_NO_EXTENT, LAYOUT_SEQUENCE, LAYOUT_SEQUENTIAL,
-    LAYOUT_UNSAFE_FFI, LAYOUT_UNTRACKED_BELOW, LAYOUT_VERSION, LOGICAL_UNSUPPORTED, Layout,
-    NO_OFFSET, STEP_CLOSE_HANDLE, STEP_COLUMN, STEP_CURSOR_BITS, STEP_FINALIZE, STEP_LIVE_BIT,
-    STEP_LOOP, STEP_NONNULL, STEP_RELEASE, STEP_RELEASE_LAST, STEP_RELEASE_ROOT, STEP_TAG,
-    STEP_THAW, Step, WHOLE_VALUE,
+    LAYOUT_COLUMNS, LAYOUT_DYNAMIC, LAYOUT_FROZEN, LAYOUT_IMPLEMENTATION_FINALIZER, LAYOUT_KEYED,
+    LAYOUT_LOGICAL_PER_ELEMENT, LAYOUT_MAGIC, LAYOUT_MUTEX_ROOT, LAYOUT_NO_EXTENT, LAYOUT_SEQUENCE,
+    LAYOUT_SEQUENTIAL, LAYOUT_UNSAFE_FFI, LAYOUT_UNTRACKED_BELOW, LAYOUT_VERSION,
+    LOGICAL_UNSUPPORTED, Layout, NO_OFFSET, STEP_CLOSE_HANDLE, STEP_COLUMN, STEP_CURSOR_BITS,
+    STEP_END_FINALIZE, STEP_FINALIZE, STEP_LIVE_BIT, STEP_LOOP, STEP_NONNULL, STEP_RELEASE,
+    STEP_RELEASE_LAST, STEP_RELEASE_ROOT, STEP_TAG, STEP_THAW, Step, WHOLE_VALUE,
 };
 pub use roots::ROOT_OVERFLOW;
 
@@ -145,6 +146,7 @@ pub const STATUS_FAILURE: u8 = 1;
 /// A deep copy into a bounded arena its budget does not cover (MEM-6): nothing is copied or
 /// recorded; the caller records the arena's `OutOfSpace`.
 pub const STATUS_EXHAUSTED: u8 = 2;
+pub const STATUS_PRETRANSFER_FAILURE: u8 = 3;
 
 /// Report a broken runtime invariant and abort. Never a language failure.
 #[cold]

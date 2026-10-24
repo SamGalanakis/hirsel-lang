@@ -169,6 +169,9 @@ fn fixture(heap_child: bool, escape: bool, held: Leaf) -> (Program<Rc>, ValueId)
     let unit = b.finish_with_layouts(&layouts);
     (
         Program {
+            invocations: Default::default(),
+            invocation_bodies: Vec::new(),
+        pretransfer_adapters: Vec::new(),
             target,
             layouts,
             units: vec![unit],

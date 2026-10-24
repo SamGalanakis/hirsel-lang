@@ -10,6 +10,7 @@ pub mod checked;
 mod code;
 mod constants;
 pub mod conversion;
+mod depth;
 mod eval;
 pub mod exit_report;
 mod frame;
@@ -50,7 +51,7 @@ impl Default for Limits {
     fn default() -> Self {
         Self {
             steps: Some(DEFAULT_STEP_LIMIT),
-            call_depth: 256,
+            call_depth: usize::MAX,
         }
     }
 }

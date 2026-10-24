@@ -5,10 +5,12 @@ count fields and storage reclamation need instrumentation; passing source exampl
 cannot close those claims. See [UNTESTABLE.md](UNTESTABLE.md) and the
 [evidence index](../coverage-ledger.md#memory).
 
-- **Deliberately unspecified — MEM-3 / LANG-10:** logical frame-byte charges and
-  normative structural scratch levels remain decisions in the
-  [spec index](../../docs/spec/index.md#unspecified). The interpreter's current
-  limits are implementation controls, not invented normative budgets.
+- **Settled depth contract, implementation proof outstanding — MEM-3 / LANG-10:**
+  the [2026-10-23 depth revision](../../docs/spec/index.md#deterministic-depth-revision)
+  defines invocations and complete logical structural-depth preflight, including distinct
+  wrappers. Earlier operational guards and visited-only boundary controls do not establish
+  the new contract. Four-engine observations with independent admission and lowering
+  validation remain required; bounded-arena accounting stays independent.
 - **Settled contract, recovered concrete controls — MEM-6:** bounded-arena logical
   charges are normative in the [runtime table](../../crates/hirsel-rt/README.md#bounded-arenas).
   The old claim that all arena exhaustion boundaries awaited a table is stale.

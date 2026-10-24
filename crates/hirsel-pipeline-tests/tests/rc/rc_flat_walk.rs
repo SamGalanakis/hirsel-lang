@@ -128,6 +128,7 @@ fn stages(
     enabled: bool,
 ) -> (hirsel_rc::instance::Program, hirsel_heapcheck::Program<Rc>) {
     let (p, l) = lowered(src, enabled);
+    let operations = l.operation_registry(&p);
     let table = l.table;
     let mut units = vec![];
     for (i, u) in l.units.into_iter().enumerate() {
@@ -150,7 +151,7 @@ fn stages(
             &Inputs {
                 memo: Default::default(),
                 discharge: None,
-                operations: &p.operation_registry(),
+                operations: &operations,
                 target: &target(),
                 layouts: &table,
                 manifest: &manifest(&p),
@@ -162,6 +163,9 @@ fn stages(
     (
         p,
         hirsel_heapcheck::Program {
+            invocation_bodies: operations.invocation_bodies.clone(),
+            invocations: operations.invocations.clone(),
+            pretransfer_adapters: operations.pretransfer_adapters.clone(),
             target: target(),
             layouts: table,
             units,
@@ -309,6 +313,7 @@ fn observations_agree_with_the_rewrite_on_and_off_including_early_exits() {
 fn the_validator_replays_the_offset_and_rejects_a_hand_built_forgery() {
     let src = source("for x in xs.items { total += x.n }");
     let (p, mut l) = lowered(&src, true);
+    let operations = l.operation_registry(&p);
     let idx = instances_of(&l, "sum")[0].index();
     let unit = &mut l.units[idx];
     let target = target();
@@ -316,7 +321,7 @@ fn the_validator_replays_the_offset_and_rejects_a_hand_built_forgery() {
     let inputs = Inputs {
         memo: Default::default(),
         discharge: None,
-        operations: &p.operation_registry(),
+        operations: &operations,
         target: &target,
         layouts: &l.table,
         manifest: &manifest,
@@ -526,7 +531,7 @@ fn control(forged: u8) -> Vec<ViolationKind> {
         &Inputs {
             memo: Default::default(),
             discharge: None,
-            operations: &p.operation_registry(),
+            operations: &l.operation_registry(&p),
             target: &target(),
             layouts: &l.table,
             manifest: &manifest(&p),
@@ -777,7 +782,7 @@ fn a_loop_carried_sequence_name_does_not_hide_a_changed_reaching_value() {
     let inputs = Inputs {
         memo: Default::default(),
         discharge: None,
-        operations: &p.operation_registry(),
+        operations: &l.operation_registry(&p),
         target: &target(),
         layouts: &l.table,
         manifest: &manifest(&p),

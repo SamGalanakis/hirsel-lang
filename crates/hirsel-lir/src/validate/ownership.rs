@@ -717,6 +717,9 @@ impl<S: Stage> Walker<'_, '_, S> {
                         _ => {}
                     }
                 }
+                if let Some(rejected) = site_data.pretransfer_failure {
+                    outs.push(self.failure(site, b, rejected, st.clone(), cr.clone()));
+                }
                 for arg in args {
                     match (arg.passing, arg.value) {
                         (Passing::Take, ArgumentValue::Value(v)) => {
@@ -795,6 +798,28 @@ impl<S: Stage> Walker<'_, '_, S> {
                 self.exit(site, &st, &cr);
             }
             Terminator::Propagate => self.exit(site, &st, &cr),
+            Terminator::RejectTransfer => {
+                // The protocol audit establishes the adapter role. This replay
+                // independently requires every pending formal to be untouched.
+                for (ordinal, &(passing, slot)) in self.facts.parameters.iter().enumerate() {
+                    if passing != Passing::Take {
+                        continue;
+                    }
+                    if let Some(slot) = slot {
+                        let s = &st.slots[slot.index()];
+                        if content(s) != Tri::Yes
+                            || !s.taken.is_empty()
+                            || !s.moved.is_empty()
+                            || !s.finalize.is_empty()
+                            || s.versions != Versions::One(unit.parameters[ordinal])
+                        {
+                            self.err(site, K::LeakedStorage(slot));
+                        }
+                        st.slots[slot.index()].init = Tri::No;
+                    }
+                }
+                self.exit(site, &st, &cr);
+            }
             Terminator::Raise(failure) => {
                 outs.push(self.failure(site, b, failure, st, cr));
                 return outs;

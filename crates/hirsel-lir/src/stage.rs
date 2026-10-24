@@ -136,6 +136,7 @@ impl StageKind {
             | Opcode::Call
             | Opcode::Return
             | Opcode::Raise
+            | Opcode::RejectTransfer
             | Opcode::Propagate
             | Opcode::Recover
             | Opcode::Isolate

@@ -30,6 +30,9 @@ mod codec;
 mod compare;
 mod flat;
 mod primitive_work;
+mod projection;
+mod structural;
+mod structural_values;
 pub use flat::{FlatStorage, run_with_flat_storage_observer};
 mod soa;
 use soa::ColumnRow;
@@ -161,8 +164,18 @@ struct CallerSite {
     range: SiteRange,
 }
 
+/// Physical formal slots stage these credits while the language caller keeps
+/// custody. Admission commits them once; rejection returns the identical values.
+#[derive(Clone)]
+struct PendingCustody {
+    actuals: Vec<(ValueId, u32, Held)>,
+    admitted: bool,
+    handed: bool,
+}
+
 #[derive(Clone)]
 pub(crate) struct Frame {
+    pending_custody: Option<PendingCustody>,
     unit: usize,
     caller: Option<CallerSite>,
     operation: Option<CallerSite>,
@@ -179,6 +192,9 @@ pub(crate) struct Frame {
     loans: Snapshot<Option<Ptr>>,
     failing: bool,
     admitted: u32,
+    invocation_sites: Vec<(Option<CallerSite>, Option<CallerSite>)>,
+    /// H-owned runtime callback token, separate from candidate FrameEnter events.
+    implicit_invocation: Option<bool>,
     env: Option<Ptr>,
     destination: Option<DestinationClass>,
     regions: Vec<usize>,
@@ -216,6 +232,7 @@ enum Work {
         child_mask: Option<Vec<bool>>,
     },
     Finalized(ResourceId),
+    RetireCleanupInvocation(u32),
     /// The location's steps are done: its storage ends.
     Done {
         at: Ptr,
@@ -244,6 +261,7 @@ enum Activity {
 }
 
 enum Exit {
+    RejectTransfer(Vec<(ValueId, Held)>),
     Return(Option<(Held, LirTypeId)>),
     Fail,
 }
@@ -262,6 +280,7 @@ enum Finished {
 }
 
 pub(crate) struct Machine<'p, S> {
+    invocation_events: BTreeMap<u32, Vec<bool>>,
     program: &'p Program<S>,
     config: &'p Config,
     ops: &'p mut dyn Operations,
@@ -398,6 +417,7 @@ impl<'p, S: Stage> Machine<'p, S> {
             ops,
             ledger,
             stack: Vec::new(),
+            invocation_events: BTreeMap::new(),
             entry: 0,
             output: Vec::new(),
             failures: Vec::new(),
@@ -482,6 +502,9 @@ impl<'p, S: Stage> Machine<'p, S> {
         let index = self.sites;
         self.sites += 1;
         let injected = self.config.inject == Some(index);
+        if injected {
+            self.ledger.trace.push(Event::Injection { site: index });
+        }
         self.full_recount_due |= injected;
         injected
     }
@@ -491,6 +514,7 @@ impl<'p, S: Stage> Machine<'p, S> {
     fn frame(&self, unit: usize, role: Role, env: Option<Ptr>) -> Frame {
         let u = self.unit(unit);
         Frame {
+            pending_custody: None,
             unit,
             caller: None,
             operation: None,
@@ -505,6 +529,8 @@ impl<'p, S: Stage> Machine<'p, S> {
             loans: (0..u.tables.loans.len()).map(|_| None).collect(),
             failing: false,
             admitted: 0,
+            invocation_sites: Vec::new(),
+            implicit_invocation: None,
             env,
             destination: None,
             regions: Vec::new(),
@@ -3377,6 +3403,9 @@ impl<'p, S: Stage> Machine<'p, S> {
                         return Err(v);
                     }
                 };
+                if self.ended {
+                    return Ok(false);
+                }
                 match control {
                     Control::Continue => self.stack.push(Activity::Frame(f)),
                     Control::Push(next) => {
@@ -3451,6 +3480,24 @@ impl<'p, S: Stage> Machine<'p, S> {
     }
 
     fn exec(&mut self, f: &mut Frame, inst: &Inst) -> Checked<Control> {
+        if f.pending_custody.as_ref().is_some_and(|p| !p.admitted)
+            && !matches!(
+                inst,
+                Inst::Address { .. }
+                    | Inst::BeginLoan { mutable: false, .. }
+                    | Inst::Read {
+                        mode: ReadMode::Borrow,
+                        ..
+                    }
+                    | Inst::Hash { .. }
+                    | Inst::EndLoan { .. }
+            )
+        {
+            return fail(
+                V::FrameImbalance,
+                "adapter transfers, charges or mutates before key admission",
+            );
+        }
         let unit = f.unit;
         let u = self.unit(unit);
         match *inst {
@@ -3734,7 +3781,21 @@ impl<'p, S: Stage> Machine<'p, S> {
                 if self.injection_site() {
                     return self.fail_at(f, failure, true);
                 }
-                let Ok(order) = self.structural_order(&l, &r, layout)? else {
+                let plan = u
+                    .tables
+                    .structural
+                    .iter()
+                    .find(|p| p.root_layout() == layout)
+                    .ok_or_else(|| err(V::Malformed, "comparison has no logical access plan"))?;
+                if !self.structural_preflight(plan, &l)? || !self.structural_preflight(plan, &r)? {
+                    return self.fail_at(f, failure, false);
+                }
+                let order = if plan.needs_value_program(&self.program.layouts) {
+                    Ok(self.projection_order(plan, &l, &r)?)
+                } else {
+                    self.structural_order(&l, &r, layout)?
+                };
+                let Ok(order) = order else {
                     return self.fail_at(f, failure, false);
                 };
                 use std::cmp::Ordering as O;
@@ -4748,7 +4809,21 @@ impl<'p, S: Stage> Machine<'p, S> {
                 if self.injection_site() {
                     return self.fail_at(f, failure, true);
                 }
-                let Ok(hash) = self.structural_hash(&val, layout)? else {
+                let plan = u
+                    .tables
+                    .structural
+                    .iter()
+                    .find(|p| p.root_layout() == layout)
+                    .ok_or_else(|| err(V::Malformed, "hash has no logical access plan"))?;
+                if !self.structural_preflight(plan, &val)? {
+                    return self.fail_at(f, failure, false);
+                }
+                let hash = if plan.needs_value_program(&self.program.layouts) {
+                    Ok(self.projection_hash(plan, &val)?)
+                } else {
+                    self.structural_hash(&val, layout)?
+                };
+                let Ok(hash) = hash else {
                     return self.fail_at(f, failure, false);
                 };
                 self.define_fresh(
@@ -4759,6 +4834,12 @@ impl<'p, S: Stage> Machine<'p, S> {
                         bits: u128::from(hash),
                     },
                 )?;
+                if let Some(pending) = &mut f.pending_custody {
+                    if pending.admitted {
+                        return fail(V::FrameImbalance, "adapter admits pending custody twice");
+                    }
+                    pending.admitted = true;
+                }
             }
             Inst::Encode {
                 result,
@@ -4809,7 +4890,9 @@ impl<'p, S: Stage> Machine<'p, S> {
                         },
                     )?;
                     let (unit, occurrence) = pending.pop().expect("a check");
-                    let frame = self.check_frame(unit, occurrence)?;
+                    let Some(frame) = self.check_frame(f, unit, occurrence)? else {
+                        return Ok(Control::Continue);
+                    };
                     f.resume = Resume::Checks {
                         result,
                         held,
@@ -5624,6 +5707,12 @@ impl<'p, S: Stage> Machine<'p, S> {
                 if self.injection_site() {
                     return self.fail_at(f, failure, true);
                 }
+                if self.admit_invocation(f).is_none() {
+                    return self.fail_at(f, failure, false);
+                }
+                let anchor = self.unit(f.unit).tables.failures[failure.index()].anchor;
+                let sites = self.caller_sites(f, self.source_range(f, anchor), true);
+                f.invocation_sites.push(sites);
                 f.admitted += 1;
             }
             Inst::FrameLeave => {
@@ -5631,6 +5720,21 @@ impl<'p, S: Stage> Machine<'p, S> {
                     return fail(V::FrameImbalance, "frame leave without admission");
                 }
                 f.admitted -= 1;
+                if f.invocation_sites.pop().is_none() {
+                    return fail(V::FrameImbalance, "invocation site retired without entry");
+                }
+                let task = self.tasks.as_ref().map_or(0, |tasks| tasks.current);
+                if self
+                    .invocation_events
+                    .get_mut(&task)
+                    .and_then(Vec::pop)
+                    .is_none()
+                {
+                    return fail(
+                        V::FrameImbalance,
+                        "task invocation retirement without entry",
+                    );
+                }
             }
             Inst::Unavailable { feature, .. } => {
                 return fail(V::Unsupported, format!("M2 operation {feature:?}"));
@@ -7654,6 +7758,42 @@ impl<'p, S: Stage> Machine<'p, S> {
                 }
                 self.take_failure(f, failure, false)?;
             }
+            Terminator::RejectTransfer => {
+                let pending = f.pending_custody.take().ok_or_else(|| {
+                    err(V::FrameImbalance, "ordinary body forges private status 3")
+                })?;
+                if pending.admitted || pending.handed || !f.failing {
+                    return fail(V::FrameImbalance, "adapter rejects after custody handoff");
+                }
+                let mut restored = Vec::new();
+                for (value, parameter, original) in pending.actuals {
+                    let slot = u
+                        .slots
+                        .iter()
+                        .position(|s| s.kind == SlotKind::Parameter(parameter))
+                        .ok_or_else(|| err(V::Malformed, "pending formal has no slot"))?;
+                    let formal = u.parameters[parameter as usize];
+                    if f.versions[slot] != Some(formal) {
+                        return fail(V::FrameImbalance, "rejected formal was changed");
+                    }
+                    let SlotStore::Own(ptr) = f.slots[slot] else {
+                        return fail(V::FrameImbalance, "pending take formal is not staged");
+                    };
+                    let ty = self.lir_type(f.unit, u.slots[slot].ty)?;
+                    let size = self.size(ty.layout)?;
+                    let owned = self.resources_of(ty.layout)?;
+                    let extent = self.take_part(ptr, size, &owned);
+                    let (val, _, credited) = self.val_from(extent, ty.repr, ty.layout)?;
+                    if val != original.val || credited != (original.credits != 0) {
+                        return fail(
+                            V::FrameImbalance,
+                            "rejection changed an actual or its holder credit",
+                        );
+                    }
+                    restored.push((value, original));
+                }
+                return Ok(Control::Exit(Exit::RejectTransfer(restored)));
+            }
             Terminator::Propagate => {
                 if !f.failing {
                     return fail(
@@ -7834,6 +7974,28 @@ impl<'p, S: Stage> Machine<'p, S> {
         }
         let cu = self.unit(callee);
         let mut new = self.frame(callee, Role::Callee, env);
+        if self.program.pretransfer_adapters.iter().any(|r| {
+            r.adapter.definition == cu.header.definition
+                && r.adapter.instance == Some(cu.header.instance)
+        }) {
+            if site.pretransfer_failure.is_none() {
+                return fail(
+                    V::FrameImbalance,
+                    "keyed adapter entered without caller rejection custody",
+                );
+            }
+            new.pending_custody = Some(PendingCustody {
+                actuals: Vec::new(),
+                admitted: false,
+                handed: false,
+            });
+        }
+        if let Some(pending) = &mut f.pending_custody {
+            if !pending.admitted || pending.handed {
+                return fail(V::FrameImbalance, "adapter handoff before gate or twice");
+            }
+            pending.handed = true;
+        }
         let (caller, operation) =
             self.caller_sites(f, self.source_range(f, site.anchor), site.forward_caller);
         if cu.header.track_caller || cu.header.origin == UnitOrigin::Library {
@@ -7857,6 +8019,11 @@ impl<'p, S: Stage> Machine<'p, S> {
             }
             let held = match (arg.passing, arg.value) {
                 (hirsel_core_contract::Passing::Take, ArgumentValue::Value(v)) => {
+                    if let Some(pending) = &mut new.pending_custody {
+                        pending
+                            .actuals
+                            .push((v, arg.parameter, self.get(f, v)?.clone()));
+                    }
                     let m = self.take_owned(f, v, "take argument")?;
                     let repr = self.value_type(callee, p)?.repr;
                     Held {
@@ -8904,8 +9071,60 @@ impl<'p, S: Stage> Machine<'p, S> {
 
     // ---- Frame exit ------------------------------------------------------
 
+    /// H computes task-local admission from its own event ledger. No native
+    /// runtime counter or producer-asserted invocation total is consulted.
+    fn admit_invocation(&mut self, f: &Frame) -> Option<bool> {
+        let task = self.tasks.as_ref().map_or(0, |tasks| tasks.current);
+        let root = task == 0
+            && !self
+                .unit(self.entry)
+                .header
+                .definition
+                .0
+                .modules
+                .iter()
+                .any(|module| module.as_str() == "$native");
+        let events = self.invocation_events.entry(task).or_default();
+        let cleanup = f.shields() || events.last() == Some(&true);
+        let used = events.iter().filter(|&&event| event == cleanup).count()
+            + usize::from(!cleanup && root);
+        let limit = if cleanup {
+            usize::from(hirsel_core_contract::depth::CLEANUP_LIMIT)
+        } else {
+            usize::from(hirsel_core_contract::depth::FOREGROUND_LIMIT)
+        };
+        if used >= limit {
+            return None;
+        }
+        events.push(cleanup);
+        Some(cleanup)
+    }
+
+    /// Checked serialization cannot unwind into ordinary language cleanup.
+    fn fatal_check(&mut self) {
+        self.stack.clear();
+        self.tasks = None;
+        self.finished = Some(Finished::Failed);
+        self.ended = true;
+    }
+
     /// A frame calling a decode's check (SER-1) on a copy of the occurrence it borrows.
-    fn check_frame(&mut self, unit: usize, occurrence: Extent) -> Checked<Frame> {
+    fn check_frame(
+        &mut self,
+        caller: &Frame,
+        unit: usize,
+        occurrence: Extent,
+    ) -> Checked<Option<Frame>> {
+        let sites = caller
+            .invocation_sites
+            .last()
+            .copied()
+            .unwrap_or((caller.caller, caller.operation));
+        let Some(cleanup) = self.admit_invocation(caller) else {
+            self.record_sites("LANG-10", sites.0, sites.1, caller.unit, true);
+            self.fatal_check();
+            return Ok(None);
+        };
         let [p] = self.unit(unit).parameters.as_slice() else {
             return fail(
                 V::Malformed,
@@ -8914,6 +9133,9 @@ impl<'p, S: Stage> Machine<'p, S> {
         };
         let p = *p;
         let mut frame = self.frame(unit, Role::Callee, None);
+        frame.implicit_invocation = Some(cleanup);
+        frame.caller = sites.0;
+        frame.operation = sites.1;
         self.define(
             &mut frame,
             p,
@@ -8924,7 +9146,7 @@ impl<'p, S: Stage> Machine<'p, S> {
             },
         )?;
         self.bind_parameter_slots(&mut frame, &[None])?;
-        Ok(frame)
+        Ok(Some(frame))
     }
 
     /// A decode's check returned to `caller`, or failed.
@@ -8938,12 +9160,12 @@ impl<'p, S: Stage> Machine<'p, S> {
             unreachable!("checked by the caller")
         };
         let verdict = match exit {
+            Exit::RejectTransfer(_) => {
+                return fail(V::FrameImbalance, "codec check returned private status 3");
+            }
             // FAIL-3: the codec cannot unwind, so the check's failure ends the run.
             Exit::Fail => {
-                self.stack.clear();
-                self.tasks = None;
-                self.finished = Some(Finished::Failed);
-                self.ended = true;
+                self.fatal_check();
                 return Ok(());
             }
             Exit::Return(Some((
@@ -8961,7 +9183,9 @@ impl<'p, S: Stage> Machine<'p, S> {
         };
         let ty = self.value_type(caller.unit, result)?;
         if verdict && let Some((unit, occurrence)) = pending.pop() {
-            let frame = self.check_frame(unit, occurrence)?;
+            let Some(frame) = self.check_frame(&caller, unit, occurrence)? else {
+                return Ok(());
+            };
             caller.resume = Resume::Checks {
                 result,
                 held,
@@ -9019,6 +9243,14 @@ impl<'p, S: Stage> Machine<'p, S> {
     }
 
     fn exit_frame(&mut self, f: Frame, exit: Exit) -> Checked<()> {
+        if let Some(pending) = &f.pending_custody {
+            if !pending.admitted || matches!(exit, Exit::Return(_)) && !pending.handed {
+                return fail(
+                    V::FrameImbalance,
+                    "adapter exits without committing pending custody",
+                );
+            }
+        }
         if !matches!(f.resume, Resume::Running) {
             return fail(V::Malformed, "frame exits while waiting");
         }
@@ -9053,7 +9285,7 @@ impl<'p, S: Stage> Machine<'p, S> {
         if !f.regions.is_empty() {
             return fail(V::LiveRegion, "a region is live at frame exit");
         }
-        if f.admitted != 0 {
+        if f.admitted != 0 || !f.invocation_sites.is_empty() {
             return fail(V::FrameImbalance, "frame admission not left at exit");
         }
         for (index, slot) in f.slots.iter().enumerate() {
@@ -9066,6 +9298,15 @@ impl<'p, S: Stage> Machine<'p, S> {
         }
         if let Exit::Return(Some((held, _))) = &exit {
             self.check_val(&held.val)?;
+        }
+        if let Some(cleanup) = f.implicit_invocation {
+            let task = self.tasks.as_ref().map_or(0, |tasks| tasks.current);
+            if self.invocation_events.get_mut(&task).and_then(Vec::pop) != Some(cleanup) {
+                return fail(
+                    V::FrameImbalance,
+                    "implicit check retires without matching entry",
+                );
+            }
         }
         match self.stack.pop() {
             Some(Activity::Frame(caller)) if matches!(caller.resume, Resume::Checks { .. }) => {
@@ -9084,12 +9325,29 @@ impl<'p, S: Stage> Machine<'p, S> {
                         "callee returned to a frame that is not calling",
                     );
                 };
+                if let Exit::RejectTransfer(restored) = exit {
+                    let rejected = self.unit(caller.unit).tables.calls[call.index()]
+                        .pretransfer_failure
+                        .ok_or_else(|| {
+                            err(
+                                V::FrameImbalance,
+                                "caller has no pending-custody rejection edge",
+                            )
+                        })?;
+                    for (value, held) in restored {
+                        self.define(&mut caller, value, held)?;
+                    }
+                    self.take_failure(&mut caller, rejected, false)?;
+                    self.stack.push(Activity::Frame(caller));
+                    return Ok(());
+                }
                 for (slot, version) in written {
                     caller.versions[slot.index()] = Some(version);
                     self.define_version(&mut caller, version)?;
                 }
                 let site_result = self.unit(caller.unit).tables.calls[call.index()].result;
                 let result = match exit {
+                    Exit::RejectTransfer(_) => unreachable!("handled before writebacks"),
                     Exit::Fail => {
                         let unit = self.unit(caller.unit);
                         if unit.header.origin != UnitOrigin::Library {
@@ -9209,6 +9467,9 @@ impl<'p, S: Stage> Machine<'p, S> {
                     return fail(V::Malformed, "a drain resumed by a non-finalizer frame");
                 }
                 match exit {
+                    Exit::RejectTransfer(_) => {
+                        return fail(V::FrameImbalance, "finalizer returned private status 3");
+                    }
                     Exit::Fail => d.failed = true,
                     Exit::Return(None) => {}
                     Exit::Return(Some(_)) => {
@@ -9218,10 +9479,16 @@ impl<'p, S: Stage> Machine<'p, S> {
                 self.stack.push(Activity::Drain(d));
             }
             None if self.in_child() => {
+                if matches!(exit, Exit::RejectTransfer(_)) {
+                    return fail(V::FrameImbalance, "task entry returned private status 3");
+                }
                 self.task_exited(matches!(exit, Exit::Fail))?;
             }
             None => {
                 self.finished = Some(match exit {
+                    Exit::RejectTransfer(_) => {
+                        return fail(V::FrameImbalance, "entry returned private status 3");
+                    }
                     Exit::Fail => Finished::Failed,
                     Exit::Return(None) => Finished::Returned(None),
                     Exit::Return(Some((held, ty))) => {
@@ -9555,8 +9822,32 @@ impl<'p, S: Stage> Machine<'p, S> {
                                 format!("finalizer of {rid:?} entered while it is {:?}", res.state),
                             );
                         }
-                        res.state = ResourceState::Finalizing;
                         let layout = res.layout;
+                        let language = self.record(layout)?.finalizer.as_ref().is_some_and(|f| {
+                            !f.definition
+                                .0
+                                .modules
+                                .iter()
+                                .any(|m| m.as_str() == "$native")
+                        });
+                        if language {
+                            let task = self.tasks.as_ref().map_or(0, |tasks| tasks.current);
+                            let events = self.invocation_events.entry(task).or_default();
+                            if events.iter().filter(|&&cleanup| cleanup).count() == 64 {
+                                self.ledger.resources[rid.0 as usize].state =
+                                    ResourceState::FieldsPending;
+                                self.record_close_failure("LANG-10", d);
+                                d.failed = true;
+                                return Ok(None);
+                            }
+                            events.push(true);
+                            // The matching Done follows all fields of this resource.
+                            let end = d.work.iter().rposition(|work|
+                                matches!(work, Work::Done { at, layout: own, .. } if *at == base && *own == layout))
+                                .ok_or_else(|| err(V::Malformed, "resource cleanup has no field scope end"))?;
+                            d.work.insert(end, Work::RetireCleanupInvocation(task));
+                        }
+                        self.ledger.resources[rid.0 as usize].state = ResourceState::Finalizing;
                         self.ledger.counters.finalizers += 1;
                         self.ledger.trace.push(Event::Finalize { resource: rid });
                         d.work.push(Work::Finalized(rid));
@@ -9838,6 +10129,14 @@ impl<'p, S: Stage> Machine<'p, S> {
                             );
                         }
                     }
+                }
+            }
+            Work::RetireCleanupInvocation(task) => {
+                if self.invocation_events.get_mut(&task).and_then(Vec::pop) != Some(true) {
+                    return fail(
+                        V::FrameImbalance,
+                        "cleanup invocation retirement without entry",
+                    );
                 }
             }
             Work::Finalized(rid) => {

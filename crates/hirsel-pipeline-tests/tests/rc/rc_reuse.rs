@@ -41,6 +41,7 @@ const MODES: [Mode; 4] = [
 ];
 
 struct Built {
+    operations: hirsel_layout::operation::OperationRegistry,
     units: Vec<LirUnit<Reuse>>,
     table: LayoutTable,
     specializations: usize,
@@ -57,7 +58,7 @@ fn decimal_money_keeps_exhaustive_switch_defaults_direct() {
 }
 
 fn check<S: Stage>(
-    program: &hirsel_rc::instance::Program,
+    operations: &hirsel_layout::operation::OperationRegistry,
     manifest: &hirsel_core_contract::Manifest,
     table: &LayoutTable,
     units: &[LirUnit<S>],
@@ -67,7 +68,7 @@ fn check<S: Stage>(
     let inputs = Inputs {
         memo: Default::default(),
         discharge: None,
-        operations: &program.operation_registry(),
+        operations,
         target: &target,
         layouts: table,
         manifest,
@@ -95,6 +96,7 @@ fn build_with_scoped(source: &str, mode: Mode, scoped: bool) -> Built {
     } else {
         crate::scoped_consumer_9::lower_disabled(source)
     };
+    let operations = lowered.operation_registry(&program);
     let specializations = lowered.units.len() - lowered.instances.len();
     let table = lowered.table.clone();
     let manifest = manifest(&program);
@@ -107,7 +109,7 @@ fn build_with_scoped(source: &str, mode: Mode, scoped: bool) -> Built {
         let rc = hirsel_rc::insert::insert(placed, &table, &proofs).expect("insertion");
         let rc = hirsel_rc::elide::elide(rc, &table).expect("elision");
         check(
-            &program,
+            &operations,
             &manifest,
             &table,
             std::slice::from_ref(&rc),
@@ -117,8 +119,9 @@ fn build_with_scoped(source: &str, mode: Mode, scoped: bool) -> Built {
             hirsel_rc::reuse::reuse(rc, &table, &Options { reuse: mode.reuse }).expect("reuse");
         units.push(reused);
     }
-    check(&program, &manifest, &table, &units, source);
+    check(&operations, &manifest, &table, &units, source);
     Built {
+        operations,
         units,
         table,
         specializations,
@@ -128,6 +131,9 @@ fn build_with_scoped(source: &str, mode: Mode, scoped: bool) -> Built {
 
 fn heap_program(built: &Built) -> hirsel_heapcheck::Program<Reuse> {
     hirsel_heapcheck::Program {
+        invocation_bodies: built.operations.invocation_bodies.clone(),
+        invocations: built.operations.invocations.clone(),
+        pretransfer_adapters: built.operations.pretransfer_adapters.clone(),
         target: target(),
         layouts: built.table.clone(),
         units: built.units.clone(),

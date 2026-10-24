@@ -3,6 +3,7 @@ use crate::{Value, observation::Anchor};
 use hirsel_tir::CleanupAction;
 #[derive(Debug)]
 pub(crate) enum Work {
+    Retire(crate::depth::Guard),
     Action(CleanupAction, Anchor),
     Chain(hirsel_tir::CleanupNodeId, Anchor),
     Release(Value, Anchor, Option<crate::frame::CallerSite>),
@@ -15,6 +16,7 @@ pub(crate) enum Ending {
 
 #[derive(Debug)]
 pub(crate) struct OperationState {
+    pub activation: Option<crate::depth::Guard>,
     pub caller: Option<crate::frame::CallerSite>,
     pub arguments: Vec<Value>,
     pub owned: Vec<Value>,

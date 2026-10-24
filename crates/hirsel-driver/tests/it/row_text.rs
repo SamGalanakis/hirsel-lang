@@ -474,12 +474,7 @@ pub fn main() -> Result[(), ()] {{
                     &native::Options::new(native::TargetSpec::x86_64_unknown_linux_gnu()),
                 )
                 .unwrap();
-                let program = hirsel_heapcheck::Program {
-                    target: ready.target.clone(),
-                    layouts: ready.table.clone(),
-                    units: ready.raw_units(),
-                    statics: ready.statics.clone(),
-                };
+                let program = ready.heap_program();
                 let run = hirsel_heapcheck::run_ready(
                     &program,
                     &entry_path(&default_context()),

@@ -11,6 +11,7 @@ const TYPES: &str = "flat type Item { text: String, n: u64 }\nflat type Items { 
 pub(super) fn audited(source: &str, expected: u128) {
     let input = compile(source);
     let lowered = hirsel_rc::import::lower(&input, &target()).unwrap();
+    let operations = lowered.operation_registry(&input);
     let problems = violations(&input, &lowered);
     assert!(
         problems.is_empty(),
@@ -44,7 +45,7 @@ pub(super) fn audited(source: &str, expected: u128) {
                 &Inputs {
                     memo: Default::default(),
                     discharge: None,
-                    operations: &input.operation_registry(),
+                    operations: &operations,
                     target: &target(),
                     layouts: &lowered.table,
                     manifest: &manifest(&input),
@@ -54,6 +55,9 @@ pub(super) fn audited(source: &str, expected: u128) {
             units.push(rc);
         }
         let program = hirsel_heapcheck::Program {
+            invocation_bodies: operations.invocation_bodies.clone(),
+            invocations: operations.invocations.clone(),
+            pretransfer_adapters: operations.pretransfer_adapters.clone(),
             target: target(),
             layouts: lowered.table.clone(),
             units,

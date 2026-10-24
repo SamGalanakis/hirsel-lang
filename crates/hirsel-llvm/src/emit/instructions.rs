@@ -440,8 +440,24 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 let failed = self.builder.binary(BinOp::Xor, condition, one);
                 self.guard(failed, failure)
             }
-            // Static lifetime events: no machine bytes. Frame admission has no
-            // numeric charge until spec #16 rules, so it cannot fail.
+            Inst::FrameEnter { failure } => {
+                let anchor = self.unit.tables.failures[failure.index()].anchor;
+                let (caller, operation) = self.failure_sites(self.anchor_code(anchor)?);
+                let entry = self.runtime(RuntimeEntry::DepthEnterAtSite)?;
+                let status = self.builder.call(entry, &[self.context, caller, operation]);
+                let failed = self.builder.icmp(
+                    crate::context::IntPredicate::Ne,
+                    status,
+                    self.module.const_int(self.module.int_type(8), 0),
+                );
+                self.guard(failed, failure)
+            }
+            Inst::FrameLeave => {
+                let leave = self.runtime(RuntimeEntry::DepthLeave)?;
+                self.builder.call(leave, &[self.context]);
+                Ok(())
+            }
+            // Static lifetime events: no machine bytes.
             Inst::StorageLive { .. }
             | Inst::StorageDead { .. }
             | Inst::EndScope { .. }
@@ -449,9 +465,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             | Inst::EndLoan { .. }
             | Inst::BindOrigin { .. }
             | Inst::BindFields { .. }
-            | Inst::EndOrigin { .. }
-            | Inst::FrameEnter { .. }
-            | Inst::FrameLeave => Ok(()),
+            | Inst::EndOrigin { .. } => Ok(()),
             // Explicit suppression: the credit is abandoned and nothing is released.
             Inst::Forget { .. } => Ok(()),
             Inst::Address { address, failure } => {
@@ -938,17 +952,23 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 layout,
                 failure,
             } => {
-                let comparator = match compare::comparator(
-                    self.module,
-                    self.inputs.layouts,
-                    self.inputs.keys,
-                    self.inputs.index,
-                    layout,
-                    matches!(op, CompareOp::Eq | CompareOp::Ne),
-                ) {
-                    Ok(comparator) => comparator,
-                    Err(CompareError::Unsupported(what)) => return self.unsupported(what),
-                    Err(CompareError::Invalid(what)) => return self.invalid(what),
+                let comparator = if self.needs_value_program(layout) {
+                    None
+                } else {
+                    Some(
+                        match compare::comparator(
+                            self.module,
+                            self.inputs.layouts,
+                            self.inputs.keys,
+                            self.inputs.index,
+                            layout,
+                            matches!(op, CompareOp::Eq | CompareOp::Ne),
+                        ) {
+                            Ok(comparator) => comparator,
+                            Err(CompareError::Unsupported(what)) => return self.unsupported(what),
+                            Err(CompareError::Invalid(what)) => return self.invalid(what),
+                        },
+                    )
                 };
                 if self.module.declares("hirsel_rt_v2_path_compare") {
                     self.manifested
@@ -967,9 +987,14 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 let (left, right) = (self.counted_view(left)?, self.counted_view(right)?);
                 self.store(shape, left, l);
                 self.store(shape, right, r);
-                let code = self
-                    .builder
-                    .call(comparator, &[l.ptr, r.ptr, self.const_u64(0), self.context]);
+                self.structural_preflight_at(layout, l.ptr, failure)?;
+                self.structural_preflight_at(layout, r.ptr, failure)?;
+                let code = if let Some(comparator) = comparator {
+                    self.builder
+                        .call(comparator, &[l.ptr, r.ptr, self.const_u64(0), self.context])
+                } else {
+                    self.structural_order_at(layout, l.ptr, r.ptr)?
+                };
                 let i8_ty = self.module.int_type(8);
                 let is = |c: u8| {
                     self.builder.icmp(
@@ -1507,10 +1532,18 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 layout,
                 failure,
             } => {
+                self.structural_preflight_value(layout, value, failure)?;
                 // Scalars remain a single one-shot leaf. Composite values
                 // share one stream across all layout helpers.
                 let begin = self.runtime(RuntimeEntry::HashBegin)?;
                 let seed = self.builder.call(begin, &[self.context]);
+                if self.needs_value_program(layout) {
+                    let at = self.stack(layout)?;
+                    let operand = self.counted_view(value)?;
+                    self.store(self.layout_shape(layout)?, operand, at);
+                    let hash = self.structural_hash_at(layout, at.ptr, seed)?;
+                    return self.define(result, hash);
+                }
                 if matches!(self.layout(layout)?.kind, LayoutKind::Scalar(kind)
                     if !matches!(kind, ScalarKind::F32 | ScalarKind::F64 | ScalarKind::Pointer))
                 {

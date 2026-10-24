@@ -215,6 +215,18 @@ pub fn specialize_scoped(
     scoped: bool,
 ) -> Specializations {
     let mut result = specialize(lowered);
+    let registry = crate::import::invocation_registry(
+        program,
+        &lowered.instances,
+        &lowered.semantic_owners,
+        &lowered.units,
+        &result.origins,
+    );
+    crate::import::prune_pretransfer(
+        &mut lowered.units,
+        &lowered.table,
+        &registry.pretransfer_adapters,
+    );
     if scoped {
         crate::scoped_consumer_9::specialize(lowered, program, target, &mut result);
     }

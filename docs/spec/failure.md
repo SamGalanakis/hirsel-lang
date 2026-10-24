@@ -64,6 +64,30 @@ chain. Cleanup continues across siblings after a failure in one of them. Shieldi
 suppresses cancellation checks, not deterministic bug failures. The unwinding mechanism is
 the implementation's choice ([native code](implementation.md#failure-and-cleanup)).
 
+Implicit cleanup uses a separate per-task count of active language invocations with a
+limit of 64. The count is initially zero. Entering a resource finalizer from foreground
+execution, on normal exit, replacement, cancellation or failure, uses this count and
+suspends the foreground continuation without debiting its count. All calls made during
+that finalizer, including nested finalizers, callbacks and primitive operations, use
+the same cleanup count. They do not open fresh allowances while cleanup invocations
+remain active. Ordinary activation admission and self-tail rules apply within it.
+
+A rejected finalizer entry records LANG-10 Depth at that implicit drop's operation site,
+does not execute its body, and still releases the resource's fields. A failure within
+a finalizer abandons its body and still releases its fields. The abandoned activation
+retires after its implicit cleanup; rejection itself creates no activation. Cleanup
+continues in DROP-2 order, including when no further user invocation fits. Mechanical
+release, loan ending, frame retirement, arena/region freeing and failure propagation
+require neither activation admission nor structural admission, and cannot fail Depth.
+After the last cleanup invocation retires the cleanup count is again zero, allowing
+subsequent sibling cleanup to run. This does not guarantee successful finalizer bodies:
+a recursively calling finalizer can itself fail Depth.
+
+Preserve the original failure and append cleanup failures in FAIL-3 order. Existing
+unsafe-FFI and checked-serialization fatal-failure exceptions remain in force. An
+arena.bounded boundary catches only its own OutOfSpace under MEM-6; it never catches
+Depth. Tooling or environmental termination does not imply this cleanup completed.
+
 ### FAIL-4: Mutexes
 
 A failure inside a `mutex.with` body kills that mutex: its payload is released unseen, and
@@ -101,6 +125,9 @@ fn work(d: Dir, p: Path) -> Result[(), FileError] {
   Ok(())                             // and here on success
 }
 ```
+
+Implicit resource finalizers use the separate per-task cleanup activation count defined
+in [FAIL-3](#fail-3-what-runs), on normal exits as well as failures.
 
 A committed whole destructure in the defining module consumes the resource without running
 its finalizer; bound fields become owners, and omitted fields are dropped immediately in

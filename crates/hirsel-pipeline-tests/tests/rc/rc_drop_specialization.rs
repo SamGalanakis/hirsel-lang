@@ -409,6 +409,9 @@ fn reuse(f: &Fixture, on: bool) -> Vec<LirUnit<Reuse>> {
 
 fn program(f: &Fixture, units: Vec<LirUnit<Reuse>>) -> Program<Reuse> {
     Program {
+        invocation_bodies: Vec::new(),
+        invocations: Default::default(),
+        pretransfer_adapters: Vec::new(),
         target: f.target.clone(),
         layouts: f.table.clone(),
         units,

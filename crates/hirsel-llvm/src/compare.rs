@@ -6,15 +6,14 @@
 //! before payloads; sequences element by element, then by length (a proper prefix first);
 //! String and Bytes slices bytewise, then by length; floats by IEEE, an unordered pair
 //! deciding at once. The root pair is at depth 0 and each field, element or Box payload one
-//! deeper; a pair deeper than `COMPARE_MAX_DEPTH` is the MEM-3 Depth failure. Scalar leaves
-//! are compared inline, after their own depth check.
+//! deeper for private traversal bookkeeping. Complete logical admission happens
+//! before entering this physical walker; representation wrappers set no language limit.
 //!
 //! A comparator `hirsel.compare.<layout key>(left, right, depth, context) -> i8` reads two values of its
 //! layout at the given addresses and returns one of the `ORDER_*` codes. Loads are unaligned
 //! (a `@packed` field may hold a comparable value at any offset).
 
 use hirsel_lir::LayoutKeys;
-use hirsel_lir::ir::COMPARE_MAX_DEPTH;
 use hirsel_lir::layout::{payload_offset, sequence_elements_offset, slice_data_offset};
 use hirsel_lir::layout_types::{
     FieldLayout, LayoutId, LayoutKind, LayoutRecord, LayoutTable, ScalarKind, ScanStep, SizeSpec,
@@ -182,16 +181,8 @@ impl<'m> Generator<'m, '_> {
     }
 
     /// The pair `(left, right)` at `depth` is too deep: return the Depth code.
-    fn check_depth(&self, depth: Value<'m>) {
-        let deep = self
-            .builder
-            .icmp(IntPredicate::Ugt, depth, self.u64(COMPARE_MAX_DEPTH));
-        let next = self.block();
-        let fail = self.block();
-        self.builder.cond_br(deep, fail, next);
-        self.builder.position(fail);
-        self.builder.ret(self.code(ORDER_DEPTH));
-        self.builder.position(next);
+    fn check_depth(&self, _depth: Value<'m>) {
+        // Logical preflight precedes this physical value traversal.
     }
 
     fn define(mut self, layout: LayoutId, entry: BasicBlock<'m>) -> Compared<()> {
@@ -946,9 +937,8 @@ impl<'m> Generator<'m, '_> {
 /// feeds framed leaves into one caller-owned SipHash stream through `hash_update`.
 /// It returns the unchanged opaque state address; only the root finalizes it. Floats feed `-0.0` as `+0.0`, so values `Compare Eq` calls equal hash equal; a
 /// variant feeds its active ordinal, a sequence its count, a String or Bytes slice its length
-/// and bytes. Depth is counted as the comparator counts it; a value deeper than
-/// `COMPARE_MAX_DEPTH` sets the byte at `deep` (the MEM-3 Depth failure, spec #90) and its
-/// state is meaningless. `Opaque` containers (Map, Set) are lib-map's.
+/// and bytes. Complete logical admission happens before this physical traversal;
+/// its private depth and failure parameters retain the helper calling convention. `Opaque` containers (Map, Set) are lib-map's.
 type HashPending<'m> = (LayoutId, Function<'m>, BasicBlock<'m>);
 
 pub(crate) fn hasher<'m>(
@@ -1055,18 +1045,8 @@ impl<'m> HashGenerator<'m, '_> {
     }
 
     /// Too deep: set the flag and return `state`; otherwise continue.
-    fn check_depth(&self, depth: Value<'m>, state: Value<'m>, deep: Value<'m>) {
-        let too = self
-            .builder
-            .icmp(IntPredicate::Ugt, depth, self.u64(COMPARE_MAX_DEPTH));
-        let next = self.module.append_block(self.function);
-        let fail = self.module.append_block(self.function);
-        self.builder.cond_br(too, fail, next);
-        self.builder.position(fail);
-        let i8_ty = self.module.int_type(8);
-        self.builder.store(self.module.const_int(i8_ty, 1), deep, 1);
-        self.builder.ret(state);
-        self.builder.position(next);
+    fn check_depth(&self, _depth: Value<'m>, _state: Value<'m>, _deep: Value<'m>) {
+        // Logical preflight precedes this physical value traversal.
     }
 
     fn define(mut self, layout: LayoutId, entry: BasicBlock<'m>) -> Compared<()> {

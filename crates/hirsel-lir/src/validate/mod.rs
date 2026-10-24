@@ -219,6 +219,7 @@ impl UnitInputs<'_> {
             crate::INTERFACE_VERSION.to_le_bytes().to_vec(),
             crate::LIR_VERSION.to_le_bytes().to_vec(),
             crate::VALIDATOR_VERSION.to_le_bytes().to_vec(),
+            hirsel_core_contract::depth::SEMANTICS.as_bytes().to_vec(),
             (closure.layouts.len() as u64).to_le_bytes().to_vec(),
         ];
         for id in closure.layouts {
@@ -641,8 +642,99 @@ fn check_with_context<S: Stage>(
         discharge: inputs.discharge,
     };
     let mut report = Report::default();
+    let mut roots = std::collections::BTreeSet::new();
+    for plan in &unit.tables.structural {
+        let checked = plan.check(inputs.layouts).and_then(|()| {
+            if !roots.insert(plan.root_layout()) {
+                return Err("duplicate structural root layout".into());
+            }
+            let expected = inputs
+                .operations
+                .structural_access(&plan.source, inputs.layouts, inputs.target)
+                .map_err(|e| format!("structural declaration reconstruction: {e:?}"))?;
+            if &expected != plan {
+                return Err("structural projection differs from independent declarations".into());
+            }
+            Ok(())
+        });
+        if let Err(error) = checked {
+            report.add(Site::UNIT, ViolationKind::Schema(error));
+        }
+    }
+    if inputs.operations.requires_structural_reference() {
+        for instruction in &unit.instructions {
+            let layout = match *instruction {
+                crate::ir::Inst::Compare { layout, .. } | crate::ir::Inst::Hash { layout, .. } => {
+                    layout
+                }
+                _ => continue,
+            };
+            if !roots.contains(&layout) {
+                report.add(
+                    Site::UNIT,
+                    ViolationKind::Schema(
+                        "structural operand has no independent access plan".into(),
+                    ),
+                );
+            }
+        }
+    }
     let facts = structure::check(&cx, &mut report);
     if let Some(facts) = facts.filter(|_| report.0.is_empty()) {
+        for result in [
+            crate::pretransfer::check_edges(
+                unit,
+                inputs.layouts,
+                inputs.operations.pretransfer_adapters(),
+            ),
+            crate::pretransfer::check_adapter(
+                unit,
+                inputs.layouts,
+                inputs.operations.pretransfer_adapters(),
+            )
+            .map(|_| ()),
+        ] {
+            if let Err(error) = result {
+                report.add(Site::UNIT, ViolationKind::Schema(error));
+            }
+        }
+        if unit.header.origin == crate::ir::UnitOrigin::Library {
+            if let Err(error) =
+                crate::invocations::check_library_with_declarations(unit, inputs.operations)
+            {
+                report.add(Site::UNIT, ViolationKind::Schema(error));
+            }
+        }
+        if let Some(reference) = inputs.operations.invocations(&unit.header.definition) {
+            let selected = inputs
+                .operations
+                .invocation_body(&unit.header.definition, unit.header.instance)
+                .ok_or_else(|| "independent source body selection is missing".to_owned());
+            if let Err(error) =
+                selected.and_then(|body| crate::invocations::check(unit, reference, body))
+            {
+                report.add(Site::UNIT, ViolationKind::Schema(error));
+            }
+        }
+        if unit.header.origin == crate::ir::UnitOrigin::Source
+            && inputs.operations.requires_invocation_reference()
+            && inputs
+                .operations
+                .invocations(&unit.header.definition)
+                .is_none()
+        {
+            report.add(
+                Site::UNIT,
+                ViolationKind::Schema("source invocation reference is missing".into()),
+            );
+        }
+        if unit.header.origin == crate::ir::UnitOrigin::Source
+            && inputs.operations.requires_structural_reference()
+        {
+            if let Err(error) = crate::structural_access::check_key_order(unit) {
+                report.add(Site::UNIT, ViolationKind::Schema(error));
+            }
+        }
         ownership::check(&cx, &facts, &mut report);
         aliasing::check(&cx, &facts, &mut report);
         if strict_scoped {

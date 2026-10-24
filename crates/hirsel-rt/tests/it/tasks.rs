@@ -332,7 +332,11 @@ fn mutex_layouts(
             16,
             1,
             None,
-            vec![tag_step(0, 1, 1), finalize_step(0, 8, resource)],
+            vec![
+                tag_step(0, 1, 2),
+                finalize_step(0, 8, resource),
+                end_finalize_step(0, 8, resource),
+            ],
         )
     });
     let wrapper = cached_layout("mutex-wrapper", 0, || {

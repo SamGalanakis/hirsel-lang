@@ -148,6 +148,22 @@ impl FnEmitter<'_, '_, '_> {
                 let failed = self.b.ins().bxor_imm_s(condition, 1);
                 self.guard(failed, failure)
             }
+            Inst::FrameEnter { failure } => {
+                let context = self.context;
+                let anchor = self.unit.tables.failures[failure.index()].anchor;
+                let (caller, operation) = self.failure_sites(self.anchor_code(anchor)?);
+                let status = self.rt1(
+                    RuntimeEntry::DepthEnterAtSite,
+                    &[context, caller, operation],
+                )?;
+                let failed = self.b.ins().icmp_imm_s(IntCC::NotEqual, status, 0);
+                self.guard(failed, failure)
+            }
+            Inst::FrameLeave => {
+                let context = self.context;
+                self.rt(RuntimeEntry::DepthLeave, &[context])?;
+                Ok(())
+            }
             // Static lifetime events: no machine bytes.
             Inst::StorageLive { .. }
             | Inst::StorageDead { .. }
@@ -157,8 +173,6 @@ impl FnEmitter<'_, '_, '_> {
             | Inst::BindOrigin { .. }
             | Inst::BindFields { .. }
             | Inst::EndOrigin { .. }
-            | Inst::FrameEnter { .. }
-            | Inst::FrameLeave
             | Inst::Forget { .. }
             | Inst::Defuse { .. }
             | Inst::RegionPublish { .. } => Ok(()),

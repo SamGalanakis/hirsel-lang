@@ -219,7 +219,7 @@ pub fn violations(program: &Program, lowered: &Lowered) -> Vec<(String, Vec<Viol
     let inputs = Inputs {
         memo: Default::default(),
         discharge: None,
-        operations: &program.operation_registry(),
+        operations: &lowered.operation_registry(program),
         target: &target,
         layouts: &lowered.table,
         manifest: &manifest,
@@ -435,6 +435,7 @@ pub fn dump<S: Stage>(u: &LirUnit<S>) -> String {
                 v.map(|v| format!(" v{}", v.0)).unwrap_or_default()
             ),
             Terminator::Raise(f) => format!("raise {}", failure(u, *f)),
+            Terminator::RejectTransfer => "reject pending transfer".into(),
             Terminator::Propagate => "propagate".into(),
             Terminator::InvariantFault { reason } => format!("invariant fault: {reason}"),
             Terminator::Unreachable => "unreachable".into(),
@@ -464,7 +465,7 @@ pub fn unit_violations(
     let inputs = Inputs {
         memo: Default::default(),
         discharge: None,
-        operations: &program.operation_registry(),
+        operations: &lowered.operation_registry(program),
         target: &target,
         layouts: &lowered.table,
         manifest: &manifest,

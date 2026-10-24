@@ -35,7 +35,7 @@ fn run(source: &str, enabled: bool) -> hirsel_heapcheck::Run {
     };
     let rows = manifest(&p);
     let target = target();
-    let operations = p.operation_registry();
+    let operations = l.operation_registry(&p);
     let inputs = hirsel_lir::validate::Inputs {
         target: &target,
         layouts: &l.table,
@@ -68,6 +68,9 @@ fn run(source: &str, enabled: bool) -> hirsel_heapcheck::Run {
         })
         .collect();
     let h = hirsel_heapcheck::Program {
+        invocation_bodies: operations.invocation_bodies.clone(),
+        invocations: operations.invocations.clone(),
+        pretransfer_adapters: operations.pretransfer_adapters.clone(),
         target,
         layouts: l.table,
         units,
@@ -182,7 +185,7 @@ fn nested_source_entry_contracts_and_mutations() {
     let (p, base) = lower_disabled(s);
     let rows = manifest(&p);
     let target = target();
-    let ops = p.operation_registry();
+    let ops = base.operation_registry(&p);
     let check = |units: &[_], table: &hirsel_lir::LayoutTable| {
         hirsel_lir::validate::qualify_scoped_transport(
             units,

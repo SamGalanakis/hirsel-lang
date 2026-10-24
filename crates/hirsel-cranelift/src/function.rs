@@ -817,6 +817,9 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
             Ref::SwitchArms(range) => arms = Some(range),
             _ => {}
         });
+        if let Terminator::Call { call, .. } = terminator {
+            failures.extend(unit.tables.calls[call.index()].pretransfer_failure);
+        }
         if let Some(range) = arms {
             edges.extend(
                 self.pool(range, &unit.pools.switch_arms)?
@@ -1736,6 +1739,10 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
                 self.fill_trampolines(trampolines)
             }
             Terminator::Propagate => self.return_status(1, None),
+            Terminator::RejectTransfer => self.return_status(
+                hirsel_lir::runtime_abi::STATUS_PRETRANSFER_FAILURE as i64,
+                None,
+            ),
             Terminator::InvariantFault { .. } => {
                 self.rt(RuntimeEntry::InvariantFault, &[])?;
                 self.b.ins().trap(TRAP);
@@ -2032,13 +2039,24 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
             (None, None) => return self.invalid("a call without a callee"),
         };
         self.ahead_reload();
-        // Both continuations observe the callee's mutations, including partial failure.
+        let status = returned[usize::from(signature.value.is_some())];
+        if let Some(rejected) = site.pretransfer_failure {
+            let rejected = self.failure_block(rejected)?;
+            let entered = self.b.create_block();
+            let pending = self.b.ins().icmp_imm(
+                IntCC::Equal,
+                status,
+                hirsel_lir::runtime_abi::STATUS_PRETRANSFER_FAILURE as i64,
+            );
+            self.b.ins().brif(pending, rejected, &[], entered, &[]);
+            self.b.switch_to_block(entered);
+        }
+        // Both entered continuations observe the callee's mutations, including partial failure.
         for (destination, temporary) in column_returns {
             let shape = self.layout_shape(destination.layout)?;
             let value = self.load(shape, temporary);
             self.scatter(destination, shape, value)?;
         }
-        let status = returned[usize::from(signature.value.is_some())];
         let failure_block = self.failure_block(failure)?;
         let fail = if site.forward_caller {
             failure_block

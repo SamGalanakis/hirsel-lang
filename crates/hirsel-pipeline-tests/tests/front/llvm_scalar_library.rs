@@ -999,6 +999,10 @@ fn heap_lines(program: &Program, case: &Case, unit: &ValidatedUnit<Ready>) -> St
     let mut actual = String::new();
     // One unit per program: a run validates the whole program it is given.
     let heap = hirsel_heapcheck::Program::<Ready> {
+        // Hand-built component units without original source bodies.
+        invocation_bodies: Vec::new(),
+        invocations: Default::default(),
+        pretransfer_adapters: Vec::new(),
         target: program.table.target.clone(),
         layouts: program.table.table.clone(),
         units: vec![unit.unit().clone()],

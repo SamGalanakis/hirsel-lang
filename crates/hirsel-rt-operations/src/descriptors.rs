@@ -660,6 +660,13 @@ pub const ENTRIES: &[Entry] = &[
     entry("hirsel_rt_v2_block_grow", Local),
     entry("hirsel_rt_v2_payload", Local),
     entry("hirsel_rt_v2_capacity", Local),
+    // depth.rs: semantic counters belong exclusively to the running task.
+    entry("hirsel_rt_v2_depth_enter", Local),
+    entry("hirsel_rt_v2_depth_enter_at_site", Local),
+    entry("hirsel_rt_v2_depth_leave", Local),
+    entry("hirsel_rt_v2_depth_preflight", Local),
+    entry("hirsel_rt_v2_structural_order", Local),
+    entry("hirsel_rt_v2_structural_hash", Local),
     // budget.rs
     entry("hirsel_rt_v2_fuel_refill", Local),
     // Ahead execution is physical progress, not a semantic operation.
@@ -709,9 +716,10 @@ pub const ENTRIES: &[Entry] = &[
     ops("hirsel_rt_v2_foreign_enter", &["extern.call", "gate.enter"]),
     ops("hirsel_rt_v2_foreign_leave", &["extern.call", "gate.leave"]),
     ops("hirsel_rt_v2_foreign_violation", &["stop"]),
-    // A callback's entry and leave take and give back a compute permit (S-13).
-    entry("hirsel_rt_v2_callback_context", Concurrent),
-    entry("hirsel_rt_v2_callback_leave", Concurrent),
+    // The foreign interval owns this task exclusively on its bound thread.
+    // Admission/retirement are task-local; permit services remain concurrent.
+    entry("hirsel_rt_v2_callback_context", Local),
+    entry("hirsel_rt_v2_callback_leave", Local),
     ops("hirsel_rt_v2_callback_failed", &["stop"]),
     // io.rs
     ops("hirsel_rt_v2_io_close", HOST),

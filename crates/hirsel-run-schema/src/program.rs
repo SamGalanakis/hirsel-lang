@@ -77,6 +77,7 @@ impl ProgramRevision {
             hash.update(bytes);
         }
         atom(&mut hash, b"hirsel.semantic-program.v1");
+        atom(&mut hash, hirsel_core_contract::depth::SEMANTICS.as_bytes());
         atom(&mut hash, entry.as_bytes());
         hash.update((closure.len() as u64).to_le_bytes());
         for identity in closure {

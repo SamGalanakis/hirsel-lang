@@ -192,14 +192,22 @@ pub(super) fn invoke(
     failure: FailureId,
     after: BlockKind,
 ) -> Option<ValueId> {
+    let invocation = matches!(callee.0, Callee::Indirect(_) | Callee::Bound { .. });
+    if invocation {
+        let admission = b.admission_failure(&callee.0, &arguments, loans, failure);
+        b.push(Inst::FrameEnter { failure: admission });
+    }
     let shape = b.cx.layouts.table().fn_abis[abi.0 as usize].clone();
     let result = shape.result.map(|r| b.fresh(r.layout));
-    let failure = if loans.is_empty() {
+    let failure = if loans.is_empty() && !invocation {
         failure
     } else {
         let at = b.current();
         let ending = b.block(BlockKind::FailureCleanup, &[]);
         b.at(ending);
+        if invocation {
+            b.push(Inst::FrameLeave);
+        }
         for &loan in loans.iter().rev() {
             b.end_loan(loan);
         }
@@ -213,6 +221,7 @@ pub(super) fn invoke(
     let arguments = PoolRange::push(&mut b.ed.unit.pools.call_arguments, arguments);
     let call = CallId(b.ed.unit.tables.calls.len() as u32);
     b.ed.unit.tables.calls.push(CallSite {
+        pretransfer_failure: None,
         forward_caller: !matches!(callee.0, Callee::Indirect(_) | Callee::Bound { .. }),
         operation_arguments: callee.1,
         callee: callee.0,
@@ -229,6 +238,9 @@ pub(super) fn invoke(
         failure,
     });
     b.at(next);
+    if invocation {
+        b.push(Inst::FrameLeave);
+    }
     for &loan in loans.iter().rev() {
         b.end_loan(loan);
     }

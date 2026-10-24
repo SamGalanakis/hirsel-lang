@@ -289,6 +289,7 @@ fn call(b: &mut Body<'_, '_>, direct: Direct, arguments: &[CallArgument]) -> R<O
     );
     let id = CallId(b.ed.unit.tables.calls.len() as u32);
     b.ed.unit.tables.calls.push(CallSite {
+        pretransfer_failure: None,
         forward_caller: false,
         operation_arguments: Vec::new(),
         callee: Callee::Direct(symbol),
@@ -366,6 +367,7 @@ fn eq(b: &mut Body<'_, '_>, a: AddressId, c: AddressId) -> R<ValueId> {
             failure,
         });
     } else {
+        b.structural_access(b.cx.type_actual(0)?, layout)?;
         b.push(Inst::Compare {
             result,
             op: CompareOp::Eq,
@@ -385,6 +387,7 @@ fn hash(b: &mut Body<'_, '_>, a: AddressId) -> R<ValueId> {
     let result_layout = b.u64_layout()?;
     let result = b.fresh(result_layout);
     let failure = loan_failure(b, &[loan], Some("MEM-3"));
+    b.structural_access(b.cx.type_actual(0)?, layout)?;
     b.push(Inst::Hash {
         result,
         value,

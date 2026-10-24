@@ -21,13 +21,14 @@ pub fn main() -> Result[(),u64] {{
         );
         let program = compile(&source);
         let lowered = hirsel_rc::import::lower(&program, &target()).unwrap();
+        let operations = lowered.operation_registry(&program);
         let table = lowered.table;
         let rows = manifest(&program);
         let target = target();
         let inputs = Inputs {
             memo: Default::default(),
             discharge: None,
-            operations: &program.operation_registry(),
+            operations: &operations,
             target: &target,
             layouts: &table,
             manifest: &rows,
@@ -61,6 +62,9 @@ pub fn main() -> Result[(),u64] {{
             assert!(violations.is_empty(), "{}\n{violations:?}", dump(unit));
         }
         let program = hirsel_heapcheck::Program::<Ready> {
+            invocation_bodies: operations.invocation_bodies.clone(),
+            invocations: operations.invocations.clone(),
+            pretransfer_adapters: operations.pretransfer_adapters.clone(),
             target,
             layouts: table,
             units,

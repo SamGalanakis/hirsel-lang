@@ -13,6 +13,7 @@ pub mod flat_walk;
 pub mod import;
 pub mod insert;
 pub mod instance;
+pub mod invocations;
 pub mod legalize;
 pub mod library;
 pub mod liveness;

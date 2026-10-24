@@ -380,7 +380,12 @@ fn a_failing_unsafe_ffi_field_ends_the_process_even_inside_a_safe_value() {
             layout(8, 1, Some(failing_drop), Vec::new()),
             LAYOUT_UNSAFE_FFI,
         );
-        let outer = layout(16, 2, Some(log_drop), vec![finalize_step(1, 8, ffi)]);
+        let outer = layout(
+            16,
+            2,
+            Some(log_drop),
+            vec![finalize_step(1, 8, ffi), end_finalize_step(1, 8, ffi)],
+        );
         release(ctx.0, node(ctx.0, outer, 1));
         return;
     }

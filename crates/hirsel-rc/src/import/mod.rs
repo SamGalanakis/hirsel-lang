@@ -483,8 +483,126 @@ pub fn lower_cached_with_roots(
     specialized.assert_origins(&lowered);
     lowered.unit_origins = specialized.origins;
     lowered.inline_instances = specialized.inline;
+    let registry = lowered.operation_registry(program);
+    prune_pretransfer(
+        &mut lowered.units,
+        &lowered.table,
+        &registry.pretransfer_adapters,
+    );
     crate::arena_credit::summarize(&mut lowered.units, &mut lowered.table);
     Ok(lowered)
+}
+
+/// Finish code-target-dependent cleanup before any strict C qualification.
+/// The validator independently reconstructs necessity; this only removes the
+/// speculative caller-owned branch for dispatch proven ordinary by the producer.
+pub(crate) fn prune_pretransfer(
+    units: &mut [LirUnit<Value>],
+    table: &LayoutTable,
+    inventory: &[hirsel_lir::pretransfer::AdapterReference],
+) {
+    for unit in units {
+        let required = hirsel_lir::pretransfer::required(unit, table, inventory);
+        for (call, required) in unit.tables.calls.iter_mut().zip(required) {
+            if !required {
+                call.pretransfer_failure = None;
+            }
+        }
+        *unit = crate::insert::Editor::new(unit.clone()).finish();
+    }
+}
+
+impl Lowered {
+    pub fn operation_registry(
+        &self,
+        program: &Program,
+    ) -> hirsel_layout::operation::OperationRegistry {
+        invocation_registry(
+            program,
+            &self.instances,
+            &self.semantic_owners,
+            &self.units,
+            &self.unit_origins,
+        )
+    }
+}
+
+/// Bind expected bodies from the independent source instance and specialization
+/// plan. Candidate anchor coordinates never select the expected inventory.
+pub(crate) fn invocation_registry(
+    program: &Program,
+    instances: &Instances,
+    owners: &BTreeMap<DefPath, Option<DefPath>>,
+    units: &[LirUnit<Value>],
+    origins: &[InstanceId],
+) -> hirsel_layout::operation::OperationRegistry {
+    let mut registry = program.operation_registry();
+    assert_eq!(
+        units.len(),
+        origins.len(),
+        "independent unit/body association"
+    );
+    for (unit, &origin) in units.iter().zip(origins) {
+        if instances.roles[origin.index()].is_library() {
+            continue;
+        }
+        let view = instances.view(origin);
+        let owner = owners
+            .get(&unit.header.definition)
+            .and_then(Option::as_ref)
+            .unwrap_or_else(|| view.definition.path.path());
+        let original = program
+            .definitions
+            .get(owner)
+            .expect("original source selection exists outside candidate units");
+        let rows = registry
+            .invocations
+            .get(owner)
+            .cloned()
+            .expect("original source invocation inventory exists");
+        let evidence = crate::invocations::bind_source(
+            original,
+            rows,
+            &Symbol {
+                kind: SymbolKind::Function,
+                definition: unit.header.definition.clone(),
+                instance: Some(unit.header.instance),
+            },
+            view.body,
+        )
+        .expect("independent source instance plan is valid");
+        registry
+            .invocations
+            .insert(evidence.body.definition.clone(), evidence.invocations);
+        registry.invocation_bodies.push(evidence.body);
+    }
+    for id in instances.ids() {
+        let view = instances.view(id);
+        let Some(primitive) = hirsel_lir::pretransfer::primitive(view.key.definition()) else {
+            continue;
+        };
+        let Some(body) = instances.ids().find(|other| {
+            instances.view(*other).key.definition() == &primitive
+                && instances.actuals[other.index()].arguments
+                    == instances.actuals[id.index()].arguments
+        }) else {
+            panic!("materialized adapter has no independently planned primitive");
+        };
+        registry.pretransfer_adapters.push(
+            crate::invocations::keyed_adapter(
+                view,
+                &instances.actuals[id.index()].arguments,
+                instances.view(body),
+                &instances.actuals[body.index()].arguments,
+                instances.abis[id.index()],
+            )
+            .expect("independent adapter instance plan is valid"),
+        );
+    }
+    registry
+        .invocation_bodies
+        .sort_by(|a, b| (&a.definition, a.instance).cmp(&(&b.definition, b.instance)));
+    registry
 }
 
 /// The definition of every static empty sequence; its instance names the
@@ -587,8 +705,14 @@ fn statics(
                         arguments: arguments.to_vec(),
                         outer: vec![],
                     };
+                    let adapter = crate::library::keyed::request(program, path, arguments.to_vec())
+                        .map_err(|e| {
+                            crate::statics::StaticError(format!("static adapter: {e:?}"))
+                        })?;
+                    let callable_path = adapter.as_ref().map(|r| &r.path).unwrap_or(path);
+                    let callable_actuals = adapter.as_ref().map(|r| &r.actuals).unwrap_or(&actuals);
                     let id = instances
-                        .find(program, path, &actuals)
+                        .find(program, callable_path, callable_actuals)
                         .or_else(|error| {
                             if arguments.is_empty() {
                                 instances
@@ -604,7 +728,7 @@ fn statics(
                         })?;
                     Ok(Symbol {
                         kind: SymbolKind::Function,
-                        definition: path.clone(),
+                        definition: callable_path.clone(),
                         instance: Some(instances.view(id).key.digest()),
                     })
                 },
@@ -1250,6 +1374,8 @@ fn import_mapped(
         unreachable: None,
         propagate: None,
         current: BlockId(0),
+        invocation_live: false,
+        invocation_return: None,
         state: State {
             slots: PVec::default(),
             loans: PVec::default(),
@@ -1333,6 +1459,8 @@ fn converged(used: &[Option<State>], entry: &[Option<State>]) -> bool {
 }
 
 struct Importer<'a> {
+    invocation_live: bool,
+    invocation_return: Option<tir::BlockId>,
     source_anchors: Vec<hirsel_span::Anchor>,
     /// Payload layouts are complete before construction; later rows cannot
     /// change their keys. Repeated empty constructions share this graph walk.

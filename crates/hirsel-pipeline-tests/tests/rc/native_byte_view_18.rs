@@ -244,7 +244,7 @@ fn nested_slice_keeps_borrowed_storage_and_rejects_outside_loan() {
     let forged = editor.finish();
     let target = support::target();
     let manifest = support::manifest(&program);
-    let operations = program.operation_registry();
+    let operations = lowered.operation_registry(&program);
     let inputs = hirsel_lir::validate::Inputs {
         memo: Default::default(),
         discharge: None,

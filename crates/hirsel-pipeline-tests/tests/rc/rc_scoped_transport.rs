@@ -7,12 +7,13 @@ fn heap(source: &str) -> hirsel_heapcheck::Run {
 }
 fn heap_baseline(source: &str, qualify: bool) -> hirsel_heapcheck::Run {
     let (program, lowered) = crate::scoped_consumer_9::lower_disabled(source);
+    let operations = lowered.operation_registry(&program);
     let rows = manifest(&program);
     let target = target();
     let inputs = Inputs {
         memo: Default::default(),
         discharge: None,
-        operations: &program.operation_registry(),
+        operations: &operations,
         target: &target,
         layouts: &lowered.table,
         manifest: &rows,
@@ -68,6 +69,9 @@ fn heap_baseline(source: &str, qualify: bool) -> hirsel_heapcheck::Run {
         })
         .collect();
     let h = hirsel_heapcheck::Program {
+        invocation_bodies: operations.invocation_bodies.clone(),
+        invocations: operations.invocations.clone(),
+        pretransfer_adapters: operations.pretransfer_adapters.clone(),
         target,
         layouts: lowered.table,
         units,
@@ -307,13 +311,14 @@ fn unsupported_generic_borrow_preserves_execution_but_not_qualification() {
         )),
         "{proof:?}"
     );
+    let operations = lowered.operation_registry(&program);
     let rows = manifest(&program);
     let target = target();
     let inputs = Inputs {
         target: &target,
         layouts: &lowered.table,
         manifest: &rows,
-        operations: &program.operation_registry(),
+        operations: &operations,
         discharge: None,
         memo: Default::default(),
     };

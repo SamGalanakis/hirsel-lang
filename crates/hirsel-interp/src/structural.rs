@@ -1,4 +1,4 @@
-//! Iterative read-only traversal. Constants are provisional under spec issue #16.
+//! Complete logical-depth admission before iterative structural reads (MEM-3).
 use crate::{
     Value,
     scalar::{self, ScalarError},
@@ -7,7 +7,40 @@ use hirsel_syntax::BinaryOp;
 use std::cmp::Ordering;
 pub const NATIVE_DEPTH: usize = 64;
 pub const SCRATCH_LEVELS: usize = 1024;
-pub const MAX_DEPTH: usize = NATIVE_DEPTH + SCRATCH_LEVELS;
+pub const MAX_DEPTH: usize = hirsel_core_contract::depth::STRUCTURAL_LIMIT as usize;
+
+/// A complete operand preflight: no scalar, tag, length or pointer shortcut may
+/// hide an excessive path. Map entries are storage pairs, not logical nodes.
+pub fn preflight(value: &Value) -> Result<(), StructuralError> {
+    let mut pending = vec![(value, 0usize)];
+    while let Some((value, depth)) = pending.pop() {
+        if depth > MAX_DEPTH {
+            return Err(StructuralError::Depth);
+        }
+        if let Value::Map { entries, .. } = value {
+            for entry in entries.iter().flatten() {
+                let Value::Tuple(fields) = entry else {
+                    return Err(StructuralError::InvalidValue);
+                };
+                for field in fields {
+                    pending.push((
+                        field.as_ref().ok_or(StructuralError::InvalidValue)?,
+                        depth + 1,
+                    ));
+                }
+            }
+        } else if let Some(fields) = children(value) {
+            for field in fields {
+                if let Some(field) = field {
+                    pending.push((field, depth + 1));
+                } else if !matches!(value, Value::Set { .. }) {
+                    return Err(StructuralError::InvalidValue);
+                }
+            }
+        }
+    }
+    Ok(())
+}
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum StructuralError {
     Depth,
@@ -47,6 +80,8 @@ fn identity(a: &Value, b: &Value) -> Result<Ordering, StructuralError> {
 }
 /// None is IEEE unordered; language equality never uses Rust bit equality.
 pub fn compare(a: &Value, b: &Value) -> Result<Option<Ordering>, StructuralError> {
+    preflight(a)?;
+    preflight(b)?;
     compare_at(a, b, 0, false)
 }
 fn compare_at(
@@ -158,7 +193,7 @@ fn compare_at(
                         work.push(Work::Pair(
                             a.as_ref().ok_or(StructuralError::InvalidValue)?,
                             b.as_ref().ok_or(StructuralError::InvalidValue)?,
-                            depth + 1,
+                            depth + usize::from(!keyed),
                         ));
                     }
                     work[first..].reverse();
@@ -186,6 +221,8 @@ fn compare_at(
     Ok(Some(Ordering::Equal))
 }
 pub fn binary(op: BinaryOp, a: &Value, b: &Value) -> Result<Value, StructuralError> {
+    preflight(a)?;
+    preflight(b)?;
     let order = compare_at(a, b, 0, matches!(op, BinaryOp::Eq | BinaryOp::Ne))?;
     use BinaryOp::*;
     Ok(Value::Bool(match op {
@@ -200,6 +237,7 @@ pub fn binary(op: BinaryOp, a: &Value, b: &Value) -> Result<Value, StructuralErr
 }
 /// Stable length-framed encoding, using SipHash-1-3. Equal keys hash identically.
 pub fn hash(value: &Value, seed: u64) -> Result<u64, StructuralError> {
+    preflight(value)?;
     Ok(hirsel_kernels::siphash::siphash13(
         &encoding(value, 0)?,
         seed,
@@ -281,7 +319,7 @@ fn encoding(value: &Value, depth: usize) -> Result<Vec<u8>, StructuralError> {
                     for f in fields.iter().rev().filter(|v| !keyed || v.is_some()) {
                         work.push(Work::Enter(
                             f.as_ref().ok_or(StructuralError::InvalidValue)?,
-                            d + 1,
+                            d + usize::from(!matches!(v, Value::Map { .. })),
                         ));
                     }
                 } else {

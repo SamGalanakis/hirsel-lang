@@ -2181,15 +2181,6 @@ fn config(inject: Option<u64>, kind: &super::link::LaunchKind, world: &HeapWorld
     }
 }
 
-fn heap_program(program: &ReadyProgram) -> hirsel_heapcheck::Program<hirsel_lir::stage::Ready> {
-    hirsel_heapcheck::Program {
-        target: program.target.clone(),
-        layouts: program.table.clone(),
-        units: program.raw_units(),
-        statics: program.statics.clone(),
-    }
-}
-
 fn violation(
     entry: &DefPath,
     v: &hirsel_heapcheck::Violation,
@@ -2356,7 +2347,7 @@ pub fn run_heap_in(
             "callee replay requires its canonical runner argument and reply protocol",
         ));
     }
-    let heap = heap_program(program);
+    let heap = program.heap_program();
     let kind = program
         .launches
         .get(entry)
@@ -2425,7 +2416,7 @@ pub fn heap_campaign_in(
             "callee replay requires its canonical runner argument and reply protocol",
         ));
     }
-    let heap = heap_program(program);
+    let heap = program.heap_program();
     let kind = program
         .launches
         .get(entry)

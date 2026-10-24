@@ -150,6 +150,7 @@ impl Importer<'_> {
         let r = self.compared(right, &mut loans, &mut taken)?;
         self.failure.before.drain(0..prepared.len());
         let layout = self.layout_of(self.value_type(l));
+        self.structural_access(self.body.places[left.place.0 as usize].ty, layout)?;
         let result = self.fresh(ty);
         self.reading(loans, taken, |this| {
             let failure = this.fail(Some("MEM-3".to_string()))?;
@@ -292,13 +293,31 @@ impl Importer<'_> {
     /// A failure successor for the operation at hand: dispose pending owned
     /// values, run the failure cleanup, propagate.
     pub(super) fn fail(&mut self, rule: Option<String>) -> R<FailureId> {
+        let live = std::mem::replace(&mut self.invocation_live, false);
         let actions = self.failure_actions()?;
         let pending = self.failure.pending.clone();
-        let target = if pending.is_empty() {
+        let mut target = if pending.is_empty() {
             self.chain(&actions)?
         } else {
             self.dispose(&pending, &actions, false)?
         };
+        self.invocation_live = live;
+        if live {
+            let saved = self.current;
+            let retired = self.block(BlockKind::FailureCleanup);
+            self.current = retired;
+            let mut arguments = Vec::new();
+            for &value in &pending {
+                let replacement = self.value(self.value_type(value), Holding::Owned);
+                self.out.blocks[retired.index()].params.push(replacement);
+                arguments.push(replacement);
+            }
+            self.push(Inst::FrameLeave);
+            let edge = self.edge(target, arguments);
+            self.terminate(Terminator::Jump(edge));
+            self.current = saved;
+            target = retired;
+        }
         let anchor = self.anchor_here();
         let edge = self.edge(target, pending);
         Ok(self.failure_edge(edge, rule, anchor))

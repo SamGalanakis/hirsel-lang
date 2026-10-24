@@ -180,6 +180,19 @@ pub struct TaskCtx {
     /// Private execution ownership; never part of the compiled context view.
     pub(crate) ahead: Option<Box<crate::tasks::ordered::ahead::Local>>,
     pub(crate) ahead_physical: *mut crate::tasks::ordered::ahead::native::Physical,
+    pub(crate) activations: hirsel_core_contract::depth::Activations,
+    pub(crate) active_invocations:
+        Box<[std::mem::MaybeUninit<hirsel_core_contract::depth::Activation>]>,
+    pub(crate) cleanup_depth: u32,
+    /// User finalizers retained through their field programs. Allocated at task creation.
+    pub(crate) cleanup_invocations: Vec<hirsel_core_contract::depth::Activation>,
+    /// Rejected entries cannot execute code; their nested field scopes need no tokens.
+    pub(crate) cleanup_rejections: usize,
+    /// Invoking language sites parallel to admitted compiled invocations. Runtime
+    /// callback boundaries inherit these sites without introducing an IR selector.
+    pub(crate) invocation_sites: Box<[std::mem::MaybeUninit<(u64, u64)>]>,
+    /// Initialized prefix of both fixed-capacity native invocation arrays.
+    pub(crate) invocation_depth: usize,
 }
 
 const _: () = assert!(std::mem::offset_of!(TaskCtx, view) == 0);
@@ -412,6 +425,15 @@ impl TaskCtx {
             native_host_result: None,
             replay_host: None,
             ordered_charge_trace: Default::default(),
+            activations: Default::default(),
+            active_invocations: Box::new_uninit_slice(crate::depth::INVOCATION_CAPACITY),
+            cleanup_depth: 0,
+            cleanup_invocations: Vec::with_capacity(usize::from(
+                hirsel_core_contract::depth::CLEANUP_LIMIT,
+            )),
+            cleanup_rejections: 0,
+            invocation_sites: Box::new_uninit_slice(crate::depth::INVOCATION_CAPACITY),
+            invocation_depth: 0,
         }
     }
 

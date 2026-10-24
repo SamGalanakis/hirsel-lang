@@ -401,6 +401,13 @@ fn for_each_table_id<S>(unit: &mut LirUnit<S>, f: &mut impl FnMut(TableId<'_>)) 
             f(TableId::Layout(layout));
         }
     }
+    for plan in &mut tables.structural {
+        for node in &mut plan.nodes {
+            for layout in node.layouts_mut() {
+                f(TableId::Layout(layout));
+            }
+        }
+    }
     for plan in &mut tables.codecs {
         for node in &mut plan.nodes {
             for layout in node.layouts_mut() {
@@ -450,6 +457,9 @@ pub fn references<S>(unit: &LirUnit<S>) -> (Vec<LayoutId>, Vec<FnAbiId>) {
             .iter()
             .filter_map(|flag| flag.environment),
     );
+    for plan in &unit.tables.structural {
+        layouts.extend(plan.layouts());
+    }
     for plan in &unit.tables.codecs {
         // Codec plans expose their reference traversal mutably; clone only the
         // node instead of the whole unit, including its CFG and source maps.

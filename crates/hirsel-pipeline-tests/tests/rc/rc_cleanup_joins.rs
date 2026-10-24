@@ -412,6 +412,9 @@ fn prove(fixture: Fixture) {
     }
     assert!(units[0].tables.init_flags.iter().any(|f| f.path.len > 0));
     let program = hirsel_heapcheck::Program {
+        invocation_bodies: Vec::new(),
+        invocations: Default::default(),
+        pretransfer_adapters: Vec::new(),
         target,
         layouts: fixture.table,
         units,
@@ -496,6 +499,9 @@ fn a_forged_field_flag_is_rejected_independently_by_c_and_h() {
         "{violations:?}"
     );
     let program = hirsel_heapcheck::Program {
+        invocation_bodies: Vec::new(),
+        invocations: Default::default(),
+        pretransfer_adapters: Vec::new(),
         target,
         layouts: fixture.table,
         units,

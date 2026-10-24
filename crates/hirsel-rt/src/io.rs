@@ -5098,7 +5098,7 @@ pub static hirsel_rt_v2_file_walk_descriptor: WalkDescriptor = WalkDescriptor(cr
     steps: std::ptr::null(),
     step_count: 0,
     field_count: 0,
-    flags: crate::LAYOUT_DYNAMIC,
+    flags: crate::LAYOUT_DYNAMIC | crate::LAYOUT_IMPLEMENTATION_FINALIZER,
     logical: crate::LOGICAL_UNSUPPORTED,
     logical_count: std::ptr::null(),
     scan: std::ptr::null(),

@@ -134,6 +134,9 @@ fn check(source: &str, expected: &[(&str, Option<u32>)], elided: &[(&str, bool)]
 
         let run = hirsel_heapcheck::run(
             &hirsel_heapcheck::Program {
+                invocation_bodies: built.operations.invocation_bodies.clone(),
+                invocations: built.operations.invocations.clone(),
+                pretransfer_adapters: built.operations.pretransfer_adapters.clone(),
                 target: built.target.clone(),
                 layouts: built.table.clone(),
                 units: built.raw_units(),

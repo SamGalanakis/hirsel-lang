@@ -18,6 +18,7 @@ impl<'p, S: Stage> Machine<'p, S> {
             ops,
             ledger: self.ledger.clone(),
             stack: self.stack.clone(),
+            invocation_events: self.invocation_events.clone(),
             entry: self.entry,
             output: self.output.clone(),
             failures: self.failures.clone(),
@@ -473,6 +474,9 @@ mod tests {
         );
         b.term(block, Terminator::Return(None));
         let program = Program {
+            invocations: Default::default(),
+            invocation_bodies: Vec::new(),
+            pretransfer_adapters: Vec::new(),
             target,
             layouts: table.clone(),
             units: vec![b.finish_with_layouts(&table)],

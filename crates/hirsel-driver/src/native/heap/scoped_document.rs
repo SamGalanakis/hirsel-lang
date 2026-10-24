@@ -65,12 +65,7 @@ fn check_detached_retention(fixture: &str) {
             assert!(node.scan.is_empty());
             assert!(node.drop.is_empty());
         }
-        let program = hirsel_heapcheck::Program {
-            target: ready.target.clone(),
-            layouts: ready.table.clone(),
-            units: ready.raw_units(),
-            statics: ready.statics.clone(),
-        };
+        let program = ready.heap_program();
         let mut previous = None;
         for full_recount_every_step in [false, true] {
             let clean = hirsel_heapcheck::run_ready(
@@ -202,7 +197,7 @@ fn construction_and_extraction_failures_drain_in_both_audit_modes() {
             &Options::new(TargetSpec::x86_64_unknown_linux_gnu()),
         )
         .unwrap();
-        let program = heap_program(&ready);
+        let program = ready.heap_program();
         for full_recount_every_step in [false, true] {
             let campaign = hirsel_heapcheck::audit_campaign_ready(
                 &program,
@@ -281,7 +276,7 @@ fn private_malformed_spans_links_and_tags_have_checked_twins() {
             &Options::new(TargetSpec::x86_64_unknown_linux_gnu()),
         )
         .unwrap();
-        let program = heap_program(&ready);
+        let program = ready.heap_program();
         for full_recount_every_step in [false, true] {
             let campaign = hirsel_heapcheck::audit_campaign_ready(
                 &program,
@@ -318,7 +313,7 @@ fn a_small_input_slice_keeps_its_ordinary_backing_during_the_callback() {
             &Options::new(TargetSpec::x86_64_unknown_linux_gnu()),
         )
         .unwrap();
-        let program = heap_program(&ready);
+        let program = ready.heap_program();
         for full_recount_every_step in [false, true] {
             let clean = hirsel_heapcheck::run_ready(
                 &program,
@@ -393,7 +388,7 @@ fn scratch_construction_and_extraction_failures_drain_in_both_audit_modes() {
             &Options::new(TargetSpec::x86_64_unknown_linux_gnu()),
         )
         .unwrap();
-        let program = heap_program(&ready);
+        let program = ready.heap_program();
         for full_recount_every_step in [false, true] {
             let campaign = hirsel_heapcheck::audit_campaign_ready(
                 &program,
@@ -447,7 +442,7 @@ fn scratch_full_hash_collisions_preserve_exact_key_comparison() {
             &Options::new(TargetSpec::x86_64_unknown_linux_gnu()),
         )
         .unwrap();
-        let mut program = heap_program(&ready);
+        let mut program = ready.heap_program();
         // Reuse rc_maps.rs's adversarial full-hash-collision control; equality
         // and the production map probing code remain unchanged.
         use hirsel_lir::ir::{ConstantData, ConstantId, ConstantValue, Inst};

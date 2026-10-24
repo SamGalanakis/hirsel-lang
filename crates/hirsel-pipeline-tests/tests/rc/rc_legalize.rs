@@ -38,6 +38,7 @@ enum Outcome {
 }
 
 struct Ready_ {
+    operations: hirsel_layout::operation::OperationRegistry,
     table: LayoutTable,
     units: Vec<LirUnit<Ready>>,
 }
@@ -47,6 +48,7 @@ fn build(source: &str) -> Ready_ {
     let program = compile(source);
     let lowered = hirsel_rc::import::lower(&program, &target())
         .unwrap_or_else(|e| panic!("{source}\nlower: {e:?}"));
+    let operations = lowered.operation_registry(&program);
     let table = lowered.table.clone();
     let mut rc = Vec::new();
     for (i, u) in lowered.units.iter().enumerate() {
@@ -70,7 +72,7 @@ fn build(source: &str) -> Ready_ {
     let inputs = Inputs {
         memo: Default::default(),
         discharge: None,
-        operations: &program.operation_registry(),
+        operations: &operations,
         target: &target,
         layouts: &table,
         manifest: &manifest,
@@ -79,7 +81,11 @@ fn build(source: &str) -> Ready_ {
         let v = hirsel_lir::validate::check(u, &inputs);
         assert!(v.is_empty(), "{source}\n{}\n{v:#?}", dump(u));
     }
-    Ready_ { table, units }
+    Ready_ {
+        operations,
+        table,
+        units,
+    }
 }
 
 fn line_of(source: &str, byte: u32) -> u32 {
@@ -90,6 +96,9 @@ fn line_of(source: &str, byte: u32) -> u32 {
 /// and every fault-injected failure path audited too.
 fn heap(source: &str, b: &Ready_) -> Outcome {
     let program = hirsel_heapcheck::Program {
+        invocation_bodies: b.operations.invocation_bodies.clone(),
+        invocations: b.operations.invocations.clone(),
+        pretransfer_adapters: b.operations.pretransfer_adapters.clone(),
         target: target(),
         layouts: b.table.clone(),
         units: b.units.clone(),
@@ -114,6 +123,9 @@ fn heap(source: &str, b: &Ready_) -> Outcome {
 /// program once per injection site.
 fn heap_clean(source: &str, b: &Ready_) -> Outcome {
     let program = hirsel_heapcheck::Program {
+        invocation_bodies: b.operations.invocation_bodies.clone(),
+        invocations: b.operations.invocations.clone(),
+        pretransfer_adapters: b.operations.pretransfer_adapters.clone(),
         target: target(),
         layouts: b.table.clone(),
         units: b.units.clone(),
@@ -596,7 +608,7 @@ fn a_simd_lane_of_another_scalar_kind_is_rejected() {
     let inputs = Inputs {
         memo: Default::default(),
         discharge: None,
-        operations: &program.operation_registry(),
+        operations: &b.operations,
         target: &target,
         layouts: &b.table,
         manifest: &manifest,
@@ -730,7 +742,7 @@ fn rewrite(b: Ready_, source: &str, ledger: &hirsel_rc::legalize::Ledger) -> Rew
             let inputs = Inputs {
                 memo: Default::default(),
                 discharge: None,
-                operations: &program.operation_registry(),
+                operations: &b.operations,
                 target: &target,
                 layouts: &b.table,
                 manifest: &manifest,
@@ -744,6 +756,7 @@ fn rewrite(b: Ready_, source: &str, ledger: &hirsel_rc::legalize::Ledger) -> Rew
         .collect();
     (
         Ready_ {
+            operations: b.operations,
             table: b.table,
             units,
         },

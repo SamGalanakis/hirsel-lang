@@ -125,13 +125,23 @@ fn recursion_has_an_explicit_depth_limit_and_no_host_call_recursion() {
     tooling_limit(&e, ToolingLimitKind::CallDepth, 1);
     let e = execute(
         vec![countdown()],
-        vec![int(P::U32, 2000)],
+        vec![int(P::U32, 1023)],
         Limits {
             steps: Some(100000),
             call_depth: 3000,
         },
     );
-    returned(&e, int(P::U32, 2001));
+    returned(&e, int(P::U32, 1024));
+    let e = execute(
+        vec![countdown()],
+        vec![int(P::U32, 1024)],
+        Limits {
+            steps: Some(100000),
+            call_depth: 3000,
+        },
+    );
+    fail(&e, "LANG-10", 7);
+    assert!(matches!(&e.outcome, Outcome::Failed(f) if f.kind == "Depth"));
 }
 fn loop_program() -> Vec<Definition> {
     let mut b = Builder::new();

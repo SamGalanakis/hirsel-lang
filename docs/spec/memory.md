@@ -34,17 +34,47 @@ There is no cycle collector and there are no weak references.
 The order in which memory is freed is unobservable; resource drops follow
 [DROP-2](failure.md#drop-2-resources). Release uses a worklist linked through dead block
 headers, so it uses constant native stack and never allocates; children are visited so
-that resource drops run in DROP-2's order. Read-only structural operations (`==`, hash,
-order) past a fixed recursion depth continue on a per-task scratch stack limited to a fixed
-number of levels; exhausting it is the failure `Depth`, with ordinary cleanup.
-`map.insert`, `set.insert`, `map.get` and `set.contains` hash their key before they look at
-the container, so a key nested past the limit fails `Depth` at the call whatever the
-container holds, an empty one included. A stored key passed the limit when it was
-inserted, so comparing it with a probe key that passed cannot fail.
+that resource drops run in DROP-2's order.
 
-**Unspecified:** the normative depth and scratch-level table. The reference interpreter
-permits 64 native plus 1,024 scratch edges for structural reads (1,088 in all, the root at
-level zero). Finite or regular nominal type graphs have no semantic width or depth cutoff.
+Structural depth is measured over logical values, independently of memory layout and
+call depth. A root has depth zero. Each tuple or record field, active variant payload
+field, distinct-type payload, box payload, sequence element, map key or value, and set
+member is one edge deeper than its containing value. Inline and Simd elements count as
+sequence elements where a structural operation is defined. A map entry introduces no
+additional pair node. Aliases and Packed representation wrappers introduce no edge;
+Packed payload fields and flat record fields count as their logical fields. Primitive
+scalars, unit, String and Bytes have no structural children. A String or Bytes length
+does not increase depth. Physical headers, capacity, map holes and indices, environment
+descriptors and compiler-generated layout wrappers introduce no edge. Opaque primitives
+retain their declared abstract structural view; types without a structural operation
+acquire none through this rule. Shared ownership does not add an edge to an otherwise
+defined structural view or let any path evade depth checking.
+
+Before evaluating built-in structural equality, inequality, order or hashing, check
+every operand's complete logical depth. If any path exceeds 1,088 edges, fail with
+`Depth`, rule MEM-3, at the invoking operation, with ordinary FAIL-1 attribution and
+FAIL-3 cleanup. This check precedes value, tag, length, identity, hash-cache and early
+mismatch shortcuts. Repeated shared subvalues are checked at every incoming logical
+depth, or by an equivalent sound height summary; pointer identity alone proves nothing.
+Insertion order, sorting strategy and hash seed do not affect admission. A successful
+preflight does not change scalar equality, NaN behavior, canonical order or hashing.
+
+Hash-key admission for map.insert, set.insert, map.get and set.contains starts with the
+key at depth zero, before container inspection, bounded-arena charge or argument
+consumption. An empty container is no exception. Already-admitted stored keys compared
+with an admitted probe start at the same key depth and cannot fail this check. Hashing
+a whole map as a value starts at that map's root and counts its key/value edges.
+User comparator calls remain ordinary invocations; this rule adds no structural read
+to an operation that did not otherwise perform one.
+
+The limit bounds logical path depth, not native recursion, worklist occupancy, type-graph
+depth, width, byte length or total work. Implementations may choose any native/scratch
+split or iterative algorithm that preserves these outcomes. Structural admission makes
+no debit to the activation count or a bounded arena. Its temporary accounting ends
+before failure cleanup or return; it cannot leak into a later operation. Mechanical
+release is not a structural read and cannot fail Depth because a value is deeply nested.
+
+Finite or regular nominal type graphs have no semantic width or depth cutoff.
 
 ### MEM-4: Arenas
 

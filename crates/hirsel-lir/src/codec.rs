@@ -664,20 +664,47 @@ impl CodecPlan {
         table: &LayoutTable,
         index: &dyn Fn(LayoutId) -> Option<u32>,
     ) -> Result<Vec<u64>, String> {
+        self.program_impl(table, index, false)
+    }
+
+    /// Physical addressing alone. The private header's output words are unused;
+    /// this program must never be passed to a serialization entry.
+    pub(crate) fn access_program(
+        &self,
+        table: &LayoutTable,
+        index: &dyn Fn(LayoutId) -> Option<u32>,
+    ) -> Result<Vec<u64>, String> {
+        self.program_impl(table, index, true)
+    }
+
+    fn program_impl(
+        &self,
+        table: &LayoutTable,
+        index: &dyn Fn(LayoutId) -> Option<u32>,
+        access: bool,
+    ) -> Result<Vec<u64>, String> {
         let descriptor = |id: LayoutId| {
             index(id)
                 .map(u64::from)
                 .ok_or_else(|| format!("layout {} has no descriptor index", id.0))
         };
-        let top = self.result.unwrap_or(self.bytes);
+        let top = if access {
+            self.root
+        } else {
+            self.result.unwrap_or(self.bytes)
+        };
         let mut words = vec![
             PROGRAM_VERSION,
             self.nodes.len() as u64,
-            fixed(record(table, self.node(top)?.layout())?)?,
+            if access {
+                0
+            } else {
+                fixed(record(table, self.node(top)?.layout())?)?
+            },
             u64::from(self.root.0),
             u64::from(top.0),
             u64::from(self.bytes.0),
-            if self.checks.is_empty() {
+            if access || self.checks.is_empty() {
                 NO_NODE
             } else {
                 descriptor(self.node(self.root)?.layout())?
@@ -824,10 +851,23 @@ impl CodecPlan {
                                 u64::from(element.0),
                             ]),
                             LayoutKind::SoaColumns { .. } => {
-                                let CodecNode::Fields { fields: ids, .. } = self.node(*element)?
-                                else {
-                                    return Err("columns without record fields".into());
-                                };
+                                // A nominal wrapper can keep semantic identity at the
+                                // same physical record address. Columns still project
+                                // the represented fields; retain `element` in the
+                                // program so access-only users keep those wrappers.
+                                let mut represented = *element;
+                                let mut projected = None;
+                                for _ in 0..=self.nodes.len() {
+                                    match self.node(represented)? {
+                                        CodecNode::Checked { value, .. } => represented = *value,
+                                        CodecNode::Fields { fields, .. } => {
+                                            projected = Some(fields);
+                                            break;
+                                        }
+                                        _ => break,
+                                    }
+                                }
+                                let ids = projected.ok_or("columns without record fields")?;
                                 let quantum = er
                                     .fields
                                     .iter()

@@ -42,6 +42,7 @@ fn source(body: &str) -> String {
 }
 
 struct Built {
+    operations: hirsel_layout::operation::OperationRegistry,
     table: LayoutTable,
     units: Vec<LirUnit<Ready>>,
     statics: Vec<hirsel_lir::statics::StaticData>,
@@ -52,13 +53,14 @@ fn build(source: &str) -> Built {
     let program = compile(source);
     let lowered = hirsel_rc::import::lower(&program, &target())
         .unwrap_or_else(|e| panic!("{source}\nlower: {e:?}"));
+    let operations = lowered.operation_registry(&program);
     let table = lowered.table.clone();
     let manifest = manifest(&program);
     let target = target();
     let inputs = Inputs {
         memo: Default::default(),
         discharge: None,
-        operations: &program.operation_registry(),
+        operations: &operations,
         target: &target,
         layouts: &table,
         manifest: &manifest,
@@ -101,6 +103,7 @@ fn build(source: &str) -> Built {
         );
     }
     Built {
+        operations,
         table,
         units,
         statics: lowered.statics,
@@ -109,6 +112,9 @@ fn build(source: &str) -> Built {
 
 fn heap_program(b: &Built) -> hirsel_heapcheck::Program<Ready> {
     hirsel_heapcheck::Program {
+        invocation_bodies: b.operations.invocation_bodies.clone(),
+        invocations: b.operations.invocations.clone(),
+        pretransfer_adapters: b.operations.pretransfer_adapters.clone(),
         target: target(),
         layouts: b.table.clone(),
         units: b.units.clone(),
@@ -1212,6 +1218,9 @@ fn handmade_finalizer(library: bool, wrong_convention: bool) {
         library
     );
     let program = hirsel_heapcheck::Program {
+        invocation_bodies: Vec::new(),
+        invocations: Default::default(),
+        pretransfer_adapters: Vec::new(),
         target,
         layouts: table,
         units: vec![caller, finalizer],
@@ -1371,7 +1380,7 @@ fn an_immortal_sequence_is_consumed_without_allocation_or_detach() {
     let inputs = Inputs {
         memo: Default::default(),
         discharge: None,
-        operations: &source_program.operation_registry(),
+        operations: &b.operations,
         target: &target,
         layouts: &b.table,
         manifest: &manifest,

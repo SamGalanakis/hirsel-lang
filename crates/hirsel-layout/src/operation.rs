@@ -92,7 +92,7 @@ fn from_type(types: &TypeInterner, ty: TypeId, depth: u32) -> Result<NativeType,
     })
 }
 
-fn intern_native(
+pub(crate) fn intern_native(
     actual: &NativeType,
     types: &TypeInterner,
     depth: u32,
@@ -188,13 +188,66 @@ fn empty_function(result: TypeId) -> FunctionType {
 /// Trusted input, supplied alongside the manifest rather than inside a unit.
 #[derive(Clone, Debug)]
 pub struct OperationRegistry {
+    pub pretransfer_adapters: Vec<hirsel_lir::pretransfer::AdapterReference>,
+    pub invocation_bodies: Vec<hirsel_lir::invocations::ReferenceBody>,
+    pub invocations:
+        BTreeMap<hirsel_syntax::DefPath, Vec<hirsel_lir::invocations::ReferenceInvocation>>,
     /// The session interner the signatures' rows live in.
     pub types: Arc<TypeInterner>,
     pub signatures: BTreeMap<OperationId, SignatureRef>,
+    pub type_declarations: BTreeMap<DefId, SignatureRef>,
     pub owners: Owners,
 }
 
 impl OperationDeclarations for OperationRegistry {
+    fn pretransfer_adapters(&self) -> &[hirsel_lir::pretransfer::AdapterReference] {
+        &self.pretransfer_adapters
+    }
+
+    fn invocation_body(
+        &self,
+        definition: &hirsel_syntax::DefPath,
+        instance: hirsel_syntax::ContentHash,
+    ) -> Option<u32> {
+        let mut selected = self
+            .invocation_bodies
+            .iter()
+            .filter(|r| &r.definition == definition && r.instance == instance);
+        let body = selected.next()?.body;
+        selected.next().is_none().then_some(body)
+    }
+    fn requires_structural_reference(&self) -> bool {
+        !self.invocations.is_empty()
+    }
+
+    fn structural_access(
+        &self,
+        source: &NativeType,
+        table: &hirsel_lir::LayoutTable,
+        target: &hirsel_lir::TargetSpec,
+    ) -> Result<hirsel_lir::structural_access::AccessPlan, LayoutError> {
+        let root = intern_native(source, &self.types, 0)?;
+        crate::structural_access::derive(
+            &self.types,
+            root,
+            &mut |definition| Ok(self.type_declarations.get(&definition).cloned()),
+            &self.owners,
+            target,
+            table,
+        )
+    }
+
+    fn requires_invocation_reference(&self) -> bool {
+        !self.invocations.is_empty()
+    }
+
+    fn invocations(
+        &self,
+        definition: &hirsel_syntax::DefPath,
+    ) -> Option<&[hirsel_lir::invocations::ReferenceInvocation]> {
+        self.invocations.get(definition).map(Vec::as_slice)
+    }
+
     /// Derive from the named declaration, never from the call's ABI or operands.
     fn derive(
         &self,

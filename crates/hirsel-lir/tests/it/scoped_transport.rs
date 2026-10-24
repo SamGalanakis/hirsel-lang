@@ -624,6 +624,7 @@ fn linked_body_claims_cover_calls_and_closure_entries() {
             });
         } else {
             caller.tables.calls.push(CallSite {
+            pretransfer_failure: None,
                 forward_caller: true,
                 operation_arguments: vec![],
                 callee: Callee::Direct(symbol),

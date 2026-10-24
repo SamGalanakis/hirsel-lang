@@ -31,7 +31,7 @@ pub(super) fn program(source: &str) -> hirsel_heapcheck::Program<Ready> {
         .collect();
     let rows = manifest(&p);
     let target = target();
-    let operations = p.operation_registry();
+    let operations = lowered.operation_registry(&p);
     let inputs = Inputs {
         target: &target,
         layouts: &lowered.table,
@@ -45,6 +45,9 @@ pub(super) fn program(source: &str) -> hirsel_heapcheck::Program<Ready> {
         assert!(errors.is_empty(), "{errors:?}\n{}", dump(unit));
     }
     hirsel_heapcheck::Program {
+        invocation_bodies: operations.invocation_bodies.clone(),
+        invocations: operations.invocations.clone(),
+        pretransfer_adapters: operations.pretransfer_adapters.clone(),
         target,
         layouts: lowered.table,
         units,
@@ -152,10 +155,24 @@ fn exercise(source: &str, order: &[u32], expected_failures: &[&str]) -> usize {
         let audit = run.result.as_ref().unwrap();
         assert_eq!(run.counters.allocations, 0);
         assert_eq!(run.counters.live_heap_bytes, 0);
-        // In the failing-finalizer witness, site zero is the original
-        // argument division. Later injected sites occur during its cleanup:
-        // FAIL-3 keeps that already-raised failure primary.
-        if expected_failures.len() > 1 && *site > 0 {
+        assert!(
+            run.trace
+                .iter()
+                .any(|event| matches!(event, Event::Injection { site: at } if at == site))
+        );
+        // Admission contributes additional injectable sites, including during
+        // cleanup after an original failure. Derive the ordering from H's
+        // independent injection-position trace instead of a historical ordinal.
+        let before_injection = run
+            .trace
+            .iter()
+            .take_while(|event| !matches!(event, Event::Injection { site: at } if at == site))
+            .find_map(|event| match event {
+                Event::Failure { rule } => Some(rule.as_str()),
+                _ => None,
+            });
+        if let Some(rule) = before_injection {
+            assert_eq!(rule, expected_failures[0]);
             assert_eq!(
                 audit.observation.failures[0],
                 clean.result.as_ref().unwrap().observation.failures[0]

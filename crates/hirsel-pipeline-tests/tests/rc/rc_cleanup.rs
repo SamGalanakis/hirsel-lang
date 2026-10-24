@@ -17,6 +17,7 @@ use hirsel_rc::placement::Options;
 use support::*;
 
 struct Built {
+    operations: hirsel_layout::operation::OperationRegistry,
     program: Program,
     table: LayoutTable,
     rc: Vec<LirUnit<Rc>>,
@@ -83,7 +84,7 @@ fn validate_driver_ready(source: &'static str) {
     let inputs = Inputs {
         memo: Default::default(),
         discharge: None,
-        operations: &built.program.operation_registry(),
+        operations: &built.operations,
         target: &target,
         layouts: &built.table,
         manifest: &rows,
@@ -103,6 +104,7 @@ fn try_build(source: &str) -> Result<Built, String> {
 /// before cleanup lowering.
 fn try_build_with(source: &str, reuse: bool) -> Result<Built, String> {
     let (program, lowered, rc) = rc_units(source)?;
+    let operations = lowered.operation_registry(&program);
     let table = lowered.table.clone();
     let finalizers = Finalizers::new(&lowered.instances, &rc);
     let ready = rc
@@ -121,6 +123,7 @@ fn try_build_with(source: &str, reuse: bool) -> Result<Built, String> {
         })
         .collect::<Result<Vec<_>, String>>()?;
     Ok(Built {
+        operations,
         program,
         table,
         rc,
@@ -155,7 +158,7 @@ fn check<S: Stage>(b: &Built, units: &[LirUnit<S>]) -> Vec<(String, Vec<Violatio
     let inputs = Inputs {
         memo: Default::default(),
         discharge: None,
-        operations: &b.program.operation_registry(),
+        operations: &b.operations,
         target: &target,
         layouts: &b.table,
         manifest: &manifest,
@@ -172,8 +175,15 @@ fn check<S: Stage>(b: &Built, units: &[LirUnit<S>]) -> Vec<(String, Vec<Violatio
         .collect()
 }
 
-fn execute<S: Stage>(table: &LayoutTable, units: &[LirUnit<S>]) -> hirsel_heapcheck::Run {
+fn execute<S: Stage>(
+    operations: &hirsel_layout::operation::OperationRegistry,
+    table: &LayoutTable,
+    units: &[LirUnit<S>],
+) -> hirsel_heapcheck::Run {
     let program = hirsel_heapcheck::Program {
+        invocation_bodies: operations.invocation_bodies.clone(),
+        invocations: operations.invocations.clone(),
+        pretransfer_adapters: operations.pretransfer_adapters.clone(),
         target: target(),
         layouts: table.clone(),
         units: units.to_vec(),
@@ -197,12 +207,12 @@ fn ready(source: &str) -> (Built, Observation) {
         let dumps: Vec<String> = b.ready.iter().map(dump).collect();
         panic!("{source}\n{}\n{v:#?}", dumps.join("\n"));
     }
-    let run = execute(&b.table, &b.ready);
+    let run = execute(&b.operations, &b.table, &b.ready);
     let audit = run.result.unwrap_or_else(|v| {
         let dumps: Vec<String> = b.ready.iter().map(dump).collect();
         panic!("{v}\n{source}\n{}", dumps.join("\n"))
     });
-    let rc = execute(&b.table, &b.rc)
+    let rc = execute(&b.operations, &b.table, &b.rc)
         .result
         .unwrap_or_else(|v| panic!("rc: {v}\n{source}"));
     assert!(
@@ -224,9 +234,9 @@ fn a_counted_local_is_released_by_its_layout() {
 /// Fault-inject every failure-capable site of the Ready program: each failure
 /// path must pass H's terminal audit.
 fn campaign(b: &Built) {
-    if let Some((site, v)) = first_injected_violation(&b.table, &b.ready) {
+    if let Some((site, v)) = first_injected_violation(&b.operations, &b.table, &b.ready) {
         // Whether the Rc program it was lowered from fails the same way.
-        let rc = first_injected_violation(&b.table, &b.rc)
+        let rc = first_injected_violation(&b.operations, &b.table, &b.rc)
             .map(|(site, v)| format!("site {site:?}: {v}"));
         let dumps: Vec<String> = b.ready.iter().map(dump).collect();
         panic!(
@@ -237,10 +247,14 @@ fn campaign(b: &Built) {
 }
 
 fn first_injected_violation<S: Stage>(
+    operations: &hirsel_layout::operation::OperationRegistry,
     table: &LayoutTable,
     units: &[LirUnit<S>],
 ) -> Option<(hirsel_heapcheck::Perturbation, hirsel_heapcheck::Violation)> {
     let program = hirsel_heapcheck::Program {
+        invocation_bodies: operations.invocation_bodies.clone(),
+        invocations: operations.invocations.clone(),
+        pretransfer_adapters: operations.pretransfer_adapters.clone(),
         target: target(),
         layouts: table.clone(),
         units: units.to_vec(),
@@ -282,8 +296,8 @@ drop(x) {
 
 /// The Ready program finalizes as the Rc program does, in the same order.
 fn same_finalizers(b: &Built) {
-    let ready = execute(&b.table, &b.ready);
-    let rc = execute(&b.table, &b.rc);
+    let ready = execute(&b.operations, &b.table, &b.ready);
+    let rc = execute(&b.operations, &b.table, &b.rc);
     assert_eq!(finalized(&ready.trace), finalized(&rc.trace));
 }
 
@@ -476,6 +490,7 @@ fn an_out_of_scope_order_cleanup_is_rejected() {
         .map(|u| hirsel_rc::cleanup::lower(u.clone(), &valid.table, &finalizers).unwrap())
         .collect();
     let mutant = Built {
+        operations: valid.operations.clone(),
         program: valid.program.clone(),
         table: valid.table.clone(),
         rc: rc.clone(),
@@ -497,10 +512,10 @@ fn an_out_of_scope_order_cleanup_is_rejected() {
         "{rc_rejected:?}"
     );
     // H observes the swapped finalizer order.
-    let swapped = finalized(&execute(&mutant.table, &mutant.ready).trace);
+    let swapped = finalized(&execute(&mutant.operations, &mutant.table, &mutant.ready).trace);
     assert_ne!(
         swapped,
-        finalized(&execute(&valid.table, &valid.ready).trace)
+        finalized(&execute(&valid.operations, &valid.table, &valid.ready).trace)
     );
 }
 
@@ -749,6 +764,7 @@ pub fn main() -> u64 {{
         let t = new_value(u, ValueRepr::Token, header, Holding::Owned);
         prepend(u, Inst::TokenNone { result: t });
         let extended = Built {
+            operations: b.operations.clone(),
             program: b.program.clone(),
             table,
             rc: Vec::new(),
@@ -831,30 +847,29 @@ fn a_two_phase_replace_with_failing_preparation_keeps_and_releases_the_old_conte
     campaign(&b);
 }
 
-/// Insert `inst` at `index` of `block`, moving every later block's range.
-fn insert_at(u: &mut LirUnit<Ready>, block: usize, index: usize, inst: Inst) {
-    let at = u.blocks[block].instructions.start as usize + index;
-    u.instructions.insert(at, inst);
-    for (b, info) in u.blocks.iter_mut().enumerate() {
-        if b == block {
-            info.instructions.len += 1;
-        } else if info.instructions.start as usize >= at {
-            info.instructions.start += 1;
-        }
+/// Edit a block and repack the arena, including adjacent empty blocks.
+fn edit_block(u: &mut LirUnit<Ready>, block: usize, edit: impl FnOnce(&mut Vec<Inst>)) {
+    let mut rows: Vec<Vec<Inst>> = u
+        .blocks
+        .iter()
+        .map(|row| row.instructions.get(&u.instructions).unwrap().to_vec())
+        .collect();
+    edit(&mut rows[block]);
+    u.instructions.clear();
+    for (info, row) in u.blocks.iter_mut().zip(rows) {
+        info.instructions = PoolRange::new(u.instructions.len() as u32, row.len() as u32);
+        u.instructions.extend(row);
     }
 }
 
-/// Remove the instruction at `index` of `block`.
+fn insert_at(u: &mut LirUnit<Ready>, block: usize, index: usize, inst: Inst) {
+    edit_block(u, block, |row| row.insert(index, inst));
+}
+
 fn remove_at(u: &mut LirUnit<Ready>, block: usize, index: usize) {
-    let at = u.blocks[block].instructions.start as usize + index;
-    u.instructions.remove(at);
-    for (b, info) in u.blocks.iter_mut().enumerate() {
-        if b == block {
-            info.instructions.len -= 1;
-        } else if info.instructions.start as usize > at {
-            info.instructions.start -= 1;
-        }
-    }
+    edit_block(u, block, |row| {
+        row.remove(index);
+    });
 }
 
 /// The explicit finalization of a counted-field resource, and three
@@ -863,7 +878,7 @@ fn remove_at(u: &mut LirUnit<Ready>, block: usize, index: usize) {
 /// begin, and the slot's `StorageDead` while the finalizer runs.
 #[test]
 fn c_and_h_agree_on_each_finalization_state_mutant() {
-    let (b, _) = ready(&format!(
+    let (mut b, _) = ready(&format!(
         "{T}pub fn main() -> u64 {{\n  let t = T(n: 1, xs: box P(a: 2))\n  7\n}}\n"
     ));
     let main = b
@@ -871,32 +886,211 @@ fn c_and_h_agree_on_each_finalization_state_mutant() {
         .iter()
         .position(|u| u.header.definition.0.name == "main")
         .unwrap();
-    let find = |u: &LirUnit<Ready>, want: fn(&Inst) -> bool| {
-        u.blocks
-            .iter()
-            .enumerate()
-            .find_map(|(bi, block)| {
-                block
-                    .instructions
-                    .get(&u.instructions)
+    // Intact owning resources now use the runtime continuation. Keep that
+    // source positive above, then model an explicit lifecycle component at its
+    // last owning read so the same three state mutants remain load-bearing.
+    let unit = &b.ready[main];
+    let value = unit
+        .instructions
+        .iter()
+        .find_map(|inst| match *inst {
+            Inst::Release { value, layout, .. }
+                if b.table.layout(layout).unwrap().finalizer.is_some() =>
+            {
+                Some(value)
+            }
+            _ => None,
+        })
+        .expect("owning resource release");
+    let (bb, read_at, address) = unit
+        .blocks
+        .iter()
+        .enumerate()
+        .find_map(|(block, row)| {
+            row.instructions
+                .get(&unit.instructions)
+                .unwrap()
+                .iter()
+                .enumerate()
+                .find_map(|(index, inst)| match *inst {
+                    Inst::Read {
+                        result,
+                        address,
+                        mode: hirsel_lir::ir::ReadMode::Take,
+                        ..
+                    } if result == value => Some((block, index, address)),
+                    _ => None,
+                })
+        })
+        .expect("release's intact owning read");
+    let release_anchor = unit
+        .instructions
+        .iter()
+        .find_map(|inst| match *inst {
+            Inst::Release {
+                value: released,
+                anchor,
+                ..
+            } if released == value => Some(anchor),
+            _ => None,
+        })
+        .unwrap();
+    // The explicit lifecycle ends a shell: drain its counted field, then
+    // StorageDead closes the pending root. Taking the root whole would violate
+    // C's existing FieldsPending ownership rule.
+    let (field_layout, release_failure) = unit
+        .instructions
+        .iter()
+        .find_map(|inst| match *inst {
+            Inst::Release {
+                value: released,
+                layout,
+                failure,
+                ..
+            } if released == value => {
+                let field = b
+                    .table
+                    .layout(layout)
                     .unwrap()
+                    .fields
                     .iter()
-                    .position(want)
-                    .map(|i| (bi, i))
-            })
-            .unwrap()
+                    .find(|field| field.ordinal == 1)
+                    .unwrap();
+                Some((field.layout, failure))
+            }
+            _ => None,
+        })
+        .unwrap();
+    let field_ty = hirsel_lir::ir::LirTypeId(
+        unit.types
+            .iter()
+            .position(|ty| ty.layout == field_layout && ty.repr == hirsel_lir::ir::ValueRepr::Block)
+            .expect("counted field type") as u32,
+    );
+    let field_payload = match &b.table.layout(field_layout).unwrap().kind {
+        hirsel_lir::layout_types::LayoutKind::Box { payload }
+        | hirsel_lir::layout_types::LayoutKind::Block { payload } => *payload,
+        other => panic!("counted field: {other:?}"),
     };
-    let begin = |i: &Inst| matches!(i, Inst::FinalizeBegin { .. });
-    let (bb, bi) = find(&b.ready[main], begin);
-    let Inst::FinalizeBegin { address, .. } =
-        b.ready[main].instructions[b.ready[main].blocks[bb].instructions.start as usize + bi]
-    else {
-        unreachable!()
-    };
+    let u = &mut b.ready[main];
+    let field_address = hirsel_lir::ir::AddressId(u.addresses.len() as u32);
+    let projection = PoolRange::new(u.pools.projections.len() as u32, 1);
+    u.pools
+        .projections
+        .push(hirsel_lir::ir::ProjectionStep::Field(1));
+    u.addresses.push(hirsel_lir::ir::AddressInfo {
+        source_place: None,
+        unchecked: Vec::new(),
+        base: u.addresses[address.index()].base,
+        projection,
+        ty: field_ty,
+    });
+    u.values[value.index()].ty = field_ty;
+    let read_index = u.blocks[bb].instructions.start as usize + read_at;
+    if let Inst::Read {
+        address: read_address,
+        ..
+    } = &mut u.instructions[read_index]
+    {
+        *read_address = field_address;
+    }
+    for inst in &mut u.instructions {
+        if let Inst::Release {
+            value: released,
+            layout,
+            ..
+        } = inst
+            && *released == value
+        {
+            *layout = field_payload;
+        }
+    }
+    let mut preparation = u.tables.failures[release_failure.index()].clone();
+    let cleanup = hirsel_lir::ir::EdgeId(u.tables.edges.len() as u32);
+    u.tables
+        .edges
+        .push(u.tables.edges[preparation.cleanup.index()].clone());
+    preparation.cleanup = cleanup;
+    let preparation_failure = FailureId(u.tables.failures.len() as u32);
+    u.tables.failures.push(preparation);
+    let entry = u.entry.index();
+    insert_at(
+        u,
+        entry,
+        0,
+        Inst::Address {
+            address: field_address,
+            failure: preparation_failure,
+        },
+    );
+    let bi = read_at;
+    insert_at(
+        &mut b.ready[main],
+        bb,
+        bi,
+        Inst::FinalizeBegin {
+            address,
+            anchor: release_anchor,
+        },
+    );
+    insert_at(
+        &mut b.ready[main],
+        bb,
+        bi + 1,
+        Inst::FinalizeEnd {
+            address,
+            anchor: release_anchor,
+        },
+    );
     let slot = match b.ready[main].addresses[address.index()].base {
         hirsel_lir::ir::AddressBase::Slot(s) => s,
         other => panic!("{other:?}"),
     };
+    insert_at(
+        &mut b.ready[main],
+        bb,
+        read_at + 4,
+        Inst::StorageDead {
+            slot,
+            if_live: false,
+        },
+    );
+    // A failing field release has consumed the child but still owes the
+    // finalized shell's storage. The intact whole-resource release consumed
+    // that shell before reaching this edge.
+    let failure_block = b.ready[main].tables.edges[cleanup.index()].target.index();
+    insert_at(
+        &mut b.ready[main],
+        failure_block,
+        0,
+        Inst::StorageDead {
+            slot,
+            if_live: true,
+        },
+    );
+    let release_cleanup = b.ready[main].tables.failures[release_failure.index()].cleanup;
+    let release_block = b.ready[main].tables.edges[release_cleanup.index()]
+        .target
+        .index();
+    if release_block != failure_block {
+        insert_at(
+            &mut b.ready[main],
+            release_block,
+            0,
+            Inst::StorageDead {
+                slot,
+                if_live: true,
+            },
+        );
+    }
+    let accepted = check(&b, &b.ready);
+    assert!(
+        accepted.is_empty(),
+        "explicit lifecycle accepted twin: {accepted:?}\n{}",
+        dump(&b.ready[main])
+    );
+    let positive = execute(&b.operations, &b.table, &b.ready);
+    assert!(positive.result.is_ok(), "{:?}", positive.result);
     let twice = {
         let mut u = b.ready[main].clone();
         let inst = u.instructions[u.blocks[bb].instructions.start as usize + bi];
@@ -938,7 +1132,7 @@ fn c_and_h_agree_on_each_finalization_state_mutant() {
                 .any(|k| matches!(k, ViolationKind::FinalizeState(_))),
             "{name}: C {c:?}"
         );
-        let h = execute(&b.table, &units);
+        let h = execute(&b.operations, &b.table, &units);
         assert!(h.result.is_err(), "{name}: H accepted it");
     }
 }
@@ -956,7 +1150,7 @@ fn ready_alone(source: &str) -> (Built, Observation) {
         let dumps: Vec<String> = b.ready.iter().map(dump).collect();
         panic!("{source}\n{}\n{v:#?}", dumps.join("\n"));
     }
-    let audit = execute(&b.table, &b.ready)
+    let audit = execute(&b.operations, &b.table, &b.ready)
         .result
         .unwrap_or_else(|v| panic!("{v}\n{source}"));
     (b, audit.observation)
@@ -1072,12 +1266,12 @@ fn ready_via_reuse(source: &str) -> (Built, hirsel_heapcheck::Run) {
         let dumps: Vec<String> = b.ready.iter().map(dump).collect();
         panic!("{source}\n{}\n{v:#?}", dumps.join("\n"));
     }
-    let run = execute(&b.table, &b.ready);
+    let run = execute(&b.operations, &b.table, &b.ready);
     let audit = run.result.clone().unwrap_or_else(|v| {
         let dumps: Vec<String> = b.ready.iter().map(dump).collect();
         panic!("{v}\n{source}\n{}", dumps.join("\n"))
     });
-    let rc = execute(&b.table, &b.rc)
+    let rc = execute(&b.operations, &b.table, &b.rc)
         .result
         .unwrap_or_else(|v| panic!("rc: {v}\n{source}"));
     assert!(
@@ -1143,7 +1337,9 @@ pub fn main() -> u64 {
             "{violations:#?}\n{}",
             built.ready.iter().map(dump).collect::<Vec<_>>().join("\n")
         );
-        let audit = execute(&built.table, &built.ready).result.unwrap();
+        let audit = execute(&built.operations, &built.table, &built.ready)
+            .result
+            .unwrap();
         assert!(audit.observation.failures.is_empty());
         campaign(&built);
     }
@@ -1178,7 +1374,7 @@ pub fn main() -> u64 {
             built.ready.iter().map(dump).collect::<Vec<_>>().join("\n")
         );
         assert!(
-            execute(&built.table, &built.ready)
+            execute(&built.operations, &built.table, &built.ready)
                 .result
                 .unwrap()
                 .observation
@@ -1216,7 +1412,7 @@ pub fn main() -> u64 {
             built.ready.iter().map(dump).collect::<Vec<_>>().join("\n")
         );
         assert!(
-            execute(&built.table, &built.ready)
+            execute(&built.operations, &built.table, &built.ready)
                 .result
                 .unwrap()
                 .observation
@@ -1237,6 +1433,9 @@ fn closure_returned_zero_sized_resources_discharge_every_slot() {
     let built = try_build(&source).unwrap();
     assert!(check(&built, &built.ready).is_empty());
     let program = hirsel_heapcheck::Program {
+        invocation_bodies: built.operations.invocation_bodies.clone(),
+        invocations: built.operations.invocations.clone(),
+        pretransfer_adapters: built.operations.pretransfer_adapters.clone(),
         target: target(),
         layouts: built.table,
         units: built.ready,
@@ -1296,4 +1495,30 @@ fn resource_variant_cleanup_preserves_own_finalizer_and_active_payload() {
             campaign(&b);
         }
     }
+}
+
+#[test]
+fn keyed_detach_cleanup_keeps_each_original_admission_identity() {
+    let (b, observation) = ready(
+        r#"
+type State { values:Map[String,u64] }
+fn fill(mut state:State)->u64 {
+ map.insert(mut state.values,"one",1u64)
+ map.insert(mut state.values,"two",2u64)
+ map.len(state.values)
+}
+pub fn main()->u64 {
+ let mut state=State(values:map.empty())
+ let original=copy state
+ let count=fill(mut state)
+ count+map.len(original.values)
+}
+"#,
+    );
+    assert!(observation.failures.is_empty());
+    assert!(matches!(
+        observation.returned,
+        Some(hirsel_heapcheck::Observed::Integer { bits: 2, .. })
+    ));
+    campaign(&b);
 }

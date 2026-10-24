@@ -35,12 +35,17 @@ pub(crate) fn specialize(
         return;
     }
     let manifest = hirsel_core_contract::Manifest::skeleton(program.operations.values().cloned());
-    let operations = program.operation_registry();
-    let mut qualification =
-        hirsel_lir::validate::ScopedQualification::new(target, &manifest, &operations, None);
-    let mut qualifies =
-        |units: &[Unit], table: &LayoutTable| qualification.qualify(units, table).is_ok();
-    if !qualifies(&lowered.units, &lowered.table) {
+    let instances = &lowered.instances;
+    let owners = &lowered.semantic_owners;
+    let qualifies =
+        |units: &[Unit], table: &LayoutTable, origins: &[crate::instance::InstanceId]| {
+            let operations =
+                crate::import::invocation_registry(program, instances, owners, units, origins);
+            hirsel_lir::validate::ScopedQualification::new(target, &manifest, &operations, None)
+                .qualify(units, table)
+                .is_ok()
+        };
+    if !qualifies(&lowered.units, &lowered.table, &result.origins) {
         return;
     }
     let baseline = lowered.instances.len();
@@ -87,7 +92,23 @@ pub(crate) fn specialize(
                 )?;
                 Ok::<_, ()>(())
             })();
-            if attempt.is_ok() && qualifies(&transaction.units, &transaction.table) {
+            if attempt.is_ok() {
+                let registry = crate::import::invocation_registry(
+                    program,
+                    instances,
+                    owners,
+                    &transaction.units,
+                    &transaction.origins,
+                );
+                crate::import::prune_pretransfer(
+                    &mut transaction.units,
+                    &transaction.table,
+                    &registry.pretransfer_adapters,
+                );
+            }
+            if attempt.is_ok()
+                && qualifies(&transaction.units, &transaction.table, &transaction.origins)
+            {
                 lowered.units = transaction.units;
                 lowered.table = transaction.table;
                 result.origins = transaction.origins;

@@ -720,6 +720,42 @@ pub(crate) fn execute_frames(
                     consumed,
                     continuation,
                 } => {
+                    let Some(activation) = frame.depth.admit() else {
+                        let failed = failure(sources, state.anchor.site, "LANG-10", "Depth")?;
+                        record_failure(
+                            runtime.trace_mode,
+                            execution,
+                            failed.clone(),
+                            state.anchor.clone(),
+                            state.caller.as_ref(),
+                        );
+                        release_operation_result(
+                            frame,
+                            OperationResult::Call {
+                                callee,
+                                arguments,
+                                mut_arguments,
+                                writebacks,
+                                updates,
+                                owned,
+                                consumed,
+                                continuation,
+                            },
+                            &mut state,
+                        )?;
+                        state.already_failed = true;
+                        frame.work.push_back(crate::resources::Work::Resume(
+                            OperationResult::Failed(failed),
+                            Box::new(crate::resources::Callback {
+                                failure_start: execution.failures.len() - 1,
+                                token: continuation,
+                                state,
+                                mut_parameters: vec![],
+                                writebacks: vec![],
+                            }),
+                        ));
+                        continue;
+                    };
                     validate_callback_writebacks(&state, &mut_arguments, &writebacks)?;
                     let callback_inputs = state
                         .bounds
@@ -937,6 +973,7 @@ pub(crate) fn execute_frames(
                                     })
                                     .collect();
                                 let native = crate::resources::OperationState {
+                                    activation: Some(activation),
                                     caller: None,
                                     arguments,
                                     owned: vec![],
@@ -1004,6 +1041,8 @@ pub(crate) fn execute_frames(
                         captures,
                         sizes,
                     )?;
+                    callback.depth = frame.depth.clone();
+                    callback.activation = Some(activation);
                     if callback.definition.tracks_caller(body) {
                         callback.caller = Some(CallerSite::new(frame, state.anchor.site, sources)?);
                     }
@@ -1092,6 +1131,7 @@ pub(crate) fn execute_frames(
                                 state.anchor.clone(),
                                 state.caller.clone(),
                             ));
+                            retire_operation(frame, &mut state);
                             if let Some(mut callback) = state.callback.take() {
                                 writeback_native_callback(&mut callback, &state)?;
                                 enqueue_owned(frame, &mut callback.state);
@@ -1107,6 +1147,7 @@ pub(crate) fn execute_frames(
                             }
                         } else {
                             frame.ending = None;
+                            retire_operation(frame, &mut state);
                             if let Some(mut callback) = state.callback.take() {
                                 writeback_native_callback(&mut callback, &state)?;
                                 if let (Some(child), Some(parent)) =
@@ -1195,6 +1236,7 @@ pub(crate) fn execute_frames(
                     }
                     frame.ending = Some(crate::resources::Ending::Failed);
                     enqueue_taken(frame, &mut state);
+                    retire_operation(frame, &mut state);
                     if let Some(mut callback) = state.callback.take() {
                         writeback_native_callback(&mut callback, &state)?;
                         enqueue_owned(frame, &mut callback.state);
@@ -1214,6 +1256,7 @@ pub(crate) fn execute_frames(
         if let Some(work) = frames.last_mut().unwrap().work.pop_front() {
             let frame = frames.last_mut().unwrap();
             match work {
+                crate::resources::Work::Retire(activation) => drop(activation),
                 crate::resources::Work::Resume(result, mut callback) => {
                     frame.ending = None;
                     if !matches!(result, OperationResult::Failed(_)) {
@@ -1465,6 +1508,18 @@ pub(crate) fn execute_frames(
                             .get(definition.path())
                             .and_then(|n| n.finalizer.clone())
                         {
+                            let Some(activation) = frame.depth.finalizer() else {
+                                record_failure(
+                                    runtime.trace_mode,
+                                    execution,
+                                    failure(sources, anchor.site, "LANG-10", "Depth")?,
+                                    anchor.clone(),
+                                    caller.as_ref(),
+                                );
+                                frame.ending = Some(crate::resources::Ending::Failed);
+                                release_fields(frame, &mut value, anchor, caller)?;
+                                continue;
+                            };
                             effect(
                                 &mut execution.trace,
                                 anchor.clone(),
@@ -1488,6 +1543,8 @@ pub(crate) fn execute_frames(
                                 vec![],
                                 sizes,
                             )?;
+                            callee.depth = frame.depth.clone();
+                            callee.activation = Some(activation);
                             if let Some(check) = &frame.check {
                                 callee.check =
                                     Some(enter_checked(&check.state, &callee, vec![], None)?);
@@ -1663,6 +1720,13 @@ pub(crate) fn execute_frames(
                 let mut value = finished.slots[local.0 as usize]
                     .take()
                     .ok_or_else(|| invalid("finalizer consumed self"))?;
+                if let Some(activation) = finished.activation.take() {
+                    frames
+                        .last_mut()
+                        .unwrap()
+                        .work
+                        .push_front(crate::resources::Work::Retire(activation));
+                }
                 release_fields(frames.last_mut().unwrap(), &mut value, anchor, caller)?;
                 if matches!(ending, crate::resources::Ending::Failed) {
                     let caller = frames.last_mut().unwrap();
@@ -2126,6 +2190,52 @@ pub(crate) fn execute_frames(
                     enqueue_cleanup(frame, id, site)?;
                 }
             }
+            Err(reason @ (EvalError::InvocationDepth | EvalError::KeyDepth)) => {
+                let rule = if matches!(reason, EvalError::KeyDepth) {
+                    "MEM-3"
+                } else {
+                    "LANG-10"
+                };
+                record_failure(
+                    runtime.trace_mode,
+                    execution,
+                    failure(sources, site, rule, "Depth")?,
+                    anchor(frame, site),
+                    frame.caller.as_ref(),
+                );
+                frame.ending = Some(crate::resources::Ending::Failed);
+                // TIR's entered-callee failure list excludes taken actuals.
+                // Rejected admission leaves them here; release them first in
+                // reverse evaluation order, then run that ordinary failure list.
+                if let Terminator::Call {
+                    callee, arguments, ..
+                } = terminator
+                {
+                    for argument in arguments.iter().rev() {
+                        if argument.value.usage == hirsel_types::UseKind::Take {
+                            let value = frame.operand(&argument.value)?;
+                            frame.work.push_back(crate::resources::Work::Release(
+                                value,
+                                anchor(frame, site),
+                                frame.caller.clone(),
+                            ));
+                        }
+                    }
+                    if let Callee::Indirect { value, .. } = callee
+                        && value.usage == hirsel_types::UseKind::Take
+                    {
+                        let value = frame.operand(value)?;
+                        frame.work.push_back(crate::resources::Work::Release(
+                            value,
+                            anchor(frame, site),
+                            frame.caller.clone(),
+                        ));
+                    }
+                }
+                if let Some(id) = cleanup {
+                    enqueue_cleanup(frame, id, site)?;
+                }
+            }
             Err(reason @ (EvalError::InactiveVariant | EvalError::OutOfBounds)) => {
                 let (rule, kind) = match reason {
                     EvalError::InactiveVariant => ("MEM-13", "InactiveVariant"),
@@ -2179,6 +2289,7 @@ pub(crate) fn execute_frames(
                 }
             }
             Ok(Action::Call {
+                activation,
                 forward_caller,
                 callee,
                 mut checks,
@@ -2190,6 +2301,43 @@ pub(crate) fn execute_frames(
             }) => {
                 let operation_caller = if forward_caller {
                     frame.caller.clone()
+                } else {
+                    None
+                };
+                // The arena adapter is mechanical, but its declared primitive and
+                // callback are two independently admitted language invocations.
+                // Admit the callback before consuming its closure/environment.
+                let arena_callback = matches!(&callee, RuntimeCallee::Definition { path, .. }
+                    if path.path().is_core(crate::library::ARENA_WITH_OPERATION)
+                        || path.path().is_core(crate::library::ARENA_BOUNDED_OPERATION));
+                let callback_activation = if arena_callback {
+                    match frame.depth.admit() {
+                        Some(guard) => Some(guard),
+                        None => {
+                            frame.operation = Some(Box::new((
+                                OperationResult::Failed(failure(
+                                    sources, site, "LANG-10", "Depth",
+                                )?),
+                                crate::resources::OperationState {
+                                    activation,
+                                    caller: operation_caller,
+                                    arguments,
+                                    owned: vec![],
+                                    taken,
+                                    finishing: None,
+                                    mut_places,
+                                    returns,
+                                    on_failure,
+                                    anchor: anchor(frame, site),
+                                    already_failed: false,
+                                    callback: None,
+                                    callback_mut_arguments: vec![],
+                                    bounds: None,
+                                },
+                            )));
+                            continue;
+                        }
+                    }
                 } else {
                     None
                 };
@@ -2496,6 +2644,7 @@ pub(crate) fn execute_frames(
                             frame.operation = Some(Box::new((
                                 result,
                                 crate::resources::OperationState {
+                                    activation,
                                     caller: operation_caller,
                                     arguments,
                                     owned: vec![],
@@ -2571,6 +2720,13 @@ pub(crate) fn execute_frames(
                     captures,
                     sizes,
                 )?;
+                callee.depth = frame.depth.clone();
+                if arena_callback {
+                    callee.activation = callback_activation;
+                    callee.enclosing_activation = activation;
+                } else {
+                    callee.activation = activation;
+                }
                 if callee.definition.tracks_caller(body) {
                     callee.caller =
                         if forward_caller && frame.definition.tracks_caller(frame.body_id) {
@@ -3046,6 +3202,9 @@ enum EvalError {
     InactiveVariant,
     OutOfBounds,
     Depth,
+    InvocationDepth,
+    /// Structural key rejection before any actual leaves caller storage.
+    KeyDepth,
     /// A charge exceeded this bounded arena's budget (MEM-6).
     OutOfSpace(u64),
     Api(Error),
@@ -3080,6 +3239,7 @@ enum Action {
     Return(Value),
     Fail(RuleId),
     Call {
+        activation: Option<crate::depth::Guard>,
         forward_caller: bool,
         callee: RuntimeCallee,
         checks: Vec<crate::checked::Argument>,
@@ -4137,6 +4297,50 @@ fn execute_terminator(
             returns,
             on_failure,
         } => {
+            let self_tail = matches!(callee, Callee::Definition { path, .. }
+                if path == frame.definition.path.path())
+                && frame.body().tail_sites.iter().any(|site| {
+                    site.owner_body == frame.body_id
+                        && site.call_block == frame.block
+                        && site.kind == TailKind::SelfTail
+                });
+            let adapter = matches!(
+                callee,
+                Callee::Indirect {
+                    forward_caller: true,
+                    ..
+                }
+            );
+            let activation = if self_tail || adapter {
+                None
+            } else {
+                Some(frame.depth.admit().ok_or(EvalError::InvocationDepth)?)
+            };
+            let primitive = match callee {
+                Callee::Definition { path, .. } => Some(path),
+                Callee::Indirect { value, .. } => match frame.observe(value.place)? {
+                    Value::FunctionReference(reference) => Some(&reference.definition),
+                    _ => None,
+                },
+            };
+            if primitive.is_some_and(|path| {
+                ["map.insert", "set.insert", "map.get", "set.contains"]
+                    .iter()
+                    .any(|name| path.is_core(name))
+            }) {
+                let key = arguments
+                    .iter()
+                    .find(|a| a.parameter.0 == 1)
+                    .ok_or_else(|| invalid("keyed primitive has no key argument"))?;
+                let key = frame
+                    .slot_ref(key.value.place)?
+                    .as_ref()
+                    .ok_or_else(|| invalid("keyed primitive key is dead"))?;
+                crate::structural::preflight(key).map_err(|error| match error {
+                    crate::structural::StructuralError::Depth => EvalError::KeyDepth,
+                    _ => invalid("invalid structural key").into(),
+                })?;
+            }
             if let Callee::Definition { path, .. } = callee {
                 if runtime.forget.as_ref() == Some(path)
                     && (arguments.len() != 1
@@ -4302,6 +4506,7 @@ fn execute_terminator(
                 }
             }
             Action::Call {
+                activation,
                 forward_caller,
                 callee,
                 checks,
@@ -4782,6 +4987,14 @@ fn enqueue_owned(frame: &mut Frame, state: &mut crate::resources::OperationState
         ));
     }
 }
+
+fn retire_operation(frame: &mut Frame, state: &mut crate::resources::OperationState) {
+    if let Some(activation) = state.activation.take() {
+        frame
+            .work
+            .push_back(crate::resources::Work::Retire(activation));
+    }
+}
 fn release_operation_result(
     frame: &mut Frame,
     result: OperationResult,
@@ -4851,6 +5064,7 @@ fn abandon_operation(
         restore_operation(frame, &mut state)?;
         enqueue_owned(frame, &mut state);
         enqueue_taken(frame, &mut state);
+        retire_operation(frame, &mut state);
         if let Some(mut callback) = state.callback.take() {
             writeback_native_callback(&mut callback, &state)?;
             state = callback.state;

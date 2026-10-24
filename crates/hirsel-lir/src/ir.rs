@@ -442,12 +442,9 @@ impl ScalarUnaryOp {
     }
 }
 
-/// The deepest operand pair `Inst::Compare` visits before failing with MEM-3
-/// Depth: the root pair is depth 0 and each field, element or boxed payload one
-/// deeper. It is the interpreter's `structural::MAX_DEPTH` (64 native levels plus
-/// 1024 scratch levels), provisional under spec #16; layouts erase distinct
-/// wrappers, so numeric Depth parity stays unresolved until #16 rules.
-pub const COMPARE_MAX_DEPTH: u64 = 64 + 1024;
+/// Complete logical operand depth admitted by MEM-3, with the root at zero.
+/// This is independent of physical layout and native/scratch implementation choices.
+pub const COMPARE_MAX_DEPTH: u64 = hirsel_core_contract::depth::STRUCTURAL_LIMIT;
 
 /// Structural comparison operators (`Inst::Compare`): equality and the total
 /// structural order over one non-scalar layout.
@@ -1134,6 +1131,8 @@ pub enum Terminator {
     Raise(FailureId),
     /// Return failure status after failure cleanup finished.
     Propagate,
+    /// Private keyed-adapter rejection; actuals remain in pending caller custody.
+    RejectTransfer,
     /// In failure cleanup: when the active failure is exactly the `OutOfSpace`
     /// of the bounded arena `arena`, which this unit opened, with no failure
     /// recorded after it, forget it and resume ordinary code on `caught`;
@@ -1367,6 +1366,9 @@ pub struct CallArgument {
 /// effects (never body-derived public promises).
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct CallSite {
+    /// Status 3 from a validated materialized keyed-primitive adapter. On this
+    /// edge evaluated Take actuals remain in pending caller custody.
+    pub pretransfer_failure: Option<FailureId>,
     pub forward_caller: bool,
     pub callee: Callee,
     /// Concrete registry instantiation; read only for Operation callees (LIR 21).
@@ -1546,6 +1548,8 @@ pub struct SideTables {
     pub init_flags: Vec<InitFlag>,
     /// SER-2 codec plans (LIR schema revision 29).
     pub codecs: Vec<crate::codec::CodecPlan>,
+    /// MEM-3 logical types and complete physical access, independently validated.
+    pub structural: Vec<crate::structural_access::AccessPlan>,
 }
 
 impl SideTables {
@@ -2479,6 +2483,7 @@ impl Terminator {
             Terminator::Return(_)
             | Terminator::Raise(_)
             | Terminator::Propagate
+            | Terminator::RejectTransfer
             | Terminator::Unreachable
             | Terminator::InvariantFault { .. } => Vec::new(),
         }
@@ -2493,11 +2498,27 @@ impl Terminator {
             | Terminator::Switch { .. }
             | Terminator::Return(_)
             | Terminator::Propagate
+            | Terminator::RejectTransfer
             | Terminator::Recover { .. }
             | Terminator::Isolate { .. }
             | Terminator::Unreachable
             | Terminator::InvariantFault { .. } => None,
         }
+    }
+
+    /// Entered-callee failure and, where allowed, pending-transfer rejection.
+    pub fn failure_edges(&self, tables: &SideTables) -> Vec<FailureId> {
+        let mut failures: Vec<_> = self.failure().into_iter().collect();
+        if let Self::Call { call, .. } = self {
+            if let Some(failure) = tables
+                .calls
+                .get(call.index())
+                .and_then(|call| call.pretransfer_failure)
+            {
+                failures.push(failure);
+            }
+        }
+        failures
     }
 
     pub fn visit(&self, f: &mut impl FnMut(Ref)) {
@@ -2547,7 +2568,10 @@ impl Terminator {
                 f(Ref::Value(start));
                 f(Ref::Edge(caught));
             }
-            Self::Propagate | Self::Unreachable | Self::InvariantFault { .. } => {}
+            Self::Propagate
+            | Self::RejectTransfer
+            | Self::Unreachable
+            | Self::InvariantFault { .. } => {}
         }
     }
 }
@@ -2771,6 +2795,9 @@ impl<S: Stage> LirUnit<S> {
             if let Some(destination) = &call.destination {
                 destination.visit(&mut push);
             }
+            if let Some(failure) = call.pretransfer_failure {
+                push(Ref::Failure(failure));
+            }
             push(Ref::SourceAnchor(call.anchor));
         }
         for site in &t.constructs {
@@ -2832,6 +2859,11 @@ impl<S: Stage> LirUnit<S> {
             push(Ref::Slot(flag.slot));
             push(Ref::Projections(flag.path));
             if let Some(layout) = flag.environment {
+                push(Ref::Layout(layout));
+            }
+        }
+        for plan in &t.structural {
+            for layout in plan.layouts() {
                 push(Ref::Layout(layout));
             }
         }
@@ -3116,6 +3148,7 @@ snapshot_enum!(Terminator {
     Isolate { start, caught },
     Unreachable,
     InvariantFault { reason },
+    RejectTransfer,
 });
 snapshot_enum!(BlockKind {
     Body,
@@ -3197,6 +3230,7 @@ snapshot_struct!(CallArgument {
     value
 });
 snapshot_struct!(CallSite {
+    pretransfer_failure,
     forward_caller,
     callee,
     operation_arguments,
@@ -3272,7 +3306,8 @@ snapshot_struct!(SideTables {
     source_anchors,
     cleanup_anchors,
     init_flags,
-    codecs
+    codecs,
+    structural
 });
 snapshot_struct!(Pools {
     values,

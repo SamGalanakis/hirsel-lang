@@ -549,6 +549,9 @@ fn relay_run(source: &str) -> hirsel_heapcheck::Run {
     let built = hirsel_driver::native::build_program(&program, manifest(&program), &options)
         .expect("build");
     let heap = hirsel_heapcheck::Program {
+        invocation_bodies: built.operations.invocation_bodies.clone(),
+        invocations: built.operations.invocations.clone(),
+        pretransfer_adapters: built.operations.pretransfer_adapters.clone(),
         target: target(),
         layouts: built.table.clone(),
         units: built.raw_units(),

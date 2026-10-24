@@ -229,6 +229,10 @@ fn program(target: &TargetSpec, called: bool, weakened: bool) -> Program {
 
 fn heap_program(p: &Program) -> hirsel_heapcheck::Program<Ready> {
     hirsel_heapcheck::Program::<Ready> {
+        // Hand-built component units without original source bodies.
+        invocation_bodies: Vec::new(),
+        invocations: Default::default(),
+        pretransfer_adapters: Vec::new(),
         target: p.table.target.clone(),
         layouts: p.table.table.clone(),
         units: p.units.iter().map(|u| u.unit().clone()).collect(),

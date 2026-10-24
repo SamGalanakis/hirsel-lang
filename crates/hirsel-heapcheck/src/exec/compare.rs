@@ -1,10 +1,9 @@
 //! `Inst::Compare` over ledger values: the interpreter's structural order
 //! (`hirsel_interp::structural::compare`, reimplemented here because this crate
 //! never depends on the interpreter) read from layouts. Pairs are visited depth
-//! first in field order and the first unequal pair decides; a pair deeper than
-//! `COMPARE_MAX_DEPTH` is the MEM-3 Depth failure; an unordered float pair
-//! decides "unordered" at once. Depth counts one level per field, element or
-//! boxed payload, as the interpreter counts one per value with children.
+//! first in field order and the first unequal pair decides. Complete logical
+//! admission is audited independently before these physical value walks.
+
 use super::*;
 use std::cmp::Ordering;
 
@@ -99,9 +98,6 @@ impl<S: Stage> Machine<'_, S> {
                     other => return Ok(Ok(Some(other))),
                 },
             };
-            if depth > COMPARE_MAX_DEPTH {
-                return Ok(Err(LangFailure));
-            }
             let record = self.record(layout)?;
             let mut children = |fields: &[hirsel_lir::layout_types::FieldLayout]| {
                 let mut sorted: Vec<_> = fields.iter().collect();
@@ -383,9 +379,6 @@ impl<S: Stage> Machine<'_, S> {
         };
         // Depth first in layout order: children are pushed in reverse.
         while let Some((at, layout, depth)) = work.pop() {
-            if depth > COMPARE_MAX_DEPTH {
-                return Ok(Err(LangFailure));
-            }
             let record = self.record(layout)?;
             let children = |fields: &[hirsel_lir::layout_types::FieldLayout]| {
                 let mut sorted: Vec<_> = fields

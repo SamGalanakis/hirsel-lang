@@ -106,6 +106,25 @@ impl Unit<'_> {
         (block, total)
     }
 
+    fn structural(&mut self, layout: LayoutId) {
+        if !self
+            .builder
+            .unit
+            .tables
+            .structural
+            .iter()
+            .any(|plan| plan.root_layout() == layout)
+        {
+            self.builder.unit.tables.structural.push(
+                self.table
+                    .structural
+                    .get(&layout)
+                    .expect("declared structural operand plan")
+                    .clone(),
+            );
+        }
+    }
+
     /// A structural comparison of two values of `layout`.
     pub fn compare(
         &mut self,
@@ -116,6 +135,7 @@ impl Unit<'_> {
         layout: LayoutId,
         failure: FailureId,
     ) -> ValueId {
+        self.structural(layout);
         let bool_l = self.table.scalar(ScalarKind::Bool);
         let result = self.plain(bool_l);
         self.builder.push(
@@ -597,7 +617,20 @@ pub fn ready_program(target: &TargetSpec) -> Program {
         &[(PassingMode::Mut, list64), (Borrow, i64_)],
         unit_,
     );
-    let table = schema.build(target);
+    let mut table = schema.build(target);
+    table.structural = schema.structural_plans(
+        &table,
+        &[
+            "box_rec1",
+            "opt",
+            "rec_f",
+            "box_chain",
+            "string",
+            "box_opt",
+            "list64",
+        ],
+    );
+
     let manifest = manifest();
     let i64_l = table.scalar(ScalarKind::I64);
     let (rec1_l, box_rec1_l) = (table.layout("rec1"), table.layout("box_rec1"));
@@ -2948,6 +2981,7 @@ pub fn ready_program(target: &TargetSpec) -> Program {
         },
     );
     let hash = |u: &mut Unit<'_>, value| {
+        u.structural(list_l);
         let result = u.plain(u64_l);
         let failure = u.releasing(&live, Some("MEM-3"), SourceAnchorId(0));
         u.builder.push(

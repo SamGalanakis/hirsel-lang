@@ -185,6 +185,9 @@ fn parity(cases: &[(&str, &str)]) {
                     if name == "early" { 2 } else { 0 }
                 );
                 let heap = hirsel_heapcheck::Program {
+                    invocation_bodies: ready.operations.invocation_bodies.clone(),
+                    invocations: ready.operations.invocations.clone(),
+                    pretransfer_adapters: ready.operations.pretransfer_adapters.clone(),
                     target: ready.target.clone(),
                     layouts: ready.table.clone(),
                     units,
@@ -333,7 +336,7 @@ fn forged_region_return_is_rejected_by_c() {
     assert_eq!(region_count(&unit), 1);
     let manifest = manifest(&program);
     let target = target();
-    let operations = program.operation_registry();
+    let operations = lowered.operation_registry(&program);
     let inputs = Inputs {
         target: &target,
         layouts: &lowered.table,

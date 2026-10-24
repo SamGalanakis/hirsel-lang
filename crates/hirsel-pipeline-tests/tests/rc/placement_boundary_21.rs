@@ -274,7 +274,7 @@ fn inline_and_foreign_placement_stays_conservative() {
             let (program, lowered) = support::lower_valid(&source(shape, profile));
             let manifest = support::manifest(&program);
             let target = support::target();
-            let operations = program.operation_registry();
+            let operations = lowered.operation_registry(&program);
             let inputs = hirsel_lir::validate::Inputs {
                 memo: Default::default(),
                 discharge: None,

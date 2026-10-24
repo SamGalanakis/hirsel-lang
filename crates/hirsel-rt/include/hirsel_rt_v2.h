@@ -34,6 +34,8 @@ extern "C" {
 /* A deep copy into a bounded arena its budget does not cover (MEM-6): nothing is copied or
  * recorded; the caller records the arena's OutOfSpace with hirsel_rt_v2_arena_exhausted. */
 #define HIRSEL_RT_V2_STATUS_EXHAUSTED 2
+/* Private compiler adapter protocol: all actuals remain in caller custody. */
+#define HIRSEL_RT_V2_STATUS_PRETRANSFER_FAILURE 3
 
 #define HIRSEL_RT_V2_LAUNCH_OK 0
 #define HIRSEL_RT_V2_LAUNCH_ABI_MISMATCH 2
@@ -156,7 +158,7 @@ _Static_assert(HIRSEL_RT_V2_PAGE_XTHREAD_FREE_OFFSET == HIRSEL_RT_V2_PAGE_OWNER_
  * LayoutRecord drop program to it). Step offsets are from the enclosing frame's base: the value,
  * a loop's element, or a column's element. */
 #define HIRSEL_RT_V2_LAYOUT_MAGIC 0x484e4c31u
-#define HIRSEL_RT_V2_LAYOUT_VERSION 15
+#define HIRSEL_RT_V2_LAYOUT_VERSION 16
 #define HIRSEL_RT_V2_LAYOUT_UNSAFE_FFI 1
 #define HIRSEL_RT_V2_LAYOUT_DYNAMIC 2
 #define HIRSEL_RT_V2_LAYOUT_WIDE_CURSOR 4
@@ -207,6 +209,8 @@ _Static_assert(HIRSEL_RT_V2_PAGE_XTHREAD_FREE_OFFSET == HIRSEL_RT_V2_PAGE_OWNER_
 /* Release the Shared root reference at offset under the root count contract (version 13): exact,
  * and deferred where the run's mode defers root releases. Never a tail release. */
 #define HIRSEL_RT_V2_STEP_RELEASE_ROOT 11
+#define HIRSEL_RT_V2_STEP_END_FINALIZE 12
+#define HIRSEL_RT_V2_LAYOUT_IMPLEMENTATION_FINALIZER 4096
 #define HIRSEL_RT_V2_STEP_CURSOR_BITS 24
 #define HIRSEL_RT_V2_WHOLE_VALUE UINT32_MAX
 #define HIRSEL_RT_V2_NO_OFFSET UINT64_MAX
@@ -216,6 +220,14 @@ _Static_assert(HIRSEL_RT_V2_PAGE_XTHREAD_FREE_OFFSET == HIRSEL_RT_V2_PAGE_OWNER_
 #define HIRSEL_RT_V2_REGION_POOL_IDLE_CAP 8388608
 
 typedef struct hirsel_rt_v2_ctx hirsel_rt_v2_ctx;
+uint8_t hirsel_rt_v2_depth_enter(hirsel_rt_v2_ctx *ctx);
+uint8_t hirsel_rt_v2_depth_enter_at_site(hirsel_rt_v2_ctx *ctx, uint64_t anchor, uint64_t operation_site);
+void hirsel_rt_v2_depth_leave(hirsel_rt_v2_ctx *ctx);
+uint8_t hirsel_rt_v2_depth_preflight(hirsel_rt_v2_ctx *ctx, const void *program, uint64_t program_length, const void *edges, uint64_t edge_count, const void *value);
+/* Value walkers after complete logical admission: order is equal=0, less=1,
+ * greater=2, unordered=3. No serialization or arena budget is involved. */
+uint8_t hirsel_rt_v2_structural_order(hirsel_rt_v2_ctx *ctx, const void *program, uint64_t program_length, const void *left, const void *right);
+uint64_t hirsel_rt_v2_structural_hash(hirsel_rt_v2_ctx *ctx, const void *program, uint64_t program_length, const void *value, uint64_t seed);
 typedef struct hirsel_rt_v2_layout hirsel_rt_v2_layout;
 
 typedef struct hirsel_rt_v2_header {

@@ -43,6 +43,9 @@ pub const STATUS_FAILURE: u8 = 1;
 /// A deep copy into a bounded arena whose budget does not cover it (MEM-6, runtime
 /// ABI 7): nothing is copied or recorded; the caller records the arena's `OutOfSpace`.
 pub const STATUS_EXHAUSTED: u8 = 2;
+/// Private call status, emitted only by validated keyed-primitive adapters.
+/// Actuals remain caller-owned; this is not an entered-callee failure.
+pub const STATUS_PRETRANSFER_FAILURE: u8 = 3;
 /// Launch uses a separate channel from language failure.
 pub const LAUNCH_OK: u8 = 0;
 pub const LAUNCH_ABI_MISMATCH: u8 = 2;
@@ -189,7 +192,7 @@ pub const REGION_RECORD_BYTES: u64 = 64;
 /// Layout descriptor constants (`hirsel_rt_v2_layout`, `hirsel_rt_v2_step`);
 /// `rt_program` lowers layout drop programs to these steps.
 pub const LAYOUT_MAGIC: u32 = 0x484e_4c31;
-pub const LAYOUT_DESCRIPTOR_VERSION: u32 = 15;
+pub const LAYOUT_DESCRIPTOR_VERSION: u32 = 16;
 /// The finalizer belongs to an `unsafe ffi` package: its failure terminates (FAIL-3).
 pub const LAYOUT_UNSAFE_FFI: u32 = 1;
 /// The size is dynamic; the descriptor's size is the extent every value has.
@@ -254,6 +257,10 @@ pub const STEP_RELEASE_LAST: u32 = 10;
 /// under the root count contract (`hirsel_rt_v2_root_release`): exact, never the inline edge,
 /// and deferred where the run's mode defers root releases. Never a tail release.
 pub const STEP_RELEASE_ROOT: u32 = 11;
+/// Retire a language finalizer after all of its fields, including on failure.
+pub const STEP_END_FINALIZE: u32 = 12;
+/// The finalizer is compiler implementation cleanup, adding no invocation itself.
+pub const LAYOUT_IMPLEMENTATION_FINALIZER: u32 = 4096;
 /// Step bits of the logical dead cursor; wide programs preserve forty mixed-radix
 /// bits in the eight-byte header and a reserved four-byte shadow.
 pub const STEP_CURSOR_BITS: u32 = 24;
@@ -433,6 +440,12 @@ pub struct CParam {
 /// Every entry `hirsel_rt_v2.h` declares.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub enum RuntimeEntry {
+    DepthEnter,
+    DepthEnterAtSite,
+    DepthLeave,
+    DepthPreflight,
+    StructuralOrder,
+    StructuralHash,
     AbiVersion,
     CtxCreate,
     CtxDestroy,
@@ -599,7 +612,13 @@ const OPERATION_SITE: CParam = p("operation_site", U64);
 const REGION: CParam = p("region", ptr(CName::Region, 1));
 
 impl RuntimeEntry {
-    pub const ALL: [RuntimeEntry; 81] = [
+    pub const ALL: [RuntimeEntry; 87] = [
+        Self::DepthEnter,
+        Self::DepthEnterAtSite,
+        Self::DepthLeave,
+        Self::DepthPreflight,
+        Self::StructuralOrder,
+        Self::StructuralHash,
         Self::AbiVersion,
         Self::CtxCreate,
         Self::CtxDestroy,
@@ -686,6 +705,53 @@ impl RuntimeEntry {
     pub const fn declaration(self) -> RuntimeDeclaration {
         use CName as N;
         let (symbol, returns, parameters): (&'static str, CType, &'static [CParam]) = match self {
+            Self::DepthEnter => ("hirsel_rt_v2_depth_enter", U8, const { &[CTX] }),
+            Self::DepthEnterAtSite => (
+                "hirsel_rt_v2_depth_enter_at_site",
+                U8,
+                const { &[CTX, ANCHOR, OPERATION_SITE] },
+            ),
+            Self::DepthLeave => ("hirsel_rt_v2_depth_leave", VOID, const { &[CTX] }),
+            Self::DepthPreflight => (
+                "hirsel_rt_v2_depth_preflight",
+                U8,
+                const {
+                    &[
+                        CTX,
+                        p("program", cptr(N::Void)),
+                        p("program_length", U64),
+                        p("edges", cptr(N::Void)),
+                        p("edge_count", U64),
+                        p("value", cptr(N::Void)),
+                    ]
+                },
+            ),
+            Self::StructuralOrder => (
+                "hirsel_rt_v2_structural_order",
+                U8,
+                const {
+                    &[
+                        CTX,
+                        p("program", cptr(N::Void)),
+                        p("program_length", U64),
+                        p("left", cptr(N::Void)),
+                        p("right", cptr(N::Void)),
+                    ]
+                },
+            ),
+            Self::StructuralHash => (
+                "hirsel_rt_v2_structural_hash",
+                U64,
+                const {
+                    &[
+                        CTX,
+                        p("program", cptr(N::Void)),
+                        p("program_length", U64),
+                        p("value", cptr(N::Void)),
+                        p("seed", U64),
+                    ]
+                },
+            ),
             Self::AbiVersion => ("hirsel_rt_v2_abi_version", U32, const { &[] }),
             Self::CtxCreate => (
                 "hirsel_rt_v2_ctx_create",
@@ -1231,6 +1297,12 @@ impl RuntimeThunk {
 }
 
 snapshot_enum!(RuntimeEntry {
+    DepthEnter,
+    DepthEnterAtSite,
+    DepthLeave,
+    DepthPreflight,
+    StructuralOrder,
+    StructuralHash,
     AbiVersion,
     CtxCreate,
     CtxDestroy,

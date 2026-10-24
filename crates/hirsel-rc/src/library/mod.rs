@@ -20,6 +20,7 @@ pub mod collection;
 pub mod failure;
 pub mod isolate;
 pub mod iter;
+pub mod keyed;
 pub mod length;
 pub mod list;
 pub mod map;
@@ -67,6 +68,10 @@ pub struct LibraryBody {
 /// Every registered body. A family adds its rows in its own module and
 /// one line here.
 pub const BODIES: &[&LibraryBody] = &[
+    &keyed::MAP_INSERT,
+    &keyed::SET_INSERT,
+    &keyed::MAP_GET,
+    &keyed::SET_CONTAINS,
     &arena::WITH,
     &arena::BOUNDED,
     &arena::COPY_TO,
@@ -272,7 +277,7 @@ pub fn inline_lowering(path: &DefPath) -> Option<&'static InlineLowering> {
 
 /// Bumped by any change to a body's generated code, so every artifact keyed
 /// by an instance of it is invalidated.
-pub const REVISION: u32 = 28;
+pub const REVISION: u32 = 30;
 
 /// The implementation revision of the library body at `path`.
 pub fn revision(path: &DefPath) -> ContentHash {

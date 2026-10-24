@@ -245,6 +245,7 @@ impl Importer<'_> {
         };
         let right = self.rvalue(&tir::Rvalue::Constant(c.clone()), self.value_type(left))?;
         let layout = self.layout_of(self.value_type(left));
+        self.structural_access(self.body.places[place.0 as usize].ty, layout)?;
         let ty = self.bool_type()?;
         let result = self.fresh(ty);
         self.reading(loans, taken, |this| {

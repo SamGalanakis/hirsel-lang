@@ -767,6 +767,7 @@ name = "hirsel-interp"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "hirsel-core-contract",
  "hirsel-diag",
  "hirsel-free",
  "hirsel-guard",
@@ -1115,6 +1116,7 @@ dependencies = [
 name = "hirsel-run-schema"
 version = "0.1.0"
 dependencies = [
+ "hirsel-core-contract",
  "hirsel-guard",
  "rustls",
  "rustls-pki-types",

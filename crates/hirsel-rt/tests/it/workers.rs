@@ -1154,3 +1154,76 @@ fn repeated_stopped_runs_never_replace_lost_permits_and_only_manager_restores_ca
     assert_eq!(hirsel_rt::pool::lost_compute_permits(), 0);
     assert_eq!(hirsel_rt::pool::compute_permits().1, 0);
 }
+
+unsafe extern "C" {
+    fn hirsel_rt_v2_depth_enter_at_site(ctx: *mut TaskCtx, anchor: u64, operation_site: u64) -> u8;
+    fn hirsel_rt_v2_depth_leave(ctx: *mut TaskCtx);
+}
+
+#[test]
+fn callback_admission_31_exact_and_retirement() {
+    let _serial = serial();
+    let mut run = BodyRun::new(1, true);
+    run.config = config();
+    let ended = run.run(
+        |_| {},
+        |ctx| {
+            let mut interval = [0u64; FOREIGN_SCOPE_BYTES / 8];
+            // SAFETY: this stand-in owns the running task; the interval and all
+            // admissions are paired before returning to the run launcher.
+            unsafe {
+                for _ in 1..hirsel_core_contract::depth::FOREGROUND_LIMIT {
+                    assert_eq!(hirsel_rt_v2_depth_enter_at_site(ctx, 77, 88), 0);
+                }
+                hirsel_rt_v2_foreign_enter(
+                    ctx,
+                    77,
+                    interval.as_mut_ptr().cast(),
+                    FOREIGN_THREADS_HOME,
+                );
+                assert_eq!(hirsel_rt_v2_callback_context(), ctx);
+                hirsel_rt::foreign::hirsel_rt_v2_callback_leave(ctx);
+                assert_eq!(hirsel_rt_v2_callback_context(), ctx);
+                hirsel_rt::foreign::hirsel_rt_v2_callback_leave(ctx);
+                hirsel_rt_v2_foreign_leave(interval.as_mut_ptr().cast());
+                for _ in 1..hirsel_core_contract::depth::FOREGROUND_LIMIT {
+                    hirsel_rt_v2_depth_leave(ctx);
+                }
+            }
+            0
+        },
+    );
+    assert_eq!(ended.ended, Ok(0));
+}
+
+#[test]
+fn callback_admission_31_over_preserves_foreign_fatal_boundary() {
+    let name = "callback_admission_31_over_preserves_foreign_fatal_boundary";
+    if in_child(name) {
+        let mut run = BodyRun::new(1, true);
+        run.config = config();
+        run.run(
+            |_| {},
+            |ctx| {
+                let mut interval = [0u64; FOREIGN_SCOPE_BYTES / 8];
+                // SAFETY: exclusively running task and live interval storage. The
+                // rejected callback ends the process before any language body runs.
+                unsafe {
+                    for _ in 0..hirsel_core_contract::depth::FOREGROUND_LIMIT {
+                        assert_eq!(hirsel_rt_v2_depth_enter_at_site(ctx, 77, 88), 0);
+                    }
+                    hirsel_rt_v2_foreign_enter(
+                        ctx,
+                        77,
+                        interval.as_mut_ptr().cast(),
+                        FOREIGN_THREADS_HOME,
+                    );
+                    hirsel_rt_v2_callback_context();
+                }
+                panic!("a rejected callback entered its body");
+            },
+        );
+        panic!("a failed foreign callback returned to its run");
+    }
+    assert_child_aborts(name, "a callback failed");
+}

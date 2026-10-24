@@ -71,18 +71,18 @@ fn inventory(unit: &LirUnit<Value>) -> BTreeMap<Entry, usize> {
                 );
             }
         }
-        if let Some(terminator) = unit.terminators.get(b)
-            && let Some(failure) = terminator.failure()
-        {
-            add(
-                failure,
-                terminator.opcode(),
-                unit.tables
-                    .failures
-                    .get(failure.index())
-                    .and_then(|e| e.rule.clone()),
-                None,
-            );
+        if let Some(terminator) = unit.terminators.get(b) {
+            for failure in terminator.failure_edges(&unit.tables) {
+                add(
+                    failure,
+                    terminator.opcode(),
+                    unit.tables
+                        .failures
+                        .get(failure.index())
+                        .and_then(|e| e.rule.clone()),
+                    None,
+                );
+            }
         }
     }
     out

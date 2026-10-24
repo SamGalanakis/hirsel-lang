@@ -203,21 +203,7 @@ pub fn derive(owners: &Owners, store: &TypeInterner, types: &[TypeId]) -> (Deriv
         .map(|d| (d.layout, d))
         .collect();
     let materialized = materialize(&descriptors);
-    let leaf = leak(Layout {
-        magic: LAYOUT_MAGIC,
-        version: LAYOUT_VERSION,
-        size: 8,
-        align: 8,
-        finalizer: Some(log_address),
-        steps: std::ptr::null(),
-        step_count: 0,
-        field_count: 0,
-        flags: 0,
-        logical: 0,
-        logical_count: std::ptr::null(),
-        scan: std::ptr::null(),
-        scan_words: u64::MAX,
-    });
+    let leaf = super::layout(8, 0, Some(log_address), Vec::new());
     (
         Derived {
             table,

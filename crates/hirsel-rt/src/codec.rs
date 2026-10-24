@@ -7,6 +7,9 @@
 //! allocates anything, then builds fresh blocks in reading order; nothing partially decoded
 //! exists. Error classes and their order are the reference codec's (`hirsel_types::wire`).
 //! The reference's operational budgets (bytes, visited values) terminate environmentally.
+pub(crate) mod structural;
+pub(crate) mod value_access;
+
 use crate::alloc::{
     allocate_sequence, hirsel_rt_v2_alloc, payload, sequence_elements_offset, sequence_slice_start,
 };
@@ -221,6 +224,8 @@ enum Scalar {
 
 struct Program {
     nodes: Vec<Node>,
+    // Keep integer signedness for access-only value ordering. Wire bytes are unchanged.
+    scalar_codes: Vec<u64>,
     out_size: u64,
     root: usize,
     out: usize,
@@ -271,6 +276,14 @@ impl Words<'_> {
 
 impl Program {
     fn parse(words: &[u64]) -> Program {
+        Self::parse_mode(words, false)
+    }
+
+    fn parse_access(words: &[u64]) -> Program {
+        Self::parse_mode(words, true)
+    }
+
+    fn parse_mode(words: &[u64], access: bool) -> Program {
         let mut w = Words { words, at: 0 };
         if w.next() != CODEC_VERSION {
             fault("a codec program of another version");
@@ -287,9 +300,16 @@ impl Program {
         };
         let starts: Vec<u64> = (0..count).map(|_| w.next()).collect();
         let mut nodes = Vec::with_capacity(count);
+        let mut scalar_codes = Vec::with_capacity(count);
         for start in starts {
             w.at = usize::try_from(start).unwrap_or_else(|_| fault("codec node offset"));
-            let node = match w.next() {
+            let tag = w.next();
+            scalar_codes.push(if tag == NODE_SCALAR {
+                w.words[w.at]
+            } else {
+                u64::MAX
+            });
+            let node = match tag {
                 NODE_SCALAR => Node::Scalar(match w.next() {
                     0 => Scalar::Bool,
                     1 | 6 => Scalar::Integer(1),
@@ -449,21 +469,24 @@ impl Program {
             nodes.push(node);
         }
         let checked = nodes.iter().any(|n| matches!(n, Node::Checked { .. }));
-        if checked != root_descriptor.is_some() {
+        if !access && checked != root_descriptor.is_some() {
             fault("a codec program whose checks and root descriptor disagree");
         }
         let program = Program {
             nodes,
+            scalar_codes,
             out_size,
             root,
             out,
             bytes,
             root_descriptor,
         };
-        if !matches!(
-            program.nodes[program.bytes],
-            Node::Text(Text { utf8: false, .. })
-        ) {
+        if !access
+            && !matches!(
+                program.nodes[program.bytes],
+                Node::Text(Text { utf8: false, .. })
+            )
+        {
             fault("a codec program whose bytes node is not Bytes");
         }
         program
@@ -865,7 +888,16 @@ unsafe fn encode_payload(
                     .unwrap_or_else(|| fault("a codec check outside the codec's checks"));
                 let mut verdict = 0u8;
                 // SAFETY: the check borrows the reconstructed value at `at`, of its layout.
+                if unsafe { crate::depth::enter_callback(ctx) } != crate::STATUS_OK {
+                    return Err(Stop::Failed);
+                }
+                // SAFETY: successful admission retains the borrowed occurrence;
+                // the thunk returns only after its ordinary cleanup.
                 let status = unsafe { thunk(ctx, at, &mut verdict) };
+                // SAFETY: this check's successful entry retires exactly once.
+                unsafe {
+                    crate::depth::hirsel_rt_v2_depth_leave(ctx);
+                }
                 match (status, verdict) {
                     (crate::STATUS_OK, 1) => (),
                     (crate::STATUS_OK, 0) => return Ok(None),

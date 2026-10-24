@@ -43,6 +43,8 @@ mod generics;
 mod indexed;
 mod input;
 mod instances;
+mod invocations;
+pub use invocations::invocation_coverage;
 mod matching;
 mod origin_dependencies;
 mod origin_types;
@@ -554,6 +556,40 @@ fn validate_input(
             },
         },
     ));
+    if errors.is_empty() {
+        match invocations::coverage(t, definition, signatures) {
+            Ok(coverage) => {
+                for (body, block, _, restart) in coverage {
+                    if restart
+                        && !definition.bodies[body as usize]
+                            .tail_sites
+                            .iter()
+                            .any(|site| {
+                                site.owner_body.0 == body
+                                    && site.call_block.0 == block
+                                    && site.kind == TailKind::SelfTail
+                            })
+                    {
+                        errors.push(Violation {
+                            body: Some(BodyId(body)),
+                            block: Some(BlockId(block)),
+                            instruction: None,
+                            kind: ViolationKind::WrongKind {
+                                entity: "missing tail witness",
+                                index: block,
+                            },
+                        });
+                    }
+                }
+            }
+            Err(_) => errors.push(Violation {
+                body: None,
+                block: None,
+                instruction: None,
+                kind: ViolationKind::InvalidTypeGraph,
+            }),
+        }
+    }
     Validation { violations: errors }
 }
 

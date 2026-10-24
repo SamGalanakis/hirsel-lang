@@ -1501,8 +1501,11 @@ define private i8 @hirsel.entry(ptr %ctx, ptr %dest, ptr %out, ptr %roots) {{
         format!(
             r#"{report_declarations}
 declare void @hirsel_rt_v2_exit_report(ptr, ptr, i32, i64, ptr)
+declare i8 @hirsel_rt_v2_depth_enter(ptr)
+declare void @hirsel_rt_v2_depth_leave(ptr)
 declare i8 @"{symbol}"(ptr{caller_parameters}, ptr, ptr{parameters})
 define private i8 @hirsel.entry(ptr %ctx, ptr %dest, ptr %out, ptr %roots) {{
+ %admitted = call i8 @hirsel_rt_v2_depth_enter(ptr %ctx)
 {loads} %s = call i8 @"{symbol}"(ptr %ctx{caller_arguments}, ptr %dest, ptr %out{arguments})
  %ok = icmp eq i8 %s, 0
  br i1 %ok, label %returned, label %done
@@ -1512,6 +1515,7 @@ report:
  call void @hirsel_rt_v2_exit_report(ptr %ctx, ptr %out, i32 {result_index}, i64 {report_offset}, ptr @hirsel.report.node.{report_root})
  br label %done
 done:
+ call void @hirsel_rt_v2_depth_leave(ptr %ctx)
  ret i8 %s
 }}"#
         )

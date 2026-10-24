@@ -607,7 +607,7 @@ fn transient_encoding_c_rejects_forged_credits_and_expired_loans() {
         .unwrap();
     let target = crate::rc_support::target();
     let manifest = crate::rc_support::manifest(&program);
-    let operations = program.operation_registry();
+    let operations = lowered.operation_registry(&program);
     let inputs = hirsel_lir::validate::Inputs {
         memo: Default::default(),
         discharge: None,

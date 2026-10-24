@@ -97,7 +97,7 @@ impl Liveness {
     fn exit<S: Stage>(&self, unit: &LirUnit<S>, block: BlockId) -> ValueSet {
         let mut live = self.live_out[block.index()].clone();
         let term = &unit.terminators[block.index()];
-        if let Some(f) = Terminator::failure(term) {
+        for f in term.failure_edges(&unit.tables) {
             live.union(&self.failure_needs(unit, f));
         }
         for d in terminator_defs(unit, term) {

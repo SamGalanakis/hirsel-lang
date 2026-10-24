@@ -529,6 +529,11 @@ pub struct Counters {
 /// One ownership transition, in execution order, for trace comparison.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Event {
+    /// Diagnostic position of a fault injection, independent of the language
+    /// failure chain. Enables cleanup oracles to distinguish preexisting failure.
+    Injection {
+        site: u64,
+    },
     Alloc {
         alloc: AllocId,
         owner: &'static str,

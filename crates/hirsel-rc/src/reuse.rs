@@ -143,7 +143,7 @@ impl Graph {
                 all[b].push((e, t));
                 preds[t.index()].push((BlockId(b as u32), e));
             }
-            if let Some(f) = Terminator::failure(term) {
+            for f in term.failure_edges(&unit.tables) {
                 let e = unit.tables.failures[f.index()].cleanup;
                 all[b].push((e, unit.tables.edges[e.index()].target));
             }
@@ -798,6 +798,7 @@ fn pair_tokens(
         match ed.unit.terminators[bi] {
             Terminator::Return(_)
             | Terminator::Propagate
+            | Terminator::RejectTransfer
             | Terminator::Unreachable
             | Terminator::InvariantFault { .. } => {
                 for (t, _) in live.drain(..) {
@@ -901,13 +902,15 @@ fn pair_tokens(
         for &t in &everywhere {
             ed.code[b].push(Inst::Dispose { token: t });
         }
-        if let Terminator::Call { failure, .. } = ed.unit.terminators[b] {
+        if matches!(ed.unit.terminators[b], Terminator::Call { .. }) {
             let at_call: Live = live
                 .iter()
                 .copied()
                 .filter(|(t, _)| !everywhere.contains(t))
                 .collect();
-            set_dispose(&mut ed, failure, &at_call);
+            for failure in ed.unit.terminators[b].failure_edges(&ed.unit.tables) {
+                set_dispose(&mut ed, failure, &at_call);
+            }
         }
         let jump = matches!(ed.unit.terminators[b], Terminator::Jump(_));
         for (e, t, args, _, dispose) in plans {

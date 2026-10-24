@@ -231,58 +231,19 @@ fn callback(
     values: &[ValueId],
     loans: &[LoanId],
 ) -> ValueId {
-    let result = b.fresh(
-        b.cx.layouts.table().fn_abis[abi.0 as usize]
-            .result
-            .as_ref()
-            .unwrap()
-            .layout,
-    );
-    let at = b.current();
-    let failed = b.block(BlockKind::FailureCleanup, &[]);
-    b.at(failed);
-    for &loan in loans.iter().rev() {
-        b.end_loan(loan);
-    }
-    let cleanup = b.failure(None);
-    b.terminate(Terminator::Jump(
-        b.ed.unit.tables.failures[cleanup.index()].cleanup,
-    ));
-    b.at(at);
-    let failure = b.failure_to(failed, &[], None);
-    let after = b.block(BlockKind::Body, &[]);
-    let arguments = PoolRange::push(
-        &mut b.ed.unit.pools.call_arguments,
-        values.iter().enumerate().map(|(i, &value)| CallArgument {
+    let arguments = values
+        .iter()
+        .enumerate()
+        .map(|(i, &value)| CallArgument {
             parameter: i as u32,
             passing: Passing::Borrow,
             value: ArgumentValue::Value(value),
-        }),
-    );
-    let call = CallId(b.ed.unit.tables.calls.len() as u32);
-    b.ed.unit.tables.calls.push(CallSite {
-        forward_caller: false,
-        operation_arguments: Vec::new(),
-        callee: Callee::Indirect(callee),
-        abi,
-        arguments,
-        result: Some(result),
-        destination: None,
-        declared: crate::import::CALL_EFFECTS,
-        anchor: b.anchor,
-    });
-    let normal = b.edge(after, &[]);
-    b.terminate(Terminator::Call {
-        call,
-        normal: Some(normal),
-        failure,
-    });
-    b.at(after);
-    for &loan in loans.iter().rev() {
-        b.end_loan(loan);
-    }
-    result
+        })
+        .collect();
+    b.call(Callee::Indirect(callee), Vec::new(), abi, arguments, loans)
+        .expect("comparator result")
 }
+
 fn arithmetic(b: &mut Body<'_, '_>, op: BinaryOp, left: ValueId, right: ValueId) -> ValueId {
     let result = b.value(b.layout_of(left), Holding::Plain);
     let failure = b.failure(Some("SEM-1"));

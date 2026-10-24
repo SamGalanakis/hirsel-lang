@@ -42,7 +42,7 @@ fn lower(p: &Program, enabled: bool) -> Lowered {
 fn heap(p: &Program, l: Lowered, faults: bool) -> hirsel_heapcheck::Run {
     let rows = manifest(p);
     let target = target();
-    let operations = p.operation_registry();
+    let operations = l.operation_registry(p);
     let inputs = hirsel_lir::validate::Inputs {
         target: &target,
         layouts: &l.table,
@@ -75,6 +75,9 @@ fn heap(p: &Program, l: Lowered, faults: bool) -> hirsel_heapcheck::Run {
         })
         .collect();
     let h = hirsel_heapcheck::Program {
+        invocation_bodies: operations.invocation_bodies.clone(),
+        invocations: operations.invocations.clone(),
+        pretransfer_adapters: operations.pretransfer_adapters.clone(),
         target,
         layouts: l.table,
         units,

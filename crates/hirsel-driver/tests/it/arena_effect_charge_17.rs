@@ -395,12 +395,7 @@ fn stdin_histories_and_offline_replay() {
         let ready = native::build(&validated, &native::Options::new(target.clone())).unwrap();
         // The production H fixture has EOF-only stdin. Supply a small
         // explicit scripted provider through H's existing Operations seam.
-        let heap = hirsel_heapcheck::Program {
-            target: ready.target.clone(),
-            layouts: ready.table.clone(),
-            units: ready.raw_units(),
-            statics: ready.statics.clone(),
-        };
+        let heap = ready.heap_program();
         let heap_config = hirsel_heapcheck::Config {
             context_handles: vec![(1, "Io".into()), (0, "Args".into())],
             ..Default::default()

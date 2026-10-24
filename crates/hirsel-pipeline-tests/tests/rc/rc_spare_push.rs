@@ -69,7 +69,7 @@ fn ready(source: &str, lowered: Lowered) -> hirsel_heapcheck::Program<Ready> {
     let table = lowered.table.clone();
     let manifest = manifest(&program);
     let target = target();
-    let operations = program.operation_registry();
+    let operations = lowered.operation_registry(&program);
     let inputs = Inputs {
         memo: Default::default(),
         discharge: None,
@@ -102,6 +102,9 @@ fn ready(source: &str, lowered: Lowered) -> hirsel_heapcheck::Program<Ready> {
         checked("ready", hirsel_lir::validate::check(u, &inputs), dump(u));
     }
     hirsel_heapcheck::Program {
+        invocation_bodies: operations.invocation_bodies.clone(),
+        invocations: operations.invocations.clone(),
+        pretransfer_adapters: operations.pretransfer_adapters.clone(),
         target,
         layouts: table,
         units,
@@ -503,4 +506,54 @@ fn a_reservation_forged_smaller_than_the_loop_fails_in_h() {
     assert_eq!(pushes(&lowered), (0, 1));
     forge(&mut lowered, 1);
     assert_eq!(heap(&ready(&source, lowered)).unwrap(), reference(&source));
+}
+
+#[test]
+fn invocation_identity_preserves_spare_push_but_rejects_another_library_target() {
+    let source = source(RESERVED);
+    let (_, lowered) = lower(&source);
+    let honest = ready(&source, lowered);
+    assert!(crate::rc_flat_builder::violations(&source, &honest).is_empty());
+    assert!(
+        hirsel_heapcheck::run(
+            &honest,
+            &path("main"),
+            &[],
+            &mut NoOperations,
+            &Config::default()
+        )
+        .result
+        .is_ok()
+    );
+    let mut forged = honest.clone();
+    let mut changed = 0;
+    for unit in &mut forged.units {
+        if unit.header.origin != UnitOrigin::Source {
+            continue;
+        }
+        for symbol in &mut unit.tables.symbols {
+            if symbol.definition == hirsel_rc::spare_push::spare_path() {
+                symbol.definition = hirsel_syntax::DefPath::core("list.reserve");
+                changed += 1;
+            }
+        }
+    }
+    assert_eq!(changed, 1);
+    let violations = crate::rc_flat_builder::violations(&source, &forged);
+    assert!(
+        violations.iter().any(|v| matches!(v,
+        hirsel_lir::validate::ViolationKind::Schema(message) if message.contains("invocation callee identity"))),
+        "{violations:?}"
+    );
+    let h = hirsel_heapcheck::run(
+        &forged,
+        &path("main"),
+        &[],
+        &mut NoOperations,
+        &Config::default(),
+    );
+    assert_eq!(
+        h.violation(),
+        Some(hirsel_heapcheck::ViolationKind::FrameImbalance)
+    );
 }

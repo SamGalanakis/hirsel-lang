@@ -521,12 +521,7 @@ fn effects(group: &str) {
             eprintln!("UUID_CELL {group} reference passed ids={}", rows.len());
         }
         if engine_selected("checked-H") {
-            let heap = hirsel_heapcheck::Program {
-                target: ready.target.clone(),
-                layouts: ready.table.clone(),
-                units: ready.raw_units(),
-                statics: ready.statics.clone(),
-            };
+            let heap = ready.heap_program();
             let mut script = Script(events.into());
             let h = hirsel_heapcheck::run_ready(
                 &heap,

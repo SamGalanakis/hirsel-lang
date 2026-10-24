@@ -70,6 +70,8 @@ pub enum StepKind {
     ReleaseLast,
     /// Run `layout`'s finalizer on the inline value at `offset`, shielded.
     Finalize,
+    /// End the finalizer's scope after its fields.
+    EndFinalize,
     /// Close the run-context handle stored at `offset`.
     CloseHandle,
     /// Unless the u32 tag at `offset` equals `variant`, skip the next `span` steps.
@@ -96,6 +98,7 @@ impl StepKind {
             Self::Release => STEP_RELEASE,
             Self::ReleaseLast => STEP_RELEASE_LAST,
             Self::Finalize => STEP_FINALIZE,
+            Self::EndFinalize => crate::runtime_abi::STEP_END_FINALIZE,
             Self::CloseHandle => STEP_CLOSE_HANDLE,
             Self::Tag => STEP_TAG,
             Self::NonNull => STEP_NONNULL,
@@ -173,6 +176,140 @@ pub enum DescriptorError {
 
 fn malformed<T>(what: impl Into<String>) -> Result<T, DescriptorError> {
     Err(DescriptorError::Malformed(what.into()))
+}
+
+impl Descriptor {
+    /// Reconstruct every static user-finalizer scope, including skipped arms
+    /// and zero-count loops. Balanced totals alone cannot prove field coverage.
+    pub fn check_finalizers(&self, table: &LayoutTable) -> Result<(), DescriptorError> {
+        fn span(
+            steps: &[Step],
+            start: usize,
+            end: usize,
+            mut active: Vec<(LayoutId, u64, u32)>,
+        ) -> Result<Vec<(LayoutId, u64, u32)>, DescriptorError> {
+            let mut at = start;
+            while at < end {
+                let step = &steps[at];
+                match step.kind {
+                    StepKind::Tag
+                    | StepKind::NonNull
+                    | StepKind::LiveBit
+                    | StepKind::Loop
+                    | StepKind::Column => {
+                        let close = at.checked_add(1 + step.span as usize).ok_or_else(|| {
+                            DescriptorError::Malformed("finalizer scope span overflow".into())
+                        })?;
+                        if close > end {
+                            return malformed("finalizer scope span leaves its field program");
+                        }
+                        if span(steps, at + 1, close, active.clone())? != active {
+                            return malformed(
+                                "conditional field cleanup changes its outer finalizer scopes",
+                            );
+                        }
+                        at = close;
+                        continue;
+                    }
+                    StepKind::Finalize => active.push((
+                        step.layout.ok_or_else(|| {
+                            DescriptorError::Malformed("finalizer entry lacks layout".into())
+                        })?,
+                        step.offset,
+                        step.field,
+                    )),
+                    StepKind::EndFinalize => {
+                        if active.pop() != step.layout.map(|id| (id, step.offset, step.field)) {
+                            return malformed("finalizer scope end does not match its entry");
+                        }
+                    }
+                    _ => (),
+                }
+                at += 1;
+            }
+            Ok(active)
+        }
+        // Count scope identities from the independent semantic drop programs.
+        // This rejects deletion of a complete balanced begin/end pair too.
+        let mut expected = std::collections::BTreeMap::new();
+        let mut pending = vec![(
+            self.layout,
+            lookup(table, self.layout)?.drop.clone(),
+            vec![self.layout],
+        )];
+        while let Some((owner, program, ancestry)) = pending.pop() {
+            for step in program {
+                let children = match step {
+                    DropStep::Finalize => {
+                        *expected.entry(owner).or_insert(0usize) += 1;
+                        vec![]
+                    }
+                    DropStep::Child { layout, .. } => vec![layout],
+                    DropStep::ElementsReverse { element, .. }
+                    | DropStep::RepeatReverse { element, .. } => vec![element],
+                    DropStep::ColumnsReverse(columns) => {
+                        columns.columns.iter().map(|c| c.layout).collect()
+                    }
+                    DropStep::ActiveVariant { variants, .. } => {
+                        for (_, arm) in variants {
+                            pending.push((owner, arm, ancestry.clone()));
+                        }
+                        vec![]
+                    }
+                    _ => vec![],
+                };
+                for child in children {
+                    if ancestry.contains(&child) {
+                        return malformed("inline finalizer scope cycle");
+                    }
+                    let mut chain = ancestry.clone();
+                    chain.push(child);
+                    pending.push((child, lookup(table, child)?.drop.clone(), chain));
+                }
+            }
+        }
+        let own = lookup(table, self.layout)?.finalizer.is_some();
+        let mut entered = std::collections::BTreeMap::new();
+        if own {
+            entered.insert(self.layout, 1usize);
+        }
+        let mut ended = std::collections::BTreeMap::new();
+        for step in &self.steps {
+            let counts = match step.kind {
+                StepKind::Finalize => &mut entered,
+                StepKind::EndFinalize => &mut ended,
+                _ => continue,
+            };
+            let id = step
+                .layout
+                .ok_or_else(|| DescriptorError::Malformed("finalizer scope lacks layout".into()))?;
+            *counts.entry(id).or_insert(0usize) += 1;
+        }
+        if entered != expected || ended != expected {
+            return malformed("finalizer scopes do not cover the semantic field drop programs");
+        }
+
+        let initial = if own {
+            vec![(self.layout, 0, WHOLE_VALUE)]
+        } else {
+            vec![]
+        };
+        if !span(&self.steps, 0, self.steps.len(), initial)?.is_empty() {
+            return malformed("finalizer remains active after its field program");
+        }
+        Ok(())
+    }
+}
+
+/// Implementation-only library drop thunks have reserved, validated $native identities.
+fn language_finalizer(record: &LayoutRecord) -> bool {
+    record.finalizer.as_ref().is_some_and(|f| {
+        !f.definition
+            .0
+            .modules
+            .iter()
+            .any(|module| module.as_str() == "$native")
+    })
 }
 
 /// The descriptor of one layout.
@@ -267,6 +404,11 @@ fn descriptor_with_storage(
         .finalizer
         .as_ref()
         .is_some_and(|f| f.unsafe_ffi_package);
+    if record.finalizer.is_some() {
+        let end = lower.push(StepKind::EndFinalize, 0);
+        lower.steps[end].variant = 1; // own root; bypassed under a partial live mask
+        lower.steps[end].layout = Some(id);
+    }
     let end = lower.steps.len();
     mark_last(&mut lower.steps, 0, end);
     if lower.steps.len() as u64 >= 1 << STEP_CURSOR_BITS {
@@ -296,7 +438,7 @@ fn descriptor_with_storage(
         Some(entries) => (entries.logical, Some(entries.program())),
         None => (logical, None),
     };
-    Ok(Descriptor {
+    let descriptor = Descriptor {
         scan: crate::handle_scan::Program::lower_in(table, record),
         logical_count,
         layout: id,
@@ -307,6 +449,11 @@ fn descriptor_with_storage(
         logical,
         flags: per_element
             | if unsafe_ffi { LAYOUT_UNSAFE_FFI } else { 0 }
+            | if record.finalizer.is_some() && !language_finalizer(record) {
+                crate::runtime_abi::LAYOUT_IMPLEMENTATION_FINALIZER
+            } else {
+                0
+            }
             | if dynamic { LAYOUT_DYNAMIC } else { 0 }
             | if no_extent(record) {
                 LAYOUT_NO_EXTENT
@@ -360,7 +507,9 @@ fn descriptor_with_storage(
                 0
             },
         steps: lower.steps,
-    })
+    };
+    descriptor.check_finalizers(table)?;
+    Ok(descriptor)
 }
 
 /// Whether a release or reset of a block of `id` under the static live mask `words` runs
@@ -870,6 +1019,10 @@ impl Lower<'_> {
         let scope = self.scope;
         self.scope = (id, at);
         let result = self.program(drop, at);
+        if result.is_ok() && record.finalizer.is_some() {
+            let end = self.push(StepKind::EndFinalize, at);
+            self.steps[end].layout = Some(id);
+        }
         self.scope = scope;
         result
     }
@@ -1118,7 +1271,9 @@ mod tests {
                 .collect::<Vec<_>>(),
             [
                 (StepKind::Finalize, 0, 1, Some(LayoutId(0))),
-                (StepKind::Finalize, 0, 0, Some(LayoutId(0)))
+                (StepKind::EndFinalize, 0, 1, Some(LayoutId(0))),
+                (StepKind::Finalize, 0, 0, Some(LayoutId(0))),
+                (StepKind::EndFinalize, 0, 0, Some(LayoutId(0)))
             ]
         );
     }

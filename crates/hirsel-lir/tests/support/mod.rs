@@ -39,6 +39,10 @@ pub fn ty() -> hirsel_types::testing::Types {
 /// An operation registry over this test thread's session interner.
 pub fn registry() -> hirsel_layout::operation::OperationRegistry {
     hirsel_layout::operation::OperationRegistry {
+        pretransfer_adapters: Vec::new(),
+        invocation_bodies: Vec::new(),
+        invocations: Default::default(),
+        type_declarations: Default::default(),
         types: session(),
         signatures: Default::default(),
         owners: Default::default(),
@@ -629,6 +633,10 @@ impl<S: Stage> Lir<S> {
             declaration_digest: signature.fingerprint,
         };
         self.operations = hirsel_layout::operation::OperationRegistry {
+            pretransfer_adapters: Vec::new(),
+            invocation_bodies: Vec::new(),
+            invocations: Default::default(),
+            type_declarations: Default::default(),
             types: session(),
             signatures: [(operation.clone(), signature)].into(),
             owners,
@@ -1414,6 +1422,7 @@ impl<S: Stage> Lir<S> {
         );
         let result = result.map(|layout| self.owned_or_plain(layout));
         self.builder.unit.tables.calls.push(CallSite {
+            pretransfer_failure: None,
             forward_caller: true,
             operation_arguments: Vec::new(),
             callee,
@@ -1442,6 +1451,7 @@ impl<S: Stage> Lir<S> {
     pub fn diverging_call(&mut self, b: BlockId, abi: FnAbiId, failure: BlockId) {
         let callee = Callee::Direct(self.symbol(SymbolKind::Function));
         self.builder.unit.tables.calls.push(CallSite {
+            pretransfer_failure: None,
             forward_caller: true,
             operation_arguments: Vec::new(),
             callee,

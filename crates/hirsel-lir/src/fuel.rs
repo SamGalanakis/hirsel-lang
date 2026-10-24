@@ -32,7 +32,12 @@ pub fn fuel_points<S>(unit: &LirUnit<S>) -> Vec<bool> {
                         .into_iter()
                         .filter_map(target),
                 )
-                .chain(terminator.failure().and_then(failure_target))
+                .chain(
+                    terminator
+                        .failure_edges(tables)
+                        .into_iter()
+                        .filter_map(failure_target),
+                )
                 .map(BlockId::index)
                 .filter(|&b| b < unit.blocks.len())
                 .collect()

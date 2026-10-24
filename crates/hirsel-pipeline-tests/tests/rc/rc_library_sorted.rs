@@ -292,6 +292,7 @@ Ok(())
         dispose: PoolRange::EMPTY,
     }];
     unit.tables.calls = vec![CallSite {
+            pretransfer_failure: None,
         forward_caller: true,
         operation_arguments: Vec::new(),
         callee: Callee::Operation(OperationRef(0)),
@@ -354,6 +355,9 @@ Ok(())
         }
     }
     let heap = hirsel_heapcheck::Program {
+        invocation_bodies: ready.operations.invocation_bodies.clone(),
+        invocations: ready.operations.invocations.clone(),
+        pretransfer_adapters: ready.operations.pretransfer_adapters.clone(),
         target: target(),
         layouts: ready.table,
         units,

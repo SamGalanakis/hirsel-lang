@@ -2100,3 +2100,119 @@ pub fn main() -> Result[(), ()] {
         }
     });
 }
+
+/// The current recording generation replays the full depth failure, and refuses
+/// a mismatched binding before entry or a missing completion as divergence.
+#[test]
+fn native_logical_depth_recording_replays_and_rejects_corruption() {
+    use hirsel_driver::native::{self, Backend, Observed, OptLevel, Options, Sites, Tape};
+    with_compiler_stack(|| {
+        let checked = checked(
+            r#"
+fn descend(n:u64)->u64 {if n==0u64 {0u64}else {1u64+descend(n-1u64)}}
+pub fn main(rt:Io)->Result[(),GrantError] {
+ let stdout=io.stdout(rt)?
+ let _=out.print(stdout,"entered\n")
+ let _=descend(1023u64)
+ Ok(())
+}
+"#,
+        );
+        assert_eq!(checked.reference.output, b"entered\n");
+        assert_eq!(checked.reference.failures.len(), 1);
+        assert_eq!(checked.reference.failures[0].rule, "LANG-10");
+        let tools = toolchain(&native::trace_roots_matrix());
+        let ready = native::build(&checked.validated, &Options::new(x86())).unwrap();
+        let sites = Sites::new(checked.validated.snapshot());
+        for backend in [Backend::Llvm, Backend::Cranelift] {
+            let dir = scratch(&format!("logical-depth-recording-{backend:?}"));
+            let tape = dir.join("depth.tape");
+            let objects = native::emit_backend_objects(
+                &ready,
+                backend,
+                OptLevel::None,
+                Partition::Whole,
+                false,
+                None,
+            )
+            .unwrap();
+            let runnable =
+                native::link_runnable(&ready, &checked.entry, &objects, &tools, &dir, None)
+                    .unwrap();
+            let recorded = native::launch_runnable(
+                &runnable,
+                &ready.target,
+                &tools,
+                &dir,
+                true,
+                Tape::Live {
+                    record: Some(&tape),
+                    revocations: None,
+                },
+            )
+            .unwrap();
+            assert_eq!(
+                native::observe(&recorded, &ready, &sites).unwrap(),
+                checked.reference
+            );
+            let replay = native::launch_runnable(
+                &runnable,
+                &ready.target,
+                &tools,
+                &dir,
+                true,
+                Tape::Replay(&tape),
+            )
+            .unwrap();
+            assert_eq!(
+                native::observe(&replay, &ready, &sites).unwrap(),
+                checked.reference
+            );
+            let recording = hirsel_rt::launch::parse_recording(
+                &hirsel_rt::launch::read_recording_text(&tape).unwrap(),
+            )
+            .unwrap();
+            assert!(!recording.events.is_empty());
+            let mut forged = recording.clone();
+            forged.run_identity[0] ^= 1;
+            std::fs::write(&tape, hirsel_rt::launch::render_recording(&forged).unwrap()).unwrap();
+            let refused = native::launch_runnable(
+                &runnable,
+                &ready.target,
+                &tools,
+                &dir,
+                true,
+                Tape::Replay(&tape),
+            )
+            .unwrap();
+            assert!(refused.stdout.is_empty(), "entry ran before refusal");
+            assert!(
+                matches!(
+                    native::observe_run(&refused, &ready, &sites).unwrap(),
+                    Observed::Refused(_)
+                ),
+                "{refused:?}"
+            );
+            let mut forged = recording;
+            forged.events.clear();
+            std::fs::write(&tape, hirsel_rt::launch::render_recording(&forged).unwrap()).unwrap();
+            let diverged = native::launch_runnable(
+                &runnable,
+                &ready.target,
+                &tools,
+                &dir,
+                true,
+                Tape::Replay(&tape),
+            )
+            .unwrap();
+            assert!(
+                matches!(
+                    native::observe_run(&diverged, &ready, &sites).unwrap(),
+                    Observed::Stopped(hirsel_run_schema::RunOutcome::Diverged(_))
+                ),
+                "{diverged:?}"
+            );
+            std::fs::remove_dir_all(dir).unwrap();
+        }
+    });
+}

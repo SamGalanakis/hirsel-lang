@@ -478,7 +478,7 @@ fn a_mutated_output_is_rejected() {
         let inputs = hirsel_lir::validate::Inputs {
             memo: Default::default(),
             discharge: None,
-            operations: &program.operation_registry(),
+            operations: &lowered.operation_registry(&program),
             target: &target,
             layouts: &lowered.table,
             manifest: &manifest,
@@ -1191,7 +1191,7 @@ fn loop_version_stale_join_is_rejected() {
     let inputs = Inputs {
         memo: Default::default(),
         discharge: None,
-        operations: &program.operation_registry(),
+        operations: &lowered.operation_registry(&program),
         target: &target,
         layouts: &lowered.table,
         manifest: &manifest,

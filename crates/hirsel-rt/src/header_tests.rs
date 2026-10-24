@@ -336,18 +336,32 @@ unsafe extern "C" fn finalizer(
 
 #[test]
 fn reentrant_failing_finalizers_finish_siblings_and_inline_continuations() {
-    let steps = [step(STEP_RELEASE, 16, 0), step(STEP_RELEASE, 8, 0)];
-    let record = Layout {
+    let mut record = Box::new(Layout {
         finalizer: Some(finalizer),
-        ..layout(24, &steps, 0)
-    };
-    let leaf = Layout {
+        ..layout(24, &[], 0)
+    });
+    let mut leaf = Box::new(Layout {
         finalizer: Some(finalizer),
         ..layout(8, &[], 0)
+    });
+    let end = |layout| Step {
+        variant: 1,
+        layout,
+        ..step(STEP_END_FINALIZE, 0, 0)
     };
+    let steps = [
+        step(STEP_RELEASE, 16, 0),
+        step(STEP_RELEASE, 8, 0),
+        end(&*record),
+    ];
+    let leaf_steps = [end(&*leaf)];
+    record.steps = steps.as_ptr();
+    record.step_count = steps.len() as u64;
+    leaf.steps = leaf_steps.as_ptr();
+    leaf.step_count = leaf_steps.len() as u64;
     for diagnostic in [false, true] {
         EVENTS.with(|events| events.borrow_mut().clear());
-        let ctx = Ctx::new(&[&leaf, &record], diagnostic);
+        let ctx = Ctx::new(&[leaf.as_ref(), record.as_ref()], diagnostic);
         let root = ctx.alloc(1, 24, 8);
         unsafe {
             payload(root).cast::<u64>().write(1);

@@ -506,7 +506,7 @@ fn localize(unit: LirUnit<Placed>, table: &LayoutTable) -> Result<LirUnit<Placed
             .unwrap_or(&[])
             .iter()
             .filter_map(Inst::failure)
-            .chain(Terminator::failure(&unit.terminators[b]));
+            .chain(unit.terminators[b].failure_edges(&unit.tables));
         for f in failures {
             let edge = &unit.tables.edges[unit.tables.failures[f.index()].cleanup.index()];
             let args = edge.arguments.get(&unit.pools.values).unwrap_or(&[]);

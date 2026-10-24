@@ -177,7 +177,7 @@ fn kill_failures(
         }
         let skip = if index == first.index() { from } else { 0 };
         failures.extend(b.ed.code[index][skip..].iter().filter_map(Inst::failure));
-        failures.extend(b.ed.unit.terminators[index].failure());
+        failures.extend(b.ed.unit.terminators[index].failure_edges(&b.ed.unit.tables));
     }
     let resume = b.current();
     for failure in failures {

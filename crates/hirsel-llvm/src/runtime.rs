@@ -20,6 +20,13 @@ pub(crate) fn declaration(module: &Module<'_>, function: Function<'_>) {
 pub(crate) fn substrate(module: &Module<'_>, function: Function<'_>, entry: RuntimeEntry) {
     use RuntimeEntry as R;
     let (memory, returns, borrowed): (_, _, &[u32]) = match entry {
+        R::DepthEnter | R::DepthEnterAtSite | R::DepthLeave => {
+            (MemoryEffects::ReadWrite, true, &[0])
+        }
+        // Read-only operand walk, with ordinary physical scratch allocation.
+        R::DepthPreflight | R::StructuralOrder | R::StructuralHash => {
+            (MemoryEffects::ReadWrite, false, &[])
+        }
         // Scalar constants and pointer arithmetic never touch memory. Payload
         // returns its argument's provenance, so its parameter is NOT nocapture.
         R::AbiVersion | R::Payload => (MemoryEffects::None, true, &[]),

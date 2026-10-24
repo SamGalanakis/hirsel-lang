@@ -445,6 +445,9 @@ fn option_finalizer(variant: u8, failing: bool) {
     assert_eq!(args[0].passing, passing);
     assert!(matches!(args[0].value, ArgumentValue::Value(_)));
     let program = hirsel_heapcheck::Program {
+        invocation_bodies: Vec::new(),
+        invocations: Default::default(),
+        pretransfer_adapters: Vec::new(),
         target,
         layouts: table,
         units: vec![caller, finalizer],

@@ -290,6 +290,10 @@ pub extern "C" fn hirsel_rt_v2_callback_context() -> *mut TaskCtx {
     unsafe {
         crate::stop::check(ctx, crate::stop::observe(ctx));
     }
+    // SAFETY: this is the interval's task, running exclusively on this thread.
+    if unsafe { crate::depth::enter_callback(ctx) } != crate::STATUS_OK {
+        ended("a callback failed");
+    }
     let took = crate::pool::acquire_permit(ctx);
     // SAFETY: the context is the interval's task's, running on this thread.
     unsafe {
@@ -319,6 +323,10 @@ pub unsafe extern "C" fn hirsel_rt_v2_callback_leave(ctx: *mut TaskCtx) {
         (*ctx).callback_depth -= 1;
         took
     };
+    // SAFETY: callback_context admitted this callback before returning ctx.
+    unsafe {
+        crate::depth::hirsel_rt_v2_depth_leave(ctx);
+    }
     if took {
         crate::pool::release_permit(ctx);
     }
@@ -328,8 +336,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_callback_leave(ctx: *mut TaskCtx) {
 /// between it and the extern call cannot run cleanup.
 #[unsafe(no_mangle)]
 pub extern "C" fn hirsel_rt_v2_callback_failed(_ctx: *mut TaskCtx) {
-    eprintln!("hirsel-rt: PROG-4: a callback failed; the process ends");
-    std::process::abort()
+    ended("a callback failed")
 }
 
 /// Turn on `ctx`'s run's extern row counters (design §5 Headroom); a run without them pays

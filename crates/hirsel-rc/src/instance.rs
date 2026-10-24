@@ -95,7 +95,36 @@ pub struct Program {
 impl Program {
     /// Independent declaration input for C, separate from the lowered units.
     pub fn operation_registry(&self) -> hirsel_layout::operation::OperationRegistry {
+        let mut signatures = hirsel_validate::SignatureMap::new(self.types.clone());
+        signatures.extend(
+            self.signatures
+                .iter()
+                .map(|(path, signature)| (path, (**signature).clone())),
+        );
+        let invocations = self
+            .definitions
+            .iter()
+            .map(|(path, definition)| {
+                let sites = crate::invocations::source_rows(
+                    &self.types,
+                    definition,
+                    &signatures,
+                    &self.operations,
+                )
+                .expect("native input already passed independent TIR validation");
+                (path.clone(), sites)
+            })
+            .collect();
         hirsel_layout::operation::OperationRegistry {
+            pretransfer_adapters: Vec::new(),
+            invocation_bodies: Vec::new(),
+            invocations,
+            type_declarations: self
+                .signatures
+                .values()
+                .filter(|s| matches!(s.kind, SignatureKind::Type(_)))
+                .map(|s| (s.definition, s.clone()))
+                .collect(),
             types: self.types.clone(),
             signatures: self
                 .operations
@@ -678,7 +707,11 @@ pub fn expand(
                     definition,
                     arguments,
                 } => {
-                    let request = if let Some(body) = crate::library::body_index(definition) {
+                    let request = if let Some(adapter) =
+                        crate::library::keyed::request(program, definition, arguments.clone())?
+                    {
+                        Some(adapter)
+                    } else if let Some(body) = crate::library::body_index(definition) {
                         Some(crate::library::Request::operation(
                             program,
                             body,

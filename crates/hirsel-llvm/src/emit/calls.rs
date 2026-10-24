@@ -217,6 +217,10 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 self.builder.br(caught);
                 Ok(())
             }
+            Terminator::RejectTransfer => {
+                self.return_status(hirsel_lir::runtime_abi::STATUS_PRETRANSFER_FAILURE as u128, None)?;
+                Ok(())
+            }
             Terminator::Propagate => {
                 self.flush_on_return()?;
                 self.return_status(1, None)?;
@@ -634,14 +638,23 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         };
         self.ahead_reload();
         signature.attribute_call(self.module, returned);
-        // Publish temporary mutations even when the callee failed.
+        // A rejected gate leaves mut roots and temporary scatters unpublished.
+        let status = signature.status(&self.builder, returned);
+        if let Some(rejected) = site.pretransfer_failure {
+            let rejected = self.failure_block(rejected)?;
+            let entered = self.module.append_block(self.function);
+            let pending = self.builder.icmp(IntPredicate::Eq, status,
+                self.module.const_int(self.module.int_type(8), hirsel_lir::runtime_abi::STATUS_PRETRANSFER_FAILURE as u128));
+            self.builder.cond_br(pending, rejected, entered);
+            self.builder.position(entered);
+        }
+        // Publish temporary mutations even when the entered callee failed.
         for (destination, temporary) in temporary_returns {
             let shape = self.layout_shape(destination.layout)?;
             self.scatter(destination, shape, self.load(shape, temporary))?;
         }
         // Hand back every root before branching on status: cleanup and Error observe
         // exactly the same callee mutations as successful continuation.
-        let status = signature.status(&self.builder, returned);
         if !signature.roots.is_empty() {
             let succeeded = self.builder.icmp(
                 IntPredicate::Eq,

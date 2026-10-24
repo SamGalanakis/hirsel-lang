@@ -34,7 +34,7 @@ use crate::{STATUS_OK, fault};
 /// `Layout::magic`: "HRL1".
 pub const LAYOUT_MAGIC: u32 = 0x484e_4c31;
 /// `Layout::version` of this descriptor format.
-pub const LAYOUT_VERSION: u32 = 15;
+pub const LAYOUT_VERSION: u32 = 16;
 /// `Layout::flags`: the type is declared in an `unsafe ffi` package, so a failure in its
 /// finalizer ends the process (FAIL-3).
 pub const LAYOUT_UNSAFE_FFI: u32 = 1;
@@ -106,6 +106,10 @@ pub const STEP_RELEASE_LAST: u32 = 10;
 /// contract ([`crate::roots`]): exact, and deferred where the run's mode defers root releases.
 /// Never a tail release.
 pub const STEP_RELEASE_ROOT: u32 = 11;
+/// Retire a language finalizer after all of its fields, including on failure.
+pub const STEP_END_FINALIZE: u32 = 12;
+/// The finalizer is compiler implementation cleanup, adding no invocation itself.
+pub const LAYOUT_IMPLEMENTATION_FINALIZER: u32 = 4096;
 
 /// Whether a step releases the counted reference at its offset.
 #[inline(always)]
@@ -220,7 +224,8 @@ pub(crate) unsafe fn check_layout(layout: *const Layout) {
             | LAYOUT_KEYED
             | LAYOUT_COLUMNS
             | LAYOUT_SEQUENTIAL
-            | LAYOUT_MUTEX_ROOT)
+            | LAYOUT_MUTEX_ROOT
+            | LAYOUT_IMPLEMENTATION_FINALIZER)
         != 0
     {
         fault("a layout descriptor has unknown flags");
@@ -247,6 +252,70 @@ pub(crate) unsafe fn check_layout(layout: *const Layout) {
         fault("a loop/column descriptor lacks WIDE_CURSOR");
     }
     check_frame(layout, steps, 0, steps.len(), Some(layout.size), 0);
+    // Runtime-owned mechanical descriptors can have a host cleanup thunk and
+    // no language scope. Emitted library descriptors still pair their marker.
+    let own_scope = layout.finalizer.is_some()
+        && (layout.flags & LAYOUT_IMPLEMENTATION_FINALIZER == 0
+            || steps
+                .iter()
+                .any(|s| s.kind == STEP_END_FINALIZE && s.variant == 1));
+    check_finalizer_scopes(layout, steps, 0, steps.len(), own_scope);
+}
+
+/// Static scope proof independent of runtime admission. A skipped arm or
+/// zero-iteration loop must preserve its caller's active finalizers.
+fn check_finalizer_scopes(layout: &Layout, steps: &[Step], start: usize, end: usize, own: bool) {
+    let mut active = usize::from(own);
+    let mut at = start;
+    while at < end {
+        let step = &steps[at];
+        if spans(step.kind) {
+            let close = at + 1 + step.span as usize;
+            check_finalizer_scopes(layout, steps, at + 1, close, false);
+            at = close;
+            continue;
+        }
+        if step.kind == STEP_FINALIZE {
+            active += 1;
+        }
+        if step.kind == STEP_END_FINALIZE {
+            active = active
+                .checked_sub(1)
+                .unwrap_or_else(|| fault("unmatched finalizer scope end"));
+            let mut nesting = 0usize;
+            let mut matching = None;
+            for earlier in (start..at).rev() {
+                match steps[earlier].kind {
+                    STEP_END_FINALIZE => nesting += 1,
+                    STEP_FINALIZE if nesting == 0 => {
+                        matching = Some(&steps[earlier]);
+                        break;
+                    }
+                    STEP_FINALIZE => nesting -= 1,
+                    _ => (),
+                }
+            }
+            if let Some(begin) = matching {
+                if begin.layout != step.layout
+                    || begin.offset != step.offset
+                    || begin.field != step.field
+                    || step.variant != 0
+                {
+                    fault("finalizer scope end differs from its entry");
+                }
+            } else if !own
+                || !std::ptr::eq(layout, step.layout)
+                || step.offset != 0
+                || step.variant != 1
+            {
+                fault("finalizer scope end differs from its implicit root entry");
+            }
+        }
+        at += 1;
+    }
+    if active != 0 {
+        fault("finalizer scope remains active after its field program");
+    }
 }
 
 /// Check `steps[start..end]`, one frame's steps, whose element extent is `extent` bytes
@@ -382,7 +451,7 @@ fn check_frame(
                     fault("a drop step lies outside its layout");
                 }
             }
-            STEP_FINALIZE => {
+            STEP_FINALIZE | STEP_END_FINALIZE => {
                 let child = step.layout;
                 if child.is_null() {
                     fault("a finalize step has no layout");
@@ -1011,6 +1080,20 @@ unsafe fn run_step(
                 }
             }
             STEP_FINALIZE => *status |= run_finalizer(ctx, step.layout, at, anchor, operation_site),
+            STEP_END_FINALIZE => {
+                if (*step.layout).flags & LAYOUT_IMPLEMENTATION_FINALIZER != 0 {
+                    return ptr::null_mut();
+                }
+                if ctx.cleanup_rejections != 0 {
+                    ctx.cleanup_rejections -= 1;
+                } else {
+                    let activation = ctx
+                        .cleanup_invocations
+                        .pop()
+                        .unwrap_or_else(|| fault("finalizer retirement without admission"));
+                    ctx.activations.retire(activation);
+                }
+            }
             // The last root died: the value is ordinary again before its steps release it.
             STEP_THAW => crate::shared::thaw_value(ctx, step.layout, at),
             STEP_CLOSE_HANDLE => {
@@ -1079,6 +1162,10 @@ unsafe fn walk_frames(
             }
             let step = &*steps.add(pc);
             pc += 1;
+            // A partial root bypasses its own finalizer; child scopes still run.
+            if step.kind == STEP_END_FINALIZE && step.variant == 1 && !mask.is_null() {
+                continue;
+            }
             if frame.depth == 0 && !field_live(mask, step.field) {
                 if spans(step.kind) {
                     pc += step.span as usize;

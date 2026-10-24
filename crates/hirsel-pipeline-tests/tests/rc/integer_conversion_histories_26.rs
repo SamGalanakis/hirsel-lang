@@ -367,7 +367,7 @@ fn illegal(kind: usize) {
         let finalizers = hirsel_rc::cleanup::Finalizers::new(&lowered.instances, &ready);
         let manifest = support::manifest(&program);
         let target = support::target();
-        let operations = program.operation_registry();
+        let operations = lowered.operation_registry(&program);
         let inputs = hirsel_lir::validate::Inputs {
             memo: Default::default(),
             discharge: None,

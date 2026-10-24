@@ -17,8 +17,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 // Deliberately not an option that a cache receipt can turn on.
 const PRODUCTION_REUSE: bool = false;
-const SCHEMA: u32 = 2;
-const MAGIC: &[u8] = b"HIRNPL02";
+const SCHEMA: u32 = 3;
+const MAGIC: &[u8] = b"HIRNPL03";
 #[cfg(test)]
 #[path = "seed_parity_tests.rs"]
 mod seed_parity_tests;
@@ -148,6 +148,20 @@ pub(super) fn save_calls(
     Ok(())
 }
 
+/// Portable keyed-adapter association. Numeric ABI IDs belong only to the
+/// current table and are rebound after the complete ABI content key is checked.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct AdapterBinding {
+    adapter: Symbol,
+    primitive: Symbol,
+    abi: ContentHash,
+}
+snapshot_struct!(AdapterBinding {
+    adapter,
+    primitive,
+    abi
+});
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct NativePlan {
     ahead_units: Vec<LirUnit<hirsel_lir::stage::Ready>>,
@@ -158,6 +172,8 @@ struct NativePlan {
     table: LayoutTable,
     statics: Vec<hirsel_lir::statics::StaticData>,
     owners: Vec<(DefPath, Option<DefPath>)>,
+    invocation_bodies: Vec<hirsel_lir::invocations::ReferenceBody>,
+    pretransfer_adapters: Vec<AdapterBinding>,
     functions: Vec<(DefPath, ContentHash)>,
     finalizers: Vec<(hirsel_lir::layout_types::LayoutId, ContentHash)>,
     inline: Vec<ContentHash>,
@@ -175,6 +191,8 @@ snapshot_struct!(NativePlan {
     table,
     statics,
     owners,
+    invocation_bodies,
+    pretransfer_adapters,
     functions,
     finalizers,
     inline,
@@ -362,6 +380,24 @@ impl NativePlan {
                 .iter()
                 .map(|(a, b)| (a.clone(), b.clone()))
                 .collect(),
+            invocation_bodies: ready.operations.invocation_bodies.clone(),
+            pretransfer_adapters: ready
+                .operations
+                .pretransfer_adapters
+                .iter()
+                .map(|row| {
+                    let abi = ready
+                        .table
+                        .fn_abis
+                        .get(row.abi.0 as usize)
+                        .ok_or_else(|| failed("adapter ABI outside current table"))?;
+                    Ok(AdapterBinding {
+                        adapter: row.adapter.clone(),
+                        primitive: row.primitive.clone(),
+                        abi: ready.keys.fn_abi(abi),
+                    })
+                })
+                .collect::<Result<_, NativeError>>()?,
             functions: ready
                 .functions
                 .iter()
@@ -488,7 +524,53 @@ fn assemble(
     }
     let program = super::adapt::program(validated);
     let manifest = super::adapt::manifest(validated.snapshot()).map_err(failed)?;
-    let operations = program.operation_registry();
+    let mut operations = program.operation_registry();
+    operations.invocation_bodies = plan.invocation_bodies.clone();
+    operations.pretransfer_adapters = plan
+        .pretransfer_adapters
+        .iter()
+        .map(|row| {
+            Ok(hirsel_lir::pretransfer::AdapterReference {
+                adapter: row.adapter.clone(),
+                primitive: row.primitive.clone(),
+                abi: *abis
+                    .get(&row.abi)
+                    .ok_or_else(|| failed("adapter ABI outside current table"))?,
+            })
+        })
+        .collect::<Result<_, NativeError>>()?;
+    // Re-read the current original source. Cached unit anchors never select its
+    // body or its invocation rows, including for a specialized source alias.
+    let owners: BTreeMap<_, _> = plan.owners.iter().cloned().collect();
+    for row in &operations.invocation_bodies {
+        let owner = owners
+            .get(&row.definition)
+            .and_then(Option::as_ref)
+            .ok_or_else(|| failed("source invocation owner missing"))?;
+        let original = program
+            .definitions
+            .get(owner)
+            .ok_or_else(|| failed("source invocation owner absent from current input"))?;
+        let rows = operations
+            .invocations
+            .get(owner)
+            .cloned()
+            .ok_or_else(|| failed("current source invocation inventory missing"))?;
+        let evidence = hirsel_rc::invocations::bind_source(
+            original,
+            rows,
+            &Symbol {
+                kind: hirsel_lir::ir::SymbolKind::Function,
+                definition: row.definition.clone(),
+                instance: Some(row.instance),
+            },
+            hirsel_tir::BodyId(row.body),
+        )
+        .map_err(failed)?;
+        operations
+            .invocations
+            .insert(row.definition.clone(), evidence.invocations);
+    }
     let inputs = hirsel_lir::validate::Inputs {
         memo: Default::default(),
         target: &options.target,
@@ -593,6 +675,71 @@ fn check(
         .iter()
         .map(|abi| (keys.fn_abi(abi), abi))
         .collect();
+    // Every source selection and materialized keyed adapter keeps independent
+    // evidence even when no candidate Value/Ready body is rebuilt on a hit.
+    let source: BTreeSet<_> = summaries
+        .iter()
+        .filter(|s| s.origin == hirsel_lir::ir::UnitOrigin::Source)
+        .map(|s| (&s.definition, s.instance))
+        .collect();
+    let bodies: BTreeSet<_> = plan
+        .invocation_bodies
+        .iter()
+        .map(|r| (&r.definition, r.instance))
+        .collect();
+    if bodies.len() != plan.invocation_bodies.len() || bodies != source {
+        return Err(failed(
+            "missing, extra or duplicate source invocation body inventory",
+        ));
+    }
+    let expected: BTreeSet<_> = summaries
+        .iter()
+        .filter(|s| hirsel_lir::pretransfer::primitive(&s.definition).is_some())
+        .map(|s| (&s.definition, s.instance))
+        .collect();
+    let mut adapters = BTreeSet::new();
+    for row in &plan.pretransfer_adapters {
+        let key = (
+            &row.adapter.definition,
+            row.adapter
+                .instance
+                .ok_or_else(|| failed("adapter instance missing"))?,
+        );
+        if !adapters.insert(key)
+            || !expected.contains(&key)
+            || row.adapter.kind != hirsel_lir::ir::SymbolKind::Function
+            || row.primitive.kind != hirsel_lir::ir::SymbolKind::Function
+            || hirsel_lir::pretransfer::primitive(&row.adapter.definition).as_ref()
+                != Some(&row.primitive.definition)
+        {
+            return Err(failed("invalid or duplicate keyed adapter inventory"));
+        }
+        let adapter = targets[&key];
+        let primitive = row
+            .primitive
+            .instance
+            .and_then(|instance| targets.get(&(&row.primitive.definition, instance)))
+            .ok_or_else(|| failed("keyed adapter primitive absent from selection"))?;
+        let abi = abis
+            .get(&row.abi)
+            .ok_or_else(|| failed("adapter ABI outside catalog"))?;
+        let actual = plan
+            .table
+            .fn_abis
+            .get(adapter.abi.0 as usize)
+            .ok_or_else(|| failed("adapter entry ABI outside catalog"))?;
+        let primitive_abi = plan
+            .table
+            .fn_abis
+            .get(primitive.abi.0 as usize)
+            .ok_or_else(|| failed("primitive entry ABI outside catalog"))?;
+        if *abi != actual || actual != primitive_abi {
+            return Err(failed("keyed adapter ABI differs from selected bodies"));
+        }
+    }
+    if adapters != expected {
+        return Err(failed("missing keyed adapter inventory"));
+    }
     for (record, summary) in plan.records.iter().zip(summaries) {
         if record
             .calls
@@ -1371,6 +1518,71 @@ mod tests {
             );
         });
     }
+    #[test]
+    fn bodyless_keyed_plan_retains_inventory_and_refuses_missing_or_stale_bindings() {
+        hirsel_engine::with_compiler_stack(|| {
+            let source = "fn main()->u64 {let m:Map[u64,u64]=map.empty();let get:fn(Map[u64,u64],u64)->Option[u64]=map.get;match get(m,1u64) {Some(x)=>x,None=>0u64}}";
+            let input = input(source, Verify::On);
+            let store = Arc::new(Store::default());
+            let options = options(store.clone(), 1);
+            let first = prepare_in(&input, &options, Mode::Reuse).unwrap();
+            let warm = prepare_in(&input, &options, Mode::Reuse).unwrap();
+            assert!(warm.stats.hit, "{:?}", warm.stats);
+            assert!(warm.ready.units.is_empty());
+            assert_eq!(
+                warm.ready.operations.pretransfer_adapters,
+                first.ready.operations.pretransfer_adapters
+            );
+            assert_eq!(warm.ready.operations.pretransfer_adapters.len(), 1);
+            let action = ContentHash::of_parts(
+                "hirsel.native-plan.input.v1",
+                [input_manifest(input.snapshot(), &options)
+                    .unwrap()
+                    .as_slice()],
+            );
+            let plan = NativePlan::of(action, &first.ready).unwrap();
+            check(&plan, &first.ready.summaries).unwrap();
+            let rejected = |plan: &NativePlan| {
+                assert!(check(plan, &first.ready.summaries).is_err());
+                assert!(
+                    assemble(
+                        plan,
+                        &input,
+                        &options,
+                        store.as_ref(),
+                        &mut Stats::default()
+                    )
+                    .is_err()
+                );
+            };
+            let mut missing = plan.clone();
+            missing.pretransfer_adapters.clear();
+            rejected(&missing);
+            let mut forged = plan.clone();
+            forged.pretransfer_adapters[0].abi = ContentHash::of_bytes(b"not an ABI");
+            rejected(&forged);
+            let mut duplicate = plan.clone();
+            duplicate
+                .pretransfer_adapters
+                .push(plan.pretransfer_adapters[0].clone());
+            rejected(&duplicate);
+            let mut missing_body = plan.clone();
+            missing_body.invocation_bodies.clear();
+            rejected(&missing_body);
+            let mut legacy = encode(&plan);
+            legacy[..MAGIC.len()].copy_from_slice(b"HIRNPL02");
+            publish(store.as_ref(), action, &legacy);
+            assert!(retrieve(store.as_ref(), action, &mut Stats::default()).is_none());
+            publish(store.as_ref(), action, &encode(&missing));
+            let repaired = prepare_in(&input, &options, Mode::Reuse).unwrap();
+            assert!(!repaired.stats.hit, "missing inventory was accepted");
+            assert_eq!(
+                repaired.ready.operations.pretransfer_adapters,
+                first.ready.operations.pretransfer_adapters
+            );
+        });
+    }
+
     fn call_direct_none(plan: &mut NativePlan) {
         for call in plan
             .records

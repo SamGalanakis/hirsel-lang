@@ -41,6 +41,9 @@ fn execute_with_collisions(body: &str, expected: u64, collisions: bool) {
         )
         .unwrap_or_else(|e| panic!("{source}\n{e}"));
         let mut p = hirsel_heapcheck::Program {
+            invocation_bodies: ready.operations.invocation_bodies.clone(),
+            invocations: ready.operations.invocations.clone(),
+            pretransfer_adapters: ready.operations.pretransfer_adapters.clone(),
             target: ready.target.clone(),
             layouts: ready.table.clone(),
             units: ready.units.iter().map(|u| u.unit().clone()).collect(),
@@ -208,6 +211,9 @@ fn heap_independently_rejects_undeclared_borrowed_returns_and_early_loan_end() {
         )
         .unwrap();
         let baseline = hirsel_heapcheck::Program {
+            invocation_bodies: ready.operations.invocation_bodies.clone(),
+            invocations: ready.operations.invocations.clone(),
+            pretransfer_adapters: ready.operations.pretransfer_adapters.clone(),
             target: ready.target,
             layouts: ready.table,
             units: ready.units.iter().map(|u| u.unit().clone()).collect(),

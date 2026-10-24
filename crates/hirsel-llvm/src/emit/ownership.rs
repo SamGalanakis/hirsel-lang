@@ -111,56 +111,26 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         }
         let place = self.stack(layout)?;
         self.store(self.value_shape(value)?, self.get(value)?, place);
-        let record = self.layout(layout)?;
-        // Byte ranges of the top-level fields the mask marks dead.
-        let dead: Vec<(u64, u64)> = match live {
-            MaskRef::All => Vec::new(),
-            MaskRef::Static(mask) => {
-                let Some(mask) = self.unit.tables.masks.get(mask.index()) else {
-                    return self.invalid("a mask outside the mask table");
-                };
-                let words = self.pool(mask.words, &self.unit.pools.mask_words)?;
-                if record.tag.is_some() {
-                    return self.unsupported("a live mask on an inline variant release");
-                }
-                let mut dead = Vec::new();
-                for field in &record.fields {
-                    let i = field.ordinal as usize;
-                    let set = words.get(i / 64).is_some_and(|w| w >> (i % 64) & 1 == 1);
-                    if !set {
-                        let size = self.fixed_size(field.layout)?;
-                        dead.push((field.offset, field.offset + size));
-                    }
-                }
-                dead
-            }
-            MaskRef::Dynamic(_) => {
-                return self.unsupported("a dynamic live mask on an inline release");
-            }
-        };
-        let anchor = self.const_u64(self.cleanup_code(anchor)?);
-        let steps: Vec<&'a DropStep> = record
-            .drop
-            .iter()
-            .filter(|step| {
-                let offset = match step {
-                    DropStep::Release { offset }
-                    | DropStep::ReleaseRoot { offset }
-                    | DropStep::Environment { offset }
-                    | DropStep::CloseHandle { offset }
-                    | DropStep::Child { offset, .. } => Some(*offset),
-                    DropStep::RepeatReverse { offset, .. } => Some(*offset),
-                    _ => None,
-                };
-                offset.is_none_or(|o| !dead.iter().any(|&(a, b)| a <= o && o < b))
-            })
-            .collect();
-        let scope = glue::Scope::of(layout);
-        let status = self.drop_glue(anchor, |walk| {
-            steps
-                .into_iter()
-                .try_for_each(|step| walk.step(&scope, place.ptr, place.align, step))
-        })?;
+        let descriptor = self.descriptor(layout)?;
+        let mask = self.live_mask(live)?;
+        let code = self.cleanup_code(anchor)?;
+        let (anchor, operation_site) = self.failure_sites(code);
+        let continuation = self
+            .prologue
+            .alloca(self.module.array_type(self.module.int_type(64), 4), 8);
+        let finalize = self.runtime(RuntimeEntry::Finalize)?;
+        let status = self.builder.call(
+            finalize,
+            &[
+                self.context,
+                descriptor,
+                place.ptr,
+                mask,
+                continuation,
+                anchor,
+                operation_site,
+            ],
+        );
         self.status_guard(status, failure)
     }
 

@@ -104,6 +104,7 @@ fn push(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, PassError> {
     );
     let call = CallId(b.ed.unit.tables.calls.len() as u32);
     b.ed.unit.tables.calls.push(CallSite {
+        pretransfer_failure: None,
         forward_caller: true,
         operation_arguments: Vec::new(),
         callee: Callee::Direct(symbol),
