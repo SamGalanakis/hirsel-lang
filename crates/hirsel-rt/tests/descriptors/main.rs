@@ -28,7 +28,10 @@ fn every_semantic_entry_acquires_the_scheduler_role_directly() {
     ];
     let mut checked = 0;
     for (symbol, key) in graph.entries() {
-        if entry_descriptor(symbol).unwrap().locality != Locality::Op || terminal.contains(&symbol)
+        if !matches!(
+            entry_descriptor(symbol).unwrap().locality,
+            Locality::Op | Locality::Physical
+        ) || terminal.contains(&symbol)
         {
             continue;
         }
@@ -36,6 +39,15 @@ fn every_semantic_entry_acquires_the_scheduler_role_directly() {
             graph.directly_calls(key, "Guard::new"),
             "unguarded semantic entry: {symbol} ({key})"
         );
+        if entry_descriptor(symbol).unwrap().locality == Locality::Physical {
+            // Physical scheduling services are independently checked below;
+            // the entry itself may not submit or commit a semantic operation.
+            assert_eq!(
+                physical_entry_violation(graph, key),
+                None,
+                "physical entry creates an operation or ordinal: {symbol}"
+            );
+        }
         checked += 1;
     }
     assert!(checked >= 150, "only checked {checked} semantic entries");
@@ -619,4 +631,86 @@ fn repeated_super_paths_resolve_direct_and_imported_role_calls() {
             );
         }
     }
+}
+
+/// Physical bookkeeping cannot emit an operation, phase, or ordinal. The
+/// scheduling services retain their separate strict audits; this boundary is
+/// the same caller contract used for task-local physical preflight.
+fn physical_entry_violation(graph: &graph::Graph, key: &str) -> Option<Vec<String>> {
+    graph.reaches_until(
+        key,
+        |target| {
+            matches!(
+                target,
+                "tasks::ordered::engine::accepted"
+                    | "tasks::ordered::engine::submit"
+                    | "Frontier::offer"
+                    | "Frontier::apply_head"
+                    | "Frontier::continue_head"
+                    | "tasks::free::record::begin"
+                    | "tasks::free::record::publish"
+                    | "tasks::free::record::publish_with_replay"
+                    | "Log::subevents"
+            )
+        },
+        |target| {
+            PHYSICAL_BUDGET_SERVICES.contains(&target) || PHYSICAL_AHEAD_SERVICES.contains(&target)
+        },
+    )
+}
+
+#[test]
+fn physical_classification_rejects_operation_and_ordinal_emission() {
+    assert_eq!(
+        entry_descriptor("hirsel_rt_v2_host_arm").unwrap().locality,
+        Locality::Physical
+    );
+    let root = tempfile::tempdir().unwrap();
+    for (body, forbidden) in [
+        ("read_identity();", None),
+        (
+            "tasks::ordered::engine::submit();",
+            Some("tasks::ordered::engine::submit"),
+        ),
+        (
+            "tasks::free::record::begin();",
+            Some("tasks::free::record::begin"),
+        ),
+        ("Log::subevents();", Some("Log::subevents")),
+    ] {
+        std::fs::write(
+            root.path().join("lib.rs"),
+            format!(
+                r#"
+            #[no_mangle] pub fn hirsel_rt_v2_host_arm() {{ Guard::new(); {body} }}
+            struct Guard; impl Guard {{ fn new() {{}} }}
+            fn read_identity() {{}}
+            struct Log; impl Log {{ fn subevents() {{}} }}
+            mod tasks {{
+                pub mod ordered {{ pub mod engine {{ pub fn submit() {{}} }} }}
+                pub mod free {{ pub mod record {{ pub fn begin() {{}} }} }}
+            }}
+        "#
+            ),
+        )
+        .unwrap();
+        let graph = graph::Graph::parse(root.path());
+        assert!(graph.directly_calls("hirsel_rt_v2_host_arm", "Guard::new"));
+        let violation = physical_entry_violation(&graph, "hirsel_rt_v2_host_arm");
+        if let Some(forbidden) = forbidden {
+            let path = violation.expect("a guarded Physical entry must reject semantic emission");
+            assert_eq!(path.last().unwrap(), forbidden, "{body}: {path:?}");
+        } else {
+            assert_eq!(violation, None);
+        }
+    }
+    // The real descriptor uses the identical predicate, and the stricter
+    // ordinal check still accepts its actual operation-free body.
+    assert_eq!(
+        physical_entry_violation(
+            source(),
+            "tasks::ordered::ahead::host_return::hirsel_rt_v2_host_arm"
+        ),
+        None
+    );
 }

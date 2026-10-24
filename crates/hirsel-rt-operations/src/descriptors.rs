@@ -40,6 +40,10 @@ pub enum Locality {
     /// Runs on the admission thread outside every task: creating, launching, reporting on and
     /// destroying a run (§6 Stops and worker lifetime).
     Admission,
+    /// Role-owned physical bookkeeping for a task's certified continuation.
+    /// May inspect its scheduler identity but creates no semantic operation.
+    /// Called on a task, unlike Admission; audited separately from local work.
+    Physical,
 }
 
 /// What follows an op's effect (§4.1 Transition).
@@ -208,7 +212,7 @@ pub struct Inline {
 
 use Access::{Read, Write};
 use Item::*;
-use Locality::{Admission, Concurrent, Immutable, Local, Op};
+use Locality::{Admission, Concurrent, Immutable, Local, Op, Physical};
 use ObjectKind::*;
 use Transition::{Call, End, Keep, Park, Terminal, Yield};
 
@@ -673,6 +677,14 @@ pub const ENTRIES: &[Entry] = &[
     entry("hirsel_rt_v2_ahead_barrier", Local),
     entry("hirsel_rt_v2_ahead_state", Local),
     entry("hirsel_rt_v2_ahead_handoff", Local),
+    // Arm validates task-owned recipe/buffer custody under the scheduler role;
+    // it creates neither a read nor an ordinal. Private leaf helpers inspect
+    // or update only that task's fixed continuation/cleanup record. Inert
+    // credits are actually released later, at canonical admission.
+    entry("hirsel_rt_v2_host_arm", Physical),
+    entry("hirsel_rt_v2_host_enter", Local),
+    entry("hirsel_rt_v2_host_active", Local),
+    entry("hirsel_rt_v2_host_defer", Local),
     // codec.rs
     entry("hirsel_rt_v2_codec_encode", Local),
     // A failed decode drops what it built.
