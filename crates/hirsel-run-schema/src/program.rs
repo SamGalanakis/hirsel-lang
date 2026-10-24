@@ -100,6 +100,11 @@ impl ProgramRevision {
     pub fn entry(&self) -> &str {
         &self.entry
     }
+    /// Owned backing storage, excluding this inline value. A copied revision
+    /// must retain its own charge even when the original source remains live.
+    pub fn retained_metadata_bytes(&self) -> u64 {
+        self.entry.capacity() as u64
+    }
     pub fn digest(&self) -> [u8; 32] {
         self.digest
     }
