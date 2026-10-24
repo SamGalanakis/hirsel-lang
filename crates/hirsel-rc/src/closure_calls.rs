@@ -493,3 +493,5 @@ pub fn specialize(lowered: &mut Lowered) -> Specializations {
     }
     Specializations { origins, inline }
 }
+
+pub use crate::spawn::{OperationFreedom, settle_operation_freedom};

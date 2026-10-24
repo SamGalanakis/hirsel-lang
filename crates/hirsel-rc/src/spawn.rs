@@ -1,13 +1,149 @@
 //! Private compiler proofs for spawn fast paths. Authority summaries are never
 //! used as op-free evidence. Unknown calls, destruction and root-bearing values
 //! conservatively refuse; direct-call dependencies are solved to a fixed point.
+type Function = (hirsel_syntax::DefPath, hirsel_syntax::ContentHash);
 use crate::insert::Lay;
 use hirsel_lir::{ir::*, layout_types::LayoutTable, stage::Value};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 pub(crate) use hirsel_lir::runtime_abi::{
     SPAWN_IMMEDIATE_AWAIT as IMMEDIATE, SPAWN_OP_FREE as OP_FREE,
 };
+
+/// Ordinary local equations for the existing spawn fast-path analysis. A
+/// declaration's empty authority/effect summary is never this evidence. Native
+/// query consumers must bind these facts to the actual accepted Value and read
+/// all selected callee outputs before treating a component as settled.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct OperationFreedom {
+    locally_safe: bool,
+    callees: Vec<Function>,
+}
+impl OperationFreedom {
+    pub fn extract(u: &LirUnit<Value>, table: &LayoutTable) -> Self {
+        let lay = Lay(table);
+        let mut locally_safe = u
+            .values
+            .iter()
+            .all(|v| !lay.anchored(u.types[v.ty.index()].layout))
+            && u.instructions.iter().all(|i| {
+                matches!(
+                    i,
+                    Inst::Const { .. }
+                        | Inst::FunctionRef { .. }
+                        | Inst::ReadStatic { .. }
+                        | Inst::Unary { .. }
+                        | Inst::Binary { .. }
+                        | Inst::Compare { .. }
+                        | Inst::Convert { .. }
+                        | Inst::IntArith { .. }
+                        | Inst::MulAdd { .. }
+                        | Inst::ScalarUnary { .. }
+                        | Inst::Check { .. }
+                        | Inst::Read { .. }
+                        | Inst::Copy { .. }
+                        | Inst::Store { .. }
+                        | Inst::Replace { .. }
+                        | Inst::StorageLive { .. }
+                        | Inst::StorageDead { .. }
+                        | Inst::EndScope { .. }
+                        | Inst::Address { .. }
+                        | Inst::Construct { .. }
+                        | Inst::Closure { .. }
+                        | Inst::Weaken { .. }
+                        | Inst::BeginLoan { .. }
+                        | Inst::EndLoan { .. }
+                        | Inst::BindOrigin { .. }
+                        | Inst::BindFields { .. }
+                        | Inst::EndOrigin { .. }
+                        | Inst::Drop { .. }
+                        | Inst::Recast { .. }
+                )
+            })
+            && table.fn_abis[u.header.abi.0 as usize]
+                .result
+                .as_ref()
+                .is_none_or(|r| lay.trivial(r.layout));
+        let mut callees = Vec::new();
+        for call in &u.tables.calls {
+            match call.callee {
+                Callee::Direct(symbol) | Callee::Bound { code: symbol, .. } => {
+                    let symbol = &u.tables.symbols[symbol.index()];
+                    if symbol.kind == SymbolKind::Function
+                        && let Some(instance) = symbol.instance
+                    {
+                        callees.push((symbol.definition.clone(), instance));
+                    } else {
+                        locally_safe = false;
+                    }
+                }
+                Callee::Indirect(_) | Callee::Operation(_) => locally_safe = false,
+            }
+        }
+        callees.sort();
+        callees.dedup();
+        Self {
+            locally_safe,
+            callees,
+        }
+    }
+    pub fn dependencies(&self) -> &[Function] {
+        &self.callees
+    }
+    pub fn canonical(&self) -> bool {
+        !self.callees.windows(2).any(|pair| pair[0] >= pair[1])
+    }
+    pub fn evaluate(&self, mut callee: impl FnMut(&Function) -> Option<bool>) -> bool {
+        self.locally_safe && self.callees.iter().all(|key| callee(key) == Some(true))
+    }
+}
+
+/// The same deletion worklist as the original whole-Value scan, now accepting
+/// compact local equations plus explicitly settled outgoing component facts.
+/// Recursive pure components begin true; a local, unknown or external refusal
+/// poisons its callers. No replacement candidate or optimistic unknown exists.
+pub fn settle_operation_freedom(
+    members: &BTreeMap<Function, OperationFreedom>,
+    outgoing: &BTreeMap<Function, bool>,
+) -> Result<BTreeMap<Function, bool>, String> {
+    if members.values().any(|facts| !facts.canonical())
+        || members.keys().any(|key| outgoing.contains_key(key))
+    {
+        return Err("noncanonical or overlapping operation-free component facts".into());
+    }
+    let owners = members.keys().cloned().collect::<Vec<_>>();
+    let indices = owners
+        .iter()
+        .cloned()
+        .enumerate()
+        .map(|(i, key)| (key, i))
+        .collect::<BTreeMap<_, _>>();
+    let mut safe = vec![true; owners.len()];
+    let mut users = vec![Vec::new(); owners.len()];
+    for (index, facts) in members.values().enumerate() {
+        safe[index] = facts.locally_safe;
+        for callee in &facts.callees {
+            if let Some(&callee) = indices.get(callee) {
+                users[callee].push(index);
+            } else if outgoing.get(callee) != Some(&true) {
+                safe[index] = false;
+            }
+        }
+    }
+    let mut queue: std::collections::VecDeque<_> = safe
+        .iter()
+        .enumerate()
+        .filter_map(|(i, safe)| (!safe).then_some(i))
+        .collect();
+    while let Some(callee) = queue.pop_front() {
+        for &user in &users[callee] {
+            if std::mem::replace(&mut safe[user], false) {
+                queue.push_back(user);
+            }
+        }
+    }
+    Ok(owners.into_iter().zip(safe).collect())
+}
 
 pub(crate) fn op_free(units: &[LirUnit<Value>], table: &LayoutTable) -> HashMap<Symbol, bool> {
     let symbols: Vec<_> = units
@@ -230,5 +366,53 @@ pub(crate) fn set_flags(u: &mut LirUnit<Value>, flags: u64) {
         data.value = ConstantValue::Integer(u128::from(flags));
         *constant = ConstantId(u.tables.constants.len() as u32);
         u.tables.constants.push(data);
+    }
+}
+
+#[cfg(test)]
+mod operation_freedom_tests {
+    use super::*;
+    use hirsel_syntax::{ContentHash, DefPath};
+    fn key(name: &str) -> Function {
+        (DefPath::core(name), ContentHash::of_bytes(name.as_bytes()))
+    }
+    fn facts(local: bool, mut callees: Vec<Function>) -> OperationFreedom {
+        callees.sort();
+        OperationFreedom {
+            locally_safe: local,
+            callees,
+        }
+    }
+    #[test]
+    fn pure_recursive_component_requires_explicit_outgoing_truth_and_propagates_refusals() {
+        let (a, b, outside) = (key("a"), key("b"), key("outside"));
+        let mut members = BTreeMap::from([
+            (a.clone(), facts(true, vec![b.clone(), outside.clone()])),
+            (b.clone(), facts(true, vec![a.clone()])),
+        ]);
+        let positive = BTreeMap::from([(outside.clone(), true)]);
+        assert_eq!(
+            settle_operation_freedom(&members, &positive).unwrap(),
+            BTreeMap::from([(a.clone(), true), (b.clone(), true)])
+        );
+        for outgoing in [BTreeMap::new(), BTreeMap::from([(outside.clone(), false)])] {
+            assert_eq!(
+                settle_operation_freedom(&members, &outgoing).unwrap(),
+                BTreeMap::from([(a.clone(), false), (b.clone(), false)])
+            );
+        }
+        members.get_mut(&a).unwrap().locally_safe = false;
+        assert_eq!(
+            settle_operation_freedom(&members, &positive).unwrap(),
+            BTreeMap::from([(a, false), (b, false)])
+        );
+    }
+    #[test]
+    fn duplicate_dependency_and_member_external_overlap_are_refused() {
+        let (a, b) = (key("a"), key("b"));
+        let mut members = BTreeMap::from([(a.clone(), facts(true, vec![b.clone(), b.clone()]))]);
+        assert!(settle_operation_freedom(&members, &BTreeMap::new()).is_err());
+        members.get_mut(&a).unwrap().callees.dedup();
+        assert!(settle_operation_freedom(&members, &BTreeMap::from([(a, true)])).is_err());
     }
 }
