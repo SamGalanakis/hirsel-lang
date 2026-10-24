@@ -96,8 +96,8 @@ fn numeric_primitives_charge_each_byte_before_publishing() {
                     minimum_fuel(&mut long, checked) - minimum_fuel(&mut short, checked),
                     19
                 );
-                let bounded = run(&mut long, checked, Some(after.steps - 1), None).unwrap();
-                assert_eq!(bounded.steps, after.steps - 1);
+                let bounded = run(&mut long, checked, Some(before.steps), None).unwrap();
+                assert_eq!(bounded.steps, before.steps);
                 assert!(matches!(bounded.outcome, Outcome::ToolingLimit(_)));
             }
         }

@@ -29,6 +29,7 @@ use std::collections::BTreeMap;
 mod codec;
 mod compare;
 mod flat;
+mod primitive_work;
 pub use flat::{FlatStorage, run_with_flat_storage_observer};
 mod soa;
 use soa::ColumnRow;
@@ -8070,6 +8071,14 @@ impl<'p, S: Stage> Machine<'p, S> {
         let outcome = match self.resumed()? {
             Some(outcome) => outcome,
             None => {
+                // H derives pure primitive work from checked operands, independently
+                // of the provider. Exhaustion precedes the call and any result/effect.
+                let cost = primitive_work::cost(&id, &args)?;
+                if cost > self.config.step_limit.saturating_sub(self.steps) {
+                    self.steps = self.config.step_limit.saturating_add(1);
+                    return fail(V::Unsupported, "step limit reached (a tooling limit)");
+                }
+                self.steps += cost;
                 self.timer_choice()?;
                 let shielded = self.shielded(f);
                 let cause = self.tasks.as_deref().and_then(|s| s.canceled(shielded));

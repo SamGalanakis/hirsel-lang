@@ -3308,6 +3308,14 @@ pub fn parse(text: String, fraction: u64, bias: i32) -> Result[u64, scalar.Parse
   parse_bytes(core@1/string.as_bytes(text), fraction, bias)
 }
 
+// Rust core f6c1107f dec2flt/decimal.rs:39-85 and mod.rs:108-179 (MIT):
+// Clinger's path uses an exactly representable mantissa and power of ten,
+// followed by ONE correctly rounded operation at the destination precision.
+// Hirsel's scalar operations already require binary32/binary64 rounding; no
+// x87 precision mutation or disguised-fast-path extension is needed here.
+const CLINGER64: Inline[f64, 23] = [1e0f64, 1e1f64, 1e2f64, 1e3f64, 1e4f64, 1e5f64, 1e6f64, 1e7f64, 1e8f64, 1e9f64, 1e10f64, 1e11f64, 1e12f64, 1e13f64, 1e14f64, 1e15f64, 1e16f64, 1e17f64, 1e18f64, 1e19f64, 1e20f64, 1e21f64, 1e22f64]
+const CLINGER32: Inline[f32, 11] = [1e0f32, 1e1f32, 1e2f32, 1e3f32, 1e4f32, 1e5f32, 1e6f32, 1e7f32, 1e8f32, 1e9f32, 1e10f32]
+
 // The same parser over a borrowed interval, for typed JSON numeric tokens.
 @noalloc
 pub fn parse_bytes(bytes: Bytes, fraction: u64, bias: i32) -> Result[
@@ -3438,6 +3446,26 @@ pub fn parse_bytes(bytes: Bytes, fraction: u64, bias: i32) -> Result[
   let q: i64 = core@1/int.narrow(
     decimal_exponent + core@1/int.widen(significant - taken)
   )
+  if significant == taken {
+    if fraction == 52 && bias == 1023 && leading <= 9007199254740992 && q >= -22 && q <= 22 {
+      let value: f64 = core@1/float.from_int(leading)
+      let scaled = if q < 0 {
+        value / CLINGER64[core@1/int.narrow(-q)]
+      } else {
+        value * CLINGER64[core@1/int.narrow(q)]
+      }
+      return Ok(sign | core@1/f64.bits(scaled))
+    }
+    if fraction == 23 && bias == 127 && leading <= 16777216 && q >= -10 && q <= 10 {
+      let value: f32 = core@1/float.from_int(leading)
+      let scaled = if q < 0 {
+        value / CLINGER32[core@1/int.narrow(-q)]
+      } else {
+        value * CLINGER32[core@1/int.narrow(q)]
+      }
+      return Ok(sign | core@1/int.widen(core@1/f32.bits(scaled)))
+    }
+  }
   match internal.float_lemire.compute(q, leading, fraction, bias) {
     Some(bits) => {
       if significant == taken {

@@ -20,6 +20,9 @@ pub fn main(rt: Io, args: Args) -> Result[(), OutputError] {
   syntax("[0,]", 3)
   syntax("{\"x\":1,}", 7)
   syntax("[1x]", 2)
+  let mut outside = json.Reader(data: b"", pos: 18446744073709551615, depth: 0)
+  failure.check(json.peek(mut outside) == 0u8 && outside.pos == 18446744073709551615, TextInvariant())
+  failure.check(json.finish_reader(mut outside) == Error(Syntax(18446744073709551615)), TextInvariant())
   let cases: List[String] = ["0", "-0", "1.2300e+004", "1E999999999999999999999999999999999", "-1E-9999999999999999999999999999"]
   for source in cases {
     match json.parse(copy source) {

@@ -19,6 +19,7 @@ enum ResultKind {
     BadArgument,
     BadTag,
     BadElement,
+    NumericWork(bool),
 }
 #[derive(Clone)]
 struct Model(ResultKind);
@@ -148,7 +149,18 @@ fn program(kind: ResultKind) -> Program<Ready> {
             slice
         };
         let value = b.owned(ValueRepr::Aggregate, layout);
-        let range = operation(&mut b, "range");
+        let range = if let ResultKind::NumericWork(core) = kind {
+            b.operation(OperationId {
+                definition: if core {
+                    hirsel_syntax::DefPath::core("bytes.integer")
+                } else {
+                    path("integer")
+                },
+                declaration_digest: Default::default(),
+            })
+        } else {
+            operation(&mut b, "range")
+        };
         let passing = if matches!(kind, ResultKind::Transfer | ResultKind::Variant) {
             Passing::Take
         } else {
@@ -945,6 +957,84 @@ fn terminal_handle_close_failures_are_language_failures_with_a_clean_twin() {
                 assert_eq!(run.output, b"unmet client\n");
                 assert_eq!(audit.observation.output, run.output);
             }
+        }
+    }
+}
+
+// Isolate the work policy from result semantics: a minimal mock provider returns
+// the same borrowed byte slice for the core and foreign operation identities.
+// Real numeric signatures/results are exercised by native corpus conformance.
+struct NumericWorkModel {
+    length: usize,
+    fresh: bool,
+    called: bool,
+}
+impl Operations for NumericWorkModel {
+    fn call(&mut self, op: &OperationId, args: &[OpValue], output: &mut Vec<u8>) -> OpOutcome {
+        match op.definition.0.name.as_str() {
+            "fresh" => {
+                self.fresh = true;
+                OpOutcome::Value(OpValue::ByteSequence(vec![b'1'; self.length]))
+            }
+            "integer" => {
+                self.called = true;
+                OpOutcome::Value(OpValue::Slice {
+                    argument: 0,
+                    start: 0,
+                    length: self.length as u64,
+                })
+            }
+            "show" => {
+                let [OpValue::Bytes(bytes)] = args else {
+                    return OpOutcome::Unsupported;
+                };
+                output.extend_from_slice(bytes);
+                OpOutcome::Value(OpValue::Unit)
+            }
+            _ => OpOutcome::Unsupported,
+        }
+    }
+}
+#[test]
+fn numeric_work_is_exact_and_exhaustion_precedes_provider_entry() {
+    for length in [0, 1, 19, 20, 128, 8192] {
+        let execute = |core, config: &Config| {
+            let mut model = NumericWorkModel {
+                length,
+                fresh: false,
+                called: false,
+            };
+            let result = run(
+                &program(ResultKind::NumericWork(core)),
+                &path("main"),
+                &[],
+                &mut model,
+                config,
+            );
+            (result, model)
+        };
+        let (plain, _) = execute(false, &Config::default());
+        let (metered, _) = execute(true, &Config::default());
+        assert!(plain.result.is_ok(), "{plain:?}");
+        assert!(metered.result.is_ok(), "{metered:?}");
+        assert_eq!(plain.output, metered.output);
+        assert_eq!(metered.steps - plain.steps, length as u64 + 1);
+        let exact = Config {
+            step_limit: metered.steps,
+            ..Config::default()
+        };
+        assert!(execute(true, &exact).0.result.is_ok());
+        if length == 8192 {
+            let short = Config {
+                step_limit: length as u64,
+                ..Config::default()
+            };
+            let (result, model) = execute(true, &short);
+            assert_eq!(result.violation(), Some(ViolationKind::Unsupported));
+            assert_eq!(result.steps, short.step_limit + 1);
+            assert!(model.fresh && !model.called);
+            assert!(result.output.is_empty());
+            assert!(execute(false, &short).0.result.is_ok());
         }
     }
 }

@@ -310,10 +310,7 @@ fn ordered_budget_services_are_guarded_and_do_not_create_semantic_operations() {
     let graph = source();
     for (caller, service) in [
         ("alloc::ordered_reserve", PHYSICAL_BUDGET_SERVICES[0]),
-        (
-            "budget::hirsel_rt_v2_fuel_refill",
-            PHYSICAL_BUDGET_SERVICES[1],
-        ),
+        ("budget::refill", PHYSICAL_BUDGET_SERVICES[1]),
     ] {
         assert!(
             graph.directly_calls(caller, service),
@@ -322,6 +319,15 @@ fn ordered_budget_services_are_guarded_and_do_not_create_semantic_operations() {
         assert!(
             graph.directly_calls(caller, "Guard::new"),
             "unguarded service: {caller}"
+        );
+    }
+    for caller in [
+        "budget::hirsel_rt_v2_fuel_refill",
+        "budget::charge_primitive",
+    ] {
+        assert!(
+            graph.directly_calls(caller, "budget::refill"),
+            "missing guarded refill path: {caller}"
         );
     }
     let violations = budget_service_violations(graph);
