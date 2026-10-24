@@ -517,8 +517,28 @@ impl QueryEngine {
         }
         let semantic_program = self.semantic_program(input.source_owners.keys().cloned())?;
         let escapes = self.escapes(&semantic_program)?;
-        let semantic =
-            NativeSemanticProgram::new(semantic_program, escapes, input.foreign_threads.clone());
+        let semantic_sources = input
+            .source_owners
+            .iter()
+            .map(|(path, source)| {
+                (
+                    path.clone(),
+                    (
+                        source.implementation_revision,
+                        input.signatures[path].fingerprint,
+                    ),
+                )
+            })
+            .collect();
+        let semantic = NativeSemanticProgram::new(
+            semantic_program,
+            escapes,
+            input.foreign_threads.clone(),
+            self.signature_snapshot(),
+            semantic_sources,
+            input.foreign_links.clone(),
+            input.foreign_unreplayable,
+        );
         Ok(ValidatedNativeInput {
             input,
             verify: self.verify,
