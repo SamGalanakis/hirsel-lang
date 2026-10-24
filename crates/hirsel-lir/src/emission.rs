@@ -470,7 +470,11 @@ pub fn artifact(
     if inputs.alternate {
         options.push_str(" ahead");
     }
-    if let Some(plan) = inputs.ahead {
+    // Empty plans emit no alternate bodies or spawn bindings. Their identity
+    // includes the whole layout table, while ordinary unit keys intentionally
+    // cover only the unit's dependencies (native/units.rs). Keep those reusable
+    // artifacts identical across programs, just as with no plan at all.
+    if let Some(plan) = inputs.ahead.filter(|plan| !plan.roots.is_empty()) {
         options.push_str(&format!(" plan:{:?}", plan.identity));
     }
     if inputs.measurement {
@@ -710,6 +714,14 @@ mod tests {
     }
 
     fn check(file: ObjectFile, manifested: Manifested) -> Result<ObjectArtifact, String> {
+        check_ahead(file, manifested, None)
+    }
+
+    fn check_ahead(
+        file: ObjectFile,
+        manifested: Manifested,
+        ahead: Option<&crate::ahead::AheadPlan>,
+    ) -> Result<ObjectArtifact, String> {
         let target = TargetSpec::x86_64_unknown_linux_gnu();
         let layouts = LayoutTable::new(&target);
         let manifest = Manifest::skeleton([]);
@@ -719,7 +731,7 @@ mod tests {
         };
         let keys = crate::layout_keys::LayoutKeys::new(&layouts);
         let inputs = EmitInputs {
-            ahead: None,
+            ahead,
             alternate: false,
             index: None,
             verify_backend: true,
@@ -739,6 +751,59 @@ mod tests {
             fuel: false,
         };
         artifact(file, manifested, &inputs, "fixture")
+    }
+
+    #[test]
+    fn empty_ahead_plans_preserve_cross_program_unit_artifacts_and_nonempty_identity() {
+        use crate::ahead::{AheadPlan, CaptureRecipe, RootPlan, ScalarGraph};
+        let baseline = check(file(&[], &[]), manifested(&[], &[])).unwrap();
+        let mut nonempty = Vec::new();
+        for program in [b"program-a", b"program-b"] {
+            let identity = ContentHash::of_bytes(program);
+            let mut plan = AheadPlan {
+                identity,
+                ..AheadPlan::default()
+            };
+            assert_eq!(
+                check_ahead(file(&[], &[]), manifested(&[], &[]), Some(&plan)).unwrap(),
+                baseline
+            );
+            // The metadata path must still bind any nonempty plan's identity;
+            // actual frame/custody/fuel validation is exercised by ahead_native.
+            plan.roots.insert(
+                identity,
+                RootPlan {
+                    graph: ScalarGraph {
+                        root: identity,
+                        identity,
+                        bodies: BTreeMap::new(),
+                    },
+                    recipe: CaptureRecipe {
+                        wrapper: LayoutId(0),
+                        source: None,
+                        wrapper_extent: 0,
+                        callable_offset: 0,
+                        live_word_offset: 0,
+                        source_extent: 0,
+                        live_mask: 0,
+                        source_code: crate::ir::Symbol {
+                            kind: crate::ir::SymbolKind::Function,
+                            definition: definition("source"),
+                            instance: Some(identity),
+                        },
+                        source_abi: crate::abi_types::FnAbiId(0),
+                        source_environment: false,
+                    },
+                },
+            );
+            let artifact = check_ahead(file(&[], &[]), manifested(&[], &[]), Some(&plan)).unwrap();
+            assert_ne!(
+                artifact.reproducibility.options,
+                baseline.reproducibility.options
+            );
+            nonempty.push(artifact.reproducibility.options);
+        }
+        assert_ne!(nonempty[0], nonempty[1]);
     }
 
     #[test]
