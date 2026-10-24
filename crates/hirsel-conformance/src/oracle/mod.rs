@@ -12,9 +12,8 @@ pub mod o4;
 pub mod o5;
 pub mod switches;
 
-use hirsel_driver::native::{Backend, OptLevel, Options, Partition, TargetSpec};
+use hirsel_engine::ToolError;
 use hirsel_engine::store::{DirStore, NoneStore, ResultStore, VerifyStore};
-use hirsel_engine::{CheckCompletion, ToolError};
 use std::{
     collections::BTreeMap,
     fmt::Write as _,
@@ -92,6 +91,14 @@ impl Config {
                 VerifyStore::Off
             },
             ..Default::default()
+        }
+    }
+
+    fn compiler(&self, store: Arc<dyn ResultStore>) -> hirsel_engine::Compiler {
+        let compiler = hirsel_driver::COMPILER.with_config(self.compile(store));
+        match self.limits {
+            Some(limits) => compiler.with_comptime_limits(limits.into()),
+            None => compiler,
         }
     }
 
@@ -191,130 +198,27 @@ fn produce_with_store(
 }
 
 fn artifacts(path: &Path, config: &Config, store: Arc<dyn ResultStore>) -> Artifacts {
-    let mut out = Artifacts::new();
-    let compiler = hirsel_driver::COMPILER.with_config(config.compile(store));
-    let mut program = match compiler.load_program_source(path, None) {
-        Ok(program) => program,
-        Err(error) => {
-            out.insert("diagnostics".into(), tool_error(&error).into_bytes());
-            return out;
-        }
-    };
-    program_artifacts(&mut program, config)
+    let mut session =
+        hirsel_driver::session::Session::open_with_compiler(path, config.compiler(store));
+    request_artifacts(&mut session, config)
 }
 
-fn program_artifacts(program: &mut hirsel_engine::LoadedProgram, config: &Config) -> Artifacts {
-    let mut out = Artifacts::new();
-    program.engine.verify = if config.verify {
-        hirsel_engine::Verify::On
-    } else {
-        hirsel_engine::Verify::Off
-    };
-    if let Some(limits) = config.limits {
-        program.engine.comptime_limits = limits.into();
-    }
-    let output = match program.check(hirsel_engine::LoweringPolicy::Reachable) {
-        Ok(output) => output,
-        Err(error) => {
-            let error = program.error(error);
-            out.insert("diagnostics".into(), tool_error(&error).into_bytes());
-            return out;
-        }
-    };
-    let mut diagnostics = String::new();
-    for d in &output.diagnostics {
-        writeln!(diagnostics, "{}", d.to_json(&output.sources)).unwrap();
-    }
-    let rejected = output
-        .diagnostics
-        .iter()
-        .any(|d| d.severity.as_str() == "error");
-    if let CheckCompletion::Incomplete { phase } = output.completion {
-        writeln!(diagnostics, "incomplete: {}", phase.phase_name()).unwrap();
-    }
-    out.insert("diagnostics".into(), diagnostics.into_bytes());
-    if rejected || output.completion != CheckCompletion::Complete {
-        return out;
-    }
-    let entry = program.entry.clone();
-    let tir = program.check_for_execution().and_then(|()| {
-        program
-            .engine
-            .export_tir(&entry)
-            .map_err(|e| program.error(e))
+/// Fresh, store-warm and resident oracle cells consume the same selected
+/// products. Exporting artifacts never exposes a mutable resident compiler.
+fn request_artifacts(session: &mut hirsel_driver::session::Session, config: &Config) -> Artifacts {
+    let selected = session.request(hirsel_driver::requests::CompileOperation::Artifacts {
+        native: config.native,
     });
-    out.insert(
-        "tir".into(),
-        tir.unwrap_or_else(|error| format!("export: {}", tool_error(&error)))
-            .into_bytes(),
-    );
-    if config.native {
-        native(program, &mut out);
-    }
-    out
-}
-
-/// Ready receipts, then the singleton objects of both backends at O0.
-fn native(program: &mut hirsel_engine::LoadedProgram, out: &mut Artifacts) {
-    let engine = &mut program.engine;
-    let validated = match engine
-        .export_native_input()
-        .map(|input| engine.import_native_input(input))
-    {
-        Ok(Ok(validated)) => validated,
-        Ok(Err(error)) => {
-            out.insert(
-                "receipts".into(),
-                format!("import: {error:?}\n").into_bytes(),
-            );
-            return;
-        }
-        Err(error) => {
-            out.insert(
-                "receipts".into(),
-                format!("export: {error:?}\n").into_bytes(),
-            );
-            return;
-        }
-    };
-    let options = Options::new(TargetSpec::x86_64_unknown_linux_gnu());
-    let ready = match hirsel_driver::native::build(&validated, &options) {
-        Ok(ready) => ready,
-        Err(error) => {
-            out.insert("receipts".into(), format!("build: {error}\n").into_bytes());
-            return;
-        }
-    };
-    let mut receipts = String::new();
-    for unit in &ready.units {
-        writeln!(receipts, "{:?}", unit.receipt().raw()).unwrap();
-    }
-    out.insert("receipts".into(), receipts.into_bytes());
-    for backend in [Backend::Llvm, Backend::Cranelift] {
-        let objects = hirsel_driver::native::emit_backend_objects(
-            &ready,
-            backend,
-            OptLevel::None,
-            Partition::Singleton,
-            false,
-            None,
-        );
-        match objects {
-            Ok(objects) => {
-                for (index, object) in objects.into_iter().enumerate() {
-                    out.insert(
-                        format!("objects/{}/{index:04}.o", backend.name()),
-                        object.bytes,
-                    );
-                }
-            }
-            Err(error) => {
-                out.insert(
-                    format!("objects/{}/error", backend.name()),
-                    error.to_string().into_bytes(),
-                );
-            }
-        }
+    match selected {
+        Ok(selected) => match &selected.result {
+            hirsel_driver::requests::CompileResult::Artifacts(artifacts) => artifacts.clone(),
+            _ => [(
+                "diagnostics".into(),
+                b"tool error: artifacts request returned another operation\n".to_vec(),
+            )]
+            .into(),
+        },
+        Err(error) => [("diagnostics".into(), tool_error(&error).into_bytes())].into(),
     }
 }
 

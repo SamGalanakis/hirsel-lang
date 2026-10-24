@@ -61,39 +61,68 @@ fn one(scenario: &Scenario, report: &mut Report) -> Result<(), String> {
     let mut session = Session::open_configured(&entry, config());
     session.check().map_err(|e| e.to_string())?;
     let changed = changed_items(&before, &after)?;
-    let engine = &session.program_applied().map_err(|e| e.to_string())?.engine;
-    let snapshot = engine.memo_snapshot();
-    let stats = engine.memo_stats().clone();
     let names: Vec<&String> = scenario
         .unchanged
         .iter()
         .chain(&scenario.recomputed)
         .collect();
-    let counts = |engine: &QueryEngine| -> Vec<[usize; 5]> {
-        names
-            .iter()
-            .map(|name| {
-                let mut path = hirsel_engine::entry_path(&context);
-                path.0.name = name.as_str().into();
-                KINDS.map(|kind| engine.recompute_count(&path, kind))
-            })
-            .collect()
+    let definitions = names
+        .iter()
+        .map(|name| {
+            let mut path = hirsel_engine::entry_path(&context);
+            path.0.name = name.as_str().into();
+            path
+        })
+        .collect::<Vec<_>>();
+    let inspect =
+        |session: &mut Session| -> Result<Arc<hirsel_driver::requests::CompileInspection>, String> {
+            let selected = session
+                .request_applied(hirsel_driver::requests::CompileOperation::Inspect {
+                    definitions: definitions.clone(),
+                })
+                .map_err(|error| error.to_string())?;
+            match &selected.result {
+                hirsel_driver::requests::CompileResult::Inspection(inspection) => {
+                    Ok(inspection.clone())
+                }
+                _ => Err("inspection request returned another operation".into()),
+            }
+        };
+    let counts =
+        |inspection: &hirsel_driver::requests::CompileInspection| -> Result<Vec<[u64; 5]>, String> {
+            definitions
+                .iter()
+                .map(|definition| {
+                    let work = inspection
+                        .definitions
+                        .iter()
+                        .find(|work| &work.definition == definition)
+                        .ok_or_else(|| format!("inspection omitted definition {definition}"))?;
+                    let mut result = [0; 5];
+                    for (slot, kind) in result.iter_mut().zip(KINDS) {
+                        *slot = work
+                            .recomputations
+                            .iter()
+                            .find(|(observed, _)| *observed == kind)
+                            .ok_or_else(|| format!("inspection omitted {kind:?} for {definition}"))?
+                            .1;
+                    }
+                    Ok(result)
+                })
+                .collect()
+        };
+    let validations = |inspection: &hirsel_driver::requests::CompileInspection| -> Result<Vec<(u64,u64)>, String> {
+        definitions.iter().map(|definition| {
+            let work = inspection.definitions.iter().find(|work| &work.definition == definition)
+                .ok_or_else(|| format!("inspection omitted physical work for {definition}"))?;
+            Ok((work.body_validations, work.lower_calls))
+        }).collect()
     };
-    let first = counts(engine);
-    let validations = |engine: &QueryEngine| {
-        names
-            .iter()
-            .map(|name| {
-                let mut path = hirsel_engine::entry_path(&context);
-                path.0.name = name.as_str().into();
-                (
-                    engine.body_validation_runs(&path),
-                    engine.lower_adapter_calls(&path),
-                )
-            })
-            .collect::<Vec<_>>()
-    };
-    let first_work = validations(engine);
+    let initial = inspect(&mut session)?;
+    let snapshot = initial.memos.clone();
+    let stats = initial.stats.clone();
+    let first = counts(&initial)?;
+    let first_work = validations(&initial)?;
     std::fs::write(&entry, &after).map_err(|e| e.to_string())?;
     session.apply(vec![FileChange {
         path: entry.clone(),
@@ -103,9 +132,9 @@ fn one(scenario: &Scenario, report: &mut Report) -> Result<(), String> {
     let touched = session.stats().touched;
     let operations = session.stats().memo_operations;
     let touched_memos = session.touched_memos().to_vec();
-    let engine = &session.program_applied().map_err(|e| e.to_string())?.engine;
-    let second = counts(engine);
-    let second_work = validations(engine);
+    let second_inspection = inspect(&mut session)?;
+    let second = counts(&second_inspection)?;
+    let second_work = validations(&second_inspection)?;
     for ((((name, first), second), first_work), second_work) in names
         .iter()
         .zip(first)
@@ -134,7 +163,7 @@ fn one(scenario: &Scenario, report: &mut Report) -> Result<(), String> {
         let claim = if unchanged { "unchanged" } else { "recomputed" };
         report.add(format!("{} [{name} {claim}]", scenario.name), verdict);
     }
-    let now = engine.memo_stats();
+    let now = &second_inspection.stats;
     let invalidations: u64 = now
         .invalidated
         .iter()
@@ -151,17 +180,13 @@ fn one(scenario: &Scenario, report: &mut Report) -> Result<(), String> {
             Verdict::Fail("edit invalidated no memo".into())
         },
     );
-    let current = engine.memo_snapshot();
+    let current = &second_inspection.memos;
     // Retained dirty memos may still record the previous revision's values.
     // A fresh check supplies independent current observations, after the
     // resident's physical work and counters have been captured above.
     let mut cold = Session::open_configured(&entry, config());
     cold.check().map_err(|e| format!("reference check: {e}"))?;
-    let reference = cold
-        .program_applied()
-        .map_err(|e| e.to_string())?
-        .engine
-        .memo_snapshot();
+    let reference = inspect(&mut cold)?.memos.clone();
     let mut observed = BTreeMap::new();
     for (owner, reads) in &reference {
         for (key, value) in reads.iter() {

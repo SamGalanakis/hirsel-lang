@@ -7,7 +7,7 @@
 //! - `disk`: two processes sharing a `dir@1` store.
 use super::{
     Artifacts, Config, Report, Verdict, difference, edits::Scenario, o1::produce_in_child, produce,
-    produce_with_store, program_artifacts, switches,
+    produce_with_store, request_artifacts, switches,
 };
 use hirsel_driver::session::{FileChange, Session};
 use hirsel_engine::store::MemStore;
@@ -39,7 +39,8 @@ fn one(
     let entry = scenario.entry(&tree);
     let store = Arc::new(MemStore::default());
     let warmed = produce_with_store(&entry, before, store.clone());
-    let mut resident = Session::open_configured(&entry, before.compile(before.result_store()));
+    let resident_store = before.result_store();
+    let mut resident = Session::open_with_compiler(&entry, before.compiler(resident_store.clone()));
     let _resident_before = resident_artifacts(&mut resident, before);
     let disk = base.join("store");
     let disk_before = Config {
@@ -70,6 +71,11 @@ fn one(
             })
             .collect(),
     );
+    if before != after {
+        // A changed verification or compile-time policy selects new immutable
+        // factories, while the same Session keeps its delivered input cursor.
+        resident.configure(after.compiler(resident_store));
+    }
     let cold = match produce(&entry, after) {
         Ok(cold) => cold,
         Err(switch) => {
@@ -121,8 +127,5 @@ fn one(
 }
 
 fn resident_artifacts(session: &mut Session, config: &Config) -> Artifacts {
-    hirsel_engine::with_compiler_stack(|| match session.program() {
-        Ok(program) => program_artifacts(program, config),
-        Err(error) => [("diagnostics".into(), super::tool_error(&error).into_bytes())].into(),
-    })
+    hirsel_engine::with_compiler_stack(|| request_artifacts(session, config))
 }
