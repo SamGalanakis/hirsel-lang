@@ -149,6 +149,35 @@ impl FrontLowerQueries {
         )
     }
 
+    pub fn memo_snapshot(&self) -> Vec<(crate::memo::MemoKey, Arc<Reads>)> {
+        let outcomes = self.outcomes.lock().unwrap_or_else(|e| e.into_inner());
+        self.inputs
+            .iter()
+            .flat_map(|(path, input)| {
+                [
+                    (FRONT_LOWER_KIND, QueryKind::Lower, input.lower.0),
+                    (FRONT_EVALUATE_KIND, QueryKind::Evaluate, input.evaluate.0),
+                ]
+                .into_iter()
+                .filter_map(|(kind, phase, address)| {
+                    let (_, outcome) = outcomes.get(&(kind, address))?;
+                    Some((
+                        crate::memo::MemoKey::new(phase, DefId::intern(path)),
+                        Arc::new(outcome.reads.clone()),
+                    ))
+                })
+                .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+    pub fn work_snapshot(&self) -> Vec<(DefPath, FrontLowerWork)> {
+        self.work
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .map(|(path, work)| (path.clone(), *work))
+            .collect()
+    }
     pub fn sources(&self) -> &SourceMap {
         &self.sources
     }
