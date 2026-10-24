@@ -181,6 +181,14 @@ impl BodyTask {
         let input = &queries.inputs[&self.query.address.0];
         let worker = queries.worker();
         let done = worker.run(self.task.take().ok_or(queries.errors.protocol)?);
+        for kind in done.recomputed() {
+            *queries
+                .work
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .entry((done.definition.clone(), kind))
+                .or_default() += 1;
+        }
         let result = done.result();
         let mut source = FrozenReadSource {
             declarations: &queries.declarations,
@@ -403,6 +411,7 @@ impl QueryEngine {
             records: self.type_records().ok_or_else(refusal)?,
             store,
             outcomes: Mutex::new(BTreeMap::new()),
+            work: Mutex::new(BTreeMap::new()),
             errors,
             _allowance: allowance,
         }))
