@@ -242,7 +242,37 @@ fn opaque_package_controls_preserve_private_operations_and_diagnostic_sites() {
                 let mut loaded = load_program(&path).unwrap();
                 let snapshot = loaded.engine.export_native_input().unwrap();
                 for public in snapshot.signatures.values() {
-                    if public.metadata.visibility == hirsel_syntax::Visibility::PublicOpaque {
+                    if public.definition.path().is_core("Region") {
+                        // 2a938017 retains only this intrinsic descriptor for independent V.
+                        assert_eq!(
+                            public.metadata.visibility,
+                            hirsel_syntax::Visibility::PublicOpaque
+                        );
+                        let hirsel_types::SignatureKind::Type(declaration) = &public.kind else {
+                            panic!("core Region must remain a type")
+                        };
+                        assert!(declaration.resource);
+                        let representation = declaration.representation.unwrap();
+                        assert_eq!(
+                            hirsel_types::encoding::signature_types(&snapshot.types, public),
+                            vec![representation]
+                        );
+                        let hirsel_types::TypeKind::Builtin {
+                            kind: hirsel_types::BuiltinType::Region,
+                            arguments,
+                        } = &snapshot.types.get(representation).unwrap().kind
+                        else {
+                            panic!("core Region exports its intrinsic descriptor only")
+                        };
+                        let [hirsel_types::GenericArgument::Type(item)] = arguments.as_slice()
+                        else {
+                            panic!("Region retains exactly its original payload type argument")
+                        };
+                        assert!(matches!(snapshot.types.get(*item).unwrap().kind,
+                            hirsel_types::TypeKind::Parameter(parameter)
+                            if parameter == hirsel_types::TypeParameterRef::bound(hirsel_types::TypeParamId(0))));
+                    } else if public.metadata.visibility == hirsel_syntax::Visibility::PublicOpaque
+                    {
                         assert!(
                             hirsel_types::encoding::signature_types(&snapshot.types, public)
                                 .is_empty(),

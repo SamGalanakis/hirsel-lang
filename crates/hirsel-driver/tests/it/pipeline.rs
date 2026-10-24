@@ -568,7 +568,7 @@ fn heap_is_a_typed_allocator_value_through_aliases_on_compiler_thread() {
         "@noalloc fn probe() { let destination = heap; let alias = destination; }",
         "fn probe() -> String { copy_to(heap, \"value\") }",
         "fn probe() -> String { let destination = heap; copy_to(destination, \"value\") }",
-        "fn inert[T: inert](take value:T) {}\nfn probe() { inert(heap) }",
+        "fn inert[T: inert](value:T) {}\nfn probe() { inert(heap) }",
         "fn probe() -> bool { let text: String = copy_to(heap, \"value\"); text == \"value\" }",
     ] {
         let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
@@ -577,6 +577,20 @@ fn heap_is_a_typed_allocator_value_through_aliases_on_compiler_thread() {
             .lower_to_tir(&path("probe"))
             .unwrap_or_else(|e| panic!("{source}: {e:?}"));
     }
+    // 2a938017 makes heap a neutral place, never a consumable scope grant.
+    let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
+    edit(
+        &mut engine,
+        "fn inert[T: inert](take value:T) {}\nfn probe() { inert(heap) }",
+    );
+    let Err(QueryError::Diagnostics(diagnostics)) = engine.lower_to_tir(&path("probe")) else {
+        panic!("heap cannot supply a taken arena grant")
+    };
+    assert!(
+        diagnostics.iter().any(|d| d.rule.as_str() == "MEM-4"
+            && d.message == "heap is not a consumable arena scope grant"),
+        "{diagnostics:?}"
+    );
 }
 
 #[test]
