@@ -1,7 +1,7 @@
 //! Resource-only host execution diagnostics. This staged producer retains the
 //! source outcome separately from trace refusal; it does not certify transports
 //! that the reference observer cannot yet see.
-use crate::{HostLaunch, RunOutcome, ToolError, session};
+use crate::{HostLaunch, RunOutcome, ToolError};
 use hirsel_interp::ownership_trace::TraceError;
 use hirsel_run_schema::ownership_trace::Trace;
 use std::path::Path;
@@ -35,18 +35,12 @@ pub fn run_resources_on_host(
         program: None,
         trace: None,
     };
-    let (outcome, _) = session::with_program(path, verify, |program| {
-        crate::run_loaded_on_host_traced(
-            program,
-            launch,
-            max_steps,
-            None,
-            None,
-            checked,
-            None,
-            Some(&mut capture),
-        )
-    })?;
+    let selection = crate::launch_binding::LaunchSelection::read(launch)?;
+    let input = crate::request_tir(path, verify, selection.entry().cloned())?;
+    let (outcome, _) = crate::tir_execution::run_tir_on_host_traced(
+        &input, launch, selection, max_steps, None, None, checked, None,
+        Some(&mut capture),
+    )?;
     Ok(ResourceRun {
         outcome,
         program: capture
