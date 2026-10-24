@@ -5,6 +5,7 @@ use crate::native::{Backend, BuildProfile, LaunchInputs, TargetSpec, Validation}
 use hirsel_engine::{LoweringPolicy, loader_inputs::FrozenInputs};
 use hirsel_syntax::DefPath;
 use std::path::PathBuf;
+mod host_selector;
 mod output;
 mod selector;
 pub use output::{

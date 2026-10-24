@@ -46,7 +46,37 @@ pub struct CompileOutput {
     pub inputs: FrozenInputs,
     pub work: RequestWork,
     pub result: CompileResult,
+    owner: Arc<dyn Send + Sync>,
 }
+impl CompileOutput {
+    pub fn new(
+        entry: DefPath,
+        inputs: FrozenInputs,
+        work: RequestWork,
+        result: CompileResult,
+    ) -> Self {
+        Self {
+            entry,
+            inputs,
+            work,
+            result,
+            owner: Arc::new(()),
+        }
+    }
+    pub(crate) fn retain_owner(mut self, owner: Arc<dyn Send + Sync>) -> Self {
+        match &mut self.result {
+            CompileResult::Check(checked)
+            | CompileResult::SafeCheck { checked, .. }
+            | CompileResult::CheckedProducts { checked, .. } => {
+                checked.sources = checked.sources.clone().retain_owner(owner.clone());
+            }
+            _ => {}
+        }
+        self.owner = owner;
+        self
+    }
+}
+#[derive(Clone)]
 pub enum CompileResult {
     Inspect(Arc<CompileInspection>),
     Artifacts(std::collections::BTreeMap<String, Vec<u8>>),
