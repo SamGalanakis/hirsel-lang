@@ -10,6 +10,10 @@ const OUTPUT: Domain = Domain {
     kind: 0x4600_0009,
     schema: 1,
 };
+const FAILURE: Domain = Domain {
+    kind: 0x4600_000c,
+    schema: 1,
+};
 struct Data {
     growth: Arc<ParameterGrowth>,
     diagnostics: Arc<Vec<Diagnostic>>,
@@ -22,8 +26,11 @@ pub struct FrontGrowthQueries {
     items: Arc<crate::NativeRecordContext>,
     records: crate::NativeRecords,
     sources: SourceMap,
+    snapshot: Arc<SignatureSnapshot>,
+    package: hirsel_syntax::PackageId,
     store: Arc<dyn ResultStore>,
     completed: Mutex<Option<(ProductRef, Arc<Data>)>>,
+    failure: Mutex<Option<(Reference, QueryError)>>,
     weight: MemoryWeight,
     errors: RuntimeErrors,
     _allowance: MemoryReservation,
@@ -36,6 +43,25 @@ pub struct FrontGrowthOutput {
     _owner: Arc<FrontGrowthQueries>,
 }
 impl FrontGrowthQueries {
+    /// Bounded root subscriptions and immutable path/anchor inventory. Body
+    /// outputs are owned by FrontBodyQueries, rather than charged once again
+    /// as an arbitrary body-size allowance for every growth subscription.
+    pub fn input_bytes(definitions: &[DefPath], weight: MemoryWeight) -> Option<u64> {
+        let slot = (std::mem::size_of::<QueryId>()
+            + std::mem::size_of::<Option<Result<ProductRef, Reference>>>()
+            + std::mem::size_of::<DefPath>()
+            + 128) as u64;
+        definitions.iter().try_fold(weight.retained, |total, path| {
+            total.checked_add(slot.checked_add(bincode::serialized_size(path).ok()?)?)
+        })
+    }
+    pub fn failure(&self, reference: Reference) -> Option<QueryError> {
+        self.failure
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .and_then(|(selected, error)| (*selected == reference).then(|| error.clone()))
+    }
     pub fn query(&self) -> QueryId {
         self.query
     }
@@ -64,6 +90,8 @@ impl QueryFactory for Factory {
             selected: vec![None; self.0.roots.len()],
             cursor: 0,
             edges: Vec::new(),
+            table_keys: BTreeMap::new(),
+            required: BTreeMap::new(),
             reads: ReadsBuilder::new(),
             terminal: None,
         }))
@@ -74,6 +102,8 @@ struct Task {
     selected: Vec<Option<Result<ProductRef, Reference>>>,
     cursor: usize,
     edges: Vec<crate::GrowthEdge>,
+    table_keys: BTreeMap<DefPath, Arc<crate::table_keys::TableKeyUse>>,
+    required: BTreeMap<DefPath, BTreeSet<usize>>,
     reads: ReadsBuilder,
     terminal: Option<Result<ProductRef, Reference>>,
 }
@@ -124,6 +154,19 @@ impl Task {
             let Some(checked) = self.queries.front.checked(reference) else {
                 return Poll::Ready(Err(selected.err().unwrap_or(self.queries.errors.protocol)));
             };
+            for call in &checked.summary.summary.calls {
+                let slots = hirsel_types::core_roles::table_key_parameters(call.callee.path());
+                if !slots.is_empty() {
+                    self.required
+                        .entry(call.callee.path().clone())
+                        .or_default()
+                        .extend(slots);
+                }
+            }
+            self.table_keys.insert(
+                checked.summary.summary.owner.path().clone(),
+                checked.table_keys,
+            );
             self.reads.merge(&checked.reads);
             self.edges
                 .extend(checked.summary.growth.edges.iter().cloned());
@@ -142,22 +185,52 @@ impl Task {
     }
     fn complete(&mut self) -> Result<ProductRef, Reference> {
         let queries = &self.queries;
+        let mut table_reads = ReadsBuilder::new();
+        let mut provider =
+            FrozenProvider::new(&queries.snapshot, queries.package.clone(), &mut table_reads);
+        let table_result = crate::table_keys::check_uses(
+            queries.snapshot.types(),
+            &self.table_keys,
+            std::mem::take(&mut self.required),
+            &mut |definition| provider.signature(definition).map(Some),
+        );
+        self.reads
+            .merge(&table_reads.finish().map_err(|_| queries.errors.protocol)?);
         let reads = std::mem::take(&mut self.reads)
             .finish()
             .map_err(|_| queries.errors.protocol)?;
+        let table_diagnostics = match table_result {
+            Ok(diagnostics) => diagnostics,
+            Err(error) => {
+                let bytes = queries
+                    .records
+                    .encode(&*queries.items, &(&error, &reads))
+                    .ok_or(queries.errors.resource)?;
+                if bytes.len() as u64 > queries.weight.retained {
+                    return Err(queries.errors.resource);
+                }
+                let reference = queries
+                    .store
+                    .put_content(FAILURE, &bytes)
+                    .ok_or(queries.errors.resource)?;
+                *queries.failure.lock().unwrap_or_else(|e| e.into_inner()) =
+                    Some((reference, error));
+                return Err(reference);
+            }
+        };
         let growth = ParameterGrowth {
             edges: std::mem::take(&mut self.edges).into(),
         };
         let diagnostics = crate::select_diagnostics(
-            crate::growing_sites(&growth.edges)
+            table_diagnostics
                 .into_iter()
-                .map(|site| {
+                .chain(crate::growing_sites(&growth.edges).into_iter().map(|site| {
                     Diagnostic::error(
                         const { RuleId::of("GEN-5") },
                         site,
                         "a recursive instantiation cycle grows its type arguments",
                     )
-                })
+                }))
                 .collect(),
             Some(&queries.sources),
         );
@@ -203,6 +276,16 @@ impl Task {
     }
 }
 impl QueryEngine {
+    /// Settle headers and capture the existing source-language root set. This
+    /// includes unexecuted declarations and excludes registry-only bodies.
+    /// It performs no body checking, lowering or compile-time execution.
+    pub fn front_source_roots(&mut self) -> Vec<DefPath> {
+        let _ = self.signature_inputs();
+        self.source_growth
+            .required()
+            .map(|id| id.path().clone())
+            .collect()
+    }
     /// Capture the complete selected source-root set, including declarations
     /// never executed by the launch entry. A partial front view is refused.
     pub fn front_growth_queries(
@@ -219,17 +302,22 @@ impl QueryEngine {
                 message: "required source roots are missing or exceed admission".into(),
             })
         };
-        let definitions: Vec<_> = self.source_paths().into_iter().collect();
-        if (definitions.len() as u64)
-            .checked_mul(8192)
-            .and_then(|n| n.checked_add(weight.retained))
+        let definitions = self.front_source_roots();
+        if FrontGrowthQueries::input_bytes(&definitions, weight)
             .is_none_or(|n| n > allowance.bytes())
         {
             return Err(refusal());
         }
         let roots = definitions
             .iter()
-            .map(|path| front.query(path).ok_or_else(refusal))
+            .map(|path| {
+                front.query(path).ok_or_else(|| {
+                    QueryError::Operational(hirsel_types::OperationalFailure {
+                        operation: "source growth admission".into(),
+                        message: format!("missing checked-root producer for {path:?}"),
+                    })
+                })
+            })
             .collect::<Result<Vec<_>, _>>()?;
         let query = QueryId {
             kind: FRONT_GROWTH_KIND,
@@ -253,8 +341,11 @@ impl QueryEngine {
             items: Arc::new(crate::NativeRecordContext::capture(self)),
             records: crate::NativeRecords::new(self.types.clone(), store.clone()),
             sources: self.sources.clone(),
+            snapshot: self.signature_inputs(),
+            package: root.0.package.clone(),
             store,
             completed: Mutex::new(None),
+            failure: Mutex::new(None),
             weight,
             errors,
             _allowance: allowance,

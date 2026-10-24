@@ -12,6 +12,41 @@ use hirsel_types::{
 };
 use std::collections::{BTreeMap, BTreeSet};
 
+/// Compact checked input. The source rule keeps generic call arguments and
+/// lexical sites, without retaining a TypedBody or invoking a body controller.
+#[derive(Clone)]
+pub(crate) struct TableKeyUse {
+    owner: hirsel_syntax::LexicalOwner,
+    generics: hirsel_types::GenericDeclarations,
+    calls: Vec<TableKeyCall>,
+}
+#[derive(Clone)]
+struct TableKeyCall {
+    callee: DefPath,
+    site: Span,
+    arguments: Vec<GenericArgument>,
+}
+impl TableKeyUse {
+    pub(crate) fn capture(body: &crate::TypedBody) -> Self {
+        Self {
+            owner: body.syntax.owner(),
+            generics: body.checked.resolution.generic_declarations.clone(),
+            calls: body
+                .checked
+                .instantiations
+                .iter()
+                .map(|call| TableKeyCall {
+                    callee: call.callee.clone(),
+                    site: body.syntax.tree.expressions[call.expression.0 as usize]
+                        .origin
+                        .span,
+                    arguments: call.arguments.clone(),
+                })
+                .collect(),
+        }
+    }
+}
+
 struct Argument {
     forbidden: bool,
     parameters: BTreeSet<usize>,
@@ -37,30 +72,53 @@ pub(crate) fn check(engine: &mut QueryEngine) -> Result<Vec<Diagnostic>, QueryEr
     if required.is_empty() {
         return Ok(vec![]);
     }
-    let bodies = engine.instantiation_bodies()?;
+    let bodies = engine
+        .instantiation_bodies()?
+        .into_iter()
+        .map(|(owner, body)| {
+            (
+                owner,
+                std::sync::Arc::new(TableKeyUse::capture(&body.value)),
+            )
+        })
+        .collect();
+    check_uses(&engine.types.clone(), &bodies, required, &mut |path| {
+        engine.signature(path).map(Some)
+    })
+}
+
+/// The existing backwards schema worklist over immutable checked products.
+/// The provider supplies only signatures and records its own consumed reads.
+pub(crate) fn check_uses(
+    types: &hirsel_types::TypeInterner,
+    bodies: &BTreeMap<DefPath, std::sync::Arc<TableKeyUse>>,
+    mut required: BTreeMap<DefPath, BTreeSet<usize>>,
+    signature: &mut impl FnMut(
+        hirsel_syntax::DefId,
+    ) -> Result<Option<hirsel_types::SignatureRef>, QueryError>,
+) -> Result<Vec<Diagnostic>, QueryError> {
+    if required.is_empty() {
+        return Ok(vec![]);
+    }
     let mut edges = Vec::new();
     // Cache each argument's schema only when that slot becomes relevant.
-    for (owner, body) in &bodies {
-        for call in &body.value.checked.instantiations {
+    for (owner, body) in bodies {
+        for call in &body.calls {
             edges.push(Edge {
                 owner: owner.clone(),
                 callee: call.callee.clone(),
-                site: body.value.syntax.tree.expressions[call.expression.0 as usize]
-                    .origin
-                    .span,
+                site: call.site,
                 arguments: call.arguments.iter().map(|_| None).collect(),
             });
         }
     }
     let mut errors = Vec::new();
-    let types = engine.types().clone();
     let mut reported = BTreeSet::new();
     loop {
         let mut changed = false;
         let mut edge_index = 0;
-        for (owner, body) in &bodies {
-            let checked = &body.value.checked;
-            for call in &checked.instantiations {
+        for (owner, body) in bodies {
+            for call in &body.calls {
                 let edge = &mut edges[edge_index];
                 edge_index += 1;
                 let positions = required.get(&edge.callee).cloned().unwrap_or_default();
@@ -69,12 +127,8 @@ pub(crate) fn check(engine: &mut QueryEngine) -> Result<Vec<Diagnostic>, QueryEr
                         continue;
                     };
                     if edge.arguments[position].is_none() {
-                        let schema = serializable_schema(
-                            &types,
-                            *actual,
-                            &checked.resolution.generic_declarations,
-                            &mut |path| engine.signature(path).map(Some),
-                        )?;
+                        let schema =
+                            serializable_schema(types, *actual, &body.generics, signature)?;
                         let mut argument = Argument {
                             forbidden: false,
                             parameters: BTreeSet::new(),
@@ -91,7 +145,7 @@ pub(crate) fn check(engine: &mut QueryEngine) -> Result<Vec<Diagnostic>, QueryEr
                                         if matches!(parameter.binder(), GenericBinder::Bound(0))
                                             || parameter.binder()
                                                 == GenericBinder::Body(
-                                                    body.value.syntax.owner().site(NameSite::Item),
+                                                    body.owner.site(NameSite::Item),
                                                 )
                                         {
                                             argument
