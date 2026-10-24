@@ -17,6 +17,8 @@ use std::marker::PhantomData;
 use std::ptr::{self, NonNull};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
+pub mod semantic;
+
 static RUNS: AtomicU64 = AtomicU64::new(1);
 static GENERATIONS: AtomicU64 = AtomicU64::new(1);
 const MAX_HOLDERS: usize = isize::MAX as usize;
