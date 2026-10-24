@@ -32,14 +32,7 @@ fn actual_operation_components_cut_off_before_values_and_propagate_recursive_loc
         .into_iter()
         .enumerate()
         {
-            let base = if heap {
-                format!("let b=box Item(n:{literal}u64);b.n")
-            } else {
-                format!("{literal}u64")
-            };
-            let text = format!(
-                "resource type Item {{n:u64}} drop(x) {{let _=x.n}}\nfn first(n:u64)->u64 uses {{}} {{if n==0u64 {{{base}}} else {{second(n-1u64)}}}}\nfn second(n:u64)->u64 uses {{}} {{first(n)}}\npub fn main()->u64 {{second(0u64)}}"
-            );
+            let text = fixture(literal, heap);
             let mut engine = QueryEngine::new(default_environment(), compiler_adapters())
                 .with_result_store(store.clone());
             let file = engine.sources.add("op-component.hir", text).unwrap();
@@ -175,4 +168,15 @@ fn actual_operation_components_cut_off_before_values_and_propagate_recursive_loc
             assert_eq!(trace.totals(), before);
         }
     });
+}
+
+pub(super) fn fixture(literal: u64, heap: bool) -> String {
+    let base = if heap {
+        format!("let b=box Item(n:{literal}u64);b.n")
+    } else {
+        format!("{literal}u64")
+    };
+    format!(
+        "resource type Item {{n:u64}} drop(x) {{let _=x.n}}\nfn first(n:u64)->u64 uses {{}} {{if n==0u64 {{{base}}} else {{second(n-1u64)}}}}\nfn second(n:u64)->u64 uses {{}} {{first(n)}}\npub fn main()->u64 {{second(0u64)}}"
+    )
 }

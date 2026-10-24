@@ -16,6 +16,7 @@ pub mod instance_tasks;
 pub mod link_tasks;
 pub mod local;
 pub mod operation;
+pub mod operation_tasks;
 pub mod optimizer;
 pub mod platform;
 pub mod products;
