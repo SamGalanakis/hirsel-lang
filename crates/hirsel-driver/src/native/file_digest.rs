@@ -184,7 +184,8 @@ fn verify_state(path: &Path, source: &File, state: &Stamp) -> std::io::Result<()
     let named = stamp(&std::fs::metadata(path)?);
     if opened != *state || named != *state {
         return Err(std::io::Error::other(format!(
-            "a link input changed while hashing: {state:?} -> opened {opened:?}, named {named:?}"
+            "a link input changed while hashing ({}): {state:?} -> opened {opened:?}, named {named:?}",
+            path.display()
         )));
     }
     Ok(())
@@ -251,6 +252,7 @@ mod tests {
             error.contains("opened") && error.contains("named"),
             "{error}"
         );
+        assert!(error.contains(path.to_str().unwrap()), "{error}");
         // The old descriptor remains valid, but the link would open a new inode.
         assert_eq!(opened.metadata().unwrap().ino(), before[1]);
         assert_eq!(opened.metadata().unwrap().size(), before[3]);
