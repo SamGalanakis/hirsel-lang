@@ -53,6 +53,16 @@ pub struct FrontStorageGraphQueries {
     _allowance: MemoryReservation,
 }
 impl FrontStorageGraphQueries {
+    pub(crate) fn matches(
+        &self,
+        front: &Arc<FrontBodyQueries>,
+        lower: &Arc<FrontLowerQueries>,
+        growth: &Arc<FrontGrowthQueries>,
+    ) -> bool {
+        Arc::ptr_eq(&self.front, front)
+            && Arc::ptr_eq(&self.lower, lower)
+            && Arc::ptr_eq(&self.growth, growth)
+    }
     pub fn input_bytes(definitions: &[DefPath]) -> Option<u64> {
         definitions
             .iter()
@@ -82,11 +92,20 @@ impl FrontStorageGraphQueries {
         })
     }
     pub fn failure(&self, reference: Reference) -> Option<QueryError> {
-        self.failure
+        let own = self
+            .failure
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .as_ref()
-            .and_then(|(selected, error)| (*selected == reference).then(|| error.clone()))
+            .and_then(|(selected, error)| (*selected == reference).then(|| error.clone()));
+        own.or_else(|| self.recipes.failure(reference))
+            .or_else(|| self.lower.failure(reference))
+            .or_else(|| self.growth.failure(reference))
+            .or_else(|| {
+                self.front
+                    .outcome(reference)
+                    .and_then(|o| o.outcome.result.err())
+            })
     }
     pub fn executions(&self) -> u64 {
         self.executions.load(Relaxed)
