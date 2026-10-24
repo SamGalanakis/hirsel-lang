@@ -691,6 +691,11 @@ pub(super) fn install(
     {
         inventory.insert((query.kind, query.address.0));
     }
+    if let Some(native) = &native {
+        for query in native.assembly.queries(&definitions) {
+            inventory.insert((query.kind, query.address.0));
+        }
+    }
     let default_capacity =
         AdmittedRuntime::default_query_capacity(config.jobs, limits.runtime_bytes)
             .ok_or_else(uninstalled)?;

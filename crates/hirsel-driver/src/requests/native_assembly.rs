@@ -126,6 +126,16 @@ impl NativeAssembly {
     pub fn query(&self) -> QueryId {
         self.bootstrap.query()
     }
+    /// Exact IDs after native source selection has rebound Run and catalogue
+    /// namespaces. Counting them performs no query or source-body read.
+    pub fn queries(&self, definitions: &[DefPath]) -> Vec<QueryId> {
+        let mut queries = vec![self.query(), self.source.query()];
+        for path in definitions {
+            queries.extend(self.source.run_query(path));
+            queries.extend(self.source.definition_query(path));
+        }
+        queries
+    }
     /// Return the source-specific Run factory, not a separately captured Run
     /// namespace. The host installs this set exactly once before requests.
     pub fn factories(&self) -> Vec<(u32, Arc<dyn QueryFactory>)> {
