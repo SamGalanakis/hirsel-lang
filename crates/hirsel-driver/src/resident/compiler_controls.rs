@@ -404,3 +404,105 @@ fn selected_run_callee_identity_and_cancellation_keep_the_shared_check_live() {
         assert_eq!(input.definition.path.path(), &callee);
     });
 }
+
+#[test]
+fn selected_private_layout_cache_matches_cold_and_preserves_unread_reader_work() {
+    hirsel_engine::with_compiler_stack(|| {
+        for (opaque, reads_field) in [(true, true), (true, false), (false, true)] {
+            let (_directory, entry, source) = fixture();
+            let visibility = if opaque { "opaque " } else { "" };
+            let body = if reads_field { "x.level" } else { "1" };
+            let parameter = if reads_field { "x:Secret" } else { "" };
+            let initial = format!(
+                "pub {visibility}type Secret: data uses {{}} {{ level:u64, }}\nfn view({parameter})->u64{{{body}}}\npub fn main()->u64{{1}}\n"
+            );
+            std::fs::write(&source, &initial).unwrap();
+            let selected = request(&entry);
+            let budget = ProcessBudget::new(768 << 20);
+            let mut configured = config();
+            configured.store = Arc::new(hirsel_engine::store::MemStore::default());
+            let make = |configured: CompileConfig| {
+                CompilerRequests::new(
+                    crate::COMPILER,
+                    configured,
+                    budget.clone(),
+                    RequestLimits {
+                        runtime_bytes: 192 << 20,
+                        snapshot_bytes: 32 << 20,
+                        transport_bytes: 32 << 20,
+                    },
+                )
+            };
+            let mut host = Host::new(make(configured));
+            let first = host.request(&selected).unwrap().wait().unwrap();
+            assert!(checked(&first).diagnostics.is_empty());
+            let mut view = first.entry.clone();
+            view.0.name = "view".into();
+            drop(first);
+            let mut counter_request = selected.clone();
+            counter_request.operation = CompileOperation::RecomputeCounts {
+                queries: [
+                    hirsel_engine::QueryKind::Resolve,
+                    hirsel_engine::QueryKind::Check,
+                ]
+                .map(|kind| (view.clone(), kind))
+                .to_vec(),
+            };
+            let before = host.request(&counter_request).unwrap().wait().unwrap();
+            let CompileResult::RecomputeCounts(before) = &before.result else {
+                panic!("wrong counter result")
+            };
+            let before = before.clone();
+            let mut edited = selected.clone();
+            edited.inputs = selected
+                .inputs
+                .replace_sources(
+                    &BTreeMap::from([(
+                        source.clone(),
+                        initial
+                            .replace("level:u64", "level:u32")
+                            .into_bytes()
+                            .into(),
+                    )]),
+                    1 << 20,
+                )
+                .unwrap();
+            let actual = host.request(&edited).unwrap().wait().unwrap();
+            counter_request.inputs = edited.inputs.clone();
+            let after = host.request(&counter_request).unwrap().wait().unwrap();
+            let CompileResult::RecomputeCounts(after) = &after.result else {
+                panic!("wrong counter result")
+            };
+            if !reads_field {
+                assert_eq!(
+                    after, &before,
+                    "unread opaque representation preserves actual reader P work"
+                );
+                assert!(
+                    actual.work.store_adoptions > 0,
+                    "the immutable graph actually restored source products"
+                );
+            } else {
+                assert!(
+                    after[1].2 > before[1].2,
+                    "private layout reads must invalidate the cached Check"
+                );
+            }
+            let mut cold = Host::new(make(config()));
+            let expected = cold.request(&edited).unwrap().wait().unwrap();
+            let normalized = |output: &crate::requests::CompileOutput| {
+                checked(output)
+                    .diagnostics
+                    .iter()
+                    .map(|diagnostic| diagnostic.to_json(&checked(output).sources))
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(
+                normalized(&actual),
+                normalized(&expected),
+                "opaque={opaque},reads_field={reads_field}"
+            );
+            assert_eq!(checked(&actual).completion, checked(&expected).completion);
+        }
+    });
+}
