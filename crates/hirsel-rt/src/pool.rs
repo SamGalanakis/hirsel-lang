@@ -1609,13 +1609,14 @@ pub(crate) unsafe fn wake_home(run: *mut RunShared) {
 }
 
 /// Wake home from a thread that may outlive the run (an owned host job). It
-/// retains only the home Exec, whose closed inbox ignores late posts.
+/// retains only the run's control, which learns the home Exec when the pool
+/// starts (admission installs services before that) and whose closed inbox
+/// ignores late posts.
 /// # Safety
 /// The run is live while this is called.
 pub(crate) unsafe fn home_wake(run: *mut RunShared) -> Option<Arc<dyn Fn() + Send + Sync>> {
-    let execs = unsafe { (*(*run).execs.get()).as_deref() }?;
-    let home = Arc::clone(&execs.home);
-    Some(Arc::new(move || wake(&home)))
+    let control = Arc::clone(unsafe { &(*run).control });
+    Some(Arc::new(move || control.wake_home()))
 }
 
 /// A pool slot for an interval: an idle pool thread, a new one, or `None` when all

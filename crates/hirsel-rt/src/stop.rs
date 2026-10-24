@@ -129,6 +129,8 @@ pub(crate) struct Control {
     terminal: Mutex<Option<Arc<dyn Terminal>>>,
     /// The home thread's exec, while a run with compute workers runs: a stop wakes its loop.
     home: Mutex<Option<Arc<crate::pool::Exec>>>,
+    /// A host job woke home before the pool published it (`wake_home`).
+    home_woken: AtomicBool,
     /// A descriptor a stop makes readable, which ends a width-1 run's idle host wait.
     wake: Mutex<Option<OwnedFd>>,
     /// Workers still inside the stopped run when its launcher returned.
@@ -256,7 +258,19 @@ impl Control {
         self.hosted.load(Ordering::Relaxed)
     }
     pub(crate) fn set_home(&self, home: Arc<crate::pool::Exec>) {
-        *self.home.lock().unwrap() = Some(home);
+        let mut slot = self.home.lock().unwrap();
+        if self.home_woken.swap(false, Ordering::Relaxed) {
+            crate::pool::wake(&home);
+        }
+        *slot = Some(home);
+    }
+    /// Wake the home exec. A wake before the pool publishes home (workers may
+    /// already run jobs) is kept under the same lock and posted by set_home.
+    pub(crate) fn wake_home(&self) {
+        match &*self.home.lock().unwrap() {
+            Some(home) => crate::pool::wake(home),
+            None => self.home_woken.store(true, Ordering::Relaxed),
+        }
     }
     /// The descriptor a stop makes readable, created at the first ask.
     pub(crate) fn wake_fd(&self) -> Option<std::os::fd::RawFd> {
