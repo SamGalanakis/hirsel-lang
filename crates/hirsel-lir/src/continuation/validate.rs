@@ -324,6 +324,9 @@ fn check_state(
     ordinal: u32,
     state: &ResumeState,
     expected: &ExistingBoundary,
+    callee: Option<(ContentHash, u64)>,
+    frame: &[LiveStorage],
+    base: u64,
 ) -> Result<(), ContinuationError> {
     let id = u.header.instance;
     let n = ordinal + 1;
@@ -374,13 +377,12 @@ fn check_state(
         return Err(ContinuationError::LiveOwner(id, n));
     }
     let (slots, loans) = storage(u, b);
-    if state.storage.iter().map(|s| s.slot).collect::<Vec<_>>()
-        != slots.iter().copied().collect::<Vec<_>>()
-        || state.storage.iter().any(|s| {
-            let ty = &u.types[u.slots[s.slot.index()].ty.index()];
-            s.layout != ty.layout || s.repr != ty.repr
-        })
-    {
+    let expected_storage: Vec<_> = frame
+        .iter()
+        .filter(|s| slots.contains(&s.slot))
+        .cloned()
+        .collect();
+    if state.storage != expected_storage || expected_storage.len() != slots.len() {
         return Err(ContinuationError::Storage(id, n));
     }
     if state.loans != loans.into_iter().collect::<Vec<_>>() {
@@ -417,23 +419,31 @@ fn check_state(
     {
         return Err(ContinuationError::ResumeLabel(id, n));
     }
-    // Offsets are increasing, aligned and disjoint, after the header.
-    let mut end = FRAME_HEADER_BYTES;
-    for (offset, layout) in state
-        .live
-        .iter()
-        .map(|l| (l.offset, l.layout))
-        .chain(state.storage.iter().map(|s| (s.offset, s.layout)))
-    {
-        let Some((size, align)) = fixed(table, layout) else {
+    // Value offsets are increasing, aligned and disjoint, after the storage.
+    let mut end = base;
+    for l in &state.live {
+        let Some((size, align)) = fixed(table, l.layout) else {
             return Err(ContinuationError::Frame(id));
         };
-        if offset < end || offset % align != 0 {
+        if l.offset < end || l.offset % align != 0 {
             return Err(ContinuationError::Frame(id));
         }
-        end = offset + size;
+        end = l.offset + size;
     }
-    if state.bytes != end.next_multiple_of(8) || state.bytes > MAX_FRAME_BYTES {
+    end = end.next_multiple_of(8);
+    match (state.callee, callee) {
+        (None, None) => {}
+        (Some(nested), Some((body, bytes)))
+            if nested.body == body
+                && nested.bytes == bytes
+                && nested.offset >= end
+                && nested.offset % 16 == 0 =>
+        {
+            end = (nested.offset + nested.bytes).next_multiple_of(8);
+        }
+        _ => return Err(ContinuationError::Frame(id)),
+    }
+    if state.bytes != end || state.bytes > MAX_FRAME_BYTES {
         return Err(ContinuationError::Frame(id));
     }
     Ok(())
@@ -498,47 +508,90 @@ pub fn validate(
             .iter()
             .map(|c| call_effect(u, c, &index, &suspends, inputs.classify))
             .collect();
-        let boundaries: Vec<_> = u
-            .terminators
-            .iter()
-            .enumerate()
-            .filter_map(|(b, t)| match t {
-                Terminator::Call { call, .. } => match &effects[call.index()] {
-                    CallEffect::Boundary(op) => Some(ExistingBoundary {
-                        block: BlockId(b as u32),
-                        call: *call,
-                        operation: op.clone(),
-                    }),
-                    _ => None,
-                },
-                _ => None,
-            })
-            .collect();
-        let open = effects
-            .iter()
-            .any(|e| matches!(e, CallEffect::Nested(_) | CallEffect::Unknown(_)));
+        let sites = super::sites(u, &effects, &plans.plans);
         match &plan.representation {
             Representation::Resumable => {
-                if open || boundaries.is_empty() {
+                let Ok(sites) = sites else {
+                    return Err(ContinuationError::Representation(*id));
+                };
+                if sites.is_empty() {
                     return Err(ContinuationError::Representation(*id));
                 }
-                if plan.states.len() != boundaries.len() {
+                if plan.states.len() != sites.len() {
                     return Err(ContinuationError::States(*id));
                 }
+                // No resume label may reach its own boundary again.
+                for site in &sites {
+                    let Terminator::Call {
+                        normal: Some(normal),
+                        ..
+                    } = u.terminators[site.block.index()]
+                    else {
+                        return Err(ContinuationError::Representation(*id));
+                    };
+                    let mut seen = BTreeSet::new();
+                    let mut stack = vec![u.tables.edges[normal.index()].target];
+                    while let Some(b) = stack.pop() {
+                        if b == site.block {
+                            return Err(ContinuationError::Representation(*id));
+                        }
+                        if seen.insert(b) {
+                            stack.extend(successors(u, b));
+                        }
+                    }
+                }
+                // Fixed storage: every slot live at some boundary, in slot order.
+                let union: BTreeSet<SlotId> =
+                    sites.iter().flat_map(|s| storage(u, s.block).0).collect();
+                if plan.storage.iter().map(|s| s.slot).collect::<Vec<_>>()
+                    != union.iter().copied().collect::<Vec<_>>()
+                {
+                    return Err(ContinuationError::Storage(*id, 0));
+                }
+                let mut end = FRAME_HEADER_BYTES;
+                for s in &plan.storage {
+                    let ty = &u.types[u.slots[s.slot.index()].ty.index()];
+                    let Some((size, align)) = fixed(inputs.table, s.layout) else {
+                        return Err(ContinuationError::Frame(*id));
+                    };
+                    if s.layout != ty.layout
+                        || s.repr != ty.repr
+                        || s.offset < end
+                        || s.offset % align != 0
+                    {
+                        return Err(ContinuationError::Storage(*id, 0));
+                    }
+                    end = s.offset + size;
+                }
+                let base = end.next_multiple_of(8);
                 let live = Live::compute(u);
-                for (i, (state, boundary)) in plan.states.iter().zip(&boundaries).enumerate() {
-                    check_state(u, inputs.table, &live, i as u32, state, boundary)?;
+                for (i, (state, site)) in plan.states.iter().zip(&sites).enumerate() {
+                    let boundary = ExistingBoundary {
+                        block: site.block,
+                        call: site.call,
+                        operation: site.operation.clone(),
+                    };
+                    check_state(
+                        u,
+                        inputs.table,
+                        &live,
+                        i as u32,
+                        state,
+                        &boundary,
+                        site.callee,
+                        &plan.storage,
+                        base,
+                    )?;
                 }
             }
-            // A refused compact form is always safe; an unrefused closed body
-            // must not claim the stackful form without a reason.
+            // A refused compact form is always safe.
             Representation::Stackful(_) => {
-                if !plan.states.is_empty() {
+                if !plan.states.is_empty() || !plan.storage.is_empty() {
                     return Err(ContinuationError::States(*id));
                 }
             }
             Representation::Direct => {
-                if !boundaries.is_empty() || open || !plan.states.is_empty() {
+                if !matches!(sites, Ok(ref s) if s.is_empty()) || !plan.states.is_empty() {
                     return Err(ContinuationError::Representation(*id));
                 }
             }
@@ -557,6 +610,7 @@ pub fn validate(
             &effects,
             &digests,
             &plan.representation,
+            &plan.storage,
             &plan.states,
             plan.captures,
         );
