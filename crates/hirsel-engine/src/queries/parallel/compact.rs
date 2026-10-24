@@ -112,7 +112,7 @@ pub(crate) struct CompactCompleted {
     lowering_inputs: Option<lowering::LoweringUse>,
     payload: Option<Vec<u8>>,
     store_write: Option<Result<(), QueryError>>,
-    verified_mode: Option<crate::semantic::VerifiedMode>,
+    mode_archive: Option<crate::semantic::ModeArchive>,
     outcome: PublishedResult,
 }
 impl CompactCompleted {
@@ -169,10 +169,10 @@ impl CompactCompleted {
             && let Some(writer) = writer
             && let Some(stage) = &self.modes
         {
-            let result = writer.write_verified_mode(&stage.reads, payload);
+            let result = writer.write_mode_archive(stage.reads.clone(), payload);
             match &result {
-                Ok(Some(proof)) => self.verified_mode = Some(proof.clone()),
-                Err(_) => self.verified_mode = None,
+                Ok(Some(proof)) => self.mode_archive = Some(proof.clone()),
+                Err(_) => self.mode_archive = None,
                 Ok(None) => (),
             }
             self.store_write = Some(result.map(|_| ()));
@@ -301,9 +301,9 @@ impl CompactCompleted {
                 Err(_) => consistent = false,
             }
         }
-        let verified_mode = modes
+        let mode_archive = modes
             .as_ref()
-            .and_then(|stage| stage.products.verified_mode.clone());
+            .and_then(|stage| stage.products.mode_archive.clone());
         let result = if consistent {
             result.map(|output| {
                 let (summary, growth) = summarize(worker.types, &output.value.typed);
@@ -334,7 +334,7 @@ impl CompactCompleted {
             lowering_inputs,
             payload: consistent.then_some(payload).flatten(),
             store_write: None,
-            verified_mode,
+            mode_archive,
             outcome: PublishedResult {
                 definition: done.definition,
                 result,
@@ -364,7 +364,7 @@ impl QueryEngine {
             lowering_inputs,
             payload,
             store_write,
-            verified_mode,
+            mode_archive,
             mut outcome,
             ..
         } = done;
@@ -446,7 +446,7 @@ impl QueryEngine {
                     false,
                     Arc::new(PhaseProducts {
                         mode_diagnostics: outcome.diagnostic_phases.clone(),
-                        verified_mode: (!store_failed).then_some(verified_mode).flatten(),
+                        mode_archive: (!store_failed).then_some(mode_archive).flatten(),
                         ..Default::default()
                     }),
                 );

@@ -689,32 +689,31 @@ pub(super) struct EncodedWriter {
     kind: QueryKind,
     expected: Option<Expected>,
 }
-fn mode_verification(
-    key: EntryKey,
-    reads: &Reads,
-    payload: &[u8],
-) -> crate::semantic::VerifiedMode {
-    crate::semantic::VerifiedMode {
-        key,
-        reads: crate::store::payload_reads_hash(reads),
-        payload: ContentHash::of_bytes(payload),
-    }
-}
 impl EncodedWriter {
-    /// Return comparison metadata only after the selected expected archive
-    /// matched byte-for-byte. The writer retains neither checked bodies nor
-    /// encoded payloads after this call.
-    pub(super) fn write_verified_mode(
+    /// Retain only the archive this completed computation actually published,
+    /// after any required byte-for-byte oracle comparison succeeded.
+    pub(super) fn write_mode_archive(
+        &self,
+        reads: Arc<Reads>,
+        payload: Vec<u8>,
+    ) -> Result<Option<crate::semantic::ModeArchive>, QueryError> {
+        let record = self.write_archive(&reads, payload)?;
+        Ok(record
+            .filter(|_| self.kind == QueryKind::Modes)
+            .map(|record| crate::semantic::ModeArchive {
+                key: self.key,
+                reads,
+                record,
+            }))
+    }
+    pub(super) fn write(&self, reads: &Reads, payload: Vec<u8>) -> Result<(), QueryError> {
+        self.write_archive(reads, payload).map(|_| ())
+    }
+    fn write_archive(
         &self,
         reads: &Reads,
         payload: Vec<u8>,
-    ) -> Result<Option<crate::semantic::VerifiedMode>, QueryError> {
-        let proof = (self.kind == QueryKind::Modes && self.expected.is_some())
-            .then(|| mode_verification(self.key, reads, &payload));
-        self.write(reads, payload)?;
-        Ok(proof)
-    }
-    pub(super) fn write(&self, reads: &Reads, payload: Vec<u8>) -> Result<(), QueryError> {
+    ) -> Result<Option<crate::store::Reference>, QueryError> {
         let _batch = self.store.local_product_store().map(|store| store.batch());
         if let Some(expected) = &self.expected {
             let matches = expected.matches(reads, &payload);
@@ -736,8 +735,9 @@ impl EncodedWriter {
         let mut entry = StoredEntry::load(&*self.store, &self.key);
         let Some(variant) = VariantRef::publish(&*self.store, &self.key, reads.clone(), &payload)
         else {
-            return Ok(());
+            return Ok(None);
         };
+        let record = variant.output;
         entry.insert(variant);
         self.store.put_query(
             self.kind,
@@ -745,7 +745,7 @@ impl EncodedWriter {
             entry.action(&self.key),
             &entry.encode_for(&self.key),
         );
-        Ok(())
+        Ok(Some(record))
     }
 }
 
@@ -817,7 +817,7 @@ impl QueryEngine {
         mutable.covered = record.covered;
         mutable.products = Arc::new(PhaseProducts {
             signature_persisted: true,
-            verified_mode: None,
+            mode_archive: None,
             resolution,
             representation,
             mode_diagnostics: vec![],
@@ -1237,7 +1237,35 @@ impl QueryEngine {
         if !self.s1.is_empty() {
             return None;
         }
-        let variant = self.stored_variant(path, QueryKind::Modes)?;
+        let key = self.store_key(path, QueryKind::Modes)?;
+        let candidate = self
+            .summaries
+            .get(&DefId::intern(path))
+            .filter(|entry| entry.consistent && !self.graph.is_dirty(&entry.memo.key))
+            .and_then(|entry| entry.products.mode_archive.clone());
+        let own = candidate
+            .filter(|archive| archive.key == key)
+            .filter(|archive| {
+                archive
+                    .reads
+                    .iter()
+                    .all(|(read, value)| self.observe(path, read) == Some(*value))
+            })
+            .and_then(|archive| {
+                let payload = self.result_store.as_ref()?.get_content(archive.record)?;
+                Some((
+                    Variant {
+                        inputs: key.1,
+                        reads: (*archive.reads).clone(),
+                        payload,
+                    },
+                    archive,
+                ))
+            });
+        let (variant, mode_archive) = match own {
+            Some((variant, archive)) => (variant, Some(archive)),
+            None => (self.stored_variant(path, QueryKind::Modes)?, None),
+        };
         let record: ModeRecord = self.decode_record(&variant.payload)?;
         // An ordinary product hit can start from declaration heads alone.
         // Materialize only this demanded body's syntax after validating its reads.
@@ -1246,15 +1274,7 @@ impl QueryEngine {
         if !record.valid(&syntax) {
             return None;
         }
-        let key = self.store_key(path, QueryKind::Modes)?;
-        let verified_mode = self
-            .summaries
-            .get(&DefId::intern(path))
-            .filter(|entry| entry.consistent && !self.graph.is_dirty(&entry.memo.key))
-            .and_then(|entry| entry.products.verified_mode.as_ref())
-            .filter(|proof| **proof == mode_verification(key, &variant.reads, &variant.payload))
-            .cloned();
-        if self.verify_store == crate::store::VerifyStore::Recompute && verified_mode.is_none() {
+        if self.verify_store == crate::store::VerifyStore::Recompute && mode_archive.is_none() {
             self.pending_store_checks.insert(
                 (DefId::intern(path), QueryKind::Modes),
                 Expected::capture(variant, &mut self.store_check_spool),
@@ -1287,14 +1307,16 @@ impl QueryEngine {
             );
             self.checked.insert(DefId::intern(path), entry);
         }
-        timings::count(Count::StoreHits);
-        self.store_adoptions += 1;
+        if mode_archive.is_none() {
+            timings::count(Count::StoreHits);
+            self.store_adoptions += 1;
+        }
         let mut entry = self.adopted(path, QueryKind::Modes, variant, output, record.detail);
         Arc::get_mut(&mut entry)
             .expect("restored mode entry is not yet shared")
             .products = Arc::new(PhaseProducts {
             mode_diagnostics: record.phases,
-            verified_mode,
+            mode_archive,
             ..Default::default()
         });
         Some(entry)
