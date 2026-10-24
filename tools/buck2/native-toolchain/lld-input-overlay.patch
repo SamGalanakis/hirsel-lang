@@ -1,0 +1,211 @@
+diff --git i/lld/ELF/Config.h w/lld/ELF/Config.h
+index 1426aab1..a1d69f1f 100644
+--- i/lld/ELF/Config.h
++++ w/lld/ELF/Config.h
+@@ -29,6 +29,7 @@
+ #include "llvm/Support/FileSystem.h"
+ #include "llvm/Support/GlobPattern.h"
+ #include "llvm/Support/TarWriter.h"
++#include "llvm/Support/VirtualFileSystem.h"
+ #include <atomic>
+ #include <memory>
+ #include <mutex>
+@@ -650,6 +651,8 @@ struct InStruct {
+ 
+ struct Ctx : CommonLinkerContext {
+   Config arg;
++  llvm::IntrusiveRefCntPtr<llvm::vfs::FileSystem> inputFS =
++      llvm::vfs::getRealFileSystem();
+   LinkerDriver driver;
+   LinkerScript *script;
+   std::unique_ptr<TargetInfo> target;
+diff --git i/lld/ELF/Driver.cpp w/lld/ELF/Driver.cpp
+index 51d9e324..115ff718 100644
+--- i/lld/ELF/Driver.cpp
++++ w/lld/ELF/Driver.cpp
+@@ -202,10 +202,22 @@ std::vector<std::pair<MemoryBufferRef, uint64_t>> static getArchiveMembers(
+   Error err = Error::success();
+   bool addToTar = file->isThin() && ctx.tar;
+   for (const Archive::Child &c : file->children(err)) {
+-    MemoryBufferRef mbref =
+-        CHECK(c.getMemoryBufferRef(),
+-              mb.getBufferIdentifier() +
+-                  ": could not get the buffer for a child of the archive");
++    MemoryBufferRef mbref;
++    if (file->isThin()) {
++      auto name = check(c.getFullName());
++      auto buffer = ctx.inputFS->getBufferForFile(
++          name, -1, /*RequiresNullTerminator=*/false, /*IsVolatile=*/false,
++          /*IsText=*/false);
++      if (!buffer)
++        Fatal(ctx) << mb.getBufferIdentifier() << ": cannot read thin member "
++                   << name << ": " << buffer.getError().message();
++      mbref = (*buffer)->getMemBufferRef();
++      job.thinBufs.push_back(std::move(*buffer));
++    } else {
++      mbref = CHECK(c.getMemoryBufferRef(),
++                    mb.getBufferIdentifier() +
++                        ": could not get the buffer for a child of the archive");
++    }
+     if (addToTar)
+       job.tarEntries.emplace_back(relativeToRoot(check(c.getFullName())),
+                                   mbref.getBuffer());
+@@ -216,7 +228,8 @@ std::vector<std::pair<MemoryBufferRef, uint64_t>> static getArchiveMembers(
+                << ": Archive::children failed: " << std::move(err);
+ 
+   // Take ownership of memory buffers created for members of thin archives.
+-  job.thinBufs = file->takeThinBuffers();
++  if (!file->isThin())
++    job.thinBufs = file->takeThinBuffers();
+ 
+   return v;
+ }
+@@ -698,6 +711,29 @@ void LinkerDriver::linkerMain(ArrayRef<const char *> argsArr) {
+   {
+     llvm::TimeTraceScope timeScope("ExecuteLinker");
+ 
++    if (auto *arg = args.getLastArg(OPT_input_overlay)) {
++      auto buffer = MemoryBuffer::getFile(arg->getValue());
++      if (!buffer) {
++        ErrAlways(ctx) << "cannot read input overlay: " << buffer.getError().message();
++        return;
++      }
++      auto fs = vfs::getVFSFromYAML(std::move(*buffer), nullptr, arg->getValue());
++      if (!fs) {
++        ErrAlways(ctx) << "invalid LLVM input overlay";
++        return;
++      }
++      ctx.inputFS = IntrusiveRefCntPtr<vfs::FileSystem>(fs.release());
++    }
++    if (auto *arg = args.getLastArg(OPT_input_working_directory)) {
++      if (!args.hasArg(OPT_input_overlay)) {
++        ErrAlways(ctx) << "--input-working-directory requires --input-overlay";
++        return;
++      }
++      if (auto ec = ctx.inputFS->setCurrentWorkingDirectory(arg->getValue())) {
++        ErrAlways(ctx) << "cannot set input working directory: " << ec.message();
++        return;
++      }
++    }
+     initLLVM();
+     createFiles(args);
+     if (errCount(ctx))
+@@ -3257,6 +3293,11 @@ template <class ELFT> void LinkerDriver::link(opt::InputArgList &args) {
+     ctx.symtab->addUnusedUndefined(name)->referenced = true;
+ 
+   parseFiles(ctx, files);
++  // --whole-archive admission reaches every archive member and dependent
++  // library. Script expressions and backend work belong to the actual link.
++  if (args.hasArg(OPT_capture_inputs_only))
++    return;
++
+ 
+   // Create dynamic sections for dynamic linking and static PIE.
+   ctx.hasDynsym = !ctx.sharedFiles.empty() || ctx.arg.isPic;
+diff --git i/lld/ELF/DriverUtils.cpp w/lld/ELF/DriverUtils.cpp
+index 6d027c52..ef3a116f 100644
+--- i/lld/ELF/DriverUtils.cpp
++++ w/lld/ELF/DriverUtils.cpp
+@@ -224,7 +224,7 @@ static std::optional<std::string> findFile(Ctx &ctx, StringRef path1,
+   else
+     path::append(s, path1, path2);
+ 
+-  if (fs::exists(s))
++  if (ctx.inputFS->exists(s))
+     return std::string(s);
+   return std::nullopt;
+ }
+@@ -263,7 +263,7 @@ std::optional<std::string> elf::searchLibrary(Ctx &ctx, StringRef name) {
+ // look for the script in the '-L' search paths. This matches the behaviour of
+ // '-T', --version-script=, and linker script INPUT() command in ld.bfd.
+ std::optional<std::string> elf::searchScript(Ctx &ctx, StringRef name) {
+-  if (fs::exists(name))
++  if (ctx.inputFS->exists(name))
+     return name.str();
+   return findFromSearchPaths(ctx, name);
+ }
+diff --git i/lld/ELF/InputFiles.cpp w/lld/ELF/InputFiles.cpp
+index 05c0f3f1..6af02c36 100644
+--- i/lld/ELF/InputFiles.cpp
++++ w/lld/ELF/InputFiles.cpp
+@@ -245,8 +245,9 @@ std::optional<MemoryBufferRef> elf::readFile(Ctx &ctx, StringRef path) {
+   Log(ctx) << path;
+   ctx.arg.dependencyFiles.insert(llvm::CachedHashString(path));
+ 
+-  auto mbOrErr = MemoryBuffer::getFile(path, /*IsText=*/false,
+-                                       /*RequiresNullTerminator=*/false);
++  auto mbOrErr = ctx.inputFS->getBufferForFile(
++      path, -1, /*RequiresNullTerminator=*/false, /*IsVolatile=*/false,
++      /*IsText=*/false);
+   if (auto ec = mbOrErr.getError()) {
+     ErrAlways(ctx) << "cannot open " << path << ": " << ec.message();
+     return std::nullopt;
+@@ -385,7 +386,7 @@ static void addDependentLibrary(Ctx &ctx, StringRef specifier,
+     ctx.driver.addFile(ctx.saver.save(*s), /*withLOption=*/true);
+   else if (std::optional<std::string> s = findFromSearchPaths(ctx, specifier))
+     ctx.driver.addFile(ctx.saver.save(*s), /*withLOption=*/true);
+-  else if (fs::exists(specifier))
++  else if (ctx.inputFS->exists(specifier))
+     ctx.driver.addFile(specifier, /*withLOption=*/false);
+   else
+     ErrAlways(ctx)
+diff --git i/lld/ELF/Options.td w/lld/ELF/Options.td
+index 64c42eb4..b615e810 100644
+--- i/lld/ELF/Options.td
++++ w/lld/ELF/Options.td
+@@ -163,6 +163,12 @@ def verbose_bp_section_orderer: FF<"verbose-bp-section-orderer">,
+ 
+ // --chroot doesn't have a help text because it is an internal option.
+ def chroot: Separate<["--"], "chroot">;
++def input_overlay: JJ<"input-overlay=">,
++  HelpText<"Read linker inputs through an LLVM virtual filesystem overlay">;
++def input_working_directory: JJ<"input-working-directory=">,
++  HelpText<"Set the virtual working directory of the input overlay">;
++def capture_inputs_only: F<"capture-inputs-only">,
++  HelpText<"Parse all input files without producing a linked output">;
+ 
+ def color_diagnostics: JJ<"color-diagnostics=">,
+   HelpText<"Use colors in diagnostics (default: auto)">,
+diff --git i/lld/ELF/ScriptLexer.cpp w/lld/ELF/ScriptLexer.cpp
+index 3a7207de..b2b320d6 100644
+--- i/lld/ELF/ScriptLexer.cpp
++++ w/lld/ELF/ScriptLexer.cpp
+@@ -44,7 +44,8 @@ ScriptLexer::Buffer::Buffer(Ctx &ctx, MemoryBufferRef mb)
+     return;
+   StringRef path = filename;
+   for (; !path.empty(); path = sys::path::parent_path(path)) {
+-    if (!sys::fs::equivalent(ctx.arg.sysroot, path))
++    auto same = ctx.inputFS->equivalent(ctx.arg.sysroot, path);
++    if (!same || !*same)
+       continue;
+     isUnderSysroot = true;
+     return;
+diff --git i/lld/ELF/ScriptParser.cpp w/lld/ELF/ScriptParser.cpp
+index 0c54fde4..82b96e0b 100644
+--- i/lld/ELF/ScriptParser.cpp
++++ w/lld/ELF/ScriptParser.cpp
+@@ -320,7 +320,7 @@ void ScriptParser::addFile(StringRef s) {
+   if (curBuf.isUnderSysroot && s.starts_with("/")) {
+     SmallString<128> pathData;
+     StringRef path = (ctx.arg.sysroot + s).toStringRef(pathData);
+-    if (sys::fs::exists(path))
++    if (ctx.inputFS->exists(path))
+       ctx.driver.addFile(ctx.saver.save(path), /*withLOption=*/false);
+     else
+       setError("cannot find " + s + " inside " + ctx.arg.sysroot);
+@@ -346,13 +346,13 @@ void ScriptParser::addFile(StringRef s) {
+     if (!directory.empty()) {
+       SmallString<0> path(directory);
+       sys::path::append(path, s);
+-      if (sys::fs::exists(path)) {
++      if (ctx.inputFS->exists(path)) {
+         ctx.driver.addFile(ctx.saver.save(path.str()), /*withLOption=*/false);
+         return;
+       }
+     }
+     // Then search in the current working directory.
+-    if (sys::fs::exists(s)) {
++    if (ctx.inputFS->exists(s)) {
+       ctx.driver.addFile(s, /*withLOption=*/false);
+     } else {
+       // Finally, search in the list of library paths.

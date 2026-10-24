@@ -1,5 +1,17 @@
-load("//tools/native-toolchain:pins.bzl", "LINK_KIT", "LLVM_DEBS", "NATIVE", "VALGRIND_DEBS")
-load(":defs.bzl", "link_kit", "toolchain_proof", "unpack_toolchain")
+load("//tools/native-toolchain:pins.bzl", "LINK_KIT", "LLD_SOURCE", "LLVM_DEBS", "NATIVE", "VALGRIND_DEBS")
+load(":defs.bzl", "link_kit", "overlay_linker", "toolchain_proof", "unpack_toolchain")
+
+http_file(name = "lld-source", urls = [LLD_SOURCE["url"]], sha256 = LLD_SOURCE["sha256"])
+overlay_linker(
+    name = "linker", source = ":lld-source", llvm = "toolchains//:llvm",
+    kit = ":kit", version = LLD_SOURCE["version"],
+    patch_tool = ":patch",
+    headers = [":zlib_headers", ":zstd_headers"],
+    patch = ":lld-input-overlay.patch",
+    main = ":lld-input-main.cpp",
+    exec_compatible_with = ["root//tools/buck2:pool_1_1048576"],
+    visibility = ["PUBLIC"],
+)
 
 [http_file(name = "llvm-deb-{}".format(i), urls = [pin["url"]], sha256 = pin["sha256"], size_bytes = pin["size"]) for i, pin in enumerate(LLVM_DEBS)]
 [http_file(name = name + "-archive", urls = [pin["url"]], sha256 = pin["sha256"], size_bytes = pin["size"]) for name, pin in NATIVE.items()]
@@ -31,7 +43,13 @@ unpack_toolchain(
 )
 
 export_file(name = "unpack.py")
+export_file(name = "lld_overlay.py")
 export_file(name = "link_kit.py")
 toolchain_proof(name = "proof", tools = [":llvm", ":arm", ":qemu", ":valgrind"], script = "proof.sh")
 toolchain_proof(name = "source-entry-proof", tools = [":llvm", "root//:hirsel-driver-unittest-harness"], script = "source_entry_proof.sh")
+toolchain_proof(name = "linker-input-proof", tools = [":linker", "toolchains//:llvm"],
+    script = "linker_input_probe.py", interpreter = "python3")
 export_file(name = "environment.tsv", visibility = ["PUBLIC"])
+
+export_file(name = "lld-input-main.cpp")
+export_file(name = "lld-input-overlay.patch")

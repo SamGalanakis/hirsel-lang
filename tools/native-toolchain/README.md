@@ -24,6 +24,40 @@ https://github.com/llvm/llvm-project/releases/tag/llvmorg-23.1.4.
 The former LLVM 21 GitHub binary archive was static-only. `check` continues to
 require a shared libLLVM; binary archives are not a fallback.
 
+## Link input capture
+
+`//tools/buck2/native-toolchain:linker` builds the ELF driver from the same
+LLVM release with `../buck2/native-toolchain/lld-input-overlay.patch`. The
+existing LLVM script parser, archive decoder and virtual filesystem supply
+input discovery and replay:
+
+- `--input-overlay=FILE` selects an LLVM YAML VFS, including its ordinary
+  `use-external-names` and `fallthrough` policies.
+- `--input-working-directory=DIR` selects the overlay's logical working
+  directory and requires an overlay.
+- `--capture-inputs-only` stops after input parsing, including archive members
+  and dependent libraries. With `--whole-archive --reproduce=FILE`, the normal
+  LLVM reproducer contains the complete input bytes. Final script expressions
+  and backend work still execute during the actual link.
+
+Logical filenames remain visible to section selectors. Thin members use the
+same virtual filesystem as direct inputs. Capture outputs are ordinary input
+data; native verification remains the consumer's responsibility.
+
+The builder uses the pinned SDK and GNU patch from `native.lock.json`, one
+CPU, and a 1 GiB build allowance. It selects libstdc++'s provided timed-wait
+fallbacks for the SDK's glibc 2.28 headers and packages the resolved loader/DSO
+closure of the linker and archiver alongside them.
+
+```sh
+.buck2/bin/buck2 test //tools/buck2/native-toolchain:linker-input-proof
+```
+
+The proof removes the original inputs before replay. It covers absolute and
+relative inputs and includes, filename section selection, thin archives and
+dependent libraries, final-link assertions, and refusal of uncaptured real
+files and thin members.
+
 ## Pool execution inputs
 
 `BUCK` downloads LLVM's locked Debian packages and their runtime libraries,

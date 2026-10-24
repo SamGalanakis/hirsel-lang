@@ -73,5 +73,20 @@
       "sha256": "e9a92d71d62655f673433c345a03fecaa4292f93c6572b28fd3d16dcfd1cc7f6",
       "size": 1509868
     }
+  },
+  "patch": {
+    "url": "https://archive.ubuntu.com/ubuntu/pool/main/p/patch/patch_2.7.6-7build3_amd64.deb",
+    "sha256": "fb7d78ed25c2788a607802270f3c28ac5ed6857bfb6cce9f73ad2cafac9159b3",
+    "size": 104048
+  },
+  "zlib_headers": {
+    "url": "https://archive.ubuntu.com/ubuntu/pool/main/z/zlib/zlib1g-dev_1.3.dfsg-3.1ubuntu2_amd64.deb",
+    "sha256": "7360405fbf49e35dca2f7a4ebeac7d4fe5fe3b2db99adac70e11e104f53b2642",
+    "size": 894096
+  },
+  "zstd_headers": {
+    "url": "https://archive.ubuntu.com/ubuntu/pool/main/libz/libzstd/libzstd-dev_1.5.5+dfsg2-2build1_amd64.deb",
+    "sha256": "2692254b78b0beeb284cda9bd34883ba470881475bc7c0eefbef479404bcfd23",
+    "size": 363838
   }
 }
