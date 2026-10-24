@@ -697,3 +697,67 @@ fn callback_reader(t: Test) {
         1,
     );
 }
+
+#[test]
+fn ownership_native_source_emission_binds_checked_metadata_and_preserves_ordinary_objects() {
+    hirsel_engine::with_compiler_stack(|| {
+        use hirsel_driver::native::{
+            self, Backend, OptLevel, Options, Partition, Sites, TargetSpec,
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("main.hir");
+        std::fs::write(&source, "resource type Token { value: u64 }\ndrop(x) {}\npub fn main() -> Result[(), ()] {\n let token = Token(value: 7u64)\n Ok(())\n}\n").unwrap();
+        let mut loaded = hirsel_driver::load_program(&source)
+            .unwrap_or_else(|error| panic!("source fixture: {error}"));
+        loaded
+            .check_for_execution()
+            .unwrap_or_else(|error| panic!("source fixture: {error}"));
+        let input = loaded.engine.export_native_input().unwrap();
+        let checked = loaded.engine.import_native_input(input).unwrap();
+        let ready = native::build(
+            &checked,
+            &Options::new(TargetSpec::x86_64_unknown_linux_gnu()),
+        )
+        .unwrap();
+        let sites = Sites::new(checked.snapshot());
+        for backend in [Backend::Llvm, Backend::Cranelift] {
+            let ordinary = || {
+                native::emit_backend_objects(
+                    &ready,
+                    backend,
+                    OptLevel::None,
+                    Partition::Whole,
+                    false,
+                    None,
+                )
+                .unwrap()
+            };
+            let before = ordinary();
+            let traced = native::ownership_trace::emit_leaf(
+                &ready,
+                &loaded.entry,
+                &sites,
+                backend,
+                OptLevel::None,
+            )
+            .unwrap_or_else(|error| panic!("{backend:?} source ownership: {error}"));
+            let after = ordinary();
+            assert_eq!(before, after);
+            assert_eq!(
+                traced.program,
+                ready.revision(&loaded.entry).unwrap().digest()
+            );
+            let creates: Vec<_> = traced
+                .units
+                .values()
+                .flat_map(|unit| unit.values())
+                .filter(|marker| marker.action == 0)
+                .collect();
+            assert_eq!(creates.len(), 1);
+            assert!(creates[0].value_type.ends_with("::Token"));
+            assert!(creates[0].source.file.ends_with("main.hir"));
+            assert_eq!(creates[0].source.line, 4);
+            assert!(!traced.objects[0].bytes.is_empty());
+        }
+    });
+}

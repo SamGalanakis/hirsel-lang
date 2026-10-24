@@ -22,6 +22,7 @@ mod kit;
 mod link;
 pub mod object_queries;
 mod observe;
+pub mod ownership_trace;
 mod pairwise;
 mod plan;
 mod proofs;
