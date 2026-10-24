@@ -263,6 +263,32 @@ impl Anchor {
     }
 }
 impl SourceMap {
+    /// Copied file-table storage after decorating a cloned snapshot with an
+    /// owner. Text, line indices and anchors remain shared with the source.
+    /// Excludes this inline value and the supplied owner's existing charge.
+    pub fn retained_snapshot_metadata_bytes(&self) -> u64 {
+        let mut bytes = (2 * size_of::<usize>())
+            .saturating_add(size_of::<Vec<SourceFile>>())
+            .saturating_add(
+                self.files
+                    .capacity()
+                    .saturating_mul(size_of::<SourceFile>()),
+            );
+        for file in self.files.iter() {
+            bytes = bytes
+                .saturating_add(file.path.capacity())
+                .saturating_add(file.logical_path.capacity());
+        }
+        if self.owner.is_some() {
+            // retain_owner adds one Arc containing the prior and supplied
+            // owners. Prior owners already retain their own original grants.
+            type Owner = std::sync::Arc<dyn Send + Sync>;
+            bytes = bytes
+                .saturating_add(2 * size_of::<usize>())
+                .saturating_add(size_of::<(Option<Owner>, Owner)>());
+        }
+        bytes as u64
+    }
     /// Retain an admitted source owner through every clone of this map or its
     /// files. The owner changes no text, anchors, locations or debug encoding.
     /// Attach it to the external snapshot, leaving the producer's own map
@@ -483,6 +509,30 @@ mod retained_source_owner_tests {
         fn drop(&mut self) {
             self.0.fetch_add(1, Ordering::SeqCst);
         }
+    }
+    #[test]
+    fn owned_snapshot_metadata_counts_copied_paths_without_shared_text() {
+        let mut original = SourceMap::default();
+        original.add("main.hir", "x".repeat(64 << 10)).unwrap();
+        let mut decorated = original.clone().retain_owner(Arc::new(()));
+        let file = &mut Arc::get_mut(&mut decorated.files).unwrap()[0];
+        file.path.reserve(4096);
+        file.logical_path.reserve(2048);
+        assert!(Arc::ptr_eq(&file.text, &original.files[0].text));
+        assert!(Arc::ptr_eq(
+            &file.line_starts,
+            &original.files[0].line_starts
+        ));
+        assert!(Arc::ptr_eq(&decorated.anchors, &original.anchors));
+        let bytes = decorated.retained_snapshot_metadata_bytes();
+        assert!(bytes >= 6144, "copied path capacities must remain charged");
+        assert!(
+            bytes < 64 << 10,
+            "shared source text must not be charged again"
+        );
+        drop(original);
+        assert_eq!(decorated.files[0].text.len(), 64 << 10);
+        assert_eq!(decorated.retained_snapshot_metadata_bytes(), bytes);
     }
     #[test]
     fn extracted_source_file_keeps_snapshot_owner_after_all_maps_drop() {

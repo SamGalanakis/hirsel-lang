@@ -34,6 +34,35 @@ impl NativeMetadataWeight {
     pub fn arc<T>(&mut self, value: &Arc<T>) {
         self.add(crate::memo::retained_arc_bytes(&**value) as usize);
     }
+    pub fn program_revision(&mut self, value: &hirsel_run_schema::ProgramRevision) {
+        self.add(value.retained_metadata_bytes() as usize);
+    }
+    pub fn code_reach(&mut self, value: &hirsel_run_schema::CodeReach) {
+        if let hirsel_run_schema::CodeReach::Escapes(paths) = value {
+            self.vec(paths, |w, path| w.add(path.capacity()));
+        }
+    }
+    pub fn callees(&mut self, values: &BTreeMap<String, hirsel_run_schema::CalleeFacts>) {
+        self.map(values, |w, path, value| {
+            w.add(path.capacity());
+            w.code_reach(&value.reach);
+        });
+    }
+    pub fn foreign_use(&mut self, value: &crate::ForeignUse) {
+        self.tree::<DefPath, ()>(value.externs.len());
+        for path in &value.externs {
+            self.path(path);
+        }
+        self.map(&value.unmodeled, |w, path, external| {
+            w.path(path);
+            w.path(external);
+        });
+    }
+    /// Call on the decorated snapshot, whose file table/path buffers were
+    /// copied by SourceMap::retain_owner; shared source text remains excluded.
+    pub fn source_snapshot(&mut self, value: &hirsel_span::SourceMap) {
+        self.add(value.retained_snapshot_metadata_bytes() as usize);
+    }
     /// Rust alloc BTree nodes, library/alloc/src/collections/btree/node.rs:42-112
     /// (rust-lang/rust a7c37f9). Every non-root node has at least five entries;
     /// count each possible node as internal with eleven key/value slots and
@@ -205,6 +234,35 @@ impl NativeMetadataWeight {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn native_launch_metadata_counts_spare_capacity_in_callee_reach() {
+        let mut name = String::with_capacity(2048);
+        name.push_str("callee");
+        let mut escape = String::with_capacity(4096);
+        escape.push_str("foreign");
+        let callees = BTreeMap::from([(
+            name,
+            hirsel_run_schema::CalleeFacts {
+                program: [0; 32],
+                code: [0; 32],
+                fingerprint: [0; 32],
+                reach: hirsel_run_schema::CodeReach::Escapes(vec![escape]),
+            },
+        )]);
+        let mut weight = NativeMetadataWeight::default();
+        weight.callees(&callees);
+        assert!(
+            weight.bytes() >= 6144,
+            "short strings retain their spare capacity"
+        );
+        let before = weight.bytes();
+        weight.code_reach(&hirsel_run_schema::CodeReach::Safe);
+        assert_eq!(
+            weight.bytes(),
+            before,
+            "safe reach has no backing allocation"
+        );
+    }
     #[test]
     fn native_metadata_counts_nested_retained_capacity() {
         let mut bytes = Vec::with_capacity(4096);
