@@ -104,18 +104,102 @@ pub(super) unsafe fn validate(
         {
             return None;
         }
-        let layout = unsafe { &*(*ctx).descriptor(recipe.buffer_descriptor) };
-        if layout.finalizer.is_some()
-            || layout.step_count != 0
-            || layout.flags & crate::LAYOUT_SEQUENCE == 0
-            || layout.flags & (crate::LAYOUT_UNSAFE_FFI | crate::LAYOUT_MUTEX_ROOT) != 0
-        {
+        if !unsafe { inert_buffer_layout(ctx, recipe.buffer_descriptor) } {
             return None;
         }
     }
     let mut cert = unsafe { super::native::validate_capture(ctx, env, &(*info).prefix, false) }?;
     cert.host = root;
     Some(cert)
+}
+
+/// Certify a byte sequence, including its holder metadata, before using the
+/// shallow storage release. An empty scan explicitly certifies no holders.
+unsafe fn inert_buffer_layout(ctx: *mut TaskCtx, index: u32) -> bool {
+    use hirsel_core_contract::handle_scan::*;
+    let layout = unsafe { &*(*ctx).descriptor(index) };
+    if layout.magic != crate::LAYOUT_MAGIC
+        || layout.version != crate::LAYOUT_VERSION
+        || layout.size != 16
+        || layout.align != 8
+        || layout.finalizer.is_some()
+        || layout.step_count != 0
+        || layout.flags & (crate::LAYOUT_DYNAMIC | crate::LAYOUT_SEQUENCE)
+            != crate::LAYOUT_DYNAMIC | crate::LAYOUT_SEQUENCE
+        || layout.flags
+            & !(crate::LAYOUT_DYNAMIC | crate::LAYOUT_SEQUENCE | crate::LAYOUT_LOGICAL_PER_ELEMENT)
+            != 0
+    {
+        return false;
+    }
+    if layout.scan_words == 0 {
+        return true;
+    }
+    if layout.scan_words != 2 * WORDS as u64 || layout.scan.is_null() {
+        return false;
+    }
+    let words = unsafe { std::slice::from_raw_parts(layout.scan, 2 * WORDS) };
+    let Ok(child) = u32::try_from(words[2]) else {
+        return false;
+    };
+    if child >= unsafe { (*ctx).heap_ref().layout_count() }
+        || words[..WORDS] != [TYPE_EDGE, 0, u64::from(child), 0, 0, 0, 0, 0]
+        || words[WORDS..] != [VALUE, VALUE_SEQUENCE, 16, 1, 16, u64::from(child), 0, 0]
+    {
+        return false;
+    }
+    let element = unsafe { &*(*ctx).descriptor(child) };
+    if element.magic != crate::LAYOUT_MAGIC
+        || element.version != crate::LAYOUT_VERSION
+        || element.size != 1
+        || element.align != 1
+        || element.finalizer.is_some()
+        || element.step_count != 0
+        || element.flags & !crate::LAYOUT_NO_EXTENT != 0
+    {
+        return false;
+    }
+    element.scan_words == 0
+        || (element.scan_words == WORDS as u64
+            && !element.scan.is_null()
+            && unsafe { std::slice::from_raw_parts(element.scan, WORDS) }
+                == [VALUE, VALUE_BITS, 1, 0, 0, 0, 0, 0])
+}
+
+/// Check the entire custody record before accounting or destroying any owner.
+/// Like Tokio's task stage, only its admitted lifecycle owner consumes storage
+/// (tokio runtime/task/core.rs:391-400, harness.rs:236-250,501-509).
+unsafe fn valid_pending(ctx: *mut TaskCtx, state: &State) -> bool {
+    if state.pending.iter().all(|p| p.block.is_null()) {
+        return true;
+    }
+    if state.armed.is_null() || state.root.is_null() {
+        return false;
+    }
+    let recipe = unsafe { &*state.armed };
+    if !(1..=8).contains(&recipe.cleanup_slots)
+        || recipe.buffer_descriptor >= unsafe { (*ctx).heap_ref().layout_count() }
+        || !unsafe { inert_buffer_layout(ctx, recipe.buffer_descriptor) }
+    {
+        return false;
+    }
+    for (slot, pending) in state.pending.iter().enumerate() {
+        let block = pending.block;
+        if block.is_null() {
+            continue;
+        }
+        if slot >= recipe.cleanup_slots as usize
+            || unsafe { (*block).index() } != recipe.buffer_descriptor
+            || !matches!(unsafe { (*block).count }, 1 | crate::count::COUNT_IMMORTAL)
+            || unsafe { crate::region::is_tracked(block) }
+            || (unsafe { (*block).count } == 1
+                && (unsafe { (*block).domain() } != crate::alloc::DOMAIN_HEAP
+                    || state.pending[..slot].iter().any(|p| p.block == block)))
+        {
+            return false;
+        }
+    }
+    true
 }
 
 /// Only the explicit entry recipe, armed before this exact host read, permits
@@ -252,6 +336,10 @@ pub(super) unsafe fn flush_logical(ctx: *mut TaskCtx, n: *mut Native) {
     if state.root.is_null() {
         return;
     }
+    assert!(
+        unsafe { valid_pending(ctx, state) },
+        "invalid host cleanup custody"
+    );
     for pending in &mut state.pending {
         if pending.block.is_null() || pending.charged != 0 {
             continue;
@@ -293,22 +381,28 @@ pub(super) unsafe fn admit(ctx: *mut TaskCtx, n: *mut Native) {
     assert!(crate::stop::running().is_null());
     let state = unsafe { &mut (*n).host };
     assert_eq!(state.task, crate::tasks::ordered::engine::current(ctx));
+    assert!(
+        unsafe { valid_pending(ctx, state) },
+        "invalid host cleanup custody"
+    );
+    assert!(
+        state
+            .pending
+            .iter()
+            .all(|p| p.block.is_null() || p.charged == 1)
+    );
     for pending in &mut state.pending {
         if pending.block.is_null() {
             continue;
         }
         assert_ne!(pending.charged, 0);
         let block = pending.block;
-        let recipe = unsafe { &*state.armed };
-        assert_eq!(unsafe { (*block).index() }, recipe.buffer_descriptor);
-        assert!(matches!(
-            unsafe { (*block).count },
-            1 | crate::count::COUNT_IMMORTAL
-        ));
-        assert_eq!(
-            unsafe { crate::release::release_block(&mut *ctx, block, std::ptr::null(), 0, 0) },
-            crate::STATUS_OK
-        );
+        // The complete record is inert and exclusively owned. Reuse the same
+        // T16 storage primitive as release::drop_last's empty-program path;
+        // admitting physical cleanup must never enter the general drop walker.
+        if unsafe { (*block).count } != crate::count::COUNT_IMMORTAL {
+            unsafe { (*ctx).heap().free(block) };
+        }
         *pending = EMPTY;
     }
     state.phase = IDLE;

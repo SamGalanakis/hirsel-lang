@@ -6,7 +6,7 @@
 
 hirsel_guard::install!();
 
-mod graph;
+include!("modules.rs");
 
 use hirsel_rt_operations::descriptors::{
     Class, E, ENTRIES, INLINE, Locality, OPS, OUTSIDE_E, REGISTRY, REGISTRY_FAMILIES, Visibility,
