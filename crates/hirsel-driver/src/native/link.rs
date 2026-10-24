@@ -6,7 +6,7 @@ use super::stages::{NativeError, ReadyProgram, StageName};
 use hirsel_lir::abi_types::{ParameterPassing, PhysicalType};
 use hirsel_lir::emission::OptLevel;
 use hirsel_lir::layout_types::{SizeSpec, TargetSpec};
-use hirsel_syntax::DefPath;
+use hirsel_syntax::{ContentHash, DefPath};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -255,7 +255,7 @@ impl Toolchain {
         targets: &[&TargetSpec],
         runtime_builds: &[RuntimeBuild],
     ) -> Result<Self, NativeError> {
-        Self::in_tree_inputs(build_dir, targets, runtime_builds, None)
+        Self::in_tree_inputs(build_dir, targets, runtime_builds, None, None)
     }
 
     /// Construct a toolchain against a resident session's frozen Cargo inputs.
@@ -265,7 +265,18 @@ impl Toolchain {
         runtime_builds: &[RuntimeBuild],
         inputs: &super::RuntimeInputs,
     ) -> Result<Self, NativeError> {
-        Self::in_tree_inputs(build_dir, targets, runtime_builds, Some(inputs))
+        Self::in_tree_inputs(build_dir, targets, runtime_builds, Some(inputs), None)
+    }
+
+    /// Use the admitted native request's single provider for runtime products.
+    pub fn in_tree_with_products(
+        build_dir: &Path,
+        targets: &[&TargetSpec],
+        runtime_builds: &[RuntimeBuild],
+        inputs: Option<&super::RuntimeInputs>,
+        store: &dyn hirsel_engine::store::ResultStore,
+    ) -> Result<Self, NativeError> {
+        Self::in_tree_inputs(build_dir, targets, runtime_builds, inputs, Some(store))
     }
 
     fn in_tree_inputs(
@@ -273,6 +284,7 @@ impl Toolchain {
         targets: &[&TargetSpec],
         runtime_builds: &[RuntimeBuild],
         inputs: Option<&super::RuntimeInputs>,
+        store: Option<&dyn hirsel_engine::store::ResultStore>,
     ) -> Result<Self, NativeError> {
         let _timing = hirsel_intern::timings::interval(hirsel_intern::timings::Interval::Link);
         let [runtime_build, ..] = *runtime_builds else {
@@ -298,6 +310,24 @@ impl Toolchain {
         // names their directory: `<dir>/<triple>/<features or default>/libhirsel_rt.a`.
         // Cargo is then never run, and a missing archive is an error.
         let prebuilt = std::env::var_os("HIRSEL_RUNTIME_ARCHIVES").map(PathBuf::from);
+        let transient;
+        let store = if let Some(store) = store {
+            store
+        } else {
+            let cap = std::env::var("HIRSEL_MEMORY_LIMIT")
+                .ok()
+                .and_then(|text| hirsel_guard::parse_limit(text.as_bytes()))
+                .unwrap_or(hirsel_guard::DEFAULT_LIMIT);
+            let bytes = (cap / 8).min(128 << 20);
+            let budget = hirsel_engine::runtime::ProcessBudget::new(bytes);
+            transient = hirsel_engine::store::RequestStore::new(
+                std::sync::Arc::new(hirsel_engine::store::NoneStore),
+                budget
+                    .reserve(bytes)
+                    .map_err(|e| NativeError::new(StageName::Link, e.to_string()))?,
+            );
+            &transient
+        };
         let mut runtime = BTreeMap::new();
         let mut runtime_debug = BTreeMap::new();
         let mut builtins = BTreeMap::new();
@@ -324,6 +354,7 @@ impl Toolchain {
                 continue;
             }
             let archive = super::runtime_cache::archive(
+                store,
                 inputs,
                 build_dir,
                 target,
@@ -370,8 +401,13 @@ impl Toolchain {
             )?;
             // Cargo builds the debug-bearing archive; derive the link forms Buck
             // builds beside it (tools/buck2/runtime_parts.py).
-            let stripped =
-                super::runtime_cache::derived(build_dir, &archive, "stripped", |scratch| {
+            let stripped = super::runtime_cache::derived(
+                store,
+                build_dir,
+                &archive,
+                "stripped",
+                runtime_derivation(&prefix, "llvm-objcopy")?,
+                |scratch| {
                     let stripped = scratch.join("libhirsel_rt.a");
                     checked(
                         StageName::Link,
@@ -380,12 +416,17 @@ impl Toolchain {
                             .args([&archive, &stripped]),
                     )?;
                     Ok(stripped)
-                })?;
+                },
+            )?;
             if runtime_build == RuntimeBuild::default() || !builtins.contains_key(&target.triple) {
-                let derived =
-                    super::runtime_cache::derived(build_dir, &archive, "builtins", |scratch| {
-                        compiler_builtins(&prefix, &stripped, scratch)
-                    })?;
+                let derived = super::runtime_cache::derived(
+                    store,
+                    build_dir,
+                    &archive,
+                    "builtins",
+                    runtime_derivation(&prefix, "llvm-ar")?,
+                    |scratch| compiler_builtins(&prefix, &stripped, scratch),
+                )?;
                 builtins.insert(target.triple.clone(), derived);
             }
             let key = (target.triple.clone(), runtime_build);
@@ -460,6 +501,49 @@ fn llvm_tool(prefix: &Path, tool: &str) -> Command {
         .env_clear()
         .env("LD_LIBRARY_PATH", prefix.join("lib"));
     command
+}
+
+// Exact tool and shipped dynamic library contents enter derived runtime actions.
+fn runtime_derivation(prefix: &Path, tool: &str) -> Result<ContentHash, NativeError> {
+    let io = |e| {
+        NativeError::new(
+            StageName::Link,
+            format!("runtime transformation input: {e}"),
+        )
+    };
+    let mut paths = vec![prefix.join("bin").join(tool)];
+    for entry in std::fs::read_dir(prefix.join("lib")).map_err(io)? {
+        let path = entry.map_err(io)?.path();
+        if path.is_file()
+            && path
+                .file_name()
+                .is_some_and(|name| name.to_string_lossy().contains(".so"))
+        {
+            paths.push(path);
+        }
+    }
+    paths.sort();
+    let mut parts = vec![crate::COMPILER_IDENTITY.to_vec()];
+    for path in paths {
+        parts.push(
+            path.strip_prefix(prefix)
+                .unwrap()
+                .as_os_str()
+                .as_encoded_bytes()
+                .to_vec(),
+        );
+        parts.push(
+            super::file_digest::file(&path)
+                .map_err(io)?
+                .content
+                .0
+                .to_vec(),
+        );
+    }
+    Ok(ContentHash::of_parts(
+        "hirsel.runtime-transformation.v1",
+        parts.iter().map(Vec::as_slice),
+    ))
 }
 
 /// `stripped`'s `compiler_builtins` members, in archive order, as an archive in
