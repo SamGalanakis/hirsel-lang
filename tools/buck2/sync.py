@@ -942,7 +942,7 @@ def first_party(meta: dict) -> str:
             if kind == "bin":
                 out.append("\n" + call("hirsel_binary", **profile, name=f"{name}-bin-{target['name']}", bin_name=target["name"], deps=own + normal, **attrs))
                 if target.get("test", True):
-                    out.append("\n" + call("hirsel_test", **profile, name=f"{name}-bin-{target['name']}-unittest", deps=own + normal,
+                    out.append("\n" + call("hirsel_test", **profile, name=f"{name}-bin-{target['name']}-unittest", deps=own + test_deps,
                                              **test_attrs(f"{name}-bin-{target['name']}-unittest", src), **attrs))
             elif kind == "example":
                 out.append("\n" + call("hirsel_binary", **profile, name=f"{name}-example-{target['name']}", bin_name=target["name"], deps=own + test_deps, **attrs))
