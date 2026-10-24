@@ -37,6 +37,7 @@ pub struct FrontBodyQueries {
     records: Arc<persistent::TypeRecords>,
     store: Arc<dyn ResultStore>,
     work: Mutex<BTreeMap<(DefPath, QueryKind), u64>>,
+    table_keys: Mutex<BTreeMap<Key, Arc<crate::table_keys::TableKeyUse>>>,
     outcomes: Mutex<BTreeMap<Key, (Reference, ModeResult, CheckedProduct)>>,
     memos: Mutex<BTreeMap<crate::memo::MemoKey, Arc<Reads>>>,
     errors: RuntimeErrors,
@@ -55,6 +56,7 @@ pub struct FrontBodyOutput {
 /// carries the checked stage's complete reads rather than a provisional union.
 #[derive(Clone)]
 pub struct FrontCheckedOutput {
+    pub(crate) table_keys: Arc<crate::table_keys::TableKeyUse>,
     pub summary: Arc<CheckedSummary>,
     pub reads: Arc<Reads>,
     _snapshot: Arc<FrontBodyQueries>,
@@ -87,9 +89,15 @@ impl FrontBodyQueries {
     }
     pub fn checked(self: &Arc<Self>, reference: Reference) -> Option<FrontCheckedOutput> {
         let outcomes = self.outcomes.lock().unwrap_or_else(|e| e.into_inner());
-        let (_, _, checked) = outcomes.values().find(|(r, _, _)| *r == reference)?;
+        let (key, (_, _, checked)) = outcomes.iter().find(|(_, (r, _, _))| *r == reference)?;
         let (summary, reads) = checked.as_ref()?;
         Some(FrontCheckedOutput {
+            table_keys: self
+                .table_keys
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get(key)?
+                .clone(),
             summary: summary.clone(),
             reads: reads.clone(),
             _snapshot: self.clone(),
@@ -205,6 +213,20 @@ impl BodyTask {
                 .unwrap_or_else(|e| e.into_inner())
                 .entry((done.definition.clone(), kind))
                 .or_default() += 1;
+        }
+        if let Some(checked) = done
+            .checked
+            .as_ref()
+            .and_then(|product| product.result().ok())
+        {
+            queries
+                .table_keys
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(
+                    self.query.address.0,
+                    Arc::new(crate::table_keys::TableKeyUse::capture(&checked.value)),
+                );
         }
         let result = done.result();
         let mut source = FrozenReadSource {
@@ -435,6 +457,7 @@ impl QueryEngine {
             outcomes: Mutex::new(BTreeMap::new()),
             work: Mutex::new(BTreeMap::new()),
             memos: Mutex::new(BTreeMap::new()),
+            table_keys: Mutex::new(BTreeMap::new()),
             errors,
             _allowance: allowance,
         }))
