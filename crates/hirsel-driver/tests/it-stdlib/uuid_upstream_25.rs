@@ -275,6 +275,48 @@ impl hirsel_heapcheck::Operations for Script {
         ) {
             (
                 "bytes",
+                "decimal_word",
+                [
+                    V::Bits {
+                        scalar: ScalarKind::U64,
+                        bits: value,
+                    },
+                    V::Sequence(buffer),
+                ],
+            ) => {
+                // As the production H oracle, use Rust's formatter independently
+                // of the runtime numeric kernel. Preserve the untouched suffix.
+                let digits = u64::try_from(*value).unwrap().to_string();
+                assert!(digits.len() <= buffer.len());
+                let mut buffer = buffer
+                    .iter()
+                    .map(|value| match value {
+                        V::Bits {
+                            scalar: ScalarKind::U8,
+                            bits,
+                        } => *bits,
+                        _ => panic!("decimal buffer must contain bytes"),
+                    })
+                    .collect::<Vec<_>>();
+                for (slot, byte) in buffer.iter_mut().zip(digits.bytes()) {
+                    *slot = u128::from(byte);
+                }
+                return O::Updated {
+                    value: V::Bits {
+                        scalar: ScalarKind::U64,
+                        bits: digits.len() as u128,
+                    },
+                    arguments: vec![(
+                        1,
+                        V::Elements {
+                            scalar: ScalarKind::U8,
+                            bits: buffer,
+                        },
+                    )],
+                };
+            }
+            (
+                "bytes",
                 "append",
                 [
                     V::Elements {
