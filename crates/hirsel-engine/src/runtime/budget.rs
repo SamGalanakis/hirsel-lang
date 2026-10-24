@@ -39,6 +39,16 @@ pub struct MemoryReservation {
     bytes: u64,
 }
 impl MemoryReservation {
+    /// Transfer part of this already charged allowance to a distinct owner.
+    /// The process total never changes, including on failure; each resulting
+    /// owner releases exactly its part on Drop.
+    pub fn split(&mut self, bytes: u64) -> Option<Self> {
+        self.bytes = self.bytes.checked_sub(bytes)?;
+        Some(Self {
+            budget: self.budget.clone(),
+            bytes,
+        })
+    }
     pub fn bytes(&self) -> u64 {
         self.bytes
     }
@@ -50,5 +60,36 @@ impl Drop for MemoryReservation {
             .reserved
             .lock()
             .unwrap_or_else(|e| e.into_inner()) -= self.bytes;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn split_transfers_one_charge_and_each_owner_releases_its_part() {
+        let budget = ProcessBudget::new(100);
+        let mut outer = budget.reserve(100).unwrap();
+        assert!(outer.split(101).is_none());
+        assert_eq!(outer.bytes(), 100);
+        assert_eq!(budget.reserved(), 100);
+        let first = outer.split(30).unwrap();
+        let mut second = outer.split(50).unwrap();
+        let nested = second.split(40).unwrap();
+        assert_eq!(
+            outer.bytes() + first.bytes() + second.bytes() + nested.bytes(),
+            100
+        );
+        assert_eq!(budget.reserved(), 100);
+        assert!(budget.reserve(1).is_err());
+        drop(outer);
+        assert_eq!(budget.reserved(), 80);
+        let replacement = budget.reserve(20).unwrap();
+        drop(first);
+        drop(second);
+        drop(nested);
+        assert_eq!(budget.reserved(), 20);
+        drop(replacement);
+        assert_eq!(budget.reserved(), 0);
     }
 }
