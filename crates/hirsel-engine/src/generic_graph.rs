@@ -460,6 +460,7 @@ pub(crate) fn check(engine: &mut QueryEngine) -> Result<Vec<Diagnostic>, QueryEr
         }
         result
     };
+    diagnostics.extend(crate::storage_graph::check(engine)?);
     diagnostics.extend(sites.into_iter().map(|site| {
         Diagnostic::error(
             const { RuleId::of("GEN-5") },

@@ -8,6 +8,7 @@ mod cfg;
 mod flow;
 mod liveness;
 mod properties;
+mod storage;
 #[cfg(test)]
 mod tests;
 
@@ -34,6 +35,50 @@ pub enum Projection {
     },
     /// Every index of the same sequence aliases for OWN-3.
     Elements,
+}
+
+/// Build a demanded compact product from an already checked body. No callee
+/// body is read here; program scheduling resolves all helper products later.
+pub fn storage_definition(
+    t: &TypeInterner,
+    m: &TypeMemo,
+    syntax: &ItemSyntax,
+    signature: &Signature,
+    checked: &CheckedBody,
+    captures: &[CaptureMode],
+    clauses: &[(ExprId, TypeId)],
+    results: &[(NameSite, TypeId)],
+    provider: &mut dyn SignatureProvider,
+) -> Result<QueryOutput<hirsel_types::storage::graph::StorageDefinition>, QueryError> {
+    let mut body = checked.clone();
+    let rows = source_rows::SourceRows::new(&body);
+    let graphs = cfg::build(
+        t, syntax, signature, &mut body, captures, clauses, results, &rows,
+    )?;
+    let generics = body.resolution.generic_declarations.clone();
+    let reader = hirsel_modes::reader::Reader::new(provider, signature);
+    let mut read = |definition| reader.borrow_mut().read(definition).map(Some);
+    let mut flow_read = |definition| reader.borrow_mut().read(definition).map(Some);
+    let memo = ContextMemo::new(t, &generics, &mut read);
+    let flow_memo = ContextMemo::new(t, &generics, &mut flow_read);
+    let mut signatures = properties::Signatures::new(m, &reader, memo, flow_memo);
+    let properties =
+        properties::classify(t, &mut body, cfg::graph_types(&graphs), &mut signatures)?;
+    let value = storage::derive(
+        t,
+        syntax,
+        signature,
+        &mut body,
+        &graphs,
+        &rows,
+        &properties,
+        &mut signatures,
+    )?;
+    Ok(QueryOutput {
+        value,
+        diagnostics: vec![],
+        dependencies: signatures.dependencies(),
+    })
 }
 impl Place {
     pub fn overlaps(&self, other: &Self) -> bool {

@@ -340,6 +340,7 @@ mod tests {
                 staged: Box::default(),
             },
             growth: Default::default(),
+            storage: Default::default(),
             checked: None,
             reads: Arc::new(Reads::empty()),
             text: engine.key_text(&path, QueryKind::Summary).unwrap(),

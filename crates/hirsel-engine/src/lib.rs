@@ -28,6 +28,7 @@ pub mod memo;
 pub mod store;
 pub use memo::{Durability, ReadKey, Reads, ReadsBuilder, Revision};
 mod generic_graph;
+mod storage_graph;
 mod table_keys;
 pub use diagnostics::*;
 pub use generic_graph::{InstanceEdge, InstanceGraph, InstanceKind};
@@ -331,6 +332,18 @@ pub trait CheckerPhase: Send + Sync {
 }
 /// Modes consume the complete typed artifact and refine its shared tables (OWN-1/8).
 pub trait ModesPhase: Send + Sync {
+    /// Demand-driven source equations after modes have completed. This is
+    /// separate from signature lookup and from per-body checking.
+    fn storage(
+        &self,
+        _t: &hirsel_types::TypeInterner,
+        _m: &hirsel_types::TypeMemo,
+        _body: &AnalyzedBody,
+        _signature: &Signature,
+        _signatures: &mut dyn SignatureProvider,
+    ) -> Result<QueryOutput<hirsel_types::storage::graph::StorageDefinition>, QueryError> {
+        Err(QueryError::NotImplemented)
+    }
     fn check_modes(
         &self,
         t: &hirsel_types::TypeInterner,

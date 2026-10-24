@@ -838,6 +838,7 @@ fn input_manifest(input: &NativeInput, options: &Options) -> Option<Vec<u8>> {
         audits,
         instances,
         instance_bodies,
+        storage_profiles,
         foreign_links,
         foreign_unreplayable,
         foreign_threads,
@@ -912,6 +913,10 @@ fn input_manifest(input: &NativeInput, options: &Options) -> Option<Vec<u8>> {
     // Full content identities, shared with the link command. Metadata reuse
     // requires a non-racy ctime/device/inode match as well as path/size/mtime.
     parts.push(link_identity(target, objects.debug)?);
+    if !storage_profiles.is_empty() {
+        parts.push(b"hirsel.native-plan.storage-profiles.v1".to_vec());
+        parts.push(serde_json::to_vec(storage_profiles).ok()?);
+    }
     // Named foreign libraries lack a resolved byte identity at this seam.
     for link in foreign_links {
         let hirsel_engine::LinkInput::File(path) = link else {

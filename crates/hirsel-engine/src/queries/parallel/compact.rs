@@ -256,6 +256,7 @@ impl CompactCompleted {
                         definition: DefId::intern(&done.definition),
                         summary,
                         growth,
+                        storage: None,
                         checked: checked_summary.clone(),
                         reads: inherited.clone(),
                         text: done.text,

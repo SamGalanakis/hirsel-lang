@@ -51,6 +51,68 @@ impl QueryEngine {
         ))
     }
 
+    /// Extend a completed compact summary only when a program-level storage
+    /// obligation demands its body equations. Ordinary compilation retains no
+    /// extra CFG for standard-library bodies without such an obligation.
+    pub(crate) fn storage_definition_summary(
+        &mut self,
+        definition: DefId,
+    ) -> Result<Arc<PublishedSummary>, QueryError> {
+        let summary = self.definition_summary(definition)?;
+        if summary.storage.is_some() {
+            return Ok(summary);
+        }
+        let path = definition.path();
+        let analyzed = self.mode_query(path)?;
+        if has_errors(&analyzed.diagnostics) {
+            return Err(QueryError::Diagnostics(analyzed.diagnostics.clone()));
+        }
+        let signature = self.signature_output(path)?;
+        let detail = self
+            .summaries
+            .get(&definition)
+            .map(|entry| entry.detail.clone())
+            .unwrap_or_default();
+        let adapter = self
+            .adapters
+            .modes
+            .clone()
+            .ok_or(QueryError::NotImplemented)?;
+        let (types, memo) = (self.types.clone(), self.memo.clone());
+        let mut recorder = Recorder {
+            owner: path.clone(),
+            private_shapes: true,
+            observed: Observed::inheriting(Some(&summary.reads)),
+            engine: self,
+            reads: detail,
+            groups: BTreeMap::new(),
+        };
+        let output = adapter.storage(
+            &types,
+            &memo,
+            &analyzed.value,
+            &signature.value,
+            &mut recorder,
+        )?;
+        if has_errors(&output.diagnostics) {
+            return Err(QueryError::Diagnostics(output.diagnostics));
+        }
+        recorder.reads.signatures.extend(output.dependencies);
+        let detail = recorder.reads;
+        let observed = recorder.observed;
+        let reads = self.typed_reads(path, &detail, &observed).map_err(|_| {
+            QueryError::Operational(hirsel_types::OperationalFailure {
+                operation: "source storage publication".into(),
+                message: "body and declaration observations disagree".into(),
+            })
+        })?;
+        let mut extended = (*summary).clone();
+        extended.storage = Some(Arc::new(output.value));
+        extended.reads = Arc::new(reads);
+        let extended = Arc::new(extended);
+        self.record_summary_products(extended.clone(), detail, false, observed.products);
+        Ok(extended)
+    }
     /// Publish the compact summary before releasing intermediate bodies whose
     /// S1 work has settled. A later body demand uses the ordinary miss path.
     pub fn publish_definition(
@@ -182,6 +244,7 @@ impl QueryEngine {
             definition,
             summary,
             growth,
+            storage: None,
             checked,
             reads,
             text,

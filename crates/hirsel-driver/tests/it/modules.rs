@@ -152,3 +152,5 @@ mod recursive_tail_agreement_44;
 mod receipt_original_actuals_33;
 mod manifest_module_guidance_48;
 mod variant_constructor_guidance_48;
+mod sealed_storage_placement_33;
+mod sealed_storage_profile_v_33;

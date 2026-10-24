@@ -63,6 +63,7 @@ mod sealed;
 mod serialization;
 mod shared;
 mod static_data;
+pub mod storage;
 mod tail;
 mod typing;
 mod variant_brands;

@@ -119,6 +119,33 @@ impl CheckerPhase for BodyAdapter {
 }
 pub struct ModeAdapter;
 impl ModesPhase for ModeAdapter {
+    fn storage(
+        &self,
+        t: &hirsel_types::TypeInterner,
+        m: &hirsel_types::TypeMemo,
+        body: &AnalyzedBody,
+        signature: &Signature,
+        signatures: &mut dyn SignatureProvider,
+    ) -> Result<QueryOutput<hirsel_types::storage::graph::StorageDefinition>, QueryError> {
+        let clauses: Vec<_> = body
+            .typed
+            .plans
+            .contracts
+            .iter()
+            .map(|clause| (clause.expression, clause.function))
+            .collect();
+        hirsel_ownership::storage_definition(
+            t,
+            m,
+            &body.typed.syntax,
+            signature,
+            &body.typed.checked,
+            &body.ownership.captures,
+            &clauses,
+            &body.results,
+            signatures,
+        )
+    }
     fn check_modes(
         &self,
         t: &hirsel_types::TypeInterner,

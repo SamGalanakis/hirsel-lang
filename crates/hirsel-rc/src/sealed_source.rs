@@ -145,14 +145,11 @@ pub fn closed_storage_type(
     ty: TypeId,
 ) -> Result<ClosedStorageType, SourceError> {
     let native = native(types, ty)?;
-    let bytes = hirsel_types::encoding::canonical_type_encoding(types, ty)
+    let source_type = hirsel_types::encoding::closed_storage_source_type(types, ty)
         .map_err(|error| SourceError::Type(format!("{error:?}")))?;
     Ok(ClosedStorageType {
         ty: native,
-        source_type: hirsel_syntax::ContentHash::of_parts(
-            "hirsel.closed-storage-source-type.v1",
-            [bytes.as_slice()],
-        ),
+        source_type,
     })
 }
 fn literal(value: &hirsel_tir::Constant) -> PayloadLiteral {

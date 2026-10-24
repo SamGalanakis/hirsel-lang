@@ -122,6 +122,9 @@ pub struct PublishedSummary {
     pub definition: DefId,
     pub summary: DefinitionSummary,
     pub growth: ParameterGrowth,
+    /// Source-only compact equations. V reconstructs its own executable graph.
+    #[serde(default)]
+    pub storage: Option<std::sync::Arc<hirsel_types::storage::graph::StorageDefinition>>,
     #[serde(default)]
     pub checked: Option<CheckedSummary>,
     pub reads: std::sync::Arc<crate::memo::Reads>,

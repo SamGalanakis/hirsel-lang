@@ -43,6 +43,9 @@ pub struct NativeInput {
     pub instances: InstanceGraph,
     /// CT-5 instance bodies of the selected generic generated declarations.
     pub instance_bodies: hirsel_tir::InstanceBodies,
+    /// Static callable placement claims. Import reconstructs required behavior
+    /// from executable operands; an empty table cannot disable a demanded proof.
+    pub storage_profiles: Vec<hirsel_types::storage::CallableStorageProfile>,
     /// What the externs resolve against at link time (PROG-4).
     pub foreign_links: Vec<crate::LinkInput>,
     /// Whether executables refuse to record or replay (PROG-4).
@@ -57,8 +60,12 @@ pub struct ValidatedNativeInput {
     verify: Verify,
     semantic_program: crate::queries::SemanticProgram,
     escapes: BTreeMap<DefPath, crate::Escape>,
+    storage_reads: hirsel_validate::storage::StorageReads,
 }
 impl ValidatedNativeInput {
+    pub fn storage_proof_reads(&self) -> &hirsel_validate::storage::StorageReads {
+        &self.storage_reads
+    }
     /// Policy under which this current snapshot was independently checked.
     pub fn verification(&self) -> Verify {
         self.verify
@@ -245,6 +252,7 @@ impl QueryEngine {
             audits,
             instances: InstanceGraph::default(),
             instance_bodies: self.instance_bodies(&paths),
+            storage_profiles: crate::storage_graph::profiles(self)?,
             foreign_links: self.foreign_links.clone(),
             foreign_unreplayable: self.foreign_unreplayable,
             foreign_threads: self.foreign_threads.clone(),
@@ -504,6 +512,13 @@ impl QueryEngine {
         if !violations.is_empty() {
             return Err(invalid(format!("invalid instance bodies: {violations:?}")));
         }
+        let storage = validate_storage_input(&input);
+        if !storage.violations.is_empty() {
+            return Err(invalid(format!(
+                "invalid callable storage proof: {:?}",
+                storage.violations
+            )));
+        }
         if !InstanceGraph::native(&input)?.same(&input.instances, &input.types) {
             return Err(invalid("forged or incomplete instance graph"));
         }
@@ -519,8 +534,31 @@ impl QueryEngine {
             verify: self.verify,
             semantic_program,
             escapes,
+            storage_reads: storage.reads,
         })
     }
+}
+
+fn validate_storage_input(input: &NativeInput) -> hirsel_validate::storage::StorageValidation {
+    let has_read = input.definitions.values().any(|definition| definition.bodies.iter().any(|body| body.blocks.iter().any(|block| matches!(&block.terminator, hirsel_tir::Terminator::Call { callee: hirsel_tir::Callee::Definition { path, .. }, .. } if path.is_core("region.with")))));
+    if !has_read && input.storage_profiles.is_empty() {
+        return Default::default();
+    }
+    let mut signatures = hirsel_validate::SignatureMap::new(input.types.clone());
+    signatures.extend_signatures(
+        input
+            .signatures
+            .values()
+            .map(|signature| (**signature).clone()),
+    );
+    let definitions: Vec<_> = input.definitions.values().cloned().collect();
+    hirsel_validate::storage::validate_program(
+        &input.types,
+        &definitions,
+        &signatures,
+        &input.instance_bodies,
+        &input.storage_profiles,
+    )
 }
 
 fn equal_native_value(
