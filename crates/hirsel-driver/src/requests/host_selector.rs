@@ -21,6 +21,7 @@ pub(super) struct SnapshotPlan {
     pub front: u64,
     pub lower: u64,
     pub check: u64,
+    pub growth: u64,
 }
 pub(super) struct GraphAdmission {
     pub runtime: MemoryReservation,
@@ -28,6 +29,7 @@ pub(super) struct GraphAdmission {
     pub front: MemoryReservation,
     pub lower: MemoryReservation,
     pub check: MemoryReservation,
+    pub growth: MemoryReservation,
     pub transport: MemoryReservation,
 }
 impl GraphAdmission {
@@ -40,7 +42,8 @@ impl GraphAdmission {
             .source
             .checked_add(plan.front)
             .and_then(|bytes| bytes.checked_add(plan.lower))
-            .and_then(|bytes| bytes.checked_add(plan.check));
+            .and_then(|bytes| bytes.checked_add(plan.check))
+            .and_then(|bytes| bytes.checked_add(plan.growth));
         if snapshot.is_none_or(|bytes| bytes > limits.snapshot_bytes) {
             return Err(ToolError::Io(std::io::Error::other(
                 "compiler snapshot footprint exceeds admission",
@@ -56,10 +59,64 @@ impl GraphAdmission {
             front: budget.reserve(plan.front).map_err(ToolError::Io)?,
             lower: budget.reserve(plan.lower).map_err(ToolError::Io)?,
             check: budget.reserve(plan.check).map_err(ToolError::Io)?,
+            growth: budget.reserve(plan.growth).map_err(ToolError::Io)?,
             transport: budget
                 .reserve(limits.transport_bytes)
                 .map_err(ToolError::Io)?,
         })
+    }
+}
+
+/// Charge the whole selected snapshot partition before S0 allocates a loader
+/// view. Partitioning transfers that existing charge to immutable producers;
+/// source maps returned on a loader failure keep their own charge as well.
+pub(super) struct LoadingAdmission {
+    runtime: MemoryReservation,
+    snapshot: MemoryReservation,
+    transport: MemoryReservation,
+}
+impl LoadingAdmission {
+    fn reserve(budget: &Arc<ProcessBudget>, limits: RequestLimits) -> Result<Self, ToolError> {
+        Ok(Self {
+            runtime: budget
+                .reserve(limits.runtime_bytes)
+                .map_err(ToolError::Io)?,
+            snapshot: budget
+                .reserve(limits.snapshot_bytes)
+                .map_err(ToolError::Io)?,
+            transport: budget
+                .reserve(limits.transport_bytes)
+                .map_err(ToolError::Io)?,
+        })
+    }
+    pub fn finish(mut self, plan: SnapshotPlan) -> Result<GraphAdmission, ToolError> {
+        let bytes = [plan.source, plan.front, plan.lower, plan.growth, plan.check]
+            .into_iter()
+            .try_fold(0u64, u64::checked_add);
+        if bytes.is_none_or(|bytes| bytes > self.snapshot.bytes()) {
+            return Err(ToolError::Runtime(
+                "compiler snapshot footprint exceeds admission".into(),
+            ));
+        }
+        // The checked total proves each split fits. No reservation is released
+        // while ownership transfers, even when another host is admitting work.
+        let source = self.snapshot.split(plan.source).unwrap();
+        let front = self.snapshot.split(plan.front).unwrap();
+        let lower = self.snapshot.split(plan.lower).unwrap();
+        let growth = self.snapshot.split(plan.growth).unwrap();
+        let check = self.snapshot.split(plan.check).unwrap();
+        Ok(GraphAdmission {
+            runtime: self.runtime,
+            source,
+            front,
+            lower,
+            growth,
+            check,
+            transport: self.transport,
+        })
+    }
+    pub fn failed(self, error: ToolError) -> ToolError {
+        retain_error(error, Arc::new(self.snapshot))
     }
 }
 
@@ -111,6 +168,15 @@ impl GraphBudget {
         budgets.push((Arc::downgrade(budget), Arc::downgrade(&owner)));
         owner
     }
+    pub fn begin(&self, limits: RequestLimits) -> Result<LoadingAdmission, ToolError> {
+        match LoadingAdmission::reserve(&self.budget, limits) {
+            Ok(admission) => Ok(admission),
+            Err(_) => {
+                self.release_idle();
+                LoadingAdmission::reserve(&self.budget, limits)
+            }
+        }
+    }
     pub fn admit(
         &self,
         limits: RequestLimits,
@@ -120,7 +186,8 @@ impl GraphBudget {
             .source
             .checked_add(plan.front)
             .and_then(|bytes| bytes.checked_add(plan.lower))
-            .and_then(|bytes| bytes.checked_add(plan.check));
+            .and_then(|bytes| bytes.checked_add(plan.check))
+            .and_then(|bytes| bytes.checked_add(plan.growth));
         if snapshot.is_none_or(|bytes| bytes > limits.snapshot_bytes) {
             return GraphAdmission::reserve(&self.budget, limits, plan);
         }
@@ -312,6 +379,73 @@ pub(super) fn completed_artifacts(
 mod tests {
     use super::*;
     #[test]
+    fn loading_admission_transfers_charge_and_holds_failed_diagnostic_sources() {
+        let limits = RequestLimits {
+            runtime_bytes: 40,
+            snapshot_bytes: 40,
+            transport_bytes: 20,
+        };
+        let budget = ProcessBudget::new(100);
+        let loading = LoadingAdmission::reserve(&budget, limits).unwrap();
+        assert_eq!(budget.reserved(), 100);
+        assert!(budget.reserve(1).is_err());
+        let graph = loading
+            .finish(SnapshotPlan {
+                source: 5,
+                front: 5,
+                lower: 5,
+                growth: 5,
+                check: 5,
+            })
+            .unwrap();
+        assert_eq!(budget.reserved(), 85);
+        drop(graph);
+        assert_eq!(budget.reserved(), 0);
+        for plan in [
+            SnapshotPlan {
+                source: u64::MAX,
+                front: 1,
+                lower: 0,
+                growth: 0,
+                check: 0,
+            },
+            SnapshotPlan {
+                source: 41,
+                front: 0,
+                lower: 0,
+                growth: 0,
+                check: 0,
+            },
+        ] {
+            assert!(
+                LoadingAdmission::reserve(&budget, limits)
+                    .unwrap()
+                    .finish(plan)
+                    .is_err()
+            );
+            assert_eq!(budget.reserved(), 0);
+        }
+        let mut sources = hirsel_span::SourceMap::default();
+        let file = sources.add("failed.hir", "bad source".into()).unwrap();
+        let error = LoadingAdmission::reserve(&budget, limits)
+            .unwrap()
+            .failed(ToolError::Query {
+                error: hirsel_engine::QueryError::NotImplemented,
+                phase: None,
+                sources,
+            });
+        assert_eq!(budget.reserved(), 40);
+        let ToolError::Query { sources, .. } = error else {
+            unreachable!()
+        };
+        let held = sources.file(file).unwrap().clone();
+        drop(sources);
+        assert_eq!(budget.reserved(), 40);
+        assert_eq!(held.text(), "bad source");
+        drop(held);
+        assert_eq!(budget.reserved(), 0);
+    }
+    #[test]
     fn partial_graph_admission_rolls_back_and_never_multiplies_snapshot_cap() {
         let limits = RequestLimits {
             runtime_bytes: 40,
@@ -323,6 +457,7 @@ mod tests {
             front: 10,
             lower: 10,
             check: 10,
+            growth: 0,
         };
         let budget = ProcessBudget::new(99);
         assert!(GraphAdmission::reserve(&budget, limits, plan).is_err());
@@ -411,6 +546,7 @@ mod tests {
                     front: 0,
                     lower: 0,
                     check: 0,
+                    growth: 0,
                 },
             )?;
             let error = hirsel_artifact_store::Domain {
