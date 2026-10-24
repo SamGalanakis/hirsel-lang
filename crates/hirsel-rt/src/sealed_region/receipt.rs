@@ -7,9 +7,9 @@
 //! scratch allocation, weak holders, user finalizers or source-task allocators.
 //! The semantic record is Copy, so destruction cannot invoke user code.
 //!
-//! This Rust-only primitive does not construct semantic receipts, acquire source
-//! storage, validate recipes, or expose a native ABI. Its run identity and node
-//! generation are metadata identities, never semantic allocation identities.
+//! This primitive does not acquire source storage or validate recipes. The
+//! opaque ABI retains/releases semantic metadata only; it creates no provenance.
+//! Run identity and generation are metadata, not semantic allocation identities.
 use super::RootBytes;
 use crate::fault;
 use std::cell::UnsafeCell;
@@ -17,6 +17,7 @@ use std::marker::PhantomData;
 use std::ptr::{self, NonNull};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
+pub mod abi;
 pub mod journal;
 pub mod semantic;
 

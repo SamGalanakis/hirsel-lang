@@ -17,7 +17,7 @@
 extern "C" {
 #endif
 
-#define HIRSEL_RT_V2_ABI_VERSION 60
+#define HIRSEL_RT_V2_ABI_VERSION 61
 /* TaskSpawn trailing flags: compiler proofs, ignored in ordered execution and replay. */
 #define HIRSEL_RT_V2_SPAWN_IMMEDIATE_AWAIT 1
 #define HIRSEL_RT_V2_SPAWN_OP_FREE 2
@@ -614,6 +614,12 @@ void hirsel_rt_v2_thaw(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_header *block);
  * run's mode, walking the root when it was the last and the release applies now. */
 void hirsel_rt_v2_root_dup(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_header *block);
 void hirsel_rt_v2_root_release(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_header *block);
+/* Private immutable semantic metadata only. Non-null handles carry explicit
+ * metadata holders, independent of source/Shared credits and task lifetimes.
+ * retain borrows a live handle and acquires one holder; release consumes one.
+ * Both are mechanical NoAlloc helpers with no language failure or user code. */
+void hirsel_rt_v2_receipt_retain(void *receipt);
+void hirsel_rt_v2_receipt_release(void *receipt);
 uint8_t hirsel_rt_v2_root_drop(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_header *block, uint64_t anchor, uint64_t operation_site);
 
 /* Finalizers. */
