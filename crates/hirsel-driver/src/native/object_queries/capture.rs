@@ -110,6 +110,17 @@ impl FrozenLinker {
         arguments: &[String],
         limits: CaptureLimits,
     ) -> Result<CapturedLink, String> {
+        self.capture_fixed(store, directory, arguments, limits, &[])
+    }
+
+    fn capture_fixed(
+        self,
+        store: &dyn ResultStore,
+        directory: &Path,
+        arguments: &[String],
+        limits: CaptureLimits,
+        fixed: &[FileRecord],
+    ) -> Result<CapturedLink, String> {
         check_arguments(arguments)?;
         let directory = std::fs::canonicalize(directory).map_err(error)?;
         let directory = directory
@@ -130,6 +141,24 @@ impl FrozenLinker {
             .arg(format!("--reproduce={}", archive.display()))
             .arg("-o")
             .arg(scratch.path().join("unused-output"));
+        if !fixed.is_empty() {
+            let mut roots = Vec::new();
+            for (index, file) in fixed.iter().enumerate() {
+                let local = scratch.path().join("fixed").join(index.to_string());
+                materialize_link_input(store, file.bytes.clone().into(), &local, false)?;
+                roots.push(serde_json::json!({"type": "file", "name": file.name, "external-contents": local}));
+            }
+            let overlay = scratch.path().join("fixed.json");
+            std::fs::write(
+                &overlay,
+                serde_json::to_vec(&serde_json::json!({
+                    "version": 0, "use-external-names": false, "fallthrough": true, "roots": roots
+                }))
+                .map_err(error)?,
+            )
+            .map_err(error)?;
+            command.arg(format!("--input-overlay={}", overlay.display()));
+        }
         success(command.output().map_err(error)?)?;
         let file = std::fs::File::open(archive).map_err(error)?;
         if file.metadata().map_err(error)?.len() > limits.archive_bytes {
@@ -240,6 +269,173 @@ impl CapturedLink {
             }
         }
         Ok(record)
+    }
+}
+
+const KIT: Domain = Domain {
+    kind: 0x4f00000f,
+    schema: 1,
+};
+struct KitRecord {
+    root: String,
+    triple: String,
+    manifest: WireRef,
+    digest: String,
+    capture: WireRef,
+}
+snapshot_struct!(KitRecord {
+    root,
+    triple,
+    manifest,
+    digest,
+    capture
+});
+
+/// The selected kit manifest and all startup/archive/script bytes actually read
+/// by the stored LLVM linker, captured before program emission. Bind reference()
+/// into linker_options before selecting a Link hit.
+#[derive(Clone, Copy)]
+pub struct FrozenLinkKit(Reference);
+impl FrozenLinkKit {
+    pub fn snapshot(
+        store: &dyn ResultStore,
+        root: &Path,
+        target: &super::super::TargetSpec,
+        linker: FrozenLinker,
+        limits: CaptureLimits,
+    ) -> Result<Self, String> {
+        use std::os::unix::ffi::OsStrExt as _;
+        let root = std::fs::canonicalize(root).map_err(error)?;
+        let mut manifest = Vec::new();
+        std::fs::File::open(root.join("manifest.json"))
+            .map_err(error)?
+            .take(
+                limits
+                    .archive_bytes
+                    .checked_add(1)
+                    .ok_or("kit manifest admission overflow")?,
+            )
+            .read_to_end(&mut manifest)
+            .map_err(error)?;
+        if manifest.len() as u64 > limits.archive_bytes {
+            return Err("kit manifest exceeds admission".into());
+        }
+        let digest = std::fs::read_to_string(root.join("digest"))
+            .map_err(error)?
+            .trim()
+            .to_owned();
+        // Parse exactly the bytes transported to later planning.
+        let parsed = super::super::kit::Kit::from_manifest(&root, &manifest, digest.clone())
+            .map_err(|e| e.to_string())?;
+        let link = super::super::kit::Link {
+            kit: &parsed,
+            triple: &target.triple,
+            kind: super::super::kit::Kind::Executable { loader: None },
+            objects: &[],
+            runtime: None,
+            unwind: true,
+            foreign: &[],
+        };
+        let (arguments, _) = link.invocation().map_err(|e| e.to_string())?;
+        let arguments = arguments
+            .iter()
+            .map(|arg| {
+                std::str::from_utf8(arg.as_bytes())
+                    .map(str::to_owned)
+                    .map_err(|e| e.to_string())
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let capture = linker.capture(store, &root, &arguments, limits)?;
+        let record = KitRecord {
+            root: root.to_str().ok_or("non-UTF8 kit root")?.into(),
+            triple: target.triple.clone(),
+            manifest: store_link_input(store, &manifest)?.into(),
+            digest,
+            capture: capture.reference().into(),
+        };
+        let result = Self(put_record(store, KIT, &record)?);
+        result.validate(store, target)?;
+        Ok(result)
+    }
+    pub fn reference(self) -> Reference {
+        self.0
+    }
+    pub fn from_reference(
+        store: &dyn ResultStore,
+        reference: Reference,
+        target: &super::super::TargetSpec,
+    ) -> Result<Self, String> {
+        let result = Self(reference);
+        result.validate(store, target)?;
+        Ok(result)
+    }
+    pub fn validate(
+        self,
+        store: &dyn ResultStore,
+        target: &super::super::TargetSpec,
+    ) -> Result<(), String> {
+        self.load(store, target).map(|_| ())
+    }
+    pub(crate) fn load(
+        self,
+        store: &dyn ResultStore,
+        target: &super::super::TargetSpec,
+    ) -> Result<super::super::kit::Kit, String> {
+        let record: KitRecord = get_record(store, KIT, self.0)?;
+        if record.triple != target.triple || !Path::new(&record.root).is_absolute() {
+            return Err("frozen kit target or root differs".into());
+        }
+        let manifest = link_input_bytes(store, record.manifest.into())?;
+        let kit = super::super::kit::Kit::from_manifest(
+            Path::new(&record.root),
+            &manifest,
+            record.digest,
+        )
+        .map_err(|e| e.to_string())?;
+        let captured = CapturedLink::from_reference(store, record.capture.into())?;
+        let files = captured.record(store)?.files;
+        // Every manifest leaf must be supplied by the closed captured file set.
+        for path in kit.link_files(&target.triple).map_err(|e| e.to_string())? {
+            if path == Path::new(&record.root).join("manifest.json")
+                || path == Path::new(&record.root).join("digest")
+            {
+                continue;
+            }
+            if !files.iter().any(|file| Path::new(&file.name) == path) {
+                return Err(format!("missing frozen kit leaf {}", path.display()));
+            }
+        }
+        Ok(kit)
+    }
+    pub(crate) fn capture(
+        self,
+        store: &dyn ResultStore,
+        linker: FrozenLinker,
+        directory: &Path,
+        arguments: &[String],
+        limits: CaptureLimits,
+    ) -> Result<CapturedLink, String> {
+        let record: KitRecord = get_record(store, KIT, self.0)?;
+        let base = CapturedLink::from_reference(store, record.capture.into())?.record(store)?;
+        if Reference::from(base.tool) != linker.reference() {
+            return Err("frozen kit selected another linker".into());
+        }
+        let captured = linker.capture_fixed(store, directory, arguments, limits, &base.files)?;
+        let actual = captured.record(store)?;
+        for file in &actual.files {
+            if let Some(expected) = base
+                .files
+                .iter()
+                .find(|expected| expected.name == file.name)
+            {
+                if Reference::from(expected.bytes.clone()) != Reference::from(file.bytes.clone()) {
+                    return Err("frozen kit input changed during final capture".into());
+                }
+            } else if Path::new(&file.name).starts_with(&record.root) {
+                return Err("final link read an uncaptured kit input".into());
+            }
+        }
+        Ok(captured)
     }
 }
 
