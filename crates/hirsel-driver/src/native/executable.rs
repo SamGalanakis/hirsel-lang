@@ -15,7 +15,7 @@ pub enum BuildProfile {
     Debug,
 }
 impl BuildProfile {
-    fn options(self, target: TargetSpec) -> Options {
+    pub(crate) fn options(self, target: TargetSpec) -> Options {
         let mut options = Options::new(target);
         options.scoped_specialization = matches!(self, Self::Release | Self::ReleaseLto);
         options
