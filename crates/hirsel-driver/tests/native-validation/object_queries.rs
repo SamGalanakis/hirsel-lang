@@ -363,13 +363,13 @@ fn chunk_boundaries_domains_and_complete_lengths_are_checked() {
     let mut record: BlobRecord = get_record(&store, BLOB, reference).unwrap();
     record.len += 1;
     let bad = put_record(&store, BLOB, &record).unwrap();
-    assert!(blob_chunks(&store, bad).is_err());
+    assert!(validate_link_input(&store, bad).is_err());
     record.len -= 1;
     record.chunks[0].kind = INPUT.kind;
     let bad = put_record(&store, BLOB, &record).unwrap();
-    assert!(blob_chunks(&store, bad).is_err());
+    assert!(validate_link_input(&store, bad).is_err());
     assert!(
-        blob_chunks(
+        validate_link_input(
             &store,
             Reference {
                 domain: INPUT,
