@@ -9,7 +9,7 @@ use hirsel_rc::sealed_source::{
 };
 use hirsel_types::{Signature, TypeInterner, TypeMemo};
 
-/// Original named entry and compact dependencies, with no DefinitionRef or
+/// Original entry and compact dependencies, with no DefinitionRef or
 /// candidate native IR. A query owner must still independently resolve every
 /// call/closure and qualified profile before deriving a boundary contract.
 pub struct ReceiptSourceObservation {
@@ -37,6 +37,46 @@ pub fn named(
     actuals: &Actuals,
     memo: &TypeMemo,
 ) -> Result<ReceiptSourceObservation, SourceError> {
+    let source = input(original)?;
+    Ok(ReceiptSourceObservation {
+        entry: source.named_entry_selected(base, types, signature, actuals, memo)?,
+        demand: source.demand_projection(base)?,
+    })
+}
+
+/// Observe one actual original closure Assign and all of its original capture
+/// operands. Only an exact nongeneric lexical base is supported here; selected
+/// enclosing binders require their own complete original actuals account.
+pub fn closure(
+    original: &NativeOriginalBody,
+    base: &InstanceKey,
+    types: &TypeInterner,
+    parent: hirsel_tir::BodyId,
+    block: hirsel_tir::BlockId,
+    statement: u32,
+) -> Result<ReceiptSourceObservation, SourceError> {
+    let source = input(original)?;
+    let lexical = InstanceKey::new(
+        original.definition().path.path(),
+        base.body(),
+        &[],
+        types,
+        None,
+        None,
+    )
+    .map_err(|error| SourceError::Type(format!("{error:?}")))?;
+    if &lexical != base {
+        return Err(SourceError::Unsupported(
+            "closure source observation needs an exact nongeneric lexical base",
+        ));
+    }
+    Ok(ReceiptSourceObservation {
+        entry: source.closure_entry(base, types, parent, block, statement, Ok)?,
+        demand: source.demand_projection(base)?,
+    })
+}
+
+fn input(original: &NativeOriginalBody) -> Result<SourceInput, SourceError> {
     let output = original.output().ok_or(SourceError::Unsupported(
         "receipt source observation needs the current original V output",
     ))?;
@@ -45,13 +85,9 @@ pub fn named(
             "receipt source observation names another original owner",
         ));
     }
-    let source = SourceInput::capture(
+    Ok(SourceInput::capture(
         output.observation_identity(),
         original.implementation_revision(),
         original.definition().clone(),
-    );
-    Ok(ReceiptSourceObservation {
-        entry: source.named_entry_selected(base, types, signature, actuals, memo)?,
-        demand: source.demand_projection(base)?,
-    })
+    ))
 }
