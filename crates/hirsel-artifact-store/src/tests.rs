@@ -628,6 +628,10 @@ fn incomplete_publication_missing_output_and_old_schema_are_misses() {
     fs::write(&path, old).unwrap();
     assert!(store.lookup(address).is_none());
     fs::write(&path, bytes).unwrap();
+    // Start the missing-output control from a fresh valid pin, independent of
+    // the deliberately damaged manifest snapshots above.
+    let store = Store::new(store.root.clone());
+    assert_eq!(store.lookup(address).unwrap().reference, reference);
     fs::remove_file(store.output_path(reference)).unwrap();
     assert!(store.lookup(address).is_none());
     assert!(store.associate(address, action, reference).is_err());
