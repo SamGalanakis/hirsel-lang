@@ -10,6 +10,7 @@ mod inspection;
 mod native_bootstrap;
 mod native_link;
 mod native_lower;
+mod native_products;
 mod native_routing;
 mod output;
 mod safe_check;
