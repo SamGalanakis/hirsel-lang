@@ -99,7 +99,7 @@ impl Store {
     fn ensure_epoch(&self, state: &mut State) -> io::Result<()> {
         if state.epoch.is_none() {
             state.epoch = Some(Epoch {
-                lease: EpochLease::new(&self.root)?,
+                lease: EpochLease::new(&self.root, self.durability)?,
                 locations: BTreeMap::new(),
                 segments: BTreeMap::new(),
                 large: BTreeMap::new(),
@@ -199,7 +199,7 @@ impl Store {
         }
         if state.depth == 0 {
             drop(state);
-            let lease = EpochLease::new(&self.root)?;
+            let lease = EpochLease::new(&self.root, self.durability)?;
             let result = self.publish(&self.path(reference.output.0, "outputs"), parts);
             drop(lease);
             self.run_scheduled_collection();
@@ -238,7 +238,7 @@ impl Store {
             .collect::<io::Result<_>>()?;
         // Index encoding, checksums, dictionary and bulk writes precede the
         // install/publication lock. This never scans a committed layer.
-        let delta = index::build(&self.root, &entries)?;
+        let delta = index::build(&self.root, &entries, self.durability)?;
         self.record_growth(delta.admission_bytes());
         if !entries.is_empty() {
             self.count(Counter::IndexLayerBuilds, 1);
@@ -246,7 +246,7 @@ impl Store {
         // Ownership protects installed-but-unpublished payloads across this
         // short install lock and the subsequent index publisher's own lock.
         {
-            let _publication = Lock::try_root(epoch.lease.root(), true)?;
+            let _publication = Lock::for_store(epoch.lease.root(), true, self.durability)?;
             for &digest in epoch.segments.keys() {
                 self.install_private(&epoch.segment_path(digest), &self.path(digest, "packs"))?;
             }

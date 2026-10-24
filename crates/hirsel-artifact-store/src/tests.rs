@@ -920,6 +920,41 @@ fn packed_offsets_and_index_truncation_are_checked_before_record_access() {
 }
 
 #[test]
+fn strict_batch_finish_waits_for_publication_lock() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().to_owned();
+    let store = Store::new(root.clone());
+    let batch = store.batch();
+    let reference = store.put(DOMAIN, b"committed after contention").unwrap();
+    let address = Address(hash(b"contended address"));
+    store
+        .associate(address, Action(hash(b"action")), reference)
+        .unwrap();
+    let publication = pack::Lock::try_root(&root, true).unwrap();
+    std::thread::scope(|scope| {
+        let (done, result) = std::sync::mpsc::channel();
+        scope.spawn(move || done.send(batch.finish()).unwrap());
+        // A strict writer waits for the short publication critical section;
+        // contention cannot become an error or a successful skipped write.
+        assert!(matches!(
+            result.recv_timeout(std::time::Duration::from_millis(100)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        ));
+        drop(publication);
+        result
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap()
+            .unwrap();
+    });
+    let reopened = Store::new(root);
+    assert_eq!(reopened.lookup(address).unwrap().reference, reference);
+    assert_eq!(
+        &*reopened.get(reference).unwrap(),
+        b"committed after contention"
+    );
+}
+
+#[test]
 fn independent_batch_writers_preserve_each_others_committed_addresses() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().to_owned();
@@ -1033,7 +1068,7 @@ fn coherently_forged_routing_cannot_accept_another_content_domain_or_association
     assert!(reader.get(wrong_domain).is_none());
     entries[0].location.offset = u32::MAX;
     assert!(
-        index::build(root, &entries).is_err(),
+        index::build(root, &entries, crate::Durability::Rebuildable).is_err(),
         "overflowing routing is refused at the build seam"
     );
 }

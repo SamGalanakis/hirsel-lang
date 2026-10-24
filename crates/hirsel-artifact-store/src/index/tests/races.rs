@@ -29,7 +29,7 @@ fn write(root: &Path, entries: &[Entry]) {
     assert!(matches!(
         publish_delta(
             root,
-            build(root, entries).unwrap(),
+            build(root, entries, crate::Durability::Rebuildable).unwrap(),
             &index_benchmark_epoch(root).unwrap()
         )
         .unwrap(),
@@ -132,7 +132,7 @@ fn cooperating_child() {
         record.location.offset = id as u32 * 64;
     }
     let epoch = index_benchmark_epoch(&root).unwrap();
-    let delta = build(&root, &[record]).unwrap();
+    let delta = build(&root, &[record], crate::Durability::Rebuildable).unwrap();
     let mut socket = UnixStream::connect(root.join("barrier")).unwrap();
     socket
         .set_read_timeout(Some(std::time::Duration::from_secs(5)))

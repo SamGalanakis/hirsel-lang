@@ -1,5 +1,6 @@
 //! Existing store's read-only libc mapping / flock / rename lifetime pattern.
 use super::{MAX_BYTES, format::Descriptor, invalid};
+use crate::Durability;
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
 use std::{
@@ -13,13 +14,21 @@ pub(super) struct Lock {
     _file: File,
 }
 impl Lock {
-    fn open(path: &Path, exclusive: bool) -> io::Result<Option<Self>> {
+    fn open(path: &Path, exclusive: bool, durability: Durability) -> io::Result<Option<Self>> {
         let file = OpenOptions::new()
             .create(true)
             .truncate(false)
             .read(true)
             .write(true)
             .open(path)?;
+        if durability == Durability::Strict {
+            if exclusive {
+                file.lock()?;
+            } else {
+                file.lock_shared()?;
+            }
+            return Ok(Some(Self { _file: file }));
+        }
         #[cfg(unix)]
         {
             let mode = if exclusive {
@@ -44,10 +53,21 @@ impl Lock {
         }
     }
     pub(super) fn publication(root: &Path, exclusive: bool) -> io::Result<Option<Self>> {
-        Self::open(&root.join(".pack-lock"), exclusive)
+        Self::for_store(root, exclusive, Durability::Rebuildable)
+    }
+    pub(super) fn for_store(
+        root: &Path,
+        exclusive: bool,
+        durability: Durability,
+    ) -> io::Result<Option<Self>> {
+        Self::open(&root.join(".pack-lock"), exclusive, durability)
     }
     pub(super) fn maintenance(root: &Path) -> io::Result<Option<Self>> {
-        Self::open(&root.join(".index-maintenance-lock"), true)
+        Self::open(
+            &root.join(".index-maintenance-lock"),
+            true,
+            Durability::Rebuildable,
+        )
     }
 }
 
@@ -57,9 +77,9 @@ pub(super) struct Stage {
     _owner: Lock,
 }
 impl Stage {
-    pub(super) fn new(root: &Path) -> io::Result<Self> {
+    pub(super) fn new(root: &Path, durability: Durability) -> io::Result<Self> {
         // Only owner discovery is locked; never bulk construction or writes.
-        let _lock = Lock::publication(root, false)?
+        let _lock = Lock::for_store(root, false, durability)?
             .ok_or_else(|| io::Error::from(io::ErrorKind::WouldBlock))?;
         let staging = root.join("index/staging");
         fs::create_dir_all(&staging)?;
@@ -75,7 +95,7 @@ impl Stage {
                 Err(e) => return Err(e),
                 Ok(()) => {}
             }
-            let owner = Lock::open(&path.join("owner.lock"), true);
+            let owner = Lock::open(&path.join("owner.lock"), true, Durability::Rebuildable);
             match owner {
                 Ok(Some(owner)) => {
                     return Ok(Self {

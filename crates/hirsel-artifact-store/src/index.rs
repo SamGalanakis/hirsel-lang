@@ -2,6 +2,7 @@
 //! Format: hirsel-briefs/store-moonshot-36/DESIGN.md, revision 2026-10-23.
 //! Git idx/MIDX informed the separated planes and chain; no Git code is copied.
 
+use crate::Durability;
 use hirsel_syntax::ContentHash;
 use std::{io, path::Path, sync::Arc};
 
@@ -148,7 +149,11 @@ fn input() -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, "invalid index input or budget")
 }
 
-pub(crate) fn build(root: &Path, entries: &[Entry]) -> io::Result<PreparedDelta> {
+pub(crate) fn build(
+    root: &Path,
+    entries: &[Entry],
+    durability: Durability,
+) -> io::Result<PreparedDelta> {
     std::fs::create_dir_all(root)?;
     let root = root.canonicalize()?;
     if entries.is_empty() {
@@ -165,7 +170,7 @@ pub(crate) fn build(root: &Path, entries: &[Entry]) -> io::Result<PreparedDelta>
         rows: entries.len() as u64,
         len: bytes.len() as u64,
     };
-    let stage = Stage::new(&root)?;
+    let stage = Stage::new(&root, durability)?;
     stage.write("layer", &bytes)?;
     Ok(PreparedDelta {
         root,
@@ -285,7 +290,7 @@ pub(crate) fn publish_delta(
     let (Some(descriptor), Some(stage)) = (delta.descriptor, delta.stage.as_ref()) else {
         return Ok(PublishOutcome::Empty);
     };
-    let Some(_lock) = Lock::publication(root, true)? else {
+    let Some(_lock) = Lock::for_store(root, true, epoch.durability())? else {
         return Ok(PublishOutcome::Skipped(SkipReason::Contended));
     };
     let mut manifest = Manifest::read(root)?;
@@ -383,7 +388,7 @@ pub(crate) fn compact(root: &Path, budget: MaintenanceBudget) -> io::Result<Comp
             }
         }
     }
-    let delta = build(root, &merged)?;
+    let delta = build(root, &merged, Durability::Rebuildable)?;
     let descriptor = delta.descriptor.ok_or_else(invalid)?;
     let stage = delta.stage.as_ref().ok_or_else(invalid)?;
     let Some(_lock) = Lock::publication(root, true)? else {

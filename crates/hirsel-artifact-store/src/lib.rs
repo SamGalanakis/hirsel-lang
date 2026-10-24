@@ -338,7 +338,7 @@ impl RegionCache {
     }
 }
 #[derive(Clone, Copy, Eq, PartialEq)]
-enum Durability {
+pub(crate) enum Durability {
     Strict,
     Rebuildable,
 }

@@ -20,7 +20,7 @@ fn entry(n: u64) -> Entry {
 fn publish(root: &Path, entries: &[Entry]) -> PublishOutcome {
     publish_delta(
         root,
-        build(root, entries).unwrap(),
+        build(root, entries, crate::Durability::Rebuildable).unwrap(),
         &index_benchmark_epoch(root).unwrap(),
     )
     .unwrap()
@@ -78,7 +78,7 @@ fn empty_drop_duplicate_and_root_mismatch_never_publish() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     assert_eq!(publish(root, &[]), PublishOutcome::Empty);
-    drop(build(root, &[entry(1)]).unwrap());
+    drop(build(root, &[entry(1)], crate::Durability::Rebuildable).unwrap());
     assert!(!root.join("index/MANIFEST").exists());
     published(publish(root, &[entry(1)]));
     let before = fs::read(root.join("index/MANIFEST")).unwrap();
@@ -88,16 +88,16 @@ fn empty_drop_duplicate_and_root_mismatch_never_publish() {
     assert!(
         publish_delta(
             root,
-            build(root, &[entry(2)]).unwrap(),
+            build(root, &[entry(2)], crate::Durability::Rebuildable).unwrap(),
             &index_benchmark_epoch(other.path()).unwrap()
         )
         .is_err()
     );
-    assert!(build(root, &[entry(2), entry(1)]).is_err());
-    assert!(build(root, &[entry(1), entry(1)]).is_err());
+    assert!(build(root, &[entry(2), entry(1)], crate::Durability::Rebuildable).is_err());
+    assert!(build(root, &[entry(1), entry(1)], crate::Durability::Rebuildable).is_err());
     let mut bad = entry(3);
     bad.location.offset = 65;
-    assert!(build(root, &[bad]).is_err());
+    assert!(build(root, &[bad], crate::Durability::Rebuildable).is_err());
 }
 
 #[test]
@@ -105,8 +105,8 @@ fn stale_common_pin_writers_preserve_disjoint_updates_and_serialized_overwrite()
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     let stale = load_pinned(root).unwrap();
-    let a = build(root, &[entry(1)]).unwrap();
-    let b = build(root, &[entry(2)]).unwrap();
+    let a = build(root, &[entry(1)], crate::Durability::Rebuildable).unwrap();
+    let b = build(root, &[entry(2)], crate::Durability::Rebuildable).unwrap();
     let epoch = index_benchmark_epoch(root).unwrap();
     published(publish_delta(root, a, &epoch).unwrap());
     let old_manifest = fs::read(root.join("index/MANIFEST")).unwrap();
@@ -218,7 +218,7 @@ fn lock_contention_is_bounded_and_live_staging_has_owner() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     let epoch = index_benchmark_epoch(root).unwrap();
-    let delta = build(root, &[entry(1)]).unwrap();
+    let delta = build(root, &[entry(1)], crate::Durability::Rebuildable).unwrap();
     let stage = fs::read_dir(root.join("index/staging"))
         .unwrap()
         .next()
@@ -280,7 +280,7 @@ fn layer_installed_but_manifest_write_failure_never_changes_root_or_recovers_orp
     let root = dir.path();
     published(publish(root, &[entry(1)]));
     let original = fs::read(root.join("index/MANIFEST")).unwrap();
-    let delta = build(root, &[entry(2)]).unwrap();
+    let delta = build(root, &[entry(2)], crate::Durability::Rebuildable).unwrap();
     let stage = fs::read_dir(root.join("index/staging"))
         .unwrap()
         .next()

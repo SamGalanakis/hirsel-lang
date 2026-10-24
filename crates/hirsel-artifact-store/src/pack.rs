@@ -352,7 +352,7 @@ impl Store {
         if self.durability != Durability::Strict {
             return Ok(());
         }
-        let _lock = Lock::try_root(&self.root, false)?;
+        let _lock = Lock::for_store(&self.root, false, self.durability)?;
         let directory = self.root.join("index");
         for id in index::current_layer_ids_locked(&self.root)? {
             self.count(Counter::FileSyncs, 1);
@@ -403,8 +403,8 @@ impl Store {
     }
     #[cfg(test)]
     pub(crate) fn publish_test_routes(&self, entries: &[index::Entry]) -> io::Result<()> {
-        let lease = EpochLease::new(&self.root)?;
-        let delta = index::build(&self.root, entries)?;
+        let lease = EpochLease::new(&self.root, self.durability)?;
+        let delta = index::build(&self.root, entries, self.durability)?;
         match index::publish_delta(&self.root, delta, &lease)? {
             index::PublishOutcome::Published { .. } => Ok(()),
             outcome => Err(io::Error::other(format!(
@@ -457,20 +457,24 @@ pub(crate) struct EpochLease {
     root: PathBuf,
     directory: PathBuf,
     _owner: Lock,
+    durability: Durability,
 }
 #[cfg(test)]
 pub(crate) fn index_benchmark_epoch(root: &Path) -> io::Result<EpochLease> {
-    EpochLease::new(root)
+    EpochLease::new(root, Durability::Rebuildable)
 }
 
 impl EpochLease {
     pub(crate) fn root(&self) -> &Path {
         &self.root
     }
-    fn new(root: &Path) -> io::Result<Self> {
+    pub(crate) fn durability(&self) -> Durability {
+        self.durability
+    }
+    fn new(root: &Path, durability: Durability) -> io::Result<Self> {
         static NEXT: AtomicU64 = AtomicU64::new(0);
         // GC cannot discover the directory between creation and owner locking.
-        let _publication = Lock::try_root(root, false)?;
+        let _publication = Lock::for_store(root, false, durability)?;
         let staging = root.join("staging");
         fs::create_dir_all(&staging)?;
         let directory = loop {
@@ -498,6 +502,7 @@ impl EpochLease {
                 root: root.to_owned(),
                 directory,
                 _owner: owner,
+                durability,
             }),
             Err(e) => {
                 let _ = fs::remove_dir_all(directory);
@@ -517,14 +522,32 @@ impl Drop for EpochLease {
 pub(super) struct Lock(File);
 impl Lock {
     pub(super) fn try_root(root: &Path, exclusive: bool) -> io::Result<Self> {
+        Self::try_file(Self::root_file(root)?, exclusive)
+    }
+    pub(super) fn for_store(
+        root: &Path,
+        exclusive: bool,
+        durability: Durability,
+    ) -> io::Result<Self> {
+        if durability == Durability::Rebuildable {
+            return Self::try_root(root, exclusive);
+        }
+        let file = Self::root_file(root)?;
+        if exclusive {
+            file.lock()?;
+        } else {
+            file.lock_shared()?;
+        }
+        Ok(Self(file))
+    }
+    fn root_file(root: &Path) -> io::Result<File> {
         fs::create_dir_all(root)?;
-        let file = File::options()
+        File::options()
             .read(true)
             .write(true)
             .create(true)
             .truncate(false)
-            .open(root.join(".pack-lock"))?;
-        Self::try_file(file, exclusive)
+            .open(root.join(".pack-lock"))
     }
     fn try_file(file: File, exclusive: bool) -> io::Result<Self> {
         #[cfg(unix)]

@@ -87,7 +87,7 @@ fn publish_entries(path: &Path, header: usize) -> Vec<Entry> {
 fn write(root: &Path, entries: &[Entry]) {
     fs::create_dir_all(root).unwrap();
     let epoch = index_benchmark_epoch(root).unwrap();
-    let delta = build(root, entries).unwrap();
+    let delta = build(root, entries, crate::Durability::Rebuildable).unwrap();
     let result = publish_delta(root, delta, &epoch).unwrap();
     assert!(
         matches!(result, PublishOutcome::Published { .. }),
@@ -115,7 +115,12 @@ fn measured() {
         "setup-publish" => write(&root, &publish_entries(&fixture.join("layer-1-0"), 64)),
         "build" => write(&root, &lookup_entries(&fixture, "keys")),
         "build-only" => {
-            let delta = build(&root, &lookup_entries(&fixture, "keys")).unwrap();
+            let delta = build(
+                &root,
+                &lookup_entries(&fixture, "keys"),
+                crate::Durability::Rebuildable,
+            )
+            .unwrap();
             black_box(delta);
         }
         "publish" => write(
