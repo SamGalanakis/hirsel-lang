@@ -391,6 +391,10 @@ fn mode_frontier(
         .into_iter()
         .zip(engine.front_definitions(definitions, jobs))
     {
+        engine
+            .checked_scope
+            .front
+            .insert(mode.definition.clone(), mode.reads.clone());
         let check = &mut checks[owner];
         if check.stopped.is_some() {
             continue;
@@ -424,6 +428,7 @@ pub(crate) fn check_files(
     files: &[(FileId, &FileContext, LoweringPolicy)],
 ) -> Result<Vec<(FileId, FileCheckOutput)>, QueryError> {
     use hirsel_intern::timings::{Interval, interval};
+    engine.checked_scope = Default::default();
     // Canonical type records are written while queries encode their products,
     // before the per-record writers run. Capacity spills stay private; a
     // completed request explicitly publishes its last bounded subepoch.

@@ -4,6 +4,13 @@ use super::*;
 use hirsel_proof_export::{ExportInput, Header, Location, Locator, SignatureSection};
 use std::rc::Rc;
 
+/// Current ordinary-check obligations, independent of retained cache contents.
+#[derive(Default)]
+pub(crate) struct CheckedScope {
+    pub(crate) front: BTreeMap<DefPath, Arc<crate::memo::Reads>>,
+    pub(crate) lowered: BTreeSet<DefPath>,
+}
+
 #[derive(Clone, Debug)]
 pub struct CheckedProducts {
     pub digest: ContentHash,
@@ -36,17 +43,7 @@ impl QueryEngine {
     /// eligible store path; this cost belongs to receipt production.
     pub fn checked_products(&mut self, entry: &DefPath) -> Result<CheckedProducts, QueryError> {
         let mut definitions = BTreeMap::new();
-        let paths: BTreeSet<_> = self
-            .lowered
-            .keys()
-            .map(|id| id.path().clone())
-            .chain(
-                self.lower_receipts
-                    .iter()
-                    .filter(|(_, r)| r.retained_artifact())
-                    .map(|(id, _)| id.path().clone()),
-            )
-            .collect();
+        let paths = self.checked_scope.lowered.clone();
         for path in paths {
             // Failed lowerings are represented by diagnostics, never a body.
             if self
@@ -102,6 +99,36 @@ impl QueryEngine {
                 },
             );
         }
+        // Only runtime constant references (and materialized constant roots)
+        // belong to this check. S1 may retain unrelated std evaluations.
+        let mut required_constants = BTreeSet::new();
+        for (path, definition) in &definitions {
+            if self.constant_values.contains_key(path) {
+                required_constants.insert(path.clone());
+            }
+            for value in definition.bodies.iter().flat_map(|body| &body.rvalues) {
+                if let hirsel_tir::Rvalue::ReadConstant {
+                    definition,
+                    arguments,
+                } = value
+                {
+                    let arguments = arguments
+                        .iter()
+                        .map(|size| match size {
+                            hirsel_types::Size::Constant(n) => Some(*n),
+                            _ => None,
+                        })
+                        .collect::<Option<Vec<_>>>();
+                    if let Some(arguments) = arguments {
+                        required_constants.insert(if arguments.is_empty() {
+                            definition.clone()
+                        } else {
+                            hirsel_tir::constant_instance_path(definition, &arguments)
+                        });
+                    }
+                }
+            }
+        }
         let sources = Rc::new(self.sources.clone());
         let locator: Locator = Rc::new(move |span| {
             let span = sources.resolve(span);
@@ -141,6 +168,7 @@ impl QueryEngine {
                         value.value.clone(),
                     )
                 }))
+                .filter(|(path, _)| required_constants.contains(path))
                 .collect(),
             skipped: vec![],
             annotations: vec![],
@@ -159,48 +187,31 @@ impl QueryEngine {
         // stored Modes product can subsume them. Preserve every observed edge
         // and value, rather than make table retention part of semantic identity.
         let mut reads: BTreeMap<DefPath, BTreeMap<Vec<u8>, ContentHash>> = BTreeMap::new();
-        for path in self.source_paths() {
-            for phase in [
-                QueryKind::Signature,
-                QueryKind::Resolve,
-                QueryKind::Check,
-                QueryKind::Modes,
-                QueryKind::Lower,
-                QueryKind::Summary,
-                QueryKind::CheckedSummary,
-            ] {
-                if let Some(observed) = self.memo_reads(&path, phase) {
-                    let edges = reads.entry(path.clone()).or_default();
-                    for (key, value) in observed.iter() {
-                        let mut bytes = vec![];
-                        key.encode(&mut bytes);
-                        if edges.insert(bytes, *value).is_some_and(|old| old != *value) {
-                            return Err(QueryError::Operational(
-                                hirsel_types::OperationalFailure {
-                                    operation: "candidate reads".into(),
-                                    message: format!(
-                                        "conflicting complete read values for {path}, {key:?}: {:?}",
-                                        [
-                                            QueryKind::Signature,
-                                            QueryKind::Resolve,
-                                            QueryKind::Check,
-                                            QueryKind::Modes,
-                                            QueryKind::Lower,
-                                            QueryKind::Summary,
-                                            QueryKind::CheckedSummary
-                                        ]
-                                        .into_iter()
-                                        .filter_map(|kind| self
-                                            .memo_reads(&path, kind)?
-                                            .get(key)
-                                            .map(|value| (kind, value)))
-                                        .collect::<Vec<_>>()
-                                    ),
-                                },
-                            ));
-                        }
-                    }
-                }
+        let mut required_reads = self.checked_scope.front.clone();
+        for path in &self.checked_scope.lowered {
+            if let Some(lower) = self.shared_memo_reads(path, QueryKind::Lower) {
+                let combined = required_reads.entry(path.clone()).or_default();
+                let mut edges = combined
+                    .iter()
+                    .chain(lower.iter())
+                    .map(|(key, value)| (*key, *value))
+                    .collect::<Vec<_>>();
+                edges.sort();
+                edges.dedup();
+                *combined = Arc::new(crate::memo::Reads::from_vec(edges).map_err(|_| {
+                    QueryError::Operational(hirsel_types::OperationalFailure {
+                        operation: "candidate reads".into(),
+                        message: format!("conflicting complete read values for {path}"),
+                    })
+                })?);
+            }
+        }
+        for (path, observed) in required_reads {
+            let edges = reads.entry(path).or_default();
+            for (key, value) in observed.iter() {
+                let mut bytes = vec![];
+                key.encode(&mut bytes);
+                edges.insert(bytes, *value);
             }
         }
         let mut parts = vec![canonical.as_bytes().to_vec()];
