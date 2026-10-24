@@ -1276,25 +1276,29 @@ pub(crate) unsafe fn issuer_path(ctx: *mut TaskCtx) -> Vec<u32> {
 /// `ctx` is the running task's and `next` is a suspended or prepared task.
 #[inline(never)]
 unsafe fn switch_to(ctx: &mut TaskCtx, next: u32) {
-    let s = scheduler(ctx);
-    let from = s.current;
-    s.task(from).budget.reset();
-    // A suspension ends the running task's hold on the home thread for the Io binding.
-    if let Some(Some(row)) = s.tasks.get_mut(from as usize) {
-        unpin(row);
-    }
-    if from == next {
+    let next_row = role::with_role(ctx, |t| {
+        let from = t.current;
+        t.task(from).budget.reset();
+        // A suspension ends the running task's hold on the home thread for the Io binding.
+        if let Some(Some(row)) = t.tasks.get_mut(from as usize) {
+            unpin(row);
+        }
+        (from != next).then(|| {
+            let row = t.task(next);
+            (row.owner, row.last, row.ctx)
+        })
+    });
+    let Some((owner, last, to_ctx)) = next_row else {
         // SAFETY: caller contract.
         unsafe { migrate_self(ctx) };
         return;
-    }
+    };
     if let Some(metrics) = &ctx.run_ref().worker_metrics {
         metrics.switch();
     }
-    let row = s.task(next);
-    if let Some(to) = crate::pool::target(ctx, row.owner, row.last) {
+    if let Some(to) = crate::pool::target(ctx, owner, last) {
         // `next` runs on another thread: this one hands the run over and waits (`crate::pool`).
-        let permit = crate::pool::resumes_into_hirsel(row.ctx, to);
+        let permit = crate::pool::resumes_into_hirsel(to_ctx, to);
         ctx.switch_out();
         let save = &raw mut ctx.task_sp;
         // SAFETY: `next` is suspended; `save` is written before any other thread runs.
@@ -1302,7 +1306,6 @@ unsafe fn switch_to(ctx: &mut TaskCtx, next: u32) {
         recycle(ctx);
         return;
     }
-    let to_ctx = s.task(next).ctx;
     let save = &raw mut ctx.task_sp;
     let to = unsafe { (*to_ctx).task_sp };
     ctx.switch_out();
@@ -1313,7 +1316,7 @@ unsafe fn switch_to(ctx: &mut TaskCtx, next: u32) {
     }
     // SAFETY: `next`'s context is live and nothing else runs on this worker.
     unsafe { TaskCtx::switch_in(to_ctx, ctx.worker_ptr()) };
-    scheduler(to_ctx).current = next;
+    role::with_role(to_ctx, |t| t.current = next);
     unsafe { ran_here(&mut *to_ctx, next) };
     // SAFETY: `to` is the suspended or prepared stack pointer of `next`.
     unsafe { fiber::switch(save, to) };
@@ -1336,7 +1339,9 @@ fn ran_here(ctx: &mut TaskCtx, task: u32) {
     }
     let here = crate::pool::compute_index();
     let metrics = ctx.run_ref().worker_metrics.clone();
-    record_worker(scheduler(ctx).task(task), here, metrics.as_deref());
+    role::with_role(ctx, |t| {
+        record_worker(t.task(task), here, metrics.as_deref())
+    });
 }
 
 fn record_worker(row: &mut Task, here: Option<u16>, metrics: Option<&crate::pool::WorkerMetrics>) {
@@ -1363,12 +1368,14 @@ unsafe fn migrate_self(ctx: &mut TaskCtx) {
         unsafe { free::migrate(ctx) };
         return;
     }
-    let s = scheduler(ctx);
-    let me = s.current;
-    let Some(Some(row)) = s.tasks.get_mut(me as usize) else {
+    let Some((me, owner, last)) = role::with_role(ctx, |t| {
+        let me = t.current;
+        let row = t.tasks.get(me as usize)?.as_ref()?;
+        Some((me, row.owner, row.last))
+    }) else {
         return;
     };
-    let Some(to) = crate::pool::target(ctx, row.owner, row.last) else {
+    let Some(to) = crate::pool::target(ctx, owner, last) else {
         return;
     };
     let permit = crate::pool::resumes_into_hirsel(ctx, to);
@@ -1397,18 +1404,22 @@ pub(crate) unsafe fn pin_home(ctx: *mut TaskCtx) {
     {
         return;
     }
-    let s = scheduler(ctx);
-    let me = s.current;
-    let Some(Some(row)) = s.tasks.get_mut(me as usize) else {
-        return;
-    };
-    if row.owner != Owner::Any {
-        return;
+    let pinned = role::with_role(ctx, |t| {
+        let me = t.current;
+        let Some(Some(row)) = t.tasks.get_mut(me as usize) else {
+            return false;
+        };
+        if row.owner != Owner::Any {
+            return false;
+        }
+        row.owner = Owner::Home;
+        row.pinned = true;
+        true
+    });
+    if pinned {
+        // SAFETY: caller contract.
+        unsafe { migrate_self(ctx) };
     }
-    row.owner = Owner::Home;
-    row.pinned = true;
-    // SAFETY: caller contract.
-    unsafe { migrate_self(ctx) };
 }
 
 /// The running task's Io operation ended without a scheduling point (a handle's close): its
@@ -1422,13 +1433,17 @@ pub(crate) unsafe fn leave_home(ctx: *mut TaskCtx) {
     if !crate::pool::wide(ctx.run_ref()) || ctx.run_ref().tasks.is_none() {
         return;
     }
-    let s = scheduler(ctx);
-    let me = s.current;
-    let Some(Some(row)) = s.tasks.get_mut(me as usize) else {
-        return;
-    };
-    if row.pinned {
-        unpin(row);
+    let unpinned = role::with_role(ctx, |t| {
+        let me = t.current;
+        match t.tasks.get_mut(me as usize) {
+            Some(Some(row)) if row.pinned => {
+                unpin(row);
+                true
+            }
+            _ => false,
+        }
+    });
+    if unpinned {
         // SAFETY: caller contract.
         unsafe { migrate_self(ctx) };
     }
@@ -1447,9 +1462,10 @@ pub(crate) unsafe fn at_home(ctx: *mut TaskCtx, call: &mut dyn FnMut()) {
         crate::stop::check(ctx, crate::stop::observe(ctx));
         pin_home(ctx);
         call();
-        let s = scheduler(ctx);
-        let me = s.current;
-        unpin(s.task(me));
+        role::with_role(ctx, |t| {
+            let me = t.current;
+            unpin(t.task(me));
+        });
         migrate_self(&mut *ctx);
     }
 }
@@ -1464,11 +1480,12 @@ pub(crate) unsafe fn to_home(ctx: &mut TaskCtx) -> bool {
     if !crate::pool::wide(ctx.run_ref()) {
         return false;
     }
-    let s = scheduler(ctx);
-    let me = s.current;
-    let row = s.task(me);
-    row.owner = Owner::Home;
-    row.pinned = false;
+    role::with_role(ctx, |t| {
+        let me = t.current;
+        let row = t.task(me);
+        row.owner = Owner::Home;
+        row.pinned = false;
+    });
     // SAFETY: caller contract.
     unsafe { migrate_self(ctx) };
     true
@@ -1479,9 +1496,10 @@ pub(crate) unsafe fn to_home(ctx: &mut TaskCtx) -> bool {
 /// # Safety
 /// `ctx` is the running task's, on the home thread, after its interval's leave.
 pub(crate) unsafe fn from_home(ctx: &mut TaskCtx) {
-    let s = scheduler(ctx);
-    let me = s.current;
-    s.task(me).owner = Owner::Any;
+    role::with_role(ctx, |t| {
+        let me = t.current;
+        t.task(me).owner = Owner::Any;
+    });
     // SAFETY: caller contract.
     unsafe { migrate_self(ctx) };
 }
@@ -1492,8 +1510,8 @@ pub(crate) unsafe fn from_home(ctx: &mut TaskCtx) {
 /// # Safety
 /// `ctx` is the run's root context; the run has compute workers and has not started.
 pub(crate) unsafe fn start_root(ctx: *mut TaskCtx, sp: *mut u8) {
-    let s = scheduler(ctx);
-    unsafe { (*s.task(ROOT).ctx).task_sp = sp };
+    let root = role::with_role(ctx, |t| t.task(ROOT).ctx);
+    unsafe { (*root).task_sp = sp };
     // SAFETY: caller contract.
     unsafe {
         (*ctx).switch_out();
@@ -1510,7 +1528,10 @@ pub(crate) unsafe fn start_root(ctx: *mut TaskCtx, sp: *mut u8) {
 /// `ctx` is the running task's, `next` is suspended and the running fiber is never resumed.
 #[inline(never)]
 unsafe fn depart_to(ctx: &mut TaskCtx, next: u32) -> ! {
-    let s = scheduler(ctx);
+    let (owner, last, to_ctx) = role::with_role(ctx, |t| {
+        let row = t.task(next);
+        (row.owner, row.last, row.ctx)
+    });
     if ctx.failure.active() || ctx.shield != 0 || !ctx.work.is_null() || !ctx.region.is_null() {
         fault("a task completed with context state left");
     }
@@ -1521,17 +1542,16 @@ unsafe fn depart_to(ctx: &mut TaskCtx, next: u32) -> ! {
     if let Some(metrics) = &ctx.run_ref().worker_metrics {
         metrics.switch();
     }
-    let row = s.task(next);
-    if let Some(to) = crate::pool::target(ctx, row.owner, row.last) {
-        let permit = crate::pool::resumes_into_hirsel(row.ctx, to);
+    if let Some(to) = crate::pool::target(ctx, owner, last) {
+        let permit = crate::pool::resumes_into_hirsel(to_ctx, to);
+        // Before the switch-out: no stop-aware entry follows it on this stack.
+        role::with_role(ctx, |t| t.task(next).state = State::Ready);
         ctx.switch_out();
-        s.task(next).state = State::Ready;
         let mut abandoned = std::ptr::null_mut();
         // SAFETY: `next` is suspended; nothing resumes the abandoned stack pointer.
         unsafe { crate::pool::hand_off(ctx, &raw mut abandoned, to, next, permit) };
         fault("a completed task was resumed");
     }
-    let to_ctx = s.task(next).ctx;
     let to = unsafe { (*to_ctx).task_sp };
     ctx.switch_out();
     // SAFETY: the completed fiber retains no shared borrow.
@@ -1541,9 +1561,9 @@ unsafe fn depart_to(ctx: &mut TaskCtx, next: u32) -> ! {
     }
     // SAFETY: `next`'s context is live and nothing else runs on this worker.
     unsafe { TaskCtx::switch_in(to_ctx, ctx.worker_ptr()) };
-    scheduler(to_ctx).current = next;
+    role::with_role(to_ctx, |t| t.current = next);
     unsafe { ran_here(&mut *to_ctx, next) };
-    scheduler(to_ctx).task(next).state = State::Ready;
+    role::with_role(to_ctx, |t| t.task(next).state = State::Ready);
     let mut abandoned = std::ptr::null_mut();
     // SAFETY: `next` is suspended; nothing resumes the abandoned stack pointer.
     unsafe { fiber::switch(&raw mut abandoned, to) };
@@ -1906,11 +1926,10 @@ unsafe fn poll_parked(ctx: *mut TaskCtx) -> Stopped<()> {
     let ready = unsafe { crate::host_waits::ready(ctx) }?;
     // Scope deadlines first, so the parked tasks' polls see what they cancel (CONC-3).
     for scope in unsafe { crate::host_waits::expired(ctx, &ready) }? {
-        ordered::events::expire(scheduler(ctx), scope);
+        role::with_role(ctx, |t| ordered::events::expire(t, scope));
     }
-    let canceled: Vec<u64> = {
-        let s = scheduler(ctx);
-        s.tasks
+    let canceled: Vec<u64> = role::with_role(ctx, |t| {
+        t.tasks
             .iter()
             .enumerate()
             .filter_map(|(task, row)| {
@@ -1918,21 +1937,26 @@ unsafe fn poll_parked(ctx: *mut TaskCtx) -> Stopped<()> {
                 let Wait::Host { token } = row.wait? else {
                     return None;
                 };
-                s.canceled_task(task as u32, row.shield()).map(|_| token)
+                t.canceled_task(task as u32, row.shield()).map(|_| token)
             })
             .collect()
-    };
+    });
     let batch = unsafe { crate::host_waits::process_batch(ctx, &canceled) }?;
     let ready = crate::host_waits::merge_ready(ready, batch);
-    for task in unsafe { crate::host_waits::woken(ctx, &ready) } {
-        scheduler(ctx).wake(task);
-    }
-    let s = scheduler(ctx);
-    s.wake_receivers();
-    if s.woken.is_empty() {
+    let woken = unsafe { crate::host_waits::woken(ctx, &ready) };
+    let Some(mut woken) = role::with_role(ctx, |t| {
+        for task in woken {
+            t.wake(task);
+        }
+        t.wake_receivers();
+        if t.woken.is_empty() {
+            return None;
+        }
+        let polling = std::mem::take(&mut t.polling);
+        Some(std::mem::replace(&mut t.woken, polling))
+    }) else {
         return Ok(());
-    }
-    let mut woken = std::mem::replace(&mut s.woken, std::mem::take(&mut s.polling));
+    };
     // Original request ticks preserve exact ties; readiness's host Instant is
     // only for sleeping and may have rounding or sampling skew. Park places are
     // unique, so the order is total.
@@ -1940,10 +1964,10 @@ unsafe fn poll_parked(ctx: *mut TaskCtx) -> Stopped<()> {
         woken.sort_unstable_by_key(|&task| {
             // The home bridge may release the role and another worker may
             // grow the task table. Copy before it; no row borrow may cross it.
-            let (wait, parked_at) = {
-                let row = scheduler(ctx).task(task);
+            let (wait, parked_at) = role::with_role(ctx, |t| {
+                let row = t.task(task);
                 (row.wait, row.parked_at)
-            };
+            });
             let deadline = match wait {
                 // SAFETY: the context is live and `token` parked.
                 Some(Wait::Host { token }) => unsafe { crate::host_waits::deadline(ctx, token) },
@@ -1953,7 +1977,7 @@ unsafe fn poll_parked(ctx: *mut TaskCtx) -> Stopped<()> {
         });
     }
     for &task in &woken {
-        scheduler(ctx).task(task).woken = false;
+        role::with_role(ctx, |t| t.task(task).woken = false);
         // SAFETY: the context is live and `task` is parked.
         if unsafe { poll(ctx, task, &ready) }? {
             #[cfg(feature = "measurement")]
@@ -1961,11 +1985,11 @@ unsafe fn poll_parked(ctx: *mut TaskCtx) -> Stopped<()> {
             {
                 profile.ready(scheduler(ctx).task(task).path.clone());
             }
-            scheduler(ctx).unpark(task);
+            role::with_role(ctx, |t| t.unpark(task));
         }
     }
     woken.clear();
-    scheduler(ctx).polling = woken;
+    role::with_role(ctx, |t| t.polling = woken);
     Ok(())
 }
 
@@ -1982,7 +2006,7 @@ unsafe fn poll(ctx: *mut TaskCtx, task: u32, ready: &crate::io::Ready) -> Stoppe
     if !unsafe { crate::pool::free::is_saved((*ctx).run_ptr(), task) } {
         return Ok(false);
     }
-    let wait = scheduler(ctx).task(task).wait;
+    let wait = role::with_role(ctx, |t| t.task(task).wait);
     if let Some(Wait::Join { child, .. }) = wait
         // SAFETY: the role owns the child's live row. Its Holding state
         // alone cannot expose the result until its stack has been saved.
@@ -3120,10 +3144,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_join(
             )
         };
     }
-    let s = scheduler(ctx);
     // SAFETY: caller contract.
-    let scope = s.scope_handle(unsafe { scope.read() });
-    let child = s.task_handle(unsafe { task.read() }, scope);
+    let (scope, child) = unsafe { child_handle(ctx, scope.read(), task.read()) };
     crate::free::enter_call(ctx);
     // SAFETY: caller contract.
     unsafe { join(&mut *ctx, scope, child, slot, size, caller_site) }
@@ -3171,10 +3193,13 @@ unsafe fn join(
             crate::free::done(ctx);
         }
     }
-    let s = scheduler(ctx);
-    let chain = s.task(child).failure.take();
-    s.scope(scope).children.retain(|&c| c != child);
-    s.vacate_task(child);
+    let (chain, retired) = role::with_role(ctx, |t| {
+        let chain = t.task(child).failure.take();
+        t.scope(scope).children.retain(|&c| c != child);
+        (chain, t.retire_task(child))
+    });
+    // The row's owned storage is destroyed outside the table borrow.
+    drop(retired);
     match chain {
         Some(chain) => {
             ctx.failure.append_chain(chain);
@@ -3210,12 +3235,10 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_cancel(
         };
         return STATUS_OK;
     }
-    let s = scheduler(ctx);
     // SAFETY: caller contract.
-    let scope = s.scope_handle(unsafe { scope.read() });
-    let child = s.task_handle(unsafe { task.read() }, scope);
+    let (_, child) = unsafe { child_handle(ctx, scope.read(), task.read()) };
     crate::free::enter(ctx, Phase::Done);
-    scheduler(ctx).cancel(child, CANCEL_REQUESTED);
+    role::with_role(ctx, |t| t.cancel(child, CANCEL_REQUESTED));
     crate::free::done(ctx);
     // SAFETY: the context is live.
     unsafe { yield_now(&mut *ctx) };
@@ -3244,10 +3267,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_detach(
         unsafe { crate::stop::check(ctx, free::lifecycle::detach(ctx, scope.read(), task.read())) };
         return STATUS_OK;
     }
-    let s = scheduler(ctx);
     // SAFETY: caller contract.
-    let scope = s.scope_handle(unsafe { scope.read() });
-    let child = s.task_handle(unsafe { task.read() }, scope);
+    let (scope, child) = unsafe { child_handle(ctx, scope.read(), task.read()) };
     crate::free::enter_call(ctx);
     // SAFETY: the context is live.
     unsafe {
@@ -3265,22 +3286,51 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_detach(
 /// `ctx` is live and `child` a child of live `scope`.
 unsafe fn detach(ctx: &mut TaskCtx, scope: u32, child: u32) {
     let saved = !free::enabled(ctx) || unsafe { crate::pool::free::is_saved(ctx.run_ptr(), child) };
-    let s = scheduler(ctx);
-    s.task(child).detached = true;
-    if saved && s.task(child).state == State::Holding {
-        s.task(child).slot = None;
+    let holding = role::with_role(ctx, |t| {
+        let row = t.task(child);
+        row.detached = true;
+        let holding = saved && row.state == State::Holding;
+        if holding {
+            row.slot = None;
+        }
+        holding
+    });
+    if holding {
         // SAFETY: the child is holding; its own cleanup drops the result.
         unsafe { hand_off(ctx, child) };
     }
-    let s = scheduler(ctx);
-    if let Some(row) = s.tasks[child as usize].as_ref()
-        && row.state == State::Done
-        && row.failure.is_none()
-        && saved
-    {
-        s.scope(scope).children.retain(|&c| c != child);
-        s.vacate_task(child);
-    }
+    let retired = role::with_role(ctx, |t| {
+        let done = t.tasks[child as usize]
+            .as_ref()
+            .is_some_and(|row| row.state == State::Done && row.failure.is_none());
+        (done && saved).then(|| {
+            t.scope(scope).children.retain(|&c| c != child);
+            t.retire_task(child)
+        })
+    });
+    drop(retired);
+}
+
+/// The live scope a Scope word names and its task set a TaskSet word names.
+///
+/// # Safety
+/// The words are the caller's; a stale or foreign one faults.
+unsafe fn set_handle(ctx: *mut TaskCtx, scope: u64, set: u64) -> (u32, u32) {
+    role::with_role(ctx, |t| {
+        let scope = t.scope_handle(scope);
+        (scope, t.set_handle(set, scope))
+    })
+}
+
+/// The live scope a Scope word names and its child a Task word names.
+///
+/// # Safety
+/// The words are the caller's; a stale or foreign one faults.
+unsafe fn child_handle(ctx: *mut TaskCtx, scope: u64, task: u64) -> (u32, u32) {
+    role::with_role(ctx, |t| {
+        let scope = t.scope_handle(scope);
+        (scope, t.task_handle(task, scope))
+    })
 }
 
 /// `task.set(s) -> TaskSet[R] of s` (CONC-2): an empty task set of `s`.
@@ -3306,14 +3356,17 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_set(
         return STATUS_OK;
     }
     crate::free::enter(ctx, Phase::Done);
-    let s = scheduler(ctx);
     // SAFETY: caller contract.
-    let scope = s.scope_handle(unsafe { scope.read() });
-    let (index, generation) = s.take_set_slot();
-    s.sets[index as usize] = Some(TaskSet {
-        generation,
-        scope,
-        members: Vec::new(),
+    let scope = unsafe { scope.read() };
+    let (index, generation) = role::with_role(ctx, |t| {
+        let scope = t.scope_handle(scope);
+        let (index, generation) = t.take_set_slot();
+        t.sets[index as usize] = Some(TaskSet {
+            generation,
+            scope,
+            members: Vec::new(),
+        });
+        (index, generation)
     });
     crate::free::done(ctx);
     // SAFETY: caller contract.
@@ -3353,13 +3406,15 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_add(
         };
         return STATUS_OK;
     }
-    let s = scheduler(ctx);
     // SAFETY: caller contract.
-    let (scope, set, word) = unsafe { (s.scope_handle(scope.read()), set.read(), task.read()) };
-    s.task_handle(word, scope);
-    let set = s.set_handle(set, scope);
+    let (scope, set, word) = unsafe { (scope.read(), set.read(), task.read()) };
+    let set = role::with_role(ctx, |t| {
+        let scope = t.scope_handle(scope);
+        t.task_handle(word, scope);
+        t.set_handle(set, scope)
+    });
     crate::free::enter(ctx, Phase::Done);
-    scheduler(ctx).set(set).members.push(Some(word));
+    role::with_role(ctx, |t| t.set(set).members.push(Some(word)));
     crate::free::done(ctx);
     // SAFETY: the context is live.
     unsafe { yield_now(&mut *ctx) };
@@ -3411,17 +3466,14 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_await_any(
         };
         return STATUS_OK;
     }
-    let s = scheduler(ctx);
     // SAFETY: caller contract.
-    let scope = s.scope_handle(unsafe { scope.read() });
-    let set = s.set_handle(unsafe { set.read() }, scope);
-    let waiting = s.set(set).members.iter().any(Option::is_some);
+    let (_, set) = unsafe { set_handle(ctx, scope.read(), set.read()) };
+    let waiting = role::with_role(ctx, |t| t.set(set).members.iter().any(Option::is_some));
     let index = if crate::free::enter(ctx, Phase::Entered) {
         // SAFETY: the set outlives the wait: the caller borrows it.
         unsafe { free_await_any(ctx, set, waiting, caller_site) }
     } else {
-        let s = scheduler(ctx);
-        if waiting && s.first_completed(set).is_none() {
+        if waiting && role::with_role(ctx, |t| t.first_completed(set)).is_none() {
             // SAFETY: the set outlives the wait: the caller borrows it.
             unsafe {
                 block(
@@ -3436,7 +3488,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_await_any(
             unsafe { yield_now(&mut *ctx) };
         }
         if waiting {
-            scheduler(ctx).first_completed(set)
+            role::with_role(ctx, |t| t.first_completed(set))
         } else {
             None
         }
@@ -3523,14 +3575,14 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_set_has(
         };
         return STATUS_OK;
     }
-    let s = scheduler(ctx);
     // SAFETY: caller contract.
-    let scope = s.scope_handle(unsafe { scope.read() });
-    let set = s.set_handle(unsafe { set.read() }, scope);
-    let has = usize::try_from(index)
-        .ok()
-        .and_then(|i| s.set(set).members.get(i))
-        .is_some_and(Option::is_some);
+    let (_, set) = unsafe { set_handle(ctx, scope.read(), set.read()) };
+    let has = role::with_role(ctx, |t| {
+        usize::try_from(index)
+            .ok()
+            .and_then(|i| t.set(set).members.get(i))
+            .is_some_and(Option::is_some)
+    });
     // SAFETY: caller contract.
     unsafe { out.write(u8::from(has)) };
     STATUS_OK
@@ -3569,15 +3621,15 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_set_take(
         };
         return STATUS_OK;
     }
-    let s = scheduler(ctx);
     // SAFETY: caller contract.
-    let scope = s.scope_handle(unsafe { scope.read() });
-    let set = s.set_handle(unsafe { set.read() }, scope);
-    let word = usize::try_from(index)
-        .ok()
-        .and_then(|i| s.set(set).members.get_mut(i))
-        .and_then(Option::take)
-        .unwrap_or_else(|| fault("a task set member taken twice"));
+    let (_, set) = unsafe { set_handle(ctx, scope.read(), set.read()) };
+    let word = role::with_role(ctx, |t| {
+        usize::try_from(index)
+            .ok()
+            .and_then(|i| t.set(set).members.get_mut(i))
+            .and_then(Option::take)
+            .unwrap_or_else(|| fault("a task set member taken twice"))
+    });
     // SAFETY: caller contract.
     unsafe { out.write(word) };
     STATUS_OK
@@ -3621,9 +3673,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_cancel_all(
     crate::free::enter_call(ctx);
     // SAFETY: caller contract.
     let set = unsafe { release_members(ctx, scope, set, true) };
-    let s = scheduler(ctx);
     // SAFETY: the context is live; the set row stays until the drain is over.
-    if unsafe { poll_drained(s, set) } {
+    if role::with_role(ctx, |t| unsafe { poll_drained(t, set) }) {
         crate::free::done(ctx);
         unsafe { yield_now(&mut *ctx) };
     } else {
@@ -3631,7 +3682,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_cancel_all(
         unsafe { block(&mut *ctx, Wait::Drain { set }, true, caller_site) };
         crate::free::done(ctx);
     }
-    scheduler(ctx).close_set(set);
+    role::with_role(ctx, |t| t.close_set(set));
     STATUS_OK
 }
 
@@ -3683,16 +3734,19 @@ unsafe fn release_members(
     set: *mut u64,
     cancel: bool,
 ) -> u32 {
-    let s = scheduler(ctx);
     // SAFETY: caller contract.
-    let scope = s.scope_handle(unsafe { scope.read() });
-    let set = s.set_handle(unsafe { set.read() }, scope);
-    let members: Vec<u64> = s.set(set).members.iter().flatten().copied().collect();
+    let (scope, set) = unsafe { set_handle(ctx, scope.read(), set.read()) };
+    let members: Vec<u64> = role::with_role(ctx, |t| {
+        t.set(set).members.iter().flatten().copied().collect()
+    });
     for word in members {
-        let child = scheduler(ctx).task_handle(word, scope);
-        if cancel {
-            scheduler(ctx).cancel(child, CANCEL_REQUESTED);
-        }
+        let child = role::with_role(ctx, |t| {
+            let child = t.task_handle(word, scope);
+            if cancel {
+                t.cancel(child, CANCEL_REQUESTED);
+            }
+            child
+        });
         // SAFETY: caller contract.
         unsafe { detach(&mut *ctx, scope, child) };
     }
