@@ -8,7 +8,7 @@
 use crate::memo::{ReadKey, Reads};
 use crate::{LoweringPolicy, QueryKind};
 pub use hirsel_artifact_store::{
-    Action, Address, Association, Bytes, Domain, MAX_RECORD, Output, Reference,
+    Action, Address, Association, Bytes, Contents, Domain, MAX_RECORD, Output, Reference,
 };
 use hirsel_syntax::{ContentHash, DefPath};
 use std::collections::HashMap;
