@@ -48,6 +48,15 @@ enum Pending {
         to: Owner,
         context: Context,
     },
+    Replace {
+        from: Owner,
+        destination: Owner,
+        displaced: Owner,
+        incoming: u64,
+        outgoing: u64,
+        copy: bool,
+        context: Context,
+    },
     BorrowMove {
         from: Owner,
         to: Owner,
@@ -693,13 +702,41 @@ impl Observer for Resources {
                 };
                 self.pending = Some(Pending::Defuse { owner, context });
             }
-            Some(InstructionKind::Replace { value, .. }) => {
-                if frame
-                    .observe(value.place)
-                    .is_ok_and(|v| resources_in(v) > 0)
+            Some(InstructionKind::Replace {
+                destination,
+                value,
+                displaced,
+                ..
+            }) => {
+                let Ok(incoming) = frame.observe(value.place) else {
+                    self.unsupported("replacement input unavailable");
+                    return;
+                };
+                let old = frame.observe(*destination).ok();
+                if !Self::supported_tree(incoming)
+                    || old.is_some_and(|value| !Self::supported_tree(value))
+                    || (resources_in(incoming) > 0 && value.usage != UseKind::Take)
                 {
-                    self.unsupported("resource replacement transport");
+                    self.unsupported("unsupported replacement resource tree or copied input");
+                    return;
                 }
+                let (Some(from), Some(destination), Some(displaced)) = (
+                    self.place(frame, value.place),
+                    self.place(frame, *destination),
+                    self.destination(frame, *displaced),
+                ) else {
+                    self.unsupported("replacement owner unavailable");
+                    return;
+                };
+                self.pending = Some(Pending::Replace {
+                    from,
+                    destination,
+                    displaced,
+                    incoming: resources_in(incoming),
+                    outgoing: old.map_or(0, resources_in),
+                    copy: value.usage != UseKind::Take,
+                    context,
+                });
             }
             Some(InstructionKind::StorageDead { place, .. }) => {
                 if let Ok(place) = frame.place(*place) {
@@ -1336,6 +1373,31 @@ impl Observer for Resources {
                 let result = self.tracker.move_tree(&context, &from, &to);
                 self.checked(result);
                 self.move_borrows(&from, &to, false);
+            }
+            Some(Pending::Replace {
+                from,
+                destination,
+                displaced,
+                incoming,
+                outgoing,
+                copy,
+                context,
+            }) => {
+                // The ordinary instruction has committed both transfers. Vacate
+                // the old owner before installing the incoming tree at it.
+                for (source, target, expected, copy) in [
+                    (&destination, &displaced, outgoing, false),
+                    (&from, &destination, incoming, copy),
+                ] {
+                    let moved = self.tracker.move_tree(&context, source, target);
+                    if let Some(tokens) = self.checked(moved)
+                        && tokens.len() as u64 != expected
+                    {
+                        self.unsupported("replacement lineage inventory differs");
+                        return;
+                    }
+                    self.move_borrows(source, target, copy);
+                }
             }
             Some(Pending::BorrowMove { from, to, copy }) => {
                 if let Storage::Slot { frame, slot } = to.storage

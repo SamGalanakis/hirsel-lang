@@ -504,7 +504,7 @@ fn ownership_reference_tuple_fields_retain_their_existing_resource_identity() {
 }
 
 #[test]
-fn ownership_reference_unsupported_replacement_never_claims_completeness() {
+fn ownership_reference_replacement_preserves_both_resource_lifetimes() {
     let mut builder = Builder::new();
     let first = token(&mut builder);
     let second = token(&mut builder);
@@ -514,7 +514,27 @@ fn ownership_reference_unsupported_replacement_never_claims_completeness() {
         vec![builder.finish("main", result), finalizer(false)],
         &runtime_types(),
     );
-    assert!(matches!(traced.trace, Err(TraceError::Unsupported(_))));
+    let trace = traced.trace.unwrap();
+    let analysis = trace.analyze([9; 32], 100).unwrap();
+    assert_eq!(
+        (analysis.created, analysis.dropped, analysis.live.len()),
+        (2, 2, 0)
+    );
+    let displaced = trace
+        .events
+        .iter()
+        .find_map(|event| match &event.action {
+            Action::Move { token, from, owner } if event.site.line == 4 => {
+                Some((token.clone(), from.clone(), owner.clone()))
+            }
+            _ => None,
+        })
+        .unwrap();
+    assert_ne!(displaced.1, displaced.2);
+    assert!(trace.events.iter().any(|event| matches!(&event.action,
+        Action::Move { token, owner, .. } if token != &displaced.0 && owner == &displaced.1)));
+    assert!(trace.events.iter().any(|event| matches!(&event.action,
+        Action::Move { token, from, .. } if token == &displaced.0 && from == &displaced.2)));
 }
 
 fn tuple(builder: &mut Builder, fields: &[PlaceId]) -> PlaceId {

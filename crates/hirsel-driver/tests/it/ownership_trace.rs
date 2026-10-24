@@ -823,7 +823,8 @@ fn ownership_native_selected_runtime_decodes_the_same_source_lifetimes_on_four_e
         let archive = object::read::archive::ArchiveFile::parse(&*default_bytes).unwrap();
         for member in archive.members() {
             let member = member.unwrap();
-            if let Ok(object) = object::File::parse(member.data(default_bytes.as_slice()).unwrap()) {
+            if let Ok(object) = object::File::parse(member.data(default_bytes.as_slice()).unwrap())
+            {
                 use object::{Object, ObjectSymbol};
                 assert!(!object.symbols().any(|symbol| {
                     symbol.is_definition()
@@ -888,4 +889,44 @@ fn ownership_native_selected_runtime_decodes_the_same_source_lifetimes_on_four_e
             assert_eq!(lifecycle(&traces[0]), lifecycle(trace));
         }
     });
+}
+
+#[test]
+fn ownership_replacement_local_and_projected_resource_move_chains() {
+    observed_task_source(
+        r#"
+resource type Token { value: u64 }
+drop(x) {}
+type Pair { left: Token, right: Token }
+fn exchange(mut slot: Token, take incoming: Token) -> Token {
+  replace(mut slot, take incoming)
+}
+@test
+fn replacements(t: Test) {
+  let mut current = Token(value: 7u64)
+  let previous = exchange(mut current, Token(value: 7u64))
+  let mut pair = Pair(left: take previous, right: Token(value: 7u64))
+  let old = replace(mut pair.left, take current)
+  test.check(t, old.value == 7u64 && pair.left.value == 7u64)
+}
+"#,
+        3,
+    );
+}
+
+#[test]
+fn ownership_replacement_implicit_assignment_drops_displaced_resource() {
+    observed_task_source(
+        r#"
+resource type Token { value: u64 }
+drop(x) {}
+@test
+fn assignments(t: Test) {
+  let mut current: Token in current = Token(value: 7u64)
+  current = Token(value: 7u64)
+  test.check(t, current.value == 7u64)
+}
+"#,
+        2,
+    );
 }
