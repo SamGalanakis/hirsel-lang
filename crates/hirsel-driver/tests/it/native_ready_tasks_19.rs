@@ -107,7 +107,7 @@ fn native_ready_tasks_validate_cold_and_fresh_snapshots_with_current_source_invo
                 policy,
                 MemoryWeight {
                     scratch: 16 << 20,
-                    retained: 1 << 20,
+                    retained: 64 << 10,
                     stack: 0,
                 },
                 budget.reserve(16 << 20).unwrap(),
@@ -129,11 +129,11 @@ fn native_ready_tasks_validate_cold_and_fresh_snapshots_with_current_source_invo
             assert_eq!(tasks.imports.load(Ordering::Relaxed), 0);
             let denied = tasks.failure("native task control refusal");
             let errors = RuntimeErrors {
-                resource: denied,
-                cycle: denied,
-                cancelled: denied,
-                protocol: denied,
-                panicked: denied,
+                resource: tasks.failure("runtime resource admission refused"),
+                cycle: tasks.failure("runtime dependency cycle refused"),
+                cancelled: tasks.failure("runtime request cancelled"),
+                protocol: tasks.failure("runtime dependency protocol refused"),
+                panicked: tasks.failure("runtime worker panicked"),
             };
             let mut runtime = AdmittedRuntime::new(
                 hirsel_intern::jobs::Jobs::new(1),
@@ -151,7 +151,7 @@ fn native_ready_tasks_validate_cold_and_fresh_snapshots_with_current_source_invo
                 0,
                 MemoryWeight {
                     scratch: 16 << 20,
-                    retained: 1 << 20,
+                    retained: 64 << 10,
                     stack: 0,
                 },
                 budget.reserve(16 << 20).unwrap(),
@@ -216,7 +216,7 @@ fn native_ready_tasks_validate_cold_and_fresh_snapshots_with_current_source_invo
                 snapshot.clone(),
                 MemoryWeight {
                     scratch: 16 << 20,
-                    retained: 1 << 20,
+                    retained: 64 << 10,
                     stack: 0,
                 },
             )
