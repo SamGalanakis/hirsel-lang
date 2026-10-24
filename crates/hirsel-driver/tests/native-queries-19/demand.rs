@@ -295,3 +295,106 @@ fn ct5_selection_reads_recheck_before_native_hit_without_decoding_unchanged_valu
         assert_eq!(graph.imports, 0);
     });
 }
+
+#[test]
+fn generated_lower_cutoff_refuses_missing_generation_and_changed_text_with_equal_headers() {
+    use hirsel_engine::store::ResultStore;
+    with_compiler_stack(|| {
+        let source = |expression: &str| {
+            format!(
+                "type P {{n:u64}}\nfn gen[T](s:TypeShape[T])->Result[Body[fn(T)->u64 uses {{}}],String] {{Ok(codegen.body(\"fn(v:standalone@0/P)->u64 uses {{}} {{{expression}}}\"))}}\nfn chosen[T](v:T)->u64 uses {{}} = comptime gen(shape(T))\npub fn main()->u64 uses {{}} {{chosen(P(n:3u64))}}"
+            )
+        };
+        let directory = tempfile::tempdir().unwrap();
+        let store = Arc::new(store::DirStore::new(directory.path().join("products")));
+        let session = |source: String| {
+            let mut engine = QueryEngine::new(default_environment(), compiler_adapters())
+                .with_result_store(store.clone());
+            let file = engine.sources.add("generated-lower.hir", source).unwrap();
+            engine.parse_file(file, &default_context()).unwrap();
+            engine
+        };
+        let mut first = session(source("v.n"));
+        let mut discovery = NativeDiscoveryCache::new(first.types().clone(), store.clone());
+        let declarations = NativeDeclarations::collect(&mut first, &mut discovery, &[]).unwrap();
+        let selected = declarations
+            .sources
+            .keys()
+            .find(|path| path.0.name.starts_with("chosen$instance$"))
+            .unwrap()
+            .clone();
+        let original = &declarations.sources[&selected];
+        let header = original.signature.fingerprint;
+        let generated = original.source.generated.as_ref().unwrap().text.clone();
+        let output = original
+            .lower
+            .clone()
+            .expect("actual independently verified generated Lower");
+        assert!(first.materialize_verified_lower_output(&output).is_some());
+        drop(declarations);
+        drop(first);
+
+        let mut missing = session(source("v.n"));
+        assert!(missing.generated_source(&selected).is_none());
+        assert!(missing.verified_lower_output(&selected).unwrap().is_none());
+        assert!(missing.materialize_verified_lower_output(&output).is_none());
+        assert_eq!(missing.recompute_count(&selected, QueryKind::Lower), 0);
+        drop(missing);
+
+        let mut same = session(source("v.n"));
+        same.native_source_roots(&[]).unwrap();
+        let current = same.native_definition_product(&selected).unwrap();
+        assert_eq!(current.signature.fingerprint, header);
+        assert_eq!(current.source.generated.as_ref().unwrap().text, generated);
+        let reused = current
+            .lower
+            .expect("current generation admits the existing V-owned envelope");
+        assert_eq!(reused.reference(), output.reference());
+        assert_eq!(reused.observation_identity(), output.observation_identity());
+        assert_eq!(same.recompute_count(&selected, QueryKind::Lower), 0);
+        drop(same);
+
+        let mut changed = session(source("v.n+1u64"));
+        changed.native_source_roots(&[]).unwrap();
+        let current = changed.native_definition_product(&selected).unwrap();
+        assert_eq!(current.signature.fingerprint, header);
+        assert_ne!(current.source.generated.as_ref().unwrap().text, generated);
+        // Source CT-5 generation has completed its first Lower/V for the new
+        // literal. It may publish that fresh envelope; the previous envelope
+        // must never become the current source through its unchanged header.
+        let replacement = current
+            .lower
+            .expect("changed generation completed actual source Lower/V");
+        assert_ne!(
+            replacement.reference(),
+            output.reference(),
+            "old V bytes do not identify current generated source"
+        );
+        assert_ne!(
+            replacement.observation_identity(),
+            output.observation_identity()
+        );
+        assert_eq!(
+            changed
+                .verified_lower_output(&selected)
+                .unwrap()
+                .unwrap()
+                .reference(),
+            replacement.reference()
+        );
+        assert!(
+            changed
+                .materialize_verified_lower_output(&replacement)
+                .is_some()
+        );
+        assert!(
+            store.get_content(output.reference()).is_some(),
+            "the old envelope remains intact; refusal is not eviction"
+        );
+        assert!(
+            changed.materialize_verified_lower_output(&output).is_none(),
+            "generated anchor identity must match current text"
+        );
+        assert_eq!(changed.recompute_count(&selected, QueryKind::Lower), 1);
+    });
+}
