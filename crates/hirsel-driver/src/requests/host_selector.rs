@@ -148,7 +148,9 @@ impl GraphBudget {
             let mut discarded = vec![];
             let mut index = 0;
             while index < hot.len() {
-                if Arc::strong_count(&hot[index]) == 1 {
+                if Arc::strong_count(&hot[index]) == 1
+                    && Arc::strong_count(&hot[index].runtime) == 1
+                {
                     discarded.push(hot.remove(index));
                 } else {
                     index += 1;
