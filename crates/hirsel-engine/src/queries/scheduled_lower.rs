@@ -29,6 +29,13 @@ const CONSTANT_DESCRIPTOR: Domain = Domain {
     kind: 0x4600_0007,
     schema: 1,
 };
+/// Physical producer work, including work before an eventual failure.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct FrontLowerWork {
+    pub lowerings: u64,
+    pub initializers: u64,
+    pub validation_runs: u64,
+}
 struct Input {
     lower: EntryKey,
     evaluate: EntryKey,
@@ -104,12 +111,30 @@ pub struct FrontLowerQueries {
     records: crate::NativeRecords,
     store: Arc<dyn ResultStore>,
     outcomes: Mutex<BTreeMap<(u32, ContentHash), (Reference, Outcome)>>,
+    work: Mutex<BTreeMap<DefPath, FrontLowerWork>>,
     weight: MemoryWeight,
     max_reads: usize,
     errors: RuntimeErrors,
     _allowance: MemoryReservation,
 }
 impl FrontLowerQueries {
+    pub fn work(&self, path: &DefPath) -> FrontLowerWork {
+        self.work
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(path)
+            .copied()
+            .unwrap_or_default()
+    }
+    fn count(&self, path: &DefPath, count: impl FnOnce(&mut FrontLowerWork)) {
+        count(
+            self.work
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .entry(path.clone())
+                .or_default(),
+        );
+    }
     pub fn query(&self, path: &DefPath) -> Option<QueryId> {
         self.id(path, FRONT_LOWER_KIND)
     }
@@ -383,6 +408,7 @@ impl FrontLowerQueries {
             };
             return Ok(Value::Constant(value, constants));
         }
+        self.count(path, |work| work.lowerings += 1);
         let output = self.lowering.lower(
             self.snapshot.types(),
             &self.memo,
@@ -411,6 +437,7 @@ impl FrontLowerQueries {
                 .validate_source_artifact(&definition, |anchor| self.anchors.record_owner(anchor));
             if ran {
                 timings::count(Count::VRuns);
+                self.count(path, |work| work.validation_runs += 1);
             }
             if let Some(error) = hirsel_validate::tooling_limit_error(&report) {
                 return Err(error);
@@ -577,8 +604,7 @@ impl s1::AsyncDependencySource for Source {
             .owner
             .instances
             .resolve(DefId::intern(path), self.owner.snapshot.types(), arguments)
-            .map(|selected| selected.map(|id| id.path().clone()))
-            .map_err(|_| QueryError::NotImplemented);
+            .map(|selected| selected.map(|id| id.path().clone()));
         s1::DependencyProduct {
             result,
             reads: Reads::empty(),
@@ -666,6 +692,7 @@ async fn evaluate(
     let site = analyzed.value.typed.syntax.tree.expressions[expression.0 as usize]
         .origin
         .span;
+    owner.count(signature.definition.path(), |work| work.initializers += 1);
     let prepared = EvaluationInput {
         analyzed: &analyzed.value,
         staged: &staged,
@@ -801,6 +828,7 @@ impl QueryEngine {
             records: crate::NativeRecords::new(self.types.clone(), store.clone()),
             store,
             outcomes: Mutex::new(BTreeMap::new()),
+            work: Mutex::new(BTreeMap::new()),
             weight,
             max_reads,
             errors,

@@ -112,7 +112,7 @@ fn admitted_real_front_tasks_match_scalar_modes_and_complete_reads() {
 }
 
 #[test]
-fn admitted_lower_and_constant_tasks_suspend_without_restarting_initializers() {
+fn admitted_lower_saved_work_and_native_metadata_survive_dependency_suspension() {
     hirsel_engine::with_compiler_stack(|| {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("main.hir");
@@ -180,6 +180,27 @@ fn admitted_lower_and_constant_tasks_suspend_without_restarting_initializers() {
             let products = runtime
                 .wait(request)
                 .unwrap_or_else(|error| panic!("{:?}", lower.failure(error)));
+            let metadata = lower.native_product(products[0]).unwrap();
+            assert!(
+                metadata.verified.is_some(),
+                "preserve the actual opaque source V output"
+            );
+            for (path, lowerings, initializers) in [
+                (&definitions[0], 0, 1),
+                (&definitions[1], 0, 1),
+                (&definitions[2], 1, 0),
+                (&definitions[3], 1, 1),
+            ] {
+                let work = lower.work(path);
+                assert_eq!(
+                    (work.lowerings, work.initializers),
+                    (lowerings, initializers),
+                    "saved producer work for {path}, jobs={jobs}"
+                );
+                for kind in [QueryKind::Resolve, QueryKind::Check, QueryKind::Modes] {
+                    assert_eq!(front.recompute_count(path, kind), 1);
+                }
+            }
             let actual = lower.outcome(products[0]).unwrap();
             let scalar = program.engine.lower_to_tir(&program.entry).unwrap();
             let records = NativeRecords::new(program.engine.types().clone(), store.clone());
@@ -195,6 +216,13 @@ fn admitted_lower_and_constant_tasks_suspend_without_restarting_initializers() {
                 .reader([actual.native_product()], store.clone())
                 .unwrap();
             assert!(native.read(&program.entry).is_some());
+            let repeated = runtime.request(&[query]);
+            assert_eq!(runtime.wait(repeated).unwrap(), products);
+            assert_eq!(
+                lower.work(&program.entry).initializers,
+                1,
+                "a second waiter executes no initializer again"
+            );
             assert_eq!(
                 runtime.stats().claims,
                 8,

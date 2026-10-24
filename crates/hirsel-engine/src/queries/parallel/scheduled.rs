@@ -36,6 +36,7 @@ pub struct FrontBodyQueries {
     records: Arc<persistent::TypeRecords>,
     store: Arc<dyn ResultStore>,
     outcomes: Mutex<BTreeMap<Key, (Reference, ModeResult)>>,
+    work: Mutex<BTreeMap<(DefPath, QueryKind), u64>>,
     errors: RuntimeErrors,
     // Own immutable snapshot and output metadata admission until every task and
     // external output reader releases this view.
@@ -49,6 +50,15 @@ pub struct FrontBodyOutput {
     _snapshot: Arc<FrontBodyQueries>,
 }
 impl FrontBodyQueries {
+    /// Actual phase invocations, including failed or discarded producers.
+    pub fn recompute_count(&self, definition: &DefPath, kind: QueryKind) -> u64 {
+        self.work
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&(definition.clone(), kind))
+            .copied()
+            .unwrap_or(0)
+    }
     pub fn query(&self, definition: &DefPath) -> Option<QueryId> {
         self.inputs.iter().find_map(|(&address, input)| {
             (input.task.definition == *definition).then_some(QueryId {
@@ -151,6 +161,14 @@ impl BodyTask {
         let input = &queries.inputs[&self.query.address.0];
         let worker = queries.worker();
         let done = worker.run(self.task.take().ok_or(queries.errors.protocol)?);
+        for kind in done.recomputed() {
+            *queries
+                .work
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .entry((done.definition.clone(), kind))
+                .or_default() += 1;
+        }
         let result = done.result();
         let mut source = FrozenReadSource {
             declarations: &queries.declarations,
@@ -372,6 +390,7 @@ impl QueryEngine {
             records: self.type_records().ok_or_else(refusal)?,
             store,
             outcomes: Mutex::new(BTreeMap::new()),
+            work: Mutex::new(BTreeMap::new()),
             errors,
             _allowance: allowance,
         }))
