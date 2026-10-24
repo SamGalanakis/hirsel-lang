@@ -689,7 +689,31 @@ pub(super) struct EncodedWriter {
     kind: QueryKind,
     expected: Option<Expected>,
 }
+fn mode_verification(
+    key: EntryKey,
+    reads: &Reads,
+    payload: &[u8],
+) -> crate::semantic::VerifiedMode {
+    crate::semantic::VerifiedMode {
+        key,
+        reads: crate::store::payload_reads_hash(reads),
+        payload: ContentHash::of_bytes(payload),
+    }
+}
 impl EncodedWriter {
+    /// Return comparison metadata only after the selected expected archive
+    /// matched byte-for-byte. The writer retains neither checked bodies nor
+    /// encoded payloads after this call.
+    pub(super) fn write_verified_mode(
+        &self,
+        reads: &Reads,
+        payload: Vec<u8>,
+    ) -> Result<Option<crate::semantic::VerifiedMode>, QueryError> {
+        let proof = (self.kind == QueryKind::Modes && self.expected.is_some())
+            .then(|| mode_verification(self.key, reads, &payload));
+        self.write(reads, payload)?;
+        Ok(proof)
+    }
     pub(super) fn write(&self, reads: &Reads, payload: Vec<u8>) -> Result<(), QueryError> {
         let _batch = self.store.local_product_store().map(|store| store.batch());
         if let Some(expected) = &self.expected {
@@ -793,6 +817,7 @@ impl QueryEngine {
         mutable.covered = record.covered;
         mutable.products = Arc::new(PhaseProducts {
             signature_persisted: true,
+            verified_mode: None,
             resolution,
             representation,
             mode_diagnostics: vec![],
@@ -1221,7 +1246,15 @@ impl QueryEngine {
         if !record.valid(&syntax) {
             return None;
         }
-        if self.verify_store == crate::store::VerifyStore::Recompute {
+        let key = self.store_key(path, QueryKind::Modes)?;
+        let verified_mode = self
+            .summaries
+            .get(&DefId::intern(path))
+            .filter(|entry| entry.consistent && !self.graph.is_dirty(&entry.memo.key))
+            .and_then(|entry| entry.products.verified_mode.as_ref())
+            .filter(|proof| **proof == mode_verification(key, &variant.reads, &variant.payload))
+            .cloned();
+        if self.verify_store == crate::store::VerifyStore::Recompute && verified_mode.is_none() {
             self.pending_store_checks.insert(
                 (DefId::intern(path), QueryKind::Modes),
                 Expected::capture(variant, &mut self.store_check_spool),
@@ -1261,6 +1294,7 @@ impl QueryEngine {
             .expect("restored mode entry is not yet shared")
             .products = Arc::new(PhaseProducts {
             mode_diagnostics: record.phases,
+            verified_mode,
             ..Default::default()
         });
         Some(entry)
