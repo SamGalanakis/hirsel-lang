@@ -58,8 +58,8 @@ impl NativeMetadataWeight {
             w.path(external);
         });
     }
-    /// Call on the decorated snapshot, whose file table/path buffers were
-    /// copied by SourceMap::retain_owner; shared source text remains excluded.
+    /// Bound a prospective clone+retain_owner or count its copied file/path
+    /// buffers afterward; shared source text and original owners stay excluded.
     pub fn source_snapshot(&mut self, value: &hirsel_span::SourceMap) {
         self.add(value.retained_snapshot_metadata_bytes() as usize);
     }

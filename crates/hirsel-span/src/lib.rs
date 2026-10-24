@@ -255,9 +255,10 @@ impl Anchor {
     }
 }
 impl SourceMap {
-    /// Copied file-table storage after decorating a cloned snapshot with an
-    /// owner. Text, line indices and anchors remain shared with the source.
-    /// Excludes this inline value and the supplied owner's existing charge.
+    /// Bound copied file-table storage before decorating a cloned snapshot, or
+    /// measure an already decorated snapshot. Includes one latest/next owner
+    /// envelope even when this map is undecorated. Text, line indices and
+    /// anchors stay shared. Excludes this inline value and supplied owner data.
     pub fn retained_snapshot_metadata_bytes(&self) -> u64 {
         let mut bytes = (2 * size_of::<usize>())
             .saturating_add(size_of::<Vec<SourceFile>>())
@@ -271,14 +272,13 @@ impl SourceMap {
                 .saturating_add(file.path.capacity())
                 .saturating_add(file.logical_path.capacity());
         }
-        if self.owner.is_some() {
-            // retain_owner adds one Arc containing the prior and supplied
-            // owners. Prior owners already retain their own original grants.
-            type Owner = std::sync::Arc<dyn Send + Sync>;
-            bytes = bytes
-                .saturating_add(2 * size_of::<usize>())
-                .saturating_add(size_of::<(Option<Owner>, Owner)>());
-        }
+        // retain_owner adds one Arc containing the prior and supplied owners.
+        // Include it prospectively so admission precedes the COW allocation.
+        // Prior owners already retain their own original grants.
+        type Owner = std::sync::Arc<dyn Send + Sync>;
+        bytes = bytes
+            .saturating_add(2 * size_of::<usize>())
+            .saturating_add(size_of::<(Option<Owner>, Owner)>());
         bytes as u64
     }
     /// Retain an admitted source owner through every clone of this map or its
@@ -500,6 +500,24 @@ mod retained_source_owner_tests {
     impl Drop for Owner {
         fn drop(&mut self) {
             self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    #[test]
+    fn prospective_snapshot_bound_includes_owner_before_decoration() {
+        let mut sources = SourceMap::default();
+        for empty in [true, false] {
+            if !empty {
+                sources.add("main.hir", "pub fn main() {}".into()).unwrap();
+            }
+            let admitted = sources.retained_snapshot_metadata_bytes();
+            let decorated = sources.clone().retain_owner(Arc::new(()));
+            assert!(
+                admitted >= decorated.retained_snapshot_metadata_bytes(),
+                "owner and copied metadata must fit the preallocation bound"
+            );
+            let next = decorated.retained_snapshot_metadata_bytes();
+            let redecorated = decorated.clone().retain_owner(Arc::new(()));
+            assert!(next >= redecorated.retained_snapshot_metadata_bytes());
         }
     }
     #[test]
