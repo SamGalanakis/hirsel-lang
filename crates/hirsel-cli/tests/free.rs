@@ -4879,3 +4879,84 @@ fn f1_queued_never_started_divergent_child_full_projection_matrix() {
         }
     }
 }
+
+/// Recording-off host epochs must wake namespace waiters just like recorded
+/// attempts. The B1 independent-file smoke originally stalled after one create.
+#[test]
+fn f1_recording_off_independent_files_wake_namespace_waiters() {
+    if !hirsel_rt::free_driver::admission_enabled() {
+        return;
+    }
+    let scratch = Scratch::new("f1-live-namespace-wakes");
+    let program = scratch.path("main.hir");
+    std::fs::write(
+        &program,
+        r#"pub type AppError = Grant(GrantError) | Output(OutputError) | Files(FileError)
+pub fn main(rt: Io, args: Args) -> Result[(), AppError] {
+  let n = match arg.text(args, 0) {
+    Ok(t) => match u64.parse(t) { Ok(v) => v, Error(_) => 1000u64, },
+    Error(_) => 1000u64,
+  }
+  let tasks = io.tasks(rt) ? Grant
+  let dir = io.dir(rt, path.of(".")) ? Files
+  let sum = task.scope(tasks, fn(s: Scope) -> Result[u64, AppError] {
+    let mut set: TaskSet[Result[u64, AppError]] of s = task.set(s)
+    for lane in 0u64..8u64 {
+      task.add(s, mut set, task.async(s, fn() -> Result[u64, AppError] {
+        let mut file = file.create(dir, path.of(f"lane-{lane}")) ? Files
+        let mut sum = 0u64
+        for _ in 0u64..n {
+          let written = file.write(dir, mut file, string.as_bytes("x")) ? Files
+          sum = sum + written
+        }
+        Ok(sum)
+      }))
+    }
+    let mut sum = 0u64
+    for i in 0u64..8u64 { sum = sum + task.await_at(s, mut set, i)? }
+    task.detach_all(s, take set)
+    Ok(sum)
+  })?
+  let stdout = io.stdout(rt) ? Grant
+  out.print(stdout, f"{sum}\n") ? Output
+  Ok(())
+}
+"#,
+    )
+    .unwrap();
+    let binary = scratch.path("program");
+    let mut build = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+    build
+        .args(["build", "--release"])
+        .arg(&program)
+        .arg("-o")
+        .arg(&binary);
+    let built = bounded_output(&mut build, &program, "live namespace build");
+    assert!(built.status.success(), "{built:?}");
+    let root = scratch.path("files");
+    std::fs::create_dir(&root).unwrap();
+    let grants = scratch.path("grants.json");
+    std::fs::write(
+        &grants,
+        serde_json::to_vec(&serde_json::json!({
+            "io":{"stdout":"stdout.bytes@1", "tasks":"tasks.free@1", "dirs":[
+                {"path":"", "host":root,"access":"read_write"}
+            ]},
+            "recording":"none", "placement":{"cores":8}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let mut run = Command::new(&binary);
+    f1_permits(&mut run, 8);
+    run.arg("--hirsel-grants").arg(&grants).arg("32");
+    let output = bounded_output(&mut run, &program, "live namespace file requests");
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(output.stdout, b"256\n");
+    for lane in 0..8 {
+        assert_eq!(
+            std::fs::read(root.join(format!("lane-{lane}"))).unwrap(),
+            vec![b'x'; 32]
+        );
+    }
+}

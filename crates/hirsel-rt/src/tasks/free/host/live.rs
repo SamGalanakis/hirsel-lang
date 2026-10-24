@@ -64,6 +64,13 @@ pub(super) unsafe fn request(
             (*pending).positions = Some((&(*pending).state).keys.take(&(*pending).keys));
         }
         while !unsafe { (*pending).positions.as_ref().unwrap().ready() } {
+            // The predecessor ends under the same role and wakes this list.
+            // Register before saving so its end cannot strand a live waiter.
+            let s = scheduler(ctx);
+            let me = s.current;
+            if !s.retrying.contains(&me) {
+                s.retrying.push(me);
+            }
             unsafe { try_block(&mut *ctx, Wait::Retry { cancelable: false }, false, 0) }?;
         }
         crate::stop::observe(ctx)?;
