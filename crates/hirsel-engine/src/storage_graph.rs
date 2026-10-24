@@ -87,7 +87,23 @@ fn derive(
             .ok_or_else(|| invalid("missing demanded source storage product"))?)
         .clone();
         for body in &mut storage.bodies {
-            for node in &body.nodes {
+            for node in &mut body.nodes {
+                if let StorageOp::Assign(assignments) = &mut node.operation {
+                    for (_, value) in assignments {
+                        if let StorageValue::ConstantReference {
+                            definition,
+                            arguments,
+                        } = value
+                        {
+                            *value = if arguments.is_empty() {
+                                let original = engine.materialize_value(definition.path())?;
+                                constant_value(&engine.types, &original)
+                            } else {
+                                StorageValue::Unknown
+                            };
+                        }
+                    }
+                }
                 match &node.operation {
                     StorageOp::Call {
                         callee:
@@ -121,6 +137,18 @@ fn derive(
                                     selected_definition(engine, *definition, arguments)?
                                 {
                                     pending.insert(selected);
+                                }
+                            }
+                            if let StorageValue::Constant { code, .. } = value {
+                                for reference in code {
+                                    pending.insert(reference.definition);
+                                    if let Some(selected) = selected_definition(
+                                        engine,
+                                        reference.definition,
+                                        &reference.arguments,
+                                    )? {
+                                        pending.insert(selected);
+                                    }
                                 }
                             }
                             if let StorageValue::Callable { target, .. } = value {
@@ -270,4 +298,60 @@ fn selected_definition(
     engine
         .resolve_instance(declaration.path(), arguments)
         .map(|body| body.map(|path| hirsel_syntax::DefId::intern(&path)))
+}
+
+// Source consumes the declared constant's own evaluated field graph. V reads
+// only its executable snapshot's independently checked constant table.
+fn constant_value(
+    types: &hirsel_types::TypeInterner,
+    value: &hirsel_tir::Materialized,
+) -> StorageValue {
+    use hirsel_types::storage::graph::StorageConstantCode;
+    use hirsel_types::{OwnedTypePart, SharedPath};
+    let mut code = Vec::new();
+    let mut complete = true;
+    let mut pending = vec![(&value.root, SharedPath::new())];
+    while let Some((value, path)) = pending.pop() {
+        match &value.kind {
+            hirsel_tir::ValueKind::FunctionReference {
+                definition,
+                arguments,
+            } => {
+                complete &= hirsel_types::generated_actual_key(types, arguments).is_some();
+                code.push(StorageConstantCode {
+                    parts: path,
+                    definition: hirsel_syntax::DefId::intern(definition),
+                    arguments: arguments.clone(),
+                });
+            }
+            hirsel_tir::ValueKind::Construct {
+                constructor,
+                fields,
+            } => {
+                for (ordinal, field) in fields.iter().enumerate().rev() {
+                    let part = match constructor {
+                        hirsel_tir::Constructor::Variant { variant, .. } => {
+                            OwnedTypePart::VariantField {
+                                variant: *variant,
+                                field: ordinal as u32,
+                            }
+                        }
+                        hirsel_tir::Constructor::Sequence
+                        | hirsel_tir::Constructor::Map
+                        | hirsel_tir::Constructor::Set => OwnedTypePart::Elements,
+                        hirsel_tir::Constructor::SortedMap { .. } => {
+                            complete = false;
+                            continue;
+                        }
+                        _ => OwnedTypePart::Field(ordinal as u32),
+                    };
+                    let mut child = path.clone();
+                    child.push(part);
+                    pending.push((field, child));
+                }
+            }
+            hirsel_tir::ValueKind::Constant(_) => (),
+        }
+    }
+    StorageValue::Constant { code, complete }
 }

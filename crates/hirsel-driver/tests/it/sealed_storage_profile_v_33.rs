@@ -57,6 +57,7 @@ fn validate(input: &NativeInput) -> StorageValidation {
         &input.types,
         &input.definitions.values().cloned().collect::<Vec<_>>(),
         &signatures,
+        &input.constants,
         &input.instance_bodies,
         &input.storage_profiles,
     )
@@ -1291,4 +1292,146 @@ fn sealed_storage_ct5_helper_v_33_growing_executable_actuals_refuse_before_closi
         validation.reads.selections.is_empty(),
         "growth refused before context selection: {validation:?}"
     );
+}
+
+fn dictionary_fixture_state() -> &'static Fixture {
+    static INPUT: OnceLock<Fixture> = OnceLock::new();
+    INPUT.get_or_init(|| with_compiler_stack(|| {
+        let source = "type ReadOps{read:fn(List[u64])->u64 uses{}}\nconst READ:ReadOps=ReadOps(read:read);\nfn clone_heap(xs:List[u64])->unique List[u64]{unique xs}\nfn read(xs:List[u64])->u64 uses{}{let fresh:List[u64] in heap=[list.len(xs)];let copied=clone_heap(fresh);list.len(copied)}\npub fn main(){let mut r=arena.with(fn(a:Arena)->Region[List[u64]]{let root:List[u64] in a=[7u64];arena.seal(take a,take root)});let n=region.with(mut r,fn(root:List[u64])->u64{let ops=READ;ops.read(root)});}";
+        let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
+        let file = engine.sources.add("storage-dictionary-v.hir", source.into()).unwrap();
+        let output = check_progress(&mut engine, file, &default_context()).unwrap();
+        assert_eq!(output.completion, CheckCompletion::Complete);
+        assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+        let input = engine.export_native_input().unwrap();
+        Fixture { input, engine: Mutex::new(engine) }
+    }))
+}
+
+#[test]
+fn sealed_storage_dictionary_v_33_executable_and_import_control() {
+    let fixture = dictionary_fixture_state();
+    let validation = validate(&fixture.input);
+    assert!(validation.violations.is_empty(), "{validation:?}");
+    assert_eq!(validation.profiles, fixture.input.storage_profiles);
+    assert!(
+        validation
+            .reads
+            .constants
+            .iter()
+            .any(|(definition, hash)| definition.path().0.name == "READ" && hash.is_some())
+    );
+    let mut engine = fixture.engine.lock().unwrap();
+    let validated = engine.import_native_input(fixture.input.clone()).unwrap();
+    assert!(
+        validated
+            .storage_proof_reads()
+            .constants
+            .iter()
+            .any(|(definition, hash)| definition.path().0.name == "READ" && hash.is_some())
+    );
+}
+
+#[test]
+fn sealed_storage_dictionary_v_33_missing_constant_with_fresh_claims() {
+    let mut input = dictionary_fixture_state().input.clone();
+    let before = input.constants.len();
+    input.constants.retain(|path, _| path.0.name != "READ");
+    assert_eq!(before - input.constants.len(), 1);
+    input.storage_profiles = validate(&input).profiles;
+    let validation = validate(&input);
+    assert!(
+        validation
+            .reads
+            .constants
+            .iter()
+            .any(|(definition, hash)| definition.path().0.name == "READ" && hash.is_none())
+    );
+    map_unknown(validation);
+}
+
+#[test]
+fn sealed_storage_dictionary_v_33_missing_body_with_fresh_claims() {
+    let mut input = dictionary_fixture_state().input.clone();
+    let before = input.definitions.len();
+    input.definitions.retain(|path, _| path.0.name != "read");
+    assert_eq!(before - input.definitions.len(), 1);
+    input.storage_profiles = validate(&input).profiles;
+    map_unknown(validate(&input));
+}
+
+#[test]
+fn sealed_storage_dictionary_v_33_actual_allocation_with_fresh_claims() {
+    let mut input = dictionary_fixture_state().input.clone();
+    let definition = input
+        .definitions
+        .iter_mut()
+        .find(|(path, _)| path.0.name == "read")
+        .unwrap()
+        .1;
+    let definition = std::sync::Arc::make_mut(definition);
+    let mut mutations = 0;
+    for body in &mut definition.bodies {
+        let original = body
+            .places
+            .iter()
+            .position(|place| {
+                place.projection.is_empty()
+                    && body.locals[place.root.0 as usize].storage == hirsel_tir::Storage::Parameter
+            })
+            .unwrap();
+        for block in &mut body.blocks {
+            if let hirsel_tir::Terminator::Call {
+                callee: hirsel_tir::Callee::Definition { path, .. },
+                arguments,
+                ..
+            } = &mut block.terminator
+            {
+                if path.0.name == "clone_heap" {
+                    assert_eq!(arguments.len(), 1);
+                    arguments[0].value.place = hirsel_tir::PlaceId(original as u32);
+                    mutations += 1;
+                }
+            }
+        }
+    }
+    assert_eq!(mutations, 1);
+    input.storage_profiles = validate(&input).profiles;
+    let validation = validate(&input);
+    assert!(validation.violations.iter().any(|violation| matches!(violation,
+        StorageViolation::ExecutableRead(hirsel_type_analysis::storage::program::StorageReadViolation {
+            failure: hirsel_type_analysis::storage::program::StorageReadFailure::AllocatesFromRoot(_),
+            origin: Some(origin), ..
+        }) if origin.callable.definition.path().0.name == "clone_heap")), "{validation:?}");
+}
+
+#[test]
+fn sealed_storage_dictionary_v_33_open_constant_code_refuses_before_closing() {
+    let mut input = dictionary_fixture_state().input.clone();
+    let constant = input
+        .constants
+        .iter_mut()
+        .find(|(path, _)| path.0.name == "READ")
+        .unwrap()
+        .1;
+    let mut pending = vec![&mut constant.root];
+    let mut mutations = 0;
+    while let Some(value) = pending.pop() {
+        match &mut value.kind {
+            hirsel_tir::ValueKind::FunctionReference { arguments, .. } => {
+                assert!(arguments.is_empty());
+                arguments.push(hirsel_types::GenericArgument::Size(
+                    hirsel_types::Size::Parameter(hirsel_types::SizeParameterRef::bound(
+                        hirsel_types::SizeParamId(0),
+                    )),
+                ));
+                mutations += 1;
+            }
+            hirsel_tir::ValueKind::Construct { fields, .. } => pending.extend(fields.iter_mut()),
+            _ => (),
+        }
+    }
+    assert_eq!(mutations, 1);
+    input.storage_profiles = validate(&input).profiles;
+    map_unknown(validate(&input));
 }
