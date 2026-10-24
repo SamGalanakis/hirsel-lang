@@ -34,3 +34,5 @@ export_file(name = "unpack.py")
 export_file(name = "link_kit.py")
 toolchain_proof(name = "proof", tools = [":llvm", ":arm", ":qemu", ":valgrind"], script = "proof.sh")
 export_file(name = "environment.tsv", visibility = ["PUBLIC"])
+
+toolchain_proof(name = "native-compilation-proof", tools = [":llvm", ":kit", "root//:hirsel-rt-archives", "root//:hirsel-driver-test-it-harness"], script = "native_compilation_proof.sh")
