@@ -4,7 +4,7 @@
 // "A value in a cannot outlive a."
 fn example() -> Bytes {
   arena.with(
-    fn(a: Arena) {
+    fn(a: Arena) -> Bytes {
       let value: Bytes in a = b"inside"
       value
     }

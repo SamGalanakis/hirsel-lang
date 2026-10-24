@@ -525,6 +525,7 @@ PROV/PROV-2-closure-own-placement-bad.hir
 PROV/PROV-2-closure-own-placement-ok.hir
 PROV/PROV-2-computed-addition-bad.hir
 PROV/PROV-2-computed-addition-ok.hir
+PROV/PROV-2-inferred-arena-result-bad.hir
 PROV/PROV-2-join-unbranded-bad.hir
 PROV/PROV-2-join-unbranded-ok.hir
 PROV/PROV-2-literal-brand-bad.hir

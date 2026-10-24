@@ -1,0 +1,12 @@
+// rule: PROV-2
+// expect: reject PROV-2 at line 7
+// twin: PROV/PROV-4-arena-result-escape-ok.hir
+// An inferred closure result cannot live in its own Arena parameter.
+fn example() -> Bytes {
+  arena.with(
+    fn(a: Arena) {
+      let value: Bytes in a = b"inside"
+      value
+    }
+  )
+}

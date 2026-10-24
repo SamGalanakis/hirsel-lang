@@ -4778,6 +4778,7 @@ conformance/PROV/PROV-2-computed-addition-bad.hir
 conformance/PROV/PROV-2-computed-addition-ok.hir
 conformance/PROV/PROV-2-computed-bitwise-bad.hir
 conformance/PROV/PROV-2-computed-bitwise-ok.hir
+conformance/PROV/PROV-2-inferred-arena-result-bad.hir
 conformance/PROV/PROV-2-instant-compare-ok.hir
 conformance/PROV/PROV-2-instant-constructor-bad.hir
 conformance/PROV/PROV-2-instant-copy-clock-ok.hir
