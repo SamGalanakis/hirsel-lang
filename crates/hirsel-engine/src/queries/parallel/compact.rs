@@ -262,7 +262,10 @@ impl CompactCompleted {
                 persistent::capture_mode(
                     records,
                     types,
-                    worker.items,
+                    |anchor| {
+                        persistent::anchor_owner(worker.items, anchor)
+                            .or_else(|| worker.citations.record_owner(anchor))
+                    },
                     &result,
                     checked_output
                         .as_ref()

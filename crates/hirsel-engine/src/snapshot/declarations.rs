@@ -152,7 +152,11 @@ impl From<DeclarationRow> for Row {
 }
 
 /// The module input resolution and signature normalization read, frozen.
+pub(crate) trait DeclarationSiblings: Send + Sync {
+    fn siblings(&self, syntax: &ItemSyntax) -> Result<Arc<[Arc<ItemSyntax>]>, crate::QueryError>;
+}
 pub struct Declarations {
+    archived_siblings: Option<Arc<dyn DeclarationSiblings>>,
     rows: Arc<FrozenRows>,
     files: BTreeMap<FileId, Arc<[Arc<ItemSyntax>]>>,
     anchors: HashMap<Anchor, FileId>,
@@ -166,6 +170,23 @@ struct FrozenRows {
     sites: BTreeMap<DefId, Arc<Row>>,
 }
 impl Declarations {
+    pub(crate) fn with_archived_siblings(&self, source: Arc<dyn DeclarationSiblings>) -> Arc<Self> {
+        Arc::new(Self {
+            rows: self.rows.clone(),
+            files: BTreeMap::new(),
+            anchors: HashMap::new(),
+            archived_siblings: Some(source),
+        })
+    }
+    pub(crate) fn try_siblings(
+        &self,
+        syntax: &ItemSyntax,
+    ) -> Result<Arc<[Arc<ItemSyntax>]>, crate::QueryError> {
+        match &self.archived_siblings {
+            Some(source) => source.siblings(syntax),
+            None => Ok(self.siblings(syntax)),
+        }
+    }
     /// `package`'s resolution index.
     pub fn index(&self, package: PackageId) -> ManifestIndex {
         self.rows
@@ -525,11 +546,56 @@ impl DeclarationIndex {
     pub fn headers(&self, path: &DefPath) -> Option<&[ContentHash]> {
         self.rows.get(&DefId::intern(path)).map(|row| &*row.headers)
     }
+    /// Header rows and source placement retained by an observation-only copy.
+    /// No item arenas or frozen full-syntax sibling lists participate.
+    pub(crate) fn observation_bytes(&self) -> Option<u64> {
+        let mut bytes = std::mem::size_of::<Self>() as u64;
+        for row in self.rows.values() {
+            bytes = bytes
+                .checked_add(
+                    (std::mem::size_of::<Row>() + 8 * std::mem::size_of::<usize>()) as u64,
+                )?
+                .checked_add((row.site_spans.capacity() * std::mem::size_of::<Span>()) as u64)?
+                .checked_add(
+                    (row.headers.capacity() * std::mem::size_of::<ContentHash>()) as u64,
+                )?;
+            if let Some(sites) = row.sites.get() {
+                bytes = bytes
+                    .checked_add((sites.len() * std::mem::size_of::<DeclarationSite>()) as u64)?;
+            }
+        }
+        bytes = bytes.checked_add(
+            (self.anchors.capacity() * (std::mem::size_of::<(Anchor, FileId)>() + 1) + 16) as u64,
+        )?;
+        for (path, files) in &self.paths {
+            bytes = bytes.checked_add(path.capacity() as u64)?.checked_add(
+                (std::mem::size_of::<std::path::PathBuf>()
+                    + files.len()
+                        * (std::mem::size_of::<FileId>() + 6 * std::mem::size_of::<usize>()))
+                    as u64,
+            )?;
+        }
+        Some(bytes)
+    }
+    pub(crate) fn observations(&self) -> Self {
+        Self {
+            revision: self.revision,
+            rows: self.rows.clone(),
+            files: BTreeMap::new(),
+            anchors: self.anchors.clone(),
+            paths: self.paths.clone(),
+            identity: self.identity,
+            inputs: self.inputs.clone(),
+            frozen: OnceLock::new(),
+            frozen_rows: OnceLock::new(),
+        }
+    }
     /// The frozen module input, built after a row or an input changed.
     pub fn frozen(&self) -> Arc<Declarations> {
         self.frozen
             .get_or_init(|| {
                 Arc::new(Declarations {
+                    archived_siblings: None,
                     rows: self
                         .frozen_rows
                         .get_or_init(|| Arc::new(self.freeze()))

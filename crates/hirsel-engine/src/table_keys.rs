@@ -14,13 +14,13 @@ use std::collections::{BTreeMap, BTreeSet};
 
 /// Compact checked input. The source rule keeps generic call arguments and
 /// lexical sites, without retaining a TypedBody or invoking a body controller.
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct TableKeyUse {
     owner: hirsel_syntax::LexicalOwner,
     generics: hirsel_types::GenericDeclarations,
     calls: Vec<TableKeyCall>,
 }
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct TableKeyCall {
     callee: DefPath,
     site: Span,

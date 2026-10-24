@@ -170,6 +170,19 @@ impl FrontLowerQueries {
             })
             .collect()
     }
+    /// Actual completed read evidence, with no producer or mutable-engine call.
+    pub fn settled_reads(&self, path: &DefPath, phase: QueryKind) -> Option<Arc<Reads>> {
+        let id = match phase {
+            QueryKind::Lower => self.query(path)?,
+            QueryKind::Evaluate => self.evaluate_query(path)?,
+            _ => return None,
+        };
+        self.outcomes
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&(id.kind, id.address.0))
+            .map(|(_, outcome)| Arc::new(outcome.reads.clone()))
+    }
     pub fn work_snapshot(&self) -> Vec<(DefPath, FrontLowerWork)> {
         self.work
             .lock()
