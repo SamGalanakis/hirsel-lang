@@ -12,7 +12,7 @@ mod scheduled_check;
 mod scheduled_lower;
 mod scheduled_run;
 pub use scheduled_check::{FRONT_CHECK_KIND, FrontCheckOutput, FrontCheckPlan, FrontCheckQueries};
-pub use scheduled_run::FrontRunOutput;
+pub use scheduled_run::{FRONT_RUN_KIND, FrontRunOutput, FrontRunQueries};
 mod scheduled_growth;
 pub use parallel::{
     FRONT_BODY_KIND, FRONT_STORAGE_KIND, FrontBodyOutput, FrontBodyQueries, FrontCheckedOutput,
