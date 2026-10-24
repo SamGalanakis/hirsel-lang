@@ -518,7 +518,7 @@ impl DemandInstances {
             .get_content(product.discovery)
             .ok_or("missing native discovery")?;
         let discovery: Discovery = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
-        if discovery.schema != 6
+        if discovery.schema != 7
             || !discovery.emission.canonical()
             || !discovery.operation_freedom.canonical()
             || !discovery.templates.canonical()
@@ -767,11 +767,41 @@ impl DemandInstances {
             hirsel_rc::library::instantiate(&mut layouts, &mut instances, request)
                 .map_err(|e| format!("native adapter primitive registration: {e:?}"))?;
         }
-        let rebound = super::instance_operations::bind_pretransfer(
-            &operations,
-            layouts.table(),
-            &self.target,
+        // LayoutBuilder can retain equal ABI content at distinct selectors.
+        // In the import table use the original instance planner's exact ID;
+        // first matching canonical content need not be that registered slot.
+        let mut original = inputs.declarations().program.operation_registry();
+        hirsel_rc::import::bind_pretransfer_inventory(
+            &mut original,
+            &inputs.declarations().program,
+            &instances,
         )?;
+        let keys = LayoutKeys::new(layouts.table());
+        let rebound = operations
+            .pretransfer_adapters
+            .iter()
+            .map(|expected| {
+                let reference = original
+                    .pretransfer_adapters
+                    .iter()
+                    .find(|actual| {
+                        actual.adapter == expected.adapter && actual.primitive == expected.primitive
+                    })
+                    .ok_or("native import lost the independently selected adapter instance")?;
+                let (abi, table) = hirsel_lir::operation::OperationDeclarations::pretransfer_abi(
+                    &operations,
+                    expected,
+                    &self.target,
+                )
+                .ok_or("native adapter has no independent canonical ABI")?;
+                if keys.fn_abi(&layouts.table().fn_abis[reference.abi.0 as usize])
+                    != LayoutKeys::new(&table).fn_abi(&abi)
+                {
+                    return Err("native original adapter ABI differs from its declaration");
+                }
+                Ok(reference.clone())
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         for (actual, reference) in operations.pretransfer_actuals.iter_mut().zip(&rebound) {
             actual.1 = reference.abi;
         }
@@ -848,7 +878,7 @@ impl DemandInstances {
         let discovery = self.put(
             INSTANCE_DISCOVERY_DOMAIN,
             &serde_json::to_vec(&Discovery {
-                schema: 6,
+                schema: 7,
                 owner: NamedKey::of(&key.instance),
                 ready_source,
                 callees,
