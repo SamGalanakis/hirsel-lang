@@ -108,6 +108,17 @@ PROOFS = {
                         'HIRSEL_AUDITOR_PACKAGE': '/selected auditors', 'HIRSEL_GLIBC_FLOOR': '/selected floor',
                         'HIRSEL_QEMU': '/selected qemu/qemu-aarch64'},
     },
+    'requests::native_selection::tests::actual_native_selector_rechecks_current_platform_before_reusing_unchanged_source': {
+        'source': 'crates/hirsel-driver/src/requests/native_selection/tests.rs',
+        'target': '//tools/buck2/native-toolchain:native-selector-input-proof',
+        'probe': 'tools/buck2/native-toolchain/native_selector_input_proof.py',
+        'arguments': ['/original pinned llvm', '/original packaged linker', '/selected kit', '/selected runtime', '/selected auditors', '/selected floor', '/selected qemu', '/selected harness'],
+        'environment': {'LLVM_SYS_231_PREFIX': '/original pinned llvm',
+                        'HIRSEL_CAPTURE_LINKER': '/original packaged linker',
+                        'HIRSEL_LINK_KIT': '/selected kit', 'HIRSEL_RUNTIME_ARCHIVES': '/selected runtime',
+                        'HIRSEL_AUDITOR_PACKAGE': '/selected auditors', 'HIRSEL_GLIBC_FLOOR': '/selected floor',
+                        'HIRSEL_QEMU': '/selected qemu/qemu-aarch64'},
+    },
     'requests::native_selection::tests::actual_native_selector_coalesces_build_and_bound_run_without_a_retained_controller': {
         'source': 'crates/hirsel-driver/src/requests/native_selection/tests.rs',
         'target': '//tools/buck2/native-toolchain:native-selector-proof',

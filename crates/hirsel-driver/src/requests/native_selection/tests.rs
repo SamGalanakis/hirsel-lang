@@ -191,3 +191,121 @@ fn actual_native_selector_coalesces_build_and_bound_run_without_a_retained_contr
         }
     });
 }
+
+/// Current native inputs are observed before selecting an installed graph,
+/// including when source inputs and the public request are unchanged.
+#[test]
+#[ignore = "requires native-selector-input-proof selected platform inputs"]
+fn actual_native_selector_rechecks_current_platform_before_reusing_unchanged_source() {
+    hirsel_engine::with_compiler_stack(|| {
+        let directory = tempfile::tempdir().unwrap();
+        let manifest = directory.path().join("hirsel.json");
+        std::fs::write(
+            directory.path().join("main.hir"),
+            "pub fn main()->Result[(),u64]{Ok(())}\n",
+        )
+        .unwrap();
+        std::fs::write(&manifest, r#"{"schema":1,"package":{"name":"inputs","version":"1"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"main"}}"#).unwrap();
+        let store: Arc<dyn ResultStore> = Arc::new(MemStore::default());
+        let target = native::TargetSpec::x86_64_unknown_linux_gnu();
+        let mut tools = native::Toolchain::in_tree_with_products(
+            &directory.path().join("runtime"),
+            &[&target],
+            &[native::RuntimeBuild::default()],
+            None,
+            store.clone(),
+        )
+        .unwrap();
+        let original = tools.archive(&target.triple).unwrap().to_owned();
+        let archive = directory.path().join("selected-runtime.a");
+        std::fs::copy(original, &archive).unwrap();
+        tools.runtime.insert(
+            (target.triple.clone(), tools.runtime_build),
+            archive.clone(),
+        );
+        let config = CompileConfig {
+            jobs: Jobs::ONE,
+            store,
+            hold_bytes: 0,
+            ..Default::default()
+        };
+        let compiler = crate::COMPILER
+            .with_config(config.clone())
+            .with_owned_engines();
+        let budget = ProcessBudget::new(1 << 30);
+        let mut selector = CompilerRequests::new(
+            compiler.clone(),
+            config,
+            budget.clone(),
+            RequestLimits {
+                runtime_bytes: 512 << 20,
+                snapshot_bytes: 256 << 20,
+                transport_bytes: 32 << 20,
+            },
+        )
+        .with_toolchain(Arc::new(tools));
+        let (loaded, inputs) = observe_inputs(selector.input_limits(), 3, |inputs| {
+            compiler
+                .load_check_package_inputs(&manifest, inputs, true)
+                .map(|_| ())
+        })
+        .unwrap();
+        loaded.unwrap();
+        let request = CompileRequest {
+            path: manifest,
+            inputs,
+            operation: CompileOperation::NativeBuild(NativeRequest {
+                definition: None,
+                backend: native::Backend::Cranelift,
+                profile: native::BuildProfile::Default,
+                target,
+                validation: native::Validation::EveryStage,
+                launch: Default::default(),
+                run: None,
+                fuel: false,
+                evidence: None,
+            }),
+        };
+        let first = selector.select(&request).unwrap();
+        let repeated = selector.select(&request).unwrap();
+        assert!(Arc::ptr_eq(&first.runtime, &repeated.runtime));
+        let roots = first.roots.clone();
+        let previous = Arc::downgrade(&first.runtime);
+        let reserved = budget.reserved();
+        // The ar global header and first member date follow GNU/LLVM ar's
+        // ordinary format. A different valid date changes selected bytes while
+        // leaving every object and symbol unchanged.
+        let mut changed = std::fs::read(&archive).unwrap();
+        assert_eq!(&changed[..8], b"!<arch>\n");
+        assert_eq!(&changed[66..68], b"`\n");
+        let date = if changed[24] == b'1' { b'2' } else { b'1' };
+        changed[24..36].fill(b' ');
+        changed[24] = date;
+        std::fs::write(&archive, changed).unwrap();
+        assert!(
+            selector.select(&request).is_err(),
+            "a changed platform cannot reuse a live old graph or overcommit its grant"
+        );
+        assert_eq!(budget.reserved(), reserved);
+        assert_eq!(first.runtime.lock().unwrap().stats().polls, 0);
+        drop(first);
+        drop(repeated);
+        let selected = selector.select(&request).unwrap();
+        assert!(
+            previous.upgrade().is_none(),
+            "the idle old revision must release its runtime admission"
+        );
+        assert_ne!(
+            selected.roots, roots,
+            "same source with changed runtime bytes selects another native action"
+        );
+        assert_eq!(
+            selected.runtime.lock().unwrap().stats().polls,
+            0,
+            "platform selection performs no source or native producer work"
+        );
+        drop(selected);
+        drop(selector);
+        assert_eq!(budget.reserved(), 0);
+    });
+}

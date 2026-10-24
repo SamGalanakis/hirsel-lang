@@ -93,3 +93,5 @@ toolchain_proof(name = "platform-closure-proof", tools = [":llvm", ":linker", ":
 toolchain_proof(name = "native-bound-bootstrap-proof", tools = [":llvm", ":linker", ":kit", "root//:hirsel-rt-archives", ":runtime-auditor", ":glibc_floor", ":qemu", "root//:hirsel-driver-unittest-harness"], script = "native_bound_bootstrap_proof.py", interpreter = "python3")
 
 toolchain_proof(name = "native-selector-proof", tools = [":llvm", ":linker", ":kit", "root//:hirsel-rt-archives", ":runtime-auditor", ":glibc_floor", ":qemu", "root//:hirsel-driver-unittest-harness"], script = "native_selector_proof.py", interpreter = "python3")
+
+toolchain_proof(name = "native-selector-input-proof", tools = [":llvm", ":linker", ":kit", "root//:hirsel-rt-archives", ":runtime-auditor", ":glibc_floor", ":qemu", "root//:hirsel-driver-unittest-harness"], script = "native_selector_input_proof.py", interpreter = "python3")
