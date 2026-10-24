@@ -369,7 +369,10 @@ For example, `csv.parse_owned` returns `Result[unique List[List[String]], CsvErr
 Consuming its receipt with `?` or a taken match yields a deeply owned table.
 Ordinary borrowed validation preserves that evidence, so `shared.freeze(take rows)`
 needs no deep copy. This is a producer contract, not a claim that every parser
-result is unique, and it adds no ownership inference rule.
+result is unique, and it adds no ownership inference rule. Likewise,
+`markdown.parse_owned` returns `unique Node`, and `parse_bounded_owned` returns
+`Result[unique Node, ParseLimit]`: both construct the owned tree before returning,
+rather than copying a completed unqualified result.
 
 The one exception in a callable header is the uniqueness of a parameter or result row
 itself, which follows that edge's variance, because a `unique` value is always a valid

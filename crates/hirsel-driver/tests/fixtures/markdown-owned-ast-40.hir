@@ -1,0 +1,155 @@
+// Ownership plumbing and lifetime vectors follow CSV owned-table-37 (Hirsel MIT).
+// Syntax/budget vectors retain commonmark.js/cmark-gfm attribution from budget-39.
+fn keep[T](take value: unique T) -> unique T uses {} {
+  take value
+}
+
+fn budget(bytes: u64, work: u64, nesting: u64) -> markdown.ParseBudget uses {} {
+  markdown.ParseBudget(source_bytes: bytes, work_items: work, nesting: nesting)
+}
+
+fn make(source: String, options: markdown.Options) -> Result[
+  unique markdown.Node,
+  markdown.ParseLimit
+] uses {} {
+  let mut builder: List[u8] = []
+  text.append(mut builder, source)
+  markdown.parse_bounded_owned(
+    text.finish_valid(take builder),
+    options,
+    budget(16384, 131072, 128)
+  )
+}
+
+fn validate(tree: markdown.Node) -> bool uses {} {
+  tree.kind == Document()
+}
+
+fn receipt(source: String, options: markdown.Options) {
+  let expected = markdown.parse(unique source, options)
+  let Ok(initial) = make(source, options) else {
+    failure.check(false, TextInvariant())
+    return
+  }
+  failure.check(validate(initial) && initial == expected, TextInvariant())
+  let packed: Result[unique markdown.Node, ()] = Ok(take initial)
+  let mapped: Result[unique markdown.Node, ()] = results.map(take packed, keep)
+  let Ok(mapped_tree) = take mapped else {
+    failure.check(false, TextInvariant())
+    return
+  }
+  let root = shared.freeze(take mapped_tree)
+  failure.check(shared.with(root, validate), TextInvariant())
+  let Ok(thawed) = shared.thaw(take root) else {
+    failure.check(false, TextInvariant())
+    return
+  }
+  let mut tree = take thawed
+  failure.check(tree == expected, TextInvariant())
+  if list.len(tree.children) != 0 {
+    tree.children[0].kind = Text("changed")
+  }
+  let Ok(second) = make(source, options) else {
+    failure.check(false, TextInvariant())
+    return
+  }
+  failure.check(second == expected, TextInvariant())
+  failure.check(
+    markdown.parse_owned(unique source, options) == expected,
+    TextInvariant()
+  )
+  let original = shared.freeze(unique source)
+  let Ok(owned) = shared.with(
+    original,
+    fn(input: String) -> Result[unique markdown.Node, markdown.ParseLimit] uses {} {
+      make(input, options)
+    }
+  ) else {
+    failure.check(false, TextInvariant())
+    return
+  }
+  let mut changed = take owned
+  changed.kind = Text("new")
+  failure.check(
+    shared.with(
+      original,
+      fn(input: String) -> bool uses {} {
+        input == source
+      }
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    markdown.render_html_with_options(second, options) == markdown.render_html_with_options(
+      expected,
+      options
+    ),
+    TextInvariant()
+  )
+}
+
+fn exact(source: String, options: markdown.Options, work: u64, nesting: u64) {
+  let bytes = string.byte_len(source)
+  let expected = markdown.parse(unique source, options)
+  for b in [
+    budget(bytes, work, nesting),
+    budget(bytes, work - 1, nesting),
+    budget(bytes, work, nesting - 1),
+    budget(bytes, 0, 0),
+    budget(0, 0, 0),
+    budget(16384, 131072, 128)
+  ] {
+    let old = markdown.parse_bounded(unique source, options, b)
+    let owned = markdown.parse_bounded_owned(unique source, options, b)
+    failure.check(old == owned, TextInvariant())
+    if let Ok(tree) = owned {
+      failure.check(tree == expected, TextInvariant())
+      failure.check(
+        markdown.render_html_with_options(tree, options) == markdown.render_html_with_options(
+          expected,
+          options
+        ),
+        TextInvariant()
+      )
+    }
+  }
+}
+
+pub fn main() -> Result[(), ()] {
+  let options = markdown.default_options()
+  for source in [
+    "",
+    "x",
+    "a\r\nb\rc",
+    "é🐑",
+    "> - repeated\n> - repeated",
+    "[x][r] [x][r] ![x][r]\n\n[r]: /same \"title\"",
+    "```same\nsame\n```\n\n`same`\n\n<div>same</div>\n\nx <i>same</i>"
+  ] {
+    receipt(source, options)
+  }
+  let mut extensions = options
+  extensions.tables = true
+  extensions.footnotes = true
+  receipt("a|a\n-|-\na|a\n\n[^a]: same\n\n[^a] [^a]", extensions)
+  exact("", options, 2, 1)
+  exact("x", options, 7, 3)
+  exact("a\n\nb", options, 13, 3)
+  exact("\x00", options, 9, 3)
+  exact("*x*", options, 36, 4)
+  exact("> - x", options, 19, 6)
+  exact("[x]: /u\n\n[x]", options, 20, 4)
+  exact("a|b\n-|-\nc|d", extensions, 50, 5)
+  exact("[^a]: x\n\n[^a]", extensions, 32, 4)
+  // Repeated reference payloads must own independent destination/title storage.
+  let mut repeated = markdown.parse_owned(
+    "[x][r] [x][r]\n\n[r]: /same \"title\"",
+    options
+  )
+  repeated.children[0].children[0].kind = Link("/changed", "new")
+  failure.check(
+    repeated.children[0].children[2].kind == Link("/same", "title"),
+    TextInvariant()
+  )
+  Ok(())
+}

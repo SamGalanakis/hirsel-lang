@@ -2076,7 +2076,10 @@ type BuildFrame {
   children: List[Node],
 }
 
-fn build_node(nodes: List[Entry], mut budget: ParseState) -> Result[Node, ParseLimit] uses {} {
+fn build_node(nodes: List[Entry], mut budget: ParseState) -> Result[
+  unique Node,
+  ParseLimit
+] uses {} {
   admit_nesting(budget, 1)?
   admit(mut budget, 1)?
   let mut stack: unique List[BuildFrame] = [
@@ -2240,10 +2243,13 @@ fn literal_eligible(source: String, options: Options) -> bool uses {} {
 // Literal paragraphs and exact thematic/setext separators need no arena links.
 // All other syntax uses the general CommonMark passes below. The conservative
 // byte preflight also excludes reference definitions and every inline opener.
-fn literal_document(mut budget: ParseState, source: String) -> Result[Node, ParseLimit] uses {} {
+fn literal_document(mut budget: ParseState, source: String) -> Result[
+  unique Node,
+  ParseLimit
+] uses {} {
   let lines = normalized_lines(mut budget, source)?
-  let mut nodes: List[Node] = []
-  let mut paragraph: List[Node] = []
+  let mut nodes: unique List[Node] = []
+  let mut paragraph: unique List[Node] = []
   for line in take lines {
     let bytes = core@1/string.as_bytes(line)
     let len = core@1/bytes.len(bytes)
@@ -2290,6 +2296,13 @@ fn literal_document(mut budget: ParseState, source: String) -> Result[Node, Pars
 /// Parse every String, including incomplete Markdown. NUL becomes U+FFFD;
 /// CRLF and bare CR become LF, as required by CommonMark preprocessing.
 pub fn parse(take source: String, options: Options) -> Node uses {} {
+  parse_owned(take source, options)
+}
+
+/// Construct a deeply unique tree, independent of the consumed source and
+/// temporary parser records. Payload construction still allocates and copies.
+/// Borrow for validation, then move or freeze the completed tree without copying.
+pub fn parse_owned(take source: String, options: Options) -> unique Node uses {} {
   let mut budget = ParseState(bounded: false, work: 0, nesting: 0)
   let parsed = parse_shared(take source, options, mut budget)
   match take parsed {
@@ -2307,6 +2320,18 @@ pub fn parse_bounded(take source: String, options: Options, budget: ParseBudget)
   Node,
   ParseLimit
 ] uses {} {
+  match parse_bounded_owned(take source, options, budget) {
+    Ok(tree) => Ok(take tree),
+    Error(limit) => Error(limit),
+  }
+}
+
+/// The same admission points and refusals as parse_bounded, with a deeply unique
+/// successful tree. This removes a consumer's completed-tree ownership copy.
+pub fn parse_bounded_owned(take source: String, options: Options, budget: ParseBudget) -> Result[
+  unique Node,
+  ParseLimit
+] uses {} {
   if size(source) > budget.source_bytes {
     return Error(SourceBytes())
   }
@@ -2319,7 +2344,7 @@ pub fn parse_bounded(take source: String, options: Options, budget: ParseBudget)
 }
 
 fn parse_shared(take source: String, options: Options, mut budget: ParseState) -> Result[
-  Node,
+  unique Node,
   ParseLimit
 ] uses {} {
   admit_nesting(budget, 1)?

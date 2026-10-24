@@ -50,9 +50,11 @@ optional task state and table alignment). Rendering reads only that tree.
 fn markdown.default_options() -> Options uses {}
 fn markdown.gfm_options() -> Options uses {}
 fn markdown.parse(take source: String, options: Options) -> Node uses {}
+fn markdown.parse_owned(take source: String, options: Options) -> unique Node uses {}
 type markdown.ParseBudget { source_bytes: u64, work_items: u64, nesting: u64 }
 type markdown.ParseLimit = SourceBytes | WorkItems | Nesting
 fn markdown.parse_bounded(take source: String, options: Options, budget: ParseBudget) -> Result[Node, ParseLimit] uses {}
+fn markdown.parse_bounded_owned(take source: String, options: Options, budget: ParseBudget) -> Result[unique Node, ParseLimit] uses {}
 fn markdown.render_html(document: Node) -> String uses {}
 fn markdown.render_html_with_options(document: Node, options: Options) -> String uses {}
 fn markdown.to_html(take source: String, options: Options) -> String uses {}
@@ -81,6 +83,14 @@ examples. Each has an independently reference-rendered truncated-input twin
 with NUL and unterminated bracket/entity syntax, using the same extension
 options as its published example. `tools/generate-markdown.py`
 pins both upstream checkouts and regenerates entity data and vectors.
+
+`parse_owned` and `parse_bounded_owned` return deeply unique trees. Temporary
+normalization/parser owners are cleaned up normally; text, link/title, code and
+footnote payloads are independent of those owners and of retained source storage.
+Borrowing the result for validation preserves its ownership proof for transfer,
+generic Result helpers and freeze/thaw. Construction still allocates and copies
+payload bytes; there is no final whole-tree clone. The unqualified APIs keep
+their existing contracts. Both pairs share the same parser implementation.
 
 ### Bounded Markdown parsing
 

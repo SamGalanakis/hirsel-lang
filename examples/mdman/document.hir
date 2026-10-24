@@ -100,7 +100,7 @@ pub fn load(d: Dir, item: manifest.Input) -> batch.Work[
   let mut options = markdown.default_options()
   // Recognize tables so they are rejected, rather than rendered as paragraphs.
   options.tables = true
-  let tree = match markdown.parse_bounded(
+  let tree = match markdown.parse_bounded_owned(
     take source,
     options,
     markdown.ParseBudget(
@@ -109,7 +109,7 @@ pub fn load(d: Dir, item: manifest.Input) -> batch.Work[
       nesting: PARSER_NESTING
     )
   ) {
-    Ok(tree) => unique tree,
+    Ok(tree) => take tree,
     Error(dimension) => {
       let label = match dimension {
         SourceBytes() => "parser source bytes",
