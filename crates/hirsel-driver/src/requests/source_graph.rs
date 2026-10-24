@@ -253,9 +253,19 @@ impl Plan {
             available - front - lower - growth
         };
         let run = available - front - lower - growth - check;
+        let stacks = (config.jobs.get() as u64)
+            .checked_mul(hirsel_intern::jobs::COMPILER_STACK_BYTES as u64)
+            .ok_or_else(uninstalled)?;
+        let working = limits.runtime_bytes.checked_sub(stacks).ok_or_else(|| {
+            ToolError::Runtime("compiler runtime cannot admit its worker stacks".into())
+        })?;
+        // Root continuations remain live while their P/Lower dependencies run.
+        // A snapshot partition is not one task's executable memory allowance.
+        let continuation_bound = working / (config.jobs.get() as u64 + 8);
         let retained = front
             .checked_div(count.max(1))
             .and_then(|bytes| bytes.checked_sub(8192))
+            .map(|bytes| bytes.min(continuation_bound))
             .filter(|bytes| *bytes != 0)
             .ok_or_else(|| {
                 ToolError::Runtime("compiler body inventory exceeds admission".into())
@@ -268,7 +278,7 @@ impl Plan {
         let root_retained = growth
             .checked_sub(growth_inventory)
             .zip(check.checked_sub(check_inventory))
-            .map(|(growth, check)| growth.min(check))
+            .map(|(growth, check)| growth.min(check).min(continuation_bound))
             .filter(|bytes| *bytes != 0)
             .ok_or_else(|| {
                 ToolError::Runtime("compiler root inventory exceeds admission".into())
@@ -280,10 +290,7 @@ impl Plan {
                 "compiler Lower inventory exceeds admission".into(),
             ));
         }
-        let stacks = (config.jobs.get() as u64)
-            .checked_mul(hirsel_intern::jobs::COMPILER_STACK_BYTES as u64)
-            .ok_or_else(uninstalled)?;
-        let scratch = limits.runtime_bytes.saturating_sub(stacks) / (config.jobs.get() as u64 + 1);
+        let scratch = working / (config.jobs.get() as u64 + 1);
         Ok(Self {
             snapshots: SnapshotPlan {
                 source,
