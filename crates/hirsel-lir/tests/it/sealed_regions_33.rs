@@ -169,8 +169,16 @@ fn transition_fixture_with_root(
         // Keep the ordinary cleanup independently reachable when a mutation
         // redirects only the seal's abort edge past it.
         let condition = t.boolean(support::ENTRY);
-        t.builder
-            .push(support::ENTRY, Inst::Check { condition, failure });
+        let cleanup_edge = t.builder.unit.tables.failures[failure.index()].cleanup;
+        let cleanup = t.builder.unit.tables.edges[cleanup_edge.index()].target;
+        let check_failure = t.failure(cleanup);
+        t.builder.push(
+            support::ENTRY,
+            Inst::Check {
+                condition,
+                failure: check_failure,
+            },
+        );
     }
     t.builder.push(
         support::ENTRY,

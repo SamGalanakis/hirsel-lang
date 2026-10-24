@@ -1703,6 +1703,8 @@ fn every_opcode_is_covered_and_admitted_by_a_stage() {
         assert!(!StageKind::Ready.admits(opcode));
         seen.push(opcode);
     }
+    assert_round_trip(&Terminator::RejectTransfer);
+    seen.push(Terminator::RejectTransfer.opcode());
     seen.sort();
     seen.dedup();
     let mut all = Opcode::ALL.to_vec();
