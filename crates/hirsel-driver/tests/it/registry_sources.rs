@@ -51,6 +51,10 @@ fn std_catalogue_signatures_match_the_complete_ordinary_source_contracts() {
                 Some(declaration) => ("@track_caller\n", declaration),
                 None => ("", line),
             };
+            let (serializable, line) = match line.strip_prefix("@serializable ") {
+                Some(declaration) => ("@serializable\n", declaration),
+                None => ("", line),
+            };
             // A `@preserves_unique(p) ` prefix is the declaration's own attribute.
             let (promise, declaration) = match line.strip_prefix("@preserves_unique(") {
                 Some(rest) => {
@@ -65,6 +69,8 @@ fn std_catalogue_signatures_match_the_complete_ordinary_source_contracts() {
                 ("pub fn ", text, "")
             } else if let Some(text) = declaration.strip_prefix("pub opaque type ") {
                 ("pub opaque type ", text, "")
+            } else if let Some(text) = declaration.strip_prefix("type ") {
+                ("pub type ", text, "")
             } else if let Some(text) = declaration.strip_prefix("const ") {
                 // Only the constant's declared type enters its signature. The
                 // parser requires a value; normalization never visits it.
@@ -76,7 +82,7 @@ fn std_catalogue_signatures_match_the_complete_ordinary_source_contracts() {
             } else {
                 panic!("unsupported catalogue declaration: {line}");
             };
-            let qualified = text.split(['[', '(', ':']).next().unwrap();
+            let qualified = text.split(['[', '(', ':', ' ', '=']).next().unwrap();
             let name = qualified;
             let mut path = hirsel_syntax::DefPath::core(name);
             path.0.package.name = "std".into();
@@ -85,7 +91,7 @@ fn std_catalogue_signatures_match_the_complete_ordinary_source_contracts() {
                 modules: path.0.modules.clone(),
             };
             let source = format!(
-                "{caller}{promise}{}{prefix}{}{}{initializer}\n",
+                "{caller}{serializable}{promise}{}{prefix}{}{}{initializer}\n",
                 if noalloc { "@noalloc\n" } else { "" },
                 path.0.name,
                 &text[qualified.len()..]

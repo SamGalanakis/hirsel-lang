@@ -241,7 +241,7 @@ fn toml.datetime(value: toml.Moment) -> Result[toml.Value, toml.TomlError] uses 
 @track_caller fn test.expect_error[T, E](t: Test, take value: Result[T, E]) -> E
 fn input.read_all(s: Stdin) -> Result[unique Bytes, InputError]
 fn input.read_line(s: Stdin) -> Result[Option[unique String], InputError]
-type input.ReadBoundedError = LineTooLong | Input(InputError)
+@serializable type input.ReadBoundedError = LineTooLong | Input(InputError)
 fn input.read_line_bounded(s: Stdin, max_line_bytes: u64) -> Result[Option[unique String], input.ReadBoundedError]
 N fn prng.seed(value: u64) -> prng.Generator uses {}
 N fn prng.u64(mut generator: prng.Generator) -> u64 uses {}
