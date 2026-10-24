@@ -42,6 +42,22 @@ pub fn validate_instance_bodies(
     signatures: &BTreeMap<DefPath, SignatureRef>,
     definitions: &BTreeMap<DefPath, DefinitionRef>,
 ) -> Vec<InstanceViolation> {
+    let definitions_set = definitions.keys().cloned().collect();
+    let mut violations = validate_instance_catalog(t, bodies, signatures, &definitions_set);
+    for (owner, definition) in definitions {
+        violations.extend(validate_instance_uses(t, bodies, owner, definition));
+    }
+    violations
+}
+
+/// Validate selected CT-5 rows using compact independently observed executable
+/// declarations. Body uses are validated separately when that body is demanded.
+pub fn validate_instance_catalog(
+    t: &TypeInterner,
+    bodies: &InstanceBodies,
+    signatures: &BTreeMap<DefPath, SignatureRef>,
+    definitions: &std::collections::BTreeSet<DefPath>,
+) -> Vec<InstanceViolation> {
     // V's own structural memo, as for a definition.
     let memo = TypeMemo::new();
     let mut violations = vec![];
@@ -50,7 +66,7 @@ pub fn validate_instance_bodies(
         let generic = signatures.get(path).is_some_and(
             |s| matches!(&s.kind, SignatureKind::Function(f) if !f.generics.is_empty()),
         );
-        if !generic || definitions.contains_key(path) {
+        if !generic || definitions.contains(path) {
             violations.push(InstanceViolation::Declaration(path.clone()));
         }
     }
@@ -93,7 +109,7 @@ pub fn validate_instance_bodies(
             }
             let instance = signatures
                 .get(row.definition.path())
-                .filter(|_| definitions.contains_key(row.definition.path()));
+                .filter(|_| definitions.contains(row.definition.path()));
             let Some(instance) = instance else {
                 violations.push(InstanceViolation::MissingInstance {
                     declaration: path.clone(),
@@ -109,41 +125,51 @@ pub fn validate_instance_bodies(
             }
         }
     }
-    for (owner, definition) in definitions {
-        let mut uses = vec![];
-        for body in &definition.bodies {
-            for block in &body.blocks {
-                if let Terminator::Call {
-                    callee: Callee::Definition { path, arguments },
-                    ..
-                } = &block.terminator
-                {
-                    uses.push((path, arguments));
-                }
-            }
-            for rvalue in &body.rvalues {
-                if let Rvalue::FunctionReference {
-                    definition,
-                    arguments,
-                } = rvalue
-                {
-                    uses.push((definition, arguments));
-                }
+    violations
+}
+
+/// The exact existing CT-5 closed-call/reference check for one actual source
+/// body. No other Definition is needed or retained by this operation.
+pub fn validate_instance_uses(
+    t: &TypeInterner,
+    bodies: &InstanceBodies,
+    owner: &DefPath,
+    definition: &hirsel_tir::Definition,
+) -> Vec<InstanceViolation> {
+    let mut violations = vec![];
+    let mut uses = vec![];
+    for body in &definition.bodies {
+        for block in &body.blocks {
+            if let Terminator::Call {
+                callee: Callee::Definition { path, arguments },
+                ..
+            } = &block.terminator
+            {
+                uses.push((path, arguments));
             }
         }
-        for (path, arguments) in uses {
-            let Some(declaration) = DefId::get(path) else {
-                continue;
-            };
-            if bodies.declarations.contains(&declaration)
-                && InstanceBodies::key(t, arguments).is_some()
-                && !matches!(bodies.resolve(declaration, t, arguments), Ok(Some(_)))
+        for rvalue in &body.rvalues {
+            if let Rvalue::FunctionReference {
+                definition,
+                arguments,
+            } = rvalue
             {
-                violations.push(InstanceViolation::Unselected {
-                    owner: owner.clone(),
-                    declaration: path.clone(),
-                });
+                uses.push((definition, arguments));
             }
+        }
+    }
+    for (path, arguments) in uses {
+        let Some(declaration) = DefId::get(path) else {
+            continue;
+        };
+        if bodies.declarations.contains(&declaration)
+            && InstanceBodies::key(t, arguments).is_some()
+            && !matches!(bodies.resolve(declaration, t, arguments), Ok(Some(_)))
+        {
+            violations.push(InstanceViolation::Unselected {
+                owner: owner.clone(),
+                declaration: path.clone(),
+            });
         }
     }
     violations
