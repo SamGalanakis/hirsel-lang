@@ -1,0 +1,10 @@
+fn keep[T: plain](take xs: unique List[T]) -> unique List[T] uses {} {
+  let mut out: List[T] = []
+  for item in take xs { list.push(mut out, item) }
+  take out
+}
+pub fn main() -> Result[(), u64] {
+  let xs: unique List[u64] = [1u64]
+  let received = keep(take xs)
+  Ok(())
+}

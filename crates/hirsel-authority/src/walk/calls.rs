@@ -134,7 +134,7 @@ impl Checker<'_> {
     /// A selected parameter's unknown environment is already covered by the
     /// enclosing declaration. Discharge only that exact receipt, independently
     /// of every other operand and of the callee's ambient authority.
-    fn receipt_authority(
+    pub(super) fn receipt_authority(
         &mut self,
         value: ExprId,
         authority: AuthoritySummary,

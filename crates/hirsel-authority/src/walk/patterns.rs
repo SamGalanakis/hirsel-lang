@@ -138,7 +138,59 @@ impl Checker<'_> {
             self.out.failure.get_or_insert(error);
             return;
         }
+        self.cursor_call_authority(&plan, &plan.open, &plan.open_arguments, source);
+        self.cursor_call_authority(&plan, &plan.next, &plan.next_arguments, plan.cursor);
         self.bind_pattern(pattern, plan.step.item, plan.source, true);
+    }
+    /// Implicit cursor calls have the same declared authority ceiling as
+    /// explicit calls. A plain element bound supplies no inert evidence.
+    fn cursor_call_authority(
+        &mut self,
+        plan: &CursorPlan,
+        path: &DefPath,
+        arguments: &[GenericArgument],
+        actual: TypeId,
+    ) {
+        let Some(frame) = self.frames.last().cloned() else {
+            return;
+        };
+        let Uses::Only(allowed) = &frame.allowed else {
+            return;
+        };
+        let Some(signature) = self.read(DefId::intern(path)) else {
+            return;
+        };
+        let SignatureKind::Function(function) = &signature.kind else {
+            return;
+        };
+        let generics: Vec<_> = arguments
+            .iter()
+            .map(|argument| match argument {
+                GenericArgument::Type(ty) => self.authority(*ty),
+                _ => AuthoritySummary::inert(),
+            })
+            .collect();
+        let authority = self.authority(actual);
+        let authority = self.receipt_authority(plan.source, authority, &frame);
+        // Nested callable parameters are provision independent of their capture
+        // ceiling, as for an explicit named call (CLO-2).
+        let parameters = if matches!(frame.owner, NameSite::Item) || self.in_clause {
+            vec![authority]
+        } else {
+            vec![AuthoritySummary::inert()]
+        };
+        let mut required = substitute_authority(&function.authority, &parameters, &generics);
+        if let Uses::Only(uses) = &function.uses {
+            required = required.join(substitute_authority(uses, &parameters, &generics));
+        }
+        let required = self.scoped_authority(required);
+        if !subset(&required, allowed) {
+            self.error(
+                frame.restriction,
+                self.span(plan.source),
+                "cursor call authority exceeds the declared uses restriction",
+            );
+        }
     }
     pub(super) fn bind_pattern(
         &mut self,

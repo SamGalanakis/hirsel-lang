@@ -1,0 +1,18 @@
+fn advance(take xs: unique List[u64], change: fn(mut u64) -> () uses {}) -> unique List[
+  u64
+] uses {} {
+  let mut owned = take xs
+  change(mut owned[0])
+  take owned
+}
+
+pub fn main() -> Result[(), u64] {
+  let xs: unique List[u64] = [1u64]
+  let received = advance(
+    take xs,
+    fn(mut x: u64) -> () uses {} {
+      x = 2
+    }
+  )
+  Ok(())
+}

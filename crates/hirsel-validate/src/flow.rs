@@ -6102,7 +6102,15 @@ impl Checker<'_> {
                 for (a, unique) in arguments.iter().zip(unique_arguments) {
                     // A `mut` argument handed back unique owns every block it
                     // reaches, so it holds no share of any argument (MODE-2).
+                    // A plain hand-back cannot install a counted share, even
+                    // when the argument is a projection of a counted owner.
                     if a.value.usage == UseKind::Mut
+                        && !self.bound(
+                            self.t,
+                            self.place_type(a.value.place),
+                            hirsel_types::Bound::Plain,
+                            &self.generic_declarations(),
+                        )
                         && !protocol
                         && !self.callee_preserves_state(callee, a.parameter, false)
                         && !self.mut_requires_unique(callee, a.parameter)
