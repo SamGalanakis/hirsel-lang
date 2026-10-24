@@ -22,6 +22,7 @@ pub(super) struct SnapshotPlan {
     pub lower: u64,
     pub check: u64,
     pub growth: u64,
+    pub run: u64,
 }
 pub(super) struct GraphAdmission {
     pub runtime: MemoryReservation,
@@ -30,6 +31,7 @@ pub(super) struct GraphAdmission {
     pub lower: MemoryReservation,
     pub check: MemoryReservation,
     pub growth: MemoryReservation,
+    pub run: MemoryReservation,
     pub transport: MemoryReservation,
 }
 impl GraphAdmission {
@@ -43,7 +45,8 @@ impl GraphAdmission {
             .checked_add(plan.front)
             .and_then(|bytes| bytes.checked_add(plan.lower))
             .and_then(|bytes| bytes.checked_add(plan.check))
-            .and_then(|bytes| bytes.checked_add(plan.growth));
+            .and_then(|bytes| bytes.checked_add(plan.growth))
+            .and_then(|bytes| bytes.checked_add(plan.run));
         if snapshot.is_none_or(|bytes| bytes > limits.snapshot_bytes) {
             return Err(ToolError::Io(std::io::Error::other(
                 "compiler snapshot footprint exceeds admission",
@@ -60,6 +63,7 @@ impl GraphAdmission {
             lower: budget.reserve(plan.lower).map_err(ToolError::Io)?,
             check: budget.reserve(plan.check).map_err(ToolError::Io)?,
             growth: budget.reserve(plan.growth).map_err(ToolError::Io)?,
+            run: budget.reserve(plan.run).map_err(ToolError::Io)?,
             transport: budget
                 .reserve(limits.transport_bytes)
                 .map_err(ToolError::Io)?,
@@ -90,9 +94,16 @@ impl LoadingAdmission {
         })
     }
     pub fn finish(mut self, plan: SnapshotPlan) -> Result<GraphAdmission, ToolError> {
-        let bytes = [plan.source, plan.front, plan.lower, plan.growth, plan.check]
-            .into_iter()
-            .try_fold(0u64, u64::checked_add);
+        let bytes = [
+            plan.source,
+            plan.front,
+            plan.lower,
+            plan.growth,
+            plan.check,
+            plan.run,
+        ]
+        .into_iter()
+        .try_fold(0u64, u64::checked_add);
         if bytes.is_none_or(|bytes| bytes > self.snapshot.bytes()) {
             return Err(ToolError::Runtime(
                 "compiler snapshot footprint exceeds admission".into(),
@@ -105,6 +116,7 @@ impl LoadingAdmission {
         let lower = self.snapshot.split(plan.lower).unwrap();
         let growth = self.snapshot.split(plan.growth).unwrap();
         let check = self.snapshot.split(plan.check).unwrap();
+        let run = self.snapshot.split(plan.run).unwrap();
         Ok(GraphAdmission {
             runtime: self.runtime,
             source,
@@ -112,6 +124,7 @@ impl LoadingAdmission {
             lower,
             growth,
             check,
+            run,
             transport: self.transport,
         })
     }
@@ -190,7 +203,8 @@ impl GraphBudget {
             .checked_add(plan.front)
             .and_then(|bytes| bytes.checked_add(plan.lower))
             .and_then(|bytes| bytes.checked_add(plan.check))
-            .and_then(|bytes| bytes.checked_add(plan.growth));
+            .and_then(|bytes| bytes.checked_add(plan.growth))
+            .and_then(|bytes| bytes.checked_add(plan.run));
         if snapshot.is_none_or(|bytes| bytes > limits.snapshot_bytes) {
             return GraphAdmission::reserve(&self.budget, limits, plan);
         }
@@ -466,6 +480,7 @@ mod tests {
             lower: 10,
             check: 10,
             growth: 0,
+            run: 0,
         };
         let budget = ProcessBudget::new(99);
         assert!(GraphAdmission::reserve(&budget, limits, plan).is_err());
@@ -555,6 +570,7 @@ mod tests {
                     lower: 0,
                     check: 0,
                     growth: 0,
+                    run: 0,
                 },
             )?;
             let error = hirsel_artifact_store::Domain {

@@ -9,6 +9,7 @@ mod host_selector;
 mod inspection;
 mod native_routing;
 mod output;
+mod safe_check;
 mod selector;
 mod source_graph;
 pub use output::{

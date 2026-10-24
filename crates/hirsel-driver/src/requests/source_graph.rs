@@ -9,7 +9,7 @@ use super::{
 };
 use hirsel_engine::{
     CompileConfig, Compiler, FrontBodyQueries, FrontCheckPlan, FrontCheckQueries,
-    FrontGrowthQueries, FrontLowerQueries, LoweringPolicy, QueryKind, ToolError,
+    FrontGrowthQueries, FrontLowerQueries, FrontRunQueries, LoweringPolicy, QueryKind, ToolError,
     loader_inputs::FrozenInputs,
     runtime::*,
     store::{Domain, RequestStore, ResultStore},
@@ -22,6 +22,8 @@ struct SourceProducts {
     entry: DefPath,
     inputs: FrozenInputs,
     lowering: LoweringPolicy,
+    run: Option<Arc<FrontRunQueries>>,
+    safe: Option<Arc<super::safe_check::SafeCheck>>,
     front: Arc<FrontBodyQueries>,
     lower: Arc<FrontLowerQueries>,
     check: Arc<FrontCheckQueries>,
@@ -37,6 +39,7 @@ impl GraphProducts for SourceProducts {
         match operation {
             CompileOperation::Check { lowering } => *lowering == self.lowering,
             CompileOperation::Inspect { .. } | CompileOperation::RecomputeCounts { .. } => true,
+            CompileOperation::SafeCheck => self.safe.is_some(),
             _ => false,
         }
     }
@@ -45,13 +48,18 @@ impl GraphProducts for SourceProducts {
         operation: &CompileOperation,
     ) -> Result<(Vec<QueryId>, CompilerReadiness), ToolError> {
         let roots = match operation {
+            CompileOperation::SafeCheck => {
+                vec![self.safe.as_ref().ok_or_else(uninstalled)?.query()]
+            }
             CompileOperation::Check { lowering } if *lowering == self.lowering => {
                 vec![self.check.query()]
             }
             CompileOperation::Inspect { .. } | CompileOperation::RecomputeCounts { .. } => vec![],
             _ => return Err(uninstalled()),
         };
+        let selected = roots.first().copied();
         let operation = operation.clone();
+        let safe = self.safe.clone();
         let check = self.check.clone();
         let expected = check.query();
         let entry = self.entry.clone();
@@ -70,6 +78,17 @@ impl GraphProducts for SourceProducts {
                     }
                     let work = meter.flush()?;
                     let result = match &operation {
+                        CompileOperation::SafeCheck => {
+                            let [product] = products else {
+                                return Err(uninstalled());
+                            };
+                            if selected.is_none_or(|selected| selected.address != product.address) {
+                                return Err(uninstalled());
+                            }
+                            let (checked, reach) =
+                                safe.as_ref().ok_or_else(uninstalled)?.outcome(*product)?;
+                            CompileResult::SafeCheck { checked, reach }
+                        }
                         CompileOperation::Check { .. } => {
                             let [product] = products else {
                                 return Err(ToolError::Runtime(
@@ -116,6 +135,7 @@ impl SourceProducts {
         let sources = self.sources.clone();
         let errors = self.errors;
         let growth = self._growth.clone();
+        let run = self.run.clone();
         Arc::new(move |reference| {
             let selected = check
                 .failure(reference)
@@ -132,6 +152,11 @@ impl SourceProducts {
                 growth
                     .failure(reference)
                     .map(|error| (error, Some(QueryKind::Check)))
+            });
+            let selected = selected.or_else(|| {
+                run.as_ref()
+                    .and_then(|run| run.failure(reference))
+                    .map(|error| (error, None))
             });
             if let Some((error, phase)) = selected {
                 return ToolError::Query {
@@ -166,6 +191,7 @@ struct Plan {
     snapshots: SnapshotPlan,
     body: MemoryWeight,
     root: MemoryWeight,
+    run: MemoryWeight,
 }
 impl Plan {
     fn new(
@@ -174,6 +200,7 @@ impl Plan {
         inputs: &FrozenInputs,
         definitions: &[DefPath],
         files: usize,
+        needs_run: bool,
     ) -> Result<Self, ToolError> {
         let count = u64::try_from(definitions.len()).map_err(|_| uninstalled())?;
         let source = (inputs.retained_bytes() as u64)
@@ -184,9 +211,18 @@ impl Plan {
             ToolError::Runtime("compiler source inventory exceeds snapshot admission".into())
         })?;
         let front = available / 4;
-        let lower = available / 2;
+        let lower = if needs_run {
+            available / 3
+        } else {
+            available / 2
+        };
         let growth = available / 8;
-        let check = available - front - lower - growth;
+        let check = if needs_run {
+            available / 8
+        } else {
+            available - front - lower - growth
+        };
+        let run = available - front - lower - growth - check;
         let stacks = (config.jobs.get() as u64)
             .checked_mul(hirsel_intern::jobs::COMPILER_STACK_BYTES as u64)
             .ok_or_else(uninstalled)?;
@@ -196,10 +232,31 @@ impl Plan {
         // Root continuations remain live while their P/Lower dependencies run.
         // A snapshot partition is not one task's executable memory allowance.
         let continuation_bound = working / (config.jobs.get() as u64 + 8);
+        let lower_inventory =
+            FrontLowerQueries::input_bytes(definitions).ok_or_else(uninstalled)?;
+        let lower_outputs = lower.checked_sub(lower_inventory).ok_or_else(|| {
+            ToolError::Runtime("compiler Lower inventory exceeds admission".into())
+        })?;
+        // One ordinary Lower and one Evaluate address are possible per input.
+        // Their cumulative producer allowance must fit even when Check demands
+        // every initializer before the execution root runs.
+        let per_output = lower_outputs / count.checked_mul(2).ok_or_else(uninstalled)?.max(1);
+        let output_metadata =
+            FrontLowerQueries::output_bytes(MemoryWeight::default()).ok_or_else(uninstalled)?;
+        let lower_retained = if needs_run {
+            per_output
+                .checked_sub(output_metadata)
+                .map(|bytes| bytes / 2)
+                .ok_or_else(|| {
+                    ToolError::Runtime("compiler Lower output allowance is exhausted".into())
+                })?
+        } else {
+            u64::MAX
+        };
         let retained = front
             .checked_div(count.max(1))
             .and_then(|bytes| bytes.checked_sub(8192))
-            .map(|bytes| bytes.min(continuation_bound))
+            .map(|bytes| bytes.min(continuation_bound).min(lower_retained))
             .filter(|bytes| *bytes != 0)
             .ok_or_else(|| {
                 ToolError::Runtime("compiler body inventory exceeds admission".into())
@@ -217,13 +274,6 @@ impl Plan {
             .ok_or_else(|| {
                 ToolError::Runtime("compiler root inventory exceeds admission".into())
             })?;
-        let lower_inventory =
-            FrontLowerQueries::input_bytes(definitions).ok_or_else(uninstalled)?;
-        if lower_inventory > lower {
-            return Err(ToolError::Runtime(
-                "compiler Lower inventory exceeds admission".into(),
-            ));
-        }
         let scratch = working / (config.jobs.get() as u64 + 1);
         Ok(Self {
             snapshots: SnapshotPlan {
@@ -232,6 +282,7 @@ impl Plan {
                 lower,
                 growth,
                 check,
+                run,
             },
             body: MemoryWeight {
                 retained,
@@ -240,6 +291,11 @@ impl Plan {
             },
             root: MemoryWeight {
                 retained: root_retained,
+                scratch,
+                stack: 0,
+            },
+            run: MemoryWeight {
+                retained: (run / 4).min(retained),
                 scratch,
                 stack: 0,
             },
@@ -255,8 +311,10 @@ pub(super) fn install(
     request: &CompileRequest,
     ledger: Arc<InspectionLedger>,
 ) -> Result<Arc<InstalledGraph>, ToolError> {
-    let CompileOperation::Check { lowering } = request.operation else {
-        return Err(uninstalled());
+    let (lowering, needs_run) = match &request.operation {
+        CompileOperation::Check { lowering } => (*lowering, false),
+        CompileOperation::SafeCheck => (config.lowering, true),
+        _ => return Err(uninstalled()),
     };
     // The loader reads exactly the supplied immutable observations. Declaration
     // indexing/signature metadata is S0; no P body or Lower task runs here.
@@ -266,6 +324,7 @@ pub(super) fn install(
         Ok(program) => program,
         Err(error) => return Err(loading.failed(error)),
     };
+    let launch_entry = program.launch_entry().cloned();
     let sources = program.engine.sources.clone();
     let definitions = program.engine.indexed_definitions();
     let plan = Plan::new(
@@ -274,6 +333,7 @@ pub(super) fn install(
         &request.inputs,
         &definitions,
         program.files.len(),
+        needs_run,
     )?;
     let GraphAdmission {
         runtime,
@@ -283,6 +343,7 @@ pub(super) fn install(
         growth,
         check,
         transport,
+        mut run,
     } = loading.finish(plan.snapshots)?;
     let source = Arc::new(source);
     let query_error = |error| ToolError::Query {
@@ -335,6 +396,44 @@ pub(super) fn install(
             errors,
         )
         .map_err(&query_error)?;
+    let safe_allowance = if matches!(request.operation, CompileOperation::SafeCheck) {
+        Some(
+            run.split(super::safe_check::BYTES)
+                .ok_or_else(uninstalled)?,
+        )
+    } else {
+        None
+    };
+    let run = if needs_run {
+        Some(
+            program
+                .engine
+                .front_run_queries(
+                    check.clone(),
+                    front.clone(),
+                    lower.clone(),
+                    plan.run,
+                    run,
+                    errors,
+                )
+                .map_err(&query_error)?,
+        )
+    } else {
+        drop(run);
+        None
+    };
+    let safe = safe_allowance
+        .map(|allowance| {
+            super::safe_check::SafeCheck::new(
+                check.clone(),
+                run.as_ref().unwrap().clone(),
+                launch_entry.clone(),
+                store.clone(),
+                errors,
+                allowance,
+            )
+        })
+        .transpose()?;
     let mut runtime = AdmittedRuntime::new(config.jobs, runtime, errors).map_err(ToolError::Io)?;
     runtime
         .register(hirsel_engine::FRONT_BODY_KIND, front.factory())
@@ -351,6 +450,16 @@ pub(super) fn install(
     runtime
         .register(hirsel_engine::FRONT_CHECK_KIND, check.factory())
         .map_err(registration)?;
+    if let Some(run) = &run {
+        runtime
+            .register(hirsel_engine::FRONT_RUN_KIND, run.factory())
+            .map_err(registration)?;
+    }
+    if let Some(safe) = &safe {
+        runtime
+            .register(super::safe_check::KIND, safe.factory())
+            .map_err(registration)?;
+    }
     let (input_operations, input_bytes) = request.inputs.read_work();
     let initial = RequestWork {
         hold_bytes: config.hold_bytes,
@@ -393,6 +502,8 @@ pub(super) fn install(
         entry: program.entry,
         inputs: request.inputs.clone(),
         lowering,
+        run,
+        safe,
         front,
         lower,
         check,
