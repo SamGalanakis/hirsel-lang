@@ -166,6 +166,26 @@ pub struct AdmittedRuntime {
     reservation: Option<MemoryReservation>,
 }
 
+/// A host completion wait independent of the runtime's outer ownership lock.
+/// Clone while holding that lock, then release it before waiting. This handle
+/// neither polls nor consumes a result; cancellation and shutdown wake it too.
+#[derive(Clone)]
+pub struct RuntimeCompletion {
+    shared: Arc<Shared>,
+}
+impl RuntimeCompletion {
+    pub fn wait(&self, request: RequestId) {
+        let mut state = self.shared.lock();
+        while !state.request_complete(request.0) && !state.stopped {
+            state = self
+                .shared
+                .changed
+                .wait(state)
+                .unwrap_or_else(|e| e.into_inner());
+        }
+    }
+}
+
 impl AdmittedRuntime {
     pub fn new(
         jobs: Jobs,
@@ -321,19 +341,18 @@ impl AdmittedRuntime {
     pub fn stats(&self) -> RuntimeStats {
         self.shared.lock().stats
     }
+    pub fn completion(&self) -> RuntimeCompletion {
+        RuntimeCompletion {
+            shared: self.shared.clone(),
+        }
+    }
     pub fn wait(&mut self, request: RequestId) -> OutcomeList {
+        let completion = self.completion();
         loop {
             if let Poll::Ready(result) = self.poll(request) {
                 return result;
             }
-            let mut state = self.shared.lock();
-            while !state.request_complete(request.0) && !state.stopped {
-                state = self
-                    .shared
-                    .changed
-                    .wait(state)
-                    .unwrap_or_else(|e| e.into_inner());
-            }
+            completion.wait(request);
         }
     }
     pub fn shutdown(&mut self) {
