@@ -608,10 +608,13 @@ pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
         .unwrap();
     assert!(live.status.success(), "{live:?}");
     assert_eq!(live.stdout, b"f1 engine replay\n");
-    assert!(
+    // c11e8258 keeps production admission gated in ordinary builds.
+    // The tape family must match the compiled admission contract exactly.
+    assert_eq!(
         std::fs::read(&tape)
             .unwrap()
-            .starts_with(b"hirsel-free-tape 2\n")
+            .starts_with(b"hirsel-free-tape 2\n"),
+        hirsel_rt::free_driver::admission_enabled()
     );
     let replay = Command::new(env!("CARGO_BIN_EXE_hirsel"))
         .arg("run")
