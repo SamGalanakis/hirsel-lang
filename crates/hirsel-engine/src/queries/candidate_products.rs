@@ -174,19 +174,11 @@ impl QueryEngine {
             annotations: vec![],
             locator,
         };
-        let export = hirsel_proof_export::build(&input);
-        if !export.skipped.is_empty() {
-            return Err(QueryError::Operational(hirsel_types::OperationalFailure {
-                operation: "candidate products".into(),
-                message: format!("incomplete canonical products: {:?}", export.skipped),
-            }));
-        }
-        let canonical: Arc<str> = hirsel_proof_export::encode(&export, &input.locator).into();
+        let encoder = CheckedProductEncoder::new(&input)?;
         // The check's complete dependency edges, per definition. Intermediate
         // Resolve/Check/Modes tables have different retention lifetimes and a
         // stored Modes product can subsume them. Preserve every observed edge
         // and value, rather than make table retention part of semantic identity.
-        let mut reads: BTreeMap<DefPath, BTreeMap<Vec<u8>, ContentHash>> = BTreeMap::new();
         let mut required_reads = self.checked_scope.front.clone();
         for path in &self.checked_scope.lowered {
             if let Some(lower) = self.shared_memo_reads(path, QueryKind::Lower) {
@@ -206,25 +198,17 @@ impl QueryEngine {
                 })?);
             }
         }
-        for (path, observed) in required_reads {
-            let edges = reads.entry(path).or_default();
-            for (key, value) in observed.iter() {
-                let mut bytes = vec![];
-                key.encode(&mut bytes);
-                edges.insert(bytes, *value);
-            }
-        }
-        let mut parts = vec![canonical.as_bytes().to_vec()];
+        let mut registrations = Vec::new();
         for (path, generated) in &self.generated {
             let mut key = vec![];
             crate::memo::encode_def_path(&mut key, path);
-            parts.push(key);
-            parts.push(generated.text.as_bytes().to_vec());
+            registrations.push(key);
+            registrations.push(generated.text.as_bytes().to_vec());
         }
         for declaration in &self.instance_bodies.declarations {
             let mut key = vec![];
             crate::memo::encode_def_path(&mut key, declaration.path());
-            parts.push(key);
+            registrations.push(key);
         }
         for (declaration, instances) in &self.instance_bodies.instances {
             let mut records: Vec<_> = instances
@@ -241,8 +225,53 @@ impl QueryEngine {
                 })
                 .collect();
             records.sort();
-            parts.extend(records);
+            registrations.extend(records);
         }
+        Ok(encoder.finish(required_reads, registrations))
+    }
+}
+
+/// Canonical encoding of already settled source obligations. This formats
+/// ordinary immutable data and cannot demand a query or supply V authority.
+pub struct CheckedProductEncoder {
+    canonical: Arc<str>,
+    types: Arc<hirsel_types::TypeInterner>,
+}
+impl CheckedProductEncoder {
+    pub fn new(input: &ExportInput) -> Result<Self, QueryError> {
+        let export = hirsel_proof_export::build(input);
+        if !export.skipped.is_empty() {
+            return Err(QueryError::Operational(hirsel_types::OperationalFailure {
+                operation: "candidate products".into(),
+                message: format!("incomplete canonical products: {:?}", export.skipped),
+            }));
+        }
+        let canonical: Arc<str> = hirsel_proof_export::encode(&export, &input.locator).into();
+        Ok(Self {
+            canonical,
+            types: input.types.clone(),
+        })
+    }
+    /// Complete read rows and the existing canonical generated/instance
+    /// registration records, in source order. None may be inferred from a
+    /// semantic cache or omitted because its body was evicted.
+    pub fn finish(
+        self,
+        required_reads: BTreeMap<DefPath, Arc<crate::memo::Reads>>,
+        registrations: Vec<Vec<u8>>,
+    ) -> CheckedProducts {
+        let canonical = self.canonical;
+        let mut reads: BTreeMap<DefPath, BTreeMap<Vec<u8>, ContentHash>> = BTreeMap::new();
+        for (path, observed) in required_reads {
+            let edges = reads.entry(path).or_default();
+            for (key, value) in observed.iter() {
+                let mut bytes = vec![];
+                key.encode(&mut bytes);
+                edges.insert(bytes, *value);
+            }
+        }
+        let mut parts = vec![canonical.as_bytes().to_vec()];
+        parts.extend(registrations);
         for (path, observed) in &reads {
             let mut key = vec![];
             crate::memo::encode_def_path(&mut key, path);
@@ -253,7 +282,7 @@ impl QueryEngine {
             }
         }
         let stats = self.types.stats();
-        Ok(CheckedProducts {
+        CheckedProducts {
             digest: ContentHash::of_parts(
                 "hirsel.checked-products.v1",
                 parts.iter().map(Vec::as_slice),
@@ -262,6 +291,6 @@ impl QueryEngine {
             reads,
             type_rows: stats.rows,
             type_bytes: stats.row_bytes,
-        })
+        }
     }
 }
