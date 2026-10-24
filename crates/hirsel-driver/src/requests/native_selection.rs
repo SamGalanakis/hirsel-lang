@@ -4,7 +4,9 @@ use super::{
     NativeRequest,
     native_assembly::{NativeAssembly, NativeAssemblyPlan, NativeSourceInputs},
     native_bootstrap::NativeAdmission,
-    native_platform::{NativePlatformInputs, NativePlatformPolicy, NativePlatformSelection},
+    native_platform::{
+        NativePlatformInputs, NativePlatformPolicy, NativePlatformSelection, NativePurpose,
+    },
     native_products::NativeBuildReadiness,
 };
 use crate::native::{self, NativeError, StageName, object_queries};
@@ -67,6 +69,7 @@ pub(super) struct NativeSelection {
     _allowance: MemoryReservation,
     key: ContentHash,
     request: NativeRequest,
+    purpose: NativePurpose,
     entry: DefPath,
     tools: Arc<native::Toolchain>,
     links: Vec<LinkInput>,
@@ -82,6 +85,7 @@ impl NativeSelection {
         program: &mut LoadedProgram,
         source: NativeSourceInputs,
         request: NativeRequest,
+        purpose: NativePurpose,
         tools: Arc<native::Toolchain>,
         footprint: &Footprint,
         allowance: &mut MemoryReservation,
@@ -128,6 +132,7 @@ impl NativeSelection {
         let NativePlatformSelection { plan, platform } = NativePlatformSelection::capture(
             store.clone(),
             NativePlatformInputs {
+                purpose,
                 request: &request,
                 entry: &entry,
                 tools: &tools,
@@ -172,8 +177,9 @@ impl NativeSelection {
         );
         Ok(Arc::new(Self {
             _allowance: policy_allowance,
-            key: request_key(&request)?,
+            key: request_key(&request, purpose)?,
             request,
+            purpose,
             entry,
             tools,
             links,
@@ -187,8 +193,8 @@ impl NativeSelection {
             readiness,
         }))
     }
-    pub fn accepts(&self, request: &NativeRequest) -> bool {
-        if request_key(request).ok() != Some(self.key) {
+    pub fn accepts(&self, request: &NativeRequest, purpose: NativePurpose) -> bool {
+        if request_key(request, purpose).ok() != Some(self.key) {
             return false;
         }
         // This must snapshot the current linker and kit as well as target
@@ -196,6 +202,7 @@ impl NativeSelection {
         NativePlatformSelection::capture(
             self.store.clone(),
             NativePlatformInputs {
+                purpose: self.purpose,
                 request: &self.request,
                 entry: &self.entry,
                 tools: &self.tools,
@@ -215,7 +222,7 @@ impl NativeSelection {
 fn native_error(error: NativeError) -> ToolError {
     ToolError::Runtime(error.to_string())
 }
-fn request_key(request: &NativeRequest) -> Result<ContentHash, ToolError> {
+fn request_key(request: &NativeRequest, purpose: NativePurpose) -> Result<ContentHash, ToolError> {
     if request.evidence.is_some() {
         return Err(native_error(NativeError::new(
             StageName::Manifest,
@@ -225,12 +232,7 @@ fn request_key(request: &NativeRequest) -> Result<ContentHash, ToolError> {
     let bytes = serde_json::to_vec(&(
         &request.definition,
         request.backend.name(),
-        match request.profile {
-            native::BuildProfile::Default => 0u8,
-            native::BuildProfile::Debug => 1,
-            native::BuildProfile::Release => 2,
-            native::BuildProfile::ReleaseLto => 3,
-        },
+        super::native_platform::profile_options(request, purpose).map_err(native_error)?,
         request.target.digest(),
         match request.validation {
             native::Validation::Ready => 0u8,

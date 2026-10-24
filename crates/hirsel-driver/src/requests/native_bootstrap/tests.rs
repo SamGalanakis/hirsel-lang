@@ -904,6 +904,7 @@ fn native_bootstrap_policy_case(bind_run: bool) {
                 NativeRequest,
                 native_platform::{
                     NativePlatformInputs, NativePlatformPolicy, NativePlatformSelection,
+                    NativePurpose,
                 },
             };
             let tools = Arc::new(
@@ -934,6 +935,11 @@ fn native_bootstrap_policy_case(bind_run: bool) {
             let NativePlatformSelection { mut plan, platform } = NativePlatformSelection::capture(
                 store.clone(),
                 NativePlatformInputs {
+                    purpose: if bind_run {
+                        NativePurpose::Run
+                    } else {
+                        NativePurpose::Build
+                    },
                     request: &request,
                     entry: &entry,
                     tools: &tools,

@@ -40,7 +40,47 @@ impl NativePlatformPolicy {
         })
     }
 }
+/// The operation supplies emission intent independently of launch records.
+/// A bound executable build can also carry a validated run.
+#[derive(Clone, Copy)]
+pub(super) enum NativePurpose {
+    Build,
+    Run,
+}
+impl NativePurpose {
+    pub fn opt(self, request: &NativeRequest) -> native::OptLevel {
+        match (self, request.profile, request.backend) {
+            // Preserve tool::run's interactive Cranelift policy. Executable
+            // builds retain their explicit profile policy on both backends.
+            (Self::Run, BuildProfile::Default, Backend::Cranelift) => native::OptLevel::None,
+            _ => request.profile.opt(),
+        }
+    }
+}
+pub(super) fn profile_options(
+    request: &NativeRequest,
+    purpose: NativePurpose,
+) -> Result<ContentHash, NativeError> {
+    let profile = match request.profile {
+        BuildProfile::Default => 0u8,
+        BuildProfile::Debug => 1,
+        BuildProfile::Release => 2,
+        BuildProfile::ReleaseLto => 3,
+    };
+    let opt = match purpose.opt(request) {
+        native::OptLevel::None => 0u8,
+        native::OptLevel::Default => 1,
+        native::OptLevel::Speed => 2,
+    };
+    let bytes = serde_json::to_vec(&(profile, request.fuel, opt))
+        .map_err(|error| NativeError::new(StageName::Emission, error.to_string()))?;
+    Ok(ContentHash::of_parts(
+        "hirsel.host.native-profile.v2",
+        [bytes.as_slice()],
+    ))
+}
 pub(super) struct NativePlatformInputs<'a> {
+    pub purpose: NativePurpose,
     pub request: &'a NativeRequest,
     pub entry: &'a DefPath,
     pub tools: &'a Toolchain,
@@ -170,16 +210,7 @@ impl NativePlatformSelection {
             allowance,
         )
         .map_err(failed)?;
-        let profile = match request.profile {
-            BuildProfile::Default => 0u8,
-            BuildProfile::Debug => 1,
-            BuildProfile::Release => 2,
-            BuildProfile::ReleaseLto => 3,
-        };
-        let profile_bytes = serde_json::to_vec(&(profile, request.fuel))
-            .map_err(|error| failed(error.to_string()))?;
-        let profile_options =
-            ContentHash::of_parts("hirsel.host.native-profile.v1", [profile_bytes.as_slice()]);
+        let profile_options = profile_options(request, inputs.purpose)?;
         let mut options = request.profile.options(target.clone());
         options.validation = request.validation;
         options.launch = request.launch.clone();
@@ -187,7 +218,7 @@ impl NativePlatformSelection {
             plan: NativePlan {
                 options,
                 policy: profile_options,
-                opt: request.profile.opt(),
+                opt: inputs.purpose.opt(request),
                 debug: request.profile == BuildProfile::Debug,
                 verify_backend: true,
                 measurement: inputs.tools.runtime_build.measurement,

@@ -67,8 +67,8 @@ pub enum CompileOperation {
     NativeRun(NativeRequest),
 }
 /// Backend and launch policy, independent of destination paths or host output
-/// writers. Build and run select the same compilation products; execution and
-/// executable materialization follow their completed readiness descriptor.
+/// writers. Build and run share compilation products when their effective
+/// emission policy matches; execution and materialization use completed readiness.
 #[derive(Clone)]
 pub struct NativeRequest {
     /// Selected launch definition; None uses the observed package entry.

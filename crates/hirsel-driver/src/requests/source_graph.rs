@@ -45,10 +45,12 @@ impl GraphProducts for SourceProducts {
             CompileOperation::Inspect { .. } | CompileOperation::RecomputeCounts { .. } => true,
             CompileOperation::Tir { .. } => self.run.is_some(),
             CompileOperation::SafeCheck => self.safe.is_some(),
-            CompileOperation::NativeBuild(request) | CompileOperation::NativeRun(request) => self
-                .native
-                .as_ref()
-                .is_some_and(|native| native.accepts(request)),
+            CompileOperation::NativeBuild(request) => self.native.as_ref().is_some_and(|native| {
+                native.accepts(request, super::native_platform::NativePurpose::Build)
+            }),
+            CompileOperation::NativeRun(request) => self.native.as_ref().is_some_and(|native| {
+                native.accepts(request, super::native_platform::NativePurpose::Run)
+            }),
             _ => false,
         }
     }
@@ -620,9 +622,12 @@ pub(super) fn install(
         })
         .transpose()?;
     let native = if let Some(footprint) = &plan.native {
-        let native_request = match &request.operation {
-            CompileOperation::NativeBuild(request) | CompileOperation::NativeRun(request) => {
-                request
+        let (native_request, purpose) = match &request.operation {
+            CompileOperation::NativeBuild(request) => {
+                (request, super::native_platform::NativePurpose::Build)
+            }
+            CompileOperation::NativeRun(request) => {
+                (request, super::native_platform::NativePurpose::Run)
             }
             _ => return Err(uninstalled()),
         };
@@ -632,26 +637,30 @@ pub(super) fn install(
             .or(launch_entry.as_ref())
             .cloned()
             .ok_or_else(uninstalled)?;
-        Some(super::native_selection::NativeSelection::new(
-            &mut program,
-            super::native_assembly::NativeSourceInputs {
-                definitions: definitions.clone(),
-                entry,
-                front: front.clone(),
-                lower: lower.clone(),
-                run: run.take().ok_or_else(uninstalled)?,
-                store: store.clone(),
-            },
-            native_request.clone(),
-            toolchain.cloned().ok_or_else(|| {
-                ToolError::Runtime("native request requires its selected toolchain".into())
-            })?,
-            footprint,
-            &mut native_allowance.ok_or_else(uninstalled)?,
-            plan.body,
-            errors,
-            disk_bytes,
-        )?)
+        Some(
+            super::native_selection::NativeSelection::new(
+                &mut program,
+                super::native_assembly::NativeSourceInputs {
+                    definitions: definitions.clone(),
+                    entry,
+                    front: front.clone(),
+                    lower: lower.clone(),
+                    run: run.take().ok_or_else(uninstalled)?,
+                    store: store.clone(),
+                },
+                native_request.clone(),
+                purpose,
+                toolchain.cloned().ok_or_else(|| {
+                    ToolError::Runtime("native request requires its selected toolchain".into())
+                })?,
+                footprint,
+                &mut native_allowance.ok_or_else(uninstalled)?,
+                plan.body,
+                errors,
+                disk_bytes,
+            )
+            .map_err(|error| super::host_selector::retain_error(error, source.clone()))?,
+        )
     } else {
         None
     };
