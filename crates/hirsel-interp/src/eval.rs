@@ -319,6 +319,7 @@ pub(crate) fn execute_frames(
     execution: &mut Execution,
     entry_consumed: &mut bool,
 ) -> Result<Step, Error> {
+    let profile = crate::profile::Profile::active(&configuration.entry);
     let provider = &mut Resolved::new(provider);
     let Scheduler {
         mut returned_snapshot,
@@ -901,6 +902,7 @@ pub(crate) fn execute_frames(
                                 )?,
                             } {
                                 execution.steps = execution.steps.saturating_add(1);
+                                profile.add(frame.definition.path.path(), 1);
                                 let taken = function
                                     .parameters
                                     .iter()
@@ -1894,14 +1896,17 @@ pub(crate) fn execute_frames(
                 code
             }
         };
-        if !dispatch(
+        let before = execution.steps;
+        let general = dispatch(
             frame,
             codes.get(code),
             depth,
             limits,
             runtime.trace_mode,
             execution,
-        ) {
+        );
+        profile.add(frame.definition.path.path(), execution.steps - before);
+        if !general {
             continue;
         }
         let call = codes
@@ -1986,6 +1991,7 @@ pub(crate) fn execute_frames(
             frame.store_point_passed = false;
         }
         execution.steps = execution.steps.saturating_add(1);
+        profile.add(frame.definition.path.path(), 1);
         if let Some(check) = &frame.check {
             let mut state = check.state.borrow_mut();
             state.site = site;

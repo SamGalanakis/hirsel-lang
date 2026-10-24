@@ -327,6 +327,123 @@ pub fn integer(
   repeat(mut out, fill, right)
 }
 
+// Rust core flt2dec/strategy/dragon.rs:296-409 at f6c1107f (MIT).
+// Bounded Dragon integer scaling: m * 2^e * 10^p = (m * 5^p) * 2^(e+p).
+// For e<0,p<=18,u64 m, the numerator has at most 106 bits and the result
+// at most 124 bits. Remainder versus half, then quotient parity, rounds exactly
+// as flt2dec dragon's final digit rule, without generating discarded digits.
+const FIXED_POW5: Array[u64] = [
+  1,
+  5,
+  25,
+  125,
+  625,
+  3125,
+  15625,
+  78125,
+  390625,
+  1953125,
+  9765625,
+  48828125,
+  244140625,
+  1220703125,
+  6103515625,
+  30517578125,
+  152587890625,
+  762939453125,
+  3814697265625
+]
+
+@noalloc
+fn fixed_scaled(mantissa: u64, exponent: i32, precision: u64) -> Option[u128] uses {} {
+  if precision > 18 || exponent >= 0 {
+    return None()
+  }
+  let places: i32 = core@1/int.narrow(precision)
+  let shift = exponent + places
+  let factor: u128 = core@1/int.widen(FIXED_POW5[precision])
+  let numerator: u128 = core@1/int.widen(mantissa) * factor
+  let mut rounded: u128 = 0
+  if shift >= 0 {
+    let left: u128 = core@1/int.narrow(shift)
+    rounded = numerator << left
+  } else if shift > -128 {
+    let right: u128 = core@1/int.narrow(-shift)
+    rounded = numerator >> right
+    let mask = (1u128 << right) - 1
+    let remainder = numerator & mask
+    let halfway = 1u128 << right - 1
+    if remainder > halfway || remainder == halfway && rounded % 2 != 0 {
+      rounded += 1
+    }
+  }
+  // shift<=-128 is below half a unit: numerator is strictly below 2^106.
+  Some(rounded)
+}
+
+// itoa's four-digit count loop. Both parts below fit u64: for e<0 the whole
+// part is at most 2^63, and the fraction is below 10^18.
+@noalloc
+fn fixed_word_digits(value: u64) -> u64 uses {} {
+  let mut remaining = value
+  let mut count: u64 = 1
+  while remaining >= 10000 {
+    remaining /= 10000
+    count += 4
+  }
+  count + if remaining >= 1000 {
+    3u64
+  } else if remaining >= 100 {
+    2u64
+  } else if remaining >= 10 {
+    1u64
+  } else {
+    0u64
+  }
+}
+
+@preserves_unique(out)
+fn fixed_scaled_into(
+  scaled: u128,
+  negative: bool,
+  fill: char,
+  align: u64,
+  width: u64,
+  precision: u64,
+  flags: u64,
+  mut out: List[u8]
+) -> () uses {} {
+  let places: u128 = core@1/int.widen(precision)
+  let scale: u128 = core@1/int.widen(FIXED_POW5[precision]) * (1u128 << places)
+  let whole_value: u64 = core@1/int.narrow(scaled / scale)
+  let fraction: u64 = core@1/int.narrow(scaled % scale)
+  let whole = fixed_word_digits(whole_value)
+  let length = whole + if precision > 0 {
+    precision + 1
+  } else {
+    0u64
+  }
+  let right = begin(length, negative, "", fill, align, width, flags, mut out)
+  internal.decimal.append_u64(mut out, whole_value, false)
+  if precision > 0 {
+    core@1/list.push(mut out, 46u8)
+    let fraction_width = if fraction == 0 {
+      0u64
+    } else {
+      fixed_word_digits(fraction)
+    }
+    let zeros: Bytes = b"000000000000000000"
+    core@1/bytes.append(
+      mut out,
+      core@1/bytes.slice(zeros, 0, precision - fraction_width)
+    )
+    if fraction != 0 {
+      internal.decimal.append_u64(mut out, fraction, false)
+    }
+  }
+  repeat(mut out, fill, right)
+}
+
 // The exact decimal expansion (the parser's DecimalSeq, every digit kept) rounded
 // half to even at `precision` fractional digits (format_round.hir).
 @preserves_unique(out)
@@ -343,6 +460,10 @@ pub fn fixed(
   mut out: List[u8]
 ) -> () uses {} {
   let places: i64 = core@1/int.narrow(precision)
+  if let Some(scaled) = fixed_scaled(mantissa, exponent, precision) {
+    fixed_scaled_into(scaled, negative, fill, align, width, precision, flags, mut out)
+    return
+  }
   let mut d = internal.decimal_seq.exact(mantissa, exponent, places)
   let point: i64 = core@1/int.widen(d.decimal_point)
   round_decimal(mut d, point + places)

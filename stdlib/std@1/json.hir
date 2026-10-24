@@ -7,6 +7,10 @@ pub type Value = Null | Bool(bool) | Number(String) | Text(String) | Array(List[
 @serializable
 pub type JsonError = Syntax(u64) | DuplicateKey(u64) | Nesting(u64) | InvalidNumber
 
+// serde_json read.rs:521-566 / ESCAPE: controls, quote and backslash end a plain run.
+// The shared byte scanner leaves UTF-8 bytes and every other byte untouched.
+const JSON_STRING_STOP: Bytes = b"\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f\"\\"
+
 // Policy counts open arrays/objects; scalars do not consume a level.
 pub const MAX_NESTING: u64 = 128
 
@@ -24,14 +28,23 @@ fn json_peek(data: Bytes, pos: u64) -> u8 uses {} {
 // Adapted serde_json src/de.rs parse_whitespace,
 // commit 20572a6d066958542d79cdd6cf1a7cd9f0c8e1f8.
 @noalloc
-fn json_whitespace(data: Bytes, mut pos: u64) -> () uses {} {
-  while pos < core@1/bytes.len(data) {
+fn json_whitespace(data: Bytes, mut pos: u64) -> u8 uses {} {
+  let size = core@1/bytes.len(data)
+  while pos < size {
     let c = data[pos]
-    if c != 32 && c != 9 && c != 10 && c != 13 {
-      break
+    if c > 32 || c != 32 && c != 9 && c != 10 && c != 13 {
+      return c
     }
     pos += 1
+    // Long space padding is common in bounded input envelopes. A borrowed
+    // byte comparison skips a whole run without changing delimiter offsets.
+    if c == 32 {
+      while size - pos >= 32 && core@1/bytes.slice(data, pos, pos + 32) == b"                                " {
+        pos += 32
+      }
+    }
   }
+  0
 }
 
 // Adapted serde_json src/de.rs parse_integer/parse_decimal/parse_exponent,
@@ -39,41 +52,62 @@ fn json_whitespace(data: Bytes, mut pos: u64) -> () uses {} {
 // Scan grammar only: no float conversion, overflow, or loss of number spelling.
 @noalloc
 fn json_number_end(data: Bytes, mut pos: u64) -> Result[(), JsonError] uses {} {
-  if json_peek(data, pos) == 45 {
+  let size = core@1/bytes.len(data)
+  let mut c = json_peek(data, pos)
+  if c == 45 {
     pos += 1
+    c = json_peek(data, pos)
   }
-  let first = json_peek(data, pos)
-  if first == 48 {
+  if c == 48 {
     pos += 1
-    if std@1/ascii.is_digit(json_peek(data, pos)) {
+    c = json_peek(data, pos)
+    if c >= 48 && c <= 57 {
       return Error(Syntax(pos))
     }
-  } else if std@1/ascii.is_digit(first) {
-    while std@1/ascii.is_digit(json_peek(data, pos)) {
+  } else if c >= 49 && c <= 57 {
+    while c >= 48 && c <= 57 {
       pos += 1
+      c = if pos < size {
+        data[pos]
+      } else {
+        0
+      }
     }
   } else {
     return Error(Syntax(pos))
   }
-  if json_peek(data, pos) == 46 {
+  if c == 46 {
     pos += 1
-    if !std@1/ascii.is_digit(json_peek(data, pos)) {
+    c = json_peek(data, pos)
+    if c < 48 || c > 57 {
       return Error(Syntax(pos))
     }
-    while std@1/ascii.is_digit(json_peek(data, pos)) {
+    while c >= 48 && c <= 57 {
       pos += 1
+      c = if pos < size {
+        data[pos]
+      } else {
+        0
+      }
     }
   }
-  if json_peek(data, pos) == 101 || json_peek(data, pos) == 69 {
+  if c == 101 || c == 69 {
     pos += 1
-    if json_peek(data, pos) == 43 || json_peek(data, pos) == 45 {
+    c = json_peek(data, pos)
+    if c == 43 || c == 45 {
       pos += 1
+      c = json_peek(data, pos)
     }
-    if !std@1/ascii.is_digit(json_peek(data, pos)) {
+    if c < 48 || c > 57 {
       return Error(Syntax(pos))
     }
-    while std@1/ascii.is_digit(json_peek(data, pos)) {
+    while c >= 48 && c <= 57 {
       pos += 1
+      c = if pos < size {
+        data[pos]
+      } else {
+        0
+      }
     }
   }
   Ok(())
@@ -131,10 +165,7 @@ fn json_shared_quoted(take data: Bytes, mut pos: u64) -> Result[String, JsonErro
     return Error(Syntax(pos))
   }
   let start = pos + 1
-  let mut end = start
-  while end < core@1/bytes.len(data) && data[end] >= 32 && data[end] != 34 && data[end] != 92 {
-    end += 1
-  }
+  let end = core@1/bytes.find_any(data, JSON_STRING_STOP, start)
   if end < core@1/bytes.len(data) && data[end] == 34 {
     pos = end + 1
     return Ok(json_shared_text(copy data, start, end))
@@ -202,9 +233,7 @@ fn json_quoted(data: Bytes, mut pos: u64) -> Result[unique String, JsonError] us
   }
   pos += 1
   let plain_start = pos
-  while pos < core@1/bytes.len(data) && data[pos] >= 32 && data[pos] != 34 && data[pos] != 92 {
-    pos += 1
-  }
+  pos = core@1/bytes.find_any(data, JSON_STRING_STOP, pos)
   if pos < core@1/bytes.len(data) && data[pos] == 34 {
     let value = json_owned_text(data, plain_start, pos)
     pos += 1
@@ -226,13 +255,7 @@ fn json_quoted(data: Bytes, mut pos: u64) -> Result[unique String, JsonError] us
     }
     if c != 92 {
       let start = pos - 1
-      while pos < core@1/bytes.len(data) {
-        let next = data[pos]
-        if next < 32 || next == 34 || next == 92 {
-          break
-        }
-        pos += 1
-      }
+      pos = core@1/bytes.find_any(data, JSON_STRING_STOP, pos)
       core@1/bytes.append(mut output, core@1/bytes.slice(data, start, pos))
     } else {
       char.format_into(json_escape(data, mut pos)?, mut output)
@@ -262,8 +285,7 @@ fn json_keyword(data: Bytes, mut pos: u64, word: String) -> Result[(), JsonError
 // handleCompleteValue at bff490a23889750de7096d9057c0a432efc929a8 supplies
 // ordered-object duplicate rejection. Ordinary owned locals clean up on every ?.
 fn json_node(take data: Bytes, mut pos: u64, depth: u64) -> Result[Value, JsonError] uses {} {
-  json_whitespace(data, mut pos)
-  let c = json_peek(data, pos)
+  let c = json_whitespace(data, mut pos)
   if c == 110 {
     json_keyword(data, mut pos, "null")?
     return Ok(Null())
@@ -279,7 +301,7 @@ fn json_node(take data: Bytes, mut pos: u64, depth: u64) -> Result[Value, JsonEr
   if c == 34 {
     return Ok(Text(json_shared_quoted(copy data, mut pos)?))
   }
-  if c == 45 || std@1/ascii.is_digit(c) {
+  if c == 45 || c >= 48 && c <= 57 {
     let start = pos
     json_number_end(data, mut pos)?
     return Ok(Number(json_shared_text(copy data, start, pos)))
@@ -302,8 +324,7 @@ fn json_node(take data: Bytes, mut pos: u64, depth: u64) -> Result[Value, JsonEr
     while true {
       let child = json_node(copy data, mut pos, depth + 1)?
       core@1/list.push(mut items, take child)
-      json_whitespace(data, mut pos)
-      let next = json_peek(data, pos)
+      let next = json_whitespace(data, mut pos)
       if next == 93 {
         pos += 1
         break
@@ -328,15 +349,13 @@ fn json_node(take data: Bytes, mut pos: u64, depth: u64) -> Result[Value, JsonEr
     if let Some(_) = core@1/map.get(entries, key) {
       return Error(DuplicateKey(key_pos))
     }
-    json_whitespace(data, mut pos)
-    if json_peek(data, pos) != 58 {
+    if json_whitespace(data, mut pos) != 58 {
       return Error(Syntax(pos))
     }
     pos += 1
     let child = json_node(copy data, mut pos, depth + 1)?
     core@1/map.insert(mut entries, take key, take child)
-    json_whitespace(data, mut pos)
-    let next = json_peek(data, pos)
+    let next = json_whitespace(data, mut pos)
     if next == 125 {
       pos += 1
       break
@@ -408,13 +427,7 @@ pub fn write_text_into(text: String, mut builder: List[u8]) -> () uses {} {
       }
     } else {
       let start = at - 1
-      while at < core@1/bytes.len(data) {
-        let next = data[at]
-        if next < 32 || next == 34 || next == 92 {
-          break
-        }
-        at += 1
-      }
+      at = core@1/bytes.find_any(data, JSON_STRING_STOP, at)
       core@1/bytes.append(mut builder, core@1/bytes.slice(data, start, at))
     }
   }
@@ -554,7 +567,6 @@ pub fn reader(data: Bytes) -> Reader in data uses {} {
 /// The next non-whitespace byte, or zero at end of cursor.
 pub fn peek(mut cursor: Reader) -> u8 uses {} {
   json_whitespace(cursor.data, mut cursor.pos)
-  json_peek(cursor.data, cursor.pos)
 }
 
 /// A quoted string: a view when unescaped, independent storage otherwise.
@@ -562,10 +574,7 @@ pub fn read_text(mut cursor: Reader) -> Result[TextView, JsonError] in cursor us
   if peek(mut cursor) != 34 {
     return Error(Syntax(cursor.pos))
   }
-  let mut end = cursor.pos + 1
-  while end < core@1/bytes.len(cursor.data) && cursor.data[end] >= 32 && cursor.data[end] != 34 && cursor.data[end] != 92 {
-    end += 1
-  }
+  let end = core@1/bytes.find_any(cursor.data, JSON_STRING_STOP, cursor.pos + 1)
   if end < core@1/bytes.len(cursor.data) && cursor.data[end] == 34 {
     let value = core@1/bytes.slice(cursor.data, cursor.pos + 1, end)
     cursor.pos = end + 1
@@ -602,7 +611,7 @@ pub fn next_token(mut cursor: Reader) -> Result[Token, JsonError] in cursor uses
   if c == 34 {
     return Ok(TextToken(read_text(mut cursor)?))
   }
-  if c == 45 || std@1/ascii.is_digit(c) {
+  if c == 45 || c >= 48 && c <= 57 {
     return Ok(NumberToken(read_number(mut cursor)?))
   }
   if c == 110 {
@@ -713,7 +722,7 @@ fn owned_member_start(mut cursor: Reader, mut first: bool) -> Result[
   let mut start = cursor.pos
   if !first && json_peek(cursor.data, start) == 44 {
     start += 1
-    json_whitespace(cursor.data, mut start)
+    let _ = json_whitespace(cursor.data, mut start)
   }
   if !reader_more(mut cursor, mut first, 125)? {
     return Ok(None)
@@ -833,10 +842,7 @@ pub fn read_owned_text(mut cursor: Reader) -> Result[unique String, JsonError] u
   if peek(mut cursor) != 34 {
     return Error(Syntax(cursor.pos))
   }
-  let mut stop = cursor.pos + 1
-  while stop < core@1/bytes.len(cursor.data) && cursor.data[stop] >= 32 && cursor.data[stop] != 34 && cursor.data[stop] != 92 {
-    stop += 1
-  }
+  let stop = core@1/bytes.find_any(cursor.data, JSON_STRING_STOP, cursor.pos + 1)
   if stop < core@1/bytes.len(cursor.data) && cursor.data[stop] == 34 {
     let mut out: List[u8] = []
     core@1/bytes.append(mut out, core@1/bytes.slice(cursor.data, cursor.pos + 1, stop))
@@ -873,9 +879,7 @@ pub fn read_owned_text_bounded(mut cursor: Reader, max_decoded_bytes: u64) -> Re
   let mut escaped = false
   while cursor.pos < core@1/bytes.len(cursor.data) {
     let start = cursor.pos
-    while cursor.pos < core@1/bytes.len(cursor.data) && cursor.data[cursor.pos] >= 32 && cursor.data[cursor.pos] != 34 && cursor.data[cursor.pos] != 92 {
-      cursor.pos += 1
-    }
+    cursor.pos = core@1/bytes.find_any(cursor.data, JSON_STRING_STOP, cursor.pos)
     let span = core@1/bytes.slice(cursor.data, start, cursor.pos)
     // Check even discarded spans. Delay UTF-8 errors until token finish, as
     // text.finish did; a later bad escape/control/EOF still takes precedence.

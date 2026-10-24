@@ -1,4 +1,5 @@
-// Go internal/strconv/{atoi,itoa}.go radix loops (ebe2feef).
+// Go src/internal/strconv/{atoi,itoa}.go radix loops (ebe2feef).
+// The numeric-radix digit check adapts atoi.go:215-247 without its width limit.
 // Decimal and arbitrary-radix parsing share grammar and overflow handling.
 @noalloc
 pub fn read_radix(
@@ -33,17 +34,55 @@ pub fn read_radix(
   } else {
     positive_limit
   }
+  // Go atoi.go:215-247: a length bound proves accumulation cannot overflow.
+  // At most 19 base<=10 digits fit u64; compare the caller's signed/width limit
+  // only after validating the whole lexeme, so Invalid still wins OutOfRange.
+  if radix <= 10 && length - i <= 19 {
+    let word_base: u64 = core@1/int.widen(radix)
+    let mut word: u64 = 0
+    while i < length {
+      let digit_byte = bytes[i]
+      if digit_byte < b'0' {
+        return Error(Invalid)
+      }
+      let word_digit = digit_byte - b'0'
+      if word_digit >= radix {
+        return Error(Invalid)
+      }
+      word = word * word_base + core@1/int.widen(word_digit)
+      i += 1
+    }
+    let magnitude: u128 = core@1/int.widen(word)
+    if magnitude > limit {
+      return Error(OutOfRange)
+    }
+    return Ok((magnitude, negative))
+  }
   let base: u128 = core@1/int.widen(radix)
   let cutoff = limit / base
   let last_digit = limit % base
   let mut value: u128 = 0
   let mut overflow: bool = false
+  let decimal = radix <= 10
   while i < length {
     let byte = bytes[i]
-    let Some(digit_value) = std@1/ascii.digit_value_radix(byte, radix) else {
-      return Error(Invalid)
+    // strconv's decimal loop does not classify alphabetic digits or recheck
+    // the radix per byte. Keep its strict grammar and delayed overflow error.
+    let digit: u128 = if decimal {
+      if byte < b'0' {
+        return Error(Invalid)
+      }
+      let decimal_digit = byte - b'0'
+      if decimal_digit >= radix {
+        return Error(Invalid)
+      }
+      core@1/int.widen(decimal_digit)
+    } else {
+      let Some(radix_digit) = std@1/ascii.digit_value_radix(byte, radix) else {
+        return Error(Invalid)
+      }
+      core@1/int.widen(radix_digit)
     }
-    let digit: u128 = core@1/int.widen(digit_value)
     if !overflow {
       if value > cutoff || value == cutoff && digit > last_digit {
         overflow = true

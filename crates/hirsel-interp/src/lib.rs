@@ -18,6 +18,7 @@ pub mod inventory;
 pub mod library;
 pub mod observation;
 mod parked;
+mod profile;
 mod resources;
 mod runs;
 pub mod scalar;
@@ -33,6 +34,7 @@ use hirsel_span::{SourceMap, Span};
 use hirsel_syntax::DefPath;
 use hirsel_tir::{BlockId, CleanupAction, RunConfiguration};
 use hirsel_types::{GenericArgument, QueryError, TypeId, TypeInterner};
+pub use profile::with_step_profile;
 pub use value::{Integer, Value};
 
 /// Default tooling step bound for the reference evaluator and corpus fixtures.

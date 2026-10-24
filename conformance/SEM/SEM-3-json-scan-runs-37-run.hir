@@ -1,0 +1,89 @@
+// rule: SEM-3
+// expect: run
+// serde_json de.rs:255 whitespace set and read.rs:521-566 string stop rules.
+fn rejects(take source: String, at: u64) -> () uses {} {
+  match json.parse(copy source) {
+    Error(Syntax(position)) => failure.check(position == at, TextInvariant()),
+    _ => failure.check(false, TextInvariant()),
+  }
+  let mut cursor = json.reader(string.as_bytes(source))
+  let outcome = match json.skip(mut cursor) {
+    Ok(_) => json.finish_reader(mut cursor),
+    Error(error) => Error(error),
+  }
+  match outcome {
+    Error(Syntax(position)) => failure.check(position == at, TextInvariant()),
+    _ => failure.check(false, TextInvariant()),
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), OutputError] {
+  let _ = rt
+  let _ = args
+  let widths: List[u64] = [0, 1, 7, 31, 32, 33, 63, 64, 65, 127]
+  for width in widths {
+    let mut buffer: List[u8] = []
+    let mut i: u64 = 0
+    while i < width {
+      list.push(mut buffer, 32)
+      i += 1
+    }
+    text.append(
+      mut buffer,
+      "\t\r\n{\"long plain key with é and 😀\":-1.2300e+004}\r\n\t"
+    )
+    i = 0
+    while i < width {
+      list.push(mut buffer, 32)
+      i += 1
+    }
+    let source = text.finish_valid(take buffer)
+    match json.parse(copy source) {
+      Ok(Object(value)) => {
+        match map.get(value, "long plain key with é and 😀") {
+          Some(Number(number)) => failure.check(
+            number == "-1.2300e+004",
+            TextInvariant()
+          ),
+          _ => failure.check(false, TextInvariant()),
+        }
+      },
+      _ => failure.check(false, TextInvariant()),
+    }
+    let mut cursor = json.reader(string.as_bytes(source))
+    failure.check(json.skip(mut cursor) == Ok(()), TextInvariant())
+    failure.check(json.finish_reader(mut cursor) == Ok(()), TextInvariant())
+    let invalid = string.concat(source, "\u{b}")
+    rejects(take invalid, string.byte_len(source))
+  }
+  // Every unescaped control byte must stop both string decoders at its offset.
+  let mut control: u8 = 0
+  while control < 32 {
+    let mut buffer: List[u8] = []
+    text.append(mut buffer, "\"a long ordinary prefix é😀")
+    let at = list.len(buffer)
+    list.push(mut buffer, control)
+    text.append(mut buffer, "\"")
+    rejects(text.finish_valid(take buffer), at)
+    control += 1
+  }
+  // Escapes following plain runs use the same strict decoding and writer path.
+  let escaped = "\"ordinary é😀\\u0000\\n\\t\\\"\\\\suffix\""
+  match json.parse(copy escaped) {
+    Ok(Text(value)) => {
+      failure.check(value == "ordinary é😀\0\n\t\"\\suffix", TextInvariant())
+      let mut encoded: List[u8] = []
+      json.write_text_into(value, mut encoded)
+      match json.parse(text.finish_valid(take encoded)) {
+        Ok(Text(again)) => failure.check(again == value, TextInvariant()),
+        _ => failure.check(false, TextInvariant()),
+      }
+    },
+    _ => failure.check(false, TextInvariant()),
+  }
+  rejects("  [01]", 4)
+  rejects("  [1.]", 5)
+  rejects("  [1e+]", 6)
+  rejects("  null\u{c}", 6)
+  Ok(())
+}

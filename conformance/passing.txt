@@ -5108,6 +5108,7 @@ conformance/SEM/SEM-1-http2-session-run.hir
 conformance/SEM/SEM-1-https-client-unix-socket-run.hir
 conformance/SEM/SEM-1-int-bit-primitives-run.hir
 conformance/SEM/SEM-1-int-sub-mul-named-run.hir
+conformance/SEM/SEM-1-integer-short-37-run.hir
 conformance/SEM/SEM-1-left-bit-loss.hir
 conformance/SEM/SEM-1-list-filled-capacity-failure.hir
 conformance/SEM/SEM-1-min-remainder.hir
@@ -5525,6 +5526,7 @@ conformance/SEM/SEM-3-edit-distance-7-suggestions-run.hir
 conformance/SEM/SEM-3-edit-distance-7-vectors-run.hir
 conformance/SEM/SEM-3-empty-graphemes.hir
 conformance/SEM/SEM-3-empty-scalars.hir
+conformance/SEM/SEM-3-fixed-word-37-run.hir
 conformance/SEM/SEM-3-flate-bomb-run.hir
 conformance/SEM/SEM-3-flate-cpython-run.hir
 conformance/SEM/SEM-3-flate-dynamic-run.hir
@@ -5772,6 +5774,7 @@ conformance/SEM/SEM-3-json-reader-import-035-run.hir
 conformance/SEM/SEM-3-json-reader-import-036-run.hir
 conformance/SEM/SEM-3-json-reader-import-037-run.hir
 conformance/SEM/SEM-3-json-roundtrip-run.hir
+conformance/SEM/SEM-3-json-scan-runs-37-run.hir
 conformance/SEM/SEM-3-json-slice-run.hir
 conformance/SEM/SEM-3-json-text-bound-36-run.hir
 conformance/SEM/SEM-3-json-typed-numbers-run.hir

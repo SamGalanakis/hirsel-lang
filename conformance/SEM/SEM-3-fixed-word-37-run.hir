@@ -1,0 +1,272 @@
+// rule: SEM-3
+// expect: run
+// Exact Fraction.from_float half-even oracle; Rust flt2dec halfway/carry boundaries.
+pub fn main(t: Test) -> Result[(), ()] {
+  failure.check(f"{core@1/f64.from_bits(0u64):.0}" == "0", Bounds())
+  failure.check(f"{core@1/f64.from_bits(0u64):.6}" == "0.000000", Bounds())
+  failure.check(f"{core@1/f64.from_bits(0u64):.18}" == "0.000000000000000000", Bounds())
+  failure.check(f"{core@1/f64.from_bits(9223372036854775808u64):.0}" == "-0", Bounds())
+  failure.check(
+    f"{core@1/f64.from_bits(9223372036854775808u64):.6}" == "-0.000000",
+    Bounds()
+  )
+  failure.check(
+    f"{core@1/f64.from_bits(9223372036854775808u64):.18}" == "-0.000000000000000000",
+    Bounds()
+  )
+  failure.check(f"{core@1/f64.from_bits(1u64):.0}" == "0", Bounds())
+  failure.check(f"{core@1/f64.from_bits(1u64):.6}" == "0.000000", Bounds())
+  failure.check(f"{core@1/f64.from_bits(1u64):.18}" == "0.000000000000000000", Bounds())
+  failure.check(f"{core@1/f64.from_bits(9223372036854775809u64):.0}" == "-0", Bounds())
+  failure.check(
+    f"{core@1/f64.from_bits(9223372036854775809u64):.6}" == "-0.000000",
+    Bounds()
+  )
+  failure.check(
+    f"{core@1/f64.from_bits(9223372036854775809u64):.18}" == "-0.000000000000000000",
+    Bounds()
+  )
+  failure.check(f"{core@1/f64.from_bits(4602678819172646912u64):.0}" == "0", Bounds())
+  failure.check(
+    f"{core@1/f64.from_bits(4602678819172646912u64):.6}" == "0.500000",
+    Bounds()
+  )
+  failure.check(
+    f"{core@1/f64.from_bits(4602678819172646912u64):.18}" == "0.500000000000000000",
+    Bounds()
+  )
+  failure.check(f"{core@1/f64.from_bits(4608308318706860032u64):.0}" == "1", Bounds())
+  failure.check(
+    f"{core@1/f64.from_bits(4608308318706860032u64):.6}" == "1.250000",
+    Bounds()
+  )
+  failure.check(
+    f"{core@1/f64.from_bits(4608308318706860032u64):.18}" == "1.250000000000000000",
+    Bounds()
+  )
+  failure.check(f"{core@1/f64.from_bits(4610560118520545280u64):.0}" == "2", Bounds())
+  failure.check(
+    f"{core@1/f64.from_bits(4610560118520545280u64):.6}" == "1.750000",
+    Bounds()
+  )
+  failure.check(
+    f"{core@1/f64.from_bits(4610560118520545280u64):.18}" == "1.750000000000000000",
+    Bounds()
+  )
+  failure.check(f"{core@1/f64.from_bits(4612811918334230528u64):.0}" == "2", Bounds())
+  failure.check(
+    f"{core@1/f64.from_bits(4612811918334230528u64):.6}" == "2.500000",
+    Bounds()
+  )
+  failure.check(
+    f"{core@1/f64.from_bits(4612811918334230528u64):.18}" == "2.500000000000000000",
+    Bounds()
+  )
+  failure.check(f"{core@1/f64.from_bits(4615063718147915776u64):.0}" == "4", Bounds())
+  failure.check(
+    f"{core@1/f64.from_bits(4615063718147915776u64):.6}" == "3.500000",
+    Bounds()
+  )
+  failure.check(
+    f"{core@1/f64.from_bits(4615063718147915776u64):.18}" == "3.500000000000000000",
+    Bounds()
+  )
+  failure.check(f"{core@1/f64.from_bits(4612811918334230527u64):.0}" == "2", Bounds())
+  failure.check(
+    f"{core@1/f64.from_bits(4612811918334230527u64):.6}" == "2.500000",
+    Bounds()
+  )
+  failure.check(
+    f"{core@1/f64.from_bits(4612811918334230527u64):.18}" == "2.499999999999999556",
+    Bounds()
+  )
+  failure.check(f"{core@1/f64.from_bits(4612811918334230529u64):.0}" == "3", Bounds())
+  failure.check(
+    f"{core@1/f64.from_bits(4612811918334230529u64):.6}" == "2.500000",
+    Bounds()
+  )
+  failure.check(
+    f"{core@1/f64.from_bits(4612811918334230529u64):.18}" == "2.500000000000000444",
+    Bounds()
+  )
+  failure.check(f"{core@1/f64.from_bits(4621819117588971519u64):.0}" == "10", Bounds())
+  failure.check(
+    f"{core@1/f64.from_bits(4621819117588971519u64):.6}" == "10.000000",
+    Bounds()
+  )
+  failure.check(
+    f"{core@1/f64.from_bits(4621819117588971519u64):.18}" == "9.999999999999998224",
+    Bounds()
+  )
+  failure.check(f"{core@1/f64.from_bits(4517329193108106637u64):.0}" == "0", Bounds())
+  failure.check(
+    f"{core@1/f64.from_bits(4517329193108106637u64):.6}" == "0.000001",
+    Bounds()
+  )
+  failure.check(
+    f"{core@1/f64.from_bits(4517329193108106637u64):.18}" == "0.000001000000000000",
+    Bounds()
+  )
+  failure.check(
+    f"{core@1/f64.from_bits(4841369599423283199u64):.0}" == "4503599627370496",
+    Bounds()
+  )
+  failure.check(
+    f"{core@1/f64.from_bits(4841369599423283199u64):.6}" == "4503599627370495.500000",
+    Bounds()
+  )
+  failure.check(
+    f"{core@1/f64.from_bits(4841369599423283199u64):.18}" == "4503599627370495.500000000000000000",
+    Bounds()
+  )
+  failure.check(f"{core@1/f64.from_bits(3345206900036294181u64):.0}" == "0", Bounds())
+  failure.check(
+    f"{core@1/f64.from_bits(656229640418093582u64):.18}" == "0.000000000000000000",
+    Bounds()
+  )
+  failure.check(f"{core@1/f64.from_bits(3518692844595672564u64):.1}" == "0.0", Bounds())
+  failure.check(
+    f"{core@1/f64.from_bits(9538174203172520368u64):.18}" == "-0.000000000000000000",
+    Bounds()
+  )
+  failure.check(
+    f"{core@1/f64.from_bits(11459635800179666231u64):.1}" == "-0.0",
+    Bounds()
+  )
+  failure.check(
+    f"{core@1/f64.from_bits(11539665114605091517u64):.6}" == "-0.000000",
+    Bounds()
+  )
+  failure.check(f"{core@1/f64.from_bits(3164069912417249592u64):.1}" == "0.0", Bounds())
+  failure.check(
+    f"{core@1/f64.from_bits(11755617221588502446u64):.18}" == "-0.000000000000000000",
+    Bounds()
+  )
+  failure.check(f"{core@1/f64.from_bits(2136439640825288746u64):.1}" == "0.0", Bounds())
+  failure.check(
+    f"{core@1/f64.from_bits(9410210951905992794u64):.6}" == "-0.000000",
+    Bounds()
+  )
+  failure.check(f"{core@1/f64.from_bits(1127022594926675631u64):.1}" == "0.0", Bounds())
+  failure.check(
+    f"{core@1/f64.from_bits(10929709462219413466u64):.18}" == "-0.000000000000000000",
+    Bounds()
+  )
+  failure.check(
+    f"{core@1/f64.from_bits(3994994019532927517u64):.6}" == "0.000000",
+    Bounds()
+  )
+  failure.check(
+    f"{core@1/f64.from_bits(4574127374511676069u64):.6}" == "0.006486",
+    Bounds()
+  )
+  failure.check(
+    f"{core@1/f64.from_bits(13087872899743023116u64):.6}" == "-0.000000",
+    Bounds()
+  )
+  failure.check(
+    f"{core@1/f64.from_bits(10140559476598432033u64):.18}" == "-0.000000000000000000",
+    Bounds()
+  )
+  failure.check(
+    f"{core@1/f64.from_bits(13422023213910321833u64):.18}" == "-0.000000000000000000",
+    Bounds()
+  )
+  failure.check(
+    f"{core@1/f64.from_bits(10949887239477181514u64):.18}" == "-0.000000000000000000",
+    Bounds()
+  )
+  failure.check(f"{core@1/f64.from_bits(3055870975685420686u64):.1}" == "0.0", Bounds())
+  failure.check(
+    f"{core@1/f64.from_bits(9655254891890500451u64):.6}" == "-0.000000",
+    Bounds()
+  )
+  failure.check(
+    f"{core@1/f64.from_bits(1139138159052727679u64):.18}" == "0.000000000000000000",
+    Bounds()
+  )
+  failure.check(
+    f"{core@1/f64.from_bits(2524684264418859760u64):.6}" == "0.000000",
+    Bounds()
+  )
+  failure.check(
+    f"{core@1/f64.from_bits(3373041320626562698u64):.18}" == "0.000000000000000000",
+    Bounds()
+  )
+  failure.check(
+    f"{core@1/f64.from_bits(13381276256954162957u64):.18}" == "-0.000000000000000000",
+    Bounds()
+  )
+  failure.check(
+    f"{core@1/f64.from_bits(13981430478895822973u64):.1}" == "-12895269709.0",
+    Bounds()
+  )
+  failure.check(
+    f"{core@1/f64.from_bits(12487264286386290876u64):.18}" == "-0.000000000000000000",
+    Bounds()
+  )
+  failure.check(
+    f"{core@1/f64.from_bits(4468292580552614643u64):.6}" == "0.000000",
+    Bounds()
+  )
+  failure.check(
+    f"{core@1/f64.from_bits(165604923956476645u64):.18}" == "0.000000000000000000",
+    Bounds()
+  )
+  failure.check(
+    f"{core@1/f64.from_bits(4608308318706860032u64):.19}" == "1.2500000000000000000",
+    Bounds()
+  )
+  failure.check(
+    f"{core@1/f64.from_bits(4841369599423283199u64):.19}" == "4503599627370495.5000000000000000000",
+    Bounds()
+  )
+  failure.check(
+    f"{core@1/f64.from_bits(4845873199050653696u64):.6}" == "9007199254740992.000000",
+    Bounds()
+  )
+  failure.check(
+    f"{core@1/f64.from_bits(4850376798678024192u64):.18}" == "18014398509481984.000000000000000000",
+    Bounds()
+  )
+  failure.check(f"{core@1/f32.from_bits(0u32):.0}" == "0", Bounds())
+  failure.check(f"{core@1/f32.from_bits(0u32):.6}" == "0.000000", Bounds())
+  failure.check(f"{core@1/f32.from_bits(0u32):.18}" == "0.000000000000000000", Bounds())
+  failure.check(f"{core@1/f32.from_bits(2147483648u32):.0}" == "-0", Bounds())
+  failure.check(f"{core@1/f32.from_bits(2147483648u32):.6}" == "-0.000000", Bounds())
+  failure.check(
+    f"{core@1/f32.from_bits(2147483648u32):.18}" == "-0.000000000000000000",
+    Bounds()
+  )
+  failure.check(f"{core@1/f32.from_bits(1u32):.0}" == "0", Bounds())
+  failure.check(f"{core@1/f32.from_bits(1u32):.6}" == "0.000000", Bounds())
+  failure.check(f"{core@1/f32.from_bits(1u32):.18}" == "0.000000000000000000", Bounds())
+  failure.check(f"{core@1/f32.from_bits(1036831949u32):.0}" == "0", Bounds())
+  failure.check(f"{core@1/f32.from_bits(1036831949u32):.6}" == "0.100000", Bounds())
+  failure.check(
+    f"{core@1/f32.from_bits(1036831949u32):.18}" == "0.100000001490116119",
+    Bounds()
+  )
+  failure.check(f"{core@1/f32.from_bits(1067450368u32):.0}" == "1", Bounds())
+  failure.check(f"{core@1/f32.from_bits(1067450368u32):.6}" == "1.250000", Bounds())
+  failure.check(
+    f"{core@1/f32.from_bits(1067450368u32):.18}" == "1.250000000000000000",
+    Bounds()
+  )
+  failure.check(f"{core@1/f32.from_bits(1071644672u32):.0}" == "2", Bounds())
+  failure.check(f"{core@1/f32.from_bits(1071644672u32):.6}" == "1.750000", Bounds())
+  failure.check(
+    f"{core@1/f32.from_bits(1071644672u32):.18}" == "1.750000000000000000",
+    Bounds()
+  )
+  failure.check(f"{core@1/f32.from_bits(1258291199u32):.0}" == "8388608", Bounds())
+  failure.check(
+    f"{core@1/f32.from_bits(1258291199u32):.6}" == "8388607.500000",
+    Bounds()
+  )
+  failure.check(
+    f"{core@1/f32.from_bits(1258291199u32):.18}" == "8388607.500000000000000000",
+    Bounds()
+  )
+  Ok(())
+}

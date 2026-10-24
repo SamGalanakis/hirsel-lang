@@ -490,6 +490,15 @@ pub fn append_u64(mut out: List[u8], value: u64, negative: bool) -> () uses {} {
   } else {
     0
   }
+  // itoa's leading digit: one-byte integers need no pair-table lookups.
+  if value < 10 {
+    core@1/list.reserve(mut out, core@1/list.len(out) + sign + 1)
+    if negative {
+      core@1/list.push(mut out, 45)
+    }
+    core@1/list.push(mut out, core@1/int.narrow(value) + 48u8)
+    return
+  }
   // Short integers fit one decimal quad. Emit it directly instead of filling
   // and then walking an inline scratch buffer (including its initialization).
   if value < 10000 {

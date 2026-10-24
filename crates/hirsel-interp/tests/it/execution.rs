@@ -725,3 +725,54 @@ fn call_only_operation_providers_keep_interception_and_tir_fallback() {
         assert_eq!(operations.calls, 5);
     }
 }
+
+#[test]
+fn step_profile_counts_calls_and_bound_without_changing_execution() {
+    let run = || execute(loop_program(), vec![], Limits::default());
+    let plain = run();
+    let (profiled, counts) = hirsel_interp::with_step_profile(&path("main"), run);
+    assert_eq!(plain, profiled);
+    let (_, excluded) = hirsel_interp::with_step_profile(&path("comptime"), run);
+    assert!(
+        excluded.is_empty(),
+        "unrelated compile-time entry must be excluded"
+    );
+    assert_eq!(counts.values().sum::<u64>(), profiled.steps);
+    assert!(
+        counts.len() >= 2,
+        "callee must have its own count: {counts:?}"
+    );
+    let (bounded, counts) = hirsel_interp::with_step_profile(&path("main"), || {
+        execute(
+            loop_program(),
+            vec![],
+            Limits {
+                steps: Some(17),
+                ..Limits::default()
+            },
+        )
+    });
+    assert_eq!(counts.values().sum::<u64>(), bounded.steps);
+    assert!(matches!(bounded.outcome, Outcome::ToolingLimit(_)));
+}
+
+#[test]
+fn step_profile_scopes_restore_after_nested_calls_and_unwind() {
+    let run = || execute(loop_program(), vec![], Limits::default());
+    let ((first, last), outer) = hirsel_interp::with_step_profile(&path("main"), || {
+        let first = run();
+        let (inner, counts) = hirsel_interp::with_step_profile(&path("main"), run);
+        assert_eq!(counts.values().sum::<u64>(), inner.steps);
+        assert!(
+            std::panic::catch_unwind(|| hirsel_interp::with_step_profile(
+                &path("main"),
+                || panic!("probe")
+            ))
+            .is_err()
+        );
+        (first, run())
+    });
+    assert_eq!(outer.values().sum::<u64>(), first.steps + last.steps);
+    let (_, disabled) = hirsel_interp::with_step_profile(&path("main"), || ());
+    assert!(disabled.is_empty());
+}
