@@ -207,6 +207,7 @@ fn probe(target: &TargetSpec, malformed: bool, nested: bool) -> Vec<u8> {
     let empty = BTreeSet::new();
     let inputs = EmitInputs {
         ahead: None,
+        continuation: None,
         alternate: false,
         index: None,
         verify_backend: true,
