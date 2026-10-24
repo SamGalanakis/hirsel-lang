@@ -605,3 +605,38 @@ fn sealed_storage_ct5_helper_33_generated_allocation_retains_origin() {
     );
     rejected(&source, "unique v.items");
 }
+
+#[test]
+fn sealed_storage_query_33_body_edit_invalidates_read_proof() {
+    with_compiler_stack(|| {
+        let source = region(
+            "fn(root:List[u64])->u64{read(root)}",
+            "fn read(xs:List[u64])->u64{list.len(xs)}",
+        );
+        let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
+        let file = engine
+            .sources
+            .add("sealed-storage-edit.hir", source.clone())
+            .unwrap();
+        let output = check_progress(&mut engine, file, &default_context()).unwrap();
+        assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+        let input = engine.export_native_input().unwrap();
+        engine.import_native_input(input).unwrap();
+        let edited = source.replace("list.len(xs)", "let copied=unique xs;list.len(copied)");
+        let file = engine
+            .sources
+            .add("sealed-storage-edit.hir", edited)
+            .unwrap();
+        let output = check_progress(&mut engine, file, &default_context()).unwrap();
+        let errors: Vec<_> = output
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.severity == hirsel_diag::Severity::Error)
+            .collect();
+        let [diagnostic] = errors.as_slice() else {
+            panic!("{errors:?}");
+        };
+        assert_eq!(diagnostic.rule.as_str(), "MODE-1");
+        assert_eq!(output.sources.slice(diagnostic.primary), Some("unique xs"));
+    });
+}
