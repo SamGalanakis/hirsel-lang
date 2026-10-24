@@ -25,6 +25,7 @@ fn topology(width: u16) -> Topology {
         queued_stop_witness: None,
         searcher: AtomicUsize::new(0),
         after_search: Mutex::new(None),
+        before_save: Default::default(),
     };
     let cell = std::sync::OnceLock::new();
     assert!(cell.set(dispatch).is_ok());

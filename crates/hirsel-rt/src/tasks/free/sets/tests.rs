@@ -14,6 +14,9 @@ struct CompletionOrder {
     second: AtomicBool,
     waiter: std::sync::atomic::AtomicU32,
     checked: AtomicBool,
+    force_save_window: bool,
+    before_save_observed: AtomicBool,
+    save_hook_fired: AtomicBool,
 }
 
 unsafe extern "C" fn reordered_result(ctx: *mut TaskCtx, env: *mut Header, _: u64, _: u64) -> u8 {
@@ -111,6 +114,17 @@ unsafe fn reordered_set_body(ctx: *mut TaskCtx, order: &CompletionOrder) {
                     if readiness::saved(s, second) {
                         break;
                     }
+                    if order.force_save_window {
+                        if s.task(ROOT).retried {
+                            // Consume any early signal still cached while the
+                            // root was running. This is a real saved Retry,
+                            // with no new semantic ordinal or manual flag reset.
+                            try_block(&mut *ctx, Wait::Retry { cancelable: false }, false, 0)
+                                .unwrap();
+                            continue;
+                        }
+                        order.before_save_observed.store(true, Ordering::Release);
+                    }
                     // The early wake precedes the child's physical save.
                     // Retry has no notification for the later save of a
                     // Holding child. Let its idle callback acquire the role;
@@ -193,12 +207,46 @@ unsafe fn reordered_set_body(ctx: *mut TaskCtx, order: &CompletionOrder) {
 
 #[test]
 fn native_await_any_replay_uses_recorded_members_after_reversed_late_completion() {
+    await_any_replay_case(false);
+}
+
+#[test]
+fn native_await_any_forced_holding_before_save_preserves_the_late_set_fixture() {
+    await_any_replay_case(true);
+}
+
+fn await_any_replay_case(force_save_window: bool) {
     const CHILD: &str = "HIRSEL_F1_REPLAY_AWAIT_ANY";
     if std::env::var_os(CHILD).is_none() {
-        let output = std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "tasks::free::sets::tests::native_await_any_replay_uses_recorded_members_after_reversed_late_completion", "--nocapture"])
-            .env(CHILD, "1").output().unwrap();
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command.args(["--exact", if force_save_window {
+            "tasks::free::sets::tests::native_await_any_forced_holding_before_save_preserves_the_late_set_fixture"
+        } else {
+            "tasks::free::sets::tests::native_await_any_replay_uses_recorded_members_after_reversed_late_completion"
+        }, "--nocapture"]).env(CHILD, "1");
+        let output = if force_save_window {
+            // Keep a failed diagnostic handshake bounded and reap only our
+            // own child before reporting the captured stage evidence.
+            let mut child = command
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .unwrap();
+            let until = std::time::Instant::now() + std::time::Duration::from_secs(20);
+            while child.try_wait().unwrap().is_none() {
+                if std::time::Instant::now() >= until {
+                    child.kill().unwrap();
+                    let output = child.wait_with_output().unwrap();
+                    panic!("bounded save-window probe timed out: {output:?}");
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            child.wait_with_output().unwrap()
+        } else {
+            command.output().unwrap()
+        };
         assert!(output.status.success(), "{output:?}");
+        eprint!("{}", String::from_utf8_lossy(&output.stderr));
         return;
     }
     crate::pool::set_compute_grant(1);
@@ -228,6 +276,9 @@ fn native_await_any_replay_uses_recorded_members_after_reversed_late_completion(
             second: AtomicBool::new(false),
             waiter: std::sync::atomic::AtomicU32::new(u32::MAX),
             checked: AtomicBool::new(false),
+            force_save_window: false,
+            before_save_observed: AtomicBool::new(false),
+            save_hook_fired: AtomicBool::new(false),
         });
         let observed = order.clone();
         let mut run = crate::host::BodyRun::new(8, false);
@@ -268,6 +319,9 @@ fn native_await_any_replay_uses_recorded_members_after_reversed_late_completion(
             (2, true),
             (8, true),
         ] {
+            if force_save_window && (!early || width == 1) {
+                continue; // The added regression selects only the two multi-worker causal early rows.
+            }
             let replay = Replay::new(&bytes).unwrap();
             let install = replay.clone();
             let order = Arc::new(CompletionOrder {
@@ -277,8 +331,12 @@ fn native_await_any_replay_uses_recorded_members_after_reversed_late_completion(
                 second: AtomicBool::new(false),
                 waiter: std::sync::atomic::AtomicU32::new(u32::MAX),
                 checked: AtomicBool::new(false),
+                force_save_window: force_save_window && early,
+                before_save_observed: AtomicBool::new(false),
+                save_hook_fired: AtomicBool::new(false),
             });
             let observed = order.clone();
+            let save_observer = order.clone();
             let mut run = crate::host::BodyRun::new(width, false);
             run.free = true;
             run.config.layouts = layouts.as_ptr();
@@ -287,6 +345,50 @@ fn native_await_any_replay_uses_recorded_members_after_reversed_late_completion(
             let outcome = run.run(
                 move |ctx| unsafe { install.root(ctx) },
                 move |ctx| unsafe {
+                    if save_observer.force_save_window {
+                        let save_observer = save_observer.clone();
+                        let run_address = (*ctx).run_ptr() as usize;
+                        crate::pool::free::test_before_save(ctx, move |task, completed| {
+                            if completed {
+                                return;
+                            }
+                            let run = run_address as *mut crate::context::RunShared;
+                            let holding = {
+                                let _role = role::IdleGuard::new(run);
+                                let s = (*(*run).tasks.get()).as_deref_mut().unwrap();
+                                let holding = s
+                                    .tasks
+                                    .get(task as usize)
+                                    .and_then(Option::as_ref)
+                                    .is_some_and(|row| {
+                                        row.path == [1] && row.state == State::Holding
+                                    })
+                                    && !crate::pool::free::is_saved(run, task);
+                                if holding {
+                                    // Poll only existing notifications using the same
+                                    // saved-stack gate as an independent idle callback.
+                                    crate::tasks::readiness::poll_free(s);
+                                    crate::tasks::free::publish_ready(s, run);
+                                }
+                                holding
+                            };
+                            if !holding
+                                || save_observer.save_hook_fired.swap(true, Ordering::AcqRel)
+                            {
+                                return;
+                            }
+                            let until =
+                                std::time::Instant::now() + std::time::Duration::from_secs(2);
+                            while !save_observer.before_save_observed.load(Ordering::Acquire) {
+                                if std::time::Instant::now() >= until {
+                                    // Preserve teardown if scheduling failed to expose
+                                    // the window; the post-run assertion rejects it.
+                                    return;
+                                }
+                                std::thread::yield_now();
+                            }
+                        });
+                    }
                     reordered_set_body(ctx, &observed);
                     panic!("replay passed its set cut");
                 },
@@ -295,6 +397,16 @@ fn native_await_any_replay_uses_recorded_members_after_reversed_late_completion(
                 matches!(outcome.ended, Err(crate::stop::Stop::Blocked(_))),
                 "{outcome:?}"
             );
+            eprintln!(
+                "await_any save-window durable={durable} width={width} early={early} forced={force_save_window} checked={} observed={} hook={}",
+                order.checked.load(Ordering::Acquire),
+                order.before_save_observed.load(Ordering::Acquire),
+                order.save_hook_fired.load(Ordering::Acquire)
+            );
+            if force_save_window {
+                assert!(order.before_save_observed.load(Ordering::Acquire));
+                assert!(order.save_hook_fired.load(Ordering::Acquire));
+            }
             assert!(order.checked.load(Ordering::Acquire));
             assert_eq!(
                 replay.finish().unwrap(),

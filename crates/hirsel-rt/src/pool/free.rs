@@ -105,6 +105,30 @@ pub(super) struct Dispatch {
     searcher: AtomicUsize,
     #[cfg(test)]
     after_search: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    #[cfg(test)]
+    before_save: std::sync::OnceLock<Box<dyn Fn(u32, bool) + Send + Sync>>,
+}
+
+/// Install a per-run idle-save observer before the root spawns children. It runs after
+/// the worker released its permit and outside every scheduler-role borrow.
+///
+/// # Safety
+/// The root owns this live run, physical dispatch is enabled, and no child
+/// has started. The observer must retain no runtime borrow across its return.
+#[cfg(test)]
+pub(crate) unsafe fn test_before_save(
+    ctx: *mut TaskCtx,
+    hook: impl Fn(u32, bool) + Send + Sync + 'static,
+) {
+    assert!(
+        execs(ctx)
+            .dispatch
+            .get()
+            .unwrap()
+            .before_save
+            .set(Box::new(hook))
+            .is_ok()
+    );
 }
 
 fn owner_word(owner: Owner) -> usize {
@@ -172,6 +196,8 @@ pub(crate) unsafe fn enable(ctx: *mut TaskCtx) {
                 searcher: AtomicUsize::new(0),
                 #[cfg(test)]
                 after_search: Mutex::new(None),
+                #[cfg(test)]
+                before_save: Default::default(),
                 count: Arc::new(Count {
                     live: AtomicU32::new(0),
                     home: Arc::downgrade(&execs.home),
@@ -437,6 +463,14 @@ pub(super) unsafe fn saved(run: *mut RunShared, exec: &Exec) {
     execs.permits.release(exec);
     crate::stop::set_running(std::ptr::null_mut());
     crate::foreign::restore(crate::foreign::ForeignScope::NONE);
+    #[cfg(test)]
+    if let Some(hook) = execs
+        .dispatch
+        .get()
+        .and_then(|dispatch| dispatch.before_save.get())
+    {
+        hook(running.value().task, matches!(leaving, Leave::Complete));
+    }
     match leaving {
         Leave::Complete => {
             let task = running.value().task;
