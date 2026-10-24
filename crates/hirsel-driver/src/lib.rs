@@ -17,6 +17,7 @@ mod launch_binding;
 pub mod native;
 mod network;
 pub mod observation_view;
+pub mod ownership_trace;
 mod pipeline;
 pub mod requests;
 pub mod resident;
@@ -754,6 +755,21 @@ fn run_loaded_on_host_with_checks(
     checked: bool,
     snapshot: Option<hirsel_rt::host_launch::HostGrants>,
 ) -> Result<(RunOutcome, Option<hirsel_run_schema::CalleeOutcome>), ToolError> {
+    run_loaded_on_host_traced(
+        program, launch, max_steps, observed, cancel, checked, snapshot, None,
+    )
+}
+
+fn run_loaded_on_host_traced(
+    program: &mut LoadedProgram,
+    launch: HostLaunch<'_>,
+    max_steps: Option<u64>,
+    observed: Option<&mut Option<hirsel_interp::observation::Observable>>,
+    cancel: Option<network::ExternalCancel>,
+    checked: bool,
+    snapshot: Option<hirsel_rt::host_launch::HostGrants>,
+    ownership: Option<&mut ownership_trace::Capture>,
+) -> Result<(RunOutcome, Option<hirsel_run_schema::CalleeOutcome>), ToolError> {
     program.check_for_execution()?;
     program.refuse_foreign_interpretation()?;
     let host = snapshot.unwrap_or_else(|| {
@@ -862,18 +878,40 @@ fn run_loaded_on_host_with_checks(
             .map_err(|e| ToolError::Runtime(format!("launch: {e:?}")))?,
     };
     let sources = program.engine.sources.clone();
-    let execution = hirsel_interp::run_with_runtime(
-        &mut program.engine,
-        &sources,
-        &tir_run,
-        args,
-        hirsel_interp::Limits {
-            steps: max_steps,
-            call_depth: 256,
-        },
-        &mut operations,
-        &runtime,
-    );
+    let limits = hirsel_interp::Limits {
+        steps: max_steps,
+        call_depth: 256,
+    };
+    let execution = if let Some(capture) = ownership {
+        capture.program = Some(run.program());
+        hirsel_interp::ownership_trace::run_resources(
+            &mut program.engine,
+            &sources,
+            hirsel_interp::ownership_trace::ResourceRequest {
+                configuration: &tir_run,
+                program: run.program(),
+                event_limit: capture.event_limit,
+            },
+            args,
+            limits,
+            &mut operations,
+            &runtime,
+        )
+        .map(|result| {
+            capture.trace = Some(result.trace);
+            result.execution
+        })
+    } else {
+        hirsel_interp::run_with_runtime(
+            &mut program.engine,
+            &sources,
+            &tir_run,
+            args,
+            limits,
+            &mut operations,
+            &runtime,
+        )
+    };
     if let Some(hook) = &free
         && let Some(session) = operations.library.take_free()
     {
