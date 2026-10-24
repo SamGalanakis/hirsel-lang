@@ -204,6 +204,9 @@ impl NativeBootstrap {
             _allowance: allowance,
         }))
     }
+    pub fn selected_store(&self) -> Arc<dyn ResultStore> {
+        self.store.clone()
+    }
     pub fn query(&self) -> QueryId {
         self.query
     }
