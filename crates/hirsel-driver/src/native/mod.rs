@@ -20,6 +20,7 @@ mod import_cache;
 mod kit;
 mod link;
 mod observe;
+pub mod object_queries;
 mod pairwise;
 mod plan;
 mod proofs;
