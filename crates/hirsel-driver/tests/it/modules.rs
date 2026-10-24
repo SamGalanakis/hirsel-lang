@@ -173,3 +173,4 @@ mod variant_constructor_guidance_48;
 mod visibility_boundary_22;
 mod waits;
 mod while_consume_mode_30;
+mod scheduled_lower_debit;
