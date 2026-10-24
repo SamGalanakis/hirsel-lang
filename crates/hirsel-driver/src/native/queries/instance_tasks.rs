@@ -261,6 +261,18 @@ impl InstanceTasks {
             .put_content(FAILURE, message.as_bytes())
             .unwrap_or(self.fallback)
     }
+    pub(super) fn source_inputs(&self) -> &NativeInstanceInputs {
+        &self.source
+    }
+    pub(super) fn options(&self) -> &crate::native::Options {
+        &self.options
+    }
+    pub(super) fn policy(&self) -> ContentHash {
+        self.policy
+    }
+    pub(super) fn selected_store(&self) -> &Arc<dyn ResultStore> {
+        &self.store
+    }
     pub fn discovery_id(&self) -> QueryId {
         self.discovery
     }

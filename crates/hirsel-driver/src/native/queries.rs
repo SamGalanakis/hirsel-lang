@@ -7,6 +7,7 @@ use hirsel_syntax::ContentHash;
 use std::sync::Arc;
 pub mod arena;
 pub mod arena_tasks;
+pub mod compilation_tasks;
 pub mod declarations;
 pub mod demand;
 pub mod graph;

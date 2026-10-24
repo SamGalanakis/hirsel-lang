@@ -19,6 +19,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Immutable codegen request inputs, explicitly bound by the emission context.
 /// Source paths and line-table bindings remain link inputs.
+#[derive(Clone)]
 pub struct EmissionOptions {
     pub input: InputIdentity,
     pub opt: OptLevel,

@@ -28,14 +28,14 @@ use std::{
     },
 };
 
-struct Platform {
-    store: Arc<store::DirStore>,
-    tools: native::Toolchain,
-    target: native::TargetSpec,
-    backend: native::Backend,
-    entry: hirsel_syntax::DefPath,
-    directory: PathBuf,
-    calls: Arc<AtomicU64>,
+pub(super) struct Platform {
+    pub(super) store: Arc<store::DirStore>,
+    pub(super) tools: native::Toolchain,
+    pub(super) target: native::TargetSpec,
+    pub(super) backend: native::Backend,
+    pub(super) entry: hirsel_syntax::DefPath,
+    pub(super) directory: PathBuf,
+    pub(super) calls: Arc<AtomicU64>,
 }
 impl NativeLinkExecutor for Platform {
     fn link(
