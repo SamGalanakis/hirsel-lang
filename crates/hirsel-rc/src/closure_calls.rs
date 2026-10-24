@@ -9,6 +9,8 @@ use hirsel_lir::stage::Value;
 use hirsel_syntax::ContentHash;
 use std::collections::{BTreeSet, HashMap, VecDeque};
 
+pub use crate::spawn::{OperationFreedom, settle_operation_freedom};
+
 pub const MAX_PER_FUNCTION: usize = 16;
 pub const MAX_SPECIALIZATIONS: usize = 256;
 

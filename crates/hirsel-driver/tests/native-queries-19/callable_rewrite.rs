@@ -6,7 +6,7 @@ use hirsel_lir::{
     stage::Value,
     validate::{Inputs, NativeEnvironment},
 };
-use hirsel_rc::closure_calls::{CallableEntry, rewrite_instance};
+use hirsel_rc::closure_calls::{CallableEntry, OperationFreedom, rewrite_instance};
 use hirsel_syntax::ContentHash;
 use native::queries::{
     declarations::NativeDeclarations, demand::DemandInstances, instance::InstanceQueries,
@@ -121,6 +121,34 @@ fn local_callable_rewrite_requests_templates_before_opening_their_values_and_kee
             binding.materialize::<Value>(&body).unwrap()
         };
         let original = read("main");
+        let main_facts = OperationFreedom::extract(&original, &binding.table);
+        assert!(main_facts.canonical());
+        assert_eq!(
+            main_facts.dependencies(),
+            &[(
+                completed["invoke"].0.instance.definition().clone(),
+                completed["invoke"].0.instance.digest()
+            )]
+        );
+        assert!(!main_facts.evaluate(|_| None));
+        assert!(!main_facts.evaluate(|_| Some(false)));
+        assert!(
+            original.values.iter().any(|value| {
+                let layout = binding
+                    .table
+                    .layout(original.types[value.ty.index()].layout)
+                    .unwrap();
+                matches!(
+                    layout.kind,
+                    hirsel_lir::layout_types::LayoutKind::Callable { environment: None }
+                ) && !layout.drop.is_empty()
+            }),
+            "the actual caller retains an erased callable with a nonempty drop program"
+        );
+        assert!(
+            !main_facts.evaluate(|_| Some(true)),
+            "positive callee facts cannot erase the caller's anchored-value refusal"
+        );
         let mut refused = original.clone();
         let mut requests = Vec::new();
         rewrite_instance(
@@ -180,6 +208,11 @@ fn local_callable_rewrite_requests_templates_before_opening_their_values_and_kee
                 .iter()
                 .any(|call| matches!(call.callee, Callee::Indirect(_)))
         );
+        let dynamic = OperationFreedom::extract(&template, &binding.table);
+        assert!(
+            !dynamic.evaluate(|_| Some(true)),
+            "indirect calls refuse despite positive declaration summaries"
+        );
         template.header.instance = request.key.digest();
         let inline = rewrite_instance(
             &mut template,
@@ -202,6 +235,18 @@ fn local_callable_rewrite_requests_templates_before_opening_their_values_and_kee
                 template.tables.symbols[symbol.index()].definition.0.name == "plus",
             _ => false,
         }));
+        let known = OperationFreedom::extract(&template, &binding.table);
+        assert_eq!(
+            known.dependencies(),
+            &[(
+                completed["plus"].0.instance.definition().clone(),
+                completed["plus"].0.instance.digest()
+            )]
+        );
+        assert!(
+            !known.evaluate(|_| None),
+            "empty source authority cannot certify an unopened callee"
+        );
         hirsel_lir::validate::validate(template, &inputs).unwrap();
         assert_eq!(value_reads, 2);
     });
