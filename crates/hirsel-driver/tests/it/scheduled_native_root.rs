@@ -236,7 +236,7 @@ fn admitted_native_roots_preserve_selection_constants_and_detached_metadata_owne
                 );
                 assert_eq!(actual.roots.environment, expected_roots.environment);
                 let sources = actual.roots.sources.clone();
-                let file = sources.file(FileId(0)).unwrap().clone();
+                let file = sources.file(hirsel_span::FileId(0)).unwrap().clone();
                 drop(actual);
                 assert!(
                     budget.reserved() > 0,
