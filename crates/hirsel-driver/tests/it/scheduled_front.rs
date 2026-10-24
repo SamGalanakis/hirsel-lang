@@ -110,3 +110,101 @@ fn admitted_real_front_tasks_match_scalar_modes_and_complete_reads() {
         }
     });
 }
+
+#[test]
+fn admitted_lower_and_constant_tasks_suspend_without_restarting_initializers() {
+    hirsel_engine::with_compiler_stack(|| {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("main.hir");
+        std::fs::write(&path, "const A:u8=comptime 1u8;\nconst B:u8=comptime A;\nfn helper()->u8{B}\npub fn main()->u8{comptime helper()}\n").unwrap();
+        for jobs in [1, 2] {
+            let store = Arc::new(MemStore::default());
+            let mut program = COMPILER
+                .with_config(CompileConfig {
+                    store: store.clone(),
+                    jobs: hirsel_intern::jobs::Jobs::new(jobs),
+                    ..Default::default()
+                })
+                .with_owned_engines()
+                .load_program(&path)
+                .unwrap();
+            let definitions: Vec<_> = ["A", "B", "helper", "main"]
+                .iter()
+                .map(|name| {
+                    let mut path = program.entry.clone();
+                    path.0.name = (*name).into();
+                    path
+                })
+                .collect();
+            let budget = ProcessBudget::new(1 << 30);
+            let mut runtime = AdmittedRuntime::new(
+                hirsel_intern::jobs::Jobs::new(jobs),
+                budget.reserve(512 << 20).unwrap(),
+                errors(),
+            )
+            .unwrap();
+            let weight = MemoryWeight {
+                retained: 2 << 20,
+                scratch: 8 << 20,
+                stack: 0,
+            };
+            let front = program
+                .engine
+                .front_body_queries(
+                    &definitions,
+                    weight,
+                    budget.reserve(16 << 20).unwrap(),
+                    errors(),
+                )
+                .unwrap();
+            let lower = program
+                .engine
+                .front_lower_queries(
+                    &definitions,
+                    front.clone(),
+                    weight,
+                    32,
+                    budget.reserve(32 << 20).unwrap(),
+                    errors(),
+                )
+                .unwrap();
+            runtime.register(FRONT_BODY_KIND, front.factory()).unwrap();
+            runtime
+                .register_local(FRONT_LOWER_KIND, lower.factory())
+                .unwrap();
+            runtime
+                .register_local(FRONT_EVALUATE_KIND, lower.factory())
+                .unwrap();
+            let query = lower.query(&program.entry).unwrap();
+            let request = runtime.request(&[query]);
+            let products = runtime
+                .wait(request)
+                .unwrap_or_else(|error| panic!("{:?}", lower.failure(error)));
+            let actual = lower.outcome(products[0]).unwrap();
+            let scalar = program.engine.lower_to_tir(&program.entry).unwrap();
+            let records = NativeRecords::new(program.engine.types().clone(), store.clone());
+            assert_eq!(
+                records.encode(&program.engine, &actual.output.value),
+                records.encode(&program.engine, &scalar.value)
+            );
+            assert_eq!(actual.body.domain, NATIVE_ORIGINAL_BODY);
+            let native = program
+                .engine
+                .native_original_context(&[program.entry.clone()])
+                .unwrap()
+                .reader([actual.native_product()], store.clone())
+                .unwrap();
+            assert!(native.read(&program.entry).is_some());
+            assert_eq!(
+                runtime.stats().claims,
+                8,
+                "four P, two Lower and two Evaluate nodes"
+            );
+            assert!(
+                runtime.stats().polls > runtime.stats().claims,
+                "real dependency suspension occurred"
+            );
+            runtime.shutdown();
+        }
+    });
+}
