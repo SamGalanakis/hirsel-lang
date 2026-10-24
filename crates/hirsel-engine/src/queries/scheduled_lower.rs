@@ -127,9 +127,28 @@ pub struct FrontLowerQueries {
     weight: MemoryWeight,
     max_reads: usize,
     errors: RuntimeErrors,
+    retention: Mutex<u64>,
     _allowance: MemoryReservation,
 }
 impl FrontLowerQueries {
+    /// Compact potential dependency inventory; no Lower/Evaluate output or
+    /// maximum continuation is reserved until that query is actually demanded.
+    pub fn input_bytes(definitions: &[DefPath]) -> Option<u64> {
+        definitions.iter().try_fold(0u64, |total, path| {
+            let path_bytes = bincode::serialized_size(path).ok()?;
+            total.checked_add(path_bytes.checked_add(
+                (std::mem::size_of::<(DefPath, Input)>() + 6 * std::mem::size_of::<usize>()) as u64,
+            )?)
+        })
+    }
+    /// One completed descriptor plus its independently stored ordinary body,
+    /// materialized value, reads/depth and opaque acceptance metadata.
+    pub fn output_bytes(weight: MemoryWeight) -> Option<u64> {
+        weight.retained.checked_mul(2)?.checked_add(
+            (std::mem::size_of::<Outcome>() + std::mem::size_of::<Reference>() + 128) as u64,
+        )
+    }
+
     pub fn sources(&self) -> &SourceMap {
         &self.sources
     }
@@ -344,6 +363,16 @@ impl FrontLowerQueries {
         path: DefPath,
         reads: QueryReads,
     ) -> Result<ProductRef, Reference> {
+        // Outputs are charged on actual demand, rather than reserving
+        // two maximum-size outcomes for every potential dependency up front.
+        // The held owner keeps this cumulative bound through runtime eviction.
+        let output_bound = Self::output_bytes(self.weight).ok_or(self.errors.resource)?;
+        let mut retention = self.retention.lock().unwrap_or_else(|e| e.into_inner());
+        if *retention < output_bound {
+            return Err(self.errors.resource);
+        }
+        *retention -= output_bound;
+        drop(retention);
         let mut source = Source {
             owner: self.clone(),
             reads,
@@ -970,15 +999,11 @@ impl QueryEngine {
                     .into(),
             })
         };
-        if weight
-            .retained
-            .checked_add(8192)
-            .and_then(|b| b.checked_mul(2))
-            .and_then(|b| b.checked_mul(definitions.len() as u64))
-            .is_none_or(|b| b > allowance.bytes())
-        {
+        let input_bytes = FrontLowerQueries::input_bytes(definitions).ok_or_else(refusal)?;
+        if input_bytes > allowance.bytes() {
             return Err(refusal());
         }
+        let retention = Mutex::new(allowance.bytes() - input_bytes);
         let store = self
             .result_store
             .clone()
@@ -1024,6 +1049,7 @@ impl QueryEngine {
             weight,
             max_reads,
             errors,
+            retention,
             _allowance: allowance,
         }))
     }
