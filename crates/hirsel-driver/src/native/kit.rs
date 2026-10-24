@@ -301,16 +301,23 @@ impl Link<'_> {
         Ok(hash.0[..20].try_into().unwrap())
     }
 
+    /// Shared invocation for live commands and stored-tool capture. The output
+    /// destination and executable tool are deliberately supplied by the consumer.
+    pub(crate) fn invocation(&self) -> Result<(Vec<OsString>, [u8; 20]), NativeError> {
+        let mut args = self.arguments()?;
+        let id = self.build_id(&args)?;
+        let hex: String = id.iter().map(|b| format!("{b:02x}")).collect();
+        args.push(format!("--build-id=0x{hex}").into());
+        Ok((args, id))
+    }
+
     /// The `lld` command writing `output`, and the build ID it carries.
     pub(crate) fn command(
         &self,
         lld: &Path,
         output: &Path,
     ) -> Result<(Command, [u8; 20]), NativeError> {
-        let mut args = self.arguments()?;
-        let id = self.build_id(&args)?;
-        let hex: String = id.iter().map(|b| format!("{b:02x}")).collect();
-        args.push(format!("--build-id=0x{hex}").into());
+        let (args, id) = self.invocation()?;
         let mut command = Command::new(lld);
         command.env_clear().args(args).arg("-o").arg(output);
         // The pinned tree's ld.lld loads its own libLLVM.
@@ -434,6 +441,61 @@ mod tests {
             );
         }
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    #[ignore = "requires the executable-plan-proof packaged linker inputs"]
+    fn stored_linker_replays_shared_executable_plans_for_both_targets() {
+        use crate::native::object_queries::capture::{CaptureLimits, CapturedLink, FrozenLinker};
+        use crate::native::{ExecutableLinkInputs, plan_executable_inputs};
+        use hirsel_engine::store::MemStore;
+        let store = MemStore::default();
+        let linker = FrozenLinker::snapshot(&store, &input("HIRSEL_CAPTURE_LINKER")).unwrap();
+        let root = tempfile::tempdir().unwrap();
+        for target in [
+            TargetSpec::x86_64_unknown_linux_gnu(),
+            TargetSpec::aarch64_unknown_linux_gnu(),
+        ] {
+            let original = root.path().join(&target.triple);
+            let (expected, id) = link(&target, &original, &[]);
+            let runtime = input("HIRSEL_RUNTIME_ARCHIVES")
+                .join(&target.triple)
+                .join("default/libhirsel_rt.a");
+            let plan = plan_executable_inputs(
+                &target,
+                &original,
+                &[original.join("main.o")],
+                ExecutableLinkInputs {
+                    kit: &input("HIRSEL_LINK_KIT"),
+                    runtime: &runtime,
+                    foreign: &[],
+                    loader: None,
+                },
+            )
+            .unwrap();
+            assert_eq!(plan.build_id, id);
+            assert!(!plan.arguments.iter().any(|arg| arg == "-o"));
+            let captured = plan
+                .capture(
+                    &store,
+                    linker,
+                    CaptureLimits {
+                        archive_bytes: 64 * 1024 * 1024,
+                        files: 256,
+                    },
+                )
+                .unwrap();
+            std::fs::remove_dir_all(&original).unwrap();
+            let captured = CapturedLink::from_reference(&store, captured.reference()).unwrap();
+            let output = root.path().join("replayed");
+            captured.link(&store, &output).unwrap();
+            assert_eq!(
+                std::fs::read(output).unwrap(),
+                expected,
+                "{}",
+                target.triple
+            );
+        }
     }
 
     /// The kit carries no compiler builtins beyond the runtime's own
