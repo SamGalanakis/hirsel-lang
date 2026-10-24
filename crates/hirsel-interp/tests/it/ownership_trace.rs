@@ -333,6 +333,37 @@ fn ownership_reference_callee_can_create_a_resource_and_return_it_to_its_actual_
 }
 
 #[test]
+fn ownership_reference_and_checked_h_agree_on_actual_call_and_cleanup_lineage() {
+    let mut identity = Builder::new();
+    let parameter = identity.parameter(kind());
+    let identity = identity.finish("identity", parameter);
+    let mut builder = Builder::new();
+    let resource = token(&mut builder);
+    call(&mut builder, "identity", take(resource), kind());
+    let result = builder.unit();
+    let definitions = vec![builder.finish("main", result), identity, finalizer(false)];
+    let mut runtime = runtime_types();
+    let reference = observed(definitions.clone(), &runtime);
+    runtime.checked = Some(hirsel_interp::checked::CheckedRuntime {
+        operations: fixture_signatures(&definitions, &runtime)
+            .into_iter()
+            .map(|(path, signature)| (path, std::sync::Arc::new(signature)))
+            .collect(),
+        ..Default::default()
+    });
+    let checked = observed(definitions, &runtime);
+    assert_eq!(reference.execution.outcome, checked.execution.outcome);
+    let reference = reference.trace.unwrap();
+    let checked = checked.trace.unwrap();
+    assert_eq!(reference, checked);
+    let analysis = checked.analyze([9; 32], 100).unwrap();
+    assert_eq!(
+        (analysis.created, analysis.dropped, analysis.live.len()),
+        (1, 1, 0)
+    );
+}
+
+#[test]
 fn ownership_reference_equal_pointer_free_resources_are_created_and_dropped_individually() {
     let mut builder = Builder::new();
     token(&mut builder);

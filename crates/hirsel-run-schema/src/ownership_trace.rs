@@ -12,6 +12,8 @@ use std::fmt;
 
 mod tracker;
 pub use tracker::{Context, Trace, Tracker};
+mod buffer;
+pub use buffer::{Buffer, BufferFull};
 
 pub const VERSION: u32 = 1;
 
