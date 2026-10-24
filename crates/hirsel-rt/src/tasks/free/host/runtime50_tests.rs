@@ -218,6 +218,24 @@ unsafe fn await_flag(ctx: *mut TaskCtx, probe: &Probe, flag: &str) -> bool {
     probe.wait(flag)
 }
 
+/// A child's request returned to it: set `flag` and wake a joining parent.
+/// # Safety
+/// A running task holding the role.
+unsafe fn finished(ctx: *mut TaskCtx, probe: &Probe, flag: &str) {
+    probe.set(flag);
+    crate::tasks::wake_retrying(ctx);
+}
+
+/// These test children are unstructured and the run ends with its root, so
+/// the root parks until each child's request has returned to it.
+/// # Safety
+/// A running task holding the role.
+unsafe fn join(ctx: *mut TaskCtx, probe: &Probe, flags: &[&str]) {
+    while !flags.iter().all(|flag| probe.has(flag)) {
+        crate::tasks::park_retry(ctx, false);
+    }
+}
+
 type Body = Box<dyn FnOnce(*mut TaskCtx) + Send>;
 
 unsafe extern "C" fn child_entry(ctx: *mut u8, data: *mut u8) -> ! {
@@ -717,11 +735,13 @@ fn runtime50_independent_keys_and_namespace() {
                         unsafe { request(ctx, file(8)) },
                         Ok(Completion::Bytes(Ok(vec![8])))
                     );
+                    unsafe { finished(ctx, &other, "8 delivered") };
                 }),
             );
             assert_eq!(request(ctx, file(7)), Ok(Completion::Bytes(Ok(vec![7]))));
             // A namespace mutation races an alias of file 7 through another
             // mount and a file-backed sink; the exclusive epoch orders them.
+            let remover = probe.clone();
             spawn(
                 ctx,
                 Box::new(move |ctx| {
@@ -733,6 +753,7 @@ fn runtime50_independent_keys_and_namespace() {
                         unsafe { request(ctx, removed) },
                         Ok(Completion::Unit(Ok(())))
                     );
+                    unsafe { finished(ctx, &remover, "removed") };
                 }),
             );
             assert_eq!(request(ctx, file(9)), Ok(Completion::Bytes(Ok(vec![9]))));
@@ -771,6 +792,7 @@ fn runtime50_independent_keys_and_namespace() {
                     hirsel_run_schema::ExitStatus::Exited(0)
                 )))
             );
+            join(ctx, probe, &["8 delivered", "removed"]);
         });
         assert_eq!(outcome.ended, Ok(STATUS_OK), "width {width}");
         assert!(
@@ -807,5 +829,61 @@ fn runtime50_independent_keys_and_namespace() {
             "two jobs overlapped"
         );
         assert_eq!(jobs.stats().delivered.load(Ordering::Acquire), 4);
+    }
+}
+
+/// Both children issue their blocking calls only once the root's own body has
+/// ended: the run lasts until each takes its job's result, which the root's
+/// join awaits.
+#[test]
+fn runtime50_root_joins_children_whose_jobs_outlast_its_body() {
+    for width in [1, 8] {
+        let probe = Arc::new(Probe::default());
+        let outcome = run_with(width, false, &probe, order_hook, move |ctx, probe| unsafe {
+            let reader = probe.clone();
+            spawn(
+                ctx,
+                Box::new(move |ctx| {
+                    unsafe { join(ctx, &reader, &["root ended"]) };
+                    assert_eq!(
+                        unsafe { request(ctx, file(8)) },
+                        Ok(Completion::Bytes(Ok(vec![8])))
+                    );
+                    unsafe { finished(ctx, &reader, "8 delivered") };
+                }),
+            );
+            let remover = probe.clone();
+            spawn(
+                ctx,
+                Box::new(move |ctx| {
+                    unsafe { join(ctx, &remover, &["root ended"]) };
+                    let removed = Request::Remove {
+                        directory: 1,
+                        path: "x".into(),
+                    };
+                    assert_eq!(
+                        unsafe { request(ctx, removed) },
+                        Ok(Completion::Unit(Ok(())))
+                    );
+                    unsafe { finished(ctx, &remover, "removed") };
+                }),
+            );
+            assert_eq!(request(ctx, file(9)), Ok(Completion::Bytes(Ok(vec![9]))));
+            assert_eq!(request(ctx, file(10)), Ok(Completion::Bytes(Ok(vec![10]))));
+            assert!(!probe.has("8 delivered") && !probe.has("removed"));
+            finished(ctx, probe, "root ended");
+            join(ctx, probe, &["8 delivered", "removed"]);
+        });
+        assert_eq!(outcome.ended, Ok(STATUS_OK), "width {width}");
+        assert!(
+            probe.violations.lock().unwrap().is_empty(),
+            "{:?}",
+            probe.violations
+        );
+        assert_eq!(probe.on_worker.load(Ordering::Acquire), 0);
+        let log = probe.log.lock().unwrap().clone();
+        assert!(log.contains(&"end 8".to_string()), "{log:?}");
+        assert!(log.contains(&"end remove".to_string()), "{log:?}");
+        assert_eq!(probe.jobs().stats().delivered.load(Ordering::Acquire), 4);
     }
 }
