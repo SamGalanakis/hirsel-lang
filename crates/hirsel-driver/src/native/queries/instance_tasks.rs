@@ -50,7 +50,7 @@ pub struct InstanceTasks {
     discovery: QueryId,
     completed: OnceLock<ProductRef>,
     weight: MemoryWeight,
-    allowance: MemoryReservation,
+    allowance: Arc<MemoryReservation>,
     fallback: Reference,
     pub imports: AtomicU64,
     pub recipe_decodes: AtomicU64,
@@ -132,7 +132,7 @@ impl InstanceTasks {
             }),
             completed: OnceLock::new(),
             weight,
-            allowance,
+            allowance: Arc::new(allowance),
             fallback,
             imports: AtomicU64::new(0),
             recipe_decodes: AtomicU64::new(0),
@@ -140,6 +140,9 @@ impl InstanceTasks {
         });
         tasks.register(initial.registered_requests()?)?;
         Ok(tasks)
+    }
+    pub(super) fn retained_allowance(&self) -> Arc<MemoryReservation> {
+        self.allowance.clone()
     }
     fn producer(&self) -> DemandInstances {
         DemandInstances::with_validator(

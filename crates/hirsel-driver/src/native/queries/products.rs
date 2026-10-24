@@ -71,6 +71,10 @@ pub struct NativeSnapshot {
     pub(super) summaries: BTreeMap<ContentHash, Arc<ArenaSummary>>,
     native: Arc<hirsel_lir::validate::NativeCache>,
     materializations: AtomicU64,
+    // Compilation dispatch and copied instance/arena metadata remain charged
+    // through the last snapshot, product scope or linker view. Direct snapshot
+    // clients still own admission of their supplied inputs themselves.
+    pub(super) retained_allowances: Vec<Arc<hirsel_engine::runtime::MemoryReservation>>,
 }
 impl NativeSnapshot {
     pub fn new(
@@ -122,6 +126,7 @@ impl NativeSnapshot {
             owners,
             summaries,
             materializations: AtomicU64::new(0),
+            retained_allowances: Vec::new(),
         }))
     }
 

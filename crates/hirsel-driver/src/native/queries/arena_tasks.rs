@@ -35,7 +35,7 @@ pub struct ArenaTasks {
     plan: OnceLock<Plan>,
     completed: OnceLock<(ProductRef, SettledArenaGraph)>,
     weight: MemoryWeight,
-    allowance: MemoryReservation,
+    allowance: Arc<MemoryReservation>,
     charged: AtomicU64,
     fallback: Reference,
     pub hits: AtomicU64,
@@ -78,12 +78,15 @@ impl ArenaTasks {
             plan: OnceLock::new(),
             completed: OnceLock::new(),
             weight,
-            allowance,
+            allowance: Arc::new(allowance),
             charged: AtomicU64::new(0),
             fallback,
             hits: AtomicU64::new(0),
             solves: AtomicU64::new(0),
         }))
+    }
+    pub(super) fn retained_allowance(&self) -> Arc<MemoryReservation> {
+        self.allowance.clone()
     }
     pub fn query_id(&self) -> QueryId {
         self.query

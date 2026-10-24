@@ -55,7 +55,7 @@ pub struct CompilationTasks {
     backends: Vec<CompilationBackend>,
     query: QueryId,
     weight: MemoryWeight,
-    allowance: MemoryReservation,
+    allowance: Arc<MemoryReservation>,
     dispatch: OnceLock<Dispatch>,
     completed: OnceLock<(ProductRef, Vec<ProductRef>)>,
     fallback: Reference,
@@ -118,7 +118,7 @@ impl CompilationTasks {
             backends,
             query,
             weight,
-            allowance,
+            allowance: Arc::new(allowance),
             dispatch: OnceLock::new(),
             completed: OnceLock::new(),
             fallback,
@@ -160,7 +160,7 @@ impl CompilationTasks {
         let manifest = hirsel_core_contract::Manifest::skeleton(
             declarations.program.operations.values().cloned(),
         );
-        let snapshot = NativeSnapshot::new(
+        let mut snapshot = NativeSnapshot::new(
             self.instances.selected_store().clone(),
             self.instances.products(discovery)?,
             self.arena.graph(arena)?,
@@ -169,6 +169,17 @@ impl CompilationTasks {
             manifest,
             Arc::new(operations),
         )?;
+        // The returned NativeTasks, snapshot and linker views can outlive this
+        // controller. Share each existing charge with their actual data owner;
+        // never reserve a second copy or retain a controller back-reference.
+        let retained_allowances = vec![
+            self.allowance.clone(),
+            self.instances.retained_allowance(),
+            self.arena.retained_allowance(),
+        ];
+        Arc::get_mut(&mut snapshot)
+            .ok_or("native snapshot was shared before admission completed")?
+            .retained_allowances = retained_allowances;
         let native = NativeTasks::new(snapshot, self.weight)?;
         let roots = NativeRootTasks::new(
             native.clone(),

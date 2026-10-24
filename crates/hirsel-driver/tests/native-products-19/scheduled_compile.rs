@@ -533,12 +533,25 @@ fn run(jobs: usize, freeze_platform: bool) {
         drop(arena_factory);
         drop(instance_factory);
         assert_eq!(budget.reserved(), 96 << 20);
-        drop(view);
-        drop(roots);
-        drop(native);
+        let retained_snapshot = native.snapshot.clone();
         drop(compilation);
         drop(arena);
         drop(instances);
+        assert_eq!(budget.reserved(), 96 << 20);
+        assert!(budget.reserve((672 << 20) + 1).is_err());
+        // A view and a directly returned snapshot independently extend the
+        // reservation lifetime, even after every producer/controller is gone.
+        drop(roots);
+        drop(native);
+        assert_eq!(budget.reserved(), 96 << 20);
+        view.with_link_context(&root, &ready, |program| {
+            assert!(program.units.is_empty());
+            Ok(())
+        })
+        .unwrap();
+        drop(view);
+        assert_eq!(budget.reserved(), 96 << 20);
+        drop(retained_snapshot);
         assert_eq!(budget.reserved(), 0);
     }
 }
