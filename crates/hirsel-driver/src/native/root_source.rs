@@ -13,7 +13,7 @@ use hirsel_syntax::{DefId, DefPath};
 use hirsel_types::{ForeignThreads, SignatureKind, SignatureRef, TypeInterner};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    sync::Arc,
+    sync::{Arc, Mutex},
 };
 
 /// Source-query results supplied by the front/native producers. Entry body IDs
@@ -51,10 +51,26 @@ pub struct NativeLinkSource {
     callees: Option<hirsel_rt::program::CalleeMetadata>,
     requested_run: Option<(DefPath, Arc<hirsel_run_config::ValidatedRun>)>,
     test_entries: Vec<(DefPath, u64)>,
+    metadata_owner: Mutex<Option<Arc<hirsel_engine::runtime::MemoryReservation>>>,
 }
 
 fn failed(message: impl Into<String>) -> NativeError {
     NativeError::new(StageName::Manifest, message)
+}
+
+fn retain_source_metadata(
+    owner: &Mutex<Option<Arc<hirsel_engine::runtime::MemoryReservation>>>,
+    bytes: u64,
+    allowance: &mut hirsel_engine::runtime::MemoryReservation,
+) -> Result<(), String> {
+    let mut retained = owner.lock().unwrap_or_else(|e| e.into_inner());
+    if retained.is_none() {
+        *retained =
+            Some(Arc::new(allowance.split(bytes).ok_or(
+                "native link source metadata exceeds retained allowance",
+            )?));
+    }
+    Ok(())
 }
 
 impl NativeLinkSource {
@@ -200,8 +216,101 @@ impl NativeLinkSource {
             callees: facts.callees,
             requested_run: None,
             test_entries: Vec::new(),
+            metadata_owner: Mutex::new(None),
         })
     }
+    /// Allocation-layout bound for this copied body-free source metadata.
+    /// Shared semantic/signature/source text and interner payloads retain their
+    /// original source owners; this measures only newly allocated containers.
+    pub fn retained_metadata_bytes(&self) -> u64 {
+        use hirsel_engine::NativeMetadataWeight as Weight;
+        let mut w = Weight::default();
+        let Self {
+            input: _,
+            semantic: _,
+            types: _,
+            operations: _,
+            functions,
+            signatures,
+            representations,
+            anchors,
+            sources: _,
+            profiles,
+            foreign_links,
+            foreign_unreplayable: _,
+            foreign_threads,
+            callees,
+            requested_run,
+            test_entries,
+            metadata_owner: _,
+        } = self;
+        w.add(size_of::<Self>() + 2 * size_of::<usize>());
+        w.add(size_of::<hirsel_engine::runtime::MemoryReservation>() + 2 * size_of::<usize>());
+        w.map(functions, |w, path, _| w.path(path));
+        w.map(signatures, |w, path, _| w.path(path));
+        w.map(representations, |w, path, value| {
+            w.path(path);
+            if let Some(value) = value {
+                w.representation(value);
+            }
+        });
+        w.map(anchors, |w, path, values| {
+            w.path(path);
+            w.flat_vec(values);
+        });
+        w.arc(profiles);
+        w.map(profiles, |w, path, profile| {
+            w.path(path);
+            w.add(profile.path.capacity());
+            w.add(profile.file.retained_metadata_bytes() as usize);
+            w.vec(&profile.anchors, |w, (file, _)| {
+                w.add(file.retained_metadata_bytes() as usize)
+            });
+        });
+        w.vec(foreign_links, |w, link| match link {
+            LinkInput::Library(name) => w.add(name.capacity()),
+            LinkInput::File(path) => w.add(path.capacity()),
+        });
+        w.map(foreign_threads, |w, package, _| {
+            w.add(package.name.capacity());
+            w.add(package.version.capacity());
+        });
+        if let Some(metadata) = callees {
+            w.map(&metadata.facts, |w, name, facts| {
+                w.add(name.capacity());
+                if let hirsel_run_schema::CodeReach::Escapes(paths) = &facts.reach {
+                    w.vec(paths, |w, path| w.add(path.capacity()));
+                }
+            });
+            if let Some(schemas) = &metadata.request_schemas {
+                w.add(schemas.retained_metadata_bytes() as usize);
+            }
+        }
+        if let Some((path, _)) = requested_run {
+            w.path(path);
+        }
+        w.vec(test_entries, |w, (path, _)| w.path(path));
+        w.bytes()
+    }
+    pub(crate) fn retain_metadata(
+        &self,
+        allowance: &mut hirsel_engine::runtime::MemoryReservation,
+    ) -> Result<(), String> {
+        retain_source_metadata(
+            &self.metadata_owner,
+            self.retained_metadata_bytes(),
+            allowance,
+        )
+    }
+    pub(crate) fn metadata_allowance(
+        &self,
+    ) -> Option<Arc<hirsel_engine::runtime::MemoryReservation>> {
+        self.metadata_owner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
     pub fn input(&self) -> &InputIdentity {
         &self.input
     }
@@ -246,6 +355,14 @@ impl NativeLinkSource {
         entry: &DefPath,
         run: Arc<hirsel_run_config::ValidatedRun>,
     ) -> Result<(), NativeError> {
+        if self
+            .metadata_owner
+            .get_mut()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_some()
+        {
+            return Err(failed("native launch metadata is already admitted"));
+        }
         if !self.functions.contains_key(entry) {
             return Err(failed("native run has no selected source entry"));
         }
@@ -267,6 +384,14 @@ impl NativeLinkSource {
         Ok(())
     }
     pub fn bind_tests(&mut self, entries: &[(DefPath, u64)]) -> Result<(), NativeError> {
+        if self
+            .metadata_owner
+            .get_mut()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_some()
+        {
+            return Err(failed("native launch metadata is already admitted"));
+        }
         let launches = self.launches();
         if entries.is_empty()
             || entries.iter().any(|(entry, _)| {
@@ -429,5 +554,28 @@ impl<'a> LinkSource<'a> {
             foreign_unreplayable: snapshot.foreign_unreplayable,
             foreign_threads: &snapshot.foreign_threads,
         }
+    }
+}
+
+#[cfg(test)]
+mod metadata_tests {
+    use super::*;
+    #[test]
+    fn copied_source_metadata_rejects_excess_and_keeps_one_lifetime_charge() {
+        let budget = hirsel_engine::runtime::ProcessBudget::new(100);
+        let mut allowance = budget.reserve(100).unwrap();
+        let owner = Mutex::new(None);
+        assert!(retain_source_metadata(&owner, 101, &mut allowance).is_err());
+        assert_eq!(allowance.bytes(), 100);
+        assert_eq!(budget.reserved(), 100);
+        retain_source_metadata(&owner, 37, &mut allowance).unwrap();
+        retain_source_metadata(&owner, 37, &mut allowance).unwrap();
+        assert_eq!(allowance.bytes(), 63);
+        let survivor = owner.lock().unwrap().clone().unwrap();
+        drop(allowance);
+        drop(owner);
+        assert_eq!(budget.reserved(), 37);
+        drop(survivor);
+        assert_eq!(budget.reserved(), 0);
     }
 }

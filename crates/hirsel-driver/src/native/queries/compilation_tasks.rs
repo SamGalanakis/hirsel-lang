@@ -71,7 +71,7 @@ impl CompilationTasks {
         emission: EmissionOptions,
         backends: Vec<CompilationBackend>,
         weight: MemoryWeight,
-        allowance: MemoryReservation,
+        mut allowance: MemoryReservation,
     ) -> Result<Arc<Self>, String> {
         Self::new_with_store_verification(
             instances,
@@ -107,6 +107,7 @@ impl CompilationTasks {
         {
             return Err("compilation inputs differ from native request snapshot".into());
         }
+        source.retain_metadata(&mut allowance)?;
         let roots = root.query_id()?;
         let selection = serde_json::to_vec(
             &backends
@@ -255,6 +256,10 @@ impl CompilationTasks {
         let retained_allowances = vec![
             self.allowance.clone(),
             self.instances.retained_allowance(),
+            self.instances.retained_source_allowance(),
+            self.source
+                .metadata_allowance()
+                .ok_or("native link source metadata is not admitted")?,
             self.arena.retained_allowance(),
         ];
         Arc::get_mut(&mut snapshot)
