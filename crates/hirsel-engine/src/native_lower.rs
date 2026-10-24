@@ -25,6 +25,7 @@ pub struct NativeOriginalProduct {
 /// Source bindings captured before Lower tasks run. This contains no source
 /// Definition or Lower output; sparse readers consume only settled demands.
 pub struct NativeOriginalContext {
+    owner: Option<Arc<dyn Send + Sync>>,
     anchors: Arc<NativeRecordContext>,
     signatures: Arc<SignatureSnapshot>,
     cache: Option<Arc<hirsel_validate::VerifierCache>>,
@@ -35,6 +36,11 @@ pub struct NativeOriginalContext {
     reuse: bool,
 }
 impl NativeOriginalContext {
+    pub(crate) fn retain_owner(mut self, owner: Arc<dyn Send + Sync>) -> Self {
+        self.owner = Some(owner);
+        self
+    }
+
     /// Bind exact front observations without opening an ordinary source body.
     /// Unknown/stale source identities and duplicate demands are refused.
     pub fn reader(
@@ -84,6 +90,7 @@ impl NativeOriginalContext {
             }
         }
         Ok(NativeOriginalReader {
+            owner: self.owner.clone(),
             verified: NativeLowerReader {
                 anchors: self.anchors.clone(),
                 signatures: self.signatures.clone(),
@@ -122,6 +129,7 @@ impl QueryEngine {
             }
         }
         Ok(NativeOriginalContext {
+            owner: None,
             anchors: Arc::new(NativeRecordContext::capture(self)),
             signatures: self.signature_snapshot(),
             cache: self.product_store().and_then(|store| store.verifier()),
@@ -282,6 +290,7 @@ pub const NATIVE_ORIGINAL_BODY: hirsel_artifact_store::Domain = hirsel_artifact_
     schema: 1,
 };
 pub struct NativeOriginalReader {
+    owner: Option<Arc<dyn Send + Sync>>,
     verified: NativeLowerReader,
     ordinary: BTreeMap<DefPath, OrdinarySource>,
     records: crate::NativeRecords,
@@ -290,6 +299,7 @@ pub struct NativeOriginalReader {
     reuse: bool,
 }
 pub struct NativeOriginalBody {
+    _owner: Option<Arc<dyn Send + Sync>>,
     definition: hirsel_tir::DefinitionRef,
     output: Option<hirsel_validate::VerifiedDefinitionOutput>,
     implementation_revision: ContentHash,
@@ -315,6 +325,16 @@ impl NativeOriginalReader {
     pub fn signatures(&self) -> &Arc<SignatureSnapshot> {
         &self.verified.signatures
     }
+    /// Copied reader maps and path buffers only. Shared source/signature/V,
+    /// interner, CT-5 and store payloads retain their original admission owners.
+    pub fn retained_metadata_bytes(&self) -> u64 {
+        let mut weight = crate::NativeMetadataWeight::default();
+        weight.add(std::mem::size_of::<Self>());
+        weight.map(&self.verified.selected, |weight, path, _| weight.path(path));
+        weight.map(&self.ordinary, |weight, path, _| weight.path(path));
+        weight.bytes()
+    }
+
     pub fn record_context(&self) -> Arc<NativeRecordContext> {
         self.verified.anchors.clone()
     }
@@ -355,6 +375,7 @@ impl NativeOriginalReader {
         if self.verified.contains(path) {
             let body = self.verified.read(path)?;
             return Some(NativeOriginalBody {
+                _owner: self.owner.clone(),
                 definition: body.definition,
                 output: Some(body.output),
                 implementation_revision: body.implementation_revision,
@@ -401,6 +422,7 @@ impl NativeOriginalReader {
             false
         };
         Some(NativeOriginalBody {
+            _owner: self.owner.clone(),
             definition,
             output: None,
             implementation_revision: source.implementation_revision,
@@ -475,6 +497,7 @@ impl QueryEngine {
             );
         }
         Ok(NativeOriginalReader {
+            owner: None,
             verified: NativeLowerReader {
                 anchors: Arc::new(NativeRecordContext::capture(self)),
                 signatures: self.signature_snapshot(),

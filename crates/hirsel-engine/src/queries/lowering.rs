@@ -39,12 +39,10 @@ impl LoweringUse {
         }
     }
     fn needed(&self, engine: &QueryEngine) -> bool {
-        self.constant
-            || self.comptime
-            || self
-                .referenced
-                .iter()
-                .any(|id| engine.source_constant(id.path()))
+        self.needed_with(|id| engine.source_constant(id.path()))
+    }
+    pub(super) fn needed_with(&self, mut constant: impl FnMut(DefId) -> bool) -> bool {
+        self.constant || self.comptime || self.referenced.iter().copied().any(&mut constant)
     }
 }
 

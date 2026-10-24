@@ -14,7 +14,7 @@ fn operational(message: impl Into<String>) -> QueryError {
 
 #[derive(Clone)]
 pub(crate) struct SemanticProgram {
-    nodes: Vec<ProgramNode>,
+    pub(crate) nodes: Vec<ProgramNode>,
     /// Every definition the closure visited.
     pub(crate) definitions: BTreeSet<DefPath>,
     /// Each visited definition's direct dependencies.
@@ -30,6 +30,14 @@ pub struct ForeignUse {
     /// deterministic model, beside one extern it uses. A run reaching any of
     /// them cannot be recorded or replayed.
     pub unmodeled: BTreeMap<DefPath, DefPath>,
+}
+
+pub(super) fn runtime_node() -> ProgramNode {
+    ProgramNode {
+        identity: "$hirsel/runtime@1".into(),
+        content: vec![RUNTIME_REVISION.to_vec()],
+        dependencies: vec![],
+    }
 }
 
 impl SemanticProgram {
