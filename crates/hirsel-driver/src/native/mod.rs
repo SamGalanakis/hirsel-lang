@@ -211,3 +211,4 @@ pub(crate) fn settled_callee_metadata(
 }
 
 pub mod queries;
+pub use link::{CapturedExecutableLinkInputs, plan_captured_executable_link};

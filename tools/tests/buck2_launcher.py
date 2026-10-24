@@ -42,7 +42,7 @@ if args.list:
     for name in selected: print(name + ': test')
 else:
     with open(os.environ['OBSERVED'], 'w') as output:
-        json.dump(dict(argv=sys.argv[1:], bootstrap=os.environ.get('RUSTC_BOOTSTRAP'), threads=os.environ.get('RUST_TEST_THREADS'), jobs=os.environ.get('HIRSEL_JOBS'), llvm=os.environ.get('LLVM_SYS_231_PREFIX'), cases=[name for name in selected
+        json.dump(dict(argv=sys.argv[1:], bootstrap=os.environ.get('RUSTC_BOOTSTRAP'), threads=os.environ.get('RUST_TEST_THREADS'), jobs=os.environ.get('HIRSEL_JOBS'), llvm=os.environ.get('LLVM_SYS_231_PREFIX'), linker=os.environ.get('HIRSEL_CAPTURE_LINKER'), auditor=os.environ.get('HIRSEL_AUDITOR_PACKAGE'), cases=[name for name in selected
                   if args.ignored or args.include_ignored or not cases[name]]), output)
     for name in selected:
         status = 'ok' if args.ignored or args.include_ignored or not cases[name] else 'ignored'
@@ -161,6 +161,24 @@ class PrivateNativeInputs(LauncherFixture):
         self.assertNotEqual(observed['llvm'], str(self.root / 'llvm'))
         self.assertFalse(Path(observed['llvm']).exists())
         self.assertTrue((self.root / 'llvm/lib/libshared.so').exists())
+
+    def test_native_environment_exports_stored_linker_and_auditor_packages(self):
+        self.source_files()
+        environment = self.root / 'native-environment.tsv'
+        rows = [line for line in (ROOT / 'tools/buck2/native-toolchain/environment.tsv').read_text().splitlines()
+                if line.startswith(('HIRSEL_CAPTURE_LINKER\t', 'HIRSEL_AUDITOR_PACKAGE\t'))]
+        self.assertEqual(len(rows), 2)
+        environment.write_text('\n'.join(rows) + '\n')
+        for _, target, _ in (row.split('\t') for row in rows):
+            package = self.root / target
+            package.mkdir()
+            self.env['HIRSEL_TOOLCHAIN_' + target.replace('-', '_').upper()] = str(package)
+        self.env.update(HIRSEL_NATIVE_ENVIRONMENT=str(environment), HIRSEL_PRIVATE_NATIVE_INPUTS=str(self.helper()))
+        result = subprocess.run(['sh', str(LAUNCHER), 'harness', '--exact', 'pool::smoke'], cwd=self.root, env=self.env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        observed = json.loads(self.observed.read_text())
+        self.assertEqual(Path(observed['linker']).resolve(), self.root / 'linker')
+        self.assertEqual(Path(observed['auditor']).resolve(), self.root / 'runtime-auditor')
 
     def test_listing_uses_original_sdk_without_materialization(self):
         self.source_files()

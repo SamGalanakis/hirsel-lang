@@ -90,7 +90,7 @@ if [ -n "${HIRSEL_NATIVE_ENVIRONMENT:-}" ]; then
   trees=""
   while IFS="$(printf '\t')" read -r variable target path; do
     case "$variable" in "" | "#"*) continue ;; esac
-    name="HIRSEL_TOOLCHAIN_$(printf '%s' "$target" | tr '[:lower:]' '[:upper:]')"
+    name="HIRSEL_TOOLCHAIN_$(printf '%s' "$target" | tr '[:lower:]-' '[:upper:]_')"
     eval "tree=\${$name}"
     export "$variable=$(cd "$tree" && pwd)/$path"
     trees="$trees $name"
