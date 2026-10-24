@@ -267,7 +267,13 @@ fn production_append_and_capacity_requests_are_bounded() {
             .replace("json_escape(cursor.data, mut cursor.pos)", "escape(cursor.data, mut cursor.pos)")
             .replace("core@1/bytes.append(mut output, span)", "failure.check(!limited && bytes.len(span) <= max_decoded_bytes - requested, Arithmetic())\nrequested += bytes.len(span)\ncore@1/bytes.append(mut output, span)")
             .replace("char.format_into(scalar, mut output)", "failure.check(!limited && width <= max_decoded_bytes - requested, Arithmetic())\nrequested += width\nchar.format_into(scalar, mut output)");
-        let mut helpers = String::new();
+        // 214eae8f's bulk scan uses the production stop set as well as its helpers.
+        let mut helpers = production
+            .lines()
+            .find(|line| line.starts_with("const JSON_STRING_STOP:"))
+            .unwrap()
+            .to_owned();
+        helpers.push('\n');
         for (name, replacement) in [("json_hex4", "hex4"), ("json_escape", "escape")] {
             let start = production.find(&format!("fn {name}(")).unwrap();
             let end = production[start..].find("\n}\n").unwrap() + start + 3;
