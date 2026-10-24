@@ -356,7 +356,8 @@ fn faults(engine: &str) {
             };
             // The independent catalogue fixes both the failure site and all
             // visible output; catching the library Limit must never run.
-            let expected_line = if mode == "pull" { 17 } else { 7 };
+            // ebc3e4a3's fixture declares read at 17; its actual failure.check is 19.
+            let expected_line = if mode == "pull" { 19 } else { 7 };
             let expected_name = if mode == "pull" {
                 "read"
             } else {
