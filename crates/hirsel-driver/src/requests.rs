@@ -13,6 +13,11 @@ mod native_lower;
 mod native_platform;
 mod native_products;
 mod native_routing;
+mod safe_check;
+mod source_graph;
+mod tir_products;
+mod native_assembly;
+mod native_selection;
 mod output;
 mod selector;
 pub use output::{

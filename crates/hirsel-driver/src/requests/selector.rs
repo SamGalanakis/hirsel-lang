@@ -18,10 +18,12 @@ pub struct RequestLimits {
 /// their products and reservations independently of this constructor's lifetime.
 pub struct CompilerRequests {
     compiler: Compiler,
+    ledger: Arc<super::inspection::InspectionLedger>,
     pub(super) graphs: super::host_selector::GraphSelections,
     config: CompileConfig,
     budget: Arc<ProcessBudget>,
     limits: RequestLimits,
+    scratch_parent: std::path::PathBuf,
     toolchain: Option<Arc<crate::native::Toolchain>>,
 }
 // Host constructors share one process allowance, including different Sessions.
@@ -60,14 +62,24 @@ impl CompilerRequests {
         limits: RequestLimits,
     ) -> Self {
         let graphs = super::host_selector::GraphSelections::new(&budget);
+        let ledger =
+            super::inspection::InspectionLedger::new(budget.clone(), limits.snapshot_bytes / 8);
         Self {
             graphs,
+            ledger,
             compiler: compiler.with_config(config.clone()).with_owned_engines(),
             config,
             budget,
             limits,
+            scratch_parent: std::env::temp_dir(),
             toolchain: None,
         }
+    }
+    /// Physical request transport policy, captured before any source read.
+    pub fn with_scratch_parent(mut self, parent: std::path::PathBuf) -> Self {
+        self.scratch_parent = parent;
+        self.graphs = super::host_selector::GraphSelections::new(&self.budget);
+        self
     }
     pub fn with_toolchain(mut self, toolchain: Arc<crate::native::Toolchain>) -> Self {
         self.toolchain = Some(toolchain);
@@ -121,5 +133,38 @@ mod tests {
         assert!(ProcessBudget::new(0).reserve(zero.runtime_bytes).is_err());
         assert_eq!(first.capture_attempts(), 3);
         assert!(first.input_limits().bytes <= 16 << 20);
+    }
+}
+
+impl hirsel_engine::requests::RequestEngine for CompilerRequests {
+    type Request = CompileRequest;
+    type Error = hirsel_engine::ToolError;
+    type Runtime = hirsel_engine::runtime::AdmittedRuntime;
+    type Readiness = CompilerReadiness;
+
+    fn select(
+        &mut self,
+        request: &CompileRequest,
+    ) -> Result<hirsel_engine::requests::SelectedRequest<Self::Runtime, Self::Readiness>, Self::Error>
+    {
+        self.ledger.admit()?;
+        let ledger = self.ledger.clone();
+        let compiler = &self.compiler;
+        let config = &self.config;
+        let limits = self.limits;
+        let scratch_parent = &self.scratch_parent;
+        let toolchain = self.toolchain.as_ref();
+        self.graphs.select(request, |budget| {
+            super::source_graph::install(
+                compiler,
+                config,
+                limits,
+                budget,
+                request,
+                ledger,
+                scratch_parent,
+                toolchain,
+            )
+        })
     }
 }

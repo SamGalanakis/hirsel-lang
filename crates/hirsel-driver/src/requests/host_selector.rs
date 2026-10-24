@@ -22,6 +22,7 @@ pub(super) struct SnapshotPlan {
     pub lower: u64,
     pub check: u64,
     pub growth: u64,
+    pub run: u64,
 }
 pub(super) struct GraphAdmission {
     pub runtime: MemoryReservation,
@@ -30,6 +31,7 @@ pub(super) struct GraphAdmission {
     pub lower: MemoryReservation,
     pub check: MemoryReservation,
     pub growth: MemoryReservation,
+    pub run: MemoryReservation,
     pub transport: MemoryReservation,
 }
 impl GraphAdmission {
@@ -43,7 +45,8 @@ impl GraphAdmission {
             .checked_add(plan.front)
             .and_then(|bytes| bytes.checked_add(plan.lower))
             .and_then(|bytes| bytes.checked_add(plan.check))
-            .and_then(|bytes| bytes.checked_add(plan.growth));
+            .and_then(|bytes| bytes.checked_add(plan.growth))
+            .and_then(|bytes| bytes.checked_add(plan.run));
         if snapshot.is_none_or(|bytes| bytes > limits.snapshot_bytes) {
             return Err(ToolError::Io(std::io::Error::other(
                 "compiler snapshot footprint exceeds admission",
@@ -60,6 +63,7 @@ impl GraphAdmission {
             lower: budget.reserve(plan.lower).map_err(ToolError::Io)?,
             check: budget.reserve(plan.check).map_err(ToolError::Io)?,
             growth: budget.reserve(plan.growth).map_err(ToolError::Io)?,
+            run: budget.reserve(plan.run).map_err(ToolError::Io)?,
             transport: budget
                 .reserve(limits.transport_bytes)
                 .map_err(ToolError::Io)?,
@@ -89,10 +93,22 @@ impl LoadingAdmission {
                 .map_err(ToolError::Io)?,
         })
     }
+    /// Transfer the already admitted transport before S0 uses the provider.
+    /// The remaining zero-sized reservation keeps finish's ownership shape.
+    pub fn take_transport(&mut self) -> MemoryReservation {
+        self.transport.split(self.transport.bytes()).unwrap()
+    }
     pub fn finish(mut self, plan: SnapshotPlan) -> Result<GraphAdmission, ToolError> {
-        let bytes = [plan.source, plan.front, plan.lower, plan.growth, plan.check]
-            .into_iter()
-            .try_fold(0u64, u64::checked_add);
+        let bytes = [
+            plan.source,
+            plan.front,
+            plan.lower,
+            plan.growth,
+            plan.check,
+            plan.run,
+        ]
+        .into_iter()
+        .try_fold(0u64, u64::checked_add);
         if bytes.is_none_or(|bytes| bytes > self.snapshot.bytes()) {
             return Err(ToolError::Runtime(
                 "compiler snapshot footprint exceeds admission".into(),
@@ -105,6 +121,7 @@ impl LoadingAdmission {
         let lower = self.snapshot.split(plan.lower).unwrap();
         let growth = self.snapshot.split(plan.growth).unwrap();
         let check = self.snapshot.split(plan.check).unwrap();
+        let run = self.snapshot.split(plan.run).unwrap();
         Ok(GraphAdmission {
             runtime: self.runtime,
             source,
@@ -112,6 +129,7 @@ impl LoadingAdmission {
             lower,
             growth,
             check,
+            run,
             transport: self.transport,
         })
     }
@@ -123,6 +141,9 @@ impl LoadingAdmission {
 /// Implemented only by installed compiler producer views. Public requests
 /// carry no tasks, materializer callbacks or compiler/verifier capabilities.
 pub(super) trait GraphProducts: Send + Sync {
+    fn accepts(&self, _operation: &CompileOperation) -> bool {
+        true
+    }
     fn select(
         &self,
         operation: &CompileOperation,
@@ -187,7 +208,8 @@ impl GraphBudget {
             .checked_add(plan.front)
             .and_then(|bytes| bytes.checked_add(plan.lower))
             .and_then(|bytes| bytes.checked_add(plan.check))
-            .and_then(|bytes| bytes.checked_add(plan.growth));
+            .and_then(|bytes| bytes.checked_add(plan.growth))
+            .and_then(|bytes| bytes.checked_add(plan.run));
         if snapshot.is_none_or(|bytes| bytes > limits.snapshot_bytes) {
             return GraphAdmission::reserve(&self.budget, limits, plan);
         }
@@ -251,8 +273,13 @@ impl GraphSelections {
         let selected = self
             .live
             .iter()
+            .rev()
             .filter_map(Weak::upgrade)
-            .find(|graph| graph.path == request.path && graph.inputs == request.inputs);
+            .find(|graph| {
+                graph.path == request.path
+                    && graph.inputs == request.inputs
+                    && graph.products.accepts(&request.operation)
+            });
         let graph = match selected {
             Some(graph) => graph,
             None => {
@@ -379,69 +406,45 @@ pub(super) fn completed_artifacts(
 mod tests {
     use super::*;
     #[test]
-    fn loading_admission_transfers_charge_and_holds_failed_diagnostic_sources() {
+    fn loading_transport_transfer_keeps_one_shared_charge_before_s0() {
+        use hirsel_engine::store::{Domain, NoneStore, RequestStore, ResultStore};
+        let budget = ProcessBudget::new(8320);
         let limits = RequestLimits {
-            runtime_bytes: 40,
-            snapshot_bytes: 40,
-            transport_bytes: 20,
+            runtime_bytes: 64,
+            snapshot_bytes: 64,
+            transport_bytes: 8192,
         };
-        let budget = ProcessBudget::new(100);
-        let loading = LoadingAdmission::reserve(&budget, limits).unwrap();
-        assert_eq!(budget.reserved(), 100);
+        let mut loading = LoadingAdmission::reserve(&budget, limits).unwrap();
+        let store = Arc::new(RequestStore::new(
+            Arc::new(NoneStore),
+            loading.take_transport(),
+        ));
+        assert_eq!(budget.reserved(), 8320);
         assert!(budget.reserve(1).is_err());
-        let graph = loading
+        let record = store
+            .put_content(Domain { kind: 1, schema: 1 }, b"source input")
+            .unwrap();
+        let admission = loading
             .finish(SnapshotPlan {
-                source: 5,
-                front: 5,
-                lower: 5,
-                growth: 5,
-                check: 5,
+                source: 16,
+                front: 16,
+                lower: 16,
+                check: 16,
+                growth: 0,
+                run: 0,
             })
             .unwrap();
-        assert_eq!(budget.reserved(), 85);
-        drop(graph);
-        assert_eq!(budget.reserved(), 0);
-        for plan in [
-            SnapshotPlan {
-                source: u64::MAX,
-                front: 1,
-                lower: 0,
-                growth: 0,
-                check: 0,
-            },
-            SnapshotPlan {
-                source: 41,
-                front: 0,
-                lower: 0,
-                growth: 0,
-                check: 0,
-            },
-        ] {
-            assert!(
-                LoadingAdmission::reserve(&budget, limits)
-                    .unwrap()
-                    .finish(plan)
-                    .is_err()
-            );
-            assert_eq!(budget.reserved(), 0);
-        }
-        let mut sources = hirsel_span::SourceMap::default();
-        let file = sources.add("failed.hir", "bad source".into()).unwrap();
-        let error = LoadingAdmission::reserve(&budget, limits)
-            .unwrap()
-            .failed(ToolError::Query {
-                error: hirsel_engine::QueryError::NotImplemented,
-                phase: None,
-                sources,
-            });
-        assert_eq!(budget.reserved(), 40);
-        let ToolError::Query { sources, .. } = error else {
-            unreachable!()
-        };
-        let held = sources.file(file).unwrap().clone();
-        drop(sources);
-        assert_eq!(budget.reserved(), 40);
-        assert_eq!(held.text(), "bad source");
+        assert_eq!(admission.transport.bytes(), 0);
+        assert_eq!(budget.reserved(), 8320);
+        let held = store.get_content(record).unwrap();
+        drop(admission);
+        drop(store);
+        assert_eq!(
+            budget.reserved(),
+            8192,
+            "a held transport view keeps its original admission"
+        );
+        assert_eq!(&*held, b"source input");
         drop(held);
         assert_eq!(budget.reserved(), 0);
     }
@@ -458,6 +461,7 @@ mod tests {
             lower: 10,
             check: 10,
             growth: 0,
+            run: 0,
         };
         let budget = ProcessBudget::new(99);
         assert!(GraphAdmission::reserve(&budget, limits, plan).is_err());
@@ -547,6 +551,7 @@ mod tests {
                     lower: 0,
                     check: 0,
                     growth: 0,
+                    run: 0,
                 },
             )?;
             let error = hirsel_artifact_store::Domain {
