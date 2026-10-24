@@ -312,7 +312,7 @@ impl BodyTask {
             return None;
         }
         let bytes = queries.store.get_content(variant.output)?;
-        let (outcome, checked) = persistent::restore_frozen_mode(
+        let restored = persistent::restore_frozen_mode(
             &queries.records,
             &queries.types,
             input.task.syntax.clone(),
@@ -321,6 +321,14 @@ impl BodyTask {
             &bytes,
             Arc::new(variant.reads.clone()),
         )?;
+        if let Some(table_keys) = restored.table_keys {
+            queries
+                .table_keys
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(self.query.address.0, table_keys);
+        }
+        let (outcome, checked) = (restored.outcome, restored.checked);
         let failed = outcome.result.is_err();
         let definition = DefId::intern(&input.task.definition);
         let mut memos = queries.memos.lock().unwrap_or_else(|e| e.into_inner());

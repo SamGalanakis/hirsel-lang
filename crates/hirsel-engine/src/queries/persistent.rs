@@ -678,6 +678,11 @@ pub(super) fn capture_mode(
     )
 }
 
+pub(super) struct FrozenMode {
+    pub(super) outcome: ModeResult,
+    pub(super) checked: Option<(Arc<CheckedSummary>, Arc<Reads>)>,
+    pub(super) table_keys: Option<Arc<crate::table_keys::TableKeyUse>>,
+}
 /// Decode only after the caller has validated the ordinary S0 variant reads.
 /// This uses the existing Modes codec and type/lexical validation; no engine
 /// query or registration controller is reachable from this helper.
@@ -689,7 +694,7 @@ pub(super) fn restore_frozen_mode(
     text: ContentHash,
     bytes: &[u8],
     reads: Arc<Reads>,
-) -> Option<(ModeResult, Option<(Arc<CheckedSummary>, Arc<Reads>)>)> {
+) -> Option<FrozenMode> {
     let record: ModeRecord = records.decode_record(bytes, |path, occurrence| {
         citations
             .items
@@ -704,6 +709,7 @@ pub(super) fn restore_frozen_mode(
     if !roots.iter().all(|id| types.get(*id).is_some()) || !record.valid(&syntax) {
         return None;
     }
+    let mut table_keys = None;
     let checked = record.checked.map(|checked| {
         let typed = TypedBody {
             syntax: syntax.clone(),
@@ -712,6 +718,7 @@ pub(super) fn restore_frozen_mode(
             unit: checked.unit,
             boolean: checked.boolean,
         };
+        table_keys = Some(Arc::new(crate::table_keys::TableKeyUse::capture(&typed)));
         let (summary, growth) = summarize(types, &typed);
         (Arc::new(CheckedSummary { summary, growth }), reads.clone())
     });
@@ -734,8 +741,8 @@ pub(super) fn restore_frozen_mode(
             text,
         })
     });
-    Some((
-        ModeResult {
+    Some(FrozenMode {
+        outcome: ModeResult {
             definition: syntax.item.definition.clone(),
             phase: result.is_err().then_some(QueryKind::Modes),
             result,
@@ -744,7 +751,8 @@ pub(super) fn restore_frozen_mode(
             diagnostic_phases: record.phases,
         },
         checked,
-    ))
+        table_keys,
+    })
 }
 
 /// Immutable writer shared by serial and worker publication. Keys and expected
