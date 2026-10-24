@@ -1179,6 +1179,7 @@ def native_toolchain_pins() -> str:
     valgrind_runtime = pins.pop("valgrind_runtime")
     link_kit = pins.pop("link_kit")
     return (HEADER + "LLVM_DEBS = " + json.dumps(llvm, indent=4)
+            + "\nLLD_SOURCE = " + json.dumps({"url": scalars["source_url"], "sha256": scalars["source_sha256"], "version": scalars["llvm_version"]}, indent=4)
             + "\nVALGRIND_DEBS = " + json.dumps(valgrind_runtime, indent=4)
             + "\nLINK_KIT = " + json.dumps(link_kit, indent=4)
             + "\nNATIVE = " + json.dumps({k: v for k, v in pins.items() if k != "schema"}, indent=4) + "\n")
