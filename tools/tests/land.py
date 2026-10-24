@@ -200,18 +200,21 @@ if pathlib.Path.cwd().name == 'lane':
         [line] = [line for line in output.splitlines() if line.startswith('land: landed ') and ' led by ' in line]
         return line.rsplit(': ', 1)[1].split()
 
-    def batch_lanes(self, count, edits=None, old=(), red=False):
+    def batch_lanes(self, count, edits=None, old=(), red=None):
         """`count` worktrees with one commit each, queued in lane order behind a live ticket this test holds.
 
         Lanes in `old` are queued as an older tools/land queues them: a ticket
         without its commit, held by a live process that never reads a result.
         """
         checks = self.recording_remote()
+        # `red` names the fake check (fmt or build) that fails on a red.txt that says red.
         if red:
-            with (self.lane / 'tools/buck2/fmt.py').open('a') as out:
+            error = {'fmt': 'Diff in red.txt at line 1:', 'build': 'error[E0425]: red.txt is red'}[red]
+            fake = {'fmt': 'fmt', 'build': 'event_logs'}[red]
+            with (self.lane / f'tools/buck2/{fake}.py').open('a') as out:
                 out.write("if pathlib.Path('red.txt').is_file() and pathlib.Path('red.txt').read_text() == 'red\\n':\n"
-                          "    print('Diff in red.txt at line 1:')\n    sys.exit(1)\n")
-            self.git(self.lane, 'commit', '-qam', 'red fmt')
+                          f"    print({error!r})\n    sys.exit(1)\n")
+            self.git(self.lane, 'commit', '-qam', f'red {red}')
         # The fake checks are main's; only each lane's own commit is queued.
         hook = self.origin / 'hooks/pre-receive'
         hook.rename(hook.with_name('held'))
@@ -276,18 +279,34 @@ if pathlib.Path.cwd().name == 'lane':
             self.assertEqual(self.git(lanes[i], 'rev-parse', 'HEAD'), self.git(self.origin, 'rev-parse', f'main~{2 - i}'))
         self.assertEqual(self.queued(), [])
 
-    def test_one_red_change_in_a_batch_of_four_is_isolated_and_the_rest_land(self):
-        checks, lanes, lands, holder = self.batch_lanes(4, edits={1: ('red.txt', 'red\n')}, red=True)
+    def test_a_formatting_red_change_in_a_batch_of_four_leaves_before_any_build(self):
+        checks, lanes, lands, holder = self.batch_lanes(4, edits={1: ('red.txt', 'red\n')}, red='fmt')
         holder.unlink()
         outputs = [self.finish_land(land, 1 if i == 1 else 0) for i, land in enumerate(lands)]
         self.assertIn('Diff in red.txt at line 1:', outputs[1])
         self.assertIn('refusing to push a red tree', outputs[1])
         self.assertNotIn('Diff in', outputs[2] + outputs[3])
-        # All four red; lanes 0-1 red; lane 0 green; lane 1 alone red; lanes 2-3 green.
-        self.assertEqual(outputs[0].count('workspace build'), 5, outputs[0])
-        self.assertEqual(outputs[0].count('FAIL  formatting'), 3, outputs[0])
+        # The screen: all four red, main green, lanes 0-1 red, lane 0 green, then the other three green.
+        self.assertEqual(outputs[0].count('screen: formatting'), 5, outputs[0])
+        self.assertEqual(outputs[0].count('workspace build'), 1, outputs[0])
+        self.assertEqual(outputs[0].count('FAIL  formatting'), 0, outputs[0])
         self.assertEqual(len((checks / 'received').read_text().splitlines()), 1)
         self.assertEqual(self.main_log()[:4], ['lane 3', 'lane 2', 'lane 0', 'red fmt'])
+        self.assertEqual(self.queued(), [])
+
+    def test_a_build_red_change_in_a_batch_of_four_bisects_and_the_green_half_lands_first(self):
+        checks, lanes, lands, holder = self.batch_lanes(4, edits={2: ('red.txt', 'red\n')}, red='build')
+        holder.unlink()
+        outputs = [self.finish_land(land, 1 if i == 2 else 0) for i, land in enumerate(lands)]
+        self.assertIn('error[E0425]: red.txt is red', outputs[2])
+        self.assertIn('refusing to push a red tree', outputs[2])
+        # All four red; lanes 0-1 green and pushed; lane 2 alone red; lane 3 green.
+        self.assertEqual(outputs[0].count('workspace build'), 4, outputs[0])
+        received = (checks / 'received').read_text().splitlines()
+        self.assertEqual(self.subjects(received), ['lane 1', 'lane 3'])
+        self.assertLess(outputs[0].index('pushed ' + received[0][:12]), outputs[0].index('with lane2 (ticket 4)'))
+        self.assertEqual(self.subjects(self.landed(outputs[1])), ['lane 1'])
+        self.assertEqual(self.main_log()[:4], ['lane 3', 'lane 1', 'lane 0', 'red build'])
         self.assertEqual(self.queued(), [])
 
     def test_a_conflict_in_the_middle_ticket_leaves_only_that_ticket(self):
@@ -303,7 +322,7 @@ if pathlib.Path.cwd().name == 'lane':
 
     def test_a_conflict_with_a_red_ticket_ahead_stays_queued_and_lands_next(self):
         edits = {0: ('red.txt', 'red\n'), 1: ('red.txt', 'other\n')}
-        checks, lanes, lands, holder = self.batch_lanes(3, edits=edits, red=True)
+        checks, lanes, lands, holder = self.batch_lanes(3, edits=edits, red='fmt')
         holder.unlink()
         head = self.finish_land(lands[0], 1)
         self.assertIn('it stands if the batch ahead of it lands', head)

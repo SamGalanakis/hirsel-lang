@@ -90,12 +90,22 @@ message a single land prints; the rest stay on the tree before it. A
 conflict with origin/main is final at once. A conflict with batched changes
 ahead of the ticket stands only if every one of them lands; otherwise the
 ticket stays queued for the next head. A change that touches generated
-files is refused at once. A red batch
-splits into halves, each checked on the green tree before it. A half that
-is already known red is split without another check. A ticket is blamed
-only when a check of its change alone, on a green tree, is red; the culprit
-exits with that check's first error and the rest land. A red that does not
-repeat blames nobody. A batch of one is a single land, as before.
+files is refused at once.
+
+Before any build, the head screens a batch of two or more with the checks
+that take seconds: build-file sync, independent line lists and fmt. These
+are the full checks' own scripts. If the combined tree fails, and
+origin/main passes them, a binary search over the batch's cumulative trees
+finds the first ticket that turns them red. That ticket leaves with its
+first error, and the rest are screened again. A fmt slip therefore costs
+seconds, not a build and a bisection.
+
+A red batch then splits into halves, each checked on the green tree
+before it. A green half is pushed at once, and the rest are settled on top
+of it. A half that is already known red is split without another
+check. A ticket is blamed only when a check of its change alone, on a
+green tree, is red; the culprit exits with that check's first error and
+the rest land. A red that does not repeat blames nobody. A batch of one is a single land, as before.
 
 Every pushed tree is one this attempt checked green. Before the push, the
 head confirms that it still owns the queue head and that every batched
@@ -106,7 +116,9 @@ dropped from the batch and removed. If the head dies, its waiting tickets
 keep their places, and the next head batches them. A revoked head neither
 pushes nor delivers outcomes. If the head's own change is a culprit, it
 still pushes the green rest; after a lost race it exits instead, and the
-next head lands the rest.
+next head lands the rest. A head whose own change landed in an early push
+exits 0 if a later push loses its race; the tickets not yet pushed keep
+their places.
 
 A ticket queued by an older `tools/land` has no `head`. The batch takes the
 tip of the branch that its worktree has checked out, as `git worktree list`
@@ -224,10 +236,11 @@ alone and the other two as one batch. Killed
 and expired live holders are reaped; a resumed holder refuses to push
 after losing its ticket. Re-execution retains the ticket and PID identity.
 Batch cases: three clean changes
-land with one check run; one red change in a batch of four is isolated in
-five checks, and the other three land; a conflict in the middle ticket
-leaves only that ticket; a conflict with a red ticket ahead stays queued
-and lands next; a dead lane's ticket is dropped; a batch that
+land with one check run; a fmt-red change in a batch of four leaves in
+the screen, before the one build; a build-red change in a batch of four
+bisects, and the green half is pushed before the rest is checked; a
+conflict in the middle ticket leaves only that ticket; a conflict with a
+red ticket ahead stays queued and lands next; a dead lane's ticket is dropped; a batch that
 loses a push race is checked again and lands whole; and a ticket queued
 by an older land is batched and later finds nothing to land.
 Further cases cover

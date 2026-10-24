@@ -478,6 +478,14 @@ class Refusal(Exception):
     """A reason to stop without pushing that blames no ticket."""
 
 
+class Race(Exception):
+    """A push rejected because main moved."""
+
+
+class Rebatch(Exception):
+    """A batched ticket left the queue during the checks."""
+
+
 def branches():
     """Each worktree's checked-out branch and its tip, from the common git directory."""
     found = {}
@@ -518,6 +526,9 @@ class Batch:
         # which stand only if every change ahead of the ticket lands.
         self.contents = {main_sha: ()}
         self.conflicts = []
+        # The tickets pushed so far in this attempt, in push order, with their commits.
+        self.landed = []
+        self.pushed = main_sha
 
     def fail(self, member, code, message, report=()):
         if member is self.own:
@@ -564,6 +575,98 @@ class Batch:
             raise Refusal('cannot check out the batch; refusing to push')
         return tip, applied
 
+    def red(self, member, report):
+        self.fail(member, 1, 'refusing to push a red tree' + (
+            '' if member is self.own else
+            f' (checked by itself on origin/main {self.main[:12]} and the green changes batched'
+            f' ahead of it, in the batch led by {self.own.lane})'), report)
+
+    def fast(self, tree):
+        """The checks that take seconds (build files, line lists, fmt) on one tree."""
+        if git('checkout', '-q', '--detach', tree).returncode:
+            raise Refusal('cannot check out the batch; refusing to push')
+        if not unchanged(tree):
+            raise Refusal('the worktree changed before checks; refusing to push')
+        FAILURE.clear()
+        say(f'screening {tree[:12]} with the fast checks')
+        passed = (check('screen: sync.py --if-stale', [PY, 'tools/buck2/sync.py', '--if-stale'])
+                  and check('screen: independent line lists', [PY, 'tools/check-hot-files'])
+                  and check('screen: formatting', [PY, 'tools/buck2/fmt.py', '--check']))
+        if not unchanged(tree):
+            raise Refusal('the worktree changed during checks; refusing to push')
+        return passed
+
+    def screen(self, members):
+        """Drop each ticket whose own change fails the fast checks, before any build.
+
+        The combined tree runs them first. When it is red, a binary search
+        over the batch's cumulative trees finds the first ticket that turns
+        them red, on a tree that passes them without it; that ticket leaves
+        with its first error, and the rest are screened again. The fast checks
+        are the full checks' own scripts, so the screen is never stricter.
+        """
+        while True:
+            tip, applied = self.apply(self.main, members)
+            members = [member for member, _ in applied]
+            if len(applied) < 2 or self.fast(tip):
+                return members
+            report = list(FAILURE)
+            if not self.fast(self.main):
+                say('origin/main fails the fast checks itself; the screen blames no ticket')
+                return members
+            # trees[i] holds the first i tickets: trees[low] passes, trees[high] fails.
+            trees = [self.main, *(commits[-1] for _, commits in applied)]
+            low, high = 0, len(applied)
+            while high - low > 1:
+                middle = (low + high) // 2
+                if self.fast(trees[middle]):
+                    low = middle
+                else:
+                    high, report = middle, list(FAILURE)
+            culprit = members[high - 1]
+            self.red(culprit, report)
+            members.remove(culprit)
+
+    def publish(self, tip, landed):
+        """Push a green tip at once, and hand each ticket it newly lands its commits."""
+        done = {member for member, _ in self.landed}
+        fresh = [(member, commits) for member, commits in landed if member not in done]
+        if not fresh:
+            return
+        # Push the checked commit explicitly; HEAD may never select a new tree.
+        if not self.queue.owns_head():
+            raise Refusal('queue ownership lost; refusing to push')
+        others = [member for member, _ in fresh if member is not self.own]
+        if len(self.queue.live(others)) != len(others):
+            raise Rebatch()
+        pushed = git('push', 'origin', f'{tip}:refs/heads/main')
+        if pushed.returncode:
+            if any(marker in pushed.stderr for marker in REJECTED):
+                raise Race()
+            raise Refusal('git push failed\n' + pushed.stderr)
+        common = Path(git('rev-parse', '--path-format=absolute', '--git-common-dir').stdout.strip())
+        at = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+        with open(common / LANDINGS, 'a') as log:
+            for member, commits in fresh:
+                log.write(json.dumps(dict(landed=commits[-1], pushed=tip, base=self.pushed, branch=member.lane,
+                                          unchecked_rebase=False, at=at), sort_keys=True) + '\n')
+        self.landed += fresh
+        self.pushed = tip
+        done |= {member for member, _ in fresh}
+        for conflict in list(self.conflicts):
+            member, ahead, message, report = conflict
+            if set(ahead) <= done:
+                self.conflicts.remove(conflict)
+                self.fail(member, 1, message, report)
+        for member, commits in fresh:
+            if member is not self.own:
+                self.queue.deliver(member, dict(
+                    code=0, report=[], commits=commits,
+                    message=f'landed {commits[-1][:12]} on main in a batch of {len(fresh)} led by '
+                            f'{self.own.lane} ({self.checked} checks): ' + ' '.join(commits)))
+        if len(fresh) > 1 or self.checked > 1:
+            say(f'pushed {tip[:12]} with {len(fresh)} tickets: ' + ', '.join(str(m) for m, _ in fresh))
+
     def green(self, tip, applied, previous=None, previous_inventory=None):
         if not unchanged(tip):
             raise Refusal('the worktree changed before checks; refusing to push')
@@ -598,15 +701,14 @@ class Batch:
                 return tip, applied
             if len(applied) == 1:
                 [(member, _)] = applied
-                self.fail(member, 1, 'refusing to push a red tree' + (
-                    '' if member is self.own else
-                    f' (checked by itself on origin/main {self.main[:12]} and the green changes batched'
-                    f' ahead of it, in the batch led by {self.own.lane})'), FAILURE)
+                self.red(member, FAILURE)
                 return base, []
         half = len(applied) // 2
         left, right = [m for m, _ in applied[:half]], [m for m, _ in applied[half:]]
         say(f'red batch; bisecting into {", ".join(map(str, left))} and then {", ".join(map(str, right))}')
         base, landed = self.settle(base, left)
+        # A green half lands now; the rest are settled on it.
+        self.publish(base, landed)
         tip, more = self.settle(base, right, red=len(landed) == len(left))
         return tip, landed + more
 
@@ -699,75 +801,60 @@ def land(queue, branch):
             git('checkout', '-q', *([branch] if branch else ['--detach', head]))
 
         try:
+            members = batch.screen(members)
             tip, landed = batch.settle(main_sha, members, previous, previous_inventory)
+            if batch.green_tip and batch.green_tip[0] == tip:
+                previous, previous_inventory = (main_sha, tip), batch.green_tip[1]
+            else:
+                previous = previous_inventory = None
             if tip != main_sha:
                 if git('checkout', '-q', '--detach', tip).returncode:
                     raise Refusal('cannot check out the checked batch; refusing to push')
                 if not unchanged(tip):
                     raise Refusal('the worktree changed during checks; refusing to push')
-        except Refusal as error:
+            batch.publish(tip, landed)
+        except (Race, Rebatch, Refusal) as error:
             restore()
-            say(str(error))
-            return 1
-        if batch.green_tip and batch.green_tip[0] == tip:
-            previous, previous_inventory = (main_sha, tip), batch.green_tip[1]
-        else:
-            previous = previous_inventory = None
+            own = [commits for member, commits in batch.landed if member is batch.own]
+            if isinstance(error, Refusal):
+                say(str(error))
+            if own:
+                # The tickets not yet pushed keep their places; the next head lands them.
+                if branch:
+                    git('checkout', '-q', '-B', branch, own[0][-1])
+                say(f'landed {own[0][-1][:12]} on main in {time.monotonic() - started:.0f} s, before the'
+                    ' rest of its batch')
+                return 0
+            if isinstance(error, Refusal):
+                return 1
+            if batch.verdict:
+                say(batch.verdict)
+                return 1
+            if isinstance(error, Rebatch):
+                say('a batched ticket left the queue during the checks; batching again without it')
+            else:
+                backoff(attempt)
+            continue
         if tip == main_sha:
             restore()
             say(batch.verdict or 'refusing to push a red tree')
             return 1
-        # Push the checked commit explicitly; HEAD may never select a new tree.
-        if not queue.owns_head():
-            restore()
-            say('queue ownership lost; refusing to push')
-            return 1
-        others = [member for member, _ in landed if member is not batch.own]
-        if len(queue.live(others)) != len(others):
-            restore()
-            say('a batched ticket left the queue during the checks; batching again without it')
-            continue
-        pushed = git('push', 'origin', f'{tip}:refs/heads/main')
-        if pushed.returncode == 0:
-            common = Path(git('rev-parse', '--path-format=absolute', '--git-common-dir').stdout.strip())
-            at = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
-            with open(common / LANDINGS, 'a') as log:
-                for member, commits in landed:
-                    log.write(json.dumps(dict(landed=commits[-1], pushed=tip, base=main_sha, branch=member.lane,
-                                              unchecked_rebase=False, at=at), sort_keys=True) + '\n')
-            for member, ahead, message, report in batch.conflicts:
-                if set(ahead) <= {m for m, _ in landed}:
-                    batch.fail(member, 1, message, report)
-                else:
-                    say(f'ticket {int(member.ticket)} for {member.lane} stays queued: it conflicted only with'
-                        ' a batch that did not land whole')
-            for member, commits in landed:
-                if member is not batch.own:
-                    queue.deliver(member, dict(
-                        code=0, report=[], commits=commits,
-                        message=f'landed {commits[-1][:12]} on main in a batch of {len(landed)} led by '
-                                f'{batch.own.lane} ({batch.checked} checks): ' + ' '.join(commits)))
-            summary = (f' in a batch of {len(landed)} with {batch.checked} checks; main is {tip[:12]}'
-                       if len(landed) > 1 or batch.checked > 1 else '')
-            if batch.verdict:
-                restore()
-                say(f'landed the rest of the batch{summary}')
-                say(batch.verdict)
-                return 1
-            own = landed[0][1]
-            if branch:
-                git('checkout', '-q', '-B', branch, tip)
-            say(f'landed {own[-1][:12]} on main in {time.monotonic() - started:.0f} s{summary}')
-            return 0
-        restore()
-        if not any(marker in pushed.stderr for marker in REJECTED):
-            say('git push failed\n' + pushed.stderr)
-            return 1
+        for member, _, _, _ in batch.conflicts:
+            say(f'ticket {int(member.ticket)} for {member.lane} stays queued: it conflicted only with'
+                ' a batch that did not land whole')
+        landed = batch.landed
+        summary = (f' in a batch of {len(landed)} with {batch.checked} checks; main is {tip[:12]}'
+                   if len(landed) > 1 or batch.checked > 1 else '')
         if batch.verdict:
-            # The waiting tickets keep their places; the next head lands them.
+            restore()
+            say(f'landed the rest of the batch{summary}')
             say(batch.verdict)
             return 1
-        backoff(attempt)
+        [own] = [commits for member, commits in landed if member is batch.own]
+        if branch:
+            git('checkout', '-q', '-B', branch, tip)
+        say(f'landed {own[-1][:12]} on main in {time.monotonic() - started:.0f} s{summary}')
+        return 0
 
 
 if __name__ == '__main__':
