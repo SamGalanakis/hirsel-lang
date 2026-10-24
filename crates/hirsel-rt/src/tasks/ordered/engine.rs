@@ -846,13 +846,21 @@ pub(super) fn save_boundary(ctx: *mut TaskCtx, progress: Progress) -> Stopped<()
     at_head(ctx)
 }
 
-/// A host wait still publishes the same saved frame and retirement poll. Its
-/// owner inspects the completed row before deciding whether at_head is needed.
-pub(super) fn save_host_boundary(ctx: *mut TaskCtx, progress: Progress) {
-    let task = current(ctx);
+/// Reserve a host wait's retirement poll before its home bridge. The bridge
+/// releases the role, and home must not mistake the still-retiring driver for
+/// a quiet one and claim an idle poll of its own.
+pub(super) fn reserve_host_poll(ctx: *mut TaskCtx, progress: Progress) {
     if progress == Progress::Poll {
+        let task = current(ctx);
         with_driver(ctx, |d| d.defer_poll_until_saved(task));
     }
+}
+
+/// A host wait still publishes the same saved frame and its reserved
+/// retirement poll. Its owner inspects the completed row before deciding
+/// whether at_head is needed.
+pub(super) fn save_host_boundary(ctx: *mut TaskCtx) {
+    let task = current(ctx);
     suspend(ctx, task, false);
 }
 

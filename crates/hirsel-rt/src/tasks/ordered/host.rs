@@ -193,10 +193,11 @@ pub(crate) unsafe fn park(ctx: *mut TaskCtx, token: u64, yielded: bool) -> Stopp
         ((), Next::Park)
     })?;
     let me = engine::current(ctx) as u32;
+    engine::reserve_host_poll(ctx, progress);
     unsafe { crate::host_waits::park(ctx, token, me) };
     // This distinct boundary may release only an irrevocably completed owned
     // read. Joins, cleanup and all uncertified waits keep save_boundary's gate.
-    engine::save_host_boundary(ctx, progress);
+    engine::save_host_boundary(ctx);
     let task = engine::current(ctx);
     if super::ahead::host_return::armed(ctx)
         && engine::with_driver(ctx, |d| d.private_enabled)
