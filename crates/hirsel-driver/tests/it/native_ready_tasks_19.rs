@@ -44,12 +44,13 @@ impl QueryContext for Pending {
 }
 #[test]
 fn native_ready_tasks_validate_cold_and_fresh_snapshots_with_current_source_invocations() {
-    ready_case("fn other()->u64{9u64}\npub fn main()->u64{7u64}", false);
-}
-#[test]
-fn native_ready_tasks_preserve_actual_materialized_adapter_inventory_on_cold_and_fresh_reads() {
     ready_case(
-        r#"
+        "fn other()->u64{9u64}\npub fn main()->u64{7u64}",
+        false,
+        false,
+    );
+}
+const ADAPTER_SOURCE: &str = r#"
 fn other(x:u64)->u64 { 10u64/x }
 pub fn main()->Result[(),()] {
  let mut s:Set[String]=set.empty()
@@ -58,11 +59,16 @@ pub fn main()->Result[(),()] {
  let f=other
  let _=f(2u64)
  Ok(())
-}"#,
-        true,
-    );
+}"#;
+#[test]
+fn native_ready_tasks_preserve_actual_materialized_adapter_inventory_on_cold_and_fresh_reads() {
+    ready_case(ADAPTER_SOURCE, true, false);
 }
-fn ready_case(source: &str, adapter: bool) {
+#[test]
+fn native_ready_tasks_refuse_missing_independent_adapter_inventory_before_materialization() {
+    ready_case(ADAPTER_SOURCE, true, true);
+}
+fn ready_case(source: &str, adapter: bool, missing_inventory: bool) {
     with_compiler_stack(|| {
         let dir = tempfile::tempdir().unwrap();
         let store: Arc<dyn ResultStore> =
@@ -202,7 +208,7 @@ fn ready_case(source: &str, adapter: bool) {
             })[0];
             let graph = arenas.graph(arena_output).unwrap();
             assert!(!graph.candidates.is_empty() && !graph.chosen.is_empty());
-            let operations = Arc::new(tasks.source_operations(discovery_output).unwrap());
+            let mut operations = tasks.source_operations(discovery_output).unwrap();
             assert_eq!(
                 operations
                     .invocation_bodies
@@ -224,7 +230,11 @@ fn ready_case(source: &str, adapter: bool) {
                     "canonical ABI actuals must come from the independent source planner"
                 );
             }
+            if missing_inventory {
+                operations.pretransfer_adapters.clear();
+            }
             let products = tasks.products(discovery_output).unwrap();
+            let before_snapshot = trace.totals();
             let snapshot = NativeSnapshot::new(
                 store.clone(),
                 products,
@@ -240,9 +250,29 @@ fn ready_case(source: &str, adapter: bool) {
                     false,
                 ),
                 manifest,
-                operations,
-            )
-            .unwrap();
+                Arc::new(operations),
+            );
+            if missing_inventory {
+                let Err(error) = snapshot else {
+                    panic!("snapshot accepted a missing independent adapter inventory");
+                };
+                assert!(
+                    error.contains("lost an independently planned adapter"),
+                    "{error}"
+                );
+                assert_eq!(
+                    trace.totals(),
+                    before_snapshot,
+                    "missing inventory must fail before native materialization"
+                );
+                if fresh {
+                    assert_eq!(tasks.imports.load(Ordering::Relaxed), 0);
+                    assert_eq!(tasks.source_body_demands.load(Ordering::Relaxed), 0);
+                    assert_eq!(trace.totals(), Default::default());
+                }
+                continue;
+            }
+            let snapshot = snapshot.unwrap();
             drop(runtime);
             let ready_tasks = NativeTasks::new(
                 snapshot.clone(),
