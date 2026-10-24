@@ -1032,7 +1032,9 @@ pub(super) mod tests {
                         let before = {
                             let _role = role::Guard::new(ctx);
                             let task = engine::current(ctx);
-                            *engine::driver(ctx).recorded.get(&task).unwrap_or(&0)
+                            crate::tasks::ordered::engine::with_driver(ctx, |d| {
+                                *d.recorded.get(&task).unwrap_or(&0)
+                            })
                         };
                         let mut result = std::mem::MaybeUninit::<UnitResult>::uninit();
                         assert_eq!(
@@ -1058,7 +1060,9 @@ pub(super) mod tests {
                                 1,
                                 "waiting preserves one host ordinal"
                             );
-                            assert!(engine::driver(ctx).host_ops.is_empty());
+                            assert!(crate::tasks::ordered::engine::with_driver(ctx, |d| d
+                                .host_ops
+                                .is_empty()));
                             let log = engine::driver(ctx).events.as_ref().unwrap();
                             assert_eq!(log.host_completions.len(), 1);
                             assert_eq!(log.host_polls.len(), 1);
@@ -1135,7 +1139,9 @@ pub(super) mod tests {
         }
         loop {
             let _role = unsafe { role::Guard::new(ctx) };
-            if engine::driver(ctx).head_paused(probe.caller.load(Ordering::Acquire)) {
+            if crate::tasks::ordered::engine::with_driver(ctx, |d| {
+                d.head_paused(probe.caller.load(Ordering::Acquire))
+            }) {
                 break;
             }
             assert!(std::time::Instant::now() < until);

@@ -326,8 +326,13 @@ fn ordered_concurrent_bounded_cancellation_preserves_checks_and_rejects_waits_be
                     Err(Stop::Refused(_))
                 ));
                 assert!((*ctx).pending_ordered_host.is_none());
-                assert!(engine::driver(ctx).host_ops.is_empty());
-                assert_eq!(engine::driver(ctx).next_host_token, 1);
+                assert!(crate::tasks::ordered::engine::with_driver(ctx, |d| d
+                    .host_ops
+                    .is_empty()));
+                assert_eq!(
+                    crate::tasks::ordered::engine::with_driver(ctx, |d| d.next_host_token),
+                    1
+                );
                 let directory = word(
                     request(
                         ctx,
@@ -350,7 +355,7 @@ fn ordered_concurrent_bounded_cancellation_preserves_checks_and_rejects_waits_be
                     )
                     .unwrap(),
                 );
-                scheduler(ctx).cancel(0, CANCEL_REQUESTED);
+                crate::tasks::role::with_role(ctx, |s| s.cancel(0, CANCEL_REQUESTED));
                 assert_eq!(
                     request(
                         ctx,
@@ -482,7 +487,7 @@ fn ordered_concurrent_output_canonical_traces_keep_actual_prefixes_and_refuse_un
                             word(request(ctx, &*calls, Request::Stderr { io: 1 }).unwrap());
                         assert_ne!(stdout, stderr);
                         if mode == 3 {
-                            scheduler(ctx).cancel(0, 7);
+                            crate::tasks::role::with_role(ctx, |s| s.cancel(0, 7));
                         }
                         for request_value in [
                             Request::Print {

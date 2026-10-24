@@ -272,7 +272,7 @@ fn witness_with_authority(
             } else {
                 loop {
                     let _role = role::Guard::new(ctx);
-                    if engine::driver(ctx).head_paused(child) {
+                    if crate::tasks::ordered::engine::with_driver(ctx, |d| d.head_paused(child)) {
                         break;
                     }
                     assert!(
@@ -287,12 +287,19 @@ fn witness_with_authority(
             {
                 let _role = role::Guard::new(ctx);
                 let me = engine::current(ctx);
-                assert!(engine::driver(ctx).head_ready(me));
+                assert!(crate::tasks::ordered::engine::with_driver(ctx, |d| d.head_ready(me)));
                 assert_eq!(
-                    engine::driver(ctx).host_returns.contains_key(&child),
+                    crate::tasks::ordered::engine::with_driver(ctx, |d| d
+                        .host_returns
+                        .contains_key(&child)),
                     !bounded && post_read
                 );
-                assert_eq!(engine::driver(ctx).host_ops.contains_key(&child), !bounded);
+                assert_eq!(
+                    crate::tasks::ordered::engine::with_driver(ctx, |d| d
+                        .host_ops
+                        .contains_key(&child)),
+                    !bounded
+                );
                 if !bounded {
                     if concurrent {
                         assert!(
@@ -308,7 +315,9 @@ fn witness_with_authority(
                     }
                 }
                 if cancel {
-                    scheduler(ctx).cancel(child as u32, CANCEL_REQUESTED);
+                    crate::tasks::role::with_role(ctx, |s| {
+                        s.cancel(child as u32, CANCEL_REQUESTED)
+                    });
                 }
                 if stop {
                     (*ctx)
@@ -321,7 +330,9 @@ fn witness_with_authority(
                 hirsel_rt_v2_task_scope_exit(ctx, 0, 0, &scope, 0),
                 STATUS_OK
             );
-            assert!(engine::driver(ctx).host_returns.is_empty());
+            assert!(crate::tasks::ordered::engine::with_driver(ctx, |d| d
+                .host_returns
+                .is_empty()));
             STATUS_OK
         },
     );

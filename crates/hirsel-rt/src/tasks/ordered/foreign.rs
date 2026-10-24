@@ -584,7 +584,10 @@ mod tests {
                 engine::at_head(ctx).unwrap();
                 let parked = {
                     let _role = role::Guard::new(ctx);
-                    matches!(scheduler(ctx).task(0).wait, Some(Wait::Pool))
+                    matches!(
+                        crate::tasks::role::with_role(ctx, |s| s.task(0).wait),
+                        Some(Wait::Pool)
+                    )
                 };
                 if parked {
                     break;
@@ -593,7 +596,10 @@ mod tests {
             }
             {
                 let _role = role::Guard::new(ctx);
-                assert!(matches!(scheduler(ctx).task(0).wait, Some(Wait::Pool)));
+                assert!(matches!(
+                    crate::tasks::role::with_role(ctx, |s| s.task(0).wait),
+                    Some(Wait::Pool)
+                ));
                 assert!(readiness::saved(scheduler(ctx), 0));
             }
             probe.entered.store(true, Ordering::Release);
@@ -784,7 +790,7 @@ mod tests {
                     {
                         let _role = role::Guard::new(ctx);
                         assert!(matches!(
-                            scheduler(ctx).task(child as u32).wait,
+                            crate::tasks::role::with_role(ctx, |s| s.task(child as u32).wait),
                             Some(Wait::Gate { gate: 7 })
                         ));
                     }

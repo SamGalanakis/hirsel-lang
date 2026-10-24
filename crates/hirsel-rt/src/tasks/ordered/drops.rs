@@ -628,9 +628,11 @@ pub(super) mod tests {
                             None,
                         )
                     } else {
-                        let (sender, receiver) =
-                            scheduler(ctx).channels.open(element, image_layout);
-                        let (channel, _) = scheduler(ctx).channels.endpoint_of(sender);
+                        let (sender, receiver) = crate::tasks::role::with_role(ctx, |s| {
+                            s.channels.open(element, image_layout)
+                        });
+                        let (channel, _) =
+                            crate::tasks::role::with_role(ctx, |s| s.channels.endpoint_of(sender));
                         assert_eq!(
                             scheduler(ctx)
                                 .channels
@@ -704,7 +706,7 @@ pub(super) mod tests {
                     drop(objects);
                     assert_eq!(records[1..], [(2, "drop.trivial"), (2, "atomic.store")]);
                     if let Some(sender) = sender {
-                        scheduler(ctx).channels.close(sender);
+                        crate::tasks::role::with_role(ctx, |s| s.channels.close(sender));
                     }
                     STATUS_OK
                 },
@@ -781,7 +783,12 @@ pub(super) mod tests {
                         let _role = role::Guard::new(ctx);
                         engine::at_head(ctx).unwrap();
                         assert_eq!(
-                            engine::driver(ctx).frontier.as_ref().unwrap().settled.level,
+                            crate::tasks::ordered::engine::with_driver(ctx, |d| d
+                                .frontier
+                                .as_ref()
+                                .unwrap()
+                                .settled
+                                .level),
                             0
                         );
                         assert_eq!((*ctx).heap_ref().meter.held(), 0);
@@ -793,7 +800,7 @@ pub(super) mod tests {
                     }
                     let _role = role::Guard::new(ctx);
                     let task = engine::current(ctx);
-                    engine::driver(ctx).finishing(task);
+                    crate::tasks::ordered::engine::with_driver(ctx, |d| d.finishing(task));
                     STATUS_OK
                 },
             );
@@ -1047,7 +1054,7 @@ pub(super) mod tests {
                 role::enter(ctx);
                 engine::at_head(ctx).unwrap();
                 let task = engine::current(ctx);
-                engine::driver(ctx).finishing(task);
+                crate::tasks::ordered::engine::with_driver(ctx, |d| d.finishing(task));
                 role::release(ctx);
                 STATUS_OK
             },
@@ -1116,7 +1123,12 @@ pub(super) mod tests {
                         crate::roots::hirsel_rt_v2_root_release(ctx, root);
                         let _role = role::Guard::new(ctx);
                         assert_eq!(
-                            engine::driver(ctx).frontier.as_ref().unwrap().settled.level,
+                            crate::tasks::ordered::engine::with_driver(ctx, |d| d
+                                .frontier
+                                .as_ref()
+                                .unwrap()
+                                .settled
+                                .level),
                             0
                         );
                         assert_eq!((*ctx).heap_ref().meter.held(), 0);
@@ -1145,7 +1157,7 @@ pub(super) mod tests {
                     }
                     let _role = role::Guard::new(ctx);
                     let task = engine::current(ctx);
-                    engine::driver(ctx).finishing(task);
+                    crate::tasks::ordered::engine::with_driver(ctx, |d| d.finishing(task));
                     STATUS_OK
                 },
             );

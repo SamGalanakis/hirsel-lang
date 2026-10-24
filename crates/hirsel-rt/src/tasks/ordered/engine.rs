@@ -2133,7 +2133,9 @@ pub(super) mod tests {
                     assert_eq!(status, crate::channels::DONE);
                     assert_eq!(message, none);
                     role::enter(ctx);
-                    let channel = scheduler(ctx).channels.channel(endpoints[1], false);
+                    let channel = crate::tasks::role::with_role(ctx, |s| {
+                        s.channels.channel(endpoints[1], false)
+                    });
                     let mut received = [0u64; 2];
                     assert_eq!(
                         scheduler(ctx)
@@ -2142,7 +2144,7 @@ pub(super) mod tests {
                         Ok(true)
                     );
                     assert_eq!(received, [1, 55]);
-                    scheduler(ctx).channels.close(endpoints[1]);
+                    crate::tasks::role::with_role(ctx, |s| s.channels.close(endpoints[1]));
                     role::release(ctx);
                     message = [1, 66];
                     assert_eq!(
@@ -2157,8 +2159,8 @@ pub(super) mod tests {
                     assert_eq!(status, crate::channels::CLOSED);
                     assert_eq!(message, [1, 66], "closed send returns ownership unchanged");
                     role::enter(ctx);
-                    scheduler(ctx).channels.close(endpoints[0]);
-                    scheduler(ctx).channels.close(duplicate);
+                    crate::tasks::role::with_role(ctx, |s| s.channels.close(endpoints[0]));
+                    crate::tasks::role::with_role(ctx, |s| s.channels.close(duplicate));
                     // Close the inert endpoints as quiescent fixture cleanup;
                     // receiver/drop entry integration follows later.
                     role::release(ctx);
@@ -2215,7 +2217,9 @@ pub(super) mod tests {
                         site: 3,
                         operation_site: 4,
                     };
-                    scheduler(ctx).sync.kill(word, vec![(failure, Vec::new())]);
+                    crate::tasks::role::with_role(ctx, |s| {
+                        s.sync.kill(word, vec![(failure, Vec::new())])
+                    });
                     role::release(ctx);
                     assert_eq!(hirsel_rt_v2_mutex_cause(ctx, &mutex), 0);
                     assert!((*ctx).failure.active());

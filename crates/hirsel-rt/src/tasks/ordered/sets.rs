@@ -685,7 +685,7 @@ pub(super) mod tests {
                 role::enter(ctx);
                 engine::at_head(ctx).unwrap();
                 let task = engine::current(ctx);
-                engine::driver(ctx).finishing(task);
+                crate::tasks::ordered::engine::with_driver(ctx, |d| d.finishing(task));
                 role::release(ctx);
                 STATUS_OK
             },

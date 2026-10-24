@@ -673,7 +673,9 @@ pub(super) mod tests {
                         // with its spawn log still owned by Frontier.
                         let _role = role::Guard::new(ctx);
                         let task = super::super::engine::current(ctx);
-                        super::super::engine::driver(ctx).suspending(task, true);
+                        crate::tasks::ordered::engine::with_driver(ctx, |d| {
+                            d.suspending(task, true)
+                        });
                         crate::pool::free::suspend_current(ctx, false);
                         let driver = super::super::engine::driver(ctx);
                         driver.enter(task, crate::pool::compute_index().unwrap_or(0));

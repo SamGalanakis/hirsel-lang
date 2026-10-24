@@ -1114,7 +1114,10 @@ pub(super) mod tests {
                             }
                             let _role = role::Guard::new(ctx);
                             engine::at_head(ctx).unwrap();
-                            assert_eq!(scheduler(ctx).task(child as u32).state, State::Holding);
+                            assert_eq!(
+                                crate::tasks::role::with_role(ctx, |s| s.task(child as u32).state),
+                                State::Holding
+                            );
                             if mode == 2 {
                                 assert_eq!(
                                     hirsel_rt_v2_task_add(ctx, &scope, &mut set, &mut child),
@@ -1156,10 +1159,12 @@ pub(super) mod tests {
                     engine::at_head(ctx).unwrap();
                     if bulk {
                         assert!(scheduler(ctx).sets[set as u32 as usize].is_none());
-                        assert!(engine::driver(ctx).detaching.is_empty());
+                        assert!(crate::tasks::ordered::engine::with_driver(ctx, |d| d
+                            .detaching
+                            .is_empty()));
                     }
                     let me = engine::current(ctx);
-                    engine::driver(ctx).finishing(me);
+                    crate::tasks::ordered::engine::with_driver(ctx, |d| d.finishing(me));
                     STATUS_OK
                 },
             );
@@ -1322,7 +1327,7 @@ pub(super) mod tests {
                     let _role = role::Guard::new(ctx);
                     engine::at_head(ctx).unwrap();
                     let me = engine::current(ctx);
-                    engine::driver(ctx).finishing(me);
+                    crate::tasks::ordered::engine::with_driver(ctx, |d| d.finishing(me));
                     STATUS_OK
                 },
             );
@@ -1500,7 +1505,7 @@ pub(super) mod tests {
                         assert!(
                             children
                                 .iter()
-                                .all(|&(task, _, _)| scheduler(ctx).task(task as u32).state
+                                .all(|&(task, _, _)| crate::tasks::role::with_role(ctx, |s| s.task(task as u32).state)
                                     == State::Holding)
                         );
                         role::release(ctx);
@@ -1512,7 +1517,7 @@ pub(super) mod tests {
                         let retired = if holding_first && matches!(consume, 0 | 3) {
                             role::enter(ctx);
                             engine::at_head(ctx).unwrap();
-                            let retired = engine::driver(ctx).frontier.as_ref().unwrap().retired();
+                            let retired = crate::tasks::ordered::engine::with_driver(ctx, |d| d.frontier.as_ref().unwrap().retired());
                             role::release(ctx);
                             Some(retired)
                         } else { None };
@@ -1540,7 +1545,7 @@ pub(super) mod tests {
                             // completed call boundary as the yielding join.
                             engine::at_head(ctx).unwrap();
                             assert_eq!(
-                                engine::driver(ctx).frontier.as_ref().unwrap().retired() - retired,
+                                crate::tasks::ordered::engine::with_driver(ctx, |d| d.frontier.as_ref().unwrap().retired()) - retired,
                                 2,
                                 "only the rest's store and the join yield poll; call return does not",
                             );
@@ -1562,7 +1567,7 @@ pub(super) mod tests {
                 }
                 role::enter(ctx);
                 engine::at_head(ctx).unwrap();
-                assert!(scheduler(ctx).scopes.iter().all(Option::is_none));
+                assert!(crate::tasks::role::with_role(ctx, |s| s.scopes.iter().all(Option::is_none)));
                 let task = engine::current(ctx);
                 let driver = engine::driver(ctx);
                 assert!(driver.frontier.as_ref().unwrap().retired() > 700);
@@ -1946,10 +1951,10 @@ pub(super) mod tests {
                 );
                 role::enter(ctx);
                 engine::at_head(ctx).unwrap();
-                scheduler(ctx).channels.close(endpoints[0]);
-                scheduler(ctx).channels.close(endpoints[1]);
+                crate::tasks::role::with_role(ctx, |s| s.channels.close(endpoints[0]));
+                crate::tasks::role::with_role(ctx, |s| s.channels.close(endpoints[1]));
                 let task = engine::current(ctx);
-                engine::driver(ctx).finishing(task);
+                crate::tasks::ordered::engine::with_driver(ctx, |d| d.finishing(task));
                 role::release(ctx);
                 STATUS_OK
             },

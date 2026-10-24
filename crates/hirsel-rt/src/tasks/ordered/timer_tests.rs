@@ -607,7 +607,7 @@ fn an_unsaved_receiver_releases_the_home_poll_reservation_then_retries_after_sav
                     ((), crate::ordered::Next::Park)
                 })
                 .unwrap();
-                engine::driver(ctx).defer_poll_until_saved(task);
+                crate::tasks::ordered::engine::with_driver(ctx, |d| d.defer_poll_until_saved(task));
                 engine::driver(ctx).host_poll = true;
                 assert!(!readiness::saved(scheduler(ctx), task as u32));
                 role::release(ctx);
@@ -620,7 +620,7 @@ fn an_unsaved_receiver_releases_the_home_poll_reservation_then_retries_after_sav
                 role::enter(ctx);
                 assert!(!completed, "unsaved frame must defer this poll");
                 assert!(
-                    !engine::driver(ctx).host_poll,
+                    !crate::tasks::ordered::engine::with_driver(ctx, |d| d.host_poll),
                     "home reservation must be retryable"
                 );
                 assert!(
@@ -632,11 +632,11 @@ fn an_unsaved_receiver_releases_the_home_poll_reservation_then_retries_after_sav
                         .is_some()
                 );
                 now.store(100, Ordering::Release);
-                engine::driver(ctx).suspending(task, false);
+                crate::tasks::ordered::engine::with_driver(ctx, |d| d.suspending(task, false));
                 crate::pool::free::suspend_current(ctx, false);
                 engine::at_head(ctx).unwrap();
                 assert_eq!(
-                    scheduler(ctx).task(task as u32).status,
+                    crate::tasks::role::with_role(ctx, |s| s.task(task as u32).status),
                     crate::channels::CANCELED + CANCEL_DEADLINE
                 );
                 assert!(

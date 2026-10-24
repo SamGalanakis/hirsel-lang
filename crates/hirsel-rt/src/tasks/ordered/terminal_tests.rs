@@ -33,7 +33,9 @@ unsafe extern "C" fn older(ctx: *mut TaskCtx, env: *mut Header, _: u64, _: u64) 
     loop {
         let pending = {
             let _role = unsafe { role::Guard::new(ctx) };
-            engine::driver(ctx).head_paused(probe.terminal.load(Ordering::Acquire))
+            crate::tasks::ordered::engine::with_driver(ctx, |d| {
+                d.head_paused(probe.terminal.load(Ordering::Acquire))
+            })
         };
         if pending {
             break;
@@ -1133,7 +1135,9 @@ fn canonical_blocked_cut_uses_logical_wait_targets_after_every_frame_is_saved() 
                             // Perturb only provisional storage identities; no
                             // object is initialized or operation introduced.
                             for _ in 1..width {
-                                let _reserved = scheduler(ctx).channels.reserve_open();
+                                let _reserved = crate::tasks::role::with_role(ctx, |s| {
+                                    s.channels.reserve_open()
+                                });
                             }
                             crate::pool::start(ctx, width, true);
                             crate::pool::free::enable(ctx);

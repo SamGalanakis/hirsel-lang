@@ -223,7 +223,7 @@ fn borrowed_output_cancellation_records_one_owned_request_without_printing() {
                 );
                 {
                     let _role = role::Guard::new(ctx);
-                    scheduler(ctx).cancel(0, CANCEL_REQUESTED);
+                    crate::tasks::role::with_role(ctx, |s| s.cancel(0, CANCEL_REQUESTED));
                 }
                 for write in [
                     crate::io::hirsel_rt_v2_out_write,

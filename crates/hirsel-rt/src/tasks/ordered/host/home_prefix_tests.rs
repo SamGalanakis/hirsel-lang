@@ -134,7 +134,7 @@ fn home_output_canonical_prefixes_match_written_bytes_and_refuse_unknown_or_inva
                                 panic!("stderr grant")
                             };
                             if mode == 6 {
-                                scheduler(ctx).cancel(0, 7);
+                                crate::tasks::role::with_role(ctx, |s| s.cancel(0, 7));
                             }
                             let owner = crate::alloc::hirsel_rt_v2_alloc(
                                 ctx,

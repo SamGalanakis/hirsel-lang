@@ -3794,7 +3794,9 @@ mod tests {
                         );
                         {
                             let _guard = role::Guard::new(ctx);
-                            scheduler(ctx).sets.resize_with(width as usize, || None);
+                            crate::tasks::role::with_role(ctx, |s| {
+                                s.sets.resize_with(width as usize, || None)
+                            });
                         }
                         let mut set = 0;
                         assert_eq!(
@@ -3989,8 +3991,11 @@ mod tests {
                         {
                             let _guard = role::Guard::new(ctx);
                             for _ in 0..width {
-                                let _ = scheduler(ctx).channels.reserve_open();
-                                let _ = scheduler(ctx).sync.reserve_mutex();
+                                let _ = crate::tasks::role::with_role(ctx, |s| {
+                                    s.channels.reserve_open()
+                                });
+                                let _ =
+                                    crate::tasks::role::with_role(ctx, |s| s.sync.reserve_mutex());
                             }
                         }
                         let none = [0u64; 2];
@@ -4210,7 +4215,10 @@ mod tests {
                 );
                 scheduler(ctx).task(first).path = old_path;
             }
-            assert_eq!(scheduler(ctx).task(unrelated).canceled.cause(), None);
+            assert_eq!(
+                crate::tasks::role::with_role(ctx, |s| s.task(unrelated).canceled.cause()),
+                None
+            );
             if observing {
                 let events = super::super::engine::driver(ctx)
                     .events
@@ -4518,7 +4526,9 @@ mod tests {
                             {
                                 let _role = role::Guard::new(ctx);
                                 (*ctx).shield = shield;
-                                scheduler(ctx).cancel(0, CANCEL_REQUESTED);
+                                crate::tasks::role::with_role(ctx, |s| {
+                                    s.cancel(0, CANCEL_REQUESTED)
+                                });
                             }
                             let env = crate::alloc::hirsel_rt_v2_alloc(
                                 ctx,
@@ -7684,7 +7694,7 @@ mod tests {
                     move |ctx| unsafe {
                         if let Some(cause) = cause {
                             let _guard = role::Guard::new(ctx);
-                            scheduler(ctx).cancel(0, cause);
+                            crate::tasks::role::with_role(ctx, |s| s.cancel(0, cause));
                         }
                         let mut observed = u32::MAX;
                         assert_eq!(
@@ -7696,7 +7706,7 @@ mod tests {
                         // Later cancellation must not rewrite the recorded answer.
                         {
                             let _guard = role::Guard::new(ctx);
-                            scheduler(ctx).cancel(0, 3);
+                            crate::tasks::role::with_role(ctx, |s| s.cancel(0, 3));
                         }
                         let driver = super::super::engine::driver(ctx);
                         let log = driver.events.as_ref().unwrap();
@@ -8031,7 +8041,9 @@ mod tests {
                             Ok(true)
                         );
                         assert_eq!(received[1], 42);
-                        assert!(!crate::tasks::scheduler(ctx).channels.ready(channel));
+                        assert!(!crate::tasks::role::with_role(ctx, |s| s
+                            .channels
+                            .ready(channel)));
                         let id = super::super::engine::driver(ctx)
                             .objects
                             .identity(crate::ordered::objects::Kind::Sender, endpoints[0])
@@ -8079,12 +8091,12 @@ mod tests {
                             6
                         );
                         assert!(
-                            !crate::tasks::scheduler(ctx).channels.ready(channel),
+                            !crate::tasks::role::with_role(ctx, |s| s.channels.ready(channel)),
                             "pending send stays invisible"
                         );
                         backend.publish(0, &op, &receipt.result);
                         assert!(
-                            crate::tasks::scheduler(ctx).channels.ready(channel),
+                            crate::tasks::role::with_role(ctx, |s| s.channels.ready(channel)),
                             "retirement publication exposes send"
                         );
 
@@ -8245,7 +8257,7 @@ mod tests {
                         assert!(log.canonical.is_empty());
                     }
                     assert!(log.joins.is_empty());
-                    scheduler(ctx).tasks.pop();
+                    crate::tasks::role::with_role(ctx, |s| s.tasks.pop());
                     crate::STATUS_OK
                 },
             );
@@ -8471,7 +8483,7 @@ mod tests {
                     );
                     if canceled {
                         let _guard = role::Guard::new(ctx);
-                        scheduler(ctx).cancel(0, CANCEL_REQUESTED);
+                        crate::tasks::role::with_role(ctx, |s| s.cancel(0, CANCEL_REQUESTED));
                     } else {
                         assert_eq!(
                             crate::finalize::hirsel_rt_v2_close_handle(ctx, endpoints[0], 0, 0),
