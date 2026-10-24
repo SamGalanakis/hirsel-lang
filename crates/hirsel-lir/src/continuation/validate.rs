@@ -514,7 +514,7 @@ pub fn validate(
                 let Ok(sites) = sites else {
                     return Err(ContinuationError::Representation(*id));
                 };
-                if sites.is_empty() {
+                if sites.is_empty() || !u.parameters.is_empty() {
                     return Err(ContinuationError::Representation(*id));
                 }
                 if plan.states.len() != sites.len() {

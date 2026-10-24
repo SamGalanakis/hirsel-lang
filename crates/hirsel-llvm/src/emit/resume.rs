@@ -226,26 +226,37 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         self.bind_parameters()?;
         let start = self.module.append_block(self.function);
         self.builder.position(start);
-        let first = if state == 0 {
-            self.builder.br(self.blocks[self.unit.entry.index()]);
-            self.unit.entry
-        } else {
-            let Some(s) = plan.states.get(state as usize - 1) else {
-                return self.invalid("a resume state outside its plan");
-            };
-            self.reload(s)?;
-            self.resume.as_mut().unwrap().resuming = Some(s.boundary.call);
-            let unit = self.unit;
-            let block = s.boundary.block;
-            self.at = (block, 0);
-            self.terminator(&unit.terminators[block.index()])?;
-            block
+        let first = match state {
+            0 => self.unit.entry,
+            k => match plan.states.get(k as usize - 1) {
+                Some(s) => s.boundary.block,
+                None => return self.invalid("a resume state outside its plan"),
+            },
         };
         let count = self.unit.blocks.len();
         let adjacent: Vec<Vec<usize>> = (0..count)
             .map(|b| self.successors(b))
             .collect::<Emitted<_>>()?;
         let order = hirsel_graph::reverse_postorder(&adjacent, first.index());
+        if state == 0 {
+            self.builder.br(self.blocks[self.unit.entry.index()]);
+        } else {
+            let s = &plan.states[state as usize - 1];
+            let mut skipped = vec![true; count];
+            for &b in &order {
+                skipped[b] = b == first.index();
+            }
+            self.reload(s)?;
+            let unit = self.unit;
+            for (block, i) in hirsel_lir::continuation::resume_preparations(unit, plan, state, &skipped) {
+                self.at = (block, i);
+                let inst = &self.pool(unit.blocks[block.index()].instructions, &unit.instructions)?[i];
+                self.instruction(inst)?;
+            }
+            self.resume.as_mut().unwrap().resuming = Some(s.boundary.call);
+            self.at = (first, 0);
+            self.terminator(&unit.terminators[first.index()])?;
+        }
         let mut emitted = vec![false; count];
         for b in order {
             if state != 0 && b == first.index() {
