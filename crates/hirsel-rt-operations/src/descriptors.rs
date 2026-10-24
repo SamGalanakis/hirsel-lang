@@ -894,6 +894,10 @@ pub const ENTRIES: &[Entry] = &[
     entry("hirsel_rt_v2_builder_begin", Local),
     entry("hirsel_rt_v2_builder_grow", Local),
     entry("hirsel_rt_v2_builder_publish", Local),
+    // Immutable semantic metadata has its own atomic custody, with no scheduler
+    // operation, source credit, task context or user finalizer.
+    entry("hirsel_rt_v2_receipt_retain", Concurrent),
+    entry("hirsel_rt_v2_receipt_release", Concurrent),
     // roots.rs: increments commute; releases can free counted frozen storage.
     entry("hirsel_rt_v2_root_dup", Concurrent),
     ops("hirsel_rt_v2_root_release", &["root.release"]),
