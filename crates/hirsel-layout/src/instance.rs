@@ -140,7 +140,32 @@ impl InstanceKey {
     pub fn digest(&self) -> ContentHash {
         self.digest
     }
+    /// A selected native implementation retains the complete lexical instance
+    /// and transformation inputs. Preserve existing symbol digest domains,
+    /// while equality and durable addresses use the full canonical encoding.
+    pub fn derived(&self, domain: &str, inputs: &[&[u8]]) -> Self {
+        let mut encoding = Vec::new();
+        for part in std::iter::once(b"hirsel.derived-instance.v1".as_slice())
+            .chain([self.encoding(), domain.as_bytes()])
+            .chain(inputs.iter().copied())
+        {
+            encoding.extend_from_slice(&(part.len() as u64).to_le_bytes());
+            encoding.extend_from_slice(part);
+        }
+        Self {
+            definition: self.definition.clone(),
+            body: self.body,
+            encoding,
+            digest: ContentHash::of_parts(
+                domain,
+                std::iter::once(self.digest.0.as_slice()).chain(inputs.iter().copied()),
+            ),
+        }
+    }
 }
+
+#[cfg(test)]
+mod derived_tests;
 
 /// Declaration ordinal of a binder's parameter.
 trait Ordinal: Copy {
