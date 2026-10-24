@@ -1,15 +1,17 @@
-//! Runtime archives are immutable, content-addressed inputs to the linker.
+//! Runtime archives and derivations are ordinary products in the selected store.
+//! Files here are materializations only; no archive/receipt cache grants reuse.
 use super::{NativeError, StageName, TargetSpec};
+use hirsel_artifact_store::{Action, Address, Domain, Reference};
+use hirsel_engine::store::ResultStore;
 use hirsel_syntax::ContentHash;
-use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
 use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Write};
+use std::io::Read;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{Mutex, OnceLock};
+use std::sync::Mutex;
 
 type Packages = Vec<(String, PathBuf)>;
 
@@ -315,55 +317,55 @@ pub(super) fn private_file(path: &Path) -> std::io::Result<File> {
     Ok(file)
 }
 
-fn digest(mut file: File) -> std::io::Result<String> {
-    let mut hash = Sha256::new();
-    let mut buffer = [0; 64 * 1024];
-    loop {
-        let count = file.read(&mut buffer)?;
-        if count == 0 {
-            break;
-        }
-        hash.update(&buffer[..count]);
-    }
-    Ok(format!("{:x}", hash.finalize()))
+const RUNTIME: Domain = Domain {
+    kind: 0x4f00_0006,
+    schema: 1,
+};
+
+fn identity(key: &str) -> (Address, Action) {
+    let address = Address(ContentHash::of_parts(
+        "hirsel.runtime-product-address.v1",
+        [key.as_bytes()],
+    ));
+    let action = Action(ContentHash::of_parts(
+        "hirsel.runtime-product-action.v1",
+        [key.as_bytes()],
+    ));
+    (address, action)
 }
 
-fn verified(archive: &Path, receipt: &Path) -> bool {
-    let check = || -> std::io::Result<bool> {
-        // A receipt belongs to this input key by its filename in the private
-        // directory. Read at most one digest so a corrupt receipt cannot grow RAM.
-        let mut expected = String::new();
-        private_file(receipt)?
-            .take(65)
-            .read_to_string(&mut expected)?;
-        if expected.len() != 64 {
-            return Ok(false);
-        }
-        Ok(digest(private_file(archive)?)? == expected)
-    };
-    check().unwrap_or(false)
+fn selected(store: &dyn ResultStore, key: &str) -> Option<Reference> {
+    let (address, action) = identity(key);
+    let association = store.lookup_product(address)?;
+    if association.action != action || association.reference.domain != RUNTIME {
+        return None;
+    }
+    let bytes = store.get_content(association.reference)?;
+    if RUNTIME.reference(&bytes) != Some(association.reference) {
+        return None;
+    }
+    let (stored_key, archive): (String, Reference) = serde_json::from_slice(&bytes).ok()?;
+    (stored_key == key).then_some(archive)
 }
 
-fn temporary_file(directory: &Path, key: &str) -> Result<(PathBuf, File), NativeError> {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static NEXT: AtomicU64 = AtomicU64::new(0);
-    loop {
-        let serial = NEXT.fetch_add(1, Ordering::Relaxed);
-        let path = directory.join(format!("{key}.{}.{serial}.tmp", std::process::id()));
-        match OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&path)
-        {
-            Ok(file) => return Ok((path, file)),
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(e) => return Err(io(e)),
-        }
+fn restore(
+    store: &dyn ResultStore,
+    reference: Reference,
+    destination: &Path,
+) -> Result<(), NativeError> {
+    // A materialization may not alias or chmod a foreign file. Only the checked
+    // private regular file is eligible for inode-preserving byte comparison.
+    if destination.symlink_metadata().is_ok() && private_file(destination).is_err() {
+        fs::remove_file(destination).map_err(io)?;
     }
+    super::object_queries::materialize_link_input(store, reference, destination, false)
+        .map_err(|e| NativeError::new(StageName::Link, e))?;
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(destination, fs::Permissions::from_mode(0o600)).map_err(io)
 }
 
 fn publish(
+    store: &dyn ResultStore,
     cache: &Path,
     key: &str,
     build: impl FnOnce(&Path) -> Result<PathBuf, NativeError>,
@@ -373,7 +375,6 @@ fn publish(
     use std::os::fd::AsRawFd;
     let pinned = PathBuf::from(format!("/proc/self/fd/{}", directory.as_raw_fd()));
     let archive = pinned.join(format!("{key}.a"));
-    let receipt = pinned.join(format!("{key}.sha256"));
     let lock = OpenOptions::new()
         .create(true)
         .truncate(false)
@@ -397,51 +398,68 @@ fn publish(
     }
     // OS locks disappear on process exit; a failed builder cannot strand a lock.
     lock.lock().map_err(io)?;
-    if verified(&archive, &receipt) {
+    if let Some(reference) = selected(store, key)
+        && restore(store, reference, &archive).is_ok()
+    {
         return Ok(cache.join(format!("{key}.a")));
     }
-    let built = build(&cache.join("build").join(key))?;
-    let (temporary, mut output) = temporary_file(&pinned, key)?;
-    let mut digest_temporary = None;
-    let result = (|| {
-        let mut input = File::open(built).map_err(io)?;
-        std::io::copy(&mut input, &mut output).map_err(io)?;
-        output.sync_all().map_err(io)?;
-        let hash = digest(File::open(&temporary).map_err(io)?).map_err(io)?;
-        let (path, mut receipt_file) = temporary_file(&pinned, key)?;
-        digest_temporary = Some(path);
-        receipt_file.write_all(hash.as_bytes()).map_err(io)?;
-        receipt_file.sync_all().map_err(io)?;
-        fs::rename(&temporary, &archive).map_err(io)?;
-        fs::rename(digest_temporary.as_ref().unwrap(), &receipt).map_err(io)?;
-        directory.sync_all().map_err(io)?;
-        // Readers hold the same lock. A crash between renames leaves a missing
-        // or mismatched receipt, which forces rebuilding rather than reuse.
-        Ok(cache.join(format!("{key}.a")))
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(temporary);
-        if let Some(path) = digest_temporary {
-            let _ = fs::remove_file(path);
-        }
+    // Different requests/processes may compute the same product. The file lock
+    // coalesces this synchronous Cargo adapter only; the store owns all reuse.
+    // Unique scratch prevents failed builds from exposing partial archives.
+    let scratch = super::executable::Scratch::new()?;
+    let built = build(&scratch.0)?;
+    let reference =
+        super::object_queries::store_link_input_reader(store, File::open(built).map_err(io)?)
+            .map_err(|e| NativeError::new(StageName::Link, e))?;
+    restore(store, reference, &archive)?;
+    let bytes = serde_json::to_vec(&(key, reference))
+        .map_err(|e| NativeError::new(StageName::Link, e.to_string()))?;
+    let record = store
+        .put_content(RUNTIME, &bytes)
+        .ok_or_else(|| NativeError::new(StageName::Link, "runtime product publication failed"))?;
+    if RUNTIME.reference(&bytes) != Some(record) {
+        return Err(NativeError::new(
+            StageName::Link,
+            "runtime product identity differs",
+        ));
     }
-    result
+    let (address, action) = identity(key);
+    store.associate_product(address, action, record);
+    if store
+        .lookup_product(address)
+        .is_none_or(|row| row.action != action || row.reference != record)
+    {
+        return Err(NativeError::new(
+            StageName::Link,
+            "runtime product association failed",
+        ));
+    }
+    Ok(cache.join(format!("{key}.a")))
 }
 
-/// A file derived from the published archive `archive` (`<key>.a` in `cache`),
-/// published as `<key>-<part>.a` under the same private-cache rules; `build`
-/// writes it in the scratch directory it is given and returns its path.
+/// An ordinary derivation of the exact archive bytes and transformation inputs.
+/// The returned private file is only a materialization of that stored product.
 pub(super) fn derived(
+    store: &dyn ResultStore,
     cache: &Path,
     archive: &Path,
     part: &str,
+    tools: ContentHash,
     build: impl FnOnce(&Path) -> Result<PathBuf, NativeError>,
 ) -> Result<PathBuf, NativeError> {
     let key = archive
         .file_stem()
         .and_then(|stem| stem.to_str())
         .ok_or_else(|| NativeError::new(StageName::Link, "a runtime archive has no key"))?;
-    publish(cache, &format!("{key}-{part}"), |scratch| {
+    // Bind the actual consumed archive, not the spelling of its pathname.
+    let input =
+        super::object_queries::store_link_input_reader(store, File::open(archive).map_err(io)?)
+            .map_err(|e| NativeError::new(StageName::Link, e))?;
+    let encoded = serde_json::to_vec(&(key, part, tools, input))
+        .map_err(|e| NativeError::new(StageName::Link, e.to_string()))?;
+    let hash = ContentHash::of_parts("hirsel.runtime-derived.v1", [encoded.as_slice()]);
+    let derived_key: String = hash.0.iter().map(|b| format!("{b:02x}")).collect();
+    publish(store, cache, &derived_key, |scratch| {
         fs::create_dir_all(scratch).map_err(io)?;
         build(scratch)
     })
@@ -507,6 +525,7 @@ impl RuntimeInputs {
 }
 
 pub(super) fn archive(
+    store: &dyn ResultStore,
     inputs: Option<&RuntimeInputs>,
     cache: &Path,
     target: &TargetSpec,
@@ -514,16 +533,16 @@ pub(super) fn archive(
     runtime_build: super::link::RuntimeBuild,
     build: impl FnOnce(&Path, &BTreeMap<OsString, OsString>) -> Result<PathBuf, NativeError>,
 ) -> Result<PathBuf, NativeError> {
-    static SHARED: OnceLock<Result<RuntimeInputs, NativeError>> = OnceLock::new();
+    let captured;
     let inputs = match inputs {
         Some(inputs) => inputs,
-        None => SHARED
-            .get_or_init(RuntimeInputs::capture)
-            .as_ref()
-            .map_err(Clone::clone)?,
+        None => {
+            captured = RuntimeInputs::capture()?;
+            &captured
+        }
     };
     let key = inputs.key(target, prefix, runtime_build)?;
-    publish(cache, &key, |build_dir| {
+    publish(store, cache, &key, |build_dir| {
         let built = build(build_dir, &inputs.environment)?;
         // Never publish a build from mutable live inputs under a frozen key.
         // Tool/config probes are intentionally paid only on a cache miss.
@@ -545,11 +564,13 @@ pub(super) fn archive(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hirsel_engine::store::MemStore;
     const CRATES: &[&str] = &["hirsel-rt", "hirsel-kernels"];
 
     #[test]
     fn frozen_inputs_memoize_probes_and_keys_but_refuse_changed_builds() {
         use std::os::unix::fs::PermissionsExt;
+        let store = MemStore::default();
         let root_scratch = tempfile::Builder::new()
             .prefix("hirsel-runtime-snapshot-")
             .tempdir()
@@ -609,6 +630,7 @@ mod tests {
         assert_ne!(inputs.key(&target, &prefix, diagnostic).unwrap(), key);
         let cache = root.join("cache");
         let built = archive(
+            &store,
             Some(&inputs),
             &cache,
             &target,
@@ -626,6 +648,7 @@ mod tests {
         let probes = fs::read(&log).unwrap();
         assert_eq!(
             archive(
+                &store,
                 Some(&inputs),
                 &cache,
                 &target,
@@ -644,6 +667,7 @@ mod tests {
         let changed = RuntimeInputs::capture_at(&root, environment).unwrap();
         assert_ne!(changed.key(&target, &prefix, variant).unwrap(), key);
         let error = archive(
+            &store,
             Some(&changed),
             &cache,
             &target,
@@ -683,6 +707,7 @@ mod tests {
 
     #[test]
     fn distinct_runtime_inputs_publish_distinct_archives_and_identical_trees_share() {
+        let store = MemStore::default();
         let root_scratch = tempfile::Builder::new()
             .prefix("hirsel-runtime-cache-")
             .tempdir()
@@ -715,7 +740,7 @@ mod tests {
         assert_eq!(first, input_key(&copy, &packages(&copy), &context).unwrap());
         let cache = root.join("cache");
         let publish_bytes = |key: &str, bytes: &[u8]| {
-            publish(&cache, key, |build_dir| {
+            publish(&store, &cache, key, |build_dir| {
                 fs::create_dir_all(build_dir).map_err(io)?;
                 let artifact = build_dir.join("runtime.a");
                 fs::write(&artifact, bytes).map_err(io)?;
@@ -731,7 +756,7 @@ mod tests {
         assert_ne!(a, b);
         assert_eq!(fs::read(a).unwrap(), b"first archive");
         assert_eq!(fs::read(b).unwrap(), b"second archive");
-        publish(&cache, &first, |_| {
+        publish(&store, &cache, &first, |_| {
             panic!("an immutable archive must be reused")
         })
         .unwrap();
@@ -764,7 +789,8 @@ mod tests {
     fn concurrent_builders_publish_one_complete_archive() {
         use std::io::Write;
         use std::os::unix::fs::PermissionsExt;
-        use std::sync::mpsc;
+        use std::sync::{Arc, mpsc};
+        let store = Arc::new(MemStore::default());
         let cache_scratch = tempfile::Builder::new()
             .prefix("hirsel-runtime-publication-")
             .permissions(fs::Permissions::from_mode(0o700))
@@ -773,9 +799,10 @@ mod tests {
         let cache = cache_scratch.path().to_path_buf();
         let (started, ready) = mpsc::channel();
         let (release, proceed) = mpsc::channel();
+        let first_store = store.clone();
         let first_cache = cache.clone();
         let first = std::thread::spawn(move || {
-            publish(&first_cache, "same-inputs", |dir| {
+            publish(first_store.as_ref(), &first_cache, "same-inputs", |dir| {
                 fs::create_dir_all(dir).map_err(io)?;
                 let artifact = dir.join("runtime.a");
                 let mut file = File::create(&artifact).map_err(io)?;
@@ -789,9 +816,10 @@ mod tests {
         });
         ready.recv().unwrap();
         assert!(!cache.join("same-inputs.a").exists());
+        let second_store = store.clone();
         let second_cache = cache.clone();
         let second = std::thread::spawn(move || {
-            publish(&second_cache, "same-inputs", |_| {
+            publish(second_store.as_ref(), &second_cache, "same-inputs", |_| {
                 panic!("one builder per key")
             })
             .unwrap()
@@ -814,8 +842,8 @@ mod tests {
         cache_scratch
     }
 
-    fn build_bytes(cache: &Path, key: &str, bytes: &[u8]) -> PathBuf {
-        publish(cache, key, |dir| {
+    fn build_bytes(store: &dyn ResultStore, cache: &Path, key: &str, bytes: &[u8]) -> PathBuf {
+        publish(store, cache, key, |dir| {
             fs::create_dir_all(dir).map_err(io)?;
             let built = dir.join("runtime.a");
             fs::write(&built, bytes).map_err(io)?;
@@ -826,12 +854,13 @@ mod tests {
 
     #[test]
     fn planted_archive_without_a_receipt_is_rebuilt() {
+        let store = MemStore::default();
         let cache_scratch = test_cache("planted");
         let cache = cache_scratch.path().to_path_buf();
         fs::write(cache.join("key.a"), b"planted archive").unwrap();
-        let archive = build_bytes(&cache, "key", b"trusted build");
+        let archive = build_bytes(&store, &cache, "key", b"trusted build");
         assert_eq!(fs::read(&archive).unwrap(), b"trusted build");
-        publish(&cache, "key", |_| {
+        publish(&store, &cache, "key", |_| {
             panic!("verified archive should be reused")
         })
         .unwrap();
@@ -840,17 +869,23 @@ mod tests {
 
     #[test]
     fn truncated_or_changed_archives_and_receipts_are_rebuilt() {
+        let store = MemStore::default();
         let cache_scratch = test_cache("corrupt");
         let cache = cache_scratch.path().to_path_buf();
-        let archive = build_bytes(&cache, "key", b"complete archive");
+        let archive = build_bytes(&store, &cache, "key", b"complete archive");
         fs::write(&archive, b"complete").unwrap();
-        build_bytes(&cache, "key", b"complete archive");
+        build_bytes(&store, &cache, "key", b"complete archive");
         assert_eq!(fs::read(&archive).unwrap(), b"complete archive");
         fs::write(&archive, b"planted contents").unwrap();
-        build_bytes(&cache, "key", b"complete archive");
-        fs::write(cache.join("key.sha256"), "bad receipt").unwrap();
-        build_bytes(&cache, "key", b"complete archive");
-        publish(&cache, "key", |_| {
+        build_bytes(&store, &cache, "key", b"complete archive");
+        // A truncated ordinary descriptor forces recomputation. No filesystem
+        // receipt may select a runtime product anymore.
+        let (address, action) = identity("key");
+        let broken = store.put_content(RUNTIME, b"truncated descriptor").unwrap();
+        store.associate_product(address, action, broken);
+        assert!(selected(&store, "key").is_none());
+        build_bytes(&store, &cache, "key", b"complete archive");
+        publish(&store, &cache, "key", |_| {
             panic!("verified archive should be reused")
         })
         .unwrap();
@@ -860,6 +895,7 @@ mod tests {
     #[test]
     fn private_directory_checks_owner_and_mode_on_every_use() {
         use std::os::unix::fs::PermissionsExt;
+        let store = MemStore::default();
         let cache_scratch = test_cache("permissions");
         let cache = cache_scratch.path().to_path_buf();
         let meta = fs::metadata(&cache).unwrap();
@@ -867,40 +903,153 @@ mod tests {
         check_directory(&meta, meta.uid()).unwrap();
         // Exercise the exact production owner check without requiring root to chown.
         assert!(check_directory(&meta, meta.uid().wrapping_add(1)).is_err());
-        build_bytes(&cache, "key", b"archive");
+        build_bytes(&store, &cache, "key", b"archive");
         for mode in [0o755, 0o770, 0o777, 0o1700] {
             fs::set_permissions(&cache, fs::Permissions::from_mode(mode)).unwrap();
             assert!(
-                publish(&cache, "key", |_| panic!(
+                publish(&store, &cache, "key", |_| panic!(
                     "insecure directory must be refused"
                 ))
                 .is_err()
             );
         }
         fs::set_permissions(&cache, fs::Permissions::from_mode(0o700)).unwrap();
-        publish(&cache, "key", |_| panic!("private directory should reuse")).unwrap();
+        publish(&store, &cache, "key", |_| {
+            panic!("private directory should reuse")
+        })
+        .unwrap();
         fs::remove_dir_all(cache).unwrap();
     }
 
     #[test]
     fn foreign_archive_permissions_and_symlinks_force_rebuilding() {
         use std::os::unix::fs::{PermissionsExt, symlink};
+        let store = MemStore::default();
         let cache_scratch = test_cache("foreign");
         let cache = cache_scratch.path().to_path_buf();
-        let archive = build_bytes(&cache, "key", b"trusted build");
+        let archive = build_bytes(&store, &cache, "key", b"trusted build");
         fs::set_permissions(&archive, fs::Permissions::from_mode(0o666)).unwrap();
-        build_bytes(&cache, "key", b"trusted build");
+        build_bytes(&store, &cache, "key", b"trusted build");
         fs::remove_file(&archive).unwrap();
         let outside = cache.join("foreign.a");
         fs::write(&outside, b"foreign archive").unwrap();
         symlink(&outside, &archive).unwrap();
-        build_bytes(&cache, "key", b"trusted build");
+        build_bytes(&store, &cache, "key", b"trusted build");
         assert_eq!(fs::read(&archive).unwrap(), b"trusted build");
         assert_eq!(fs::read(outside).unwrap(), b"foreign archive");
         let alias = cache.with_extension("alias");
         symlink(&cache, &alias).unwrap();
-        assert!(publish(&alias, "key", |_| panic!("symlinked cache must be refused")).is_err());
+        assert!(
+            publish(&store, &alias, "key", |_| panic!(
+                "symlinked cache must be refused"
+            ))
+            .is_err()
+        );
         fs::remove_file(alias).unwrap();
         fs::remove_dir_all(cache).unwrap();
+    }
+    #[test]
+    fn ordinary_runtime_products_restore_missing_files_and_reopen_in_another_directory() {
+        let store_root = tempfile::tempdir().unwrap();
+        let cache = test_cache("ordinary");
+        let next = test_cache("ordinary-next");
+        let store = hirsel_engine::store::DirStore::new(store_root.path().join("products"));
+        let archive = build_bytes(&store, cache.path(), "key", b"runtime bytes");
+        assert!(!cache.path().join("key.sha256").exists());
+        fs::remove_file(&archive).unwrap();
+        let reopened = hirsel_engine::store::DirStore::new(store_root.path().join("products"));
+        for directory in [cache.path(), next.path()] {
+            let restored = publish(&reopened, directory, "key", |_| {
+                panic!("ordinary product must hit")
+            })
+            .unwrap();
+            assert_eq!(fs::read(restored).unwrap(), b"runtime bytes");
+        }
+        let fresh = MemStore::default();
+        let mut computed = false;
+        publish(&fresh, cache.path(), "key", |dir| {
+            computed = true;
+            let output = dir.join("new.a");
+            fs::write(&output, b"new selected provider").map_err(io)?;
+            Ok(output)
+        })
+        .unwrap();
+        assert!(
+            computed,
+            "a materialized .a cannot bypass the selected provider"
+        );
+    }
+
+    #[test]
+    fn runtime_derivations_bind_archive_bytes_and_tool_identity() {
+        let store = MemStore::default();
+        let cache = test_cache("derived-products");
+        let archive = cache.path().join("input.a");
+        fs::write(&archive, b"one").unwrap();
+        let transform = ContentHash::of_bytes(b"tool version one");
+        let build = |dir: &Path| {
+            let output = dir.join("derived.a");
+            fs::write(&output, fs::read(&archive).map_err(io)?).map_err(io)?;
+            Ok(output)
+        };
+        let first = derived(&store, cache.path(), &archive, "strip", transform, build).unwrap();
+        assert_eq!(
+            derived(
+                &store,
+                cache.path(),
+                &archive,
+                "strip",
+                transform,
+                |_| panic!("same inputs must hit")
+            )
+            .unwrap(),
+            first
+        );
+        fs::write(&archive, b"two").unwrap();
+        let second = derived(&store, cache.path(), &archive, "strip", transform, build).unwrap();
+        assert_ne!(first, second);
+        assert_eq!(fs::read(&first).unwrap(), b"one");
+        assert_eq!(fs::read(&second).unwrap(), b"two");
+        let third = derived(
+            &store,
+            cache.path(),
+            &archive,
+            "strip",
+            ContentHash::of_bytes(b"tool version two"),
+            build,
+        )
+        .unwrap();
+        assert_ne!(second, third);
+    }
+
+    #[test]
+    fn failed_or_unadmitted_runtime_products_never_publish_a_selected_output() {
+        let cache = test_cache("failed-products");
+        let store = MemStore::default();
+        assert!(
+            publish(&store, cache.path(), "key", |dir| {
+                fs::write(dir.join("partial.a"), b"partial").map_err(io)?;
+                Err(NativeError::new(StageName::Link, "injected build crash"))
+            })
+            .is_err()
+        );
+        assert!(store.lookup_product(identity("key").0).is_none());
+        assert!(!cache.path().join("key.a").exists());
+        let budget = hirsel_engine::runtime::ProcessBudget::new(0);
+        let denied = hirsel_engine::store::RequestStore::new(
+            std::sync::Arc::new(hirsel_engine::store::NoneStore),
+            budget.reserve(0).unwrap(),
+        );
+        assert!(
+            publish(&denied, cache.path(), "key", |dir| {
+                let output = dir.join("runtime.a");
+                fs::write(&output, b"unadmitted").map_err(io)?;
+                Ok(output)
+            })
+            .is_err()
+        );
+        assert!(denied.exhausted());
+        assert!(denied.lookup_product(identity("key").0).is_none());
+        assert!(!cache.path().join("key.a").exists());
     }
 }
