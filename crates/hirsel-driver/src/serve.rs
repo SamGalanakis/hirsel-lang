@@ -9,8 +9,7 @@
 //! thread, which owns the program. A cancellation a caller forwards reaches the running
 //! callee through its [`ExternalCancel`](crate::network::ExternalCancel).
 use crate::network::{CancelHandle, ExternalCancel};
-use crate::{HostLaunch, LoadedProgram, ToolError};
-use hirsel_engine::DefinitionQueries;
+use crate::{HostLaunch, ToolError};
 use hirsel_remote::frame::Call;
 use hirsel_remote::host::{
     ABANDONED, Action, Caller, Host, Limits, Place, Refusal, RunId, SessionId, Start,
@@ -138,15 +137,17 @@ pub fn serve(
             "only 1 callee run at a time is supported",
         ));
     }
-    let mut program = crate::COMPILER.with_verify(verify).load_program(program)?;
-    program.check_for_execution()?;
-    program.refuse_foreign_interpretation()?;
-    let entries = hirsel_engine::served_entries(&mut program.engine, &program.entry)
-        .map_err(|e| program.error(e))?;
-    let runtime = program
-        .engine
-        .runtime_types()
-        .map_err(|e| program.error(e))?;
+    let mut session = crate::session::Session::open(program, verify);
+    let initial = session.request(crate::requests::CompileOperation::Tir { definition: None })?;
+    let crate::requests::CompileResult::Tir(input) = &initial.result else {
+        return Err(host_error(
+            "compiler",
+            "TIR request returned another operation",
+        ));
+    };
+    crate::tir_execution::refuse_foreign_interpretation(input)?;
+    let entries = input.entries.clone();
+    let runtime = input.runtime.clone();
     let wire = Arc::new(
         crate::network::remote_wire(&runtime, config.frame_bytes())
             .map_err(|e| host_error("the frame codec", e))?,
@@ -213,7 +214,7 @@ pub fn serve(
     });
     for (start, cancel) in started {
         let run = start.run;
-        let (end, callee) = run_callee(&mut program, &runtime, &entries, &config, &start, cancel);
+        let (end, callee) = run_callee(&mut session, &entries, &config, &start, cancel);
         let mut shared = shared.lock().unwrap();
         shared.cancels.remove(&run);
         let actions = shared.host.ended(run, end, callee);
@@ -290,8 +291,7 @@ fn accept(
 /// Run one admitted call as its own callee run (RUN-10): its outcome, and the callee run's
 /// instance when it ran.
 fn run_callee(
-    program: &mut LoadedProgram,
-    runtime: &hirsel_interp::aggregate::RuntimeTypes,
+    session: &mut crate::session::Session,
     entries: &BTreeMap<String, (CalleeFacts, CallForm)>,
     config: &HostConfig,
     start: &Start,
@@ -301,12 +301,24 @@ fn run_callee(
     let Some((facts, _)) = entries.get(&call.path) else {
         return (CallOutcome::NotRun(VERSION_MISMATCH), None);
     };
-    // Check 8: the argument decodes against the callee's parameter schema.
-    let decodes = crate::def_path(&call.path).and_then(|path| {
-        let signature = program.engine.item_signature(&path).ok()?.value;
-        let (_, argument) = crate::call_schemas(&signature, runtime).ok()?;
-        hirsel_interp::library::runners::decode(&argument, &call.argument, runtime).ok()
+    let selected = crate::def_path(&call.path).and_then(|definition| {
+        session
+            .request_applied(crate::requests::CompileOperation::Tir {
+                definition: Some(definition),
+            })
+            .ok()
     });
+    let Some(crate::requests::CompileResult::Tir(input)) =
+        selected.as_ref().map(|selected| &selected.result)
+    else {
+        return (CallOutcome::NotRun(REJECTED), None);
+    };
+    // Check 8 uses the selected immutable callee's parameter schema.
+    let decodes = crate::call_schemas(&input.signature, &input.runtime)
+        .ok()
+        .and_then(|(_, argument)| {
+            hirsel_interp::library::runners::decode(&argument, &call.argument, &input.runtime).ok()
+        });
     if decodes.is_none() {
         return (CallOutcome::NotRun(REJECTED), None);
     }
@@ -357,7 +369,18 @@ fn run_callee(
         run: &run,
         record: tape.as_deref(),
     };
-    match crate::run_loaded_on_host(program, launch, None, None, Some(cancel)) {
+    let result = crate::launch_binding::LaunchSelection::read(launch).and_then(|selection| {
+        crate::tir_execution::run_tir_on_host(
+            input,
+            launch,
+            selection,
+            None,
+            None,
+            Some(cancel),
+            false,
+        )
+    });
+    match result {
         Ok((_, Some(CalleeOutcome::Ok(bytes)))) => (CallOutcome::Ok(bytes), Some(callee)),
         Ok((_, Some(CalleeOutcome::Err(bytes)))) => (CallOutcome::Failed(bytes), Some(callee)),
         Ok((_, Some(CalleeOutcome::Failed(bytes)))) => (CallOutcome::Faulted(bytes), Some(callee)),

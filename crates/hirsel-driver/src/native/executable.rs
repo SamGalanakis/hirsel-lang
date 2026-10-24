@@ -1,5 +1,5 @@
 //! Standalone executable compilation; launch authority is supplied by its caller at runtime.
-use super::{NativeError, OptLevel, Options, Partition, StageName, TargetSpec, Toolchain};
+use super::{NativeError, StageName, TargetSpec};
 use hirsel_engine::ToolError;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -187,79 +187,30 @@ pub fn build_path_native_backend_with_validation(
             "release builds use LLVM; select LLVM or a non-release profile",
         )));
     }
-    crate::session::with_program(source, verify, |loaded| {
-        loaded.check_for_execution()?;
-        hirsel_intern::memory::checkpoint("front complete");
-        let engine = &mut loaded.engine;
-        let input = engine
-            .export_native_input()
-            .map_err(|error| ToolError::Query {
-                error,
-                phase: engine.unavailable,
-                sources: engine.sources.clone(),
-            })?;
-        let sources = (profile == BuildProfile::Debug).then(|| super::profile_sources(&input));
-        let validated = match engine.import_native_input(input) {
-            Ok(input) => input,
-            Err(error) => {
-                return Ok(Err(NativeError::new(
-                    StageName::Manifest,
-                    format!("the native snapshot: {error:?}"),
-                )));
-            }
-        };
-        Ok((|| {
-            let mut options = profile.options(target.clone());
-            options.validation = validation;
-            let proofs = evidence
-                .map(|e| super::Proofs::assess(engine, &loaded.entry, &validated, e))
-                .transpose()?;
-            if let Some(proofs) = &proofs {
-                options.discharge = proofs.discharge.clone();
-            }
-            if profile != BuildProfile::ReleaseLto {
-                options.objects = super::units::selected(
-                    &target,
-                    backend,
-                    profile.opt(),
-                    sources.is_some(),
-                    fuel,
-                )?;
-            }
-            let mut program = super::build(&validated, &options)?;
-            let facts = super::callee_metadata(engine, &loaded.entry)?;
-            program.bind_callees(facts)?;
-            hirsel_intern::memory::checkpoint("native workers complete");
-            // Fuel checks let the executable accept a fuel budget (`budgets.limits@2`).
-            program.fuel = fuel;
-            let scratch = Scratch::new()?;
-            let cache = std::env::var_os("HIRSEL_NATIVE_CACHE")
-                .map(PathBuf::from)
-                .unwrap_or_else(super::runtime_cache::default_directory);
-            let mut tools = Toolchain::in_tree(&cache, &[&target])?;
-            tools.debug_info = profile == BuildProfile::Debug;
-            let objects = super::emit_backend_objects(
-                &program,
-                backend,
-                profile.opt(),
-                Partition::Whole,
-                false,
-                sources.as_ref(),
-            )?;
-            let linked = super::link::link_standalone(
-                &program,
-                &loaded.entry,
-                &objects,
-                &tools,
-                &scratch.0,
-            )?;
-            hirsel_intern::memory::checkpoint("link complete");
-            let timing = hirsel_intern::timings::interval(hirsel_intern::timings::Interval::Link);
-            std::fs::copy(&linked.path, output).map_err(io)?;
-            drop(timing);
-            Ok(proofs.map_or_else(Vec::new, |p| p.report(&program)))
-        })())
-    })
+    let selected = crate::session::request(
+        source,
+        verify,
+        crate::requests::CompileOperation::NativeBuild(crate::requests::NativeRequest {
+            backend,
+            profile,
+            target,
+            validation,
+            launch: super::LaunchInputs::default(),
+            run: None,
+            definition: None,
+            fuel,
+            evidence: evidence.cloned().map(std::sync::Arc::new),
+        }),
+    )?;
+    match &selected.result {
+        crate::requests::CompileResult::Native(input) => {
+            Ok(super::request_output::materialize_output(input, output))
+        }
+        crate::requests::CompileResult::NativeError(error) => Ok(Err(error.clone())),
+        _ => Err(ToolError::Runtime(
+            "native build request returned another operation".into(),
+        )),
+    }
 }
 
 #[cfg(test)]

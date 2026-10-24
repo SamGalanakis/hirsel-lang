@@ -52,7 +52,6 @@ pub fn load_program_source(
 /// A partial pipeline can produce rejection diagnostics, but never a clean acceptance.
 pub fn check_path(path: &Path) -> Result<CheckOutput, ToolError> {
     session::with_session(path, hirsel_engine::Verify::On, session::Session::check)
-        .unwrap_or_else(|| COMPILER.check_path(path))
 }
 /// `check_path`, then the escape from capability checking an accepted program's
 /// entry reaches (CAP-6).
@@ -65,28 +64,13 @@ pub fn check_safe_path(
     ),
     ToolError,
 > {
-    if !session::resident() {
-        return COMPILER.check_safe_path(path);
-    }
-    session::with_program(path, hirsel_engine::Verify::On, |program| {
-        let output = program
-            .check(hirsel_engine::LoweringPolicy::Comptime)
-            .map_err(|error| program.error(error))?;
-        if output
-            .diagnostics
-            .iter()
-            .any(|d| d.severity == hirsel_diag::Severity::Error)
-            || output.completion != hirsel_engine::CheckCompletion::Complete
-        {
-            return Ok((output, None));
-        }
-        if program.launch_entry().is_none() {
-            return Ok((output, None));
-        }
-        let reach = program.unsafe_reach()?;
-        Ok((output, Some((program.entry.clone(), reach))))
-    })
+    session::with_session(
+        path,
+        hirsel_engine::Verify::On,
+        session::Session::check_safe,
+    )
 }
+
 pub fn format_path(path: &Path) -> Result<String, ToolError> {
     COMPILER.format_path(path)
 }
@@ -96,7 +80,14 @@ pub fn prepare_format_path(path: &Path) -> Result<Vec<hirsel_engine::FormattedSo
     COMPILER.prepare_format_path(path)
 }
 pub fn run_path(path: &Path, stdout: &mut dyn Write) -> Result<RunOutcome, ToolError> {
-    COMPILER.run_path(path, stdout)
+    run_simulation(
+        COMPILER,
+        path,
+        SimulationConfig::default(),
+        None,
+        stdout,
+        &mut std::io::sink(),
+    )
 }
 pub fn run_path_with_simulation(
     path: &Path,
@@ -136,23 +127,39 @@ fn run_simulation(
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> Result<RunOutcome, ToolError> {
-    let mut program = compiler.load_program(path)?;
-    program.check_for_execution()?;
-    program.refuse_foreign_interpretation()?;
-    if let Some(limits) = limits {
-        program.engine.adapters.interpreter = Some(Box::new(hirsel_engine::InterpreterAdapter {
-            limits,
-            ..Default::default()
-        }));
-    }
-    // Tool launches classify an absent entry before requesting a rich observation.
-    launch_signature(&mut program)?;
+    use hirsel_engine::InterpreterPhase;
+    let input = request_tir(path, compiler.verify(), None)?;
+    tir_execution::refuse_foreign_interpretation(&input)?;
     let run = hirsel_tir::RunConfiguration {
-        entry: program.entry.clone(),
+        entry: input.entry.clone(),
         hash_seed: 0,
         inputs: vec![],
     };
-    let observed = hirsel_engine::run_observed_snapshot(&mut program.engine, &run, simulation)?;
+    let mut simulation = simulation;
+    if !simulation.runners.is_empty() {
+        simulation.callees = std::sync::Arc::new(input.callees.clone());
+    }
+    let mut interpreter = hirsel_engine::InterpreterAdapter {
+        limits: limits.unwrap_or_default(),
+        ..Default::default()
+    };
+    interpreter.prepare(
+        input.signature.clone(),
+        (*input.runtime).clone(),
+        simulation,
+    );
+    let runtime_error = |error| match error {
+        hirsel_engine::RuntimeError::Io(error) => ToolError::Io(error),
+        hirsel_engine::RuntimeError::Query(error) => ToolError::Query {
+            error,
+            phase: Some(hirsel_engine::QueryKind::Interpret),
+            sources: input.sources.clone(),
+        },
+        hirsel_engine::RuntimeError::Tool(message) => ToolError::Runtime(message),
+    };
+    let observed = interpreter
+        .run_observed_query(&run, &mut input.provider(), &input.sources)
+        .map_err(runtime_error)?;
     let (output, program_stderr) = if let Some(observation) = observed.observation {
         (
             observation.output,
@@ -191,12 +198,9 @@ fn run_simulation(
         stdout.write_all(&output).map_err(ToolError::Io)?;
         stderr.write_all(&program_stderr).map_err(ToolError::Io)?;
     }
-    observed.outcome.map_err(|error| match error {
-        hirsel_engine::RuntimeError::Io(error) => ToolError::Io(error),
-        hirsel_engine::RuntimeError::Query(error) => program.error(error),
-        hirsel_engine::RuntimeError::Tool(message) => ToolError::Runtime(message),
-    })
+    observed.outcome.map_err(runtime_error)
 }
+
 /// `hirsel export --tir <source|manifest.json>`: the proof-seam TIR export
 ///  of the checked program's entry closure.
 pub fn export_tir_path(path: &Path) -> Result<String, ToolError> {
@@ -284,30 +288,13 @@ pub fn run_file(path: &Path, stdout: &mut dyn Write) -> Result<RunOutcome, NotIm
     run_path(path, stdout).map_err(|_| NotImplemented)
 }
 
-pub(crate) fn launch_signature(
-    program: &mut LoadedProgram,
-) -> Result<hirsel_types::SignatureRef, ToolError> {
-    program
-        .engine
-        .item_signature(&program.entry)
-        .map(|q| q.value)
-        .map_err(|e| match e {
-            hirsel_types::QueryError::NotImplemented => ToolError::Runtime(format!(
-                "launch: the program declares no entry `pub fn {}`",
-                program.entry.0.name
-            )),
-            e => program.error(e),
-        })
-}
 /// A minimal inline template for the entry's requested roots, for launch hints.
 /// Io selects stdout only; no directory or other projection is implied.
 pub fn entry_grants_hint(path: &Path) -> Result<String, ToolError> {
-    let mut program = load_program(path)?;
-    program.check_for_execution()?;
-    let signature = launch_signature(&mut program)?;
-    let launch = hirsel_engine::entry_launch_kind(program.engine.types(), &signature)
+    let input = request_tir(path, hirsel_engine::Verify::On, None)?;
+    let launch = hirsel_engine::entry_launch_kind(&input.runtime.types, &input.signature)
         .map_err(ToolError::Launch)?;
-    let roots = hirsel_engine::entry_roots(program.engine.types(), &signature, launch)
+    let roots = hirsel_engine::entry_roots(&input.runtime.types, &input.signature, launch)
         .map_err(ToolError::Launch)?;
     let mut grants = serde_json::Map::new();
     for root in roots {
@@ -329,16 +316,11 @@ pub fn entry_grants_hint(path: &Path) -> Result<String, ToolError> {
 
 /// Export the semantic binding and denial defaults; callers explicitly select grants.
 pub fn export_run_path(path: &Path) -> Result<Vec<u8>, ToolError> {
-    let mut program = load_program(path)?;
-    program.check_for_execution()?;
-    let signature = launch_signature(&mut program)?;
-    let launch = hirsel_engine::entry_launch_kind(program.engine.types(), &signature)
+    let input = request_tir(path, hirsel_engine::Verify::On, None)?;
+    let launch = hirsel_engine::entry_launch_kind(&input.runtime.types, &input.signature)
         .map_err(ToolError::Launch)?;
-    let revision = program
-        .engine
-        .semantic_program_revision(&program.entry)
-        .map_err(|e| program.error(e))?;
-    Ok(hirsel_run_config::RunConfig::for_program(&revision, launch)
+    let revision = &input.revision;
+    Ok(hirsel_run_config::RunConfig::for_program(revision, launch)
         .validated()
         .map_err(|e| ToolError::Runtime(e.to_string()))?
         .canonical()
@@ -446,15 +428,6 @@ pub(crate) enum HostRun {
         io: hirsel_rt::io_sim::SimIo,
     },
 }
-impl HostRun {
-    pub(crate) fn run(&self) -> &hirsel_run_config::ValidatedRun {
-        match self {
-            Self::Live { admitted, .. } => admitted.run(),
-            Self::Replay { run, .. } => run,
-        }
-    }
-}
-
 /// A host launch bound to the checked program, before host admission.
 pub(crate) enum BoundHostRun {
     Live(hirsel_run_config::BoundRun),
@@ -464,33 +437,7 @@ pub(crate) enum BoundHostRun {
     },
 }
 
-/// Bind fresh grants, or a recording, to the selected semantic revision and entry, with no
-/// host consulted. A recording bound to other code, entry or roots refuses here; so does a
-/// record whose code policy the entry's reach breaks (CAP-6), naming the path.
-pub(crate) fn bind_launch(
-    program: &mut LoadedProgram,
-    launch: HostLaunch<'_>,
-) -> Result<BoundHostRun, ToolError> {
-    let selection = launch_binding::LaunchSelection::read(launch)?;
-    if let Some(entry) = selection.entry() {
-        program.entry = entry.clone();
-    }
-    if selection.requires_replayable(launch) {
-        program.refuse_unreplayable()?;
-    }
-    let signature = launch_signature(program)?;
-    let revision = program
-        .engine
-        .semantic_program_revision(&program.entry)
-        .map_err(|e| program.error(e))?;
-    let code = match program.unsafe_reach()? {
-        None => hirsel_run_schema::CodeReach::Safe,
-        Some(reach) => hirsel_run_schema::CodeReach::Escapes(reach.spelled()),
-    };
-    selection.bind(launch, program.engine.types(), &signature, &revision, code)
-}
-
-/// A definition's canonical spelling (`package@version/module/name`) as a path.
+/// Parse an exact canonical logical definition path from a run record.
 pub(crate) fn def_path(spelled: &str) -> Option<hirsel_syntax::DefPath> {
     let (package, rest) = spelled.split_once('@')?;
     let mut parts = rest.split('/');
@@ -508,17 +455,8 @@ pub(crate) fn def_path(spelled: &str) -> Option<hirsel_syntax::DefPath> {
     (path.to_string() == spelled).then_some(path)
 }
 
-/// Bind a launch as [`bind_launch`] does, then admit a live one once on `host`, whose Io
-/// writes the granted standard output; a live launch opens its journal here.
-pub(crate) fn bind_host_run(
-    program: &mut LoadedProgram,
-    launch: HostLaunch<'_>,
-    host: hirsel_rt::host_launch::HostGrants,
-) -> Result<HostRun, ToolError> {
-    let bound = bind_launch(program, launch)?;
-    admit_bound_host_run(bound, launch, host)
-}
-
+/// Admit the already bound live launch once on `host`; its Io and journal
+/// open only after the immutable source facts and explicit grants have bound.
 pub(crate) fn admit_bound_host_run(
     bound: BoundHostRun,
     launch: HostLaunch<'_>,
@@ -577,9 +515,9 @@ pub fn report_runtime_failures(
     let RunOutcome::Failed { primary, causes } = outcome else {
         return Ok(());
     };
-    session::with_program(path, hirsel_engine::Verify::On, |program| {
-        program.check_for_execution()?;
-        let sources = &program.engine.sources;
+    let input = request_tir(path, hirsel_engine::Verify::On, None)?;
+    let sources = &input.sources;
+    {
         let physical = |site: &hirsel_run_schema::Site| {
             let mut site = site.clone();
             if let Some(file) = sources.anchors().find_map(|(_, file, _)| {
@@ -601,7 +539,7 @@ pub fn report_runtime_failures(
             .map_err(ToolError::Io)?;
         }
         Ok(())
-    })
+    }
 }
 
 /// Replay-only semantic enrichment. Binding and exact request consumption happen before
@@ -630,17 +568,15 @@ pub fn replay_observations_checked(
     max_steps: Option<u64>,
 ) -> Result<hirsel_interp::observation::Observable, ToolError> {
     let mut observed = None;
-    let (outcome, _) = session::with_program(path, hirsel_engine::Verify::On, |program| {
-        run_loaded_on_host_with_checks(
-            program,
-            HostLaunch::Replay(tape),
-            max_steps,
-            Some(&mut observed),
-            None,
-            true,
-            None,
-        )
-    })?;
+    let (outcome, _) = run_request_on_host(
+        path,
+        hirsel_engine::Verify::On,
+        HostLaunch::Replay(tape),
+        max_steps,
+        Some(&mut observed),
+        None,
+        true,
+    )?;
     replay_observation(observed, &outcome)
 }
 
@@ -653,9 +589,30 @@ pub fn record_fixture_observations(
     tape: &Path,
     checked: bool,
 ) -> Result<hirsel_interp::observation::Observable, ToolError> {
-    session::with_program(path, hirsel_engine::Verify::On, |program| {
-        record_loaded_fixture_observations(program, run, fixture, tape, checked)
-    })
+    let launch = HostLaunch::Live {
+        config: LaunchConfig::Record(run.as_os_str()),
+        record: Some(tape),
+        revocations: None,
+    };
+    let selection = launch_binding::LaunchSelection::read(launch)?;
+    let input = request_tir(path, hirsel_engine::Verify::On, selection.entry().cloned())?;
+    let mut observed = None;
+    let host = hirsel_rt::host_launch::HostGrants::snapshot(
+        fixture.files.clone(),
+        fixture.stdin.clone(),
+        fixture.monotonic.unwrap_or(0),
+    );
+    let (outcome, _) = tir_execution::run_tir_on_host_with_grants(
+        &input,
+        launch,
+        selection,
+        fixture.steps,
+        Some(&mut observed),
+        None,
+        checked,
+        Some(host),
+    )?;
+    replay_observation(observed, &outcome)
 }
 
 /// Record a fresh fixture execution while reusing this program's checked query graph.
@@ -673,7 +630,7 @@ pub fn record_loaded_fixture_observations(
         fixture.stdin.clone(),
         fixture.monotonic.unwrap_or(0),
     );
-    let outcome = run_loaded_on_host_with_checks(
+    let outcome = tir_execution::run_loaded_on_host_with_checks(
         program,
         HostLaunch::Live {
             config: LaunchConfig::Record(run.as_os_str()),
@@ -698,7 +655,7 @@ pub fn replay_loaded_observations(
     checked: bool,
 ) -> Result<hirsel_interp::observation::Observable, ToolError> {
     let mut observed = None;
-    let (outcome, _) = run_loaded_on_host_with_checks(
+    let (outcome, _) = tir_execution::run_loaded_on_host_with_checks(
         program,
         HostLaunch::Replay(tape),
         max_steps,
@@ -728,269 +685,38 @@ fn run_path_on_host_observed(
     verify: hirsel_engine::Verify,
     observed: Option<&mut Option<hirsel_interp::observation::Observable>>,
 ) -> Result<RunOutcome, ToolError> {
-    session::with_program(path, verify, |program| {
-        run_loaded_on_host(program, launch, max_steps, observed, None).map(|(outcome, _)| outcome)
-    })
+    run_request_on_host(path, verify, launch, max_steps, observed, None, false)
+        .map(|(outcome, _)| outcome)
 }
 
-/// Execute a loaded, checked program on the host as [`run_path_on_host`] does. A callee
-/// launch also returns its own outcome's bytes (RUN-11), and `cancel` lets another thread
-/// cancel the run's root scope (RUN-9).
-pub(crate) fn run_loaded_on_host(
-    program: &mut LoadedProgram,
-    launch: HostLaunch<'_>,
-    max_steps: Option<u64>,
-    observed: Option<&mut Option<hirsel_interp::observation::Observable>>,
-    cancel: Option<network::ExternalCancel>,
-) -> Result<(RunOutcome, Option<hirsel_run_schema::CalleeOutcome>), ToolError> {
-    run_loaded_on_host_with_checks(program, launch, max_steps, observed, cancel, false, None)
+pub(crate) fn request_tir(
+    path: &Path,
+    verify: hirsel_engine::Verify,
+    definition: Option<hirsel_syntax::DefPath>,
+) -> Result<std::sync::Arc<requests::TirExecution>, ToolError> {
+    let output = session::request(path, verify, requests::CompileOperation::Tir { definition })?;
+    match &output.result {
+        requests::CompileResult::Tir(input) => Ok(input.clone()),
+        _ => Err(ToolError::Runtime(
+            "TIR request returned another operation".into(),
+        )),
+    }
 }
 
-fn run_loaded_on_host_with_checks(
-    program: &mut LoadedProgram,
+pub(crate) fn run_request_on_host(
+    path: &Path,
+    verify: hirsel_engine::Verify,
     launch: HostLaunch<'_>,
     max_steps: Option<u64>,
     observed: Option<&mut Option<hirsel_interp::observation::Observable>>,
     cancel: Option<network::ExternalCancel>,
     checked: bool,
-    snapshot: Option<hirsel_rt::host_launch::HostGrants>,
 ) -> Result<(RunOutcome, Option<hirsel_run_schema::CalleeOutcome>), ToolError> {
-    run_loaded_on_host_traced(
-        program, launch, max_steps, observed, cancel, checked, snapshot, None,
+    let selection = launch_binding::LaunchSelection::read(launch)?;
+    let input = request_tir(path, verify, selection.entry().cloned())?;
+    tir_execution::run_tir_on_host(
+        &input, launch, selection, max_steps, observed, cancel, checked,
     )
-}
-
-fn run_loaded_on_host_traced(
-    program: &mut LoadedProgram,
-    launch: HostLaunch<'_>,
-    max_steps: Option<u64>,
-    observed: Option<&mut Option<hirsel_interp::observation::Observable>>,
-    cancel: Option<network::ExternalCancel>,
-    checked: bool,
-    snapshot: Option<hirsel_rt::host_launch::HostGrants>,
-    ownership: Option<&mut ownership_trace::Capture>,
-) -> Result<(RunOutcome, Option<hirsel_run_schema::CalleeOutcome>), ToolError> {
-    program.check_for_execution()?;
-    program.refuse_foreign_interpretation()?;
-    let host = snapshot.unwrap_or_else(|| hirsel_rt::host_launch::HostGrants::process());
-    let tape = match launch {
-        HostLaunch::Live { record, .. } | HostLaunch::Callee { record, .. } => {
-            record.map(Path::to_path_buf)
-        }
-        HostLaunch::Replay(_) => None,
-    };
-    let (run, io, instance) = match bind_host_run(program, launch, host)? {
-        HostRun::Live { admitted, io } => (
-            admitted.run().clone(),
-            network::HostIo::Live(io),
-            admitted.instance(),
-        ),
-        // A replay parks where the recording parked (its `blocked` and `ready` events).
-        HostRun::Replay { run, io } => {
-            let instance = io.instance();
-            (run, network::HostIo::Replay(io), instance)
-        }
-    };
-    // A callee run's replay entered its callee entry (`bind_launch`).
-    let signature = launch_signature(program)?;
-    let call = run.record().call.clone();
-    let tir_run = hirsel_tir::RunConfiguration {
-        entry: program.entry.clone(),
-        hash_seed: run.record().inputs.hash_seed,
-        inputs: vec![],
-    };
-    let mut runtime = if checked {
-        program.engine.checked_runtime_types()
-    } else {
-        program.engine.runtime_types()
-    }
-    .map_err(|e| program.error(e))?;
-    runtime.trace_mode = hirsel_interp::TraceMode::Effects;
-    // A replay re-applies the recorded budgets, so it stops where the run stopped.
-    if let Some(budgets) = run.budgets() {
-        runtime.budgets = hirsel_interp::RunBudgets {
-            fuel: budgets.fuel,
-            memory_bytes: budgets.memory_bytes,
-        };
-    }
-    let mut operations = network::HostLibrary::new(&tir_run, &run, io)
-        .map_err(|e| ToolError::Runtime(format!("host launch: {e:?}")))?;
-    if observed.is_some() {
-        operations.silence_replay_output();
-    }
-    let call_schemas = match &call {
-        Some(_) => Some(call_schemas(&signature, &runtime)?),
-        None => None,
-    };
-    if run.calls() || call.is_some() {
-        let callees = hirsel_engine::callee_facts(&mut program.engine, &program.entry)
-            .map_err(|e| program.error(e))?;
-        // A live run's remote runners open their providers now, reading their TLS material.
-        let remote = match &operations.io {
-            network::HostIo::Live(_) => network::RemoteRunners::open(
-                run.record()
-                    .io
-                    .as_ref()
-                    .map_or(&[][..], |io| io.runners.as_slice()),
-                instance.unwrap_or_default(),
-                || network::remote_wire(&runtime, hirsel_remote::wire::DEFAULT_FRAME_BYTES),
-            )
-            .map_err(|e| ToolError::Runtime(format!("launch: {e}")))?,
-            network::HostIo::Replay(_) => None,
-        };
-        operations.set_runners(network::RunnerContext {
-            instance,
-            callees: std::sync::Arc::new(callees),
-            tape,
-            role: call_schemas.as_ref().map(|(schemas, _)| schemas.clone()),
-            remote,
-        });
-    }
-    if let Some(cancel) = cancel {
-        operations
-            .set_external_cancel(cancel)
-            .map_err(|e| ToolError::Runtime(format!("launch: {e}")))?;
-    }
-    // F0's free-mode test channel (`hirsel_free::session::TestHook`).
-    let free = hirsel_free::session::TestHook::from_env().map_err(ToolError::Runtime)?;
-    if let Some(hook) = &free {
-        let session = hook.session(&run.identity()).map_err(ToolError::Runtime)?;
-        operations.library.enable_free(session, hook.seed);
-    }
-    let args = match (&call, &call_schemas) {
-        // A callee run enters with its place's Io and the argument its call carries.
-        (Some(call), Some((_, argument))) => {
-            let bytes = call
-                .argument()
-                .map_err(|e| ToolError::Runtime(format!("launch: {e}")))?;
-            let value = hirsel_interp::library::runners::decode(argument, &bytes, &runtime)
-                .map_err(|e| ToolError::Runtime(format!("launch: the call's argument: {e:?}")))?;
-            match call.form() {
-                hirsel_run_schema::CallForm::Call => vec![operations.library.root_io(), value],
-                hirsel_run_schema::CallForm::Compute => vec![value],
-            }
-        }
-        _ => operations
-            .library
-            .entry_arguments(&runtime.types, &signature)
-            .map_err(|e| ToolError::Runtime(format!("launch: {e:?}")))?,
-    };
-    let sources = program.engine.sources.clone();
-    let limits = hirsel_interp::Limits {
-        steps: max_steps,
-        call_depth: 256,
-        source: None,
-    };
-    let execution = if let Some(capture) = ownership {
-        capture.program = Some(run.program());
-        hirsel_interp::ownership_trace::run_resources(
-            &mut program.engine,
-            &sources,
-            hirsel_interp::ownership_trace::ResourceRequest {
-                configuration: &tir_run,
-                program: run.program(),
-                event_limit: capture.event_limit,
-            },
-            args,
-            limits,
-            &mut operations,
-            &runtime,
-        )
-        .map(|result| {
-            capture.trace = Some(result.trace);
-            result.execution
-        })
-    } else {
-        hirsel_interp::run_with_runtime(
-            &mut program.engine,
-            &sources,
-            &tir_run,
-            args,
-            limits,
-            &mut operations,
-            &runtime,
-        )
-    };
-    if let Some(hook) = &free
-        && let Some(session) = operations.library.take_free()
-    {
-        let outcome = match &execution {
-            Ok(execution) => hirsel_interp::library::free_outcome_name(&execution.outcome),
-            Err(_) => "stopped",
-        };
-        hook.finish(session, outcome).map_err(ToolError::Runtime)?;
-    }
-    let replay = matches!(operations.io, network::HostIo::Replay(_));
-    if let Some(refusal) = operations.refused.take() {
-        return Err(ToolError::Runtime(if replay {
-            format!("replay refused: {refusal}")
-        } else {
-            format!("host Io: {refusal}")
-        }));
-    }
-    let execution = execution.map_err(|e| match e.error {
-        hirsel_interp::Error::Unavailable(reason) => {
-            ToolError::Runtime(format!("interpretation unavailable: {reason}"))
-        }
-        hirsel_interp::Error::Query(error) => ToolError::Query {
-            error,
-            phase: Some(hirsel_engine::QueryKind::Interpret),
-            sources: sources.clone(),
-        },
-        error => ToolError::Runtime(format!("interpret: {error:?}")),
-    })?;
-    // A callee run records its own outcome as it ended (RUN-11); replay checks it.
-    let end = match (&call, &execution.outcome) {
-        (Some(_), hirsel_interp::Outcome::Returned { value, .. }) => {
-            Some(hirsel_interp::CalleeEnd::Returned(value.clone()))
-        }
-        (Some(_), hirsel_interp::Outcome::Failed(_)) => {
-            Some(hirsel_interp::CalleeEnd::Failed(execution.failures.clone()))
-        }
-        _ => None,
-    };
-    let mut returned = None;
-    if let Some(end) = end {
-        let (mut stdout, mut trace) = (vec![], vec![]);
-        let mut cx = hirsel_interp::OperationContext {
-            configuration: &tir_run,
-            sources: &sources,
-            stdout: &mut stdout,
-            trace: &mut trace,
-            trace_mode: runtime.trace_mode,
-            anchor: None,
-        };
-        returned = operations.callee_return(&end, &mut cx).map_err(|e| {
-            ToolError::Runtime(match operations.refused.take() {
-                Some(refusal) if replay => format!("replay refused: {refusal}"),
-                _ => format!("the callee's outcome: {e:?}"),
-            })
-        })?;
-    }
-    let outcome = hirsel_engine::project_outcome(&execution, &sources)
-        .map_err(|error| ToolError::Runtime(format!("{error:?}")))?;
-    if let network::HostIo::Replay(io) = &mut operations.io
-        && !operations.library.native_free()
-        && !matches!(execution.outcome, hirsel_interp::Outcome::ToolingLimit(_))
-    {
-        io.finish_outcome(&outcome).map_err(|e| {
-            ToolError::Runtime(format!(
-                "replay refused: {e:?}; run stopped with {outcome:?}"
-            ))
-        })?;
-    }
-    if let Some(observed) = observed {
-        *observed = execution.observable(&sources);
-    }
-    let outcome = operations
-        .finish_free(&outcome)
-        .map_err(|e| ToolError::Runtime(format!("Free replay: {e}")))?
-        .unwrap_or(outcome);
-    if let network::HostIo::Live(io) = &mut operations.io {
-        io.finish_recording(&outcome)
-            .map_err(|e| ToolError::Runtime(format!("the Io tape: {e}")))?;
-    }
-    Ok((outcome, returned))
 }
 
 /// A callee entry's call schemas and its argument's schema, from its checked signature.

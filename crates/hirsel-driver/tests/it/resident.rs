@@ -106,12 +106,16 @@ fn session_representation_edit_matches_cold(opaque: bool, reads_field: bool) {
         };
         let mut session = session::Session::open_configured(&source, config.clone());
         assert!(session.check_applied().unwrap().diagnostics.is_empty());
-        let program = session.program_applied().unwrap();
-        program.engine.checked_products(&program.entry).unwrap();
-        let mut view = program.entry.clone();
+        session.checked_products(false).unwrap();
+        let mut view = session.logical_entry().unwrap().clone();
         view.0.name = "view".into();
-        let before = [QueryKind::Resolve, QueryKind::Check]
-            .map(|kind| program.engine.recompute_count(&view, kind));
+        let before = session
+            .recompute_counts(
+                [QueryKind::Resolve, QueryKind::Check]
+                    .map(|kind| (view.clone(), kind))
+                    .to_vec(),
+            )
+            .unwrap();
 
         let edited = initial.replace("level:u64", "level:u32");
         std::fs::write(&source, &edited).unwrap();
@@ -122,12 +126,16 @@ fn session_representation_edit_matches_cold(opaque: bool, reads_field: bool) {
         let actual = session.check_applied().unwrap();
         assert_eq!(session.stats().loads, 1);
         assert_eq!(session.stats().replaced, 1);
-        let program = session.program_applied().unwrap();
-        let receipt = program.engine.checked_products(&program.entry).unwrap();
+        let receipt = session.checked_products(true).unwrap();
         if !reads_field {
             assert_eq!(
-                [QueryKind::Resolve, QueryKind::Check]
-                    .map(|kind| program.engine.recompute_count(&view, kind)),
+                session
+                    .recompute_counts(
+                        [QueryKind::Resolve, QueryKind::Check]
+                            .map(|kind| (view.clone(), kind))
+                            .to_vec()
+                    )
+                    .unwrap(),
                 before,
                 "a view that does not read the representation stays cached"
             );
@@ -328,7 +336,9 @@ fn manifest_session_preserves_the_cold_loader_syntax_error_boundary() {
         // Checking exposes diagnostics, but requesting a program still cannot
         // return the old valid product while its source no longer parses.
         assert!(matches!(
-            session.program_applied(),
+            session.request_applied(hirsel_driver::requests::CompileOperation::Tir {
+                definition: None
+            }),
             Err(ToolError::Query {
                 error: QueryError::Diagnostics(_),
                 ..
@@ -340,8 +350,7 @@ fn manifest_session_preserves_the_cold_loader_syntax_error_boundary() {
         assert_eq!(repaired.completion, valid.completion);
         assert_eq!(session.stats().loads, 1);
         assert_eq!(session.stats().replaced, 2);
-        let program = session.program_applied().unwrap();
-        let receipt = program.engine.checked_products(&program.entry).unwrap();
+        let receipt = session.checked_products(true).unwrap();
         let mut fresh = hirsel_driver::COMPILER
             .load_check_package(&manifest)
             .unwrap();
@@ -417,6 +426,21 @@ fn manifest_session_preserves_non_diagnostic_query_errors() {
             Err(self.0.clone())
         }
     }
+    fn unavailable() -> PhaseAdapters {
+        let mut adapters = compiler_adapters();
+        adapters.lexer = Some(Arc::new(FailingLexer(QueryError::NotImplemented)));
+        adapters
+    }
+    fn disconnected() -> PhaseAdapters {
+        let mut adapters = compiler_adapters();
+        adapters.lexer = Some(Arc::new(FailingLexer(QueryError::Operational(
+            hirsel_types::OperationalFailure {
+                operation: "fixture-transport".into(),
+                message: "connection lost".into(),
+            },
+        ))));
+        adapters
+    }
     with_compiler_stack(|| {
         for error in [
             QueryError::NotImplemented,
@@ -426,9 +450,22 @@ fn manifest_session_preserves_non_diagnostic_query_errors() {
             }),
         ] {
             let (fixture, manifest) = manifest_check_fixture();
-            let mut session = session::Session::open(&manifest, Verify::On);
-            session.program_applied().unwrap().engine.adapters.lexer =
-                Some(Arc::new(FailingLexer(error.clone())));
+            let factory = if error == QueryError::NotImplemented {
+                unavailable
+            } else {
+                disconnected
+            };
+            let mut session = session::Session::open_with_compiler(
+                &manifest,
+                hirsel_driver::COMPILER.with_phase_adapters(
+                    factory,
+                    [if error == QueryError::NotImplemented {
+                        0x47
+                    } else {
+                        0x48
+                    }; 32],
+                ),
+            );
             // Force a new parse, with the injected failure at the loader seam.
             std::fs::write(fixture.path().join("main.hir"), "fn main() { }\n").unwrap();
             let Err(ToolError::Query { error: actual, .. }) = session.check() else {
@@ -919,16 +956,13 @@ fn compact_program_front_refreshes_only_changed_definitions_and_signature_subscr
         let mut session = session::Session::open(&source, Verify::On);
         assert!(session.check().unwrap().diagnostics.is_empty());
         let caller = path("caller");
-        let before: Vec<_> = [QueryKind::Resolve, QueryKind::Check, QueryKind::Modes]
-            .into_iter()
-            .map(|kind| {
-                session
-                    .program()
-                    .unwrap()
-                    .engine
-                    .recompute_count(&caller, kind)
-            })
-            .collect();
+        let before = session
+            .recompute_counts(
+                [QueryKind::Resolve, QueryKind::Check, QueryKind::Modes]
+                    .map(|kind| (caller.clone(), kind))
+                    .to_vec(),
+            )
+            .unwrap();
         let body = text.replace("{ x }", "{ x + 1u8 }");
         std::fs::write(&source, &body).unwrap();
         let actual = session.check().unwrap();
@@ -941,19 +975,16 @@ fn compact_program_front_refreshes_only_changed_definitions_and_signature_subscr
             touched < 100,
             "one body edit touched {touched} memos among 515 definitions"
         );
-        for (kind, before) in [QueryKind::Resolve, QueryKind::Check, QueryKind::Modes]
-            .into_iter()
-            .zip(before)
-        {
-            assert_eq!(
-                session
-                    .program()
-                    .unwrap()
-                    .engine
-                    .recompute_count(&caller, kind),
-                before
-            );
-        }
+        assert_eq!(
+            session
+                .recompute_counts(
+                    [QueryKind::Resolve, QueryKind::Check, QueryKind::Modes]
+                        .map(|kind| (caller.clone(), kind))
+                        .to_vec()
+                )
+                .unwrap(),
+            before
+        );
         let signature = body.replace("leaf(x:u8) -> u8", "leaf(x:u32) -> u32");
         std::fs::write(&source, &signature).unwrap();
         let actual = session.check().unwrap();
@@ -1758,7 +1789,7 @@ fn configured_compilers_and_sessions_share_providers_and_preserve_edit_results()
         );
         let mut session = session::Session::open_configured(&source, config);
         assert!(session.check().unwrap().diagnostics.is_empty());
-        assert_eq!(session.program().unwrap().engine.hold_bytes(), 0);
+        assert_eq!(session.hold_bytes(), 0);
         for text in [original.replace("helper()}", "missing()}"), original.into()] {
             std::fs::write(&source, &text).unwrap();
             let actual = session.check().unwrap();
@@ -2513,7 +2544,7 @@ fn accepted_ten_thousand_definition_body_edit_reports_actual_index_and_aggregate
         std::fs::write(&source, &text).unwrap();
         let mut session = session::Session::open(&source, Verify::On);
         assert!(session.check().unwrap().diagnostics.is_empty());
-        let before = session.program_applied().unwrap().engine.work_stats();
+        let before = session.work_stats();
         assert!(
             before.frontier_observations < 100_000,
             "cold publication copied too many frontier notifications: {before:?}"
@@ -2527,12 +2558,7 @@ fn accepted_ten_thousand_definition_body_edit_reports_actual_index_and_aggregate
         assert!(output.diagnostics.is_empty());
         assert_eq!(output.completion, CheckCompletion::Complete);
         let touched = session.stats().touched;
-        let work = session
-            .program_applied()
-            .unwrap()
-            .engine
-            .work_stats()
-            .since(before);
+        let work = session.work_stats().since(before);
         assert_eq!(work.parsed_bytes, edit.len() as u64);
         assert_eq!(work.parsed_definitions, 10_000);
         assert_eq!(work.index_occurrence_visits, 10_000);
@@ -2679,12 +2705,20 @@ fn library_session_checks_every_source_and_cannot_launch() {
         fixture.write("other.hir", "pub fn main() -> u8 { 2u8 }\n");
         assert!(session.check().unwrap().diagnostics.is_empty());
         assert_eq!(session.stats().loads, 1);
-        let program = session.program().unwrap();
-        assert!(program.launch_entry().is_none());
+        let safe = session
+            .request(hirsel_driver::requests::CompileOperation::SafeCheck)
+            .unwrap();
+        assert!(matches!(
+            &safe.result,
+            hirsel_driver::requests::CompileResult::SafeCheck { reach: None, .. }
+        ));
         assert!(
-            program
-                .check_for_execution()
-                .unwrap_err()
+            session
+                .request_applied(hirsel_driver::requests::CompileOperation::Tir {
+                    definition: None
+                })
+                .err()
+                .unwrap()
                 .to_string()
                 .contains("launch manifest requires entry")
         );
@@ -2695,9 +2729,6 @@ fn library_session_checks_every_source_and_cannot_launch() {
         value["entry"] = serde_json::json!({"module":["other"], "name":"main"});
         std::fs::write(&manifest, value.to_string()).unwrap();
         assert!(session.check().unwrap().diagnostics.is_empty());
-        assert_eq!(
-            session.program().unwrap().launch_entry().unwrap().0.modules,
-            ["other"]
-        );
+        assert_eq!(session.logical_entry().unwrap().0.modules, ["other"]);
     });
 }

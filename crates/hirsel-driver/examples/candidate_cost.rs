@@ -175,11 +175,7 @@ fn main() {
         let mut restore_adoptions = 0;
         let mut restore_recomputations = 0;
         let resident_before = if mode == "resident" {
-            let engine = &resident.program_applied().unwrap().engine;
-            (
-                engine.store_adoptions(),
-                engine.memo_stats().recomputed.values().sum::<u64>(),
-            )
+            (resident.store_adoptions(), resident.recomputations())
         } else {
             (0, 0)
         };
@@ -243,29 +239,12 @@ fn main() {
             check_ns = ns(t);
             assert_eq!(output.completion, CheckCompletion::Complete);
             assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
-            checked_source = checked_source_hash(
-                &output.sources,
-                selected_file(resident.program_applied().unwrap(), source),
-            );
+            checked_source =
+                checked_source_hash(&output.sources, fresh_receipt_file(&output.sources, source));
             let t = Instant::now();
-            let entry_path = resident_entry(&mut resident);
-            adopted =
-                resident.program_applied().unwrap().engine.store_adoptions() - resident_before.0;
-            recomputed = resident
-                .program_applied()
-                .unwrap()
-                .engine
-                .memo_stats()
-                .recomputed
-                .values()
-                .sum::<u64>()
-                - resident_before.1;
-            let products = resident
-                .program_applied()
-                .unwrap()
-                .engine
-                .checked_products(&entry_path)
-                .unwrap();
+            adopted = resident.store_adoptions() - resident_before.0;
+            recomputed = resident.recomputations() - resident_before.1;
+            let products = resident.checked_products(true).unwrap();
             save_products(&spec, i, &products);
             digest = products.digest;
             receipt_ns = ns(t);
@@ -276,11 +255,8 @@ fn main() {
             }]);
             assert!(resident.check_applied().unwrap().diagnostics.is_empty());
             restore_ns = ns(t);
-            let engine = &resident.program_applied().unwrap().engine;
-            restore_adoptions = engine.store_adoptions() - resident_before.0 - adopted;
-            restore_recomputations = engine.memo_stats().recomputed.values().sum::<u64>()
-                - resident_before.1
-                - recomputed;
+            restore_adoptions = resident.store_adoptions() - resident_before.0 - adopted;
+            restore_recomputations = resident.recomputations() - resident_before.1 - recomputed;
         } else if mode == "cold" {
             let output = std::process::Command::new(std::env::current_exe().unwrap())
                 .args(["cold-once", &args[2], &i.to_string()])
@@ -351,7 +327,4 @@ fn main() {
     emit(
         serde_json::json!({"session_stats":session_stats,"counters":format!("{c:?}"),"frozen_loads":c.frozen_loads,"adoptions":c.store_adoptions,"recomputations":c.recomputations,"completed":c.completed_results,"load_ns":c.load_nanos,"check_ns":c.check_nanos,"receipt_ns":c.receipt_nanos,"retained_bytes":c.retained_bytes,"retained_after_release_bytes":after_release.retained_bytes,"dropped_engines":c.dropped_engines,"type_bytes":c.peak_type_bytes}),
     );
-}
-fn resident_entry(s: &mut Session) -> hirsel_syntax::DefPath {
-    s.program_applied().unwrap().entry.clone()
 }

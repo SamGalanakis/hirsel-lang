@@ -1,8 +1,6 @@
 //! `hirsel run --native`: the checked program, optimized, run as an image in the host's
 //! runner (or, when it calls C, as an executable).
-use super::{
-    NativeError, OptLevel, Options, Partition, Sites, StageName, TargetSpec, Toolchain, build,
-};
+use super::NativeError;
 use hirsel_engine::{RunOutcome, ToolError};
 use std::io::Write;
 use std::path::Path;
@@ -109,263 +107,80 @@ pub fn run_path_native_backend_with_trace_events(
     validation: super::Validation,
     trace_events: Option<&Path>,
 ) -> Result<Result<RunOutcome, NativeError>, ToolError> {
-    let (mut host_stdout, mut host_stderr) = (std::io::stdout(), std::io::stderr());
-    let (inherit, json, stdout, stderr): (bool, bool, &mut dyn Write, &mut dyn Write) = match output
-    {
-        Output::Inherit { json } => (true, json, &mut host_stdout, &mut host_stderr),
-        Output::Streams { stdout, stderr } => (false, false, stdout, stderr),
-    };
-    crate::session::with_program(path, verify, |loaded| {
-        loaded.check_for_execution()?;
-        if matches!(
-            launch,
-            crate::HostLaunch::Replay(_)
-                | crate::HostLaunch::Live {
-                    record: Some(_),
-                    ..
-                }
-        ) {
-            loaded.refuse_unreplayable()?;
-        }
-        // The driver binds only: the executable admits the run, once (design.md).
-        let host = match launch {
-            crate::HostLaunch::Live {
-                config,
-                record,
-                revocations,
-            } => {
-                let live = crate::HostLaunch::Live {
-                    config,
-                    record: None,
-                    revocations,
-                };
-                let crate::BoundHostRun::Live(bound) = crate::bind_launch(loaded, live)? else {
-                    unreachable!("a live launch binds live")
-                };
-                // The executable records; the level and the destination must agree here first.
-                hirsel_rt::host_launch::recording_level(bound.run(), record.is_some())
-                    .map_err(|e| ToolError::Runtime(format!("launch: {e}")))?;
-                (
-                    bound.into_run(),
-                    super::link::Tape::Live {
-                        record,
-                        revocations,
-                    },
-                )
-            }
-            launch @ crate::HostLaunch::Replay(tape) => {
-                let crate::BoundHostRun::Replay { run, .. } = crate::bind_launch(loaded, launch)?
-                else {
-                    unreachable!("a replay binds a recording")
-                };
-                (run, super::link::Tape::Replay(tape))
-            }
-            crate::HostLaunch::Callee { .. } => {
-                return Err(ToolError::Runtime(
-                    "launch: a runner host runs its callees interpreted".into(),
-                ));
-            }
+    if matches!(launch, crate::HostLaunch::Callee { .. }) {
+        return Err(ToolError::Runtime(
+            "launch: a runner host runs its callees interpreted".into(),
+        ));
+    }
+    let selection = crate::launch_binding::LaunchSelection::read(launch)?;
+    let definition = selection.entry().cloned();
+    crate::session::with_session(path, verify, |session| {
+        // Source launch facts and native roots select exactly the same frozen
+        // observations. Do not poll disk between binding and native selection.
+        let facts = session.request(crate::requests::CompileOperation::Tir {
+            definition: definition.clone(),
+        })?;
+        let crate::requests::CompileResult::Tir(facts) = &facts.result else {
+            return Err(ToolError::Runtime(
+                "native launch facts returned another operation".into(),
+            ));
         };
-        let entry = loaded.entry.clone();
-        let engine = &mut loaded.engine;
-        let query = |engine: &hirsel_engine::QueryEngine, error| ToolError::Query {
-            error,
-            phase: engine.unavailable,
-            sources: engine.sources.clone(),
-        };
-        let input = match engine.export_native_input() {
-            Ok(input) => input,
-            Err(error) => return Err(query(engine, error)),
-        };
-        let validated = match engine.import_native_input(input) {
-            Ok(validated) => validated,
-            Err(error) => {
-                return Ok(Err(NativeError::new(
-                    StageName::Manifest,
-                    format!("the native snapshot: {error:?}"),
+        if selection.requires_replayable(launch) {
+            if let Some((user, extern_)) = facts.foreign.unmodeled.first_key_value() {
+                return Err(ToolError::Runtime(format!(
+                    "launch: {user} calls the extern {extern_} and is not a wrapper with a \
+                     deterministic model, so this run cannot be recorded or replayed (PROG-4)"
                 )));
             }
+        }
+        let bound = selection.bind(
+            launch,
+            &facts.runtime.types,
+            &facts.signature,
+            &facts.revision,
+            facts.code.clone(),
+        )?;
+        let run = match &bound {
+            crate::BoundHostRun::Live(bound) => bound.run(),
+            crate::BoundHostRun::Replay { run, .. } => run,
         };
-        let proofs = match evidence
-            .map(|e| super::Proofs::assess(engine, &entry, &validated, e))
-            .transpose()
-        {
-            Ok(proofs) => proofs,
-            Err(error) => return Ok(Err(error)),
-        };
-        let callee_facts = match super::callee_metadata(engine, &entry) {
-            Ok(metadata) => metadata,
-            Err(error) => return Ok(Err(error)),
-        };
-        let observation = match run(
-            &validated,
-            callee_facts,
-            &entry,
-            (&host.0, host.1),
-            proofs.as_ref(),
-            backend,
-            validation,
-            trace_events,
-            inherit,
-            stdout,
-            stderr,
-        ) {
-            Ok(super::link::Observed::Ran(observation, waits)) => Ok((observation, waits)),
-            // The executable admitted the run and refused it: the same refusal the interpreter's
-            // admission reports.
-            Ok(super::link::Observed::Refused(reason)) => {
-                return Err(match hirsel_run_schema::RunRefusal::parse(&reason) {
-                    Some(refusal) => ToolError::Launch(refusal),
-                    None => ToolError::Runtime(format!("launch: {reason}")),
-                });
+        let selected = session.request_applied(crate::requests::CompileOperation::NativeRun(
+            crate::requests::NativeRequest {
+                definition,
+                backend,
+                profile: super::BuildProfile::Default,
+                target: super::TargetSpec::x86_64_unknown_linux_gnu(),
+                validation,
+                launch: run.record().inputs.clone(),
+                run: Some(std::sync::Arc::new(run.clone())),
+                fuel: run.budgets().is_some_and(|budgets| budgets.fuel.is_some()),
+                evidence: evidence.cloned().map(std::sync::Arc::new),
+            },
+        ))?;
+        match &selected.result {
+            crate::requests::CompileResult::Native(input) => {
+                // The launch was bound before compilation against these exact
+                // observations; the compiler cannot substitute another revision.
+                if input.revision.digest() != facts.revision.digest() {
+                    return Err(ToolError::Runtime(
+                        "native launch revision changed during selection".into(),
+                    ));
+                }
+                super::request_output::run_bound_output(input, launch, bound, output, trace_events)
             }
-            Ok(super::link::Observed::Stopped(outcome)) => return Ok(Ok(outcome)),
-            Err(error) => Err(error),
-        };
-        Ok(observation.and_then(|(observation, waits)| {
-            let io = |e: std::io::Error| NativeError::new(StageName::Launch, e.to_string());
-
-            let sites = Sites::new(validated.snapshot());
-            for failure in &observation.failures {
-                writeln!(stderr, "{}", sites.report(failure, json)?).map_err(io)?;
-            }
-            observation.outcome(&sites, waits)
-        }))
+            crate::requests::CompileResult::NativeError(error) => Ok(Err(error.clone())),
+            _ => Err(ToolError::Runtime(
+                "native run request returned another operation".into(),
+            )),
+        }
     })
-}
-
-/// Build a Call launch with the existing checked decoder, without requiring a
-/// caller in the source to instantiate it or grant the Entry reference.
-fn build_callee_replay(
-    validated: &hirsel_engine::ValidatedNativeInput,
-    entry: &hirsel_engine::DefPath,
-    options: &Options,
-) -> Result<super::ReadyProgram, NativeError> {
-    // An independent replay has no enclosing RunnerSend to require its
-    // decoder. Root the existing body explicitly, under the same validators.
-    let adapted = super::adapt::program(validated);
-    let root = hirsel_rc::library::runners::replay_main(&adapted, entry)
-        .map_err(|e| NativeError::new(StageName::Launch, e.to_string()))?;
-    let owners =
-        hirsel_rc::library::owners(&adapted.types, &adapted.signatures).over(&adapted.owners);
-    let layouts = hirsel_layout::layout::LayoutBuilder::new(&options.target, &owners);
-    let key = root
-        .key(&adapted.types, &layouts)
-        .map_err(|e| NativeError::new(StageName::Launch, format!("callee root: {e:?}")))?;
-    let manifest = super::adapt::manifest(validated.snapshot())
-        .map_err(|e| NativeError::new(StageName::Manifest, e))?;
-    let mut program = super::stages::build_program_roots(&adapted, manifest, options, &[root])?;
-    // Bind the ordinary semantic closure first; the extra root is a library
-    // instance and acquires no source Entry authority.
-    program.bind_revisions(validated)?;
-    let signature = &adapted.signatures[entry];
-    let roots = hirsel_engine::entry_roots(
-        &adapted.types,
-        signature,
-        hirsel_run_schema::LaunchKind::Call,
-    )
-    .map_err(|e| NativeError::new(StageName::Launch, e.to_string()))?;
-    program.launches.insert(
-        entry.clone(),
-        super::link::LaunchKind::Call {
-            roots,
-            decoder: hirsel_lir::emission::symbol_name(key.definition(), Some(&key.digest())),
-        },
-    );
-    program.revisions.insert(
-        entry.clone(),
-        validated
-            .semantic_program_revision(entry)
-            .map_err(|e| NativeError::new(StageName::Launch, format!("callee revision: {e:?}")))?,
-    );
-    if validated.unsafe_reach(entry).is_some() {
-        program.escaping.insert(entry.clone());
-    }
-    // The call's function-reference thunk is required by its checked
-    // signature, even when the source never constructs an Entry itself.
-    let instance = program.functions[entry];
-    let thunk = hirsel_lir::emission::function_thunk_name(entry, Some(&instance));
-    let unit = program
-        .summaries
-        .iter_mut()
-        .find(|s| s.definition == *entry && s.instance == instance)
-        .ok_or_else(|| NativeError::new(StageName::Launch, "missing callee unit"))?;
-    unit.glue.entries.insert((entry.clone(), Some(instance)));
-    program.entries.insert(thunk, entry.to_string());
-    Ok(program)
-}
-
-fn run(
-    validated: &hirsel_engine::ValidatedNativeInput,
-    callee_facts: hirsel_rt::program::CalleeMetadata,
-    entry: &hirsel_engine::DefPath,
-    (run, tape): (&hirsel_run_config::ValidatedRun, super::link::Tape<'_>),
-    proofs: Option<&super::Proofs>,
-    backend: super::Backend,
-    validation: super::Validation,
-    trace_events: Option<&Path>,
-    inherit: bool,
-    stdout: &mut dyn Write,
-    stderr: &mut dyn Write,
-) -> Result<super::link::Observed, NativeError> {
-    let target = TargetSpec::x86_64_unknown_linux_gnu();
-    let mut options = Options::new(target.clone());
-    options.validation = validation;
-    // Interactive native runs keep the ordinary heap lowering; standalone
-    // --release selects the more expensive scoped proof/specialization pass.
-    options.scoped_specialization = false;
-    if let Some(proofs) = proofs {
-        options.discharge = proofs.discharge.clone();
-    }
-    // A fuel budget needs fuel checks; without one the executable pays nothing.
-    let fuel = run.budgets().is_some_and(|b| b.fuel.is_some());
-    let opt = match backend {
-        super::Backend::Llvm => OptLevel::Default,
-        super::Backend::Cranelift => OptLevel::None,
-    };
-    options.objects = super::units::selected(&target, backend, opt, false, fuel)?;
-    let mut program = if run.record().launch == hirsel_run_schema::LaunchKind::Call {
-        build_callee_replay(validated, entry, &options)?
-    } else {
-        build(validated, &options)?
-    };
-    program.bind_callees(callee_facts)?;
-    program.fuel = fuel;
-    for line in proofs.map_or_else(Vec::new, |p| p.report(&program)) {
-        writeln!(stderr, "hirsel: {line}")
-            .map_err(|e| NativeError::new(StageName::Launch, e.to_string()))?;
-    }
-    let scratch = super::executable::Scratch::new()?;
-    let cache = std::env::var_os("HIRSEL_NATIVE_CACHE")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(super::runtime_cache::default_directory);
-    let io = |e: std::io::Error| NativeError::new(StageName::Link, e.to_string());
-    let toolchain = Toolchain::in_tree(&cache, &[&target])?;
-    let objects =
-        super::link::emit_backend_objects(&program, backend, opt, Partition::Whole, false, None)?;
-    #[cfg(test)]
-    concurrent_tests::before_link(&scratch.0);
-    let runnable =
-        super::link::link_runnable(&program, entry, &objects, &toolchain, &scratch.0, Some(run))?;
-    let launched = super::link::launch_live(
-        &runnable,
-        &target,
-        &toolchain,
-        &scratch.0,
-        tape,
-        super::link::LiveRun {
-            run,
-            trace_events,
-            inherit,
-            stdout,
-            stderr,
-        },
-    )?;
-    let observation =
-        super::link::observe_run(&launched, &program, &Sites::new(validated.snapshot()))?;
-    Ok(observation)
 }
 
 #[cfg(test)]
 #[path = "concurrent_tests.rs"]
 mod concurrent_tests;
+
+#[cfg(test)]
+pub(super) fn before_request_link(path: &Path) {
+    concurrent_tests::before_link(path);
+}
