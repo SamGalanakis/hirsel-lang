@@ -43,7 +43,6 @@ fn binding(cancellable: bool) -> (Binding, Arc<AtomicU32>, Arc<AtomicU32>) {
                 clock: 99,
                 deadline: 100,
             },
-            borrowed: None,
             task: Some(3),
             generation: 0,
             completion: None,
@@ -236,7 +235,6 @@ fn ordered_home_poll_does_not_retain_another_tasks_result_under_the_running_call
                 7,
                 Parked {
                     request: Request::ReadStdin { stdin: 12, max: 3 },
-                    borrowed: None,
                     task: Some(42),
                     generation: 0,
                     completion: None,
@@ -314,7 +312,6 @@ fn an_injected_parked_wait_is_polled_even_with_a_published_future_scope_timer() 
                             directory: 1,
                             watcher: 2,
                         },
-                        borrowed: None,
                         task: None,
                         generation: 0,
                         completion: None,
@@ -385,7 +382,6 @@ fn home_readiness_releases_the_role_before_reacquiring_a_compute_permit() {
                         7,
                         Parked {
                             request: Request::ReadStdin { stdin: 12, max: 1 },
-                            borrowed: None,
                             task: None,
                             generation: 0,
                             completion: None,

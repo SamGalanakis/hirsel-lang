@@ -620,11 +620,25 @@ impl Readiness {
     /// result means this provider has no external readiness source (e.g. the remaining waits
     /// are scripted).
     pub fn wait(&self) -> Result<bool, AdapterError> {
-        let (epoll, deadline) = match self.wait_source(false)? {
-            WaitSource::Ready => return Ok(true),
-            WaitSource::Empty => return Ok(false),
-            WaitSource::Driver(epoll, deadline, _) => (epoll, deadline),
-        };
+        match self.wait_source(false)? {
+            WaitSource::Ready => Ok(true),
+            WaitSource::Empty => Ok(false),
+            WaitSource::Driver(epoll, deadline, _) => self.block(epoll, deadline),
+        }
+    }
+
+    /// Wait as [`wait`](Self::wait), and also when only wake descriptors remain:
+    /// for a waiter whose outstanding event source (an owned host job) notifies
+    /// this driver, so its publication and a stop end the same blocking wait.
+    pub(crate) fn wait_woken(&self) -> Result<bool, AdapterError> {
+        match self.wait_source(true)? {
+            WaitSource::Ready => Ok(true),
+            WaitSource::Empty => Ok(false),
+            WaitSource::Driver(epoll, deadline, _) => self.block(epoll, deadline),
+        }
+    }
+
+    fn block(&self, epoll: OwnedFd, deadline: Option<Instant>) -> Result<bool, AdapterError> {
         let mut events = [libc::epoll_event { events: 0, u64: 0 }; 256];
         let n = loop {
             let timeout = deadline.map_or(-1, |deadline| {

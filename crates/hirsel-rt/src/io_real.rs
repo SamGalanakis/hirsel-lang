@@ -13,6 +13,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 mod concurrent;
 pub use concurrent::ConcurrentIo;
+pub(crate) use concurrent::HOME_TOKEN;
 /// The home adapter, accepting custom streams with no `Send` bound.
 pub type RealIo = RealCore<LocalStreams>;
 

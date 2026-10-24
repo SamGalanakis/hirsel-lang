@@ -190,7 +190,6 @@ impl Waits {
 
 struct Parked {
     request: Request,
-    borrowed: Option<*mut crate::io::NetBuffer<'static>>,
     /// The task that issued it, once it parked.
     task: Option<u32>,
     generation: u32,
@@ -520,6 +519,14 @@ pub(crate) unsafe fn issue(
         return unsafe { crate::tasks::free::host::native::issue(ctx, request) };
     }
     let ordered = crate::tasks::ordered::engine::on(ctx);
+    if ordered && let Some(io) = unsafe { (*ctx).run_ref().ordered_io.get() } {
+        // Live Ordered: every request enters the run's concurrent service, so a
+        // blocking built-in call runs as an owned job, never on a compute worker
+        // or home. The service spends the operation's yield or parks.
+        let adapter = io.adapter.clone();
+        return unsafe { ordered_concurrent::request(ctx, &*adapter, request) }
+            .map(|result| (result, true));
+    }
     let mut request = unsafe { ordered_concurrent::HomeRequest::new(ctx, request, ordered) };
     let print = matches!(
         request.get(),
@@ -719,7 +726,6 @@ unsafe fn issue_here(
         token,
         Parked {
             request: request.take(false),
-            borrowed: None,
             task: None,
             generation: 0,
             completion: None,
@@ -762,7 +768,6 @@ pub(crate) unsafe fn completed_read(
     // home loan is needed to inspect a completed saved owner's immutable bytes.
     let binding = unsafe { Binding::raw(ctx) };
     let row = binding.waits.parked.get(&token).expect("saved host wait");
-    assert!(row.borrowed.is_none());
     crate::tasks::ordered::host::CompletedRead::new(
         token,
         &row.request,
@@ -829,7 +834,6 @@ pub(crate) unsafe fn send(ctx: *mut TaskCtx, request: Request) -> Stopped<Result
         token,
         Parked {
             request: retry,
-            borrowed: None,
             task: None,
             generation: 0,
             completion: None,
@@ -873,8 +877,9 @@ pub(crate) unsafe fn is_runner_call(ctx: *mut TaskCtx, token: u64) -> bool {
     )
 }
 
-/// Execute borrowed live network storage, or decline before any effect. The buffer
-/// stays exclusively borrowed on this fiber until its parked row is removed.
+/// Execute borrowed live network storage only when it completes without a wait,
+/// or decline before any effect; a wait takes the owned path, so no parked row
+/// retains the borrowed buffer.
 /// # Safety
 /// Same context/binding contract as issue; buffer's storage lives through the call.
 pub(crate) unsafe fn issue_net(
@@ -913,8 +918,13 @@ pub(crate) unsafe fn issue_net(
     let token = binding.waits.next;
     binding.waits.next += 1;
     match binding.adapter.net_io(token, net, stream, inline, buffer) {
-        None => return Ok(None),
-        Some(Err(AdapterError::Blocked)) => {}
+        None => Ok(None),
+        // A wait takes the owned path: no parked row borrows fiber storage, and
+        // the declined attempt had no effect.
+        Some(Err(AdapterError::Blocked)) => {
+            binding.adapter.finish(token);
+            Ok(None)
+        }
         Some(result) => {
             // The root already proved no peer, host wait, deadline or free-mode
             // point needs a yield. Keep the diagnostic point without redoing it.
@@ -926,36 +936,9 @@ pub(crate) unsafe fn issue_net(
             if inline {
                 crate::stop::observe(ctx)?;
             }
-            return Ok(Some((result, inline)));
+            Ok(Some((result, inline)))
         }
     }
-    let request = buffer.request(net, stream);
-    if binding.adapter.injected_wait(&request) {
-        binding.waits.parked_injected.insert(token);
-    }
-    binding.waits.parked.insert(
-        token,
-        Parked {
-            request: request.clone(),
-            // SAFETY: issue_net cannot return until the row is removed. A stop abandons
-            // the run, including its wait table; no pointer escapes the run.
-            borrowed: Some((buffer as *mut crate::io::NetBuffer<'_>).cast()),
-            task: None,
-            generation: 0,
-            completion: None,
-            ready: false,
-        },
-    );
-    // Invalidate timer-only publication before park can retire a boundary.
-    unsafe { count(ctx) };
-    unsafe { crate::tasks::park_host(&mut *ctx, token, true) }?;
-    let binding = unsafe { Binding::get(ctx) };
-    let completion = binding
-        .waits
-        .remove_parked(token)
-        .and_then(|p| p.completion)
-        .unwrap_or_else(|| crate::fault("a borrowed host wait resumed without completion"));
-    Ok(Some((completion.map(|c| net_result(&request, c)), true)))
 }
 
 /// Arm scope `scope`'s deadline: a timer wait for `at` on `clock` under a token of its own,
@@ -1932,35 +1915,8 @@ unsafe fn poll_binding_observed(
             }
         }
         None => {
-            let borrowed = binding.waits.parked.get(&token).and_then(|p| p.borrowed);
-            let result = match borrowed {
-                // SAFETY: issue_net holds this stack buffer exclusively until removal.
-                Some(buffer) => binding
-                    .adapter
-                    .net_io(
-                        token,
-                        match &request {
-                            Request::NetRead { net, .. }
-                            | Request::NetWrite { net, .. }
-                            | Request::NetWriteAll { net, .. } => *net,
-                            _ => unreachable!(),
-                        },
-                        match &request {
-                            Request::NetRead { stream, .. }
-                            | Request::NetWrite { stream, .. }
-                            | Request::NetWriteAll { stream, .. } => *stream,
-                            _ => unreachable!(),
-                        },
-                        false,
-                        unsafe { &mut *buffer },
-                    )
-                    .unwrap_or_else(|| crate::fault("borrowed network adapter changed"))
-                    .map(|value| net_completion(&request, value)),
-                None => {
-                    binding.adapter.enter(token);
-                    binding.adapter.call(request)
-                }
-            };
+            binding.adapter.enter(token);
+            let result = binding.adapter.call(request);
             if let Some(observed) = observed.as_mut() {
                 **observed = Some(crate::tasks::ordered::events::owned_host_result(&result));
             }
@@ -2027,23 +1983,6 @@ unsafe fn wait_here(ctx: *mut TaskCtx) -> Stopped<bool> {
 }
 
 // Only parked calls need the generic protocol's result storage.
-fn net_completion(request: &Request, value: Result<u64, crate::net::NetError>) -> Completion {
-    match request {
-        Request::NetWriteAll { .. } => Completion::NetUnit(value.map(|_| ())),
-        _ => Completion::Count(value),
-    }
-}
-fn net_result(request: &Request, value: Completion) -> Result<u64, crate::net::NetError> {
-    match value {
-        Completion::Count(value) => value,
-        Completion::NetBytes(Err(error)) => Err(error),
-        Completion::NetUnit(value) if matches!(request, Request::NetWriteAll { .. }) => {
-            value.map(|()| 0)
-        }
-        _ => crate::fault("borrowed network result changed"),
-    }
-}
-
 #[cfg(test)]
 mod native_tests {
     use super::*;

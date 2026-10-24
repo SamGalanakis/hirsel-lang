@@ -87,6 +87,76 @@ fn tape_header(line: Option<&str>) -> bool {
     line.is_some_and(|line| line == TAPE_HEADER || line == TAPE_HEADER_6)
 }
 
+/// The home binding of a live Ordered run whose RealIo moved to its concurrent
+/// service. Requests enter the service; scope deadlines, in-process runner
+/// calls and their delivery still address the home binding and reach the same
+/// core, under home tokens disjoint from the service's.
+struct OrderedHome {
+    io: std::sync::Arc<crate::io_real::ConcurrentIo>,
+    /// The entered home token, as `RealIo::enter` keeps its current one.
+    current: u64,
+}
+
+impl Adapter for OrderedHome {
+    fn preflight(&self, request: &Request) -> Result<Option<Completion>, AdapterError> {
+        crate::io_concurrent::ConcurrentAdapter::preflight(&*self.io, request)
+    }
+    fn enter(&mut self, token: u64) {
+        self.current = token | crate::io_real::HOME_TOKEN;
+    }
+    fn call(&mut self, request: Request) -> Result<Completion, AdapterError> {
+        crate::io_concurrent::ConcurrentAdapter::call_at(&*self.io, self.current, request)
+    }
+    fn parked(&mut self, token: u64) {
+        crate::io_concurrent::ConcurrentAdapter::parked(
+            &*self.io,
+            token | crate::io_real::HOME_TOKEN,
+        );
+    }
+    fn finish(&mut self, token: u64) {
+        crate::io_concurrent::ConcurrentAdapter::finish(
+            &*self.io,
+            token | crate::io_real::HOME_TOKEN,
+        );
+    }
+    fn cancellable(&self, token: u64) -> bool {
+        crate::io_concurrent::ConcurrentAdapter::cancellable(
+            &*self.io,
+            token | crate::io_real::HOME_TOKEN,
+        )
+    }
+    fn runner_readiness(&mut self) -> Option<crate::readiness::Readiness> {
+        crate::io_concurrent::ConcurrentAdapter::readiness(&*self.io)
+    }
+    /// Only the home binding's own ready tokens, as RealIo reported them: a
+    /// conservative Every would re-issue, and record, every armed timer.
+    fn ready(&mut self) -> Result<Ready, AdapterError> {
+        self.io.ready_for(true)
+    }
+    fn deliver(&mut self, token: u64, completion: hirsel_run_schema::RunnerCompletion) {
+        self.io
+            .deliver(token | crate::io_real::HOME_TOKEN, completion);
+    }
+    /// With no service row pending, home waits here for its own timers and
+    /// runner deliveries: the same core sources, journal flush included.
+    fn wait(&mut self) -> Result<bool, AdapterError> {
+        crate::io_concurrent::ConcurrentAdapter::wait_sources(&*self.io)?.wait()
+    }
+    fn wake_on(&mut self, fd: std::os::fd::RawFd) -> bool {
+        crate::io_concurrent::ConcurrentAdapter::readiness(&*self.io)
+            .is_some_and(|readiness| readiness.wake_on(fd).is_ok())
+    }
+    /// Home waits (scope deadlines, runner sends) register on the readiness
+    /// the service shares, so a mixed wait exposes that one driver.
+    fn wait_sources(&mut self) -> Result<Option<crate::io::WaitSources>, AdapterError> {
+        Ok(Some(crate::io::WaitSources::Drivers(
+            crate::io_concurrent::ConcurrentAdapter::readiness(&*self.io)
+                .into_iter()
+                .collect(),
+        )))
+    }
+}
+
 /// An adapter the launcher still holds after binding it.
 pub(crate) struct Shared<A>(pub(crate) Rc<RefCell<A>>);
 
@@ -2673,6 +2743,42 @@ pub(crate) unsafe fn execute(
         unsafe { hirsel_rt_v2_ctx_destroy(ctx) };
         return Err(error);
     }
+    // Live Ordered moves its admitted RealIo, with the attached journal, to the
+    // run's concurrent service: blocking built-in calls then run as owned jobs,
+    // never on a compute worker or home. Replay keeps its home tape.
+    let mut ordered_live = None;
+    if ordered_enabled && let Some(io) = real.take() {
+        // The home binding's alias goes first; OrderedHome replaces it.
+        drop(adapter);
+        let moved = Rc::try_unwrap(io)
+            .map_err(|_| "Ordered admission retained a home adapter alias".to_owned())
+            .and_then(|io| {
+                io.into_inner()
+                    .into_concurrent()
+                    .map_err(|_| "Ordered admission requires transportable streams".to_owned())
+            })
+            .map(std::sync::Arc::new)
+            .and_then(|io| {
+                unsafe {
+                    crate::tasks::ordered::host::concurrent::Service::install(ctx, io.clone())
+                }
+                .map(|()| io)
+                .map_err(|stop| format!("Ordered host admission: {stop:?}"))
+            });
+        match moved {
+            Ok(io) => {
+                adapter = Box::new(OrderedHome {
+                    io: io.clone(),
+                    current: crate::io_real::HOME_TOKEN,
+                });
+                ordered_live = Some(io);
+            }
+            Err(error) => {
+                unsafe { hirsel_rt_v2_ctx_destroy(ctx) };
+                return Err(error);
+            }
+        }
+    }
     if trace_destination.is_some() {
         crate::tasks::ordered::events::enable(ctx);
         let roots = entry.roots();
@@ -3056,6 +3162,10 @@ pub(crate) unsafe fn execute(
                 .finish_recording(&outcome)
                 .map_err(|e| format!("the Io tape: {e}"))?;
         }
+        if let Some(io) = &ordered_live {
+            io.finish_recording(&outcome)
+                .map_err(|e| format!("the Io tape: {e}"))?;
+        }
         if let Some(writer) = &mut zero_recording {
             writer
                 .finish_with_outcome(&outcome)
@@ -3128,11 +3238,14 @@ pub(crate) unsafe fn execute(
         return Err(error);
     }
     if let (Some(destination), Some(trace)) = (trace_destination, trace) {
-        let real_io = real.as_ref().map(|io| io.borrow());
-        let grants = real_io.as_ref().map_or_else(Vec::new, |io| io.mount_pins());
-        trace
-            .map_err(str::to_owned)?
-            .publish(destination, &grants, &output_grants)?;
+        let trace = trace.map_err(str::to_owned)?;
+        if let Some(io) = &ordered_live {
+            io.with_mount_pins(|grants| trace.publish(destination, grants, &output_grants))?;
+        } else {
+            let real_io = real.as_ref().map(|io| io.borrow());
+            let grants = real_io.as_ref().map_or_else(Vec::new, |io| io.mount_pins());
+            trace.publish(destination, &grants, &output_grants)?;
+        }
     }
     Ok(outcome)
 }

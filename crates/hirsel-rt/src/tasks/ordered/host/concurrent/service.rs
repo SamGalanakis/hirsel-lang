@@ -307,7 +307,16 @@ impl Service {
                 crate::io::WaitSources::Drivers(a)
             }
         };
-        let waited = sources.wait().map_err(Stop::refusal)?;
+        let mut waited = sources.wait().map_err(Stop::refusal)?;
+        // An in-flight job is an event source: with nothing else to wait on,
+        // block until its publication or a stop notifies the driver, instead
+        // of declaring the run quiet.
+        if !waited && self.jobs.busy() {
+            let driver = self.driver.as_ref().ok_or_else(|| {
+                Stop::Refused("an Ordered host job requires a readiness driver".into())
+            })?;
+            waited = driver.wait_woken().map_err(Stop::refusal)?;
+        }
         if let Some(stop) = unsafe { (*run).control.stopped() } {
             return Err(stop);
         }

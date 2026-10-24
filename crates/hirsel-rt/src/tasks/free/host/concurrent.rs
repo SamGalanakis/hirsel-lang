@@ -200,8 +200,20 @@ impl Drop for Service {
 /// Replay consumes only the resulting request digest and invokes no provider.
 pub(crate) fn with_current(action: impl FnOnce(&dyn ConcurrentAdapter)) -> bool {
     let ctx = crate::stop::running();
-    if ctx.is_null() || !super::native::enabled(ctx) {
+    if ctx.is_null() {
         return false;
+    }
+    // Live Ordered sets up its own concurrent service's providers.
+    if !super::native::enabled(ctx) {
+        let Some(io) = (crate::tasks::ordered::engine::on(ctx))
+            .then(|| unsafe { (*ctx).run_ref().ordered_io.get() })
+            .flatten()
+        else {
+            return false;
+        };
+        let _segment = unsafe { role::Segment::new(ctx) };
+        action(&*io.adapter);
+        return true;
     }
     if unsafe { (*ctx).run_ref().free_replay } {
         return true;

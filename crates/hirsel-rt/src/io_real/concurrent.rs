@@ -7,6 +7,10 @@ use crate::io_concurrent::ConcurrentAdapter;
 use crate::io_keys::{Key, KeySet, KeyTable, Kind, Registry};
 use std::sync::Mutex;
 
+/// The bit a live Ordered run's home binding sets on its tokens; service
+/// tokens stay below 2^48 and readiness run tags occupy bits 48..62.
+pub(crate) const HOME_TOKEN: u64 = 1 << 62;
+
 /// Real host I/O callable on any worker. Only bounded calls hold resource positions;
 /// providers register readiness and return before a process/socket/timer wait.
 pub struct ConcurrentIo {
@@ -16,6 +20,9 @@ pub struct ConcurrentIo {
     // TLS roots belong to a stream until its first bounded handshake attempt.
     // A provider's single staging slot must never couple concurrent callers.
     tls_pem: Mutex<std::collections::BTreeMap<u64, Vec<u8>>>,
+    /// Ready tokens one poll found for the other side: [service, home binding].
+    /// Readiness hands each finding out once, and both sides share it.
+    deferred: Mutex<[Vec<u64>; 2]>,
     #[cfg(test)]
     before_file: Option<Arc<dyn Fn() + Send + Sync>>,
     #[cfg(test)]
@@ -55,6 +62,7 @@ impl ConcurrentIo {
             registry: Mutex::new(registry),
             calls: KeyTable::default(),
             tls_pem: Default::default(),
+            deferred: Default::default(),
             #[cfg(test)]
             before_file: None,
             #[cfg(test)]
@@ -70,6 +78,32 @@ impl ConcurrentIo {
     }
     pub fn stderr(&self) -> Vec<u8> {
         self.core.lock().unwrap().state.stderr.clone()
+    }
+    /// The ready parked tokens of one side: the run's service, or (`home`) the
+    /// home binding of a live Ordered run, whose tokens carry [`HOME_TOKEN`].
+    /// The other side's findings wait for its own next poll.
+    pub(crate) fn ready_for(&self, home: bool) -> Result<Ready, AdapterError> {
+        let Ready::Tokens(tokens) = self.core.lock().unwrap().ready()? else {
+            return Ok(Ready::Every);
+        };
+        let mut deferred = self.deferred.lock().unwrap();
+        for token in tokens {
+            deferred[usize::from(token & HOME_TOKEN != 0)].push(token);
+        }
+        let mut mine: Vec<u64> = std::mem::take(&mut deferred[usize::from(home)])
+            .into_iter()
+            .map(|token| token & !HOME_TOKEN)
+            .collect();
+        mine.sort_unstable();
+        mine.dedup();
+        Ok(Ready::Tokens(mine))
+    }
+    /// The admitted mounts' pins, for destinations checked after the run.
+    pub fn with_mount_pins<T>(
+        &self,
+        f: impl FnOnce(&[(&str, &crate::host_paths::PinnedDirectory)]) -> T,
+    ) -> T {
+        f(&self.core.lock().unwrap().mount_pins())
     }
     pub fn finish_recording(&self, outcome: &hirsel_run_schema::RunOutcome) -> std::io::Result<()> {
         self.core.lock().unwrap().finish_recording(outcome)
@@ -405,7 +439,7 @@ impl ConcurrentAdapter for ConcurrentIo {
         self.core.lock().unwrap().cancellable(token)
     }
     fn ready(&self) -> Result<Ready, AdapterError> {
-        self.core.lock().unwrap().ready()
+        self.ready_for(false)
     }
     fn wait_sources(&self) -> Result<crate::io::WaitSources, AdapterError> {
         Ok(self

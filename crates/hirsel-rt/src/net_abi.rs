@@ -1182,13 +1182,32 @@ mod borrowed_wait_tests {
     use std::cell::Cell;
     use std::rc::Rc;
 
-    struct Delayed(Rc<Cell<u32>>);
-    impl Adapter for Delayed {
+    /// Counts of borrowed attempts, withdrawals and owned calls.
+    #[derive(Default)]
+    struct Counts {
+        borrowed: Cell<u32>,
+        finished: Cell<u32>,
+        owned: Cell<u32>,
+    }
+    struct WouldBlock(Rc<Counts>);
+    impl Adapter for WouldBlock {
         fn preflight(&self, _: &Request) -> Result<Option<Completion>, AdapterError> {
             Ok(None)
         }
-        fn call(&mut self, _: Request) -> Result<Completion, AdapterError> {
-            panic!("a borrowed retry must retain the original storage");
+        fn call(&mut self, request: Request) -> Result<Completion, AdapterError> {
+            assert_eq!(
+                request,
+                Request::NetRead {
+                    net: 2,
+                    stream: 3,
+                    max: 16
+                }
+            );
+            self.0.owned.set(self.0.owned.get() + 1);
+            Ok(Completion::NetBytes(Ok(b"ready".to_vec())))
+        }
+        fn finish(&mut self, _: u64) {
+            self.0.finished.set(self.0.finished.get() + 1);
         }
         fn net_io(
             &mut self,
@@ -1196,27 +1215,17 @@ mod borrowed_wait_tests {
             _: u64,
             _: u64,
             _: bool,
-            buffer: &mut NetBuffer<'_>,
+            _: &mut NetBuffer<'_>,
         ) -> Option<Result<Result<u64, crate::net::NetError>, AdapterError>> {
-            let issued = self.0.get();
-            self.0.set(issued + 1);
-            if issued == 0 {
-                return Some(Err(AdapterError::Blocked));
-            }
-            let NetBuffer::Read(bytes) = buffer else {
-                panic!("read buffer")
-            };
-            for (slot, byte) in bytes.iter_mut().zip(b"ready") {
-                slot.write(*byte);
-            }
-            Some(Ok(Ok(5)))
+            self.0.borrowed.set(self.0.borrowed.get() + 1);
+            Some(Err(AdapterError::Blocked))
         }
     }
 
     #[test]
-    fn parked_read_reuses_the_issuing_frame_and_preserves_the_unwritten_tail() {
-        let issued = Rc::new(Cell::new(0));
-        let mut binding = Box::new(Binding::new(Delayed(issued.clone())));
+    fn a_blocked_borrowed_read_takes_the_owned_path_and_preserves_the_unwritten_tail() {
+        let counts = Rc::new(Counts::default());
+        let mut binding = Box::new(Binding::new(WouldBlock(counts.clone())));
         let mut ctx = std::ptr::null_mut();
         assert_eq!(
             unsafe { crate::context::hirsel_rt_v2_ctx_create(&crate::Config::new(), &mut ctx) },
@@ -1244,7 +1253,10 @@ mod borrowed_wait_tests {
         assert_eq!(result.value, 5);
         assert_eq!(&bytes[..5], b"ready");
         assert_eq!(&bytes[5..], &[0xa5; 11]);
-        assert_eq!(issued.get(), 2);
+        // The borrowed attempt withdrew its token; no row retained the frame.
+        assert_eq!(counts.borrowed.get(), 1);
+        assert_eq!(counts.finished.get(), 2);
+        assert_eq!(counts.owned.get(), 1);
         unsafe {
             (*ctx).bind_io_data(std::ptr::null_mut());
             crate::context::hirsel_rt_v2_ctx_destroy(ctx);
