@@ -115,6 +115,13 @@ pub(crate) struct CompactCompleted {
     outcome: PublishedResult,
 }
 impl CompactCompleted {
+    pub(super) fn outcome(&self) -> &PublishedResult {
+        &self.outcome
+    }
+    pub(super) fn take_payload(&mut self) -> Option<Vec<u8>> {
+        self.payload.take()
+    }
+
     /// Drain the encoded bytes before this worker accepts another task. Only
     /// the provider verdict returns to canonical serial memo publication.
     pub(super) fn write_payload(&mut self, writer: Option<&persistent::EncodedWriter>) {

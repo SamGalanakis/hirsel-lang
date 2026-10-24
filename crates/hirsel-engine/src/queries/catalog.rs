@@ -174,6 +174,16 @@ pub(crate) struct Catalog {
     facts_cache:
         std::sync::RwLock<BTreeMap<hirsel_syntax::LexicalOwner, (ContentHash, SourceFacts)>>,
 }
+impl Clone for Catalog {
+    fn clone(&self) -> Self {
+        Self {
+            files: self.files.clone(),
+            candidates: self.candidates.clone(),
+            // Facts are recomputable memoization, not source observations.
+            facts_cache: Default::default(),
+        }
+    }
+}
 impl Catalog {
     pub(super) fn clear_facts(&self) {
         self.facts_cache.write().unwrap().clear();

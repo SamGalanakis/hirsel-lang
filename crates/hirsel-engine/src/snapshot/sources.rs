@@ -85,3 +85,29 @@ impl CitationSource for SourceContext<'_> {
         ContentHash::of_parts("hirsel.read.cited", parts.iter().map(Vec::as_slice))
     }
 }
+
+/// Owned immutable citation inputs for admitted tasks that outlive preparation.
+pub(crate) struct OwnedSourceContext {
+    pub sources: SourceMap,
+    pub items: Arc<BTreeMap<DefPath, Vec<Arc<ItemSyntax>>>>,
+    pub declarations: DeclarationIndex,
+    pub catalog: crate::queries::catalog::Catalog,
+}
+impl OwnedSourceContext {
+    fn borrowed(&self) -> SourceContext<'_> {
+        SourceContext {
+            sources: &self.sources,
+            items: &self.items,
+            declarations: &self.declarations,
+            catalog: &self.catalog,
+        }
+    }
+}
+impl CitationSource for OwnedSourceContext {
+    fn cited_name(&self, owner: DefId, target: DefId) -> Option<Span> {
+        self.borrowed().cited_name(owner, target)
+    }
+    fn cited_text(&self, target: DefId) -> ContentHash {
+        self.borrowed().cited_text(target)
+    }
+}

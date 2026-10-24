@@ -158,3 +158,4 @@ mod expression_type_argument_guidance_49;
 mod borrowed_match_guidance_49;
 mod source_invocations_19;
 mod native_source_products_19;
+mod scheduled_front;
