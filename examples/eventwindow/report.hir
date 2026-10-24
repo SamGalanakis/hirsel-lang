@@ -1,0 +1,94 @@
+// Every append is admitted before changing the bounded staging buffer.
+@preserves_unique(out)
+pub fn put(mut out: List[u8], text: String) -> Result[(), model.Problem] uses {} {
+  if string.byte_len(text) > model.OUTPUT_BYTES - list.len(out) {
+    return Error(Invalid(OutputLimit()))
+  }
+  text.append(mut out, text)
+  Ok(())
+}
+
+@preserves_unique(out)
+fn quoted(mut out: List[u8], text: String) -> Result[(), model.Problem] uses {} {
+  let mut escaped: List[u8] = []
+  json.write_text_into(text, mut escaped)
+  let Ok(value) = text.finish(take escaped) else {
+    return Error(Invalid(Utf8()))
+  }
+  put(mut out, value)
+}
+
+@preserves_unique(out)
+fn rows(
+  mut out: List[u8],
+  totals: List[model.Cell[model.CountSum]],
+  extremes: List[model.Cell[model.MinMax]],
+  keys: List[String]
+) -> Result[(), model.Problem] uses {} {
+  let sorted = window.ordered(unique totals, keys)
+  put(mut out, "[")?
+  let mut first = true
+  for cell in sorted {
+    if !first {
+      put(mut out, ",")?
+    }
+    first = false
+    let mut at = 0u64
+    while at < list.len(extremes) {
+      if extremes[at].key == cell.key && extremes[at].start == cell.start {
+        break
+      }
+      at = model.add(at, 1)?
+    }
+    if at == list.len(extremes) {
+      return Error(Invalid(AggregateTopology()))
+    }
+    let a = cell.aggregate
+    let b = extremes[at].aggregate
+    put(mut out, f"{{\"start\":{cell.start},\"end\":{cell.end},\"key\":")?
+    quoted(mut out, keys[cell.key])?
+    put(
+      mut out,
+      f",\"count\":{a.count},\"sum\":{a.sum},\"min\":{b.min},\"max\":{b.max}}}"
+    )?
+  }
+  put(mut out, "]")
+}
+
+pub fn render(state: model.State) -> Result[unique Bytes, model.Problem] uses {} {
+  let mut out: List[u8] = []
+  put(
+    mut out,
+    f"{{\"schema\":1,\"width\":{state.width},\"offset\":{state.offset},\"next_seq\":{state.next_seq},\"watermark\":"
+  )?
+  match state.watermark {
+    None() => put(mut out, "null")?,
+    Some(w) => put(mut out, f"{w}")?,
+  }
+  put(mut out, f",\"watermarks\":{state.watermarks},\"late\":{state.late},\"keys\":[")?
+  let mut sorted = unique state.keys
+  list.sort(mut sorted, string.compare)
+  let mut first = true
+  for key in sorted {
+    if !first {
+      put(mut out, ",")?
+    }
+    first = false
+    quoted(mut out, key)?
+  }
+  put(mut out, "],\"live\":")?
+  rows(mut out, state.totals.live, state.extremes.live, state.keys)?
+  put(mut out, ",\"emitted\":")?
+  // Already emitted history is in event-time order; ordering it is idempotent.
+  rows(mut out, state.totals.emitted, state.extremes.emitted, state.keys)?
+  put(mut out, "}\n")?
+  Ok(bytes.from_list(take out))
+}
+
+pub fn diagnostic(problem: model.Problem) -> String uses {} {
+  let reason = match problem {
+    Invalid(code) => model.reason_text(code),
+    File(_) => "file",
+  }
+  f"eventwindow: {reason}\n"
+}

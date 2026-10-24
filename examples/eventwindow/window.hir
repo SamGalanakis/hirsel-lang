@@ -1,0 +1,181 @@
+// One app-local generic engine. Both instantiations run for every event and
+// watermark. Scoped callbacks borrow the selected mutable aggregate only.
+pub fn accumulate[A: plain + inert](
+  take state: unique model.Windows[A],
+  key: u64,
+  start: i64,
+  end: i64,
+  value: i64,
+  initial: fn(i64) -> A uses {},
+  step: fn(mut A, i64) -> Result[(), model.Problem] uses {}
+) -> Result[unique model.Windows[A], model.Problem] uses {} {
+  let mut owned = take state
+  for i in 0u64..list.len(owned.live) {
+    if owned.live[i].key == key && owned.live[i].start == start {
+      // V currently rejects an indexed mut callback even for plain u64.
+      // Stage exactly one plain aggregate, then install it after success.
+      let mut current = owned.live[i].aggregate
+      step(mut current, value)?
+      owned.live[i].aggregate = current
+      return Ok(take owned)
+    }
+  }
+  if list.len(owned.live) == model.LIVE {
+    return Error(Invalid(LiveLimit()))
+  }
+  list.push(
+    mut owned.live,
+    model.Cell(key: key, start: start, end: end, aggregate: initial(value))
+  )
+  Ok(take owned)
+}
+
+pub fn precedes[A: plain + inert](
+  a: model.Cell[A],
+  b: model.Cell[A],
+  keys: List[String]
+) -> bool uses {} {
+  a.end < b.end || a.end == b.end && (a.start < b.start || a.start == b.start && string.compare(
+    keys[a.key],
+    keys[b.key]
+  ) < 0)
+}
+
+// Plain cells can be moved/sorted independently of the owned string registry.
+pub fn ordered[A: plain + inert](
+  take cells: unique List[model.Cell[A]],
+  keys: List[String]
+) -> unique List[model.Cell[A]] uses {} {
+  let mut out = take cells
+  let mut i = 1u64
+  while i < list.len(out) {
+    let mut j = i
+    while j > 0 && precedes(out[j], out[j - 1], keys) {
+      list.swap(mut out, j, j - 1)
+      j -= 1
+    }
+    i += 1
+  }
+  take out
+}
+
+pub fn close[A: plain + inert](
+  take state: unique model.Windows[A],
+  watermark: i64,
+  keys: List[String]
+) -> Result[unique model.Windows[A], model.Problem] uses {} {
+  let (live, emitted) = model.window_parts(take state)
+  let sorted = ordered(take live, keys)
+  let mut history = take emitted
+  let mut remaining: List[model.Cell[A]] = []
+  for cell in take sorted {
+    if cell.end <= watermark {
+      if list.len(history) == model.EMITTED {
+        return Error(Invalid(EmittedLimit()))
+      }
+      list.push(mut history, cell)
+    } else {
+      list.push(mut remaining, cell)
+    }
+  }
+  Ok(model.Windows(live: take remaining, emitted: take history))
+}
+
+pub fn apply(take state: unique model.State, take record: model.Record) -> Result[
+  unique model.State,
+  model.Problem
+] uses {} {
+  let (
+    width,
+    offset,
+    sequence,
+    previous_watermark,
+    previous_marks,
+    previous_late,
+    registry,
+    totals,
+    extremes
+  ) = model.parts(take state)
+  let mut keys = take registry
+  let mut sums = take totals
+  let mut ranges = take extremes
+  let mut watermark = previous_watermark
+  let mut marks = previous_marks
+  let mut late_count = previous_late
+  let seq = match record {
+    Event(n, _, _, _) => n,
+    Watermark(n, _) => n,
+  }
+  if seq != sequence {
+    return Error(Invalid(Sequence()))
+  }
+  let next = model.add(seq, 1)?
+  match take record {
+    Event(_, key, at, value) => {
+      let mut index = list.len(keys)
+      for i in 0u64..list.len(keys) {
+        if keys[i] == key {
+          index = i
+          break
+        }
+      }
+      if index == list.len(keys) {
+        if index == model.KEYS {
+          return Error(Invalid(KeysLimit()))
+        }
+        list.push(mut keys, unique key)
+      }
+      let late = match watermark {
+        Some(w) => at < w,
+        None() => false,
+      }
+      if late {
+        late_count = model.add(late_count, 1)?
+      } else {
+        let (start, end) = model.interval(at, width, offset)?
+        sums = accumulate(
+          take sums,
+          index,
+          start,
+          end,
+          value,
+          model.first_total,
+          model.total
+        )?
+        ranges = accumulate(
+          take ranges,
+          index,
+          start,
+          end,
+          value,
+          model.first_extreme,
+          model.extreme
+        )?
+      }
+    },
+    Watermark(_, w) => {
+      if let Some(previous) = watermark {
+        if w < previous {
+          return Error(Invalid(WatermarkDecrease()))
+        }
+      }
+      sums = close(take sums, w, keys)?
+      ranges = close(take ranges, w, keys)?
+      watermark = Some(w)
+      marks = model.add(marks, 1)?
+    },
+  }
+  Ok(
+    model.State(
+      width: width,
+      offset: offset,
+      next_seq: next,
+      watermark: watermark,
+      watermarks: marks,
+      late: late_count,
+      keys: take keys,
+      totals: take sums,
+      extremes: take ranges
+    )
+  )
+}

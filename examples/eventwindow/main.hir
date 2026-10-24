@@ -1,0 +1,104 @@
+fn argument(args: Args, at: u64) -> Result[unique String, model.Problem] uses {args} {
+  let Ok(value) = arg.text(args, at) else {
+    return Error(Invalid(Usage()))
+  }
+  Ok(unique value)
+}
+
+fn prepare(rt: Io, args: Args) -> Result[unique Bytes, model.Problem] {
+  if arg.len(args) != 4 {
+    return Error(Invalid(Usage()))
+  }
+  let command = argument(args, 0)?
+  let first = argument(args, 1)?
+  let second = argument(args, 2)?
+  let state = if command == "init" {
+    let Ok(width) = i64.parse(first) else {
+      return Error(Invalid(Width()))
+    }
+    let Ok(offset) = i64.parse(second) else {
+      return Error(Invalid(Offset()))
+    }
+    model.empty(width, offset)?
+  } else if command == "apply" {
+    let Ok(source) = io.dir(rt, path.of("input")) else {
+      return Error(Invalid(InputGrant()))
+    }
+    let state = checkpoint.read(source, path.of(first))?
+    input.batch(source, path.of(second), take state)?
+  } else {
+    return Error(Invalid(Usage()))
+  }
+  checkpoint.encode(state)
+}
+
+// Optional signals use the existing scoped race, with no workers in ordinary
+// execution. Losing children are canceled/joined before handback and cleanup.
+fn interruptible(rt: Io, args: Args, signals: Signals, tasks: Tasks) -> Result[
+  unique Bytes,
+  model.Problem
+] {
+  task.scope(
+    tasks,
+    fn(scope: Scope) -> Result[unique Bytes, model.Problem] {
+      let mut set: TaskSet[Result[unique Bytes, model.Problem]] of scope = task.set(
+        scope
+      )
+      task.add(
+        scope,
+        mut set,
+        task.async(
+          scope,
+          fn() -> Result[unique Bytes, model.Problem] {
+            prepare(rt, args)
+          }
+        )
+      )
+      task.add(
+        scope,
+        mut set,
+        task.async(
+          scope,
+          fn() -> Result[unique Bytes, model.Problem] {
+            let _ = signal.wait(signals, [Interrupt()])
+            Error(Invalid(Canceled()))
+          }
+        )
+      )
+      let (_, outcome) = task.select(scope, take set)
+      take outcome
+    }
+  )
+}
+
+fn run(rt: Io, args: Args) -> Result[(), model.Problem] {
+  let bytes = if let Ok(signals) = io.signals(rt) {
+    let Ok(tasks) = io.tasks(rt) else {
+      return Error(Invalid(TasksGrant()))
+    }
+    interruptible(rt, args, signals, tasks)?
+  } else {
+    prepare(rt, args)?
+  }
+  // Publication begins after the signal race has canceled and joined its loser.
+  let output = argument(args, 3)?
+  let Ok(destination) = io.dir(rt, path.of("output")) else {
+    return Error(Invalid(OutputGrant()))
+  }
+  checkpoint.publish(destination, path.of(output), bytes)
+}
+
+pub fn main(rt: Io, args: Args) -> std@1/process.ExitCode {
+  match run(rt, args) {
+    Ok(()) => std@1/process.SUCCESS,
+    Error(problem) => {
+      let Ok(errors) = io.stderr(rt) else {
+        return std@1/process.exit_code(3u8)
+      }
+      match err.print(errors, report.diagnostic(problem)) {
+        Ok(()) => std@1/process.exit_code(2u8),
+        Error(_) => std@1/process.exit_code(3u8),
+      }
+    },
+  }
+}

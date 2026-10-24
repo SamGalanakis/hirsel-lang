@@ -1,0 +1,251 @@
+type Decoded {
+  totals: List[model.Cell[model.CountSum]],
+  extremes: List[model.Cell[model.MinMax]],
+  count: u64,
+}
+
+fn array(value: json.Value) -> Result[List[json.Value], model.Problem] in value uses {} {
+  let Array(items) = value else {
+    return Error(Invalid(Shape()))
+  }
+  Ok(copy items)
+}
+
+// Check that min/max are attained and that the remaining count can produce
+// sum. Widen before multiplication: i64 * u64 fits signed i128, checked anyway.
+fn aggregate(count: u64, sum: i64, min: i64, max: i64) -> Result[(), model.Problem] uses {} {
+  if count == 0 || min > max {
+    return Error(Invalid(Aggregate()))
+  }
+  if count == 1 {
+    if sum != min || sum != max {
+      return Error(Invalid(Aggregate()))
+    }
+    return Ok(())
+  }
+  let n: i128 = int.widen(count - 1)
+  let lo: i128 = int.widen(min)
+  let hi: i128 = int.widen(max)
+  let total: i128 = int.widen(sum)
+  let Some(low_product) = int.checked_mul(n, lo) else {
+    return Error(Invalid(Overflow()))
+  }
+  let Some(high_product) = int.checked_mul(n, hi) else {
+    return Error(Invalid(Overflow()))
+  }
+  let Some(low) = int.checked_add(low_product, hi) else {
+    return Error(Invalid(Overflow()))
+  }
+  let Some(high) = int.checked_add(high_product, lo) else {
+    return Error(Invalid(Overflow()))
+  }
+  if total < low || total > high {
+    return Error(Invalid(Aggregate()))
+  }
+  Ok(())
+}
+
+fn rows(
+  value: json.Value,
+  keys: List[String],
+  width: i64,
+  offset: i64,
+  watermark: Option[i64],
+  emitted: bool
+) -> Result[unique Decoded, model.Problem] uses {} {
+  let items = array(value)?
+  let cap = if emitted {
+    model.EMITTED
+  } else {
+    model.LIVE
+  }
+  if list.len(items) > cap {
+    return Error(Invalid(WindowLimit()))
+  }
+  let mut totals: List[model.Cell[model.CountSum]] = []
+  let mut extremes: List[model.Cell[model.MinMax]] = []
+  let mut count = 0u64
+  for item in items {
+    let fields = input.object(item, 7)?
+    let start = input.integer(input.field(fields, "start")?)?
+    let end = input.integer(input.field(fields, "end")?)?
+    if model.minus(end, start)? != width || model.modulo(
+      model.minus(start, offset)?,
+      width
+    )? != 0 || start > 1000000000 || end <= -1000000000 {
+      return Error(Invalid(Interval()))
+    }
+    let closed = match watermark {
+      Some(w) => end <= w,
+      None() => false,
+    }
+    if closed != emitted {
+      return Error(Invalid(WindowWatermark()))
+    }
+    let key = input.key(input.field(fields, "key")?)?
+    let mut index = list.len(keys)
+    for i in 0u64..list.len(keys) {
+      if keys[i] == key {
+        index = i
+        break
+      }
+    }
+    if index == list.len(keys) {
+      return Error(Invalid(UnknownKey()))
+    }
+    let n = input.unsigned(input.field(fields, "count")?)?
+    let sum = input.integer(input.field(fields, "sum")?)?
+    let min = input.integer(input.field(fields, "min")?)?
+    let max = input.integer(input.field(fields, "max")?)?
+    aggregate(n, sum, min, max)?
+    let cell = model.Cell(
+      key: index,
+      start: start,
+      end: end,
+      aggregate: model.CountSum(count: n, sum: sum)
+    )
+    if list.len(totals) != 0 {
+      if !window.precedes(totals[list.len(totals) - 1], cell, keys) {
+        return Error(Invalid(WindowOrder()))
+      }
+    }
+    count = model.add(count, n)?
+    list.push(mut totals, cell)
+    list.push(
+      mut extremes,
+      model.Cell(
+        key: index,
+        start: start,
+        end: end,
+        aggregate: model.MinMax(min: min, max: max)
+      )
+    )
+  }
+  Ok(Decoded(totals: take totals, extremes: take extremes, count: count))
+}
+
+pub fn decode(take data: Bytes) -> Result[unique model.State, model.Problem] uses {} {
+  if bytes.len(data) > model.OUTPUT_BYTES {
+    return Error(Invalid(CheckpointLimit()))
+  }
+  let value = input.parse(take data)?
+  let fields = input.object(value, 10)?
+  if input.unsigned(input.field(fields, "schema")?)? != 1 {
+    return Error(Invalid(Schema()))
+  }
+  let width = input.integer(input.field(fields, "width")?)?
+  let offset = input.integer(input.field(fields, "offset")?)?
+  let mut state = model.empty(width, offset)?
+  if offset != state.offset {
+    return Error(Invalid(Offset()))
+  }
+  let next = input.unsigned(input.field(fields, "next_seq")?)?
+  let watermarks = input.unsigned(input.field(fields, "watermarks")?)?
+  let late = input.unsigned(input.field(fields, "late")?)?
+  let watermark: Option[i64] = match input.field(fields, "watermark")? {
+    Null() => None(),
+    other => Some(model.tick(input.integer(other)?)?),
+  }
+  if (watermark == None()) != (watermarks == 0) || watermark == None() && late != 0 {
+    return Error(Invalid(WatermarkCount()))
+  }
+  let keys = array(input.field(fields, "keys")?)?
+  if list.len(keys) > model.KEYS {
+    return Error(Invalid(KeysLimit()))
+  }
+  for item in keys {
+    let key = input.key(item)?
+    if list.len(state.keys) != 0 {
+      if string.compare(state.keys[list.len(state.keys) - 1], key) >= 0 {
+        return Error(Invalid(KeyOrder()))
+      }
+    }
+    list.push(mut state.keys, take key)
+  }
+  let live_rows = rows(
+    input.field(fields, "live")?,
+    state.keys,
+    width,
+    offset,
+    watermark,
+    false
+  )?
+  let emitted_rows = rows(
+    input.field(fields, "emitted")?,
+    state.keys,
+    width,
+    offset,
+    watermark,
+    true
+  )?
+  let Decoded(totals: live_totals, extremes: live_extremes, count: live_count) = take live_rows
+  let Decoded(totals: emitted_totals, extremes: emitted_extremes, count: emitted_count) = take emitted_rows
+  if model.add(model.add(model.add(live_count, emitted_count)?, late)?, watermarks)? != next {
+    return Error(Invalid(Accounting()))
+  }
+  let events = model.add(model.add(live_count, emitted_count)?, late)?
+  if list.len(state.keys) > events || (list.len(state.keys) == 0) != (events == 0) {
+    return Error(Invalid(KeyAccounting()))
+  }
+  let mut unused = 0u64
+  for i in 0u64..list.len(state.keys) {
+    let mut present = false
+    for cell in live_totals {
+      if cell.key == i {
+        present = true
+        break
+      }
+    }
+    for cell in emitted_totals {
+      if cell.key == i {
+        present = true
+        break
+      }
+    }
+    if !present {
+      unused = model.add(unused, 1)?
+    }
+  }
+  if unused > late {
+    return Error(Invalid(KeyAccounting()))
+  }
+  state.next_seq = next
+  state.watermark = watermark
+  state.watermarks = watermarks
+  state.late = late
+  let total_state: unique model.Windows[model.CountSum] = model.Windows(
+    live: take live_totals,
+    emitted: take emitted_totals
+  )
+  state.totals = take total_state
+  let extreme_state: unique model.Windows[model.MinMax] = model.Windows(
+    live: take live_extremes,
+    emitted: take emitted_extremes
+  )
+  state.extremes = take extreme_state
+  Ok(take state)
+}
+
+pub fn read(d: Dir, name: Path) -> Result[unique model.State, model.Problem] {
+  let mut f = file.open(d, name) ? model.file_problem
+  let data = match file.read_all_bounded(d, mut f, model.OUTPUT_BYTES) {
+    Ok(data) => take data,
+    Error(Limit()) => return Error(Invalid(CheckpointLimit())),
+    Error(File(error)) => return Error(model.file_problem(error)),
+  }
+  decode(take data)
+}
+
+pub fn encode(state: model.State) -> Result[unique Bytes, model.Problem] uses {} {
+  report.render(state)
+}
+
+pub fn publish(d: Dir, name: Path, data: Bytes) -> Result[(), model.Problem] {
+  if bytes.len(data) > model.OUTPUT_BYTES {
+    return Error(Invalid(OutputLimit()))
+  }
+  let mut temporary = file.create_atomic(d, name) ? model.file_problem
+  file.write_all(d, mut temporary, data) ? model.file_problem
+  file.commit(d, take temporary) ? model.file_problem
+  Ok(())
+}

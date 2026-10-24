@@ -1,0 +1,238 @@
+pub const INPUT_BYTES: u64 = 32768
+
+pub const LINE_BYTES: u64 = 1024
+
+pub const RECORDS: u64 = 128
+
+pub const KEY_BYTES: u64 = 32
+
+pub const KEYS: u64 = 16
+
+pub const LIVE: u64 = 32
+
+pub const EMITTED: u64 = 128
+
+pub const OUTPUT_BYTES: u64 = 65536
+
+pub type Reason = Accounting | Aggregate | AggregateTopology | Canceled | CheckpointLimit | EmittedLimit | InputGrant | InputLimit | Integer | Interval | Json | Key | KeyAccounting | KeyLimit | KeyOrder | KeysLimit | LineLimit | LiveLimit | Offset | OutputGrant | OutputLimit | Overflow | RecordsLimit | Scanner | Schema | Sequence | Shape | TasksGrant | Tick | UnknownKey | Usage | Utf8 | WatermarkCount | WatermarkDecrease | Width | WindowLimit | WindowOrder | WindowWatermark
+
+pub type Problem = Invalid(Reason) | File(FileError)
+
+pub type Record = Event(u64, String, i64, i64) | Watermark(u64, i64)
+
+pub type CountSum {
+  count: u64,
+  sum: i64,
+}
+
+pub type MinMax {
+  min: i64,
+  max: i64,
+}
+
+// The key is an index into the invocation-owned registry, never a raw handle.
+pub type Cell[A] {
+  key: u64,
+  start: i64,
+  end: i64,
+  aggregate: A,
+}
+
+pub type Windows[A] {
+  live: List[Cell[A]],
+  emitted: List[Cell[A]],
+}
+
+pub type State {
+  width: i64,
+  offset: i64,
+  next_seq: u64,
+  watermark: Option[i64],
+  watermarks: u64,
+  late: u64,
+  keys: List[String],
+  totals: Windows[CountSum],
+  extremes: Windows[MinMax],
+}
+
+pub fn add(a: u64, b: u64) -> Result[u64, Problem] uses {} {
+  let Some(n) = int.checked_add(a, b) else {
+    return Error(Invalid(Overflow()))
+  }
+  Ok(n)
+}
+
+pub fn plus(a: i64, b: i64) -> Result[i64, Problem] uses {} {
+  let Some(n) = int.checked_add(a, b) else {
+    return Error(Invalid(Overflow()))
+  }
+  Ok(n)
+}
+
+pub fn minus(a: i64, b: i64) -> Result[i64, Problem] uses {} {
+  let Some(n) = int.checked_sub(a, b) else {
+    return Error(Invalid(Overflow()))
+  }
+  Ok(n)
+}
+
+pub fn tick(n: i64) -> Result[i64, Problem] uses {} {
+  if n < -1000000000 || n > 1000000000 {
+    return Error(Invalid(Tick()))
+  }
+  Ok(n)
+}
+
+// Apache Beam window.py:392-426, fadfc789376137afabab0469bf1e43a0f10a6ad0.
+// Python's % is Euclidean here; Hirsel's signed remainder needs normalization.
+pub fn modulo(n: i64, width: i64) -> Result[i64, Problem] uses {} {
+  let remainder = n % width
+  if remainder < 0 {
+    plus(remainder, width)
+  } else {
+    Ok(remainder)
+  }
+}
+
+pub fn interval(at: i64, width: i64, offset: i64) -> Result[(i64, i64), Problem] uses {} {
+  let start = minus(at, modulo(minus(at, offset)?, width)?)?
+  Ok((start, plus(start, width)?))
+}
+
+pub fn empty(width: i64, offset: i64) -> Result[unique State, Problem] uses {} {
+  if width < 1 || width > 3600 {
+    return Error(Invalid(Width()))
+  }
+  tick(offset)?
+  Ok(
+    State(
+      width: width,
+      offset: modulo(offset, width)?,
+      next_seq: 0,
+      watermark: None(),
+      watermarks: 0,
+      late: 0,
+      keys: [],
+      totals: Windows(live: [], emitted: []),
+      extremes: Windows(live: [], emitted: [])
+    )
+  )
+}
+
+pub fn first_total(value: i64) -> CountSum uses {} {
+  CountSum(count: 1, sum: value)
+}
+
+pub fn first_extreme(value: i64) -> MinMax uses {} {
+  MinMax(min: value, max: value)
+}
+
+pub fn total(mut a: CountSum, value: i64) -> Result[(), Problem] uses {} {
+  let count = add(a.count, 1)?
+  let sum = plus(a.sum, value)?
+  a.count = count
+  a.sum = sum
+  Ok(())
+}
+
+pub fn extreme(mut a: MinMax, value: i64) -> Result[(), Problem] uses {} {
+  if value < a.min {
+    a.min = value
+  }
+  if value > a.max {
+    a.max = value
+  }
+  Ok(())
+}
+
+pub fn file_problem(error: FileError) -> Problem uses {} {
+  File(error)
+}
+
+// Cross-module moves use whole-owner destructuring in the declaring module.
+// Explicit unique receipts transport the two independent aggregate roots.
+pub fn window_parts[A: plain + inert](take state: unique Windows[A]) -> (
+  unique List[Cell[A]],
+  unique List[Cell[A]]
+) uses {} {
+  let Windows(live: live, emitted: emitted) = take state
+  (take live, take emitted)
+}
+
+pub fn parts(take state: unique State) -> (
+  i64,
+  i64,
+  u64,
+  Option[i64],
+  u64,
+  u64,
+  unique List[String],
+  unique Windows[CountSum],
+  unique Windows[MinMax]
+) uses {} {
+  let State(
+    width: width,
+    offset: offset,
+    next_seq: next_seq,
+    watermark: watermark,
+    watermarks: watermarks,
+    late: late,
+    keys: keys,
+    totals: totals,
+    extremes: extremes
+  ) = take state
+  (
+    width,
+    offset,
+    next_seq,
+    watermark,
+    watermarks,
+    late,
+    take keys,
+    take totals,
+    take extremes
+  )
+}
+
+pub fn reason_text(reason: Reason) -> String uses {} {
+  match reason {
+    Accounting() => "accounting",
+    Aggregate() => "aggregate",
+    AggregateTopology() => "aggregate_topology",
+    Canceled() => "canceled",
+    CheckpointLimit() => "checkpoint_limit",
+    EmittedLimit() => "emitted_limit",
+    InputGrant() => "input_grant",
+    InputLimit() => "input_limit",
+    Integer() => "integer",
+    Interval() => "interval",
+    Json() => "json",
+    Key() => "key",
+    KeyAccounting() => "key_accounting",
+    KeyLimit() => "key_limit",
+    KeyOrder() => "key_order",
+    KeysLimit() => "keys_limit",
+    LineLimit() => "line_limit",
+    LiveLimit() => "live_limit",
+    Offset() => "offset",
+    OutputGrant() => "output_grant",
+    OutputLimit() => "output_limit",
+    Overflow() => "overflow",
+    RecordsLimit() => "records_limit",
+    Scanner() => "scanner",
+    Schema() => "schema",
+    Sequence() => "sequence",
+    Shape() => "shape",
+    TasksGrant() => "tasks_grant",
+    Tick() => "tick",
+    UnknownKey() => "unknown_key",
+    Usage() => "usage",
+    Utf8() => "utf8",
+    WatermarkCount() => "watermark_count",
+    WatermarkDecrease() => "watermark_decrease",
+    Width() => "width",
+    WindowLimit() => "window_limit",
+    WindowOrder() => "window_order",
+    WindowWatermark() => "window_watermark",
+  }
+}

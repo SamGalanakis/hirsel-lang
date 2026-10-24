@@ -1,0 +1,57 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "eventwindow",
+    "version": "1"
+  },
+  "entry": {
+    "module": [],
+    "name": "main"
+  },
+  "sources": [
+    {
+      "path": "main.hir",
+      "module": []
+    },
+    {
+      "path": "model.hir",
+      "module": [
+        "model"
+      ]
+    },
+    {
+      "path": "input.hir",
+      "module": [
+        "input"
+      ]
+    },
+    {
+      "path": "window.hir",
+      "module": [
+        "window"
+      ]
+    },
+    {
+      "path": "checkpoint.hir",
+      "module": [
+        "checkpoint"
+      ]
+    },
+    {
+      "path": "report.hir",
+      "module": [
+        "report"
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "manifest": "../../stdlib/std@1/hirsel.json",
+      "package": {
+        "name": "std",
+        "version": "1"
+      },
+      "expose": []
+    }
+  ]
+}

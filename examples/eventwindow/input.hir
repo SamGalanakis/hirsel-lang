@@ -1,0 +1,142 @@
+pub fn object(value: json.Value, size: u64) -> Result[
+  Map[String, json.Value],
+  model.Problem
+] in value uses {} {
+  let Object(fields) = value else {
+    return Error(Invalid(Shape()))
+  }
+  let mut count = 0u64
+  for _ in fields {
+    count = model.add(count, 1)?
+  }
+  if count != size {
+    return Error(Invalid(Shape()))
+  }
+  Ok(copy fields)
+}
+
+pub fn field(fields: Map[String, json.Value], name: String) -> Result[
+  json.Value,
+  model.Problem
+] in fields uses {} {
+  let Some(value) = map.get(fields, name) else {
+    return Error(Invalid(Shape()))
+  }
+  Ok(copy value)
+}
+
+pub fn integer(value: json.Value) -> Result[i64, model.Problem] uses {} {
+  let Number(text) = value else {
+    return Error(Invalid(Integer()))
+  }
+  let Ok(n) = i64.parse(text) else {
+    return Error(Invalid(Integer()))
+  }
+  Ok(n)
+}
+
+pub fn unsigned(value: json.Value) -> Result[u64, model.Problem] uses {} {
+  let Number(text) = value else {
+    return Error(Invalid(Integer()))
+  }
+  let Ok(n) = u64.parse(text) else {
+    return Error(Invalid(Integer()))
+  }
+  Ok(n)
+}
+
+pub fn key(value: json.Value) -> Result[unique String, model.Problem] uses {} {
+  let Text(text) = value else {
+    return Error(Invalid(Key()))
+  }
+  if string.byte_len(text) > model.KEY_BYTES {
+    return Error(Invalid(KeyLimit()))
+  }
+  Ok(unique text)
+}
+
+pub fn parse(take data: Bytes) -> Result[json.Value, model.Problem] uses {} {
+  let Ok(text) = string.from_bytes(take data) else {
+    return Error(Invalid(Utf8()))
+  }
+  let Ok(value) = json.parse(take text) else {
+    return Error(Invalid(Json()))
+  }
+  Ok(take value)
+}
+
+pub fn record(take data: Bytes) -> Result[model.Record, model.Problem] uses {} {
+  let value = parse(take data)?
+  let Object(fields) = value else {
+    return Error(Invalid(Shape()))
+  }
+  let seq = unsigned(field(fields, "seq")?)?
+  if let Some(_) = map.get(fields, "watermark") {
+    object(value, 2)?
+    return Ok(Watermark(seq, model.tick(integer(field(fields, "watermark")?)?)?))
+  }
+  object(value, 4)?
+  Ok(
+    Event(
+      seq,
+      key(field(fields, "key")?)?,
+      model.tick(integer(field(fields, "at")?)?)?,
+      integer(field(fields, "value")?)?
+    )
+  )
+}
+
+// Port the shipped metricfold scanner driver: 256-byte read lookahead, bounded
+// partial line, physical LF/CRLF admission before typed parsing or application.
+pub fn batch(d: Dir, name: Path, take state: unique model.State) -> Result[
+  unique model.State,
+  model.Problem
+] {
+  let mut f = file.open(d, name) ? model.file_problem
+  let mut owned = take state
+  let Ok(created) = line_scan.new(model.LINE_BYTES, true) else {
+    return Error(Invalid(Scanner()))
+  }
+  let mut scanner = take created
+  let mut total = 0u64
+  let mut records = 0u64
+  while true {
+    let mut chunk: List[u8] = []
+    let n = file.read(d, mut f, mut chunk, 256) ? model.file_problem
+    let data = bytes.from_list(take chunk)
+    let mut start = 0u64
+    let mut first = true
+    while start < n || n == 0 && first {
+      first = false
+      // Go ScanLines' IndexByte structure, via the shipped byte search.
+      // This preserves one-line admission without a checked call per byte.
+      let newline = bytes.find_any(data, b"\n", start)
+      let end = if newline < n {
+        model.add(newline, 1)?
+      } else {
+        n
+      }
+      let width = end - start
+      if width > model.INPUT_BYTES - total {
+        return Error(Invalid(InputLimit()))
+      }
+      total = model.add(total, width)?
+      let Ok(lines) = line_scan.feed(mut scanner, bytes.slice(data, start, end), n == 0) else {
+        return Error(Invalid(LineLimit()))
+      }
+      for line in take lines {
+        if records == model.RECORDS {
+          return Error(Invalid(RecordsLimit()))
+        }
+        let typed = record(take line)?
+        owned = window.apply(take owned, take typed)?
+        records = model.add(records, 1)?
+      }
+      start = end
+    }
+    if n == 0 {
+      break
+    }
+  }
+  Ok(take owned)
+}

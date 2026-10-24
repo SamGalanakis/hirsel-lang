@@ -1,0 +1,29 @@
+// Separately frozen arithmetic and bounded-emission controls. These supplement
+// the original full-main cap cells; they do not replace them.
+pub fn main() -> Result[(), model.Problem] {
+  let mut count = model.CountSum(count: 18446744073709551615u64, sum: 0)
+  failure.check(model.total(mut count, 0) == Error(Invalid(Overflow())), Arithmetic())
+  failure.check(count.count == 18446744073709551615u64 && count.sum == 0, Arithmetic())
+  let mut sum = model.CountSum(count: 1, sum: 9223372036854775807i64)
+  failure.check(model.total(mut sum, 1) == Error(Invalid(Overflow())), Arithmetic())
+  failure.check(sum.count == 1 && sum.sum == 9223372036854775807i64, Arithmetic())
+  failure.check(
+    model.plus(9223372036854775807i64, 1) == Error(Invalid(Overflow())),
+    Arithmetic()
+  )
+  failure.check(
+    model.minus(-9223372036854775808i64, 1) == Error(Invalid(Overflow())),
+    Arithmetic()
+  )
+  let mut out: List[u8] = []
+  for _ in 0u64..256u64 {
+    let _ = report.put(
+      mut out,
+      "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    )
+  }
+  failure.check(list.len(out) == 65536, Arithmetic())
+  failure.check(report.put(mut out, "x") == Error(Invalid(OutputLimit())), Arithmetic())
+  failure.check(list.len(out) == 65536, Arithmetic())
+  Ok(())
+}
