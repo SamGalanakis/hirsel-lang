@@ -304,6 +304,12 @@ N fn string.slice(s: String, start: StrPos of s, end: StrPos of s) -> String in 
 @preserves_unique(bytes) fn string.from_bytes(take bytes: Bytes) -> Result[String, Bytes]
 fn bytes.base64_encode(data: Bytes, alphabet: Base64Alphabet, padding: Base64Padding) -> unique Bytes uses {}
 fn bytes.base64_decode(data: Bytes, alphabet: Base64Alphabet, padding: Base64Padding) -> unique Option[Bytes] uses {}
+N fn bytes.sha1(data: Bytes) -> Inline[u8, 20] uses {}
+N fn bytes.sha224(data: Bytes) -> Inline[u8, 28] uses {}
+N fn bytes.sha256(data: Bytes) -> Inline[u8, 32] uses {}
+N fn bytes.sha384(data: Bytes) -> Inline[u8, 48] uses {}
+N fn bytes.sha512(data: Bytes) -> Inline[u8, 64] uses {}
+N fn bytes.sha512_256(data: Bytes) -> Inline[u8, 32] uses {}
 N fn bytes.len(src: Bytes) -> u64
 N fn bytes.find_any(src: Bytes, needles: Bytes, start: u64) -> u64
 N fn bytes.json_number_end(src: Bytes, start: u64) -> (u64, u64)
@@ -1575,6 +1581,12 @@ FAIL-3 shielding.
 `Base64Padding = Required() | Omitted()` are serializable plain configuration
 variants; `std@1/base64.Alphabet` and `Padding` alias them. Applications normally
 use `std@1/base64.encode/decode`, which retain their String API and typed errors.
+The six `bytes.sha*` primitives borrow exactly their byte extent and return
+fixed, inline digest bytes without allocation or owner transfer. RustCrypto
+`sha1`/`sha2` supplies the algorithm and hardware dispatch. SHA-1/224/256 reject
+lengths above 2^61-1 bytes with SEM-1 before reading input. Work charges and
+checkpoints are specified under [long pure primitives](determinism.md).
+
 `bytes.base64_encode` borrows its exact byte extent and returns fresh unique
 ASCII bytes with the selected RFC4648 alphabet and padding. `bytes.base64_decode`
 returns `Some` of fresh unique bytes only for a complete strict success: no

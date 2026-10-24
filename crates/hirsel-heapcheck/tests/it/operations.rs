@@ -20,6 +20,7 @@ enum ResultKind {
     BadTag,
     BadElement,
     NumericWork(bool),
+    ShaWork(&'static str, bool),
 }
 #[derive(Clone)]
 struct Model(ResultKind);
@@ -149,12 +150,17 @@ fn program(kind: ResultKind) -> Program<Ready> {
             slice
         };
         let value = b.owned(ValueRepr::Aggregate, layout);
-        let range = if let ResultKind::NumericWork(core) = kind {
+        let work = match kind {
+            ResultKind::NumericWork(core) => Some(("integer", core)),
+            ResultKind::ShaWork(name, core) => Some((name, core)),
+            _ => None,
+        };
+        let range = if let Some((name, core)) = work {
             b.operation(OperationId {
                 definition: if core {
-                    hirsel_syntax::DefPath::core("bytes.integer")
+                    hirsel_syntax::DefPath::core(&format!("bytes.{name}"))
                 } else {
-                    path("integer")
+                    path(name)
                 },
                 declaration_digest: Default::default(),
             })
@@ -1035,6 +1041,105 @@ fn numeric_work_is_exact_and_exhaustion_precedes_provider_entry() {
             assert!(model.fresh && !model.called);
             assert!(result.output.is_empty());
             assert!(execute(false, &short).0.result.is_ok());
+        }
+    }
+}
+
+// The existing byte-result fixture isolates metering from the SHA provider:
+// both providers return the same checked borrowed slice. Only core identities
+// incur the normative charge; low limits must prevent entering that provider.
+struct ShaWorkModel {
+    length: usize,
+    hashed: bool,
+    fresh: bool,
+}
+impl Operations for ShaWorkModel {
+    fn call(&mut self, op: &OperationId, args: &[OpValue], output: &mut Vec<u8>) -> OpOutcome {
+        match op.definition.0.name.as_str() {
+            "fresh" => {
+                self.fresh = true;
+                OpOutcome::Value(OpValue::ByteSequence(vec![42; self.length]))
+            }
+            "show" => {
+                let [OpValue::Bytes(bytes)] = args else {
+                    return OpOutcome::Unsupported;
+                };
+                output.extend_from_slice(bytes);
+                OpOutcome::Value(OpValue::Unit)
+            }
+            "sha1" | "sha224" | "sha256" | "sha384" | "sha512" | "sha512_256" => {
+                self.hashed = true;
+                OpOutcome::Value(OpValue::Slice {
+                    argument: 0,
+                    start: 0,
+                    length: self.length as u64,
+                })
+            }
+            _ => OpOutcome::Unsupported,
+        }
+    }
+}
+#[test]
+fn sha_work_is_exact_and_exhaustion_precedes_provider_entry() {
+    for name in ["sha1", "sha224", "sha256", "sha384", "sha512", "sha512_256"] {
+        for (length, cost64, cost128) in [
+            (0, 2, 2),
+            (1, 2, 2),
+            (55, 2, 2),
+            (56, 3, 2),
+            (63, 3, 2),
+            (64, 3, 2),
+            (111, 3, 2),
+            (112, 3, 3),
+            (119, 3, 3),
+            (120, 4, 3),
+            (127, 4, 3),
+            (128, 4, 3),
+            (129, 4, 3),
+            (8192, 130, 66),
+        ] {
+            let cost = if ["sha1", "sha224", "sha256"].contains(&name) {
+                cost64
+            } else {
+                cost128
+            };
+            let execute = |core, config: &Config| {
+                let mut model = ShaWorkModel {
+                    length,
+                    hashed: false,
+                    fresh: false,
+                };
+                let result = run(
+                    &program(ResultKind::ShaWork(name, core)),
+                    &path("main"),
+                    &[],
+                    &mut model,
+                    config,
+                );
+                (result, model)
+            };
+            let (ordinary, _) = execute(false, &Config::default());
+            let (metered, _) = execute(true, &Config::default());
+            assert!(ordinary.result.is_ok(), "{ordinary:?}");
+            assert!(metered.result.is_ok(), "{metered:?}");
+            assert_eq!(ordinary.output, metered.output);
+            assert_eq!(metered.steps - ordinary.steps, cost, "{name} {length}");
+            if length == 8192 {
+                let config = Config {
+                    step_limit: cost - 1,
+                    ..Config::default()
+                };
+                let (short, model) = execute(true, &config);
+                assert_eq!(short.violation(), Some(ViolationKind::Unsupported));
+                assert_eq!(short.steps, config.step_limit + 1);
+                assert!(
+                    model.fresh && !model.hashed,
+                    "SHA provider ran after exhaustion"
+                );
+                assert!(short.output.is_empty());
+                let (twin, _) = execute(false, &config);
+                assert!(twin.result.is_ok(), "{twin:?}");
+            }
         }
     }
 }

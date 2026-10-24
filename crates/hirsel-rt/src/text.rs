@@ -140,7 +140,7 @@ pub unsafe fn allocate_bytes(ctx: *mut TaskCtx, bytes: &[u8]) -> Slice {
 /// Read a slice without assuming UTF-8 or a Sequence owner (flat views are valid).
 /// # Safety
 /// The slice owner is live and its range contains initialized bytes.
-unsafe fn bytes<'a>(slice: Slice) -> &'a [u8] {
+pub(crate) unsafe fn bytes<'a>(slice: Slice) -> &'a [u8] {
     let start = usize::try_from(slice.start).unwrap_or_else(|_| fault("slice start overflow"));
     let length = usize::try_from(slice.length).unwrap_or_else(|_| fault("slice length overflow"));
     slice

@@ -2304,8 +2304,8 @@ pub(crate) fn execute_frames(
                             continue;
                         }
                         let path = &target.path;
-                        // Pure borrowed numeric work has the same deterministic charge in
-                        // reference and checked H. Preflight before scanning or publishing
+                        // Pure borrowed primitive work has the same deterministic charge in
+                        // reference and checked H. Preflight before doing work or publishing
                         // any result; the ordinary call terminator remains its own step.
                         let cost = primitive_work(path, &arguments)?;
                         if cost != 0 {
@@ -2847,7 +2847,17 @@ fn dispatch(
 }
 /// Closed operation identity, independent of source spelling or callback routing.
 fn primitive_work(path: &hirsel_syntax::DefPath, arguments: &[Value]) -> Result<u64, Error> {
-    Ok(crate::library::numeric_work(path, arguments)?.unwrap_or(0))
+    if path.0.package.package_is("core", "1")
+        && path.0.modules == ["bytes"]
+        && let Some(algorithm) = hirsel_kernels::sha::Algorithm::from_operation(&path.0.name)
+    {
+        let Some(Value::Bytes(data)) = arguments.first() else {
+            return Err(invalid("SHA requires a byte extent"));
+        };
+        Ok(algorithm.charge(data.len() as u64))
+    } else {
+        Ok(crate::library::numeric_work(path, arguments)?.unwrap_or(0))
+    }
 }
 
 fn failure(sources: &SourceMap, site: Span, rule: &str, kind: &str) -> Result<Failure, Error> {

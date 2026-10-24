@@ -19,6 +19,7 @@ mod base64;
 pub mod handles;
 mod host_child;
 pub mod host_launch;
+pub mod sha;
 
 pub mod exit_report;
 mod host_io_tape;

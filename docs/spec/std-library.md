@@ -2785,7 +2785,8 @@ capability. The resource-valued conformance example is
 
 ## SHA-256
 
-`std@1/sha256` implements SHA-256 entirely in ordinary, allocation-free source.
+`std@1/sha256` exposes allocation-free SHA-256. Its one-shot `digest` delegates
+to the checked RustCrypto runtime primitive; incremental operations remain ordinary source.
 Its opaque `State` contains eight chaining words, a partial 64-byte block and a
 byte count. The public operations are:
 
@@ -2802,7 +2803,7 @@ that total input remains at most 2^61-1 bytes, the maximum whole-byte message
 whose bit length fits SHA-256's 64-bit length field; exceeding it fails SEM-1.
 Finish consumes state, pads once, and emits exactly 32 bytes in big-endian word
 order. Round additions wrap deliberately at 32 bits. `digest` is the one-shot
-form over the same kernel. Hexadecimal rendering is a separate codec;
+form with the same digest bytes and input-length contract. Hexadecimal rendering is a separate codec;
 `digest_hex` is `hex.encode(bytes.from_inline(digest(data)))`. This is a
 digest, without password-hashing or signature operations.
 
@@ -2834,12 +2835,13 @@ both exist only to read and write formats and protocols that name them (Git obje
 ids, legacy TLS/PGP data, `Content-MD5`, archive checksums). Neither may
 authenticate data against an adversary; use SHA-256 or another SHA-2 digest.
 
-Throughput: every hash buffers input a byte at a time into its block, then runs
-one compression per full block: SHA-1 80 rounds and MD5 64 rounds over 32-bit
-words, the SHA-256 kernel 64 rounds, the SHA-512 kernel 80 rounds over 64-bit
-words on twice the block: 0.625 rounds per byte against SHA-256's 1.0, so on a
-64-bit target SHA-512 is usually the faster kernel. Truncated variants cost exactly their
-kernel. There is no bench gate.
+One-shot `digest` in all six SHA-1/SHA-2 modules dispatches to the corresponding
+RustCrypto runtime primitive. The opaque public state layouts, incremental
+`new/update/finish` functions and `hash` dictionaries are unchanged, including
+empty and split updates. Incremental compression still executes ordinary Hirsel
+and retains its interpreted cost. `digest_hex` continues to call `digest` once,
+then the separate hex codec. Primitive work and checkpoint charges are specified
+under [long pure primitives](determinism.md); no step budget is raised.
 
 ## BLAKE2
 

@@ -2261,6 +2261,15 @@ primary_operations! { library, call, context, name, a, value;
         }
         u64_value(count)
     },
+    Primitive: "bytes.sha1" | "bytes.sha224" | "bytes.sha256" | "bytes.sha384" | "bytes.sha512" | "bytes.sha512_256" => {
+        let algorithm = hirsel_kernels::sha::Algorithm::from_operation(&call.path.0.name).unwrap();
+        if algorithm.block_size() == 64 && bytes(arg(a, 0)?)?.len() as u64 > u64::MAX / 8 {
+            return Ok(Some(OperationResult::Failed(fail(&call, context, "SEM-1", "SHA input length overflow"))));
+        }
+        // eval charged steps and fuel before offering this borrowed-only operation.
+        let digest = hirsel_kernels::sha::digest(algorithm, bytes(arg(a, 0)?)?, |_| Ok::<_, std::convert::Infallible>(())).unwrap();
+        collection::sequence(BuiltinType::Inline, digest[..algorithm.output_size()].iter().map(|&n| Value::Integer(Integer::new(Primitive::U8, u128::from(n)).unwrap())))
+    },
     Primitive: "bytes.find_any" => u64_value(hirsel_kernels::byte_scan::find_any(
         bytes(arg(a, 0)?)?, bytes(arg(a, 1)?)?, index(arg(a, 2)?)? as u64,
     )),

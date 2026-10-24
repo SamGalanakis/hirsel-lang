@@ -1,4 +1,4 @@
-//! Numeric work policy transcribed independently for post-RC H. No kernel,
+//! Primitive work policy transcribed independently for post-RC H. No kernel,
 //! runtime or source-interpreter implementation participates in this checker.
 use crate::{
     OpValue,
@@ -36,8 +36,30 @@ pub(super) fn cost(id: &OperationId, arguments: &[OpValue]) -> Checked<u64> {
             Ok((data.len() as u64).saturating_add(1))
         }
         "decimal_word" => Ok(9),
+        "sha1" | "sha224" | "sha256" | "sha384" | "sha512" | "sha512_256" => {
+            sha_work(path.name.as_str(), arguments)
+        }
         _ => Ok(0),
     }
+}
+
+fn sha_work(name: &str, arguments: &[OpValue]) -> Checked<u64> {
+    let (block, length_field) = match name {
+        "sha1" | "sha224" | "sha256" => (64, 8),
+        "sha384" | "sha512" | "sha512_256" => (128, 16),
+        _ => return Ok(0),
+    };
+    let [OpValue::Bytes(bytes)] = arguments else {
+        return Err(err(
+            V::TypeConfusion,
+            "SHA requires one checked byte extent",
+        ));
+    };
+    let length = u64::try_from(bytes.len())
+        .map_err(|_| err(V::Unsupported, "SHA extent length overflow"))?;
+    (length / block)
+        .checked_add(2 + u64::from(length % block >= block - length_field))
+        .ok_or_else(|| err(V::Unsupported, "SHA primitive work overflow"))
 }
 
 // A lexical DFA independent of the production parser's grammar-phase loops.

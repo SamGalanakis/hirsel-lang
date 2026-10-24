@@ -9,6 +9,7 @@ pub mod handle_scan;
 pub mod integer;
 pub mod report;
 pub mod schedule;
+pub mod sha;
 pub mod siphash;
 pub mod telemetry;
 pub mod unicode;

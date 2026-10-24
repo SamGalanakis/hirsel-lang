@@ -143,7 +143,15 @@ fn main() {
     let lock = root.join("Cargo.lock");
     println!("cargo:rerun-if-changed={}", lock.display());
     let lock = fs::read_to_string(lock).unwrap();
-    for name in ["libc"] {
+    for name in [
+        "libc",
+        "sha1",
+        "sha2",
+        "digest",
+        "block-buffer",
+        "crypto-common",
+        "cpufeatures",
+    ] {
         let marker = format!("name = {name:?}\n");
         let mut found = false;
         for package in lock

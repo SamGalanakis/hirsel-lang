@@ -122,3 +122,4 @@ mod capture_fixed_tags_37;
 mod stream_item_bound_38;
 mod markdown_parse_budget_39;
 mod numeric_work_38;
+mod sha_primitive_38;

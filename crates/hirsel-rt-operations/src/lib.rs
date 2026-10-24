@@ -131,6 +131,12 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
         "string.slice" | "bytes.slice" | "bytes.append_from_history"
     )
     .then(|| hirsel_core_contract::RuleCode("SEM-3".into()));
+    if matches!(
+        name.as_str(),
+        "bytes.sha1" | "bytes.sha224" | "bytes.sha256"
+    ) {
+        row.failure = Some(hirsel_core_contract::RuleCode("SEM-1".into()));
+    }
     if name == "bytes.replace_range" {
         row.failure = Some(hirsel_core_contract::RuleCode("MEM-14".into()));
     }
@@ -145,6 +151,12 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
         | "bytes.find_any"
         | "bytes.base64_encode"
         | "bytes.base64_decode"
+        | "bytes.sha1"
+        | "bytes.sha224"
+        | "bytes.sha256"
+        | "bytes.sha384"
+        | "bytes.sha512"
+        | "bytes.sha512_256"
         | "string.from_bytes"
         | "string.slice"
         | "io.stdout"
@@ -1534,6 +1546,48 @@ pub const HIRSEL_ABI_EXPORTS: &[AbiExport] = &[
     },
     AbiExport {
         caller_site: false,
+        symbol: "hirsel_rt_v2_bytes_sha1",
+        destination: false,
+        result: Some((20, 1)),
+        parameters: &[Physical::Pointer, Physical::I64, Physical::I64],
+    },
+    AbiExport {
+        caller_site: false,
+        symbol: "hirsel_rt_v2_bytes_sha224",
+        destination: false,
+        result: Some((28, 1)),
+        parameters: &[Physical::Pointer, Physical::I64, Physical::I64],
+    },
+    AbiExport {
+        caller_site: false,
+        symbol: "hirsel_rt_v2_bytes_sha256",
+        destination: false,
+        result: Some((32, 1)),
+        parameters: &[Physical::Pointer, Physical::I64, Physical::I64],
+    },
+    AbiExport {
+        caller_site: false,
+        symbol: "hirsel_rt_v2_bytes_sha384",
+        destination: false,
+        result: Some((48, 1)),
+        parameters: &[Physical::Pointer, Physical::I64, Physical::I64],
+    },
+    AbiExport {
+        caller_site: false,
+        symbol: "hirsel_rt_v2_bytes_sha512",
+        destination: false,
+        result: Some((64, 1)),
+        parameters: &[Physical::Pointer, Physical::I64, Physical::I64],
+    },
+    AbiExport {
+        caller_site: false,
+        symbol: "hirsel_rt_v2_bytes_sha512_256",
+        destination: false,
+        result: Some((32, 1)),
+        parameters: &[Physical::Pointer, Physical::I64, Physical::I64],
+    },
+    AbiExport {
+        caller_site: false,
         symbol: "hirsel_rt_v2_bytes_base64_encode",
         destination: true,
         result: Some((24, 8)),
@@ -2520,6 +2574,12 @@ pub const NATIVE_PATHS: &[&str] = &[
     "bytes.find_any",
     "bytes.base64_encode",
     "bytes.base64_decode",
+    "bytes.sha1",
+    "bytes.sha224",
+    "bytes.sha256",
+    "bytes.sha384",
+    "bytes.sha512",
+    "bytes.sha512_256",
     "bytes.replace_range",
     "bytes.slice",
     "string.as_bytes",

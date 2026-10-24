@@ -477,6 +477,61 @@ mod tests {
         }
     }
 
+    #[test]
+    fn sha_work_fuel_padding_and_stop_checkpoints_are_exact() {
+        use hirsel_kernels::sha::{Algorithm, digest};
+        for algorithm in [
+            Algorithm::Sha1,
+            Algorithm::Sha224,
+            Algorithm::Sha256,
+            Algorithm::Sha384,
+            Algorithm::Sha512,
+            Algorithm::Sha512_256,
+        ] {
+            for length in [0, 55, 56, 63, 64, 119, 128, 8192] {
+                let source = vec![42; length];
+                let cost = algorithm.charge(length as u64);
+                for fuel in [cost - 1, cost, cost + 1] {
+                    let ctx = context(Some(fuel), None);
+                    let mut completed = false;
+                    let result = run(ctx, || {
+                        let result =
+                            digest(algorithm, &source, |n| unsafe { charge_primitive(ctx, n) });
+                        let _output = unsafe { crate::stop::check(ctx, result) };
+                        completed = true;
+                    });
+                    assert_eq!(completed, fuel >= cost, "{algorithm:?} {length} {fuel}");
+                    assert_eq!(
+                        result,
+                        if fuel < cost {
+                            Err(Stop::BudgetExceeded(BudgetKind::Fuel))
+                        } else {
+                            Ok(())
+                        }
+                    );
+                    unsafe { hirsel_rt_v2_ctx_destroy(ctx) };
+                }
+            }
+            let ctx = context(None, None);
+            let source = vec![42; 32768];
+            let seen = Cell::new(0);
+            let result = run(ctx, || {
+                let result = digest(algorithm, &source, |cost| {
+                    unsafe { charge_primitive(ctx, cost) }?;
+                    seen.set(seen.get() + 1);
+                    if seen.get() == 2 {
+                        unsafe { (*ctx).run_ref().control.request(Stop::Requested) };
+                    }
+                    Ok::<_, Stop>(())
+                });
+                let _output = unsafe { crate::stop::check(ctx, result) };
+            });
+            assert_eq!(result, Err(Stop::Requested));
+            assert_eq!(seen.get(), 2, "stop must be observed at next checkpoint");
+            unsafe { hirsel_rt_v2_ctx_destroy(ctx) };
+        }
+    }
+
     /// At width 1 a budget of F points allows exactly F charges: the run stops at charge
     /// F + 1, at every size, below, at and above one chunk.
     #[test]

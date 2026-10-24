@@ -639,9 +639,7 @@ pub fn finish(take state: State) -> Inline[u8, 64] uses {} {
 
 @noalloc
 pub fn digest(data: Bytes) -> Inline[u8, 64] uses {} {
-  let mut state = new()
-  update(mut state, data)
-  finish(take state)
+  core@1/bytes.sha512(data)
 }
 
 pub fn digest_hex(data: Bytes) -> unique String uses {} {

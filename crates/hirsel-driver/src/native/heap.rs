@@ -2029,6 +2029,16 @@ fn text(module: Option<&str>, name: &str, args: &[OpValue]) -> Option<OpOutcome>
                 }
             }
         }
+        (Some("bytes"), name, [OpValue::Bytes(bytes)])
+            if hirsel_rt::kernels::sha::Algorithm::from_operation(name).is_some() =>
+        {
+            let algorithm = hirsel_rt::kernels::sha::Algorithm::from_operation(name).unwrap();
+            let digest = hirsel_rt::kernels::sha::digest(algorithm, bytes, |_| {
+                Ok::<_, std::convert::Infallible>(())
+            })
+            .unwrap();
+            OpValue::Plain(digest[..algorithm.output_size()].to_vec())
+        }
         (Some("string"), "from_bytes", [OpValue::Bytes(bytes)]) => OpValue::Variant {
             tag: u32::from(hirsel_rt::kernels::string_from_bytes(bytes.clone()).is_err()),
             value: Box::new(OpValue::Slice {

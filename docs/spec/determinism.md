@@ -282,6 +282,34 @@ up to one chunk per running task may remain unspent. A replay does not re-enforc
 it stops at the recorded cut. An engine that cannot enforce a requested budget refuses the
 launch.
 
+**Long pure primitives.** The one-shot `bytes.sha1`, `bytes.sha224`,
+`bytes.sha256`, `bytes.sha384`, `bytes.sha512` and `bytes.sha512_256` operations
+charge **1 per call plus 1 per compression block**, including padding. For
+input length `n`, block size `B` and length-field size `L`, the block count is
+`n / B + 1 + (n % B >= B - L ? 1 : 0)`. SHA-1/224/256 use `B=64,L=8`;
+SHA-384/512/512-256 use `B=128,L=16`. Quotient/remainder and checked addition
+avoid overflow, including the empty input's mandatory padding block.
+
+The reference evaluator, its checked mode and independent post-RC H add this
+charge to their tooling Steps before hashing; the call terminator still costs
+its ordinary step. H derives the charge from its checked byte operands before
+provider entry, without depending on runtime or kernel code. The reference
+modes also preflight fuel in the same order and stop without publishing a
+result if either allowance is insufficient. Both native engines charge the identical primitive fuel cost,
+including when invoked from code without loop fuel checks; ordinary function
+and loop charges remain engine-specific. Native work checks the host stop at
+entry, before every group of at most 64 full blocks, and before tail/padding.
+A rejected checkpoint publishes no digest and does no later hashing. No
+implicit task yield or task-cancellation observation is introduced: explicit
+`task.check_canceled` points keep their ordinary recorded contract. These
+host-stop checks follow fuel-refill stop behaviour and add no tape event.
+Incremental std `new/update/finish` retains its source-level checks and costs;
+one-shot hashing does not execute or double-charge those wrappers.
+
+The SHA primitive cutover resets ordinary tapes to binary v9. Semantic revisions
+bind the primitive source and resolved RustCrypto dependency versions/checksums;
+old-generation tapes are refused before entry, never upgraded into new passes.
+
 **Canonical form.** The record has one strict canonical representation: schema-order
 object members; arrays ordered as specified (`args` order preserved, grant sets sorted by
 normalized UTF-8 key); no duplicate or unknown fields; canonical unsigned decimal integers

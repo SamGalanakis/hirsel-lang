@@ -6,6 +6,8 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+sha1 = "=0.10.6"
+sha2 = "=0.10.9"
 itoa = "1.0.18"
 hirsel-core-contract = { path = "../hirsel-core-contract" }
 
