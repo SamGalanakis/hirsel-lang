@@ -517,10 +517,8 @@ unsafe fn job(
             .take()
             .unwrap()
     };
-    let owned = Owned {
-        reservation: Some(io.jobs.reserve(wait)),
-        slot: None,
-    };
+    let mut owned = unsafe { Owned::new(ctx) };
+    owned.reservation = Some(io.jobs.reserve(wait));
     assert!(
         io.rows
             .lock()

@@ -126,7 +126,11 @@ fn runtime50_ordered_blocking_file_runs_as_owned_job() {
         let jobs = disk.jobs.lock().unwrap().clone().unwrap();
         let stats = jobs.stats();
         assert_eq!(disk.off_job.load(Ordering::Acquire), 0, "stop {stop}");
-        assert_eq!(disk.on_job.load(Ordering::Acquire), 1, "stop {stop}");
+        assert_eq!(
+            disk.on_job.load(Ordering::Acquire),
+            1,
+            "stop {stop}: {outcome:?}"
+        );
         if stop {
             assert_eq!(outcome.ended, Err(crate::stop::Stop::Requested));
             assert_eq!(jobs.held(), 1, "credit released before the call returned");

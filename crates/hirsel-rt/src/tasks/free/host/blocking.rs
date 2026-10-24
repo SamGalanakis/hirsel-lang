@@ -126,11 +126,6 @@ pub(super) unsafe fn before_claim(ctx: *mut TaskCtx, io: &Service, wait: u64) ->
     }
     // Wait for key predecessors first: a credit never waits behind a key.
     unsafe { wait_keys(ctx) }?;
-    let owned = unsafe {
-        (*pending).job.insert(Owned {
-            reservation: None,
-            slot: None,
-        })
-    } as *mut Owned;
+    let owned = unsafe { (*pending).job.insert(Owned::new(ctx)) } as *mut Owned;
     unsafe { reserve(ctx, io, wait, owned) }
 }

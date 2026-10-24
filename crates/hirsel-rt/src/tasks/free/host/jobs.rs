@@ -219,6 +219,22 @@ impl Drop for Slot {
 pub(crate) struct Owned {
     pub(crate) reservation: Option<Reservation>,
     pub(crate) slot: Option<Arc<Slot>>,
+    /// The destination task (S1): its slot is not reused while the request
+    /// owns a job, so a late completion never reaches a later occupant.
+    pub(crate) destination: crate::tasks::registry::TaskLease,
+}
+
+impl Owned {
+    /// # Safety
+    /// The running owner holds the role.
+    pub(crate) unsafe fn new(ctx: *mut crate::TaskCtx) -> Owned {
+        let slot = unsafe { (*ctx).task_id };
+        Owned {
+            reservation: None,
+            slot: None,
+            destination: crate::tasks::scheduler(ctx).lease(slot),
+        }
+    }
 }
 
 impl Drop for Owned {

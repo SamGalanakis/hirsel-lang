@@ -65,12 +65,7 @@ pub(super) unsafe fn request(
         io.adapter.blocking(unsafe { (*pending).request.buffers() })
     };
     if blocking {
-        unsafe {
-            (*pending).job = Some(super::jobs::Owned {
-                reservation: None,
-                slot: None,
-            })
-        };
+        unsafe { (*pending).job = Some(super::jobs::Owned::new(ctx)) };
     }
     let mut first = true;
     loop {
