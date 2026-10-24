@@ -268,6 +268,9 @@ where
             }
         }
         self.pending_discovery_delivery = false;
+        // Notifications describe the previous observation. Once disk has been
+        // reobserved, a later same-byte delivery is again an idempotent edit.
+        self.polled_metadata.get_mut().clear();
         discovery
     }
     /// Observe the actual filesystem before selecting the shared graph.
@@ -626,6 +629,34 @@ mod tests {
             assert_eq!(session.stats().loads, 2);
             assert_eq!(session.stats().revision, revision + 1);
             assert!(session.poll().is_empty());
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn observed_session_disk_refresh_consumes_prior_alias_notification() {
+        hirsel_engine::with_compiler_stack(|| {
+            let directory = fixture();
+            let source = directory.path().join("main.hir");
+            let first = directory.path().join("first.hir");
+            let second = directory.path().join("second.hir");
+            let bytes = std::fs::read(&source).unwrap();
+            std::fs::rename(&source, &first).unwrap();
+            std::fs::copy(&first, &second).unwrap();
+            std::os::unix::fs::symlink(&first, &source).unwrap();
+            let mut session = session(directory.path(), None, Arc::new(AtomicUsize::new(0)));
+            assert!(session.check().unwrap().diagnostics.is_empty());
+            std::fs::remove_file(&source).unwrap();
+            std::os::unix::fs::symlink(&second, &source).unwrap();
+            assert!(!session.poll().is_empty());
+            assert!(session.check().unwrap().diagnostics.is_empty());
+            let revision = session.stats().revision;
+            session.apply(vec![FileChange {
+                path: source,
+                bytes: Some(bytes),
+            }]);
+            assert_eq!(session.stats().revision, revision);
+            assert_eq!(session.stats().loads, 2);
         });
     }
 
