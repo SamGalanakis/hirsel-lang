@@ -732,7 +732,9 @@ pub(crate) unsafe fn proceed(ctx: *mut TaskCtx) -> bool {
 #[cfg(test)]
 pub(crate) unsafe fn renew(ctx: *mut TaskCtx) {
     // SAFETY: only this exec's own thread touches its chain cell.
-    unsafe { &*current(execs(ctx)) }.chain.set(Budget::default());
+    unsafe { &*current(execs(ctx)) }
+        .chain
+        .set(Budget::default());
 }
 
 /// An addressed post can supersede a requested queue search. Hand its

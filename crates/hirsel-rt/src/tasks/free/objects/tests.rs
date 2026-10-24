@@ -22,7 +22,10 @@ fn isolated(name: &str, variable: &str) -> bool {
         .unwrap();
     assert!(output.status.success(), "{output:?}");
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("1 passed"), "the isolated body ran: {stdout}");
+    assert!(
+        stdout.contains("1 passed"),
+        "the isolated body ran: {stdout}"
+    );
     false
 }
 
@@ -59,7 +62,11 @@ struct Layouts([&'static crate::Layout; 3]);
 
 impl Layouts {
     fn new(image: &'static crate::Layout, wrapper: crate::Layout) -> Self {
-        Self([image, Box::leak(Box::new(wrapper)), Box::leak(Box::new(plain(8)))])
+        Self([
+            image,
+            Box::leak(Box::new(wrapper)),
+            Box::leak(Box::new(plain(8))),
+        ])
     }
 
     fn install(&self, run: &mut crate::host::BodyRun, pointers: &mut Vec<*const crate::Layout>) {
@@ -146,7 +153,12 @@ unsafe fn round(ctx: *mut TaskCtx, objects: &mut Disjoint, value: u64) {
     let mut payload = [0u64; 2];
     let mut status = 99;
     unsafe {
-        hirsel_rt_v2_mutex_take(ctx, &mut status, &objects.mutex, payload.as_mut_ptr().cast());
+        hirsel_rt_v2_mutex_take(
+            ctx,
+            &mut status,
+            &objects.mutex,
+            payload.as_mut_ptr().cast(),
+        );
         assert_eq!((status, payload), (0, [1, value]));
         payload[1] += 1;
         hirsel_rt_v2_mutex_put(ctx, &objects.mutex, payload.as_mut_ptr().cast());
@@ -188,7 +200,9 @@ unsafe extern "C" fn disjoint_child(ctx: *mut TaskCtx, env: *mut Header, _: u64,
         unsafe { round(ctx, objects, value) };
     }
     window.done.fetch_add(1, Ordering::AcqRel);
-    wait_until("the window closes", || window.release.load(Ordering::Acquire));
+    wait_until("the window closes", || {
+        window.release.load(Ordering::Acquire)
+    });
     STATUS_OK
 }
 
@@ -259,7 +273,12 @@ fn runtime50_immediate_objects_do_not_enter_role() {
                 let mut scope = 0;
                 hirsel_rt_v2_task_scope_enter(ctx, std::ptr::null_mut(), &mut scope, &0);
                 for objects in &mut objects {
-                    spawn(ctx, &scope, disjoint_child, (objects as *mut Disjoint).cast());
+                    spawn(
+                        ctx,
+                        &scope,
+                        disjoint_child,
+                        (objects as *mut Disjoint).cast(),
+                    );
                 }
                 wait_until("both children resolve their leases", || {
                     window.ready.load(Ordering::Acquire) == 2
@@ -302,7 +321,12 @@ fn runtime50_immediate_objects_do_not_enter_role() {
             2 * 6 * ROUNDS
         );
         if let Some(recording) = recording {
-            let cut = recording.recorder.stop("returned", None).unwrap().unwrap().0;
+            let cut = recording
+                .recorder
+                .stop("returned", None)
+                .unwrap()
+                .unwrap()
+                .0;
             for child in [vec![0], vec![1]] {
                 // Every immediate op is its own recorded ordinal.
                 assert!(
@@ -341,9 +365,7 @@ unsafe extern "C" fn contended_child(ctx: *mut TaskCtx, env: *mut Header, _: u64
     let mut payload = [0u64; 2];
     let mut status = 99;
     shared.registered.fetch_add(1, Ordering::AcqRel);
-    unsafe {
-        hirsel_rt_v2_mutex_take(ctx, &mut status, &handle, payload.as_mut_ptr().cast())
-    };
+    unsafe { hirsel_rt_v2_mutex_take(ctx, &mut status, &handle, payload.as_mut_ptr().cast()) };
     if !shared.saves.lock().unwrap().contains(&me) {
         shared.resumed_before_save.store(true, Ordering::Release);
     }
@@ -368,9 +390,7 @@ unsafe fn contend(ctx: *mut TaskCtx, shared: &Contended, count: u32) -> Vec<(u32
     let word = unsafe { mutex_word(&handle) };
     let mut payload = [0u64; 2];
     let mut status = 99;
-    unsafe {
-        hirsel_rt_v2_mutex_take(ctx, &mut status, &handle, payload.as_mut_ptr().cast())
-    };
+    unsafe { hirsel_rt_v2_mutex_take(ctx, &mut status, &handle, payload.as_mut_ptr().cast()) };
     assert_eq!(status, 0);
     shared.order.lock().unwrap().clear();
     shared.registered.store(0, Ordering::Release);
@@ -380,7 +400,14 @@ unsafe fn contend(ctx: *mut TaskCtx, shared: &Contended, count: u32) -> Vec<(u32
     let mut scope = 0;
     unsafe { hirsel_rt_v2_task_scope_enter(ctx, std::ptr::null_mut(), &mut scope, &0) };
     for waiter in 0..count {
-        unsafe { spawn(ctx, &scope, contended_child, (shared as *const Contended).cast()) };
+        unsafe {
+            spawn(
+                ctx,
+                &scope,
+                contended_child,
+                (shared as *const Contended).cast(),
+            )
+        };
         // Registration, not save: the put may beat the waiter's logical park.
         wait_until("a waiter registers in FIFO order", || unsafe {
             waiting(ctx, word) == waiter as usize + 1
@@ -393,9 +420,7 @@ unsafe fn contend(ctx: *mut TaskCtx, shared: &Contended, count: u32) -> Vec<(u32
     unsafe { hirsel_rt_v2_mutex_put(ctx, &handle, payload.as_mut_ptr().cast()) };
     shared.put.store(true, Ordering::Release);
     // A barging retake must queue behind every reserved waiter.
-    unsafe {
-        hirsel_rt_v2_mutex_take(ctx, &mut status, &handle, payload.as_mut_ptr().cast())
-    };
+    unsafe { hirsel_rt_v2_mutex_take(ctx, &mut status, &handle, payload.as_mut_ptr().cast()) };
     assert_eq!((status, payload), (0, [1, value + u64::from(count)]));
     assert_eq!(shared.finished.load(Ordering::Acquire), count);
     unsafe { hirsel_rt_v2_mutex_put(ctx, &handle, payload.as_mut_ptr().cast()) };
@@ -553,7 +578,11 @@ fn runtime50_object_custody_race_matrix() {
         );
         assert_eq!(outcome.ended, Ok(STATUS_OK), "recorded {recorded}");
         assert_eq!(outcome.pending, 0);
-        assert_eq!(DESTROYED.load(Ordering::Acquire), 1, "exactly one destruction");
+        assert_eq!(
+            DESTROYED.load(Ordering::Acquire),
+            1,
+            "exactly one destruction"
+        );
         if let Some(recording) = recording {
             recording.recorder.stop("returned", None).unwrap().unwrap();
         }

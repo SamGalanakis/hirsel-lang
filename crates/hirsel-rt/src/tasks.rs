@@ -3953,9 +3953,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_channel_send(
     message: *mut u8,
 ) -> u8 {
     // SAFETY: caller contract; a resolved immediate send needs no role.
-    if let Some(result) =
-        unsafe { free::objects::channel_send(ctx, sender.read(), message, out) }
-    {
+    if let Some(result) = unsafe { free::objects::channel_send(ctx, sender.read(), message, out) } {
         return unsafe { free::objects::finish(ctx, result) };
     }
     // SAFETY: this semantic entry owns its task until it suspends or returns.
@@ -4284,9 +4282,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_mutex_take(
     payload: *mut u8,
 ) -> u8 {
     // SAFETY: caller contract; a resolved available take needs no role.
-    if let Some(result) =
-        unsafe { free::objects::mutex_take(ctx, mutex_word(m), payload, out) }
-    {
+    if let Some(result) = unsafe { free::objects::mutex_take(ctx, mutex_word(m), payload, out) } {
         return unsafe { free::objects::finish(ctx, result) };
     }
     // SAFETY: this semantic entry owns its task until it suspends or returns.
