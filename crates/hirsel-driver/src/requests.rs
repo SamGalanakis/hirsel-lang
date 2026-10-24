@@ -10,6 +10,7 @@ mod inspection;
 mod output;
 mod selector;
 mod source_graph;
+mod tir_products;
 pub use output::{
     CompileInspection, CompileOutput, CompileResult, CompilerReadiness, DefinitionWork,
     NativeExecution, NativeObservation, RequestWork, TirExecution, TirProducts,

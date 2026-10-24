@@ -95,6 +95,15 @@ impl CompileOutput {
             | CompileResult::CheckedProducts { checked, .. } => {
                 checked.sources = checked.sources.clone().retain_owner(owner.clone());
             }
+            CompileResult::Tir(execution) => {
+                let execution = Arc::make_mut(execution);
+                execution.sources = execution.sources.clone().retain_owner(owner.clone());
+            }
+            CompileResult::Native(execution) => {
+                let execution = Arc::make_mut(execution);
+                execution.sources = execution.sources.clone().retain_owner(owner.clone());
+                execution.owner = Arc::new((execution.owner.clone(), owner.clone()));
+            }
             CompileResult::Inspect(inspection) => {
                 Arc::make_mut(inspection).owner = owner.clone();
             }
@@ -140,6 +149,7 @@ pub trait TirProducts: Send + Sync {
 /// The selected TIR root and the immutable closure needed to execute it. The
 /// runtime contains the exact type, private-view and checked-H metadata for
 /// this snapshot; semantic revision remains independent of native artifacts.
+#[derive(Clone)]
 pub struct TirExecution {
     pub entry: DefPath,
     pub definition: DefinitionRef,
@@ -200,6 +210,7 @@ pub struct NativeObservation {
 /// Executable readiness includes a materialized executable and frozen launch
 /// metadata. Construction follows successful Link/materialization checks; the
 /// admission/scratch owner lives until the last output user releases it.
+#[derive(Clone)]
 pub struct NativeExecution {
     pub executable: PathBuf,
     pub product: hirsel_engine::runtime::ProductRef,
