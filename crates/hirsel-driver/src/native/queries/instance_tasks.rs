@@ -259,6 +259,7 @@ impl InstanceTasks {
             &output.templates,
             &output.operation_freedom,
             &output.emission,
+            &output.adapters,
         ))
         .map_err(|e| e.to_string())?;
         let bytes = ordinary
@@ -355,6 +356,11 @@ impl InstanceTasks {
             self.source.provider()
         };
         let mut registry = self.source.declarations.program.operation_registry();
+        self.producer().bind_planned_adapters(
+            &source,
+            entries.iter().map(|entry| &entry.request),
+            &mut registry,
+        )?;
         for entry in entries {
             let Some(path) = entry.request.source_definition() else {
                 continue;
