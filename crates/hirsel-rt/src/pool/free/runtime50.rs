@@ -261,6 +261,10 @@ pub(super) struct Config {
     pub(super) tasks: u32,
     pub(super) reuse: u32,
     pub(super) stop: bool,
+    /// Fixed scripts by slot instead of seeded ones.
+    scripts: Option<&'static [&'static [Op]]>,
+    /// A domain's clock steps only after this many of its timers were armed.
+    hold_clock: u64,
 }
 
 impl Config {
@@ -270,6 +274,29 @@ impl Config {
             tasks: 3 + (seed % 3) as u32,
             reuse: (seed / 3 % 2) as u32 + 1,
             stop: seed % 2 == 0,
+            scripts: None,
+            hold_clock: 0,
+        }
+    }
+
+    /// Two tasks arm one-tick sleeps in one domain at the same virtual
+    /// instant; its clock steps only once both are armed, so the driver's
+    /// clock pump delivers two equal deadlines in one step.
+    pub(super) fn equal_sleeps(seed: u64) -> Self {
+        const SLEEP: &[Op] = &[
+            Op::Sleep {
+                domain: 0,
+                after: 1,
+            },
+            Op::Release,
+        ];
+        Self {
+            seed,
+            tasks: 2,
+            reuse: 0,
+            stop: false,
+            scripts: Some(&[SLEEP, SLEEP]),
+            hold_clock: 2,
         }
     }
 }
@@ -374,6 +401,7 @@ struct World {
     mutex: ObjectPermit,
     mutex_owner: Option<u32>,
     domains: Vec<Readiness>,
+    armed: [u64; DOMAINS],
     jobs: BTreeMap<u64, Job>,
     claimed: BTreeSet<u64>,
     withdrawn: BTreeSet<u64>,
@@ -557,7 +585,10 @@ impl World {
         let mut firsts = Vec::new();
         let mut tasks = Vec::new();
         for slot in 0..config.tasks {
-            let script = script(&mut c);
+            let script = match config.scripts {
+                Some(scripts) => scripts[slot as usize].to_vec(),
+                None => script(&mut c),
+            };
             let (task, queued) = prepare(slot, 0, script, config.reuse);
             tasks.push(task);
             firsts.push(queued);
@@ -573,6 +604,7 @@ impl World {
             mutex: ObjectPermit::new(),
             mutex_owner: None,
             domains: (0..DOMAINS).map(|_| Readiness::virtual_clock(0)).collect(),
+            armed: [0; DOMAINS],
             jobs: BTreeMap::new(),
             claimed: BTreeSet::new(),
             withdrawn: BTreeSet::new(),
@@ -689,10 +721,11 @@ impl World {
             }
         }
         for domain in 0..DOMAINS {
-            if self
-                .tasks
-                .iter()
-                .any(|t| matches!(t.wait, Some(Wait::Timer { domain: d, .. }) if d == domain))
+            if self.armed[domain] >= self.config.hold_clock
+                && self
+                    .tasks
+                    .iter()
+                    .any(|t| matches!(t.wait, Some(Wait::Timer { domain: d, .. }) if d == domain))
             {
                 events.push(3 << 24 | domain as u32);
             }
@@ -1095,6 +1128,7 @@ impl World {
             effect(&section, &self.tasks[t].log, index, Phase::Done, DONE);
             self.tasks[t].pc += 1;
         } else {
+            self.armed[domain] += 1;
             self.tasks[t].wait = Some(Wait::Timer { domain, token, at });
             self.leave(w, false, "timer");
         }
