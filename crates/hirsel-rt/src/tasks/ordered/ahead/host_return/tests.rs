@@ -205,7 +205,7 @@ fn selected_authority_requires_empty_exclusive_buffer_and_exact_read_maximum() {
                 host: &root,
             };
             let cert = validate(ctx, env, &info).unwrap();
-            let mut n = Native::new(ctx, env, 0, 1, cert);
+            let mut n = Native::new(ctx, env, 0, cert);
             (*ctx).ahead_physical = &raw mut n.physical;
             let mut buffer = crate::alloc::allocate_sequence(ctx, 4, 0, 1, 1);
             (*buffer).count = 2;
@@ -331,7 +331,7 @@ fn deferred_byte_frees_keep_old_fuel_words_and_release_only_at_admission() {
                 host: &root,
             };
             let cert = validate(ctx, env, &info).unwrap();
-            let mut n = Native::new(ctx, env, 0, 1, cert);
+            let mut n = Native::new(ctx, env, 0, cert);
             assert_eq!(
                 crate::depth::hirsel_rt_v2_depth_enter_at_site(ctx, 111, 222),
                 crate::STATUS_OK
@@ -617,7 +617,7 @@ fn unmetered_cleanup_consumes_each_owner_once_only_after_admission() {
                 host: &root,
             };
             let cert = validate(ctx, env, &info).unwrap();
-            let mut n = Native::new(ctx, env, 0, 1, cert);
+            let mut n = Native::new(ctx, env, 0, cert);
             n.host = state;
             flush_logical(ctx, &raw mut *n);
             assert_eq!((*small).count, 1);
@@ -690,7 +690,7 @@ unsafe fn selected_pending_lifecycle(stop: bool) {
             host: &root,
         };
         let cert = validate(ctx, env, &info).unwrap();
-        let mut n = Native::new(ctx, env, 0, 1, cert);
+        let mut n = Native::new(ctx, env, 0, cert);
         let native = &raw mut *n;
         (*ctx).ahead_physical = &raw mut n.physical;
         let mut local = Box::new(super::super::Local::new(true));
@@ -841,4 +841,99 @@ fn canceled_selected_native_retains_two_pending_owners_until_admission() {
 #[test]
 fn stopped_selected_native_reclaims_two_pending_owners_without_admission() {
     unsafe { selected_pending_lifecycle(true) };
+}
+
+/// The admitted segment records its exact saved PC and the recipe's original
+/// buffer descriptor, once; a block of any other descriptor is never released.
+pub(in crate::tasks::ordered::ahead) fn selected_descriptor_admission() {
+    for foreign in [false, true] {
+        let wrapper = layout(24);
+        let source = layout(8);
+        let bytes = byte_layout();
+        let other = byte_layout();
+        let layouts = [
+            &wrapper as *const _,
+            &source as *const _,
+            &bytes as *const _,
+            &other as *const _,
+        ];
+        let mut run = crate::host::BodyRun::new(1, false);
+        run.config.layouts = layouts.as_ptr();
+        run.config.layout_count = layouts.len() as u32;
+        let outcome = run.run(
+            |ctx| unsafe {
+                crate::tasks::ordered::engine::enable(
+                    ctx,
+                    crate::ordered::Policy::admit(&Default::default(), None),
+                );
+            },
+            move |ctx| unsafe {
+                let read = read_recipe();
+                let reads = [&read as *const _];
+                let root = root(&reads);
+                let env =
+                    crate::alloc::hirsel_rt_v2_alloc(ctx, 2, 24, 8, crate::alloc::DOMAIN_HEAP, 0);
+                crate::alloc::payload(env)
+                    .cast::<[u64; 3]>()
+                    .write([code as usize as u64, 0, 1]);
+                let capture = Recipe {
+                    source_descriptor: u32::MAX,
+                    source_extent: 0,
+                    ..capture_recipe()
+                };
+                let info = HostInfo {
+                    prefix: Info {
+                        prefix: SpawnAheadInfo {
+                            version: 3,
+                            flags: 0,
+                            entry: Some(code),
+                        },
+                        stack_bytes: 1024,
+                        recipe: &capture,
+                    },
+                    host: &root,
+                };
+                let cert = validate(ctx, env, &info).unwrap();
+                let mut n = Native::new(ctx, env, 0, cert);
+                n.host.armed = &read;
+                n.host.phase = ACTIVE;
+                n.host.task = crate::tasks::ordered::engine::current(ctx);
+                n.physical.saved_sp = std::ptr::dangling_mut::<u8>().wrapping_add(0x1230);
+                let descriptor = if foreign { 5 } else { read.buffer_descriptor };
+                let block = crate::alloc::allocate_sequence(ctx, descriptor, 1, 1, 1);
+                hirsel_rt_v2_host_defer(&raw mut n.physical, 0, block, 7);
+                let flushed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    flush_logical(ctx, &raw mut *n)
+                }));
+                assert_eq!(
+                    flushed.is_err(),
+                    foreign,
+                    "foreign custody must refuse its charge"
+                );
+                let running = crate::stop::running();
+                crate::stop::set_running(std::ptr::null_mut());
+                let admitted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    admit(ctx, &raw mut *n)
+                }));
+                if foreign {
+                    assert!(admitted.is_err(), "a foreign descriptor was released");
+                    n.host.pending = [EMPTY; 8];
+                    crate::release::release_block(&mut *ctx, block, std::ptr::null(), 0, 0);
+                } else {
+                    assert!(admitted.is_ok());
+                    let save = n.admitted.expect("admission record");
+                    assert_eq!(save.descriptor, Some(read.buffer_descriptor));
+                    assert_eq!(save.pc.sp, n.physical.saved_sp);
+                    // A repeated admission adopts nothing new.
+                    n.physical.saved_sp = n.physical.saved_sp.wrapping_add(64);
+                    admit(ctx, &raw mut *n);
+                    assert_eq!(n.admitted, Some(save), "a host segment was adopted twice");
+                }
+                crate::stop::set_running(running);
+                crate::release::release_block(&mut *ctx, env, std::ptr::null(), 0, 0);
+                crate::STATUS_OK
+            },
+        );
+        assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
+    }
 }

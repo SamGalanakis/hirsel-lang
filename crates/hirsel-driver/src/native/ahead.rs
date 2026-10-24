@@ -96,13 +96,14 @@ pub(super) fn objects(
             if machine_helpers {
                 return None;
             }
+            let [startup, getter, handoff, depth] = super::continuation::AHEAD_HELPER_BYTES;
             hirsel_lir::ahead::stack_bound_with_depth(
                 &root.graph,
                 &frames,
-                16,
-                8,
-                64,
-                hirsel_rt::DEPTH_LEAF_STACK_BYTES,
+                startup,
+                getter,
+                handoff,
+                depth,
             )
             .map(|n| (*id, n))
         })

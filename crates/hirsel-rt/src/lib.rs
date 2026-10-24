@@ -16,6 +16,7 @@
 hirsel_guard::install!(crate::io_real::borrowed_net_tests::Count: crate::io_real::borrowed_net_tests::Count);
 
 mod base64;
+mod continuation;
 mod deadlines;
 mod depth;
 pub mod handles;
@@ -303,3 +304,6 @@ pub const DEPTH_LEAF_STACK_BYTES: u64 = 8;
 pub const AHEAD_HOST_HELPERS: &[u8] = include_bytes!("tasks/ordered/ahead/host_return.rs");
 #[doc(hidden)]
 pub const AHEAD_SWITCH: &[u8] = include_bytes!("fiber.rs");
+/// The continuation ownership protocol compiler plans are bound to.
+#[doc(hidden)]
+pub const CONTINUATION_PROTOCOL: &[u8] = include_bytes!("continuation.rs");

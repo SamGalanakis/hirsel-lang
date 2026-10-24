@@ -984,14 +984,13 @@ impl Task {
     /// Exclusive/quiescent Saved owner only. This performs no release or charge.
     fn restore_ahead_custody(&mut self) {
         unsafe {
-            if let Some(local) = (*self.ctx).ahead.as_mut()
-                && let Some(native) = local.native.as_mut()
-            {
+            if let Some(local) = (*self.ctx).ahead.as_mut() {
                 assert!(
-                    self.dispatch.as_ref().is_none_or(|frame| frame.is_saved()),
+                    local.native.is_none()
+                        || self.dispatch.as_ref().is_none_or(|frame| frame.is_saved()),
                     "discard before Saved acknowledgement"
                 );
-                native.restore(self.generation);
+                local.restore(self.generation);
             }
         }
     }
