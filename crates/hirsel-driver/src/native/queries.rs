@@ -403,3 +403,8 @@ type ReadyRecord = (
 );
 pub mod instance;
 pub mod source_inputs;
+pub mod demand;
+pub mod emission;
+pub mod instance_tasks;
+pub mod optimizer;
+pub mod ready_source;
