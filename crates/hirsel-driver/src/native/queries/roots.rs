@@ -45,6 +45,17 @@ pub struct RootExecutableInputs<'a> {
     pub platform: crate::native::ExecutableLinkInputs<'a>,
 }
 
+/// Executable planning with a fully captured runtime/foreign file namespace.
+pub struct RootCapturedExecutableInputs<'a> {
+    pub entry: &'a hirsel_syntax::DefPath,
+    pub backend: crate::native::Backend,
+    pub objects: &'a [hirsel_lir::stage::ObjectArtifact],
+    pub directory: &'a std::path::Path,
+    pub requested: Option<&'a hirsel_run_config::ValidatedRun>,
+    pub standalone: bool,
+    pub platform: crate::native::CapturedExecutableLinkInputs<'a>,
+}
+
 /// Executable planning from a kit snapshot selected before codegen.
 pub struct RootFrozenExecutableInputs<'a> {
     pub entry: &'a hirsel_syntax::DefPath,
@@ -197,6 +208,34 @@ impl RootProducts {
             inputs.objects,
             |program, objects| {
                 crate::native::plan_frozen_executable_link(
+                    program,
+                    inputs.entry,
+                    objects,
+                    inputs.directory,
+                    inputs.requested,
+                    inputs.standalone,
+                    inputs.platform,
+                )
+                .map_err(|error| error.to_string())
+            },
+        )
+    }
+
+    /// The admitted root supplies launcher/glue metadata; the captured platform
+    /// supplies every runtime/foreign virtual name, byte and build identity.
+    pub fn plan_captured_executable(
+        &mut self,
+        root: &Arc<NativeRootProduct>,
+        products: &[Arc<ReadyProduct>],
+        inputs: RootCapturedExecutableInputs<'_>,
+    ) -> Result<crate::native::object_queries::platform::CapturedPlatformPlan, String> {
+        self.with_link_objects(
+            root,
+            products,
+            inputs.backend,
+            inputs.objects,
+            |program, objects| {
+                crate::native::plan_captured_executable_link(
                     program,
                     inputs.entry,
                     objects,
