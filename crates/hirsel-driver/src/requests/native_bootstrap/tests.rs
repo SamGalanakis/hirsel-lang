@@ -196,7 +196,7 @@ fn actual_native_bootstrap_suspends_attaches_once_and_preserves_link_refusal_aft
                     requested_run: None,
                     backends: vec![CompilationBackend {
                         backend: "cranelift".into(),
-                        backend_version: ContentHash::of_bytes(crate::COMPILER_IDENTITY),
+                        backend_version: ContentHash::of_bytes(&crate::COMPILER_IDENTITY),
                         target_features: target.digest(),
                         profile_options: ContentHash::of_bytes(b"none"),
                         runtime_abi: ContentHash::of_bytes(
