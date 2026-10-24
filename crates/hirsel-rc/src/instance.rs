@@ -117,6 +117,7 @@ impl Program {
             .collect();
         hirsel_layout::operation::OperationRegistry {
             pretransfer_adapters: Vec::new(),
+            pretransfer_actuals: Vec::new(),
             invocation_bodies: Vec::new(),
             invocations,
             type_declarations: self

@@ -178,6 +178,17 @@ pub trait OperationDeclarations {
         &[]
     }
 
+    /// Re-derive a planned adapter's ABI from its independent primitive
+    /// declaration and typed actuals. Table-local ABI indices are insufficient.
+    /// Unavailable inputs keep nonempty inventories ineligible for cached output.
+    fn pretransfer_abi(
+        &self,
+        _: &crate::pretransfer::AdapterReference,
+        _: &crate::TargetSpec,
+    ) -> Option<(FnAbi, crate::LayoutTable)> {
+        None
+    }
+
     fn requires_structural_reference(&self) -> bool {
         false
     }

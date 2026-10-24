@@ -606,16 +606,28 @@ pub(crate) fn invocation_registry(
         }) else {
             panic!("materialized adapter has no independently planned primitive");
         };
-        registry.pretransfer_adapters.push(
-            crate::invocations::keyed_adapter(
-                view,
-                &instances.actuals[id.index()].arguments,
-                instances.view(body),
+        let reference = crate::invocations::keyed_adapter(
+            view,
+            &instances.actuals[id.index()].arguments,
+            instances.view(body),
+            &instances.actuals[body.index()].arguments,
+            instances.abis[id.index()],
+        )
+        .expect("independent adapter instance plan is valid");
+        if let Some(operation) = program.operations.get(&primitive)
+            && let Ok(arguments) = hirsel_layout::operation::collect_arguments(
+                &program.types,
                 &instances.actuals[body.index()].arguments,
-                instances.abis[id.index()],
             )
-            .expect("independent adapter instance plan is valid"),
-        );
+        {
+            registry.pretransfer_actuals.push((
+                reference.adapter.clone(),
+                reference.abi,
+                operation.clone(),
+                arguments,
+            ));
+        }
+        registry.pretransfer_adapters.push(reference);
     }
     registry
         .invocation_bodies
