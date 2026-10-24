@@ -218,7 +218,7 @@ fn actual_native_selector_rechecks_current_platform_before_reusing_unchanged_sou
         .unwrap();
         let original = tools.archive(&target.triple).unwrap().to_owned();
         let archive = directory.path().join("selected-runtime.a");
-        std::fs::copy(original, &archive).unwrap();
+        std::fs::write(&archive, std::fs::read(original).unwrap()).unwrap();
         tools.runtime.insert(
             (target.triple.clone(), tools.runtime_build),
             archive.clone(),
