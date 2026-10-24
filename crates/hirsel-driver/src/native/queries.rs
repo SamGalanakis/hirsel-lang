@@ -91,3 +91,5 @@ pub trait NativeProducts {
 
 pub mod declarations;
 pub mod source;
+
+pub mod recipes;

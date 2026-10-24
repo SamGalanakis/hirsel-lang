@@ -28,6 +28,36 @@ impl NativeDeclarations {
     pub fn manifest(&self) -> Result<hirsel_core_contract::Manifest, String> {
         crate::native::adapt::manifest_for_operations(self.roots.operations.values())
     }
+    /// Join a separately selected source instance with the actual V-owned
+    /// original call inventory. This opens no Definition or candidate Value.
+    /// The instance recipe supplies the destination and lexical body ordinal.
+    pub fn source_operations(
+        &self,
+        source: &DefPath,
+        selected: &hirsel_lir::ir::Symbol,
+        body: hirsel_tir::BodyId,
+    ) -> Result<hirsel_layout::operation::OperationRegistry, String> {
+        let output = self
+            .sources
+            .get(source)
+            .and_then(|source| source.lower.as_ref())
+            .ok_or("current verifier-owned source invocation output is unavailable")?;
+        let evidence = hirsel_rc::invocations::source_instance_from_output(
+            &output.invocations(),
+            source,
+            &self.program.operations,
+            selected,
+            body,
+        )
+        .map_err(str::to_owned)?;
+        let mut registry = self.program.operation_registry();
+        registry
+            .invocations
+            .insert(evidence.body.definition.clone(), evidence.invocations);
+        registry.invocation_bodies.push(evidence.body);
+        Ok(registry)
+    }
+
     /// Demand one original source body and apply the same independent CT-5
     /// uses check as snapshot import. No body enters the declaration registry.
     pub fn body(
