@@ -10,6 +10,7 @@ use std::collections::BTreeMap;
 pub struct LayoutIndex<'a> {
     table: &'a LayoutTable,
     scalars: BTreeMap<ScalarKind, LayoutId>,
+    region_mark: Option<LayoutId>,
     sequences: BTreeMap<LayoutId, LayoutId>,
     header: Option<LayoutId>,
 }
@@ -19,6 +20,7 @@ impl<'a> LayoutIndex<'a> {
         let mut out = Self {
             table,
             scalars: BTreeMap::new(),
+            region_mark: None,
             sequences: BTreeMap::new(),
             header: None,
         };
@@ -26,6 +28,7 @@ impl<'a> LayoutIndex<'a> {
             let id = LayoutId(i as u32);
             match row.kind {
                 LayoutKind::Scalar(kind) => {
+                    out.region_mark.get_or_insert(id);
                     out.scalars.entry(kind).or_insert(id);
                 }
                 LayoutKind::Sequence { element } => {
@@ -66,10 +69,11 @@ impl<'a> LayoutIndex<'a> {
     }
 
     /// Common rows the passes may introduce after the Value object key is
-    /// computed. The passes synthesize Header, Bool and U64; other scalar rows must
-    /// already be named by the unit.
+    /// computed. RegionMark uses the first scalar row; capture it first so a
+    /// temporary binding preserves that choice even when Header reaches another
+    /// scalar. The passes also synthesize Header, Bool and U64.
     pub fn introduced(&self) -> impl Iterator<Item = LayoutId> + '_ {
-        self.header.into_iter().chain(
+        self.region_mark.into_iter().chain(self.header).chain(
             [ScalarKind::Bool, ScalarKind::U64]
                 .into_iter()
                 .filter_map(|kind| self.scalar(kind)),

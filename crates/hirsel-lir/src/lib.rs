@@ -32,6 +32,7 @@ pub mod objects;
 pub mod operation;
 pub mod ownership_trace;
 pub mod persistent;
+pub mod products;
 pub mod profile;
 pub mod receipt_transport;
 pub mod rt_program;
