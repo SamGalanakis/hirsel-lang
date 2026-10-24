@@ -42,6 +42,8 @@ NATIVE = [
 ]
 # These workers require parent-supplied input and cannot run alone in a gate.
 DELEGATED = {
+    ('crates/hirsel-artifact-store/src/index/tests/races.rs', 'cooperating_child'):
+        ('multiprocess_common_pin_publication_and_live_staging_gc_owner', 'child'),
     ('crates/hirsel-parser/tests/it/grammar_fuzz_22.rs', 'worker'):
         ('bounded_grammar_recovery', 'isolated'),
     ('crates/hirsel-cli/tests/cli/policy_evaluator_33.rs', 'policy_evaluator_33_cell'):
@@ -60,12 +62,27 @@ def native_covers(path, name, prefix, selection):
     return path.startswith(prefix) and (not filters or any(f in qualified for f in filters))
 
 
+def ignored_declarations(text):
+    """Resolve simple fn-name macro templates to their actual invocation names."""
+    for attribute in ATTRIBUTE.finditer(text):
+        function = re.search(r'\bfn\s+(\$?\w+)', text[attribute.end():])
+        name = function[1]
+        if name.startswith('$') and attribute[1] is not None:
+            macro = re.findall(r'macro_rules!\s+(\w+)', text[:attribute.start()])[-1]
+            names = re.findall(r'\b' + re.escape(macro) + r'!\s*\(\s*(\w+)', text)
+            if not names:
+                raise ValueError(f'ignored macro has no registered invocations: {macro}')
+            for name in names:
+                yield attribute, name
+        else:
+            yield attribute, name
+
+
 def orphans(sources):
     """`(path, test)` for each ignored test of `{path: text}` without a home."""
     found = []
     for path, text in sorted(sources.items()):
-        for attribute in ATTRIBUTE.finditer(text):
-            name = FUNCTION.search(text, attribute.end())[1]
+        for attribute, name in ignored_declarations(text):
             if attribute[1] is not None:
                 if name.startswith('full_gate_') and attribute[1].startswith('ignore = "full gate'):
                     continue
@@ -73,8 +90,9 @@ def orphans(sources):
                 continue
             if (path, name) in DELEGATED:
                 continue
-            home = EXPLICIT.get(f'{Path(path).stem}::{name}')
-            if home and home['source'] == path:
+            home = next((home for case, home in EXPLICIT.items()
+                         if home['source'] == path and case.rsplit('::', 1)[-1] == name), None)
+            if home:
                 continue
             if any(native_covers(path, name, prefix, selection) for prefix, selection in NATIVE):
                 continue
@@ -101,11 +119,21 @@ class IgnoredTests(unittest.TestCase):
             parent_body = text.split(f'fn {parent}()', 1)[1].split('\n#[test]', 1)[0]
             self.assertIn(f'{helper}(', parent_body)
             helper_body = text.split(f'fn {helper}(', 1)[1].split('\nfn ', 1)[0]
-            self.assertRegex(helper_body, rf'"--exact",\s+"{module}::{worker}",\s+"--ignored"')
             self.assertIn('current_exe()', helper_body)
-            if helper == 'isolated':
+            if helper == 'child':
+                self.assertIn('"index::tests::races::cooperating_child"', helper_body)
+                self.assertIn('"--exact"', helper_body)
+                self.assertIn('"--ignored"', helper_body)
+                for key in ('INDEX36_CHILD_ROOT', 'INDEX36_CHILD_MODE', 'INDEX36_CHILD_ID'):
+                    self.assertIn(key, helper_body)
+                self.assertIn('child(', parent_body)
+                self.assertIn('.spawn()', parent_body)
+                self.assertIn('mod races;', (ROOT / Path(path).parent / 'modules.rs').read_text())
+            elif helper == 'isolated':
+                self.assertRegex(helper_body, rf'"--exact",\s+"{module}::{worker}",\s+"--ignored"')
                 self.assertIn('child.wait()', helper_body)
             else:
+                self.assertRegex(helper_body, rf'"--exact",\s+"{module}::{worker}",\s+"--ignored"')
                 self.assertIn('.output()', helper_body)
                 self.assertIn('output.status.success()', helper_body)
                 self.assertIn('"--cpu=60:61"', helper_body)
@@ -121,17 +149,17 @@ class IgnoredTests(unittest.TestCase):
         self.assertTrue((ROOT / 'tools/ignored-tests').stat().st_mode & 0o111)
         for case, home in EXPLICIT.items():
             text = (ROOT / home['source']).read_text()
-            names = [FUNCTION.search(text, a.end())[1] for a in ATTRIBUTE.finditer(text)]
-            self.assertIn(case.split('::')[1], names, case)
-            self.assertIn(f'mod {Path(home["source"]).stem};',
-                          (ROOT / 'crates/hirsel-cli/tests/cli/modules.rs').read_text())
+            names = [name for _, name in ignored_declarations(text)]
+            self.assertIn(case.rsplit('::', 1)[-1], names, case)
+            registry = home.get('module_registry', str(Path(home['source']).parent / 'modules.rs'))
+            self.assertIn(f'mod {Path(home["source"]).stem};', (ROOT / registry).read_text())
             environment = {key: '/retained/input with spaces' for key in home['inputs']}
             command = runner['command'](case, environment)
             self.assertEqual(command[-5:], ['--test-arg=--exact', f'--test-arg={case}',
                                            '--test-arg=--ignored', '--test-arg=--test-threads=1',
                                            '--test-arg=--nocapture'])
             self.assertEqual(command[1:6], ['test', '-c', 'hirsel.tests=host',
-                                           '//:hirsel-cli-test-cli-shard-1', '--'])
+                                           home.get('target', '//:hirsel-cli-test-cli-shard-1'), '--'])
             for key in home['inputs']:
                 self.assertIn(f'{key}={environment[key]}', command)
                 with self.assertRaises(ValueError):
@@ -173,6 +201,15 @@ class IgnoredTests(unittest.TestCase):
                  patch('builtins.print'):
                 self.assertEqual(runner['main'](), expected)
                 self.assertEqual(run.call_args.args[0], runner['command'](case, {}))
+
+    def test_ignored_macro_templates_name_invocations_instead_of_the_next_helper(self):
+        text = '\n'.join([
+            'macro_rules! controls { ($name:ident) => {',
+            '#[test]', '#[ignore = "manual"]', 'fn $name() {}', '} }',
+            'controls!(first);', 'controls!(second);', 'fn ordinary_helper() {}'])
+        self.assertEqual([name for _, name in ignored_declarations(text)], ['first', 'second'])
+        self.assertEqual(orphans({'crates/example/controls.rs': text}), [
+            ('crates/example/controls.rs', 'first'), ('crates/example/controls.rs', 'second')])
 
     def test_orphans_are_named_and_homes_are_not(self):
         sources = {

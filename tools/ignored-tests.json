@@ -161,10 +161,6 @@
       "FLOW_AUDIT_36_ORDERED"
     ]
   },
-  "merge_audit_37::merge_audit_37_refusals_and_independent_files": {
-    "source": "crates/hirsel-cli/tests/cli/merge_audit_37.rs",
-    "inputs": []
-  },
   "merge_audit_37::merge_audit_37_native_full_main_replay": {
     "source": "crates/hirsel-cli/tests/cli/merge_audit_37.rs",
     "inputs": []
@@ -176,10 +172,6 @@
     ]
   },
   "merge_audit_37::merge_audit_37_cap_source_exact": {
-    "source": "crates/hirsel-cli/tests/cli/merge_audit_37.rs",
-    "inputs": []
-  },
-  "merge_audit_37::merge_audit_37_cap_lines_exact": {
     "source": "crates/hirsel-cli/tests/cli/merge_audit_37.rs",
     "inputs": []
   },
@@ -243,6 +235,61 @@
   },
   "merge_audit_37::merge_audit_37_cap_report_over": {
     "source": "crates/hirsel-cli/tests/cli/merge_audit_37.rs",
+    "inputs": []
+  },
+  "index::microbench::measured": {
+    "source": "crates/hirsel-artifact-store/src/index/microbench.rs",
+    "module_registry": "crates/hirsel-artifact-store/src/index.rs",
+    "target": "//:hirsel-artifact-store-unittest",
+    "inputs": [
+      "INDEX36_OP",
+      "INDEX36_ROOT",
+      "INDEX36_FIXTURE"
+    ]
+  },
+  "heap_file_faults_38::treelearn_original_commit_denied": {
+    "source": "crates/hirsel-pipeline-tests/tests/front/heap_file_faults_38.rs",
+    "target": "//:hirsel-pipeline-tests-test-front-shard-1",
+    "inputs": []
+  },
+  "capture_fixed_tags_37::backtrack_llvm_edges": {
+    "source": "crates/hirsel-driver/tests/it-stdlib/capture_fixed_tags_37.rs",
+    "target": "//:hirsel-driver-test-it-stdlib-shard-1",
+    "inputs": []
+  },
+  "capture_fixed_tags_37::backtrack_llvm_ascii": {
+    "source": "crates/hirsel-driver/tests/it-stdlib/capture_fixed_tags_37.rs",
+    "target": "//:hirsel-driver-test-it-stdlib-shard-1",
+    "inputs": []
+  },
+  "capture_fixed_tags_37::backtrack_llvm_random": {
+    "source": "crates/hirsel-driver/tests/it-stdlib/capture_fixed_tags_37.rs",
+    "target": "//:hirsel-driver-test-it-stdlib-shard-1",
+    "inputs": []
+  },
+  "capture_fixed_tags_37::backtrack_llvm_limits": {
+    "source": "crates/hirsel-driver/tests/it-stdlib/capture_fixed_tags_37.rs",
+    "target": "//:hirsel-driver-test-it-stdlib-shard-1",
+    "inputs": []
+  },
+  "capture_fixed_tags_37::backtrack_cranelift_edges": {
+    "source": "crates/hirsel-driver/tests/it-stdlib/capture_fixed_tags_37.rs",
+    "target": "//:hirsel-driver-test-it-stdlib-shard-1",
+    "inputs": []
+  },
+  "capture_fixed_tags_37::backtrack_cranelift_ascii": {
+    "source": "crates/hirsel-driver/tests/it-stdlib/capture_fixed_tags_37.rs",
+    "target": "//:hirsel-driver-test-it-stdlib-shard-1",
+    "inputs": []
+  },
+  "capture_fixed_tags_37::backtrack_cranelift_random": {
+    "source": "crates/hirsel-driver/tests/it-stdlib/capture_fixed_tags_37.rs",
+    "target": "//:hirsel-driver-test-it-stdlib-shard-1",
+    "inputs": []
+  },
+  "capture_fixed_tags_37::backtrack_cranelift_limits": {
+    "source": "crates/hirsel-driver/tests/it-stdlib/capture_fixed_tags_37.rs",
+    "target": "//:hirsel-driver-test-it-stdlib-shard-1",
     "inputs": []
   }
 }

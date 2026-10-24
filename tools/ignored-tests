@@ -23,7 +23,7 @@ def command(case, environment):
     if missing:
         raise ValueError('required retained inputs: ' + ', '.join(missing))
     return [str(ROOT / '.buck2/bin/buck2'), 'test', '-c', 'hirsel.tests=host',
-            '//:hirsel-cli-test-cli-shard-1', '--',
+            home.get('target', '//:hirsel-cli-test-cli-shard-1'), '--',
             *[argument for key in home['inputs']
               for argument in ['--env', f'{key}={environment[key]}']],
             '--test-arg=--exact', f'--test-arg={case}', '--test-arg=--ignored',
