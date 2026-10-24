@@ -64,3 +64,62 @@ pub fn relax() {
 pub fn model(f: impl Fn() + Sync + Send + 'static) {
     loom::model(f);
 }
+
+/// Collapse only failed section-gate polls into a blocking wait. Notifications
+/// follow the release which an original successful poll must acquire: active=0,
+/// cut=0, or stopped=true. Initial Dekker accesses are unchanged. As in loom
+/// 0.7.2 sync/notify.rs, each modeled thread retains its own Notify, including
+/// its at-most-one spurious wake. No protocol word is changed by this facade.
+#[derive(Default)]
+pub struct SectionWaits(std::sync::Mutex<WaitState>);
+#[derive(Default)]
+struct WaitState {
+    threads: std::collections::HashMap<loom::thread::ThreadId, usize>,
+    words: std::collections::HashMap<usize, Vec<std::sync::Arc<loom::sync::Notify>>>,
+}
+impl SectionWaits {
+    pub fn new() -> Self {
+        Self::default()
+    }
+    fn notifications(
+        state: &mut WaitState,
+        key: usize,
+    ) -> &mut Vec<std::sync::Arc<loom::sync::Notify>> {
+        state.words.entry(key).or_insert_with(|| {
+            (0..loom::MAX_THREADS)
+                .map(|_| std::sync::Arc::new(loom::sync::Notify::new()))
+                .collect()
+        })
+    }
+    pub fn wait(&self, word: &AtomicU32, stopped: Option<&AtomicBool>) {
+        let notification = {
+            // This host mutex protects bookkeeping only, with no modeled
+            // synchronization edge. Each possible waiter has its own token
+            // even before its first poll, so registration cannot lose a wake.
+            let mut state = self.0.lock().unwrap();
+            let next = state.threads.len();
+            let index = *state
+                .threads
+                .entry(loom::thread::current().id())
+                .or_insert(next);
+            assert!(index < loom::MAX_THREADS);
+            Self::notifications(&mut state, std::ptr::from_ref(word) as usize)[index].clone()
+        };
+        // These are only additional failed-loop polls, not read-modify-write
+        // operations. A notification is retained if its release happened
+        // before this poll but the model still selected an older read.
+        if stopped.is_some_and(|stopped| stopped.load(Ordering::Acquire)) || sc_load(word) != 1 {
+            return;
+        }
+        notification.wait();
+    }
+    pub fn wake<T>(&self, word: &T) {
+        let notifications = {
+            let mut state = self.0.lock().unwrap();
+            Self::notifications(&mut state, std::ptr::from_ref(word) as usize).clone()
+        };
+        for notification in notifications {
+            notification.notify();
+        }
+    }
+}

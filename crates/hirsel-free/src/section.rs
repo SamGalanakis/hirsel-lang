@@ -26,7 +26,7 @@
 
 use crate::phase::Progress;
 use crate::sync::{Arc, AtomicBool, AtomicU32, AtomicU64, Cell, Mutex, MutexGuard, Ordering};
-use crate::sync::{relax, sc_load, sc_store};
+use crate::sync::{SectionWaits, sc_load, sc_store};
 
 /// Bytes per log segment: a published record never moves.
 pub const SEGMENT: usize = 4096;
@@ -105,6 +105,7 @@ pub struct Stopped;
 /// The section gate of one recording run.
 pub struct Gate {
     cut: AtomicU32,
+    waits: SectionWaits,
     stopped: AtomicBool,
     /// A stop wants the cutter role: flushes give way.
     stopping: AtomicBool,
@@ -117,6 +118,7 @@ impl Gate {
     pub fn new(slots: usize) -> Gate {
         Gate {
             cut: AtomicU32::new(0),
+            waits: SectionWaits::new(),
             stopped: AtomicBool::new(false),
             stopping: AtomicBool::new(false),
             slots: (0..slots)
@@ -157,6 +159,7 @@ impl Gate {
                 return Ok(Section { gate: self, slot });
             }
             active.store(0, Ordering::Release);
+            self.waits.wake(active);
             let waiting = pause_ns.map(|_| std::time::Instant::now());
             loop {
                 if self.stopped.load(Ordering::Acquire) {
@@ -166,7 +169,7 @@ impl Gate {
                 if sc_load(&self.cut) == 0 {
                     break;
                 }
-                relax();
+                self.waits.wait(&self.cut, Some(&self.stopped));
             }
             add_pause(pause_ns, waiting);
         }
@@ -199,7 +202,7 @@ impl Gate {
         sc_store(&self.cut, 1);
         for slot in self.slots.iter() {
             while sc_load(&slot.active) == 1 {
-                relax();
+                self.waits.wait(&slot.active, None);
             }
         }
         Cut {
@@ -256,6 +259,7 @@ impl Drop for Section<'_> {
         self.gate.slots[self.slot]
             .active
             .store(0, Ordering::Release);
+        self.gate.waits.wake(&self.gate.slots[self.slot].active);
     }
 }
 
@@ -332,8 +336,10 @@ impl Drop for Cut<'_> {
     fn drop(&mut self) {
         if self.stop {
             self.gate.stopped.store(true, Ordering::Release);
+            self.gate.waits.wake(&self.gate.cut);
         } else {
             sc_store(&self.gate.cut, 0);
+            self.gate.waits.wake(&self.gate.cut);
         }
     }
 }

@@ -71,31 +71,45 @@ for row in "${genmc_runs[@]}"; do
   fi
 done
 
-# The loom models: every interleaving with at most one preemption. A second preemption lets
-# loom keep a spinning wait reading a stale value forever (its unbounded-path limit), a
-# liveness artefact; GenMC above explores the same handshake exhaustively. The `weak` mutation
-# drops the SC fences that model the SC accesses and must fail.
+# Section/claim models use the failed-poll wait abstraction documented in README.md.
+# Keep the historical bound-1 run distinct from the explicit bound-2 row. Other
+# model families retain their own bound-2 runs. Pin the original branch budget;
+# an exhausted budget or setup failure is never an acceptable mutation result.
 loom_runs=(
   "loom||1|pass"
+  "loom-section-bound2|--test models|2|pass"
   "loom-schedule-bound2|--test schedule|2|pass"
   "loom-cancel-bound2|--test cancel|2|pass"
   "loom-atomic-bound2|--test atomic|2|pass"
   "loom-mutex-bound2|--test mutex|2|pass"
   "loom-channel-bound2|--test channel|2|pass"
-  "mutation-loom-weak-handshake|--features weak|1|fail"
+  "mutation-loom-weak-handshake|--test models --features weak|2|causality"
 )
 for row in "${loom_runs[@]}"; do
   IFS='|' read -r name features preemptions expected <<<"$row"
   [[ "$name" =~ $filter ]] || continue
   total=$((total + 1))
+  test_args=()
+  if [[ "$expected" == causality ]]; then
+    test_args=(-- --exact every_cut_is_causally_closed)
+  fi
   set +e
   # shellcheck disable=SC2086
-  out="$(cd "$here/loom" && LOOM_MAX_PREEMPTIONS="$preemptions" CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$here/loom/target}" \
-    cargo test --release --locked --offline $features 2>&1)"
+  out="$(cd "$here/loom" && LOOM_MAX_PREEMPTIONS="$preemptions" LOOM_MAX_BRANCHES=1000 CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$here/loom/target}" \
+    cargo test --release --locked --offline $features "${test_args[@]}" 2>&1)"
   code=$?
   set -e
-  if [[ $code -eq 0 ]]; then verdict=pass; else verdict=fail; fi
-  passed="$(grep -oE '[0-9]+ passed' <<<"$out" | awk '{n += $1} END {print n + 0}')"
+  passed="$(grep -oE '[0-9]+ passed' <<<"$out" | awk '{n += $1} END {print n + 0}' || true)"
+  if [[ $code -eq 0 && "$passed" -gt 0 ]] &&
+     [[ "$name" != loom-section-bound2 || "$passed" -eq 6 ]]; then
+    verdict=pass
+  elif [[ $code -eq 101 ]] &&
+       grep -Fq 'Causality violation: Concurrent write accesses to `UnsafeCell`.' <<<"$out" &&
+       grep -Fq 'test result: FAILED. 0 passed; 1 failed;' <<<"$out"; then
+    verdict=causality
+  else
+    verdict=unknown
+  fi
   if [[ "$verdict" == "$expected" ]]; then result="ok ($verdict, $passed models passed)"; else result="FAILED ($verdict)"; fi
   printf '%-44s %-8s %s\n' "$name" "$expected" "$result"
   if [[ "$result" != ok* ]]; then

@@ -64,3 +64,21 @@ pub fn relax() {
 pub fn model(f: impl FnOnce()) {
     f();
 }
+
+/// Wait policy for section-gate polling. This is zero-sized in the runtime;
+/// the model substitutes blocking waits to collapse failed-read stuttering.
+pub struct SectionWaits;
+impl Default for SectionWaits {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+impl SectionWaits {
+    pub fn new() -> Self {
+        Self
+    }
+    pub fn wait(&self, _word: &AtomicU32, _stopped: Option<&AtomicBool>) {
+        relax();
+    }
+    pub fn wake<T>(&self, _word: &T) {}
+}

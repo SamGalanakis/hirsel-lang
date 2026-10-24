@@ -13,16 +13,15 @@ expected result; the gate runs it when these models or the kernel source they co
   matrix with and without recording (a stop at every point of entered, claimed, the host call
   and done; exactly one of claim and withdraw; in doubt; quarantine; buffers freed once); and
   the home bridge's claim and close. Loom models a SeqCst access as AcqRel, so the shim pairs
-  each with an SC fence; the `weak` feature drops the fences and must fail. Runs use one
-  preemption: a second lets loom keep a spin wait reading a stale value forever, a liveness
-  artefact of its unbounded-path limit.
+  each with an SC fence; the `weak` feature drops the fences and must fail with an
+  `UnsafeCell` causality violation. The six section/claim models run at preemption bound
+  **2**, with a **1000-branch** budget, using the failed-poll abstraction described below.
 - The ready queue, scheduling state and saved-frame ownership models in
   `loom/tests/schedule.rs` separately run at preemption bound **2**. They check
   steal/overflow ownership, wake versus park and completion, visibility of the
   saved image before another worker starts it, and shutdown discarding a queued
-  image. This does not establish bound-2 coverage for the section gate above:
-  `every_cut_is_causally_closed` and `old_receive_new_send` exhausted both the
-  1000- and 10000-branch budgets at that bound without an assertion verdict.
+  image. These are separate models; their coverage does not substitute for the
+  section/claim models.
 - `genmc/` holds C11 models with the SC accesses exactly as the kernel writes them, checked by
   GenMC v0.19.0 under RC11 (and IMM for the gate), exhaustively: `gate.c` (two workers, a flush
   and the stop; GenMC's race detector checks the cutter's plain reads), `claim.c` (one request
@@ -51,9 +50,63 @@ expected result; the gate runs it when these models or the kernel source they co
   a racing send's image, and last-Sender close cannot overtake a queued image.
   The fixture supplies only immutable descriptor metadata. It does not model
   finalizer execution, scheduler readiness, native recorder phases or cuts;
-  separate runtime tests cover those boundaries. The full recorder-gate
-  bound-2 limitation above remains open.
+  separate runtime tests cover those boundaries.
 
 GenMC is built once by `check.sh`, pinned by commit, into
 `${XDG_CACHE_HOME:-~/.cache}/genmc-<commit>`; it needs cmake, clang and LLVM 19-22 with their
 development files, and libffi. `GENMC=<path>` uses another build.
+
+## Section waits: scope and refinement
+
+The raw spin/yield section models exhausted both 1000 and 10000 branches at
+preemption bound 2. One counterexample to the *branch budget* pauses the cutter
+just before `stopped := true`: two workers repeatedly read the closed gate and
+`stopped == false`, yielding to each other while the cutter never resumes. This
+is neither a protocol assertion failure nor a completed safety exploration.
+The earlier bound-1 result is retained as historical evidence, not bound-2 proof.
+
+`SectionWaits` factors the wait policy out of the production source. In the
+runtime it is zero-sized: `wait` performs the original spin/yield, and `wake` is
+a no-op. Protocol atomics, their orderings, initial Dekker accesses, log writes,
+publication, and scans are unchanged. The Loom facade instead parks a failed
+poll on a persistent per-thread `loom::sync::Notify`. This follows Loom 0.7.2
+`src/sync/notify.rs:7-53` and `src/rt/notify.rs:52-159`: a retained notification,
+one waiter per token, and at most one spurious wake per token. The host mutex
+protecting the token map is deliberately not a modeled synchronization edge.
+
+The reduction concerns finite safety traces, with these obligations:
+
+1. Parking occurs only after the original loop has observed its wait condition.
+   Only those polling loops are abstracted. Every entry handshake, critical
+   access, phase transition, and scan still runs through the production source
+   and Loom's race detector. No iteration that publishes or mutates protocol
+   state is skipped.
+2. A failed-poll run changes no protocol word or protected data. Interior
+   repeated reads can be removed; any constraints they imposed only restricted
+   the original execution. Other threads can run before parking, during the
+   wait, and after waking. A failed poll that overlaps a release is covered by
+   the original loop's reads, the facade's acquire/SC recheck, and a retained
+   notification. Tokens exist even before registration, preventing lost wakes.
+3. Each notification is immediately after the existing release that ends the
+   wait: `active := 0`, `cut := 0`, or `stopped := true`. There is no intervening
+   protected access in that thread. Its acquire edge substitutes for the
+   acquire of that release by a successful original poll. The original loop
+   rechecks after waking; notification alone never admits a section or scan.
+   If a newer gate/slot epoch has started, the recheck either keeps waiting or
+   observes an equal-or-later release; same-thread order (or the cutter-role
+   mutex across cutters) carries the earlier edge. A terminal wake substitutes
+   for observing `stopped`, and cannot authorize a further section.
+4. Neither the initial entry handshake nor a cutter's first slot check receives
+   notification synchronization. In particular, both sides missing each other
+   remains detectable: dropping the SC fences still produces the original
+   concurrent-write `UnsafeCell` violation, not a deadlock or budget failure.
+
+The bound-2 claim is exhaustive exploration of these six **wait-abstracted**
+models at the stated bounds, together with this failed-poll refinement argument.
+It is not completed enumeration of arbitrary raw spinning, a proof of fairness
+or starvation freedom, or an unbounded proof. Blocking lets other runnable
+threads proceed without spending preemptions on failed polls; scheduling,
+cancellation, atomic, mutex, and channel model bounds remain separate. The
+GenMC RC11/IMM models still check the actual SC handshake independently, without
+this wait facade. No branch cap is raised and no exploration is suppressed with
+`skip_branch` or `stop_exploring`.
