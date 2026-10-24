@@ -9824,7 +9824,7 @@ impl<'p, S: Stage> Machine<'p, S> {
                 match step {
                     DropStep::ReleaseSealed { .. } => {
                         return fail(V::Unsupported, "sealed storage H drop is not linked");
-                }
+                    }
                     DropStep::ReleaseReceipt { .. } => {
                         return fail(
                             V::Unsupported,

@@ -1111,7 +1111,6 @@ pub enum Inst {
         shape: SealDescriptorId,
         previous: Option<ValueId>,
     },
-
 }
 
 /// A control edge with its block arguments.

@@ -13,14 +13,38 @@ pub(super) fn check<S: Stage>(
     report: &mut Report,
 ) {
     let unit = cx.unit;
-    for descriptor in &unit.tables.seal_descriptors {
-        if let Err(error) = descriptor.validate_at(cx.operations, &unit.header.definition, unit.header.instance, cx.layouts.0, cx.target) {
-            report.add(Site::UNIT, K::Sealed(error));
-        }
-    }
     let expected = cx
         .operations
         .seal_events(&unit.header.definition, unit.header.instance);
+    if unit.tables.seal_descriptors.is_empty()
+        && !unit.instructions.iter().any(|i| {
+            matches!(
+                i,
+                Inst::SealArena { .. }
+                    | Inst::ArenaInventory { .. }
+                    | Inst::BorrowSealedRoot { .. }
+            )
+        })
+    {
+        if expected.as_ref().is_some_and(|events| !events.is_empty()) {
+            report.add(
+                Site::UNIT,
+                K::Sealed("sealed source event correspondence differs or is unavailable".into()),
+            );
+        }
+        return;
+    }
+    for descriptor in &unit.tables.seal_descriptors {
+        if let Err(error) = descriptor.validate_at(
+            cx.operations,
+            &unit.header.definition,
+            unit.header.instance,
+            cx.layouts.0,
+            cx.target,
+        ) {
+            report.add(Site::UNIT, K::Sealed(error));
+        }
+    }
     let mut observed = Vec::new();
     for (b, block) in unit.blocks.iter().enumerate() {
         for (i, inst) in block

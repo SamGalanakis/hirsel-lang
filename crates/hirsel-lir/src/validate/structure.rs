@@ -610,7 +610,12 @@ impl<S: Stage> Checker<'_, '_, S> {
                 // A `Shared` root is always a counted heap block (MEM-11).
                 (ValueRepr::Block, LayoutKind::Shared { .. }) => true,
                 (ValueRepr::Callable, LayoutKind::Callable { .. }) => true,
-                (ValueRepr::Handle, LayoutKind::Handle | LayoutKind::HostCapability { .. } | LayoutKind::SealedRegion { .. }) => true,
+                (
+                    ValueRepr::Handle,
+                    LayoutKind::Handle
+                    | LayoutKind::HostCapability { .. }
+                    | LayoutKind::SealedRegion { .. },
+                ) => true,
                 (ValueRepr::Arena, LayoutKind::Arena) => true,
                 (ValueRepr::Scalar(ScalarKind::U64), LayoutKind::Path) => true,
                 (ValueRepr::Token, LayoutKind::Header) => true,

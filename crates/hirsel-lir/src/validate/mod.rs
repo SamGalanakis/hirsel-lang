@@ -1155,7 +1155,9 @@ impl<'a> Layouts<'a> {
         steps.iter().any(|step| match step {
             DropStep::Finalize | DropStep::CloseHandle { .. } => true,
             // Restoring counts is invisible; the release that follows is a Child.
-            DropStep::Thaw { .. } | DropStep::ReleaseSealed { .. } | DropStep::ReleaseReceipt { .. } => false,
+            DropStep::Thaw { .. }
+            | DropStep::ReleaseSealed { .. }
+            | DropStep::ReleaseReceipt { .. } => false,
             DropStep::Child { layout, .. }
             | DropStep::ElementsReverse {
                 element: layout, ..
@@ -1221,7 +1223,9 @@ impl<'a> Layouts<'a> {
         seen: &mut std::collections::BTreeSet<LayoutId>,
     ) -> bool {
         steps.iter().any(|step| match step {
-            DropStep::Finalize | DropStep::CloseHandle { .. } | DropStep::ReleaseReceipt { .. } => false,
+            DropStep::Finalize | DropStep::CloseHandle { .. } | DropStep::ReleaseReceipt { .. } => {
+                false
+            }
             DropStep::ReleaseSealed { .. } => true,
             DropStep::Thaw { .. } | DropStep::ReleaseRoot { .. } => true,
             DropStep::Child { layout, .. }

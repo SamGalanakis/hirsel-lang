@@ -1,9 +1,9 @@
 //! Descriptor controls; typed transition/CFG adversaries are separate.
 use crate::support;
 use hirsel_layout::layout::{LayoutBuilder, Owners};
+use hirsel_lir::logical_storage::LogicalBytes;
 use hirsel_lir::operation::{NativeType, OperationArgument, OperationDeclarations};
 use hirsel_lir::{LayoutTable, TargetSpec};
-use hirsel_lir::logical_storage::LogicalBytes;
 use hirsel_types::*;
 
 fn fixture() -> (
@@ -224,23 +224,21 @@ fn public_validation_accepts_a_declared_typed_seal_transition() {
 
 #[test]
 fn source_correspondence_survives_candidate_event_deletion() {
-    let (t, d, _, _) = transition_fixture();
-    let (mut unit, table, manifest) = t.finish();
-    unit.instructions.clear();
-    for block in &mut unit.blocks {
-        block.instructions.len = 0;
-    }
-    let target = TargetSpec::x86_64_unknown_linux_gnu();
-    let inputs = hirsel_lir::validate::Inputs {
-        target: &target,
-        layouts: &table,
-        manifest: &manifest,
-        operations: &d,
-        discharge: None,
-        memo: Default::default(),
+    let (_, d, _, _) = transition_fixture();
+    // A fully well-formed ordinary unit represents deletion of both producer
+    // and sink, including every candidate descriptor. Its current-source
+    // expectation still names the original seal operation independently.
+    let mut missing = support::Lir::<TestStage>::new(&[], None);
+    missing.builder.ret(support::ENTRY, None);
+    let (unit, table, manifest) = missing.finish();
+    let empty = Declarations {
+        registry: d.registry.clone(),
+        expected: Some(vec![]),
     };
-    // Result is undefined too; no interpretation of an absent event is success.
-    assert!(hirsel_lir::validate::validate(unit, &inputs).is_err());
+    assert!(checked_raw(unit.clone(), &table, &manifest, &empty).is_empty());
+    let errors = checked_raw(unit, &table, &manifest, &d);
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    sealed_rejection(&errors, "source event correspondence");
     let (t, mut d, _, _) = transition_fixture();
     d.expected = None;
     assert!(!checked(t, &d).is_empty());
@@ -421,4 +419,87 @@ fn branch_local_seal_consumption_survives_a_token_phi() {
             assert_eq!(errors, []);
         }
     }
+}
+
+#[derive(Clone, Debug, Default, Hash)]
+struct LegacyTables {
+    pub calls: Vec<CallSite>,
+    pub constructs: Vec<ConstructSite>,
+    pub closures: Vec<ClosureSite>,
+    pub constants: Vec<ConstantData>,
+    pub symbols: Vec<Symbol>,
+    pub operations: Vec<OperationId>,
+    pub loans: Vec<LoanInfo>,
+    pub failures: Vec<FailureEdge>,
+    pub edges: Vec<Edge>,
+    pub masks: Vec<FieldMask>,
+    pub regions: Vec<RegionInstance>,
+    pub arenas: Vec<ExternalInstance>,
+    pub shared: Vec<ExternalInstance>,
+    pub task_domains: u32,
+    pub source_anchors: Vec<SourceAnchor>,
+    pub cleanup_anchors: Vec<CleanupAnchor>,
+    /// Drop flags (LIR schema revision 8).
+    pub init_flags: Vec<InitFlag>,
+    /// SER-2 codec plans (LIR schema revision 29).
+    pub codecs: Vec<crate::codec::CodecPlan>,
+    /// MEM-3 logical types and complete physical access, independently validated.
+    pub structural: Vec<crate::structural_access::AccessPlan>,
+}
+hirsel_codec::snapshot_struct!(LegacyTables {
+    calls,
+    constructs,
+    closures,
+    constants,
+    symbols,
+    operations,
+    loans,
+    failures,
+    edges,
+    masks,
+    regions,
+    arenas,
+    shared,
+    task_domains,
+    source_anchors,
+    cleanup_anchors,
+    init_flags,
+    codecs,
+    structural
+});
+
+#[test]
+fn absent_sealed_tables_preserve_ordinary_side_table_bytes_and_hash() {
+    use std::hash::{Hash, Hasher};
+    let old = LegacyTables {
+        task_domains: 3,
+        ..Default::default()
+    };
+    let value = SideTables {
+        task_domains: 3,
+        ..Default::default()
+    };
+    let old_text = hirsel_codec::to_text(&old).replace("LegacyTables", "SideTables");
+    assert_eq!(hirsel_codec::to_text(&value), old_text);
+    assert_eq!(
+        hirsel_codec::from_text::<SideTables>(&old_text).unwrap(),
+        value
+    );
+    let hash = |input: &dyn Fn(&mut std::collections::hash_map::DefaultHasher)| {
+        let mut state = std::collections::hash_map::DefaultHasher::new();
+        input(&mut state);
+        state.finish()
+    };
+    assert_eq!(hash(&|s| old.hash(s)), hash(&|s| value.hash(s)));
+    let (_, _, descriptor) = fixture();
+    let demanded = SideTables {
+        seal_descriptors: vec![descriptor],
+        ..value.clone()
+    };
+    assert_ne!(hash(&|s| value.hash(s)), hash(&|s| demanded.hash(s)));
+    let text = hirsel_codec::to_text(&demanded);
+    assert_eq!(
+        hirsel_codec::from_text::<SideTables>(&text).unwrap(),
+        demanded
+    );
 }

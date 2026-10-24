@@ -308,7 +308,9 @@ pub enum LayoutKind {
         root: crate::operation::NativeType,
     },
     /// An affine pointer-sized sealed owner with a typed read-only root.
-    SealedRegion { root: LayoutId },
+    SealedRegion {
+        root: LayoutId,
+    },
 }
 
 /// One step of a checked size expression, evaluated as a postfix program.

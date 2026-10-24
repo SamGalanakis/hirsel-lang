@@ -1051,6 +1051,25 @@ mod tests {
     }
 
     #[test]
+    fn empty_vector_trailer_keeps_legacy_bytes_and_roundtrips_present_values() {
+        #[derive(Debug, PartialEq)]
+        struct AddedPool {
+            base: u32,
+            pool: Vec<u32>,
+        }
+        snapshot_struct!(AddedPool { base } trailing_empty pool);
+        for (pool, expected) in [
+            (vec![], "(AddedPool 7)"),
+            (vec![1, 2], "(AddedPool 7\n  (list 1 2))"),
+        ] {
+            let value = AddedPool { base: 7, pool };
+            assert_eq!(to_text(&value), expected);
+            assert_eq!(from_text::<AddedPool>(expected).unwrap(), value);
+        }
+        assert!(from_text::<AddedPool>("(AddedPool 7 (list 1) false)").is_err());
+    }
+
+    #[test]
     fn absent_optional_trailer_keeps_legacy_bytes_and_present_empty_is_distinct() {
         #[derive(Debug, PartialEq)]
         struct Additive {
