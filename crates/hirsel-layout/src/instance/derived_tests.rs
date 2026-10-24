@@ -23,6 +23,89 @@ fn base(name: &str, body: u32) -> InstanceKey {
     .unwrap()
 }
 
+#[test]
+fn identity_shape_preserves_scoped_environment_and_direct_nested_convention() {
+    use hirsel_lir::abi_types::CallMultiplicity;
+    let types = TypeInterner::new(None);
+    let ty = types.intern(Type::with_kind(TypeKind::Primitive(Primitive::U64)));
+    let actuals = [(
+        ActualBinder::Type(hirsel_types::TypeParameterRef::bound(
+            hirsel_types::TypeParamId(0),
+        )),
+        GenericArgument::Type(ty),
+    )];
+    let conventions = [
+        None,
+        Some(CallableConvention {
+            parameters: vec![],
+            multiplicity: CallMultiplicity::Many,
+        }),
+        Some(CallableConvention {
+            parameters: vec![Passing::Mut, Passing::Take, Passing::Borrow],
+            multiplicity: CallMultiplicity::Once,
+        }),
+    ];
+    let scoped = ContentHash::of_bytes(b"scoped capture identity, not physical layout identity");
+    for convention in conventions {
+        for environment in [None, Some(scoped)] {
+            let path = DefPath::core("identity.scoped_shape");
+            let key =
+                InstanceKey::new(&path, 3, &actuals, &types, convention.as_ref(), environment)
+                    .unwrap();
+            let restored = InstanceKey::from_encoding(&path, 3, key.encoding().to_vec()).unwrap();
+            assert_eq!(
+                key.identity_shape().unwrap(),
+                (convention.clone(), environment)
+            );
+            assert_eq!(
+                restored.identity_shape().unwrap(),
+                (convention.clone(), environment)
+            );
+            assert_eq!(
+                key.derived("identity.stage", &[b"stage-input"])
+                    .identity_shape()
+                    .unwrap(),
+                (convention.clone(), environment)
+            );
+        }
+    }
+}
+
+#[test]
+fn identity_shape_refuses_missing_environment_framing_and_wrong_parameter_count() {
+    use hirsel_lir::abi_types::CallMultiplicity;
+    let key = base("identity.missing_shape", 0);
+    let mut bytes = key.encoding().to_vec();
+    bytes.truncate(bytes.len() - 9);
+    let malformed = InstanceKey::from_encoding(key.definition(), key.body(), bytes).unwrap();
+    assert_eq!(malformed.identity_shape(), Err(InstanceKeyError::Encoding));
+
+    let convention = CallableConvention {
+        parameters: vec![Passing::Mut],
+        multiplicity: CallMultiplicity::Many,
+    };
+    let key = InstanceKey::new(
+        key.definition(),
+        0,
+        &[],
+        &TypeInterner::new(None),
+        Some(&convention),
+        None,
+    )
+    .unwrap();
+    let mut parts = atoms(key.encoding());
+    let bad_count = 2u64.to_le_bytes();
+    let position = parts.iter().position(|atom| *atom == b"mut").unwrap() - 1;
+    parts[position] = &bad_count;
+    let mut bytes = Vec::new();
+    for part in parts {
+        bytes.extend_from_slice(&(part.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(part);
+    }
+    let malformed = InstanceKey::from_encoding(key.definition(), key.body(), bytes).unwrap();
+    assert_eq!(malformed.identity_shape(), Err(InstanceKeyError::Encoding));
+}
+
 fn atoms(mut bytes: &[u8]) -> Vec<&[u8]> {
     let mut parts = Vec::new();
     while !bytes.is_empty() {

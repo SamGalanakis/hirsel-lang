@@ -30,7 +30,7 @@ const REQUEST_LAYOUTS: Domain = Domain {
 };
 const INSTANCE_PLAN: Domain = Domain {
     kind: 0x4e00_002a,
-    schema: 1,
+    schema: 2,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -337,7 +337,7 @@ impl DemandInstances {
                 INSTANCE_PLAN,
                 &self
                     .records
-                    .encode(engine, &InstancePlan::capture(instances, id, table))
+                    .encode(engine, &InstancePlan::capture(instances, id))
                     .ok_or("native original plan encoding failed")?,
             )?,
         })
