@@ -11,7 +11,7 @@ use native::{
         instance_tasks::InstanceTasks,
         link_tasks::{LinkExecution, NativeLinkExecutor},
         products::EmissionOptions,
-        roots::{RootExecutableInputs, RootLinkInputs, RootProducts},
+        roots::{RootExecutableInputs, RootFrozenExecutableInputs, RootLinkInputs, RootProducts},
         source_inputs::NativeInstanceInputs,
     },
     root_source::{NativeLinkFacts, NativeLinkSource},
@@ -97,6 +97,7 @@ struct Platform {
     directory: PathBuf,
     calls: Arc<AtomicU64>,
     frozen: Option<native::object_queries::capture::FrozenLinker>,
+    frozen_kit: Option<native::object_queries::capture::FrozenLinkKit>,
 }
 impl NativeLinkExecutor for Platform {
     fn link(
@@ -116,24 +117,46 @@ impl NativeLinkExecutor for Platform {
             false,
         )?;
         if let Some(linker) = self.frozen {
-            let plan = products.plan_executable(
-                input.root,
-                input.ready,
-                RootExecutableInputs {
-                    entry: &self.entry,
-                    backend: self.backend,
-                    objects: input.objects,
-                    directory: &self.directory,
-                    requested: None,
-                    standalone: false,
-                    platform: native::ExecutableLinkInputs {
-                        kit: &self.tools.kit,
-                        runtime: &archive,
-                        foreign: &[],
-                        loader: None,
+            let plan = if let Some(kit) = self.frozen_kit {
+                products.plan_frozen_executable(
+                    input.root,
+                    input.ready,
+                    RootFrozenExecutableInputs {
+                        entry: &self.entry,
+                        backend: self.backend,
+                        objects: input.objects,
+                        directory: &self.directory,
+                        requested: None,
+                        standalone: false,
+                        platform: native::FrozenExecutableLinkInputs {
+                            store: self.store.as_ref(),
+                            kit,
+                            runtime: &archive,
+                            foreign: &[],
+                            loader: None,
+                        },
                     },
-                },
-            )?;
+                )?
+            } else {
+                products.plan_executable(
+                    input.root,
+                    input.ready,
+                    RootExecutableInputs {
+                        entry: &self.entry,
+                        backend: self.backend,
+                        objects: input.objects,
+                        directory: &self.directory,
+                        requested: None,
+                        standalone: false,
+                        platform: native::ExecutableLinkInputs {
+                            kit: &self.tools.kit,
+                            runtime: &archive,
+                            foreign: &[],
+                            loader: None,
+                        },
+                    },
+                )?
+            };
             let captured = plan.capture(
                 self.store.as_ref(),
                 linker,
@@ -213,17 +236,22 @@ fn immutable_native_compilation_at_width_one() {
 }
 #[test]
 fn immutable_root_observation_uses_only_admitted_portable_summaries() {
-    with_compiler_stack(|| run_case(1, true, false));
+    with_compiler_stack(|| run_case(1, true, false, false));
 }
 #[test]
 #[ignore = "requires root-plan-proof frozen linker package"]
 fn frozen_root_plans_run_both_backends_without_live_linker_inputs() {
-    with_compiler_stack(|| run_case(1, false, true));
+    with_compiler_stack(|| run_case(1, false, true, false));
+}
+#[test]
+#[ignore = "requires root-frozen-kit-proof selected linker inputs"]
+fn admitted_root_plans_bind_the_kit_before_codegen() {
+    with_compiler_stack(|| run_case(1, false, true, true));
 }
 fn run(jobs: usize) {
-    run_case(jobs, false, false);
+    run_case(jobs, false, false, false);
 }
-fn run_case(jobs: usize, observation_only: bool, frozen_plan: bool) {
+fn run_case(jobs: usize, observation_only: bool, frozen_plan: bool, use_frozen_kit: bool) {
     let directory = tempfile::tempdir().unwrap();
     // The same admitted transport is selected before source or native work.
     // Its 24 MiB comes from dispatch's former 96 MiB; total stays 768 MiB.
@@ -259,8 +287,27 @@ fn run_case(jobs: usize, observation_only: bool, frozen_plan: bool) {
         )
         .unwrap()
     });
+    let frozen_kit = use_frozen_kit.then(|| {
+        native::object_queries::capture::FrozenLinkKit::snapshot(
+            store.as_ref(),
+            &tools.kit,
+            &target,
+            frozen.unwrap(),
+            native::object_queries::capture::CaptureLimits {
+                archive_bytes: 64 << 20,
+                files: 256,
+            },
+        )
+        .unwrap()
+    });
     let tool_identity = frozen
-        .map(|linker| format!("{:?}", linker.reference()))
+        .map(|linker| {
+            format!(
+                "{:?}:{:?}",
+                linker.reference(),
+                frozen_kit.map(|kit| kit.reference())
+            )
+        })
         .unwrap_or_default();
     let policy = ContentHash::of_bytes(b"immutable native compilation control");
     let mut previous: Option<(Vec<store::Reference>, store::Reference)> = None;
@@ -418,6 +465,7 @@ fn run_case(jobs: usize, observation_only: bool, frozen_plan: bool) {
                         .join(format!("{literal}-{fresh}-{}", backend.name())),
                     calls: calls.clone(),
                     frozen,
+                    frozen_kit,
                 }),
             })
             .collect();

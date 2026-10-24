@@ -80,6 +80,15 @@ PROOFS = {
                         'HIRSEL_CAPTURE_LINKER': '/original packaged linker',
                         'HIRSEL_LINK_KIT': '/selected kit', 'HIRSEL_RUNTIME_ARCHIVES': '/selected runtime'},
     },
+    'native_compilation_tasks_19::admitted_root_plans_bind_the_kit_before_codegen': {
+        'source': 'crates/hirsel-driver/tests/it/native_compilation_tasks_19.rs',
+        'target': '//tools/buck2/native-toolchain:root-frozen-kit-proof',
+        'probe': 'tools/buck2/native-toolchain/root_frozen_kit_proof.py',
+        'arguments': ['/original pinned llvm', '/original packaged linker', '/selected kit', '/selected runtime', '/selected harness'],
+        'environment': {'LLVM_SYS_231_PREFIX': '/original pinned llvm',
+                        'HIRSEL_CAPTURE_LINKER': '/original packaged linker',
+                        'HIRSEL_LINK_KIT': '/selected kit', 'HIRSEL_RUNTIME_ARCHIVES': '/selected runtime'},
+    },
 }
 EXPLICIT = json.loads((ROOT / 'tools/ignored-tests.json').read_text())
 ATTRIBUTE = re.compile(r'^[ \t]*#\[(ignore\b[^\]]*)\]|^[ \t]*#\[cfg_attr\(\s*([^,]+),\s*ignore\b', re.M)
