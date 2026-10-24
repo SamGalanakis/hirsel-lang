@@ -13,7 +13,7 @@ use std::{
 /// carries ordinary descriptor data only, not C/V authority or another mutable
 /// query controller. All cold instance/SCC production still precedes NativeTasks.
 pub struct NativeRootTasks {
-    native: Arc<NativeTasks>,
+    pub(super) native: Arc<NativeTasks>,
     source: Arc<NativeLinkSource>,
     key: NativeRootKey,
     query: QueryId,
@@ -73,13 +73,7 @@ impl NativeRootTasks {
         root: ProductRef,
         ready: &[ProductRef],
     ) -> Result<(RootProducts, Arc<NativeRootProduct>), String> {
-        let selected = self
-            .completed
-            .get()
-            .ok_or("root continuation has not completed")?;
-        if selected.product != root {
-            return Err("root continuation returned another output".into());
-        }
+        let selected = self.output(root)?;
         let view = RootProducts::settled(
             self.native.snapshot.clone(),
             self.source.clone(),
@@ -88,6 +82,16 @@ impl NativeRootTasks {
             ready,
         )?;
         Ok((view, selected.clone()))
+    }
+    pub(super) fn output(&self, root: ProductRef) -> Result<Arc<NativeRootProduct>, String> {
+        let selected = self
+            .completed
+            .get()
+            .ok_or("root continuation has not completed")?;
+        if selected.product != root {
+            return Err("root continuation returned another output".into());
+        }
+        Ok(selected.clone())
     }
     pub fn query_id(&self) -> QueryId {
         self.query

@@ -10,6 +10,7 @@ pub mod declarations;
 pub mod demand;
 pub mod graph;
 pub mod instance;
+pub mod link_tasks;
 pub mod local;
 pub mod products;
 pub mod ready;
