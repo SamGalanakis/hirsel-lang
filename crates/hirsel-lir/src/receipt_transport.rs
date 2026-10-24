@@ -2,6 +2,7 @@
 //! not prove original-source demand, SSA custody, slot pairing or entered-edge
 //! writeback. Executable C/H/backend support remains unavailable until those
 //! obligations are independently checked.
+use crate::abi_types::FnAbi;
 use crate::ir::{AddressId, ArgumentValue, CallSite, Pools, Ref, ValueId};
 use crate::sealed_payload_source::{ReceiptContract, ReceiptMode};
 use hirsel_codec::{snapshot_enum, snapshot_struct};
@@ -149,6 +150,70 @@ impl ReceiptCall {
             f(Ref::Value(result));
         }
     }
+}
+
+/// Bind each demanded selector to the actual ordinary argument as well as its
+/// metadata carrier. This local check cannot prove alias disjointness, typed
+/// reaching versions, source authority or metadata ownership/lifetime.
+pub fn check_call_contract(
+    abi: &FnAbi,
+    call: &CallSite,
+    pools: &Pools,
+) -> Result<(), &'static str> {
+    let Some(contract) = &abi.receipts else {
+        if abi.key.receipt_contract.is_some() {
+            return Err("receipt ABI key without its complete contract");
+        }
+        return if call.receipts.is_none() {
+            Ok(())
+        } else {
+            Err("receipt ABI transport: call and callee disagree on contract presence")
+        };
+    };
+    if abi.key.receipt_contract != Some(contract.content()?) {
+        return Err("receipt ABI key disagrees with its complete contract");
+    }
+    let receipt = call
+        .receipts
+        .as_ref()
+        .ok_or("receipt ABI transport: call and callee disagree on contract presence")?;
+    receipt.check_contract(contract)?;
+    let ordinary = call
+        .arguments
+        .get(&pools.call_arguments)
+        .ok_or("receipt call has an invalid ordinary argument range")?;
+    for input in &receipt.arguments {
+        let mut paired = ordinary.iter().filter(|argument| {
+            abi.parameters
+                .get(argument.parameter as usize)
+                .is_some_and(|parameter| parameter.source == input.parameter())
+        });
+        let argument = paired
+            .next()
+            .ok_or("receipt lacks its paired ordinary argument")?;
+        if paired.next().is_some() {
+            return Err("receipt has duplicate ordinary parameter bindings");
+        }
+        let passing = match input.mode() {
+            ReceiptMode::Borrow => hirsel_core_contract::Passing::Borrow,
+            ReceiptMode::Take => hirsel_core_contract::Passing::Take,
+            ReceiptMode::MutSlot => hirsel_core_contract::Passing::Mut,
+        };
+        if argument.passing != passing {
+            return Err("receipt differs from ordinary call ownership");
+        }
+        if matches!(input, ReceiptArgument::Mut { .. })
+            && !matches!(argument.value, ArgumentValue::Address { .. })
+        {
+            return Err("mutable receipt lacks its ordinary mutable address");
+        }
+    }
+    // A unit or other zero-size ordinary result has no physical ValueId.
+    // Its independent metadata result must still be published on success.
+    if contract.result.is_some() && abi.result.is_some() && call.result.is_none() {
+        return Err("receipt result lacks its ordinary non-unit result");
+    }
+    Ok(())
 }
 
 snapshot_enum!(ReceiptArgument {
