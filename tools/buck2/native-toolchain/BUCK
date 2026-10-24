@@ -33,4 +33,5 @@ unpack_toolchain(
 export_file(name = "unpack.py")
 export_file(name = "link_kit.py")
 toolchain_proof(name = "proof", tools = [":llvm", ":arm", ":qemu", ":valgrind"], script = "proof.sh")
+toolchain_proof(name = "source-entry-proof", tools = [":llvm", "root//:hirsel-driver-unittest-harness"], script = "source_entry_proof.sh")
 export_file(name = "environment.tsv", visibility = ["PUBLIC"])
