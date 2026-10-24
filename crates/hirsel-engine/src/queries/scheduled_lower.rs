@@ -570,7 +570,7 @@ impl FrontLowerQueries {
         source: &mut Source,
     ) -> Result<Value, QueryError> {
         let front = self.front.query(path).ok_or(QueryError::NotImplemented)?;
-        let selected = source.reads.read(front).await;
+        let selected = source.reads.read_consuming(front).await;
         let reference = selected.map(|p| p.record).unwrap_or_else(|r| r);
         let body = self
             .front
@@ -791,7 +791,7 @@ impl Source {
             .owner
             .id(path, kind)
             .ok_or(QueryError::NotImplemented)?;
-        let selected = self.reads.read(id).await;
+        let selected = self.reads.read_consuming(id).await;
         let outcome = self
             .owner
             .selected(id, selected)
