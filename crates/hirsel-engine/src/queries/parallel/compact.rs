@@ -112,6 +112,7 @@ pub(crate) struct CompactCompleted {
     lowering_inputs: Option<lowering::LoweringUse>,
     payload: Option<Vec<u8>>,
     store_write: Option<Result<(), QueryError>>,
+    verified_mode: Option<crate::semantic::VerifiedMode>,
     outcome: PublishedResult,
 }
 impl CompactCompleted {
@@ -179,7 +180,13 @@ impl CompactCompleted {
             && let Some(writer) = writer
             && let Some(stage) = &self.modes
         {
-            self.store_write = Some(writer.write(&stage.reads, payload));
+            let result = writer.write_verified_mode(&stage.reads, payload);
+            match &result {
+                Ok(Some(proof)) => self.verified_mode = Some(proof.clone()),
+                Err(_) => self.verified_mode = None,
+                Ok(None) => (),
+            }
+            self.store_write = Some(result.map(|_| ()));
         }
     }
 
@@ -308,6 +315,9 @@ impl CompactCompleted {
                 Err(_) => consistent = false,
             }
         }
+        let verified_mode = modes
+            .as_ref()
+            .and_then(|stage| stage.products.verified_mode.clone());
         let result = if consistent {
             result.map(|output| {
                 let (summary, growth) = summarize(worker.types, &output.value.typed);
@@ -338,6 +348,7 @@ impl CompactCompleted {
             lowering_inputs,
             payload: consistent.then_some(payload).flatten(),
             store_write: None,
+            verified_mode,
             outcome: PublishedResult {
                 definition: done.definition,
                 result,
@@ -367,6 +378,7 @@ impl QueryEngine {
             lowering_inputs,
             payload,
             store_write,
+            verified_mode,
             mut outcome,
             ..
         } = done;
@@ -448,6 +460,7 @@ impl QueryEngine {
                     false,
                     Arc::new(PhaseProducts {
                         mode_diagnostics: outcome.diagnostic_phases.clone(),
+                        verified_mode: (!store_failed).then_some(verified_mode).flatten(),
                         ..Default::default()
                     }),
                 );
