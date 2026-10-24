@@ -240,6 +240,38 @@ impl ReadyQueries {
             .map(|accepted| accepted.linkage())
     }
 
+    /// Body access reserved for a selected emission miss. The supplied
+    /// descriptor must still match this query's current C-owned association.
+    pub(super) fn read(
+        &self,
+        key: &InstanceAddress,
+        product: &ReadyProduct,
+        environment: &NativeEnvironment<'_>,
+    ) -> Result<
+        (
+            hirsel_lir::products::LayoutClosure,
+            hirsel_lir::products::UnitBody,
+        ),
+        String,
+    > {
+        let current = self
+            .lookup_inner(key, product.product.action, environment)
+            .ok_or("Ready materialization lost current C admission")?;
+        if current.product != product.product {
+            return Err("Ready materialization descriptor differs".into());
+        }
+        let accepted = self
+            .native
+            .lookup(
+                subject(key, product.product.action),
+                key.policy,
+                StageKind::Ready,
+                environment,
+            )
+            .ok_or("Ready materialization lost native output")?;
+        self.native.read(&accepted, environment.target)
+    }
+
     /// One actual local miss and final C. No proof is inferred from the input
     /// references, the pass outputs, or a producer's supplied summary.
     pub fn publish_from_value(

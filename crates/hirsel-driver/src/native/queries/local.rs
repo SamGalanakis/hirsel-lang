@@ -38,6 +38,47 @@ fn function(key: &InstanceAddress) -> Function {
     (key.instance.definition().clone(), key.instance.digest())
 }
 
+fn bind_statics(
+    statics: StaticRows,
+    binding: &Binding,
+) -> Result<Vec<hirsel_lir::statics::StaticData>, String> {
+    statics
+        .into_iter()
+        .map(|(layouts, text)| {
+            let mut data: hirsel_lir::statics::StaticData =
+                hirsel_codec::from_text(&text).map_err(|e| format!("local static: {e:?}"))?;
+            if data.blocks.len() != layouts.len() {
+                return Err("local static layout count differs".into());
+            }
+            for (i, (block, layout)) in data.blocks.iter_mut().zip(layouts).enumerate() {
+                if block.layout.0 as usize != i {
+                    return Err("noncanonical local static layout index".into());
+                }
+                block.layout = binding
+                    .layout(layout)
+                    .ok_or("missing local static layout")?;
+            }
+            Ok(data)
+        })
+        .collect()
+}
+
+pub(super) fn read_statics(
+    store: &dyn ResultStore,
+    reference: Reference,
+    binding: &Binding,
+) -> Result<Vec<hirsel_lir::statics::StaticData>, String> {
+    if reference.domain != STATICS_FINALIZERS_DOMAIN {
+        return Err("wrong static input domain".into());
+    }
+    let bytes = store
+        .get_content(reference)
+        .ok_or("missing local statics")?;
+    let (statics, _): (StaticRows, FinalizerRows) =
+        serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+    bind_statics(statics, binding)
+}
+
 /// One selected request's local Ready provider. Completed base instances and
 /// summaries are supplied by the dependency scheduler, never executed here.
 pub struct LocalReadyQueries {
@@ -250,25 +291,7 @@ impl LocalReadyQueries {
                 })
                 .collect::<Result<_, String>>()?,
         );
-        let statics = statics
-            .into_iter()
-            .map(|(layouts, text)| {
-                let mut data: hirsel_lir::statics::StaticData =
-                    hirsel_codec::from_text(&text).map_err(|e| format!("local static: {e:?}"))?;
-                if data.blocks.len() != layouts.len() {
-                    return Err("local static layout count differs".into());
-                }
-                for (i, (block, layout)) in data.blocks.iter_mut().zip(layouts).enumerate() {
-                    if block.layout.0 as usize != i {
-                        return Err("noncanonical local static layout index".into());
-                    }
-                    block.layout = binding
-                        .layout(layout)
-                        .ok_or("missing local static layout")?;
-                }
-                Ok(data)
-            })
-            .collect::<Result<Vec<_>, String>>()?;
+        let statics = bind_statics(statics, &binding)?;
         let inputs = Inputs {
             memo: Default::default(),
             target: environment.target,

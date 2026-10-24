@@ -48,6 +48,33 @@ impl NativeDeclarations {
         Ok(definition)
     }
 
+    /// Capture the original Lower snapshot before native recipe restoration.
+    /// Only an actual V output supplies its observation. An unavailable source
+    /// observation remains None; this does not construct a receipt contract or
+    /// infer independently empty call/closure expansion.
+    pub fn original_source(
+        &mut self,
+        engine: &mut QueryEngine,
+        path: &DefPath,
+    ) -> Result<
+        (
+            hirsel_tir::DefinitionRef,
+            Option<hirsel_rc::sealed_source::SourceInput>,
+        ),
+        QueryError,
+    > {
+        let definition = self.body(engine, path)?;
+        let source = &self.sources[path];
+        let input = source.lower.as_ref().map(|lower| {
+            hirsel_rc::sealed_source::SourceInput::capture(
+                lower.observation_identity(),
+                source.source.implementation_revision,
+                definition.clone(),
+            )
+        });
+        Ok((definition, input))
+    }
+
     pub fn collect(
         engine: &mut QueryEngine,
         cache: &mut NativeDiscoveryCache,

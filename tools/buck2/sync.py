@@ -178,6 +178,7 @@ TEST_DATA = {
     "hirsel-driver-test-it": ["crates/hirsel-driver/tests/fixtures/**", "crates/hirsel-rt/include/**",
                               "examples/tasks/model.hir", "examples/tasks/store.hir"],
     "hirsel-driver-test-it-stdlib": ["crates/hirsel-driver/tests/fixtures/**"],
+    "hirsel-driver-test-native-products-19": ["crates/hirsel-rt/include/**"],
     "hirsel-llvm-test-it": ["crates/hirsel-llvm/tests/native/**"],
     "hirsel-ownership-unittest": ["crates/hirsel-ownership/proptest-regressions/**"],
     "hirsel-pipeline-tests-test-front": ["crates/hirsel-llvm/tests/native/fixture.h"],
@@ -870,8 +871,9 @@ def first_party(meta: dict) -> str:
             # Core native query controls use source declarations only; unlike
             # the backend/stdlib suites they need no installed std products.
             core_native_queries = binary == "hirsel-driver-test-native-queries-19"
+            native_product_queries = binary == "hirsel-driver-test-native-products-19"
             return dict(data=test_data(binary, name, package_dir, src), runtime_archives=None if binary == "hirsel-rt-unittest" or core_native_queries else runtime_archives,
-                        products=PRODUCTS if name in PRODUCT_TESTS and not core_native_queries else None,
+                        products=PRODUCTS if name in PRODUCT_TESTS and not (core_native_queries or native_product_queries) else None,
                         seeded=seeded(target_dir(package_dir, src), src) or None, skips=FULL_GATE_SKIPS.get(binary))
 
         lib = next((t for t in package["targets"] if set(t["kind"]) & {"lib", "rlib", "staticlib"}), None)

@@ -465,10 +465,15 @@ impl DemandInstances {
             if recipe.key()? != key.instance {
                 return Err("source recipe differs from demanded key".into());
             }
-            let original = declarations
-                .body(engine, &request.key.definition)
+            let (original, source_input) = declarations
+                .original_source(engine, &request.key.definition)
                 .map_err(|e| format!("native source body: {e:?}"))?;
-            Some((recipe, original))
+            if let Some(input) = &source_input {
+                input
+                    .demand_body(&key.instance)
+                    .map_err(|e| format!("native original source: {e:?}"))?;
+            }
+            Some((recipe, original, source_input))
         } else {
             None
         };
@@ -481,13 +486,18 @@ impl DemandInstances {
             LayoutBuilder::from_products(&self.target, &owners, &bound.iter().collect::<Vec<_>>())
                 .map_err(|e| format!("native request layout binding: {e:?}"))?;
         layouts.prepare_native_controls();
-        let (mut instances, id) = if let Some((recipe, original)) = source {
-            recipe.restore(
+        let (mut instances, id) = if let Some((recipe, original, source_input)) = source {
+            let restored = recipe.restore(
                 &declarations.program,
                 &declarations.context,
                 original,
                 &mut layouts,
-            )?
+            )?;
+            // Keep the original snapshot through restoration. A future receipt
+            // factory consumes it here, with complete independent expansions;
+            // the current unavailable contract remains unavailable.
+            drop(source_input);
+            restored
         } else {
             let recipe = LibraryRecipe::decode(&self.records, engine, &recipe_bytes)?;
             if recipe.key()? != key.instance {

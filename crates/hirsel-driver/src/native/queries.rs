@@ -11,6 +11,7 @@ pub mod demand;
 pub mod graph;
 pub mod instance;
 pub mod local;
+pub mod products;
 pub mod ready;
 pub mod recipes;
 pub mod source;
