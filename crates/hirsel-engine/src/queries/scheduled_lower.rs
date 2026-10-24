@@ -151,6 +151,12 @@ impl FrontLowerQueries {
         )
     }
 
+    /// Input rows plus actual settled metadata/receipt debits. Historical
+    /// provider archive traffic and live runtime futures are separate owners.
+    pub fn retained_bytes(&self) -> u64 {
+        self._allowance.bytes() - *self.retention.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     pub fn memo_snapshot(&self) -> Vec<(crate::memo::MemoKey, Arc<Reads>)> {
         let outcomes = self.outcomes.lock().unwrap_or_else(|e| e.into_inner());
         self.inputs
@@ -408,16 +414,9 @@ impl FrontLowerQueries {
         path: DefPath,
         reads: QueryReads,
     ) -> Result<ProductRef, Reference> {
-        // Outputs are charged on actual demand, rather than reserving
-        // two maximum-size outcomes for every potential dependency up front.
-        // The held owner keeps this cumulative bound through runtime eviction.
-        let output_bound = Self::output_bytes(self.weight).ok_or(self.errors.resource)?;
-        let mut retention = self.retention.lock().unwrap_or_else(|e| e.into_inner());
-        if *retention < output_bound {
-            return Err(self.errors.resource);
-        }
-        *retention -= output_bound;
-        drop(retention);
+        // The live future and working bodies use this task's runtime weight.
+        // Only actual settled descriptor/receipt ownership is retained below;
+        // provider archives and unused maximum task weights are not ownership.
         let mut source = Source {
             owner: self.clone(),
             reads,
@@ -480,6 +479,35 @@ impl FrontLowerQueries {
         if bytes.len() as u64 > self.weight.retained {
             return Err(self.errors.resource);
         }
+        let mut charge = (bytes.len() as u64)
+            .checked_mul(2)
+            .and_then(|bytes| {
+                bytes.checked_add(
+                    (std::mem::size_of::<Outcome>() + std::mem::size_of::<Reference>() + 128)
+                        as u64,
+                )
+            })
+            .ok_or(self.errors.resource)?;
+        if let Some(receipt) = &execution {
+            charge = charge
+                .checked_add(receipt.retained_bytes().ok_or(self.errors.resource)?)
+                .ok_or(self.errors.resource)?;
+        }
+        if let Ok(Value::Lower(lower)) = &result {
+            if let Some(verified) = &lower.verified {
+                charge = charge
+                    .checked_add(verified.retained_bytes().ok_or(self.errors.resource)?)
+                    .ok_or(self.errors.resource)?;
+            }
+            if lower.acceptance.is_some() {
+                charge = charge
+                    .checked_add(std::mem::size_of::<hirsel_validate::AcceptedArtifact>() as u64)
+                    .ok_or(self.errors.resource)?;
+            }
+        }
+        let mut retention = self.retention.lock().unwrap_or_else(|e| e.into_inner());
+        *retention = retention.checked_sub(charge).ok_or(self.errors.resource)?;
+        drop(retention);
         // Descriptor domains are explicit: an S5 transport descriptor must
         // never overwrite a scalar Lower/Evaluate archive of another schema.
         let domain = if result.is_err() {

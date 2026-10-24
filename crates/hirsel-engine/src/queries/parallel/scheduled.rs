@@ -135,8 +135,9 @@ impl FrontBodyQueries {
         Some(Arc::new(syntax))
     }
 
-    /// Potential task, result and counter slots. Body archives and completed
-    /// read/summary metadata consume the remaining allowance only on demand.
+    /// Potential task, result and counter slots. Completed read/summary
+    /// metadata consumes the remaining allowance only on demand. Archive bytes
+    /// belong to the selected provider, not to these reference-only rows.
     pub fn input_bytes(definitions: &[DefPath]) -> Option<u64> {
         definitions
             .iter()
@@ -152,7 +153,6 @@ impl FrontBodyQueries {
     }
     fn retain(
         &self,
-        reference: Reference,
         outcome: &ModeResult,
         checked: &CheckedProduct,
         table_keys: Option<&crate::table_keys::TableKeyUse>,
@@ -168,7 +168,7 @@ impl FrontBodyQueries {
             ),
             |anchor| self.citations.record_owner(anchor),
         )?;
-        let charge = reference.len.checked_add(bytes.len() as u64)?;
+        let charge = bytes.len() as u64;
         let mut retention = self.retention.lock().unwrap_or_else(|e| e.into_inner());
         *retention = retention.checked_sub(charge)?;
         Some(())
@@ -191,6 +191,12 @@ impl FrontBodyQueries {
             }),
         })
     }
+    /// Captured rows and actual settled metadata owned by this producer view.
+    /// Provider content bytes and active decode scratch have separate owners.
+    pub fn retained_bytes(&self) -> u64 {
+        self._allowance.bytes() - *self.retention.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     pub fn store_adoptions(&self) -> u64 {
         self.store_adoptions.load(Relaxed)
     }
@@ -516,7 +522,6 @@ impl BodyTask {
             Arc::new(variant.reads.clone()),
         )?;
         queries.retain(
-            variant.output,
             &restored.outcome,
             &restored.checked,
             restored.table_keys.as_deref(),
@@ -761,7 +766,6 @@ impl BodyTask {
         };
         queries
             .retain(
-                record,
                 &outcome,
                 &checked,
                 queries
@@ -831,7 +835,6 @@ impl QueryEngine {
         let input_records = crate::NativeRecords::new(self.types.clone(), store.clone());
         let declarations = self.frozen_declarations();
         let mut siblings = BTreeMap::new();
-        let mut archived = BTreeSet::new();
         let mut selected = Vec::new();
         for definition in definitions {
             if self
@@ -855,12 +858,6 @@ impl QueryEngine {
             let bytes = input_records
                 .encode(&*anchors, &(&syntax, syntax.occurrence))
                 .ok_or_else(refusal)?;
-            let reference = SOURCE_INPUT.reference(&bytes).ok_or_else(refusal)?;
-            if archived.insert(reference.output.0) {
-                required = required
-                    .checked_add(bytes.len() as u64)
-                    .ok_or_else(refusal)?;
-            }
             if required > allowance.bytes() {
                 return Err(refusal());
             }
@@ -875,12 +872,6 @@ impl QueryEngine {
                     let bytes = input_records
                         .encode(&*anchors, &(sibling, sibling.occurrence))
                         .ok_or_else(refusal)?;
-                    let reference = SOURCE_INPUT.reference(&bytes).ok_or_else(refusal)?;
-                    if archived.insert(reference.output.0) {
-                        required = required
-                            .checked_add(bytes.len() as u64)
-                            .ok_or_else(refusal)?;
-                    }
                     required = required
                         .checked_add(std::mem::size_of::<Reference>() as u64)
                         .ok_or_else(refusal)?;
