@@ -13,6 +13,8 @@ use std::sync::Arc;
 /// that every caller performed their transformations.
 #[derive(Clone, Debug, Default)]
 pub struct RequestWork {
+    pub store_adoptions: u64,
+    pub recomputations: u64,
     pub front: WorkStats,
     pub touched_memos: Vec<hirsel_engine::memo::MemoKey>,
     pub memo_operations: u64,
