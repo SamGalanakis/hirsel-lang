@@ -67,7 +67,7 @@ fn selected_platform_closes_runtime_before_keys_and_replays_without_originals() 
             aliases: 128,
             name_bytes: 64 << 10,
         };
-        let mut versions = Vec::new();
+        let mut versions: Vec<CapturedPlatform> = Vec::new();
         let image = directory.path().join(format!("{}-program", target.triple));
         for value in [42, 43] {
             let text = if arm {
