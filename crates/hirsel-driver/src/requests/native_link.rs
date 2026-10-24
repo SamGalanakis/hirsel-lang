@@ -5,7 +5,9 @@ use crate::native::{
     self, Backend,
     object_queries::{
         self,
-        capture::{CaptureLimits, FrozenLinkKit, FrozenLinker},
+        capture::CaptureLimits,
+        platform::CapturedPlatform,
+        runtime::{RuntimeFiles, RuntimeLimits},
     },
     queries::{
         compilation_tasks::CompilationBackend,
@@ -13,36 +15,30 @@ use crate::native::{
         roots::{RootFrozenExecutableInputs, RootProducts},
     },
 };
-use hirsel_engine::{
-    runtime::MemoryReservation,
-    store::{Reference, ResultStore},
-};
+use hirsel_engine::{runtime::MemoryReservation, store::ResultStore};
 use hirsel_syntax::{ContentHash, DefPath};
 use std::{
     io::Read,
     path::{Path, PathBuf},
     sync::Arc,
+    time::Duration,
 };
 
-/// Retain filename-sensitive linker selection as well as content. These names
-/// come from selected inputs and never from a public request's task metadata.
-pub(super) struct NamedInput {
-    pub name: String,
-    pub content: Reference,
-}
+/// The capability comes only from selected-input capture and closed target
+/// resolution. Its original metadata reservation transfers into this executor.
 pub(super) struct LinkInputs {
-    pub tool: FrozenLinker,
-    pub kit: FrozenLinkKit,
-    pub runtime: NamedInput,
-    pub foreign: Vec<NamedInput>,
-    pub loader: Option<(PathBuf, PathBuf)>,
+    pub platform: CapturedPlatform,
+    pub emulator: Option<PathBuf>,
+    pub timeout: Duration,
+    pub runtime_limits: RuntimeLimits,
     pub limits: CaptureLimits,
 }
-pub(super) struct FrozenPlatform {
+pub(crate) struct FrozenPlatform {
     store: Arc<dyn ResultStore>,
     inputs: LinkInputs,
     entry: DefPath,
     backend: Backend,
+    target: native::TargetSpec,
     requested: Option<Arc<hirsel_run_config::ValidatedRun>>,
     linker_options: ContentHash,
     _allowance: MemoryReservation,
@@ -53,61 +49,79 @@ impl FrozenPlatform {
         inputs: LinkInputs,
         entry: DefPath,
         backend: Backend,
+        target: native::TargetSpec,
         requested: Option<Arc<hirsel_run_config::ValidatedRun>>,
         allowance: MemoryReservation,
     ) -> Result<Arc<Self>, String> {
-        let valid_name = |name: &str| {
-            let mut parts = Path::new(name).components();
-            matches!(parts.next(), Some(std::path::Component::Normal(_))) && parts.next().is_none()
-        };
-        if !valid_name(&inputs.runtime.name)
-            || inputs.foreign.iter().any(|input| !valid_name(&input.name))
-            || inputs.limits.archive_bytes == 0
-            || inputs.limits.files == 0
-        {
-            return Err("invalid selected native platform input bounds or filename".into());
+        if inputs.limits.archive_bytes == 0 || inputs.limits.files == 0 {
+            return Err("invalid selected native platform input bounds".into());
         }
+        inputs
+            .platform
+            .runtime()
+            .validate(store.as_ref(), &target, inputs.runtime_limits)?;
         let mut weight = hirsel_engine::NativeMetadataWeight::default();
         weight.add(std::mem::size_of::<Self>());
         weight.path(&entry);
-        weight.add(inputs.runtime.name.capacity());
-        weight.vec(&inputs.foreign, |weight, input| {
-            weight.add(input.name.capacity())
-        });
-        if let Some((loader, libraries)) = &inputs.loader {
-            weight.add(loader.capacity());
-            weight.add(libraries.capacity());
+        weight.add(target.triple.capacity());
+        if let Some(emulator) = &inputs.emulator {
+            weight.add(emulator.capacity());
         }
-        if weight.bytes() > allowance.bytes() {
+        let metadata = weight
+            .bytes()
+            .checked_add(inputs.platform.retained_metadata_bytes())
+            .ok_or("selected native platform metadata overflow")?;
+        if metadata > allowance.bytes() {
             return Err("selected native platform metadata exceeds admission".into());
         }
         let encoded = serde_json::to_vec(&(
-            1u32,
-            inputs.tool.reference(),
-            inputs.kit.reference(),
+            2u32,
+            inputs.platform.identity(),
+            target.digest(),
             backend.name(),
             &entry,
-            (&inputs.runtime.name, inputs.runtime.content),
-            inputs
-                .foreign
-                .iter()
-                .map(|input| (&input.name, input.content))
-                .collect::<Vec<_>>(),
-            &inputs.loader,
             requested.as_ref().map(|run| run.identity()),
         ))
         .map_err(|error| error.to_string())?;
         let linker_options =
-            ContentHash::of_parts("hirsel.host.frozen-platform.v1", [encoded.as_slice()]);
+            ContentHash::of_parts("hirsel.host.frozen-platform.v2", [encoded.as_slice()]);
         Ok(Arc::new(Self {
             store,
             inputs,
             entry,
             backend,
+            target,
             requested,
             linker_options,
             _allowance: allowance,
         }))
+    }
+    /// Run this for reopened Link hits too, before exposing any executable.
+    pub fn validate_image(&self, image: &Path) -> Result<(), String> {
+        self.inputs.platform.validate_image(
+            self.store.as_ref(),
+            &self.target,
+            image,
+            self.inputs.emulator.as_deref(),
+            self.inputs.timeout,
+            self.inputs.runtime_limits,
+        )
+    }
+    pub fn runtime_files(&self, image: &Path) -> Result<RuntimeFiles, String> {
+        self.validate_image(image)?;
+        self.inputs.platform.runtime().materialize(
+            self.store.as_ref(),
+            &self.target,
+            self.inputs.runtime_limits,
+        )
+    }
+    pub fn executable(&self, path: PathBuf) -> Result<native::Runnable, String> {
+        let runtime = self.runtime_files(&path)?;
+        Ok(native::Runnable::closed(
+            path,
+            runtime,
+            self.inputs.emulator.clone(),
+        ))
     }
     pub fn backend(
         self: &Arc<Self>,
@@ -123,10 +137,11 @@ impl FrozenPlatform {
             profile_options,
             runtime_abi,
             linker_options: self.linker_options,
-            runtime_archives: vec![self.inputs.runtime.content],
+            runtime_archives: vec![self.inputs.platform.runtime_archive().content],
             foreign_inputs: self
                 .inputs
-                .foreign
+                .platform
+                .foreign()
                 .iter()
                 .map(|input| input.content)
                 .collect(),
@@ -143,10 +158,11 @@ impl NativeLinkExecutor for FrozenPlatform {
     }
     fn link(&self, native: &mut RootProducts, input: LinkExecution<'_>) -> Result<Vec<u8>, String> {
         if input.key.linker_options != self.linker_options
-            || input.inputs.runtime_archives != [self.inputs.runtime.content]
+            || input.inputs.runtime_archives != [self.inputs.platform.runtime_archive().content]
             || !input.inputs.foreign_inputs.iter().copied().eq(self
                 .inputs
-                .foreign
+                .platform
+                .foreign()
                 .iter()
                 .map(|input| input.content))
         {
@@ -157,16 +173,17 @@ impl NativeLinkExecutor for FrozenPlatform {
         let foreign_dir = scratch.path().join("foreign");
         std::fs::create_dir(&runtime_dir).map_err(|error| error.to_string())?;
         std::fs::create_dir(&foreign_dir).map_err(|error| error.to_string())?;
-        let runtime = runtime_dir.join(&self.inputs.runtime.name);
+        let runtime = runtime_dir.join(&self.inputs.platform.runtime_archive().name);
         object_queries::materialize_link_input(
             self.store.as_ref(),
-            self.inputs.runtime.content,
+            self.inputs.platform.runtime_archive().content,
             &runtime,
             false,
         )?;
         let foreign = self
             .inputs
-            .foreign
+            .platform
+            .foreign()
             .iter()
             .enumerate()
             .map(|(index, input)| {
@@ -194,17 +211,22 @@ impl NativeLinkExecutor for FrozenPlatform {
                 standalone: self.requested.is_none(),
                 platform: native::FrozenExecutableLinkInputs {
                     store: self.store.as_ref(),
-                    kit: self.inputs.kit,
+                    kit: self.inputs.platform.kit(),
                     runtime: &runtime,
                     foreign: &foreign,
-                    loader: self.inputs.loader.clone(),
+                    loader: None,
                 },
             },
         )?;
-        let capture = plan.capture(self.store.as_ref(), self.inputs.tool, self.inputs.limits)?;
+        let capture = plan.capture(
+            self.store.as_ref(),
+            self.inputs.platform.linker(),
+            self.inputs.limits,
+        )?;
         capture.validate(self.store.as_ref())?;
         let executable = scratch.path().join("program");
         capture.link(self.store.as_ref(), &executable)?;
+        self.validate_image(&executable)?;
         let limit = self.inputs.limits.archive_bytes;
         let mut bytes = Vec::new();
         std::fs::File::open(executable)

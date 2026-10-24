@@ -15,6 +15,7 @@ pub(crate) fn materialize_output(
         object_queries::linked_product(input.store.as_ref(), input.product).map_err(error)?;
     object_queries::materialize_executable(input.store.as_ref(), &linked, destination)
         .map_err(error)?;
+    input.platform.validate_image(destination).map_err(error)?;
     Ok(input.report.clone())
 }
 
@@ -76,8 +77,12 @@ pub(crate) fn run_output(
         }
         #[cfg(test)]
         super::tool::before_request_link(&scratch.0);
+        let runnable = input
+            .platform
+            .executable(executable)
+            .map_err(|message| NativeError::new(StageName::Launch, message))?;
         let launched = link::launch_live(
-            &link::Runnable::Executable(executable),
+            &runnable,
             &input.request.target,
             &input.toolchain,
             &scratch.0,

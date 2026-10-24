@@ -12,6 +12,7 @@ struct OutputOwner {
     _bootstrap: Arc<NativeBootstrap>,
     _compilation: Arc<native::queries::compilation_tasks::CompilationTasks>,
     _source: Arc<FrontNativeProducts>,
+    _platform: Arc<super::native_link::FrozenPlatform>,
 }
 
 /// The compiler installs this only for its selected Build policy. Launch
@@ -21,12 +22,14 @@ pub(super) struct NativeBuildReadiness {
     request: NativeRequest,
     store: Arc<dyn ResultStore>,
     toolchain: Arc<native::Toolchain>,
+    platform: Arc<super::native_link::FrozenPlatform>,
 }
 impl NativeBuildReadiness {
     pub fn new(
         bootstrap: Arc<NativeBootstrap>,
         request: NativeRequest,
         toolchain: Arc<native::Toolchain>,
+        platform: Arc<super::native_link::FrozenPlatform>,
     ) -> Result<Self, NativeError> {
         // Evidence requires its actual assessment/discharge producer. An
         // uninstalled proof root can never become an empty successful report.
@@ -42,6 +45,7 @@ impl NativeBuildReadiness {
             request,
             store,
             toolchain,
+            platform,
         })
     }
     pub fn materialize(&self, selected: ProductRef) -> Result<Arc<NativeExecution>, NativeError> {
@@ -75,15 +79,18 @@ impl NativeBuildReadiness {
             object_queries::linked_product(self.store.as_ref(), *linked).map_err(failed)?;
         object_queries::materialize_executable(self.store.as_ref(), &artifact, &executable)
             .map_err(failed)?;
+        self.platform.validate_image(&executable).map_err(failed)?;
         let owner = Arc::new(OutputOwner {
             _directory: directory,
             _bootstrap: self.bootstrap.clone(),
             _compilation: compilation.clone(),
             _source: source.clone(),
+            _platform: self.platform.clone(),
         });
         Ok(Arc::new(NativeExecution {
             executable,
             product: *linked,
+            platform: self.platform.clone(),
             store: self.store.clone(),
             observation,
             report: vec![],

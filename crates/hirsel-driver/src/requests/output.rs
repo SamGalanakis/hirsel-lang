@@ -214,6 +214,7 @@ pub struct NativeObservation {
 pub struct NativeExecution {
     pub executable: PathBuf,
     pub product: hirsel_engine::runtime::ProductRef,
+    pub(crate) platform: Arc<super::native_link::FrozenPlatform>,
     pub store: Arc<dyn hirsel_engine::store::ResultStore>,
     pub observation: NativeObservation,
     pub report: Vec<String>,
