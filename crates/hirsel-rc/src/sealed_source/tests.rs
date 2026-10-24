@@ -417,6 +417,7 @@ fn source_witness_33_expected_empty_is_distinct_from_unavailable_provider() {
         invocation_bodies: vec![],
         invocations: Default::default(),
         pretransfer_adapters: vec![],
+        pretransfer_actuals: Vec::new(),
     });
     assert!(
         declarations
@@ -559,6 +560,7 @@ fn source_witness_33_provider_refuses_mixed_source_snapshots() {
         invocation_bodies: vec![],
         invocations: Default::default(),
         pretransfer_adapters: vec![],
+        pretransfer_actuals: Vec::new(),
     });
     declarations.insert(one).unwrap();
     assert!(declarations.insert(two).is_err());
