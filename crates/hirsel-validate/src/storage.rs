@@ -57,7 +57,7 @@ pub fn validate_program(
     declared: &[CallableStorageProfile],
 ) -> StorageValidation {
     let mut validation = StorageValidation::default();
-    let reader = Reader::new(signatures);
+    let reader = Reader::new(types, signatures);
     reconstruct(types, definitions, &reader, instances, &mut validation);
     reader.finish(&mut validation.reads.declarations);
     let mut claims = BTreeMap::new();
