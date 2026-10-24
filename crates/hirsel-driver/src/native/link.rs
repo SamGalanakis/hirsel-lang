@@ -93,6 +93,9 @@ pub struct RuntimeBuild {
     /// Valgrind memcheck client requests for the runtime's own blocks, with every
     /// allocation, free and arena bump kept in the runtime.
     pub memcheck: bool,
+    /// Compile ownership hooks and their bounded diagnostic buffer. Ordinary
+    /// runtime products omit both the hooks and their private run state.
+    pub ownership_trace: bool,
 }
 impl RuntimeBuild {
     pub(crate) fn features(self) -> String {
@@ -101,6 +104,7 @@ impl RuntimeBuild {
             self.system_allocator.then_some("system-allocator"),
             self.measurement.then_some("measurement"),
             self.memcheck.then_some("memcheck"),
+            self.ownership_trace.then_some("ownership-trace"),
         ]
         .into_iter()
         .flatten()

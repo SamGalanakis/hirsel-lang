@@ -120,6 +120,7 @@ fn compile() -> Result<(), Box<dyn std::error::Error>> {
                 memcheck: false,
                 system_allocator: config == "regions-off-system",
                 measurement,
+                ownership_trace: false,
             };
             let runtime_start = Instant::now();
             let toolchain = Toolchain::in_tree_with_runtime(&runtime, &[&target], runtime_build)?;

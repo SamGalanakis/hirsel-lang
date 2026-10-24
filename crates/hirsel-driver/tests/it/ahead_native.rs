@@ -410,6 +410,7 @@ fn depth_helpers_have_the_certified_fixed_machine_extent_in_every_runtime_varian
             system_allocator: mask & 2 != 0,
             measurement: mask & 4 != 0,
             memcheck: false,
+            ownership_trace: false,
         })
         .collect::<Vec<_>>();
     let scratch = tempfile::tempdir().unwrap();

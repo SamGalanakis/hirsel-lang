@@ -627,6 +627,15 @@ mod tests {
             ..variant
         };
         assert_ne!(inputs.key(&target, &prefix, diagnostic).unwrap(), key);
+        let ownership = super::super::RuntimeBuild {
+            ownership_trace: true,
+            ..variant
+        };
+        assert_ne!(inputs.key(&target, &prefix, ownership).unwrap(), key);
+        assert_ne!(
+            inputs.key(&target, &prefix, ownership).unwrap(),
+            inputs.key(&target, &prefix, diagnostic).unwrap()
+        );
         let cache = root.join("cache");
         let built = archive(
             &store,

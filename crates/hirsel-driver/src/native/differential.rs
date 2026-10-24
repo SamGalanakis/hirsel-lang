@@ -72,6 +72,7 @@ impl Runtime {
             system_allocator: self == Self::System,
             measurement: false,
             memcheck: self == Self::Memcheck,
+            ownership_trace: false,
         }
     }
 }
