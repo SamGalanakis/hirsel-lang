@@ -162,3 +162,4 @@ mod settled_native_source_19;
 mod native_declarations_19;
 mod source_invocations_19;
 mod native_recipes_19;
+mod native_instance_products_19;
