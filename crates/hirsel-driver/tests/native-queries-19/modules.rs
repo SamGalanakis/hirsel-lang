@@ -15,3 +15,4 @@ mod arena_tasks;
 mod original_sources;
 mod link_input_streams;
 mod source_proofs;
+mod callable_rewrite;
