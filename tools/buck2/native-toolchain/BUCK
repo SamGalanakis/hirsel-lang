@@ -81,3 +81,5 @@ toolchain_proof(name = "scratch-linker-proof", tools = [":linker", "toolchains//
 toolchain_proof(name = "scratch-transport-units", tools = [":llvm", "root//:hirsel-engine-unittest-harness", "root//:hirsel-driver-unittest-harness"], script = "scratch_transport_units.sh")
 
 toolchain_proof(name = "platform-capture-proof", tools = [":llvm", ":linker", ":kit", "root//:hirsel-rt-archives", ":runtime-auditor", ":glibc_floor", ":qemu", "root//:hirsel-driver-unittest-harness"], script = "platform_capture_proof.py", interpreter = "python3")
+
+toolchain_proof(name = "platform-closure-proof", tools = [":llvm", ":linker", ":kit", "root//:hirsel-rt-archives", ":runtime-auditor", ":glibc_floor", ":qemu", "root//:hirsel-driver-unittest-harness"], script = "platform_closure_proof.py", interpreter = "python3")

@@ -52,6 +52,17 @@ DELEGATED = {
 # These Buck proof targets supply their own immutable tool inputs, rather than
 # the archival runner's environment. Each probe checks exact identity/counts.
 PROOFS = {
+    'native::object_queries::platform::closure_tests::selected_virtual_inputs_keep_scripts_thin_members_and_absolute_dso_names': {
+        'source': 'crates/hirsel-driver/tests/native-validation/platform_closure.rs',
+        'target': '//tools/buck2/native-toolchain:platform-closure-proof',
+        'probe': 'tools/buck2/native-toolchain/platform_closure_proof.py',
+        'arguments': ['/original pinned llvm', '/original packaged linker', '/selected kit', '/selected runtime', '/selected auditors', '/selected floor', '/selected qemu', '/selected harness'],
+        'environment': {'LLVM_SYS_231_PREFIX': '/original pinned llvm',
+                        'HIRSEL_CAPTURE_LINKER': '/original packaged linker',
+                        'HIRSEL_LINK_KIT': '/selected kit', 'HIRSEL_RUNTIME_ARCHIVES': '/selected runtime',
+                        'HIRSEL_AUDITOR_PACKAGE': '/selected auditors', 'HIRSEL_GLIBC_FLOOR': '/selected floor',
+                        'HIRSEL_QEMU': '/selected qemu/qemu-aarch64'},
+    },
     'native::object_queries::platform::tests::selected_platform_closes_runtime_before_keys_and_replays_without_originals': {
         'source': 'crates/hirsel-driver/tests/native-validation/platform_capture.rs',
         'target': '//tools/buck2/native-toolchain:platform-capture-proof',

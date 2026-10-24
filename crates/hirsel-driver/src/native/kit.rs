@@ -281,7 +281,11 @@ impl Link<'_> {
     /// The build ID: every input that reaches the output, by content (the kit's
     /// files by its digest), and the line with input paths replaced by those
     /// contents, so it never depends on a checkout, cache or scratch directory.
-    fn build_id(&self, args: &[OsString]) -> Result<[u8; 20], NativeError> {
+    fn build_id(
+        &self,
+        args: &[OsString],
+        input: &mut impl FnMut(&Path) -> Result<ContentHash, NativeError>,
+    ) -> Result<[u8; 20], NativeError> {
         // The pinned ld.lld is the loaded libLLVM's release (`hirsel_llvm::PINNED_LLVM`).
         let mut parts: Vec<Vec<u8>> = vec![
             self.kit.digest.as_bytes().to_vec(),
@@ -301,7 +305,7 @@ impl Link<'_> {
                 })
             {
                 if let std::collections::btree_map::Entry::Vacant(entry) = named.entry(path) {
-                    entry.insert(input_identity(path)?);
+                    entry.insert(input(path)?);
                 }
             }
             named
@@ -328,8 +332,17 @@ impl Link<'_> {
     /// Shared invocation for live commands and stored-tool capture. The output
     /// destination and executable tool are deliberately supplied by the consumer.
     pub(crate) fn invocation(&self) -> Result<(Vec<OsString>, [u8; 20]), NativeError> {
+        self.invocation_with(&mut input_identity)
+    }
+
+    /// The same link line with identities supplied by an immutable selected
+    /// platform. This never reopens its runtime/foreign source installation.
+    pub(crate) fn invocation_with(
+        &self,
+        input: &mut impl FnMut(&Path) -> Result<ContentHash, NativeError>,
+    ) -> Result<(Vec<OsString>, [u8; 20]), NativeError> {
         let mut args = self.arguments()?;
-        let id = self.build_id(&args)?;
+        let id = self.build_id(&args, input)?;
         let hex: String = id.iter().map(|b| format!("{b:02x}")).collect();
         args.push(format!("--build-id=0x{hex}").into());
         Ok((args, id))

@@ -47,6 +47,9 @@ pub struct CapturedPlatform {
     target: ContentHash,
     identity: ContentHash,
     reads: Vec<PlatformRead>,
+    captured_inputs: CapturedLink,
+    runtime_path: PathBuf,
+    foreign_paths: Vec<PathBuf>,
 }
 struct SelectedInput {
     name: String,
@@ -59,6 +62,7 @@ struct PlatformIdentity {
     runtime_archive: SelectedInput,
     foreign: Vec<SelectedInput>,
     runtime: WireRef,
+    link_inputs: ContentHash,
 }
 snapshot_struct!(SelectedInput { name, content });
 snapshot_struct!(PlatformIdentity {
@@ -67,7 +71,8 @@ snapshot_struct!(PlatformIdentity {
     kit,
     runtime_archive,
     foreign,
-    runtime
+    runtime,
+    link_inputs
 });
 
 impl CapturedPlatform {
@@ -108,6 +113,7 @@ impl CapturedPlatform {
             .collect::<Result<Vec<_>, _>>()?;
         // Keep the original selected absolute names: an ELF without SONAME
         // binds its pathname, which must remain stable across Link requests.
+        let runtime_path = reads[0].path.clone();
         let foreign_paths = reads
             .iter()
             .skip(1)
@@ -161,15 +167,34 @@ impl CapturedPlatform {
                 .ok_or("kit DSO lacks a UTF-8 filename")?;
             arguments.push(format!("-l:{name}"));
         }
-        for path in &foreign_paths {
-            arguments.push(path.to_str().ok_or("non-UTF8 foreign input")?.to_owned());
+        for path in std::iter::once(&runtime_path).chain(&foreign_paths) {
+            arguments.push(
+                path.to_str()
+                    .ok_or("non-UTF8 selected link input")?
+                    .to_owned(),
+            );
         }
         let probe = inputs
             .linker
             .capture(store, scratch.path(), &arguments, inputs.limits)?;
-        for (path, selected) in foreign_paths.iter().zip(&foreign) {
+        for (path, selected) in std::iter::once(&runtime_path)
+            .chain(&foreign_paths)
+            .zip(std::iter::once(&runtime_archive).chain(&foreign))
+        {
             if probe.input(store, path)? != Some(selected.content) {
                 return Err("selected foreign input changed during runtime capture".into());
+            }
+        }
+        for (path, content) in probe.inputs(store)? {
+            if let Some(known) = reads.iter().find(|read| read.path == path) {
+                if known.content != content {
+                    return Err("selected link input changed during discovery".into());
+                }
+            } else {
+                if snapshot(store, &path, &mut remaining)? != content {
+                    return Err("transitive link input changed during discovery".into());
+                }
+                reads.push(PlatformRead { path, content });
             }
         }
         let image = scratch.path().join("runtime-probe.so");
@@ -212,7 +237,7 @@ impl CapturedPlatform {
             content: input.content.into(),
         };
         let identity = hirsel_codec::digest(
-            "hirsel.selected-link-platform.v1",
+            "hirsel.selected-link-platform.v2",
             "Platform",
             &PlatformIdentity {
                 target: target.digest(),
@@ -221,6 +246,7 @@ impl CapturedPlatform {
                 runtime_archive: selected(&runtime_archive),
                 foreign: foreign.iter().map(selected).collect(),
                 runtime: discovered.runtime.reference().into(),
+                link_inputs: probe.inputs_identity(store)?,
             },
         );
         Ok(Self {
@@ -232,6 +258,9 @@ impl CapturedPlatform {
             target: target.digest(),
             identity,
             reads,
+            captured_inputs: probe,
+            runtime_path,
+            foreign_paths,
         })
     }
     /// Owned object, vector capacities, filenames and current-input path buffers.
@@ -241,6 +270,14 @@ impl CapturedPlatform {
         let mut bytes = std::mem::size_of::<Self>();
         let mut add = |amount| bytes = bytes.saturating_add(amount);
         add(self.runtime_archive.name.capacity());
+        add(self.runtime_path.capacity());
+        add(self
+            .foreign_paths
+            .capacity()
+            .saturating_mul(std::mem::size_of::<PathBuf>()));
+        for path in &self.foreign_paths {
+            add(path.capacity());
+        }
         add(self
             .foreign
             .capacity()
@@ -256,6 +293,81 @@ impl CapturedPlatform {
             add(read.path.capacity());
         }
         u64::try_from(bytes).unwrap_or(u64::MAX)
+    }
+
+    /// Plan with original selected virtual names and ref-fed build identities.
+    /// Only newly emitted program objects are read from the live directory.
+    pub fn plan_inputs(
+        &self,
+        store: &dyn ResultStore,
+        target: &super::super::TargetSpec,
+        directory: &Path,
+        objects: &[PathBuf],
+        loader: Option<(PathBuf, PathBuf)>,
+    ) -> Result<CapturedPlatformPlan, String> {
+        if self.target != target.digest() {
+            return Err("selected platform target differs".into());
+        }
+        let directory = std::fs::canonicalize(directory).map_err(error)?;
+        let objects = objects
+            .iter()
+            .map(|path| std::fs::canonicalize(path).map_err(error))
+            .collect::<Result<Vec<_>, _>>()?;
+        let kit = self.kit.load(store, target)?;
+        let link = super::super::kit::Link {
+            kit: &kit,
+            triple: &target.triple,
+            kind: super::super::kit::Kind::Executable { loader },
+            objects: &objects,
+            runtime: Some(&self.runtime_path),
+            unwind: true,
+            foreign: &self.foreign_paths,
+        };
+        let (arguments, build_id) = link
+            .invocation_with(&mut |path| {
+                let selected = if path == self.runtime_path {
+                    Some(self.runtime_archive.content)
+                } else {
+                    self.foreign_paths
+                        .iter()
+                        .zip(&self.foreign)
+                        .find(|(selected, _)| selected.as_path() == path)
+                        .map(|(_, input)| input.content)
+                };
+                if let Some(content) = selected {
+                    // Bind script leaves, thin members and the declared runtime,
+                    // including a changed leaf behind an unchanged root file.
+                    return Ok(ContentHash::of_parts(
+                        "hirsel.selected-platform.build-input.v1",
+                        [content.output.0.0.as_slice(), self.identity.0.as_slice()],
+                    ));
+                }
+                if !objects.iter().any(|object| object == path) {
+                    return Err(super::super::NativeError::new(
+                        super::super::StageName::Link,
+                        "planner requested an unselected input identity",
+                    ));
+                }
+                super::super::file_digest::file(path)
+                    .map(|hash| hash.content)
+                    .map_err(|error| {
+                        super::super::NativeError::new(
+                            super::super::StageName::Link,
+                            error.to_string(),
+                        )
+                    })
+            })
+            .map_err(|error| error.to_string())?;
+        Ok(CapturedPlatformPlan {
+            plan: super::super::ExecutableLinkPlan {
+                directory,
+                arguments,
+                build_id,
+                frozen_kit: Some(self.kit),
+            },
+            platform: self.identity,
+            objects,
+        })
     }
 
     pub fn linker(&self) -> FrozenLinker {
@@ -321,6 +433,37 @@ impl CapturedPlatform {
         Ok(())
     }
 }
+/// An invocation minted by one selected platform, retaining its exact virtual
+/// namespace. Public request metadata cannot substitute another file closure.
+pub struct CapturedPlatformPlan {
+    plan: super::super::ExecutableLinkPlan,
+    platform: ContentHash,
+    objects: Vec<PathBuf>,
+}
+impl CapturedPlatformPlan {
+    pub fn build_id(&self) -> [u8; 20] {
+        self.plan.build_id
+    }
+    pub fn capture(
+        &self,
+        store: &dyn ResultStore,
+        platform: &CapturedPlatform,
+        limits: CaptureLimits,
+    ) -> Result<CapturedLink, String> {
+        if self.platform != platform.identity {
+            return Err("executable plan selected another platform".into());
+        }
+        platform.kit.capture_selected(
+            store,
+            platform.linker,
+            platform.captured_inputs,
+            &self.plan,
+            &self.objects,
+            limits,
+        )
+    }
+}
+
 fn error(error: std::io::Error) -> String {
     error.to_string()
 }
@@ -370,3 +513,7 @@ impl<R: Read> Read for HashedReader<R> {
 #[cfg(test)]
 #[path = "../../../tests/native-validation/platform_capture.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../../tests/native-validation/platform_closure.rs"]
+mod closure_tests;

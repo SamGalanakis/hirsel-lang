@@ -2018,6 +2018,36 @@ pub fn plan_executable_link(
     plan_executable_inputs(&program.target, directory, &objects, inputs)
 }
 
+/// Emit the ordinary launcher and plan against an immutable selected platform.
+/// Runtime/foreign virtual names and transitive reads stay bound to that owner.
+pub fn plan_captured_executable_link(
+    program: &ReadyProgram,
+    entry: &DefPath,
+    objects: &[hirsel_lir::stage::ObjectArtifact],
+    directory: &Path,
+    requested: Option<&hirsel_run_config::ValidatedRun>,
+    standalone: bool,
+    inputs: CapturedExecutableLinkInputs<'_>,
+) -> Result<super::object_queries::platform::CapturedPlatformPlan, NativeError> {
+    let objects = executable_objects(program, entry, objects, directory, requested, standalone)?;
+    inputs
+        .platform
+        .plan_inputs(
+            inputs.store,
+            &program.target,
+            directory,
+            &objects,
+            inputs.loader,
+        )
+        .map_err(|error| NativeError::new(StageName::Link, error))
+}
+
+pub struct CapturedExecutableLinkInputs<'a> {
+    pub store: &'a dyn hirsel_engine::store::ResultStore,
+    pub platform: &'a super::object_queries::platform::CapturedPlatform,
+    pub loader: Option<(PathBuf, PathBuf)>,
+}
+
 fn executable_objects(
     program: &ReadyProgram,
     entry: &DefPath,

@@ -42,7 +42,7 @@ if args.list:
     for name in selected: print(name + ': test')
 else:
     with open(os.environ['OBSERVED'], 'w') as output:
-        json.dump(dict(argv=sys.argv[1:], bootstrap=os.environ.get('RUSTC_BOOTSTRAP'), threads=os.environ.get('RUST_TEST_THREADS'), jobs=os.environ.get('HIRSEL_JOBS'), cases=[name for name in selected
+        json.dump(dict(argv=sys.argv[1:], bootstrap=os.environ.get('RUSTC_BOOTSTRAP'), threads=os.environ.get('RUST_TEST_THREADS'), jobs=os.environ.get('HIRSEL_JOBS'), llvm=os.environ.get('LLVM_SYS_231_PREFIX'), linker=os.environ.get('HIRSEL_CAPTURE_LINKER'), auditor=os.environ.get('HIRSEL_AUDITOR_PACKAGE'), cases=[name for name in selected
                   if args.ignored or args.include_ignored or not cases[name]]), output)
     for name in selected:
         status = 'ok' if args.ignored or args.include_ignored or not cases[name] else 'ignored'
@@ -114,6 +114,81 @@ class LauncherFixture(unittest.TestCase):
             OBSERVED=str(self.observed), HIRSEL_TEST_BINARY='fixture-test-it')
         for key in ('HIRSEL_TEST_POOL', 'HIRSEL_TEST_CPUS', 'HIRSEL_TEST_EXACT_CPUS', 'TEST_SHARD_INDEX', 'TEST_TOTAL_SHARDS', 'HIRSEL_TEST_HOST_ONLY'):
             self.env.pop(key, None)
+
+
+class PrivateNativeInputs(LauncherFixture):
+    def helper(self):
+        return Path(os.environ.get('HIRSEL_TEST_PRIVATE_NATIVE_INPUTS', ROOT / 'tools/buck2/private_native_inputs.py')).resolve()
+
+    def source_files(self):
+        library = self.root / 'llvm/lib/libshared.so'
+        library.write_bytes(b'original immutable SDK bytes')
+        library.chmod(0o444)
+        (library.parent / 'alias.so').hardlink_to(library)
+        (self.root / 'llvm/include').mkdir()
+        (self.root / 'llvm/include/header').write_bytes(b'header')
+        return library
+
+    def test_private_inodes_survive_source_hardlink_churn_and_preserve_aliases(self):
+        library = self.source_files()
+        destination = self.root / 'private'
+        copied = subprocess.run(['python3', str(self.helper()), str(self.root / 'llvm'), str(destination)], capture_output=True, text=True)
+        self.assertEqual(copied.returncode, 0, copied.stderr)
+        private = destination / 'lib/libshared.so'
+        self.assertNotEqual(library.stat().st_ino, private.stat().st_ino)
+        self.assertEqual(private.stat().st_ino, (destination / 'lib/alias.so').stat().st_ino)
+        before = private.stat()
+        for index in range(4):
+            alias = self.root / f'other-materialization-{index}'
+            alias.hardlink_to(library)
+            self.assertEqual(private.stat().st_nlink, before.st_nlink)
+            alias.unlink()
+        after = private.stat()
+        self.assertEqual((after.st_ino, after.st_ctime_ns, after.st_mtime_ns, after.st_mode),
+                         (before.st_ino, before.st_ctime_ns, before.st_mtime_ns, before.st_mode))
+        self.assertEqual(private.read_bytes(), b'original immutable SDK bytes')
+        self.assertTrue((destination / 'include').is_symlink())
+        self.assertEqual((destination / 'include/header').read_bytes(), b'header')
+
+    def test_launcher_uses_private_sdk_for_bodies_and_removes_it_after_exit(self):
+        self.source_files()
+        environment = self.root / 'native-environment.tsv'
+        environment.write_text('')
+        self.env.update(HIRSEL_NATIVE_ENVIRONMENT=str(environment), HIRSEL_PRIVATE_NATIVE_INPUTS=str(self.helper()))
+        result = subprocess.run(['sh', str(LAUNCHER), 'harness', '--exact', 'pool::smoke'], cwd=self.root, env=self.env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        observed = json.loads(self.observed.read_text())
+        self.assertNotEqual(observed['llvm'], str(self.root / 'llvm'))
+        self.assertFalse(Path(observed['llvm']).exists())
+        self.assertTrue((self.root / 'llvm/lib/libshared.so').exists())
+
+    def test_native_environment_exports_stored_linker_and_auditor_packages(self):
+        self.source_files()
+        environment = self.root / 'native-environment.tsv'
+        rows = [line for line in (ROOT / 'tools/buck2/native-toolchain/environment.tsv').read_text().splitlines()
+                if line.startswith(('HIRSEL_CAPTURE_LINKER\t', 'HIRSEL_AUDITOR_PACKAGE\t'))]
+        self.assertEqual(len(rows), 2)
+        environment.write_text('\n'.join(rows) + '\n')
+        for _, target, _ in (row.split('\t') for row in rows):
+            package = self.root / target
+            package.mkdir()
+            self.env['HIRSEL_TOOLCHAIN_' + target.replace('-', '_').upper()] = str(package)
+        self.env.update(HIRSEL_NATIVE_ENVIRONMENT=str(environment), HIRSEL_PRIVATE_NATIVE_INPUTS=str(self.helper()))
+        result = subprocess.run(['sh', str(LAUNCHER), 'harness', '--exact', 'pool::smoke'], cwd=self.root, env=self.env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        observed = json.loads(self.observed.read_text())
+        self.assertEqual(Path(observed['linker']).resolve(), self.root / 'linker')
+        self.assertEqual(Path(observed['auditor']).resolve(), self.root / 'runtime-auditor')
+
+    def test_listing_uses_original_sdk_without_materialization(self):
+        self.source_files()
+        environment = self.root / 'native-environment.tsv'
+        environment.write_text('')
+        # An invalid helper would fail immediately if a listing tried to copy.
+        self.env.update(HIRSEL_NATIVE_ENVIRONMENT=str(environment), HIRSEL_PRIVATE_NATIVE_INPUTS='/bin/false')
+        result = subprocess.run(['sh', str(LAUNCHER), 'harness', '--list'], cwd=self.root, env=self.env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('pool::smoke: test', result.stdout)
 
 
 class LauncherSelection(LauncherFixture):
