@@ -672,6 +672,7 @@ dependencies = [
  "hirsel-validate",
  "libc",
  "object",
+ "serde",
  "serde_json",
  "sha2",
  "tempfile",
