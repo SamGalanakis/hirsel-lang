@@ -587,6 +587,51 @@ pub fn store_link_input(store: &dyn ResultStore, bytes: &[u8]) -> Result<Referen
     put_blob(store, bytes)
 }
 
+/// Snapshot a file/stream with one bounded chunk buffer, using the exact same
+/// blob/chunk encoding as byte-slice inputs. Short reads do not split chunks.
+pub fn store_link_input_reader(
+    store: &dyn ResultStore,
+    mut reader: impl std::io::Read,
+) -> Result<Reference, String> {
+    use std::io::Read;
+    let mut chunks = Vec::new();
+    let mut len = 0u64;
+    let mut buffer = Vec::with_capacity(MAX_RECORD);
+    loop {
+        buffer.clear();
+        reader
+            .by_ref()
+            .take(MAX_RECORD as u64)
+            .read_to_end(&mut buffer)
+            .map_err(error)?;
+        if buffer.is_empty() {
+            break;
+        }
+        len = len
+            .checked_add(buffer.len() as u64)
+            .ok_or("native blob length overflow")?;
+        let reference = store
+            .put_content(CHUNK, &buffer)
+            .ok_or("native chunk publication failed")?;
+        if CHUNK.reference(&buffer) != Some(reference) {
+            return Err("native chunk content identity differs".into());
+        }
+        chunks.push(WireRef::from(reference));
+    }
+    put_record(store, BLOB, &BlobRecord { len, chunks })
+}
+
+/// Restore a frozen linker/tool input through the same atomic writer as
+/// executable publication. The original mutable path is never reopened.
+pub fn materialize_link_input(
+    store: &dyn ResultStore,
+    reference: Reference,
+    destination: &Path,
+    executable: bool,
+) -> Result<(), String> {
+    materialize_blob(store, reference, destination, executable)
+}
+
 /// Materialize a previously snapshotted input, never reopen its mutable path.
 pub fn link_input_bytes(store: &dyn ResultStore, reference: Reference) -> Result<Vec<u8>, String> {
     read_blob(store, reference)
@@ -634,13 +679,21 @@ pub fn materialize_executable(
     product: &LinkedProduct,
     destination: &Path,
 ) -> Result<(), String> {
-    use std::io::{Read, Write};
     let checked = linked_product(store, product.product)?;
     if checked.executable != product.executable {
         return Err("executable descriptor mismatch".into());
     }
-    let chunks = blob_chunks(store, product.executable)?;
-    if chunks.is_empty() {
+    materialize_blob(store, product.executable, destination, true)
+}
+fn materialize_blob(
+    store: &dyn ResultStore,
+    reference: Reference,
+    destination: &Path,
+    executable: bool,
+) -> Result<(), String> {
+    use std::io::{Read, Write};
+    let chunks = blob_chunks(store, reference)?;
+    if executable && chunks.is_empty() {
         return Err("empty executable output".into());
     }
     let matches = |file: &mut std::fs::File| -> std::io::Result<bool> {
@@ -659,7 +712,7 @@ pub fn materialize_executable(
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            Ok(file.metadata()?.permissions().mode() & 0o111 != 0)
+            Ok((file.metadata()?.permissions().mode() & 0o111 != 0) == executable)
         }
         #[cfg(not(unix))]
         {
@@ -694,8 +747,12 @@ pub fn materialize_executable(
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            file.set_permissions(std::fs::Permissions::from_mode(0o755))
-                .map_err(error)?;
+            file.set_permissions(std::fs::Permissions::from_mode(if executable {
+                0o755
+            } else {
+                0o644
+            }))
+            .map_err(error)?;
         }
         file.sync_all().map_err(error)?;
         std::fs::rename(&temporary, destination).map_err(error)?;
@@ -704,7 +761,7 @@ pub fn materialize_executable(
             .map_err(error)?;
         let mut file = std::fs::File::open(destination).map_err(error)?;
         if !permissions(&file).map_err(error)? || !matches(&mut file).map_err(error)? {
-            return Err("materialized executable failed readiness".into());
+            return Err("materialized native file failed readiness".into());
         }
         Ok(())
     })();
