@@ -5,6 +5,7 @@ fn service(clock: Arc<Clock>) -> Service {
     Service {
         adapter: clock,
         live: Default::default(),
+        jobs: Default::default(),
         driver: None,
         rows: Default::default(),
         pending: AtomicUsize::new(0),
