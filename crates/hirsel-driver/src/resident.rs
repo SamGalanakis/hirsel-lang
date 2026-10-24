@@ -128,7 +128,10 @@ impl<R: QueryRuntime, O: OutputReadiness> RequestLease<R, O> {
                 self.completed = true;
                 Poll::Ready(match result {
                     Ok(products) => self.output.ready(&products).map_err(RequestError::Output),
-                    Err(diagnostics) => Err(RequestError::Query(diagnostics)),
+                    Err(diagnostics) => Err(match self.output.failed(diagnostics) {
+                        Some(error) => RequestError::Output(error),
+                        None => RequestError::Query(diagnostics),
+                    }),
                 })
             }
         }

@@ -330,3 +330,84 @@ fn input_limit_is_a_failure_not_an_empty_successful_snapshot() {
     );
     assert_eq!(snapshot.retained_bytes(), 0);
 }
+
+#[test]
+fn terminal_diagnostics_are_owned_before_transient_provider_and_lease_drop() {
+    use hirsel_engine::store::{MemStore, ResultStore};
+    struct Diagnostics {
+        runtime: Arc<Mutex<ProbeRuntime>>,
+        store: Arc<MemStore>,
+    }
+    impl OutputReadiness for Diagnostics {
+        type Output = ();
+        type Error = String;
+        fn ready(&mut self, _: &[ProductRef]) -> Result<(), String> {
+            panic!("a failed query cannot run successful output readiness")
+        }
+        fn failed(&mut self, reference: Reference) -> Option<String> {
+            // Decoding may perform provider I/O; the runtime must be unlocked.
+            self.runtime
+                .try_lock()
+                .unwrap()
+                .events
+                .push("diagnostics".into());
+            let bytes = self.store.get_content(reference).unwrap();
+            Some(std::str::from_utf8(&bytes).unwrap().to_owned())
+        }
+    }
+    struct DiagnosticEngine {
+        runtime: Arc<Mutex<ProbeRuntime>>,
+        store: Arc<MemStore>,
+    }
+    impl RequestEngine for DiagnosticEngine {
+        type Request = ();
+        type Error = ();
+        type Runtime = ProbeRuntime;
+        type Readiness = Diagnostics;
+        fn select(&mut self, _: &()) -> Result<SelectedRequest<ProbeRuntime, Diagnostics>, ()> {
+            Ok(SelectedRequest {
+                runtime: self.runtime.clone(),
+                roots: vec![QueryId {
+                    kind: 1,
+                    address: product().address,
+                }],
+                output: Diagnostics {
+                    runtime: self.runtime.clone(),
+                    store: self.store.clone(),
+                },
+            })
+        }
+    }
+    let runtime = Arc::new(Mutex::new(ProbeRuntime::default()));
+    let store = Arc::new(MemStore::default());
+    let weak = Arc::downgrade(&store);
+    let diagnostic = store
+        .put_content(
+            Domain {
+                kind: 888,
+                schema: 1,
+            },
+            b"exact terminal diagnostic",
+        )
+        .unwrap();
+    let mut host = Host::new(DiagnosticEngine {
+        runtime: runtime.clone(),
+        store,
+    });
+    let mut lease = host.request(&()).unwrap();
+    reply(&runtime, Poll::Ready(Err(diagnostic)));
+    let result = lease.poll();
+    drop(lease);
+    drop(host);
+    assert!(
+        weak.upgrade().is_none(),
+        "no diagnostic provider remains alive"
+    );
+    assert_eq!(
+        result,
+        Poll::Ready(Err(RequestError::Output(
+            "exact terminal diagnostic".into()
+        )))
+    );
+    assert_eq!(events(&runtime), ["request 1", "poll 1", "diagnostics"]);
+}
