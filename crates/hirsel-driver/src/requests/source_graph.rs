@@ -78,7 +78,14 @@ impl GraphProducts for SourceProducts {
         let foreign_unreplayable = self.foreign_unreplayable;
         let check = self.check.clone();
         let expected = check.query();
-        let entry = self.entry.clone();
+        let entry = match &operation {
+            CompileOperation::Tir { definition } => definition
+                .as_ref()
+                .or(self.launch_entry.as_ref())
+                .cloned()
+                .ok_or_else(|| ToolError::Runtime("launch manifest requires entry".into()))?,
+            _ => self.entry.clone(),
+        };
         let inputs = self.inputs.clone();
         let meter = self.meter.clone();
         let store = self.store.clone();
