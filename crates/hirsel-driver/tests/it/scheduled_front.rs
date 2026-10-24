@@ -242,7 +242,6 @@ fn admitted_lower_saved_work_and_native_metadata_survive_dependency_suspension()
                     .as_ref(),
                 &actual.reads
             );
-            let actual = lower.outcome(products[0]).unwrap();
             let execution = actual
                 .execution
                 .as_ref()

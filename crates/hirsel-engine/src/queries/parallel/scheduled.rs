@@ -38,8 +38,8 @@ pub struct FrontBodyQueries {
     store: Arc<dyn ResultStore>,
     work: Mutex<BTreeMap<(DefPath, QueryKind), u64>>,
     table_keys: Mutex<BTreeMap<Key, Arc<crate::table_keys::TableKeyUse>>>,
-    outcomes: Mutex<BTreeMap<Key, (Reference, ModeResult, CheckedProduct)>>,
     memos: Mutex<BTreeMap<crate::memo::MemoKey, Arc<Reads>>>,
+    outcomes: Mutex<BTreeMap<Key, (Reference, ModeResult, CheckedProduct)>>,
     errors: RuntimeErrors,
     // Own immutable snapshot and output metadata admission until every task and
     // external output reader releases this view.
@@ -63,6 +63,8 @@ pub struct FrontCheckedOutput {
 }
 impl FrontBodyQueries {
     /// Actual phase invocations, including failed or discarded producers.
+    /// Actual completed phase read rows, captured by the same compact phase
+    /// finisher as scalar publication. This inspection executes no query.
     pub fn memo_snapshot(&self) -> Vec<(crate::memo::MemoKey, Arc<Reads>)> {
         self.memos
             .lock()
