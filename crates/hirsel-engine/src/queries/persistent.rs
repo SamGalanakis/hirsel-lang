@@ -2957,6 +2957,7 @@ mod malformed_tests {
             protocol_associations: vec![],
             contracts: vec![],
             bodies: vec![hirsel_tir::Body {
+                arena_scope_grant: None,
                 scoped_parameters: vec![],
                 parameter_scope: syntax.owner().site(hirsel_types::NameSite::Item),
                 locals: vec![Local {
