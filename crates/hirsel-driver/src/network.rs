@@ -361,6 +361,8 @@ pub(crate) struct HostLibrary {
     free: Option<hirsel_rt::free_replay::Codec>,
     free_report: Option<hirsel_rt::free_replay::Report>,
     free_waits: BTreeMap<u64, free::Wait>,
+    // A pending host poll can publish phases that enable an earlier-polled sibling.
+    free_progressed: bool,
     free_drops: BTreeMap<u64, free::Drop>,
     free_checks: BTreeMap<u64, free::Check>,
     free_runners: BTreeMap<u64, free::Runner>,
@@ -467,6 +469,7 @@ impl HostLibrary {
             free_report,
             free,
             free_waits: BTreeMap::new(),
+            free_progressed: false,
             free_drops: BTreeMap::new(),
             free_checks: BTreeMap::new(),
             free_runners: BTreeMap::new(),
@@ -2678,7 +2681,9 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
     }
     fn ready_now(&mut self) -> Result<bool, Error> {
         if self.free.is_some() {
-            return Ok(false);
+            // Retry the parked set after actual replay publication, even if
+            // the publishing request still waits on its next key epoch.
+            return Ok(std::mem::take(&mut self.free_progressed));
         }
         self.remote_deliveries();
         self.io

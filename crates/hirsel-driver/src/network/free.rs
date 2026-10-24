@@ -377,8 +377,13 @@ impl HostLibrary {
         let path = self.library.task_path();
         let cancellation = self.library.host_cancellation();
         let codec = self.free.as_mut().unwrap();
-        self.library
-            .with_free_session(|session| request.advance(codec, session, &path, cancellation))
+        let (result, progressed) = self.library.with_free_session(|session| {
+            let before = session.progress(&path);
+            let result = request.advance(codec, session, &path, cancellation)?;
+            Ok((result, before != session.progress(&path)))
+        })?;
+        self.free_progressed |= progressed;
+        Ok(result)
     }
     fn free_convert(
         &mut self,

@@ -4489,3 +4489,280 @@ fn f1_required_parked_receive_records_live_durable_output_cut_and_replays_prefix
         || Box::new(|| {}),
     );
 }
+
+const F1_LATE_SET_SOURCE: &str = r#"fn discard[T](take value: T) -> () { () }
+fn wait_release(take marker: Shared[String]) -> () {
+  let mut pending: unique List[Shared[String]] = unique [take marker]
+  let mut released = false
+  while !released {
+    match list.pop(mut pending) {
+      Some(root) => match shared.thaw(take root) {
+        Ok(text) => { discard(take text); released = true },
+        Error(retained) => list.push(mut pending, take retained),
+      },
+      None() => failure.check(false, Bounds()),
+    }
+  }
+}
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let out = io.stdout(rt)?
+  let first_text: String = "first"
+  let first_marker: Shared[String] = shared.freeze(take first_text)
+  let first_held = copy first_marker
+  let second_text: String = "second"
+  let second_marker: Shared[String] = shared.freeze(take second_text)
+  let second_held = copy second_marker
+  task.scope(tasks, fn(scope: Scope) {
+    let first = task.async(scope, fn() -> u64 { discard(take first_held); 11u64 })
+    wait_release(take first_marker)
+    let second = task.async(scope, fn() -> u64 { discard(take second_held); 22u64 })
+    wait_release(take second_marker)
+    let mut members: TaskSet[u64] of scope = task.set(scope)
+    task.add(scope, mut members, take second)
+    task.add(scope, mut members, take first)
+    let a = match task.await_any(scope, members) { Some(index) => index, None() => 99u64 }
+    failure.check(a == 1u64, Bounds())
+    let av = task.await_at(scope, mut members, a)
+    let b = match task.await_any(scope, members) { Some(index) => index, None() => 99u64 }
+    failure.check(b == 0u64, Bounds())
+    let bv = task.await_at(scope, mut members, b)
+    failure.check(av == 11u64 && bv == 22u64, Bounds())
+    let empty = match task.await_any(scope, members) { None() => true, Some(_) => false }
+    failure.check(empty, Bounds())
+    task.cancel_all(scope, take members)
+  })
+  let _ = out.print(out, "late set 1 0\n")
+  Ok(())
+}
+"#;
+
+#[test]
+fn f1_late_task_set_and_reverse_insertion_full_projection_matrix() {
+    if !hirsel_rt::free_driver::admission_enabled() {
+        return;
+    }
+    // The child's pending release attaches to TaskFinish entry. The role
+    // covers both entry and result-readiness publication before the parent
+    // can observe its successful thaw. Neither child has another body op.
+    // This exercises the same completion-rank ordering as the scoped native
+    // sets::tests::late_set_creation_and_reverse_insertion control.
+    f1_corpus_matrix_with_witness(
+        "late-task-set-reverse-insertion",
+        F1_LATE_SET_SOURCE,
+        |_| serde_json::json!({"io":{"stdout":"stdout.bytes@1","tasks":"tasks.free@1","dirs":[]},"args":[]}),
+        (0, |live, tape, _, _| {
+            assert_eq!(live.stdout, b"late set 1 0\n", "{live:?}");
+            assert_eq!(f1_recorded_thaws(tape).iter().filter(|&&ok| ok).count(), 2);
+            for child in [vec![0], vec![1]] {
+                assert_eq!(tape.cut[&child].phase, hirsel_free::phase::Phase::Done);
+                assert!(tape.cut[&child].op >= 2);
+            }
+        }),
+        b"",
+        || Box::new(|| {}),
+    );
+}
+
+/// Placement control's existing one-JSON-line protocol (cli/placement.rs and
+/// rt/managed_cores.rs); this observes real worker counts without changing CPU
+/// affinity, the process permit allowance, or the recorder's semantic inputs.
+fn f1_placement_control(socket: &Path, request: serde_json::Value) -> serde_json::Value {
+    use std::io::{BufRead, BufReader, Write};
+    use std::os::unix::net::UnixStream;
+    let mut peer = UnixStream::connect(socket).unwrap();
+    peer.set_read_timeout(Some(std::time::Duration::from_secs(1)))
+        .unwrap();
+    peer.set_write_timeout(Some(std::time::Duration::from_secs(1)))
+        .unwrap();
+    writeln!(peer, "{request}").unwrap();
+    let mut reply = String::new();
+    BufReader::new(peer).read_line(&mut reply).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&reply).unwrap();
+    assert!(value.get("error").is_none(), "{value}");
+    value
+}
+
+const F1_LIVE_SHRINK_SOURCE: &str = r#"fn pause(c: MonotonicClock) -> () {
+  match clock.monotonic(c) {
+    Ok(now) => {
+      let at = match instant.checked_add(c, now, 1000000u64) { Some(v) => v, None() => now }
+      let _ = clock.sleep_until(c, at)
+    },
+    Error(_) => failure.check(false, Bounds()),
+  }
+}
+pub type E = Grant(GrantError) | Files(FileError)
+pub fn main(rt: Io) -> Result[(), E] {
+  let tasks = io.tasks(rt) ? Grant
+  let out = io.stdout(rt) ? Grant
+  let c = io.monotonic_clock(rt) ? Grant
+  let d = io.dir(rt, path.of("data")) ? Files
+  let ready_a: Atomic[u64] = atomic.create(tasks, 0u64)
+  let ready_b: Atomic[u64] = atomic.create(tasks, 0u64)
+  let done: Atomic[u64] = atomic.create(tasks, 0u64)
+  let valid = task.scope(tasks, fn(scope: Scope) -> bool {
+    let a = task.async(scope, fn() -> u64 {
+      let items: unique List[u64] = unique [11u64, 1u64]
+      atomic.store(tasks, ready_a, 1u64)
+      while atomic.load(tasks, done) == 0u64 { pause(c) }
+      items[0] + items[1]
+    })
+    let b = task.async(scope, fn() -> u64 {
+      let items: unique List[u64] = unique [22u64, 2u64]
+      atomic.store(tasks, ready_b, 1u64)
+      while atomic.load(tasks, done) == 0u64 { pause(c) }
+      items[0] + items[1]
+    })
+    while atomic.load(tasks, ready_a) == 0u64 || atomic.load(tasks, ready_b) == 0u64 { pause(c) }
+    failure.check(file.write_bytes(d, path.of("ready"), b"both children started") == Ok(()), Bounds())
+    let mut shrunk = false
+    while !shrunk {
+      shrunk = match file.read_bytes(d, path.of("shrunk")) {
+        Ok(bytes) => { failure.check(bytes == b"shrunk", Bounds()); true },
+        Error(_) => false,
+      }
+      if !shrunk { pause(c) }
+    }
+    atomic.store(tasks, done, 1u64)
+    let av = task.await(scope, take a)
+    let bv = task.await(scope, take b)
+    av == 12u64 && bv == 24u64
+  })
+  failure.check(valid, Bounds())
+  let _ = out.print(out, "live shrink 8 1\n")
+  Ok(())
+}
+"#;
+
+#[test]
+fn f1_live_worker_shrink_recording_full_projection_matrix() {
+    f1_worker_shrink_matrix(false);
+}
+
+#[test]
+fn f1_started_saved_frames_migrate_before_shrink_full_projection_matrix() {
+    f1_worker_shrink_matrix(true);
+}
+
+fn f1_worker_shrink_matrix(observe_migration: bool) {
+    if !hirsel_rt::free_driver::admission_enabled() {
+        return;
+    }
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::{Duration, Instant};
+    let peer_scratch = Scratch::new("live-shrink-control");
+    let host = peer_scratch.path("data");
+    std::fs::create_dir(&host).unwrap();
+    let socket = peer_scratch.path("control");
+    let metrics = peer_scratch.path("metrics");
+    f1_corpus_matrix_with_witness(
+        if observe_migration {
+            "started-frame-migration"
+        } else {
+            "live-worker-shrink"
+        },
+        F1_LIVE_SHRINK_SOURCE,
+        |_| {
+            let mut grants = serde_json::json!({"io":{"stdout":"stdout.bytes@1","tasks":"tasks.free@1","monotonic_clock":"clock.monotonic.ns@1","dirs":[{"path":"data","host":host,"access":"read_write"}]},"args":[],"placement":{"control":socket}});
+            if observe_migration {
+                grants["placement"]["metrics"] = metrics.to_string_lossy().as_ref().into();
+            }
+            grants
+        },
+        (0, |live, tape, _, _| {
+            assert_eq!(live.stdout, b"live shrink 8 1\n", "{live:?}");
+            for child in [vec![0], vec![1]] {
+                assert_eq!(tape.cut[&child].phase, hirsel_free::phase::Phase::Done);
+                assert!(tape.cut[&child].op > 3);
+            }
+        }),
+        b"",
+        || {
+            let ready = host.join("ready");
+            let shrunk = host.join("shrunk");
+            let _ = std::fs::remove_file(&ready);
+            let _ = std::fs::remove_file(&shrunk);
+            if observe_migration {
+                let _ = std::fs::remove_file(&metrics);
+            }
+            let metrics = metrics.clone();
+            let socket = socket.clone();
+            let stopping = Arc::new(AtomicBool::new(false));
+            let stopped = stopping.clone();
+            let peer = std::thread::spawn(move || {
+                let deadline = Instant::now() + Duration::from_secs(20);
+                loop {
+                    if stopped.load(Ordering::Acquire) {
+                        return;
+                    }
+                    assert!(Instant::now() < deadline, "live shrink startup");
+                    if ready.exists() && socket.exists() {
+                        let snapshot =
+                            f1_placement_control(&socket, serde_json::json!({"metrics":true}));
+                        if snapshot["width"]["effective"] == 8 && snapshot["width"]["pending"] == 0
+                        {
+                            eprintln!("Free live shrink observed initial {snapshot}");
+                            break;
+                        }
+                    }
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                if observe_migration {
+                    // Task::last starts None: first dispatch cannot increment
+                    // migrations. Before this file is released, no child has
+                    // finished or been joined and no shrink was requested.
+                    // A positive count therefore witnesses a previously run
+                    // saved frame claimed by another compute worker.
+                    loop {
+                        if stopped.load(Ordering::Acquire) {
+                            return;
+                        }
+                        assert!(
+                            Instant::now() < deadline,
+                            "an already-started frame must migrate"
+                        );
+                        let observed = std::fs::read_to_string(&metrics).unwrap_or_default();
+                        let migrated = observed
+                            .lines()
+                            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+                            .find(|row| {
+                                row["migrations_per_s"]
+                                    .as_f64()
+                                    .is_some_and(|value| value > 0.0)
+                            });
+                        if let Some(row) = migrated {
+                            assert_eq!(row["width"]["effective"], 8);
+                            assert_eq!(row["width"]["pending"], 0);
+                            eprintln!("Free started frame migration observed {row}");
+                            break;
+                        }
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                }
+                let requested =
+                    f1_placement_control(&socket, serde_json::json!({"placement":{"cores":1}}));
+                assert_eq!(requested["width"]["requested"], 1);
+                loop {
+                    if stopped.load(Ordering::Acquire) {
+                        return;
+                    }
+                    assert!(Instant::now() < deadline, "live workers must drain to one");
+                    let snapshot =
+                        f1_placement_control(&socket, serde_json::json!({"metrics":true}));
+                    if snapshot["width"]["effective"] == 1 && snapshot["width"]["pending"] == 0 {
+                        eprintln!("Free live shrink observed settled {snapshot}");
+                        std::fs::write(&shrunk, b"shrunk").unwrap();
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+            });
+            Box::new(move || {
+                stopping.store(true, Ordering::Release);
+                peer.join().unwrap();
+            })
+        },
+    );
+}
