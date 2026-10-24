@@ -167,6 +167,28 @@ impl SourceInput {
         signature: &Signature,
         mut substitute: impl FnMut(TypeId) -> Result<TypeId, SourceError>,
     ) -> Result<SourceCallableEntry, SourceError> {
+        let function = self.named_declaration(base, signature)?;
+        if !function.generics.is_empty() {
+            return Err(SourceError::Unsupported(
+                "original named entry needs complete binder selection",
+            ));
+        }
+        self.entry(
+            base,
+            types,
+            function,
+            SourceEntryKind::Definition {
+                declaration: signature.fingerprint,
+            },
+            &mut substitute,
+        )
+    }
+
+    fn named_declaration<'a>(
+        &self,
+        base: &InstanceKey,
+        signature: &'a Signature,
+    ) -> Result<&'a FunctionType, SourceError> {
         let body = self.demand_body(base)?;
         if signature.definition != self.definition.path
             || signature.fingerprint != self.definition.signature_hash
@@ -194,11 +216,75 @@ impl SourceInput {
                 "original entry declaration is not callable",
             ));
         };
-        if !function.generics.is_empty() {
+        Ok(function)
+    }
+
+    /// Select a generic named entry using explicit ORIGINAL source actuals.
+    /// Rebuild the existing base key before substituting either source binder;
+    /// no native view, derived key or callback can stand in for this selection.
+    /// Enclosing/CT5 closure binders need a separate complete source account.
+    pub fn named_entry_selected(
+        &self,
+        base: &InstanceKey,
+        types: &TypeInterner,
+        signature: &Signature,
+        actuals: &crate::instance::Actuals,
+        memo: &hirsel_types::TypeMemo,
+    ) -> Result<SourceCallableEntry, SourceError> {
+        let function = self.named_declaration(base, signature)?;
+        let body = self.demand_body(base)?;
+        if !actuals.outer.is_empty() {
             return Err(SourceError::Unsupported(
-                "original named entry needs complete binder selection",
+                "original named entry needs enclosing binder coverage",
             ));
         }
+        if function.generics.len() != actuals.arguments.len() {
+            return Err(SourceError::Malformed(
+                "original named actual arity differs",
+            ));
+        }
+        if !function.generics.is_empty() && actuals.binder != Some(body.parameter_scope) {
+            return Err(SourceError::Malformed(
+                "original named binder scope differs",
+            ));
+        }
+        if function
+            .generics
+            .iter()
+            .zip(&actuals.arguments)
+            .any(|(formal, actual)| {
+                !matches!(
+                    (formal, actual),
+                    (
+                        hirsel_types::GenericParameter::Type { .. },
+                        hirsel_types::GenericArgument::Type(_)
+                    ) | (
+                        hirsel_types::GenericParameter::Size { .. },
+                        hirsel_types::GenericArgument::Size(_)
+                    )
+                )
+            })
+        {
+            return Err(SourceError::Malformed("original named actual kind differs"));
+        }
+        let expected = crate::instance::key_of(
+            types,
+            self.definition.path.path(),
+            self.definition.entry,
+            actuals,
+            None,
+            None,
+        )
+        .map_err(|error| SourceError::Type(format!("{error:?}")))?;
+        if &expected != base {
+            return Err(SourceError::Malformed(
+                "original named specialization key differs",
+            ));
+        }
+        let mut substitute = |ty| {
+            crate::instance::substitute(types, memo, ty, actuals, true)
+                .map_err(|error| SourceError::Type(format!("{error:?}")))
+        };
         self.entry(
             base,
             types,

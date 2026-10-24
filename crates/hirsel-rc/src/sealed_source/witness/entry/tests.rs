@@ -348,3 +348,200 @@ fn erased_original_callable_cannot_be_repaired_by_candidate_substitution() {
         "unknown original type must refuse before substitution can invent evidence"
     );
 }
+
+fn generic_named(
+    size: bool,
+) -> (
+    Arc<TypeInterner>,
+    SourceInput,
+    SignatureRef,
+    crate::instance::Actuals,
+    InstanceKey,
+) {
+    let (types, scalar, bytes) = types();
+    let scope = body(&[scalar], 1).parameter_scope;
+    let bound = if size {
+        types.intern(Type::with_kind(TypeKind::Builtin {
+            kind: BuiltinType::Array,
+            arguments: vec![
+                GenericArgument::Type(bytes),
+                GenericArgument::Size(Size::Parameter(SizeParameterRef::bound(SizeParamId(0)))),
+            ]
+            .into(),
+        }))
+    } else {
+        types.intern(Type::with_kind(TypeKind::Parameter(
+            TypeParameterRef::bound(TypeParamId(0)),
+        )))
+    };
+    let in_body = if size {
+        types.intern(Type::with_kind(TypeKind::Builtin {
+            kind: BuiltinType::Array,
+            arguments: vec![
+                GenericArgument::Type(bytes),
+                GenericArgument::Size(Size::Parameter(SizeParameterRef::body(
+                    scope,
+                    SizeParamId(0),
+                ))),
+            ]
+            .into(),
+        }))
+    } else {
+        types.intern(Type::with_kind(TypeKind::Parameter(
+            TypeParameterRef::body(scope, TypeParamId(0)),
+        )))
+    };
+    let mut definition = witness_definition(body(&[in_body, in_body], 1));
+    Arc::make_mut(&mut definition).signature_hash = ContentHash([3; 32]);
+    let mut callable = function(&[(PassingMode::Borrow, bound)], bound);
+    callable.generics = vec![if size {
+        GenericParameter::Size { name: "N".into() }
+    } else {
+        GenericParameter::Type {
+            name: "T".into(),
+            bounds: Default::default(),
+        }
+    }]
+    .into();
+    let signature = Arc::new(Signature {
+        metadata: Default::default(),
+        definition: definition.path,
+        kind: SignatureKind::Function(callable),
+        fingerprint: definition.signature_hash,
+    });
+    let actuals = crate::instance::Actuals {
+        binder: Some(scope),
+        arguments: vec![if size {
+            GenericArgument::Size(Size::Constant(3))
+        } else {
+            GenericArgument::Type(bytes)
+        }],
+        outer: vec![],
+    };
+    let key = crate::instance::key_of(
+        &types,
+        definition.path.path(),
+        BodyId(0),
+        &actuals,
+        None,
+        None,
+    )
+    .unwrap();
+    (
+        types,
+        SourceInput::capture(ContentHash([1; 32]), ContentHash([2; 32]), definition),
+        signature,
+        actuals,
+        key,
+    )
+}
+
+#[test]
+fn selected_named_entry_closes_both_original_type_binders() {
+    let (types, source, signature, actuals, key) = generic_named(false);
+    let entry = source
+        .named_entry_selected(&key, &types, &signature, &actuals, &TypeMemo::new())
+        .unwrap();
+    let GenericArgument::Type(actual) = actuals.arguments[0] else {
+        unreachable!()
+    };
+    let expected = crate::sealed_source::closed_storage_type(&types, actual).unwrap();
+    assert_eq!(&entry.parameters()[0].ty, &expected);
+    assert_eq!(entry.result(), &expected);
+    assert_eq!(entry.parameters()[0].passing, Passing::Borrow);
+    assert_eq!(entry.reference().instance, key.digest());
+    // The legacy convenience method has no explicit selection and remains strict.
+    assert_eq!(
+        source
+            .named_entry(&key, &types, &signature, Ok)
+            .unwrap_err(),
+        SourceError::Unsupported("original named entry needs complete binder selection")
+    );
+}
+
+#[test]
+fn selected_named_entry_closes_size_actuals_without_physical_layouts() {
+    let (types, source, signature, actuals, key) = generic_named(true);
+    let entry = source
+        .named_entry_selected(&key, &types, &signature, &actuals, &TypeMemo::new())
+        .unwrap();
+    assert!(
+        matches!(&entry.result().ty, hirsel_lir::operation::NativeType::Builtin(
+        hirsel_lir::operation::BuiltinType::Array, args) if matches!(args.last(), Some(OperationArgument::Size(3))))
+    );
+    assert_eq!(entry.result(), &entry.parameters()[0].ty);
+}
+
+#[test]
+fn selected_named_entry_refuses_wrong_key_scope_kind_and_incomplete_selection() {
+    let (types, source, signature, actuals, key) = generic_named(false);
+    for (case, expected) in [
+        (0, "original named actual arity differs"),
+        (1, "original named binder scope differs"),
+        (2, "original named actual kind differs"),
+        (3, "original named specialization key differs"),
+    ] {
+        let mut bad = actuals.clone();
+        match case {
+            0 => bad.arguments.clear(),
+            1 => bad.binder = None,
+            2 => bad.arguments[0] = GenericArgument::Size(Size::Constant(1)),
+            _ => {
+                bad.arguments[0] = GenericArgument::Type(
+                    types.intern(Type::with_kind(TypeKind::Primitive(Primitive::U64))),
+                )
+            }
+        }
+        assert_eq!(
+            source
+                .named_entry_selected(&key, &types, &signature, &bad, &TypeMemo::new())
+                .unwrap_err(),
+            SourceError::Malformed(expected)
+        );
+    }
+    let mut enclosing = actuals.clone();
+    enclosing
+        .outer
+        .push((actuals.binder.unwrap(), actuals.arguments.clone()));
+    assert_eq!(
+        source
+            .named_entry_selected(&key, &types, &signature, &enclosing, &TypeMemo::new())
+            .unwrap_err(),
+        SourceError::Unsupported("original named entry needs enclosing binder coverage")
+    );
+}
+
+#[test]
+fn selected_named_entry_preserves_source_modes_erased_by_base_instance_key() {
+    let (types, source, signature, actuals, key) = generic_named(false);
+    let ordinary = source
+        .named_entry_selected(&key, &types, &signature, &actuals, &TypeMemo::new())
+        .unwrap();
+    let GenericArgument::Type(ty) = actuals.arguments[0] else {
+        unreachable!()
+    };
+    let mut unique = types.get(ty).unwrap().clone();
+    unique.modes.uniqueness = Uniqueness::Unique;
+    let unique = types.intern(unique);
+    let mut selected = actuals.clone();
+    selected.arguments[0] = GenericArgument::Type(unique);
+    let erased_key =
+        crate::instance::key_of(&types, key.definition(), BodyId(0), &selected, None, None)
+            .unwrap();
+    assert_eq!(key, erased_key);
+    let changed = source
+        .named_entry_selected(&key, &types, &signature, &selected, &TypeMemo::new())
+        .unwrap();
+    assert_eq!(
+        ordinary.parameters()[0].ty.ty,
+        changed.parameters()[0].ty.ty
+    );
+    assert_ne!(
+        ordinary.parameters()[0].ty.source_type,
+        changed.parameters()[0].ty.source_type
+    );
+    assert_eq!(
+        &changed.parameters()[0].ty,
+        &crate::sealed_source::closed_storage_type(&types, unique).unwrap()
+    );
+}
