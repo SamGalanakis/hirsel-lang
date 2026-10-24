@@ -369,75 +369,195 @@ fn verify(engine: &[&str], grants: &str, outcome: &str, recorded: &Recorded) {
     }
 }
 
-/// Run `each` for every trace on its own thread: a native run spends most of its time
-/// compiling, so the traces proceed together.
-fn per_trace(each: impl Fn(&str, &str, &str) + Sync) {
-    std::thread::scope(|scope| {
-        for (name, grants, outcome) in TRACES {
-            let each = &each;
-            scope.spawn(move || each(name, grants, outcome));
+/// Every recording of trace `name` on `engine` replays to its live projection
+/// at every cut. Each trace and engine is one case: a native run spends most of
+/// its time compiling.
+fn every_f0_trace(name: &str, engine: &[&str]) {
+    let &(_, grants, outcome) = TRACES.iter().find(|(trace, ..)| *trace == name).unwrap();
+    for seed in SEEDS {
+        for durable in [false, true] {
+            let recorded = record(engine, name, grants, seed, durable);
+            verify(engine, grants, outcome, &recorded);
         }
-    });
+    }
 }
 
 #[test]
-fn every_f0_trace_replays_to_its_live_projection_at_every_cut_on_every_engine() {
-    per_trace(|name, grants, outcome| {
-        for engine in ENGINES {
-            for seed in SEEDS {
-                for durable in [false, true] {
-                    let recorded = record(engine, name, grants, seed, durable);
-                    verify(engine, grants, outcome, &recorded);
-                }
-            }
-        }
-    });
+fn every_f0_trace_replays_to_its_live_projection_at_every_cut_gap_interpreter() {
+    every_f0_trace("gap", ENGINES[0]);
 }
 
-/// The traces whose outcome a schedule decides reach each outcome under some seed on every
-/// engine, and that seed's durable recording replays as above.
 #[test]
-fn the_racing_traces_reach_both_outcomes_and_replay_on_every_engine() {
-    // A diagnostic invocation can select one of the nine trace/engine pairs,
-    // preserving its seed search, both outcomes and every replay cut. With no
-    // selection the test still covers the full matrix.
-    let selection = std::env::var("HIRSEL_FREE_MATRIX").ok().map(|value| {
-        let (trace, engine) = value.split_once(':').expect("trace:engine selection");
-        assert!(["mutex_cycle", "acquire_reply", "thaw_race"].contains(&trace));
-        let engine = ["interpreter", "llvm", "cranelift"]
-            .iter()
-            .position(|name| *name == engine)
-            .expect("engine selection must be interpreter, llvm or cranelift");
-        (trace.to_owned(), engine)
-    });
-    std::thread::scope(|scope| {
-        for (name, outcomes) in [
-            ("mutex_cycle", ["thawed\n", "shared\n"]),
-            ("acquire_reply", ["a first\n", "b first\n"]),
-            ("thaw_race", ["thawed\n", "shared\n"]),
-        ] {
-            for (index, engine) in ENGINES.into_iter().enumerate() {
-                if selection
-                    .as_ref()
-                    .is_some_and(|(trace, selected)| trace != name || *selected != index)
-                {
-                    continue;
-                }
-                scope.spawn(move || {
-                    for want in outcomes {
-                        let seed = (0..64u64)
-                            .find(|&seed| record(engine, name, GRANTS, seed, false).stdout == want)
-                            .unwrap_or_else(|| {
-                                panic!("{name} on {engine:?}: no seed prints {want:?}")
-                            });
-                        let recorded = record(engine, name, GRANTS, seed, true);
-                        assert_eq!(recorded.stdout, want, "{}", recorded.what);
-                        verify(engine, GRANTS, "returned", &recorded);
-                    }
-                });
-            }
-        }
-    });
+fn every_f0_trace_replays_to_its_live_projection_at_every_cut_gap_llvm() {
+    every_f0_trace("gap", ENGINES[1]);
+}
+
+#[test]
+fn every_f0_trace_replays_to_its_live_projection_at_every_cut_gap_cranelift() {
+    every_f0_trace("gap", ENGINES[2]);
+}
+
+#[test]
+fn every_f0_trace_replays_to_its_live_projection_at_every_cut_finite_release_interpreter() {
+    every_f0_trace("finite_release", ENGINES[0]);
+}
+
+#[test]
+fn every_f0_trace_replays_to_its_live_projection_at_every_cut_finite_release_llvm() {
+    every_f0_trace("finite_release", ENGINES[1]);
+}
+
+#[test]
+fn every_f0_trace_replays_to_its_live_projection_at_every_cut_finite_release_cranelift() {
+    every_f0_trace("finite_release", ENGINES[2]);
+}
+
+#[test]
+fn every_f0_trace_replays_to_its_live_projection_at_every_cut_mutex_cycle_interpreter() {
+    every_f0_trace("mutex_cycle", ENGINES[0]);
+}
+
+#[test]
+fn every_f0_trace_replays_to_its_live_projection_at_every_cut_mutex_cycle_llvm() {
+    every_f0_trace("mutex_cycle", ENGINES[1]);
+}
+
+#[test]
+fn every_f0_trace_replays_to_its_live_projection_at_every_cut_mutex_cycle_cranelift() {
+    every_f0_trace("mutex_cycle", ENGINES[2]);
+}
+
+#[test]
+fn every_f0_trace_replays_to_its_live_projection_at_every_cut_parked_receive_interpreter() {
+    every_f0_trace("parked_receive", ENGINES[0]);
+}
+
+#[test]
+fn every_f0_trace_replays_to_its_live_projection_at_every_cut_parked_receive_llvm() {
+    every_f0_trace("parked_receive", ENGINES[1]);
+}
+
+#[test]
+fn every_f0_trace_replays_to_its_live_projection_at_every_cut_parked_receive_cranelift() {
+    every_f0_trace("parked_receive", ENGINES[2]);
+}
+
+#[test]
+fn every_f0_trace_replays_to_its_live_projection_at_every_cut_nested_root_interpreter() {
+    every_f0_trace("nested_root", ENGINES[0]);
+}
+
+#[test]
+fn every_f0_trace_replays_to_its_live_projection_at_every_cut_nested_root_llvm() {
+    every_f0_trace("nested_root", ENGINES[1]);
+}
+
+#[test]
+fn every_f0_trace_replays_to_its_live_projection_at_every_cut_nested_root_cranelift() {
+    every_f0_trace("nested_root", ENGINES[2]);
+}
+
+#[test]
+fn every_f0_trace_replays_to_its_live_projection_at_every_cut_acquire_reply_interpreter() {
+    every_f0_trace("acquire_reply", ENGINES[0]);
+}
+
+#[test]
+fn every_f0_trace_replays_to_its_live_projection_at_every_cut_acquire_reply_llvm() {
+    every_f0_trace("acquire_reply", ENGINES[1]);
+}
+
+#[test]
+fn every_f0_trace_replays_to_its_live_projection_at_every_cut_acquire_reply_cranelift() {
+    every_f0_trace("acquire_reply", ENGINES[2]);
+}
+
+#[test]
+fn every_f0_trace_replays_to_its_live_projection_at_every_cut_coalesced_root_interpreter() {
+    every_f0_trace("coalesced_root", ENGINES[0]);
+}
+
+#[test]
+fn every_f0_trace_replays_to_its_live_projection_at_every_cut_coalesced_root_llvm() {
+    every_f0_trace("coalesced_root", ENGINES[1]);
+}
+
+#[test]
+fn every_f0_trace_replays_to_its_live_projection_at_every_cut_coalesced_root_cranelift() {
+    every_f0_trace("coalesced_root", ENGINES[2]);
+}
+
+#[test]
+fn every_f0_trace_replays_to_its_live_projection_at_every_cut_thaw_race_interpreter() {
+    every_f0_trace("thaw_race", ENGINES[0]);
+}
+
+#[test]
+fn every_f0_trace_replays_to_its_live_projection_at_every_cut_thaw_race_llvm() {
+    every_f0_trace("thaw_race", ENGINES[1]);
+}
+
+#[test]
+fn every_f0_trace_replays_to_its_live_projection_at_every_cut_thaw_race_cranelift() {
+    every_f0_trace("thaw_race", ENGINES[2]);
+}
+
+/// A trace whose outcome a schedule decides reaches each outcome under some
+/// seed on `engine`, and that seed's durable recording replays as above.
+fn racing_trace(name: &str, outcomes: [&str; 2], engine: &[&str]) {
+    for want in outcomes {
+        let seed = (0..64u64)
+            .find(|&seed| record(engine, name, GRANTS, seed, false).stdout == want)
+            .unwrap_or_else(|| panic!("{name} on {engine:?}: no seed prints {want:?}"));
+        let recorded = record(engine, name, GRANTS, seed, true);
+        assert_eq!(recorded.stdout, want, "{}", recorded.what);
+        verify(engine, GRANTS, "returned", &recorded);
+    }
+}
+
+#[test]
+fn the_racing_traces_reach_both_outcomes_and_replay_mutex_cycle_interpreter() {
+    racing_trace("mutex_cycle", ["thawed\n", "shared\n"], ENGINES[0]);
+}
+
+#[test]
+fn the_racing_traces_reach_both_outcomes_and_replay_mutex_cycle_llvm() {
+    racing_trace("mutex_cycle", ["thawed\n", "shared\n"], ENGINES[1]);
+}
+
+#[test]
+fn the_racing_traces_reach_both_outcomes_and_replay_mutex_cycle_cranelift() {
+    racing_trace("mutex_cycle", ["thawed\n", "shared\n"], ENGINES[2]);
+}
+
+#[test]
+fn the_racing_traces_reach_both_outcomes_and_replay_acquire_reply_interpreter() {
+    racing_trace("acquire_reply", ["a first\n", "b first\n"], ENGINES[0]);
+}
+
+#[test]
+fn the_racing_traces_reach_both_outcomes_and_replay_acquire_reply_llvm() {
+    racing_trace("acquire_reply", ["a first\n", "b first\n"], ENGINES[1]);
+}
+
+#[test]
+fn the_racing_traces_reach_both_outcomes_and_replay_acquire_reply_cranelift() {
+    racing_trace("acquire_reply", ["a first\n", "b first\n"], ENGINES[2]);
+}
+
+#[test]
+fn the_racing_traces_reach_both_outcomes_and_replay_thaw_race_interpreter() {
+    racing_trace("thaw_race", ["thawed\n", "shared\n"], ENGINES[0]);
+}
+
+#[test]
+fn the_racing_traces_reach_both_outcomes_and_replay_thaw_race_llvm() {
+    racing_trace("thaw_race", ["thawed\n", "shared\n"], ENGINES[1]);
+}
+
+#[test]
+fn the_racing_traces_reach_both_outcomes_and_replay_thaw_race_cranelift() {
+    racing_trace("thaw_race", ["thawed\n", "shared\n"], ENGINES[2]);
 }
 
 /// Repeated dup and drop of one root in one segment leave the root to the joiner on every
@@ -757,12 +877,24 @@ fn f1_corpus_matrix_with_exit(
     grants: impl FnOnce(&Scratch) -> serde_json::Value,
     expected_exit: i32,
 ) {
-    f1_corpus_matrix_with_run(
+    f1_corpus_matrix_with_exit_cells(name, text, grants, expected_exit, Cells::ALL);
+}
+
+fn f1_corpus_matrix_with_exit_cells(
+    name: &str,
+    text: &str,
+    grants: impl FnOnce(&Scratch) -> serde_json::Value,
+    expected_exit: i32,
+    cells: Cells,
+) {
+    f1_corpus_matrix_with_live(
         name,
         text,
         |scratch| serde_json::json!({"io":grants(scratch),"args":[]}),
         expected_exit,
         b"",
+        || Box::new(|| {}),
+        cells,
     );
 }
 
@@ -773,7 +905,15 @@ fn f1_corpus_matrix_with_run(
     expected_exit: i32,
     stdin: &[u8],
 ) {
-    f1_corpus_matrix_with_live(name, text, grants, expected_exit, stdin, || Box::new(|| {}));
+    f1_corpus_matrix_with_live(
+        name,
+        text,
+        grants,
+        expected_exit,
+        stdin,
+        || Box::new(|| {}),
+        Cells::ALL,
+    );
 }
 
 fn f1_corpus_matrix_with_live(
@@ -783,14 +923,16 @@ fn f1_corpus_matrix_with_live(
     expected_exit: i32,
     stdin: &[u8],
     live_peer: impl FnMut() -> Box<dyn FnOnce()>,
+    cells: Cells,
 ) {
-    f1_corpus_matrix_with_witness(
+    f1_corpus_matrix_cells(
         name,
         text,
         grants,
         (expected_exit, |_, _, _, _| {}),
         stdin,
         live_peer,
+        cells,
     );
 }
 
@@ -816,16 +958,30 @@ impl Cells {
     const INTERPRETER: &'static [&'static [&'static str]] = &[&[]];
     const NATIVE: &'static [&'static [&'static str]] =
         &[&["--native"], &["--native", "--backend", "cranelift"]];
+    const LLVM: &'static [&'static [&'static str]] = &[&["--native"]];
+    const CRANELIFT: &'static [&'static [&'static str]] =
+        &[&["--native", "--backend", "cranelift"]];
     const fn part(durable: bool, native: bool) -> Cells {
-        Cells {
-            levels: if durable { &["durable"] } else { &["record"] },
-            dimensions: Self::DIMENSIONS,
-            engines: if native {
+        Cells::at(
+            durable,
+            if native {
                 Cells::NATIVE
             } else {
                 Cells::INTERPRETER
             },
+        )
+    }
+    /// One recording level, replayed on `engines`.
+    const fn at(durable: bool, engines: &'static [&'static [&'static str]]) -> Cells {
+        Cells {
+            levels: if durable { &["durable"] } else { &["record"] },
+            engines,
+            dimensions: Self::DIMENSIONS,
         }
+    }
+    /// One recording level, replayed on every engine.
+    const fn level(durable: bool) -> Cells {
+        Cells::at(durable, &ENGINES)
     }
 }
 
@@ -1128,8 +1284,17 @@ pub fn main(rt: Io) -> Result[(), AppError] {
 }
 
 #[test]
-fn f1_random_and_sleep_requests_replay_through_recorded_attempts() {
-    f1_corpus_matrix_with_io(
+fn f1_random_and_sleep_requests_replay_through_recorded_attempts_record() {
+    f1_random_and_sleep_matrix(Cells::level(false));
+}
+
+#[test]
+fn f1_random_and_sleep_requests_replay_through_recorded_attempts_durable() {
+    f1_random_and_sleep_matrix(Cells::level(true));
+}
+
+fn f1_random_and_sleep_matrix(cells: Cells) {
+    f1_corpus_matrix_with_exit_cells(
         "random-sleep",
         r#"
 pub type AppError = Grant(GrantError) | Random(RandomError) | Clock(ClockError) | Wait(WaitError) | Output(OutputError)
@@ -1147,40 +1312,66 @@ pub fn main(rt: Io) -> Result[(), AppError] {
 }
 "#,
         |_| serde_json::json!({"stdout":"stdout.bytes@1", "tasks":"tasks.free@1", "random":"random.system@1", "monotonic_clock":"clock.monotonic.ns@1", "dirs":[]}),
+        0,
+        cells,
     );
 }
 
 #[test]
-fn f1_failed_root_terminal_outcome_replays_exactly() {
-    f1_corpus_matrix_with_exit(
+fn f1_failed_root_terminal_outcome_replays_exactly_record() {
+    f1_failed_root_terminal_outcome_matrix(Cells::level(false));
+}
+
+#[test]
+fn f1_failed_root_terminal_outcome_replays_exactly_durable() {
+    f1_failed_root_terminal_outcome_matrix(Cells::level(true));
+}
+
+fn f1_failed_root_terminal_outcome_matrix(cells: Cells) {
+    f1_corpus_matrix_with_exit_cells(
         "failed-root",
         "pub fn main(rt: Io) -> Result[(), GrantError] { let tasks = io.tasks(rt)?; failure.check(false, Arithmetic()); Ok(()) }",
         |_| serde_json::json!({"stdout":"stdout.bytes@1", "tasks":"tasks.free@1", "dirs":[]}),
         hirsel_run_schema::exit::FAILED,
+        cells,
     );
 }
 
 #[test]
-fn f1_blocked_terminal_outcome_replays_exactly() {
+fn f1_blocked_terminal_outcome_replays_exactly_record() {
+    f1_blocked_terminal_outcome_matrix(Cells::level(false));
+}
+
+#[test]
+fn f1_blocked_terminal_outcome_replays_exactly_durable() {
+    f1_blocked_terminal_outcome_matrix(Cells::level(true));
+}
+
+fn f1_blocked_terminal_outcome_matrix(cells: Cells) {
     // Full F1 phases are exercised by the qualification configuration. The
     // ordinary admission control checks the shipping legacy-tape path.
     if !hirsel_rt::free_driver::admission_enabled() {
         return;
     }
-    f1_corpus_matrix_with_exit(
+    f1_corpus_matrix_with_exit_cells(
         "blocked-root",
         "pub fn main(rt: Io) -> Result[(), GrantError] { let tasks = io.tasks(rt)?; let (tx, rx): (Sender[u32], Receiver[u32]) = channel.open(tasks); let mut sender = take tx; let mut receiver = take rx; let _ = channel.receive(tasks, mut receiver); let _ = channel.send(tasks, mut sender, 1u32); Ok(()) }",
         |_| serde_json::json!({"stdout":"stdout.bytes@1", "tasks":"tasks.free@1", "dirs":[]}),
         hirsel_run_schema::exit::BLOCKED,
+        cells,
     );
 }
 
 #[test]
 fn f1_terminal_restoration_rejects_forged_root_and_unconsumed_records() {
-    f1_terminal_restoration_matrix("record", &[("1", None)]);
+    f1_terminal_restoration_matrix("record", &[("1", None)], &ENGINES);
 }
 
-fn f1_terminal_restoration_matrix(level: &str, dimensions: &[(&str, Option<usize>)]) {
+fn f1_terminal_restoration_matrix(
+    level: &str,
+    dimensions: &[(&str, Option<usize>)],
+    engines: &[&[&str]],
+) {
     use hirsel_free::{
         phase::Progress,
         record::{Encoder, Record},
@@ -1271,7 +1462,7 @@ fn f1_terminal_restoration_matrix(level: &str, dimensions: &[(&str, Option<usize
             parsed.end.as_ref().unwrap(),
         ));
         std::fs::write(&path, forged).unwrap();
-        for engine in ENGINES {
+        for &engine in engines {
             for &(width, permits) in dimensions {
                 let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
                 command
@@ -1700,6 +1891,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), E] {
                 server.join().unwrap();
             })
         },
+        Cells::ALL,
     );
 }
 
@@ -1772,6 +1964,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), E] {
                 server.join().unwrap();
             })
         },
+        Cells::ALL,
     );
 }
 
@@ -1833,18 +2026,45 @@ pub fn main(rt: Io, args: Args) -> Result[(), E] {
 
 #[test]
 fn f1_tls_client_setup_replays_without_a_tls_peer() {
-    f1_tls_client_matrix("tls.connect_with(n, take stream, \"localhost\", client)");
-}
-
-#[test]
-fn f1_tls_basic_and_identity_connect_replay_without_a_tls_peer() {
-    f1_tls_client_matrix("tls.connect(n, take stream, \"localhost\", Pem(bCA))");
     f1_tls_client_matrix(
-        "tls.connect_as(n, take stream, \"localhost\", Pem(bCA), TlsIdentity(chain: bCHAIN, key: bKEY))",
+        "tls.connect_with(n, take stream, \"localhost\", client)",
+        Cells::ALL,
     );
 }
 
-fn f1_tls_client_matrix(upgrade: &str) {
+#[test]
+fn f1_tls_basic_connect_replays_without_a_tls_peer_record() {
+    f1_tls_client_matrix(
+        "tls.connect(n, take stream, \"localhost\", Pem(bCA))",
+        Cells::level(false),
+    );
+}
+
+#[test]
+fn f1_tls_basic_connect_replays_without_a_tls_peer_durable() {
+    f1_tls_client_matrix(
+        "tls.connect(n, take stream, \"localhost\", Pem(bCA))",
+        Cells::level(true),
+    );
+}
+
+#[test]
+fn f1_tls_identity_connect_replays_without_a_tls_peer_record() {
+    f1_tls_client_matrix(
+        "tls.connect_as(n, take stream, \"localhost\", Pem(bCA), TlsIdentity(chain: bCHAIN, key: bKEY))",
+        Cells::level(false),
+    );
+}
+
+#[test]
+fn f1_tls_identity_connect_replays_without_a_tls_peer_durable() {
+    f1_tls_client_matrix(
+        "tls.connect_as(n, take stream, \"localhost\", Pem(bCA), TlsIdentity(chain: bCHAIN, key: bKEY))",
+        Cells::level(true),
+    );
+}
+
+fn f1_tls_client_matrix(upgrade: &str, cells: Cells) {
     use rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
     use std::io::{Read, Write};
     use std::net::{Ipv4Addr, TcpListener};
@@ -1941,6 +2161,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), E] {
                 server.join().unwrap();
             })
         },
+        cells,
     );
 }
 
@@ -3052,13 +3273,14 @@ fn f1_runner_short_callee_crash_and_lost_reply_keep_distinct_outcomes() {
 
 #[test]
 fn f1_external_stop_during_host_wait_replays_exact_terminal_and_projection() {
-    f1_external_stop_matrix("1", 1, &[("1", 1)]);
+    f1_external_stop_matrix("1", 1, &[("1", 1)], Cells::ALL);
 }
 
 fn f1_external_stop_matrix(
     record_width: &str,
     record_permits: usize,
     replay_dimensions: &[(&str, usize)],
+    cells: Cells,
 ) {
     if !hirsel_rt::free_driver::admission_enabled() {
         return;
@@ -3084,7 +3306,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), E] {
     build.arg("build").arg(&program).arg("-o").arg(&executable);
     let built = bounded_output(&mut build, &program, "external stop standalone build");
     assert!(built.status.success(), "{built:?}");
-    for level in ["record", "durable"] {
+    for &level in cells.levels {
         let tape = scratch.path(level);
         let report = scratch.path("projection");
         let grants = format!(
@@ -3136,7 +3358,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), E] {
             |r| matches!(r, hirsel_free::record::Record::Completion { op, .. } if *op == root.op)
         ));
         let projection = std::fs::read_to_string(&report).unwrap();
-        for engine in ENGINES {
+        for &engine in cells.engines {
             for &(width, permits) in replay_dimensions {
                 let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
                 command
@@ -3194,37 +3416,45 @@ pub fn main(rt: Io, args: Args) -> Result[(), E] {
             assert_eq!(parsed_partial.cut, parsed.cut);
             let path = scratch.path(if torn { "torn" } else { "partial" });
             std::fs::write(&path, bytes).unwrap();
-            for engine in ENGINES {
-                for &(width, permits) in replay_dimensions {
-                    let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
-                    command
-                        .arg("run")
-                        .args(engine)
-                        .arg(&program)
-                        .arg("--replay")
-                        .arg(&path)
-                        .args(["--cores", width])
-                        .env(hirsel_rt::free_replay::Report::VAR, &report);
-                    f1_permits(&mut command, permits);
-                    let replay = bounded_output(
-                        &mut command,
-                        &program,
-                        &format!(
-                            "host wait {level} partial torn={torn} {engine:?} width{width} permits{permits}"
-                        ),
-                    );
-                    assert_eq!(replay.stdout, b"before stop\n", "{replay:?}");
-                    assert!(
-                        !replay.status.success(),
-                        "an unfinished host wait cannot return: {replay:?}"
-                    );
-                    assert_eq!(std::fs::read_to_string(&report).unwrap(), expected);
-                    let result = (replay.status.code(), replay.stderr);
-                    if let Some(reference) = &partial_reference {
-                        assert_eq!(&result, reference);
-                    } else {
-                        partial_reference = Some(result);
-                    }
+            // The whole matrix's reference is its first interpreter replay of
+            // the untorn cut. A native part replays that cell first too.
+            let reference = (!torn && !cells.engines.contains(&Cells::INTERPRETER[0]))
+                .then_some((Cells::INTERPRETER[0], replay_dimensions[0]));
+            let runs = reference.into_iter().chain(
+                cells
+                    .engines
+                    .iter()
+                    .flat_map(|&engine| replay_dimensions.iter().map(move |&cell| (engine, cell))),
+            );
+            for (engine, (width, permits)) in runs {
+                let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+                command
+                    .arg("run")
+                    .args(engine)
+                    .arg(&program)
+                    .arg("--replay")
+                    .arg(&path)
+                    .args(["--cores", width])
+                    .env(hirsel_rt::free_replay::Report::VAR, &report);
+                f1_permits(&mut command, permits);
+                let replay = bounded_output(
+                    &mut command,
+                    &program,
+                    &format!(
+                        "host wait {level} partial torn={torn} {engine:?} width{width} permits{permits}"
+                    ),
+                );
+                assert_eq!(replay.stdout, b"before stop\n", "{replay:?}");
+                assert!(
+                    !replay.status.success(),
+                    "an unfinished host wait cannot return: {replay:?}"
+                );
+                assert_eq!(std::fs::read_to_string(&report).unwrap(), expected);
+                let result = (replay.status.code(), replay.stderr);
+                if let Some(reference) = &partial_reference {
+                    assert_eq!(&result, reference);
+                } else {
+                    partial_reference = Some(result);
                 }
             }
         }
@@ -3315,14 +3545,35 @@ fn f1_returned_error_resource_matrix(
 }
 
 #[test]
-fn f1_explicit_exit_codes_replay_exact_terminal_and_projection() {
-    f1_explicit_exit_codes_matrix("1", 1, &[("1", 1)]);
+fn f1_explicit_exit_codes_replay_exact_terminal_and_projection_record() {
+    f1_explicit_exit_codes_matrix(
+        "1",
+        1,
+        &[("1", 1)],
+        Cells::level(false),
+        &F1_EXIT_CODE_FIXTURES,
+    );
 }
+
+#[test]
+fn f1_explicit_exit_codes_replay_exact_terminal_and_projection_durable() {
+    f1_explicit_exit_codes_matrix(
+        "1",
+        1,
+        &[("1", 1)],
+        Cells::level(true),
+        &F1_EXIT_CODE_FIXTURES,
+    );
+}
+
+const F1_EXIT_CODE_FIXTURES: [&str; 3] = ["direct", "wrapped", "error"];
 
 fn f1_explicit_exit_codes_matrix(
     record_width: &str,
     record_permits: usize,
     replay_dimensions: &[(&str, usize)],
+    cells: Cells,
+    fixtures: &[&str],
 ) {
     if !hirsel_rt::free_driver::admission_enabled() {
         return;
@@ -3349,11 +3600,14 @@ fn f1_explicit_exit_codes_matrix(
             "error: missing data\n",
         ),
     ] {
+        if !fixtures.contains(&name) {
+            continue;
+        }
         let scratch = Scratch::new(&format!("f1-exit-code-{name}"));
         let program = scratch.path("main.hir");
         std::fs::write(&program, text).unwrap();
         let report = scratch.path("projection");
-        for level in ["record", "durable"] {
+        for &level in cells.levels {
             let tape = scratch.path(level);
             let grants = format!(
                 r#"{{"io":{{"tasks":"tasks.free@1","dirs":[]}},"args":[],"recording":"{level}"}}"#
@@ -3385,7 +3639,7 @@ fn f1_explicit_exit_codes_matrix(
                     .starts_with("native-outcome-v2/")
             );
             let projection = std::fs::read_to_string(&report).unwrap();
-            for engine in ENGINES {
+            for &engine in cells.engines {
                 for &(width, permits) in replay_dimensions {
                     let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
                     command
@@ -3416,13 +3670,14 @@ fn f1_explicit_exit_codes_matrix(
 
 #[test]
 fn f1_failed_root_preserves_ordered_cleanup_causes_and_projection() {
-    f1_ordered_cleanup_causes_matrix("1", 1, &[("1", 1)]);
+    f1_ordered_cleanup_causes_matrix("1", 1, &[("1", 1)], Cells::ALL);
 }
 
 fn f1_ordered_cleanup_causes_matrix(
     record_width: &str,
     record_permits: usize,
     replay_dimensions: &[(&str, usize)],
+    cells: Cells,
 ) {
     if !hirsel_rt::free_driver::admission_enabled() {
         return;
@@ -3455,7 +3710,7 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
         .map(|check| text.lines().position(|line| line.contains(check)).unwrap() + 1)
         .collect();
     let report = scratch.path("projection");
-    for level in ["record", "durable"] {
+    for &level in cells.levels {
         let tape = scratch.path(level);
         let grants = format!(
             r#"{{"io":{{"stdout":"stdout.bytes@1","tasks":"tasks.free@1","dirs":[]}},"args":[],"recording":"{level}"}}"#
@@ -3509,7 +3764,7 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
                 .starts_with("native-outcome-v2/")
         );
         let projection = std::fs::read_to_string(&report).unwrap();
-        for engine in ENGINES {
+        for &engine in cells.engines {
             for &(width, permits) in replay_dimensions {
                 let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
                 command
@@ -3539,7 +3794,7 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
 
 #[test]
 fn f1_terminal_metadata_rejects_contradictory_outcomes_and_receipts_before_effects() {
-    f1_terminal_metadata_matrix("1", 1, &[("1", 1)], "record");
+    f1_terminal_metadata_matrix("1", 1, &[("1", 1)], "record", &ENGINES);
 }
 
 fn f1_terminal_metadata_matrix(
@@ -3547,6 +3802,7 @@ fn f1_terminal_metadata_matrix(
     record_permits: usize,
     replay_dimensions: &[(&str, usize)],
     level: &str,
+    engines: &[&[&str]],
 ) {
     if !hirsel_rt::free_driver::admission_enabled() {
         return;
@@ -3643,7 +3899,7 @@ fn f1_terminal_metadata_matrix(
         forged.extend(hirsel_free::tape::stop(&parsed.keys, &tasks, &end));
         let path = scratch.path(name);
         std::fs::write(&path, forged).unwrap();
-        for engine in ENGINES {
+        for &engine in engines {
             for &(width, permits) in replay_dimensions {
                 let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
                 command
@@ -3697,7 +3953,14 @@ fn f1_runner_width_and_permit_matrix(
         return;
     }
     let scratch = Scratch::new(name);
-    f1_runner_matrix_in(&scratch, text, grants, live_output, replay_output);
+    f1_runner_matrix_in(
+        &scratch,
+        text,
+        grants,
+        live_output,
+        replay_output,
+        Cells::ALL,
+    );
 }
 
 /// As [`f1_runner_width_and_permit_matrix`] at one recording level: each
@@ -3707,13 +3970,14 @@ fn f1_runner_width_and_permit_matrix_at(
     text: &str,
     grants: &str,
     output: (&[u8], &[u8]),
-    level: &'static str,
+    durable: bool,
 ) {
     if !hirsel_rt::free_driver::admission_enabled() {
         return;
     }
-    let scratch = Scratch::new(&format!("{name}-{level}"));
-    f1_runner_matrix_levels(&scratch, text, grants, output.0, output.1, &[level]);
+    let cells = Cells::level(durable);
+    let scratch = Scratch::new(&format!("{name}-{}", cells.levels[0]));
+    f1_runner_matrix_in(&scratch, text, grants, output.0, output.1, cells);
 }
 
 fn f1_runner_matrix_in(
@@ -3722,25 +3986,14 @@ fn f1_runner_matrix_in(
     grants: &str,
     live_output: &[u8],
     replay_output: &[u8],
-) {
-    let levels = ["record", "durable"];
-    f1_runner_matrix_levels(scratch, text, grants, live_output, replay_output, &levels);
-}
-
-fn f1_runner_matrix_levels(
-    scratch: &Scratch,
-    text: &str,
-    grants: &str,
-    live_output: &[u8],
-    replay_output: &[u8],
-    levels: &[&str],
+    cells: Cells,
 ) {
     let name = scratch.0.display();
     let program = scratch.path("main.hir");
     std::fs::write(&program, text).unwrap();
     let report = scratch.path("projection");
     let mut grants: serde_json::Value = serde_json::from_str(grants).unwrap();
-    for &level in levels {
+    for &level in cells.levels {
         let tape = scratch.path(level);
         grants["recording"] = level.into();
         let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
@@ -3763,7 +4016,7 @@ fn f1_runner_matrix_levels(
         assert!(bytes.starts_with(hirsel_free::tape::MAGIC));
         assert!(hirsel_free::tape::parse(&bytes).unwrap().end.is_some());
         let projection = std::fs::read_to_string(&report).unwrap();
-        for engine in ENGINES {
+        for &engine in cells.engines {
             for width in ["1", "8"] {
                 for permits in [1, 8] {
                     let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
@@ -3798,7 +4051,7 @@ fn f1_runner_compute_full_projection_width_and_permit_matrix() {
         F1_RUNNER_COMPUTE_SOURCE,
         F1_RUNNER_COMPUTE_GRANTS,
         (b"runner outcomes\n", b"runner outcomes\n"),
-        "record",
+        false,
     );
 }
 
@@ -3809,7 +4062,7 @@ fn f1_runner_compute_full_projection_width_and_permit_matrix_durable() {
         F1_RUNNER_COMPUTE_SOURCE,
         F1_RUNNER_COMPUTE_GRANTS,
         (b"runner outcomes\n", b"runner outcomes\n"),
-        "durable",
+        true,
     );
 }
 
@@ -3869,7 +4122,36 @@ fn f1_runner_spawn_refusal_full_projection_width_and_permit_matrix() {
 }
 
 #[test]
-fn f1_runner_linked_tapes_width_and_permit_matrix() {
+fn f1_runner_linked_tapes_width_and_permit_matrix_record_interpreter() {
+    f1_runner_linked_tapes_matrix(Cells::at(false, Cells::INTERPRETER));
+}
+
+#[test]
+fn f1_runner_linked_tapes_width_and_permit_matrix_record_llvm() {
+    f1_runner_linked_tapes_matrix(Cells::at(false, Cells::LLVM));
+}
+
+#[test]
+fn f1_runner_linked_tapes_width_and_permit_matrix_record_cranelift() {
+    f1_runner_linked_tapes_matrix(Cells::at(false, Cells::CRANELIFT));
+}
+
+#[test]
+fn f1_runner_linked_tapes_width_and_permit_matrix_durable_interpreter() {
+    f1_runner_linked_tapes_matrix(Cells::at(true, Cells::INTERPRETER));
+}
+
+#[test]
+fn f1_runner_linked_tapes_width_and_permit_matrix_durable_llvm() {
+    f1_runner_linked_tapes_matrix(Cells::at(true, Cells::LLVM));
+}
+
+#[test]
+fn f1_runner_linked_tapes_width_and_permit_matrix_durable_cranelift() {
+    f1_runner_linked_tapes_matrix(Cells::at(true, Cells::CRANELIFT));
+}
+
+fn f1_runner_linked_tapes_matrix(cells: Cells) {
     if !hirsel_rt::free_driver::admission_enabled() {
         return;
     }
@@ -3880,9 +4162,10 @@ fn f1_runner_linked_tapes_width_and_permit_matrix() {
         F1_RUNNER_LINKED_GRANTS,
         b"linked child\nlinked parent\n",
         b"linked parent\n",
+        cells,
     );
     let program = scratch.path("main.hir");
-    for level in ["record", "durable"] {
+    for &level in cells.levels {
         let tape = scratch.path(level);
         let child_tape = scratch.path(&format!("{level}.call-0"));
         let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
@@ -3895,12 +4178,47 @@ fn f1_runner_linked_tapes_width_and_permit_matrix() {
             "{joined:?}"
         );
         assert!(joined.stderr.is_empty(), "{joined:?}");
-        f1_runner_child_replay_matrix(&program, &child_tape, false, b"linked child\n");
+        f1_runner_child_replay_matrix(
+            &program,
+            &child_tape,
+            false,
+            b"linked child\n",
+            cells.engines,
+        );
     }
 }
 
 #[test]
-fn f1_runner_crashed_child_width_and_permit_matrix() {
+fn f1_runner_crashed_child_width_and_permit_matrix_record_interpreter() {
+    f1_runner_crashed_child_matrix(Cells::at(false, Cells::INTERPRETER));
+}
+
+#[test]
+fn f1_runner_crashed_child_width_and_permit_matrix_record_llvm() {
+    f1_runner_crashed_child_matrix(Cells::at(false, Cells::LLVM));
+}
+
+#[test]
+fn f1_runner_crashed_child_width_and_permit_matrix_record_cranelift() {
+    f1_runner_crashed_child_matrix(Cells::at(false, Cells::CRANELIFT));
+}
+
+#[test]
+fn f1_runner_crashed_child_width_and_permit_matrix_durable_interpreter() {
+    f1_runner_crashed_child_matrix(Cells::at(true, Cells::INTERPRETER));
+}
+
+#[test]
+fn f1_runner_crashed_child_width_and_permit_matrix_durable_llvm() {
+    f1_runner_crashed_child_matrix(Cells::at(true, Cells::LLVM));
+}
+
+#[test]
+fn f1_runner_crashed_child_width_and_permit_matrix_durable_cranelift() {
+    f1_runner_crashed_child_matrix(Cells::at(true, Cells::CRANELIFT));
+}
+
+fn f1_runner_crashed_child_matrix(cells: Cells) {
     if !hirsel_rt::free_driver::admission_enabled() {
         return;
     }
@@ -3911,9 +4229,10 @@ fn f1_runner_crashed_child_width_and_permit_matrix() {
         F1_RUNNER_CRASH_GRANTS,
         b"abandoned twice\n",
         b"abandoned twice\n",
+        cells,
     );
     let program = scratch.path("main.hir");
-    for level in ["record", "durable"] {
+    for &level in cells.levels {
         for ordinal in 0..2 {
             let child_tape = scratch.path(&format!("{level}.call-{ordinal}"));
             let recording = hirsel_rt::host_launch::read_recording(&child_tape).unwrap();
@@ -3926,17 +4245,76 @@ fn f1_runner_crashed_child_width_and_permit_matrix() {
                     matches!(event.request, hirsel_rt::io::Request::CallReturn(_))
                 })
             );
-            f1_runner_child_replay_matrix(&program, &child_tape, true, b"");
+            f1_runner_child_replay_matrix(&program, &child_tape, true, b"", cells.engines);
         }
     }
 }
 
 #[test]
-fn f1_runner_short_crash_and_lost_reply_width_and_permit_matrix() {
+fn f1_runner_short_crash_width_and_permit_matrix_record_interpreter() {
+    f1_runner_short_matrix("crash", "Abandoned", Cells::at(false, Cells::INTERPRETER));
+}
+
+#[test]
+fn f1_runner_short_crash_width_and_permit_matrix_record_llvm() {
+    f1_runner_short_matrix("crash", "Abandoned", Cells::at(false, Cells::LLVM));
+}
+
+#[test]
+fn f1_runner_short_crash_width_and_permit_matrix_record_cranelift() {
+    f1_runner_short_matrix("crash", "Abandoned", Cells::at(false, Cells::CRANELIFT));
+}
+
+#[test]
+fn f1_runner_short_crash_width_and_permit_matrix_durable_interpreter() {
+    f1_runner_short_matrix("crash", "Abandoned", Cells::at(true, Cells::INTERPRETER));
+}
+
+#[test]
+fn f1_runner_short_crash_width_and_permit_matrix_durable_llvm() {
+    f1_runner_short_matrix("crash", "Abandoned", Cells::at(true, Cells::LLVM));
+}
+
+#[test]
+fn f1_runner_short_crash_width_and_permit_matrix_durable_cranelift() {
+    f1_runner_short_matrix("crash", "Abandoned", Cells::at(true, Cells::CRANELIFT));
+}
+
+#[test]
+fn f1_runner_short_lose_reply_width_and_permit_matrix_record_interpreter() {
+    f1_runner_short_matrix("lose_reply", "Lost", Cells::at(false, Cells::INTERPRETER));
+}
+
+#[test]
+fn f1_runner_short_lose_reply_width_and_permit_matrix_record_llvm() {
+    f1_runner_short_matrix("lose_reply", "Lost", Cells::at(false, Cells::LLVM));
+}
+
+#[test]
+fn f1_runner_short_lose_reply_width_and_permit_matrix_record_cranelift() {
+    f1_runner_short_matrix("lose_reply", "Lost", Cells::at(false, Cells::CRANELIFT));
+}
+
+#[test]
+fn f1_runner_short_lose_reply_width_and_permit_matrix_durable_interpreter() {
+    f1_runner_short_matrix("lose_reply", "Lost", Cells::at(true, Cells::INTERPRETER));
+}
+
+#[test]
+fn f1_runner_short_lose_reply_width_and_permit_matrix_durable_llvm() {
+    f1_runner_short_matrix("lose_reply", "Lost", Cells::at(true, Cells::LLVM));
+}
+
+#[test]
+fn f1_runner_short_lose_reply_width_and_permit_matrix_durable_cranelift() {
+    f1_runner_short_matrix("lose_reply", "Lost", Cells::at(true, Cells::CRANELIFT));
+}
+
+fn f1_runner_short_matrix(fault: &str, outcome: &str, cells: Cells) {
     if !hirsel_rt::free_driver::admission_enabled() {
         return;
     }
-    for (fault, outcome) in [("crash", "Abandoned"), ("lose_reply", "Lost")] {
+    {
         let scratch = Scratch::new(&format!("f1-runner-short-{fault}-matrix"));
         let (text, grants) = f1_runner_short_fixture(fault, outcome);
         f1_runner_matrix_in(
@@ -3945,9 +4323,10 @@ fn f1_runner_short_crash_and_lost_reply_width_and_permit_matrix() {
             &grants,
             b"outcome lost\n",
             b"outcome lost\n",
+            cells,
         );
         let program = scratch.path("main.hir");
-        for level in ["record", "durable"] {
+        for &level in cells.levels {
             let child_tape = scratch.path(&format!("{level}.call-0"));
             let recording = hirsel_rt::host_launch::read_recording(&child_tape).unwrap();
             assert!(
@@ -3960,16 +4339,22 @@ fn f1_runner_short_crash_and_lost_reply_width_and_permit_matrix() {
                 event.request,
                 hirsel_rt::io::Request::CallReturn(hirsel_run_schema::CalleeOutcome::Ok(_))
             )));
-            f1_runner_child_replay_matrix(&program, &child_tape, false, b"");
+            f1_runner_child_replay_matrix(&program, &child_tape, false, b"", cells.engines);
         }
     }
 }
 
 /// Child tapes have Host admission rather than Free task logs. Check their
 /// exact process outcome independently of the caller's full Free Projection.
-fn f1_runner_child_replay_matrix(program: &Path, tape: &Path, stopped: bool, stdout: &[u8]) {
+fn f1_runner_child_replay_matrix(
+    program: &Path,
+    tape: &Path,
+    stopped: bool,
+    stdout: &[u8],
+    engines: &[&[&str]],
+) {
     let mut reference = None;
-    for engine in ENGINES {
+    for &engine in engines {
         for width in ["1", "8"] {
             for permits in [1, 8] {
                 let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
@@ -3996,9 +4381,9 @@ fn f1_runner_child_replay_matrix(program: &Path, tape: &Path, stopped: bool, std
                         Some(hirsel_run_schema::exit::ENVIRONMENTAL),
                         "{replay:?}"
                     );
-                    assert!(
-                        String::from_utf8_lossy(&replay.stderr)
-                            .contains("its place stopped the run"),
+                    assert_eq!(
+                        replay.stderr,
+                        b"hirsel: environmental failure: its place stopped the run\n",
                         "{replay:?}"
                     );
                 } else {
@@ -4022,43 +4407,358 @@ fn f1_returned_error_resource_width_and_permit_matrix() {
 }
 
 #[test]
-fn f1_explicit_exit_codes_width_and_permit_matrix() {
-    f1_explicit_exit_codes_matrix("8", 8, &[("1", 1), ("1", 8), ("8", 1), ("8", 8)]);
+fn f1_explicit_exit_codes_width_and_permit_matrix_record_direct() {
+    f1_explicit_exit_codes_matrix(
+        "8",
+        8,
+        &[("1", 1), ("1", 8), ("8", 1), ("8", 8)],
+        Cells::level(false),
+        &["direct"],
+    );
 }
 
 #[test]
-fn f1_ordered_cleanup_causes_width_and_permit_matrix() {
-    f1_ordered_cleanup_causes_matrix("8", 8, &[("1", 1), ("1", 8), ("8", 1), ("8", 8)]);
+fn f1_explicit_exit_codes_width_and_permit_matrix_record_wrapped() {
+    f1_explicit_exit_codes_matrix(
+        "8",
+        8,
+        &[("1", 1), ("1", 8), ("8", 1), ("8", 8)],
+        Cells::level(false),
+        &["wrapped"],
+    );
 }
 
 #[test]
-fn f1_external_stop_width_and_permit_matrix() {
-    f1_external_stop_matrix("8", 8, &[("1", 1), ("1", 8), ("8", 1), ("8", 8)]);
+fn f1_explicit_exit_codes_width_and_permit_matrix_record_error() {
+    f1_explicit_exit_codes_matrix(
+        "8",
+        8,
+        &[("1", 1), ("1", 8), ("8", 1), ("8", 8)],
+        Cells::level(false),
+        &["error"],
+    );
 }
 
 #[test]
-fn f1_terminal_metadata_width_and_permit_matrix() {
-    for level in ["record", "durable"] {
-        f1_terminal_metadata_matrix("8", 8, &[("1", 1), ("1", 8), ("8", 1), ("8", 8)], level);
-    }
+fn f1_explicit_exit_codes_width_and_permit_matrix_durable_direct() {
+    f1_explicit_exit_codes_matrix(
+        "8",
+        8,
+        &[("1", 1), ("1", 8), ("8", 1), ("8", 8)],
+        Cells::level(true),
+        &["direct"],
+    );
 }
 
 #[test]
-fn f1_terminal_root_and_consumption_width_and_permit_matrix() {
+fn f1_explicit_exit_codes_width_and_permit_matrix_durable_wrapped() {
+    f1_explicit_exit_codes_matrix(
+        "8",
+        8,
+        &[("1", 1), ("1", 8), ("8", 1), ("8", 8)],
+        Cells::level(true),
+        &["wrapped"],
+    );
+}
+
+#[test]
+fn f1_explicit_exit_codes_width_and_permit_matrix_durable_error() {
+    f1_explicit_exit_codes_matrix(
+        "8",
+        8,
+        &[("1", 1), ("1", 8), ("8", 1), ("8", 8)],
+        Cells::level(true),
+        &["error"],
+    );
+}
+
+#[test]
+fn f1_ordered_cleanup_causes_width_and_permit_matrix_record_interpreter() {
+    f1_ordered_cleanup_causes_matrix(
+        "8",
+        8,
+        &[("1", 1), ("1", 8), ("8", 1), ("8", 8)],
+        Cells::at(false, Cells::INTERPRETER),
+    );
+}
+
+#[test]
+fn f1_ordered_cleanup_causes_width_and_permit_matrix_record_llvm() {
+    f1_ordered_cleanup_causes_matrix(
+        "8",
+        8,
+        &[("1", 1), ("1", 8), ("8", 1), ("8", 8)],
+        Cells::at(false, Cells::LLVM),
+    );
+}
+
+#[test]
+fn f1_ordered_cleanup_causes_width_and_permit_matrix_record_cranelift() {
+    f1_ordered_cleanup_causes_matrix(
+        "8",
+        8,
+        &[("1", 1), ("1", 8), ("8", 1), ("8", 8)],
+        Cells::at(false, Cells::CRANELIFT),
+    );
+}
+
+#[test]
+fn f1_ordered_cleanup_causes_width_and_permit_matrix_durable_interpreter() {
+    f1_ordered_cleanup_causes_matrix(
+        "8",
+        8,
+        &[("1", 1), ("1", 8), ("8", 1), ("8", 8)],
+        Cells::at(true, Cells::INTERPRETER),
+    );
+}
+
+#[test]
+fn f1_ordered_cleanup_causes_width_and_permit_matrix_durable_llvm() {
+    f1_ordered_cleanup_causes_matrix(
+        "8",
+        8,
+        &[("1", 1), ("1", 8), ("8", 1), ("8", 8)],
+        Cells::at(true, Cells::LLVM),
+    );
+}
+
+#[test]
+fn f1_ordered_cleanup_causes_width_and_permit_matrix_durable_cranelift() {
+    f1_ordered_cleanup_causes_matrix(
+        "8",
+        8,
+        &[("1", 1), ("1", 8), ("8", 1), ("8", 8)],
+        Cells::at(true, Cells::CRANELIFT),
+    );
+}
+
+#[test]
+fn f1_external_stop_width_and_permit_matrix_record_interpreter() {
+    f1_external_stop_matrix(
+        "8",
+        8,
+        &[("1", 1), ("1", 8), ("8", 1), ("8", 8)],
+        Cells::at(false, Cells::INTERPRETER),
+    );
+}
+
+#[test]
+fn f1_external_stop_width_and_permit_matrix_record_llvm() {
+    f1_external_stop_matrix(
+        "8",
+        8,
+        &[("1", 1), ("1", 8), ("8", 1), ("8", 8)],
+        Cells::at(false, Cells::LLVM),
+    );
+}
+
+#[test]
+fn f1_external_stop_width_and_permit_matrix_record_cranelift() {
+    f1_external_stop_matrix(
+        "8",
+        8,
+        &[("1", 1), ("1", 8), ("8", 1), ("8", 8)],
+        Cells::at(false, Cells::CRANELIFT),
+    );
+}
+
+#[test]
+fn f1_external_stop_width_and_permit_matrix_durable_interpreter() {
+    f1_external_stop_matrix(
+        "8",
+        8,
+        &[("1", 1), ("1", 8), ("8", 1), ("8", 8)],
+        Cells::at(true, Cells::INTERPRETER),
+    );
+}
+
+#[test]
+fn f1_external_stop_width_and_permit_matrix_durable_llvm() {
+    f1_external_stop_matrix(
+        "8",
+        8,
+        &[("1", 1), ("1", 8), ("8", 1), ("8", 8)],
+        Cells::at(true, Cells::LLVM),
+    );
+}
+
+#[test]
+fn f1_external_stop_width_and_permit_matrix_durable_cranelift() {
+    f1_external_stop_matrix(
+        "8",
+        8,
+        &[("1", 1), ("1", 8), ("8", 1), ("8", 8)],
+        Cells::at(true, Cells::CRANELIFT),
+    );
+}
+
+#[test]
+fn f1_terminal_metadata_width_and_permit_matrix_record_interpreter() {
+    f1_terminal_metadata_matrix(
+        "8",
+        8,
+        &[("1", 1), ("1", 8), ("8", 1), ("8", 8)],
+        "record",
+        Cells::INTERPRETER,
+    );
+}
+
+#[test]
+fn f1_terminal_metadata_width_and_permit_matrix_record_llvm() {
+    f1_terminal_metadata_matrix(
+        "8",
+        8,
+        &[("1", 1), ("1", 8), ("8", 1), ("8", 8)],
+        "record",
+        Cells::LLVM,
+    );
+}
+
+#[test]
+fn f1_terminal_metadata_width_and_permit_matrix_record_cranelift() {
+    f1_terminal_metadata_matrix(
+        "8",
+        8,
+        &[("1", 1), ("1", 8), ("8", 1), ("8", 8)],
+        "record",
+        Cells::CRANELIFT,
+    );
+}
+
+#[test]
+fn f1_terminal_metadata_width_and_permit_matrix_durable_interpreter_width1() {
+    // Interpreter replays cost most; one replay width per case fits its action.
+    f1_terminal_metadata_matrix("8", 8, &[("1", 1), ("1", 8)], "durable", Cells::INTERPRETER);
+}
+
+#[test]
+fn f1_terminal_metadata_width_and_permit_matrix_durable_interpreter_width8() {
+    // Interpreter replays cost most; one replay width per case fits its action.
+    f1_terminal_metadata_matrix("8", 8, &[("8", 1), ("8", 8)], "durable", Cells::INTERPRETER);
+}
+
+#[test]
+fn f1_terminal_metadata_width_and_permit_matrix_durable_llvm() {
+    f1_terminal_metadata_matrix(
+        "8",
+        8,
+        &[("1", 1), ("1", 8), ("8", 1), ("8", 8)],
+        "durable",
+        Cells::LLVM,
+    );
+}
+
+#[test]
+fn f1_terminal_metadata_width_and_permit_matrix_durable_cranelift() {
+    f1_terminal_metadata_matrix(
+        "8",
+        8,
+        &[("1", 1), ("1", 8), ("8", 1), ("8", 8)],
+        "durable",
+        Cells::CRANELIFT,
+    );
+}
+
+#[test]
+fn f1_terminal_root_and_consumption_width_and_permit_matrix_record_interpreter() {
     if !hirsel_rt::free_driver::admission_enabled() {
         return;
     }
-    for level in ["record", "durable"] {
-        f1_terminal_restoration_matrix(
-            level,
-            &[
-                ("1", Some(1)),
-                ("1", Some(8)),
-                ("8", Some(1)),
-                ("8", Some(8)),
-            ],
-        );
+    f1_terminal_restoration_matrix(
+        "record",
+        &[
+            ("1", Some(1)),
+            ("1", Some(8)),
+            ("8", Some(1)),
+            ("8", Some(8)),
+        ],
+        Cells::INTERPRETER,
+    );
+}
+
+#[test]
+fn f1_terminal_root_and_consumption_width_and_permit_matrix_record_llvm() {
+    if !hirsel_rt::free_driver::admission_enabled() {
+        return;
     }
+    f1_terminal_restoration_matrix(
+        "record",
+        &[
+            ("1", Some(1)),
+            ("1", Some(8)),
+            ("8", Some(1)),
+            ("8", Some(8)),
+        ],
+        Cells::LLVM,
+    );
+}
+
+#[test]
+fn f1_terminal_root_and_consumption_width_and_permit_matrix_record_cranelift() {
+    if !hirsel_rt::free_driver::admission_enabled() {
+        return;
+    }
+    f1_terminal_restoration_matrix(
+        "record",
+        &[
+            ("1", Some(1)),
+            ("1", Some(8)),
+            ("8", Some(1)),
+            ("8", Some(8)),
+        ],
+        Cells::CRANELIFT,
+    );
+}
+
+#[test]
+fn f1_terminal_root_and_consumption_width_and_permit_matrix_durable_interpreter() {
+    if !hirsel_rt::free_driver::admission_enabled() {
+        return;
+    }
+    f1_terminal_restoration_matrix(
+        "durable",
+        &[
+            ("1", Some(1)),
+            ("1", Some(8)),
+            ("8", Some(1)),
+            ("8", Some(8)),
+        ],
+        Cells::INTERPRETER,
+    );
+}
+
+#[test]
+fn f1_terminal_root_and_consumption_width_and_permit_matrix_durable_llvm() {
+    if !hirsel_rt::free_driver::admission_enabled() {
+        return;
+    }
+    f1_terminal_restoration_matrix(
+        "durable",
+        &[
+            ("1", Some(1)),
+            ("1", Some(8)),
+            ("8", Some(1)),
+            ("8", Some(8)),
+        ],
+        Cells::LLVM,
+    );
+}
+
+#[test]
+fn f1_terminal_root_and_consumption_width_and_permit_matrix_durable_cranelift() {
+    if !hirsel_rt::free_driver::admission_enabled() {
+        return;
+    }
+    f1_terminal_restoration_matrix(
+        "durable",
+        &[
+            ("1", Some(1)),
+            ("1", Some(8)),
+            ("8", Some(1)),
+            ("8", Some(8)),
+        ],
+        Cells::CRANELIFT,
+    );
 }
 
 #[test]
@@ -4174,6 +4874,7 @@ fn f1_required_r7_root_matrix(name: &str, fixture: &str) {
         r#"{"io":{"stdout":"stdout.bytes@1","tasks":"tasks.free@1","dirs":[]},"args":[]}"#,
         b"Err\n",
         b"Err\n",
+        Cells::ALL,
     );
     for level in ["record", "durable"] {
         let bytes = std::fs::read(scratch.path(level)).unwrap();
@@ -4205,7 +4906,16 @@ fn f1_required_r7_aggregate_thaw_cross_engine_matrix() {
 }
 
 #[test]
-fn f1_required_process_wait_allows_other_task_file_progress_cross_engine_matrix() {
+fn f1_required_process_wait_allows_other_task_file_progress_cross_engine_matrix_record() {
+    f1_required_process_wait_matrix(Cells::level(false));
+}
+
+#[test]
+fn f1_required_process_wait_allows_other_task_file_progress_cross_engine_matrix_durable() {
+    f1_required_process_wait_matrix(Cells::level(true));
+}
+
+fn f1_required_process_wait_matrix(cells: Cells) {
     if !hirsel_rt::free_driver::admission_enabled() {
         return;
     }
@@ -4259,10 +4969,12 @@ pub fn main(rt: Io) -> Result[(), E] {{
 "#,
         child.display()
     );
-    f1_corpus_matrix_with_io(
+    f1_corpus_matrix_with_exit_cells(
         "required-process-file",
         &text,
         |_| serde_json::json!({"stdout":"stdout.bytes@1","tasks":"tasks.free@1","monotonic_clock":"clock.monotonic.ns@1","process":{"provider":"process.spawn@1","rules":[{"program":child,"env":[]}]},"dirs":[{"path":"data","host":host,"access":"read_write"}]}),
+        0,
+        cells,
     );
 }
 
@@ -4776,7 +5488,16 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
 "#;
 
 #[test]
-fn f1_late_task_set_and_reverse_insertion_full_projection_matrix() {
+fn f1_late_task_set_and_reverse_insertion_full_projection_matrix_record() {
+    f1_late_task_set_and_reverse_insertion_matrix(Cells::level(false));
+}
+
+#[test]
+fn f1_late_task_set_and_reverse_insertion_full_projection_matrix_durable() {
+    f1_late_task_set_and_reverse_insertion_matrix(Cells::level(true));
+}
+
+fn f1_late_task_set_and_reverse_insertion_matrix(cells: Cells) {
     if !hirsel_rt::free_driver::admission_enabled() {
         return;
     }
@@ -4785,7 +5506,7 @@ fn f1_late_task_set_and_reverse_insertion_full_projection_matrix() {
     // can observe its successful thaw. Neither child has another body op.
     // This exercises the same completion-rank ordering as the scoped native
     // sets::tests::late_set_creation_and_reverse_insertion control.
-    f1_corpus_matrix_with_witness(
+    f1_corpus_matrix_cells(
         "late-task-set-reverse-insertion",
         F1_LATE_SET_SOURCE,
         |_| serde_json::json!({"io":{"stdout":"stdout.bytes@1","tasks":"tasks.free@1","dirs":[]},"args":[]}),
@@ -4799,6 +5520,7 @@ fn f1_late_task_set_and_reverse_insertion_full_projection_matrix() {
         }),
         b"",
         || Box::new(|| {}),
+        cells,
     );
 }
 
