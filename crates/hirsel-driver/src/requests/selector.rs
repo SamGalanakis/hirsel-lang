@@ -18,6 +18,7 @@ pub struct RequestLimits {
 /// their products and reservations independently of this constructor's lifetime.
 pub struct CompilerRequests {
     compiler: Compiler,
+    pub(super) graphs: super::host_selector::GraphSelections,
     config: CompileConfig,
     budget: Arc<ProcessBudget>,
     limits: RequestLimits,
@@ -58,7 +59,9 @@ impl CompilerRequests {
         budget: Arc<ProcessBudget>,
         limits: RequestLimits,
     ) -> Self {
+        let graphs = super::host_selector::GraphSelections::new(&budget);
         Self {
+            graphs,
             compiler: compiler.with_config(config.clone()).with_owned_engines(),
             config,
             budget,
@@ -68,6 +71,7 @@ impl CompilerRequests {
     }
     pub fn with_toolchain(mut self, toolchain: Arc<crate::native::Toolchain>) -> Self {
         self.toolchain = Some(toolchain);
+        self.graphs = super::host_selector::GraphSelections::new(&self.budget);
         self
     }
     pub fn compiler(&self) -> &Compiler {
