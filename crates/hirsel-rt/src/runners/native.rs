@@ -493,15 +493,15 @@ mod tests {
             let holders = unsafe { crate::pool::holders((*run.root).run_ref()).unwrap() };
             let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
             while !ENTERED.load(Ordering::Acquire)
-                || (bridge && crate::pool::compute_permits().1 != 0)
+                || (bridge && !unsafe { crate::pool::home_posts((*run.root).run_ptr()) })
             {
                 assert!(std::time::Instant::now() < until);
                 std::thread::yield_now();
             }
             unsafe { (*run.root).run_ref().control.request(Stop::Requested) };
             assert_eq!(run.poll(), Some(Err(Stop::Requested)));
-            // Bridge mode has published its borrowed closure and released its
-            // permit. Drop must withdraw it before freeing the home adapter.
+            // Bridge mode has published its borrowed closure, keeping its permit
+            // through the loan. Drop must withdraw it before freeing the home adapter.
             // Pure mode deliberately retains its permit and child-local data.
             drop(run);
             assert_eq!(drops.get(), 1);
