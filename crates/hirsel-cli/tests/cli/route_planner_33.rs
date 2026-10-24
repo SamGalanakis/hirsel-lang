@@ -406,6 +406,8 @@ fn route_planner_33_reference_checked_workflows() {
 #[test]
 fn route_planner_33_native_four_engine_replay() {
     hirsel_engine::with_compiler_stack(|| {
+        // Reuse compilation for this immutable package; each tape gets a fresh runtime.
+        hirsel_driver::session::enable_resident(1);
         let raw_only = std::env::var("ROUTE_PLANNER_33_LIVE_STDERR_ONLY").as_deref() == Ok("1");
         if raw_only {
             assert!(
@@ -677,6 +679,7 @@ fn route_planner_33_native_four_engine_replay() {
                     .unwrap_or_default()
                     .split(',')
                     .any(|s| s == format!("{id}:{}", dir.file_name().unwrap().to_str().unwrap()));
+                let mut interpreter_replays = 0;
                 if !reused_replays {
                     for (player, replay_dir) in &runnables {
                         let replayed = launch_fixture(
@@ -704,7 +707,7 @@ fn route_planner_33_native_four_engine_replay() {
                         hirsel_driver::replay_observations_checked,
                     ] {
                         let replayed = replay(&path, &tape, Some(1_000_000));
-                        if known_steps(id) {
+                        if known_steps(id) && replayed.is_err() {
                             let error = replayed.unwrap_err().to_string();
                             assert!(
                                 error.contains("ToolingLimit")
@@ -715,6 +718,7 @@ fn route_planner_33_native_four_engine_replay() {
                             eprintln!("ROUTE_INCOMPLETE {id} interpreter replay Steps1M");
                         } else {
                             assert_eq!(Observation::of_reference(&replayed.unwrap()), observation);
+                            interpreter_replays += 1;
                         }
                     }
                 } else {
@@ -722,7 +726,7 @@ fn route_planner_33_native_four_engine_replay() {
                         "ROUTE_REUSED_REPLAYS {id} immutable retained native+interpreter completions"
                     );
                 }
-                fs::write(root.join(format!("{id}-{}-replays-completed.json",dir.file_name().unwrap().to_str().unwrap())), serde_json::to_vec_pretty(&json!({"id":id,"backend":dir.file_name().unwrap().to_str(),"tape":tape,"native_replays":2,"interpreter_replays":if known_steps(id){0}else{2},"retained_reuse":reused_replays})).unwrap()).unwrap();
+                fs::write(root.join(format!("{id}-{}-replays-completed.json",dir.file_name().unwrap().to_str().unwrap())), serde_json::to_vec_pretty(&json!({"id":id,"backend":dir.file_name().unwrap().to_str(),"tape":tape,"native_replays":2,"interpreter_replays":interpreter_replays,"retained_reuse":reused_replays})).unwrap()).unwrap();
                 if id == "networkx-xg" && dir.ends_with("Llvm") {
                     for kind in ["binding", "request", "missing", "extra"] {
                         if std::env::var("ROUTE_PLANNER_33_COMPLETED_CONTROLS")
@@ -880,7 +884,7 @@ fn route_planner_33_native_four_engine_replay() {
                     }
                 }
                 assert_eq!(fs::read(&tape).unwrap(), frozen);
-                receipts.push(json!({"id":id,"backend":dir.file_name().unwrap().to_str(),"selected":true,"started":true,"completed":raw_stderr_matches,"passed":raw_stderr_matches,"live_stdout_status_file_and_tape_stderr":true,"live_raw_stderr_matches":raw_stderr_matches,"raw_stderr_owner":if raw_stderr_matches {"none"} else {"native-file-faults-33 / host-replay-parity-31"},"tape":tape,"native_replays":2,"interpreter_replays_completed":if known_steps(id) {0} else {2},"expected_provenance":if known_steps(id) {"independent original cap oracle; never evaluator receipt"} else {"reference+checked retained or fresh reference"},"interpreter_replay_disposition":if known_steps(id) {"INCOMPLETE Steps1M"} else {"pass"}}));
+                receipts.push(json!({"id":id,"backend":dir.file_name().unwrap().to_str(),"selected":true,"started":true,"completed":raw_stderr_matches,"passed":raw_stderr_matches,"live_stdout_status_file_and_tape_stderr":true,"live_raw_stderr_matches":raw_stderr_matches,"raw_stderr_owner":if raw_stderr_matches {"none"} else {"native-file-faults-33 / host-replay-parity-31"},"tape":tape,"native_replays":2,"interpreter_replays_completed":interpreter_replays,"expected_provenance":if known_steps(id) {"independent original cap oracle; never evaluator receipt"} else {"reference+checked retained or fresh reference"},"interpreter_replay_disposition":if reused_replays {"retained; not run"} else if interpreter_replays < 2 {"INCOMPLETE Steps1M"} else {"pass"}}));
                 fs::write(
                     root.join("receipts.json"),
                     serde_json::to_vec_pretty(&receipts).unwrap(),
