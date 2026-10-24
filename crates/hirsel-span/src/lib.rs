@@ -268,6 +268,29 @@ impl SourceMap {
         self.owner = Some(owner);
         self
     }
+
+    /// Backing source text, line indexes, paths and placed-anchor tables owned
+    /// by this immutable map. A shared clone is charged by its one owner.
+    pub fn input_bytes(&self) -> Option<u64> {
+        let mut n = (std::mem::size_of::<Self>()
+            + self.files.capacity() * std::mem::size_of::<SourceFile>()) as u64;
+        for file in self.files.iter() {
+            n = n
+                .checked_add(file.text.len() as u64)?
+                .checked_add((file.line_starts.len() * std::mem::size_of::<u32>()) as u64)?
+                .checked_add(file.path.capacity() as u64)?
+                .checked_add(file.logical_path.capacity() as u64)?;
+        }
+        // Rust std's B-tree degree is six (alloc/collections/btree/node.rs):
+        // at most eleven pairs/twelve edges, at least five pairs per non-root
+        // node. Include an internal-node/header bound for every possible node.
+        let nodes = self.anchors.len().div_ceil(5).checked_add(1)?;
+        let node = 18 * std::mem::size_of::<usize>()
+            + 11 * (std::mem::size_of::<Anchor>() + std::mem::size_of::<(FileId, u32)>())
+            + std::mem::align_of::<usize>();
+        n.checked_add(nodes.checked_mul(node)? as u64)
+    }
+
     /// Returns None when the u32 representation cannot contain this file/map.
     pub fn add(&mut self, path: impl AsRef<Path>, text: String) -> Option<FileId> {
         let logical = Path::new("standalone@0").join(
