@@ -68,6 +68,8 @@ pub struct DemandProducts<'a> {
     owners: BTreeMap<ContentHash, InstanceAddress>,
     summaries: BTreeMap<ContentHash, Arc<ArenaSummary>>,
     pub local: LocalReadyQueries,
+    /// Actual selected Ready body materializations, including emission misses.
+    pub ready_materializations: u64,
 }
 impl<'a> DemandProducts<'a> {
     pub fn new(
@@ -116,6 +118,7 @@ impl<'a> DemandProducts<'a> {
             environment,
             owners,
             summaries,
+            ready_materializations: 0,
         })
     }
 }
@@ -219,6 +222,7 @@ impl NativeProducts for DemandProducts<'_> {
         let mut units = Vec::new();
         for (_, body) in &captured {
             let raw = binding.materialize::<Ready>(body)?;
+            self.ready_materializations += 1;
             let unit = hirsel_lir::validate::validate(raw, &inputs)
                 .map_err(|e| format!("emission Ready refused: {:?}", e.violations))?;
             units.push(unit);

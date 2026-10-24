@@ -1,6 +1,9 @@
 use hirsel_driver::*;
 use hirsel_engine::*;
 use hirsel_syntax::ContentHash;
+use native::object_queries::{
+    CodegenKey, LinkInputs, LinkKey, ObjectProducts, ObjectQueries, load_object,
+};
 use native::queries::{
     NativeProducts,
     arena::{ArenaQueryCounts, EquationProduct},
@@ -39,6 +42,7 @@ fn run_product_case(aggregate: bool) {
         Vec<u8>,
         Vec<u8>,
     )> = None;
+    let mut previous_fragments: Option<[store::Reference; 2]> = None;
     for (literal, fresh) in [(7u64, false), (7, true), (8, false), (8, true)] {
         let mut engine = QueryEngine::new(default_environment(), compiler_adapters())
             .with_result_store(store.clone());
@@ -154,7 +158,54 @@ fn run_product_case(aggregate: bool) {
             );
         }
         let before_emission = trace.totals();
-        let (llvm, cranelift, glue_llvm, glue_cranelift, call) = products
+        let codegen_key = |backend: &str| CodegenKey {
+            owner: key.clone(),
+            backend: backend.into(),
+            backend_version: ContentHash::of_parts(
+                "compiled backend",
+                [backend.as_bytes(), COMPILER_IDENTITY.as_slice()],
+            ),
+            target_features: target.digest(),
+            profile_options: ContentHash::of_bytes(b"debug, opt none"),
+            runtime_abi: ContentHash::of_bytes(&hirsel_lir::RUNTIME_ABI_VERSION.to_le_bytes()),
+        };
+        let mut objects = ObjectQueries::new(
+            store.clone(),
+            products,
+            |_: &LinkKey,
+             _: &LinkInputs,
+             _: &[hirsel_lir::stage::ObjectArtifact]|
+             -> Result<Vec<u8>, String> {
+                Err("this codegen control links with the generated native C entry harness".into())
+            },
+        );
+        let llvm_fragment = objects.codegen(&codegen_key("llvm")).unwrap();
+        let cranelift_fragment = objects.codegen(&codegen_key("cranelift")).unwrap();
+        assert_eq!(
+            objects.native.ready_materializations,
+            if fresh { 0 } else { 2 },
+            "object hits must not materialize a Ready body"
+        );
+        let fragments = [
+            llvm_fragment.product.record,
+            cranelift_fragment.product.record,
+        ];
+        if let Some(old) = previous_fragments {
+            if fresh || !aggregate {
+                assert_eq!(
+                    fragments, old,
+                    "equal object recomputation backdates its fragment output"
+                );
+            } else {
+                assert_ne!(fragments[0], old[0]);
+                assert_ne!(fragments[1], old[1]);
+            }
+        }
+        previous_fragments = Some(fragments);
+        let llvm = load_object(store.as_ref(), llvm_fragment.object).unwrap();
+        let cranelift = load_object(store.as_ref(), cranelift_fragment.object).unwrap();
+        let (glue_llvm, glue_cranelift, call) = objects
+            .native
             .with_ready(&[ready.clone()], |units, inputs| {
                 assert_eq!(units.len(), 1);
                 assert_eq!(inputs.statics.len(), 1);
@@ -165,14 +216,6 @@ fn run_product_case(aggregate: bool) {
                     aggregate,
                     "the fixture must exercise the intended constant-slot selection"
                 );
-                let profile = hirsel_lir::debug::Profile {
-                    debug: true,
-                    sources: None,
-                };
-                let llvm = hirsel_llvm::emit_object_profile(units, inputs, profile)
-                    .map_err(|e| e.to_string())?;
-                let cranelift = hirsel_cranelift::emit_object_profile(units, inputs, profile)
-                    .map_err(|e| e.to_string())?;
                 let finalizers = Default::default();
                 let registry = hirsel_lir::descriptor_registry::DescriptorRegistry::new(
                     inputs.layouts,
@@ -211,7 +254,7 @@ fn run_product_case(aggregate: bool) {
                     ),
                     "call_main",
                 );
-                Ok((llvm, cranelift, glue_llvm, glue_cranelift, call))
+                Ok((glue_llvm, glue_cranelift, call))
             })
             .unwrap();
         assert_eq!(
