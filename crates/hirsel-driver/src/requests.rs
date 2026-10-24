@@ -25,6 +25,14 @@ pub struct CompileRequest {
 }
 #[derive(Clone)]
 pub enum CompileOperation {
+    /// Pure selected-graph metadata; this operation never demands a producer.
+    Inspect {
+        definitions: Vec<DefPath>,
+    },
+    /// Explicit canonical oracle exports from the same compiler graph.
+    Artifacts {
+        native: bool,
+    },
     Check {
         lowering: LoweringPolicy,
     },

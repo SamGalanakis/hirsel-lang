@@ -23,6 +23,22 @@ pub struct RequestWork {
     pub input_operations: u64,
     pub input_bytes: u64,
 }
+/// Actual cumulative producer work for explicitly named definitions.
+#[derive(Clone, Debug)]
+pub struct DefinitionWork {
+    pub definition: DefPath,
+    pub recomputations: Vec<(hirsel_engine::QueryKind, u64)>,
+    pub body_validations: u64,
+    pub lower_calls: u64,
+}
+/// Read-only observations of the selected engine graph. Producing this value
+/// neither runs compilation nor changes memo validity or retention.
+#[derive(Clone, Debug)]
+pub struct CompileInspection {
+    pub stats: hirsel_engine::memo::MemoStats,
+    pub memos: Vec<(hirsel_engine::memo::MemoKey, Arc<hirsel_engine::Reads>)>,
+    pub definitions: Vec<DefinitionWork>,
+}
 /// One completed operation. Its metadata belongs to the same immutable input
 /// snapshot as its result and does not ask the disk for newer observations.
 pub struct CompileOutput {
@@ -32,6 +48,8 @@ pub struct CompileOutput {
     pub result: CompileResult,
 }
 pub enum CompileResult {
+    Inspect(Arc<CompileInspection>),
+    Artifacts(std::collections::BTreeMap<String, Vec<u8>>),
     /// Native pipeline failures retain their existing inner error category.
     NativeError(crate::native::NativeError),
     Check(CheckOutput),
