@@ -13,6 +13,11 @@ mod native_semantic;
 pub use native_semantic::NativeSemanticProgram;
 mod native_queries;
 pub use native_queries::*;
+mod native_lower;
+pub use native_lower::{
+    NATIVE_ORIGINAL_BODY, NativeLowerBody, NativeLowerReader, NativeOriginalBody,
+    NativeOriginalContext, NativeOriginalProduct, NativeOriginalReader,
+};
 mod native_input;
 pub use native_input::*;
 mod representation;
