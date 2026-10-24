@@ -256,7 +256,7 @@ fn workspace_edges_respect_the_crate_layering() {
                 if dep["kind"].is_null() && dep["path"].is_null() {
                     assert!(matches!(
                         dep["name"].as_str(),
-                        Some("unicode-segmentation" | "unicode-normalization")
+                        Some("sha1" | "sha2" | "itoa")
                     ));
                     assert!(dep["req"].as_str().unwrap().starts_with('='));
                     assert_eq!(dep["uses_default_features"], false);
