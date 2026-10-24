@@ -106,8 +106,10 @@ fn release_whole(layout: LayoutId) -> Vec<K> {
     let mut t = Lir::<Ready>::new(&[(Passing::Take, layout)], None);
     let x = t.owned(layout);
     t.param(x);
-    t.release(ENTRY, x, &[]);
-    t.builder.ret(ENTRY, None);
+    // Exercise release vocabulary at a valid cleanup anchor; a resource's
+    // unrelated early-destruction rejection must not mask the finalizer rule.
+    let cleanup = t.cleanup_exit(&[Undo::Release(x)], None);
+    t.builder.jump(ENTRY, cleanup, &[]);
     t.check()
 }
 
