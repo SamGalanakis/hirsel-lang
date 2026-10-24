@@ -50,6 +50,15 @@ DELEGATED = {
     ('crates/hirsel-cli/tests/cli/policy_evaluator_33.rs', 'policy_evaluator_33_cell'):
         ('policy_evaluator_33_simulation', 'campaign'),
 }
+# These Buck proof targets supply their own immutable tool inputs, rather than
+# the archival runner's environment. Each probe checks exact identity/counts.
+PROOFS = {
+    'native::object_queries::capture::tests::packaged_capture_replays_changed_inputs_without_originals': {
+        'source': 'crates/hirsel-driver/tests/native-validation/link_capture.rs',
+        'target': '//tools/buck2/native-toolchain:linker-store-proof',
+        'probe': 'tools/buck2/native-toolchain/linker_store_probe.py',
+    },
+}
 EXPLICIT = json.loads((ROOT / 'tools/ignored-tests.json').read_text())
 ATTRIBUTE = re.compile(r'^[ \t]*#\[(ignore\b[^\]]*)\]|^[ \t]*#\[cfg_attr\(\s*([^,]+),\s*ignore\b', re.M)
 FUNCTION = re.compile(r'\bfn\s+(\w+)')
@@ -90,6 +99,9 @@ def orphans(sources):
             elif attribute[2].strip() == 'debug_assertions':
                 continue
             if (path, name) in DELEGATED:
+                continue
+            if any(home['source'] == path and case.rsplit('::', 1)[-1] == name
+                   for case, home in PROOFS.items()):
                 continue
             home = next((home for case, home in EXPLICIT.items()
                          if home['source'] == path and case.rsplit('::', 1)[-1] == name), None)
@@ -168,6 +180,35 @@ class IgnoredTests(unittest.TestCase):
             # Registration never covers an adjacent ignored case in the same file.
             self.assertEqual(orphans({home['source']: '#[ignore]\nfn unregistered() {}'}),
                              [(home['source'], 'unregistered')])
+
+    def test_buck_proof_homes_forward_tools_and_require_one_exact_execution(self):
+        for case, home in PROOFS.items():
+            self.assertIn(case.rsplit('::', 1)[-1], [name for _, name in ignored_declarations((ROOT / home['source']).read_text())])
+            self.assertEqual(orphans({home['source']: '#[ignore]\nfn unregistered() {}'}), [(home['source'], 'unregistered')])
+            self.assertIn('tests/native-validation/link_capture.rs', (ROOT / 'crates/hirsel-driver/src/native/object_queries/capture.rs').read_text())
+            target = (ROOT / 'tools/buck2/native-toolchain/BUCK').read_text()
+            self.assertIn('name = "linker-store-proof", tools = [":linker", "toolchains//:llvm", "root//:hirsel-driver-unittest-harness"]', target)
+            self.assertIn('script = "linker_store_probe.py", interpreter = "python3"', target)
+            probe = runpy.run_path(str(ROOT / home['probe']))
+            arguments = ['/original packaged linker', '/original pinned llvm', '/selected harness']
+            selected, environment = probe['command'](arguments, {'KEEP': 'original'})
+            self.assertEqual(selected, [arguments[2], '--ignored', '--exact', case, '--test-threads=1', '--nocapture'])
+            self.assertEqual(environment['HIRSEL_CAPTURE_LINKER'], arguments[0])
+            self.assertEqual(environment['HIRSEL_CAPTURE_LLVM'], arguments[1])
+            self.assertEqual(environment['LD_LIBRARY_PATH'], arguments[1] + '/lib')
+            self.assertEqual(environment['KEEP'], 'original')
+            for status, output, expected in [
+                (0, f'test {case} ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored;', 0),
+                (0, 'test result: ok. 0 passed; 0 failed; 0 ignored;', 1),
+                (0, 'test result: ok. 0 passed; 0 failed; 1 ignored;', 1),
+                (0, 'test other ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored;', 1),
+                (0, f'test {case} ... ok\ntest result: ok. 2 passed; 0 failed; 0 ignored;', 1),
+                (32, 'test result: FAILED. 0 passed; 1 failed; 0 ignored;', 32),
+            ]:
+                with patch.object(subprocess, 'run', return_value=types.SimpleNamespace(returncode=status, stdout=output)) as run, patch('builtins.print'):
+                    self.assertEqual(probe['main'](arguments), expected)
+                    self.assertEqual(run.call_args.args[0], selected)
+                    self.assertEqual(run.call_args.kwargs['env']['HIRSEL_CAPTURE_LINKER'], arguments[0])
 
     def test_cursor_home_selects_registered_modules_and_ignored_cases(self):
         registry = (ROOT / 'crates/hirsel-pipeline-tests/tests/rc/modules.rs').read_text()
