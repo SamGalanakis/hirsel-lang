@@ -257,22 +257,24 @@ impl<T> Worker<T> {
     /// a refill never overflows back and other workers find the rest
     /// (Tokio `worker.rs:1110-1151`). The first task is returned directly.
     fn refill(&mut self, shared: &Ready<T>) -> Option<T> {
-        let batch: Vec<_> = {
+        let (first, rest): (T, Vec<_>) = {
             let mut inject = shared.inject.lock().unwrap();
+            let first = inject.pop_front()?;
             if inject.is_empty() {
-                return None;
+                // A sole injected task needs no batch.
+                (first, Vec::new())
+            } else {
+                let width = shared.width().max(1) as usize;
+                let cap = self.local.remaining().min(CAPACITY / 2);
+                let count = ((inject.len() + 1) / width + 1).min(cap).max(1);
+                let rest = (count - 1).min(inject.len());
+                (first, inject.drain(..rest).collect())
             }
-            let width = shared.width().max(1) as usize;
-            let cap = self.local.remaining().min(CAPACITY / 2);
-            let count = (inject.len() / width + 1).min(cap).clamp(1, inject.len());
-            inject.drain(..count).collect()
         };
-        shared.count(batch.len());
-        let mut batch = batch.into_iter();
-        let first = batch.next();
-        for task in batch {
+        shared.count(1 + rest.len());
+        for task in rest {
             assert!(self.local.push(task).is_empty());
         }
-        first
+        Some(first)
     }
 }

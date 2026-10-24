@@ -1288,6 +1288,7 @@ fn resize(ctx: *mut TaskCtx) {
     if compute.active.is_empty() {
         return;
     }
+    let before = compute.active.len();
     if execs.home_at_one {
         let on_home = compute.active[0].kind == Kind::Home;
         if on_home && width > 1 {
@@ -1333,7 +1334,9 @@ fn resize(ctx: *mut TaskCtx) {
         }
     }
     grow(run, execs, &mut compute, width);
-    free::set_width(execs, compute.active.len());
+    if compute.active.len() != before {
+        free::set_width(execs, compute.active.len());
+    }
 }
 
 /// Post the root task `task` (suspended at its row) to the first compute worker.

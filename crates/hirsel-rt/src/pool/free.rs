@@ -359,7 +359,9 @@ pub(crate) const BATCH: usize = 32;
 pub(crate) struct ReadyBatch {
     run: *mut RunShared,
     execs: *const Execs,
-    entries: [Option<Saved>; BATCH],
+    /// Exactly the first `len` entries are initialized; no slot is cleared
+    /// or dropped beyond them.
+    entries: [std::mem::MaybeUninit<Saved>; BATCH],
     len: usize,
 }
 
@@ -372,7 +374,7 @@ impl ReadyBatch {
         Self {
             run,
             execs,
-            entries: [const { None }; BATCH],
+            entries: [const { std::mem::MaybeUninit::uninit() }; BATCH],
             len: 0,
         }
     }
@@ -395,7 +397,7 @@ impl ReadyBatch {
             publish(unsafe { &*self.execs }, saved, false, false);
             return;
         }
-        self.entries[self.len] = Some(saved);
+        self.entries[self.len].write(saved);
         self.len += 1;
         if self.len == BATCH {
             self.flush();
@@ -414,9 +416,11 @@ impl ReadyBatch {
         let execs = unsafe { &*self.execs };
         inject(
             execs,
-            self.entries[..len]
-                .iter_mut()
-                .map(|entry| entry.take().expect("a batched entry")),
+            self.entries[..len].iter().map(|entry| {
+                // SAFETY: entries below the taken len were written by push
+                // and are read exactly once; len is already zero.
+                unsafe { entry.assume_init_read() }
+            }),
         );
     }
 }

@@ -498,7 +498,7 @@ fn runtime50_notify_save_shrink_batch() {
         let mut batch = ReadyBatch {
             run: std::ptr::null_mut(),
             execs: &*execs as *const Execs,
-            entries: [const { None }; BATCH],
+            entries: [const { std::mem::MaybeUninit::uninit() }; BATCH],
             len: 0,
         };
         batch.push(segment(&execs, 2));

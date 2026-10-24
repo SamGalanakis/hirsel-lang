@@ -85,7 +85,9 @@ pub(super) unsafe fn try_yield(ctx: &mut TaskCtx) -> Stopped<()> {
         .load(std::sync::atomic::Ordering::Acquire)
         != 0
         || unsafe { host::concurrent::pending(ctx.run_ptr()) };
-    if home_rechecks(scheduler(ctx), waits) {
+    // Without a saved host wait there is nothing for home to recheck; skip
+    // the role-entering accessor on every other immediate op.
+    if waits && home_rechecks(scheduler(ctx), waits) {
         unsafe { crate::pool::wake_home(ctx.run_ptr()) };
     }
     let s = scheduler(ctx);
