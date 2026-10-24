@@ -32,43 +32,166 @@ use crate::sync::{SectionWaits, sc_load, sc_store};
 pub const SEGMENT: usize = 4096;
 
 /// A task's record log and published progress.
+///
+/// The log is a chain of fixed segments split by who may touch what. The task's owner links
+/// spare segments it reserved outside any section at the tail, and writes records there,
+/// inside its sections ([`Tail`]); the cutter reads from the head and frees segments it has
+/// scanned, only while the gate is closed ([`Head`]). Neither side allocates while a section
+/// is open, and the owner's spare list is never read by the cutter.
 pub struct TaskLog {
     path: Vec<u32>,
     progress: AtomicU64,
-    log: Cell<Segments>,
+    tail: Cell<Tail>,
+    head: Cell<Head>,
+    /// Owner only: segments reserved before a section, linked by the next section that fills
+    /// its tail. Boxed: linking moves only the pointer, so a segment keeps its address.
+    #[allow(clippy::vec_box)]
+    spare: Cell<Vec<Box<Segment>>>,
     /// On a slot's dirty list since the last scan.
     dirty: Cell<bool>,
+    /// The next task on the same slot's dirty list (an intrusive list: marking allocates
+    /// nothing).
+    next_dirty: Cell<Option<Arc<TaskLog>>>,
     /// The log length the last scan read up to, and whether a scan has seen the task
     /// (cutter only).
     scanned: Cell<(usize, bool)>,
 }
 
-/// Chained fixed segments.
-#[derive(Default)]
-struct Segments {
-    segments: Vec<Box<[u8]>>,
-    len: usize,
+/// One fixed segment of a log.
+pub struct Segment {
+    bytes: Box<[u8]>,
+    next: Option<Box<Segment>>,
 }
 
-impl Segments {
-    fn append(&mut self, mut bytes: &[u8]) {
+impl Segment {
+    fn new() -> Box<Segment> {
+        Box::new(Segment {
+            bytes: vec![0; SEGMENT].into_boxed_slice(),
+            next: None,
+        })
+    }
+}
+
+/// The writer's end of a log: written inside the owner's sections, read by the owner at any
+/// time and by the cutter while the gate is closed.
+struct Tail {
+    /// The last linked segment, owned by the chain from [`Head`]; null before the first.
+    last: *mut Segment,
+    /// The committed length, from the log's start.
+    len: usize,
+    /// The end of the linked capacity, from the log's start.
+    end: usize,
+}
+
+// SAFETY: `last` points into the chain its `TaskLog` owns; the section protocol orders every
+// access to it.
+unsafe impl Send for Tail {}
+
+/// The reader's end of a log: the first segment not yet freed, and its offset.
+#[derive(Default)]
+struct Head {
+    first: Option<Box<Segment>>,
+    base: usize,
+}
+
+/// A section's direct writer into one task's log: bytes land in place, linking reserved
+/// spares (or, past the reservation, new segments) at the tail.
+pub struct LogOut<'a> {
+    tail: &'a mut Tail,
+    head: &'a mut Head,
+    #[allow(clippy::vec_box)]
+    spare: &'a mut Vec<Box<Segment>>,
+    /// Segments this section allocated because its reservation was short.
+    pub overflow: usize,
+}
+
+impl LogOut<'_> {
+    fn link(&mut self) {
+        let mut segment = self.spare.pop().unwrap_or_else(|| {
+            self.overflow += 1;
+            Segment::new()
+        });
+        segment.next = None;
+        let last: *mut Segment = &mut *segment;
+        if self.tail.last.is_null() {
+            self.head.first = Some(segment);
+            self.head.base = self.tail.end;
+        } else {
+            // SAFETY: `last` is the chain's live tail; only this section touches it.
+            unsafe { (*self.tail.last).next = Some(segment) };
+        }
+        self.tail.last = last;
+        self.tail.end += SEGMENT;
+    }
+    /// The bytes written so far.
+    pub fn len(&self) -> usize {
+        self.tail.len
+    }
+    pub fn is_empty(&self) -> bool {
+        self.tail.len == 0
+    }
+    pub fn push(&mut self, byte: u8) {
+        if self.tail.len == self.tail.end {
+            self.link();
+        }
+        // SAFETY: the tail segment has room at `len % SEGMENT`; only this section reaches it.
+        let segment = unsafe { &mut *self.tail.last };
+        segment.bytes[self.tail.len % SEGMENT] = byte;
+        self.tail.len += 1;
+    }
+    pub fn extend(&mut self, mut bytes: &[u8]) {
         while !bytes.is_empty() {
-            let at = self.len % SEGMENT;
-            if self.len / SEGMENT == self.segments.len() {
-                self.segments.push(vec![0; SEGMENT].into_boxed_slice());
+            if self.tail.len == self.tail.end {
+                self.link();
             }
+            let at = self.tail.len % SEGMENT;
             let n = bytes.len().min(SEGMENT - at);
-            self.segments[self.len / SEGMENT][at..at + n].copy_from_slice(&bytes[..n]);
-            self.len += n;
+            // SAFETY: as in `push`.
+            let segment = unsafe { &mut *self.tail.last };
+            segment.bytes[at..at + n].copy_from_slice(&bytes[..n]);
+            self.tail.len += n;
             bytes = &bytes[n..];
         }
     }
+}
+
+impl Head {
     fn read(&self, mut from: usize, to: usize, out: &mut Vec<u8>) {
+        let mut segment = self.first.as_deref();
+        let mut base = self.base;
         while from < to {
-            let at = from % SEGMENT;
+            let current = segment.expect("a scanned range is linked");
+            if from >= base + SEGMENT {
+                segment = current.next.as_deref();
+                base += SEGMENT;
+                continue;
+            }
+            let at = from - base;
             let n = (to - from).min(SEGMENT - at);
-            out.extend_from_slice(&self.segments[from / SEGMENT][at..at + n]);
+            out.extend_from_slice(&current.bytes[at..at + n]);
             from += n;
+        }
+    }
+    /// Free every segment wholly before `through`, keeping the tail.
+    fn release(&mut self, through: usize) {
+        while self.base + SEGMENT <= through {
+            let Some(first) = self.first.as_mut() else {
+                return;
+            };
+            let Some(next) = first.next.take() else {
+                return;
+            };
+            self.first = Some(next);
+            self.base += SEGMENT;
+        }
+    }
+}
+
+impl Drop for Head {
+    fn drop(&mut self) {
+        let mut next = self.first.take();
+        while let Some(mut segment) = next {
+            next = segment.next.take();
         }
     }
 }
@@ -78,8 +201,15 @@ impl TaskLog {
         Arc::new(TaskLog {
             path,
             progress: AtomicU64::new(Progress::START.pack()),
-            log: Cell::new(Segments::default()),
+            tail: Cell::new(Tail {
+                last: std::ptr::null_mut(),
+                len: 0,
+                end: 0,
+            }),
+            head: Cell::new(Head::default()),
+            spare: Cell::new(Vec::new()),
             dirty: Cell::new(false),
+            next_dirty: Cell::new(None),
             scanned: Cell::new((0, false)),
         })
     }
@@ -90,12 +220,46 @@ impl TaskLog {
     pub fn progress(&self) -> Progress {
         Progress::unpack(self.progress.load(Ordering::Acquire)).expect("a packed progress word")
     }
+    /// Make room for `bytes` more record bytes before a section, so the section links spares
+    /// instead of allocating. Returns how many segments this allocated.
+    ///
+    /// # Safety
+    /// The caller owns this task's writing side (it alone opens sections that write this
+    /// log) and holds no open section.
+    pub unsafe fn reserve(&self, bytes: usize) -> usize {
+        // SAFETY: the owner alone writes the tail, and not now; the cutter only reads it.
+        let room = unsafe { self.tail.with(|tail| tail.end - tail.len) };
+        // SAFETY: owner only.
+        unsafe {
+            self.spare.with_mut(|spare| {
+                let have = room + spare.len() * SEGMENT;
+                let want = bytes.saturating_sub(have).div_ceil(SEGMENT);
+                spare.reserve(want);
+                for _ in 0..want {
+                    spare.push(Segment::new());
+                }
+                want
+            })
+        }
+    }
 }
 
 /// A thread's slot: one per compute worker, home thread and pool thread.
 struct Slot {
     active: AtomicU32,
-    dirty: Cell<Vec<Arc<TaskLog>>>,
+    /// The most recently marked task; each links the one marked before it.
+    dirty: Cell<Option<Arc<TaskLog>>>,
+}
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        // SAFETY: dropping the gate: nothing else reaches the slot.
+        let mut next = unsafe { self.dirty.with_mut(Option::take) };
+        while let Some(task) = next {
+            // SAFETY: as above; a task on the list is reached only through it now.
+            next = unsafe { task.next_dirty.with_mut(Option::take) };
+        }
+    }
 }
 
 /// The run is stopped: a section cannot open again.
@@ -124,7 +288,7 @@ impl Gate {
             slots: (0..slots)
                 .map(|_| Slot {
                     active: AtomicU32::new(0),
-                    dirty: Cell::new(Vec::new()),
+                    dirty: Cell::new(None),
                 })
                 .collect(),
             role: Mutex::new(Vec::new()),
@@ -231,9 +395,10 @@ impl Section<'_> {
         // SAFETY: this section is open, so no cutter scans; `task` runs only here.
         unsafe {
             if !task.dirty.with_mut(|dirty| std::mem::replace(dirty, true)) {
-                self.gate.slots[self.slot]
-                    .dirty
-                    .with_mut(|list| list.push(task.clone()));
+                let list = &self.gate.slots[self.slot].dirty;
+                let previous = list.with_mut(Option::take);
+                task.next_dirty.with_mut(|next| *next = previous);
+                list.with_mut(|head| *head = Some(task.clone()));
             }
         }
     }
@@ -243,9 +408,28 @@ impl Section<'_> {
     }
     /// Append record bytes to the log of the task this section runs.
     pub fn append(&self, task: &Arc<TaskLog>, bytes: &[u8]) {
-        // SAFETY: as in `mark`.
-        unsafe { task.log.with_mut(|log| log.append(bytes)) };
+        self.write(task, |out| out.extend(bytes));
+    }
+    /// Write records directly into the log of the task this section runs: into the room its
+    /// owner reserved before the section, with no intermediate copy.
+    pub fn write<R>(&self, task: &Arc<TaskLog>, f: impl FnOnce(&mut LogOut<'_>) -> R) -> R {
+        // SAFETY: as in `mark`; the owner's spare list is the section's own.
+        let result = unsafe {
+            task.tail.with_mut(|tail| {
+                task.head.with_mut(|head| {
+                    task.spare.with_mut(|spare| {
+                        f(&mut LogOut {
+                            tail,
+                            head,
+                            spare,
+                            overflow: 0,
+                        })
+                    })
+                })
+            })
+        };
         self.mark(task);
+        result
     }
     /// Publish the task's progress (release): the phase's action and records are done.
     pub fn publish(&self, task: &Arc<TaskLog>, progress: Progress) {
@@ -292,16 +476,23 @@ impl Cut<'_> {
         for slot in self.gate.slots.iter() {
             // SAFETY: the gate is closed and every slot was seen inactive after the close, so
             // no section touches a dirty list, a log or a dirty flag until the cut ends.
-            let dirty = unsafe { slot.dirty.with_mut(std::mem::take) };
-            for task in dirty {
+            let mut dirty = Vec::new();
+            let mut next = unsafe { slot.dirty.with_mut(Option::take) };
+            while let Some(task) = next {
+                // SAFETY: as above.
+                next = unsafe { task.next_dirty.with_mut(Option::take) };
+                dirty.push(task);
+            }
+            for task in dirty.into_iter().rev() {
                 // SAFETY: as above.
                 let (seen, scanned) = unsafe {
                     task.dirty.with_mut(|dirty| *dirty = false);
                     let (from, seen) = task.scanned.with(|scanned| *scanned);
                     let mut bytes = Vec::new();
-                    let to = task.log.with(|log| {
-                        log.read(from, log.len, &mut bytes);
-                        log.len
+                    let to = task.tail.with(|tail| tail.len);
+                    task.head.with_mut(|head| {
+                        head.read(from, to, &mut bytes);
+                        head.release(to);
                     });
                     task.scanned.with_mut(|scanned| *scanned = (to, true));
                     (

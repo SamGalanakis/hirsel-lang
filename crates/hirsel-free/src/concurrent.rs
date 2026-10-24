@@ -12,9 +12,9 @@
 use crate::claim::{Arbiter, Request, Requests, Sweep};
 use crate::phase::{Phase, Progress};
 use crate::projection::{Event, Observed, Stamped};
-use crate::record::{CheckIndex, Encoder, ObjectId, Record};
+use crate::record::{CheckIndex, Encoder, ObjectId, Record, RecordBound};
 use crate::recorder::TapeSink;
-use crate::section::{Gate, Scanned, Section, Stopped, TaskLog};
+use crate::section::{Scanned, Section, Stopped, TaskLog};
 use crate::tape::{self, End, TaskChunk};
 use std::collections::{BTreeMap, HashMap};
 use std::io;
@@ -30,7 +30,6 @@ pub struct Task {
     epochs: HashMap<u32, u64>,
     canceled: Option<u32>,
     cancel_checks: CheckIndex,
-    scratch: Vec<u8>,
     /// Canonical test trace, absent in ordinary recording.
     trace: Option<Vec<Stamped>>,
     spawned: u32,
@@ -64,6 +63,37 @@ impl Task {
     pub fn trace(&self) -> &[Stamped] {
         self.trace.as_deref().unwrap_or_default()
     }
+
+    /// Reserve log room for the next phase's records before its section opens: the section
+    /// then encodes in place and allocates nothing. Record bytes beyond `bound` stay correct
+    /// but allocate a segment inside the section, which [`RecordReservation`] reports.
+    pub fn reserve(&mut self, bound: RecordBound) -> RecordReservation {
+        // SAFETY: `&mut self` owns this task's writing side, and a section borrows its task
+        // mutably, so none is open on it now.
+        let allocated = unsafe { self.log.reserve(bound.bytes) };
+        RecordReservation { bound, allocated }
+    }
+
+    /// Track `object` before the section of its first touch, so that touch inserts no entry.
+    /// Its previous version starts at creation (1), exactly as an untracked first touch.
+    pub fn track(&mut self, object: &ObjectId) {
+        if !self.last.contains_key(object) {
+            self.last.insert(object.clone(), 1);
+        }
+    }
+
+    /// Track host key `key` before the section of this task's first position on it.
+    pub fn track_key(&mut self, key: u32) {
+        self.epochs.entry(key).or_insert(0);
+    }
+}
+
+/// Log room a task reserved for one phase, outside any section.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RecordReservation {
+    pub bound: RecordBound,
+    /// Segments the reservation allocated (0 when the log had room).
+    pub allocated: usize,
 }
 
 struct Output<S> {
@@ -84,7 +114,7 @@ pub struct Cut {
 pub struct Recorder<S: TapeSink, B = ()> {
     arbiter: Arbiter,
     identity: Arc<()>,
-    slots: Box<[std::sync::atomic::AtomicBool]>,
+    executors: Arc<Executors>,
     requests: Requests<B>,
     root_started: std::sync::atomic::AtomicBool,
     keys: Mutex<Vec<String>>,
@@ -116,12 +146,20 @@ pub struct Metrics {
     pause_ns: std::sync::atomic::AtomicU64,
     bytes: std::sync::atomic::AtomicU64,
     events: std::sync::atomic::AtomicU64,
+    /// Log segments sections allocated past their reservation.
+    overflow: std::sync::atomic::AtomicU64,
 }
 
 impl Metrics {
     pub fn values(&self) -> Vec<(&'static str, f64)> {
         use std::sync::atomic::Ordering::Relaxed;
-        let mut values = vec![("cut_pause_ns", self.pause_ns.load(Relaxed) as f64)];
+        let mut values = vec![
+            ("cut_pause_ns", self.pause_ns.load(Relaxed) as f64),
+            (
+                "section_segment_allocations",
+                self.overflow.load(Relaxed) as f64,
+            ),
+        ];
         let events = self.events.load(Relaxed);
         if events != 0 {
             values.push((
@@ -133,19 +171,33 @@ impl Metrics {
     }
 }
 
-/// Exclusive ownership of one worker's section word. It may migrate with
-/// its worker but cannot be cloned or shared. Phase entry requires a mutable
-/// borrow, so safe callers cannot concurrently use one slot twice.
-pub struct Worker<'r> {
-    gate: &'r Gate,
-    held: &'r std::sync::atomic::AtomicBool,
-    index: usize,
-    owner: std::marker::PhantomData<std::cell::Cell<()>>,
+/// The registered executor slots of one recording: which section words have an owner.
+struct Executors {
+    held: Box<[std::sync::atomic::AtomicBool]>,
 }
 
-impl Drop for Worker<'_> {
+/// One registered physical executor's section word, owned for the executor's registered
+/// lifetime: a compute worker, the home thread, a blocking or pool thread. It is not `Send`,
+/// so it never migrates; a migrating task moves its [`Task`] encoder, never the slot. Phase
+/// entry borrows it mutably, so a slot runs one section at a time, and dropping it (the
+/// executor's retirement) cannot happen while a section on it is open. A nested callback on
+/// an executor whose slot is checked out registers a distinct slot instead of reusing it.
+pub struct ExecutorSlot {
+    executors: Arc<Executors>,
+    index: usize,
+    executor: std::marker::PhantomData<*const ()>,
+}
+
+impl ExecutorSlot {
+    /// The section word this slot owns.
+    pub fn index(&self) -> usize {
+        self.index
+    }
+}
+
+impl Drop for ExecutorSlot {
     fn drop(&mut self) {
-        self.held.store(false, std::sync::atomic::Ordering::Release);
+        self.executors.held[self.index].store(false, std::sync::atomic::Ordering::Release);
     }
 }
 
@@ -166,9 +218,11 @@ impl<S: TapeSink, B> Recorder<S, B> {
         Ok(Self {
             arbiter: Arbiter::new(true, slots),
             identity: Arc::new(()),
-            slots: (0..slots)
-                .map(|_| std::sync::atomic::AtomicBool::new(false))
-                .collect(),
+            executors: Arc::new(Executors {
+                held: (0..slots)
+                    .map(|_| std::sync::atomic::AtomicBool::new(false))
+                    .collect(),
+            }),
             requests: Requests::default(),
             root_started: std::sync::atomic::AtomicBool::new(false),
             keys: Mutex::new(Vec::new()),
@@ -191,44 +245,47 @@ impl<S: TapeSink, B> Recorder<S, B> {
         self.observer = Some(observer);
     }
 
-    /// Take a worker's slot outside any section. A second owner cannot take
-    /// it until the first drops its token, including during worker retirement.
-    pub fn worker(&self, index: usize) -> Option<Worker<'_>> {
+    /// Register an executor on section word `index`, outside any section. A second owner
+    /// cannot register it until the first retires (drops its slot).
+    pub fn executor(&self, index: usize) -> Option<ExecutorSlot> {
         use std::sync::atomic::Ordering;
-        let held = self.slots.get(index)?;
+        let held = self.executors.held.get(index)?;
         held.compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
             .ok()?;
-        Some(Worker {
-            gate: self.arbiter.gate().unwrap(),
-            held,
+        Some(ExecutorSlot {
+            executors: self.executors.clone(),
             index,
-            owner: std::marker::PhantomData,
+            executor: std::marker::PhantomData,
         })
     }
 
-    /// Reserve the preferred thread slot, or another idle slot when an old
-    /// retiring worker still owns that numeric index. The returned token
-    /// exclusively owns its section word until dropped. No section is open
-    /// while searching; a caller retries outside sections if all are held.
-    pub fn worker_available(&self, preferred: usize) -> Option<Worker<'_>> {
-        self.worker(preferred).or_else(|| {
-            (0..self.slots.len())
+    /// Register an executor on the preferred section word, or another free one when an old
+    /// retiring executor still owns it. No section is open while searching; a caller retries
+    /// outside sections if all are held.
+    pub fn executor_available(&self, preferred: usize) -> Option<ExecutorSlot> {
+        self.executor(preferred).or_else(|| {
+            (0..self.executors.held.len())
                 .filter(|&index| index != preferred)
-                .find_map(|index| self.worker(index))
+                .find_map(|index| self.executor(index))
         })
     }
 
-    fn check_worker(&self, worker: &Worker<'_>) {
+    /// Whether `slot` was registered with this recording.
+    pub fn owns(&self, slot: &ExecutorSlot) -> bool {
+        Arc::ptr_eq(&slot.executors, &self.executors)
+    }
+
+    fn check_worker(&self, worker: &ExecutorSlot) {
         assert!(
-            std::ptr::eq(worker.gate, self.arbiter.gate().unwrap()),
-            "worker belongs to another recording"
+            self.owns(worker),
+            "executor slot belongs to another recording"
         );
     }
 
     /// Register the root at admission. Child registration instead belongs in
     /// the parent's spawn section (`Writer::spawn`) so a cut cannot split it
     /// from the spawning phase.
-    pub fn root(&self, worker: &mut Worker<'_>) -> Result<Task, Stopped> {
+    pub fn root(&self, worker: &mut ExecutorSlot) -> Result<Task, Stopped> {
         assert!(
             !self
                 .root_started
@@ -265,7 +322,7 @@ impl<S: TapeSink, B> Recorder<S, B> {
     /// engine acquires no user-visible ownership before this method admits it.
     pub fn phase<T>(
         &self,
-        worker: &mut Worker<'_>,
+        worker: &mut ExecutorSlot,
         task: &mut Task,
         progress: Progress,
         action: impl FnOnce(&mut Writer<'_, '_>) -> T,
@@ -283,7 +340,7 @@ impl<S: TapeSink, B> Recorder<S, B> {
     /// no writer or section can span that tail.
     pub fn phase_if<T>(
         &self,
-        worker: &mut Worker<'_>,
+        worker: &mut ExecutorSlot,
         task: &mut Task,
         progress: Progress,
         prefix: impl FnOnce() -> bool,
@@ -312,6 +369,7 @@ impl<S: TapeSink, B> Recorder<S, B> {
             progress,
             bytes: 0,
             events: 0,
+            overflow: 0,
         };
         let result = action(&mut writer);
         writer.section.publish(&writer.task.log, progress);
@@ -319,6 +377,7 @@ impl<S: TapeSink, B> Recorder<S, B> {
             use std::sync::atomic::Ordering::Relaxed;
             metrics.bytes.fetch_add(writer.bytes, Relaxed);
             metrics.events.fetch_add(writer.events, Relaxed);
+            metrics.overflow.fetch_add(writer.overflow, Relaxed);
         }
         Ok(Some(result))
     }
@@ -487,7 +546,6 @@ fn unregistered_task(
         epochs: HashMap::new(),
         canceled: None,
         cancel_checks: CheckIndex::default(),
-        scratch: Vec::new(),
         trace: trace.then(Vec::new),
         spawned: 0,
         observer,
@@ -502,6 +560,7 @@ pub struct Writer<'g, 't> {
     progress: Progress,
     bytes: u64,
     events: u64,
+    overflow: u64,
 }
 
 impl Writer<'_, '_> {
@@ -534,13 +593,37 @@ impl Writer<'_, '_> {
             id: request.id,
         });
     }
-    fn record(&mut self, record: Record) {
+    /// Encode `record` in place into the task's reserved log room. Returns its byte length.
+    fn record(&mut self, record: Record) -> u64 {
         assert_eq!(record.op(), self.progress.op);
-        self.task.scratch.clear();
-        self.task.encoder.encode(&record, &mut self.task.scratch);
-        self.section.append(&self.task.log, &self.task.scratch);
+        let encoder = &mut self.task.encoder;
+        let (bytes, overflow) = self.section.write(&self.task.log, |out| {
+            let start = out.len();
+            encoder.encode(&record, out);
+            (out.len() - start, out.overflow)
+        });
+        self.overflow += overflow as u64;
+        bytes as u64
     }
-    fn event(&mut self, event: Event) {
+    fn payload(&mut self, completion: bool, bytes: &[u8]) {
+        let (op, encoder) = (self.progress.op, &mut self.task.encoder);
+        let overflow = self.section.write(&self.task.log, |out| {
+            encoder.payload(completion, op, bytes, out);
+            out.overflow
+        });
+        self.overflow += overflow as u64;
+    }
+    /// Whether an optional diagnostic observer or the canonical test trace wants events.
+    pub fn observed(&self) -> bool {
+        self.task.observer.is_some() || self.task.trace.is_some()
+    }
+    /// Build an optional diagnostic event only when someone observes it: ordinary recording
+    /// constructs no `Event` and copies no outcome.
+    fn event(&mut self, event: impl FnOnce() -> Event) {
+        if !self.observed() {
+            return;
+        }
+        let event = event();
         if let Some(observer) = &self.task.observer {
             observer.0.lock().unwrap().push(Stamped {
                 task: self.task.log.path().into(),
@@ -559,21 +642,26 @@ impl Writer<'_, '_> {
     /// The object lock's action just produced `version`. Version is bumped
     /// and this record is written while the same object lock is held.
     pub fn touch(&mut self, object: &ObjectId, version: u64, sub: u32, outcome: &str) {
-        let previous = self.task.last.get(object).copied().unwrap_or(1);
+        let previous = match self.task.last.get_mut(object) {
+            Some(last) => std::mem::replace(last, version),
+            None => {
+                // Untracked first touch: correct, but it allocates inside the section.
+                self.task.last.insert(object.clone(), version);
+                1
+            }
+        };
         let gap = version
             .checked_sub(previous + 1)
             .expect("object versions advance in the object's section order");
-        self.task.last.insert(object.clone(), version);
         if gap != 0 {
-            self.record(Record::Gap {
+            self.bytes += self.record(Record::Gap {
                 op: self.progress.op,
                 sub,
                 gap,
             });
-            self.bytes += self.task.scratch.len() as u64;
             self.events += 1;
         }
-        self.event(Event::Versioned {
+        self.event(|| Event::Versioned {
             object: object.clone(),
             version,
             sub,
@@ -581,7 +669,7 @@ impl Writer<'_, '_> {
         });
     }
     pub fn create(&mut self, object: ObjectId) {
-        self.event(Event::Versioned {
+        self.event(|| Event::Versioned {
             object,
             version: 1,
             sub: 0,
@@ -589,7 +677,7 @@ impl Writer<'_, '_> {
         });
     }
     pub fn receive(&mut self, object: ObjectId, outcome: &str) {
-        self.event(Event::Received {
+        self.event(|| Event::Received {
             object,
             outcome: outcome.into(),
         });
@@ -599,21 +687,21 @@ impl Writer<'_, '_> {
             op: self.progress.op,
             bits,
         });
-        self.event(Event::Observed(Observed::Load(bits)));
+        self.event(|| Event::Observed(Observed::Load(bits)));
     }
     pub fn thaw(&mut self, ok: bool) {
         self.record(Record::Thaw {
             op: self.progress.op,
             ok,
         });
-        self.event(Event::Observed(Observed::Thaw(ok)));
+        self.event(|| Event::Observed(Observed::Thaw(ok)));
     }
     pub fn await_any(&mut self, index: u64) {
         self.record(Record::AwaitAny {
             op: self.progress.op,
             index,
         });
-        self.event(Event::Observed(Observed::AwaitAny(index)));
+        self.event(|| Event::Observed(Observed::AwaitAny(index)));
     }
     pub fn cancel(&mut self, cause: Option<u32>) {
         let check = self.task.cancel_checks.take(self.progress.op);
@@ -624,7 +712,7 @@ impl Writer<'_, '_> {
                 cause,
             });
         }
-        self.event(Event::Observed(Observed::Cancel(cause)));
+        self.event(|| Event::Observed(Observed::Cancel(cause)));
     }
     pub fn expired(&mut self, expired: bool) {
         if expired {
@@ -632,10 +720,13 @@ impl Writer<'_, '_> {
                 op: self.progress.op,
             });
         }
-        self.event(Event::Observed(Observed::Expired(expired)));
+        self.event(|| Event::Observed(Observed::Expired(expired)));
     }
     pub fn key(&mut self, key: u32, name: &str, epoch: u64, shared: bool, index: u32) {
-        let previous = self.task.epochs.insert(key, epoch).unwrap_or(0);
+        let previous = match self.task.epochs.get_mut(&key) {
+            Some(last) => std::mem::replace(last, epoch),
+            None => self.task.epochs.insert(key, epoch).unwrap_or(0),
+        };
         let gap = epoch
             .checked_sub(previous)
             .expect("a task's key epochs never go backwards");
@@ -645,28 +736,22 @@ impl Writer<'_, '_> {
             shared,
             gap,
         });
-        self.event(Event::Key {
+        self.event(|| Event::Key {
             key: name.into(),
             epoch,
             index,
         });
     }
     pub fn observation(&mut self, bytes: &[u8]) {
-        self.record(Record::Observation {
-            op: self.progress.op,
-            bytes: bytes.into(),
-        });
+        self.payload(false, bytes);
     }
     pub fn complete<B>(&mut self, request: &Request<B>, bytes: &[u8]) {
         assert_eq!(self.progress.phase, Phase::Done);
         request.finish();
-        self.record(Record::Completion {
-            op: self.progress.op,
-            bytes: bytes.into(),
-        });
+        self.payload(true, bytes);
     }
     pub fn output(&mut self, sink: &str, epoch: u64, bytes: &[u8]) {
-        self.event(Event::Output {
+        self.event(|| Event::Output {
             sink: sink.into(),
             epoch,
             bytes: bytes.into(),

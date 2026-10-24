@@ -401,6 +401,8 @@ impl<S: TapeSink> Recorder<S> {
     ) -> Result<(), Stopped> {
         let gate = self.arbiter.gate().expect("a recording has a gate");
         let live = self.tasks.get_mut(task).expect("a started task");
+        // SAFETY: this width-1 recorder alone writes the task's log, outside any section.
+        unsafe { live.log.reserve(live.staged.len()) };
         let section = match gate.enter(0) {
             Ok(section) => section,
             Err(stopped) => {

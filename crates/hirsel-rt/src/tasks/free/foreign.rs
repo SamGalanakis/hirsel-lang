@@ -306,12 +306,10 @@ mod tests {
                             );
                             assert_eq!(canceled, 0);
                             // An old exec can retain this numeric preferred slot
-                            // while a replacement runs. The phase must obtain a
-                            // different exclusive token, never alias or panic.
-                            let occupied = inspect
-                                .recorder
-                                .worker(crate::pool::recorder_slot())
-                                .unwrap();
+                            // while a replacement runs (unless this executor's own
+                            // registration already holds it). The phase must run on
+                            // an exclusive registered slot, never alias or panic.
+                            let occupied = inspect.recorder.executor(crate::pool::recorder_slot());
                             assert_eq!(
                                 hirsel_rt_v2_task_canceled(ctx, &mut canceled, &0),
                                 STATUS_OK

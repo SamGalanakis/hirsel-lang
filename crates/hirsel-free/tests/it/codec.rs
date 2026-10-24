@@ -306,7 +306,7 @@ fn cancellation_changes_keep_their_check_across_host_retries_and_partial_tapes()
             None,
         )
         .unwrap();
-        let mut worker = parallel.worker(0).unwrap();
+        let mut worker = parallel.executor(0).unwrap();
         let mut task = parallel.root(&mut worker).unwrap();
         for &(progress, cause) in &checks {
             if concurrent {

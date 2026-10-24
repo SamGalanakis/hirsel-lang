@@ -16,7 +16,7 @@ fn done(op: u64) -> Progress {
 fn prepared_children_join_the_cut_only_when_their_spawn_section_commits() {
     let recorder =
         Recorder::<Vec<u8>>::new(Vec::new(), b"prepared child", 1, false, true, None).unwrap();
-    let mut worker = recorder.worker(0).unwrap();
+    let mut worker = recorder.executor(0).unwrap();
     let mut root = recorder.root(&mut worker).unwrap();
     let prepared = root.prepare_child();
     let first = recorder.flush().unwrap().unwrap();
@@ -56,7 +56,7 @@ fn eight_workers_record_object_actions_and_replay_at_one_permit() {
     const OPS: u64 = 32;
     let recorder =
         Arc::new(Recorder::<Vec<u8>>::new(Vec::new(), b"wide", TASKS, false, true, None).unwrap());
-    let mut worker = recorder.worker(0).unwrap();
+    let mut worker = recorder.executor(0).unwrap();
     let mut root = recorder.root(&mut worker).unwrap();
     let object = ObjectId::Made {
         path: vec![],
@@ -79,7 +79,7 @@ fn eight_workers_record_object_actions_and_replay_at_one_permit() {
         .map(|(slot, mut task)| {
             let (recorder, version, object) = (recorder.clone(), version.clone(), object.clone());
             std::thread::spawn(move || {
-                let mut worker = recorder.worker(slot).unwrap();
+                let mut worker = recorder.executor(slot).unwrap();
                 for op in 1..=OPS {
                     // No phase waits for the object lock: take it first. The
                     // version and queue effect then occur inside the section.
@@ -152,7 +152,7 @@ fn eight_workers_record_object_actions_and_replay_at_one_permit() {
 fn stop_with_a_claimed_request_does_not_wait_for_host_and_quarantines_completion() {
     for durable in [false, true] {
         let recorder = Recorder::new(Vec::new(), b"in flight", 1, durable, false, None).unwrap();
-        let mut worker = recorder.worker(0).unwrap();
+        let mut worker = recorder.executor(0).unwrap();
         let mut root = recorder.root(&mut worker).unwrap();
         let request = recorder.prepare(1, vec![7; 64]);
         recorder
@@ -201,7 +201,7 @@ fn recording_metrics_count_only_gap_bytes_and_do_not_invent_cpu_time() {
         Some(metrics.clone()),
     )
     .unwrap();
-    let mut worker = recorder.worker(0).unwrap();
+    let mut worker = recorder.executor(0).unwrap();
     let mut task: Task = recorder.root(&mut worker).unwrap();
     let object = ObjectId::Gate("package".into());
     recorder
@@ -238,7 +238,7 @@ fn a_durable_watermark_never_admits_an_unpublished_prepare_or_a_failed_barrier()
     }
     let recorder =
         Recorder::<Vec<u8>>::new(Vec::new(), b"not published", 1, true, false, None).unwrap();
-    let mut worker = recorder.worker(0).unwrap();
+    let mut worker = recorder.executor(0).unwrap();
     let _root = recorder.root(&mut worker).unwrap();
     assert!(
         !recorder
@@ -255,7 +255,7 @@ fn a_durable_watermark_never_admits_an_unpublished_prepare_or_a_failed_barrier()
         None,
     )
     .unwrap();
-    let mut worker = recorder.worker(0).unwrap();
+    let mut worker = recorder.executor(0).unwrap();
     let mut root = recorder.root(&mut worker).unwrap();
     let request = recorder.prepare(1, ());
     recorder
@@ -272,11 +272,11 @@ fn a_durable_watermark_never_admits_an_unpublished_prepare_or_a_failed_barrier()
 #[test]
 fn section_slot_tokens_cannot_be_held_by_two_workers_at_once() {
     let recorder = Recorder::<Vec<u8>>::new(Vec::new(), b"slots", 1, false, false, None).unwrap();
-    let worker = recorder.worker(0).unwrap();
-    assert!(recorder.worker(0).is_none());
-    assert!(recorder.worker(1).is_none());
+    let worker = recorder.executor(0).unwrap();
+    assert!(recorder.executor(0).is_none());
+    assert!(recorder.executor(1).is_none());
     drop(worker);
-    assert!(recorder.worker(0).is_some());
+    assert!(recorder.executor(0).is_some());
 }
 
 #[test]
@@ -285,7 +285,7 @@ fn retiring_workers_with_one_preferred_slot_keep_exclusive_tokens_and_closed_cut
     let recorder = Arc::new(
         Recorder::<Vec<u8>>::new(Vec::new(), b"reused slots", WORKERS, true, true, None).unwrap(),
     );
-    let mut root_worker = recorder.worker(0).unwrap();
+    let mut root_worker = recorder.executor(0).unwrap();
     let mut root = recorder.root(&mut root_worker).unwrap();
     let children = recorder
         .phase(&mut root_worker, &mut root, done(1), |writer| {
@@ -304,7 +304,7 @@ fn retiring_workers_with_one_preferred_slot_keep_exclusive_tokens_and_closed_cut
             let resume = resume.clone();
             std::thread::spawn(move || {
                 // A retiring exec and its replacement prefer the same index.
-                let mut worker = recorder.worker_available(0).unwrap();
+                let mut worker = recorder.executor_available(0).unwrap();
                 reserved.wait();
                 resume.wait();
                 recorder
@@ -314,7 +314,7 @@ fn retiring_workers_with_one_preferred_slot_keep_exclusive_tokens_and_closed_cut
                     .unwrap();
                 drop(worker);
                 let mut worker = loop {
-                    if let Some(worker) = recorder.worker_available(0) {
+                    if let Some(worker) = recorder.executor_available(0) {
                         break worker;
                     }
                     std::thread::yield_now();
@@ -330,7 +330,7 @@ fn retiring_workers_with_one_preferred_slot_keep_exclusive_tokens_and_closed_cut
         .collect();
     reserved.wait();
     assert!(
-        recorder.worker_available(0).is_none(),
+        recorder.executor_available(0).is_none(),
         "every token is exclusively held"
     );
     // Merely holding tokens does not block a cut: no phase is open yet.
@@ -376,8 +376,8 @@ fn retiring_workers_with_one_preferred_slot_keep_exclusive_tokens_and_closed_cut
 fn a_task_log_cannot_be_written_under_another_runs_gate() {
     let a = Recorder::<Vec<u8>>::new(Vec::new(), b"a", 1, false, false, None).unwrap();
     let b = Recorder::<Vec<u8>>::new(Vec::new(), b"b", 1, false, false, None).unwrap();
-    let mut a_worker = a.worker(0).unwrap();
-    let mut b_worker = b.worker(0).unwrap();
+    let mut a_worker = a.executor(0).unwrap();
+    let mut b_worker = b.executor(0).unwrap();
     let mut task = a.root(&mut a_worker).unwrap();
     b.phase(&mut b_worker, &mut task, done(1), |_| ()).unwrap();
 }
@@ -386,7 +386,7 @@ fn a_task_log_cannot_be_written_under_another_runs_gate() {
 fn a_rejected_entry_prefix_leaves_no_progress_record_or_open_gate_slot() {
     let recorder =
         Recorder::<Vec<u8>>::new(Vec::new(), b"entry retry", 1, false, true, None).unwrap();
-    let mut worker = recorder.worker(0).unwrap();
+    let mut worker = recorder.executor(0).unwrap();
     let mut root = recorder.root(&mut worker).unwrap();
     let mut acted = false;
     let rejected = recorder.phase_if(

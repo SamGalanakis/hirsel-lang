@@ -33,6 +33,7 @@ pub(crate) unsafe fn enter(ctx: *mut TaskCtx, gate: u32, site: u64) -> Stopped<b
             .unwrap_or(true);
         if enabled && unsafe { (*s).gate(gate).owner.is_none() } {
             let object = super::record::on(ctx).then(|| ObjectId::Gate(format!("package:{gate}")));
+            super::record::track(ctx, object.as_ref());
             let publication = super::record::publish(ctx, Phase::Done, |writer| unsafe {
                 let row = (*s).gate(gate);
                 row.owner = Some(me);
@@ -112,6 +113,7 @@ pub(crate) unsafe fn leave(ctx: *mut TaskCtx, gate: u32, outermost: bool) -> Sto
         ));
     }
     let object = super::record::on(ctx).then(|| ObjectId::Gate(format!("package:{gate}")));
+    super::record::track(ctx, object.as_ref());
     let publication = super::record::publish(ctx, Phase::Done, |writer| unsafe {
         let row = (*s).gate(gate);
         row.depth = 0;

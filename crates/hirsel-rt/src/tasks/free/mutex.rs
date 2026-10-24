@@ -30,6 +30,7 @@ fn touched(
     replay: Option<&super::replay::Object>,
     action: impl FnOnce(&mut crate::sync::MutexImage) -> &'static str,
 ) -> Stopped<()> {
+    super::record::track(ctx, cell.object.get());
     super::record::publish_with_replay(ctx, phase, replay.map(|object| object.token()), |writer| {
         let outcome = action(state);
         if let Some(writer) = writer {
@@ -269,6 +270,7 @@ unsafe fn close_inner(
     let cell = unsafe { (*s).sync.mutex(word) };
     let empty = crate::channels::Ring::new(cell.element.size, 1);
     let mut state = cell.lock();
+    super::record::track(ctx, cell.object.get());
     let publication = super::record::publish_with_replay(
         ctx,
         Phase::Done,

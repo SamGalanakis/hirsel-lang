@@ -137,6 +137,15 @@ pub(crate) unsafe fn prepare_with_keys(
     let pending = pending as *mut Pending;
     let s = scheduler(ctx) as *mut Scheduler;
     let shield = unsafe { (*ctx).shield };
+    // Prepared, a position per key, a cancellation change and the request observation.
+    super::record::reserve(ctx, unsafe {
+        hirsel_free::record::RecordBound::records(2 + (*pending).names.len()).payload(
+            (*pending)
+                .request_observation
+                .as_ref()
+                .map_or(0, |bytes| bytes.len()),
+        )
+    });
     super::record::publish(ctx, Phase::Entered, |writer| unsafe {
         let writer = writer.expect("a recorded host entry");
         writer.prepare(&(*pending).request);
@@ -601,6 +610,9 @@ unsafe fn invoke_resolved(
 pub(crate) unsafe fn ended(ctx: *mut TaskCtx) -> Stopped<()> {
     let pending = unsafe { (*ctx).pending_host.as_deref_mut().unwrap() } as *mut Pending;
     let index = unsafe { (*pending).attempt };
+    super::record::reserve(ctx, unsafe {
+        hirsel_free::record::RecordBound::records(1).payload((*pending).encoded.len())
+    });
     super::record::publish(ctx, Phase::Ended(index), |writer| unsafe {
         let writer = writer.expect("a recorded host observation");
         writer.observation(&(*pending).encoded);
@@ -698,6 +710,11 @@ pub(crate) unsafe fn attempt(ctx: *mut TaskCtx) -> Stopped<()> {
     };
     let s = scheduler(ctx) as *mut Scheduler;
     let shield = unsafe { (*ctx).shield };
+    // Ready, a position per key and a cancellation change.
+    super::record::reserve(
+        ctx,
+        hirsel_free::record::RecordBound::records(2 + unsafe { (*pending).names.len() }),
+    );
     super::record::publish(ctx, Phase::Attempt(index), |writer| unsafe {
         (*pending).attempt = index;
         let writer = writer.expect("a recorded host attempt");

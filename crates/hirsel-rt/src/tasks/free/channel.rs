@@ -66,6 +66,7 @@ pub(crate) unsafe fn dup(ctx: *mut TaskCtx, sender: u64, out: *mut u64) -> Stopp
     let reservation = unsafe { (*s).channels.reserve_dup() };
     let word = reservation.word();
     let mut state = cell.lock();
+    super::record::track(ctx, cell.object.get());
     let publication = super::record::publish_with_replay(
         ctx,
         Phase::Done,
@@ -115,6 +116,7 @@ pub(crate) unsafe fn send(
     let mut state = cell.lock();
     cell.prepare_send(&mut state);
     // Send deliberately does not observe cancellation (CONC-3).
+    super::record::track(ctx, cell.object.get());
     let publication = super::record::publish_with_replay(
         ctx,
         Phase::Done,
@@ -302,6 +304,7 @@ unsafe fn close_inner(
     } else {
         "close receiver"
     };
+    super::record::track(ctx, cell.object.get());
     let publication = super::record::publish_with_replay(
         ctx,
         Phase::Done,

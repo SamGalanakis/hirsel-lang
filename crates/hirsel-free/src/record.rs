@@ -125,15 +125,73 @@ const COMPLETION: u8 = 9;
 const BLOCKED: u8 = 10;
 const READY: u8 = 11;
 
-pub fn put_varint(out: &mut Vec<u8>, mut value: u128) {
+/// Where an encoder writes: a byte vector, or a section's reserved log room
+/// ([`crate::section::LogOut`]).
+pub trait Out {
+    fn byte(&mut self, byte: u8);
+    fn bytes(&mut self, bytes: &[u8]);
+}
+
+impl Out for Vec<u8> {
+    fn byte(&mut self, byte: u8) {
+        self.push(byte);
+    }
+    fn bytes(&mut self, bytes: &[u8]) {
+        self.extend_from_slice(bytes);
+    }
+}
+
+impl Out for crate::section::LogOut<'_> {
+    fn byte(&mut self, byte: u8) {
+        self.push(byte);
+    }
+    fn bytes(&mut self, bytes: &[u8]) {
+        self.extend(bytes);
+    }
+}
+
+/// The most bytes one record without a payload takes: the tag, a varint small value, the op
+/// delta and a 128-bit field.
+pub const MAX_FIXED: usize = 1 + 10 + 10 + 19;
+/// A payload record's bytes besides the payload: the tag, the op delta and the length.
+pub const PAYLOAD_HEAD: usize = 1 + 10 + 10;
+
+/// An upper bound on the bytes one phase's records take, reserved before its section.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct RecordBound {
+    pub bytes: usize,
+}
+
+impl RecordBound {
+    /// Room for `n` records without a payload.
+    pub const fn records(n: usize) -> RecordBound {
+        RecordBound {
+            bytes: n * MAX_FIXED,
+        }
+    }
+    /// Add room for one observation or completion of `len` payload bytes.
+    pub const fn payload(self, len: usize) -> RecordBound {
+        RecordBound {
+            bytes: self.bytes + PAYLOAD_HEAD + len,
+        }
+    }
+    /// Add room for `n` more records without a payload.
+    pub const fn and(self, n: usize) -> RecordBound {
+        RecordBound {
+            bytes: self.bytes + n * MAX_FIXED,
+        }
+    }
+}
+
+pub fn put_varint(out: &mut impl Out, mut value: u128) {
     loop {
         let byte = (value & 0x7f) as u8;
         value >>= 7;
         if value == 0 {
-            out.push(byte);
+            out.byte(byte);
             return;
         }
-        out.push(byte | 0x80);
+        out.byte(byte | 0x80);
     }
 }
 
@@ -195,23 +253,32 @@ pub struct Encoder {
 }
 
 impl Encoder {
-    fn head(&mut self, out: &mut Vec<u8>, kind: u8, small: u64, op: u64) {
+    fn head(&mut self, out: &mut impl Out, kind: u8, small: u64, op: u64) {
         assert!(
             op >= self.op,
             "records out of op order: {op} after {}",
             self.op
         );
         if small < 15 {
-            out.push(kind | (small as u8) << 4);
+            out.byte(kind | (small as u8) << 4);
         } else {
-            out.push(kind | 15 << 4);
+            out.byte(kind | 15 << 4);
             put_varint(out, u128::from(small - 15));
         }
         put_varint(out, u128::from(op - self.op));
         self.op = op;
     }
 
-    pub fn encode(&mut self, record: &Record, out: &mut Vec<u8>) {
+    /// An observation (`completion` false) or a completion of borrowed payload bytes: the
+    /// same bytes as encoding the [`Record`], without building one.
+    pub fn payload(&mut self, completion: bool, op: u64, bytes: &[u8], out: &mut impl Out) {
+        let kind = if completion { COMPLETION } else { OBSERVATION };
+        self.head(out, kind, 0, op);
+        put_varint(out, bytes.len() as u128);
+        out.bytes(bytes);
+    }
+
+    pub fn encode(&mut self, record: &Record, out: &mut impl Out) {
         match *record {
             Record::Gap { op, sub, gap } => {
                 assert!(gap > 0, "a zero gap is never recorded");
@@ -247,16 +314,8 @@ impl Encoder {
                 self.head(out, KEY, gap, op);
                 put_varint(out, u128::from(key) << 1 | u128::from(shared));
             }
-            Record::Observation { op, ref bytes } => {
-                self.head(out, OBSERVATION, 0, op);
-                put_varint(out, bytes.len() as u128);
-                out.extend_from_slice(bytes);
-            }
-            Record::Completion { op, ref bytes } => {
-                self.head(out, COMPLETION, 0, op);
-                put_varint(out, bytes.len() as u128);
-                out.extend_from_slice(bytes);
-            }
+            Record::Observation { op, ref bytes } => self.payload(false, op, bytes, out),
+            Record::Completion { op, ref bytes } => self.payload(true, op, bytes, out),
             Record::Blocked { op } => self.head(out, BLOCKED, 0, op),
             Record::Ready { op } => self.head(out, READY, 0, op),
         }

@@ -10,10 +10,48 @@
 
 use crate::TaskCtx;
 use crate::stop::{Stop, Stopped};
-use hirsel_free::concurrent::{Recorder, Writer};
+use hirsel_free::concurrent::{ExecutorSlot, Recorder, Writer};
 use hirsel_free::phase::{Phase, Progress};
 use hirsel_free::projection::Stamped;
+use hirsel_free::record::RecordBound;
 use std::sync::{Arc, Mutex};
+
+/// Log room every phase reserves before its section: a phase without a payload writes at most
+/// a few fixed records (a gap, a load, a cancellation change). Host phases reserve their key
+/// positions and payloads explicitly with [`reserve`].
+const PHASE: RecordBound = RecordBound::records(4);
+
+thread_local! {
+    /// This physical executor's registered section slot in the recording it last ran a phase
+    /// for. A phase checks it out for its section and returns it; a nested callback that finds
+    /// it checked out registers a distinct slot. Thread exit retires it.
+    static EXECUTOR: std::cell::Cell<Option<ExecutorSlot>> = const { std::cell::Cell::new(None) };
+}
+
+/// This executor's registered slot in `recorder`, registering one on first use. No section is
+/// open while registering; retiring executors may briefly hold every slot, so wait outside.
+fn checkout(recorder: &Recorder<Sink, crate::io::Request>) -> ExecutorSlot {
+    if let Ok(Some(slot)) = EXECUTOR.try_with(std::cell::Cell::take) {
+        if recorder.owns(&slot) {
+            return slot;
+        }
+        // A previous recording's registration retires here.
+        drop(slot);
+    }
+    loop {
+        if let Some(slot) = recorder.executor_available(crate::pool::recorder_slot()) {
+            return slot;
+        }
+        std::thread::yield_now();
+    }
+}
+
+/// Return a slot after its section closed. A nested registration made while it was checked out
+/// retires instead.
+fn checkin(slot: ExecutorSlot) {
+    let nested = EXECUTOR.try_with(|cached| cached.replace(Some(slot)));
+    drop(nested);
+}
 
 /// Production recordings stream to a pinned file; explicit runtime tests keep
 /// the same bytes and barrier offsets in memory. No production tape is retained
@@ -257,17 +295,10 @@ impl Task {
         &mut self,
         request: &hirsel_free::claim::Request<crate::io::Request>,
     ) -> Stopped<bool> {
-        let mut worker = loop {
-            if let Some(worker) = self
-                .shared
-                .recorder
-                .worker_available(crate::pool::recorder_slot())
-            {
-                break worker;
-            }
-            std::thread::yield_now();
-        };
-        self.shared
+        self.log.reserve(PHASE);
+        let mut worker = checkout(&self.shared.recorder);
+        let claimed = self
+            .shared
             .recorder
             .phase(
                 &mut worker,
@@ -275,7 +306,9 @@ impl Task {
                 Progress::new(self.ordinal, Phase::Claimed),
                 |writer| self.shared.recorder.claim(writer, request),
             )
-            .map_err(|_| Stop::Requested)
+            .map_err(|_| Stop::Requested);
+        checkin(worker);
+        claimed
     }
 }
 
@@ -347,17 +380,8 @@ fn publish_phase<T>(
     let mut roots = crate::roots::PhaseRoots::prepare(ctx);
     let mut task = unsafe { (*ctx).recording.take() }.expect("an admitted native recorder");
     let shared = task.shared.clone();
-    let mut worker = loop {
-        if let Some(worker) = shared
-            .recorder
-            .worker_available(crate::pool::recorder_slot())
-        {
-            break worker;
-        }
-        // No section is open. Retiring execs may temporarily outnumber the
-        // active topology; another bounded section will release a token.
-        std::thread::yield_now();
-    };
+    task.log.reserve(PHASE);
+    let mut worker = checkout(&shared.recorder);
     let progress = Progress::new(task.ordinal, phase);
     let mut action = Some(action);
     let result = loop {
@@ -374,7 +398,7 @@ fn publish_phase<T>(
             Ok(None) => crate::roots::wait_phase(ctx),
         }
     };
-    drop(worker);
+    checkin(worker);
     if result.is_ok() {
         // The entry is now published and no section/writer survives. A cut
         // admitting it also admits its full deterministic frozen-graph tail.
@@ -382,6 +406,22 @@ fn publish_phase<T>(
     }
     unsafe { (*ctx).recording = Some(task) };
     result.map_err(|_| Stop::Requested)
+}
+
+/// Reserve log room for the next phase's records beyond [`PHASE`], before its section: key
+/// positions and payload bytes the phase will write.
+pub(super) fn reserve(ctx: *mut TaskCtx, bound: RecordBound) {
+    if let Some(task) = unsafe { (*ctx).recording.as_mut() } {
+        task.log.reserve(bound);
+    }
+}
+
+/// Track an object this task is about to touch, before the section: its first touch then
+/// inserts no entry inside the section.
+pub(super) fn track(ctx: *mut TaskCtx, object: Option<&hirsel_free::record::ObjectId>) {
+    if let (Some(task), Some(object)) = (unsafe { (*ctx).recording.as_mut() }, object) {
+        task.log.track(object);
+    }
 }
 
 pub(super) fn object(ctx: *mut TaskCtx) -> Option<hirsel_free::record::ObjectId> {
@@ -401,6 +441,7 @@ pub(crate) fn end<T>(ctx: *mut TaskCtx, action: impl FnOnce() -> T) -> Stopped<T
 /// final phase. Keep the bytes task-owned across deterministic release tails.
 pub(crate) fn end_observed(ctx: *mut TaskCtx, bytes: Vec<u8>) -> Stopped<()> {
     assert!(unsafe { (*ctx).free_terminal.is_none() });
+    reserve(ctx, PHASE.payload(bytes.len()));
     unsafe { (*ctx).free_terminal = Some(bytes) };
     begin(ctx);
     let token = super::replay::token(ctx);
@@ -573,7 +614,9 @@ impl Recording {
         let mut recorder = Recorder::new(
             sink,
             binding,
-            crate::pool::MAX_WIDTH as usize + crate::pool::POOL_THREADS + 1,
+            // Every physical executor keeps its registered slot while it lives: room for a
+            // full topology plus as many retiring executors not yet exited.
+            2 * (crate::pool::MAX_WIDTH as usize + crate::pool::POOL_THREADS + 1),
             durable,
             trace,
             None,
@@ -608,7 +651,7 @@ impl Recording {
             self.authorities
                 .root(unsafe { (*ctx).run_ref().free_root_env });
         }
-        let mut worker = self.recorder.worker(0).unwrap();
+        let mut worker = self.recorder.executor(0).unwrap();
         let log = self.recorder.root(&mut worker).unwrap();
         unsafe {
             (*ctx).recording = Some(Box::new(Task {

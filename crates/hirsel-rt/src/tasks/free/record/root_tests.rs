@@ -100,7 +100,7 @@ fn nested_entry(cut_tail: bool) {
                         let mut task = (*ctx).recording.take().unwrap();
                         let mut worker = observer
                             .recorder
-                            .worker(crate::pool::recorder_slot())
+                            .executor_available(crate::pool::recorder_slot())
                             .unwrap();
                         observer
                             .recorder
@@ -449,7 +449,7 @@ fn native_replay_applies_nested_root_tails_at_an_entered_only_cut() {
                     let mut task = (*ctx).recording.take().unwrap();
                     let mut worker = cutter
                         .recorder
-                        .worker(crate::pool::recorder_slot())
+                        .executor_available(crate::pool::recorder_slot())
                         .unwrap();
                     cutter
                         .recorder
