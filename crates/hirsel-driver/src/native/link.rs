@@ -1265,7 +1265,15 @@ fn link_runnable_inputs(
     }
     let _timing = hirsel_intern::timings::interval(hirsel_intern::timings::Interval::Link);
     let runner = super::runner::runner(toolchain, &program.target)?;
-    let main = launcher_object(program, entry, objects, dir, requested, false, "main")?;
+    let main = launcher_object(
+        program,
+        entry,
+        objects,
+        dir,
+        requested,
+        false,
+        ("main", None),
+    )?;
     let main = write(dir, "main.o", &main)?;
     let linked = link_launcher(
         program,
@@ -1425,7 +1433,7 @@ pub fn link_library(
     dir: &Path,
     run: Option<&hirsel_run_config::ValidatedRun>,
 ) -> Result<Library, NativeError> {
-    let main = launcher_object(program, entry, objects, dir, run, false, "main")?;
+    let main = launcher_object(program, entry, objects, dir, run, false, ("main", None))?;
     let main = write(dir, "main.o", &main)?;
     let runner = super::runner::runner(toolchain, &program.target)?;
     let linked = link_launcher(
@@ -1556,7 +1564,15 @@ fn link_objects_impl(
     resolved_foreign: Option<&[PathBuf]>,
 ) -> Result<Linked, NativeError> {
     let _timing = hirsel_intern::timings::interval(hirsel_intern::timings::Interval::Link);
-    let main = launcher_object(program, entry, objects, dir, requested, standalone, "main")?;
+    let main = launcher_object(
+        program,
+        entry,
+        objects,
+        dir,
+        requested,
+        standalone,
+        ("main", None),
+    )?;
     let main = write(dir, "main.o", &main)?;
     let output = if standalone {
         Output::Standalone
@@ -1589,7 +1605,7 @@ fn launcher_object(
     dir: &Path,
     requested: Option<&hirsel_run_config::ValidatedRun>,
     standalone: bool,
-    main_symbol: &str,
+    (main_symbol, test_seed): (&str, Option<u64>),
 ) -> Result<Vec<u8>, NativeError> {
     program.check_semantic_units(objects)?;
     let (symbol, result_size, caller_site) = entry_result(program, entry)?;
@@ -1664,6 +1680,9 @@ done:
     };
     let mut record = hirsel_run_config::RunConfig::for_program(revision, launch);
     record.inputs = program.launch.clone();
+    if let Some(seed) = test_seed {
+        record.inputs.test_seed = seed;
+    }
     // The existing conformance launcher supplies this explicit fixture profile.
     // Standalone admission will consume the record at the C entry boundary.
     if matches!(kind, LaunchKind::Main(_)) && !standalone {
@@ -2173,21 +2192,64 @@ fn cranelift_objects(objects: &[hirsel_lir::stage::ObjectArtifact]) -> bool {
 /// runners. Each child selects one adapter; the runtime starts fresh with Test as its only root
 /// and its own fixed seed.
 pub(crate) fn link_tests(
-    program: &mut ReadyProgram,
+    program: &ReadyProgram,
     tests: &[crate::testing::Test],
     objects: &[hirsel_lir::stage::ObjectArtifact],
     toolchain: &Toolchain,
     dir: &Path,
 ) -> Result<Runnable, NativeError> {
+    let entries = tests
+        .iter()
+        .map(|test| (&test.entry, test.seed))
+        .collect::<Vec<_>>();
+    link_test_entries(program, &entries, objects, toolchain, dir, None)
+}
+
+pub(crate) fn link_tests_frozen(
+    program: &ReadyProgram,
+    tests: &[(DefPath, u64)],
+    objects: &[hirsel_lir::stage::ObjectArtifact],
+    toolchain: &Toolchain,
+    dir: &Path,
+    foreign: &[PathBuf],
+) -> Result<Runnable, NativeError> {
+    let entries = tests
+        .iter()
+        .map(|(entry, seed)| (entry, *seed))
+        .collect::<Vec<_>>();
+    link_test_entries(program, &entries, objects, toolchain, dir, Some(foreign))
+}
+
+fn link_test_entries(
+    program: &ReadyProgram,
+    tests: &[(&DefPath, u64)],
+    objects: &[hirsel_lir::stage::ObjectArtifact],
+    toolchain: &Toolchain,
+    dir: &Path,
+    foreign: Option<&[PathBuf]>,
+) -> Result<Runnable, NativeError> {
+    if tests.is_empty() {
+        return Err(NativeError::new(
+            StageName::Link,
+            "empty native test selection",
+        ));
+    }
     let mut declarations = String::new();
     let mut cases = String::new();
     let mut launchers = vec![dir.join("tests.o")];
     let mut entries = Vec::new();
-    for (index, test) in tests.iter().enumerate() {
-        program.launch.test_seed = test.seed;
+    for (index, (entry, seed)) in tests.iter().enumerate() {
         let name = format!("hirsel_test_{index}");
         entries.push(name.clone());
-        let bytes = launcher_object(program, &test.entry, objects, dir, None, false, &name)?;
+        let bytes = launcher_object(
+            program,
+            entry,
+            objects,
+            dir,
+            None,
+            false,
+            (&name, Some(*seed)),
+        )?;
         launchers.push(write(dir, &format!("test-{index}.o"), &bytes)?);
         declarations.push_str(&format!("declare i32 @{name}(i32, ptr)\n"));
         // The test entry sees no process argument but its own name.
@@ -2233,13 +2295,13 @@ refuse:\n ret i32 3\n}}\n",
     };
     link_launcher(
         program,
-        &tests[0].entry,
+        tests[0].0,
         objects,
         toolchain,
         dir,
         runner.as_ref().map_or(Output::Launched, Output::Image),
         &launchers,
-        None,
+        foreign,
     )
     .map(Linked::runnable)
 }
@@ -2264,6 +2326,49 @@ pub struct Launched {
     pub stderr: Vec<u8>,
     /// The launcher's observation record (`hirsel_rt::launch`).
     pub record: String,
+}
+
+/// Fresh test child using the ordinary dispatcher argument and scheduler.
+/// Test launch timing keeps the same process interval as native test/bench.
+pub(crate) fn launch_test(
+    runnable: &Runnable,
+    target: &TargetSpec,
+    toolchain: &Toolchain,
+    dir: &Path,
+    index: usize,
+    scheduler: Option<&hirsel_run_schema::Scheduler>,
+) -> Result<(Launched, std::time::Duration), NativeError> {
+    let record = dir.join("observation");
+    let _ = std::fs::remove_file(&record);
+    let start = std::time::Instant::now();
+    let mut command = Command::new("tests");
+    command
+        .arg(index.to_string())
+        .env_clear()
+        .env("HIRSEL_RT_OBSERVATION", &record);
+    if let Some(scheduler) = scheduler {
+        command.env("HIRSEL_RT_SCHEDULER", scheduler.to_string());
+    }
+    let output = run_bounded(
+        runnable,
+        target,
+        toolchain,
+        &dir.join("tooling"),
+        &command,
+        None,
+    )?;
+    let elapsed = start.elapsed();
+    Ok((
+        Launched {
+            audit_required: false,
+            exit: output.status.code(),
+            signal: std::os::unix::process::ExitStatusExt::signal(&output.status),
+            stdout: output.stdout,
+            stderr: output.stderr,
+            record: std::fs::read_to_string(&record).unwrap_or_default(),
+        },
+        elapsed,
+    ))
 }
 
 /// What a launch runs: a linked executable, or a program image in its runner.

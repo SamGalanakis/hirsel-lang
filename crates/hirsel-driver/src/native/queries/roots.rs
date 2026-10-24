@@ -21,7 +21,7 @@ const STATIC_MANIFEST: Domain = Domain {
 };
 const LAUNCH_MANIFEST: Domain = Domain {
     kind: 0x4e00_001a,
-    schema: 3,
+    schema: 4,
 };
 
 /// Explicit platform linker inputs for a selected root. The object query owns
@@ -220,6 +220,13 @@ impl RootProducts {
     {
         self.admitted_root(root)?;
         Ok(self.source.requested_run())
+    }
+    pub fn test_entries(
+        &self,
+        root: &Arc<NativeRootProduct>,
+    ) -> Result<Vec<(hirsel_syntax::DefPath, u64)>, String> {
+        self.admitted_root(root)?;
+        Ok(self.source.test_entries().to_vec())
     }
     fn launch_bytes(&self) -> Result<Vec<u8>, String> {
         let snapshot = &self.inner.snapshot;

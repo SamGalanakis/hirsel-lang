@@ -69,7 +69,7 @@ fn one_native_runtime_produces_cold_instances_both_arena_strata_ready_roots_and_
 {
     with_compiler_stack(|| {
         for jobs in [1, 4] {
-            run(jobs, false, false, false);
+            run(jobs, false, false, false, false);
         }
     });
 }
@@ -77,7 +77,7 @@ fn one_native_runtime_produces_cold_instances_both_arena_strata_ready_roots_and_
 fn frozen_platform_links_standalone_after_original_tool_kit_runtime_and_foreign_paths_disappear() {
     with_compiler_stack(|| {
         for jobs in [1, 4] {
-            run(jobs, true, false, false);
+            run(jobs, true, false, false, false);
         }
     });
 }
@@ -85,7 +85,7 @@ fn frozen_platform_links_standalone_after_original_tool_kit_runtime_and_foreign_
 fn optimized_codegen_reads_transitive_recursive_templates_without_recursive_ready_dependencies() {
     with_compiler_stack(|| {
         for jobs in [1, 4] {
-            run(jobs, false, true, false);
+            run(jobs, false, true, false, false);
         }
     });
 }
@@ -93,7 +93,15 @@ fn optimized_codegen_reads_transitive_recursive_templates_without_recursive_read
 fn frozen_platform_restores_root_bound_runner_images_after_link_hits() {
     with_compiler_stack(|| {
         for jobs in [1, 4] {
-            run(jobs, true, false, true);
+            run(jobs, true, false, true, false);
+        }
+    });
+}
+#[test]
+fn frozen_test_dispatchers_keep_ordered_seeds_and_reopen_body_free_link_hits() {
+    with_compiler_stack(|| {
+        for jobs in [1, 4] {
+            run(jobs, true, false, false, true);
         }
     });
 }
@@ -123,7 +131,13 @@ impl native::queries::link_tasks::NativeLinkExecutor for CountedPlatform {
         self.inner.link(native, input)
     }
 }
-fn run(jobs: usize, freeze_platform: bool, optimized: bool, requested_run: bool) {
+fn run(
+    jobs: usize,
+    freeze_platform: bool,
+    optimized: bool,
+    requested_run: bool,
+    test_dispatch: bool,
+) {
     let directory = tempfile::tempdir().unwrap();
     let store = Arc::new(store::DirStore::new(directory.path().join("products")));
     let target = native::TargetSpec::x86_64_unknown_linux_gnu();
@@ -237,6 +251,7 @@ fn run(jobs: usize, freeze_platform: bool, optimized: bool, requested_run: bool)
     let mut previous_actions = std::collections::BTreeMap::new();
     let mut previous_ready = std::collections::BTreeMap::new();
     let mut reference = None;
+    let mut second_reference = None;
     let mut stale_launch = None;
     let mut old_link_addresses = std::collections::BTreeMap::new();
     for (iteration, (literal, fresh)) in [(7u64, false), (7, true), (8, false), (8, true)]
@@ -245,7 +260,12 @@ fn run(jobs: usize, freeze_platform: bool, optimized: bool, requested_run: bool)
     {
         let mut engine = QueryEngine::new(default_environment(), compiler_adapters())
             .with_result_store(store.clone());
-        let text = if optimized {
+        let text = if test_dispatch {
+            format!(
+                "pub fn main(t:Test)->Result[(),()] {{test.check(t,test.seed(t)=={literal}u64);Ok(())}}\npub fn second(t:Test)->Result[(),()] {{test.check(t,test.seed(t)=={}u64);Ok(())}}\n",
+                literal + 100
+            )
+        } else if optimized {
             format!(
                 "fn leaf(n:u64)->u64 {{if n==0u64 {{{literal}u64}} else {{middle(n-1u64)}}}}\nfn middle(n:u64)->u64 {{leaf(n)}}\npub fn main()->Result[(),u64] {{Error(middle(0u64))}}\n"
             )
@@ -261,6 +281,9 @@ fn run(jobs: usize, freeze_platform: bool, optimized: bool, requested_run: bool)
         let file = engine.sources.add("cold-scheduled-link.hir", text).unwrap();
         engine.parse_file(file, &default_context()).unwrap();
         let main = entry_path(&default_context());
+        let mut second = main.clone();
+        second.0.name = "second".into();
+        let test_entries = vec![(main.clone(), literal), (second.clone(), literal + 100)];
         if !fresh {
             let execution = run_observed_snapshot(
                 &mut engine,
@@ -269,12 +292,33 @@ fn run(jobs: usize, freeze_platform: bool, optimized: bool, requested_run: bool)
                     hash_seed: 0,
                     inputs: vec![],
                 },
-                SimulationConfig::default(),
+                SimulationConfig {
+                    test_seed: if test_dispatch { literal } else { 0 },
+                    ..Default::default()
+                },
             )
             .unwrap();
             reference = Some(native::Observation::of_reference(
                 execution.observation.as_ref().unwrap(),
             ));
+            if test_dispatch {
+                let execution = run_observed_snapshot(
+                    &mut engine,
+                    &RunConfiguration {
+                        entry: second.clone(),
+                        hash_seed: 0,
+                        inputs: vec![],
+                    },
+                    SimulationConfig {
+                        test_seed: literal + 100,
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+                second_reference = Some(native::Observation::of_reference(
+                    execution.observation.as_ref().unwrap(),
+                ));
+            }
         } else {
             engine.adapters.lowering = None;
         }
@@ -295,7 +339,9 @@ fn run(jobs: usize, freeze_platform: bool, optimized: bool, requested_run: bool)
                 .unwrap(),
             )
         });
-        let source = Arc::new(if let Some(run) = &run_record {
+        let source = Arc::new(if test_dispatch {
+            NativeLinkSource::capture_for_tests(&mut engine, &declarations, &test_entries).unwrap()
+        } else if let Some(run) = &run_record {
             NativeLinkSource::capture_for_run(&mut engine, &declarations, &main, run.clone())
                 .unwrap()
         } else {
@@ -368,7 +414,9 @@ fn run(jobs: usize, freeze_platform: bool, optimized: bool, requested_run: bool)
                 }),
                 runtime_abi: ContentHash::of_bytes(&hirsel_lir::RUNTIME_ABI_VERSION.to_le_bytes()),
                 linker_options: if let Some(platform) = &frozen {
-                    if requested_run {
+                    if test_dispatch {
+                        platform.linker_options_for_tests(backend, &main).unwrap()
+                    } else if requested_run {
                         platform.linker_options_for_run(backend, &main).unwrap()
                     } else {
                         platform
@@ -389,7 +437,15 @@ fn run(jobs: usize, freeze_platform: bool, optimized: bool, requested_run: bool)
                     .map_or_else(Vec::new, |platform| platform.foreign_inputs().to_vec()),
                 executor: if let Some(platform) = &frozen {
                     Arc::new(CountedPlatform {
-                        inner: if requested_run {
+                        inner: if test_dispatch {
+                            platform.executor_for_tests(
+                                backend,
+                                main.clone(),
+                                directory
+                                    .path()
+                                    .join(format!("{literal}-{fresh}-{}", backend.name())),
+                            )
+                        } else if requested_run {
                             platform.executor_for_run(
                                 backend,
                                 main.clone(),
@@ -429,7 +485,11 @@ fn run(jobs: usize, freeze_platform: bool, optimized: bool, requested_run: bool)
             arena.clone(),
             source.clone(),
             NativeRootKey {
-                roots: vec![main],
+                roots: if test_dispatch {
+                    vec![main, second]
+                } else {
+                    vec![main]
+                },
                 target_abi: target.digest(),
                 policy,
             },
@@ -496,7 +556,7 @@ fn run(jobs: usize, freeze_platform: bool, optimized: bool, requested_run: bool)
             } else if iteration == 0 {
                 completed.len() as u64
             } else {
-                1
+                if test_dispatch { 2 } else { 1 }
             }
         );
         assert_eq!(
@@ -506,7 +566,7 @@ fn run(jobs: usize, freeze_platform: bool, optimized: bool, requested_run: bool)
             } else if iteration == 0 {
                 completed.len() as u64
             } else {
-                1
+                if test_dispatch { 2 } else { 1 }
             }
         );
         assert_eq!(
@@ -525,7 +585,7 @@ fn run(jobs: usize, freeze_platform: bool, optimized: bool, requested_run: bool)
             } else if iteration == 0 {
                 completed.len() as u64 * 2
             } else {
-                2
+                if test_dispatch { 4 } else { 2 }
             }
         );
         if fresh {
@@ -668,7 +728,7 @@ fn run(jobs: usize, freeze_platform: bool, optimized: bool, requested_run: bool)
             if fresh {
                 assert_eq!(current, old);
             } else {
-                if optimized {
+                if optimized || test_dispatch {
                     assert_eq!(current.0, old.0);
                 } else {
                     assert_ne!(current.0, old.0);
@@ -704,7 +764,16 @@ fn run(jobs: usize, freeze_platform: bool, optimized: bool, requested_run: bool)
                 let key = native::object_queries::LinkKey {
                     roots: root.instances.clone(),
                     target: target.digest(),
-                    linker_options: if requested_run {
+                    linker_options: if test_dispatch {
+                        frozen
+                            .as_ref()
+                            .unwrap()
+                            .linker_options_for_tests(
+                                backend,
+                                &hirsel_engine::entry_path(&default_context()),
+                            )
+                            .unwrap()
+                    } else if requested_run {
                         frozen
                             .as_ref()
                             .unwrap()
@@ -746,7 +815,7 @@ fn run(jobs: usize, freeze_platform: bool, optimized: bool, requested_run: bool)
             let executable = directory.join("program");
             native::object_queries::materialize_executable(store.as_ref(), &linked, &executable)
                 .unwrap();
-            if freeze_platform && !requested_run {
+            if freeze_platform && !requested_run && !test_dispatch {
                 use object::Object as _;
                 let bytes = std::fs::read(&executable).unwrap();
                 let elf = object::File::parse(bytes.as_slice()).unwrap();
@@ -760,49 +829,72 @@ fn run(jobs: usize, freeze_platform: bool, optimized: bool, requested_run: bool)
                         .any(|part| part == b"cold-scheduled-link.hir")
                 );
             }
-            let run = if requested_run {
-                let platform = frozen.as_ref().unwrap();
-                let runnable = platform.runnable(&linked, &executable).unwrap();
-                assert!(matches!(runnable, native::Runnable::Image(_)));
-                std::fs::write(
-                    directory.join("run.json"),
-                    run_record.as_ref().unwrap().launch_bytes(),
-                )
-                .unwrap();
-                native::launch_runnable(
-                    &runnable,
-                    &target,
-                    platform.toolchain(),
-                    &directory,
-                    true,
-                    native::Tape::Live {
-                        record: None,
-                        revocations: None,
-                    },
-                )
-                .unwrap()
-            } else {
-                native::launch(&executable, &target, &tools, &directory, true).unwrap()
-            };
-            view.with_link_context(&root, &ready, |program| {
-                assert!(program.units.is_empty());
-                let callees = program
-                    .callee_metadata()
-                    .expect("actual checked runner metadata");
-                assert!(callees.request_schemas.is_some());
-                if freeze_platform {
-                    assert!(
-                        callees.facts.keys().any(|path| path.ends_with("/worker")),
-                        "referenced entry facts survive body-free link assembly"
+            for case in 0..if test_dispatch { 2 } else { 1 } {
+                let run = if test_dispatch {
+                    let platform = frozen.as_ref().unwrap();
+                    let runnable = platform.runnable(&linked, &executable).unwrap();
+                    assert!(matches!(runnable, native::Runnable::Image(_)));
+                    platform
+                        .launch_test(&runnable, &directory, case, None)
+                        .unwrap()
+                        .0
+                } else if requested_run {
+                    let platform = frozen.as_ref().unwrap();
+                    let runnable = platform.runnable(&linked, &executable).unwrap();
+                    assert!(matches!(runnable, native::Runnable::Image(_)));
+                    std::fs::write(
+                        directory.join("run.json"),
+                        run_record.as_ref().unwrap().launch_bytes(),
+                    )
+                    .unwrap();
+                    native::launch_runnable(
+                        &runnable,
+                        &target,
+                        platform.toolchain(),
+                        &directory,
+                        true,
+                        native::Tape::Live {
+                            record: None,
+                            revocations: None,
+                        },
+                    )
+                    .unwrap()
+                } else {
+                    native::launch(&executable, &target, &tools, &directory, true).unwrap()
+                };
+                view.with_link_context(&root, &ready, |program| {
+                    assert!(program.units.is_empty());
+                    if test_dispatch {
+                        assert!(program.callee_metadata().is_none());
+                    } else {
+                        let callees = program
+                            .callee_metadata()
+                            .expect("actual checked runner metadata");
+                        assert!(callees.request_schemas.is_some());
+                        if freeze_platform {
+                            assert!(
+                                callees.facts.keys().any(|path| path.ends_with("/worker")),
+                                "referenced entry facts survive body-free link assembly"
+                            );
+                        }
+                    }
+                    let actual = native::observe(&run, program, &source.sites())
+                        .map_err(|e| e.to_string())?;
+                    assert_eq!(
+                        Some(&actual),
+                        if case == 0 {
+                            reference.as_ref()
+                        } else {
+                            second_reference.as_ref()
+                        }
                     );
+                    Ok(())
+                })
+                .unwrap();
+                if !test_dispatch {
+                    assert!(String::from_utf8_lossy(&run.stderr).contains(&literal.to_string()));
                 }
-                let actual =
-                    native::observe(&run, program, &source.sites()).map_err(|e| e.to_string())?;
-                assert_eq!(Some(&actual), reference.as_ref());
-                Ok(())
-            })
-            .unwrap();
-            assert!(String::from_utf8_lossy(&run.stderr).contains(&literal.to_string()));
+            }
         }
         assert_eq!(trace.totals(), before);
         assert_eq!(native.snapshot.ready_materializations(), bodies);

@@ -4,8 +4,7 @@ use crate::testing::{BenchResult, Selection, Test, TestResult};
 use hirsel_engine::{LoadedProgram, NativeInput, ToolError};
 use std::{
     path::{Path, PathBuf},
-    process::Command,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 pub fn test_path(
@@ -74,7 +73,7 @@ impl Executable {
             .import_native_input(input.clone())
             .map_err(|e| NativeError::new(StageName::Manifest, format!("{e:?}")))?;
         let target = TargetSpec::x86_64_unknown_linux_gnu();
-        let mut program = super::build(&validated, &Options::new(target.clone()))?;
+        let program = super::build(&validated, &Options::new(target.clone()))?;
         let scratch = super::executable::Scratch::new()?;
         let cache = std::env::var_os("HIRSEL_NATIVE_CACHE")
             .map(PathBuf::from)
@@ -88,7 +87,7 @@ impl Executable {
             false,
             None,
         )?;
-        let runnable = super::link::link_tests(&mut program, tests, &objects, &tools, &scratch.0)?;
+        let runnable = super::link::link_tests(&program, tests, &objects, &tools, &scratch.0)?;
         Ok(Self {
             input,
             program,
@@ -106,34 +105,14 @@ impl Executable {
         scheduler: Option<&hirsel_run_schema::Scheduler>,
     ) -> Result<(Option<String>, Vec<u8>, Duration), NativeError> {
         let sites = super::Sites::new(&self.input);
-        let record = self.scratch.0.join("observation");
-        let _ = std::fs::remove_file(&record);
-        let start = Instant::now();
-        let mut command = Command::new("tests");
-        command
-            .arg(index.to_string())
-            .env_clear()
-            .env("HIRSEL_RT_OBSERVATION", &record);
-        if let Some(scheduler) = scheduler {
-            command.env("HIRSEL_RT_SCHEDULER", scheduler.to_string());
-        }
-        let output = super::link::run_bounded(
+        let (launched, elapsed) = super::link::launch_test(
             &self.runnable,
             &self.program.target,
             &self.toolchain,
-            &self.scratch.0.join("tooling"),
-            &command,
-            None,
+            &self.scratch.0,
+            index,
+            scheduler,
         )?;
-        let elapsed = start.elapsed();
-        let launched = super::Launched {
-            audit_required: false,
-            exit: output.status.code(),
-            signal: std::os::unix::process::ExitStatusExt::signal(&output.status),
-            stdout: output.stdout,
-            stderr: output.stderr,
-            record: std::fs::read_to_string(&record).unwrap_or_default(),
-        };
         let failure = match super::observe(&launched, &self.program, &sites) {
             Ok(observation) if observation.exit_code == Some(0) => None,
             Ok(observation) if observation.exit_code == Some(1) => Some("returned Error".into()),

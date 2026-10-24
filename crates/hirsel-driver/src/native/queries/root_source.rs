@@ -29,6 +29,7 @@ pub struct NativeLinkSource {
     foreign_threads: BTreeMap<hirsel_syntax::PackageId, ForeignThreads>,
     callees: Option<hirsel_rt::program::CalleeMetadata>,
     requested_run: Option<(DefPath, Arc<hirsel_run_config::ValidatedRun>)>,
+    test_entries: Vec<(DefPath, u64)>,
 }
 impl NativeLinkSource {
     pub fn capture(
@@ -68,6 +69,7 @@ impl NativeLinkSource {
             foreign_threads: declarations.roots.foreign_threads.clone(),
             callees: None,
             requested_run: None,
+            test_entries: Vec::new(),
         })
     }
 
@@ -131,6 +133,38 @@ impl NativeLinkSource {
 
     pub(super) fn requested_run(&self) -> Option<(DefPath, Arc<hirsel_run_config::ValidatedRun>)> {
         self.requested_run.clone()
+    }
+
+    /// Ordered package-test entries and explicit seeds are root inputs. Test
+    /// paths and expected snapshots are not consumed by the linker.
+    pub fn capture_for_tests(
+        engine: &mut QueryEngine,
+        declarations: &NativeDeclarations,
+        entries: &[(DefPath, u64)],
+    ) -> Result<Self, NativeError> {
+        let mut source = Self::capture(engine, declarations).map_err(|e| {
+            NativeError::new(
+                crate::native::StageName::Manifest,
+                format!("native test source: {e:?}"),
+            )
+        })?;
+        let launches = source.launches();
+        if entries.is_empty()
+            || entries.iter().any(|(entry, _)| {
+                launches.get(entry) != Some(&crate::native::link::LaunchKind::Test)
+            })
+        {
+            return Err(NativeError::new(
+                crate::native::StageName::Manifest,
+                "native test selection contains no entries or a non-Test entry",
+            ));
+        }
+        source.test_entries = entries.to_vec();
+        Ok(source)
+    }
+
+    pub(super) fn test_entries(&self) -> &[(DefPath, u64)] {
+        &self.test_entries
     }
 
     /// Bind the independently checked source closure to selected native unit
@@ -253,7 +287,7 @@ impl NativeLinkSource {
             .collect::<Vec<_>>();
         let dispatch = crate::native::foreign::dispatch(&self.view());
         serde_json::to_vec(&(
-            4u32,
+            5u32,
             self.input.digest,
             revisions,
             positions,
@@ -268,6 +302,7 @@ impl NativeLinkSource {
             self.requested_run
                 .as_ref()
                 .map(|(entry, run)| (entry, run.launch_bytes())),
+            &self.test_entries,
         ))
         .map_err(|e| e.to_string())
     }

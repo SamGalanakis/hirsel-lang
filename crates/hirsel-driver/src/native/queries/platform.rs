@@ -19,6 +19,14 @@ const PLATFORM: Domain = Domain {
     kind: 0x4e00_0025,
     schema: 2,
 };
+#[derive(Clone, Copy, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum Launch {
+    Standalone,
+    Run,
+    Tests,
+}
+
 #[derive(Serialize)]
 struct File {
     path: String,
@@ -257,21 +265,28 @@ impl FrozenPlatform {
         entry: &hirsel_syntax::DefPath,
         debug_sources: bool,
     ) -> Result<ContentHash, String> {
-        self.linker_options_mode(backend, entry, debug_sources, false)
+        self.linker_options_mode(backend, entry, debug_sources, Launch::Standalone)
     }
     pub fn linker_options_for_run(
         &self,
         backend: Backend,
         entry: &hirsel_syntax::DefPath,
     ) -> Result<ContentHash, String> {
-        self.linker_options_mode(backend, entry, false, true)
+        self.linker_options_mode(backend, entry, false, Launch::Run)
+    }
+    pub fn linker_options_for_tests(
+        &self,
+        backend: Backend,
+        entry: &hirsel_syntax::DefPath,
+    ) -> Result<ContentHash, String> {
+        self.linker_options_mode(backend, entry, false, Launch::Tests)
     }
     fn linker_options_mode(
         &self,
         backend: Backend,
         entry: &hirsel_syntax::DefPath,
         debug_sources: bool,
-        requested_run: bool,
+        launch: Launch,
     ) -> Result<ContentHash, String> {
         let execution = match self.tools.execution {
             crate::native::Execution::Executable => "executable",
@@ -284,7 +299,7 @@ impl FrozenPlatform {
             entry,
             hirsel_lir::ABI_VERSION,
             hirsel_lir::RUNTIME_ABI_VERSION,
-            requested_run,
+            launch,
             execution,
             // Current source/anchor contents are the root launch manifest's
             // explicit inputs; keep them out of this logical options address.
@@ -292,7 +307,7 @@ impl FrozenPlatform {
         ))
         .map_err(|e| e.to_string())?;
         Ok(ContentHash::of_parts(
-            "hirsel.native.frozen-platform-link.v2",
+            "hirsel.native.frozen-platform-link.v3",
             [bytes.as_slice()],
         ))
     }
@@ -317,7 +332,7 @@ impl FrozenPlatform {
             entry,
             directory,
             debug_sources,
-            requested_run: false,
+            launch: Launch::Standalone,
         })
     }
     pub fn executor_for_run(
@@ -332,8 +347,39 @@ impl FrozenPlatform {
             entry,
             directory,
             debug_sources: false,
-            requested_run: true,
+            launch: Launch::Run,
         })
+    }
+    pub fn executor_for_tests(
+        self: &Arc<Self>,
+        backend: Backend,
+        entry: hirsel_syntax::DefPath,
+        directory: PathBuf,
+    ) -> Arc<dyn NativeLinkExecutor> {
+        Arc::new(Executor {
+            platform: self.clone(),
+            backend,
+            entry,
+            directory,
+            debug_sources: false,
+            launch: Launch::Tests,
+        })
+    }
+    pub fn launch_test(
+        &self,
+        runnable: &crate::native::Runnable,
+        directory: &Path,
+        index: usize,
+        scheduler: Option<&hirsel_run_schema::Scheduler>,
+    ) -> Result<(crate::native::Launched, std::time::Duration), crate::native::NativeError> {
+        crate::native::link::launch_test(
+            runnable,
+            &self.target,
+            &self.tools,
+            directory,
+            index,
+            scheduler,
+        )
     }
     /// Restore the selected output and recheck its existing executable/image
     /// protocol. Keep this platform alive through launch: it owns the frozen
@@ -505,7 +551,7 @@ struct Executor {
     entry: hirsel_syntax::DefPath,
     directory: PathBuf,
     debug_sources: bool,
-    requested_run: bool,
+    launch: Launch,
 }
 impl NativeLinkExecutor for Executor {
     fn link(&self, native: &mut RootProducts, input: LinkExecution<'_>) -> Result<Vec<u8>, String> {
@@ -516,7 +562,7 @@ impl NativeLinkExecutor for Executor {
                     self.backend,
                     &self.entry,
                     self.debug_sources,
-                    self.requested_run,
+                    self.launch,
                 )?
             || input.inputs.runtime_archives != platform.runtime_archives()
             || input.inputs.foreign_inputs != platform.foreign
@@ -531,12 +577,21 @@ impl NativeLinkExecutor for Executor {
             None
         };
         let requested = native.requested_run(input.root)?;
-        if requested.is_some() != self.requested_run
-            || requested
-                .as_ref()
-                .is_some_and(|(entry, _)| entry != &self.entry)
-        {
-            return Err("Link launch differs from the selected root run".into());
+        let tests = native.test_entries(input.root)?;
+        let matches = match self.launch {
+            Launch::Standalone => requested.is_none() && tests.is_empty(),
+            Launch::Run => {
+                tests.is_empty()
+                    && requested
+                        .as_ref()
+                        .is_some_and(|(entry, _)| entry == &self.entry)
+            }
+            Launch::Tests => {
+                requested.is_none() && tests.first().is_some_and(|(entry, _)| entry == &self.entry)
+            }
+        };
+        if !matches {
+            return Err("Link launch differs from the selected root inputs".into());
         }
         native.with_link_context(input.root, input.ready, |program| {
             crate::native::check_runtime_calls(program).map_err(|e| e.to_string())?;
@@ -555,7 +610,21 @@ impl NativeLinkExecutor for Executor {
                         .map_err(|e| e.to_string())?,
                 );
             }
-            let path = if let Some((_, run)) = &requested {
+            let path = if self.launch == Launch::Tests {
+                match crate::native::link::link_tests_frozen(
+                    program,
+                    &tests,
+                    &objects,
+                    &platform.tools,
+                    &self.directory,
+                    &platform.foreign_files,
+                )
+                .map_err(|e| e.to_string())?
+                {
+                    crate::native::Runnable::Executable(path) => path,
+                    crate::native::Runnable::Image(image) => image.path,
+                }
+            } else if let Some((_, run)) = &requested {
                 match crate::native::link::link_runnable_frozen(
                     program,
                     &self.entry,
