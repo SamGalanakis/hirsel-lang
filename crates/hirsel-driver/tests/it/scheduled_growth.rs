@@ -8,15 +8,17 @@ fn admitted_source_growth_demands_unexecuted_required_roots() {
         let path = directory.path().join("main.hir");
         for (source, expected_rule) in [
             (
-                "fn grow[T: copyable](x:T) { grow((copy x,copy x)) }\npub fn main(){}\n",
+                "fn grow[T: copyable](x:T) { grow((copy x,copy x)) }\npub fn main(){}\n".to_owned(),
                 Some("GEN-5"),
             ),
             (
-                include_str!("../../../../conformance/STORE/STORE-6-generic-key-bad.hir"),
+                std::fs::read_to_string("../../conformance/STORE/STORE-6-generic-key-bad.hir")
+                    .unwrap(),
                 Some("STORE-6"),
             ),
             (
-                include_str!("../../../../conformance/STORE/STORE-6-generic-key-ok.hir"),
+                std::fs::read_to_string("../../conformance/STORE/STORE-6-generic-key-ok.hir")
+                    .unwrap(),
                 None,
             ),
         ] {
