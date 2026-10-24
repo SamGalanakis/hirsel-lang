@@ -25,6 +25,7 @@ mod pairwise;
 mod plan;
 mod proofs;
 pub mod queries;
+pub(crate) mod request_output;
 mod runner;
 mod runtime_cache;
 pub use runtime_cache::RuntimeInputs;
