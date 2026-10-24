@@ -10,3 +10,4 @@ mod runner;
 mod tour;
 mod fixture_manifest_18;
 mod iterator_depth_47;
+mod append_depth_47;

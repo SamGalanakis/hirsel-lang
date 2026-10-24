@@ -1,8 +1,6 @@
-//! Results built only to be appended (format-into): a call whose Bytes or
-//! String result is only copied onto a list appends to that list instead.
-//! Every rewritten and derived definition passes the IR checker, every unit
-//! passes C at each stage, and H agrees with the interpreter under its fault
-//! campaign. Shapes whose fusion would reorder an observable effect stay calls.
+//! Regression vectors for copied and formatted append results. Native
+//! lowering retains their original calls and admission/failure order; the
+//! former pre-instance fusion could erase them or mutate output too early.
 use crate::rc_support as support;
 
 use hirsel_driver::native::{
@@ -11,13 +9,14 @@ use hirsel_driver::native::{
 use hirsel_engine::{
     RunConfiguration, SimulationConfig, run_observed_snapshot, with_compiler_stack,
 };
-use hirsel_rc::append_into::{INTO_SUFFIX, fuse};
 use hirsel_rc::instance::Program;
 use hirsel_syntax::DefPath;
 use hirsel_tir::{Callee, Terminator};
 use std::path::PathBuf;
 
 use support::*;
+
+const INTO_SUFFIX: &str = "$into";
 
 /// `main` prints `value()`.
 const ENTRY: &str = "fn output_error[E](take e: E) -> () {}
@@ -95,22 +94,35 @@ fn calls(program: &Program, name: &str) -> Vec<String> {
         .collect()
 }
 
-/// The IR checker accepts every definition the fusion changed or added.
-fn checked(source: &str, before: &Program, after: &Program) {
-    let mut signatures = hirsel_validate::SignatureMap::new(after.types.clone());
-    signatures.extend_signatures(after.signatures.values().map(|s| (**s).clone()));
-    for (path, def) in &after.definitions {
-        if before.definitions.get(path) == Some(def) {
-            continue;
-        }
-        let v = hirsel_validate::validate(def, &after.types, &signatures, &mut vec![]);
-        assert!(
-            v.violations.is_empty(),
-            "{source}\n{}: {:#?}",
-            path.0.name,
-            v.violations
+/// Native source scopes are checked against the independent original plan.
+fn checked(source: &str, program: &Program) {
+    let lowered = hirsel_rc::import::lower(program, &target()).unwrap();
+    let registry = lowered.operation_registry(program);
+    for body in &registry.invocation_bodies {
+        let unit = lowered
+            .units
+            .iter()
+            .find(|unit| {
+                unit.header.definition == body.definition && unit.header.instance == body.instance
+            })
+            .unwrap();
+        assert_eq!(
+            hirsel_lir::invocations::check(
+                unit,
+                &registry.invocations[&body.definition],
+                body.body
+            ),
+            Ok(()),
+            "{source}\n{}",
+            dump(unit)
         );
     }
+    assert!(
+        lowered
+            .units
+            .iter()
+            .all(|unit| !unit.header.definition.0.name.ends_with(INTO_SUFFIX))
+    );
 }
 
 /// The driver's build (C at every stage) agrees with the interpreter on H,
@@ -198,15 +210,13 @@ fn agree_modes(source: &str, name: &str, native: bool) {
     });
 }
 
-/// Fuse `body`'s program, check it with the IR checker, run it through the
-/// driver on H against the interpreter, and return the fused program.
+/// Check original source admissions and H's complete semantic observation.
 fn check(body: &str, name: &str) -> Program {
     let source = source(body);
     let program = compile(&source);
-    let fused = fuse(&program);
-    checked(&source, &program, &fused);
+    checked(&source, &program);
     agree(&source, name);
-    fused
+    program
 }
 
 /// The frozen persistent-list and wordfreq emitters, reduced.
@@ -225,24 +235,18 @@ const EMIT: &str = "fn value() -> u64 {
 
 #[test]
 fn copied_results_append_into_the_list_they_were_copied_onto() {
-    let fused = check(EMIT, "append-into-emit");
-    let into = format!("number{INTO_SUFFIX}");
-    // Both emitters call the appending form; nothing calls number.
-    let value = calls(&fused, "value");
-    assert_eq!(value.iter().filter(|c| **c == into).count(), 2, "{value:?}");
-    assert!(!value.iter().any(|c| c == "number"), "{value:?}");
-    // The builder and its form append the text: no to_string remains.
-    for f in ["number", into.as_str()] {
-        let c = calls(&fused, f);
-        assert!(c.iter().any(|c| c == "u64.format_into"), "{f}: {c:?}");
-        assert!(!c.iter().any(|c| c == "u64.to_string"), "{f}: {c:?}");
-        assert!(!c.iter().any(|c| c == "string.as_bytes"), "{f}: {c:?}");
+    let program = check(EMIT, "append-into-emit");
+    let value = calls(&program, "value");
+    assert_eq!(value.iter().filter(|callee| *callee == "number").count(), 2);
+    let number = calls(&program, "number");
+    for retained in ["u64.to_string", "string.as_bytes", "bytes.from_list"] {
+        assert!(number.iter().any(|callee| callee == retained), "{number:?}");
     }
-    assert!(!calls(&fused, &into).iter().any(|c| c == "bytes.from_list"));
+    assert!(named(&program, "number$into").is_none());
 }
 
-/// A package consumer that names only to_string must still select its appender.
-/// ENTRY names format_into directly, which used to hide the missing dependency.
+/// A package consumer naming only to_string keeps the original call.
+/// ENTRY names format_into directly, so this checks the narrower dependency.
 #[test]
 fn to_string_only_consumers_select_the_appending_implementation() {
     let entry = ENTRY.replace(
@@ -251,14 +255,11 @@ fn to_string_only_consumers_select_the_appending_implementation() {
     );
     let source = format!("{SHARED}{EMIT}{entry}");
     let program = compile(&source);
-    let fused = fuse(&program);
-    checked(&source, &program, &fused);
-    for name in ["number", "number$into"] {
-        let c = calls(&fused, name);
-        assert!(c.iter().any(|c| c == "u64.format_into"), "{name}: {c:?}");
-        assert!(!c.iter().any(|c| c == "u64.to_string"), "{name}: {c:?}");
-        assert!(!c.iter().any(|c| c == "string.as_bytes"), "{name}: {c:?}");
-    }
+    checked(&source, &program);
+    let calls = calls(&program, "number");
+    assert!(calls.iter().any(|callee| callee == "u64.to_string"));
+    assert!(calls.iter().any(|callee| callee == "string.as_bytes"));
+    assert!(named(&program, "number$into").is_none());
     agree(&source, "to-string-only-append");
 }
 
@@ -266,7 +267,7 @@ fn to_string_only_consumers_select_the_appending_implementation() {
 /// the copy no longer holds: each call stays as it was.
 #[test]
 fn results_read_otherwise_or_lists_touched_first_stay_calls() {
-    let fused = check(
+    let program = check(
         "// The result is read besides its copy.
 fn reread() -> u64 {
   let mut output: List[u8] = []
@@ -314,7 +315,7 @@ fn value() -> u64 {
         "append-into-declined",
     );
     for f in ["reread", "written", "partial", "measured"] {
-        let c = calls(&fused, f);
+        let c = calls(&program, f);
         assert!(c.iter().any(|c| c == "number"), "{f}: {c:?}");
         assert!(!c.iter().any(|c| c.ends_with(INTO_SUFFIX)), "{f}: {c:?}");
     }
@@ -325,7 +326,7 @@ fn value() -> u64 {
 /// Failing before the first append is the same in both forms.
 #[test]
 fn builders_failing_after_their_first_append_stay_calls() {
-    let fused = check(
+    let program = check(
         "fn late(n: u64) -> Bytes {
   let mut out: List[u8] = []
   list.push(mut out, 40u8)
@@ -353,13 +354,10 @@ fn value() -> u64 {
 ",
         "append-into-failing",
     );
-    let value = calls(&fused, "value");
+    let value = calls(&program, "value");
     assert!(value.iter().any(|c| c == "late"), "{value:?}");
-    assert!(named(&fused, &format!("late{INTO_SUFFIX}")).is_none());
-    assert!(
-        value.iter().any(|c| *c == format!("early{INTO_SUFFIX}")),
-        "{value:?}"
-    );
+    assert!(named(&program, &format!("late{INTO_SUFFIX}")).is_none());
+    assert!(value.iter().any(|c| c == "early"), "{value:?}");
 }
 
 /// The digit emitters manipulate only scalar/inline data and a borrowed output.
@@ -418,14 +416,15 @@ fn inline_format_builders_append_into_the_destination() {
 ",
     );
     let program = compile(&input);
-    let fused = fuse(&program);
-    checked(&input, &program, &fused);
+    checked(&input, &program);
+    let calls = calls(&program, "value");
     assert!(
-        !calls(&fused, "value")
-            .iter()
-            .any(|c| c == "text.finish_valid"),
-        "{:?}",
-        calls(&fused, "value")
+        calls.iter().any(|callee| callee == "$intrinsic.TextFinish"),
+        "{calls:?}"
+    );
+    assert!(
+        calls.iter().any(|callee| callee == "text.append"),
+        "{calls:?}"
     );
     agree(&input, "inline-format-append");
 }
@@ -515,7 +514,7 @@ fn value() -> u64 { string.byte_len(primitive()) + string.byte_len(custom()) }
 }
 
 // Port of Goose 8511ae34 test/codegen/append_destination_storage.goose:5–15.
-// u8 payloads exercise Hirsel's existing Bytes fusion, with the same vector.
+// u8 payloads preserve the same Bytes append/storage semantic vector.
 const RELAY_VECTOR: &str = "fn make(n: u64) -> Bytes {
   let mut out: List[u8] = []
   let data = if n == 0u64 { b\"\" } else if n == 1u64 { b\"\\x00\" } else { b\"\\x00\\x01\" }
@@ -537,13 +536,7 @@ pub fn main() -> u64 {
 
 fn relay_run(source: &str) -> hirsel_heapcheck::Run {
     let program = compile(source);
-    println!(
-        "main before {:?}, after {:?}",
-        calls(&program, "main"),
-        calls(&fuse(&program), "main")
-    );
-    let fused = fuse(&program);
-    checked(source, &program, &fused);
+    checked(source, &program);
     let mut options = Options::new(target());
     options.regions = false;
     let built = hirsel_driver::native::build_program(&program, manifest(&program), &options)
@@ -590,11 +583,13 @@ fn relay_destination_storage_witness() {
         "relay observation {:?}",
         relay.result.as_ref().unwrap().observation
     );
-    // The static source is read once: the whole-result copy performs no reads.
-    assert_eq!(relay.counters.indexed_byte_reads, 3);
-    assert_eq!(direct.counters.indexed_byte_reads, 3);
-    assert_eq!(relay.counters.allocations, 1);
-    assert_eq!(relay.counters, direct.counters);
+    // Both source programs retain the producer reads and result-copy reads.
+    // Their ordinary private results retain their own storage and cleanup.
+    for run in [&relay, &direct] {
+        assert_eq!(run.counters.indexed_byte_reads, 6);
+        assert_eq!(run.counters.allocations, 3);
+        assert_eq!(run.counters.live_heap_bytes, 0);
+    }
     let fallback = relay_run(&RELAY_VECTOR.replace(
         "fn relay(n: u64) -> Bytes { make(n) }",
         "fn relay(n: u64) -> Bytes { let b = make(n); let length = bytes.len(b); b }",
@@ -616,28 +611,19 @@ fn transparent_number_relays_append_without_private_storage() {
         EMIT.replace("number(v", "relay2(v")
     ));
     let program = compile(&input);
-    let fused = fuse(&program);
-    checked(&input, &program, &fused);
+    checked(&input, &program);
     for (wrapper, producer) in [("relay2", "relay"), ("relay", "number")] {
-        let derived = format!("{wrapper}$into");
-        assert_eq!(
-            fused
-                .definitions
-                .keys()
-                .filter(|p| p.0.name == derived)
-                .count(),
-            1
-        );
+        assert!(named(&program, &format!("{wrapper}$into")).is_none());
         assert!(
-            calls(&fused, &derived)
+            calls(&program, wrapper)
                 .iter()
-                .any(|c| c == &format!("{producer}$into"))
+                .any(|callee| callee == producer)
         );
     }
     assert_eq!(
-        calls(&fused, "value")
+        calls(&program, "value")
             .iter()
-            .filter(|c| c.as_str() == "relay2$into")
+            .filter(|callee| *callee == "relay2")
             .count(),
         2
     );
@@ -662,27 +648,19 @@ fn relay_depth_is_bounded_per_definition() {
             consumer.replace("relay2(k)", &format!("relay{depth}(k)"))
         );
         let program = compile(&input);
-        let fused = fuse(&program);
-        checked(&input, &program, &fused);
-        let callee = if depth < 9 {
-            format!("relay{depth}$into")
-        } else {
-            format!("relay{depth}")
-        };
+        checked(&input, &program);
+        let callee = format!("relay{depth}");
         assert!(
-            calls(&fused, "main").contains(&callee),
+            calls(&program, "main").contains(&callee),
             "depth {depth}: {:?}",
-            calls(&fused, "main")
+            calls(&program, "main")
         );
-        let helpers = fused
+        let helpers = program
             .definitions
             .keys()
             .filter(|p| p.0.name.ends_with(INTO_SUFFIX))
             .count();
-        assert!(helpers <= depth + 1);
-        if depth == 9 {
-            assert_eq!(helpers, 0);
-        }
+        assert_eq!(helpers, 0);
     }
 }
 
@@ -712,9 +690,8 @@ fn relay_reads_writes_and_failures_keep_the_original_output() {
     ];
     for input in variants {
         let program = compile(&input);
-        let fused = fuse(&program);
-        checked(&input, &program, &fused);
-        assert!(!calls(&fused, "main").iter().any(|p| p == "relay2$into"));
+        checked(&input, &program);
+        assert!(!calls(&program, "main").iter().any(|p| p == "relay2$into"));
         let run = relay_run(&input);
         assert!(run.result.is_ok());
     }
@@ -725,27 +702,24 @@ fn relay_arguments_and_bounded_destinations_keep_their_contracts() {
     let body = "fn relay(unused: u64, n: u64) -> Bytes { number(n) }\nfn value() -> u64 { let mut out: List[u8] = []; append(mut out, relay(7u64, 42u64)); checksum(bytes.from_list(take out)) }";
     let input = source(body);
     let program = compile(&input);
-    let fused = fuse(&program);
-    checked(&input, &program, &fused);
-    assert!(calls(&fused, "value").contains(&"relay$into".to_owned()));
+    checked(&input, &program);
+    assert!(calls(&program, "value").contains(&"relay".to_owned()));
     agree(&input, "relay-argument-ordinals");
 
     let bounded = source(
         "fn relay(n: u64) -> Bytes { number(n) }\nfn limited(cap: u64) -> Result[u64, OutOfSpace] { arena.bounded(cap, fn(a: Arena) -> u64 { let mut out: List[u8] in a = []; let b = relay(42u64); for i in 0u64..bytes.len(b) { list.push(mut out, b[i]) }; list.len(out) }) }\nfn value() -> u64 { if limited(3u64) == Ok(3u64) && limited(2u64) == Error(OutOfSpace()) { 1u64 } else { 0u64 } }",
     );
     let program = compile(&bounded);
-    let fused = fuse(&program);
-    checked(&bounded, &program, &fused);
-    assert!(named(&fused, "relay$into").is_none());
+    checked(&bounded, &program);
+    assert!(named(&program, "relay$into").is_none());
     agree(&bounded, "relay-bounded-destinations");
 
     let alias = source(
         "fn alias(xs: List[u8]) -> Bytes { number(list.len(xs)) }\nfn value() -> u64 { let mut out: List[u8] = [99u8]; let b = alias(out); append(mut out, b); checksum(bytes.from_list(take out)) }",
     );
     let program = compile(&alias);
-    let fused = fuse(&program);
-    checked(&alias, &program, &fused);
-    assert!(named(&fused, "alias$into").is_none());
+    checked(&alias, &program);
+    assert!(named(&program, "alias$into").is_none());
     agree(&alias, "relay-output-alias");
 }
 
@@ -765,24 +739,14 @@ fn relay_argument_and_callee_failures_preserve_the_failure_oracle() {
     .enumerate()
     {
         let program = compile(&input);
-        let fused = fuse(&program);
-        checked(&input, &program, &fused);
-        assert!(calls(&fused, "main").contains(&"relay2$into".to_owned()));
+        checked(&input, &program);
+        assert!(calls(&program, "main").contains(&"relay2".to_owned()));
         let optimized = relay_run(&input);
         let fallback = relay_run(&input.replace(
             "fn relay(n: u64) -> Bytes { make(n) }",
             "fn relay(n: u64) -> Bytes { let b = make(n); let length = bytes.len(b); b }",
         ));
-        let mut optimized = optimized.result.as_ref().unwrap().observation.clone();
-        // Raw H names generated definitions. The driver maps them to their
-        // semantic source owner; require the original range/source unchanged.
-        for failure in &mut optimized.failures {
-            if let Some(name) = failure.definition.0.name.strip_suffix(INTO_SUFFIX) {
-                let name = name.to_owned();
-                assert!(named(&program, &name).is_some());
-                failure.definition.0.name = name;
-            }
-        }
+        let optimized = optimized.result.as_ref().unwrap().observation.clone();
         let fallback = &fallback.result.as_ref().unwrap().observation;
         assert_eq!(optimized.failures.len(), 1);
         assert!(
@@ -810,10 +774,9 @@ fn relay_argument_and_callee_failures_preserve_the_failure_oracle() {
         "  if n > 0u64 { let discarded = relay(n - 1u64) }\n  let mut out: List[u8] = []",
     );
     let program = compile(&input);
-    let fused = fuse(&program);
-    checked(&input, &program, &fused);
-    assert!(named(&fused, "relay$into").is_none());
-    assert!(calls(&fused, "main").contains(&"relay2".to_owned()));
+    checked(&input, &program);
+    assert!(named(&program, "relay$into").is_none());
+    assert!(calls(&program, "main").contains(&"relay2".to_owned()));
     let run = relay_run(&input);
     assert!(run.result.as_ref().unwrap().observation.failures.is_empty());
 }

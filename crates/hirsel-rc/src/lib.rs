@@ -3,7 +3,6 @@
 #[cfg(test)]
 hirsel_guard::install!();
 
-pub mod append_into;
 pub mod arena_credit;
 pub mod cleanup;
 pub mod closure_calls;

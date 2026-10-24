@@ -31,8 +31,7 @@
 //! without its `Check` and failure edge (its condition is still read), and a
 //! licensed SEM-1 integer operator as a wrapping `IntArith`. Projection paths
 //! mark only their licensed bounds/tag guards unchecked. Plans name original
-//! TIR `(body, block, statement)` sites; append fusion carries those coordinates
-//! and canonical places through retained and derived code.
+//! TIR `(body, block, statement)` sites and canonical places.
 use crate::PassError;
 use crate::instance::{Actuals, InstanceError, InstanceId, Instances, Program, substitute};
 use crate::library::builder::Layouts as _;
@@ -252,15 +251,10 @@ pub fn lower_cached_with_roots(
     roots: &[crate::library::Request],
 ) -> Result<Lowered, LowerError> {
     hirsel_intern::timings::count(hirsel_intern::timings::Count::NativeAppendExpand);
-    // Results built only to be appended are built in place (append_into).
-    let (fused, origins, source_owners) = crate::append_into::fuse_with_origins(program, discharge);
-    let program = &fused;
-    let mut native_discharge = discharge.clone();
-    for (path, origin) in &origins {
-        if let Some(sites) = discharge.sites(&origin.definition) {
-            native_discharge.0.insert(path.clone(), sites.clone());
-        }
-    }
+    // Source calls retain their admissions, targets and failure ordering.
+    // Building an append result directly in its consumer would change all
+    // three under LANG-10, including mutations observed during cleanup.
+    let native_discharge = discharge.clone();
     let none = BTreeSet::new();
     let mut discharged = Vec::new();
     // The library's native representations lie over the program's owners.
@@ -288,8 +282,7 @@ pub fn lower_cached_with_roots(
         next += 1;
         let own_environment = instances.environments[id.index()];
         let definition = instances.view(id).definition.path.path().clone();
-        let origin = origins.get(&definition);
-        let proof_owner = origin.map_or(&definition, |o| &o.definition);
+        let proof_owner = &definition;
         let sites = discharge.sites(proof_owner);
         if sites.is_none()
             && let Some(hit) = cache.get(program, &instances, id)
@@ -323,13 +316,12 @@ pub fn lower_cached_with_roots(
             // The reference's library requests are its own: only the
             // discharged unit is compiled.
             Some(_) => Some(
-                import_mapped(
+                import_body(
                     program,
                     &instances,
                     id,
                     plan.as_ref(),
                     &none,
-                    origin,
                     &mut recorder,
                     &mut Vec::new(),
                 )
@@ -337,13 +329,12 @@ pub fn lower_cached_with_roots(
             ),
             None => None,
         };
-        let mut unit = import_mapped(
+        let mut unit = import_body(
             program,
             &instances,
             id,
             plan.as_ref(),
             sites.unwrap_or(&none),
-            origin,
             &mut recorder,
             &mut required,
         )
@@ -451,12 +442,7 @@ pub fn lower_cached_with_roots(
             let owner = if instances.roles[id.index()].is_library() {
                 None
             } else {
-                Some(
-                    source_owners
-                        .get(&path)
-                        .cloned()
-                        .unwrap_or_else(|| path.clone()),
-                )
+                Some(path.clone())
             };
             (path, owner)
         })
@@ -1285,19 +1271,15 @@ pub fn import(
     layouts: &mut LayoutBuilder<'_>,
     required: &mut Vec<crate::library::Request>,
 ) -> R<LirUnit<Value>> {
-    import_mapped(
-        program, instances, id, plan, discharge, None, layouts, required,
-    )
+    import_body(program, instances, id, plan, discharge, layouts, required)
 }
 
-#[allow(clippy::too_many_arguments)]
-fn import_mapped(
+fn import_body(
     program: &Program,
     instances: &Instances,
     id: InstanceId,
     plan: Option<&LoopPlan>,
     discharge: &BTreeSet<Discharged>,
-    origin: Option<&crate::append_into::SourceMap>,
     layouts: &mut dyn crate::library::builder::Layouts,
     required: &mut Vec<crate::library::Request>,
 ) -> R<LirUnit<Value>> {
@@ -1315,8 +1297,21 @@ fn import_mapped(
         id,
         plan,
         discharge,
-        origin,
-        source_anchors: origin.map_or_else(|| tir::source_anchors(def), |o| o.anchors.clone()),
+        source_anchors: tir::source_anchors(def),
+        // Reference and discharged imports name the same canonical source
+        // place, independently of which guards the proof plan licenses.
+        source_places: {
+            let mut canonical = HashMap::new();
+            body.places
+                .iter()
+                .enumerate()
+                .map(|(index, place)| {
+                    *canonical
+                        .entry((place.root, place.projection.clone()))
+                        .or_insert(index as u32)
+                })
+                .collect()
+        },
         def,
         body,
         body_id: view.body.0,
@@ -1457,6 +1452,7 @@ struct Importer<'a> {
     invocation_live: bool,
     invocation_return: Option<tir::BlockId>,
     source_anchors: Vec<hirsel_span::Anchor>,
+    source_places: Vec<u32>,
     /// Payload layouts are complete before construction; later rows cannot
     /// change their keys. Repeated empty constructions share this graph walk.
     static_layout_keys: HashMap<LayoutId, hirsel_lir::layout_types::LayoutKey>,
@@ -1467,7 +1463,6 @@ struct Importer<'a> {
     plan: Option<&'a LoopPlan>,
     /// PS-13 sites of this definition that import without their check.
     discharge: &'a BTreeSet<Discharged>,
-    origin: Option<&'a crate::append_into::SourceMap>,
     def: &'a tir::Definition,
     body: &'a tir::Body,
     body_id: u32,

@@ -35,18 +35,7 @@ impl Importer<'_> {
         let Some(place) = self.body.places.get(id.0 as usize) else {
             return malformed(format!("place {} outside the body", id.0));
         };
-        let source_place = match self.origin {
-            Some(origin) => origin.places[self.body_id as usize]
-                .get(id.0 as usize)
-                .copied(),
-            None if self.discharge.is_empty() => None,
-            None => self
-                .body
-                .places
-                .iter()
-                .position(|p| p.root == place.root && p.projection == place.projection)
-                .map(|i| i as u32),
-        };
+        let source_place = Some(self.source_places[id.0 as usize]);
         // A field access can extend a computed origin without binding a new
         // origin of its own. Preserve that prefix's site for its bounds check.
         let site = self.origin_sites.get(&id).copied().or_else(|| {

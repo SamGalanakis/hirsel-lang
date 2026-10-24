@@ -411,38 +411,18 @@ impl Importer<'_> {
 
     /// Whether the statement being imported is a PS-13 site licensed in `form`.
     pub(super) fn discharged(&self, form: Form) -> bool {
-        self.source_statement().is_some_and(|(block, statement)| {
-            self.discharge.contains(&Discharged {
-                body: self.body_id,
-                block,
-                statement,
-                form,
-            })
+        self.discharge.contains(&Discharged {
+            body: self.body_id,
+            block: self.statement.0,
+            statement: self.statement.1,
+            form,
         })
     }
 
-    fn source_statement(&self) -> Option<(u32, u32)> {
-        match self.origin {
-            Some(origin) => origin
-                .sites
-                .get(self.body_id as usize)?
-                .get(self.statement.0 as usize)?
-                .get(self.statement.1 as usize)
-                .copied()
-                .flatten(),
-            None => Some(self.statement),
-        }
-    }
-
     pub(super) fn anchor_here(&mut self) -> SourceAnchorId {
-        let source = self.source_statement();
-        let (block, statement) = source.unwrap_or(self.statement);
+        let (block, statement) = self.statement;
         let a = SourceAnchor {
-            body: if source.is_some() {
-                self.body_id
-            } else {
-                u32::MAX - self.body_id
-            },
+            body: self.body_id,
             block,
             statement,
             site: self.site(self.span),

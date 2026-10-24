@@ -587,7 +587,16 @@ fn append_fusion_keeps_original_sites_in_callers_and_derived_builders() {
             report[..2].iter().all(|l| l.ends_with(": removed")),
             "{report:?}"
         );
-        for name in ["fused", "producer$into"] {
+        // Append retirement keeps the proof on each original definition.
+        assert!(
+            reference.raw_units().iter().all(|unit| !unit
+                .header
+                .definition
+                .0
+                .name
+                .ends_with("$into"))
+        );
+        for name in ["fused", "producer"] {
             let count = |p: &ReadyProgram| {
                 p.raw_units()
                     .iter()
@@ -624,7 +633,7 @@ fn append_fusion_keeps_original_sites_in_callers_and_derived_builders() {
 }
 
 /// The sidecar changes LIR and code generation, which ordinary corpus
-/// execution cannot exercise. Run accepted arithmetic/projections/fusion on H
+/// execution cannot exercise. Run accepted arithmetic/projections/append on H
 /// and on both native targets at O0 and O3, retaining main's result checks.
 #[test]
 fn accepted_removal_forms_run_on_heap_and_both_native_targets() {
