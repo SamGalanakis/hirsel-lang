@@ -201,7 +201,7 @@ impl<'a> Lay<'a> {
     ) -> bool {
         steps.iter().any(|step| match step {
             DropStep::Finalize | DropStep::CloseHandle { .. } => true,
-            DropStep::Thaw { .. } => false,
+            DropStep::Thaw { .. } | DropStep::ReleaseReceipt { .. } => false,
             DropStep::Child { layout, .. }
             | DropStep::ElementsReverse {
                 element: layout, ..
@@ -281,7 +281,9 @@ impl<'a> Lay<'a> {
         seen: &mut BTreeSet<LayoutId>,
     ) -> bool {
         steps.iter().any(|step| match step {
-            DropStep::Finalize | DropStep::CloseHandle { .. } => false,
+            DropStep::Finalize | DropStep::CloseHandle { .. } | DropStep::ReleaseReceipt { .. } => {
+                false
+            }
             DropStep::Thaw { .. } | DropStep::ReleaseRoot { .. } => true,
             DropStep::Child { layout, .. }
             | DropStep::ElementsReverse {

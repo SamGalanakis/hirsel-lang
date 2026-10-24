@@ -9813,6 +9813,12 @@ impl<'p, S: Stage> Machine<'p, S> {
                 let logical_path = self.ledger.path(logical_base);
                 let gated = |_: u64| dead.iter().any(|path| logical_path.starts_with(path));
                 match step {
+                    DropStep::ReleaseReceipt { .. } => {
+                        return fail(
+                            V::Unsupported,
+                            "private receipt storage H drop is not implemented",
+                        );
+                    }
                     DropStep::Finalize => {
                         let rid = self.resource_at(base)?;
                         let res = &mut self.ledger.resources[rid.0 as usize];

@@ -37,6 +37,17 @@ impl<S: Stage> Program<S> {
         if self.layouts.target != self.target.digest() {
             return fail(V::Malformed, "layout table names another target");
         }
+        if self.layouts.layouts.iter().any(|layout| {
+            matches!(
+                layout.kind,
+                hirsel_lir::layout_types::LayoutKind::PayloadReceipt { .. }
+            )
+        }) {
+            return fail(
+                V::Malformed,
+                "private receipt storage ownership is not implemented",
+            );
+        }
         for abi in &self.layouts.fn_abis {
             hirsel_lir::abi::check_implemented_transport(abi).map_err(|e| err(V::Malformed, e))?;
         }
@@ -520,3 +531,35 @@ impl Default for Config {
 
 /// The rule of an injected failure.
 pub const INJECTED_RULE: &str = "HEAPCHECK-INJECTED";
+
+#[cfg(test)]
+mod receipt_layout_tests {
+    use super::*;
+    use hirsel_lir::layout_types::{CopyRecipe, DropStep, LayoutKind};
+    use hirsel_lir::operation::{NativeType, Primitive};
+    #[test]
+    fn private_receipt_storage_does_not_gain_h_custody_from_a_layout_declaration() {
+        let mut layouts = crate::build::Layouts::new(TargetSpec::x86_64_unknown_linux_gnu());
+        let id = layouts.scalar(ScalarKind::Pointer);
+        let mut program = Program::<hirsel_lir::stage::Rc> {
+            target: layouts.target,
+            layouts: layouts.table,
+            units: vec![],
+            statics: vec![],
+            invocation_bodies: vec![],
+            pretransfer_adapters: vec![],
+            invocations: Default::default(),
+        };
+        program.check().unwrap();
+        let record = &mut program.layouts.layouts[id.0 as usize];
+        record.kind = LayoutKind::PayloadReceipt {
+            root: NativeType::Primitive(Primitive::Bytes),
+        };
+        record.drop = vec![DropStep::ReleaseReceipt { offset: 0 }];
+        record.copy = CopyRecipe::NotCopyable;
+        let error = program.check().unwrap_err();
+        assert!(
+            format!("{error:?}").contains("private receipt storage ownership is not implemented")
+        );
+    }
+}

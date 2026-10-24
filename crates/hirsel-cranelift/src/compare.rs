@@ -483,6 +483,7 @@ impl Gen<'_, '_> {
             | LayoutKind::Frozen { .. }
             | LayoutKind::Handle
             | LayoutKind::HostCapability { .. }
+            | LayoutKind::PayloadReceipt { .. }
             | LayoutKind::Arena
             | LayoutKind::Callable { .. }
             | LayoutKind::Iterator { .. }
@@ -1043,6 +1044,7 @@ impl Gen<'_, '_> {
             | LayoutKind::Frozen { .. }
             | LayoutKind::Handle
             | LayoutKind::HostCapability { .. }
+            | LayoutKind::PayloadReceipt { .. }
             | LayoutKind::Arena
             | LayoutKind::Callable { .. }
             | LayoutKind::Iterator { .. }

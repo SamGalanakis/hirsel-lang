@@ -97,7 +97,10 @@ pub(crate) fn covered(layouts: &LayoutTable, layout: LayoutId) -> bool {
 fn plain(layouts: &LayoutTable, steps: &[DropStep]) -> bool {
     steps.iter().all(|step| match step {
         // A Shared root's frozen payload thaws in the runtime's walk.
-        DropStep::Finalize | DropStep::ColumnsReverse(_) | DropStep::Thaw { .. } => false,
+        DropStep::Finalize
+        | DropStep::ColumnsReverse(_)
+        | DropStep::Thaw { .. }
+        | DropStep::ReleaseReceipt { .. } => false,
         // A Shared root's release is a runtime call under the root count contract.
         DropStep::Release { .. }
         | DropStep::ReleaseRoot { .. }
@@ -216,7 +219,8 @@ fn infallible(layouts: &LayoutTable, layout: LayoutId) -> bool {
             | DropStep::RepeatReverse {
                 element: layout, ..
             } => inline(*layout, seen),
-            DropStep::Finalize
+            DropStep::ReleaseReceipt { .. }
+            | DropStep::Finalize
             | DropStep::Environment { .. }
             | DropStep::CloseHandle { .. }
             | DropStep::Thaw { .. }
@@ -717,6 +721,9 @@ impl<'m, 'g> Walk<'m, 'g> {
                 let arguments = [self.context, handle, self.anchor, self.operation_site];
                 self.accumulate(self.builder.call(self.runtime.close_handle, &arguments));
                 Ok(())
+            }
+            DropStep::ReleaseReceipt { .. } => {
+                invalid("receipt metadata drop requires linked runtime emission")
             }
             DropStep::Finalize => invalid("compiled drop code that reaches a finalizer"),
             DropStep::Thaw { .. } => invalid("compiled drop code that reaches a frozen value"),

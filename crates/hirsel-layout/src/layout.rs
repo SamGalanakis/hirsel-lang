@@ -424,6 +424,30 @@ impl<'o> LayoutBuilder<'o> {
         })
     }
 
+    /// Compiler-only metadata layout. Its key binds the original root type;
+    /// constructing this row does not provide source provenance or custody.
+    pub fn payload_receipt(&mut self, root: &hirsel_lir::operation::NativeType) -> LayoutId {
+        let mut key = Encoder {
+            bytes: Vec::new(),
+            revisions: true,
+        };
+        key.tag("payload-receipt.v1");
+        key.tag(&hirsel_codec::to_text(root));
+        if let Some(&id) = self.memo.get(&key.bytes) {
+            return id;
+        }
+        let mut record = self.blank(
+            &key.bytes,
+            LayoutKind::PayloadReceipt { root: root.clone() },
+            SizeSpec::Fixed(self.target.scalar_size(ScalarKind::Pointer)),
+            self.target.scalar_align(ScalarKind::Pointer),
+        );
+        record.abi.scalars = vec![(0, ScalarKind::Pointer)];
+        record.copy = CopyRecipe::NotCopyable;
+        record.drop = vec![DropStep::ReleaseReceipt { offset: 0 }];
+        self.insert(key.bytes, record)
+    }
+
     /// The FlatFormatV0 byte extent of a flat-compatible type, as its
     /// out-of-line storage holds it (private native format).
     pub fn flat(&mut self, types: &TypeInterner, ty: TypeId) -> Result<LayoutId, LayoutError> {
@@ -3358,6 +3382,7 @@ fn drop_offset(step: &DropStep) -> Option<u64> {
     match step {
         DropStep::Release { offset }
         | DropStep::ReleaseRoot { offset }
+        | DropStep::ReleaseReceipt { offset }
         | DropStep::Child { offset, .. }
         | DropStep::Thaw { offset, .. }
         | DropStep::Environment { offset }

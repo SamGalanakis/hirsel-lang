@@ -222,6 +222,18 @@ impl<'a> Validator<'a> {
                     );
                 }
             }
+            LayoutKind::PayloadReceipt { .. } => {
+                if !r.fields.is_empty() || r.tag.is_some() || r.finalizer.is_some() {
+                    self.fail(
+                        s.clone(),
+                        Obligation::DropOrder,
+                        "receipt metadata has no language fields or finalizer",
+                    );
+                }
+                self.exact(&s, r, pointer, pointer_align);
+                self.wrapper(&s, r, &[], &[DropStep::ReleaseReceipt { offset: 0 }]);
+                self.copy(&s, r, CopyRecipe::NotCopyable);
+            }
             LayoutKind::Shared { payload } => {
                 self.exact(&s, r, pointer, pointer_align);
                 self.wrapper(

@@ -303,6 +303,10 @@ pub enum LayoutKind {
     Sequential {
         element: LayoutId,
     },
+    /// Private immutable semantic metadata, separate from language credits.
+    PayloadReceipt {
+        root: crate::operation::NativeType,
+    },
 }
 
 /// One step of a checked size expression, evaluated as a postfix program.
@@ -552,6 +556,8 @@ pub enum DropStep {
     /// Drop structure-of-arrays elements from the highest index to the lowest,
     /// each element's fields in reverse declaration order.
     ColumnsReverse(SoaColumns),
+    /// Mechanical metadata destruction; never a language holder/root release.
+    ReleaseReceipt { offset: u64 },
 }
 
 /// Column placement of a structure-of-arrays sequence payload (#47 assumption).
@@ -788,6 +794,7 @@ snapshot_enum!(LayoutKind {
     SoaColumns { element },
     Sequence { element },
     Sequential { element },
+    PayloadReceipt { root },
 });
 snapshot_enum!(SizeTerm {
     Constant(value),
@@ -891,6 +898,7 @@ snapshot_enum!(DropStep {
     },
     ColumnsReverse(columns),
     ReleaseRoot { offset },
+    ReleaseReceipt { offset },
 });
 snapshot_struct!(SoaColumns {
     count_offset,

@@ -311,6 +311,7 @@ fn erase_layout_refs(record: &mut crate::LayoutRecord, refs: &mut Vec<crate::Lay
                 DropStep::Finalize
                 | DropStep::Release { .. }
                 | DropStep::ReleaseRoot { .. }
+                | DropStep::ReleaseReceipt { .. }
                 | DropStep::Environment { .. }
                 | DropStep::CloseHandle { .. } => {}
             }
@@ -345,6 +346,7 @@ fn erase_layout_refs(record: &mut crate::LayoutRecord, refs: &mut Vec<crate::Lay
         | LayoutKind::Callable { environment: None }
         | LayoutKind::Resource
         | LayoutKind::Header
+        | LayoutKind::PayloadReceipt { .. }
         | LayoutKind::Flat => {}
     }
     for field in &mut record.fields {

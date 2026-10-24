@@ -643,6 +643,19 @@ fn check_with_context<S: Stage>(
             }];
         }
     }
+    if inputs
+        .layouts
+        .layouts
+        .iter()
+        .any(|layout| matches!(layout.kind, LayoutKind::PayloadReceipt { .. }))
+    {
+        return vec![Violation {
+            site: Site::UNIT,
+            kind: ViolationKind::Schema(
+                "private receipt storage requires independent source and custody validation".into(),
+            ),
+        }];
+    }
     let (_, abis) = crate::objects::references(unit);
     for id in abis {
         if let Some(abi) = inputs.layouts.fn_abis.get(id.0 as usize)
@@ -1053,7 +1066,8 @@ impl<'a> Layouts<'a> {
             | LayoutKind::Callable { .. }
             | LayoutKind::Iterator { .. }
             | LayoutKind::Resource
-            | LayoutKind::Header => false,
+            | LayoutKind::Header
+            | LayoutKind::PayloadReceipt { .. } => false,
         }
     }
     /// Whether `Inst::Hash` is defined on every part of this layout (LIR
@@ -1103,7 +1117,7 @@ impl<'a> Layouts<'a> {
         steps.iter().any(|step| match step {
             DropStep::Finalize | DropStep::CloseHandle { .. } => true,
             // Restoring counts is invisible; the release that follows is a Child.
-            DropStep::Thaw { .. } => false,
+            DropStep::Thaw { .. } | DropStep::ReleaseReceipt { .. } => false,
             DropStep::Child { layout, .. }
             | DropStep::ElementsReverse {
                 element: layout, ..
@@ -1169,7 +1183,9 @@ impl<'a> Layouts<'a> {
         seen: &mut std::collections::BTreeSet<LayoutId>,
     ) -> bool {
         steps.iter().any(|step| match step {
-            DropStep::Finalize | DropStep::CloseHandle { .. } => false,
+            DropStep::Finalize | DropStep::CloseHandle { .. } | DropStep::ReleaseReceipt { .. } => {
+                false
+            }
             DropStep::Thaw { .. } | DropStep::ReleaseRoot { .. } => true,
             DropStep::Child { layout, .. }
             | DropStep::ElementsReverse {

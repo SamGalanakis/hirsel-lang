@@ -355,6 +355,7 @@ fn run_drop(
             DropStep::Finalize => out.push((base, "finalize")),
             DropStep::Release { offset } => out.push((base + offset, "release")),
             DropStep::ReleaseRoot { offset } => out.push((base + offset, "release root")),
+            DropStep::ReleaseReceipt { offset } => out.push((base + offset, "release receipt")),
             DropStep::Environment { offset } => out.push((base + offset, "environment")),
             DropStep::CloseHandle { offset } => out.push((base + offset, "close")),
             DropStep::Child { offset, layout } => {

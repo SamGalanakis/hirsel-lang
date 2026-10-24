@@ -307,6 +307,7 @@ impl<S: Stage> Machine<'_, S> {
                 LayoutKind::Environment { .. }
                 | LayoutKind::Handle
                 | LayoutKind::HostCapability { .. }
+                | LayoutKind::PayloadReceipt { .. }
                 | LayoutKind::Arena
                 | LayoutKind::Callable { .. }
                 | LayoutKind::Iterator { .. }
@@ -527,6 +528,7 @@ impl<S: Stage> Machine<'_, S> {
                 LayoutKind::Environment { .. }
                 | LayoutKind::Handle
                 | LayoutKind::HostCapability { .. }
+                | LayoutKind::PayloadReceipt { .. }
                 | LayoutKind::Arena
                 | LayoutKind::Callable { .. }
                 | LayoutKind::Iterator { .. }

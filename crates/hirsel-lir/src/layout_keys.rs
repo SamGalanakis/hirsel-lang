@@ -50,6 +50,7 @@ impl LayoutRecord {
             | LayoutKind::Callable { environment: None }
             | LayoutKind::Resource
             | LayoutKind::Header
+            | LayoutKind::PayloadReceipt { .. }
             | LayoutKind::Flat => {}
         }
         for field in &mut self.fields {
@@ -112,6 +113,7 @@ impl LayoutRecord {
                     DropStep::Finalize
                     | DropStep::Release { .. }
                     | DropStep::ReleaseRoot { .. }
+                    | DropStep::ReleaseReceipt { .. }
                     | DropStep::Environment { .. }
                     | DropStep::CloseHandle { .. } => {}
                 }
