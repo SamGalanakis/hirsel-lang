@@ -37,6 +37,15 @@ pub struct FrontStorageOutput {
     _owner: Arc<FrontStorageQueries>,
 }
 impl FrontStorageQueries {
+    /// Potential recipe address/path slots only; actual recipe demands debit
+    /// their existing output bound from the remainder of this reservation.
+    pub fn input_bytes(front: &FrontBodyQueries) -> Option<u64> {
+        front.inputs.values().try_fold(0u64, |n, input| {
+            n.checked_add((std::mem::size_of::<(Key, DefPath)>() + 64) as u64)?
+                .checked_add(bincode::serialized_size(&input.definition).ok()?)
+        })
+    }
+
     pub fn query(&self, path: &DefPath) -> Option<QueryId> {
         self.inputs.iter().find_map(|(&address, selected)| {
             (path == selected).then_some(QueryId {
