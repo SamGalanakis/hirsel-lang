@@ -94,20 +94,29 @@ fn materializations_track_executed_bodies_without_invalidating_unrelated_lowerin
         assert!(check(&mut engine, source).diagnostics.is_empty());
         let before = counts(&engine, "user");
         let value = engine.materialize_constant(&path("SECOND")).unwrap();
-        for edited in [
-            source.to_string(),
-            source.replace("0u32", "1u32"),
-            format!("{source}fn added() {{}}\n"),
+        let validation_before = engine.body_validation_runs(&path("user"));
+        for (membership_changed, edited) in [
+            (false, source.to_string()),
+            (false, source.replace("0u32", "1u32")),
+            (true, format!("{source}fn added() {{}}\n")),
         ] {
             assert!(check(&mut engine, &edited).diagnostics.is_empty());
-            assert_eq!(counts(&engine, "user"), before);
+            let mut expected = before;
+            // 6b356750 binds executed values to the complete base V universe.
+            // New membership refreshes that acceptance, while ordinary body
+            // edits retain both semantic lowering and its validation context.
+            expected[4] += usize::from(membership_changed);
+            assert_eq!(counts(&engine, "user"), expected, "{edited}");
+            if membership_changed {
+                assert!(engine.body_validation_runs(&path("user")) > validation_before);
+            }
             assert_eq!(engine.materialize_constant(&path("SECOND")).unwrap(), value);
         }
         let edited = source.replace("3u32", "5u32");
         assert!(check(&mut engine, &edited).diagnostics.is_empty());
         assert_ne!(engine.materialize_constant(&path("SECOND")).unwrap(), value);
         assert_eq!(counts(&engine, "user")[0..4], before[0..4]);
-        assert_eq!(counts(&engine, "user")[4], before[4] + 1);
+        assert_eq!(counts(&engine, "user")[4], before[4] + 2);
         let mut fresh = QueryEngine::new(default_environment(), compiler_adapters());
         check(&mut fresh, &edited);
         assert_eq!(
