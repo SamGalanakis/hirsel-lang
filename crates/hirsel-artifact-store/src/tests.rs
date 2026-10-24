@@ -205,6 +205,43 @@ fn private_byte_and_metadata_limits_publish_only_bounded_prefixes_and_abort_the_
 }
 
 #[test]
+fn tiny_unique_payloads_force_metadata_admission_before_byte_pressure() {
+    for count in [15, 32] {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::rebuildable(dir.path().to_owned());
+        store.set_private_limits(1 << 20, 2048);
+        let statistics = store.enable_statistics();
+        let request = store.request();
+        let references: Vec<_> = (0u8..count)
+            .map(|n| store.put(DOMAIN, &[n]).unwrap())
+            .collect();
+        let snapshot = statistics.snapshot();
+        assert!(snapshot.counters["AdmissionCommits"] > 0);
+        assert!(
+            snapshot.counters["EpochMetadataPeakBytes"] <= 2048,
+            "{snapshot:?}"
+        );
+        // All one-byte inputs, including their pack framing, fit far below 1 MiB.
+        assert!(snapshot.counters["PrivatePeakBytes"] < 4096);
+        let reader = Store::new(dir.path().to_owned());
+        let published: Vec<_> = references.iter().map(|&r| reader.get(r)).collect();
+        let count = published.iter().filter(|v| v.is_some()).count();
+        assert!(count > 0 && count < references.len());
+        for (n, bytes) in published.iter().enumerate().take(count) {
+            assert_eq!(bytes.as_deref(), Some(&[n as u8][..]));
+        }
+        assert!(published[count..].iter().all(Option::is_none));
+        drop(request);
+        assert_eq!(
+            statistics.snapshot().counters["IndexPublications"],
+            snapshot.counters["IndexPublications"]
+        );
+        assert!(references[count..].iter().all(|&r| reader.get(r).is_none()));
+        assert_eq!(fs::read_dir(dir.path().join("staging")).unwrap().count(), 0);
+    }
+}
+
+#[test]
 fn request_finish_requires_joined_batches_and_abandoned_staging_is_reclaimed() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::rebuildable(dir.path().to_owned());

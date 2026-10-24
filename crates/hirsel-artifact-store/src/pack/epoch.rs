@@ -157,7 +157,9 @@ impl Store {
             );
             statistics.peak(
                 Counter::EpochMetadataPeakBytes,
-                (epoch.metadata() + state.pending.len() * 128 + 256) as u64,
+                (epoch.metadata()
+                    + state.pending.len() * 128
+                    + usize::from(!state.pending.is_empty()) * 256) as u64,
             );
         }
     }
