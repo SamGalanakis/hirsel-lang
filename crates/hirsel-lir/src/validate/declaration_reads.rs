@@ -3,7 +3,10 @@ use crate::operation::{NativeType, OperationArgument, OperationDeclarations};
 use crate::{FnAbi, LayoutTable, TargetSpec, layout::LayoutError};
 use hirsel_core_contract::OperationId;
 use hirsel_syntax::{ContentHash, DefPath};
-use std::{collections::BTreeMap, sync::Mutex};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Mutex,
+};
 
 #[derive(Clone, Debug)]
 pub(super) struct InvocationRead {
@@ -81,6 +84,8 @@ pub(super) struct Reads {
     bodies: Vec<BodyRead>,
     structural: Vec<StructuralRead>,
     pretransfer: Option<Vec<AdapterRead>>,
+    unavailable_events: Vec<(DefPath, ContentHash)>,
+    unavailable_payloads: Vec<(DefPath, ContentHash)>,
 }
 hirsel_codec::snapshot_struct!(Reads {
     invocation_required,
@@ -88,7 +93,9 @@ hirsel_codec::snapshot_struct!(Reads {
     invocations,
     bodies,
     structural,
-    pretransfer
+    pretransfer,
+    unavailable_events,
+    unavailable_payloads
 });
 
 fn invocation_identity(rows: Option<&[crate::invocations::ReferenceInvocation]>) -> ContentHash {
@@ -118,11 +125,21 @@ impl Reads {
         declarations: &dyn OperationDeclarations,
         target: &TargetSpec,
     ) -> bool {
-        self.pretransfer.as_ref().is_none_or(|expected| {
-            adapter_inventory(declarations, target).as_ref() == Some(expected)
-        }) && self
-            .invocation_required
-            .is_none_or(|v| v == declarations.requires_invocation_reference())
+        self.unavailable_events
+            .iter()
+            .all(|(definition, instance)| declarations.seal_events(definition, *instance).is_none())
+            && self
+                .unavailable_payloads
+                .iter()
+                .all(|(definition, instance)| {
+                    declarations.seal_payloads(definition, *instance).is_none()
+                })
+            && self.pretransfer.as_ref().is_none_or(|expected| {
+                adapter_inventory(declarations, target).as_ref() == Some(expected)
+            })
+            && self
+                .invocation_required
+                .is_none_or(|v| v == declarations.requires_invocation_reference())
             && self
                 .structural_required
                 .is_none_or(|v| v == declarations.requires_structural_reference())
@@ -158,6 +175,8 @@ struct Observations {
     bodies: BTreeMap<(DefPath, ContentHash), Option<u32>>,
     structural: BTreeMap<String, NativeType>,
     unsupported: bool,
+    unavailable_events: BTreeSet<(DefPath, ContentHash)>,
+    unavailable_payloads: BTreeSet<(DefPath, ContentHash)>,
     pretransfer: bool,
 }
 pub(super) struct Observed<'a> {
@@ -212,6 +231,8 @@ impl<'a> Observed<'a> {
             None
         };
         Some(Reads {
+            unavailable_events: reads.unavailable_events.iter().cloned().collect(),
+            unavailable_payloads: reads.unavailable_payloads.iter().cloned().collect(),
             pretransfer,
             invocation_required: reads.invocation_required,
             structural_required: reads.structural_required,
@@ -249,22 +270,40 @@ impl OperationDeclarations for Observed<'_> {
         definition: &DefPath,
         instance: ContentHash,
     ) -> Option<Vec<crate::sealed_payload_source::SourceEvent>> {
-        self.reads
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .unsupported = true;
-        self.declarations.seal_events(definition, instance)
+        let output = self.declarations.seal_events(definition, instance);
+        let mut reads = self.reads.lock().unwrap_or_else(|e| e.into_inner());
+        if output.is_none() {
+            // Observe unavailable, never independently expected-empty. A later
+            // Some (even empty) invalidates this actual C output on replay.
+            reads
+                .unavailable_events
+                .insert((definition.clone(), instance));
+        } else {
+            // Available receipt observations still require their own complete
+            // durable source/custody binding; ordinary None replay grants none.
+            reads.unsupported = true;
+        }
+        output
     }
     fn seal_payloads(
         &self,
         definition: &DefPath,
         instance: ContentHash,
     ) -> Option<Vec<crate::sealed_payload_source::SourcePayload>> {
-        self.reads
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .unsupported = true;
-        self.declarations.seal_payloads(definition, instance)
+        let output = self.declarations.seal_payloads(definition, instance);
+        let mut reads = self.reads.lock().unwrap_or_else(|e| e.into_inner());
+        if output.is_none() {
+            // Observe unavailable, never independently expected-empty. A later
+            // Some (even empty) invalidates this actual C output on replay.
+            reads
+                .unavailable_payloads
+                .insert((definition.clone(), instance));
+        } else {
+            // Available receipt observations still require their own complete
+            // durable source/custody binding; ordinary None replay grants none.
+            reads.unsupported = true;
+        }
+        output
     }
     fn pretransfer_adapters(&self) -> &[crate::pretransfer::AdapterReference] {
         self.reads
