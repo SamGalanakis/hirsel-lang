@@ -501,6 +501,11 @@ impl QueryTask for InstanceTask {
     fn weight(&self) -> MemoryWeight {
         self.tasks.weight
     }
+    fn continuation_bytes(&self) -> u64 {
+        // Completed products remain owned by the registry/snapshot and its
+        // explicit reservation. This charge covers only the task frame.
+        self.tasks.weight.retained
+    }
     fn poll(&mut self, cx: &mut dyn QueryContext) -> QueryPoll {
         if let Some(result) = self.terminal {
             return finish(result);
@@ -642,6 +647,11 @@ impl QueryTask for DiscoveryTask {
     }
     fn weight(&self) -> MemoryWeight {
         self.tasks.weight
+    }
+    fn continuation_bytes(&self) -> u64 {
+        // Completed products remain owned by the registry/snapshot and its
+        // explicit reservation. This charge covers only the task frame.
+        self.tasks.weight.retained
     }
     fn poll(&mut self, cx: &mut dyn QueryContext) -> QueryPoll {
         if let Some(result) = self.terminal {
