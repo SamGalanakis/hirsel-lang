@@ -420,7 +420,7 @@ impl Generator<'_> {
                 let leaf = self.leaf();
                 self.blocks[block].relocs.push((at + offset, leaf));
             }
-            LayoutKind::Handle => {
+            LayoutKind::Handle | LayoutKind::HostCapability { .. } => {
                 self.handles += 1;
                 let id = 1000 + self.handles;
                 self.write(block, at, &id.to_le_bytes());

@@ -287,7 +287,9 @@ fn repr(table: &LayoutTable, layout: LayoutId) -> ValueRepr {
         LayoutKind::Unit => ValueRepr::Unit,
         LayoutKind::Scalar(k) => ValueRepr::Scalar(k),
         LayoutKind::Block { .. } | LayoutKind::Box { .. } => ValueRepr::Block,
-        LayoutKind::Handle | LayoutKind::Path => ValueRepr::Handle,
+        LayoutKind::Handle | LayoutKind::HostCapability { .. } | LayoutKind::Path => {
+            ValueRepr::Handle
+        }
         LayoutKind::Arena => ValueRepr::Arena,
         LayoutKind::Callable { .. } => ValueRepr::Callable,
         _ => ValueRepr::Aggregate,

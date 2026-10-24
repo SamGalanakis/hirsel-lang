@@ -74,3 +74,43 @@ pub const VALUE_SEQUENTIAL: u64 = 17;
 pub const VALUE_COLUMNS: u64 = 18;
 /// Value-only column: prefix, stride, linked child layout; remaining words zero.
 pub const VALUE_COLUMN: u64 = 17;
+
+/// ABI 55: host capability observation only. VALUE operands: kind, extent(8),
+/// UTF-8 kind length, then at most 32 bytes of the builtin kind, zero padded.
+/// Neither the carrier word nor any capability bytes enter a canonical value.
+pub const VALUE_HOST_CAPABILITY: u64 = 19;
+
+/// The core's opaque host handles, excluding inert ticks/paths, scheduler
+/// objects, scoped tokens and foreign handles with no host authority identity.
+pub fn host_capability_kind(name: &str) -> bool {
+    matches!(
+        name,
+        "Io" | "Args"
+            | "Env"
+            | "Dir"
+            | "Stdin"
+            | "Stderr"
+            | "Stdout"
+            | "Signals"
+            | "MonotonicClock"
+            | "WallClock"
+            | "Random"
+            | "Telemetry"
+            | "Tasks"
+            | "Net"
+            | "Proc"
+            | "Runner"
+            | "File"
+            | "AtomicFile"
+            | "Mapped"
+            | "Watcher"
+            | "Span"
+            | "Stream"
+            | "ReadHalf"
+            | "WriteHalf"
+            | "Listener"
+            | "UdpSocket"
+            | "Child"
+            | "ChildGroup"
+    )
+}

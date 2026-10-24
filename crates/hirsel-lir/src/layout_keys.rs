@@ -44,6 +44,7 @@ impl LayoutRecord {
             | LayoutKind::Packed
             | LayoutKind::Opaque { .. }
             | LayoutKind::Handle
+            | LayoutKind::HostCapability { .. }
             | LayoutKind::Path
             | LayoutKind::Arena
             | LayoutKind::Callable { environment: None }

@@ -301,6 +301,7 @@ fn erase_layout_refs(record: &mut crate::LayoutRecord, refs: &mut Vec<crate::Lay
         | LayoutKind::Packed
         | LayoutKind::Opaque { .. }
         | LayoutKind::Handle
+        | LayoutKind::HostCapability { .. }
         | LayoutKind::Path
         | LayoutKind::Arena
         | LayoutKind::Callable { environment: None }

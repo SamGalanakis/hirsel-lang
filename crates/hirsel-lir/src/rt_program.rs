@@ -319,7 +319,7 @@ fn descriptor_with_storage(
                 0
             }
             | if matches!(record.kind, LayoutKind::Frozen { value }
-                if table.layouts[value.0 as usize].kind == LayoutKind::Handle)
+                if matches!(table.layouts[value.0 as usize].kind, LayoutKind::Handle | LayoutKind::HostCapability { .. }))
             {
                 crate::runtime_abi::LAYOUT_MUTEX_ROOT
             } else {

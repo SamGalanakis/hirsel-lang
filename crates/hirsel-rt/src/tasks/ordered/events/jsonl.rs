@@ -115,6 +115,7 @@ fn authority(authority: &HostAuthority) -> Value {
     match authority {
         HostAuthority::RootIo => json!({"kind":"root_io"}),
         HostAuthority::RootEnv => json!({"kind":"root_env"}),
+        HostAuthority::RootArgs => json!({"kind":"root_args"}),
         HostAuthority::Created(id) => json!({"kind":"created", "handle":handle(id)}),
     }
 }
@@ -296,7 +297,7 @@ fn outcome(outcome: &CanonicalOutcome) -> Value {
 }
 fn row(event: &CanonicalEvent) -> Value {
     json!({
-        "schema":"hirsel.ordered.events@1", "task":event.task, "ordinal":event.ordinal,
+        "schema":"hirsel.ordered.events@2", "task":event.task, "ordinal":event.ordinal,
         "subevent":event.subevent, "op":event.op, "transition":transition(&event.transition),
         "item":item(&event.item), "version":event.version, "outcome":outcome(&event.outcome),
         "retirement":event.retirement, "credit":event.credit,

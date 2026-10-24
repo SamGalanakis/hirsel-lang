@@ -932,6 +932,7 @@ impl<'a> Layouts<'a> {
             LayoutKind::Shared { .. }
             | LayoutKind::Frozen { .. }
             | LayoutKind::Handle
+            | LayoutKind::HostCapability { .. }
             | LayoutKind::Arena
             | LayoutKind::Callable { .. }
             | LayoutKind::Iterator { .. }

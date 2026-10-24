@@ -134,6 +134,7 @@ pub(super) enum Node {
         arms: Vec<Vec<Field>>,
     },
     Handle(Kind),
+    HostCapability(String),
     Path,
     Indirect {
         node: usize,
@@ -202,7 +203,7 @@ impl Node {
             Self::Bits(bytes) => *bytes,
             Self::Bool => 1,
             Self::Slice { .. } => 24,
-            Self::Handle(_) | Self::Path | Self::Indirect { .. } => 8,
+            Self::Handle(_) | Self::HostCapability(_) | Self::Path | Self::Indirect { .. } => 8,
             Self::Sequence { minimum, .. }
             | Self::FlatFields { minimum, .. }
             | Self::Sequential { minimum, .. }
@@ -513,6 +514,20 @@ impl Program {
                         columns,
                     }
                 }
+                VALUE_HOST_CAPABILITY if extent == 8 => {
+                    let length = usize::try_from(header[3]).map_err(|_| Error::Program)?;
+                    let bytes: Vec<_> = header[4..8]
+                        .iter()
+                        .flat_map(|word| word.to_le_bytes())
+                        .collect();
+                    let name = std::str::from_utf8(bytes.get(..length).ok_or(Error::Program)?)
+                        .map_err(|_| Error::Program)?;
+                    if !host_capability_kind(name) || bytes[length..].iter().any(|byte| *byte != 0)
+                    {
+                        return Err(Error::Program);
+                    }
+                    Node::HostCapability(name.to_owned())
+                }
                 VALUE_PATH if extent == 8 => Node::Path,
                 VALUE_HANDLE if extent == 8 => {
                     Node::Handle(Kind::from_code(header[3]).ok_or(Error::Program)?)
@@ -593,6 +608,9 @@ impl Program {
                 Ok(())
             };
             match node {
+                Node::HostCapability(kind) if !host_capability_kind(kind) => {
+                    return Err(Error::Program);
+                }
                 Node::Bits(bytes) if !matches!(bytes, 1 | 2 | 4 | 8 | 16) => {
                     return Err(Error::Program);
                 }
@@ -887,10 +905,23 @@ impl Program {
     /// `value` holds the program's live native value. The program identifies
     /// its actual initialized fields and tags; inactive fields and padding may
     /// be uninitialized. Resolve is read-only, bounded, and cannot yield.
+    #[cfg(test)]
     pub(super) unsafe fn encode(
         &self,
         value: *const u8,
+        resolve: impl FnMut(Kind, u64) -> Option<ObjectId>,
+    ) -> Result<Vec<u8>, Error> {
+        unsafe { self.encode_with_host(value, resolve, |_| None) }
+    }
+
+    /// Observation only: host words are looked up, never copied or decoded.
+    /// # Safety
+    /// `value` holds the initialized value described by this program.
+    pub(super) unsafe fn encode_with_host(
+        &self,
+        value: *const u8,
         mut resolve: impl FnMut(Kind, u64) -> Option<ObjectId>,
+        mut host: impl FnMut(u64) -> Option<super::events::HostAuthority>,
     ) -> Result<Vec<u8>, Error> {
         if self.extent() > 0 && value.is_null() {
             return Err(Error::Value);
@@ -1232,6 +1263,39 @@ impl Program {
                     out.extend_from_slice(text.as_bytes());
                     continue;
                 }
+                Node::HostCapability(kind) => {
+                    use super::events::HostAuthority;
+                    let word = unsafe { at.cast::<u64>().read_unaligned() };
+                    let identity = host(word).ok_or(Error::UnresolvedHandle)?;
+                    // Kind is immutable compiler metadata. Only logical provenance
+                    // enters the payload; no adapter word or capability bytes do.
+                    out.extend_from_slice(&(kind.len() as u64).to_le_bytes());
+                    out.extend_from_slice(kind.as_bytes());
+                    match identity {
+                        HostAuthority::RootIo if kind == "Io" => out.push(0),
+                        HostAuthority::RootEnv if kind == "Env" => out.push(1),
+                        HostAuthority::RootArgs if kind == "Args" => out.push(3),
+                        HostAuthority::Created(id) => {
+                            if id.operation.creator.len() > WORK_MAX {
+                                return Err(Error::Limit);
+                            }
+                            out.push(2);
+                            out.extend_from_slice(
+                                &(id.operation.creator.len() as u64).to_le_bytes(),
+                            );
+                            for part in id.operation.creator {
+                                out.extend_from_slice(&part.to_le_bytes());
+                            }
+                            out.extend_from_slice(&id.operation.ordinal.to_le_bytes());
+                            out.extend_from_slice(&id.field.to_le_bytes());
+                        }
+                        _ => return Err(Error::Value),
+                    }
+                    if out.len() > BYTES_MAX {
+                        return Err(Error::Limit);
+                    }
+                    continue;
+                }
                 Node::Handle(kind) => {
                     let word = unsafe { at.cast::<u64>().read_unaligned() };
                     let object = resolve(*kind, word).ok_or(Error::UnresolvedHandle)?;
@@ -1421,6 +1485,195 @@ impl Program {
 mod tests {
     use super::*;
     use std::mem::MaybeUninit;
+
+    #[test]
+    fn hostcap_result_38_projection_is_kind_and_full_identity_only() {
+        use super::super::events::HostAuthority;
+        use super::super::events::HostHandleId;
+        let program = Program::new(vec![Node::HostCapability("Stdout".into())], 0).unwrap();
+        let identity = HostHandleId {
+            operation: ObjectId {
+                creator: vec![3, 1],
+                ordinal: 7,
+            },
+            field: 2,
+        };
+        let encode = |word: u64, kind: &str, identity: HostHandleId| unsafe {
+            Program::new(vec![Node::HostCapability(kind.into())], 0)
+                .unwrap()
+                .encode_with_host(
+                    (&word as *const u64).cast(),
+                    |_, _| None,
+                    |_| Some(HostAuthority::Created(identity.clone())),
+                )
+        };
+        let bytes = encode(0xdead_beef, "Stdout", identity.clone()).unwrap();
+        assert_eq!(
+            bytes,
+            encode(0x1234_5678, "Stdout", identity.clone()).unwrap()
+        );
+        assert_ne!(
+            bytes,
+            encode(0xdead_beef, "Stderr", identity.clone()).unwrap()
+        );
+        let mut different = identity.clone();
+        different.field += 1;
+        assert_ne!(bytes, encode(0xdead_beef, "Stdout", different).unwrap());
+        let mut different = identity.clone();
+        different.operation.creator.push(0);
+        assert_ne!(bytes, encode(0xdead_beef, "Stdout", different).unwrap());
+        assert_eq!(
+            unsafe {
+                program.encode_with_host((&17u64 as *const u64).cast(), |_, _| None, |_| None)
+            },
+            Err(Error::UnresolvedHandle)
+        );
+        for (kind, root) in [
+            ("Io", HostAuthority::RootIo),
+            ("Env", HostAuthority::RootEnv),
+            ("Args", HostAuthority::RootArgs),
+        ] {
+            let word = 999u64;
+            let program = Program::new(vec![Node::HostCapability(kind.into())], 0).unwrap();
+            let bytes = unsafe {
+                program.encode_with_host(
+                    (&word as *const u64).cast(),
+                    |_, _| None,
+                    |_| Some(root.clone()),
+                )
+            }
+            .unwrap();
+            assert!(bytes.len() < 17, "roots never invent a creator operation");
+        }
+    }
+
+    #[test]
+    fn hostcap_result_38_linked_metadata_is_bounded_and_kind_checked() {
+        use hirsel_layout::layout::{LayoutBuilder, OwnerRepresentation, Owners};
+        use hirsel_lir::layout_types::TargetSpec;
+        use hirsel_syntax::{ContentHash, DefPath};
+        use hirsel_types::testing::Types;
+        for target in TargetSpec::executed() {
+            let path = DefPath::core("Stdout");
+            let mut owners = Owners::default();
+            owners.nominals.insert(
+                path.clone().into(),
+                OwnerRepresentation::Handle {
+                    revision: ContentHash::of_bytes(b"hostcap observation fixture"),
+                    resource: false,
+                },
+            );
+            let mut types = Types::default();
+            let ty = types.named(&path, vec![]);
+            let mut builder = LayoutBuilder::new(&target, &owners);
+            let root = builder.layout(&types.store, ty).unwrap();
+            let table = builder.finish();
+            for rotation in [0, 1] {
+                let count = table.layouts.len();
+                let (mut words, layouts) = native_layouts(&table, rotation);
+                let linked = ((root.0 as usize + rotation) % count + 2) as u32;
+                let decode = || unsafe {
+                    Program::from_layouts(linked, count as u32 + 2, |id| {
+                        &layouts[((id as usize).saturating_sub(2) + count - rotation) % count]
+                    })
+                };
+                assert!(
+                    matches!(&decode().unwrap().nodes[0], Node::HostCapability(kind) if kind == "Stdout")
+                );
+                let header = words[root.0 as usize]
+                    .chunks_exact(WORDS)
+                    .position(|op| op[0] == VALUE)
+                    .unwrap()
+                    * WORDS;
+                let original = words[root.0 as usize][header..header + WORDS].to_vec();
+                for (operand, value) in [(3, 33), (3, u64::MAX), (4, 0), (7, u64::MAX)] {
+                    words[root.0 as usize][header + operand] = value;
+                    assert!(matches!(decode(), Err(Error::Program)));
+                    words[root.0 as usize][header..header + WORDS].copy_from_slice(&original);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn hostcap_result_38_observation_cannot_revive_closed_or_change_kind() {
+        use super::super::events::{HostAuthority, HostHandleId};
+        use crate::io::{Adapter, AdapterError, Completion, Event, Request, Tree};
+        let event = |request, completion| Event {
+            request,
+            completion,
+            fault: None,
+        };
+        let directory = Request::Directory {
+            io: 1,
+            path: String::new(),
+        };
+        let open = Request::Open {
+            directory: 2,
+            path: "a".into(),
+        };
+        let close = Request::Close { handle: 3 };
+        for stale in [false, true] {
+            let forged = if stale {
+                open.clone()
+            } else {
+                Request::Print {
+                    stdout: 3,
+                    bytes: b"forged".to_vec(),
+                }
+            };
+            let claimed = if stale {
+                Completion::Handle(Ok(3))
+            } else {
+                Completion::Unit(Ok(()))
+            };
+            let mut tape = vec![
+                event(directory.clone(), Completion::Handle(Ok(2))),
+                event(open.clone(), Completion::Handle(Ok(3))),
+            ];
+            if stale {
+                tape.push(event(close.clone(), Completion::Unit(Ok(()))));
+            }
+            tape.push(event(forged.clone(), claimed));
+            let tree = Tree::new(BTreeMap::from([("a".into(), Vec::new())])).unwrap();
+            let mut io = crate::io_sim::SimIo::new(tree, tape);
+            io.set_projections(["dir".into()].into());
+            assert_eq!(io.call(directory.clone()), Ok(Completion::Handle(Ok(2))));
+            assert_eq!(io.call(open.clone()), Ok(Completion::Handle(Ok(3))));
+            let identity = HostHandleId {
+                operation: ObjectId {
+                    creator: vec![0],
+                    ordinal: 1,
+                },
+                field: 0,
+            };
+            let program = Program::new(vec![Node::HostCapability("File".into())], 0).unwrap();
+            let observation = unsafe {
+                program.encode_with_host(
+                    (&3u64 as *const u64).cast(),
+                    |_, _| None,
+                    |_| Some(HostAuthority::Created(identity.clone())),
+                )
+            }
+            .unwrap();
+            assert!(!observation.is_empty());
+            if stale {
+                assert_eq!(io.call(close.clone()), Ok(Completion::Unit(Ok(()))));
+            }
+            let before = io.handles().observed();
+            assert!(matches!(
+                io.call(forged),
+                Err(AdapterError::ReplayMismatch(_))
+            ));
+            assert_eq!(
+                io.handles().observed(),
+                before,
+                "forged completions mint nothing"
+            );
+            assert!(io.stdout().is_empty());
+            assert_eq!(before.contains_key(&3), !stale);
+        }
+    }
 
     #[test]
     fn linked_generic_callable_identity_survives_registry_reordering_and_distinguishes_bodies() {

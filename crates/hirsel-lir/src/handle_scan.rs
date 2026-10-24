@@ -209,7 +209,12 @@ impl Program {
                     VALUE_BITS
                 };
             }
-            LayoutKind::Unit | LayoutKind::Aggregate | LayoutKind::Frozen { .. } => {
+            LayoutKind::Unit
+            | LayoutKind::Aggregate
+            | LayoutKind::Resource
+            | LayoutKind::Frozen { .. }
+                if record.tag.is_none() =>
+            {
                 self.words[at + 1] = VALUE_FIELDS;
                 for field in &record.fields {
                     self.value_field(field, u64::MAX);
@@ -298,7 +303,7 @@ impl Program {
                     self.words[field + 3] = u64::MAX;
                 }
             }
-            LayoutKind::Variant => {
+            LayoutKind::Variant | LayoutKind::Resource => {
                 let Some(tag) = &record.tag else { return };
                 let (form, nullary) = match tag.form {
                     TagForm::Ordinal => (0, 0),
@@ -340,6 +345,20 @@ impl Program {
             }
             LayoutKind::Path if size == 8 => {
                 self.words[at + 1] = VALUE_PATH;
+            }
+            LayoutKind::HostCapability { kind } => {
+                if host_capability_kind(kind) && kind.len() <= 32 && size == 8 {
+                    self.words[at + 1] = VALUE_HOST_CAPABILITY;
+                    self.words[at + 3] = kind.len() as u64;
+                    let mut bytes = [0; 32];
+                    bytes[..kind.len()].copy_from_slice(kind.as_bytes());
+                    for (word, bytes) in self.words[at + 4..at + 8]
+                        .iter_mut()
+                        .zip(bytes.chunks_exact(8))
+                    {
+                        *word = u64::from_le_bytes(bytes.try_into().unwrap());
+                    }
+                }
             }
             LayoutKind::Handle => {
                 if let [

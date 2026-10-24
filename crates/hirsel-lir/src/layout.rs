@@ -567,6 +567,7 @@ fn logical_at(table: &LayoutTable, id: LayoutId, depth: usize) -> Option<u64> {
         | LayoutKind::Slice { .. }
         | LayoutKind::Opaque { .. }
         | LayoutKind::Handle
+        | LayoutKind::HostCapability { .. }
         | LayoutKind::Path
         | LayoutKind::Arena => LOGICAL_REFERENCE,
         LayoutKind::Callable { .. } | LayoutKind::Iterator { .. } => LOGICAL_CALLABLE,

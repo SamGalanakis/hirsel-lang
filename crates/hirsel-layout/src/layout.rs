@@ -1693,7 +1693,10 @@ impl<'o> LayoutBuilder<'o> {
         }
         if !v.drop.is_empty() {
             // A mutex root holds only a cell word, with no counted graph to thaw.
-            if v.kind != LayoutKind::Handle {
+            if !matches!(
+                v.kind,
+                LayoutKind::Handle | LayoutKind::HostCapability { .. }
+            ) {
                 record.drop.push(DropStep::Thaw {
                     offset: 0,
                     layout: value,
@@ -2389,6 +2392,15 @@ impl<'o> LayoutBuilder<'o> {
                     let (size, align) = self.pointer();
                     handle = self.blank(key, LayoutKind::Arena, SizeSpec::Fixed(size), align);
                     self.words(&mut handle, &[ScalarKind::Pointer]);
+                }
+                if definition.path().0.package.name_is("core")
+                    && hirsel_core_contract::handle_scan::host_capability_kind(
+                        &definition.path().0.name,
+                    )
+                {
+                    handle.kind = LayoutKind::HostCapability {
+                        kind: definition.path().0.name.to_string(),
+                    };
                 }
                 handle.key.owner_revision = Some(*revision);
                 return Ok(handle);

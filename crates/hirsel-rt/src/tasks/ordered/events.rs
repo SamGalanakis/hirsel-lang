@@ -946,6 +946,13 @@ pub(crate) fn record_host_attempt(
 }
 
 impl Log {
+    fn value_host_identity(&self, word: u64) -> Option<HostAuthority> {
+        self.host_roots
+            .get(&word)
+            .cloned()
+            .or_else(|| self.host_handles.get(&word).cloned().map(Into::into))
+    }
+
     fn subevents(&mut self, boundary: &Boundary, name: &'static str, events: Subevents) {
         for (item, outcome) in events {
             let next = self
@@ -1071,15 +1078,19 @@ pub(super) unsafe fn task_result(ctx: *mut TaskCtx, descriptor: u32, slot: *cons
     }
     let payload = log.values.get(&descriptor).and_then(|program| unsafe {
         program
-            .encode(slot, |kind, word| {
-                use crate::ordered::objects::Kind;
-                match kind {
-                    Kind::Task => log.tasks.get(&word),
-                    Kind::TaskSet => log.sets.get(&word),
-                    _ => driver.objects.identity(kind, word),
-                }
-                .cloned()
-            })
+            .encode_with_host(
+                slot,
+                |kind, word| {
+                    use crate::ordered::objects::Kind;
+                    match kind {
+                        Kind::Task => log.tasks.get(&word),
+                        Kind::TaskSet => log.sets.get(&word),
+                        _ => driver.objects.identity(kind, word),
+                    }
+                    .cloned()
+                },
+                |word| log.value_host_identity(word),
+            )
             .ok()
     });
     assert!(
@@ -1147,15 +1158,19 @@ pub(super) unsafe fn receive_immediate(ctx: *mut TaskCtx, status: Option<u32>, m
     let payload = if status == Some(crate::channels::DONE) {
         log.values.get(descriptor).and_then(|program| unsafe {
             program
-                .encode(message, |kind, word| {
-                    use crate::ordered::objects::Kind;
-                    match kind {
-                        Kind::Task => log.tasks.get(&word),
-                        Kind::TaskSet => log.sets.get(&word),
-                        _ => driver.objects.identity(kind, word),
-                    }
-                    .cloned()
-                })
+                .encode_with_host(
+                    message,
+                    |kind, word| {
+                        use crate::ordered::objects::Kind;
+                        match kind {
+                            Kind::Task => log.tasks.get(&word),
+                            Kind::TaskSet => log.sets.get(&word),
+                            _ => driver.objects.identity(kind, word),
+                        }
+                        .cloned()
+                    },
+                    |word| log.value_host_identity(word),
+                )
                 .ok()
         })
     } else {
@@ -1222,15 +1237,19 @@ pub(crate) unsafe fn record_receive_poll(
     let payload = if status == crate::channels::DONE {
         log.values.get(descriptor).and_then(|program| unsafe {
             program
-                .encode(slot, |kind, word| {
-                    use crate::ordered::objects::Kind;
-                    match kind {
-                        Kind::Task => log.tasks.get(&word),
-                        Kind::TaskSet => log.sets.get(&word),
-                        _ => driver.objects.identity(kind, word),
-                    }
-                    .cloned()
-                })
+                .encode_with_host(
+                    slot,
+                    |kind, word| {
+                        use crate::ordered::objects::Kind;
+                        match kind {
+                            Kind::Task => log.tasks.get(&word),
+                            Kind::TaskSet => log.sets.get(&word),
+                            _ => driver.objects.identity(kind, word),
+                        }
+                        .cloned()
+                    },
+                    |word| log.value_host_identity(word),
+                )
                 .ok()
         })
     } else {
@@ -1332,15 +1351,19 @@ pub(super) unsafe fn complete_receive(
     let payload = if status == crate::channels::DONE {
         log.values.get(&descriptor).and_then(|program| unsafe {
             program
-                .encode(message, |kind, word| {
-                    use crate::ordered::objects::Kind;
-                    match kind {
-                        Kind::Task => log.tasks.get(&word),
-                        Kind::TaskSet => log.sets.get(&word),
-                        _ => driver.objects.identity(kind, word),
-                    }
-                    .cloned()
-                })
+                .encode_with_host(
+                    message,
+                    |kind, word| {
+                        use crate::ordered::objects::Kind;
+                        match kind {
+                            Kind::Task => log.tasks.get(&word),
+                            Kind::TaskSet => log.sets.get(&word),
+                            _ => driver.objects.identity(kind, word),
+                        }
+                        .cloned()
+                    },
+                    |word| log.value_host_identity(word),
+                )
                 .ok()
         })
     } else {
@@ -1469,15 +1492,19 @@ pub(super) unsafe fn object_value(
         entry.insert(unsafe { super::values::Program::linked(ctx, descriptor) }.ok()?);
     }
     let bytes = unsafe {
-        log.values[&descriptor].encode(image, |kind, word| {
-            use crate::ordered::objects::Kind;
-            match kind {
-                Kind::Task => log.tasks.get(&word),
-                Kind::TaskSet => log.sets.get(&word),
-                _ => driver.objects.identity(kind, word),
-            }
-            .cloned()
-        })
+        log.values[&descriptor].encode_with_host(
+            image,
+            |kind, word| {
+                use crate::ordered::objects::Kind;
+                match kind {
+                    Kind::Task => log.tasks.get(&word),
+                    Kind::TaskSet => log.sets.get(&word),
+                    _ => driver.objects.identity(kind, word),
+                }
+                .cloned()
+            },
+            |word| log.value_host_identity(word),
+        )
     }
     .ok()?;
     Some((item, bytes))
@@ -1515,6 +1542,23 @@ pub(crate) fn initial_host(ctx: *mut TaskCtx, io: Option<u64>, env: Option<u64>)
     if let Some(env) = env {
         log.host_roots.insert(env, HostAuthority::RootEnv);
     }
+}
+
+/// Args is an admitted entry root, not a numeric zero with implicit authority.
+pub(crate) fn initial_args(ctx: *mut TaskCtx, args: u64) {
+    let driver = super::engine::driver(ctx);
+    let Some(log) = driver.events.as_mut() else {
+        return;
+    };
+    assert!(
+        log.ordinals.is_empty(),
+        "initial authorities precede operations"
+    );
+    assert!(
+        log.host_roots
+            .insert(args, HostAuthority::RootArgs)
+            .is_none()
+    );
 }
 
 /// Borrowed output bypasses the owned wait protocol. Copy only when evidence

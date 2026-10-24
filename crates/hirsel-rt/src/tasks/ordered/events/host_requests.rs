@@ -9,6 +9,7 @@ use crate::io::Request;
 pub(in crate::tasks::ordered) enum HostAuthority {
     RootIo,
     RootEnv,
+    RootArgs,
     Created(HostHandleId),
 }
 impl From<HostHandleId> for HostAuthority {

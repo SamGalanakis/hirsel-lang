@@ -1974,7 +1974,7 @@ impl<'p, S: Stage> Machine<'p, S> {
                     bits: u128::from_le_bytes(bits),
                 }
             }
-            LayoutKind::Path | LayoutKind::Handle => {
+            LayoutKind::Path | LayoutKind::Handle | LayoutKind::HostCapability { .. } => {
                 let mut bits = [0; 8];
                 bits.copy_from_slice(image.read_bytes(offset, 8));
                 OpValue::Handle(u64::from_le_bytes(bits))
@@ -3247,7 +3247,7 @@ impl<'p, S: Stage> Machine<'p, S> {
             match &record.kind {
                 // A run-context handle, such as a file's, owns its word until
                 // a move takes it.
-                LayoutKind::Handle => {
+                LayoutKind::Handle | LayoutKind::HostCapability { .. } => {
                     if extent.any_init(offset, size) {
                         return Ok(true);
                     }
@@ -8682,7 +8682,10 @@ impl<'p, S: Stage> Machine<'p, S> {
                     image.write_bytes(0, &handle.to_le_bytes());
                     return Ok(image);
                 }
-                if self.record(layout)?.kind != LayoutKind::Handle {
+                if !matches!(
+                    self.record(layout)?.kind,
+                    LayoutKind::Handle | LayoutKind::HostCapability { .. }
+                ) {
                     return fail(V::TypeConfusion, "handle result at another layout");
                 }
                 if matches!(value, OpValue::OpenHandle(_)) {
@@ -10227,7 +10230,7 @@ impl<'p, S: Stage> Machine<'p, S> {
             LayoutKind::Callable { .. } | LayoutKind::Iterator { .. } => {
                 Observed::NonComparableFunction
             }
-            LayoutKind::Handle => {
+            LayoutKind::Handle | LayoutKind::HostCapability { .. } => {
                 let mut bytes = [0u8; 8];
                 bytes.copy_from_slice(e.read_bytes(offset, 8));
                 Observed::Handle(u64::from_le_bytes(bytes))

@@ -259,6 +259,10 @@ pub enum LayoutKind {
     },
     /// A logical handle ID into a run-context table; never an address.
     Handle,
+    /// Host capability observation kind; carrier and ownership match Handle.
+    HostCapability {
+        kind: String,
+    },
     /// Inert interned Path ID: equality/hash by word, order by context text.
     Path,
     /// An arena token: one pointer word holding an open arena's runtime
@@ -773,6 +777,7 @@ snapshot_enum!(LayoutKind {
     Slice { element },
     Opaque { owner },
     Handle,
+    HostCapability { kind },
     Path,
     Arena,
     Callable { environment },

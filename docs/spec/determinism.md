@@ -804,6 +804,44 @@ the accepted prefix and errors just like stdout, on a distinct stream. Simulatio
 JSON supplies `stdin` as UTF-8 text or an array of bytes, and `env` as an object
 whose exact keys are grants and whose values are UTF-8 strings or null for unset.
 
+### Canonical task-result traces
+
+The cooperative provider's `--hirsel-trace-events` export uses
+`hirsel.ordered.events@2`. A task result is observed from its live initialized
+fields, in declaration order and through only the active variant. A host
+capability in any such field is an **identity-and-kind record**, never the
+capability's carrier bytes, a serialized grant, or an operating-system handle.
+The kind is the exact core type name from validated immutable layout metadata
+(for example `Stdout`, `File` or `Io`). A created handle's identity is its creating
+task's spawn path, that task's operation ordinal and the initialized result-field
+ordinal of the creating operation. Distinct result fields remain distinct even
+when they alias one host resource. Admitted entry roots `Io`, `Env` and `Args`
+have explicit root identities instead of invented creation operations.
+
+Within the existing hexadecimal canonical value payload, a capability record is
+the UTF-8 kind with its little-endian `u64` byte length, followed by an identity
+tag: `0` for root Io, `1` for root Env, `3` for root Args, or `2` for a created
+handle. Tag `2` is followed by a little-endian `u64` path length, its `u32` path
+components, a `u64` operation ordinal and a `u32` result-field ordinal. Tags are
+one byte. Kind and identity never depend on addresses, worker width, adapter table
+allocation or engine. Unresolved identities or missing metadata refuse the complete
+export; they never fall back to raw bytes. This also applies when a result is
+nested in a resource whose destructor later uses the capability.
+
+These records are observations only. Replay executes the task and its ownership
+transfers again from the bound program and capability inputs; it never decodes a
+task-result observation into a value, adds a grant, revives a closed handle or
+resurrects a capability. Existing grant, kind and lifetime checks still apply.
+A tape claiming a task-result capability is invalid input, including one naming
+a real identity or a grant absent from the bound launch. Canonical export does
+not add task-result inputs to the host tape or journal.
+
+This is a trace format reset from `hirsel.ordered.events@1`, accompanied by layout
+format 9 and runtime ABI 55. Old trace schemas and incompatible compiled layouts
+are not upgraded or recovered by the reset. The host-tape schema remains 8:
+its requests and completions are unchanged, and replay still requires compatible
+program and run bindings.
+
 ### Offline observation views
 
 `hirsel view <recording> --capture <archival-id> -o <view.json>` inspects an

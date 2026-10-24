@@ -297,7 +297,16 @@ impl<'a> Validator<'a> {
                 }
                 self.copy(&s, r, CopyRecipe::Bits);
             }
-            LayoutKind::Handle => {
+            LayoutKind::Handle | LayoutKind::HostCapability { .. } => {
+                if let LayoutKind::HostCapability { kind } = &r.kind
+                    && !hirsel_core_contract::handle_scan::host_capability_kind(kind)
+                {
+                    self.fail(
+                        s.clone(),
+                        Obligation::Scan,
+                        "unknown host capability observation kind",
+                    );
+                }
                 self.exact(&s, r, 8, self.target.scalar_align(ScalarKind::U64));
                 if !matches!(r.scan.as_slice(), [ScanStep::Handle { offset: 0, .. }]) {
                     self.fail(s.clone(), Obligation::Scan, "a handle scans its ID");
@@ -1139,7 +1148,10 @@ impl<'a> Validator<'a> {
         }
         let mut drop = Vec::new();
         if !v.drop.is_empty() {
-            if v.kind != LayoutKind::Handle {
+            if !matches!(
+                v.kind,
+                LayoutKind::Handle | LayoutKind::HostCapability { .. }
+            ) {
                 drop.push(DropStep::Thaw {
                     offset: 0,
                     layout: value,

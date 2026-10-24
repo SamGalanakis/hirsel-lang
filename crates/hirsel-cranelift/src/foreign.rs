@@ -69,7 +69,7 @@ impl FnEmitter<'_, '_, '_> {
                 argument.value,
                 &self.layout(parameter.layout)?.kind,
             ) {
-                (_, _, LayoutKind::Handle) => {}
+                (_, _, LayoutKind::Handle | LayoutKind::HostCapability { .. }) => {}
                 (
                     ParameterPassing::ByValue,
                     ArgumentValue::Value(value),

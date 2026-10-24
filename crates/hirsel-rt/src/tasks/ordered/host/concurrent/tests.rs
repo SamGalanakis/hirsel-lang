@@ -244,7 +244,7 @@ fn ordered_concurrent_bounded_real_files_release_role_and_publish_discovered_obs
                     assert!(
                         parsed
                             .iter()
-                            .all(|row| row["schema"] == "hirsel.ordered.events@1")
+                            .all(|row| row["schema"] == "hirsel.ordered.events@2")
                     );
                     *seen.lock().unwrap() = (rows, canonical.to_vec(), jsonl);
                     STATUS_OK

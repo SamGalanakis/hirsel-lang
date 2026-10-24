@@ -332,7 +332,7 @@ pub fn repr_of(table: &LayoutTable, layout: LayoutId) -> ValueRepr {
         LayoutKind::Block { .. } | LayoutKind::Box { .. } => ValueRepr::Block,
         LayoutKind::Callable { .. } => ValueRepr::Callable,
         LayoutKind::Header => ValueRepr::Token,
-        LayoutKind::Handle => ValueRepr::Handle,
+        LayoutKind::Handle | LayoutKind::HostCapability { .. } => ValueRepr::Handle,
         LayoutKind::Path => ValueRepr::Scalar(ScalarKind::U64),
         _ => ValueRepr::Aggregate,
     }

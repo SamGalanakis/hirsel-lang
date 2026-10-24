@@ -2657,6 +2657,9 @@ pub(crate) unsafe fn execute(
             (roots & crate::standalone::ROOT_IO != 0).then_some(IO_HANDLE),
             (roots & crate::standalone::ROOT_ENV != 0).then_some(u64::MAX),
         );
+        if roots & crate::standalone::ROOT_ARGS != 0 {
+            crate::tasks::ordered::events::initial_args(ctx, ARGS_HANDLE);
+        }
     }
     let mut binding = Box::new(Binding::from_box(adapter).with_arguments(arguments.clone()));
     unsafe { binding.bind(&mut *ctx) };

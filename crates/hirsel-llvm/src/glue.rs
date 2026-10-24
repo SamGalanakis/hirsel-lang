@@ -198,7 +198,7 @@ fn infallible(layouts: &LayoutTable, layout: LayoutId) -> bool {
                 .and_then(|payload| layouts.layout(payload))
                 .is_some_and(|record| {
                     matches!(record.kind, LayoutKind::Frozen { value }
-                    if layouts.layout(value).is_some_and(|value| value.kind != LayoutKind::Handle))
+                    if layouts.layout(value).is_some_and(|value| !matches!(value.kind, LayoutKind::Handle | LayoutKind::HostCapability { .. })))
                 }),
             DropStep::ActiveVariant {
                 tag_offset,

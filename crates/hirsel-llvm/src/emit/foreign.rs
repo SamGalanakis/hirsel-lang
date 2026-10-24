@@ -46,7 +46,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             let kind = &self.layout(parameter.layout)?.kind;
             match (parameter.passing, argument.value, kind) {
                 // A capability is authority, never data C receives.
-                (_, _, LayoutKind::Handle) => {}
+                (_, _, LayoutKind::Handle | LayoutKind::HostCapability { .. }) => {}
                 (
                     ParameterPassing::ByValue,
                     ArgumentValue::Value(value),
