@@ -40,6 +40,12 @@ pub trait OutputReadiness {
     type Output;
     type Error;
     fn ready(&mut self, products: &[ProductRef]) -> Result<Self::Output, Self::Error>;
+    /// Decode terminal diagnostics while their admitted input/store owners are
+    /// still alive. A consuming host may drop the lease immediately afterwards.
+    /// Return an owned error; a bare reference cannot retain transient bytes.
+    fn failed(&mut self, _diagnostics: hirsel_artifact_store::Reference) -> Option<Self::Error> {
+        None
+    }
 }
 
 /// One engine-selected immutable graph. Runtime sharing is engine-owned: equal
