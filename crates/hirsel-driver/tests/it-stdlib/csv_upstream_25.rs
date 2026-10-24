@@ -249,11 +249,14 @@ fn partition(part: usize) {
             Sha256::digest(source.as_bytes()),
             Sha256::digest(&expected.output)
         );
-        if let Some(image) = std::env::var_os("HIRSEL_PRODUCTS") {
-            eprintln!(
-                "csv-image sha256={:x}",
-                Sha256::digest(std::fs::read(image).unwrap())
+        if let Some(products) = std::env::var_os("HIRSEL_PRODUCTS") {
+            let products = PathBuf::from(products);
+            assert!(
+                products.is_dir(),
+                "ordinary products must be a directory: {}",
+                products.display()
             );
+            eprintln!("csv-products directory={}", products.display());
         }
         let path =
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/std_source/main.hir");
