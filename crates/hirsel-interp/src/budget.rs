@@ -50,6 +50,18 @@ impl Meter {
         self.fuel += 1;
         Ok(())
     }
+    /// A pure long primitive's deterministic work, before it produces a result.
+    pub fn primitive(&mut self, cost: u64) -> Result<(), BudgetKind> {
+        if self
+            .budgets
+            .fuel
+            .is_some_and(|limit| cost > limit.saturating_sub(self.fuel))
+        {
+            return Err(BudgetKind::Fuel);
+        }
+        self.fuel = self.fuel.saturating_add(cost);
+        Ok(())
+    }
     pub fn metered(&self) -> bool {
         self.budgets.memory_bytes.is_some()
     }

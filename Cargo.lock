@@ -792,6 +792,7 @@ version = "0.1.0"
 dependencies = [
  "hirsel-core-contract",
  "hirsel-guard",
+ "itoa",
 ]
 
 [[package]]

@@ -831,8 +831,31 @@ pub(crate) fn execute_frames(
                                 callback_depth += 1;
                                 suspended = &callback.state;
                             }
+                            let before_limit = limits.steps == Some(execution.steps);
+                            let cost = primitive_work(&reference.definition, &arguments)?;
+                            let precharged =
+                                cost != 0 && callback_depth < limits.call_depth && !before_limit;
+                            let mut primitive_limit = false;
+                            if precharged {
+                                // Named callbacks of runtime operations enter here, without
+                                // an Action::Call frame. Count their ordinary call step once,
+                                // then the same primitive work as a direct/indirect source call.
+                                let allowed = limits.steps.map_or(cost, |limit| {
+                                    cost.min(
+                                        limit.saturating_sub(execution.steps).saturating_sub(1),
+                                    )
+                                });
+                                budgets
+                                    .run
+                                    .primitive(allowed)
+                                    .map_err(Error::BudgetExceeded)?;
+                                execution.steps = execution.steps.saturating_add(1 + allowed);
+                                profile.add(frame.definition.path.path(), 1 + allowed);
+                                primitive_limit = allowed != cost;
+                            }
                             if callback_depth >= limits.call_depth
-                                || limits.steps == Some(execution.steps)
+                                || before_limit
+                                || primitive_limit
                             {
                                 let limit = ToolingLimit {
                                     kind: if callback_depth >= limits.call_depth {
@@ -901,8 +924,10 @@ pub(crate) fn execute_frames(
                                     },
                                 )?,
                             } {
-                                execution.steps = execution.steps.saturating_add(1);
-                                profile.add(frame.definition.path.path(), 1);
+                                if !precharged {
+                                    execution.steps = execution.steps.saturating_add(1);
+                                    profile.add(frame.definition.path.path(), 1);
+                                }
                                 let taken = function
                                     .parameters
                                     .iter()
@@ -2279,6 +2304,41 @@ pub(crate) fn execute_frames(
                             continue;
                         }
                         let path = &target.path;
+                        // Pure borrowed numeric work has the same deterministic charge in
+                        // reference and checked H. Preflight before scanning or publishing
+                        // any result; the ordinary call terminator remains its own step.
+                        let cost = primitive_work(path, &arguments)?;
+                        if cost != 0 {
+                            let allowed = limits.steps.map_or(cost, |limit| {
+                                cost.min(limit.saturating_sub(execution.steps))
+                            });
+                            budgets
+                                .run
+                                .primitive(allowed)
+                                .map_err(Error::BudgetExceeded)?;
+                            execution.steps = execution.steps.saturating_add(allowed);
+                            profile.add(frame.definition.path.path(), allowed);
+                            if allowed != cost {
+                                let limit = ToolingLimit {
+                                    kind: ToolingLimitKind::Steps,
+                                    limit: limits.steps.unwrap(),
+                                    site: Some(site),
+                                };
+                                if runtime.trace_mode == TraceMode::Full {
+                                    execution
+                                        .trace
+                                        .push(TraceEvent::ToolingLimit(limit.clone()));
+                                }
+                                if operations.stop_at_tooling_limit() {
+                                    execution.outcome = Outcome::ToolingLimit(limit);
+                                    return Ok(Step::Finished);
+                                }
+                                tooling.get_or_insert(limit);
+                                frame.ending = Some(crate::resources::Ending::Failed);
+                                enqueue_cleanup(frame, on_failure, site)?;
+                                continue;
+                            }
+                        }
                         if target.forget {
                             if arguments.len() != 1 || !mut_places.is_empty() {
                                 return Err(invalid("forget arity/mode"));
@@ -2785,6 +2845,11 @@ fn dispatch(
         frame.instruction += 1;
     }
 }
+/// Closed operation identity, independent of source spelling or callback routing.
+fn primitive_work(path: &hirsel_syntax::DefPath, arguments: &[Value]) -> Result<u64, Error> {
+    Ok(crate::library::numeric_work(path, arguments)?.unwrap_or(0))
+}
+
 fn failure(sources: &SourceMap, site: Span, rule: &str, kind: &str) -> Result<Failure, Error> {
     Ok(Failure {
         rule: RuleId::new(rule).map_err(|_| invalid("invalid failure rule"))?,

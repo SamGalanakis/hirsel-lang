@@ -1756,3 +1756,15 @@ commit `8dca815eb424d8ebcb3df805d17504835e14de11`. re2c is in the public domain.
 Hirsel uses UTF-8 byte distances and leftmost-first captures; it conservatively
 declines tags inside alternatives/repetition, publishes only complete plans,
 and does not import POSIX disambiguation or tag histories.
+
+
+Numeric primitive leaves (`hirsel-kernels/src/numeric.rs`) adapt serde_json
+8c535a260ce561eaab4111aafc29038eb9f77ff3 `src/de.rs:462-623` strict number grammar
+(MIT OR Apache-2.0), and Go ebe2feefc400f813aefdc8a036e66d2619da6649
+`src/internal/strconv/atoi.go:70-162,215-247` digit/cutoff accumulation (BSD-3-Clause).
+Hirsel keeps no-plus/no-underscore grammar and Invalid-over-OutOfRange precedence.
+Decimal emission directly uses the existing itoa 1.0.18 dependency (MIT OR Apache-2.0),
+whose pair-table structure is `src/lib.rs:264-320` at the retained 1577ed9 reference.
+Diff line scanning follows imara-diff `src/sources.rs` ByteLines::next: find LF,
+include it, and retain a final unterminated line; Hirsel uses its existing bulk
+byte search/append and returns owned strings (existing Apache-2.0 notice above).

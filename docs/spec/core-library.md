@@ -306,6 +306,9 @@ fn bytes.base64_encode(data: Bytes, alphabet: Base64Alphabet, padding: Base64Pad
 fn bytes.base64_decode(data: Bytes, alphabet: Base64Alphabet, padding: Base64Padding) -> unique Option[Bytes] uses {}
 N fn bytes.len(src: Bytes) -> u64
 N fn bytes.find_any(src: Bytes, needles: Bytes, start: u64) -> u64
+N fn bytes.json_number_end(src: Bytes, start: u64) -> (u64, u64)
+N fn bytes.integer(src: Bytes, radix: u8, signed: bool, positive_hi: u64, positive_lo: u64, negative_hi: u64, negative_lo: u64) -> (u64, u64, u64)
+N fn bytes.decimal_word(value: u64, mut buffer: Inline[u8, 20]) -> u64
 @preserves_unique(builder) @unretained(data) fn bytes.append(mut builder: List[u8], data: Bytes) -> ()
 @preserves_unique(builder) @unretained(data) fn bytes.replace_range(mut builder: List[u8], start: u64, data: Bytes) -> ()
 @preserves_unique(out) fn bytes.append_from_history(mut out: List[u8], distance: u64, count: u64) -> ()
@@ -1792,3 +1795,29 @@ validation failures with no partially decoded value. Operational refusal is sepa
 `start` whose byte occurs in `needles`, or `bytes.len(src)` if there is none. Empty
 sets and starts at or beyond the extent have no match. It borrows both extents,
 allocates nothing and treats all 256 byte values equally.
+
+
+The numeric byte leaves back std's existing lossless JSON and scalar APIs.
+`bytes.json_number_end` returns the cursor immediately after a strict JSON number
+and status 1; on malformed grammar it returns the exact error cursor and status 0.
+It never converts/rounds the lexeme. Out-of-extent starts return that start/status 0.
+The extra deterministic Steps and fuel charge is 1 plus the distinct source bytes
+examined, including a terminating lookahead byte when present; EOF adds no byte.
+
+`bytes.integer` takes radix 2..36, a signed policy and positive/negative u128 limits
+split into high/low u64 words. It returns magnitude high/low and status 0 positive,
+1 negative, 2 Invalid or 3 OutOfRange (zero magnitude on error). ASCII digits and
+letters are accepted up to radix; plus, underscore, whitespace and non-ASCII are
+invalid. Minus requires signed=true and at least one digit. Validate through
+magnitude overflow: a later invalid digit wins over OutOfRange. Leading zeros
+and signed negative zero retain their spelling-independent integer semantics.
+It charges 1 plus the full input extent length in both Steps and fuel, even on
+invalid radix or malformed input.
+
+`bytes.decimal_word` writes the unsigned u64's shortest decimal prefix into the
+caller's twenty-byte inline array, returns its length and preserves the tail.
+It allocates nothing and charges 9 extra Steps and fuel (1 plus its eight input
+bytes). The std wrapper retains signs, arbitrary-capacity atomic BufferTooSmall,
+and its existing public error types. All three work charges precede result
+publication, including named runtime callback routing; budget refusal publishes
+no primitive result. They add no semantic scheduling/Io events.

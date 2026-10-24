@@ -2238,6 +2238,29 @@ primary_operations! { library, call, context, name, a, value;
                     ))));
                 }
             },
+    Primitive: "bytes.json_number_end" => {
+        let (result, _) = hirsel_kernels::numeric::json_number(bytes(arg(a, 0)?)?, int(arg(a, 1)?)?.bits() as u64);
+        Value::Tuple(result.into_iter().map(|n| Some(u64_value(n))).collect())
+    },
+    Primitive: "bytes.integer" => {
+        let Value::Bool(signed) = arg(a, 2)? else { return Err(invalid("integer signed flag")); };
+        let word = |i| -> Result<u128, Error> { Ok(int(arg(a, i)?)?.bits()) };
+        let result = hirsel_kernels::numeric::integer(bytes(arg(a, 0)?)?, word(1)? as u8, *signed,
+            word(3)? << 64 | word(4)?, word(5)? << 64 | word(6)?);
+        Value::Tuple(result.into_iter().map(|n| Some(u64_value(n))).collect())
+    },
+    Primitive: "bytes.decimal_word" => {
+        let value = int(arg(a, 0)?)?.bits() as u64;
+        let mut digits = [0; 20];
+        let count = hirsel_kernels::numeric::decimal_word(value, &mut digits);
+        let Value::Sequence { elements, .. } = arg_mut(call.arguments, 1)? else {
+            return Err(invalid("decimal inline buffer"));
+        };
+        for (slot, byte) in elements.iter_mut().zip(&digits[..count as usize]) {
+            *slot = Some(Value::Integer(Integer::new(Primitive::U8, u128::from(*byte)).unwrap()));
+        }
+        u64_value(count)
+    },
     Primitive: "bytes.find_any" => u64_value(hirsel_kernels::byte_scan::find_any(
         bytes(arg(a, 0)?)?, bytes(arg(a, 1)?)?, index(arg(a, 2)?)? as u64,
     )),
@@ -3016,4 +3039,27 @@ pub(super) fn output_bytes<'a>(name: &str, value: &'a Value) -> Result<&'a [u8],
     } else {
         bytes(value)
     }
+}
+
+/// Exact deterministic work preflight, shared by reference and checked H.
+pub(crate) fn numeric_work(
+    path: &hirsel_syntax::DefPath,
+    arguments: &[Value],
+) -> Result<Option<u64>, Error> {
+    if !path.0.package.package_is("core", "1") || path.0.modules != ["bytes"] {
+        return Ok(None);
+    }
+    let cost = match path.0.name.as_str() {
+        "json_number_end" => {
+            hirsel_kernels::numeric::json_number(
+                bytes(arg(arguments, 0)?)?,
+                int(arg(arguments, 1)?)?.bits() as u64,
+            )
+            .1
+        }
+        "integer" => 1 + bytes(arg(arguments, 0)?)?.len() as u64,
+        "decimal_word" => 9,
+        _ => return Ok(None),
+    };
+    Ok(Some(cost))
 }

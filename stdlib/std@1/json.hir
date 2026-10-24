@@ -32,16 +32,18 @@ fn json_whitespace(data: Bytes, mut pos: u64) -> u8 uses {} {
   let size = core@1/bytes.len(data)
   while pos < size {
     let c = data[pos]
-    if c > 32 || c != 32 && c != 9 && c != 10 && c != 13 {
-      return c
-    }
-    pos += 1
-    // Long space padding is common in bounded input envelopes. A borrowed
-    // byte comparison skips a whole run without changing delimiter offsets.
-    if c == 32 {
-      while size - pos >= 32 && core@1/bytes.slice(data, pos, pos + 32) == b"                                " {
-        pos += 32
-      }
+    match c {
+      32 => {
+        pos += 1
+        // Preserve bulk space padding without a second scalar scan.
+        while size - pos >= 32 && core@1/bytes.slice(data, pos, pos + 32) == b"                                " {
+          pos += 32
+        }
+      },
+      9 | 10 | 13 => {
+        pos += 1
+      },
+      _ => return c,
     }
   }
   0
@@ -52,65 +54,9 @@ fn json_whitespace(data: Bytes, mut pos: u64) -> u8 uses {} {
 // Scan grammar only: no float conversion, overflow, or loss of number spelling.
 @noalloc
 fn json_number_end(data: Bytes, mut pos: u64) -> Result[(), JsonError] uses {} {
-  let size = core@1/bytes.len(data)
-  let mut c = json_peek(data, pos)
-  if c == 45 {
-    pos += 1
-    c = json_peek(data, pos)
-  }
-  if c == 48 {
-    pos += 1
-    c = json_peek(data, pos)
-    if c >= 48 && c <= 57 {
-      return Error(Syntax(pos))
-    }
-  } else if c >= 49 && c <= 57 {
-    while c >= 48 && c <= 57 {
-      pos += 1
-      c = if pos < size {
-        data[pos]
-      } else {
-        0
-      }
-    }
-  } else {
-    return Error(Syntax(pos))
-  }
-  if c == 46 {
-    pos += 1
-    c = json_peek(data, pos)
-    if c < 48 || c > 57 {
-      return Error(Syntax(pos))
-    }
-    while c >= 48 && c <= 57 {
-      pos += 1
-      c = if pos < size {
-        data[pos]
-      } else {
-        0
-      }
-    }
-  }
-  if c == 101 || c == 69 {
-    pos += 1
-    c = json_peek(data, pos)
-    if c == 43 || c == 45 {
-      pos += 1
-      c = json_peek(data, pos)
-    }
-    if c < 48 || c > 57 {
-      return Error(Syntax(pos))
-    }
-    while c >= 48 && c <= 57 {
-      pos += 1
-      c = if pos < size {
-        data[pos]
-      } else {
-        0
-      }
-    }
-  }
-  Ok(())
+  let (end, valid) = core@1/bytes.json_number_end(data, pos)
+  pos = end
+  if valid == 0 { Error(Syntax(pos)) } else { Ok(()) }
 }
 
 // An explicitly owned decoder token has independent, exact-length storage.
@@ -161,9 +107,6 @@ fn json_hex4(data: Bytes, mut pos: u64) -> Result[u64, JsonError] uses {} {
 // The owning DOM parser can retain a plain token as a slice. Escaped text
 // uses the same decoder as the borrowed pull reader.
 fn json_shared_quoted(take data: Bytes, mut pos: u64) -> Result[String, JsonError] uses {} {
-  if json_peek(data, pos) != 34 {
-    return Error(Syntax(pos))
-  }
   let start = pos + 1
   let end = core@1/bytes.find_any(data, JSON_STRING_STOP, start)
   if end < core@1/bytes.len(data) && data[end] == 34 {
@@ -284,47 +227,50 @@ fn json_keyword(data: Bytes, mut pos: u64, word: String) -> Result[(), JsonError
 // 20572a6d066958542d79cdd6cf1a7cd9f0c8e1f8; Zig lib/std/json/dynamic.zig
 // handleCompleteValue at bff490a23889750de7096d9057c0a432efc929a8 supplies
 // ordered-object duplicate rejection. Ordinary owned locals clean up on every ?.
-fn json_node(take data: Bytes, mut pos: u64, depth: u64) -> Result[Value, JsonError] uses {} {
-  let c = json_whitespace(data, mut pos)
-  if c == 110 {
-    json_keyword(data, mut pos, "null")?
-    return Ok(Null())
-  }
-  if c == 116 {
-    json_keyword(data, mut pos, "true")?
-    return Ok(Bool(true))
-  }
-  if c == 102 {
-    json_keyword(data, mut pos, "false")?
-    return Ok(Bool(false))
-  }
-  if c == 34 {
-    return Ok(Text(json_shared_quoted(copy data, mut pos)?))
-  }
-  if c == 45 || c >= 48 && c <= 57 {
-    let start = pos
-    json_number_end(data, mut pos)?
-    return Ok(Number(json_shared_text(copy data, start, pos)))
-  }
-  if c != 91 && c != 123 {
-    return Error(Syntax(pos))
+// Pass the already scanned lookahead into each child. Like serde SeqAccess,
+// each token boundary consumes whitespace once, including empty containers.
+fn json_node(take data: Bytes, mut pos: u64, depth: u64, c: u8) -> Result[Value, JsonError] uses {} {
+  match c {
+    110 => {
+      json_keyword(data, mut pos, "null")?
+      return Ok(Null())
+    },
+    116 => {
+      json_keyword(data, mut pos, "true")?
+      return Ok(Bool(true))
+    },
+    102 => {
+      json_keyword(data, mut pos, "false")?
+      return Ok(Bool(false))
+    },
+    34 => return Ok(Text(json_shared_quoted(copy data, mut pos)?)),
+    91 => (),
+    123 => (),
+    _ => {
+      if c != 45 && (c < 48 || c > 57) {
+        return Error(Syntax(pos))
+      }
+      let start = pos
+      json_number_end(data, mut pos)?
+      return Ok(Number(json_shared_text(copy data, start, pos)))
+    },
   }
   if depth == MAX_NESTING {
     return Error(Nesting(pos))
   }
   pos += 1
-  json_whitespace(data, mut pos)
+  let mut next = json_whitespace(data, mut pos)
   if c == 91 {
     let mut items: List[Value] = []
-    if json_peek(data, pos) == 93 {
+    if next == 93 {
       pos += 1
       let array_value: Value = Array(take items)
       return Ok(take array_value)
     }
     while true {
-      let child = json_node(copy data, mut pos, depth + 1)?
+      let child = json_node(copy data, mut pos, depth + 1, next)?
       core@1/list.push(mut items, take child)
-      let next = json_whitespace(data, mut pos)
+      next = json_whitespace(data, mut pos)
       if next == 93 {
         pos += 1
         break
@@ -333,17 +279,20 @@ fn json_node(take data: Bytes, mut pos: u64, depth: u64) -> Result[Value, JsonEr
         return Error(Syntax(pos))
       }
       pos += 1
+      next = json_whitespace(data, mut pos)
     }
     let array_value: Value = Array(take items)
     return Ok(take array_value)
   }
   let mut entries: Map[String, Value] = core@1/map.empty()
-  if json_peek(data, pos) == 125 {
+  if next == 125 {
     pos += 1
     return Ok(Object(take entries))
   }
   while true {
-    json_whitespace(data, mut pos)
+    if next != 34 {
+      return Error(Syntax(pos))
+    }
     let key_pos = pos
     let key = json_shared_quoted(copy data, mut pos)?
     if let Some(_) = core@1/map.get(entries, key) {
@@ -353,9 +302,10 @@ fn json_node(take data: Bytes, mut pos: u64, depth: u64) -> Result[Value, JsonEr
       return Error(Syntax(pos))
     }
     pos += 1
-    let child = json_node(copy data, mut pos, depth + 1)?
+    let first = json_whitespace(data, mut pos)
+    let child = json_node(copy data, mut pos, depth + 1, first)?
     core@1/map.insert(mut entries, take key, take child)
-    let next = json_whitespace(data, mut pos)
+    next = json_whitespace(data, mut pos)
     if next == 125 {
       pos += 1
       break
@@ -364,6 +314,7 @@ fn json_node(take data: Bytes, mut pos: u64, depth: u64) -> Result[Value, JsonEr
       return Error(Syntax(pos))
     }
     pos += 1
+    next = json_whitespace(data, mut pos)
   }
   Ok(Object(take entries))
 }
@@ -374,7 +325,8 @@ fn json_node(take data: Bytes, mut pos: u64, depth: u64) -> Result[Value, JsonEr
 pub fn parse(take text: String) -> Result[Value, JsonError] uses {} {
   let data = core@1/string.as_bytes(text)
   let mut pos: u64 = 0
-  let value = json_node(copy data, mut pos, 0)?
+  let first = json_whitespace(data, mut pos)
+  let value = json_node(copy data, mut pos, 0, first)?
   json_whitespace(data, mut pos)
   if pos != core@1/bytes.len(data) {
     return Error(Syntax(pos))

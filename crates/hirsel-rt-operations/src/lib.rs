@@ -139,7 +139,10 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
         "clock.sleep_until" => Some("hirsel_rt_v2_clock_sleep_until_at_site".into()),
         // Fixed declaration signatures: every entry has its exact physical ABI
         // in HIRSEL_ABI_EXPORTS; generic callbacks remain compiled bodies.
-        "bytes.find_any"
+        "bytes.json_number_end"
+        | "bytes.integer"
+        | "bytes.decimal_word"
+        | "bytes.find_any"
         | "bytes.base64_encode"
         | "bytes.base64_decode"
         | "string.from_bytes"
@@ -1480,6 +1483,42 @@ pub const HIRSEL_ABI_EXPORTS: &[AbiExport] = &[
     },
     AbiExport {
         caller_site: false,
+        symbol: "hirsel_rt_v2_bytes_json_number_end",
+        destination: false,
+        result: Some((16, 8)),
+        parameters: &[
+            Physical::Pointer,
+            Physical::I64,
+            Physical::I64,
+            Physical::I64,
+        ],
+    },
+    AbiExport {
+        caller_site: false,
+        symbol: "hirsel_rt_v2_bytes_integer",
+        destination: false,
+        result: Some((24, 8)),
+        parameters: &[
+            Physical::Pointer,
+            Physical::I64,
+            Physical::I64,
+            Physical::I8,
+            Physical::I8,
+            Physical::I64,
+            Physical::I64,
+            Physical::I64,
+            Physical::I64,
+        ],
+    },
+    AbiExport {
+        caller_site: false,
+        symbol: "hirsel_rt_v2_bytes_decimal_word",
+        destination: false,
+        result: Some((8, 8)),
+        parameters: &[Physical::I64, Physical::Pointer],
+    },
+    AbiExport {
+        caller_site: false,
         symbol: "hirsel_rt_v2_bytes_find_any",
         destination: false,
         result: Some((8, 8)),
@@ -2475,6 +2514,9 @@ pub const NATIVE_PATHS: &[&str] = &[
     "bytes.from_list",
     "bytes.append",
     "bytes.append_from_history",
+    "bytes.json_number_end",
+    "bytes.integer",
+    "bytes.decimal_word",
     "bytes.find_any",
     "bytes.base64_encode",
     "bytes.base64_decode",

@@ -1090,3 +1090,13 @@ native binding F1B3 are reset to tape 9, journal 3 and F1B4. Native observation
 receipts reset from 6 to 7. The RunConfig request schema and semantic identity
 domain remain 1; neither contains launcher evidence. Legacy text inspection imports
 without admission evidence earn no physical capacity credit.
+
+### Numeric primitive work
+
+The numeric byte primitives also charge deterministic work before publishing a
+result: `bytes.json_number_end` charges 1 plus inspected input bytes (terminating
+lookahead included, EOF excluded); `bytes.integer` charges 1 plus full input byte
+length; `bytes.decimal_word` charges 9 for its fixed eight-byte u64 input. These
+are extra Steps/fuel, besides ordinary TIR instructions and function/back-edge
+fuel points. Reference/checked execution clips Steps to the unchanged limit;
+native execution uses exact run fuel and preserves ordered chunk accounting.

@@ -590,3 +590,83 @@ pub unsafe extern "C" fn hirsel_rt_v2_bytes_find_any(
     unsafe { out.write(hirsel_kernels::byte_scan::find_any(source, needles, offset)) };
     STATUS_OK
 }
+
+/// Strict JSON grammar over a borrowed extent; no lexeme allocation/conversion.
+/// # Safety
+/// The extent is live and initialized; `out` holds two writable u64 words.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_bytes_json_number_end(
+    ctx: *mut TaskCtx,
+    out: *mut [u64; 2],
+    owner: *mut Header,
+    start: u64,
+    length: u64,
+    offset: u64,
+) -> u8 {
+    let source = unsafe {
+        bytes(Slice {
+            owner,
+            start,
+            length,
+        })
+    };
+    let (result, cost) = hirsel_kernels::numeric::json_number(source, offset);
+    let charged = unsafe { crate::budget::charge_primitive(ctx, cost) };
+    unsafe { crate::stop::check(ctx, charged) };
+    unsafe { out.write(result) };
+    STATUS_OK
+}
+
+/// Exact bounded integer parsing; result words are high, low, status.
+/// # Safety
+/// The source is a live byte extent; `out` holds three writable u64 words.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_bytes_integer(
+    ctx: *mut TaskCtx,
+    out: *mut [u64; 3],
+    owner: *mut Header,
+    start: u64,
+    length: u64,
+    radix: u8,
+    signed: u8,
+    positive_hi: u64,
+    positive_lo: u64,
+    negative_hi: u64,
+    negative_lo: u64,
+) -> u8 {
+    let charged = unsafe { crate::budget::charge_primitive(ctx, length.saturating_add(1)) };
+    unsafe { crate::stop::check(ctx, charged) };
+    let source = unsafe {
+        bytes(Slice {
+            owner,
+            start,
+            length,
+        })
+    };
+    let result = hirsel_kernels::numeric::integer(
+        source,
+        radix,
+        signed != 0,
+        u128::from(positive_hi) << 64 | u128::from(positive_lo),
+        u128::from(negative_hi) << 64 | u128::from(negative_lo),
+    );
+    unsafe { out.write(result) };
+    STATUS_OK
+}
+
+/// Decimal u64 emission into a caller-owned fixed scratch; tail bytes untouched.
+/// # Safety
+/// `out` and the exclusive initialized twenty-byte `buffer` are writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_bytes_decimal_word(
+    ctx: *mut TaskCtx,
+    out: *mut u64,
+    value: u64,
+    buffer: *mut [u8; 20],
+) -> u8 {
+    let charged = unsafe { crate::budget::charge_primitive(ctx, 9) };
+    unsafe { crate::stop::check(ctx, charged) };
+    let count = hirsel_kernels::numeric::decimal_word(value, unsafe { &mut *buffer });
+    unsafe { out.write(count) };
+    STATUS_OK
+}

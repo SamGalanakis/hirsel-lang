@@ -314,3 +314,7 @@ typedef struct { uint32_t tag, padding; uint64_t statuses, stderr_lists; } hirse
 uint8_t hirsel_rt_v2_proc_wait_group(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_group_result*, const uint64_t*, uint64_t*, const void*);
 
 uint8_t hirsel_rt_v2_bytes_find_any(hirsel_rt_v2_ctx*, uint64_t*, hirsel_rt_v2_header*, uint64_t, uint64_t, hirsel_rt_v2_header*, uint64_t, uint64_t, uint64_t);
+
+uint8_t hirsel_rt_v2_bytes_json_number_end(hirsel_rt_v2_ctx*, uint64_t (*)[2], hirsel_rt_v2_header*, uint64_t, uint64_t, uint64_t);
+uint8_t hirsel_rt_v2_bytes_integer(hirsel_rt_v2_ctx*, uint64_t (*)[3], hirsel_rt_v2_header*, uint64_t, uint64_t, uint8_t, uint8_t, uint64_t, uint64_t, uint64_t, uint64_t);
+uint8_t hirsel_rt_v2_bytes_decimal_word(hirsel_rt_v2_ctx*, uint64_t*, uint64_t, uint8_t (*)[20]);

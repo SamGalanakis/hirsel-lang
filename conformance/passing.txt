@@ -6043,6 +6043,7 @@ conformance/SEM/SEM-3-nfc-slice-run.hir
 conformance/SEM/SEM-3-nfc-utf8-invalid-run.hir
 conformance/SEM/SEM-3-nfc-utf8-valid-run.hir
 conformance/SEM/SEM-3-no-implicit-normalisation.hir
+conformance/SEM/SEM-3-numeric-work-38-run.hir
 conformance/SEM/SEM-3-path-go-run.hir
 conformance/SEM/SEM-3-pathtime-path-boundary-run.hir
 conformance/SEM/SEM-3-pathtime-path-run.hir

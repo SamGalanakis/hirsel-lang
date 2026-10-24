@@ -18,6 +18,7 @@ mod env;
 mod file_faults;
 mod filesystem;
 mod net;
+mod numeric;
 mod process;
 mod signals;
 
@@ -1784,6 +1785,11 @@ impl Io {
 
 /// Semantic text kernels return bytes or input-relative ranges; H owns every block.
 fn text(module: Option<&str>, name: &str, args: &[OpValue]) -> Option<OpOutcome> {
+    if module == Some("bytes")
+        && let Some(outcome) = numeric::call(name, args)
+    {
+        return Some(outcome);
+    }
     use hirsel_lir::layout_types::ScalarKind;
     let value = match (module, name, args) {
         (

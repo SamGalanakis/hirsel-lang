@@ -13,3 +13,5 @@ pub mod siphash;
 pub mod telemetry;
 pub mod unicode;
 pub mod walk;
+
+pub mod numeric;

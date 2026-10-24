@@ -301,26 +301,49 @@ pub unsafe extern "C" fn hirsel_rt_v2_fuel_refill(ctx: *mut TaskCtx) {
         unsafe { crate::tasks::ordered::ahead::refill(ctx) };
         return;
     }
+    let result = unsafe { refill(ctx) };
+    unsafe { crate::stop::check(ctx, result) };
+}
+
+/// Charge deterministic primitive work even when the caller omitted loop fuel checks.
+/// A checkpoint also observes the embedding host's stop without adding a scheduling point.
+/// # Safety
+/// `ctx` is the current live task; this helper returns before any stop switches stacks.
+pub(crate) unsafe fn charge_primitive(
+    ctx: *mut TaskCtx,
+    mut cost: u64,
+) -> crate::stop::Stopped<()> {
+    crate::stop::observe(ctx)?;
+    while cost != 0 {
+        let available = unsafe { (*ctx).view.compiled.fuel.max(0) as u64 };
+        let spent = available.min(cost);
+        unsafe { (*ctx).view.compiled.fuel -= spent as i64 };
+        cost -= spent;
+        if cost != 0 {
+            unsafe { (*ctx).view.compiled.fuel = -1 };
+            unsafe { refill(ctx) }?;
+            cost -= 1; // refill includes the point that crossed the chunk boundary.
+        }
+    }
+    Ok(())
+}
+
+unsafe fn refill(ctx: *mut TaskCtx) -> crate::stop::Stopped<()> {
+    crate::stop::observe(ctx)?;
     if unsafe { (*ctx).run_ref().ordered_mode.load(Ordering::Acquire) } {
-        let result = crate::stop::observe(ctx).and_then(|()| {
-            let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
-            crate::tasks::ordered::engine::fuel_refill(ctx)
-        });
-        unsafe { crate::stop::check(ctx, result) };
-        return;
+        let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
+        return crate::tasks::ordered::engine::fuel_refill(ctx);
     }
-    // SAFETY: caller contract.
-    let ctx = unsafe { &mut *ctx };
-    // A refill is where a loop without runtime entries sees its run's stop (design §6 Stops).
-    // SAFETY: caller contract: a fuel point holds nothing a stop must drop.
-    unsafe { crate::stop::check(ctx, crate::stop::observe(ctx)) };
-    let chunk = ctx.run_ref().fuel.take();
+    let chunk = unsafe { (*ctx).run_ref().fuel.take() };
     if chunk == 0 {
-        // SAFETY: caller contract.
-        unsafe { crate::stop::raise(ctx, crate::stop::Stop::BudgetExceeded(BudgetKind::Fuel)) }
+        return Err(crate::stop::Stop::BudgetExceeded(BudgetKind::Fuel));
     }
-    ctx.heap()
-        .set_fuel(i64::try_from(chunk - 1).unwrap_or(i64::MAX));
+    unsafe {
+        (*ctx)
+            .heap()
+            .set_fuel(i64::try_from(chunk - 1).unwrap_or(i64::MAX))
+    };
+    Ok(())
 }
 
 #[cfg(test)]
@@ -388,6 +411,69 @@ mod tests {
             if *word < 0 {
                 hirsel_rt_v2_fuel_refill(ctx);
             }
+        }
+    }
+
+    #[test]
+    fn numeric_work_charges_exact_fuel_before_writing_scratch() {
+        // Byte budgets below, at and above every chunk boundary also exercise
+        // the shared bulk-charge path without primitive-specific arithmetic.
+        for cost in [
+            1,
+            9,
+            FUEL_CHUNK - 1,
+            FUEL_CHUNK,
+            FUEL_CHUNK + 1,
+            FUEL_CHUNK * 3 + 7,
+        ] {
+            for fuel in [cost - 1, cost, cost + 1] {
+                let ctx = context(Some(fuel), None);
+                let mut written = false;
+                let result = run(ctx, || {
+                    let charged = unsafe { charge_primitive(ctx, cost) };
+                    unsafe { crate::stop::check(ctx, charged) };
+                    written = true;
+                });
+                assert_eq!(written, fuel >= cost);
+                assert_eq!(
+                    result,
+                    if fuel < cost {
+                        Err(Stop::BudgetExceeded(BudgetKind::Fuel))
+                    } else {
+                        Ok(())
+                    }
+                );
+                unsafe { hirsel_rt_v2_ctx_destroy(ctx) };
+            }
+        }
+        for fuel in [8, 9, 10] {
+            let ctx = context(Some(fuel), None);
+            let mut buffer = [0xa5; 20];
+            let mut count = 0xa5;
+            let result = run(ctx, || {
+                assert_eq!(
+                    unsafe {
+                        crate::text::hirsel_rt_v2_bytes_decimal_word(
+                            ctx,
+                            &mut count,
+                            1234567890,
+                            &mut buffer,
+                        )
+                    },
+                    crate::STATUS_OK
+                );
+            });
+            if fuel < 9 {
+                assert_eq!(result, Err(Stop::BudgetExceeded(BudgetKind::Fuel)));
+                assert_eq!(buffer, [0xa5; 20]);
+                assert_eq!(count, 0xa5);
+            } else {
+                assert_eq!(result, Ok(()));
+                assert_eq!(count, 10);
+                assert_eq!(&buffer[..10], b"1234567890");
+                assert_eq!(&buffer[10..], &[0xa5; 10]);
+            }
+            unsafe { hirsel_rt_v2_ctx_destroy(ctx) };
         }
     }
 

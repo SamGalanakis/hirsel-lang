@@ -306,3 +306,7 @@ fn runner.compute[A: serializable, R: serializable, E: serializable](r: Runner, 
 fn runner.call[A: serializable, R: serializable, E: serializable](r: Runner, f: Entry[fn(rt: Io, a: A) -> Result[R, E]], a: A) -> unique Result[R, RunError[E]]
 fn runner.spawn[A: serializable, R: serializable, E: serializable](s: Scope, r: Runner, f: Entry[fn(rt: Io, a: A) -> Result[R, E]], a: A) -> Task[Result[R, RunError[E]]] of s
 fn test.runner(t: Test) -> Runner
+
+N fn bytes.json_number_end(src: Bytes, start: u64) -> (u64, u64)
+N fn bytes.integer(src: Bytes, radix: u8, signed: bool, positive_hi: u64, positive_lo: u64, negative_hi: u64, negative_lo: u64) -> (u64, u64, u64)
+N fn bytes.decimal_word(value: u64, mut buffer: Inline[u8, 20]) -> u64

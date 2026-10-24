@@ -139,6 +139,8 @@ pub fn append_prefix(mut out: List[u8], buffer: Inline[u8, 40], count: u64) -> (
   }
 }
 
+const DECIMAL_PAIR_BYTES: Bytes = b"00010203040506070809101112131415161718192021222324252627282930313233343536373839404142434445464748495051525354555657585960616263646566676869707172737475767778798081828384858687888990919293949596979899"
+
 // Two decimal digits per entry, "00" through "99": Rust core::fmt::num's
 // DECIMAL_PAIRS (third-party/NOTICES.md). The fixed inline table has no owner
 // credit or cleanup when indexed.
@@ -499,34 +501,19 @@ pub fn append_u64(mut out: List[u8], value: u64, negative: bool) -> () uses {} {
     core@1/list.push(mut out, core@1/int.narrow(value) + 48u8)
     return
   }
-  // Short integers fit one decimal quad. Emit it directly instead of filling
-  // and then walking an inline scratch buffer (including its initialization).
+  // Emit the leading one/two digits and the low pair as bulk spans from
+  // itoa's pair table. There is no scratch initialization or second digit pass.
   if value < 10000 {
-    let count: u64 = if value >= 1000 {
-      4
-    } else if value >= 100 {
-      3
-    } else if value >= 10 {
-      2
-    } else {
-      1
-    }
-    core@1/list.reserve(mut out, core@1/list.len(out) + sign + count)
     if negative {
       core@1/list.push(mut out, 45)
     }
     if value >= 100 {
-      let high = value / 100
-      if high >= 10 {
-        core@1/list.push(mut out, DECIMAL_PAIRS[high * 2])
-      }
-      core@1/list.push(mut out, DECIMAL_PAIRS[high * 2 + 1])
+      let high = value / 100 * 2
+      let start = if value >= 1000 { high } else { high + 1 }
+      core@1/bytes.append(mut out, core@1/bytes.slice(DECIMAL_PAIR_BYTES, start, high + 2))
     }
-    let low = value % 100
-    if value >= 10 {
-      core@1/list.push(mut out, DECIMAL_PAIRS[low * 2])
-    }
-    core@1/list.push(mut out, DECIMAL_PAIRS[low * 2 + 1])
+    let low = value % 100 * 2
+    core@1/bytes.append(mut out, core@1/bytes.slice(DECIMAL_PAIR_BYTES, low, low + 2))
     return
   }
   let mut buffer: Inline[u8, 20] = [
@@ -551,35 +538,13 @@ pub fn append_u64(mut out: List[u8], value: u64, negative: bool) -> () uses {} {
     0u8,
     0u8
   ]
-  let mut offset: u64 = 20
-  let mut remain = value
-  while remain > 999 {
-    offset -= 4
-    let quad = remain % 10000
-    remain /= 10000
-    let high = quad / 100 * 2
-    let low = quad % 100 * 2
-    buffer[offset] = DECIMAL_PAIRS[high]
-    buffer[offset + 1] = DECIMAL_PAIRS[high + 1]
-    buffer[offset + 2] = DECIMAL_PAIRS[low]
-    buffer[offset + 3] = DECIMAL_PAIRS[low + 1]
-  }
-  if remain > 9 {
-    offset -= 2
-    let pair = remain % 100 * 2
-    remain /= 100
-    buffer[offset] = DECIMAL_PAIRS[pair]
-    buffer[offset + 1] = DECIMAL_PAIRS[pair + 1]
-  }
-  if remain != 0 || value == 0 {
-    offset -= 1
-    buffer[offset] = DECIMAL_PAIRS[remain * 2 + 1]
-  }
-  core@1/list.reserve(mut out, core@1/list.len(out) + sign + 20 - offset)
+  let count = core@1/bytes.decimal_word(value, mut buffer)
+  core@1/list.reserve(mut out, core@1/list.len(out) + sign + count)
   if negative {
     core@1/list.push(mut out, 45)
   }
-  while offset < 20 {
+  let mut offset: u64 = 0
+  while offset < count {
     core@1/list.push(mut out, buffer[offset])
     offset += 1
   }

@@ -34,11 +34,7 @@ pub type PatchError = Malformed(u64)
 // --- Lines ----------------------------------------------------------------
 fn piece(data: Bytes, start: u64, end: u64) -> unique String uses {} {
   let mut out: List[u8] = []
-  let mut i = start
-  while i < end {
-    core@1/list.push(mut out, data[i])
-    i += 1
-  }
+  core@1/bytes.append(mut out, core@1/bytes.slice(data, start, end))
   text.finish_valid(take out)
 }
 
@@ -49,16 +45,11 @@ pub fn split_lines(source: String) -> unique List[String] uses {} {
   let size = core@1/bytes.len(data)
   let mut out: List[String] = []
   let mut start: u64 = 0
-  let mut i: u64 = 0
-  while i < size {
-    if data[i] == b'\n' {
-      core@1/list.push(mut out, piece(data, start, i + 1))
-      start = i + 1
-    }
-    i += 1
-  }
-  if start < size {
-    core@1/list.push(mut out, piece(data, start, size))
+  while start < size {
+    let stop = core@1/bytes.find_any(data, b"\n", start)
+    let end = if stop < size { stop + 1 } else { size }
+    core@1/list.push(mut out, piece(data, start, end))
+    start = end
   }
   take out
 }
