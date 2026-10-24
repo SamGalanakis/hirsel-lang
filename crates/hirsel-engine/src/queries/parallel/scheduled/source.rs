@@ -43,9 +43,10 @@ impl crate::snapshot::DeclarationSiblings for SiblingArchives {
     }
 }
 
-/// Distinct immutable source/header backing and front archive/slot backing.
+/// Distinct immutable source/header backing and front reference/slot backing.
 /// The host charges shared source_headers once, alongside the selected S0
-/// snapshot; front_inputs is the minimum producer reservation, before outputs.
+/// snapshot; front_inputs is the minimum producer reservation, before output metadata.
+/// Archive byte ownership remains with the selected provider.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FrontInputFootprint {
     pub source_headers: u64,
@@ -71,44 +72,28 @@ impl QueryEngine {
         for definition in definitions {
             self.materialize(definition)?;
         }
-        let store = self
+        if self
             .result_store
-            .clone()
-            .filter(|s| s.enabled())
-            .ok_or_else(refused)?;
-        let records = crate::NativeRecords::new(self.types.clone(), store);
+            .as_ref()
+            .is_none_or(|store| !store.enabled())
+        {
+            return Err(refused());
+        }
         let owners = crate::NativeRecordContext::capture(self);
         let declarations = self.frozen_declarations();
         let mut front_inputs = FrontBodyQueries::input_bytes(definitions).ok_or_else(refused)?;
-        let mut seen = BTreeSet::new();
         let mut files = BTreeSet::new();
         for definition in definitions {
             let syntax = self.snapshot(definition)?;
-            let bytes = records
-                .encode(&owners, &(&syntax, syntax.occurrence))
-                .ok_or_else(refused)?;
-            let reference = SOURCE_INPUT.reference(&bytes).ok_or_else(refused)?;
-            if seen.insert(reference.output.0) {
-                front_inputs = front_inputs
-                    .checked_add(bytes.len() as u64)
-                    .ok_or_else(refused)?;
-            }
             let file = self.sources.anchor(syntax.anchor).ok_or_else(refused)?.0;
             if files.insert(file) {
-                for sibling in declarations.siblings(&syntax).iter() {
-                    let bytes = records
-                        .encode(&owners, &(sibling, sibling.occurrence))
-                        .ok_or_else(refused)?;
-                    let reference = SOURCE_INPUT.reference(&bytes).ok_or_else(refused)?;
-                    if seen.insert(reference.output.0) {
-                        front_inputs = front_inputs
-                            .checked_add(bytes.len() as u64)
-                            .ok_or_else(refused)?;
-                    }
-                    front_inputs = front_inputs
-                        .checked_add(std::mem::size_of::<Reference>() as u64)
-                        .ok_or_else(refused)?;
-                }
+                front_inputs = front_inputs
+                    .checked_add(
+                        (declarations.siblings(&syntax).len() as u64)
+                            .checked_mul(std::mem::size_of::<Reference>() as u64)
+                            .ok_or_else(refused)?,
+                    )
+                    .ok_or_else(refused)?;
             }
         }
         let source_headers = self

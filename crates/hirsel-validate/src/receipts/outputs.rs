@@ -414,6 +414,28 @@ pub struct VerifiedDefinitionOutput {
     invocations: Arc<SourceInvocations>,
 }
 impl VerifiedDefinitionOutput {
+    /// Strongly owned compact observations, excluding the independently stored
+    /// body named by reference. Shared allocations are conservatively charged
+    /// once for each admitted owner that keeps this token alive.
+    pub fn retained_bytes(&self) -> Option<u64> {
+        let mut bytes = (std::mem::size_of::<Self>()
+            + std::mem::size_of::<SourceInvocations>()
+            + 6 * std::mem::size_of::<usize>()) as u64;
+        bytes = bytes.checked_add(
+            (self.reads.len() as u64).checked_mul(std::mem::size_of::<VRead>() as u64)?,
+        )?;
+        bytes = bytes.checked_add(self.metadata.len() as u64)?;
+        bytes = bytes.checked_add(
+            (self.invocations.calls.capacity() as u64)
+                .checked_mul(std::mem::size_of::<SourceInvocation>() as u64)?,
+        )?;
+        for call in &self.invocations.calls {
+            if let Some(path) = &call.callee {
+                bytes = bytes.checked_add(bincode::serialized_size(path).ok()?)?;
+            }
+        }
+        Some(bytes)
+    }
     pub fn reference(&self) -> Reference {
         self.reference
     }
