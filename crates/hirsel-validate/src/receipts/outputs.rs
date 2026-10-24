@@ -276,6 +276,40 @@ mod tests {
                 )
                 .is_none()
         );
+        // Revalidate the identical body against the new independent private
+        // view. Body content backdates; the complete observation must change.
+        let (report, _, _, evidence) = validate_definition(
+            &definition,
+            session(),
+            |_| Some((path("main"), 0)),
+            &f.signatures,
+            policy,
+            Some(&cache),
+        );
+        assert!(report.violations.is_empty(), "{report:?}");
+        let current = cache
+            .publish_definition(
+                policy,
+                &definition,
+                session(),
+                policy,
+                &f.signatures,
+                &evidence.unwrap(),
+                b"new query metadata",
+            )
+            .unwrap();
+        assert_eq!(current.reference(), output.reference());
+        assert_ne!(
+            current.observation_identity(),
+            output.observation_identity()
+        );
+        assert_eq!(
+            cache
+                .definition_output(policy, definition.path, &session(), policy, &f.signatures)
+                .unwrap()
+                .observation_identity(),
+            current.observation_identity()
+        );
     }
 }
 #[derive(Serialize, Deserialize)]
@@ -305,6 +339,13 @@ impl VerifiedDefinitionOutput {
     }
     pub fn owner(&self) -> DefId {
         self.owner
+    }
+    /// Ordinary identity of the exact artifact, policy and independently
+    /// observed environment. A body reference alone omits private-view reads.
+    /// The query owner still validates current Lower dependencies and obtains
+    /// this token from V; this hash grants no verification authority.
+    pub fn observation_identity(&self) -> ContentHash {
+        receipt_action(self.artifact, self.policy, &self.reads)
     }
     /// Query metadata remains producer data; the query owner checks it.
     pub fn metadata(&self) -> &[u8] {
