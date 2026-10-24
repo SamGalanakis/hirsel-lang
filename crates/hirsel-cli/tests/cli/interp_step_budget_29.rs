@@ -57,7 +57,9 @@ fn sha256_kilobyte_reference_witness() {
         );
         let (_scratch, mut loaded) = program(&source);
         let run = config(&loaded);
-        // Measured 1.24M steps for this input: a fixture policy, never a default.
+        // The explicit allowance is a fixture policy, never a default.
+        // The one-shot SHA work is specified separately below, not inferred from
+        // this application's total (which also includes hex formatting and Io).
         const STEPS: u64 = 2_000_000;
         let plain = run_observed_snapshot_bounded(
             &mut loaded.engine,
@@ -81,36 +83,63 @@ fn sha256_kilobyte_reference_witness() {
         assert_eq!(assert_completed(&checked, STEPS), used);
         assert_eq!(plain.observation, checked.observation);
         // Restoring the default is required even after larger fixture execution.
+        // One-shot SHA now fits it; do not require an obsolete scalar cost floor.
         let default =
             run_observed_snapshot(&mut loaded.engine, &run, SimulationConfig::default()).unwrap();
-        assert!(default.observation.is_none());
-        assert!(matches!(default.outcome, Ok(RunOutcome::ToolingLimit(_))));
-        assert_eq!(
-            default.step_usage,
-            Some(StepUsage {
-                limit: Some(1_000_000),
-                consumed: 1_000_000
-            })
-        );
-        // The measured bound has exact stop semantics, not an approximate fuel unit.
-        let exact = run_observed_snapshot_bounded(
-            &mut loaded.engine,
-            &run,
-            SimulationConfig::default(),
-            used,
-        )
-        .unwrap();
-        assert_completed(&exact, used);
-        let short = run_observed_snapshot_bounded(
-            &mut loaded.engine,
-            &run,
-            SimulationConfig::default(),
-            used - 1,
-        )
-        .unwrap();
-        assert!(short.observation.is_none());
-        assert!(matches!(short.outcome, Ok(RunOutcome::ToolingLimit(_))));
-        assert_eq!(short.step_usage.unwrap().consumed, used - 1);
+        assert_eq!(assert_completed(&default, 1_000_000), used);
+        assert_eq!(default.observation, plain.observation);
+
+        // docs/spec/determinism.md, "Long pure primitives": SHA-256 adds one
+        // call unit plus one per padded64-byte block.1024 bytes have16 data
+        // blocks and one padding block, so the additional charge is18.
+        const SHA_WORK: u64 = 1 + 1024 / 64 + 1;
+        let mut primitive_steps = Vec::new();
+        for operation in ["len", "sha256"] {
+            let source = format!(
+                "pub fn main() -> Result[(), ()] {{ let _=core@1/bytes.{operation}(b\"{input}\")\nOk(()) }}"
+            );
+            let (_scratch, mut control) = program(&source);
+            let config = config(&control);
+            let reference =
+                run_observed_snapshot(&mut control.engine, &config, SimulationConfig::default())
+                    .unwrap();
+            let checked =
+                run_observed_checked(&mut control.engine, &config, SimulationConfig::default())
+                    .unwrap();
+            let steps = assert_completed(&reference, 1_000_000);
+            assert_eq!(assert_completed(&checked, 1_000_000), steps);
+            assert_eq!(reference.observation, checked.observation);
+            primitive_steps.push(steps);
+        }
+        // Identical byte construction and ordinary call steps cancel in this
+        // pair, isolating the normative primitive work from wrapper costs.
+        assert_eq!(primitive_steps[1] - primitive_steps[0], SHA_WORK);
+
+        // The public bounded helper intentionally refuses allowances below the
+        // default. Use the interpreter adapter to retain the exact/one-short
+        // tooling-stop checks for this now-cheap application.
+        let saved = loaded.engine.adapters.interpreter.take();
+        for bound in [used, used - 1] {
+            loaded.engine.adapters.interpreter = Some(Box::new(InterpreterAdapter {
+                limits: hirsel_interp::Limits {
+                    steps: Some(bound),
+                    call_depth: 256,
+                },
+                ..Default::default()
+            }));
+            let result =
+                run_observed_snapshot(&mut loaded.engine, &run, SimulationConfig::default())
+                    .unwrap();
+            if bound == used {
+                assert_eq!(assert_completed(&result, bound), used);
+                assert_eq!(result.observation, plain.observation);
+            } else {
+                assert!(result.observation.is_none());
+                assert!(matches!(result.outcome, Ok(RunOutcome::ToolingLimit(_))));
+                assert_eq!(result.step_usage.unwrap().consumed, bound);
+            }
+        }
+        loaded.engine.adapters.interpreter = saved;
     });
 }
 
