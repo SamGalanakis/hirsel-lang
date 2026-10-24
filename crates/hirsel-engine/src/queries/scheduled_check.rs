@@ -60,6 +60,22 @@ pub struct FrontCheckQueries {
     _allowance: MemoryReservation,
 }
 impl FrontCheckQueries {
+    /// Ordered file/path cursors and product-reference rows. The actual
+    /// definition bodies remain charged to their own producer owners.
+    pub fn input_bytes(definitions: &[DefPath], files: usize, weight: MemoryWeight) -> Option<u64> {
+        let path_slot = (std::mem::size_of::<(DefPath, bool)>()
+            + 2 * std::mem::size_of::<(DefPath, ProductRef)>()
+            + std::mem::size_of::<DefId>()
+            + 128) as u64;
+        let base = weight.retained.checked_add(
+            (files as u64).checked_mul((2 * std::mem::size_of::<FileInput>() + 128) as u64)?,
+        )?;
+        definitions.iter().try_fold(base, |total, path| {
+            total.checked_add(
+                path_slot.checked_add(bincode::serialized_size(path).ok()?.checked_mul(3)?)?,
+            )
+        })
+    }
     pub fn query(&self) -> QueryId {
         self.query
     }
@@ -238,13 +254,11 @@ impl Task {
                         };
                         self.reads.merge(&body.outcome.reads);
                         if let Some(summary) = &body.outcome.summary {
-                            file.source_rules |= summary.summary.calls.iter().any(|call| {
-                                call.callee.path().is_core("region.with")
-                                    || !hirsel_types::core_roles::table_key_parameters(
-                                        call.callee.path(),
-                                    )
-                                    .is_empty()
-                            });
+                            file.source_rules |= summary
+                                .summary
+                                .calls
+                                .iter()
+                                .any(|call| call.callee.path().is_core("region.with"));
                         }
                         match body.outcome.result {
                             Ok(output) => {
@@ -291,19 +305,29 @@ impl Task {
                                 }
                             }
                             Err(reference) => {
-                                let output = self
-                                    .queries
-                                    .plan
-                                    .front
-                                    .outcome(reference)
-                                    .ok_or(reference)?;
-                                let error = output
-                                    .outcome
-                                    .result
-                                    .err()
-                                    .ok_or(self.queries.errors.protocol)?;
+                                let (error, phase) = if let Some(output) =
+                                    self.queries.plan.front.outcome(reference)
+                                {
+                                    (
+                                        output
+                                            .outcome
+                                            .result
+                                            .err()
+                                            .ok_or(self.queries.errors.protocol)?,
+                                        output.outcome.phase,
+                                    )
+                                } else {
+                                    (
+                                        self.queries
+                                            .plan
+                                            .growth
+                                            .failure(reference)
+                                            .ok_or(reference)?,
+                                        Some(QueryKind::Check),
+                                    )
+                                };
                                 for file in self.files.iter_mut().filter(|file| file.clean()) {
-                                    file.error(error.clone(), output.outcome.phase);
+                                    file.error(error.clone(), phase);
                                 }
                             }
                         }
@@ -536,11 +560,12 @@ impl QueryEngine {
             }
             files.push(input);
         }
-        let roots: usize = files.iter().map(|file| file.paths.len()).sum();
-        if (roots as u64)
-            .checked_mul(8192)
-            .and_then(|n| n.checked_add(weight.retained))
-            .is_none_or(|n| n > allowance.bytes())
+        let definitions: Vec<_> = files
+            .iter()
+            .flat_map(|file| file.paths.iter().map(|(path, _)| path.clone()))
+            .collect();
+        if FrontCheckQueries::input_bytes(&definitions, files.len(), weight)
+            .is_none_or(|required| required > allowance.bytes())
         {
             return Err(refusal());
         }
