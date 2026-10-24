@@ -13,6 +13,8 @@ use std::sync::Arc;
 /// that every caller performed their transformations.
 #[derive(Clone, Debug, Default)]
 pub struct RequestWork {
+    /// Retained-body allowance of the selected front owner.
+    pub hold_bytes: u64,
     pub store_adoptions: u64,
     pub recomputations: u64,
     pub front: WorkStats,
