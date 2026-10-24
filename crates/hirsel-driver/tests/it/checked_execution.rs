@@ -1131,3 +1131,53 @@ fn nested_list_builder_aliases_trap_even_with_forged_noalloc_body() {
         }
     });
 }
+
+#[test]
+fn dropped_temporary_views_release_their_checked_holders() {
+    with_compiler_stack(|| {
+        let source = r#"
+type View { values: List[u64] }
+fn view(values: List[u64]) -> View in values { View(values: copy values) }
+fn count(v: View) -> u64 { list.len(v.values) }
+fn consume(take values: unique List[u64]) -> u64 { list.len(values) }
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let values: unique List[u64] = [7u64]
+  let _ = count(view(values))
+  let n = consume(take values)
+  if n == 1u64 { let _ = out.print(io.stdout(rt)?, "one\n") }
+  Ok(())
+}
+"#;
+        let mut engine = accepted(source);
+        assert_eq!(printed(run(&mut engine, &[], false)), "one\n");
+        assert_eq!(printed(run(&mut engine, &[], true)), "one\n");
+    });
+}
+
+#[test]
+fn dropped_borrowed_resources_finish_before_unique_consumption() {
+    with_compiler_stack(|| {
+        let source = r#"
+resource type Watch { values: List[u64], stdout: Stdout }
+drop(w) {
+  failure.check(list.len(w.values) == 1u64, TextInvariant())
+  let _ = out.print(w.stdout, "released\n")
+}
+fn watch(values: List[u64], stdout: Stdout) -> Watch in values {
+  Watch(values: copy values, stdout: stdout)
+}
+fn consume(take values: unique List[u64]) -> u64 { list.len(values) }
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let stdout = io.stdout(rt)?
+  let values: unique List[u64] = [7u64]
+  let _ = watch(values, stdout)
+  let n = consume(take values)
+  if n == 1u64 { let _ = out.print(stdout, "one\n") }
+  Ok(())
+}
+"#;
+        let mut engine = accepted(source);
+        assert_eq!(printed(run(&mut engine, &[], false)), "released\none\n");
+        assert_eq!(printed(run(&mut engine, &[], true)), "released\none\n");
+    });
+}

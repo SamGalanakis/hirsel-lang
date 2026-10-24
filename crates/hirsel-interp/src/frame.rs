@@ -687,6 +687,14 @@ impl Frame {
             }
         }
         let value = self.extract(operand)?;
+        // Administrative moves transfer the holder with the value. Leaving
+        // its shadow in an emptied staging slot would keep a later-dropped
+        // counted alias alive until EndScope. A mut inline handback may keep
+        // its source value, so clear only storage extraction actually emptied.
+        if operand.usage == UseKind::Take && self.slot_ref(operand.place).is_ok_and(Option::is_none)
+        {
+            self.set_shadow(operand.place, Default::default())?;
+        }
         if operand.usage == UseKind::Copy {
             if let Some(check) = &self.check {
                 shadow = shadow.copy_out(&value, &check.state.borrow());
@@ -1104,7 +1112,7 @@ impl Frame {
                 Work::Release(value, ..) => value.logical_bytes(),
                 Work::Resume(result, callback) => crate::resources::result_bytes(result)
                     .saturating_add(callback.state.logical_bytes()),
-                Work::Action(..) | Work::Chain(..) | Work::Retire(..) => 0,
+                Work::Action(..) | Work::Chain(..) | Work::Retire(..) | Work::RetireShadow(..) => 0,
             });
         }
         total
@@ -1125,7 +1133,8 @@ impl Drop for Frame {
                 }
                 crate::resources::Work::Action(..)
                 | crate::resources::Work::Chain(..)
-                | crate::resources::Work::Retire(..) => (),
+                | crate::resources::Work::Retire(..)
+                | crate::resources::Work::RetireShadow(..) => (),
             }
         }
         if let Some(crate::resources::Ending::Return(value)) = self.ending.take() {

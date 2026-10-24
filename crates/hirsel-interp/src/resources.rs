@@ -7,6 +7,9 @@ pub(crate) enum Work {
     Action(CleanupAction, Anchor),
     Chain(hirsel_tir::CleanupNodeId, Anchor),
     Release(Value, Anchor, Option<crate::frame::CallerSite>),
+    /// A dropped slot no longer owns its shadow. Keep its holders through the
+    /// preceding release, including nested releases and suspended finalizers.
+    RetireShadow(crate::checked::Shadow),
     Resume(crate::OperationResult, Box<Callback>),
 }
 pub(crate) enum Ending {

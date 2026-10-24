@@ -1339,7 +1339,7 @@ pub(crate) fn execute_frames(
                     }
                     match action {
                         CleanupAction::Drop { place, if_live } => {
-                            frame.access(place, "drop")?;
+                            let shadow = frame.access(place, "drop")?;
                             let value = match frame.slot(place) {
                                 Ok(slot) => slot.take(),
                                 Err(
@@ -1369,17 +1369,26 @@ pub(crate) fn execute_frames(
                             }
                             if let Some(value) = value {
                                 checked_release_order(frame, place, &value)?;
+                                frame.set_shadow(place, Default::default())?;
+                                if frame.check.is_some() {
+                                    frame
+                                        .work
+                                        .push_front(crate::resources::Work::RetireShadow(shadow));
+                                }
                                 frame.work.push_front(crate::resources::Work::Release(
                                     value,
                                     anchor,
                                     frame.caller.clone(),
                                 ));
+                            } else {
+                                frame.set_shadow(place, Default::default())?;
                             }
                         }
                         CleanupAction::EndLoan { .. } => (),
                         _ => return Err(Error::Unavailable("M2 cleanup".into())),
                     }
                 }
+                crate::resources::Work::RetireShadow(shadow) => drop(shadow),
                 crate::resources::Work::Release(mut value, anchor, caller) => {
                     // The arena opener owns the physical scope guard. Ending
                     // its grant is mechanical, not a simulated handle drop;
@@ -2113,14 +2122,14 @@ pub(crate) fn execute_frames(
                 },
                 &InstructionKind::Drop { place, if_live } => {
                     arena_write(frame, place, false, &mut budgets).and_then(|()| {
-                        frame
-                            .access(place, "drop")
-                            .and_then(|_| frame.slot(place))
-                            .map(|slot| Action::Drop {
-                                value: slot.take(),
-                                if_live,
-                            })
-                            .map_err(EvalError::from)
+                        let shadow = frame.access(place, "drop")?;
+                        let value = frame.slot(place)?.take();
+                        frame.set_shadow(place, Default::default())?;
+                        Ok(Action::Drop {
+                            value,
+                            if_live,
+                            shadow,
+                        })
                     })
                 }
                 &InstructionKind::RunCleanup(id) => Ok(Action::Cleanup(id)),
@@ -2256,7 +2265,11 @@ pub(crate) fn execute_frames(
             }
             Err(EvalError::Api(error)) => return Err(error),
             Ok(Action::Continue) => (),
-            Ok(Action::Drop { value, if_live }) => {
+            Ok(Action::Drop {
+                value,
+                if_live,
+                shadow,
+            }) => {
                 if value.is_none() && !if_live {
                     return Err(invalid("unconditional drop of dead storage"));
                 }
@@ -2266,6 +2279,11 @@ pub(crate) fn execute_frames(
                         anchor(frame, site),
                         frame.caller.clone(),
                     ));
+                    if frame.check.is_some() {
+                        frame
+                            .work
+                            .push_back(crate::resources::Work::RetireShadow(shadow));
+                    }
                 }
             }
             Ok(Action::Cleanup(id)) => enqueue_cleanup(frame, id, site)?,
@@ -3233,6 +3251,7 @@ enum Action {
     Drop {
         value: Option<Value>,
         if_live: bool,
+        shadow: crate::checked::Shadow,
     },
     Cleanup(CleanupId),
     Continue,
