@@ -318,7 +318,9 @@ pub fn forget_read_crossing_requirements(
 }
 
 /// Physical owned-part paths; this is a traversal result, never a new type form.
-#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(
+    serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd,
+)]
 pub enum OwnedTypePart {
     Field(u32),
     VariantField { variant: u32, field: u32 },

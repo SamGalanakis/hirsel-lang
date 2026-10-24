@@ -833,6 +833,20 @@ pub fn canonical_type_encoding(
     Ok(encoder.bytes)
 }
 
+/// The original substituted source TYPE identity used by closed storage.
+/// Native function types erase axes this retains. This identifies a rooted
+/// type, not its expanded payload graph or the contents of an environment.
+pub fn closed_storage_source_type(
+    store: &TypeInterner,
+    root: TypeId,
+) -> Result<ContentHash, EncodingError> {
+    let bytes = canonical_type_encoding(store, root)?;
+    Ok(ContentHash::of_parts(
+        "hirsel.closed-storage-source-type.v1",
+        [bytes.as_slice()],
+    ))
+}
+
 /// Canonical specialization arguments use the same rooted type renderer.
 pub fn canonical_argument_encoding(
     store: &TypeInterner,

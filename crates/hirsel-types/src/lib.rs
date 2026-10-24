@@ -9,6 +9,7 @@ pub mod entry;
 pub use encoding::signature_types;
 pub mod rows;
 pub mod serialization;
+pub mod storage;
 pub mod wire;
 pub use serialization::{serializable_schema, structural_serializable};
 mod slice;

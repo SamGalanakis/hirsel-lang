@@ -1178,6 +1178,7 @@ dependencies = [
 name = "hirsel-type-analysis"
 version = "0.1.0"
 dependencies = [
+ "hirsel-graph",
  "hirsel-guard",
  "hirsel-intern",
  "hirsel-syntax",
