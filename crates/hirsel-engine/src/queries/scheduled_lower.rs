@@ -2,10 +2,12 @@
 //! preparation and interpreter state on the admitted home worker. Publication
 //! into a source namespace remains a separate ordered transaction.
 use super::*;
+mod evidence;
 use crate::comptime::{EvaluationInput, PreparingSource, ValuePreparation};
 use crate::memo::{DepthEvidence, dependency_limit};
 use crate::runtime::*;
 use crate::store::{Domain, EntryKey, Reference, ResultStore};
+use evidence::Evidence;
 use hirsel_tir::{DefinitionRef, Materialized, MaterializedRef};
 use std::{
     cell::RefCell,
@@ -20,15 +22,15 @@ pub const FRONT_LOWER_KIND: u32 = 0x4600_0003;
 pub const FRONT_EVALUATE_KIND: u32 = 0x4600_0004;
 const FAILURE: Domain = Domain {
     kind: 0x4600_0005,
-    schema: 2,
+    schema: 3,
 };
 const LOWER_DESCRIPTOR: Domain = Domain {
     kind: 0x4600_0006,
-    schema: 2,
+    schema: 3,
 };
 const CONSTANT_DESCRIPTOR: Domain = Domain {
     kind: 0x4600_0007,
-    schema: 2,
+    schema: 3,
 };
 /// Physical producer work, including work before an eventual failure.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -55,6 +57,7 @@ struct LowerProduct {
     diagnostics: Vec<Diagnostic>,
     dependencies: Vec<SignatureDependency>,
     verified: Option<hirsel_validate::VerifiedDefinitionOutput>,
+    acceptance: Option<hirsel_validate::AcceptedArtifact>,
 }
 impl LowerProduct {
     fn decode(&self, owner: &FrontLowerQueries) -> Option<QueryOutput<DefinitionRef>> {
@@ -72,6 +75,9 @@ struct Outcome {
     result: Result<Value, QueryError>,
     reads: Reads,
     depth: DepthEvidence<Span>,
+    executed: bool,
+    execution: Option<hirsel_validate::ExecutionReceipt>,
+    execution_subject: ContentHash,
 }
 /// A held Lower product keeps immutable source/output admission alive. The
 /// ordinary archive is data; native consumers independently validate it.
@@ -80,6 +86,8 @@ pub struct FrontLowerOutput {
     pub output: QueryOutput<DefinitionRef>,
     pub reads: Reads,
     pub depth: DepthEvidence<Span>,
+    pub execution: Option<hirsel_validate::ExecutionReceipt>,
+    pub execution_subject: ContentHash,
     pub body: Reference,
     pub implementation_revision: ContentHash,
     pub signature: ContentHash,
@@ -170,6 +178,91 @@ impl FrontLowerQueries {
             .map(|(path, work)| (path.clone(), *work))
             .collect()
     }
+    pub fn sources(&self) -> &SourceMap {
+        &self.sources
+    }
+    pub fn runtime_types(&self) -> Arc<hirsel_interp::aggregate::RuntimeTypes> {
+        self.runtime.clone()
+    }
+    pub fn signatures(&self) -> Arc<SignatureSnapshot> {
+        self.snapshot.clone()
+    }
+    pub fn signature(&self, path: &DefPath) -> Result<hirsel_types::SignatureRef, QueryError> {
+        self.snapshot
+            .signature(DefId::intern(path))
+            .ok_or(QueryError::NotImplemented)?
+            .map(Arc::clone)
+            .map_err(Clone::clone)
+    }
+    pub fn settled_definition(
+        self: &Arc<Self>,
+        path: &DefPath,
+    ) -> Result<DefinitionRef, QueryError> {
+        let id = self.query(path).ok_or(QueryError::NotImplemented)?;
+        let selected = self
+            .outcomes
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&(id.kind, id.address.0))
+            .cloned()
+            .ok_or(QueryError::NotImplemented)?;
+        match selected.1.result? {
+            Value::Lower(lower) => lower
+                .decode(self)
+                .map(|output| output.value)
+                .ok_or(QueryError::NotImplemented),
+            _ => Err(QueryError::NotImplemented),
+        }
+    }
+    pub fn settled_constant(
+        &self,
+        path: &DefPath,
+        arguments: &[u64],
+    ) -> Result<MaterializedRef, QueryError> {
+        if !arguments.is_empty() {
+            return Err(QueryError::NotImplemented);
+        }
+        let id = self
+            .evaluate_query(path)
+            .ok_or(QueryError::NotImplemented)?;
+        let selected = self
+            .outcomes
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&(id.kind, id.address.0))
+            .cloned()
+            .ok_or(QueryError::NotImplemented)?;
+        match selected.1.result? {
+            Value::Constant(value, _) => Ok(Arc::new(value)),
+            _ => Err(QueryError::NotImplemented),
+        }
+    }
+    pub fn settled_constants(&self) -> Vec<DefPath> {
+        let outcomes = self.outcomes.lock().unwrap_or_else(|e| e.into_inner());
+        self.inputs
+            .keys()
+            .filter(|path| {
+                self.evaluate_query(path).is_some_and(|id| {
+                    outcomes
+                        .get(&(id.kind, id.address.0))
+                        .is_some_and(|(_, outcome)| {
+                            matches!(outcome.result, Ok(Value::Constant(..)))
+                        })
+                })
+            })
+            .cloned()
+            .collect()
+    }
+    pub fn settled_instance(
+        &self,
+        path: &DefPath,
+        arguments: &[hirsel_types::GenericArgument],
+    ) -> Result<Option<DefPath>, QueryError> {
+        self.instances
+            .resolve(DefId::intern(path), self.snapshot.types(), arguments)
+            .map(|selected| selected.map(|id| id.path().clone()))
+    }
+
     pub fn work(&self, path: &DefPath) -> FrontLowerWork {
         self.work
             .lock()
@@ -226,6 +319,8 @@ impl FrontLowerQueries {
         let lower = lower.clone();
         let reads = outcome.reads.clone();
         let depth = outcome.depth.clone();
+        let execution = outcome.execution.clone();
+        let execution_subject = outcome.execution_subject;
         drop(outcomes);
         let output = lower.decode(self)?;
         let input = self.inputs.get(lower.definition.path())?;
@@ -239,6 +334,8 @@ impl FrontLowerQueries {
             output,
             reads,
             depth,
+            execution,
+            execution_subject,
             body: lower.body,
             implementation_revision: input.implementation,
             signature,
@@ -313,6 +410,10 @@ impl FrontLowerQueries {
                 self.limits.call_depth,
             )))),
             framed: id.kind == FRONT_EVALUATE_KIND,
+            evidence: Rc::new(RefCell::new(Evidence::new(
+                self.verify,
+                self.weight.retained,
+            ))),
         };
         let result = if source.framed && source.depth.borrow().limit() == 0 {
             Err(source.overflow(self.inputs[&path].site))
@@ -326,6 +427,11 @@ impl FrontLowerQueries {
         let observed = std::mem::take(&mut *source.observed.borrow_mut())
             .finish()
             .map_err(|_| self.errors.protocol)?;
+        let executed = source.evidence.borrow().executed;
+        let execution = result
+            .as_ref()
+            .ok()
+            .and_then(|_| source.evidence.borrow().finish(&observed));
         let input = &self.inputs[&path];
         let key = if id.kind == FRONT_LOWER_KIND {
             &input.lower
@@ -342,14 +448,16 @@ impl FrontLowerQueries {
                     &lower.dependencies,
                     &observed,
                     &depth,
+                    executed,
                 ),
             ),
-            Ok(Value::Constant(value, substitutions)) => self
-                .records
-                .encode(&self.anchors, &(value, substitutions, &observed, &depth)),
+            Ok(Value::Constant(value, substitutions)) => self.records.encode(
+                &self.anchors,
+                &(value, substitutions, &observed, &depth, executed),
+            ),
             Err(error) => self
                 .records
-                .encode(&self.anchors, &(&path, error, &observed, &depth)),
+                .encode(&self.anchors, &(&path, error, &observed, &depth, executed)),
         }
         .ok_or(self.errors.resource)?;
         if bytes.len() as u64 > self.weight.retained {
@@ -378,6 +486,12 @@ impl FrontLowerQueries {
                 domain.schema.to_le_bytes().as_slice(),
             ],
         ));
+        let execution_subject = persistent::evaluation_subject(key, &bytes);
+        if let Some(receipt) = &execution
+            && let Some(cache) = self.store.verifier()
+        {
+            cache.publish_execution(execution_subject, receipt);
+        }
         let failed = result.is_err();
         self.outcomes
             .lock()
@@ -390,6 +504,9 @@ impl FrontLowerQueries {
                         result,
                         reads: observed,
                         depth,
+                        executed,
+                        execution,
+                        execution_subject,
                     },
                 ),
             );
@@ -505,14 +622,17 @@ impl FrontLowerQueries {
             );
         }
         let mut verified = None;
+        let mut acceptance = None;
         if self.verify == Verify::On {
             let mut observed = ReadsBuilder::new();
             FrozenProvider::new(&self.snapshot, path.0.package.clone(), &mut observed)
                 .validation_universe();
             source.merge(&observed.finish().map_err(|_| QueryError::NotImplemented)?);
-            let (report, ran, _, evidence) = self
+            let (report, ran, accepted, evidence) = self
                 .snapshot
                 .validate_source_artifact(&definition, |anchor| self.anchors.record_owner(anchor));
+            acceptance = accepted;
+            source.evidence.borrow_mut().accepted(acceptance.clone());
             if ran {
                 timings::count(Count::VRuns);
                 self.count(path, |work| work.validation_runs += 1);
@@ -560,6 +680,7 @@ impl FrontLowerQueries {
             diagnostics: output.diagnostics,
             dependencies,
             verified,
+            acceptance,
         }))
     }
 }
@@ -591,6 +712,7 @@ struct Source {
     observed: Rc<RefCell<ReadsBuilder>>,
     depth: Rc<RefCell<DepthEvidence<Span>>>,
     framed: bool,
+    evidence: Rc<RefCell<Evidence>>,
 }
 impl Source {
     fn overflow(&self, site: Span) -> QueryError {
@@ -630,6 +752,14 @@ impl Source {
             .selected(id, selected)
             .ok_or(QueryError::NotImplemented)?;
         self.merge(&outcome.reads);
+        self.evidence
+            .borrow_mut()
+            .dependency(outcome.executed, outcome.execution.as_ref());
+        if let Ok(Value::Lower(lower)) = &outcome.result {
+            self.evidence
+                .borrow_mut()
+                .accepted(lower.acceptance.clone());
+        }
         let n = u32::from(self.framed);
         let overflow = if kind == FRONT_EVALUATE_KIND {
             self.depth.borrow_mut().observe_frame(&outcome.depth, site);
@@ -810,6 +940,7 @@ async fn evaluate(
         .origin
         .span;
     owner.count(signature.definition.path(), |work| work.initializers += 1);
+    source.evidence.borrow_mut().executed = true;
     let prepared = EvaluationInput {
         analyzed: &analyzed.value,
         staged: &staged,
@@ -830,6 +961,7 @@ async fn evaluate(
         .run_async(&owner.sources, owner.limits, &runtime, &mut source)
         .await;
     source.merge(&product.value.reads);
+    source.evidence.borrow_mut().accepted(product.acceptance);
     let result = product.value.result.and_then(|(value, ty)| {
         let mut observed = ReadsBuilder::new();
         let result = crate::materialized::reify_value(

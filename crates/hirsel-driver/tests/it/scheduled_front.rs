@@ -6,7 +6,7 @@ use hirsel_engine::{
 };
 use std::sync::Arc;
 
-fn errors() -> RuntimeErrors {
+pub(super) fn errors() -> RuntimeErrors {
     let reference = |text: &[u8]| {
         Domain {
             kind: 0x4600_00ff,
@@ -241,6 +241,30 @@ fn admitted_lower_saved_work_and_native_metadata_survive_dependency_suspension()
                     .1
                     .as_ref(),
                 &actual.reads
+            );
+            let actual = lower.outcome(products[0]).unwrap();
+            let execution = actual
+                .execution
+                .as_ref()
+                .expect("actual private execution evidence");
+            assert!(
+                execution.artifacts().len() >= 3,
+                "includes main, A and B private artifacts"
+            );
+            let snapshot = program.engine.signature_snapshot();
+            let cache = store.verifier().unwrap();
+            assert!(
+                cache
+                    .execution(actual.execution_subject, |package| snapshot
+                        .validation_input_digest(package))
+                    .is_some()
+            );
+            assert!(
+                cache
+                    .execution(actual.execution_subject, |_| {
+                        hirsel_syntax::ContentHash::of_bytes(b"changed private view")
+                    })
+                    .is_none()
             );
             let scalar = program.engine.lower_to_tir(&program.entry).unwrap();
             let records = NativeRecords::new(program.engine.types().clone(), store.clone());

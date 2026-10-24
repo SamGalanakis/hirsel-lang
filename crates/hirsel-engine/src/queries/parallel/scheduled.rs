@@ -13,6 +13,7 @@ const FAILURE: Domain = Domain {
     schema: 1,
 };
 type Key = ContentHash;
+type CheckedProduct = Option<(Arc<CheckedSummary>, Arc<Reads>)>;
 struct Input {
     task: Task,
     key: EntryKey,
@@ -35,8 +36,8 @@ pub struct FrontBodyQueries {
     candidates: BTreeMap<DefPath, ContentHash>,
     records: Arc<persistent::TypeRecords>,
     store: Arc<dyn ResultStore>,
-    outcomes: Mutex<BTreeMap<Key, (Reference, ModeResult)>>,
     work: Mutex<BTreeMap<(DefPath, QueryKind), u64>>,
+    outcomes: Mutex<BTreeMap<Key, (Reference, ModeResult, CheckedProduct)>>,
     memos: Mutex<BTreeMap<crate::memo::MemoKey, Arc<Reads>>>,
     errors: RuntimeErrors,
     // Own immutable snapshot and output metadata admission until every task and
@@ -48,6 +49,14 @@ pub struct FrontBodyQueries {
 #[derive(Clone)]
 pub struct FrontBodyOutput {
     pub outcome: ModeResult,
+    _snapshot: Arc<FrontBodyQueries>,
+}
+/// Checked-only source-growth input. It survives a later Modes failure and
+/// carries the checked stage's complete reads rather than a provisional union.
+#[derive(Clone)]
+pub struct FrontCheckedOutput {
+    pub summary: Arc<CheckedSummary>,
+    pub reads: Arc<Reads>,
     _snapshot: Arc<FrontBodyQueries>,
 }
 impl FrontBodyQueries {
@@ -76,6 +85,17 @@ impl FrontBodyQueries {
             .copied()
             .unwrap_or(0)
     }
+    pub fn checked(self: &Arc<Self>, reference: Reference) -> Option<FrontCheckedOutput> {
+        let outcomes = self.outcomes.lock().unwrap_or_else(|e| e.into_inner());
+        let (_, _, checked) = outcomes.values().find(|(r, _, _)| *r == reference)?;
+        let (summary, reads) = checked.as_ref()?;
+        Some(FrontCheckedOutput {
+            summary: summary.clone(),
+            reads: reads.clone(),
+            _snapshot: self.clone(),
+        })
+    }
+
     pub fn query(&self, definition: &DefPath) -> Option<QueryId> {
         self.inputs.iter().find_map(|(&address, input)| {
             (input.task.definition == *definition).then_some(QueryId {
@@ -94,7 +114,7 @@ impl FrontBodyQueries {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .values()
-            .find_map(|(selected, outcome)| {
+            .find_map(|(selected, outcome, _)| {
                 (*selected == reference).then(|| FrontBodyOutput {
                     outcome: outcome.clone(),
                     _snapshot: self.clone(),
@@ -107,7 +127,7 @@ impl FrontBodyQueries {
             .lock()
             .unwrap()
             .values()
-            .map(|(r, _)| *r)
+            .map(|(r, _, _)| *r)
             .collect()
     }
     fn worker(&self) -> Worker<'_> {
@@ -205,6 +225,7 @@ impl BodyTask {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .extend(completed.memo_snapshot(&mut source));
+        let checked = completed.checked_product();
         let published = completed.outcome().clone();
         let outcome = ModeResult {
             definition: published.definition.clone(),
@@ -270,7 +291,7 @@ impl BodyTask {
             .outcomes
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .insert(self.query.address.0, (record, outcome));
+            .insert(self.query.address.0, (record, outcome, checked));
         if failed {
             return Err(record);
         }

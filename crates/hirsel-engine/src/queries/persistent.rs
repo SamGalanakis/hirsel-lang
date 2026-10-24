@@ -520,7 +520,7 @@ fn persisted_execution_reads(
     }
     Reads::from_vec(reads).ok()
 }
-fn evaluation_subject(key: &EntryKey, payload: &[u8]) -> ContentHash {
+pub(super) fn evaluation_subject(key: &EntryKey, payload: &[u8]) -> ContentHash {
     ContentHash::of_parts(
         "hirsel.validate.evaluated-output.v1",
         [key.0.0.as_slice(), key.1.0.as_slice(), payload],

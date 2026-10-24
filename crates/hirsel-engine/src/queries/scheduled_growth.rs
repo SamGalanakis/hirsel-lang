@@ -1,0 +1,263 @@
+//! Source GEN-5 over every required checked root. Native reachability never
+//! selects this root set. Pending reads retain the frontier and bounded edges;
+//! factories and output inspection execute no compiler phase.
+use super::*;
+use crate::runtime::*;
+use crate::store::{Domain, Reference, ResultStore};
+use std::{sync::Mutex, task::Poll};
+pub const FRONT_GROWTH_KIND: u32 = 0x4600_0008;
+const OUTPUT: Domain = Domain {
+    kind: 0x4600_0009,
+    schema: 1,
+};
+struct Data {
+    growth: Arc<ParameterGrowth>,
+    diagnostics: Arc<Vec<Diagnostic>>,
+    reads: Arc<Reads>,
+}
+pub struct FrontGrowthQueries {
+    query: QueryId,
+    roots: Vec<QueryId>,
+    front: Arc<FrontBodyQueries>,
+    items: Arc<crate::NativeRecordContext>,
+    records: crate::NativeRecords,
+    sources: SourceMap,
+    store: Arc<dyn ResultStore>,
+    completed: Mutex<Option<(ProductRef, Arc<Data>)>>,
+    weight: MemoryWeight,
+    errors: RuntimeErrors,
+    _allowance: MemoryReservation,
+}
+#[derive(Clone)]
+pub struct FrontGrowthOutput {
+    pub growth: Arc<ParameterGrowth>,
+    pub diagnostics: Arc<Vec<Diagnostic>>,
+    pub reads: Arc<Reads>,
+    _owner: Arc<FrontGrowthQueries>,
+}
+impl FrontGrowthQueries {
+    pub fn query(&self) -> QueryId {
+        self.query
+    }
+    pub fn factory(self: &Arc<Self>) -> Arc<dyn QueryFactory> {
+        Arc::new(Factory(self.clone()))
+    }
+    pub fn outcome(self: &Arc<Self>, product: ProductRef) -> Option<FrontGrowthOutput> {
+        let completed = self.completed.lock().unwrap_or_else(|e| e.into_inner());
+        let (selected, data) = completed.as_ref()?;
+        (*selected == product).then(|| FrontGrowthOutput {
+            growth: data.growth.clone(),
+            diagnostics: data.diagnostics.clone(),
+            reads: data.reads.clone(),
+            _owner: self.clone(),
+        })
+    }
+}
+struct Factory(Arc<FrontGrowthQueries>);
+impl QueryFactory for Factory {
+    fn create(&self, id: QueryId) -> Result<Box<dyn QueryTask>, Reference> {
+        if id != self.0.query {
+            return Err(self.0.errors.protocol);
+        }
+        Ok(Box::new(Task {
+            queries: self.0.clone(),
+            selected: vec![None; self.0.roots.len()],
+            cursor: 0,
+            edges: Vec::new(),
+            reads: ReadsBuilder::new(),
+            terminal: None,
+        }))
+    }
+}
+struct Task {
+    queries: Arc<FrontGrowthQueries>,
+    selected: Vec<Option<Result<ProductRef, Reference>>>,
+    cursor: usize,
+    edges: Vec<crate::GrowthEdge>,
+    reads: ReadsBuilder,
+    terminal: Option<Result<ProductRef, Reference>>,
+}
+impl QueryTask for Task {
+    fn id(&self) -> QueryId {
+        self.queries.query
+    }
+    fn weight(&self) -> MemoryWeight {
+        self.queries.weight
+    }
+    fn poll(&mut self, cx: &mut dyn QueryContext) -> QueryPoll {
+        if let Some(result) = self.terminal {
+            return finish(result);
+        }
+        match self.advance(cx) {
+            Poll::Pending => QueryPoll::Waiting(
+                self.queries
+                    .roots
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, id)| self.selected[i].is_none().then_some(*id))
+                    .collect(),
+            ),
+            Poll::Ready(result) => {
+                self.terminal = Some(result);
+                finish(result)
+            }
+        }
+    }
+}
+fn finish(result: Result<ProductRef, Reference>) -> QueryPoll {
+    match result {
+        Ok(product) => QueryPoll::Complete(product),
+        Err(error) => QueryPoll::Failed(error),
+    }
+}
+impl Task {
+    fn advance(&mut self, cx: &mut dyn QueryContext) -> Poll<Result<ProductRef, Reference>> {
+        for (i, query) in self.queries.roots.iter().enumerate() {
+            if self.selected[i].is_none()
+                && let Poll::Ready(result) = cx.read(*query)
+            {
+                self.selected[i] = Some(result);
+            }
+        }
+        while let Some(Some(selected)) = self.selected.get(self.cursor).copied() {
+            let reference = selected.map(|p| p.record).unwrap_or_else(|r| r);
+            let Some(checked) = self.queries.front.checked(reference) else {
+                return Poll::Ready(Err(selected.err().unwrap_or(self.queries.errors.protocol)));
+            };
+            self.reads.merge(&checked.reads);
+            self.edges
+                .extend(checked.summary.growth.edges.iter().cloned());
+            if (self.edges.len() as u64)
+                .saturating_mul(std::mem::size_of::<crate::GrowthEdge>() as u64)
+                > self.queries.weight.retained
+            {
+                return Poll::Ready(Err(self.queries.errors.resource));
+            }
+            self.cursor += 1;
+        }
+        if self.cursor < self.selected.len() {
+            return Poll::Pending;
+        }
+        Poll::Ready(self.complete())
+    }
+    fn complete(&mut self) -> Result<ProductRef, Reference> {
+        let queries = &self.queries;
+        let reads = std::mem::take(&mut self.reads)
+            .finish()
+            .map_err(|_| queries.errors.protocol)?;
+        let growth = ParameterGrowth {
+            edges: std::mem::take(&mut self.edges).into(),
+        };
+        let diagnostics = crate::select_diagnostics(
+            crate::growing_sites(&growth.edges)
+                .into_iter()
+                .map(|site| {
+                    Diagnostic::error(
+                        const { RuleId::of("GEN-5") },
+                        site,
+                        "a recursive instantiation cycle grows its type arguments",
+                    )
+                })
+                .collect(),
+            Some(&queries.sources),
+        );
+        let bytes = queries
+            .records
+            .encode(&*queries.items, &(&growth, &diagnostics, &reads))
+            .ok_or(queries.errors.resource)?;
+        if bytes.len() as u64 > queries.weight.retained {
+            return Err(queries.errors.resource);
+        }
+        let record = queries
+            .store
+            .put_content(OUTPUT, &bytes)
+            .ok_or(queries.errors.resource)?;
+        // Canonical required member outputs, not completion order or type IDs,
+        // identify the actual source-growth computation.
+        let mut members = Vec::new();
+        for selected in self.selected.iter().flatten() {
+            match selected {
+                Ok(product) => members.extend(product.record.output.0.0),
+                Err(reference) => members.extend(reference.output.0.0),
+            }
+        }
+        let action = hirsel_artifact_store::Action(ContentHash::of_parts(
+            "hirsel.front.source-growth.action.v1",
+            [queries.query.address.0.0.as_slice(), members.as_slice()],
+        ));
+        let product = ProductRef {
+            address: queries.query.address,
+            action,
+            record,
+        };
+        let data = Arc::new(Data {
+            growth: Arc::new(growth),
+            diagnostics: Arc::new(diagnostics),
+            reads: Arc::new(reads),
+        });
+        *queries.completed.lock().unwrap_or_else(|e| e.into_inner()) = Some((product, data));
+        queries
+            .store
+            .associate_product(product.address, product.action, product.record);
+        Ok(product)
+    }
+}
+impl QueryEngine {
+    /// Capture the complete selected source-root set, including declarations
+    /// never executed by the launch entry. A partial front view is refused.
+    pub fn front_growth_queries(
+        &mut self,
+        root: &DefPath,
+        front: Arc<FrontBodyQueries>,
+        weight: MemoryWeight,
+        allowance: MemoryReservation,
+        errors: RuntimeErrors,
+    ) -> Result<Arc<FrontGrowthQueries>, QueryError> {
+        let refusal = || {
+            QueryError::Operational(hirsel_types::OperationalFailure {
+                operation: "source growth admission".into(),
+                message: "required source roots are missing or exceed admission".into(),
+            })
+        };
+        let definitions: Vec<_> = self.source_paths().into_iter().collect();
+        if (definitions.len() as u64)
+            .checked_mul(8192)
+            .and_then(|n| n.checked_add(weight.retained))
+            .is_none_or(|n| n > allowance.bytes())
+        {
+            return Err(refusal());
+        }
+        let roots = definitions
+            .iter()
+            .map(|path| front.query(path).ok_or_else(refusal))
+            .collect::<Result<Vec<_>, _>>()?;
+        let query = QueryId {
+            kind: FRONT_GROWTH_KIND,
+            address: hirsel_artifact_store::Address(ContentHash::of_parts(
+                "hirsel.front.source-growth.address.v1",
+                [
+                    self.environment_value().0.as_slice(),
+                    root.fingerprint().0.as_slice(),
+                ],
+            )),
+        };
+        let store = self
+            .result_store
+            .clone()
+            .filter(|s| s.enabled())
+            .ok_or_else(refusal)?;
+        Ok(Arc::new(FrontGrowthQueries {
+            query,
+            roots,
+            front,
+            items: Arc::new(crate::NativeRecordContext::capture(self)),
+            records: crate::NativeRecords::new(self.types.clone(), store.clone()),
+            sources: self.sources.clone(),
+            store,
+            completed: Mutex::new(None),
+            weight,
+            errors,
+            _allowance: allowance,
+        }))
+    }
+}
