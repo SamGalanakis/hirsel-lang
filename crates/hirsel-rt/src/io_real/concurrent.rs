@@ -86,9 +86,15 @@ impl ConcurrentIo {
         request: Request,
         observed: &mut Option<u64>,
     ) -> Result<Completion, AdapterError> {
-        // Ready/Schedule are recorder notifications, never host call payloads.
+        // Scheduling and timed-process recorder notifications are never host call payloads.
         // Reject them explicitly instead of reaching State's filesystem dispatch.
-        if matches!(request, Request::Ready { .. } | Request::Schedule { .. }) {
+        if matches!(
+            request,
+            Request::Ready { .. }
+                | Request::Schedule { .. }
+                | Request::ProcessTime { .. }
+                | Request::ProcessSettle { .. }
+        ) {
             return Err(AdapterError::InvalidCompletion);
         }
         let positions = self.calls.take(&self.keys(&request));
@@ -303,7 +309,13 @@ impl ConcurrentAdapter for ConcurrentIo {
             .tls_server(stream, identities, clients, alpn);
     }
     fn preflight(&self, request: &Request) -> Result<Option<Completion>, AdapterError> {
-        if matches!(request, Request::Ready { .. } | Request::Schedule { .. }) {
+        if matches!(
+            request,
+            Request::Ready { .. }
+                | Request::Schedule { .. }
+                | Request::ProcessTime { .. }
+                | Request::ProcessSettle { .. }
+        ) {
             return Err(AdapterError::InvalidCompletion);
         }
         self.core.lock().unwrap().preflight(request)

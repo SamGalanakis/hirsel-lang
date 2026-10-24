@@ -1,5 +1,6 @@
 //! Real-adapter claim/withdraw/quarantine controls over the exhaustive Request inventory.
 use hirsel_free::claim::{Claim, Requests};
+use hirsel_rt::io::{AdapterError, Request};
 use hirsel_rt::io_concurrent::ConcurrentAdapter;
 use hirsel_rt::io_real::RealIo;
 use std::sync::Arc;
@@ -42,7 +43,17 @@ fn every_real_request_obeys_claim_cut_at_widths_one_and_eight() {
                         assert!(record.claim());
                         assert!(!record.claim(), "duplicate issue");
                         assert_eq!(table.sweep().in_doubt, [index as u64]);
-                        let _quarantined = io.call_at(worker as u64 + 1, record.buffers().clone());
+                        let quarantined = io.call_at(worker as u64 + 1, record.buffers().clone());
+                        if matches!(
+                            request,
+                            Request::Ready { .. }
+                                | Request::Schedule { .. }
+                                | Request::ProcessTime { .. }
+                                | Request::ProcessSettle { .. }
+                        ) {
+                            assert_eq!(quarantined, Err(AdapterError::InvalidCompletion));
+                            assert_eq!(io.preflight(request), Err(AdapterError::InvalidCompletion));
+                        }
                         record.finish();
                         assert_eq!(record.state(), Claim::Done);
                     }

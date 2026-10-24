@@ -1658,6 +1658,10 @@ impl State {
             bytes[..n].to_vec()
         };
         match request {
+            R::Ready { .. }
+            | R::Schedule { .. }
+            | R::ProcessTime { .. }
+            | R::ProcessSettle { .. } => Err(AdapterError::InvalidCompletion),
             R::MonotonicClock { io } | R::WallClock { io } => {
                 self.expect(*io, Grant::Io)?;
                 let monotonic = matches!(request, R::MonotonicClock { .. });
