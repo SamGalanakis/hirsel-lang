@@ -803,12 +803,15 @@ type LiveWitness = fn(&Output, &hirsel_free::tape::Tape, &Scratch, &str);
 struct Cells {
     levels: &'static [&'static str],
     engines: &'static [&'static [&'static str]],
+    dimensions: &'static [(&'static str, usize)],
 }
 
 impl Cells {
+    const DIMENSIONS: &'static [(&'static str, usize)] = &[("1", 1), ("1", 8), ("8", 1), ("8", 8)];
     const ALL: Cells = Cells {
         levels: &["record", "durable"],
         engines: &ENGINES,
+        dimensions: Self::DIMENSIONS,
     };
     const INTERPRETER: &'static [&'static [&'static str]] = &[&[]];
     const NATIVE: &'static [&'static [&'static str]] =
@@ -816,6 +819,7 @@ impl Cells {
     const fn part(durable: bool, native: bool) -> Cells {
         Cells {
             levels: if durable { &["durable"] } else { &["record"] },
+            dimensions: Self::DIMENSIONS,
             engines: if native {
                 Cells::NATIVE
             } else {
@@ -912,35 +916,33 @@ fn f1_corpus_matrix_cells(
             })
             .collect();
         for &engine in cells.engines {
-            for width in ["1", "8"] {
-                for permits in [1, 8] {
-                    let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
-                    command
-                        .arg("run")
-                        .args(engine)
-                        .arg(&program)
-                        .arg("--replay")
-                        .arg(&tape)
-                        .args(["--cores", width])
-                        .env(hirsel_rt::free_replay::Report::VAR, &report);
-                    f1_permits(&mut command, permits);
-                    let cell = format!("{name} {level} {engine:?} width {width} permits {permits}");
-                    command.stdin(std::process::Stdio::null());
-                    let replay = bounded_output(&mut command, &program, &cell);
+            for &(width, permits) in cells.dimensions {
+                let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+                command
+                    .arg("run")
+                    .args(engine)
+                    .arg(&program)
+                    .arg("--replay")
+                    .arg(&tape)
+                    .args(["--cores", width])
+                    .env(hirsel_rt::free_replay::Report::VAR, &report);
+                f1_permits(&mut command, permits);
+                let cell = format!("{name} {level} {engine:?} width {width} permits {permits}");
+                command.stdin(std::process::Stdio::null());
+                let replay = bounded_output(&mut command, &program, &cell);
+                assert_eq!(
+                    replay.status.code(),
+                    live.status.code(),
+                    "{cell}: {replay:?}"
+                );
+                assert_eq!(replay.stdout, live.stdout, "{cell}");
+                assert_eq!(replay.stderr, live.stderr, "{cell}");
+                if let Some(projection) = &projection {
                     assert_eq!(
-                        replay.status.code(),
-                        live.status.code(),
-                        "{cell}: {replay:?}"
+                        &std::fs::read_to_string(&report).unwrap(),
+                        projection,
+                        "{cell}: full normalized projection"
                     );
-                    assert_eq!(replay.stdout, live.stdout, "{cell}");
-                    assert_eq!(replay.stderr, live.stderr, "{cell}");
-                    if let Some(projection) = &projection {
-                        assert_eq!(
-                            &std::fs::read_to_string(&report).unwrap(),
-                            projection,
-                            "{cell}: full normalized projection"
-                        );
-                    }
                 }
             }
         }
@@ -2387,8 +2389,63 @@ fn f1_scope_deadline_phases_replay_with_exact_expiration_causes_record_interpret
 }
 
 #[test]
-fn f1_scope_deadline_phases_replay_with_exact_expiration_causes_record_native() {
-    f1_deadline_matrix(false, Cells::part(false, true));
+fn f1_scope_deadline_phases_record_llvm() {
+    f1_deadline_matrix(
+        false,
+        Cells {
+            levels: &["record"],
+            engines: &[&["--native"]],
+            dimensions: Cells::DIMENSIONS,
+        },
+    );
+}
+
+#[test]
+fn f1_scope_deadline_phases_record_cranelift_width1_permits1() {
+    f1_deadline_matrix(
+        false,
+        Cells {
+            levels: &["record"],
+            engines: &[&["--native", "--backend", "cranelift"]],
+            dimensions: &[("1", 1)],
+        },
+    );
+}
+
+#[test]
+fn f1_scope_deadline_phases_record_cranelift_width1_permits8() {
+    f1_deadline_matrix(
+        false,
+        Cells {
+            levels: &["record"],
+            engines: &[&["--native", "--backend", "cranelift"]],
+            dimensions: &[("1", 8)],
+        },
+    );
+}
+
+#[test]
+fn f1_scope_deadline_phases_record_cranelift_width8_permits1() {
+    f1_deadline_matrix(
+        false,
+        Cells {
+            levels: &["record"],
+            engines: &[&["--native", "--backend", "cranelift"]],
+            dimensions: &[("8", 1)],
+        },
+    );
+}
+
+#[test]
+fn f1_scope_deadline_phases_record_cranelift_width8_permits8() {
+    f1_deadline_matrix(
+        false,
+        Cells {
+            levels: &["record"],
+            engines: &[&["--native", "--backend", "cranelift"]],
+            dimensions: &[("8", 8)],
+        },
+    );
 }
 
 #[test]
