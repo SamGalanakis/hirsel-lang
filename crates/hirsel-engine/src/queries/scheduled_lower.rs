@@ -80,6 +80,57 @@ struct Outcome {
     execution: Option<hirsel_validate::ExecutionReceipt>,
     execution_subject: ContentHash,
 }
+impl Outcome {
+    fn retained_bytes(&self) -> Option<u64> {
+        let mut weight = crate::NativeMetadataWeight::default();
+        weight.add(
+            self.reads
+                .len()
+                .checked_mul(std::mem::size_of::<(ReadKey, ContentHash)>())?,
+        );
+        weight.add(std::mem::size_of_val(&*self.depth.first));
+        match &self.result {
+            Ok(Value::Lower(lower)) => {
+                weight.add(
+                    crate::memo::retained_lowering_output_bytes(
+                        &lower.diagnostics,
+                        &lower.dependencies,
+                    )
+                    .try_into()
+                    .ok()?,
+                );
+                weight.vec(&lower.materialized, |w, (_, value)| w.materialized(value));
+                if let Some(verified) = &lower.verified {
+                    weight.add(verified.retained_bytes()?.try_into().ok()?);
+                }
+                // AcceptedArtifact and every other inline field belong to
+                // the typed B-tree row, charged by outcome_table_bytes.
+            }
+            Ok(Value::Constant(value, substitutions)) => {
+                weight.materialized(value);
+                weight.vec(substitutions, |w, (_, value)| w.materialized(value));
+            }
+            Err(error) => weight.add(
+                crate::memo::retained::retained_query_error_bytes(error)
+                    .try_into()
+                    .ok()?,
+            ),
+        }
+        if let Some(receipt) = &self.execution {
+            weight.add(receipt.retained_bytes()?.try_into().ok()?);
+        }
+        Some(weight.bytes())
+    }
+}
+fn outcome_table_bytes(rows: usize) -> u64 {
+    if rows == 0 {
+        return 0;
+    }
+    let mut weight = crate::NativeMetadataWeight::default();
+    weight.tree::<(u32, ContentHash), (Reference, Outcome, u64)>(rows);
+    weight.bytes()
+}
+
 /// A held Lower product keeps immutable source/output admission alive. The
 /// ordinary archive is data; native consumers independently validate it.
 #[derive(Clone)]
@@ -124,7 +175,7 @@ pub struct FrontLowerQueries {
     anchors: crate::NativeRecordContext,
     records: crate::NativeRecords,
     store: Arc<dyn ResultStore>,
-    outcomes: Mutex<BTreeMap<(u32, ContentHash), (Reference, Outcome)>>,
+    outcomes: Mutex<BTreeMap<(u32, ContentHash), (Reference, Outcome, u64)>>,
     work: Mutex<BTreeMap<DefPath, FrontLowerWork>>,
     weight: MemoryWeight,
     max_reads: usize,
@@ -168,7 +219,7 @@ impl FrontLowerQueries {
                 ]
                 .into_iter()
                 .filter_map(|(kind, phase, address)| {
-                    let (_, outcome) = outcomes.get(&(kind, address))?;
+                    let (_, outcome, _) = outcomes.get(&(kind, address))?;
                     Some((
                         crate::memo::MemoKey::new(phase, DefId::intern(path)),
                         Arc::new(outcome.reads.clone()),
@@ -189,7 +240,7 @@ impl FrontLowerQueries {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .get(&(id.kind, id.address.0))
-            .map(|(_, outcome)| Arc::new(outcome.reads.clone()))
+            .map(|(_, outcome, _)| Arc::new(outcome.reads.clone()))
     }
     pub fn work_snapshot(&self) -> Vec<(DefPath, FrontLowerWork)> {
         self.work
@@ -266,7 +317,7 @@ impl FrontLowerQueries {
                 self.evaluate_query(path).is_some_and(|id| {
                     outcomes
                         .get(&(id.kind, id.address.0))
-                        .is_some_and(|(_, outcome)| {
+                        .is_some_and(|(_, outcome, _)| {
                             matches!(outcome.result, Ok(Value::Constant(..)))
                         })
                 })
@@ -330,7 +381,7 @@ impl FrontLowerQueries {
     }
     pub fn outcome(self: &Arc<Self>, product: ProductRef) -> Option<FrontLowerOutput> {
         let outcomes = self.outcomes.lock().unwrap_or_else(|e| e.into_inner());
-        let (reference, outcome) = outcomes.get(&(FRONT_LOWER_KIND, product.address.0))?;
+        let (reference, outcome, _) = outcomes.get(&(FRONT_LOWER_KIND, product.address.0))?;
         if *reference != product.record {
             return None;
         }
@@ -392,7 +443,7 @@ impl FrontLowerQueries {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .values()
-            .find(|(r, _)| *r == reference)?
+            .find(|(r, _, _)| *r == reference)?
             .1
             .result
             .as_ref()
@@ -405,8 +456,8 @@ impl FrontLowerQueries {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .get(&(id.kind, id.address.0))
-            .filter(|(r, _)| *r == reference)
-            .map(|(_, o)| o.clone())
+            .filter(|(r, _, _)| *r == reference)
+            .map(|(_, o, _)| o.clone())
     }
     async fn run(
         self: Arc<Self>,
@@ -481,35 +532,6 @@ impl FrontLowerQueries {
         if bytes.len() as u64 > self.weight.scratch {
             return Err(self.errors.resource);
         }
-        let mut charge = (bytes.len() as u64)
-            .checked_mul(2)
-            .and_then(|bytes| {
-                bytes.checked_add(
-                    (std::mem::size_of::<Outcome>() + std::mem::size_of::<Reference>() + 128)
-                        as u64,
-                )
-            })
-            .ok_or(self.errors.resource)?;
-        if let Some(receipt) = &execution {
-            charge = charge
-                .checked_add(receipt.retained_bytes().ok_or(self.errors.resource)?)
-                .ok_or(self.errors.resource)?;
-        }
-        if let Ok(Value::Lower(lower)) = &result {
-            if let Some(verified) = &lower.verified {
-                charge = charge
-                    .checked_add(verified.retained_bytes().ok_or(self.errors.resource)?)
-                    .ok_or(self.errors.resource)?;
-            }
-            if lower.acceptance.is_some() {
-                charge = charge
-                    .checked_add(std::mem::size_of::<hirsel_validate::AcceptedArtifact>() as u64)
-                    .ok_or(self.errors.resource)?;
-            }
-        }
-        let mut retention = self.retention.lock().unwrap_or_else(|e| e.into_inner());
-        *retention = retention.checked_sub(charge).ok_or(self.errors.resource)?;
-        drop(retention);
         // Descriptor domains are explicit: an S5 transport descriptor must
         // never overwrite a scalar Lower/Evaluate archive of another schema.
         let domain = if result.is_err() {
@@ -540,23 +562,35 @@ impl FrontLowerQueries {
             cache.publish_execution(execution_subject, receipt);
         }
         let failed = result.is_err();
-        self.outcomes
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(
-                (id.kind, id.address.0),
-                (
-                    record,
-                    Outcome {
-                        result,
-                        reads: observed,
-                        depth,
-                        executed,
-                        execution,
-                        execution_subject,
-                    },
-                ),
-            );
+        let outcome = Outcome {
+            result,
+            reads: observed,
+            depth,
+            executed,
+            execution,
+            execution_subject,
+        };
+        let charge = outcome.retained_bytes().ok_or(self.errors.resource)?;
+        let mut retention = self.retention.lock().unwrap_or_else(|e| e.into_inner());
+        let mut outcomes = self.outcomes.lock().unwrap_or_else(|e| e.into_inner());
+        let selected = (id.kind, id.address.0);
+        let old = outcomes.get(&selected).map(|(_, _, charge)| *charge);
+        let next_len = outcomes
+            .len()
+            .checked_add(usize::from(old.is_none()))
+            .ok_or(self.errors.resource)?;
+        let table_growth = outcome_table_bytes(next_len)
+            .checked_sub(outcome_table_bytes(outcomes.len()))
+            .ok_or(self.errors.resource)?;
+        let remaining = retention
+            .checked_add(old.unwrap_or(0))
+            .and_then(|n| n.checked_sub(charge))
+            .and_then(|n| n.checked_sub(table_growth))
+            .ok_or(self.errors.resource)?;
+        outcomes.insert(selected, (record, outcome, charge));
+        *retention = remaining;
+        drop(outcomes);
+        drop(retention);
         if failed {
             return Err(record);
         }
@@ -1168,5 +1202,47 @@ impl QueryEngine {
             retention,
             _allowance: allowance,
         }))
+    }
+}
+
+#[cfg(test)]
+mod retention_tests {
+    use super::*;
+    #[test]
+    fn retained_outcome_charges_capacity_and_compact_read_rows() {
+        let mut bytes = Vec::with_capacity(64 << 10);
+        bytes.push(1);
+        let capacity = bytes.capacity();
+        let substitutions = Vec::with_capacity(4);
+        let substitutions_bytes =
+            substitutions.capacity() * std::mem::size_of::<(hirsel_syntax::ExprId, Materialized)>();
+        let outcome = Outcome {
+            result: Ok(Value::Constant(
+                Materialized {
+                    root: hirsel_tir::ValueNode {
+                        ty: hirsel_types::TypeId::DANGLING,
+                        kind: hirsel_tir::ValueKind::Constant(hirsel_tir::Constant::Bytes(bytes)),
+                    },
+                },
+                substitutions,
+            )),
+            reads: Reads::from_vec(vec![(
+                ReadKey::Signature(DefId::intern(&DefPath::core(&"long".repeat(4096)))),
+                ContentHash::default(),
+            )])
+            .unwrap(),
+            depth: DepthEvidence::leaf(32),
+            executed: false,
+            execution: None,
+            execution_subject: ContentHash::default(),
+        };
+        let expected = capacity
+            + substitutions_bytes
+            + std::mem::size_of::<(ReadKey, ContentHash)>()
+            + std::mem::size_of_val(&*outcome.depth.first);
+        assert_eq!(outcome.retained_bytes(), Some(expected as u64));
+        assert_eq!(outcome_table_bytes(0), 0);
+        assert!(outcome_table_bytes(1) >= std::mem::size_of::<(Reference, Outcome, u64)>() as u64);
+        assert!(outcome_table_bytes(6) > outcome_table_bytes(1));
     }
 }
