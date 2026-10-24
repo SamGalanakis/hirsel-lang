@@ -235,3 +235,59 @@ impl NativePlatformSelection {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn interactive_backend_optimization_is_explicit_in_codegen_profile_identity() {
+        for backend in [Backend::Cranelift, Backend::Llvm] {
+            let mut request = NativeRequest {
+                definition: None,
+                backend,
+                profile: BuildProfile::Default,
+                target: native::TargetSpec::x86_64_unknown_linux_gnu(),
+                validation: native::Validation::EveryStage,
+                launch: Default::default(),
+                run: None,
+                fuel: false,
+                evidence: None,
+            };
+            assert_eq!(
+                NativePurpose::Build.opt(&request),
+                native::OptLevel::Default
+            );
+            let run = profile_options(&request, NativePurpose::Run).unwrap();
+            let build = profile_options(&request, NativePurpose::Build).unwrap();
+            match backend {
+                Backend::Cranelift => {
+                    assert_eq!(NativePurpose::Run.opt(&request), native::OptLevel::None);
+                    assert_ne!(
+                        run, build,
+                        "interactive None cannot reuse a Default Codegen action"
+                    );
+                }
+                Backend::Llvm => {
+                    assert_eq!(NativePurpose::Run.opt(&request), native::OptLevel::Default);
+                    assert_eq!(
+                        run, build,
+                        "equal effective policy shares compilation products"
+                    );
+                }
+            }
+            request.profile = BuildProfile::Debug;
+            assert_eq!(NativePurpose::Build.opt(&request), native::OptLevel::None);
+            assert_ne!(
+                run,
+                profile_options(&request, NativePurpose::Build).unwrap()
+            );
+            let unfueled = profile_options(&request, NativePurpose::Run).unwrap();
+            request.fuel = true;
+            assert_ne!(
+                unfueled,
+                profile_options(&request, NativePurpose::Run).unwrap()
+            );
+        }
+    }
+}
