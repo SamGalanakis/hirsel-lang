@@ -66,6 +66,11 @@ PROOFS = {
                         'HIRSEL_CAPTURE_LINKER': '/original packaged linker',
                         'HIRSEL_LINK_KIT': '/selected kit', 'HIRSEL_RUNTIME_ARCHIVES': '/selected runtime'},
     },
+    'native::kit::tests::frozen_kit_binds_transitive_leaf_edits_and_plans_without_originals': {
+        'source': 'crates/hirsel-driver/src/native/kit.rs',
+        'target': '//tools/buck2/native-toolchain:frozen-kit-proof',
+        'probe': 'tools/buck2/native-toolchain/frozen_kit_proof.py',
+    },
     'native_compilation_tasks_19::frozen_root_plans_run_both_backends_without_live_linker_inputs': {
         'source': 'crates/hirsel-driver/tests/it/native_compilation_tasks_19.rs',
         'target': '//tools/buck2/native-toolchain:root-plan-proof',
