@@ -501,7 +501,7 @@ mod tests {
                 let stock = object::File::parse(expected.as_slice()).unwrap();
                 let actual = object::File::parse(selected.as_slice()).unwrap();
                 for section in stock.sections() {
-                    if matches!(section.flags(), object::SectionFlags::Elf { sh_flags } if sh_flags & u64::from(object::elf::SHF_ALLOC) != 0)
+                    if matches!(section.flags(), object::SectionFlags::Elf { sh_flags, .. } if sh_flags.contains(object::elf::SHF_ALLOC))
                     {
                         let other = actual.section_by_name(section.name().unwrap()).unwrap();
                         assert!(
