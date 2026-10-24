@@ -14,7 +14,7 @@ pub const INSTANCE_RECORD_DOMAIN: Domain = Domain {
 };
 pub const INSTANCE_DISCOVERY_DOMAIN: Domain = Domain {
     kind: 0x4e00_0011,
-    schema: 6,
+    schema: 7,
 };
 pub const STATICS_FINALIZERS_DOMAIN: Domain = Domain {
     kind: 0x4e00_0012,
@@ -303,7 +303,15 @@ impl InstanceQueries {
                 inputs,
                 additional_abis,
             )
-            .map_err(|rejected| format!("native Value refused: {:?}", rejected.violations))?;
+            .map_err(|rejected| {
+                format!(
+                    "native Value refused for {} body {} instance {:?}: {:?}",
+                    key.instance.definition(),
+                    key.instance.body(),
+                    key.instance.digest(),
+                    rejected.violations
+                )
+            })?;
         let output = output.ok_or_else(|| {
             format!(
                 "native Value transport failed: {} body {} instance {:?}",
