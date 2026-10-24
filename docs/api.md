@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-2248 exported definitions; 976 variants.
+2257 exported definitions; 983 variants.
 
 ## Types and roots
 
@@ -1282,7 +1282,7 @@ Variant of RandomError.
 
 <a id="def-core_401_2fRegion"></a>
 
-- `type Region[T] uses {T}`
+- `opaque resource type Region[T] uses {T}`
 
 <a id="def-core_401_2fRemoteCall"></a>
 
@@ -2072,7 +2072,7 @@ References: [`core@1/Bytes`](#def-core_401_2fBytes)
 
 <a id="def-core_401_2farena_2fbounded"></a>
 
-- `@noalloc fn arena.bounded[R](cap: u64, body: fn(a: Arena) -> R) -> Result[R, OutOfSpace]`
+- `@noalloc fn arena.bounded[R](cap: u64, body: once fn(a: Arena) -> R) -> Result[R, OutOfSpace]`
 
 <a id="def-core_401_2farena_2fseal"></a>
 
@@ -2080,7 +2080,7 @@ References: [`core@1/Bytes`](#def-core_401_2fBytes)
 
 <a id="def-core_401_2farena_2fwith"></a>
 
-- `@noalloc fn arena.with[R](body: fn(a: Arena) -> R) -> R`
+- `@noalloc fn arena.with[R](body: once fn(a: Arena) -> R) -> R`
 
 
 ## arg
@@ -3417,6 +3417,10 @@ References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/u64`](#def-core_40
 
 - `fn bytes.base64_encode(data: Bytes, alphabet: Base64Alphabet, padding: Base64Padding) -> unique Bytes uses {}`
 
+<a id="def-core_401_2fbytes_2ffind_5fany"></a>
+
+- `@noalloc fn bytes.find_any(src: Bytes, needles: Bytes, start: u64) -> u64`
+
 <a id="def-std_401_2fbytes_2ffrom_5finline"></a>
 
 - `pub fn bytes.from_inline[n: size](xs: Inline[u8, n]) -> unique Bytes uses {}`
@@ -4232,6 +4236,15 @@ References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/bool`](#def-core
 <a id="def-std_401_2fcsv_2fparse"></a>
 
 - `pub fn csv.parse(take text: String, config: Config) -> Result[List[List[String]], CsvError] uses {}`
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/csv/Config`](#def-std_401_2fcsv_2fConfig), [`std@1/csv/CsvError`](#def-std_401_2fcsv_2fCsvError)
+
+<a id="def-std_401_2fcsv_2fparse_5fowned"></a>
+
+- `pub fn csv.parse_owned(take text: String, config: Config) -> Result[ unique List[List[String]], CsvError ] uses {}`
+
+Construct a deeply owned table, independent of the consumed input. Borrow
+for validation, then shared.freeze(take rows) without cloning the table.
 
 References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/csv/Config`](#def-std_401_2fcsv_2fConfig), [`std@1/csv/CsvError`](#def-std_401_2fcsv_2fCsvError)
 
@@ -9282,6 +9295,28 @@ References: [`core@1/u64`](#def-core_401_2fu64)
 
 References: [`core@1/u64`](#def-core_401_2fu64)
 
+<a id="def-std_401_2fjson_2fReadTextBoundedError"></a>
+
+- `pub type json.ReadTextBoundedError = Json(JsonError) | Limit`
+
+JSON syntax/UTF-8 failures retain their old cause; Limit has no partial text.
+
+References: [`std@1/json/JsonError`](#def-std_401_2fjson_2fJsonError)
+
+<a id="def-std_401_2fjson_2fReadTextBoundedError_23Json"></a>
+
+- `Json(JsonError) -> json.ReadTextBoundedError`
+
+Variant of json.ReadTextBoundedError.
+
+References: [`std@1/json/JsonError`](#def-std_401_2fjson_2fJsonError)
+
+<a id="def-std_401_2fjson_2fReadTextBoundedError_23Limit"></a>
+
+- `Limit -> json.ReadTextBoundedError`
+
+Variant of json.ReadTextBoundedError.
+
 <a id="def-std_401_2fjson_2fReader"></a>
 
 - `pub type json.Reader { data: Bytes, pos: u64, depth: u64, }`
@@ -9539,6 +9574,16 @@ An independently owned decoded string for an owned typed field. The reader's
 view path remains available for keys and transient consumers.
 
 References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/json/JsonError`](#def-std_401_2fjson_2fJsonError), [`std@1/json/Reader`](#def-std_401_2fjson_2fReader)
+
+<a id="def-std_401_2fjson_2fread_5fowned_5ftext_5fbounded"></a>
+
+- `pub fn json.read_owned_text_bounded(mut cursor: Reader, max_decoded_bytes: u64) -> Result[ unique String, ReadTextBoundedError ] uses {}`
+
+Decode at most max_decoded_bytes UTF-8 bytes, excluding the quotes. Syntax
+wins over Limit; success and Limit stop immediately after the closing quote.
+Logical retained length is bounded, not the allocator's capacity/RSS slack.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`core@1/u64`](#def-core_401_2fu64), [`std@1/json/ReadTextBoundedError`](#def-std_401_2fjson_2fReadTextBoundedError), [`std@1/json/Reader`](#def-std_401_2fjson_2fReader)
 
 <a id="def-std_401_2fjson_2fread_5ftext"></a>
 
@@ -11273,6 +11318,38 @@ The bounded String helpers return no partial output on refusal.
 
 References: [`core@1/u64`](#def-core_401_2fu64)
 
+<a id="def-std_401_2fmarkdown_2fParseBudget"></a>
+
+- `pub type markdown.ParseBudget { source_bytes: u64, work_items: u64, nesting: u64, }`
+
+Independent original-source, cumulative parser-record and nesting bounds.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fmarkdown_2fParseLimit"></a>
+
+- `pub type markdown.ParseLimit = SourceBytes | WorkItems | Nesting`
+
+Operational refusal; Markdown grammar itself remains total.
+
+<a id="def-std_401_2fmarkdown_2fParseLimit_23Nesting"></a>
+
+- `Nesting -> markdown.ParseLimit`
+
+Variant of markdown.ParseLimit.
+
+<a id="def-std_401_2fmarkdown_2fParseLimit_23SourceBytes"></a>
+
+- `SourceBytes -> markdown.ParseLimit`
+
+Variant of markdown.ParseLimit.
+
+<a id="def-std_401_2fmarkdown_2fParseLimit_23WorkItems"></a>
+
+- `WorkItems -> markdown.ParseLimit`
+
+Variant of markdown.ParseLimit.
+
 <a id="def-std_401_2fmarkdown_2fRenderError"></a>
 
 - `pub type markdown.RenderError[E] = LimitReached(u64) | Sink(E)`
@@ -11315,6 +11392,14 @@ Parse every String, including incomplete Markdown. NUL becomes U+FFFD;
 CRLF and bare CR become LF, as required by CommonMark preprocessing.
 
 References: [`core@1/String`](#def-core_401_2fString), [`std@1/markdown/Node`](#def-std_401_2fmarkdown_2fNode), [`std@1/markdown/Options`](#def-std_401_2fmarkdown_2fOptions)
+
+<a id="def-std_401_2fmarkdown_2fparse_5fbounded"></a>
+
+- `pub fn markdown.parse_bounded(take source: String, options: Options, budget: ParseBudget) -> Result[ Node, ParseLimit ] uses {}`
+
+Refuse before exhausting an original-byte, work-record or nesting allowance.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/markdown/Node`](#def-std_401_2fmarkdown_2fNode), [`std@1/markdown/Options`](#def-std_401_2fmarkdown_2fOptions), [`std@1/markdown/ParseBudget`](#def-std_401_2fmarkdown_2fParseBudget), [`std@1/markdown/ParseLimit`](#def-std_401_2fmarkdown_2fParseLimit)
 
 <a id="def-std_401_2fmarkdown_2frender_5fhtml"></a>
 
@@ -15623,6 +15708,24 @@ References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/List`](#def-core_4
 
 ## stream
 
+<a id="def-std_401_2fstream_2fBoundError"></a>
+
+- `pub type stream.BoundError[E] = Source(E) | Limit`
+
+A source failure before the item budget, or an extra result after it.
+
+<a id="def-std_401_2fstream_2fBoundError_23Limit"></a>
+
+- `Limit -> stream.BoundError[E]`
+
+Variant of stream.BoundError.
+
+<a id="def-std_401_2fstream_2fBoundError_23Source"></a>
+
+- `Source(E) -> stream.BoundError[E]`
+
+Variant of stream.BoundError.
+
 <a id="def-std_401_2fstream_2fChunkLimit"></a>
 
 - `pub opaque type stream.ChunkLimit: plain + sendable + inert + noalloc_drop uses {}`
@@ -15668,6 +15771,17 @@ Variant of stream.WriteError.
 - `Write(W) -> stream.WriteError[E, W]`
 
 Variant of stream.WriteError.
+
+<a id="def-std_401_2fstream_2fbound"></a>
+
+- `@captures(input) pub fn stream.bound[T, E](take input: Flow[T, E], max_items: u64) -> Flow[T, BoundError[E]] uses {input}`
+
+Validate whole-stream cardinality when drained, with one-result lookahead.
+Construction and early destruction do not pull. Zero probes on first demand.
+Any extra result, including an error, is dropped and reported as Limit.
+Pull/drop language failures propagate normally, even during the probe.
+
+References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/stream/BoundError`](#def-std_401_2fstream_2fBoundError), [`std@1/stream/Flow`](#def-std_401_2fstream_2fFlow)
 
 <a id="def-std_401_2fstream_2fchunk_5flimit"></a>
 
