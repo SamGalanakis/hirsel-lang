@@ -491,12 +491,12 @@ mod tests {
             let checked = program
                 .check_configured()
                 .map_err(|error| program.error(error))?;
-            let output = Arc::new(CompileOutput {
-                entry: program.entry.clone(),
-                inputs: request.inputs.clone(),
-                work: Default::default(),
-                result: CompileResult::Check(checked),
-            });
+            let output = Arc::new(CompileOutput::new(
+                program.entry.clone(),
+                request.inputs.clone(),
+                Default::default(),
+                CompileResult::Check(checked),
+            ));
             let reference = Domain {
                 kind: 987,
                 schema: 1,
