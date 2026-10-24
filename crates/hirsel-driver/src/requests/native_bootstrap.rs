@@ -1,0 +1,492 @@
+//! Admit native tasks only after their ordinary source root has settled. The
+//! bootstrap is itself a dependency task; host readiness never runs a compiler.
+use super::{native_lower, native_routing::NativeRouting};
+use crate::native::{
+    self,
+    queries::{
+        NativeRootKey,
+        arena_tasks::ArenaTasks,
+        compilation_tasks::{CompilationBackend, CompilationTasks},
+        declarations::NativeDeclarations,
+        instance_tasks::InstanceTasks,
+        products::EmissionOptions,
+        source_inputs::NativeInstanceInputs,
+    },
+    root_source::{NativeLinkFacts, NativeLinkSource},
+};
+use hirsel_engine::{
+    FrontLowerQueries, FrontNativeProducts, FrontNativeQueries, runtime::*, store::*,
+};
+use hirsel_syntax::{ContentHash, DefPath};
+use std::{
+    sync::{Arc, Mutex, OnceLock},
+    task::Poll,
+};
+
+pub(super) const KIND: u32 = 0x5200_0010;
+const OUTPUT: Domain = Domain {
+    kind: 0x5200_0011,
+    schema: 1,
+};
+const FAILURE: Domain = Domain {
+    kind: 0x5200_0012,
+    schema: 1,
+};
+
+/// Compiler-owned policy and captured platform inputs. Public request clients
+/// cannot supply this plan, a factory, an executor or an admission capability.
+pub(super) struct NativePlan {
+    pub options: native::Options,
+    pub policy: ContentHash,
+    pub opt: hirsel_lir::emission::OptLevel,
+    pub debug: bool,
+    pub verify_backend: bool,
+    pub measurement: bool,
+    pub fuel: bool,
+    pub backends: Vec<CompilationBackend>,
+    pub requested_run: Option<Arc<hirsel_run_config::ValidatedRun>>,
+}
+pub(super) struct NativeAdmission {
+    pub instances: MemoryReservation,
+    pub arena: MemoryReservation,
+    pub compilation: MemoryReservation,
+}
+struct Prepared {
+    source: ProductRef,
+    facts: Arc<FrontNativeProducts>,
+    compilation: Arc<CompilationTasks>,
+}
+struct Completed {
+    product: ProductRef,
+    compilation: ProductRef,
+}
+/// Owns only immutable producer views and compact dispatch/completion records.
+/// C acceptance stays inside Instance/Ready and remains independent of source V.
+pub(super) struct NativeBootstrap {
+    source: Arc<FrontNativeQueries>,
+    lower: Arc<FrontLowerQueries>,
+    definitions: Vec<DefPath>,
+    routing: Arc<NativeRouting>,
+    store: Arc<dyn ResultStore>,
+    query: QueryId,
+    weight: MemoryWeight,
+    pending: Mutex<Option<(NativePlan, NativeAdmission)>>,
+    prepared: OnceLock<Prepared>,
+    completed: OnceLock<Completed>,
+    failure: Mutex<Option<(Reference, String)>>,
+    errors: RuntimeErrors,
+    _allowance: MemoryReservation,
+}
+impl NativeBootstrap {
+    pub fn new(
+        source: Arc<FrontNativeQueries>,
+        lower: Arc<FrontLowerQueries>,
+        definitions: Vec<DefPath>,
+        routing: Arc<NativeRouting>,
+        store: Arc<dyn ResultStore>,
+        mut plan: NativePlan,
+        admission: NativeAdmission,
+        weight: MemoryWeight,
+        allowance: MemoryReservation,
+        errors: RuntimeErrors,
+    ) -> Result<Arc<Self>, String> {
+        if plan.options.objects.is_some() {
+            return Err("native bootstrap requires ordinary object query producers".into());
+        }
+        let discharge = plan
+            .options
+            .discharge
+            .0
+            .iter()
+            .map(|(path, sites)| {
+                let sites = sites
+                    .iter()
+                    .map(|site| {
+                        use hirsel_lir::discharge::Form;
+                        let form = match &site.form {
+                            Form::Check(rule) => (0u8, rule.as_str(), 0u32),
+                            Form::Integer => (1, "", 0),
+                            Form::Negation => (2, "", 0),
+                            Form::Projection { place, rule } => (3, rule.as_str(), *place),
+                        };
+                        (site.body, site.block, site.statement, form)
+                    })
+                    .collect::<Vec<_>>();
+                (path, sites)
+            })
+            .collect::<Vec<_>>();
+        let native_policy = serde_json::to_vec(&(
+            match plan.options.validation {
+                native::Validation::Ready => 0u8,
+                native::Validation::EveryStage => 1,
+            },
+            &plan.options.launch,
+            plan.options.target.digest(),
+            plan.options.regions,
+            plan.options.elide,
+            plan.options.reuse,
+            plan.options.flat_walk,
+            plan.options.scoped_specialization,
+            discharge,
+        ))
+        .map_err(|error| error.to_string())?;
+        plan.policy = ContentHash::of_parts(
+            "hirsel.host.native-policy.v1",
+            [plan.policy.0.as_slice(), native_policy.as_slice()],
+        );
+        let selection = serde_json::to_vec(&(
+            source.query().address.0,
+            plan.policy,
+            plan.options.target.digest(),
+            match plan.opt {
+                hirsel_lir::emission::OptLevel::None => 0u8,
+                hirsel_lir::emission::OptLevel::Default => 1,
+                hirsel_lir::emission::OptLevel::Speed => 2,
+            },
+            plan.requested_run.as_ref().map(|run| run.identity()),
+            plan.debug,
+            plan.verify_backend,
+            plan.measurement,
+            plan.fuel,
+            plan.backends
+                .iter()
+                .map(|backend| {
+                    (
+                        &backend.backend,
+                        backend.backend_version,
+                        backend.target_features,
+                        backend.profile_options,
+                        backend.runtime_abi,
+                        backend.linker_options,
+                        &backend.runtime_archives,
+                        &backend.foreign_inputs,
+                    )
+                })
+                .collect::<Vec<_>>(),
+        ))
+        .map_err(|error| error.to_string())?;
+        let metadata = definitions
+            .iter()
+            .try_fold(
+                std::mem::size_of::<Self>() as u64 + selection.len() as u64,
+                |bytes, path| {
+                    bytes.checked_add(
+                        u64::try_from(serde_json::to_vec(path).ok()?.len())
+                            .ok()?
+                            .checked_add(128)?,
+                    )
+                },
+            )
+            .ok_or("native bootstrap inventory overflow")?;
+        if metadata > allowance.bytes() || weight.retained < std::mem::size_of::<Task>() as u64 {
+            return Err("native bootstrap inventory exceeds admission".into());
+        }
+        let query = QueryId {
+            kind: KIND,
+            address: Address(ContentHash::of_parts(
+                "hirsel.host.native-bootstrap.v1",
+                [selection.as_slice()],
+            )),
+        };
+        Ok(Arc::new(Self {
+            source,
+            lower,
+            definitions,
+            routing,
+            store,
+            query,
+            weight,
+            pending: Mutex::new(Some((plan, admission))),
+            prepared: OnceLock::new(),
+            completed: OnceLock::new(),
+            failure: Mutex::new(None),
+            errors,
+            _allowance: allowance,
+        }))
+    }
+    pub fn selected_store(&self) -> Arc<dyn ResultStore> {
+        self.store.clone()
+    }
+    pub fn query(&self) -> QueryId {
+        self.query
+    }
+    pub fn factory(self: &Arc<Self>) -> Arc<dyn QueryFactory> {
+        Arc::new(Factory(self.clone()))
+    }
+    /// Exact selected compiler completion and retained ordinary provider. Link
+    /// materialization still revalidates its selected descriptor through S4.
+    pub fn outcome(
+        &self,
+        product: ProductRef,
+    ) -> Result<(Arc<CompilationTasks>, ProductRef, Arc<FrontNativeProducts>), String> {
+        let completed = self
+            .completed
+            .get()
+            .ok_or("native bootstrap has not completed")?;
+        if completed.product != product {
+            return Err("native bootstrap received another completion".into());
+        }
+        let prepared = self
+            .prepared
+            .get()
+            .ok_or("native bootstrap dispatch is unavailable")?;
+        Ok((
+            prepared.compilation.clone(),
+            completed.compilation,
+            prepared.facts.clone(),
+        ))
+    }
+    pub fn failure(&self, reference: Reference) -> Option<String> {
+        self.failure
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .and_then(|(selected, message)| (*selected == reference).then(|| message.clone()))
+    }
+    fn fail(&self, message: String) -> Reference {
+        if message.len() as u64 > self.weight.retained {
+            return self.errors.resource;
+        }
+        let Some(reference) = self.store.put_content(FAILURE, message.as_bytes()) else {
+            return self.errors.resource;
+        };
+        *self.failure.lock().unwrap_or_else(|e| e.into_inner()) = Some((reference, message));
+        reference
+    }
+    fn prepare(&self, product: ProductRef) -> Result<&Prepared, String> {
+        if let Some(prepared) = self.prepared.get() {
+            return if prepared.source == product {
+                Ok(prepared)
+            } else {
+                Err("native source changed within immutable bootstrap".into())
+            };
+        }
+        let facts = self
+            .source
+            .outcome(product)
+            .ok_or("native source root is unavailable")?
+            .products;
+        let (plan, admission) = self
+            .pending
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+            .ok_or("native bootstrap initialization already consumed")?;
+        let declarations = NativeDeclarations::from_settled(
+            &facts.signatures,
+            facts.roots.clone(),
+            facts.catalogue.clone(),
+            facts.statics.clone(),
+            facts.extra.clone(),
+        )
+        .map_err(|e| format!("native declarations: {e:?}"))?;
+        let reader = facts
+            .original_context
+            .reader(facts.originals.clone(), self.store.clone())
+            .map_err(|e| format!("native original products: {e:?}"))?;
+        let entries = declarations
+            .context
+            .sources
+            .iter()
+            .map(|(path, context)| (path.clone(), context.entry.0))
+            .collect();
+        let operations = Arc::new(declarations.program.operation_registry());
+        let callees =
+            native::settled_callee_metadata(facts.run.callees.clone(), &facts.run.runtime)
+                .map_err(|e| e.to_string())?;
+        let mut source = NativeLinkSource::from_settled(
+            NativeLinkFacts {
+                program: &declarations.program,
+                operations,
+                roots: &declarations.roots,
+                declarations: &declarations.sources,
+                entries: &entries,
+                anchors: &declarations.source_anchors,
+                signatures: facts.signatures.clone(),
+                semantic: facts.semantic.clone(),
+                selected: std::slice::from_ref(&facts.run.entry),
+                callees: Some(callees),
+            },
+            &reader,
+        )
+        .map_err(|e| e.to_string())?;
+        if let Some(run) = plan.requested_run {
+            source
+                .bind_run(&facts.run.entry, run)
+                .map_err(|e| e.to_string())?;
+        }
+        let emission = EmissionOptions::request(
+            source.input().clone(),
+            plan.opt,
+            plan.debug,
+            source.foreign_dispatch(),
+            plan.verify_backend,
+            plan.measurement,
+            plan.fuel,
+        );
+        let root = NativeRootKey {
+            roots: facts.roots.definitions.clone(),
+            target_abi: plan.options.target.digest(),
+            policy: plan.policy,
+        };
+        let inputs = NativeInstanceInputs::from_products(declarations, reader)
+            .map_err(|e| format!("native instance inputs: {e:?}"))?;
+        let source_paths = inputs
+            .declarations
+            .sources
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        if source_paths
+            .iter()
+            .any(|path| !self.definitions.contains(path))
+        {
+            return Err("native source escaped the admitted Lower namespace".into());
+        }
+        let front = native_lower::inputs(
+            self.lower.clone(),
+            facts.original_context.clone(),
+            &source_paths,
+        )?;
+        let instances = InstanceTasks::new(
+            inputs,
+            self.store.clone(),
+            plan.options,
+            plan.policy,
+            self.weight,
+            admission.instances,
+        )?
+        .with_front_lower(front)?;
+        let arena = ArenaTasks::new(
+            instances.clone(),
+            self.store.clone(),
+            0,
+            self.weight,
+            admission.arena,
+        )?;
+        let compilation = CompilationTasks::new(
+            instances,
+            arena,
+            Arc::new(source),
+            root,
+            emission,
+            plan.backends,
+            self.weight,
+            admission.compilation,
+        )?;
+        self.routing
+            .bind(compilation.factories())
+            .map_err(str::to_owned)?;
+        self.prepared
+            .set(Prepared {
+                source: product,
+                facts,
+                compilation,
+            })
+            .map_err(|_| "native bootstrap dispatch was constructed twice")?;
+        Ok(self.prepared.get().unwrap())
+    }
+    fn publish(&self, compilation: ProductRef) -> Result<ProductRef, String> {
+        self.prepared
+            .get()
+            .ok_or("native dispatch is unavailable")?
+            .compilation
+            .outputs(compilation)?;
+        let bytes = serde_json::to_vec(&(
+            compilation.address.0,
+            compilation.action.0,
+            compilation.record,
+        ))
+        .map_err(|e| e.to_string())?;
+        let record = self
+            .store
+            .put_content(OUTPUT, &bytes)
+            .ok_or("native bootstrap transport exhausted")?;
+        if OUTPUT.reference(&bytes) != Some(record) {
+            return Err("native bootstrap content identity differs".into());
+        }
+        let product = ProductRef {
+            address: self.query.address,
+            action: Action(ContentHash::of_parts(
+                "hirsel.host.native-bootstrap-action.v1",
+                [
+                    self.query.address.0.0.as_slice(),
+                    record.output.0.0.as_slice(),
+                ],
+            )),
+            record,
+        };
+        self.store
+            .associate_product(product.address, product.action, product.record);
+        self.completed
+            .set(Completed {
+                product,
+                compilation,
+            })
+            .map_err(|_| "duplicate native bootstrap completion")?;
+        Ok(product)
+    }
+}
+struct Factory(Arc<NativeBootstrap>);
+impl QueryFactory for Factory {
+    fn create(&self, query: QueryId) -> Result<Box<dyn QueryTask>, Reference> {
+        if query != self.0.query {
+            return Err(self.0.errors.protocol);
+        }
+        Ok(Box::new(Task {
+            owner: self.0.clone(),
+            terminal: self.0.completed.get().map(|c| Ok(c.product)),
+        }))
+    }
+}
+struct Task {
+    owner: Arc<NativeBootstrap>,
+    terminal: Option<Result<ProductRef, Reference>>,
+}
+impl QueryTask for Task {
+    fn id(&self) -> QueryId {
+        self.owner.query
+    }
+    fn weight(&self) -> MemoryWeight {
+        self.owner.weight
+    }
+    fn poll(&mut self, cx: &mut dyn QueryContext) -> QueryPoll {
+        let result = if let Some(result) = self.terminal {
+            result
+        } else {
+            let source = match cx.read(self.owner.source.query()) {
+                Poll::Pending => return QueryPoll::Waiting(vec![self.owner.source.query()]),
+                Poll::Ready(Err(error)) => {
+                    self.terminal = Some(Err(error));
+                    return QueryPoll::Failed(error);
+                }
+                Poll::Ready(Ok(product)) => product,
+            };
+            match self.owner.prepare(source) {
+                Err(error) => Err(self.owner.fail(error)),
+                Ok(prepared) => match cx.read(prepared.compilation.query_id()) {
+                    Poll::Pending => {
+                        return QueryPoll::Waiting(vec![prepared.compilation.query_id()]);
+                    }
+                    Poll::Ready(Err(error)) => Err(error),
+                    Poll::Ready(Ok(product))
+                        if product.address == prepared.compilation.query_id().address =>
+                    {
+                        self.owner
+                            .publish(product)
+                            .map_err(|error| self.owner.fail(error))
+                    }
+                    _ => Err(self.owner.errors.protocol),
+                },
+            }
+        };
+        self.terminal = Some(result);
+        match result {
+            Ok(product) => QueryPoll::Complete(product),
+            Err(error) => QueryPoll::Failed(error),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests;

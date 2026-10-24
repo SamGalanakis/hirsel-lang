@@ -531,3 +531,42 @@ fn selected_run_bounds_lower_mailboxes_by_the_immutable_query_inventory() {
         assert_eq!(budget.reserved(), 0);
     });
 }
+
+#[test]
+fn selected_footprint_planner_admits_many_small_definitions_under_the_same_snapshot_bound() {
+    hirsel_engine::with_compiler_stack(|| {
+        let (_directory, entry, source) = fixture();
+        let mut text = String::new();
+        for index in 0..256 {
+            text.push_str(&format!("fn f{index}()->u8{{1u8}}\n"));
+        }
+        text.push_str("pub fn main()->u8{1u8}\n");
+        std::fs::write(&source, text).unwrap();
+        let selected = request(&entry);
+        let budget = ProcessBudget::new(512 << 20);
+        let mut host = Host::new(CompilerRequests::new(
+            crate::COMPILER,
+            config(),
+            budget.clone(),
+            RequestLimits {
+                runtime_bytes: 192 << 20,
+                snapshot_bytes: 4 << 20,
+                transport_bytes: 16 << 20,
+            },
+        ));
+        let output = host.request(&selected).unwrap().wait().unwrap();
+        assert!(checked(&output).diagnostics.is_empty());
+        assert_eq!(
+            checked(&output).completion,
+            hirsel_engine::CheckCompletion::Complete
+        );
+        assert!(output.work.recomputations > 0);
+        drop(host);
+        assert!(
+            budget.reserved() > 0,
+            "held check sources retain their exact admitted source owner"
+        );
+        drop(output);
+        assert_eq!(budget.reserved(), 0);
+    });
+}

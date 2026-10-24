@@ -6,11 +6,11 @@ use hirsel_syntax::DefId;
 const BODY: Domain = REPLAY_DOMAIN;
 const RECEIPT: Domain = Domain {
     kind: 0x5600_0006,
-    schema: 3,
+    schema: 4,
 };
 fn key(subject: ContentHash, policy: ContentHash) -> ContentHash {
     ContentHash::of_parts(
-        "hirsel.validate.definition-output.v3",
+        "hirsel.validate.definition-output.v4",
         [subject.0.as_slice(), policy.0.as_slice()],
     )
 }
@@ -335,6 +335,7 @@ pub struct SourceInvocation {
 }
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 struct SourceInvocations {
+    entry: u32,
     bodies: u32,
     calls: Vec<SourceInvocation>,
 }
@@ -366,6 +367,7 @@ impl SourceInvocations {
             })
             .collect();
         Some(Self {
+            entry: definition.entry.0,
             bodies: u32::try_from(definition.bodies.len()).ok()?,
             calls,
         })
@@ -386,6 +388,10 @@ impl VerifiedInvocations {
     }
     pub fn source_identity(&self) -> ContentHash {
         self.source
+    }
+    /// The original Lower entry, independent of derived native instances.
+    pub fn entry_body(&self) -> u32 {
+        self.facts.entry
     }
     pub fn body_count(&self) -> u32 {
         self.facts.bodies
@@ -408,6 +414,28 @@ pub struct VerifiedDefinitionOutput {
     invocations: Arc<SourceInvocations>,
 }
 impl VerifiedDefinitionOutput {
+    /// Strongly owned compact observations, excluding the independently stored
+    /// body named by reference. Shared allocations are conservatively charged
+    /// once for each admitted owner that keeps this token alive.
+    pub fn retained_bytes(&self) -> Option<u64> {
+        let mut bytes = (std::mem::size_of::<Self>()
+            + std::mem::size_of::<SourceInvocations>()
+            + 6 * std::mem::size_of::<usize>()) as u64;
+        bytes = bytes.checked_add(
+            (self.reads.len() as u64).checked_mul(std::mem::size_of::<VRead>() as u64)?,
+        )?;
+        bytes = bytes.checked_add(self.metadata.len() as u64)?;
+        bytes = bytes.checked_add(
+            (self.invocations.calls.capacity() as u64)
+                .checked_mul(std::mem::size_of::<SourceInvocation>() as u64)?,
+        )?;
+        for call in &self.invocations.calls {
+            if let Some(path) = &call.callee {
+                bytes = bytes.checked_add(bincode::serialized_size(path).ok()?)?;
+            }
+        }
+        Some(bytes)
+    }
     pub fn reference(&self) -> Reference {
         self.reference
     }

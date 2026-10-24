@@ -9,7 +9,8 @@ use super::{
 };
 use hirsel_engine::{
     CompileConfig, Compiler, FrontBodyQueries, FrontCheckPlan, FrontCheckQueries,
-    FrontGrowthQueries, FrontLowerQueries, FrontRunQueries, LoweringPolicy, QueryKind, ToolError,
+    FrontGrowthQueries, FrontInputFootprint, FrontLowerQueries, FrontRunQueries, LoweringPolicy,
+    QueryKind, ToolError,
     loader_inputs::FrozenInputs,
     runtime::*,
     store::{Domain, RequestStore, ResultStore},
@@ -255,28 +256,56 @@ impl Plan {
         definitions: &[DefPath],
         files: usize,
         needs_run: bool,
+        footprint: FrontInputFootprint,
+        inspection_bytes: u64,
     ) -> Result<Self, ToolError> {
-        let count = u64::try_from(definitions.len()).map_err(|_| uninstalled())?;
-        let source = (inputs.retained_bytes() as u64)
-            .checked_mul(2)
-            .and_then(|bytes| bytes.checked_add(count.checked_mul(8192)?))
+        let source = u64::try_from(inputs.retained_bytes())
+            .ok()
+            .and_then(|bytes| bytes.checked_add(footprint.source_headers))
+            .and_then(|bytes| bytes.checked_add(inspection_bytes))
             .ok_or_else(uninstalled)?;
-        let available = limits.snapshot_bytes.checked_sub(source).ok_or_else(|| {
-            ToolError::Runtime("compiler source inventory exceeds snapshot admission".into())
+        let metadata = MemoryWeight::default();
+        let lower_inventory =
+            FrontLowerQueries::input_bytes(definitions).ok_or_else(uninstalled)?;
+        let growth_inventory =
+            FrontGrowthQueries::input_bytes(definitions, metadata).ok_or_else(uninstalled)?;
+        let check_inventory =
+            FrontCheckQueries::input_bytes(definitions, files, metadata).ok_or_else(uninstalled)?;
+        let run_inventory = if needs_run {
+            FrontRunQueries::input_bytes(definitions).ok_or_else(uninstalled)?
+        } else {
+            0
+        };
+        let fixed = [
+            source,
+            footprint.front_inputs,
+            lower_inventory,
+            growth_inventory,
+            check_inventory,
+            run_inventory,
+        ]
+        .into_iter()
+        .try_fold(0u64, u64::checked_add)
+        .ok_or_else(uninstalled)?;
+        let slack = limits.snapshot_bytes.checked_sub(fixed).ok_or_else(|| {
+            ToolError::Runtime(
+                "compiler immutable input inventory exceeds snapshot admission".into(),
+            )
         })?;
-        let front = available / 4;
-        let lower = if needs_run {
-            available / 3
+        let front_slack = slack / 4;
+        let lower_slack = if needs_run { slack / 3 } else { slack / 2 };
+        let growth_slack = slack / 8;
+        let check_slack = if needs_run {
+            slack / 8
         } else {
-            available / 2
+            slack - front_slack - lower_slack - growth_slack
         };
-        let growth = available / 8;
-        let check = if needs_run {
-            available / 8
-        } else {
-            available - front - lower - growth
-        };
-        let run = available - front - lower - growth - check;
+        let run_slack = slack - front_slack - lower_slack - growth_slack - check_slack;
+        let front = footprint.front_inputs + front_slack;
+        let lower = lower_inventory + lower_slack;
+        let growth = growth_inventory + growth_slack;
+        let check = check_inventory + check_slack;
+        let run = run_inventory + run_slack;
         let stacks = (config.jobs.get() as u64)
             .checked_mul(hirsel_intern::jobs::COMPILER_STACK_BYTES as u64)
             .ok_or_else(uninstalled)?;
@@ -286,44 +315,23 @@ impl Plan {
         // Root continuations remain live while their P/Lower dependencies run.
         // A snapshot partition is not one task's executable memory allowance.
         let continuation_bound = working / (config.jobs.get() as u64 + 8);
-        let lower_inventory =
-            FrontLowerQueries::input_bytes(definitions).ok_or_else(uninstalled)?;
-        let lower_outputs = lower.checked_sub(lower_inventory).ok_or_else(|| {
-            ToolError::Runtime("compiler Lower inventory exceeds admission".into())
-        })?;
-        // One ordinary Lower and one Evaluate address are possible per input.
-        // Their cumulative producer allowance must fit even when Check demands
-        // every initializer before the execution root runs.
-        let per_output = lower_outputs / count.checked_mul(2).ok_or_else(uninstalled)?.max(1);
+        // Only demanded Lower outputs consume producer retention. Potential
+        // addresses carry compact input slots, not maximum future/body grants.
         let output_metadata =
             FrontLowerQueries::output_bytes(MemoryWeight::default()).ok_or_else(uninstalled)?;
-        let lower_retained = per_output
+        let retained = lower_slack
             .checked_sub(output_metadata)
-            .map(|bytes| bytes / 2)
-            .ok_or_else(|| {
-                ToolError::Runtime("compiler Lower output allowance is exhausted".into())
-            })?;
-        let retained = front
-            .checked_div(count.max(1))
-            .and_then(|bytes| bytes.checked_sub(8192))
-            .map(|bytes| bytes.min(continuation_bound).min(lower_retained))
+            .map(|bytes| (bytes / 2).min(continuation_bound))
             .filter(|bytes| *bytes != 0)
             .ok_or_else(|| {
-                ToolError::Runtime("compiler body inventory exceeds admission".into())
+                ToolError::Runtime("compiler Lower continuation exceeds admission".into())
             })?;
-        let root_metadata = MemoryWeight::default();
-        let growth_inventory =
-            FrontGrowthQueries::input_bytes(definitions, root_metadata).ok_or_else(uninstalled)?;
-        let check_inventory = FrontCheckQueries::input_bytes(definitions, files, root_metadata)
-            .ok_or_else(uninstalled)?;
-        let root_retained = growth
-            .checked_sub(growth_inventory)
-            .zip(check.checked_sub(check_inventory))
-            .map(|(growth, check)| growth.min(check).min(continuation_bound))
-            .filter(|bytes| *bytes != 0)
-            .ok_or_else(|| {
-                ToolError::Runtime("compiler root inventory exceeds admission".into())
-            })?;
+        let root_retained = growth_slack.min(check_slack).min(continuation_bound);
+        if root_retained == 0 {
+            return Err(ToolError::Runtime(
+                "compiler root continuation exceeds admission".into(),
+            ));
+        }
         let scratch = working / (config.jobs.get() as u64 + 1);
         Ok(Self {
             snapshots: SnapshotPlan {
@@ -345,7 +353,7 @@ impl Plan {
                 stack: 0,
             },
             run: MemoryWeight {
-                retained: (run / 4).min(retained),
+                retained: (run_slack / 4).min(retained),
                 scratch,
                 stack: 0,
             },
@@ -369,16 +377,35 @@ pub(super) fn install(
     };
     // The loader reads exactly the supplied immutable observations. Declaration
     // indexing/signature metadata is S0; no P body or Lower task runs here.
-    let loading = budget.begin(limits)?;
-    let mut program = match compiler.load_check_package_inputs(&request.path, &request.inputs, true)
-    {
-        Ok(program) => program,
-        Err(error) => return Err(loading.failed(error)),
-    };
+    let mut loading = budget.begin(limits)?;
+    let store = Arc::new(RequestStore::new(
+        config.store.clone(),
+        loading.take_transport(),
+    ));
+    let mut selected_config = config.clone();
+    selected_config.store = store.clone();
+    let selected_compiler = compiler.clone().with_config(selected_config);
+    let mut program =
+        match selected_compiler.load_check_package_inputs(&request.path, &request.inputs, true) {
+            Ok(program) => program,
+            Err(error) => return Err(loading.failed(error)),
+        };
     let launch_entry = program.launch_entry().cloned();
     let foreign_unreplayable = program.engine.foreign_unreplayable;
     let sources = program.engine.sources.clone();
-    let definitions = program.engine.indexed_definitions();
+    let required = program.engine.front_source_roots();
+    let definitions = program
+        .engine
+        .indexed_definitions()
+        .into_iter()
+        .chain(required)
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let footprint = match program.engine.front_input_footprint(&definitions) {
+        Ok(footprint) => footprint,
+        Err(error) => return Err(loading.failed(program.error(error))),
+    };
     let plan = Plan::new(
         limits,
         config,
@@ -386,6 +413,9 @@ pub(super) fn install(
         &definitions,
         program.files.len(),
         needs_run,
+        footprint,
+        GraphMeter::input_bytes(&definitions, program.engine.memo_snapshot().len())
+            .ok_or_else(uninstalled)?,
     )?;
     let GraphAdmission {
         runtime,
@@ -403,8 +433,7 @@ pub(super) fn install(
         phase: None,
         sources: sources.clone().retain_owner(source.clone()),
     };
-    let store = Arc::new(RequestStore::new(config.store.clone(), transport));
-    program.engine = program.engine.with_result_store(store.clone());
+    drop(transport);
     let errors = runtime_errors(store.as_ref())?;
     let front = program
         .engine

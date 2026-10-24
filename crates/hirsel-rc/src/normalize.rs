@@ -86,7 +86,9 @@ pub fn plan(
     facts: &mut dyn FnMut(hirsel_types::TypeId) -> Facts,
 ) -> Result<(Option<LoopPlan>, Vec<Declined>), NormalizeError> {
     let view = instances.view(id);
-    let def: &tir::Definition = &view.definition;
+    let def: &tir::Definition = view
+        .definition()
+        .map_err(|e| NormalizeError::Instance(e.into()))?;
     let body = &def.bodies[view.body.0 as usize];
     let mut sites = Vec::new();
     let mut declined = Vec::new();
@@ -154,7 +156,9 @@ fn verify(
     facts: &mut dyn FnMut(hirsel_types::TypeId) -> Facts,
 ) -> Result<LoopSite, &'static str> {
     let view = instances.view(id);
-    let def: &tir::Definition = &view.definition;
+    let def: &tir::Definition = view
+        .definition()
+        .map_err(|_| "source body has not been demanded")?;
     let body = &def.bodies[view.body.0 as usize];
     if matches!(instances.roles[id.index()], InstanceRole::Closure { .. }) || view.body != def.entry
     {

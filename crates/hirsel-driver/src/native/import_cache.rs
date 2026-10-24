@@ -174,7 +174,7 @@ fn inputs(
         view.key.encoding().to_vec(),
         roles.into_bytes(),
         actuals_bytes,
-        definition(program, &view.definition)?,
+        definition(program, view.definition().ok()?)?,
     ];
     facts.push(serde_json::to_vec(&program.revisions.get(path)).ok()?);
     // The native library can select registry roles and opaque container shapes
@@ -216,7 +216,9 @@ fn inputs(
                 &program.types,
                 &hirsel_proof_export::DefinitionContent::Body {
                     signature: signature.clone(),
-                    tir: (path == *view.key.definition()).then(|| view.definition.clone()),
+                    tir: (path == *view.key.definition())
+                        .then(|| view.definition().ok().cloned())
+                        .flatten(),
                 },
             ));
         }

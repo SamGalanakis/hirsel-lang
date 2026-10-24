@@ -642,7 +642,7 @@ impl hirsel_artifact_store::Contents for Contents {
 pub(super) fn capture_mode(
     records: &TypeRecords,
     types: Arc<hirsel_types::TypeInterner>,
-    items: &BTreeMap<DefPath, Vec<Arc<ItemSyntax>>>,
+    owner: impl Fn(Anchor) -> Option<(DefPath, u32)>,
     result: &Result<Arc<QueryOutput<AnalyzedBody>>, QueryError>,
     checked: Option<(&QueryOutput<TypedBody>, &DependencyReads)>,
     phases: Vec<(Diagnostic, String)>,
@@ -666,15 +666,14 @@ pub(super) fn capture_mode(
         dependencies: output.dependencies.clone(),
         detail: canonical_detail(detail.clone()),
     });
-    encode_record(
-        records,
-        items,
+    records.encode_record(
         &ModeRecord {
             checked,
             phases,
             output,
             detail: canonical_detail(detail),
         },
+        owner,
     )
 }
 
@@ -702,6 +701,7 @@ pub(super) fn restore_frozen_mode(
             .and_then(|items| items.iter().find(|item| item.occurrence == occurrence))
             .map(|item| item.anchor)
             .or_else(|| citations.catalog.anchor(path, occurrence))
+            .or_else(|| citations.owners.record_source_anchor(path, occurrence))
     })?;
     let (encoded, roots) =
         hirsel_types::with_table_collection(|| bincode::serialize_into(std::io::sink(), &record));
@@ -1384,7 +1384,7 @@ impl QueryEngine {
             capture_mode(
                 &records,
                 engine.types.clone(),
-                &engine.items,
+                |anchor| engine.record_anchor_owner(anchor),
                 &output,
                 checked
                     .as_ref()

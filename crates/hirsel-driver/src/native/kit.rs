@@ -65,6 +65,14 @@ impl Kit {
         };
         let manifest = read("manifest.json")?;
         let digest = String::from_utf8_lossy(&read("digest")?).trim().to_string();
+        Self::from_manifest(root, &manifest, digest)
+    }
+
+    pub(crate) fn from_manifest(
+        root: &Path,
+        manifest: &[u8],
+        digest: String,
+    ) -> Result<Self, NativeError> {
         let actual: String = {
             use sha2::Digest;
             sha2::Sha256::digest(&manifest)
@@ -113,6 +121,16 @@ impl Kit {
             digest,
             targets,
         })
+    }
+
+    /// Replace the manifest-only identity with the normalized captured input
+    /// closure when planning with a frozen kit. Legacy kit lines keep their ID.
+    pub(crate) fn bind_input_identity(&mut self, identity: ContentHash) {
+        self.digest = identity
+            .0
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
     }
 
     /// Exact files the existing executable link line reads for one target.
@@ -307,16 +325,23 @@ impl Link<'_> {
         Ok(hash.0[..20].try_into().unwrap())
     }
 
+    /// Shared invocation for live commands and stored-tool capture. The output
+    /// destination and executable tool are deliberately supplied by the consumer.
+    pub(crate) fn invocation(&self) -> Result<(Vec<OsString>, [u8; 20]), NativeError> {
+        let mut args = self.arguments()?;
+        let id = self.build_id(&args)?;
+        let hex: String = id.iter().map(|b| format!("{b:02x}")).collect();
+        args.push(format!("--build-id=0x{hex}").into());
+        Ok((args, id))
+    }
+
     /// The `lld` command writing `output`, and the build ID it carries.
     pub(crate) fn command(
         &self,
         lld: &Path,
         output: &Path,
     ) -> Result<(Command, [u8; 20]), NativeError> {
-        let mut args = self.arguments()?;
-        let id = self.build_id(&args)?;
-        let hex: String = id.iter().map(|b| format!("{b:02x}")).collect();
-        args.push(format!("--build-id=0x{hex}").into());
+        let (args, id) = self.invocation()?;
         let mut command = Command::new(lld);
         command.env_clear().args(args).arg("-o").arg(output);
         // The pinned tree's ld.lld loads its own libLLVM.
@@ -405,6 +430,208 @@ mod tests {
             );
         }
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    #[ignore = "requires the executable-plan-proof packaged linker inputs"]
+    fn stored_linker_replays_shared_executable_plans_for_both_targets() {
+        use crate::native::object_queries::capture::{CaptureLimits, CapturedLink, FrozenLinker};
+        use crate::native::{ExecutableLinkInputs, plan_executable_inputs};
+        use hirsel_engine::store::MemStore;
+        let store = MemStore::default();
+        let linker = FrozenLinker::snapshot(&store, &input("HIRSEL_CAPTURE_LINKER")).unwrap();
+        let root = tempfile::tempdir().unwrap();
+        for target in [
+            TargetSpec::x86_64_unknown_linux_gnu(),
+            TargetSpec::aarch64_unknown_linux_gnu(),
+        ] {
+            let original = root.path().join(&target.triple);
+            let (expected, id) = link(&target, &original, &[]);
+            let runtime = input("HIRSEL_RUNTIME_ARCHIVES")
+                .join(&target.triple)
+                .join("default/libhirsel_rt.a");
+            let plan = plan_executable_inputs(
+                &target,
+                &original,
+                &[original.join("main.o")],
+                ExecutableLinkInputs {
+                    kit: &input("HIRSEL_LINK_KIT"),
+                    runtime: &runtime,
+                    foreign: &[],
+                    loader: None,
+                },
+            )
+            .unwrap();
+            assert_eq!(plan.build_id, id);
+            assert!(!plan.arguments.iter().any(|arg| arg == "-o"));
+            let captured = plan
+                .capture(
+                    &store,
+                    linker,
+                    CaptureLimits {
+                        archive_bytes: 64 * 1024 * 1024,
+                        files: 256,
+                    },
+                )
+                .unwrap();
+            std::fs::remove_dir_all(&original).unwrap();
+            let captured = CapturedLink::from_reference(&store, captured.reference()).unwrap();
+            let output = root.path().join("replayed");
+            captured.link(&store, &output).unwrap();
+            assert_eq!(
+                std::fs::read(output).unwrap(),
+                expected,
+                "{}",
+                target.triple
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "requires frozen-kit-proof packaged linker inputs"]
+    fn frozen_kit_binds_transitive_leaf_edits_and_plans_without_originals() {
+        use crate::native::object_queries::capture::{CaptureLimits, FrozenLinkKit, FrozenLinker};
+        use crate::native::{FrozenExecutableLinkInputs, plan_frozen_executable_inputs};
+        use hirsel_engine::store::MemStore;
+        use sha2::Digest;
+        let store = MemStore::default();
+        let linker = FrozenLinker::snapshot(&store, &input("HIRSEL_CAPTURE_LINKER")).unwrap();
+        let llvm = input("HIRSEL_CAPTURE_LLVM");
+        let root = tempfile::tempdir().unwrap();
+        let limits = CaptureLimits {
+            archive_bytes: 16 << 20,
+            files: 64,
+        };
+        for target in [
+            TargetSpec::x86_64_unknown_linux_gnu(),
+            TargetSpec::aarch64_unknown_linux_gnu(),
+        ] {
+            let kit = root.path().join(&target.triple);
+            let files = kit.join(&target.triple);
+            std::fs::create_dir_all(&files).unwrap();
+            let assemble = |name: &str, source: &str| {
+                let text = files.join(format!("{name}.s"));
+                let object = files.join(format!("{name}.o"));
+                std::fs::write(&text, source).unwrap();
+                let output = Command::new(llvm.join("bin/llvm-mc"))
+                    .arg(format!("-triple={}", target.triple))
+                    .args(["-filetype=obj", "-o"])
+                    .arg(&object)
+                    .arg(text)
+                    .env_clear()
+                    .env("LD_LIBRARY_PATH", llvm.join("lib"))
+                    .output()
+                    .unwrap();
+                assert!(
+                    output.status.success(),
+                    "{}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                object
+            };
+            let arm = target.triple.starts_with("aarch64");
+            assemble(
+                "start",
+                if arm {
+                    ".globl _start\n_start:\n bl leaf\n mov x8,#93\n svc #0\n"
+                } else {
+                    ".globl _start\n_start:\n call leaf\n mov %rax,%rdi\n mov $60,%rax\n syscall\n"
+                },
+            );
+            std::fs::write(files.join("empty.a"), b"!<arch>\n").unwrap();
+            std::fs::write(files.join("script.ld"), b"INPUT(leaf.o)\n").unwrap();
+            let manifest = serde_json::to_vec(&serde_json::json!({ "targets": { (target.triple.clone()): {
+                "interpreter": "/unused/loader", "options": [], "start": ["start.o"],
+                "unwind": "empty.a", "libraries": ["script.ld"], "nonshared": "empty.a", "end": []
+            }}}))
+            .unwrap();
+            std::fs::write(kit.join("manifest.json"), &manifest).unwrap();
+            std::fs::write(
+                kit.join("digest"),
+                format!("{:x}", sha2::Sha256::digest(&manifest)),
+            )
+            .unwrap();
+            let mut versions = Vec::new();
+            for value in [42, 43] {
+                assemble(
+                    "leaf",
+                    &if arm {
+                        format!(".globl leaf\nleaf:\n mov x0,#{value}\n ret\n")
+                    } else {
+                        format!(".globl leaf\nleaf:\n mov ${value},%rax\n ret\n")
+                    },
+                );
+                versions
+                    .push(FrozenLinkKit::snapshot(&store, &kit, &target, linker, limits).unwrap());
+            }
+            assert_ne!(
+                versions[0].reference(),
+                versions[1].reference(),
+                "manifest is unchanged; actual transitive bytes bind the hit identity"
+            );
+            // The same bytes at another kit root must retain their build ID.
+            let relocated = root.path().join(format!("relocated-{}", target.triple));
+            std::fs::create_dir_all(relocated.join(&target.triple)).unwrap();
+            for name in ["manifest.json", "digest"] {
+                std::fs::copy(kit.join(name), relocated.join(name)).unwrap();
+            }
+            for entry in std::fs::read_dir(&files).unwrap() {
+                let entry = entry.unwrap();
+                std::fs::copy(
+                    entry.path(),
+                    relocated.join(&target.triple).join(entry.file_name()),
+                )
+                .unwrap();
+            }
+            versions.push(
+                FrozenLinkKit::snapshot(&store, &relocated, &target, linker, limits).unwrap(),
+            );
+            let planned = root.path().join(format!("planned-{}", target.triple));
+            std::fs::create_dir_all(&planned).unwrap();
+            let runtime = planned.join("runtime.a");
+            std::fs::write(&runtime, b"!<arch>\n").unwrap();
+            std::fs::remove_dir_all(&kit).unwrap();
+            std::fs::remove_dir_all(&relocated).unwrap();
+            let mut images = Vec::new();
+            let mut identities = Vec::new();
+            for kit in versions {
+                let kit = FrozenLinkKit::from_reference(&store, kit.reference(), &target).unwrap();
+                let plan = plan_frozen_executable_inputs(
+                    &target,
+                    &planned,
+                    &[],
+                    FrozenExecutableLinkInputs {
+                        store: &store,
+                        kit,
+                        runtime: &runtime,
+                        foreign: &[],
+                        loader: None,
+                    },
+                )
+                .unwrap();
+                identities.push(plan.build_id);
+                let captured = plan.capture(&store, linker, limits).unwrap();
+                let output = planned.join("program");
+                captured.link(&store, &output).unwrap();
+                images.push(std::fs::read(output).unwrap());
+            }
+            assert_ne!(
+                images[0], images[1],
+                "different frozen leaf code must reach each image"
+            );
+            assert_ne!(
+                identities[0], identities[1],
+                "transitive leaf bytes belong to the build ID"
+            );
+            assert_eq!(
+                identities[1], identities[2],
+                "kit relocation is not an emitted input"
+            );
+            assert!(
+                images[1] == images[2],
+                "relocated frozen kits must link identical bytes"
+            );
+        }
     }
 
     /// The kit carries no compiler builtins beyond the runtime's own

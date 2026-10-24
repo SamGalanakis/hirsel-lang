@@ -51,6 +51,7 @@ fn v_owned_invocations_match_original_source_and_survive_a_fresh_body_free_hit()
         assert_eq!(facts.owner().path(), &main);
         assert_eq!(facts.source_identity(), output.observation_identity());
         assert_eq!(facts.body_count() as usize, body.bodies.len());
+        assert_eq!(facts.entry_body(), body.entry.0);
         let selected = Symbol {
             kind: SymbolKind::Function,
             definition: main.clone(),
@@ -68,6 +69,7 @@ fn v_owned_invocations_match_original_source_and_survive_a_fresh_body_free_hit()
         )
         .unwrap();
         let body_id = body.entry;
+        let expected_entry = body.entry.0;
         let compact =
             |facts: &hirsel_validate::VerifiedInvocations, source, selected: &Symbol, body| {
                 hirsel_rc::invocations::source_instance_from_output(
@@ -120,6 +122,7 @@ fn v_owned_invocations_match_original_source_and_survive_a_fresh_body_free_hit()
         );
         let mut fresh = session(false);
         let reopened = fresh.verified_lower_output(&main).unwrap().unwrap();
+        assert_eq!(reopened.invocations().entry_body(), expected_entry);
         assert_eq!(fresh.recompute_count(&main, QueryKind::Lower), 0);
         assert_eq!(
             reopened.observation_identity(),

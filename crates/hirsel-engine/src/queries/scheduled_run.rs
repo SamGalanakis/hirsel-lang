@@ -43,6 +43,7 @@ struct Input {
 /// One immutable input namespace, shared across selected Run roots. Each task
 /// waits for the ordered source transaction before reading semantic products.
 pub struct FrontRunQueries {
+    native_roots: Vec<DefPath>,
     inputs: BTreeMap<DefPath, Input>,
     ids: BTreeMap<DefPath, QueryId>,
     check: Arc<FrontCheckQueries>,
@@ -68,6 +69,46 @@ struct Ownership {
     _allowance: MemoryReservation,
 }
 impl FrontRunQueries {
+    /// Native selects the union of its source roots before this immutable view
+    /// is shared with any factory. Ordinary launch identities stay rooted at
+    /// the requested entry; the semantic handoff carries the selected union.
+    pub(crate) fn with_source_roots(
+        mut self: Arc<Self>,
+        mut roots: Vec<DefPath>,
+    ) -> Result<Arc<Self>, QueryError> {
+        roots.sort();
+        roots.dedup();
+        if roots.iter().any(|path| !self.ids.contains_key(path)) {
+            return Err(operational(
+                "native source root is outside the captured namespace",
+            ));
+        }
+        let bytes = serde_json::to_vec(&roots).map_err(|e| operational(e.to_string()))?;
+        let this = Arc::get_mut(&mut self)
+            .ok_or_else(|| operational("native source roots require an unshared Run view"))?;
+        let charge = (bytes.len() as u64)
+            .checked_add((roots.len() * std::mem::size_of::<DefPath>()) as u64)
+            .ok_or_else(|| operational("native root inventory overflow"))?;
+        let remaining = this.retention.get_mut().unwrap_or_else(|e| e.into_inner());
+        *remaining = remaining
+            .checked_sub(charge)
+            .ok_or_else(|| operational("native source roots exceed Run admission"))?;
+        for id in this.ids.values_mut() {
+            id.address = hirsel_artifact_store::Address(ContentHash::of_parts(
+                "hirsel.front.run.source-root-set.v1",
+                [id.address.0.0.as_slice(), bytes.as_slice()],
+            ));
+        }
+        this.native_roots = roots;
+        Ok(self)
+    }
+    pub(crate) fn matches_inputs(
+        &self,
+        front: &Arc<FrontBodyQueries>,
+        lower: &Arc<FrontLowerQueries>,
+    ) -> bool {
+        Arc::ptr_eq(&self.front, front) && Arc::ptr_eq(&self.lower, lower)
+    }
     /// Potential root cursors and bodyless header/semantic-node slots. Exact
     /// canonical input content is charged by the constructor in addition.
     pub fn input_bytes(definitions: &[DefPath]) -> Option<u64> {
@@ -90,6 +131,13 @@ impl FrontRunQueries {
     }
     pub fn factory(self: &Arc<Self>) -> Arc<dyn QueryFactory> {
         Arc::new(Factory(self.clone()))
+    }
+    pub(crate) fn completed_product(&self, id: QueryId) -> Option<ProductRef> {
+        self.completed
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&id.address.0)
+            .map(|(product, _)| *product)
     }
     pub fn outcome(&self, product: ProductRef) -> Option<Arc<FrontRunOutput>> {
         let values = self.completed.lock().unwrap_or_else(|e| e.into_inner());
@@ -229,6 +277,8 @@ impl Task {
             }
             self.checked = true;
             self.pending.push(self.root.clone());
+            self.pending
+                .extend(self.queries.native_roots.iter().cloned());
             // Legacy served_entries selects every eligible source entry in the
             // launch package, even when the root never references it.
             for (path, input) in &self.queries.inputs {
@@ -478,8 +528,10 @@ impl Task {
         })
     }
     fn program(&self, root: &DefPath) -> SemanticProgram {
+        self.program_from(vec![root.clone()])
+    }
+    fn program_from(&self, mut pending: Vec<DefPath>) -> SemanticProgram {
         let mut definitions = BTreeSet::new();
-        let mut pending = vec![root.clone()];
         while let Some(path) = pending.pop() {
             if definitions.insert(path.clone()) {
                 pending.extend(self.uses.get(&path).into_iter().flatten().cloned());
@@ -578,7 +630,12 @@ impl Task {
         let foreign = foreign_use(&program, &queries.inputs);
         let revision = program.revision(&self.root)?;
         let code = reach(&self.root);
-        let bindings = program
+        let semantic_program = if queries.native_roots.is_empty() {
+            program.clone()
+        } else {
+            self.program_from(queries.native_roots.clone())
+        };
+        let bindings = semantic_program
             .definitions
             .iter()
             .filter_map(|path| {
@@ -592,7 +649,7 @@ impl Task {
             })
             .collect();
         let semantic = Arc::new(crate::NativeSemanticProgram::new(
-            program,
+            semantic_program,
             escapes,
             queries.foreign_threads.clone(),
             snapshot.clone(),
@@ -809,6 +866,7 @@ impl QueryEngine {
             .filter(|s| s.enabled())
             .ok_or(QueryError::NotImplemented)?;
         Ok(Arc::new(FrontRunQueries {
+            native_roots: Vec::new(),
             inputs,
             ids,
             check,

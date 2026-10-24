@@ -10,13 +10,23 @@ mod parallel;
 pub(crate) mod s1;
 mod scheduled_check;
 mod scheduled_lower;
+mod scheduled_native;
+mod scheduled_native_root;
+pub use scheduled_native_root::{
+    FRONT_NATIVE_ROOT_KIND, FrontNativeOutput, FrontNativePlan, FrontNativeProducts,
+    FrontNativeQueries,
+};
 mod scheduled_run;
 pub use scheduled_check::{FRONT_CHECK_KIND, FrontCheckOutput, FrontCheckPlan, FrontCheckQueries};
+pub use scheduled_native::{
+    FRONT_NATIVE_DEFINITION_KIND, FrontNativeDefinitionOutput, FrontNativeDefinitionQueries,
+};
 pub use scheduled_run::{FRONT_RUN_KIND, FrontRunOutput, FrontRunQueries};
 mod scheduled_growth;
 pub use parallel::{
-    FRONT_BODY_KIND, FrontBodyOutput, FrontBodyQueries, FrontCheckedOutput, ModeResult,
-    PublishedDefinition, PublishedResult,
+    FRONT_BODY_KIND, FRONT_STORAGE_KIND, FrontBodyOutput, FrontBodyQueries, FrontCheckedOutput,
+    FrontInputFootprint, FrontStorageOutput, FrontStorageQueries, ModeResult, PublishedDefinition,
+    PublishedResult,
 };
 pub use s1::{LoweringResult, S1LowerWork};
 pub use scheduled_growth::{FRONT_GROWTH_KIND, FrontGrowthOutput, FrontGrowthQueries};
@@ -46,6 +56,7 @@ pub(crate) use memos::{Entry, Observed, Table};
 mod program_revision;
 pub use program_revision::ForeignUse;
 pub(crate) use program_revision::SemanticProgram;
+pub(crate) mod native_discovery;
 pub(crate) mod native_records;
 mod persistent;
 mod retention;
@@ -2311,47 +2322,17 @@ impl TirProvider for QueryEngine {
             .map(|s| s.definition.path().clone())
             .collect();
         paths.extend(declarations.into_iter().map(|(_, _, path)| path));
-        let ranks: BTreeMap<_, _> = paths
-            .iter()
-            .enumerate()
-            .map(|(i, p)| (p.clone(), i))
-            .collect();
-        let mut users = vec![Vec::new(); paths.len()];
-        let mut counts = vec![0; paths.len()];
-        for (i, path) in paths.iter().enumerate() {
+        scheduled_native_root::order_constants(paths, |path| {
             let value = self.evaluate_constant(path)?;
-            for (read, _) in value.executed.iter() {
-                let ReadKey::ExecutedBody(dependency) = read else {
-                    continue;
-                };
-                if let Some(&dependency) = ranks.get(dependency.path()).filter(|&&d| d != i) {
-                    users[dependency].push(i);
-                    counts[i] += 1;
-                }
-            }
-        }
-        let mut ready: BTreeSet<_> = counts
-            .iter()
-            .enumerate()
-            .filter_map(|(i, &n)| (n == 0).then_some(i))
-            .collect();
-        let mut ordered = Vec::with_capacity(paths.len());
-        while let Some(i) = ready.pop_first() {
-            ordered.push(paths[i].clone());
-            for &user in &users[i] {
-                counts[user] -= 1;
-                if counts[user] == 0 {
-                    ready.insert(user);
-                }
-            }
-        }
-        if ordered.len() != paths.len() {
-            return Err(QueryError::Operational(hirsel_types::OperationalFailure {
-                operation: "constant initialization".into(),
-                message: "cyclic materialized constant dependencies".into(),
-            }));
-        }
-        Ok(ordered)
+            Ok(value
+                .executed
+                .iter()
+                .filter_map(|(read, _)| match read {
+                    ReadKey::ExecutedBody(dependency) => Some(dependency.path().clone()),
+                    _ => None,
+                })
+                .collect())
+        })
     }
 
     fn definition(&mut self, path: &DefPath) -> Result<hirsel_tir::DefinitionRef, QueryError> {

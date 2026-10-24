@@ -65,11 +65,14 @@ pub use hirsel_llvm::c_call;
 pub use hirsel_proof_export::sidecar::Checker;
 pub use hirsel_run_schema::Inputs as LaunchInputs;
 pub use link::{
-    Launched, Library, Observed, Partition, Runnable, RuntimeBuild, SMALL_UNIT_INSTRUCTIONS, Tape,
-    Toolchain, emit_backend_objects, emit_objects, fixture_run_record, launch, launch_fixture,
+    ExecutableLinkInputs, ExecutableLinkPlan, FrozenExecutableLinkInputs, Launched, Library,
+    Observed, Partition, Runnable, RuntimeBuild, SMALL_UNIT_INSTRUCTIONS, Tape, Toolchain,
+    emit_backend_objects, emit_objects, fixture_run_record, launch, launch_fixture,
     launch_runnable, launch_with, link, link_fixture_runnable, link_host, link_library,
     link_objects, link_profile, link_runnable, link_standalone_objects, observe, observe_run,
-    partition_backend_objects, partition_backend_objects_with_jobs, partition_objects, run_host,
+    partition_backend_objects, partition_backend_objects_with_jobs, partition_objects,
+    plan_executable_inputs, plan_executable_link, plan_frozen_executable_inputs,
+    plan_frozen_executable_link, run_host,
 };
 pub use observe::{Failure, OBSERVATION_SCHEMA, Observation, Sites, site_codes};
 pub use pairwise::pairwise_matrix;
@@ -174,9 +177,19 @@ fn callee_metadata(
     let runtime = engine
         .runtime_types()
         .map_err(|e| failed(format!("runner request types: {e:?}")))?;
-    let schemas = hirsel_interp::library::runners::core_schema(&runtime, "GrantSet")
+    settled_callee_metadata(facts, &runtime)
+}
+
+/// Encode the same checked runner schemas from an already settled Run root.
+/// This boundary cannot demand source queries or reconstruct runtime types.
+pub(crate) fn settled_callee_metadata(
+    facts: std::collections::BTreeMap<String, hirsel_run_schema::CalleeFacts>,
+    runtime: &hirsel_interp::aggregate::RuntimeTypes,
+) -> Result<hirsel_rt::program::CalleeMetadata, NativeError> {
+    let failed = |error: String| NativeError::new(StageName::Launch, error);
+    let schemas = hirsel_interp::library::runners::core_schema(runtime, "GrantSet")
         .and_then(|grants| {
-            hirsel_interp::library::runners::allowlist_schema(&runtime)
+            hirsel_interp::library::runners::allowlist_schema(runtime)
                 .map(|definitions| (grants, definitions))
         })
         .map_err(|e| failed(format!("runner request schemas: {e:?}")))?;
