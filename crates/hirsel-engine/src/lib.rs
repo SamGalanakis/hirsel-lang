@@ -3,8 +3,8 @@
 #[cfg(test)]
 hirsel_guard::install!();
 
-mod work;
 pub mod runtime;
+mod work;
 pub use work::WorkStats;
 mod operations;
 pub use operations::*;
@@ -49,8 +49,8 @@ mod adapters;
 mod facts;
 pub use adapters::*;
 pub mod loader_inputs;
-pub mod requests;
 mod package;
+pub mod requests;
 pub use store::release_shared_caches;
 mod policy;
 pub use policy::{
