@@ -285,10 +285,12 @@ pub(super) unsafe fn request(
     }
     let _owner = Owner(ctx);
     super::super::begin(ctx, false)?;
-    let token = engine::driver(ctx).next_host_token;
-    assert_eq!(token >> 48, 0);
-    engine::driver(ctx).next_host_token = token.checked_add(1).unwrap();
-    let observing = engine::driver(ctx).events.is_some();
+    let (token, observing) = engine::with_driver(ctx, |d| {
+        let token = d.next_host_token;
+        assert_eq!(token >> 48, 0);
+        d.next_host_token = token.checked_add(1).unwrap();
+        (token, d.events.is_some())
+    });
     let request = unsafe {
         (*ctx)
             .pending_ordered_host

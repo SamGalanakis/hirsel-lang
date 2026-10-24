@@ -13,28 +13,36 @@ pub(crate) fn pin(ctx: *mut TaskCtx) -> bool {
     let Some(owner) = crate::pool::pin_foreign_compute() else {
         return false;
     };
-    let s = scheduler(ctx);
-    let me = s.current;
-    let row = s.task(me);
-    unpin(row);
-    assert_eq!(row.owner, Owner::Any);
-    row.owner = owner;
+    role::with_role(ctx, |s| {
+        let me = s.current;
+        let row = s.task(me);
+        unpin(row);
+        assert_eq!(row.owner, Owner::Any);
+        row.owner = owner;
+    });
     true
 }
 
 pub(crate) fn unpin_compute(ctx: *mut TaskCtx) {
-    let s = scheduler(ctx);
-    let me = s.current;
-    let owner = std::mem::replace(&mut s.task(me).owner, Owner::Any);
+    let owner = role::with_role(ctx, |s| {
+        let me = s.current;
+        std::mem::replace(&mut s.task(me).owner, Owner::Any)
+    });
     crate::pool::unpin_foreign_compute(owner);
 }
 
 pub(crate) fn gate_enter(ctx: *mut TaskCtx, gate: u32, site: u64) -> Stopped<bool> {
     engine::at_head(ctx)?;
-    let s = scheduler(ctx);
-    let me = s.current;
-    if s.gate(gate).owner == Some(me) {
-        s.gate(gate).depth += 1;
+    let nested = role::with_role(ctx, |s| {
+        let me = s.current;
+        let row = s.gate(gate);
+        let nested = row.owner == Some(me);
+        if nested {
+            row.depth += 1;
+        }
+        nested
+    });
+    if nested {
         return Ok(false);
     }
     let started = unsafe { (*ctx).run_ref() }
@@ -45,19 +53,20 @@ pub(crate) fn gate_enter(ctx: *mut TaskCtx, gate: u32, site: u64) -> Stopped<boo
         ctx,
         "gate.enter",
         || {
-            let s = scheduler(ctx);
-            let me = s.current;
-            let row = s.gate(gate);
-            if row.owner.is_none() {
-                row.owner = Some(me);
-                row.depth = 1;
-                row.version += 1;
-                (true, Next::Keep)
-            } else {
-                s.task(me).wait_site = site;
-                s.park(Wait::Gate { gate });
-                (false, Next::Park)
-            }
+            role::with_role(ctx, |s| {
+                let me = s.current;
+                let row = s.gate(gate);
+                if row.owner.is_none() {
+                    row.owner = Some(me);
+                    row.depth = 1;
+                    row.version += 1;
+                    (true, Next::Keep)
+                } else {
+                    s.task(me).wait_site = site;
+                    s.park(Wait::Gate { gate });
+                    (false, Next::Park)
+                }
+            })
         },
         |acquired| {
             super::events::gate_event(
@@ -83,19 +92,20 @@ pub(crate) fn gate_enter(ctx: *mut TaskCtx, gate: u32, site: u64) -> Stopped<boo
 pub(crate) fn gate_leave(ctx: *mut TaskCtx, gate: u32, outermost: bool) -> Stopped<()> {
     engine::at_head(ctx)?;
     let effect = || {
-        let s = scheduler(ctx);
-        let me = s.current;
-        let row = s.gate(gate);
-        assert_eq!(row.owner, Some(me));
-        assert_eq!(row.depth == 1, outermost);
-        row.depth -= 1;
-        if outermost {
-            row.owner = None;
-            row.version += 1;
-            for task in std::mem::take(&mut row.waiters) {
-                s.wake(task);
+        role::with_role(ctx, |s| {
+            let me = s.current;
+            let row = s.gate(gate);
+            assert_eq!(row.owner, Some(me));
+            assert_eq!(row.depth == 1, outermost);
+            row.depth -= 1;
+            if outermost {
+                row.owner = None;
+                row.version += 1;
+                for task in std::mem::take(&mut row.waiters) {
+                    s.wake(task);
+                }
             }
-        }
+        });
         ((), Next::Keep)
     };
     if outermost {
@@ -117,19 +127,21 @@ pub(crate) unsafe fn to_pool(ctx: *mut TaskCtx, site: u64) -> Stopped<u16> {
             break slot;
         }
         let (_, progress) = engine::head_continuation(ctx, || {
-            let s = scheduler(ctx);
-            let me = s.current;
-            s.task(me).wait_site = site;
-            s.park(Wait::Pool);
+            role::with_role(ctx, |s| {
+                let me = s.current;
+                s.task(me).wait_site = site;
+                s.park(Wait::Pool);
+            });
             ((), Next::Park)
         })?;
         engine::save_boundary(ctx, progress)?;
     };
-    let s = scheduler(ctx);
-    let me = s.current;
-    let row = s.task(me);
-    unpin(row);
-    row.owner = Owner::Pool(slot);
+    role::with_role(ctx, |s| {
+        let me = s.current;
+        let row = s.task(me);
+        unpin(row);
+        row.owner = Owner::Pool(slot);
+    });
     unsafe { engine::migrate(ctx) }?;
     Ok(slot)
 }
@@ -138,16 +150,17 @@ pub(crate) unsafe fn to_pool(ctx: *mut TaskCtx, site: u64) -> Stopped<u16> {
 /// for this task's logical head. Reuse is safe: the old exec cannot accept a
 /// new saved image until this outgoing frame reaches its idle continuation.
 pub(crate) unsafe fn from_pool(ctx: *mut TaskCtx, slot: u16) -> Stopped<()> {
-    let s = scheduler(ctx);
-    let me = s.current;
-    assert_eq!(
-        std::mem::replace(&mut s.task(me).owner, Owner::Any),
-        Owner::Pool(slot)
-    );
+    let owner = role::with_role(ctx, |s| {
+        let me = s.current;
+        std::mem::replace(&mut s.task(me).owner, Owner::Any)
+    });
+    assert_eq!(owner, Owner::Pool(slot));
     crate::pool::release(ctx, slot);
-    for task in std::mem::take(&mut scheduler(ctx).pool_waiters) {
-        scheduler(ctx).wake(task);
-    }
+    role::with_role(ctx, |s| {
+        for task in std::mem::take(&mut s.pool_waiters) {
+            s.wake(task);
+        }
+    });
     unsafe { engine::migrate(ctx) }
 }
 

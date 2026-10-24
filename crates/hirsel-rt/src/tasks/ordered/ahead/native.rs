@@ -423,7 +423,7 @@ pub(crate) unsafe fn run(ctx: *mut TaskCtx, exec: &crate::pool::Exec, mut sp: *m
             if pause {
                 if !private(ctx) && (*run).control.stopped().is_none() {
                     let task = super::super::engine::current(ctx);
-                    super::super::engine::driver(ctx).suspending(task, true);
+                    super::super::engine::with_driver(ctx, |d| d.suspending(task, true));
                 }
                 let owner = super::super::super::dispatch_owner(ctx);
                 (*ctx).switch_out();

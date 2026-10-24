@@ -84,7 +84,7 @@ pub(crate) unsafe fn endpoint(
         return Ok(STATUS_OK);
     }
     let descriptor = engine::carrier_descriptor(ctx, Kind::Receiver, word);
-    if engine::driver(ctx).plain_layouts.contains(&descriptor) {
+    if engine::with_driver(ctx, |d| d.plain_layouts.contains(&descriptor)) {
         engine::submit(
             ctx,
             super::Command::PlainClose { word, mutex: false }.operation(engine::footprint(
@@ -97,7 +97,7 @@ pub(crate) unsafe fn endpoint(
         return Ok(STATUS_OK);
     }
     engine::at_head(ctx)?;
-    let (_, sender) = scheduler(ctx).channels.endpoint_of(word);
+    let (_, sender) = role::with_role(ctx, |s| s.channels.endpoint_of(word));
     let name = if sender {
         "drop.trivial"
     } else {
@@ -113,11 +113,13 @@ pub(crate) unsafe fn endpoint(
         ctx,
         name,
         || {
-            let left = if super::events::observing(ctx) {
-                scheduler(ctx).channels.close_images(word)
-            } else {
-                scheduler(ctx).channels.close(word)
-            };
+            let left = role::with_role(ctx, |s| {
+                if super::events::enabled(s) {
+                    s.channels.close_images(word)
+                } else {
+                    s.channels.close(word)
+                }
+            });
             (left, Next::Keep)
         },
         |left| unsafe {
@@ -167,7 +169,7 @@ pub(crate) unsafe fn mutex(
     operation_site: u64,
 ) -> Stopped<u8> {
     let descriptor = engine::carrier_descriptor(ctx, Kind::Mutex, word);
-    if engine::driver(ctx).plain_layouts.contains(&descriptor) {
+    if engine::with_driver(ctx, |d| d.plain_layouts.contains(&descriptor)) {
         engine::submit(
             ctx,
             super::Command::PlainClose { word, mutex: true }.operation(engine::footprint(
@@ -191,11 +193,13 @@ pub(crate) unsafe fn mutex(
         ctx,
         name,
         || {
-            let left = if super::events::observing(ctx) {
-                scheduler(ctx).sync.close_images(word)
-            } else {
-                scheduler(ctx).sync.close(word)
-            };
+            let left = role::with_role(ctx, |s| {
+                if super::events::enabled(s) {
+                    s.sync.close_images(word)
+                } else {
+                    s.sync.close(word)
+                }
+            });
             (left, Next::Keep)
         },
         |left| unsafe {
@@ -330,9 +334,11 @@ pub(crate) unsafe fn kill(ctx: *mut TaskCtx, word: u64) -> Stopped<u8> {
         || {
             let path = current_path(ctx);
             let chain = unsafe { (*ctx).failure.chain(&path) };
-            let canonical =
-                unsafe { super::events::mutex_failures(ctx, scheduler(ctx), word, &chain) };
-            scheduler(ctx).sync.kill(word, chain);
+            let canonical = role::with_role(ctx, |s| {
+                let canonical = unsafe { super::events::mutex_failures(ctx, s, word, &chain) };
+                s.sync.kill(word, chain);
+                canonical
+            });
             (canonical, Next::Yield)
         },
         Clone::clone,

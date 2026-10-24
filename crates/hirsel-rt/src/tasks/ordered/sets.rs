@@ -20,29 +20,27 @@ fn writes(items: impl IntoIterator<Item = Item>) -> Footprint {
 /// As for TaskSet, with the scheduler role and test-only ordered policy.
 pub(crate) unsafe fn create(ctx: *mut TaskCtx, scope: *const u64, out: *mut u64) -> Stopped<u8> {
     let scope = unsafe { scope.read() };
-    let (index, generation) = {
-        let s = scheduler(ctx);
-        // Remove a vacant row from reuse, without publishing a native TaskSet.
-        // The owning create command installs it only at retirement.
-        s.take_set_slot()
-    };
+    // Remove a vacant row from reuse, without publishing a native TaskSet.
+    // The owning create command installs it only at retirement.
+    let (index, generation) = role::with_role(ctx, |s| s.take_set_slot());
     let word = crate::channels::ENDPOINT | TASK_SET | handle(index, generation);
     let task = engine::current(ctx);
-    let driver = engine::driver(ctx);
-    // TaskSet's result type is erased too: it can later expose any member's
-    // Task and the result handles/finalizers reachable from that Task.
-    driver.objects.unknown(Kind::TaskSet, word);
-    driver.objects.obtained(
-        driver
-            .frontier
-            .as_mut()
-            .unwrap()
-            .held
-            .get_mut(&task)
-            .unwrap(),
-        Kind::TaskSet,
-        word,
-    );
+    engine::with_driver(ctx, |driver| {
+        // TaskSet's result type is erased too: it can later expose any member's
+        // Task and the result handles/finalizers reachable from that Task.
+        driver.objects.unknown(Kind::TaskSet, word);
+        driver.objects.obtained(
+            driver
+                .frontier
+                .as_mut()
+                .unwrap()
+                .held
+                .get_mut(&task)
+                .unwrap(),
+            Kind::TaskSet,
+            word,
+        );
+    });
     engine::submit(
         ctx,
         super::Command::TaskSetCreate {
@@ -98,13 +96,14 @@ pub(crate) unsafe fn has(
         ctx,
         "task.set_has",
         || {
-            let s = scheduler(ctx);
-            let scope = s.scope_handle(unsafe { scope.read() });
-            let set = s.set_handle(set_word, scope);
-            let has = usize::try_from(index)
-                .ok()
-                .and_then(|i| s.set(set).members.get(i))
-                .is_some_and(Option::is_some);
+            let has = role::with_role(ctx, |s| {
+                let scope = s.scope_handle(unsafe { scope.read() });
+                let set = s.set_handle(set_word, scope);
+                usize::try_from(index)
+                    .ok()
+                    .and_then(|i| s.set(set).members.get(i))
+                    .is_some_and(Option::is_some)
+            });
             (has, Next::Keep)
         },
         |has| [set_word.to_ne_bytes().as_slice(), &[u8::from(*has)]].concat(),
@@ -128,32 +127,34 @@ pub(crate) unsafe fn take(
         ctx,
         "task.set_take",
         || {
-            let s = scheduler(ctx);
-            let scope = s.scope_handle(unsafe { scope.read() });
-            let set = s.set_handle(set_word, scope);
-            let word = usize::try_from(index)
-                .ok()
-                .and_then(|i| s.set(set).members.get_mut(i))
-                .and_then(Option::take)
-                .unwrap_or_else(|| fault("a task set member taken twice"));
+            let word = role::with_role(ctx, |s| {
+                let scope = s.scope_handle(unsafe { scope.read() });
+                let set = s.set_handle(set_word, scope);
+                usize::try_from(index)
+                    .ok()
+                    .and_then(|i| s.set(set).members.get_mut(i))
+                    .and_then(Option::take)
+            });
+            let word = word.unwrap_or_else(|| fault("a task set member taken twice"));
             (word, Next::Keep)
         },
         |word| [set_word.to_ne_bytes(), word.to_ne_bytes()].concat(),
     )?;
     assert!(matches!(progress, Progress::Absorbed(_)));
     let task = engine::current(ctx);
-    let driver = engine::driver(ctx);
-    driver.objects.obtained(
-        driver
-            .frontier
-            .as_mut()
-            .unwrap()
-            .held
-            .get_mut(&task)
-            .unwrap(),
-        Kind::Task,
-        word,
-    );
+    engine::with_driver(ctx, |driver| {
+        driver.objects.obtained(
+            driver
+                .frontier
+                .as_mut()
+                .unwrap()
+                .held
+                .get_mut(&task)
+                .unwrap(),
+            Kind::Task,
+            word,
+        );
+    });
     unsafe { out.write(word) };
     Ok(STATUS_OK)
 }
@@ -171,26 +172,28 @@ pub(crate) unsafe fn await_any(
     engine::at_head(ctx)?;
     super::events::prepare_await_any(ctx, unsafe { scope.read() }, set_word);
     let ((set, waiting, must_wait), progress) = engine::head_effect(ctx, "task.await_any", || {
-        let s = scheduler(ctx);
-        let scope = s.scope_handle(unsafe { scope.read() });
-        let set = s.set_handle(set_word, scope);
-        let waiting = s.set(set).members.iter().any(Option::is_some);
-        let must_wait = waiting && s.first_completed(set).is_none();
-        ((set, waiting, must_wait), Next::Yield)
+        let found = role::with_role(ctx, |s| {
+            let scope = s.scope_handle(unsafe { scope.read() });
+            let set = s.set_handle(set_word, scope);
+            let waiting = s.set(set).members.iter().any(Option::is_some);
+            (set, waiting, waiting && s.first_completed(set).is_none())
+        });
+        (found, Next::Yield)
     })?;
     engine::continue_at_head(ctx, progress)?;
     if must_wait {
         let (_, progress) = engine::head_continuation(ctx, || {
-            let s = scheduler(ctx);
-            let me = s.current;
-            s.task(me).wait_site = caller_site;
-            s.park(Wait::Any { set, member: None });
+            role::with_role(ctx, |s| {
+                let me = s.current;
+                s.task(me).wait_site = caller_site;
+                s.park(Wait::Any { set, member: None });
+            });
             ((), Next::Park)
         })?;
         engine::save_boundary(ctx, progress)?;
     }
     let index = if waiting {
-        scheduler(ctx).first_completed(set)
+        role::with_role(ctx, |s| s.first_completed(set))
     } else {
         None
     };
@@ -226,7 +229,7 @@ pub(crate) unsafe fn canceled(ctx: *mut TaskCtx, out: *mut u32) -> Stopped<u8> {
         ctx,
         "task.check_canceled",
         || {
-            let cause = scheduler(ctx).canceled(unsafe { (*ctx).shield });
+            let cause = role::with_role(ctx, |s| s.canceled(unsafe { (*ctx).shield }));
             (cause.map_or(0, |cause| cause + 1), Next::Yield)
         },
         |cause| cause.to_le_bytes().to_vec(),
@@ -262,31 +265,38 @@ pub(crate) unsafe fn release(
         "task.detach_all"
     };
     let ((scope, set, members), _) = engine::head_effect(ctx, name, || {
-        let s = scheduler(ctx);
-        let scope = s.scope_handle(unsafe { scope.read() });
-        let set = s.set_handle(unsafe { set.read() }, scope);
-        let members = s
-            .set(set)
-            .members
-            .iter()
-            .flatten()
-            .copied()
-            .collect::<Vec<_>>();
-        ((scope, set, members), Next::Keep)
+        let found = role::with_role(ctx, |s| {
+            let scope = s.scope_handle(unsafe { scope.read() });
+            let set = s.set_handle(unsafe { set.read() }, scope);
+            let members = s
+                .set(set)
+                .members
+                .iter()
+                .flatten()
+                .copied()
+                .collect::<Vec<_>>();
+            (scope, set, members)
+        });
+        (found, Next::Keep)
     })?;
     for word in members {
         // Earlier calls can complete and vacate other members. Native words
         // are generation-qualified; an already-retired member needs no effect.
-        let Some(child) = scheduler(ctx).member(word) else {
+        let Some(child) = role::with_role(ctx, |s| s.member(word)) else {
             continue;
         };
         engine::head_continuation(ctx, || {
-            let s = scheduler(ctx);
-            let me = s.current;
-            super::events::cancel_all_member(s, me, child);
+            role::with_role(ctx, |s| {
+                let me = s.current;
+                super::events::cancel_all_member(s, me, child);
+            });
             ((), Next::Keep)
         })?;
-        if scheduler(ctx).task(child).state == State::Holding {
+        let (state, failed) = role::with_role(ctx, |s| {
+            let row = s.task(child);
+            (row.state, row.failure.is_some())
+        });
+        if state == State::Holding {
             unsafe {
                 lifecycle::call(
                     ctx,
@@ -299,42 +309,43 @@ pub(crate) unsafe fn release(
                     },
                 )
             }?;
-        } else if scheduler(ctx).task(child).state == State::Done
-            && scheduler(ctx).task(child).failure.is_none()
-        {
+        } else if state == State::Done && !failed {
             engine::head_continuation(ctx, || {
-                let s = scheduler(ctx);
-                assert!(readiness::saved(s, child));
-                s.scope(scope).children.retain(|&c| c != child);
-                s.vacate_task(child);
+                role::with_role(ctx, |s| {
+                    assert!(readiness::saved(s, child));
+                    s.scope(scope).children.retain(|&c| c != child);
+                    s.vacate_task(child);
+                });
                 ((), Next::Keep)
             })?;
         }
     }
-    let wait = cancel && !unsafe { poll_drained(scheduler(ctx), set) };
+    let wait = cancel && !role::with_role(ctx, |s| unsafe { poll_drained(s, set) });
     let (_, progress) = engine::head_continuation(ctx, || {
         if !cancel {
-            scheduler(ctx).close_set(set);
+            role::with_role(ctx, |s| s.close_set(set));
         }
         ((), Next::Yield)
     })?;
     engine::continue_at_head(ctx, progress)?;
     if wait {
         let (_, progress) = engine::head_continuation(ctx, || {
-            let s = scheduler(ctx);
-            let me = s.current;
-            s.task(me).wait_site = caller_site;
-            s.park(Wait::Drain { set });
+            role::with_role(ctx, |s| {
+                let me = s.current;
+                s.task(me).wait_site = caller_site;
+                s.park(Wait::Drain { set });
+            });
             ((), Next::Park)
         })?;
         engine::save_boundary(ctx, progress)?;
     }
     if cancel {
         engine::head_continuation(ctx, || {
-            let s = scheduler(ctx);
-            let me = s.current;
-            s.close_set(set);
-            super::events::cancel_all_closed(s, me);
+            role::with_role(ctx, |s| {
+                let me = s.current;
+                s.close_set(set);
+                super::events::cancel_all_closed(s, me);
+            });
             ((), Next::Keep)
         })?;
     }

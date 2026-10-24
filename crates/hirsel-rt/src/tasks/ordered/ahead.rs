@@ -295,7 +295,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_spawn_ahead(
         // when this run can use it. W1 and strict execution start ordinary code.
         let enabled = version != 0
             && unsafe { (*ctx).run_ref().control.width.load(Ordering::Acquire) > 1 }
-            && super::engine::driver(ctx).private_enabled;
+            && super::engine::with_driver(ctx, |d| d.private_enabled);
         let (entry, certificate) = if !enabled {
             (None, None)
         } else if version == 1 {

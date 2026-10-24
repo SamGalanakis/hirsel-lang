@@ -277,8 +277,7 @@ impl Backend<Command> for Objects<'_> {
     }
 
     fn can_commit_early(&mut self, op: &Operation<Command>) -> bool {
-        let s = super::scheduler(self.ctx);
-        match &op.payload {
+        super::role::with_role(self.ctx, |s| match &op.payload {
             Command::Head { .. }
             | Command::PlainClose { .. }
             | Command::TaskDetachAll { .. }
@@ -304,7 +303,7 @@ impl Backend<Command> for Objects<'_> {
             Command::AtomicCreate { .. }
             | Command::MutexCreate { .. }
             | Command::ChannelOpen { .. } => true,
-        }
+        })
     }
 
     fn commit(&mut self, task: TaskId, op: &Operation<Command>, early: bool) -> Receipt<Outcome> {
@@ -315,11 +314,13 @@ impl Backend<Command> for Objects<'_> {
             let mut canonical;
             let observing = events::observing(self.ctx);
             if *mutex {
-                let left = if observing {
-                    super::scheduler(self.ctx).sync.close_images(*word)
-                } else {
-                    super::scheduler(self.ctx).sync.close(*word)
-                };
+                let left = super::role::with_role(self.ctx, |s| {
+                    if observing {
+                        s.sync.close_images(*word)
+                    } else {
+                        s.sync.close(*word)
+                    }
+                });
                 canonical = unsafe {
                     events::close_observed(
                         self.ctx,
@@ -333,11 +334,13 @@ impl Backend<Command> for Objects<'_> {
                     unsafe { drops::plain_images(self.ctx, &image, descriptor) };
                 }
             } else {
-                let left = if observing {
-                    super::scheduler(self.ctx).channels.close_images(*word)
-                } else {
-                    super::scheduler(self.ctx).channels.close(*word)
-                };
+                let left = super::role::with_role(self.ctx, |s| {
+                    if observing {
+                        s.channels.close_images(*word)
+                    } else {
+                        s.channels.close(*word)
+                    }
+                });
                 canonical = unsafe {
                     events::close_observed(
                         self.ctx,
@@ -390,10 +393,9 @@ impl Backend<Command> for Objects<'_> {
                 credit,
             };
         }
-        let s = super::scheduler(self.ctx);
         // SAFETY: Objects::new's caller guarantees ownership and image/handle
         // validity. All byte storage below is owned, including output images.
-        let (result, next) = unsafe {
+        let (result, next) = super::role::with_role(self.ctx, |s| unsafe {
             match &op.payload {
                 Command::PlainClose { .. } => unreachable!("cleanup owns no scheduler borrow"),
                 Command::TaskDetachAll { scope, set } => {
@@ -704,7 +706,7 @@ impl Backend<Command> for Objects<'_> {
                     (outcome, Next::Yield)
                 }
             }
-        };
+        });
         Receipt {
             result,
             next,
@@ -743,25 +745,26 @@ impl Backend<Command> for Objects<'_> {
 
     fn publish(&mut self, _: TaskId, _: &Operation<Command>, result: &Outcome) {
         if let Some(pending) = result.pending.borrow_mut().take() {
-            super::scheduler(self.ctx).channels.publish(pending);
+            super::role::with_role(self.ctx, |s| s.channels.publish(pending));
         }
     }
 
     fn call(&mut self, caller: TaskId, child: TaskId) {
-        lifecycle::call_saved(super::scheduler(self.ctx), caller, child);
+        super::role::with_role(self.ctx, |s| lifecycle::call_saved(s, caller, child));
     }
     fn call_member(&mut self, caller: TaskId, child: TaskId) {
-        lifecycle::detach_member(super::scheduler(self.ctx), caller, child);
+        super::role::with_role(self.ctx, |s| lifecycle::detach_member(s, caller, child));
     }
     fn call_returned(&mut self, caller: TaskId) {
-        let s = super::scheduler(self.ctx);
-        let super::Logical::Ordered(driver) = &mut s.logical else {
-            unreachable!()
-        };
-        if let Some(set) = driver.detaching.remove(&caller) {
-            s.close_set(set);
-            events::complete_bulk_detach(s, caller);
-        }
+        super::role::with_role(self.ctx, |s| {
+            let super::Logical::Ordered(driver) = &mut s.logical else {
+                unreachable!()
+            };
+            if let Some(set) = driver.detaching.remove(&caller) {
+                s.close_set(set);
+                events::complete_bulk_detach(s, caller);
+            }
+        });
     }
 
     fn defer_poll(&self) -> bool {

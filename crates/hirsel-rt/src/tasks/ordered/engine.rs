@@ -11,7 +11,9 @@ use crate::ordered::objects::{Kind, Registry};
 use crate::ordered::{Backend, Frontier, Next, Offer, Operation, Policy, Progress, Receipt};
 use crate::stop::{Stop, Stopped};
 
-use super::super::{Logical, handle, scheduler};
+#[cfg(test)]
+use super::super::scheduler;
+use super::super::{Logical, handle, role};
 use super::driver::Driver;
 use super::{Command, Objects, Outcome, Returned};
 
@@ -28,6 +30,9 @@ pub(crate) fn on(ctx: *mut TaskCtx) -> bool {
     }
 }
 
+/// Test fixtures only: production code borrows the driver through
+/// [`with_driver`], which cannot outlive its closure.
+#[cfg(test)]
 pub(super) fn driver(ctx: *mut TaskCtx) -> &'static mut Driver {
     let Logical::Ordered(driver) = &mut scheduler(ctx).logical else {
         panic!("ordered submission without an ordered driver")
@@ -35,21 +40,35 @@ pub(super) fn driver(ctx: *mut TaskCtx) -> &'static mut Driver {
     driver
 }
 
-pub(super) fn current(ctx: *mut TaskCtx) -> TaskId {
-    let s = scheduler(ctx);
-    let task = s.current;
-    handle(task, s.task(task).generation)
+/// Run `f` on the Ordered driver under one lexical role-table borrow, which
+/// ends before any suspension, user code, home call or role release.
+pub(super) fn with_driver<T>(ctx: *mut TaskCtx, f: impl FnOnce(&mut Driver) -> T) -> T {
+    role::with_role(ctx, |s| {
+        let Logical::Ordered(driver) = &mut s.logical else {
+            panic!("ordered submission without an ordered driver")
+        };
+        f(driver)
+    })
 }
 
-/// Read identity and policy under one scheduler access. No borrow returned
-/// here may cross user code, a commit callback, or a physical suspension.
-fn current_driver(ctx: *mut TaskCtx) -> (TaskId, &'static mut Driver) {
-    let s = scheduler(ctx);
-    let task = handle(s.current, s.task(s.current).generation);
-    let Logical::Ordered(driver) = &mut s.logical else {
-        panic!("ordered submission without an ordered driver")
-    };
-    (task, driver)
+pub(super) fn current(ctx: *mut TaskCtx) -> TaskId {
+    role::with_role(ctx, |s| {
+        let me = s.current;
+        handle(me, s.task(me).generation)
+    })
+}
+
+/// Read identity and policy under one role-table borrow, which cannot cross
+/// user code, a commit callback, or a physical suspension.
+fn with_current_driver<T>(ctx: *mut TaskCtx, f: impl FnOnce(TaskId, &mut Driver) -> T) -> T {
+    role::with_role(ctx, |s| {
+        let me = s.current;
+        let task = handle(me, s.task(me).generation);
+        let Logical::Ordered(driver) = &mut s.logical else {
+            panic!("ordered submission without an ordered driver")
+        };
+        f(task, driver)
+    })
 }
 
 /// Opt-in for supported native-boundary tests. General admission is not wired.
@@ -95,7 +114,7 @@ pub(crate) unsafe fn enable(ctx: *mut TaskCtx, policy: Policy) {
         .held
         .insert(root, Held::empty());
     assert_eq!(driver.select(), vec![root]);
-    scheduler(ctx).logical = Logical::Ordered(driver);
+    role::with_role(ctx, |s| s.logical = Logical::Ordered(driver));
     unsafe { (*ctx).heap_ref().meter.ordered((*ctx).run_ptr()) };
     unsafe {
         (*ctx)
@@ -258,12 +277,16 @@ fn settle_head(ctx: *mut TaskCtx, before: &Stretch) -> Stopped<()> {
 }
 
 fn settle_head_here(ctx: *mut TaskCtx, before: &Stretch) -> Stopped<()> {
-    let (task, driver) = current_driver(ctx);
-    assert!(
-        driver.head_ready(task),
-        "retire owned work before head charges"
-    );
-    let result = driver.frontier.as_mut().unwrap().settled.settle(before);
+    let (task, result) = with_current_driver(ctx, |task, driver| {
+        assert!(
+            driver.head_ready(task),
+            "retire owned work before head charges"
+        );
+        (
+            task,
+            driver.frontier.as_mut().unwrap().settled.settle(before),
+        )
+    });
     super::events::charges::partial(ctx, task, before, result);
     result.map_err(Stop::BudgetExceeded)
 }
@@ -272,22 +295,19 @@ fn settle_head_here(ctx: *mut TaskCtx, before: &Stretch) -> Stopped<()> {
 /// request and logical budget untouched; only head promotion can resume it.
 pub(crate) fn reserve_allocation(ctx: *mut TaskCtx, bytes: u64) -> Stopped<()> {
     unsafe { super::ahead::barrier(ctx) };
-    let task = {
-        let (task, driver) = current_driver(ctx);
+    let task = with_current_driver(ctx, |task, driver| {
         driver.enter(task, crate::pool::compute_index().unwrap_or(0));
         task
-    };
+    });
     capture_fuel(ctx);
     advance(ctx)?;
-    let blocked_head = {
-        let driver = driver(ctx);
+    let blocked_head = with_driver(ctx, |driver| {
         driver.frontier.as_ref().unwrap().head() == Some(task) && !driver.head_ready(task)
-    };
+    });
     if blocked_head {
         at_head(ctx)?;
     }
-    let (memory, budgets, envelope_full) = {
-        let driver = driver(ctx);
+    let (memory, budgets, envelope_full) = with_driver(ctx, |driver| {
         (
             driver.memory,
             driver.budgets,
@@ -297,12 +317,11 @@ pub(crate) fn reserve_allocation(ctx: *mut TaskCtx, bytes: u64) -> Stopped<()> {
                     .get(&task)
                     .is_some_and(|stretch| stretch.allocation_pauses(bytes)),
         )
-    };
+    });
     if envelope_full {
         at_head(ctx)?;
     }
-    let reserved = {
-        let driver = driver(ctx);
+    let reserved = with_driver(ctx, |driver| {
         let frontier = driver
             .frontier
             .as_mut()
@@ -311,12 +330,12 @@ pub(crate) fn reserve_allocation(ctx: *mut TaskCtx, bytes: u64) -> Stopped<()> {
             .logged_fuel(task)
             .saturating_add(driver.stretches.get(&task).map_or(0, Stretch::fuel_charges));
         frontier.reserve(task, bytes, fuel)
-    };
+    });
     if reserved.is_err() {
         at_head(ctx)?;
     }
     if memory {
-        let head = driver(ctx).head_ready(task);
+        let head = with_driver(ctx, |d| d.head_ready(task));
         if head {
             super::host::retire_return(ctx);
             let before = stretch(ctx);
@@ -334,19 +353,20 @@ pub(crate) fn reserve_allocation(ctx: *mut TaskCtx, bytes: u64) -> Stopped<()> {
             settle_head(ctx, &allocation)?;
         } else {
             unsafe { (*ctx).ordered_charge_trace.allocation(bytes) };
-            driver(ctx)
-                .stretches
-                .entry(task)
-                .or_insert_with(|| Stretch::new(budgets))
-                .alloc(bytes)
-                .expect("preflighted allocation envelope");
+            with_driver(ctx, |d| {
+                d.stretches
+                    .entry(task)
+                    .or_insert_with(|| Stretch::new(budgets))
+                    .alloc(bytes)
+            })
+            .expect("preflighted allocation envelope");
         }
         assert_eq!(
             unsafe { (*ctx).ordered_allocation.replace(bytes) },
             0,
             "one upcoming heap/pool charge"
         );
-        let level = driver(ctx).frontier.as_ref().unwrap().settled.level;
+        let level = with_driver(ctx, |d| d.frontier.as_ref().unwrap().settled.level);
         unsafe { (*ctx).heap_ref().meter.settled(level) };
     }
     Ok(())
@@ -380,25 +400,23 @@ pub(crate) fn fuel_refill(ctx: *mut TaskCtx) -> Stopped<()> {
     capture_fuel(ctx);
     advance(ctx)?;
     let task = current(ctx);
-    let blocked_head = {
-        let driver = driver(ctx);
+    let blocked_head = with_driver(ctx, |driver| {
         driver.frontier.as_ref().unwrap().head() == Some(task) && !driver.head_ready(task)
-    };
+    });
     if blocked_head {
         at_head(ctx)?;
     }
-    let must_wait = {
-        let driver = driver(ctx);
+    let must_wait = with_driver(ctx, |driver| {
         let frontier = driver.frontier.as_ref().unwrap();
         let consumed = frontier
             .logged_fuel(task)
             .saturating_add(driver.stretches.get(&task).map_or(0, Stretch::fuel_charges));
         frontier.head() != Some(task) && consumed > frontier.settled.fuel
-    };
+    });
     if must_wait {
         at_head(ctx)?;
     }
-    if driver(ctx).head_ready(task) {
+    if with_driver(ctx, |d| d.head_ready(task)) {
         super::host::retire_return(ctx);
         let before = stretch(ctx);
         settle_head(ctx, &before)?;
@@ -428,10 +446,8 @@ fn with_frontier_here<T>(
     ctx: *mut TaskCtx,
     action: impl FnOnce(&mut Frontier<Command, Outcome>, &mut Objects<'_>) -> T,
 ) -> T {
-    let mut frontier = driver(ctx)
-        .frontier
-        .take()
-        .expect("nonreentrant ordered commit");
+    let mut frontier =
+        with_driver(ctx, |d| d.frontier.take()).expect("nonreentrant ordered commit");
     let mut records = Vec::new();
     let mut record = |task, _, outcome: &Outcome, _| records.push((task, outcome.returned()));
     let mut backend = unsafe { Objects::deferred(ctx, &mut record) };
@@ -464,42 +480,39 @@ fn with_frontier_here<T>(
 /// Exactly one retirement poll. No driver/scheduler reference crosses it.
 fn poll(ctx: *mut TaskCtx) -> Stopped<()> {
     assert!(
-        !std::mem::replace(&mut driver(ctx).host_poll, true),
+        !with_driver(ctx, |d| std::mem::replace(&mut d.host_poll, true)),
         "one poll owner"
     );
     unsafe { super::super::poll_parked(ctx) }?;
-    let ready = {
-        let s = scheduler(ctx);
+    let ready = role::with_role(ctx, |s| {
         let ready = std::mem::take(&mut s.runnable);
         ready
             .into_iter()
             .map(|task| handle(task, s.task(task).generation))
             .collect()
-    };
-    let driver = driver(ctx);
-    driver.frontier.as_mut().unwrap().complete_poll(ready);
-    driver.host_poll = false;
+    });
+    with_driver(ctx, |driver| {
+        driver.frontier.as_mut().unwrap().complete_poll(ready);
+        driver.host_poll = false;
+    });
     Ok(())
 }
 
 fn notify(ctx: *mut TaskCtx) {
-    let selected = driver(ctx).select();
+    let selected = with_driver(ctx, |d| d.select());
     for id in selected {
         let task = id as u32;
-        let owner = {
-            let row = scheduler(ctx).task(task);
+        let owner = role::with_role(ctx, |s| {
+            let row = s.task(task);
             assert_eq!(row.generation, (id >> 32) as u32);
             row.owner
-        };
+        });
         unsafe { crate::pool::free::schedule_saved((*ctx).run_ptr(), task, owner) };
     }
 }
 
 fn advance(ctx: *mut TaskCtx) -> Stopped<()> {
-    let deferred = {
-        let driver = driver(ctx);
-        driver.host_poll || driver.poll_deferred()
-    };
+    let deferred = with_driver(ctx, |driver| driver.host_poll || driver.poll_deferred());
     if deferred {
         return Ok(());
     }
@@ -508,12 +521,14 @@ fn advance(ctx: *mut TaskCtx) -> Stopped<()> {
             with_frontier(ctx, |f, backend| f.absorb(backend)).map_err(Stop::BudgetExceeded)?;
         // A successful retry has discharged the save wait. The owned log,
         // rather than a notification alone, remains the readiness authority.
-        driver(ctx).awaiting_save = matches!(progress, Progress::NeedSave(_));
+        with_driver(ctx, |d| {
+            d.awaiting_save = matches!(progress, Progress::NeedSave(_))
+        });
         match progress {
             Progress::Poll => poll(ctx)?,
             Progress::Absorbed(_) | Progress::Called(_) | Progress::Retired => {}
             Progress::NeedSave(_) => {
-                driver(ctx).awaiting_save = true;
+                with_driver(ctx, |d| d.awaiting_save = true);
                 break;
             }
             Progress::NeedSegment(_) | Progress::Idle => break,
@@ -525,31 +540,33 @@ fn advance(ctx: *mut TaskCtx) -> Stopped<()> {
 }
 
 fn accepted(ctx: *mut TaskCtx, task: TaskId, waiting: bool) {
-    let driver = driver(ctx);
-    let ordinal = driver.submitted.entry(task).or_default();
-    if waiting {
-        assert!(driver.waiting.insert(task, *ordinal).is_none());
-    }
-    *ordinal += 1;
+    with_driver(ctx, |driver| {
+        let ordinal = driver.submitted.entry(task).or_default();
+        if waiting {
+            assert!(driver.waiting.insert(task, *ordinal).is_none());
+        }
+        *ordinal += 1;
+    });
 }
 
 fn suspend(ctx: *mut TaskCtx, task: TaskId, head_only: bool) {
-    driver(ctx).suspending(task, head_only);
+    with_driver(ctx, |d| d.suspending(task, head_only));
     unsafe { crate::pool::free::suspend_current(ctx, false) };
-    driver(ctx).enter(task, crate::pool::compute_index().unwrap_or(0));
+    with_driver(ctx, |d| {
+        d.enter(task, crate::pool::compute_index().unwrap_or(0))
+    });
 }
 
 /// Wait before any task-tree mutation. This gate keeps a later task's native
 /// arguments on its own stack until its existing log has retired at the head.
 pub(super) fn at_head(ctx: *mut TaskCtx) -> Stopped<()> {
-    let task = {
-        let (task, driver) = current_driver(ctx);
+    let task = with_current_driver(ctx, |task, driver| {
         driver.enter(task, crate::pool::compute_index().unwrap_or(0));
         task
-    };
+    });
     loop {
         advance(ctx)?;
-        if driver(ctx).head_ready(task) {
+        if with_driver(ctx, |d| d.head_ready(task)) {
             super::host::retire_return(ctx);
             let before = stretch(ctx);
             settle_head(ctx, &before)?;
@@ -568,10 +585,10 @@ pub(super) fn at_head(ctx: *mut TaskCtx) -> Stopped<()> {
 pub(crate) unsafe fn migrate(ctx: *mut TaskCtx) -> Stopped<()> {
     at_head(ctx)?;
     let task = current(ctx);
-    let (owner, last) = {
-        let row = scheduler(ctx).task(task as u32);
+    let (owner, last) = role::with_role(ctx, |s| {
+        let row = s.task(task as u32);
         (row.owner, row.last)
-    };
+    });
     if crate::pool::target(ctx, owner, last).is_some() {
         suspend(ctx, task, true);
     }
@@ -598,7 +615,7 @@ pub(crate) fn root_report(
 pub(crate) fn root_end(ctx: *mut TaskCtx, status: u8) -> Stopped<()> {
     let task = current(ctx);
     assert_eq!(task as u32, 0, "only the root publishes the launch result");
-    if driver(ctx).is_finishing(task) {
+    if with_driver(ctx, |d| d.is_finishing(task)) {
         return Ok(());
     }
     let (_, progress) = head_canonical(
@@ -609,7 +626,7 @@ pub(crate) fn root_end(ctx: *mut TaskCtx, status: u8) -> Stopped<()> {
     )?;
     assert_eq!(progress, Progress::Poll);
     poll(ctx)?;
-    driver(ctx).finishing(task);
+    with_driver(ctx, |d| d.finishing(task));
     Ok(())
 }
 
@@ -621,11 +638,11 @@ pub(crate) fn terminal(ctx: *mut TaskCtx, stop: &Stop) -> Stopped<()> {
     if super::events::charges::terminal_recorded(ctx) {
         return Ok(());
     }
-    let frontier = driver(ctx)
-        .frontier
-        .as_ref()
-        .expect("restored terminal frontier");
-    if frontier.is_stopped() || frontier.head().is_none() {
+    let ended = with_driver(ctx, |d| {
+        let frontier = d.frontier.as_ref().expect("restored terminal frontier");
+        frontier.is_stopped() || frontier.head().is_none()
+    });
+    if ended {
         return Ok(());
     }
     let (_, progress) = head_canonical(
@@ -753,7 +770,7 @@ fn head_outcome<T>(
     let task = current(ctx);
     accepted(ctx, task, false);
     let before = stretch(ctx);
-    let observing = driver(ctx).events.is_some();
+    let observing = with_driver(ctx, |d| d.events.is_some());
     let mut result = None;
     let progress = with_frontier(ctx, |frontier, objects| {
         let mut backend = HeadEffect {
@@ -823,7 +840,7 @@ pub(super) fn continue_after_read(ctx: *mut TaskCtx, progress: Progress) -> Stop
 pub(super) fn save_boundary(ctx: *mut TaskCtx, progress: Progress) -> Stopped<()> {
     let task = current(ctx);
     if progress == Progress::Poll {
-        driver(ctx).defer_poll_until_saved(task);
+        with_driver(ctx, |d| d.defer_poll_until_saved(task));
     }
     suspend(ctx, task, false);
     at_head(ctx)
@@ -834,7 +851,7 @@ pub(super) fn save_boundary(ctx: *mut TaskCtx, progress: Progress) -> Stopped<()
 pub(super) fn save_host_boundary(ctx: *mut TaskCtx, progress: Progress) {
     let task = current(ctx);
     if progress == Progress::Poll {
-        driver(ctx).defer_poll_until_saved(task);
+        with_driver(ctx, |d| d.defer_poll_until_saved(task));
     }
     suspend(ctx, task, false);
 }
@@ -846,27 +863,25 @@ pub(super) fn submit(
     ctx: *mut TaskCtx,
     mut operation: Operation<Command>,
 ) -> Stopped<Option<Returned>> {
-    let task = {
-        let (task, driver) = current_driver(ctx);
-        if driver.host_returns.contains_key(&task) {
-            // No driver borrow crosses the canonical completed-read barrier.
-            at_head(ctx)?;
-            self::driver(ctx).enter(task, crate::pool::compute_index().unwrap_or(0));
-        } else {
-            driver.enter(task, crate::pool::compute_index().unwrap_or(0));
-        }
-        task
-    };
+    let (task, returning) = with_current_driver(ctx, |task, driver| {
+        (task, driver.host_returns.contains_key(&task))
+    });
+    if returning {
+        // No driver borrow crosses the canonical completed-read barrier.
+        at_head(ctx)?;
+    }
+    with_driver(ctx, |d| {
+        d.enter(task, crate::pool::compute_index().unwrap_or(0))
+    });
     let mut before = stretch(ctx);
     loop {
         advance(ctx)?;
-        let (head, ready) = {
-            let driver = driver(ctx);
+        let (head, ready) = with_driver(ctx, |driver| {
             (
                 driver.frontier.as_ref().unwrap().head(),
                 driver.head_ready(task),
             )
-        };
+        });
         if head == Some(task) {
             if !ready {
                 suspend(ctx, task, true);
@@ -877,11 +892,11 @@ pub(super) fn submit(
                 with_frontier(ctx, |f, backend| f.apply_head(before, operation, backend))
                     .map_err(Stop::BudgetExceeded)?;
             if matches!(progress, Progress::NeedSave(_)) {
-                driver(ctx).awaiting_save = true;
+                with_driver(ctx, |d| d.awaiting_save = true);
                 loop {
                     suspend(ctx, task, true);
                     advance(ctx)?;
-                    if let Some(result) = driver(ctx).returned.remove(&task) {
+                    if let Some(result) = with_driver(ctx, |d| d.returned.remove(&task)) {
                         fuel_in(ctx);
                         return Ok(Some(result));
                     }
@@ -891,14 +906,12 @@ pub(super) fn submit(
                 poll(ctx)?;
             }
             advance(ctx)?;
-            let result = driver(ctx)
-                .returned
-                .remove(&task)
-                .expect("head outcome recorded");
+            let result =
+                with_driver(ctx, |d| d.returned.remove(&task)).expect("head outcome recorded");
             fuel_in(ctx);
             return Ok(Some(result));
         }
-        let started = driver(ctx).tuning.clock();
+        let started = with_driver(ctx, |d| d.tuning.clock());
         let (offer, retained, result) = with_frontier(ctx, |f, backend| {
             let (offer, retained) = f.offer(task, before, operation, backend);
             let result = (offer == Offer::Early).then(|| f.early_result(task).unwrap().returned());
@@ -907,7 +920,7 @@ pub(super) fn submit(
         let overhead = started.map_or(0, |started| {
             started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64
         });
-        driver(ctx).tuning.offer(task, offer, overhead);
+        with_driver(ctx, |d| d.tuning.offer(task, offer, overhead));
         match offer {
             Offer::Early => {
                 accepted(ctx, task, false);
@@ -924,7 +937,7 @@ pub(super) fn submit(
                 loop {
                     suspend(ctx, task, false);
                     advance(ctx)?;
-                    if let Some(returned) = driver(ctx).returned.remove(&task) {
+                    if let Some(returned) = with_driver(ctx, |d| d.returned.remove(&task)) {
                         fuel_in(ctx);
                         return Ok(Some(returned));
                     }
@@ -940,17 +953,14 @@ pub(super) fn submit(
 }
 
 pub(super) fn footprint(ctx: *mut TaskCtx, kind: Kind, word: u64, write: bool) -> Footprint {
-    driver(ctx)
-        .objects
-        .footprint(kind, word, write)
-        .unwrap_or_else(|| {
-            // Missing native binding is a conservative head/log boundary, never
-            // an empty footprint that could certify an early commit.
-            Footprint {
-                writes: BTreeSet::from([Item::Host]),
-                ..Footprint::default()
-            }
-        })
+    with_driver(ctx, |d| d.objects.footprint(kind, word, write)).unwrap_or_else(|| {
+        // Missing native binding is a conservative head/log boundary, never
+        // an empty footprint that could certify an early commit.
+        Footprint {
+            writes: BTreeSet::from([Item::Host]),
+            ..Footprint::default()
+        }
+    })
 }
 
 #[derive(Clone)]
@@ -962,28 +972,29 @@ pub(super) struct Carrier {
 fn bind(ctx: *mut TaskCtx, bindings: &[(Kind, u64, BTreeSet<u32>)]) -> Footprint {
     let task = current(ctx);
     let path = super::super::current_path(ctx);
-    let driver = driver(ctx);
-    let ordinal = *driver.submitted.get(&task).unwrap_or(&0);
-    let object = ObjectId {
-        creator: path,
-        ordinal,
-    };
-    for (kind, word, obtains) in bindings {
-        driver
-            .objects
-            .bind_erased(*kind, *word, object.clone(), obtains.clone());
-    }
-    let frontier = driver.frontier.as_mut().unwrap();
-    let held = frontier.held.get_mut(&task).expect("a live owner");
-    held.objects.insert(object.clone());
-    for (_, _, obtains) in bindings {
-        held.obtains.extend(obtains);
-    }
-    frontier.carries = driver.objects.carries.clone();
-    Footprint {
-        writes: BTreeSet::from([Item::Object(object)]),
-        ..Footprint::default()
-    }
+    with_driver(ctx, |driver| {
+        let ordinal = *driver.submitted.get(&task).unwrap_or(&0);
+        let object = ObjectId {
+            creator: path,
+            ordinal,
+        };
+        for (kind, word, obtains) in bindings {
+            driver
+                .objects
+                .bind_erased(*kind, *word, object.clone(), obtains.clone());
+        }
+        let frontier = driver.frontier.as_mut().unwrap();
+        let held = frontier.held.get_mut(&task).expect("a live owner");
+        held.objects.insert(object.clone());
+        for (_, _, obtains) in bindings {
+            held.obtains.extend(obtains);
+        }
+        frontier.carries = driver.objects.carries.clone();
+        Footprint {
+            writes: BTreeSet::from([Item::Object(object)]),
+            ..Footprint::default()
+        }
+    })
 }
 
 /// # Safety
@@ -996,7 +1007,7 @@ pub(crate) unsafe fn atomic_create(
     payload_offset: u64,
     payload_size: u64,
 ) -> Stopped<()> {
-    let reservation = scheduler(ctx).sync.reserve_image();
+    let reservation = role::with_role(ctx, |s| s.sync.reserve_image());
     let word = reservation.word();
     let footprint = bind(ctx, &[(Kind::Atomic, word, BTreeSet::new())]);
     let image = unsafe { std::slice::from_raw_parts(image, size as usize) }.to_vec();
@@ -1049,7 +1060,7 @@ pub(crate) unsafe fn atomic_store(
 }
 
 pub(super) fn is_sender(ctx: *mut TaskCtx, word: u64) -> bool {
-    driver(ctx).carriers.contains_key(&(Kind::Sender, word))
+    with_driver(ctx, |d| d.carriers.contains_key(&(Kind::Sender, word)))
 }
 
 pub(super) fn sender_close(ctx: *mut TaskCtx, word: u64) -> Stopped<()> {
@@ -1062,7 +1073,7 @@ pub(super) fn sender_close(ctx: *mut TaskCtx, word: u64) -> Stopped<()> {
 }
 
 pub(super) fn carrier_descriptor(ctx: *mut TaskCtx, kind: Kind, word: u64) -> u32 {
-    driver(ctx).carriers[&(kind, word)].descriptor
+    with_driver(ctx, |d| d.carriers[&(kind, word)].descriptor)
 }
 
 /// # Safety
@@ -1070,18 +1081,19 @@ pub(super) fn carrier_descriptor(ctx: *mut TaskCtx, kind: Kind, word: u64) -> u3
 pub(super) unsafe fn obtained_image(ctx: *mut TaskCtx, image: *const u8, descriptor: u32) {
     let captures = unsafe { crate::ordered::capture::scan(ctx, image, descriptor) };
     let task = current(ctx);
-    let driver = driver(ctx);
-    let obtained = driver.objects.captured(&captures);
-    let held = driver
-        .frontier
-        .as_mut()
-        .unwrap()
-        .held
-        .get_mut(&task)
-        .unwrap();
-    held.objects.extend(obtained.objects);
-    held.obtains.extend(obtained.obtains);
-    held.unknown |= obtained.unknown;
+    with_driver(ctx, |driver| {
+        let obtained = driver.objects.captured(&captures);
+        let held = driver
+            .frontier
+            .as_mut()
+            .unwrap()
+            .held
+            .get_mut(&task)
+            .unwrap();
+        held.objects.extend(obtained.objects);
+        held.obtains.extend(obtained.obtains);
+        held.unknown |= obtained.unknown;
+    });
 }
 
 /// # Safety
@@ -1104,7 +1116,7 @@ pub(crate) unsafe fn channel_open(
     descriptor: u32,
 ) -> Stopped<()> {
     let carrier = unsafe { carrier(ctx, descriptor, none) };
-    let reservation = scheduler(ctx).channels.reserve_open();
+    let reservation = role::with_role(ctx, |s| s.channels.reserve_open());
     let (sender, receiver) = reservation.words();
     let footprint = bind(
         ctx,
@@ -1114,7 +1126,7 @@ pub(crate) unsafe fn channel_open(
         ],
     );
     for (kind, word) in [(Kind::Sender, sender), (Kind::Receiver, receiver)] {
-        driver(ctx).carriers.insert((kind, word), carrier.clone());
+        with_driver(ctx, |d| d.carriers.insert((kind, word), carrier.clone()));
     }
     submit(
         ctx,
@@ -1135,13 +1147,14 @@ pub(crate) unsafe fn channel_open(
 /// # Safety
 /// As for sender.dup. Source and output are owner-local handle words.
 pub(crate) unsafe fn sender_dup(ctx: *mut TaskCtx, sender: u64, out: *mut u64) -> Stopped<()> {
-    let reservation = scheduler(ctx).channels.reserve_dup();
+    let reservation = role::with_role(ctx, |s| s.channels.reserve_dup());
     let word = reservation.word();
     let footprint = footprint(ctx, Kind::Sender, sender, true);
-    let driver = driver(ctx);
-    driver.objects.alias(Kind::Sender, sender, word);
-    let carrier = driver.carriers[&(Kind::Sender, sender)].clone();
-    driver.carriers.insert((Kind::Sender, word), carrier);
+    with_driver(ctx, |driver| {
+        driver.objects.alias(Kind::Sender, sender, word);
+        let carrier = driver.carriers[&(Kind::Sender, sender)].clone();
+        driver.carriers.insert((Kind::Sender, word), carrier);
+    });
     submit(
         ctx,
         Command::SenderDup {
@@ -1162,7 +1175,7 @@ pub(crate) unsafe fn channel_send(
     message: *mut u8,
     out: *mut u32,
 ) -> Stopped<()> {
-    let size = driver(ctx).carriers[&(Kind::Sender, sender)].none.len();
+    let size = with_driver(ctx, |d| d.carriers[&(Kind::Sender, sender)].none.len());
     let image = unsafe { std::slice::from_raw_parts(message, size) }.to_vec();
     let operation = Command::Send {
         sender,
@@ -1190,12 +1203,12 @@ pub(crate) unsafe fn mutex_create(
 ) -> Stopped<()> {
     let carrier = unsafe { carrier(ctx, descriptor, none) };
     let image = unsafe { std::slice::from_raw_parts(payload, carrier.none.len()) }.to_vec();
-    let reservation = scheduler(ctx).sync.reserve_mutex();
+    let reservation = role::with_role(ctx, |s| s.sync.reserve_mutex());
     let word = reservation.word();
     let footprint = bind(ctx, &[(Kind::Mutex, word, BTreeSet::from([descriptor]))]);
-    driver(ctx)
-        .carriers
-        .insert((Kind::Mutex, word), carrier.clone());
+    with_driver(ctx, |d| {
+        d.carriers.insert((Kind::Mutex, word), carrier.clone())
+    });
     let block = unsafe {
         crate::alloc::hirsel_rt_v2_alloc(ctx, wrapper, 8, 8, crate::alloc::DOMAIN_HEAP, 0)
     };
@@ -1225,7 +1238,7 @@ pub(crate) unsafe fn mutex_take(
     payload: *mut u8,
     out: *mut u32,
 ) -> Stopped<()> {
-    let none = driver(ctx).carriers[&(Kind::Mutex, word)].none.clone();
+    let none = with_driver(ctx, |d| d.carriers[&(Kind::Mutex, word)].none.clone());
     let operation =
         Command::MutexTake { word, none }.operation(footprint(ctx, Kind::Mutex, word, true));
     let returned = submit(ctx, operation)?.expect("take requires its outcome");
@@ -1245,7 +1258,7 @@ pub(crate) unsafe fn mutex_take(
 /// # Safety
 /// As for mutex.put: payload is an owned Some carrier, restored to None.
 pub(crate) unsafe fn mutex_put(ctx: *mut TaskCtx, word: u64, payload: *mut u8) -> Stopped<()> {
-    let none = driver(ctx).carriers[&(Kind::Mutex, word)].none.clone();
+    let none = with_driver(ctx, |d| d.carriers[&(Kind::Mutex, word)].none.clone());
     let image = unsafe { std::slice::from_raw_parts(payload, none.len()) }.to_vec();
     submit(
         ctx,
@@ -2296,19 +2309,18 @@ pub(crate) fn ahead_refill(ctx: *mut TaskCtx) -> Stopped<bool> {
     capture_fuel(ctx);
     advance(ctx)?;
     let task = current(ctx);
-    let wait = {
-        let d = driver(ctx);
+    let wait = with_driver(ctx, |d| {
         let f = d.frontier.as_ref().unwrap();
         (f.head() == Some(task) && !d.head_ready(task))
             || (f.head() != Some(task)
                 && f.logged_fuel(task)
                     .saturating_add(d.stretches.get(&task).map_or(0, Stretch::fuel_charges))
                     > f.settled.fuel)
-    };
+    });
     if wait {
         return Ok(false);
     }
-    if driver(ctx).head_ready(task) {
+    if with_driver(ctx, |d| d.head_ready(task)) {
         super::host::retire_return(ctx);
         let before = stretch(ctx);
         settle_head(ctx, &before)?;
@@ -2322,7 +2334,7 @@ pub(crate) fn ahead_refill(ctx: *mut TaskCtx) -> Stopped<bool> {
 pub(crate) fn host_segment_barrier(ctx: *mut TaskCtx) -> Stopped<bool> {
     advance(ctx)?;
     let task = current(ctx);
-    if !driver(ctx).head_ready(task) {
+    if !with_driver(ctx, |d| d.head_ready(task)) {
         return Ok(false);
     }
     super::host::retire_return(ctx);

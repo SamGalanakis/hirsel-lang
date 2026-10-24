@@ -15,7 +15,7 @@ pub(crate) use service::{Service, pending};
 /// The issuer holds the role and owns its admitted request.
 pub(crate) unsafe fn park(ctx: *mut TaskCtx, token: u64, task: u32) {
     let io = unsafe { (*ctx).run_ref().ordered_io.get().unwrap() };
-    let generation = crate::tasks::scheduler(ctx).task(task).generation;
+    let generation = role::with_role(ctx, |s| s.task(task).generation);
     let _segment = unsafe { role::Segment::new(ctx) };
     io.park(token, task, generation);
 }
@@ -216,10 +216,11 @@ pub(crate) unsafe fn request(
             .as_ref()
             .unwrap() as *const Request
     };
-    let driver = engine::driver(ctx);
-    let token = driver.next_host_token;
-    driver.next_host_token = token.checked_add(1).expect("host request token overflow");
-    let observing = driver.events.is_some();
+    let (token, observing) = engine::with_driver(ctx, |driver| {
+        let token = driver.next_host_token;
+        driver.next_host_token = token.checked_add(1).expect("host request token overflow");
+        (token, driver.events.is_some())
+    });
     let cause = unsafe { crate::tasks::canceled(ctx) };
     super::super::events::request_host(ctx, unsafe { &*request });
     let keys = if observing {

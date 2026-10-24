@@ -47,10 +47,11 @@ impl CompletedRead {
 /// pure stretch. A parked read has no extra continuation/poll on return.
 pub(super) fn retire_return(ctx: *mut TaskCtx) {
     let task = engine::current(ctx);
-    let Some(token) = engine::driver(ctx).host_returns.get(&task).map(|r| r.token) else {
+    let Some(token) = engine::with_driver(ctx, |d| d.host_returns.get(&task).map(|r| r.token))
+    else {
         return;
     };
-    assert!(engine::driver(ctx).head_ready(task));
+    assert!(engine::with_driver(ctx, |d| d.head_ready(task)));
     // No stop-aware entry or bridge between removing the original row and
     // publishing its canonical return. The certificate stays run-owned until
     // that point; an abandoned Rust stack is never its only owner.
@@ -85,14 +86,14 @@ pub(crate) fn return_pending(ctx: *mut TaskCtx, token: u64) -> bool {
 fn tail_enabled(ctx: *mut TaskCtx) -> bool {
     let certified = super::ahead::host_return::selected(ctx);
     certified
-        && engine::driver(ctx).private_enabled
+        && engine::with_driver(ctx, |d| d.private_enabled)
         && crate::pool::wide(unsafe { (*ctx).run_ref() })
 }
 
 pub(crate) fn begin(ctx: *mut TaskCtx, close: bool) -> Stopped<()> {
     engine::at_head(ctx)?;
     let task = engine::current(ctx);
-    if engine::driver(ctx).host_ops.contains_key(&task) {
+    if engine::with_driver(ctx, |d| d.host_ops.contains_key(&task)) {
         return Ok(());
     }
     let name = if close {
@@ -101,16 +102,22 @@ pub(crate) fn begin(ctx: *mut TaskCtx, close: bool) -> Stopped<()> {
         "host.request"
     };
     engine::head_effect(ctx, name, || ((), Next::Keep))?;
-    assert!(engine::driver(ctx).host_ops.insert(task, name).is_none());
+    assert!(engine::with_driver(ctx, |d| d
+        .host_ops
+        .insert(task, name)
+        .is_none()));
     Ok(())
 }
 
 pub(crate) fn finish(ctx: *mut TaskCtx, next: Next) -> Stopped<()> {
     engine::at_head(ctx)?;
     let task = engine::current(ctx);
-    assert!(engine::driver(ctx).host_ops.remove(&task).is_some());
+    assert!(engine::with_driver(ctx, |d| d
+        .host_ops
+        .remove(&task)
+        .is_some()));
     let (_, progress) = engine::head_continuation(ctx, || ((), next))?;
-    if engine::driver(ctx).bounded_reads.remove(&task) && tail_enabled(ctx) {
+    if engine::with_driver(ctx, |d| d.bounded_reads.remove(&task)) && tail_enabled(ctx) {
         engine::continue_after_read(ctx, progress)
     } else {
         engine::continue_at_head(ctx, progress)
@@ -178,10 +185,11 @@ pub(crate) unsafe fn park(ctx: *mut TaskCtx, token: u64, yielded: bool) -> Stopp
         engine::continue_at_head(ctx, progress)?;
     }
     let (_, progress) = engine::head_continuation(ctx, || {
-        let s = scheduler(ctx);
-        let me = s.current;
-        unpin(s.task(me));
-        s.park(Wait::Host { token });
+        role::with_role(ctx, |s| {
+            let me = s.current;
+            unpin(s.task(me));
+            s.park(Wait::Host { token });
+        });
         ((), Next::Park)
     })?;
     let me = engine::current(ctx) as u32;
@@ -191,7 +199,7 @@ pub(crate) unsafe fn park(ctx: *mut TaskCtx, token: u64, yielded: bool) -> Stopp
     engine::save_host_boundary(ctx, progress);
     let task = engine::current(ctx);
     if super::ahead::host_return::armed(ctx)
-        && engine::driver(ctx).private_enabled
+        && engine::with_driver(ctx, |d| d.private_enabled)
         && crate::pool::wide(unsafe { (*ctx).run_ref() })
     {
         if let Some(completed) = unsafe { crate::host_waits::completed_read(ctx, token) } {
@@ -208,7 +216,10 @@ pub(crate) unsafe fn park(ctx: *mut TaskCtx, token: u64, yielded: bool) -> Stopp
         }
     }
     engine::at_head(ctx)?;
-    assert!(engine::driver(ctx).host_ops.remove(&task).is_some());
+    assert!(engine::with_driver(ctx, |d| d
+        .host_ops
+        .remove(&task)
+        .is_some()));
     Ok(())
 }
 

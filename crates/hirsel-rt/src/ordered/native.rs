@@ -20,10 +20,11 @@ impl SendReceipt {
     /// all four early-commit rules for this sender's queued turn. `sender` is
     /// an open Sender of the run and `message` is its writable `Some` image.
     pub unsafe fn commit(ctx: *mut TaskCtx, sender: u64, message: *mut u8) -> Self {
-        let channels = &mut crate::tasks::scheduler(ctx).channels;
-        let channel = channels.channel(sender, true);
-        // SAFETY: caller contract.
-        let (status, pending) = unsafe { channels.send_pending(channel, message) };
+        let (status, pending) = crate::tasks::role::with_role(ctx, |s| {
+            let channel = s.channels.channel(sender, true);
+            // SAFETY: caller contract.
+            unsafe { s.channels.send_pending(channel, message) }
+        });
         Self { status, pending }
     }
 
@@ -35,7 +36,7 @@ impl SendReceipt {
     /// has settled this send's preceding stretch and reached its retirement.
     pub unsafe fn retire(self, ctx: *mut TaskCtx) {
         if let Some(send) = self.pending {
-            crate::tasks::scheduler(ctx).channels.publish(send);
+            crate::tasks::role::with_role(ctx, |s| s.channels.publish(send));
         }
     }
 }

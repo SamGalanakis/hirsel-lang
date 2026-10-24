@@ -1042,9 +1042,10 @@ pub(crate) fn enable(ctx: *mut TaskCtx) {
     unsafe { (*ctx).run_ref() }
         .ordered_roots
         .get_or_init(Default::default);
-    let driver = super::engine::driver(ctx);
-    assert!(driver.recorded.is_empty());
-    assert!(driver.events.replace(Log::default()).is_none());
+    super::engine::with_driver(ctx, |driver| {
+        assert!(driver.recorded.is_empty());
+        assert!(driver.events.replace(Log::default()).is_none());
+    });
 }
 
 /// # Safety
@@ -1530,45 +1531,47 @@ pub(super) fn value_subevent(
 /// Admission names the actual initial grants; numeric handle values carry no
 /// meaning. This creates no operations or initialized result-handle bindings.
 pub(crate) fn initial_host(ctx: *mut TaskCtx, io: Option<u64>, env: Option<u64>) {
-    let driver = super::engine::driver(ctx);
-    let Some(log) = driver.events.as_mut() else {
-        return;
-    };
-    assert!(
-        log.ordinals.is_empty(),
-        "initial authorities precede all operations"
-    );
-    assert!(
-        log.host_roots.is_empty(),
-        "initial authorities admitted once"
-    );
-    assert!(
-        io.is_none() || env.is_none() || io != env,
-        "root authority words must differ"
-    );
-    if let Some(io) = io {
-        log.host_roots.insert(io, HostAuthority::RootIo);
-    }
-    if let Some(env) = env {
-        log.host_roots.insert(env, HostAuthority::RootEnv);
-    }
+    super::engine::with_driver(ctx, |driver| {
+        let Some(log) = driver.events.as_mut() else {
+            return;
+        };
+        assert!(
+            log.ordinals.is_empty(),
+            "initial authorities precede all operations"
+        );
+        assert!(
+            log.host_roots.is_empty(),
+            "initial authorities admitted once"
+        );
+        assert!(
+            io.is_none() || env.is_none() || io != env,
+            "root authority words must differ"
+        );
+        if let Some(io) = io {
+            log.host_roots.insert(io, HostAuthority::RootIo);
+        }
+        if let Some(env) = env {
+            log.host_roots.insert(env, HostAuthority::RootEnv);
+        }
+    });
 }
 
 /// Args is an admitted entry root, not a numeric zero with implicit authority.
 pub(crate) fn initial_args(ctx: *mut TaskCtx, args: u64) {
-    let driver = super::engine::driver(ctx);
-    let Some(log) = driver.events.as_mut() else {
-        return;
-    };
-    assert!(
-        log.ordinals.is_empty(),
-        "initial authorities precede operations"
-    );
-    assert!(
-        log.host_roots
-            .insert(args, HostAuthority::RootArgs)
-            .is_none()
-    );
+    super::engine::with_driver(ctx, |driver| {
+        let Some(log) = driver.events.as_mut() else {
+            return;
+        };
+        assert!(
+            log.ordinals.is_empty(),
+            "initial authorities precede operations"
+        );
+        assert!(
+            log.host_roots
+                .insert(args, HostAuthority::RootArgs)
+                .is_none()
+        );
+    });
 }
 
 /// Borrowed output bypasses the owned wait protocol. Copy only when evidence

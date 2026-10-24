@@ -73,12 +73,9 @@ impl Spawn {
 /// As for TaskScopeEnter, with the ordered policy and role installed.
 pub(crate) unsafe fn scope_enter(ctx: *mut TaskCtx, out: *mut u64) -> Stopped<u8> {
     let owner = engine::current(ctx);
-    let (index, generation) = {
-        let s = scheduler(ctx);
-        s.take_scope_slot()
-    };
+    let (index, generation) = role::with_role(ctx, |s| s.take_scope_slot());
     let word = handle(index, generation);
-    engine::driver(ctx).objects.inert(Kind::Scope, word);
+    engine::with_driver(ctx, |d| d.objects.inert(Kind::Scope, word));
     engine::submit(
         ctx,
         super::Command::ScopeEnter {
@@ -129,14 +126,16 @@ pub(crate) unsafe fn scope_enter_until(
     // owned by this head and cannot be observed by a retirement poll yet.
     let token = unsafe { crate::host_waits::arm(ctx, index, clock, at) }?;
     if let Some(token) = token {
-        scheduler(ctx).scope(index).deadline.as_mut().unwrap().token = Some(token);
+        role::with_role(ctx, |s| {
+            s.scope(index).deadline.as_mut().unwrap().token = Some(token);
+        });
     }
     super::events::deadline_armed(ctx, index, token.is_some());
     if token.is_none() {
-        super::events::expire(scheduler(ctx), index);
+        role::with_role(ctx, |s| super::events::expire(s, index));
     }
     let word = handle(index, generation);
-    engine::driver(ctx).objects.inert(Kind::Scope, word);
+    engine::with_driver(ctx, |d| d.objects.inert(Kind::Scope, word));
     let (_, progress) = engine::head_continuation(ctx, || ((), Next::Yield))?;
     engine::continue_at_head(ctx, progress)?;
     unsafe { out.write(word) };
@@ -192,22 +191,20 @@ pub(crate) unsafe fn spawn_certified(
     let parent = engine::current(ctx);
     let scope = unsafe { scope.read() };
     let ordinal = {
-        let committed = scheduler(ctx).task(parent as u32).spawned;
-        let next = engine::driver(ctx)
-            .spawn_ordinals
-            .entry(parent)
-            .or_insert(committed);
-        let ordinal = *next;
-        *next = next.checked_add(1).expect("spawn path ordinal overflow");
-        ordinal
+        let committed = role::with_role(ctx, |s| s.task(parent as u32).spawned);
+        engine::with_driver(ctx, |d| {
+            let next = d.spawn_ordinals.entry(parent).or_insert(committed);
+            let ordinal = *next;
+            *next = next.checked_add(1).expect("spawn path ordinal overflow");
+            ordinal
+        })
     };
-    let (index, generation, path) = {
-        let s = scheduler(ctx);
+    let (index, generation, path) = role::with_role(ctx, |s| {
         let mut path = s.task(parent as u32).path.clone();
         path.push(ordinal);
         let (index, generation) = s.take_task_slot();
         (index, generation, path)
-    };
+    });
     let stack = unsafe { (*ctx).worker() }.idle_stacks.take();
     let child = stack.context();
     unsafe {
@@ -227,7 +224,7 @@ pub(crate) unsafe fn spawn_certified(
             .load(std::sync::atomic::Ordering::Acquire)
             > 1
     };
-    let alternate = ahead_entry.filter(|_| wide && engine::driver(ctx).private_enabled);
+    let alternate = ahead_entry.filter(|_| wide && engine::with_driver(ctx, |d| d.private_enabled));
     let mut task = Task::new(generation, child, Some(scope as u32), path, None);
     task.code = Some((alternate.unwrap_or(code), environment, operation_site));
     if alternate.is_some() {
@@ -243,38 +240,40 @@ pub(crate) unsafe fn spawn_certified(
         )
     };
     let word = handle(index, generation);
-    let driver = engine::driver(ctx);
-    let held = driver.objects.captured(&captures);
-    // Task result types are erased by TaskSpawn's current native ABI. An
-    // unknown binding conservatively blocks passes through a captured task.
-    driver.objects.unknown(Kind::Task, word);
-    driver.objects.obtained(
-        driver
-            .frontier
-            .as_mut()
-            .unwrap()
-            .held
-            .get_mut(&parent)
-            .unwrap(),
-        Kind::Task,
-        word,
-    );
+    let (held, plain) = engine::with_driver(ctx, |driver| {
+        let held = driver.objects.captured(&captures);
+        // Task result types are erased by TaskSpawn's current native ABI. An
+        // unknown binding conservatively blocks passes through a captured task.
+        driver.objects.unknown(Kind::Task, word);
+        driver.objects.obtained(
+            driver
+                .frontier
+                .as_mut()
+                .unwrap()
+                .held
+                .get_mut(&parent)
+                .unwrap(),
+            Kind::Task,
+            word,
+        );
+        let plain = driver
+            .plain_layouts
+            .contains(&unsafe { (*environment).index() });
+        (held, plain)
+    });
     let host = certificate.as_ref().is_some_and(|c| !c.host.is_null());
     let reserve = !host && alternate.is_some() && {
         let safe_capture = !captures.roots
             && !captures.unknown
             && captures.handles.is_empty()
             && captures.typed.is_empty()
-            && driver
-                .plain_layouts
-                .contains(&unsafe { (*environment).index() });
-        let scope_committed = {
-            let s = scheduler(ctx);
+            && plain;
+        let scope_committed = role::with_role(ctx, |s| {
             s.scopes
                 .get(scope as u32 as usize)
                 .and_then(Option::as_ref)
                 .is_some_and(|row| row.generation == (scope >> 32) as u32)
-        };
+        });
         let safe_capture = safe_capture
             || (certificate.is_some()
                 && !captures.roots
@@ -283,7 +282,7 @@ pub(crate) unsafe fn spawn_certified(
                 && captures.typed.is_empty());
         safe_capture
             && scope_committed
-            && engine::driver(ctx).reserved.len() < super::ahead::MAX_RESERVATIONS
+            && engine::with_driver(ctx, |d| d.reserved.len()) < super::ahead::MAX_RESERVATIONS
     };
     if let Some(certificate) = certificate {
         if (reserve || (host && alternate.is_some()))
@@ -326,12 +325,10 @@ pub(crate) unsafe fn spawn_certified(
                 .admitted
                 .store(false, std::sync::atomic::Ordering::Release)
         };
-        engine::driver(ctx).reserved.insert(
-            index,
-            super::ahead::Reserved {
-                task: Box::new(task),
-            },
-        );
+        let task = super::ahead::Reserved {
+            task: Box::new(task),
+        };
+        engine::with_driver(ctx, |d| d.reserved.insert(index, task));
         None
     } else {
         Some(task)
@@ -363,7 +360,7 @@ pub(crate) unsafe fn spawn_certified(
     )?;
     // A committed spawn has already moved out of the private owner map.
     // Only an owned unpublished frame can be advertised by this path.
-    if engine::driver(ctx).reserved.contains_key(&index) {
+    if engine::with_driver(ctx, |d| d.reserved.contains_key(&index)) {
         unsafe { crate::pool::free::schedule_saved((*ctx).run_ptr(), index, Owner::Any) };
     }
     unsafe { out.write(word) };
@@ -380,40 +377,43 @@ pub(crate) unsafe fn finish(
     descriptor: u32,
 ) -> Stopped<u8> {
     engine::at_head(ctx)?;
-    let me = scheduler(ctx).current;
+    let me = role::with_role(ctx, |s| s.current);
     unsafe { super::events::task_result(ctx, descriptor, slot) };
-    if scheduler(ctx).task(me).detached {
+    if role::with_role(ctx, |s| s.task(me).detached) {
         // A detached body retains its result for its own cleanup. Its actual
         // end commits after that cleanup, in complete().
         return Ok(STATUS_OK);
     }
     let (parent, progress) = engine::head_effect(ctx, "task.end", || {
-        let s = scheduler(ctx);
-        let scope = s.task(me).scope.expect("a child has a scope");
-        let parent = s.scope(scope).owner;
-        let parent = handle(parent, s.task(parent).generation);
-        let row = s.task(me);
-        row.ended = true;
-        row.slot = Some(Slot {
-            slot,
-            none,
-            size: usize::try_from(size).expect("task result size fits usize"),
+        let parent = role::with_role(ctx, |s| {
+            let scope = s.task(me).scope.expect("a child has a scope");
+            let parent = s.scope(scope).owner;
+            let parent = handle(parent, s.task(parent).generation);
+            let row = s.task(me);
+            row.ended = true;
+            row.slot = Some(Slot {
+                slot,
+                none,
+                size: usize::try_from(size).expect("task result size fits usize"),
+            });
+            row.state = State::Holding;
+            s.order(me);
+            parent
         });
-        row.state = State::Holding;
-        s.order(me);
         // A waiter's poll cannot inspect this slot until after physical save.
         (parent, Next::Hold)
     })?;
     let task = engine::current(ctx);
-    engine::driver(ctx)
-        .frontier
-        .as_mut()
-        .unwrap()
-        .held
-        .get_mut(&parent)
-        .expect("a live scope owner")
-        .holding
-        .insert(task);
+    engine::with_driver(ctx, |d| {
+        d.frontier
+            .as_mut()
+            .unwrap()
+            .held
+            .get_mut(&parent)
+            .expect("a live scope owner")
+            .holding
+            .insert(task)
+    });
     engine::save_boundary(ctx, progress)?;
     Ok(STATUS_OK)
 }
@@ -492,25 +492,26 @@ pub(super) fn detach_member(s: &mut Scheduler, caller: u64, child: u64) {
 /// The child is holding a physically saved frame; the caller owns the role.
 pub(super) unsafe fn call(ctx: *mut TaskCtx, child: u32, call: Call) -> Stopped<()> {
     let effect = || {
-        let s = scheduler(ctx);
-        let me = s.current;
-        assert!(readiness::saved(s, child));
-        assert_eq!(s.task(child).state, State::Holding);
-        match call.result {
-            ResultAction::Keep => {}
-            ResultAction::Deliver(slot, size) => {
-                let held = s.task(child).slot.take().expect("a holding result");
-                // SAFETY: the child is saved and this callback owns the caller.
-                unsafe { deliver(held, slot, size) };
+        let id = role::with_role(ctx, |s| {
+            let me = s.current;
+            assert!(readiness::saved(s, child));
+            assert_eq!(s.task(child).state, State::Holding);
+            match call.result {
+                ResultAction::Keep => {}
+                ResultAction::Deliver(slot, size) => {
+                    let held = s.task(child).slot.take().expect("a holding result");
+                    // SAFETY: the child is saved and this callback owns the caller.
+                    unsafe { deliver(held, slot, size) };
+                }
+                ResultAction::Discard => s.task(child).slot = None,
             }
-            ResultAction::Discard => s.task(child).slot = None,
-        }
-        s.task(me).state = State::Parked;
-        let row = s.task(child);
-        row.detached |= call.detached;
-        row.state = State::Ready;
-        row.handoff = Some(me);
-        let id = handle(child, row.generation);
+            s.task(me).state = State::Parked;
+            let row = s.task(child);
+            row.detached |= call.detached;
+            row.state = State::Ready;
+            row.handoff = Some(me);
+            handle(child, row.generation)
+        });
         (
             (),
             Next::Call {
@@ -541,10 +542,11 @@ pub(crate) unsafe fn join(
     engine::at_head(ctx)?;
     let scope_word = unsafe { scope.read() };
     let child_word = unsafe { task.read() };
-    let s = scheduler(ctx);
-    let scope = s.scope_handle(scope_word);
-    let child = s.task_handle(child_word, scope);
-    let state = s.task(child).state;
+    let (scope, child, state) = role::with_role(ctx, |s| {
+        let scope = s.scope_handle(scope_word);
+        let child = s.task_handle(child_word, scope);
+        (scope, child, s.task(child).state)
+    });
     super::events::prepare_join(ctx, scope_word, child_word);
     match state {
         State::Holding => {
@@ -572,14 +574,15 @@ pub(crate) unsafe fn join(
             let (_, progress) = engine::head_effect(ctx, "task.join", || ((), Next::Yield))?;
             engine::continue_at_head(ctx, progress)?;
             let (_, progress) = engine::head_continuation(ctx, || {
-                let s = scheduler(ctx);
-                let me = s.current;
-                s.task(me).wait_site = caller_site;
-                s.park(Wait::Join { child, slot, size });
+                role::with_role(ctx, |s| {
+                    let me = s.current;
+                    s.task(me).wait_site = caller_site;
+                    s.park(Wait::Join { child, slot, size });
+                });
                 ((), Next::Park)
             })?;
             engine::save_boundary(ctx, progress)?;
-            if scheduler(ctx).task(child).state == State::Holding {
+            if role::with_role(ctx, |s| s.task(child).state) == State::Holding {
                 // The retirement poll already moved the held result. A return
                 // from this child's rest continues the same turn, without poll.
                 unsafe {
@@ -597,10 +600,11 @@ pub(crate) unsafe fn join(
             }
         }
     }
-    let s = scheduler(ctx);
-    assert_eq!(s.task(child).state, State::Done);
-    assert!(readiness::saved(s, child));
-    let chain = s.task(child).failure.take();
+    let chain = role::with_role(ctx, |s| {
+        assert_eq!(s.task(child).state, State::Done);
+        assert!(readiness::saved(s, child));
+        s.task(child).failure.take()
+    });
     super::events::complete_join(ctx, scope_word, child_word, chain.as_deref());
     // Keep the original no-stop window through row retirement. The observer
     // only reborrowed role-owned data and cannot add a scheduling boundary.
@@ -649,21 +653,23 @@ unsafe fn exit_scope(
     engine::at_head(ctx)?;
     super::events::prepare_scope_exit(ctx, unsafe { scope.read() });
     let ((scope, waited), progress) = engine::head_effect(ctx, "task.scope_exit", || {
-        let s = scheduler(ctx);
-        let scope = s.scope_handle(unsafe { scope.read() });
-        let me = s.current;
-        assert_eq!(s.task(me).scopes.pop(), Some(scope));
-        s.cancel_epoch.changed();
-        if error != 0 || unsafe { (*ctx).failure.active() } {
-            for child in s.scope(scope).children.clone() {
-                super::events::scope_cancel(s, me, child);
+        let (scope, waited) = role::with_role(ctx, |s| {
+            let scope = s.scope_handle(unsafe { scope.read() });
+            let me = s.current;
+            assert_eq!(s.task(me).scopes.pop(), Some(scope));
+            s.cancel_epoch.changed();
+            if error != 0 || unsafe { (*ctx).failure.active() } {
+                for child in s.scope(scope).children.clone() {
+                    super::events::scope_cancel(s, me, child);
+                }
             }
-        }
-        let waited = !s.settled(scope);
-        if waited {
-            s.task(me).wait_site = caller_site;
-            s.park(Wait::Exit { scope });
-        }
+            let waited = !s.settled(scope);
+            if waited {
+                s.task(me).wait_site = caller_site;
+                s.park(Wait::Exit { scope });
+            }
+            (scope, waited)
+        });
         (
             (scope, waited),
             if waited { Next::Park } else { Next::Keep },
@@ -672,9 +678,9 @@ unsafe fn exit_scope(
     if waited {
         engine::save_boundary(ctx, progress)?;
     }
-    let children = scheduler(ctx).scope(scope).children.clone();
+    let children = role::with_role(ctx, |s| s.scope(scope).children.clone());
     for &child in children.iter().rev() {
-        if scheduler(ctx).task(child).state == State::Holding {
+        if role::with_role(ctx, |s| s.task(child).state) == State::Holding {
             unsafe {
                 call(
                     ctx,
@@ -690,18 +696,19 @@ unsafe fn exit_scope(
         }
     }
     let (deadline, _) = engine::head_continuation(ctx, || {
-        let s = scheduler(ctx);
-        let me = s.current;
-        let own = s.task(me).path.clone();
-        for child in children {
-            assert_eq!(s.task(child).state, State::Done);
-            assert!(readiness::saved(s, child));
-            if let Some(chain) = s.task(child).failure.take() {
-                unsafe { (*ctx).failure.merge_chain(&own, chain) };
+        let deadline = role::with_role(ctx, |s| {
+            let me = s.current;
+            let own = s.task(me).path.clone();
+            for child in children {
+                assert_eq!(s.task(child).state, State::Done);
+                assert!(readiness::saved(s, child));
+                if let Some(chain) = s.task(child).failure.take() {
+                    unsafe { (*ctx).failure.merge_chain(&own, chain) };
+                }
+                s.vacate_task(child);
             }
-            s.vacate_task(child);
-        }
-        let deadline = s.take_scope(scope).deadline;
+            s.take_scope(scope).deadline
+        });
         (deadline, Next::Keep)
     })?;
     if let Some(ScopeDeadline {
@@ -752,16 +759,17 @@ pub(crate) unsafe fn receive(
     let word = unsafe { receiver.read() };
     let descriptor = engine::carrier_descriptor(ctx, Kind::Receiver, word);
     unsafe { super::events::prepare_receive(ctx, word, descriptor) };
-    let me = scheduler(ctx).current;
+    let me = role::with_role(ctx, |s| s.current);
     let (status, progress) = engine::head_observed(
         ctx,
         "channel.receive",
         || {
-            let s = scheduler(ctx);
-            let channel = s.channels.channel(word, false);
             let shield = unsafe { (*ctx).shield };
-            // SAFETY: this head callback owns the receiving task and its output.
-            let status = unsafe { receive_ready(s, me, shield, channel, message) };
+            let status = role::with_role(ctx, |s| {
+                let channel = s.channels.channel(word, false);
+                // SAFETY: this head callback owns the receiving task and its output.
+                unsafe { receive_ready(s, me, shield, channel, message) }
+            });
             (status, Next::Yield)
         },
         |status| {
@@ -775,17 +783,18 @@ pub(crate) unsafe fn receive(
     } else {
         engine::continue_at_head(ctx, progress)?;
         let (_, progress) = engine::head_continuation(ctx, || {
-            let s = scheduler(ctx);
-            let channel = s.channels.channel(word, false);
-            s.task(me).wait_site = caller_site;
-            s.park(Wait::Receive {
-                channel,
-                slot: message,
+            role::with_role(ctx, |s| {
+                let channel = s.channels.channel(word, false);
+                s.task(me).wait_site = caller_site;
+                s.park(Wait::Receive {
+                    channel,
+                    slot: message,
+                });
             });
             ((), Next::Park)
         })?;
         engine::save_boundary(ctx, progress)?;
-        scheduler(ctx).task(me).status
+        role::with_role(ctx, |s| s.task(me).status)
     };
     if status == crate::channels::DONE {
         // The receive ends its turn before obtained handles may be used. Its
@@ -803,44 +812,10 @@ pub(crate) unsafe fn receive(
 /// The child owns its last runtime frame and has dropped its environment.
 pub(crate) unsafe fn complete(ctx: &mut TaskCtx, index: u32, status: u8) -> ! {
     unsafe { crate::stop::check(ctx, engine::at_head(ctx)) };
-    let began_end = scheduler(ctx).task(index).ended;
     let ctx_ptr = std::ptr::from_mut(ctx);
+    let began_end = role::with_role(ctx_ptr, |s| s.task(index).ended);
     let effect = || {
-        let s = scheduler(ctx_ptr);
-        let row = s.task(index);
-        let first_end = !std::mem::replace(&mut row.ended, true);
-        let path = row.path.clone();
-        let chain = unsafe { (*ctx_ptr).failure.take_chain(&path) };
-        let failed = status != STATUS_OK;
-        if failed != !chain.is_empty() {
-            fault("a task's status disagrees with its failure state");
-        }
-        let s = scheduler(ctx_ptr);
-        let row = s.task(index);
-        row.finishing = true;
-        if first_end && !failed {
-            s.order(index);
-        }
-        if failed {
-            s.task(index).failure = Some(chain);
-            s.order(index);
-            let scope = s.task(index).scope.expect("a child has a scope");
-            s.cancel_scope(scope, CANCEL_CHILD_FAILED);
-            let siblings = s.scope(scope).children.clone();
-            s.wake_owner(scope);
-            let mut cancellations = Vec::new();
-            for sibling in siblings {
-                if sibling != index {
-                    if let Some(events) =
-                        super::events::cancel_observed(s, sibling, CANCEL_CHILD_FAILED)
-                    {
-                        cancellations.extend(events);
-                    }
-                }
-            }
-            cancellations.sort_unstable_by(|a, b| a.0.cmp(&b.0));
-            unsafe { super::events::failed_end(ctx_ptr, s, index, cancellations) };
-        }
+        role::with_role(ctx_ptr, |s| finish_end(ctx_ptr, s, index, status));
         ((), Next::End)
     };
     let effect = if began_end {
@@ -850,14 +825,15 @@ pub(crate) unsafe fn complete(ctx: &mut TaskCtx, index: u32, status: u8) -> ! {
     };
     let (_, progress) = unsafe { crate::stop::check(ctx, effect) };
     let task = engine::current(ctx);
-    let driver = engine::driver(ctx);
-    if progress == Progress::Poll {
-        driver.defer_poll_until_saved(task);
-    } else {
-        // The frontier returned into a caller without a scheduling point.
-        driver.defer_return_until_saved(task);
-    }
-    driver.finishing(task);
+    engine::with_driver(ctx, |driver| {
+        if progress == Progress::Poll {
+            driver.defer_poll_until_saved(task);
+        } else {
+            // The frontier returned into a caller without a scheduling point.
+            driver.defer_return_until_saved(task);
+        }
+        driver.finishing(task);
+    });
     if let Some(metrics) = &ctx.run_ref().worker_metrics {
         metrics.complete();
     }
@@ -868,6 +844,42 @@ pub(crate) unsafe fn complete(ctx: &mut TaskCtx, index: u32, status: u8) -> ! {
     drop(std::mem::take(&mut ctx.frozen));
     drop(std::mem::take(&mut ctx.isolated));
     unsafe { crate::pool::free::finish_current(ctx) }
+}
+
+/// The end effect's table work: no TaskCtx bridge, switch or user code.
+fn finish_end(ctx: *mut TaskCtx, s: &mut Scheduler, index: u32, status: u8) {
+    let row = s.task(index);
+    let first_end = !std::mem::replace(&mut row.ended, true);
+    let path = row.path.clone();
+    let chain = unsafe { (*ctx).failure.take_chain(&path) };
+    let failed = status != STATUS_OK;
+    if failed != !chain.is_empty() {
+        fault("a task's status disagrees with its failure state");
+    }
+    s.task(index).finishing = true;
+    if first_end && !failed {
+        s.order(index);
+    }
+    if failed {
+        s.task(index).failure = Some(chain);
+        s.order(index);
+        let scope = s.task(index).scope.expect("a child has a scope");
+        s.cancel_scope(scope, CANCEL_CHILD_FAILED);
+        let siblings = s.scope(scope).children.clone();
+        s.wake_owner(scope);
+        let mut cancellations = Vec::new();
+        for sibling in siblings {
+            if sibling != index {
+                if let Some(events) =
+                    super::events::cancel_observed(s, sibling, CANCEL_CHILD_FAILED)
+                {
+                    cancellations.extend(events);
+                }
+            }
+        }
+        cancellations.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+        unsafe { super::events::failed_end(ctx, s, index, cancellations) };
+    }
 }
 
 /// Called under IdleGuard after physical ownership invalidation/publication.
