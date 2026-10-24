@@ -679,25 +679,13 @@ fn native(
     }
 }
 
-// Selected original vectors remain individually named in the durable receipts.
-fn campaign(phase: &str) {
-    campaign_selected(phase, None);
-}
-
-fn campaign_selected(phase: &str, only: Option<&str>) {
-    let root = scratch(phase);
-    let manifest = package(&root);
-    // Setup may rebuild a stale std image; it owns this copy and runs before
-    // the immutable qualification closure and per-process execution caps.
-    let image = root.join("qualified.image");
-    fs::copy(std::env::var_os("HIRSEL_IMAGE").unwrap(), &image).unwrap();
+fn prepare_product_inputs(root: &Path, manifest: &Path) -> PathBuf {
+    // Ordinary products are immutable action inputs. Package loading and the
+    // qualification closure use the same tree before bounded cells start.
+    let products = PathBuf::from(std::env::var_os("HIRSEL_PRODUCTS").unwrap());
     hirsel_engine::with_compiler_stack(|| {
-        hirsel_driver::load_program_source_with_images(
-            &manifest,
-            None,
-            &hirsel_engine::StdImages::at(&image),
-        )
-        .unwrap_or_else(|e| panic!("image setup: {e}"));
+        hirsel_driver::load_program_source(manifest, None)
+            .unwrap_or_else(|e| panic!("ordinary package setup: {e}"));
     });
     let closure = Command::new("python3")
         .arg(root.join("seal_inputs.py"))
@@ -710,6 +698,46 @@ fn campaign_selected(phase: &str, only: Option<&str>) {
     fs::write(root.join("seal-stdout"), &closure.stdout).unwrap();
     fs::write(root.join("seal-stderr"), &closure.stderr).unwrap();
     assert!(closure.status.success(), "input closure: {closure:?}");
+    products
+}
+
+#[test]
+fn ordinary_product_setup_seals_installed_inputs() {
+    let root = scratch("product-inputs");
+    let manifest = package(&root);
+    let products = prepare_product_inputs(&root, &manifest);
+    let rows: Vec<Value> =
+        serde_json::from_slice(&fs::read(root.join("actual-inputs.json")).unwrap()).unwrap();
+    let retained: std::collections::BTreeSet<_> = rows
+        .iter()
+        .filter(|row| row["name"] == "HIRSEL_PRODUCTS")
+        .map(|row| PathBuf::from(row["path"].as_str().unwrap()))
+        .collect();
+    fn files(root: &Path, found: &mut std::collections::BTreeSet<PathBuf>) {
+        for entry in fs::read_dir(root).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                files(&path, found);
+            } else if path.is_file() {
+                found.insert(path);
+            }
+        }
+    }
+    let mut expected = std::collections::BTreeSet::new();
+    files(&products.canonicalize().unwrap(), &mut expected);
+    assert!(!expected.is_empty());
+    assert_eq!(retained, expected);
+}
+
+// Selected original vectors remain individually named in the durable receipts.
+fn campaign(phase: &str) {
+    campaign_selected(phase, None);
+}
+
+fn campaign_selected(phase: &str, only: Option<&str>) {
+    let root = scratch(phase);
+    let manifest = package(&root);
+    let products = prepare_product_inputs(&root, &manifest);
     let mut receipts = Vec::new();
     for row in cases() {
         let id = row["id"].as_str().unwrap();
@@ -735,7 +763,7 @@ fn campaign_selected(phase: &str, only: Option<&str>) {
                 "--nocapture",
             ])
             .env("HIRSEL_MEMORY_LIMIT", "2G")
-            .env("HIRSEL_IMAGE", &image)
+            .env("HIRSEL_PRODUCTS", &products)
             .env("DECISION_TREE_35_ROW_FILE", cell.join("row.json"))
             .env("DECISION_TREE_35_ROOT", &cell)
             .env("DECISION_TREE_35_PHASE", phase)
@@ -883,7 +911,7 @@ fn decision_tree_35_ordered_capacity() {
     let input_seal = Command::new("python3").arg("-c").arg(r#"
 import hashlib,json,os,sys
 from pathlib import Path
-r=Path(sys.argv[1]);names=['HIRSEL_IMAGE','HIRSEL_RUNTIME_ARCHIVES','LLVM_SYS_231_PREFIX','HIRSEL_LINK_KIT','HIRSEL_GLIBC_FLOOR']
+r=Path(sys.argv[1]);names=['HIRSEL_PRODUCTS','HIRSEL_RUNTIME_ARCHIVES','LLVM_SYS_231_PREFIX','HIRSEL_LINK_KIT','HIRSEL_GLIBC_FLOOR']
 roots={k:Path(os.environ[k]) for k in names if k in os.environ};roots['cli']=Path(sys.argv[2])
 rows=[]
 for key,p in roots.items():
@@ -963,7 +991,7 @@ fn decision_tree_35_minimum_bounds_full_main() {
 import hashlib,json,os,sys
 from pathlib import Path
 r=Path(sys.argv[1]);roots={'harness':Path(sys.argv[2]),'cli':Path(sys.argv[3]),'stdlib':Path(sys.argv[4])/'../../stdlib/std@1'}
-for k in ['HIRSEL_IMAGE','HIRSEL_RUNTIME_ARCHIVES','LLVM_SYS_231_PREFIX','HIRSEL_LINK_KIT','HIRSEL_GLIBC_FLOOR']:
+for k in ['HIRSEL_PRODUCTS','HIRSEL_RUNTIME_ARCHIVES','LLVM_SYS_231_PREFIX','HIRSEL_LINK_KIT','HIRSEL_GLIBC_FLOOR']:
  if k in os.environ:roots[k]=Path(os.environ[k])
 rows=[]
 for key,p in roots.items():

@@ -45,7 +45,7 @@ for name in ['BUCK','third-party/BUCK','third-party/Cargo.toml','third-party/Car
  file(root/name,True)
 env={k:v for k,v in os.environ.items() if k.startswith(('HIRSEL_','LLVM_','ASSIGNMENT_PLANNER_')) or k in ['PATH','LD_LIBRARY_PATH','PYTHONPATH']}
 tree(root/'tools/buck2/toolchains/rust-files')
-for key in ['HIRSEL_IMAGE','HIRSEL_RUNTIME_ARCHIVES','HIRSEL_LINK_KIT','HIRSEL_GLIBC_FLOOR','LLVM_SYS_231_PREFIX']:
+for key in ['HIRSEL_PRODUCTS','HIRSEL_RUNTIME_ARCHIVES','HIRSEL_LINK_KIT','HIRSEL_GLIBC_FLOOR','LLVM_SYS_231_PREFIX']:
  if env.get(key):tree(env[key])
 for k,v in env.items():
  if k.endswith('_BASELINE'):file(v,True)

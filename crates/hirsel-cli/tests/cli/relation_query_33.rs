@@ -348,8 +348,20 @@ fn relation_query_33_full_entry_native_replay() {
             let destination = root.join(format!("runtime-{}-{:?}.a", key.0, key.1));
             fs::copy(path, &destination).unwrap();
         }
-        if let Some(image) = std::env::var_os("HIRSEL_IMAGE") {
-            fs::copy(image, root.join("std-image")).unwrap();
+        if let Some(products) = std::env::var_os("HIRSEL_PRODUCTS") {
+            fn retain(source: &Path, target: &Path) {
+                fs::create_dir_all(target).unwrap();
+                for entry in fs::read_dir(source).unwrap() {
+                    let path = entry.unwrap().path();
+                    let target = target.join(path.file_name().unwrap());
+                    if path.is_dir() {
+                        retain(&path, &target);
+                    } else {
+                        fs::copy(&path, &target).unwrap();
+                    }
+                }
+            }
+            retain(Path::new(&products), &root.join("std-products"));
         }
 
         let ready = build(&input, &options).unwrap();

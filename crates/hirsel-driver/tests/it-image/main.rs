@@ -34,7 +34,7 @@ fn ordinary_std_complete_products_equal_fresh_ones() {
     with_compiler_stack(|| {
         let f = Fixture::new();
         // Buck2 checks std once for all tests. Cargo users build the same artifact
-        // with the documented `hirsel image` command and set HIRSEL_PRODUCTS.
+        // with the documented `hirsel precompute` command and set HIRSEL_PRODUCTS.
         let products = std_products();
         let client = f.program("aaa", STD_PROGRAM, &std_manifest(), "std");
         let mut prechecked = load(&client, Some(&products));

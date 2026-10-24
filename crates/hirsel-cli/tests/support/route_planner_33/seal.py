@@ -37,7 +37,7 @@ file(root/'crates/hirsel-cli/tests/cli/route_planner_33.rs',True)
 for name in ['BUCK','third-party/BUCK','third-party/Cargo.toml','third-party/Cargo.lock','third-party/lib.rs','tools/buck2/exec_sizes.bzl','tools/buck2/test_sizes.bzl','tools/buck2/workspace-metadata.json','tools/native-toolchain/pins.bzl','.buck2/sync-stamp.json','.buckconfig','.buckconfig.local']:
  file(root/name,True)
 env={k:v for k,v in os.environ.items() if k.startswith(('HIRSEL_','LLVM_','ROUTE_PLANNER_')) or k in ['PATH','LD_LIBRARY_PATH']}
-for key in ['HIRSEL_IMAGE','HIRSEL_RUNTIME_ARCHIVES','HIRSEL_LINK_KIT','HIRSEL_GLIBC_FLOOR','LLVM_SYS_231_PREFIX']:
+for key in ['HIRSEL_PRODUCTS','HIRSEL_RUNTIME_ARCHIVES','HIRSEL_LINK_KIT','HIRSEL_GLIBC_FLOOR','LLVM_SYS_231_PREFIX']:
  if env.get(key):tree(env[key])
 for path in sys.argv[3:]:file(path)
 file(sys.executable)

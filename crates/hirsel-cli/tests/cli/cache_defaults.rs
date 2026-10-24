@@ -55,8 +55,7 @@ fn default_native_store_reuses_unchanged_units_and_none_recomputes() {
 
 /// Callback bodies, generic instances, finalizers and launch grants remain current
 /// when the ordinary object provider has already cached the program.
-#[test]
-fn warmed_native_callbacks_finalizers_and_grants_follow_edits_at_one_two_eight() {
+fn warmed_native_callback_edits(backend: &str, jobs: &str) {
     let original = r#"
 resource type R { n:u64 }
 drop(x) { let _ = 10u64 / x.n; () }
@@ -77,67 +76,93 @@ pub fn main(rt:Io)->Result[(),GrantError] {
     let source = super::file(original);
     let cache = source.with_extension("cache");
     let granted = r#"{"io":{"stdout":"stdout.bytes@1","dirs":[]},"args":[]}"#;
-    for backend in ["llvm", "cranelift"] {
-        for jobs in ["1", "2", "8"] {
-            std::fs::write(&source, original).unwrap();
-            let run = |grants: &str, off: bool| {
-                let mut cmd = Command::new(env!("CARGO_BIN_EXE_hirsel"));
-                cmd.env("HIRSEL_DAEMON", "off")
-                    .env("HIRSEL_RESULTS", "none@1")
-                    .env("HIRSEL_JOBS", jobs)
-                    .env("XDG_CACHE_HOME", cache.join(backend).join(jobs))
-                    .env_remove("HIRSEL_OBJECTS")
-                    .env_remove("HIRSEL_VALIDATE_STAGES");
-                if off {
-                    cmd.env("HIRSEL_OBJECTS", "none@1");
-                }
-                let output = cmd
-                    .args(["run", "--native", "--backend", backend, "--timings=json"])
-                    .arg(&source)
-                    .args(["--grants", grants])
-                    .output()
-                    .unwrap();
-                let stderr = std::str::from_utf8(&output.stderr).unwrap();
-                let report: serde_json::Value =
-                    serde_json::from_str(stderr.lines().last().unwrap()).unwrap();
-                (output, report)
-            };
-            let (cold, _) = run(granted, false);
-            assert_eq!(cold.status.code(), Some(0), "{backend} j{jobs}: {cold:?}");
-            assert_eq!(cold.stdout, b"five\n");
-            let (warm, counts) = run(granted, false);
-            assert_eq!(warm.status.code(), Some(0), "{warm:?}");
-            assert_eq!(warm.stdout, cold.stdout);
-            assert!(counts["counts"]["object hits"].as_u64().unwrap() > 0);
-            assert_eq!(counts["counts"]["object misses"], 0);
-            let (denied, _) = run("{}", false);
-            assert_eq!(denied.status.code(), Some(3), "{denied:?}");
-            assert!(
-                denied.stdout.is_empty(),
-                "a warmed launch reused old grants"
-            );
-            let edited = original.replace("x + 1u64", "x + 2u64");
-            std::fs::write(&source, &edited).unwrap();
-            let (callback, report) = run(granted, false);
-            assert_eq!(callback.status.code(), Some(0), "{callback:?}");
-            assert_eq!(callback.stdout, b"six\n");
-            assert!(report["counts"]["object misses"].as_u64().unwrap() > 0);
-            std::fs::write(
-                &source,
-                edited.replace("10u64 / x.n", "10u64 / (x.n - 1u64)"),
-            )
-            .unwrap();
-            let (finalizer, _) = run(granted, false);
-            let (fresh, _) = run(granted, true);
-            assert_eq!(finalizer.status.code(), Some(2), "{finalizer:?}");
-            assert_eq!(finalizer.status.code(), fresh.status.code());
-            assert_eq!(finalizer.stdout, b"six\n");
-            assert_eq!(finalizer.stdout, fresh.stdout);
-            assert!(String::from_utf8_lossy(&finalizer.stderr).contains("SEM-1"));
-            assert!(String::from_utf8_lossy(&fresh.stderr).contains("SEM-1"));
+    std::fs::write(&source, original).unwrap();
+    let run = |grants: &str, off: bool| {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+        cmd.env("HIRSEL_DAEMON", "off")
+            .env("HIRSEL_RESULTS", "none@1")
+            .env("HIRSEL_JOBS", jobs)
+            .env("XDG_CACHE_HOME", cache.join(backend).join(jobs))
+            .env_remove("HIRSEL_OBJECTS")
+            .env_remove("HIRSEL_VALIDATE_STAGES");
+        if off {
+            cmd.env("HIRSEL_OBJECTS", "none@1");
         }
-    }
+        let output = cmd
+            .args(["run", "--native", "--backend", backend, "--timings=json"])
+            .arg(&source)
+            .args(["--grants", grants])
+            .output()
+            .unwrap();
+        let stderr = std::str::from_utf8(&output.stderr).unwrap();
+        let report: serde_json::Value =
+            serde_json::from_str(stderr.lines().last().unwrap()).unwrap();
+        (output, report)
+    };
+    let (cold, _) = run(granted, false);
+    assert_eq!(cold.status.code(), Some(0), "{backend} j{jobs}: {cold:?}");
+    assert_eq!(cold.stdout, b"five\n");
+    let (warm, counts) = run(granted, false);
+    assert_eq!(warm.status.code(), Some(0), "{warm:?}");
+    assert_eq!(warm.stdout, cold.stdout);
+    assert!(counts["counts"]["object hits"].as_u64().unwrap() > 0);
+    assert_eq!(counts["counts"]["object misses"], 0);
+    let (denied, _) = run("{}", false);
+    assert_eq!(denied.status.code(), Some(3), "{denied:?}");
+    assert!(
+        denied.stdout.is_empty(),
+        "a warmed launch reused old grants"
+    );
+    let edited = original.replace("x + 1u64", "x + 2u64");
+    std::fs::write(&source, &edited).unwrap();
+    let (callback, report) = run(granted, false);
+    assert_eq!(callback.status.code(), Some(0), "{callback:?}");
+    assert_eq!(callback.stdout, b"six\n");
+    assert!(report["counts"]["object misses"].as_u64().unwrap() > 0);
+    std::fs::write(
+        &source,
+        edited.replace("10u64 / x.n", "10u64 / (x.n - 1u64)"),
+    )
+    .unwrap();
+    let (finalizer, _) = run(granted, false);
+    let (fresh, _) = run(granted, true);
+    assert_eq!(finalizer.status.code(), Some(2), "{finalizer:?}");
+    assert_eq!(finalizer.status.code(), fresh.status.code());
+    assert_eq!(finalizer.stdout, b"six\n");
+    assert_eq!(finalizer.stdout, fresh.stdout);
+    assert!(String::from_utf8_lossy(&finalizer.stderr).contains("SEM-1"));
+    assert!(String::from_utf8_lossy(&fresh.stderr).contains("SEM-1"));
     std::fs::remove_dir_all(cache).unwrap();
+}
+
+#[test]
+fn warmed_native_callbacks_finalizers_and_grants_llvm_one() {
+    warmed_native_callback_edits("llvm", "1");
+}
+
+#[test]
+fn warmed_native_callbacks_finalizers_and_grants_llvm_two() {
+    warmed_native_callback_edits("llvm", "2");
+}
+
+#[test]
+fn warmed_native_callbacks_finalizers_and_grants_llvm_eight() {
+    warmed_native_callback_edits("llvm", "8");
+}
+
+#[test]
+fn warmed_native_callbacks_finalizers_and_grants_cranelift_one() {
+    warmed_native_callback_edits("cranelift", "1");
+}
+
+#[test]
+fn warmed_native_callbacks_finalizers_and_grants_cranelift_two() {
+    warmed_native_callback_edits("cranelift", "2");
+}
+
+#[test]
+fn warmed_native_callbacks_finalizers_and_grants_cranelift_eight() {
+    warmed_native_callback_edits("cranelift", "8");
 }
 
 /// A std-free package isolates cache selection from installed-seed behavior.

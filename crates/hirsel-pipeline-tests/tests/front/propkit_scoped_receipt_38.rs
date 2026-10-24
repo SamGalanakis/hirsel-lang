@@ -94,7 +94,7 @@ fn provenance() -> &'static serde_json::Value {
         }
         let mut files=std::collections::BTreeMap::new();let mut seen=std::collections::BTreeSet::new();let mut environment=std::collections::BTreeMap::new();
         collect(std::env::current_exe().unwrap(),&mut files,&mut seen);
-        for key in ["HIRSEL_IMAGE","HIRSEL_RUNTIME_ARCHIVES","HIRSEL_LINK_KIT","HIRSEL_GLIBC_FLOOR","LLVM_SYS_231_PREFIX"] {
+        for key in ["HIRSEL_PRODUCTS","HIRSEL_RUNTIME_ARCHIVES","HIRSEL_LINK_KIT","HIRSEL_GLIBC_FLOOR","LLVM_SYS_231_PREFIX"] {
             if let Some(value)=std::env::var_os(key) {
                 environment.insert(key,value.to_string_lossy().into_owned());
                 let path=std::path::PathBuf::from(value);

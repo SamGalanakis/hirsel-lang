@@ -10,7 +10,7 @@ def identity(path):
     return dict(path=str(path), resolved=str(path.resolve()), bytes=path.stat().st_size, sha256=h.hexdigest())
 
 files, environment = {}, {}
-for key in ('HIRSEL_IMAGE','HIRSEL_RUNTIME_ARCHIVES','LLVM_SYS_231_PREFIX','HIRSEL_LINK_KIT','HIRSEL_GLIBC_FLOOR'):
+for key in ('HIRSEL_PRODUCTS','HIRSEL_RUNTIME_ARCHIVES','LLVM_SYS_231_PREFIX','HIRSEL_LINK_KIT','HIRSEL_GLIBC_FLOOR'):
     value = os.environ.get(key)
     environment[key] = value
     if not value: continue

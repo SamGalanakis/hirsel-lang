@@ -28,7 +28,7 @@ fn tool_inputs(root: &Path) -> BTreeMap<PathBuf, String> {
         PathBuf::from(env!("CARGO_BIN_EXE_hirsel")),
     ];
     for name in [
-        "HIRSEL_IMAGE",
+        "HIRSEL_PRODUCTS",
         "HIRSEL_RUNTIME_ARCHIVES",
         "LLVM_SYS_231_PREFIX",
         "HIRSEL_LINK_KIT",

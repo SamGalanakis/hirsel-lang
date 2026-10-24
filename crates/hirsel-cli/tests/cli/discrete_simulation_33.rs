@@ -25,7 +25,7 @@ fn tool_inputs(root: &Path) -> BTreeMap<PathBuf, String> {
     }
     let mut files = vec![std::env::current_exe().unwrap()];
     for name in [
-        "HIRSEL_IMAGE",
+        "HIRSEL_PRODUCTS",
         "HIRSEL_RUNTIME_ARCHIVES",
         "LLVM_SYS_231_PREFIX",
         "HIRSEL_LINK_KIT",
