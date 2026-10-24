@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-2257 exported definitions; 983 variants.
+2268 exported definitions; 983 variants.
 
 ## Types and roots
 
@@ -3417,6 +3417,10 @@ References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/u64`](#def-core_40
 
 - `fn bytes.base64_encode(data: Bytes, alphabet: Base64Alphabet, padding: Base64Padding) -> unique Bytes uses {}`
 
+<a id="def-core_401_2fbytes_2fdecimal_5fword"></a>
+
+- `@noalloc fn bytes.decimal_word(value: u64, mut buffer: Inline[u8, 20]) -> u64`
+
 <a id="def-core_401_2fbytes_2ffind_5fany"></a>
 
 - `@noalloc fn bytes.find_any(src: Bytes, needles: Bytes, start: u64) -> u64`
@@ -3431,6 +3435,14 @@ References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Inline`](#def-core
 
 - `@preserves_unique(src) fn bytes.from_list(take src: List[u8]) -> Bytes`
 
+<a id="def-core_401_2fbytes_2finteger"></a>
+
+- `@noalloc fn bytes.integer(src: Bytes, radix: u8, signed: bool, positive_hi: u64, positive_lo: u64, negative_hi: u64, negative_lo: u64) -> (u64, u64, u64)`
+
+<a id="def-core_401_2fbytes_2fjson_5fnumber_5fend"></a>
+
+- `@noalloc fn bytes.json_number_end(src: Bytes, start: u64) -> (u64, u64)`
+
 <a id="def-core_401_2fbytes_2flen"></a>
 
 - `@noalloc fn bytes.len(src: Bytes) -> u64`
@@ -3444,6 +3456,30 @@ References: [`core@1/Bytes`](#def-core_401_2fBytes)
 <a id="def-core_401_2fbytes_2freplace_5frange"></a>
 
 - `@preserves_unique(builder) @unretained(data) fn bytes.replace_range(mut builder: List[u8], start: u64, data: Bytes) -> ()`
+
+<a id="def-core_401_2fbytes_2fsha1"></a>
+
+- `@noalloc fn bytes.sha1(data: Bytes) -> Inline[u8, 20] uses {}`
+
+<a id="def-core_401_2fbytes_2fsha224"></a>
+
+- `@noalloc fn bytes.sha224(data: Bytes) -> Inline[u8, 28] uses {}`
+
+<a id="def-core_401_2fbytes_2fsha256"></a>
+
+- `@noalloc fn bytes.sha256(data: Bytes) -> Inline[u8, 32] uses {}`
+
+<a id="def-core_401_2fbytes_2fsha384"></a>
+
+- `@noalloc fn bytes.sha384(data: Bytes) -> Inline[u8, 48] uses {}`
+
+<a id="def-core_401_2fbytes_2fsha512"></a>
+
+- `@noalloc fn bytes.sha512(data: Bytes) -> Inline[u8, 64] uses {}`
+
+<a id="def-core_401_2fbytes_2fsha512_5f256"></a>
+
+- `@noalloc fn bytes.sha512_256(data: Bytes) -> Inline[u8, 32] uses {}`
 
 <a id="def-core_401_2fbytes_2fslice"></a>
 
@@ -11400,6 +11436,25 @@ References: [`core@1/String`](#def-core_401_2fString), [`std@1/markdown/Node`](#
 Refuse before exhausting an original-byte, work-record or nesting allowance.
 
 References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/markdown/Node`](#def-std_401_2fmarkdown_2fNode), [`std@1/markdown/Options`](#def-std_401_2fmarkdown_2fOptions), [`std@1/markdown/ParseBudget`](#def-std_401_2fmarkdown_2fParseBudget), [`std@1/markdown/ParseLimit`](#def-std_401_2fmarkdown_2fParseLimit)
+
+<a id="def-std_401_2fmarkdown_2fparse_5fbounded_5fowned"></a>
+
+- `pub fn markdown.parse_bounded_owned(take source: String, options: Options, budget: ParseBudget) -> Result[ unique Node, ParseLimit ] uses {}`
+
+The same admission points and refusals as parse_bounded, with a deeply unique
+successful tree. This removes a consumer's completed-tree ownership copy.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/markdown/Node`](#def-std_401_2fmarkdown_2fNode), [`std@1/markdown/Options`](#def-std_401_2fmarkdown_2fOptions), [`std@1/markdown/ParseBudget`](#def-std_401_2fmarkdown_2fParseBudget), [`std@1/markdown/ParseLimit`](#def-std_401_2fmarkdown_2fParseLimit)
+
+<a id="def-std_401_2fmarkdown_2fparse_5fowned"></a>
+
+- `pub fn markdown.parse_owned(take source: String, options: Options) -> unique Node uses {}`
+
+Construct a deeply unique tree, independent of the consumed source and
+temporary parser records. Payload construction still allocates and copies.
+Borrow for validation, then move or freeze the completed tree without copying.
+
+References: [`core@1/String`](#def-core_401_2fString), [`std@1/markdown/Node`](#def-std_401_2fmarkdown_2fNode), [`std@1/markdown/Options`](#def-std_401_2fmarkdown_2fOptions)
 
 <a id="def-std_401_2fmarkdown_2frender_5fhtml"></a>
 
