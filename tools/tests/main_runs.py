@@ -604,7 +604,9 @@ class InfraDiagnostics(unittest.TestCase):
                                 (0, 'test memory_limit ... FAILED'), (0, 'test timeout_case ... FAILED'),
                                 (0, 'test pool_shutdown ... FAILED'), (0, 'test remote_execution_error ... FAILED'),
                                 (0, 'Tests finished: Pass 4. Fail 1. Timeout 0. Fatal 0. Infra Failure 0. Build failure 0'),
-                                (0, 'Infra Failure \x1b[32m0\x1b[39m')):
+                                (0, 'Infra Failure \x1b[32m0\x1b[39m'),
+                                (1, 'AssertionError: expected CPU bound not found in source: '
+                                    '.env("HIRSEL_MEMORY_LIMIT", "2G")')):
             with self.subTest(status=status, details=details):
                 self.assertIsNone(infra_reason(status, details))
 

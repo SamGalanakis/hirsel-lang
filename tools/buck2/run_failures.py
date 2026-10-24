@@ -11,7 +11,7 @@ import signal
 # Require failure diagnostics, not just words such as "memory" or "remote" in
 # test names. In particular, an ordinary assertion failure remains a code red.
 DIAGNOSTICS = (
-    ('memory limit', r'HIRSEL_MEMORY_LIMIT|\boom[_ -]kill(?:ed)?\b|out of memory|memory limit .+ reached'),
+    ('memory limit', r'\boom[_ -]kill(?:ed)?\b|out of memory|memory limit .+ reached'),
     ('timeout', r'\btimed[ _-]?out\b|\bTimeoutExpired\b|\btimeout\s+[1-9]\d*\b|deadline exceeded'),
     ('signal', r'\bSIG(?:KILL|TERM|SEGV|ABRT|BUS|ILL|FPE|INT|QUIT|XCPU|XFSZ)\b|'
                r'(?:killed|terminated|died|death) (?:by |with )?signal\b|\bsignal[:= ]+\d+\b'),
