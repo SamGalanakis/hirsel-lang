@@ -135,6 +135,8 @@ struct ReadyState {
     /// ready once a network request completes after it blocked, since that request may
     /// have advanced the script (a write a parked read's peer expects).
     scripted: IdSet,
+    /// Level readiness for affected script subscribers, cleared on rearm.
+    scripted_ready: IdSet,
     /// The number of network requests completed so far: the progress epoch a scripted
     /// wait compares against the one it blocked at.
     progress: u64,
@@ -191,6 +193,7 @@ impl std::ops::DerefMut for PendingGuard<'_> {
 }
 impl Drop for PendingGuard<'_> {
     fn drop(&mut self) {
+        let progress = self.state.progress;
         let p = self.state.pending.get_mut(&self.token).unwrap();
         let non_timer = p.deadline.is_none()
             || p.interest.is_some()
@@ -198,6 +201,7 @@ impl Drop for PendingGuard<'_> {
             || p.scripted.is_some()
             || p.process.is_some()
             || p.resolver.is_some();
+        let script = p.scripted;
         let was = std::mem::replace(&mut p.non_timer, non_timer);
         if non_timer != was {
             if non_timer {
@@ -205,6 +209,17 @@ impl Drop for PendingGuard<'_> {
             } else {
                 self.state.non_timer -= 1;
             }
+        }
+        if let Some(ScriptedWait::Progress(since)) = script {
+            self.state.scripted.insert(self.token);
+            if since < progress {
+                self.state.scripted_ready.insert(self.token);
+            } else {
+                self.state.scripted_ready.remove(&self.token);
+            }
+        } else {
+            self.state.scripted.remove(&self.token);
+            self.state.scripted_ready.remove(&self.token);
         }
         self.state.notify_driver();
     }
@@ -358,6 +373,7 @@ impl Readiness {
             && matches!(pending.scripted, Some(ScriptedWait::Progress(_)))
         {
             pending.scripted = Some(ScriptedWait::Progress(progress));
+            state.scripted_ready.remove(&token);
         }
     }
     /// An unbounded Unanswered connect has no readiness source (CONC-8).
@@ -380,6 +396,12 @@ impl Readiness {
     pub(crate) fn progressed(&self) {
         let mut state = self.0.lock().unwrap();
         state.progress += 1;
+        let state = &mut *state;
+        // This world progressed, so every current progress subscriber is
+        // affected. No scheduling point walks idle script registrations.
+        for token in state.scripted.members_unordered() {
+            state.scripted_ready.insert(token);
+        }
         state.notify_driver();
     }
     /// Harness-only virtual time: samples are stable while runnable work remains.
@@ -432,6 +454,7 @@ impl Readiness {
         state.touched.remove(&token);
         state.always.remove(&token);
         state.scripted.remove(&token);
+        state.scripted_ready.remove(&token);
         state.woken.remove(&token);
         if let Some((fd, _)) = pending.registered {
             state.unregister(token, fd);
@@ -705,7 +728,7 @@ impl Readiness {
                 "external wait in timed process clock domain".into(),
             ));
         }
-        if !state.progressed_scripts().is_empty() {
+        if !state.scripted_ready.is_empty() {
             return Ok(WaitSource::Ready);
         }
         if let Some(now) = state.virtual_time {
@@ -763,15 +786,7 @@ impl ReadyState {
     /// The scripted waits a network request completed after: each may be ready now, and
     /// a re-issue that blocks again waits for the next one.
     fn progressed_scripts(&self) -> Vec<u64> {
-        self.scripted
-            .members_unordered()
-            .filter(|token| {
-                self.pending
-                    .get(token)
-                    .and_then(|pending| pending.scripted)
-                    .is_some_and(|wait| matches!(wait, ScriptedWait::Progress(since) if since < self.progress))
-            })
-            .collect()
+        self.scripted_ready.members_unordered().collect()
     }
     /// Register the interest and deadline of every token a provider touched.
     fn sync(&mut self) -> Result<(), AdapterError> {
@@ -806,9 +821,6 @@ impl ReadyState {
                 && interest.is_none_or(|(new, _)| new != fd)
             {
                 self.unregister(token, fd);
-            }
-            if scripted {
-                self.scripted.insert(token);
             }
             let mut always = !watched && !timed && !delivery && !scripted;
             if let Some((fd, events)) = interest {

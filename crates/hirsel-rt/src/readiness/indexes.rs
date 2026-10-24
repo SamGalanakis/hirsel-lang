@@ -56,3 +56,39 @@ fn exact_deadline_storage_tracks_rearm_cancel_and_domain_exit() {
         assert_eq!(state.non_timer, 0);
     }
 }
+
+#[test]
+fn scripted_readiness_indexes_registration_races_and_only_live_subscribers() {
+    let driver = Readiness::default();
+    for token in 0..1024 {
+        driver.enter(token);
+        driver.scripted();
+        driver.parked(token);
+    }
+    assert!(driver.ready().unwrap().is_empty());
+    assert!(driver.0.lock().unwrap().scripted_ready.is_empty());
+    assert!(!driver.wait().unwrap());
+    driver.progressed();
+    assert_eq!(driver.ready().unwrap().len(), 1024);
+    for token in 0..1024 {
+        driver.finish(token);
+    }
+    assert!(driver.0.lock().unwrap().scripted.is_empty());
+    assert!(driver.0.lock().unwrap().scripted_ready.is_empty());
+    // Capture the request epoch before a progress/poll racing registration.
+    let since = driver.0.lock().unwrap().progress;
+    driver.progressed();
+    assert!(driver.ready().unwrap().is_empty());
+    driver.enter(2048);
+    driver.pending().scripted = Some(ScriptedWait::Progress(since));
+    assert!(driver.ready().unwrap().is_empty(), "owner has not parked");
+    driver.parked(2048);
+    assert_eq!(driver.ready().unwrap(), vec![2048]);
+    driver.scripted();
+    assert!(
+        driver.ready().unwrap().is_empty(),
+        "rearm acknowledges progress"
+    );
+    driver.finish(2048);
+    assert!(driver.0.lock().unwrap().scripted_ready.is_empty());
+}
