@@ -281,10 +281,22 @@ impl QueryEngine {
     /// It performs no body checking, lowering or compile-time execution.
     pub fn front_source_roots(&mut self) -> Vec<DefPath> {
         let _ = self.signature_inputs();
-        self.source_growth
+        let mut roots: BTreeSet<_> = self
+            .source_growth
             .required()
             .map(|id| id.path().clone())
-            .collect()
+            .collect();
+        // A warm source catalog carries only the written declaration. Its fact
+        // helper is still a required body of the source check transaction.
+        for path in roots.clone() {
+            if self.source_facts(&path).is_some_and(|facts| facts.fact) {
+                let helper = hirsel_check_protocol::fact::fact_path(&path);
+                let _ = self.materialize(&path);
+                let _ = self.item_signature(&helper);
+                roots.insert(helper);
+            }
+        }
+        roots.into_iter().collect()
     }
     /// Capture the complete selected source-root set, including declarations
     /// never executed by the launch entry. A partial front view is refused.

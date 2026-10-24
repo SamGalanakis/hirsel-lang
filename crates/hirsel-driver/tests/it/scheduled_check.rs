@@ -36,23 +36,11 @@ fn ordered_check_gates_lowering_and_preserves_file_failure_prefixes() {
                         .with_owned_engines()
                         .load_program(&path)
                         .unwrap();
-                    let mut definitions = Vec::new();
-                    for (file, context) in program.files.clone() {
-                        definitions.extend(
-                            program
-                                .engine
-                                .parse_file(file, &context)
-                                .unwrap()
-                                .value
-                                .items
-                                .iter()
-                                .map(|syntax| syntax.item.definition.clone()),
-                        );
-                    }
+                    let definitions = program.engine.front_source_roots();
                     let budget = ProcessBudget::new(1 << 30);
                     let errors = crate::scheduled_front::errors();
                     let weight = MemoryWeight {
-                        retained: 2 << 20,
+                        retained: 64 << 10,
                         scratch: 8 << 20,
                         stack: 0,
                     };
@@ -67,7 +55,9 @@ fn ordered_check_gates_lowering_and_preserves_file_failure_prefixes() {
                         .front_body_queries(
                             &definitions,
                             weight,
-                            budget.reserve(16 << 20).unwrap(),
+                            budget
+                                .reserve((weight.retained + 8192) * definitions.len() as u64)
+                                .unwrap(),
                             errors,
                         )
                         .unwrap();
