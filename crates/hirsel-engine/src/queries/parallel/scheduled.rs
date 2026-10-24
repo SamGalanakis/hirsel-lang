@@ -6,7 +6,7 @@ use crate::runtime::*;
 use crate::snapshot::OwnedSourceContext;
 use crate::store::{Domain, EntryKey, Reference, ResultStore, VariantRef};
 use std::sync::{
-    Mutex,
+    Mutex, Weak,
     atomic::{AtomicU64, Ordering::Relaxed},
 };
 
@@ -17,6 +17,43 @@ const FAILURE: Domain = Domain {
 };
 type Key = ContentHash;
 type CheckedProduct = Option<(Arc<CheckedSummary>, Arc<Reads>)>;
+struct FrontOutcome {
+    reference: Reference,
+    definition: DefPath,
+    status: Result<(), QueryError>,
+    phase: Option<QueryKind>,
+    summary: Option<Arc<PublishedSummary>>,
+    reads: Arc<Reads>,
+    diagnostic_phases: Vec<(Diagnostic, String)>,
+    checked: CheckedProduct,
+    // Only active consumers own a decoded body. The settled query retains its
+    // canonical archive and compact source facts, including when hold_bytes=0.
+    body: Weak<QueryOutput<AnalyzedBody>>,
+}
+impl FrontOutcome {
+    fn capture(reference: Reference, outcome: ModeResult, checked: CheckedProduct) -> Self {
+        let ModeResult {
+            definition,
+            result,
+            phase,
+            summary,
+            reads,
+            diagnostic_phases,
+        } = outcome;
+        let body = result.as_ref().ok().map(Arc::downgrade).unwrap_or_default();
+        Self {
+            reference,
+            definition,
+            status: result.map(|_| ()),
+            phase,
+            summary,
+            reads,
+            diagnostic_phases,
+            checked,
+            body,
+        }
+    }
+}
 struct Input {
     task: Task,
     key: EntryKey,
@@ -44,7 +81,7 @@ pub struct FrontBodyQueries {
     memos: Mutex<BTreeMap<crate::memo::MemoKey, Arc<Reads>>>,
     store_adoptions: AtomicU64,
     verify_store: crate::store::VerifyStore,
-    outcomes: Mutex<BTreeMap<Key, (Reference, ModeResult, CheckedProduct)>>,
+    outcomes: Mutex<BTreeMap<Key, FrontOutcome>>,
     errors: RuntimeErrors,
     // Own immutable snapshot and output metadata admission until every task and
     // external output reader releases this view.
@@ -188,8 +225,10 @@ impl FrontBodyQueries {
     }
     pub fn checked(self: &Arc<Self>, reference: Reference) -> Option<FrontCheckedOutput> {
         let outcomes = self.outcomes.lock().unwrap_or_else(|e| e.into_inner());
-        let (key, (_, _, checked)) = outcomes.iter().find(|(_, (r, _, _))| *r == reference)?;
-        let (summary, reads) = checked.as_ref()?;
+        let (key, outcome) = outcomes
+            .iter()
+            .find(|(_, outcome)| outcome.reference == reference)?;
+        let (summary, reads) = outcome.checked.as_ref()?;
         Some(FrontCheckedOutput {
             table_keys: self
                 .table_keys
@@ -217,16 +256,55 @@ impl FrontBodyQueries {
     /// An immutable outcome, including exact error-phase and read evidence.
     /// This lookup never adopts a product into a mutable source namespace.
     pub fn outcome(self: &Arc<Self>, reference: Reference) -> Option<FrontBodyOutput> {
+        let mut outcomes = self.outcomes.lock().unwrap_or_else(|e| e.into_inner());
+        let (key, selected) = outcomes
+            .iter_mut()
+            .find(|(_, outcome)| outcome.reference == reference)?;
+        let result = match &selected.status {
+            Err(error) => Err(error.clone()),
+            Ok(()) => {
+                let output = if let Some(output) = selected.body.upgrade() {
+                    output
+                } else {
+                    let bytes = self.store.get_content(reference)?;
+                    let input = self.inputs.get(key)?;
+                    let restored = persistent::restore_frozen_mode(
+                        &self.records,
+                        &self.types,
+                        input.task.syntax.clone(),
+                        &self.citations,
+                        input.key.1,
+                        &bytes,
+                        selected.reads.clone(),
+                    )?;
+                    let output = restored.outcome.result.ok()?;
+                    selected.body = Arc::downgrade(&output);
+                    output
+                };
+                Ok(output)
+            }
+        };
+        Some(FrontBodyOutput {
+            outcome: ModeResult {
+                definition: selected.definition.clone(),
+                result,
+                phase: selected.phase,
+                summary: selected.summary.clone(),
+                reads: selected.reads.clone(),
+                diagnostic_phases: selected.diagnostic_phases.clone(),
+            },
+            _snapshot: self.clone(),
+        })
+    }
+    /// Distinct decoded bodies currently owned by active output consumers.
+    /// Settled archives and compact checked summaries contain no body owner.
+    pub fn live_body_count(&self) -> usize {
         self.outcomes
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .values()
-            .find_map(|(selected, outcome, _)| {
-                (*selected == reference).then(|| FrontBodyOutput {
-                    outcome: outcome.clone(),
-                    _snapshot: self.clone(),
-                })
-            })
+            .filter(|outcome| outcome.body.strong_count() != 0)
+            .count()
     }
     #[cfg(test)]
     pub(super) fn outcomes_for_test(&self) -> Vec<Reference> {
@@ -234,7 +312,7 @@ impl FrontBodyQueries {
             .lock()
             .unwrap()
             .values()
-            .map(|(r, _, _)| *r)
+            .map(|outcome| outcome.reference)
             .collect()
     }
     fn worker(&self) -> Worker<'_> {
@@ -347,7 +425,10 @@ impl BodyTask {
             .outcomes
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .insert(self.query.address.0, (variant.output, outcome, checked));
+            .insert(
+                self.query.address.0,
+                FrontOutcome::capture(variant.output, outcome, checked),
+            );
         queries.store_adoptions.fetch_add(1, Relaxed);
         timings::count(Count::StoreHits);
         if failed {
@@ -505,7 +586,10 @@ impl BodyTask {
                     .outcomes
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
-                    .insert(self.query.address.0, (record, output, None));
+                    .insert(
+                        self.query.address.0,
+                        FrontOutcome::capture(record, output, None),
+                    );
                 return Err(record);
             }
         }
@@ -547,7 +631,10 @@ impl BodyTask {
             .outcomes
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .insert(self.query.address.0, (record, outcome, checked));
+            .insert(
+                self.query.address.0,
+                FrontOutcome::capture(record, outcome, checked),
+            );
         if failed {
             return Err(record);
         }
@@ -612,17 +699,11 @@ impl QueryEngine {
             let key = self
                 .store_key(definition, QueryKind::Modes)
                 .ok_or_else(refusal)?;
-            let id = DefId::intern(definition);
-            let checked = self
-                .checked
-                .get(&id)
-                .cloned()
-                .filter(|entry| self.memo_valid(definition, entry, text));
-            let resolution = self
-                .resolutions
-                .get(&id)
-                .cloned()
-                .filter(|entry| self.memo_valid(definition, entry, text));
+            // Immutable S0 variants provide body reuse. The construction
+            // inventory itself must never pin a mutable engine's checked body
+            // after a request settles, including the explicit zero hold policy.
+            let resolution = None;
+            let checked = None;
             selected.push((definition.clone(), syntax, text, key, resolution, checked));
         }
         let snapshot = self.signature_inputs();
