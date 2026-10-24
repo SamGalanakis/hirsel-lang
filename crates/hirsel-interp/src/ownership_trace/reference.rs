@@ -47,6 +47,13 @@ enum Pending {
     },
 }
 
+struct SpawnState {
+    definition: DefPath,
+    body: hirsel_tir::BodyId,
+    captures: Vec<(u32, Owner, u64)>,
+    context: Context,
+}
+
 #[derive(Default)]
 struct TaskState {
     frames: Vec<FrameState>,
@@ -62,6 +69,7 @@ pub(super) struct Resources {
     paths: BTreeMap<u64, TaskPath>,
     suspended: BTreeMap<u64, TaskState>,
     task_limit: usize,
+    spawns: BTreeMap<u64, SpawnState>,
     tracker: Tracker,
     frames: Vec<FrameState>,
     next_frame: u64,
@@ -81,6 +89,7 @@ impl Resources {
             paths: BTreeMap::from([(0, TaskPath::default())]),
             suspended: BTreeMap::new(),
             task_limit: event_limit,
+            spawns: BTreeMap::new(),
             tracker: Tracker::new(event_limit),
             frames: vec![],
             next_frame: 0,
@@ -292,7 +301,8 @@ impl Resources {
         if let Some(error) = self.error {
             return Err(error);
         }
-        let complete = completed
+        let complete = self.spawns.is_empty()
+            && completed
             && self.frames.is_empty()
             && self.releases.is_empty()
             && self
@@ -329,7 +339,71 @@ impl Observer for Resources {
             self.unsupported("invalid, duplicate or excessive canonical task entry");
             return;
         }
-        if frame
+        let path = TaskPath(path);
+        let mut state = TaskState::default();
+        if let Some(spawn) = self.spawns.remove(&child) {
+            if frame.definition.path.path() != &spawn.definition || frame.body_id != spawn.body {
+                self.unsupported("spawned callable differs from the committed task argument");
+                return;
+            }
+            let id = self.next_frame;
+            self.next_frame += 1;
+            let mut context = spawn.context;
+            context.task = path.clone();
+            let mut expected = 0;
+            for (capture, from, count) in spawn.captures {
+                let Some((local, _)) = frame
+                    .body()
+                    .locals
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, local)| local.storage == hirsel_tir::Storage::Capture)
+                    .nth(capture as usize)
+                else {
+                    self.unsupported("spawn capture has no initialized child slot");
+                    return;
+                };
+                if frame
+                    .slots
+                    .get(local)
+                    .and_then(Option::as_ref)
+                    .map(resources_in)
+                    != Some(count)
+                {
+                    self.unsupported(
+                        "spawn capture inventory differs from its initialized child slot",
+                    );
+                    return;
+                }
+                let to = Owner {
+                    task: Some(path.clone()),
+                    storage: Storage::Slot {
+                        frame: id,
+                        slot: local as u32,
+                    },
+                    path: vec![],
+                };
+                let result = self.tracker.move_tree(&context, &from, &to);
+                if let Some(tokens) = self.checked(result)
+                    && tokens.len() as u64 != count
+                {
+                    self.unsupported("spawn capture lineage inventory differs");
+                    return;
+                }
+                expected += count;
+            }
+            if frame.slots.iter().flatten().map(resources_in).sum::<u64>() != expected {
+                self.unsupported("unattributed resource in spawned child slots");
+                return;
+            }
+            state.frames.push(FrameState {
+                id,
+                finalizer: false,
+                aliases: BTreeMap::new(),
+                return_to: None,
+                returned: None,
+            });
+        } else if frame
             .slots
             .iter()
             .flatten()
@@ -338,8 +412,8 @@ impl Observer for Resources {
             self.unsupported("spawned resource capture transport");
             return;
         }
-        self.paths.insert(child, TaskPath(path));
-        self.suspended.insert(child, TaskState::default());
+        self.paths.insert(child, path);
+        self.suspended.insert(child, state);
     }
     fn sync(&mut self, task: u64, frames: &[Frame], sources: &SourceMap) {
         if self.error.is_some() {
@@ -745,7 +819,13 @@ impl Observer for Resources {
         }
         self.frames.push(state);
     }
-    fn builtin_entered(&mut self, _task: u64, _frame: &Frame) {
+    fn builtin_entered(
+        &mut self,
+        _task: u64,
+        _frame: &Frame,
+        arguments: &[Value],
+        result: &crate::OperationResult,
+    ) {
         if self.error.is_some() {
             return;
         }
@@ -753,9 +833,100 @@ impl Observer for Resources {
             self.unsupported("builtin entered without its actual source call");
             return;
         };
-        if !call.arguments.is_empty() {
-            self.unsupported("builtin resource transport");
+        if call.arguments.is_empty() {
+            return;
         }
+        if !call.definition.is_core("task.async") || !call.captures.is_empty() {
+            self.unsupported("builtin resource transport");
+            return;
+        }
+        let crate::OperationResult::Complete {
+            value: Value::Handle { kind, id: child },
+            consumed,
+            arguments: updates,
+            released,
+        } = result
+        else {
+            self.unsupported("resource spawn did not commit a task handle");
+            return;
+        };
+        if kind != "Task"
+            || consumed.as_slice() != [1]
+            || !updates.is_empty()
+            || !released.is_empty()
+            || self.spawns.contains_key(child)
+            || self.paths.contains_key(child)
+            || self.spawns.len() >= self.task_limit
+            || call.arguments.len() != 1
+        {
+            self.unsupported("unsupported resource spawn completion");
+            return;
+        }
+        let (parameter, usage, from) = &call.arguments[0];
+        let Some(Value::Closure {
+            definition,
+            body,
+            captures,
+            environment,
+            invoked,
+        }) = arguments.get(1)
+        else {
+            self.unsupported("resource spawn argument is not a closure environment");
+            return;
+        };
+        if *parameter != 1
+            || *usage != UseKind::Take
+            || captures.len() != environment.owned_captures.len()
+            || invoked.as_ref().is_none_or(|state| state.get().is_some())
+        {
+            self.unsupported("resource spawn requires an uninvoked owned once environment");
+            return;
+        }
+        let custody = Owner {
+            task: None,
+            storage: Storage::Object {
+                name: "task.spawn".into(),
+                id: *child,
+                item: 0,
+            },
+            path: vec![],
+        };
+        let mut incoming = vec![];
+        for (index, (value, owned)) in captures.iter().zip(&environment.owned_captures).enumerate()
+        {
+            let Some(value) = value else {
+                continue;
+            };
+            let count = resources_in(value);
+            if count == 0 {
+                continue;
+            }
+            if !owned || !Self::supported_tree(value) {
+                self.unsupported("borrowed or unsupported resource spawn capture");
+                return;
+            }
+            let mut owner = custody.clone();
+            owner.path.push(Step::Field {
+                field: index as u32,
+            });
+            incoming.push((index as u32, owner, count));
+        }
+        let result = self.tracker.move_tree(&call.context, from, &custody);
+        if let Some(tokens) = self.checked(result)
+            && tokens.len() as u64 != incoming.iter().map(|(_, _, count)| count).sum::<u64>()
+        {
+            self.unsupported("spawn environment lineage inventory differs");
+            return;
+        }
+        self.spawns.insert(
+            *child,
+            SpawnState {
+                definition: definition.path().clone(),
+                body: *body,
+                captures: incoming,
+                context: call.context,
+            },
+        );
     }
     fn builtin_returned(&mut self, _task: u64, _frame: &Frame, value: &Value) {
         if resources_in(value) != 0 {

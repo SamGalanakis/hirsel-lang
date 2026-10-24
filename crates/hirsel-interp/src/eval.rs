@@ -2765,7 +2765,7 @@ pub(crate) async fn execute_frames<O: crate::ownership_trace::Observer>(
                             None
                         };
                         if let Some(mut result) = result {
-                            observer.builtin_entered(task, frame);
+                            observer.builtin_entered(task, frame, &arguments, &result);
                             if frame.check.is_none()
                                 && !budgets.run.metered()
                                 && target

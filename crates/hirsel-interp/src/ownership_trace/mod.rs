@@ -35,7 +35,14 @@ pub(crate) trait Observer {
     #[inline(always)]
     fn call_entered(&mut self, _task: u64, _caller: &Frame, _callee: &Frame) {}
     #[inline(always)]
-    fn builtin_entered(&mut self, _task: u64, _frame: &Frame) {}
+    fn builtin_entered(
+        &mut self,
+        _task: u64,
+        _frame: &Frame,
+        _arguments: &[Value],
+        _result: &crate::OperationResult,
+    ) {
+    }
     #[inline(always)]
     fn builtin_returned(&mut self, _task: u64, _frame: &Frame, _value: &Value) {}
     #[inline(always)]

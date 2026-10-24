@@ -277,3 +277,61 @@ fn canceled_child(t: Test) {
         1,
     );
 }
+
+#[test]
+fn ownership_spawn_moves_owned_aggregate_captures_into_the_actual_child() {
+    let trace = observed_task_source(
+        r#"
+resource type Token {}
+drop(x) {}
+@test
+fn captured_children(t: Test) {
+  let tasks = test.tasks(t)
+  task.scope(tasks, fn(s: Scope) {
+    let pair = (Token(), Token())
+    let child = task.async(s, fn() { let carried = take pair })
+    let _ = task.await(s, take child)
+  })
+}
+"#,
+        2,
+    );
+    use hirsel_run_schema::ownership_trace::{Action, Storage};
+    assert!(trace.events.iter().any(|event| matches!(&event.action,
+        Action::Move { owner, .. } if owner.task.is_none() && matches!(&owner.storage, Storage::Object {name, ..} if name == "task.spawn"))));
+    let child_moves: Vec<_> = trace.events.iter().filter(|event| matches!(&event.action,
+        Action::Move { from, owner, .. } if from.task.is_none() && owner.task.as_ref().is_some_and(|task| !task.0.is_empty()))).collect();
+    assert_eq!(child_moves.len(), 2);
+    assert!(
+        child_moves
+            .iter()
+            .all(|event| event.action.token().task.0.is_empty())
+    );
+}
+
+#[test]
+fn ownership_spawn_cancellation_releases_the_transferred_capture() {
+    observed_task_source(
+        r#"
+resource type Token {}
+drop(x) {}
+@test
+fn canceled_capture(t: Test) {
+  let tasks = test.tasks(t)
+  task.scope(tasks, fn(s: Scope) {
+    let token = Token()
+    let (gate_tx, gate_rx): (Sender[u8], Receiver[u8]) = channel.open(tasks)
+    let child = task.async(s, fn() {
+      let held = take token
+      let mut gate = take gate_rx
+      let _ = channel.receive(tasks, mut gate)
+    })
+    task.cancel(s, child)
+    let _ = task.await(s, take child)
+    let _ = gate_tx
+  })
+}
+"#,
+        1,
+    );
+}
