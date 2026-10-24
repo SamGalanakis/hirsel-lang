@@ -391,6 +391,21 @@ pub(super) unsafe fn admit(ctx: *mut TaskCtx, n: *mut Native) {
             .iter()
             .all(|p| p.block.is_null() || p.charged == 1)
     );
+    // An active segment's exact resume point and selected original
+    // descriptor, recorded once; a repeated admission adopts nothing. Its
+    // fuel is logical throughout, so nothing private moves with it.
+    if state.phase == ACTIVE {
+        unsafe {
+            (*n).admitted = Some(crate::continuation::PrivateSave {
+                pc: crate::continuation::SavedFiber {
+                    sp: (*n).physical.saved_sp,
+                },
+                generation: 0,
+                fuel: 0,
+                descriptor: Some((*state.armed).buffer_descriptor),
+            })
+        };
+    }
     for pending in &mut state.pending {
         if pending.block.is_null() {
             continue;
@@ -412,4 +427,4 @@ pub(super) unsafe fn admit(ctx: *mut TaskCtx, n: *mut Native) {
 }
 
 #[cfg(all(test, target_arch = "x86_64"))]
-mod tests;
+pub(super) mod tests;

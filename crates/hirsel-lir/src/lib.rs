@@ -12,6 +12,7 @@ pub mod abi_types;
 pub mod ahead;
 pub mod codec;
 pub mod construction;
+pub mod continuation;
 pub mod debug;
 pub mod descriptor_registry;
 pub mod discharge;

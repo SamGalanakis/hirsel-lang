@@ -292,13 +292,8 @@ pub(crate) unsafe fn spawn_certified(
                 .unwrap()
                 .supports_ahead(certificate.stack_bytes)
         {
-            let mut native = super::ahead::native::Native::new(
-                child,
-                environment,
-                operation_site,
-                generation,
-                certificate,
-            );
+            let mut native =
+                super::ahead::native::Native::new(child, environment, operation_site, certificate);
             unsafe {
                 (*child).ahead_physical = &raw mut native.physical;
                 (*child).task_sp = task.stack.as_ref().unwrap().prepare(
@@ -317,14 +312,7 @@ pub(crate) unsafe fn spawn_certified(
     }
     let reserve = reserve && unsafe { (*child).ahead.is_some() };
     let task = if reserve {
-        unsafe {
-            (*child)
-                .ahead
-                .as_ref()
-                .unwrap()
-                .admitted
-                .store(false, std::sync::atomic::Ordering::Release)
-        };
+        unsafe { (*child).ahead.as_ref().unwrap().reserve(generation) };
         let task = super::ahead::Reserved {
             task: Box::new(task),
         };

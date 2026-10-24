@@ -13,39 +13,40 @@ fn certificate(live: *mut u64) -> Certificate {
         source: std::ptr::null_mut(),
     }
 }
-#[test]
-pub(crate) fn saved_custody_restores_only_the_mask_once_without_releasing_the_source() {
-    let mut image = [code as usize as u64, 0, 1, 0x1234567890abcdef];
-    let mut native = Native::new(
+fn reserved(live: *mut u64, generation: u32) -> super::super::Local {
+    let mut local = super::super::Local::new(true);
+    local.native = Some(Native::new(
         std::ptr::null_mut(),
         std::ptr::null_mut(),
         0,
-        37,
-        certificate(&raw mut image[2]),
-    );
+        certificate(live),
+    ));
+    local.reserve(generation);
+    local
+}
+#[test]
+pub(crate) fn saved_custody_restores_only_the_mask_once_without_releasing_the_source() {
+    let mut image = [code as usize as u64, 0, 1, 0x1234567890abcdef];
+    let mut local = reserved(&raw mut image[2], 37);
     image[2] = 0;
-    unsafe { native.restore(37) };
+    unsafe { local.restore(37) };
     assert_eq!(image, [code as usize as u64, 0, 1, 0x1234567890abcdef]);
     image[2] = 0;
-    unsafe { native.restore(37) };
+    unsafe { local.restore(37) };
     assert_eq!(image[2], 0, "custody restoration must not run twice");
 }
 #[test]
 pub(crate) fn promotion_adopts_the_actual_moved_mask_and_same_physical_record() {
     let mut mask = 1;
-    let mut native = Native::new(
-        std::ptr::null_mut(),
-        std::ptr::null_mut(),
-        0,
-        73,
-        certificate(&raw mut mask),
-    );
-    let address = &raw const native.physical;
+    let mut local = reserved(&raw mut mask, 73);
+    let address = &raw const local.native.as_ref().unwrap().physical;
     mask = 0;
-    native.adopt(73);
+    let save = local.adopt(73, std::ptr::dangling_mut(), 5);
+    assert_eq!((save.generation, save.fuel, save.descriptor), (73, 5, None));
+    let native = local.native.as_ref().unwrap();
     assert_eq!(&raw const native.physical, address);
     assert_eq!(native.physical.points_left, i64::MAX);
-    unsafe { native.restore(73) };
+    unsafe { local.restore(73) };
     assert_eq!(mask, 0);
 }
 #[test]
@@ -71,16 +72,10 @@ fn promotion_keeps_live_logical_tokens_sites_and_both_allowances_on_the_same_tas
         let tokens = (*ctx).invocation_tokens;
         let sites = (*ctx).invocation_site_slots;
         let mut mask = 1;
-        let mut native = Native::new(
-            ctx,
-            std::ptr::null_mut(),
-            10,
-            73,
-            certificate(&raw mut mask),
-        );
+        let mut native = Native::new(ctx, std::ptr::null_mut(), 10, certificate(&raw mut mask));
         let physical = &raw mut native.physical;
         (*ctx).ahead_physical = physical;
-        native.adopt(73);
+        native.adopt();
         assert_eq!((*ctx).ahead_physical, physical);
         assert_eq!(native.ctx, ctx);
         assert_eq!((*ctx).activations.live(), (1, 1));
@@ -103,19 +98,13 @@ fn promotion_keeps_live_logical_tokens_sites_and_both_allowances_on_the_same_tas
 #[test]
 pub(crate) fn stale_generation_cannot_restore_or_adopt_custody() {
     let mut mask = 0;
-    let mut native = Native::new(
-        std::ptr::null_mut(),
-        std::ptr::null_mut(),
-        0,
-        91,
-        certificate(&raw mut mask),
-    );
+    let mut local = reserved(&raw mut mask, 91);
     for adopt in [false, true] {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             if adopt {
-                native.adopt(92)
+                local.adopt(92, std::ptr::null_mut(), 0);
             } else {
-                unsafe { native.restore(92) }
+                unsafe { local.restore(92) }
             }
         }));
         assert!(result.is_err());
@@ -356,8 +345,9 @@ pub(crate) fn stopped_run_restores_saved_custody_before_reclaiming_its_heap() {
                 crate::alloc::hirsel_rt_v2_alloc(ctx, 2, 24, 8, crate::alloc::DOMAIN_HEAP, 0);
             let live = crate::alloc::payload(environment).add(16).cast::<u64>();
             live.write(1);
-            let mut local = Box::new(super::super::Local::new(false));
-            local.native = Some(Native::new(child, environment, 0, 73, certificate(live)));
+            let mut local = Box::new(super::super::Local::new(true));
+            local.native = Some(Native::new(child, environment, 0, certificate(live)));
+            local.reserve(73);
             (*child).ahead = Some(local);
             let mut task = crate::tasks::Task::new(73, child, None, vec![1], None);
             // No stack code is entered. This owner simply keeps the context

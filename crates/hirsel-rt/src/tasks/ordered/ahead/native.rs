@@ -51,9 +51,9 @@ pub(crate) struct Native {
     live: *mut u64,
     original_mask: u64,
     source: *mut Header,
-    generation: u32,
-    adopted: bool,
     pub(super) host: super::host_return::State,
+    /// The last admitted host-return segment.
+    pub(crate) admitted: Option<crate::continuation::PrivateSave>,
 }
 const _: () = {
     assert!(std::mem::offset_of!(Physical, points_left) == 0);
@@ -258,7 +258,6 @@ impl Native {
         ctx: *mut TaskCtx,
         environment: *mut Header,
         operation_site: u64,
-        generation: u32,
         certificate: Certificate,
     ) -> Box<Self> {
         Box::new(Self {
@@ -282,30 +281,18 @@ impl Native {
             live: certificate.live,
             original_mask: certificate.mask,
             source: certificate.source,
-            generation,
-            adopted: !certificate.host.is_null(),
             host: super::host_return::State::new(certificate.host),
+            admitted: None,
         })
     }
-    pub(crate) fn adopt(&mut self, generation: u32) {
-        assert_eq!(
-            generation, self.generation,
-            "stale ahead custody generation"
-        );
-        assert!(!self.adopted, "ahead custody adopted twice");
-        self.adopted = true;
+    /// The logical owner now drives this physical record without private quanta.
+    pub(super) fn adopt(&mut self) {
         self.physical.points_left = i64::MAX;
     }
-    /// Idle only, generation-matching Saved owner; no RC operation or user code.
-    pub(crate) unsafe fn restore(&mut self, generation: u32) {
-        assert_eq!(
-            generation, self.generation,
-            "stale ahead discard generation"
-        );
-        if !self.adopted {
-            unsafe { self.live.write(self.original_mask) };
-            self.adopted = true;
-        }
+    /// Withdrawal only (`Local::restore`): the original live mask returns to
+    /// the environment, whose ordinary drop then releases the source capture.
+    pub(super) unsafe fn restore_mask(&mut self) {
+        unsafe { self.live.write(self.original_mask) };
     }
 }
 
