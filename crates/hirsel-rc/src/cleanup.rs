@@ -776,7 +776,7 @@ pub(crate) fn absent(
             empty
         });
     }
-    if record.kind == LayoutKind::Variant {
+    if record.tag.is_some() {
         return record.tag.as_ref().is_some_and(|tag| {
             tag.variants.iter().all(|variant| {
                 variant.fields.iter().all(|field| {
@@ -1421,6 +1421,18 @@ impl Lowering<'_, '_> {
                             .at(&self.facts.paths(), &[Step::Field(field.ordinal)])
                             == Tri::Yes
                     })
+                    && record
+                        .tag
+                        .iter()
+                        .flat_map(|tag| &tag.variants)
+                        .all(|variant| {
+                            variant.fields.iter().all(|field| {
+                                s.moved.at(
+                                    &self.facts.paths(),
+                                    &[Step::Variant(variant.ordinal, field.ordinal)],
+                                ) == Tri::Yes
+                            })
+                        })
             });
         if !self.lay.trivial(layout)
             && owner_presence(s, &self.facts.paths(), &path, layout, self.lay) != Tri::No
@@ -1811,8 +1823,9 @@ impl Lowering<'_, '_> {
         }
     }
 
-    /// Move an intact variant into temporary storage so every arm can end
-    /// that storage before joining, including a nullary or failing arm.
+    /// Select an intact variant's active arm. Ordinary variants use a
+    /// temporary that each arm ends; resources retain their original slot
+    /// so their own finalizer preserves the slot's cleanup order.
     fn variant(
         &mut self,
         at: BlockId,
@@ -1821,19 +1834,40 @@ impl Lowering<'_, '_> {
         site: &Site,
         fail: &mut dyn FnMut(&mut Self, ()) -> FailureId,
     ) -> Result<BlockId, PassError> {
-        let (local, whole, joined, retry) = self.hold_action(at, path, layout, site, fail)?;
-        let slot = local.slot;
-        let ty = self.ed.unit.slots[slot.index()].ty;
-        let version = local.version.unwrap();
+        let record = self.lay.get(layout).unwrap().clone();
+        // A resource's own finalizer participates in its original slot's
+        // cleanup order. Keep that slot and its phase through arm selection.
+        let held = record.finalizer.is_none();
         let kind = self.ed.unit.blocks[at.index()].kind;
         let anchor = self.ed.unit.blocks[at.index()].anchor;
+        let (local, whole, joined, retry) = if held {
+            self.hold_action(at, path, layout, site, fail)?
+        } else {
+            let whole = self.address(site.slot, path, layout)?;
+            let outer = fail(self, ());
+            let local = Site {
+                slot: site.slot,
+                version: site.version,
+                anchor: site.anchor,
+                failure: self.ed.unit.tables.failures[outer.index()].clone(),
+            };
+            (
+                local,
+                whole,
+                self.ed.block(kind, &[], anchor),
+                self.ed.block(BlockKind::FailureCleanup, &[], anchor),
+            )
+        };
+        let base_path = if held { Vec::new() } else { path.to_vec() };
+        let slot = local.slot;
+        let ty = type_of(&mut self.ed.unit, ValueRepr::Aggregate, layout);
+        let version = local.version.unwrap();
         let exit = self.ed.unit.tables.edges[local.failure.cleanup.index()].clone();
         let exit_args = exit
             .arguments
             .get(&self.ed.unit.pools.values)
             .unwrap_or(&[])
             .to_vec();
-        let record = self.lay.get(layout).unwrap().clone();
         let variants = record.tag.as_ref().unwrap().variants.clone();
         let state = crate::insert::SlotState {
             live: Tri::Yes,
@@ -1881,9 +1915,15 @@ impl Lowering<'_, '_> {
                     if_active: false,
                 });
                 let mut actions = Vec::new();
+                if record.finalizer.is_some() {
+                    actions.push(Action::Finalize {
+                        path: base_path.clone(),
+                        layout,
+                    });
+                }
                 self.plan_variant_fields(
                     &state,
-                    Vec::new(),
+                    base_path.clone(),
                     &record,
                     variant.ordinal,
                     &mut actions,
@@ -1895,10 +1935,12 @@ impl Lowering<'_, '_> {
                 }
                 let base = self.prepare_actions(arm, &actions, &local, retry)?;
                 let dead = self.ed.block(BlockKind::FailureCleanup, &[], anchor);
-                self.ed.code[dead.index()].push(Inst::StorageDead {
-                    slot,
-                    if_live: false,
-                });
+                if held {
+                    self.ed.code[dead.index()].push(Inst::StorageDead {
+                        slot,
+                        if_live: false,
+                    });
+                }
                 self.ed.unit.terminators[dead.index()] =
                     Terminator::Jump(self.ed.edge(exit.target, &exit_args));
                 let edge = self.ed.edge(dead, &[]);
@@ -1914,10 +1956,12 @@ impl Lowering<'_, '_> {
                     },
                 };
                 let end = self.sequence(arm, &actions, &sub)?;
-                self.ed.code[end.index()].push(Inst::StorageDead {
-                    slot,
-                    if_live: false,
-                });
+                if held {
+                    self.ed.code[end.index()].push(Inst::StorageDead {
+                        slot,
+                        if_live: false,
+                    });
+                }
                 self.ed.unit.terminators[end.index()] = Terminator::Jump(if failed {
                     self.ed.edge(exit.target, &exit_args)
                 } else {
@@ -2282,11 +2326,30 @@ impl Lowering<'_, '_> {
             });
             return Ok(());
         }
-        if record.kind == LayoutKind::Variant {
-            if !under {
-                out.push(Action::Variant { path, layout });
-                return Ok(());
+        let pending = s.fields_pending.at(&paths, &path);
+        if record.finalizer.is_some() && pending == Tri::Maybe {
+            return Err(PassError::Malformed(
+                "a retained defused shell crossed its straight-line region".into(),
+            ));
+        }
+        // Select an intact resource's active arm while it is still live.
+        // The arm finalizes the resource in place before its payload.
+        if record.tag.is_some() && !under && pending != Tri::Yes {
+            out.push(Action::Variant { path, layout });
+            return Ok(());
+        }
+        if record.finalizer.is_some() && pending != Tri::Yes {
+            if under {
+                return Err(PassError::Malformed(
+                    "a field moved out of a live resource".into(),
+                ));
             }
+            out.push(Action::Finalize {
+                path: path.clone(),
+                layout,
+            });
+        }
+        if record.tag.is_some() {
             return self.plan_variant(s, path, record, out);
         }
         if !under && matches!(record.kind, LayoutKind::Inline { .. }) {
@@ -2306,23 +2369,6 @@ impl Lowering<'_, '_> {
                 "a partial transfer from non-composite inline {:?} storage",
                 record.kind
             )));
-        }
-        let pending = s.fields_pending.at(&paths, &path);
-        if record.finalizer.is_some() && pending != Tri::Yes {
-            if pending == Tri::Maybe {
-                return Err(PassError::Malformed(
-                    "a retained defused shell crossed its straight-line region".into(),
-                ));
-            }
-            if under {
-                return Err(PassError::Malformed(
-                    "a field moved out of a live resource".into(),
-                ));
-            }
-            out.push(Action::Finalize {
-                path: path.clone(),
-                layout,
-            });
         }
         // Layout validation fixes this order. Byte offsets cannot identify a
         // declaration: zero-sized resources and their siblings may coincide.

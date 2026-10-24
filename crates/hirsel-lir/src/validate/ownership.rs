@@ -890,9 +890,6 @@ impl<S: Stage> Walker<'_, '_, S> {
         let Some(record) = self.cx.layouts.get(layout) else {
             return;
         };
-        if record.kind != crate::layout_types::LayoutKind::Variant || record.finalizer.is_some() {
-            return;
-        }
         let Some(tag) = &record.tag else {
             return;
         };
@@ -1833,7 +1830,7 @@ impl<S: Stage> Walker<'_, '_, S> {
                 covered
             });
         }
-        if record.kind == crate::layout_types::LayoutKind::Variant {
+        if record.tag.is_some() {
             return record.tag.as_ref().is_some_and(|tag| {
                 tag.variants.iter().all(|variant| {
                     variant.fields.iter().all(|field| {

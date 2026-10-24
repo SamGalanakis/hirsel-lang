@@ -75,7 +75,7 @@ pub const VALUE_COLUMNS: u64 = 18;
 /// Value-only column: prefix, stride, linked child layout; remaining words zero.
 pub const VALUE_COLUMN: u64 = 17;
 
-/// ABI 55: host capability observation only. VALUE operands: kind, extent(8),
+/// ABI 56: host capability observation only. VALUE operands: kind, extent(8),
 /// UTF-8 kind length, then at most 32 bytes of the builtin kind, zero padded.
 /// Neither the carrier word nor any capability bytes enter a canonical value.
 pub const VALUE_HOST_CAPABILITY: u64 = 19;

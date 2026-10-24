@@ -1270,3 +1270,30 @@ fn closure_returned_zero_sized_resources_discharge_every_slot() {
         );
     }
 }
+
+#[test]
+fn resource_variant_cleanup_preserves_own_finalizer_and_active_payload() {
+    for (value, failures, finalizers) in [
+        ("Held(value: T(n: 1, xs: box P(a: 2)))", 0, 2),
+        ("Empty", 0, 1),
+        ("Held(value: T(n: 0, xs: box P(a: 2)))", 1, 2),
+    ] {
+        for parent_fails in [false, true] {
+            let drop = if parent_fails {
+                "failure.check(false, Arithmetic())"
+            } else {
+                "()"
+            };
+            let (b, o) = ready(&format!(
+                "{T}resource type Wrapped = Held(value: T) | Empty\ndrop(w) {{ {drop} }}\npub fn main() -> u64 {{ let w: Wrapped = {value}; 7 }}"
+            ));
+            assert_eq!(o.failures.len(), failures + usize::from(parent_fails));
+            assert_eq!(
+                finalized(&execute(&b.table, &b.ready).trace).len(),
+                finalizers
+            );
+            same_finalizers(&b);
+            campaign(&b);
+        }
+    }
+}
