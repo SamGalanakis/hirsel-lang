@@ -1395,3 +1395,7 @@ pub(super) mod tests {
 
 #[cfg(test)]
 mod completed_read_tests;
+
+#[cfg(test)]
+#[path = "host/modules.rs"]
+mod host_modules;

@@ -194,7 +194,12 @@ pub(crate) unsafe fn request(
     adapter: &dyn ConcurrentAdapter,
     request: Request,
 ) -> Stopped<Result<Completion, AdapterError>> {
-    if crate::host_waits::may_park(&request) {
+    // Blocking built-in calls park on an owned job row in the run's service.
+    // Classification is a bounded lookup that never takes R; releasing the
+    // role here would open a retirement window to the home poll.
+    let blocking =
+        unsafe { (*ctx).run_ref().ordered_io.get() }.is_some() && adapter.blocking(&request);
+    if blocking || crate::host_waits::may_park(&request) {
         return unsafe { service::request(ctx, adapter, request) };
     }
     let close = matches!(request, Request::Close { .. });
@@ -341,6 +346,23 @@ fn invoke_attempt(
         Ok(BTreeMap::new())
     };
     (result, discovered, output)
+}
+
+/// One bounded attempt, or its cancellation outcome. A job runs exactly this.
+fn call_attempt(
+    adapter: &dyn ConcurrentAdapter,
+    token: u64,
+    cause: Option<u32>,
+    request: Request,
+) -> (Result<Completion, AdapterError>, Option<u64>) {
+    if let Some(cause) = cause {
+        match crate::io_checks::cancel_concurrent(adapter, token, &request, cause) {
+            Ok(Some(completion)) => return (Ok(completion), None),
+            Err(error) => return (Err(error), None),
+            Ok(None) => {}
+        }
+    }
+    adapter.call_observed_at(token, request)
 }
 
 fn discover(

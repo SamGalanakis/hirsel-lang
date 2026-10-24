@@ -20,12 +20,36 @@ pub(crate) struct Service {
     driver: Option<crate::readiness::Readiness>,
     rows: Mutex<BTreeMap<u64, Row>>,
     pending: AtomicUsize,
+    jobs: Jobs,
 }
 
 struct Row {
     request: Request,
     task: Option<(u32, u32)>,
     completion: Option<Result<Completion, AdapterError>>,
+    /// A blocking built-in call owned by a bounded job, as in Free (S5).
+    job: Option<Owned>,
+}
+
+use crate::tasks::free::host::jobs::{Jobs, Owned};
+
+impl Row {
+    fn new(request: Request, job: Option<Owned>) -> Row {
+        Row {
+            request,
+            task: None,
+            completion: None,
+            job,
+        }
+    }
+    /// A job row is ready when its credit was granted or its call returned.
+    fn job_ready(&mut self) -> Option<bool> {
+        let job = self.job.as_mut()?;
+        Some(match &job.slot {
+            Some(slot) => slot.returned(),
+            None => job.reservation.as_mut().is_some_and(|r| r.granted()),
+        })
+    }
 }
 
 impl Service {
@@ -42,6 +66,18 @@ impl Service {
                 driver.wake_on(fd).map_err(Stop::refusal)?;
             }
         }
+        let jobs = Jobs::default();
+        let (ready, home) = (driver.clone(), unsafe {
+            crate::pool::home_wake((*ctx).run_ptr())
+        });
+        jobs.set_waker(Arc::new(move || {
+            if let Some(ready) = &ready {
+                let _ = ready.notify();
+            }
+            if let Some(home) = &home {
+                home();
+            }
+        }));
         assert!(
             run.ordered_io
                 .set(Arc::new(Self {
@@ -49,10 +85,16 @@ impl Service {
                     driver,
                     rows: Default::default(),
                     pending: AtomicUsize::new(0),
+                    jobs,
                 }))
                 .is_ok()
         );
         Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn jobs_probe(&self) -> crate::tasks::free::host::jobs::Probe {
+        self.jobs.probe()
     }
 
     pub(crate) fn notify(&self) {
@@ -84,12 +126,15 @@ impl Service {
 
     pub(crate) fn ready(&self) -> Stopped<Vec<crate::host_waits::ReadyHost>> {
         let ready = self.adapter.ready().map_err(Stop::refusal)?;
+        // Job completions publish through rows; their tokens need no merge.
+        self.jobs.drain();
         Ok(self
             .rows
             .lock()
             .unwrap()
-            .iter()
+            .iter_mut()
             .filter_map(|(&token, row)| {
+                let job = row.job_ready();
                 let (task, generation) = row.task?;
                 let deadline = match row.request {
                     Request::SleepUntil { deadline, .. } => Some(deadline),
@@ -100,7 +145,7 @@ impl Service {
                     task,
                     token,
                     deadline,
-                    ready: ready.contains(token & !CONCURRENT),
+                    ready: job.unwrap_or_else(|| ready.contains(token & !CONCURRENT)),
                 })
             })
             .collect())
@@ -139,6 +184,9 @@ impl Service {
         ready: bool,
         observing: bool,
     ) -> Stopped<(bool, Option<Attempt>)> {
+        if let Some(polled) = self.poll_job(token, cause, observing) {
+            return Ok(polled);
+        }
         let request = self
             .rows
             .lock()
@@ -173,6 +221,58 @@ impl Service {
                 .completion = Some(result);
         }
         Ok((done, evidence))
+    }
+
+    /// Submit a granted job, or complete a returned one. Discovery and the
+    /// adapter's finish run here, on the poller, exactly as for a retry.
+    fn poll_job(
+        &self,
+        token: u64,
+        cause: Option<u32>,
+        observing: bool,
+    ) -> Option<(bool, Option<Attempt>)> {
+        let mut rows = self.rows.lock().unwrap();
+        let row = rows.get_mut(&token)?;
+        let job = row.job.as_mut()?;
+        let Some(slot) = &job.slot else {
+            if job.reservation.as_mut().is_some_and(|r| r.granted()) {
+                let credit = job.reservation.take().and_then(|r| r.take()).unwrap();
+                let (adapter, request) = (self.adapter.clone(), row.request.clone());
+                let cause = cause.filter(|_| adapter.cancellable(token & !CONCURRENT));
+                job.slot = Some(self.jobs.submit(credit, token, move || {
+                    call_attempt(&*adapter, token & !CONCURRENT, cause, request)
+                }));
+            }
+            return Some((false, None));
+        };
+        if !slot.returned() {
+            return Some((false, None));
+        }
+        let (mut result, _) = job
+            .slot
+            .take()
+            .unwrap()
+            .deliver()
+            .expect("one owner delivery");
+        row.job = None;
+        drop(rows);
+        let discovered = if observing {
+            discover(&mut result, &*self.adapter)
+        } else {
+            Ok(BTreeMap::new())
+        };
+        self.adapter.finish(token & !CONCURRENT);
+        let evidence = observing.then(|| Attempt {
+            result: super::super::super::events::owned_host_result(&result),
+            discovery: discovered,
+        });
+        self.rows
+            .lock()
+            .unwrap()
+            .get_mut(&token)
+            .unwrap()
+            .completion = Some(result);
+        Some((true, evidence))
     }
 
     pub(crate) fn task(&self, token: u64) -> u32 {
@@ -253,7 +353,8 @@ impl Service {
 impl Drop for Service {
     fn drop(&mut self) {
         for (&token, row) in self.rows.get_mut().unwrap().iter() {
-            if row.completion.is_none() {
+            // A running job still uses its token; quarantine owns its result.
+            if row.completion.is_none() && row.job.as_ref().is_none_or(|job| job.slot.is_none()) {
                 self.adapter.finish(token & !CONCURRENT);
             }
         }
@@ -313,6 +414,9 @@ pub(super) unsafe fn request(
     }
     let read = matches!(request, Request::NetRead { .. }).then(|| request.clone());
     let cause = unsafe { crate::tasks::canceled(ctx) };
+    if adapter.blocking(request) {
+        return unsafe { job(ctx, io, token, cause) };
+    }
     let (result, discovered, _) = {
         let _segment = unsafe { role::Segment::new(ctx) };
         invoke_attempt(adapter, token, cause, request.clone(), observing)
@@ -349,14 +453,7 @@ pub(super) unsafe fn request(
             io.rows
                 .lock()
                 .unwrap()
-                .insert(
-                    wait,
-                    Row {
-                        request,
-                        task: None,
-                        completion: None
-                    }
-                )
+                .insert(wait, Row::new(request, None))
                 .is_none()
         );
         io.pending.fetch_add(1, Ordering::Release);
@@ -398,6 +495,62 @@ pub(super) unsafe fn request(
     }
 }
 
+/// A blocking built-in call: the retiring turn parks on a job row instead of
+/// holding its compute worker in the syscall. Its first observation is the
+/// park, as for a request that registered readiness; the retirement poll
+/// submits the job once its credit is granted and completes the row on return.
+/// # Safety
+/// As for request, after the request's entry events.
+unsafe fn job(
+    ctx: *mut TaskCtx,
+    io: &Service,
+    token: u64,
+    cause: Option<u32>,
+) -> Stopped<Result<Completion, AdapterError>> {
+    let wait = token | CONCURRENT;
+    let request = unsafe {
+        (*ctx)
+            .pending_ordered_host
+            .as_mut()
+            .unwrap()
+            .request
+            .take()
+            .unwrap()
+    };
+    let owned = Owned {
+        reservation: Some(io.jobs.reserve(wait)),
+        slot: None,
+    };
+    assert!(
+        io.rows
+            .lock()
+            .unwrap()
+            .insert(wait, Row::new(request, Some(owned)))
+            .is_none()
+    );
+    io.pending.fetch_add(1, Ordering::Release);
+    // Submit now when capacity is free; never wait for it under the role.
+    let _ = io.poll_job(wait, cause, false);
+    super::super::super::events::record_host_initial(ctx, &Err(AdapterError::Blocked));
+    unsafe { super::super::park(ctx, wait, false) }?;
+    let result = if super::super::return_pending(ctx, wait) {
+        io.rows
+            .lock()
+            .unwrap()
+            .get(&wait)
+            .unwrap()
+            .completion
+            .clone()
+    } else {
+        let row = io.rows.lock().unwrap().remove(&wait).unwrap();
+        io.pending.fetch_sub(1, Ordering::Release);
+        row.completion
+    }
+    .expect("completed job wait");
+    super::super::super::events::complete_host(ctx, false, &result);
+    Ok(result)
+}
+
 #[cfg(test)]
 mod generation_tests {
     use super::*;
@@ -428,6 +581,7 @@ mod generation_tests {
                     driver: None,
                     rows: Default::default(),
                     pending: AtomicUsize::new(0),
+                    jobs: Default::default(),
                 };
                 let s = crate::tasks::scheduler(ctx);
                 let generation = s.task(0).generation;
@@ -435,12 +589,14 @@ mod generation_tests {
                 io.rows.lock().unwrap().insert(
                     token,
                     Row {
-                        request: Request::SleepUntil {
-                            clock: 11,
-                            deadline: 10,
-                        },
                         task: Some((0, generation.wrapping_add(1))),
-                        completion: None,
+                        ..Row::new(
+                            Request::SleepUntil {
+                                clock: 11,
+                                deadline: 10,
+                            },
+                            None,
+                        )
                     },
                 );
                 s.task(0).wait = Some(crate::tasks::Wait::Host { token });
