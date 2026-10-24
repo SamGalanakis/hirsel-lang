@@ -4,6 +4,7 @@
 use super::*;
 use hirsel_lir::ir::{LirUnit, UnitOrigin};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 
 pub type Function = hirsel_rc::arena_credit::equations::Function;
 
@@ -30,4 +31,22 @@ impl TemplateFacts {
     pub(super) fn canonical(&self) -> bool {
         !self.references.windows(2).any(|pair| pair[0] >= pair[1])
     }
+}
+
+/// Ported unchanged from native/units.rs:187-201. Only copyable templates
+/// extend traversal; a noncopyable intermediate does not expose its callees.
+/// The owner is excluded even when recursive edges return to it.
+pub(crate) fn copy_closure<K: Ord + Clone>(
+    owner: &K,
+    mut references: impl FnMut(&K) -> Vec<K>,
+    mut copyable: impl FnMut(&K) -> bool,
+) -> Vec<K> {
+    let mut seen = BTreeSet::new();
+    let mut pending = references(owner);
+    while let Some(member) = pending.pop() {
+        if &member != owner && copyable(&member) && seen.insert(member.clone()) {
+            pending.extend(references(&member));
+        }
+    }
+    seen.into_iter().collect()
 }
