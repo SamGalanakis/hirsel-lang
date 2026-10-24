@@ -1954,17 +1954,102 @@ enum Output<'a> {
     Image(&'a super::runner::Runner),
 }
 
-fn link_launcher(
+/// Inputs selected and materialized by the caller, in their original link order.
+/// No compiler driver, linker executable or ambient foreign-library search is used.
+pub struct ExecutableLinkInputs<'a> {
+    pub kit: &'a Path,
+    /// The already selected debug or stripped runtime archive.
+    pub runtime: &'a Path,
+    pub foreign: &'a [PathBuf],
+    /// None selects the kit's canonical target interpreter.
+    pub loader: Option<(PathBuf, PathBuf)>,
+}
+
+/// A kit invocation ready for stored-tool capture. Arguments exclude `-o` and
+/// its output; generated launcher, unit and run-record files live in `directory`.
+pub struct ExecutableLinkPlan {
+    pub directory: PathBuf,
+    pub arguments: Vec<std::ffi::OsString>,
+    pub build_id: [u8; 20],
+}
+
+impl ExecutableLinkPlan {
+    /// Capture with the independently selected frozen tool and caller's bounds.
+    pub fn capture(
+        &self,
+        store: &dyn hirsel_engine::store::ResultStore,
+        linker: super::object_queries::capture::FrozenLinker,
+        limits: super::object_queries::capture::CaptureLimits,
+    ) -> Result<super::object_queries::capture::CapturedLink, String> {
+        let arguments = self
+            .arguments
+            .iter()
+            .map(|arg| {
+                arg.to_str()
+                    .map(str::to_owned)
+                    .ok_or_else(|| "non-UTF8 link argument".to_string())
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        linker.capture(store, &self.directory, &arguments, limits)
+    }
+}
+
+/// Emit the existing launcher and plan an executable link without spawning a
+/// linker. `standalone` accepts fresh launch grants; otherwise `requested` is
+/// bound exactly as in `link_objects_with_run`. Object and launch manifests
+/// undergo the same checks as the live linker path.
+pub fn plan_executable_link(
     program: &ReadyProgram,
     entry: &DefPath,
     objects: &[hirsel_lir::stage::ObjectArtifact],
-    toolchain: &Toolchain,
-    dir: &Path,
-    mut output: Output<'_>,
-    launchers: &[PathBuf],
-) -> Result<Linked, NativeError> {
+    directory: &Path,
+    requested: Option<&hirsel_run_config::ValidatedRun>,
+    standalone: bool,
+    inputs: ExecutableLinkInputs<'_>,
+) -> Result<ExecutableLinkPlan, NativeError> {
+    let main = launcher_object(
+        program, entry, objects, directory, requested, standalone, "main",
+    )?;
+    let main = write(directory, "main.o", &main)?;
+    check_link_manifest(program, entry, objects)?;
+    let objects = write_link_objects(directory, objects, &[main])?;
+    plan_executable_inputs(&program.target, directory, &objects, inputs)
+}
+
+/// Plan the shared kit line for already emitted launcher/unit objects. This also
+/// serves foreign executable producers that do not need a Hirsel launcher.
+pub fn plan_executable_inputs(
+    target: &TargetSpec,
+    directory: &Path,
+    objects: &[PathBuf],
+    inputs: ExecutableLinkInputs<'_>,
+) -> Result<ExecutableLinkPlan, NativeError> {
+    let kit = super::kit::Kit::load(inputs.kit)?;
+    let link = super::kit::Link {
+        kit: &kit,
+        triple: &target.triple,
+        kind: super::kit::Kind::Executable {
+            loader: inputs.loader,
+        },
+        objects,
+        runtime: Some(inputs.runtime),
+        unwind: true,
+        foreign: inputs.foreign,
+    };
+    let (arguments, build_id) = link.invocation()?;
+    Ok(ExecutableLinkPlan {
+        directory: directory.to_path_buf(),
+        arguments,
+        build_id,
+    })
+}
+
+fn check_link_manifest(
+    program: &ReadyProgram,
+    entry: &DefPath,
+    objects: &[hirsel_lir::stage::ObjectArtifact],
+) -> Result<(), NativeError> {
     let (symbol, _, _) = entry_result(program, entry)?;
-    let target = &program.target;
     // Link manifest: each definition instance has exactly one implementation
     // across the objects, the entry among them, and every import is another
     // object's export, a runtime entry or a toolchain routine.
@@ -1997,6 +2082,32 @@ fn link_launcher(
             ));
         }
     }
+    Ok(())
+}
+
+fn write_link_objects(
+    dir: &Path,
+    objects: &[hirsel_lir::stage::ObjectArtifact],
+    launchers: &[PathBuf],
+) -> Result<Vec<PathBuf>, NativeError> {
+    let mut inputs = launchers.to_vec();
+    for (index, object) in objects.iter().enumerate() {
+        inputs.push(write(dir, &format!("unit-{index}.o"), &object.bytes)?);
+    }
+    Ok(inputs)
+}
+
+fn link_launcher(
+    program: &ReadyProgram,
+    entry: &DefPath,
+    objects: &[hirsel_lir::stage::ObjectArtifact],
+    toolchain: &Toolchain,
+    dir: &Path,
+    mut output: Output<'_>,
+    launchers: &[PathBuf],
+) -> Result<Linked, NativeError> {
+    check_link_manifest(program, entry, objects)?;
+    let target = &program.target;
     let archive = toolchain.archive(&target.triple).ok_or_else(|| {
         NativeError::new(
             StageName::Link,
@@ -2009,10 +2120,7 @@ fn link_launcher(
     })?;
     let executable = dir.join("program");
     let kit = super::kit::Kit::load(&toolchain.kit)?;
-    let mut inputs: Vec<PathBuf> = launchers.to_vec();
-    for (index, object) in objects.iter().enumerate() {
-        inputs.push(write(dir, &format!("unit-{index}.o"), &object.bytes)?);
-    }
+    let inputs = write_link_objects(dir, objects, launchers)?;
     if let Output::Image(runner) = output {
         let image = match executable_reason(program, objects, toolchain) {
             Some(reason) => Err(reason),
