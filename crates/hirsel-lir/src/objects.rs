@@ -511,6 +511,7 @@ pub fn rebound<S>(
     layouts: &[LayoutId],
     abis: &[FnAbiId],
 ) -> Result<LirUnit<S>, String> {
+    crate::construction::record(&unit.header, crate::construction::ValueWork::Rebind);
     let mut missing = None;
     for_each_table_id(&mut unit, &mut |id| match id {
         TableId::Layout(id) => match layouts.get(id.0 as usize) {

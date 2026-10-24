@@ -42,6 +42,10 @@
 //!   Plain: a literal slice) is backed by an immortal static block: consuming
 //!   it needs no credit, and it is never a reuse donor.
 mod aliasing;
+mod linkage;
+mod products;
+pub use linkage::{CheckedLinkage, check_arena_scoped_links};
+pub use products::{NativeCache, NativeEnvironment, NativeOutput};
 mod arena;
 pub use arena::check_calls as check_result_arena_calls;
 mod discharge;

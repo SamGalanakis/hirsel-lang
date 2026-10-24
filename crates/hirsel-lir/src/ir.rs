@@ -1687,7 +1687,7 @@ pub struct UnitHeader {
 
 /// One function body at stage `S`. Fields are public so tests and adversarial
 /// inputs can forge raw units; only validators produce `ValidatedUnit<S>`.
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Debug, Eq, PartialEq, Hash)]
 pub struct LirUnit<S> {
     pub header: UnitHeader,
     pub types: Vec<LirType>,
@@ -1711,10 +1711,34 @@ pub struct LirUnit<S> {
     pub stage: PhantomData<S>,
 }
 
+impl<S: Clone> Clone for LirUnit<S> {
+    fn clone(&self) -> Self {
+        crate::construction::record(&self.header, crate::construction::ValueWork::Clone);
+        Self {
+            header: self.header.clone(),
+            types: self.types.clone(),
+            values: self.values.clone(),
+            slots: self.slots.clone(),
+            addresses: self.addresses.clone(),
+            blocks: self.blocks.clone(),
+            terminators: self.terminators.clone(),
+            instructions: self.instructions.clone(),
+            entry: self.entry,
+            parameters: self.parameters.clone(),
+            captures: self.captures.clone(),
+            scopes: self.scopes.clone(),
+            tables: self.tables.clone(),
+            pools: self.pools.clone(),
+            stage: self.stage,
+        }
+    }
+}
+
 impl<S: Stage> LirUnit<S> {
     /// An empty unit whose header names stage `S`.
     pub fn new(mut header: UnitHeader) -> Self {
         header.stage = S::KIND;
+        crate::construction::record(&header, crate::construction::ValueWork::Create);
         Self {
             header,
             types: Vec::new(),
@@ -1738,6 +1762,7 @@ impl<S: Stage> LirUnit<S> {
     pub fn into_stage<T: Stage>(self) -> LirUnit<T> {
         let mut header = self.header;
         header.stage = T::KIND;
+        crate::construction::record(&header, crate::construction::ValueWork::Retag);
         LirUnit {
             header,
             types: self.types,
@@ -3449,6 +3474,7 @@ impl<S: Stage> hirsel_codec::Snapshot for LirUnit<S> {
     }
     fn read(r: &mut hirsel_codec::Reader<'_>) -> Result<Self, hirsel_codec::DecodeError> {
         use hirsel_codec::Snapshot as Sn;
+        let start = r.offset();
         r.open("LirUnit")?;
         let header = UnitHeader::read(r)?;
         if header.stage != S::KIND {
@@ -3458,6 +3484,7 @@ impl<S: Stage> hirsel_codec::Snapshot for LirUnit<S> {
                 S::KIND
             )));
         }
+        crate::construction::record(&header, crate::construction::ValueWork::Decode);
         let unit = LirUnit {
             header,
             types: Sn::read(r)?,
@@ -3476,6 +3503,10 @@ impl<S: Stage> hirsel_codec::Snapshot for LirUnit<S> {
             stage: PhantomData,
         };
         r.close()?;
+        crate::construction::record(
+            &unit.header,
+            crate::construction::ValueWork::DecodedBytes((r.offset() - start) as u64),
+        );
         Ok(unit)
     }
 }
