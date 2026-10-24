@@ -5,7 +5,9 @@ use std::task::Poll;
 mod budget;
 mod scheduler;
 pub use budget::{MemoryReservation, ProcessBudget};
-pub use scheduler::{AdmittedRuntime, RuntimeErrors, RuntimeEvent, RuntimeObserver, RuntimeStats};
+pub use scheduler::{
+    AdmittedRuntime, RuntimeCompletion, RuntimeErrors, RuntimeEvent, RuntimeObserver, RuntimeStats,
+};
 
 /// Logical address, independent of source revision, worker or request order.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

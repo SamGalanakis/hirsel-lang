@@ -846,3 +846,55 @@ fn new_dependent_keeps_its_latch_when_cancelled_inflight_claim_is_restarted() {
     );
     assert_eq!(events.iter().filter(|e| e.1 == LocalEvent::Drop).count(), 1);
 }
+
+#[test]
+fn host_completion_wait_does_not_hold_runtime_ownership_or_consume_results() {
+    let mut rt = runtime(1, 4 << 20);
+    let (entered, entered_rx) = mpsc::channel();
+    let (release, released) = mpsc::channel();
+    rt.register(
+        1,
+        Arc::new(BlockingFactory {
+            entered,
+            release: Mutex::new(Some(released)),
+        }),
+    )
+    .unwrap();
+    let request = rt.request(&[query(0)]);
+    entered_rx.recv().unwrap();
+    let runtime = Arc::new(Mutex::new(rt));
+    let completion = runtime.lock().unwrap().completion();
+    let (finished, finished_rx) = mpsc::channel();
+    let waiter = std::thread::spawn(move || {
+        completion.wait(request);
+        finished.send(()).unwrap();
+    });
+    // A host can still acquire the runtime and cancel while another host waits.
+    runtime.lock().unwrap().cancel(request);
+    finished_rx
+        .recv_timeout(std::time::Duration::from_secs(2))
+        .expect("cancellation did not wake the unlocked host completion wait");
+    waiter.join().unwrap();
+    assert_eq!(
+        runtime.lock().unwrap().poll(request),
+        Poll::Ready(Err(errors().cancelled))
+    );
+    release.send(()).unwrap();
+    runtime.lock().unwrap().shutdown();
+}
+#[test]
+fn host_completion_handles_settlement_before_wait_and_runtime_shutdown() {
+    let mut rt = runtime(1, 4 << 20);
+    install(&mut rt, &[(0, Spec::deps(&[]))]);
+    let completion = rt.completion();
+    let request = rt.request(&[query(0)]);
+    completion.wait(request);
+    // Notification precedes polling; waiting twice does not consume completion.
+    completion.wait(request);
+    assert_eq!(rt.poll(request), Poll::Ready(Ok(vec![product(query(0))])));
+    rt.shutdown();
+    completion.wait(request);
+    let refused = rt.request(&[query(1)]);
+    completion.wait(refused);
+    assert_eq!(rt.poll(refused), Poll::Ready(Err(errors().cancelled)));
+}
