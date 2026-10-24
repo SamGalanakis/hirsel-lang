@@ -205,7 +205,7 @@ impl CapturedLink {
         let tool: ToolRecord = get_record(store, TOOL, record.tool.into())?;
         check_tool(&tool.files)?;
         for file in tool.files.iter().chain(&record.files) {
-            blob_chunks(store, file.bytes.clone().into())?;
+            validate_link_input(store, file.bytes.clone().into())?;
         }
         Ok(())
     }

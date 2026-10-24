@@ -258,16 +258,23 @@ fn check(
         .chain(std::iter::once(record.auditor.clone()))
         .chain(record.aliases.iter().map(|alias| alias.file.clone()))
     {
-        let chunks = blob_chunks(store, reference.into())?;
-        let first = chunks.first().ok_or("empty runtime ELF input")?;
-        let header = object::elf::FileHeader64::<object::LittleEndian>::parse(first.as_ref())
-            .map_err(|error| error.to_string())?;
-        if !header.is_little_endian()
-            || header.e_machine(object::LittleEndian) != machine
-            || header.e_type(object::LittleEndian) != object::elf::ET_DYN
+        let reference: Reference = reference.into();
         {
-            return Err("runtime ELF input differs from selected target or dynamic kind".into());
+            let blob = blob_record(store, reference)?;
+            let first = blob.chunks.first().ok_or("empty runtime ELF input")?;
+            let bytes = require(store, first.clone().into())?;
+            let header = object::elf::FileHeader64::<object::LittleEndian>::parse(bytes.as_ref())
+                .map_err(|error| error.to_string())?;
+            if !header.is_little_endian()
+                || header.e_machine(object::LittleEndian) != machine
+                || header.e_type(object::LittleEndian) != object::elf::ET_DYN
+            {
+                return Err(
+                    "runtime ELF input differs from selected target or dynamic kind".into(),
+                );
+            }
         }
+        validate_link_input(store, reference)?;
     }
     Ok(())
 }

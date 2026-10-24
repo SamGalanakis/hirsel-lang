@@ -71,6 +71,11 @@ PROOFS = {
         'target': '//tools/buck2/native-toolchain:frozen-kit-proof',
         'probe': 'tools/buck2/native-toolchain/frozen_kit_proof.py',
     },
+    'native::object_queries::capture::tests::large_tool_snapshots_and_replays_under_none_and_unwritable_with_original_ram_cap': {
+        'source': 'crates/hirsel-driver/tests/native-validation/link_capture.rs',
+        'target': '//tools/buck2/native-toolchain:scratch-linker-proof',
+        'probe': 'tools/buck2/native-toolchain/scratch_linker_proof.py',
+    },
 }
 EXPLICIT = json.loads((ROOT / 'tools/ignored-tests.json').read_text())
 ATTRIBUTE = re.compile(r'^[ \t]*#\[(ignore\b[^\]]*)\]|^[ \t]*#\[cfg_attr\(\s*([^,]+),\s*ignore\b', re.M)

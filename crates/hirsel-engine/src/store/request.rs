@@ -4,7 +4,8 @@
 use super::*;
 use crate::runtime::MemoryReservation;
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+mod scratch;
 
 // Bounds payload ownership, Arc/region headers and BTreeMap allocation overhead.
 const ENTRY_CHARGE: u64 = 2048;
@@ -13,36 +14,94 @@ struct State {
     contents: BTreeMap<ContentHash, (Reference, Bytes)>,
     associations: BTreeMap<ContentHash, Association>,
 }
+struct Admission {
+    memory: MemoryReservation,
+    used: AtomicU64,
+    exhausted: AtomicBool,
+    scratch: OnceLock<Arc<dyn Send + Sync>>,
+}
+impl Admission {
+    fn charge(&self, bytes: u64) -> bool {
+        if self
+            .used
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |used| {
+                used.checked_add(bytes)
+                    .filter(|next| *next <= self.memory.bytes())
+            })
+            .is_err()
+        {
+            self.exhausted.store(true, Ordering::Release);
+            return false;
+        }
+        true
+    }
+    fn release(&self, bytes: u64) {
+        let previous = self.used.fetch_sub(bytes, Ordering::AcqRel);
+        debug_assert!(previous >= bytes);
+    }
+}
 pub struct RequestStore {
     backend: Arc<dyn ResultStore>,
-    memory: Arc<MemoryReservation>,
+    memory: Arc<Admission>,
     state: Mutex<State>,
-    exhausted: AtomicBool,
 }
 impl RequestStore {
     pub fn new(backend: Arc<dyn ResultStore>, memory: MemoryReservation) -> Self {
+        Self::admitted(
+            backend,
+            Arc::new(Admission {
+                memory,
+                used: AtomicU64::new(0),
+                exhausted: AtomicBool::new(false),
+                scratch: OnceLock::new(),
+            }),
+        )
+    }
+    /// Explicit request-local scratch transport. The selected backend and its
+    /// verifier/local-store authority remain unchanged. Metadata and live read
+    /// buffers share the original RAM reservation; physical files have the
+    /// caller's disk bound and are deleted after the last transported view.
+    pub fn with_scratch(
+        backend: Arc<dyn ResultStore>,
+        memory: MemoryReservation,
+        parent: &std::path::Path,
+        disk_bytes: u64,
+    ) -> std::io::Result<Self> {
+        let admission = Arc::new(Admission {
+            memory,
+            used: AtomicU64::new(0),
+            exhausted: AtomicBool::new(false),
+            scratch: OnceLock::new(),
+        });
+        let backend = Arc::new(scratch::ScratchStore::new(
+            backend,
+            admission.clone(),
+            parent,
+            disk_bytes,
+        )?);
+        Ok(Self::admitted(backend, admission))
+    }
+    fn admitted(backend: Arc<dyn ResultStore>, memory: Arc<Admission>) -> Self {
         Self {
             backend,
-            memory: Arc::new(memory),
+            memory,
             state: Mutex::new(State {
                 used: 0,
                 contents: BTreeMap::new(),
                 associations: BTreeMap::new(),
             }),
-            exhausted: AtomicBool::new(false),
         }
     }
     /// The native task reports the existing deterministic resource failure
     /// before settling a product when its admitted transport allowance is full.
     pub fn exhausted(&self) -> bool {
-        self.exhausted.load(Ordering::Acquire)
+        self.memory.exhausted.load(Ordering::Acquire)
     }
     pub fn retained_bytes(&self) -> u64 {
-        self.state.lock().unwrap_or_else(|e| e.into_inner()).used
+        self.memory.used.load(Ordering::Acquire)
     }
     fn charge(&self, state: &mut State, bytes: u64) -> bool {
-        if bytes > self.memory.bytes().saturating_sub(state.used) {
-            self.exhausted.store(true, Ordering::Release);
+        if !self.memory.charge(bytes) {
             return false;
         }
         state.used += bytes;

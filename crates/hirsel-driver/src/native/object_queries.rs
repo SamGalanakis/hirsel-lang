@@ -166,10 +166,16 @@ const LINKED: Domain = Domain {
     kind: 0x4f000003,
     schema: 1,
 };
-const BLOB: Domain = Domain {
+const LEGACY_BLOB: Domain = Domain {
     kind: 0x4f000004,
     schema: 1,
 };
+const BLOB: Domain = Domain {
+    kind: 0x4f000004,
+    schema: 2,
+};
+// Keep a current transport read below the unchanged 16 MiB request allowance.
+const BLOB_CHUNK: usize = 1 << 20;
 const CHUNK: Domain = Domain {
     kind: 0x4f000005,
     schema: 1,
@@ -452,7 +458,7 @@ fn link_checked(
         if object.metadata.target != key.target || !object.metadata.bytes.is_empty() {
             return Err("link fragment belongs to another target or embeds object bytes".into());
         }
-        blob_chunks(store, object.bytes.into())?;
+        validate_link_input(store, object.bytes.into())?;
         fragments.push((record.owner, fragment.clone()));
     }
     fragments.sort_by(|a, b| a.0.cmp(&b.0));
@@ -473,7 +479,7 @@ fn link_checked(
     }
     for read in inputs.runtime_archives.iter().chain(&inputs.foreign_inputs) {
         if read.domain == BLOB {
-            blob_chunks(store, *read)?;
+            validate_link_input(store, *read)?;
         }
     }
     // Validate the entire fragment closure even on a linked-output hit. Missing
@@ -580,7 +586,7 @@ pub fn linked_product(
 ) -> Result<LinkedProduct, String> {
     let record: LinkedRecord = get_record(store, LINKED, product.record)?;
     let executable = record.executable.into();
-    blob_chunks(store, executable)?;
+    validate_link_input(store, executable)?;
     Ok(LinkedProduct {
         product,
         executable,
@@ -596,7 +602,7 @@ pub fn fragment_product(
     let summary = record.summary.into();
     require(store, summary)?;
     let record: ObjectRecord = get_record(store, OBJECT, object)?;
-    blob_chunks(store, record.bytes.into())?;
+    validate_link_input(store, record.bytes.into())?;
     Ok(FragmentProduct {
         product,
         object,
@@ -622,7 +628,7 @@ pub fn load_object(
 // and executable bytes never require raising the store's per-record limit.
 fn put_blob(store: &dyn ResultStore, bytes: &[u8]) -> Result<Reference, String> {
     let chunks = bytes
-        .chunks(MAX_RECORD)
+        .chunks(BLOB_CHUNK)
         .map(|chunk| {
             store
                 .put_content(CHUNK, chunk)
@@ -654,12 +660,12 @@ pub fn store_link_input_reader(
     use std::io::Read;
     let mut chunks = Vec::new();
     let mut len = 0u64;
-    let mut buffer = Vec::with_capacity(MAX_RECORD);
+    let mut buffer = Vec::with_capacity(BLOB_CHUNK);
     loop {
         buffer.clear();
         reader
             .by_ref()
-            .take(MAX_RECORD as u64)
+            .take(BLOB_CHUNK as u64)
             .read_to_end(&mut buffer)
             .map_err(error)?;
         if buffer.is_empty() {
@@ -694,36 +700,47 @@ pub fn materialize_link_input(
 pub fn link_input_bytes(store: &dyn ResultStore, reference: Reference) -> Result<Vec<u8>, String> {
     read_blob(store, reference)
 }
-fn blob_chunks(
-    store: &dyn ResultStore,
-    reference: Reference,
-) -> Result<Vec<hirsel_artifact_store::Bytes>, String> {
-    let blob: BlobRecord = get_record(store, BLOB, reference)?;
+fn blob_record(store: &dyn ResultStore, reference: Reference) -> Result<BlobRecord, String> {
+    let (domain, chunk_bytes) = if reference.domain == LEGACY_BLOB {
+        (LEGACY_BLOB, MAX_RECORD)
+    } else {
+        (BLOB, BLOB_CHUNK)
+    };
+    let blob: BlobRecord = get_record(store, domain, reference)?;
     let mut total = 0u64;
-    let mut chunks = Vec::with_capacity(blob.chunks.len());
-    for (i, chunk) in blob.chunks.iter().enumerate() {
+    for (index, chunk) in blob.chunks.iter().enumerate() {
         let chunk: Reference = chunk.clone().into();
         if chunk.domain != CHUNK
             || chunk.len == 0
-            || (i + 1 != blob.chunks.len() && chunk.len != MAX_RECORD as u64)
+            || chunk.len > chunk_bytes as u64
+            || (index + 1 != blob.chunks.len() && chunk.len != chunk_bytes as u64)
         {
             return Err("invalid native blob chunk".into());
         }
         total = total
             .checked_add(chunk.len)
             .ok_or("native blob length overflow")?;
-        chunks.push(require(store, chunk)?);
     }
     if total != blob.len {
         return Err("native blob length mismatch".into());
     }
-    Ok(chunks)
+    Ok(blob)
 }
+
+/// Validate every chunk without retaining the complete payload in transport RAM.
+pub fn validate_link_input(store: &dyn ResultStore, reference: Reference) -> Result<(), String> {
+    for chunk in blob_record(store, reference)?.chunks {
+        let _bytes = require(store, chunk.into())?;
+    }
+    Ok(())
+}
+
 fn read_blob(store: &dyn ResultStore, reference: Reference) -> Result<Vec<u8>, String> {
-    let chunks = blob_chunks(store, reference)?;
-    let len = chunks.iter().map(|c| c.len()).sum();
+    let blob = blob_record(store, reference)?;
+    let len = usize::try_from(blob.len).map_err(|_| "native blob exceeds host address space")?;
     let mut bytes = Vec::with_capacity(len);
-    for chunk in chunks {
+    for chunk in blob.chunks {
+        let chunk = require(store, chunk.into())?;
         bytes.extend_from_slice(&chunk);
     }
     Ok(bytes)
@@ -750,21 +767,22 @@ fn materialize_blob(
     executable: bool,
 ) -> Result<(), String> {
     use std::io::{Read, Write};
-    let chunks = blob_chunks(store, reference)?;
-    if executable && chunks.is_empty() {
+    let blob = blob_record(store, reference)?;
+    if executable && blob.chunks.is_empty() {
         return Err("empty executable output".into());
     }
-    let matches = |file: &mut std::fs::File| -> std::io::Result<bool> {
+    let matches = |file: &mut std::fs::File| -> Result<bool, String> {
         let mut buffer = vec![0; 64 << 10];
-        for chunk in &chunks {
+        for chunk in &blob.chunks {
+            let chunk = require(store, chunk.clone().into())?;
             for part in chunk.chunks(buffer.len()) {
-                file.read_exact(&mut buffer[..part.len()])?;
+                file.read_exact(&mut buffer[..part.len()]).map_err(error)?;
                 if buffer[..part.len()] != *part {
                     return Ok(false);
                 }
             }
         }
-        Ok(file.read(&mut buffer[..1])? == 0)
+        Ok(file.read(&mut buffer[..1]).map_err(error)? == 0)
     };
     let permissions = |file: &std::fs::File| -> std::io::Result<bool> {
         #[cfg(unix)]
@@ -799,8 +817,9 @@ fn materialize_blob(
             .create_new(true)
             .open(&temporary)
             .map_err(error)?;
-        for chunk in &chunks {
-            file.write_all(chunk).map_err(error)?;
+        for chunk in &blob.chunks {
+            let chunk = require(store, chunk.clone().into())?;
+            file.write_all(&chunk).map_err(error)?;
         }
         #[cfg(unix)]
         {
