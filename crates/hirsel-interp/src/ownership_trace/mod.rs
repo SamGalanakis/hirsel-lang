@@ -17,6 +17,9 @@ pub(crate) trait Observer {
     #[inline(always)]
     fn sync(&mut self, _task: u64, _frames: &[Frame], _sources: &SourceMap) {}
     #[inline(always)]
+    fn task_started(&mut self, _parent: u64, _child: u64, _path: Option<Vec<u32>>, _frame: &Frame) {
+    }
+    #[inline(always)]
     fn before_step(
         &mut self,
         _task: u64,

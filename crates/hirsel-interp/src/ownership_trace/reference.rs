@@ -47,7 +47,21 @@ enum Pending {
     },
 }
 
+#[derive(Default)]
+struct TaskState {
+    frames: Vec<FrameState>,
+    releases: VecDeque<Owner>,
+    pending: Option<Pending>,
+    forget_source: Option<Owner>,
+    call: Option<CallState>,
+}
+
 pub(super) struct Resources {
+    current_task: u64,
+    current_path: TaskPath,
+    paths: BTreeMap<u64, TaskPath>,
+    suspended: BTreeMap<u64, TaskState>,
+    task_limit: usize,
     tracker: Tracker,
     frames: Vec<FrameState>,
     next_frame: u64,
@@ -62,6 +76,11 @@ pub(super) struct Resources {
 impl Resources {
     pub fn new(forget: Option<DefPath>, event_limit: usize) -> Self {
         Self {
+            current_task: 0,
+            current_path: TaskPath::default(),
+            paths: BTreeMap::from([(0, TaskPath::default())]),
+            suspended: BTreeMap::new(),
+            task_limit: event_limit,
             tracker: Tracker::new(event_limit),
             frames: vec![],
             next_frame: 0,
@@ -94,6 +113,7 @@ impl Resources {
         }
     }
     fn context(
+        &self,
         definition: DefId,
         body: hirsel_tir::BodyId,
         span: Span,
@@ -116,7 +136,7 @@ impl Resources {
             .collect::<Vec<_>>()
             .join(".");
         Context {
-            task: TaskPath::default(),
+            task: self.current_path.clone(),
             operation: 0,
             site: hirsel_run_schema::Site {
                 definition: format!("{}@{}::{name}", path.0.package.name, path.0.package.version),
@@ -126,15 +146,15 @@ impl Resources {
             },
         }
     }
-    fn at(frame: &Frame, span: Span, sources: &SourceMap) -> Context {
-        Self::context(frame.definition.path, frame.body_id, span, sources)
+    fn at(&self, frame: &Frame, span: Span, sources: &SourceMap) -> Context {
+        self.context(frame.definition.path, frame.body_id, span, sources)
     }
     fn slot(&self, local: u32) -> Option<Owner> {
-        Some(Self::frame_slot(self.frames.last()?.id, local))
+        Some(self.frame_slot(self.frames.last()?.id, local))
     }
-    fn frame_slot(frame: u64, slot: u32) -> Owner {
+    fn frame_slot(&self, frame: u64, slot: u32) -> Owner {
         Owner {
-            task: Some(TaskPath::default()),
+            task: Some(self.current_path.clone()),
             storage: Storage::Slot { frame, slot },
             path: vec![],
         }
@@ -234,7 +254,7 @@ impl Resources {
     }
     fn scratch(&mut self) -> Owner {
         let owner = Owner {
-            task: Some(TaskPath::default()),
+            task: Some(self.current_path.clone()),
             storage: Storage::Argument {
                 call: self.next_scratch,
                 parameter: 0,
@@ -272,7 +292,13 @@ impl Resources {
         if let Some(error) = self.error {
             return Err(error);
         }
-        let complete = completed && self.frames.is_empty() && self.releases.is_empty();
+        let complete = completed
+            && self.frames.is_empty()
+            && self.releases.is_empty()
+            && self
+                .suspended
+                .values()
+                .all(|state| state.frames.is_empty() && state.releases.is_empty());
         self.tracker
             .finish(program, complete)
             .map_err(TraceError::Consistency)
@@ -285,13 +311,55 @@ impl Observer for Resources {
             self.unsupported("nested runner resource transport");
         }
     }
+    fn task_started(&mut self, parent: u64, child: u64, path: Option<Vec<u32>>, frame: &Frame) {
+        if self.error.is_some() {
+            return;
+        }
+        let Some(path) = path else {
+            self.unsupported("task provider supplies no canonical spawn path");
+            return;
+        };
+        if parent != self.current_task
+            || self.paths.contains_key(&child)
+            || path.len() != self.current_path.0.len() + 1
+            || !path.starts_with(&self.current_path.0)
+            || self.paths.values().any(|known| known.0 == path)
+            || self.paths.len() > self.task_limit
+        {
+            self.unsupported("invalid, duplicate or excessive canonical task entry");
+            return;
+        }
+        if frame
+            .slots
+            .iter()
+            .flatten()
+            .any(|value| resources_in(value) != 0)
+        {
+            self.unsupported("spawned resource capture transport");
+            return;
+        }
+        self.paths.insert(child, TaskPath(path));
+        self.suspended.insert(child, TaskState::default());
+    }
     fn sync(&mut self, task: u64, frames: &[Frame], sources: &SourceMap) {
         if self.error.is_some() {
             return;
         }
-        if task != 0 {
-            self.unsupported("task resource transport");
-            return;
+        if task != self.current_task {
+            let Some(incoming) = self.suspended.remove(&task) else {
+                self.unsupported("task resumed without an observed canonical entry");
+                return;
+            };
+            let outgoing = TaskState {
+                frames: std::mem::replace(&mut self.frames, incoming.frames),
+                releases: std::mem::replace(&mut self.releases, incoming.releases),
+                pending: std::mem::replace(&mut self.pending, incoming.pending),
+                forget_source: std::mem::replace(&mut self.forget_source, incoming.forget_source),
+                call: std::mem::replace(&mut self.call, incoming.call),
+            };
+            self.suspended.insert(self.current_task, outgoing);
+            self.current_task = task;
+            self.current_path = self.paths[&task].clone();
         }
         if self.call.is_some() {
             self.unsupported("call did not commit an observed user-frame entry");
@@ -306,10 +374,7 @@ impl Observer for Resources {
             let id = self.next_frame;
             self.next_frame += 1;
             let finalizer = frame.finalized.is_some();
-            if !self.frames.is_empty() && !finalizer {
-                self.unsupported("ordinary call resource transport");
-                return;
-            }
+
             self.frames.push(FrameState {
                 id,
                 finalizer,
@@ -326,7 +391,7 @@ impl Observer for Resources {
                     self.unsupported("missing finalizer frame");
                     return;
                 };
-                let context = Self::context(anchor.definition, anchor.body, anchor.site, sources);
+                let context = self.context(anchor.definition, anchor.body, anchor.site, sources);
                 let result = self.tracker.move_tree(&context, &from, &to);
                 self.checked(result);
             } else if frame.slots.iter().flatten().any(|v| resources_in(v) > 0) {
@@ -348,7 +413,7 @@ impl Observer for Resources {
         if self.error.is_some() {
             return;
         }
-        let context = Self::at(frame, site, sources);
+        let context = self.at(frame, site, sources);
         match instruction {
             Some(InstructionKind::Assign { destination, value }) => {
                 match frame.body().rvalues.get(value.0 as usize) {
@@ -498,54 +563,63 @@ impl Observer for Resources {
                                 (path.clone(), None, vec![])
                             }
                             hirsel_tir::Callee::Indirect { value: operand, .. } => {
-                                let Ok(Value::Closure {
-                                    definition,
-                                    body,
-                                    captures,
-                                    environment,
-                                    invoked,
-                                }) = frame.observe(operand.place)
-                                else {
-                                    self.unsupported("unsupported indirect callable");
-                                    return;
-                                };
-                                if captures.len() != environment.owned_captures.len()
-                                    || invoked.as_ref().is_some_and(|state| state.get().is_some())
+                                if let Ok(Value::FunctionReference(reference)) =
+                                    frame.observe(operand.place)
                                 {
-                                    self.unsupported(
-                                        "closure environment is inconsistent or already invoked",
-                                    );
-                                    return;
-                                }
-                                let mut incoming = vec![];
-                                for (index, (value, owned)) in
-                                    captures.iter().zip(&environment.owned_captures).enumerate()
-                                {
-                                    let Some(value) = value else {
-                                        continue;
+                                    (reference.definition.clone(), None, vec![])
+                                } else {
+                                    let Ok(Value::Closure {
+                                        definition,
+                                        body,
+                                        captures,
+                                        environment,
+                                        invoked,
+                                    }) = frame.observe(operand.place)
+                                    else {
+                                        self.unsupported("unsupported indirect callable");
+                                        return;
                                     };
-                                    if resources_in(value) == 0 {
-                                        continue;
-                                    }
-                                    if !*owned
-                                        || invoked.is_none()
-                                        || operand.usage != UseKind::Take
+                                    if captures.len() != environment.owned_captures.len()
+                                        || invoked
+                                            .as_ref()
+                                            .is_some_and(|state| state.get().is_some())
                                     {
                                         self.unsupported(
-                                            "borrowed or reusable resource closure invocation",
-                                        );
+                                        "closure environment is inconsistent or already invoked",
+                                    );
                                         return;
                                     }
-                                    let Some(mut from) = self.place(frame, operand.place) else {
-                                        self.unsupported("invoked closure owner unavailable");
-                                        return;
-                                    };
-                                    from.path.push(Step::Field {
-                                        field: index as u32,
-                                    });
-                                    incoming.push((index as u32, from));
+                                    let mut incoming = vec![];
+                                    for (index, (value, owned)) in
+                                        captures.iter().zip(&environment.owned_captures).enumerate()
+                                    {
+                                        let Some(value) = value else {
+                                            continue;
+                                        };
+                                        if resources_in(value) == 0 {
+                                            continue;
+                                        }
+                                        if !*owned
+                                            || invoked.is_none()
+                                            || operand.usage != UseKind::Take
+                                        {
+                                            self.unsupported(
+                                                "borrowed or reusable resource closure invocation",
+                                            );
+                                            return;
+                                        }
+                                        let Some(mut from) = self.place(frame, operand.place)
+                                        else {
+                                            self.unsupported("invoked closure owner unavailable");
+                                            return;
+                                        };
+                                        from.path.push(Step::Field {
+                                            field: index as u32,
+                                        });
+                                        incoming.push((index as u32, from));
+                                    }
+                                    (definition.path().clone(), Some(*body), incoming)
                                 }
-                                (definition.path().clone(), Some(*body), incoming)
                             }
                         };
                         let mut incoming = vec![];
@@ -645,7 +719,7 @@ impl Observer for Resources {
                 self.unsupported("callee parameter is unavailable");
                 return;
             };
-            let to = Self::frame_slot(id, local.0);
+            let to = self.frame_slot(id, local.0);
             if usage == UseKind::Take {
                 let result = self.tracker.move_tree(&call.context, &from, &to);
                 self.checked(result);
@@ -665,7 +739,7 @@ impl Observer for Resources {
                 self.unsupported("callee capture slot is unavailable");
                 return;
             };
-            let to = Self::frame_slot(id, local as u32);
+            let to = self.frame_slot(id, local as u32);
             let result = self.tracker.move_tree(&call.context, &from, &to);
             self.checked(result);
         }
@@ -795,7 +869,7 @@ impl Observer for Resources {
             self.unsupported("cleanup owner unavailable");
             return;
         };
-        let context = Self::at(frame, site, sources);
+        let context = self.at(frame, site, sources);
         let owner = self.scratch();
         let result = self.tracker.move_tree(&context, &from, &owner);
         if self.checked(result).is_some() {
@@ -825,7 +899,7 @@ impl Observer for Resources {
                 self.unsupported("finalizer owner unavailable");
                 return;
             };
-            let context = Self::context(anchor.definition, anchor.body, anchor.site, sources);
+            let context = self.context(anchor.definition, anchor.body, anchor.site, sources);
             let result = self.tracker.drop_value(&context, &owner);
             self.checked(result);
             if let Some(value) = frame.slots.get(local.0 as usize).and_then(Option::as_ref) {
@@ -887,7 +961,7 @@ impl Observer for Resources {
             self.unsupported("resource destruction has no observed incoming owner");
             return;
         };
-        let context = Self::at(frame, site, sources);
+        let context = self.at(frame, site, sources);
         if Self::resource(value) {
             let result = self.tracker.drop_value(&context, &owner);
             self.checked(result);
@@ -907,14 +981,14 @@ impl Observer for Resources {
             return;
         };
         let owner = Owner {
-            task: Some(TaskPath::default()),
+            task: Some(self.current_path.clone()),
             storage: Storage::Forgotten { frame: state.id },
             path: vec![Step::Index {
                 index: self.next_scratch,
             }],
         };
         self.next_scratch += 1;
-        let context = Self::at(frame, site, sources);
+        let context = self.at(frame, site, sources);
         let result = self.tracker.move_tree(&context, &from, &owner);
         self.checked(result);
     }

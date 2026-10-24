@@ -371,6 +371,8 @@ operation_boundary! {
     /// The logical bytes of the values this layer holds for the run (channel buffers,
     /// task results), measured with the evaluator's own (`budgets.limits@2`).
     fn retained_bytes(&self) -> u64 { 0 }
+    /// Canonical provider task path, requested only by opt-in ownership observation.
+    fn ownership_task_path(&self, _id: u64) -> Option<Vec<u32>> { None }
     /// A callee run whose provider stops it at its place's crash point itself, before one
     /// of its requests (`sim@1` on a host), instead of the execution counting suspensions.
     fn stops_itself(&self) -> bool { false }

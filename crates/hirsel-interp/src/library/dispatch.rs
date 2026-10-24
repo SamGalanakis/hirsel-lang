@@ -1491,6 +1491,13 @@ impl Operations for Library {
         self.drop_failure.take()
     }
 
+    fn ownership_task_path(&self, id: u64) -> Option<Vec<u32>> {
+        if id == 0 {
+            Some(vec![])
+        } else {
+            self.tasks.child_path(id)
+        }
+    }
     fn take_tasks(&mut self) -> Vec<crate::TaskStart> {
         self.tasks.take_starts()
     }

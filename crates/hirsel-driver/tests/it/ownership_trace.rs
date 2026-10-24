@@ -163,3 +163,117 @@ fn ownership_simulation_test_entry_preserves_source_results_and_restores_the_ada
     }
     assert_eq!(traces[0], traces[1]);
 }
+
+fn observed_task_source(body: &str, creates: usize) -> hirsel_run_schema::ownership_trace::Trace {
+    use hirsel_driver::ownership_trace::execute_test_resources;
+    use hirsel_driver::{
+        COMPILER,
+        testing::{self, Selection},
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("tasks.hir");
+    std::fs::write(&source, body).unwrap();
+    let mut program = COMPILER
+        .with_verify(Verify::On)
+        .load_test_package(&source)
+        .unwrap_or_else(|error| panic!("task fixture: {error}"));
+    let tests = testing::discover(&mut program, &[], Some(49), Selection::Tests)
+        .unwrap_or_else(|error| panic!("task fixture: {error}"));
+    assert_eq!(tests.len(), 1);
+    let mut traces = vec![];
+    for checked in [false, true] {
+        let ordinary = testing::execute(&mut program, &tests[0], checked, 0)
+            .unwrap_or_else(|error| panic!("task fixture: {error}"));
+        let traced = execute_test_resources(
+            &mut program,
+            &tests[0],
+            checked,
+            0,
+            hirsel_interp::Limits::default(),
+            1000,
+        )
+        .unwrap_or_else(|error| panic!("task fixture: {error}"));
+        assert_eq!(
+            ordinary.outcome.as_ref().unwrap(),
+            traced.execution.outcome.as_ref().unwrap()
+        );
+        assert_eq!(ordinary.observation, traced.execution.observation);
+        assert_eq!(ordinary.step_usage, traced.execution.step_usage);
+        let trace = traced
+            .trace
+            .unwrap_or_else(|error| panic!("task fixture: {error}"));
+        let analysis = trace.analyze(traced.program, 1000).unwrap();
+        assert_eq!(
+            (analysis.created, analysis.dropped, analysis.live.len()),
+            (creates as u64, creates as u64, 0)
+        );
+        traces.push(trace);
+    }
+    assert_eq!(traces[0], traces[1]);
+    traces.remove(0)
+}
+
+#[test]
+fn ownership_tasks_equal_resources_have_distinct_canonical_child_identities() {
+    let trace = observed_task_source(
+        r#"
+resource type Token {}
+drop(x) {}
+@test
+fn children(t: Test) {
+  let tasks = test.tasks(t)
+  task.scope(tasks, fn(s: Scope) {
+    let first = task.async(s, fn() { let token = Token() })
+    let second = task.async(s, fn() { let token = Token() })
+    let _ = task.await(s, take first)
+    let _ = task.await(s, take second)
+  })
+}
+"#,
+        2,
+    );
+    let tasks: std::collections::BTreeSet<_> = trace
+        .events
+        .iter()
+        .filter(|event| {
+            matches!(
+                event.action,
+                hirsel_run_schema::ownership_trace::Action::Create { .. }
+            )
+        })
+        .map(|event| event.task.clone())
+        .collect();
+    assert_eq!(tasks.len(), 2);
+    assert!(tasks.iter().all(|path| path.0.len() == 1));
+}
+
+#[test]
+fn ownership_tasks_cancellation_drops_a_child_local_after_readiness() {
+    observed_task_source(
+        r#"
+resource type Token {}
+drop(x) {}
+@test
+fn canceled_child(t: Test) {
+  let tasks = test.tasks(t)
+  task.scope(tasks, fn(s: Scope) {
+    let (ready_tx, ready_rx): (Sender[u8], Receiver[u8]) = channel.open(tasks)
+    let (gate_tx, gate_rx): (Sender[u8], Receiver[u8]) = channel.open(tasks)
+    let child = task.async(s, fn() {
+      let token = Token()
+      let mut ready = take ready_tx
+      let _ = channel.send(tasks, mut ready, 7u8)
+      let mut gate = take gate_rx
+      let _ = channel.receive(tasks, mut gate)
+    })
+    let mut ready = take ready_rx
+    let _ = channel.receive(tasks, mut ready)
+    task.cancel(s, child)
+    let _ = task.await(s, take child)
+    let _ = gate_tx
+  })
+}
+"#,
+        1,
+    );
+}

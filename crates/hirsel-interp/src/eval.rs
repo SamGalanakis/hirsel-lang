@@ -428,7 +428,11 @@ pub(crate) async fn execute_frames<O: crate::ownership_trace::Observer>(
         .ok_or_else(|| invalid("a finished run resumed"))?;
     operations.enter_task(task, frames.iter().any(|f| f.finalized.is_some()));
     loop {
-        observer.sync(task, &frames, sources);
+        // Parking moves the stack into the parked queue; its observation stays
+        // suspended until a runnable stack is selected below.
+        if !frames.is_empty() {
+            observer.sync(task, &frames, sources);
+        }
         for start in operations.take_tasks() {
             let mut invocation_types = Default::default();
             let (definition, body, captures, sizes) = match &start.callee {
@@ -541,6 +545,14 @@ pub(crate) async fn execute_frames<O: crate::ownership_trace::Observer>(
                     }
                 }
                 child.check = Some(enter_checked(&parent.state, &child, vec![], callee)?);
+            }
+            if O::ENABLED {
+                observer.task_started(
+                    task,
+                    start.id,
+                    operations.ownership_task_path(start.id),
+                    &child,
+                );
             }
             start.callee.begin_call();
             start.callee.discard();
@@ -666,6 +678,9 @@ pub(crate) async fn execute_frames<O: crate::ownership_trace::Observer>(
                 return Ok(Step::Idle);
             }
         }
+
+        // A scheduler choice changes the observer state before any resumed cleanup.
+        observer.sync(task, &frames, sources);
 
         // The pending operation discarded holding children's results: each child drops its
         // own in its rest, and this task continues when the last returns, with no scheduling
@@ -1770,6 +1785,14 @@ pub(crate) async fn execute_frames<O: crate::ownership_trace::Observer>(
             && frames[0].ending.is_some()
             && let Some(index) = hand_offs.iter().position(|h| h.child == task)
         {
+            // Rest cleanup owns a real frame too; retire its observation before
+            // handing control back to the waiting parent.
+            observer.finish_frame(
+                task,
+                &frames[0],
+                frames[0].ending.as_ref().unwrap(),
+                sources,
+            );
             frames.clear();
             operations.rest_finished(task, std::mem::take(&mut execution.failures))?;
             let hand_off = &mut hand_offs[index];
