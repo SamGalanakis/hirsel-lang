@@ -17,6 +17,8 @@ enum Class {
     LeafUtility,
     /// Shared pure leaves with no runtime representation or ambient inputs.
     LeafKernel,
+    /// Shared persistent bytes, independent of compiler phase implementations.
+    Storage,
     /// The driver layer: the engine and the driver, which wires implementation
     /// crates through adapters and alone depends on the engine.
     Wiring,
@@ -36,7 +38,7 @@ const CRATES: &[(&str, Class)] = &[
     ("hirsel-syntax", Class::Data),
     ("hirsel-codec", Class::Data),
     ("hirsel-types", Class::Data),
-    ("hirsel-artifact-store", Class::Data),
+    ("hirsel-artifact-store", Class::Storage),
     ("hirsel-product-codec", Class::Data),
     ("hirsel-type-analysis", Class::Data),
     ("hirsel-tir", Class::Data),
@@ -66,7 +68,6 @@ const CRATES: &[(&str, Class)] = &[
     ("hirsel-cranelift", Class::Implementation),
     ("hirsel-rt", Class::Implementation),
     ("hirsel-heapcheck", Class::Implementation),
-    ("hirsel-artifact-store", Class::Implementation),
     ("hirsel-code-store", Class::Implementation),
     ("hirsel-remote", Class::Implementation),
     ("hirsel-kernels", Class::LeafKernel),
@@ -83,13 +84,20 @@ const CRATES: &[(&str, Class)] = &[
 /// The implementation crates the engine may use directly; it reaches
 /// signature, check, modes and lower only through its `Phases` trait object.
 const ENGINE_IMPLEMENTATIONS: &[&str] = &[
-    // The engine owns persistence; this store reads ambient files and is not data.
-    "hirsel-artifact-store",
     "hirsel-interp",
     "hirsel-resolve",
     "hirsel-parser",
     "hirsel-lexer",
     "hirsel-fmt",
+];
+
+// Storage access is explicit; pure graph helpers and compiler phases cannot
+// acquire ambient persistence through an unrestricted data-crate edge.
+const STORAGE_CONSUMERS: &[&str] = &[
+    "hirsel-engine",
+    "hirsel-lir",
+    "hirsel-product-codec",
+    "hirsel-validate",
 ];
 
 /// Shared utilities and native data crates take no external production dependency.
@@ -141,12 +149,13 @@ fn check_edge(from: &str, to: &str, kind: Kind) -> Result<(), String> {
             matches!(from, "hirsel-rt" | "hirsel-interp" | "hirsel-heapcheck")
         }
         (Class::LeafKernel, _) => false,
+        (_, Class::Storage) => STORAGE_CONSUMERS.contains(&from),
         (_, Class::Data) => true,
         (Class::Wiring, Class::Implementation) => {
             from != "hirsel-engine" || ENGINE_IMPLEMENTATIONS.contains(&to)
         }
         (Class::Tool, Class::Wiring | Class::Implementation) => true,
-        (Class::Data, _) => false,
+        (Class::Data | Class::Storage, _) => false,
         (Class::Implementation, _) => false,
         (Class::Tool, Class::Tool) => to == "hirsel-cli-args",
         (_, Class::Tool) => false,
@@ -324,6 +333,17 @@ fn layering_controls() {
                 matches!(kind, Class::Data | Class::LeafUtility),
                 "{consumer}"
             );
+        }
+    }
+    for consumer in STORAGE_CONSUMERS {
+        assert!(check_edge(consumer, "hirsel-artifact-store", Kind::Production).is_ok());
+    }
+    assert!(check_edge("hirsel-graph", "hirsel-artifact-store", Kind::Production).is_err());
+    assert!(check_edge("hirsel-kernels", "hirsel-artifact-store", Kind::Production).is_err());
+    for &(phase, class) in CRATES {
+        if matches!(class, Class::Implementation | Class::Wiring | Class::Tool) {
+            assert!(check_edge("hirsel-artifact-store", phase, Kind::Production).is_err());
+            assert!(check_edge("hirsel-artifact-store", phase, Kind::Build).is_err());
         }
     }
     // Leaf utilities depend on no workspace crate.
