@@ -6,7 +6,7 @@ use crate::{TaskCtx, alloc::payload, fault, kernels::siphash::SipHasher13};
 use std::cmp::Ordering;
 
 #[derive(Clone, Copy)]
-enum Location {
+pub(super) enum Location {
     Address(*const u8),
     Row {
         columns: usize,
@@ -16,19 +16,19 @@ enum Location {
     },
 }
 #[derive(Clone, Copy)]
-struct Projection {
-    node: usize,
-    location: Location,
+pub(super) struct Projection {
+    pub(super) node: usize,
+    pub(super) location: Location,
 }
 impl Projection {
-    fn at(node: usize, at: *const u8) -> Self {
+    pub(super) fn at(node: usize, at: *const u8) -> Self {
         Self {
             node,
             location: Location::Address(at),
         }
     }
 }
-enum View<'a> {
+pub(super) enum View<'a> {
     Scalar {
         kind: Scalar,
         code: u64,
@@ -46,7 +46,7 @@ enum View<'a> {
 
 // SAFETY: callers supply live admitted operands of the program's validated root.
 // Every projected address below follows that same program; all reads are borrowed.
-unsafe fn view<'a>(p: &Program, mut projection: Projection) -> View<'a> {
+pub(super) unsafe fn view<'a>(p: &Program, mut projection: Projection) -> View<'a> {
     unsafe {
         loop {
             let id = projection.node;
