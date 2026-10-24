@@ -22,6 +22,7 @@ pub struct RequestWork {
 /// One completed operation. Its metadata belongs to the same immutable input
 /// snapshot as its result and does not ask the disk for newer observations.
 pub struct CompileOutput {
+    pub entry: DefPath,
     pub inputs: FrozenInputs,
     pub work: RequestWork,
     pub result: CompileResult,
