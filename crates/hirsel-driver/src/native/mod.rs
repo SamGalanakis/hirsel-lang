@@ -37,7 +37,7 @@ mod units;
 pub use testing::{bench_path, test_path};
 pub use units::UnitObjects;
 
-pub use adapt::{input_identity, manifest, program};
+pub use adapt::{input_identity, manifest, manifest_for_operations, program};
 pub use coverage::backend_features;
 pub use differential::{
     Configuration, Engine, Fixture, MATRIX_VERSION, Outcome, Runtime, differential,

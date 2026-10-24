@@ -180,9 +180,17 @@ fn cleanup(value: &DropAllocation) -> Result<CleanupEffect, String> {
 /// runtime's native disposition for every row. A row the runtime has not
 /// reviewed is an error, never an unclassified row.
 pub fn manifest(input: &NativeInput) -> Result<Manifest, String> {
-    let rows = input
-        .operations
-        .values()
+    manifest_for_operations(input.operations.values())
+}
+
+/// Classify an exact declaration inventory through the reviewed runtime
+/// catalogue. Every digest, ownership contract and capability is checked as
+/// for a complete native snapshot; no candidate LIR supplies these facts.
+pub fn manifest_for_operations<'a>(
+    operations: impl IntoIterator<Item = &'a hirsel_engine::OperationRecord>,
+) -> Result<Manifest, String> {
+    let rows = operations
+        .into_iter()
         .map(|record| {
             let mut row = OperationRow::unclassified(OperationId {
                 definition: record.key.definition.clone(),

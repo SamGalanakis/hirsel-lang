@@ -209,7 +209,22 @@ pub fn lower(source: &str) -> (Program, Lowered) {
 }
 
 pub fn manifest(program: &Program) -> hirsel_core_contract::Manifest {
-    hirsel_core_contract::Manifest::skeleton(program.operations.values().cloned())
+    let inventory = hirsel_engine::registry::BuiltinRegistry::shared().operation_inventory();
+    let records = program.operations.values().map(|operation| {
+        let key = hirsel_engine::OperationKey {
+            definition: operation.definition.clone(),
+            declaration_digest: operation.declaration_digest,
+        };
+        inventory
+            .get(&key)
+            .expect("source operation has its exact registry declaration")
+    });
+    let manifest = hirsel_driver::native::manifest_for_operations(records)
+        .expect("source native capabilities pass the production review");
+    manifest
+        .check_coverage(program.operations.values().cloned())
+        .unwrap();
+    manifest
 }
 
 /// Every violation of every unit, with its unit's definition name.
