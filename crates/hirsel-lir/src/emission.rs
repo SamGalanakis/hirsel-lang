@@ -773,6 +773,7 @@ mod tests {
             plan.roots.insert(
                 identity,
                 RootPlan {
+                    host: None,
                     graph: ScalarGraph {
                         root: identity,
                         identity,

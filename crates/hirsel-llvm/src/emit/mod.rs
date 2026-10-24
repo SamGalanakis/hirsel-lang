@@ -202,7 +202,7 @@ pub fn compile_ir(
             });
         }
         module.set_target(&machine);
-        optimize_and_emit(&module, &machine, opt, true)?
+        optimize_and_emit(&module, &machine, opt, true, false)?
     };
     ObjectFile::read(target, bytes).map_err(|message| CodegenError::Object { message })
 }
@@ -212,8 +212,12 @@ fn optimize_and_emit(
     machine: &TargetMachine,
     opt: OptLevel,
     verify: bool,
+    retain_function_symbols: bool,
 ) -> Result<Vec<u8>, CodegenError> {
     optimize(module, machine, opt, verify)?;
+    if retain_function_symbols {
+        module.retain_local_function_symbols();
+    }
     module
         .emit_object(machine)
         .map_err(|message| CodegenError::Emit { message })
@@ -287,7 +291,13 @@ pub fn emit_object_profile(
     profile: Profile<'_>,
 ) -> Result<ObjectArtifact, CodegenError> {
     let (bytes, manifested, plan) = lower(units, inputs, profile, |module, machine| {
-        optimize_and_emit(module, machine, inputs.opt, verify_backend(inputs))
+        optimize_and_emit(
+            module,
+            machine,
+            inputs.opt,
+            verify_backend(inputs),
+            inputs.alternate,
+        )
     })?;
     let (bytes, debug) = match plan {
         Some(plan) => crate::debug::split(&bytes, &plan)

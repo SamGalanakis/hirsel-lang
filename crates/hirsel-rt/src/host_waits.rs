@@ -91,8 +91,13 @@ impl TimerHint {
 /// width > 1 run run on compute workers (`crate::pool`).
 ///
 /// # Safety
-/// `ctx` is live; `f` does not suspend.
+/// `ctx` is live; no Binding or scheduler loan crosses the call. `f` uses
+/// only home-owned state and copied inputs, never the issuer's scheduler.
 unsafe fn at_home<T>(ctx: *mut TaskCtx, f: impl FnOnce() -> T) -> Stopped<T> {
+    // Every wait-table bridge can return a compute permit before waiting.
+    // Release the role until that permit is reacquired; a worker holding the
+    // last permit may itself be waiting to enter the scheduler.
+    let _segment = unsafe { crate::tasks::role::Segment::new(ctx) };
     let (mut f, mut out) = (Some(f), None);
     // SAFETY: caller contract.
     unsafe {
@@ -449,11 +454,16 @@ pub(crate) unsafe fn issue(
         }
     }
     let close = matches!(request.get(), Request::Close { .. });
+    let read = (ordered && matches!(request.get(), Request::NetRead { .. }))
+        .then(|| request.get().clone());
     // SAFETY: caller contract.
     let issued = unsafe { issue_here(ctx, &mut request) };
     // SAFETY: as above.
     unsafe { count(ctx) };
-    if ordered && let Ok((result, _)) = &issued {
+    if ordered && let Ok((result, parked)) = &issued {
+        if !parked && let Some(read) = &read {
+            crate::tasks::ordered::host::bounded_read(ctx, read, result);
+        }
         crate::tasks::ordered::events::complete_host(ctx, close, result);
         if print && crate::tasks::ordered::events::observing(ctx) {
             let _ = crate::tasks::ordered::events::certify_host(ctx);
@@ -637,13 +647,69 @@ unsafe fn issue_here(
     // SAFETY: the context is live and nothing is borrowed across the park.
     unsafe { crate::tasks::park_host(&mut *ctx, token, yielded) }?;
     let binding = unsafe { Binding::get(ctx) };
-    let completion = binding
-        .waits
-        .parked
-        .remove(&token)
-        .and_then(|parked| parked.completion)
-        .unwrap_or_else(|| crate::fault("a host wait resumed without its completion"));
+    let completion = if crate::tasks::ordered::host::return_pending(ctx, token) {
+        binding
+            .waits
+            .parked
+            .get(&token)
+            .and_then(|row| row.completion.clone())
+    } else {
+        binding
+            .waits
+            .parked
+            .remove(&token)
+            .and_then(|row| row.completion)
+    }
+    .unwrap_or_else(|| crate::fault("a host wait resumed without its completion"));
     Ok((completion, true))
+}
+
+/// Inspect only an already-completed row, after the original poll and wake.
+/// This neither retries a request nor changes token/row/evidence ownership.
+/// # Safety
+/// The issuer has resumed its saved frame and exclusively owns this wait.
+pub(crate) unsafe fn completed_read(
+    ctx: *mut TaskCtx,
+    token: u64,
+) -> Option<crate::tasks::ordered::host::CompletedRead> {
+    if token & CONCURRENT != 0 {
+        return unsafe { (*ctx).run_ref().ordered_io.get().unwrap() }.completed_read(token);
+    }
+    // The facade's owned wait rows are role-protected; no adapter callback or
+    // home loan is needed to inspect a completed saved owner's immutable bytes.
+    let binding = unsafe { Binding::raw(ctx) };
+    let row = binding.waits.parked.get(&token).expect("saved host wait");
+    assert!(row.borrowed.is_none());
+    crate::tasks::ordered::host::CompletedRead::new(
+        token,
+        &row.request,
+        row.completion.as_ref().expect("completed wait"),
+    )
+}
+
+/// Remove the original wait only at its canonical return, with the role held
+/// and the poll finished. No provider callback or new stop observation occurs.
+/// # Safety
+/// The caller is the generation-qualified certificate's canonical head owner.
+pub(crate) unsafe fn retire_completed_read(ctx: *mut TaskCtx, token: u64, task: u64) {
+    assert_eq!(task as u32, unsafe { (*ctx).task_id });
+    if token & CONCURRENT != 0 {
+        unsafe { (*ctx).run_ref().ordered_io.get().unwrap() }.retire_read(
+            token,
+            task as u32,
+            (task >> 32) as u32,
+        );
+    } else {
+        let binding = unsafe { Binding::raw(ctx) };
+        let row = binding
+            .waits
+            .parked
+            .remove(&token)
+            .expect("certified read row");
+        assert_eq!(row.task, Some(unsafe { (*ctx).task_id }));
+        assert!(row.completion.is_some());
+        unsafe { count(ctx) };
+    }
 }
 
 /// The token the next parkable request is issued under.
@@ -816,16 +882,9 @@ pub(crate) unsafe fn arm(
 ) -> Stopped<Option<u64>> {
     // The adapter and wait table are home-affine at width > 1. The bridge
     // also refreshes the run's armed/parked count before returning.
-    if unsafe { (*ctx).run_ref().free_mode } {
-        // Free home readiness can need the role while this worker waits for
-        // its bridge. Copy the issuer first: the adapter callback must not
-        // reenter the scheduler through this context after we leave the role.
-        let task = crate::tasks::current_path(ctx);
-        let _segment = unsafe { crate::tasks::role::Segment::new(ctx) };
-        unsafe { at_home(ctx, || arm_here(ctx, scope, clock, at, Some(&task))) }?
-    } else {
-        unsafe { at_home(ctx, || arm_here(ctx, scope, clock, at, None)) }?
-    }
+    // Both policies copy the issuer before the home callback leaves the role.
+    let task = crate::tasks::current_path(ctx);
+    unsafe { at_home(ctx, || arm_here(ctx, scope, clock, at, &task)) }?
 }
 
 unsafe fn arm_here(
@@ -833,7 +892,7 @@ unsafe fn arm_here(
     scope: u32,
     clock: u64,
     at: u64,
-    issuer: Option<&[u32]>,
+    issuer: &[u32],
 ) -> Stopped<Option<u64>> {
     // Production admission moves every host grant into this service. Explicit
     // harness mixtures can instead retain their scope clock in the home binding.
@@ -849,13 +908,7 @@ unsafe fn arm_here(
     }
     let binding = unsafe { Binding::get(ctx) };
     if binding.adapter.wants_issuer() {
-        if let Some(task) = issuer {
-            binding.adapter.issuer(task);
-        } else {
-            let task = crate::tasks::current_path(ctx);
-            let binding = unsafe { Binding::get(ctx) };
-            binding.adapter.issuer(&task);
-        }
+        binding.adapter.issuer(issuer);
     }
     let binding = unsafe { Binding::get(ctx) };
     let token = binding.waits.next;
@@ -1273,13 +1326,12 @@ pub(crate) unsafe fn idle(ctx: *mut TaskCtx) -> bool {
 /// request is parked or a scope deadline armed.
 ///
 /// # Safety
-/// `ctx` is live and no borrow of the Binding is held.
+/// `ctx` is live and no Binding or scheduler borrow crosses this call.
 pub(crate) unsafe fn ready(ctx: *mut TaskCtx) -> Stopped<Ready> {
     // SAFETY: caller contract.
     if unsafe { quiet(ctx) && !ordered_concurrent::pending((*ctx).run_ptr()) } {
         return Ok(Ready::Tokens(Vec::new()));
     }
-    // Concurrent callbacks must not retain the issuer's scheduler role.
     let concurrent = unsafe { ordered_concurrent::pending((*ctx).run_ptr()) };
     if !concurrent
         && crate::tasks::ordered::engine::on(ctx)
@@ -1287,10 +1339,7 @@ pub(crate) unsafe fn ready(ctx: *mut TaskCtx) -> Stopped<Ready> {
     {
         return Ok(Ready::Tokens(Vec::new()));
     }
-    if concurrent {
-        let _segment = unsafe { crate::tasks::role::Segment::new(ctx) };
-        return unsafe { at_home(ctx, || ready_here(ctx)) }?;
-    }
+    // Ordered retains its host_poll retirement gate throughout this bridge.
     unsafe { at_home(ctx, || ready_here(ctx)) }?
 }
 
@@ -1601,6 +1650,7 @@ pub(crate) unsafe fn wait(ctx: *mut TaskCtx) -> Stopped<bool> {
     // The code's caller owns this permit. Home must never reacquire it on
     // behalf of a waiting compute worker: at one process permit that would
     // prevent the caller from resuming after the home completion.
+    let _segment = unsafe { crate::tasks::role::Segment::new(ctx) };
     crate::pool::release_permit(ctx);
     let waited = unsafe { at_home(ctx, || wait_here(ctx)) }??;
     crate::pool::acquire_permit(ctx);

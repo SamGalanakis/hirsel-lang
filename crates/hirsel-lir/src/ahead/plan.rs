@@ -29,6 +29,7 @@ pub struct CaptureRecipe {
 pub struct RootPlan {
     pub graph: ScalarGraph,
     pub recipe: CaptureRecipe,
+    pub host: Option<HostReturnGraph>,
 }
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct AheadPlan {
@@ -155,8 +156,22 @@ impl AheadPlan {
                 continue;
             }
             let attempt = (|| {
-                let (recipe, source) = envelope(unit, table, envs)?;
-                let mut graph = scalar_graph(units, table, target, source, fuel, helpers)?;
+                let scalar = envelope(unit, table, envs, true).and_then(|(recipe, source)| {
+                    scalar_graph(units, table, target, source, fuel, helpers)
+                        .map(|graph| (recipe, graph, None))
+                });
+                let (recipe, mut graph, mut host) = match scalar {
+                    Ok(scalar) => scalar,
+                    Err(scalar_error) => {
+                        let (recipe, source) =
+                            envelope(unit, table, envs, false).map_err(|_| scalar_error)?;
+                        let host = super::host_return::propose(
+                            units, table, target, source, fuel, helpers,
+                        )?;
+                        (recipe, host.graph.clone(), Some(host))
+                    }
+                };
+                let source = graph.root;
                 if graph.bodies.len() == MAX_UNITS
                     || graph
                         .bodies
@@ -195,7 +210,25 @@ impl AheadPlan {
                     ],
                 );
 
-                Ok(RootPlan { graph, recipe })
+                if let Some(host) = &mut host {
+                    host.spines.insert(
+                        unit.header.instance,
+                        super::host_return::wrapper_spine(unit),
+                    );
+                    graph.identity = ContentHash::of_parts(
+                        "hirsel.ahead.host-callers.v1",
+                        [
+                            graph.identity.0.as_slice(),
+                            format!("{:?}", host.spines).as_bytes(),
+                        ],
+                    );
+                    host.graph = graph.clone();
+                }
+                Ok(RootPlan {
+                    graph,
+                    recipe,
+                    host,
+                })
             })();
             match attempt {
                 Ok(root) => {
@@ -238,13 +271,13 @@ impl AheadPlan {
         for (id, root) in &plan.roots {
             bytes.extend_from_slice(&id.0);
             bytes.extend_from_slice(&root.graph.identity.0);
-            bytes.extend_from_slice(format!("{:?}", root.recipe).as_bytes());
+            bytes.extend_from_slice(format!("{:?}{:?}", root.recipe, root.host).as_bytes());
             for (id, body) in &root.graph.bodies {
                 bytes.extend_from_slice(&id.0);
                 bytes.extend_from_slice(&body.body.0);
             }
         }
-        plan.identity = ContentHash::of_parts("hirsel.ahead.plan.v1", [bytes.as_slice()]);
+        plan.identity = ContentHash::of_parts("hirsel.ahead.plan.v2", [bytes.as_slice()]);
         plan
     }
 }
@@ -264,6 +297,7 @@ fn envelope(
     u: &LirUnit<Ready>,
     table: &LayoutTable,
     envs: &BTreeMap<ContentHash, Option<LayoutId>>,
+    inert: bool,
 ) -> Result<(CaptureRecipe, ContentHash), Refusal> {
     let no = |reason: &str| refused(u.header.instance, reason);
     if u.header.origin != UnitOrigin::Library
@@ -593,7 +627,7 @@ fn envelope(
     } else {
         None
     };
-    if source_layout.is_some_and(|l| !scalar_image(table, l)) {
+    if inert && source_layout.is_some_and(|l| !scalar_image(table, l)) {
         return Err(no("non-inert source captures"));
     }
     let extent = |l| match table.layout(l).map(|l| &l.size) {
@@ -745,4 +779,19 @@ fn code_values(u: &LirUnit<Ready>, seeds: &[(ValueId, ContentHash)]) -> Vec<Code
         }
     }
     codes
+}
+
+impl AheadPlan {
+    pub fn host_spine(&self, id: ContentHash) -> Option<&Spine> {
+        self.roots
+            .values()
+            .filter_map(|r| r.host.as_ref())
+            .find_map(|h| h.spines.get(&id))
+    }
+    pub fn host_read(&self, id: ContentHash, call: CallId) -> Option<&ReadContinuation> {
+        self.roots
+            .values()
+            .filter_map(|r| r.host.as_ref())
+            .find_map(|h| h.reads.get(&(id, call)))
+    }
 }

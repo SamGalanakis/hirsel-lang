@@ -11,7 +11,9 @@ use crate::ir::*;
 use crate::layout_types::{LayoutId, LayoutKind, LayoutTable, ScalarKind, SizeSpec, TargetSpec};
 use crate::stage::{Ready, ValidatedUnit};
 
+mod host_return;
 mod plan;
+pub use host_return::{HostReturnGraph, ReadContinuation, Spine, read_metadata_name};
 pub use plan::{
     AheadPlan, CaptureRecipe, RootPlan, alternate_name, environments, metadata_name, prospective,
 };

@@ -93,10 +93,48 @@ pub(crate) fn metadata(
     use hirsel_lir::emission::{artifact, symbol_name};
     use hirsel_lir::stage::{ObjectSymbol, ObjectSymbolKind};
     let mut em = Emitter::new(Inputs::units(inputs), false)?;
+    let mut read_ids = std::collections::BTreeMap::new();
+    for host in plan.roots.values().filter_map(|r| r.host.as_ref()) {
+        for (&(unit, call), recipe) in &host.reads {
+            if read_ids.contains_key(&(unit, call)) {
+                continue;
+            }
+            let name = hirsel_lir::ahead::read_metadata_name(unit, call, plan.identity);
+            let mut bytes = Vec::with_capacity(16);
+            for word in [
+                registry
+                    .index(recipe.descriptor)
+                    .ok_or_else(|| crate::CodegenError::Object {
+                        message: "missing selected byte descriptor".into(),
+                    })?,
+                recipe.maximum,
+                host.spines[&unit].deferred_releases.len().max(1) as u32,
+                0,
+            ] {
+                bytes.extend_from_slice(&word.to_le_bytes());
+            }
+            let mut image = DataDescription::new();
+            image.define(bytes.into_boxed_slice());
+            image.set_align(8);
+            let (data, _) = em.declare_data(&name, Linkage::Export)?;
+            em.define_data(&name, data, &image)?;
+            em.manifested.exports.insert(
+                name.clone(),
+                ObjectSymbol {
+                    name,
+                    kind: ObjectSymbolKind::Data,
+                    definition: None,
+                    abi: None,
+                },
+            );
+            read_ids.insert((unit, call), data);
+        }
+    }
     for (id, root) in &plan.roots {
         let name = hirsel_lir::ahead::metadata_name(*id, plan.identity);
-        let mut info = vec![0u8; 32];
-        info[..4].copy_from_slice(&2u32.to_le_bytes());
+        let version = if root.host.is_some() { 3u32 } else { 2u32 };
+        let mut info = vec![0u8; if root.host.is_some() { 40 } else { 32 }];
+        info[..4].copy_from_slice(&version.to_le_bytes());
         let mut description = DataDescription::new();
         if let Some(&bound) = bounds.get(id) {
             let recipe = &root.recipe;
@@ -166,6 +204,32 @@ pub(crate) fn metadata(
             description.write_function_addr(8, f);
             let data = em.module.declare_data_in_data(recipe_id, &mut description);
             description.write_data_addr(24, data, 0);
+            if let Some(host) = &root.host {
+                let mut list = DataDescription::new();
+                list.define(vec![0u8; host.reads.len() * 8].into_boxed_slice());
+                list.set_align(8);
+                for (i, key) in host.reads.keys().enumerate() {
+                    let read = em.module.declare_data_in_data(read_ids[key], &mut list);
+                    list.write_data_addr(i as u32 * 8, read, 0);
+                }
+                let list_name = format!("{name}_reads");
+                let (list_id, _) = em.declare_data(&list_name, Linkage::Local)?;
+                em.define_data(&list_name, list_id, &list)?;
+                let mut bytes = vec![0u8; 56];
+                bytes[..4].copy_from_slice(&1u32.to_le_bytes());
+                bytes[8..16].copy_from_slice(&(host.reads.len() as u64).to_le_bytes());
+                bytes[24..56].copy_from_slice(&root.graph.identity.0);
+                let mut image = DataDescription::new();
+                image.define(bytes.into_boxed_slice());
+                image.set_align(8);
+                let list_data = em.module.declare_data_in_data(list_id, &mut image);
+                image.write_data_addr(16, list_data, 0);
+                let root_name = format!("{name}_host");
+                let (root_id, _) = em.declare_data(&root_name, Linkage::Local)?;
+                em.define_data(&root_name, root_id, &image)?;
+                let data = em.module.declare_data_in_data(root_id, &mut description);
+                description.write_data_addr(32, data, 0);
+            }
         } else {
             description.define(info.into_boxed_slice());
             description.set_align(8);
@@ -189,4 +253,91 @@ pub(crate) fn metadata(
         .map_err(|message| crate::CodegenError::Object { message })?;
     artifact(file, manifested, inputs, crate::TOOLCHAIN)
         .map_err(|problem| crate::CodegenError::Manifest { problem })
+}
+
+impl FnEmitter<'_, '_, '_> {
+    pub(crate) fn host_read_boundary(
+        &mut self,
+        call: hirsel_lir::ir::CallId,
+        enter: bool,
+    ) -> Emitted {
+        use hirsel_lir::{ahead, runtime_abi::RuntimeEntry, stage::ObjectSymbolKind};
+        let Some(state) = self.ahead_state else {
+            return Ok(());
+        };
+        let Some((buffer, name)) = self.em.inputs.unit().ahead.and_then(|p| {
+            p.host_read(self.unit.header.instance, call).map(|r| {
+                (
+                    r.buffer,
+                    ahead::read_metadata_name(self.unit.header.instance, call, p.identity),
+                )
+            })
+        }) else {
+            return Ok(());
+        };
+        self.em
+            .manifest_import(&name, ObjectSymbolKind::Data, None, None);
+        let (id, _) = self
+            .em
+            .declare_data(&name, cranelift_module::Linkage::Import)?;
+        let recipe = self.data_addr(id, 0);
+        if enter {
+            self.rt(RuntimeEntry::HostEnter, &[state, recipe])?;
+            self.ahead_reload();
+        } else {
+            let Some(place) = self.slots[buffer.index()] else {
+                return self.invalid("missing selected buffer slot");
+            };
+            self.rt(RuntimeEntry::HostArm, &[self.context, recipe, place.ptr])?;
+        }
+        Ok(())
+    }
+    pub(crate) fn host_instruction(&mut self, inst: &hirsel_lir::ir::Inst) -> Emitted<bool> {
+        use hirsel_lir::{ir::Inst, runtime_abi::RuntimeEntry};
+        let Some(state) = self.ahead_state else {
+            return Ok(false);
+        };
+        let Some(spine) = self
+            .em
+            .inputs
+            .unit()
+            .ahead
+            .and_then(|p| p.host_spine(self.unit.header.instance))
+        else {
+            return Ok(false);
+        };
+        let i = self.instruction_index;
+        if spine.barriers.contains(&i) {
+            self.ahead_barrier()?;
+        }
+        let Some(&slot) = spine.deferred_releases.get(&i) else {
+            return Ok(false);
+        };
+        let Inst::Release { value, .. } = *inst else {
+            return self.invalid("deferred cleanup is not a release");
+        };
+        let active = self.rt1(RuntimeEntry::HostActive, &[state])?;
+        let active = self.b.ins().icmp_imm(IntCC::NotEqual, active, 0);
+        let held = self.b.create_block();
+        let ordinary = self.b.create_block();
+        let next = self.b.create_block();
+        self.b.ins().brif(active, held, &[], ordinary, &[]);
+        self.b.switch_to_block(held);
+        let block = self.get1(value)?;
+        let fuel = self.b.ins().load(
+            types::I64,
+            flags(),
+            self.context,
+            hirsel_lir::runtime_abi::CTX_FUEL_OFFSET as i32,
+        );
+        let slot = self.b.ins().iconst(types::I32, i64::from(slot));
+        self.rt(RuntimeEntry::HostDefer, &[state, slot, block, fuel])?;
+        self.b.ins().jump(next, &[]);
+        self.b.switch_to_block(ordinary);
+        self.ahead_barrier()?;
+        self.instruction_body(inst)?;
+        self.b.ins().jump(next, &[]);
+        self.b.switch_to_block(next);
+        Ok(true)
+    }
 }

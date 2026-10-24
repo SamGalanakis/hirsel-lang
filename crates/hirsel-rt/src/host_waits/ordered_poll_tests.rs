@@ -312,3 +312,150 @@ fn an_injected_parked_wait_is_polled_even_with_a_published_future_scope_timer() 
         assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
     }
 }
+
+#[test]
+fn home_readiness_releases_the_role_before_reacquiring_a_compute_permit() {
+    use std::sync::atomic::{AtomicBool, AtomicPtr};
+    struct HomeReady {
+        run: Arc<AtomicPtr<crate::context::RunShared>>,
+        released: Arc<AtomicBool>,
+    }
+    impl Adapter for HomeReady {
+        fn preflight(&self, _: &Request) -> Result<Option<Completion>, AdapterError> {
+            Ok(None)
+        }
+        fn call(&mut self, _: Request) -> Result<Completion, AdapterError> {
+            unreachable!()
+        }
+        fn ready(&mut self) -> Result<Ready, AdapterError> {
+            let run = self.run.load(Ordering::Acquire);
+            // Model the real permit waiter: the home bridge cannot return its
+            // permit while another worker holds capacity waiting for this role.
+            // The readiness callback borrows only the home binding, so it must
+            // leave the scheduler available throughout the synchronous bridge.
+            let guard = unsafe { crate::tasks::role::IdleGuard::try_new(run) };
+            self.released.store(guard.is_some(), Ordering::Release);
+            drop(guard);
+            Ok(Ready::Every)
+        }
+    }
+    for width in [1, 4] {
+        let shared = Arc::new(AtomicPtr::default());
+        let released = Arc::new(AtomicBool::new(false));
+        let mut run = crate::host::BodyRun::new(width, true);
+        run.adapter = Some(Box::new(HomeReady {
+            run: shared.clone(),
+            released: released.clone(),
+        }));
+        unsafe { run.use_ordered_home_dispatch() };
+        let outcome = run.run(
+            |ctx| unsafe {
+                shared.store((*ctx).run_ptr(), Ordering::Release);
+                crate::tasks::ordered::engine::enable(
+                    ctx,
+                    crate::ordered::Policy::admit(&Default::default(), None),
+                );
+            },
+            |ctx| unsafe {
+                let _role = crate::tasks::role::Guard::new(ctx);
+                at_home(ctx, || {
+                    Binding::get(ctx).waits.parked.insert(
+                        7,
+                        Parked {
+                            request: Request::ReadStdin { stdin: 12, max: 1 },
+                            borrowed: None,
+                            task: None,
+                            completion: None,
+                        },
+                    );
+                    count(ctx);
+                })
+                .unwrap();
+                assert_eq!(ready(ctx).unwrap(), Ready::Every);
+                assert!(
+                    crate::tasks::role::IdleGuard::try_new((*ctx).run_ptr()).is_none(),
+                    "the issuer must regain its role before touching the scheduler"
+                );
+                at_home(ctx, || {
+                    Binding::get(ctx).waits.parked.remove(&7);
+                    count(ctx);
+                })
+                .unwrap();
+                crate::STATUS_OK
+            },
+        );
+        assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
+        assert!(
+            released.load(Ordering::Acquire),
+            "home readiness retained the role across compute-permit reacquisition at width {width}"
+        );
+    }
+}
+
+#[test]
+fn home_timer_arming_lends_the_role_and_preserves_the_copied_issuer() {
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicBool, AtomicPtr};
+    struct HomeTimer {
+        run: Arc<AtomicPtr<crate::context::RunShared>>,
+        released: Arc<AtomicBool>,
+        issuer: Arc<Mutex<Option<Vec<u32>>>>,
+    }
+    impl Adapter for HomeTimer {
+        fn preflight(&self, _: &Request) -> Result<Option<Completion>, AdapterError> {
+            Ok(None)
+        }
+        fn call(&mut self, _: Request) -> Result<Completion, AdapterError> {
+            unreachable!()
+        }
+        fn wants_issuer(&self) -> bool {
+            true
+        }
+        fn issuer(&mut self, issuer: &[u32]) {
+            *self.issuer.lock().unwrap() = Some(issuer.to_vec());
+        }
+        fn scope_timer(&mut self, _: Request) -> Result<Completion, AdapterError> {
+            let guard =
+                unsafe { crate::tasks::role::IdleGuard::try_new(self.run.load(Ordering::Acquire)) };
+            self.released.store(guard.is_some(), Ordering::Release);
+            drop(guard);
+            Ok(Completion::Wait(Ok(())))
+        }
+    }
+    for width in [1, 4] {
+        let shared = Arc::new(AtomicPtr::default());
+        let released = Arc::new(AtomicBool::new(false));
+        let issuer = Arc::new(Mutex::new(None));
+        let mut run = crate::host::BodyRun::new(width, true);
+        run.adapter = Some(Box::new(HomeTimer {
+            run: shared.clone(),
+            released: released.clone(),
+            issuer: issuer.clone(),
+        }));
+        unsafe { run.use_ordered_home_dispatch() };
+        let outcome = run.run(
+            |ctx| unsafe {
+                shared.store((*ctx).run_ptr(), Ordering::Release);
+                crate::tasks::ordered::engine::enable(
+                    ctx,
+                    crate::ordered::Policy::admit(&Default::default(), None),
+                );
+            },
+            |ctx| unsafe {
+                let _role = crate::tasks::role::Guard::new(ctx);
+                assert_eq!(arm(ctx, 0, 11, 100).unwrap(), None);
+                assert!(
+                    crate::tasks::role::IdleGuard::try_new((*ctx).run_ptr()).is_none(),
+                    "issuer role restored after timer bridge"
+                );
+                crate::STATUS_OK
+            },
+        );
+        assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
+        assert_eq!(*issuer.lock().unwrap(), Some(vec![]));
+        assert!(
+            released.load(Ordering::Acquire),
+            "home wait-table bridge retained role at width {width}"
+        );
+    }
+}

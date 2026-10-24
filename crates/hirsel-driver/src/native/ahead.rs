@@ -7,6 +7,7 @@ pub(super) fn helper_identity() -> ContentHash {
         "hirsel.ahead.helpers.v3",
         [
             hirsel_rt::AHEAD_HELPERS,
+            hirsel_rt::AHEAD_HOST_HELPERS,
             hirsel_rt::AHEAD_SWITCH,
             hirsel_rt::DEPTH_HELPERS,
             hirsel_rt::DEPTH_LEAF_STACK_BYTES.to_le_bytes().as_slice(),
@@ -83,7 +84,7 @@ pub(super) fn objects(
         .collect();
     // Backend-created memcpy/division/outlined helpers have no private-work
     // summary. Refuse publication even if their ordinary use is permitted.
-    let machine_helpers = unknown_machine_calls(&object, &plan);
+    let machine_helpers = unknown_machine_calls(&object, &plan, program);
     let bounds: BTreeMap<_, _> = plan
         .roots
         .iter()
@@ -143,28 +144,109 @@ fn inputs<'a>(
         verify_backend: program.validation == super::stages::Validation::EveryStage,
     }
 }
-fn unknown_machine_calls(object: &hirsel_lir::stage::ObjectArtifact, plan: &AheadPlan) -> bool {
-    use hirsel_lir::stage::ObjectSymbolKind;
+fn unknown_machine_calls(
+    object: &hirsel_lir::stage::ObjectArtifact,
+    plan: &AheadPlan,
+    program: &ReadyProgram,
+) -> bool {
+    use hirsel_lir::{ir::*, stage::ObjectSymbolKind};
+    let mut prefix_runtime = std::collections::BTreeSet::new();
+    let mut prefix_functions = std::collections::BTreeSet::new();
+    if plan.roots.values().any(|r| r.host.is_some()) {
+        // Every unclassified instruction and every non-scalar call in these
+        // exact bodies barriers before its lowering. Accept explicit, known
+        // runtime declarations there; machine-created libc/outline helpers
+        // have no such source site and remain refused.
+        prefix_runtime.extend(
+            hirsel_lir::runtime_abi::RuntimeEntry::ALL
+                .iter()
+                .map(|e| e.declaration().symbol.to_owned()),
+        );
+        let all: Vec<_> = if program.unit_objects.is_some() {
+            program
+                .ahead_units
+                .iter()
+                .map(std::sync::Arc::as_ref)
+                .collect()
+        } else {
+            program.units.iter().collect()
+        };
+        for unit in all {
+            let u = unit.unit();
+            let Some(spine) = plan.host_spine(u.header.instance) else {
+                continue;
+            };
+            for (i, inst) in u.instructions.iter().enumerate() {
+                if let Inst::FunctionRef { symbol, .. } = inst
+                    && !spine.private_instructions[i]
+                {
+                    // This exact callable construction is behind the host
+                    // instruction barrier. Its ordinary thunk is neither a
+                    // private callee nor permission for an unknown helper.
+                    let symbol = &u.tables.symbols[symbol.index()];
+                    prefix_functions.insert(hirsel_lir::emission::function_thunk_name(
+                        &symbol.definition,
+                        symbol.instance.as_ref(),
+                    ));
+                }
+            }
+            for (i, call) in u.tables.calls.iter().enumerate() {
+                if spine.scalar_calls.contains(&CallId(i as u32)) {
+                    continue;
+                }
+                match call.callee {
+                    Callee::Direct(symbol) | Callee::Bound { code: symbol, .. } => {
+                        let symbol = &u.tables.symbols[symbol.index()];
+                        if symbol
+                            .instance
+                            .is_none_or(|id| !plan.bodies.contains_key(&id))
+                        {
+                            prefix_functions.insert(hirsel_lir::emission::symbol_name(
+                                &symbol.definition,
+                                symbol.instance.as_ref(),
+                            ));
+                        }
+                    }
+                    Callee::Operation(op) => {
+                        let operation = &u.tables.operations[op.index()];
+                        if let Some(row) = program.manifest.row(operation)
+                            && let hirsel_core_contract::Disposition::RuntimePrimitive(template) =
+                                row.dispositions.get(hirsel_core_contract::Engine::Native)
+                            && let Some(name) =
+                                hirsel_lir::abi::resolve_call_symbol(template, u, call)
+                        {
+                            prefix_runtime.insert(name);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
     object.imports.iter().any(|s| match s.kind {
         ObjectSymbolKind::Data => false,
-        ObjectSymbolKind::Function => !plan.bodies.keys().any(|id| {
-            let symbol = &plan.symbols[id];
-            s.name == hirsel_lir::ahead::alternate_name(&symbol.definition, *id)
-        }),
-        ObjectSymbolKind::Runtime => !matches!(
-            s.name.as_str(),
-            "hirsel_rt_v2_ahead_state"
-                | "hirsel_rt_v2_ahead_handoff"
-                // The helper identity binds these exact naked, eight-byte
-                // call extents. Failure publication still crosses the barrier.
-                | "hirsel_rt_v2_depth_enter_at_site"
-                | "hirsel_rt_v2_depth_leave"
-                | "hirsel_rt_v2_failure_begin"
-                | "hirsel_rt_v2_failure_reanchor"
-                | "hirsel_rt_v2_release"
-                | "hirsel_rt_v2_finalize"
-                | "hirsel_rt_v2_task_finish"
-        ),
+        ObjectSymbolKind::Function => {
+            !prefix_functions.contains(&s.name)
+                && !plan.bodies.keys().any(|id| {
+                    let symbol = &plan.symbols[id];
+                    s.name == hirsel_lir::ahead::alternate_name(&symbol.definition, *id)
+                })
+        }
+        ObjectSymbolKind::Runtime => {
+            !prefix_runtime.contains(&s.name)
+                && !matches!(
+                    s.name.as_str(),
+                    "hirsel_rt_v2_ahead_state"
+                        | "hirsel_rt_v2_ahead_handoff"
+                        | "hirsel_rt_v2_depth_enter_at_site"
+                        | "hirsel_rt_v2_depth_leave"
+                        | "hirsel_rt_v2_failure_begin"
+                        | "hirsel_rt_v2_failure_reanchor"
+                        | "hirsel_rt_v2_release"
+                        | "hirsel_rt_v2_finalize"
+                        | "hirsel_rt_v2_task_finish"
+                )
+        }
         _ => true,
     })
 }
@@ -229,7 +311,7 @@ pub fn check_objects(
                 .roots
                 .iter()
                 .filter_map(|(id, root)| {
-                    if unknown_machine_calls(code, &plan) {
+                    if unknown_machine_calls(code, &plan, program) {
                         return None;
                     }
                     hirsel_lir::ahead::stack_bound_with_depth(

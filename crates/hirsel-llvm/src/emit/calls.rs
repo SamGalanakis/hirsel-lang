@@ -114,6 +114,26 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
     }
 
     pub(super) fn terminator(&mut self, terminator: &Terminator) -> Emitted {
+        if self.ahead_state.is_some()
+            && self
+                .inputs
+                .ahead
+                .and_then(|p| p.host_spine(self.unit.header.instance))
+                .is_some()
+            && match terminator {
+                Terminator::Jump(_) | Terminator::Call { .. } => false,
+                Terminator::Branch {
+                    condition: value, ..
+                }
+                | Terminator::Switch { value, .. } => !hirsel_lir::ahead::scalar_image(
+                    self.inputs.layouts,
+                    self.unit.types[self.unit.values[value.index()].ty.index()].layout,
+                ),
+                _ => true,
+            }
+        {
+            self.ahead_barrier()?;
+        }
         match *terminator {
             Terminator::Jump(edge) => self.jump(edge),
             Terminator::Branch { condition, yes, no } => {
@@ -267,9 +287,18 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 .ahead
                 .is_some_and(|p| p.bodies.contains_key(&id))
             {
-                return self.invalid("missing real alternate callee");
+                if self
+                    .inputs
+                    .ahead
+                    .and_then(|p| p.host_spine(self.unit.header.instance))
+                    .is_none()
+                {
+                    return self.invalid("missing real alternate callee");
+                }
+                symbol_name(&symbol.definition, symbol.instance.as_ref())
+            } else {
+                hirsel_lir::ahead::alternate_name(&symbol.definition, id)
             }
-            hirsel_lir::ahead::alternate_name(&symbol.definition, id)
         } else {
             symbol_name(&symbol.definition, symbol.instance.as_ref())
         };
@@ -631,9 +660,16 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         } else {
             function
         };
-        if matches!(site.callee, Callee::Operation(_)) {
+        if matches!(site.callee, Callee::Operation(_))
+            || self
+                .inputs
+                .ahead
+                .and_then(|p| p.host_spine(unit.header.instance))
+                .is_some_and(|s| !s.scalar_calls.contains(&call))
+        {
             self.ahead_barrier()?;
         }
+        self.host_read_boundary(call, false)?;
         self.ahead_flush();
         let returned = match function {
             Some(function) => self.builder.call(function, &args),
@@ -700,6 +736,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 }
             }
         }
+        self.host_read_boundary(call, true)?;
         let ok = self.builder.icmp(
             IntPredicate::Eq,
             status,

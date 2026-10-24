@@ -271,7 +271,8 @@ pub(crate) unsafe fn spawn_certified(
         Kind::Task,
         word,
     );
-    let reserve = alternate.is_some() && {
+    let host = certificate.as_ref().is_some_and(|c| !c.host.is_null());
+    let reserve = !host && alternate.is_some() && {
         let safe_capture = !captures.roots
             && !captures.unknown
             && captures.handles.is_empty()
@@ -297,7 +298,7 @@ pub(crate) unsafe fn spawn_certified(
             && engine::driver(ctx).reserved.len() < super::ahead::MAX_RESERVATIONS
     };
     if let Some(certificate) = certificate {
-        if reserve
+        if (reserve || (host && alternate.is_some()))
             && task
                 .stack
                 .as_ref()

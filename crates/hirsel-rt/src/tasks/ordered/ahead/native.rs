@@ -34,6 +34,7 @@ pub struct Info {
 pub(crate) struct Certificate {
     pub entry: TaskCode,
     pub stack_bytes: u64,
+    pub(crate) host: *const super::host_return::Root,
     live: *mut u64,
     mask: u64,
     source: *mut Header,
@@ -52,6 +53,7 @@ pub(crate) struct Native {
     source: *mut Header,
     generation: u32,
     adopted: bool,
+    pub(super) host: super::host_return::State,
 }
 const _: () = {
     assert!(std::mem::offset_of!(Physical, points_left) == 0);
@@ -87,6 +89,15 @@ pub(crate) unsafe fn validate(
     ctx: *mut TaskCtx,
     environment: *mut Header,
     info: *const Info,
+) -> Option<Certificate> {
+    unsafe { validate_capture(ctx, environment, info, true) }
+}
+
+pub(super) unsafe fn validate_capture(
+    ctx: *mut TaskCtx,
+    environment: *mut Header,
+    info: *const Info,
+    inert: bool,
 ) -> Option<Certificate> {
     unsafe {
         let info = &*info;
@@ -156,8 +167,7 @@ pub(crate) unsafe fn validate(
             if layout.size != u64::from(r.source_extent)
                 || layout.align > 16
                 || layout.finalizer.is_some()
-                || layout.step_count != 0
-                || !inert_source(ctx, r.source_descriptor)
+                || (inert && (layout.step_count != 0 || !inert_source(ctx, r.source_descriptor)))
                 || layout.flags
                     & (crate::LAYOUT_DYNAMIC | crate::LAYOUT_UNSAFE_FFI | crate::LAYOUT_MUTEX_ROOT)
                     != 0
@@ -168,6 +178,7 @@ pub(crate) unsafe fn validate(
         Some(Certificate {
             entry,
             stack_bytes: info.stack_bytes,
+            host: std::ptr::null(),
             live,
             mask,
             source,
@@ -252,7 +263,11 @@ impl Native {
     ) -> Box<Self> {
         Box::new(Self {
             physical: Physical {
-                points_left: 1024,
+                points_left: if certificate.host.is_null() {
+                    1024
+                } else {
+                    i64::MAX
+                },
                 saved_sp: std::ptr::null_mut(),
                 idle_sp: std::ptr::null_mut(),
                 reason: 0,
@@ -268,7 +283,8 @@ impl Native {
             original_mask: certificate.mask,
             source: certificate.source,
             generation,
-            adopted: false,
+            adopted: !certificate.host.is_null(),
+            host: super::host_return::State::new(certificate.host),
         })
     }
     pub(crate) fn adopt(&mut self, generation: u32) {
@@ -343,6 +359,7 @@ pub(crate) unsafe fn run(ctx: *mut TaskCtx, exec: &crate::pool::Exec, mut sp: *m
         loop {
             crate::stop::set_running(std::ptr::null_mut());
             super::super::super::role::enter(ctx);
+            super::host_return::flush_logical(ctx, native);
             let run = (*ctx).run_ptr();
             let mut pause = (*run).control.stopped().is_some();
             if !returned && !pause && (*native).pending_refill && !private(ctx) {
@@ -351,6 +368,16 @@ pub(crate) unsafe fn run(ctx: *mut TaskCtx, exec: &crate::pool::Exec, mut sp: *m
                         pause = !ready;
                         (*native).pending_refill = !ready;
                     }
+                    Err(stop) => {
+                        (*run).control.request_inside(stop);
+                        pause = true;
+                    }
+                }
+            }
+            if !pause && (*native).host.active() && (*native).physical.reason & 4 != 0 {
+                match super::super::engine::host_segment_barrier(ctx) {
+                    Ok(true) => super::host_return::admit(ctx, native),
+                    Ok(false) => pause = true,
                     Err(stop) => {
                         (*run).control.request_inside(stop);
                         pause = true;
@@ -386,7 +413,11 @@ pub(crate) unsafe fn run(ctx: *mut TaskCtx, exec: &crate::pool::Exec, mut sp: *m
                             }
                         }
                     }
-                    (*native).physical.points_left = i64::MAX;
+                    (*native).physical.points_left = if (*native).host.active() {
+                        1024
+                    } else {
+                        i64::MAX
+                    };
                 }
             }
             if pause {

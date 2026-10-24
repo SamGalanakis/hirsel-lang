@@ -12,7 +12,7 @@
 use crate::layout_types::{ScalarKind, StorageKind};
 use hirsel_codec::snapshot_enum;
 
-pub const ABI_VERSION: u32 = 59;
+pub const ABI_VERSION: u32 = 60;
 /// TaskSpawn physical hint bits: ordered execution and replay ignore both.
 pub const SPAWN_IMMEDIATE_AWAIT: u64 = 1;
 pub const SPAWN_OP_FREE: u64 = 2;
@@ -380,6 +380,7 @@ pub enum CName {
     TaskCode,
     SpawnAheadInfo,
     AheadPhysical,
+    HostReadRecipe,
 }
 
 impl CName {
@@ -404,6 +405,7 @@ impl CName {
             Self::TaskCode => "hirsel_rt_v2_task_code",
             Self::SpawnAheadInfo => "hirsel_rt_v2_spawn_ahead_info",
             Self::AheadPhysical => "hirsel_rt_v2_ahead_physical",
+            Self::HostReadRecipe => "hirsel_rt_v2_host_read_recipe",
         }
     }
 }
@@ -541,6 +543,10 @@ pub enum RuntimeEntry {
     AheadBarrier,
     AheadState,
     AheadHandoff,
+    HostArm,
+    HostEnter,
+    HostActive,
+    HostDefer,
 }
 
 /// One C declaration of `hirsel_rt_v2`.
@@ -612,7 +618,7 @@ const OPERATION_SITE: CParam = p("operation_site", U64);
 const REGION: CParam = p("region", ptr(CName::Region, 1));
 
 impl RuntimeEntry {
-    pub const ALL: [RuntimeEntry; 87] = [
+    pub const ALL: [RuntimeEntry; 91] = [
         Self::DepthEnter,
         Self::DepthEnterAtSite,
         Self::DepthLeave,
@@ -700,6 +706,10 @@ impl RuntimeEntry {
         Self::AheadBarrier,
         Self::AheadState,
         Self::AheadHandoff,
+        Self::HostArm,
+        Self::HostEnter,
+        Self::HostActive,
+        Self::HostDefer,
     ];
 
     pub const fn declaration(self) -> RuntimeDeclaration {
@@ -1238,6 +1248,44 @@ impl RuntimeEntry {
                 VOID,
                 const { &[p("state", ptr(N::AheadPhysical, 1)), p("reason", U32)] },
             ),
+            Self::HostArm => (
+                "hirsel_rt_v2_host_arm",
+                VOID,
+                const {
+                    &[
+                        CTX,
+                        p("recipe", cptr(N::HostReadRecipe)),
+                        p("buffer", ptr(N::Header, 2)),
+                    ]
+                },
+            ),
+            Self::HostEnter => (
+                "hirsel_rt_v2_host_enter",
+                VOID,
+                const {
+                    &[
+                        p("state", ptr(N::AheadPhysical, 1)),
+                        p("recipe", cptr(N::HostReadRecipe)),
+                    ]
+                },
+            ),
+            Self::HostActive => (
+                "hirsel_rt_v2_host_active",
+                U8,
+                const { &[p("state", ptr(N::AheadPhysical, 1))] },
+            ),
+            Self::HostDefer => (
+                "hirsel_rt_v2_host_defer",
+                VOID,
+                const {
+                    &[
+                        p("state", ptr(N::AheadPhysical, 1)),
+                        p("slot", U32),
+                        p("block", ptr(N::Header, 1)),
+                        p("fuel", U64),
+                    ]
+                },
+            ),
             Self::AheadBarrier => ("hirsel_rt_v2_ahead_barrier", VOID, const { &[CTX] }),
             Self::FuelRefill => ("hirsel_rt_v2_fuel_refill", VOID, const { &[CTX] }),
             Self::WorkerCreate => (
@@ -1384,4 +1432,8 @@ snapshot_enum!(RuntimeEntry {
     AheadBarrier,
     AheadState,
     AheadHandoff,
+    HostArm,
+    HostEnter,
+    HostActive,
+    HostDefer,
 });

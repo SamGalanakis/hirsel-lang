@@ -70,6 +70,7 @@ pub const VALIDATOR_VERSION: u32 = 19;
 #[cfg(feature = "testing")]
 pub mod testing;
 
+pub mod liveness;
 pub mod logical_storage;
 
 pub mod pretransfer;

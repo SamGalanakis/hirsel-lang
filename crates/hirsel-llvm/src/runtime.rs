@@ -39,6 +39,11 @@ pub(crate) fn substrate(module: &Module<'_>, function: Function<'_>, entry: Runt
             (MemoryEffects::ArgumentRead, true, &[0])
         }
         R::AheadState => (MemoryEffects::ArgumentRead, true, &[]),
+        R::HostActive => (MemoryEffects::ArgumentRead, true, &[0]),
+        R::HostEnter => (MemoryEffects::ArgumentReadWrite, true, &[0, 1]),
+        // The block pointer is retained in the fixed task-owned cleanup slot.
+        R::HostDefer => (MemoryEffects::ArgumentReadWrite, true, &[0]),
+        R::HostArm => (MemoryEffects::ReadWrite, false, &[]),
         R::HashBytes => (MemoryEffects::ArgumentRead, true, &[1]),
         R::HashInit => (MemoryEffects::ArgumentReadWrite, true, &[0]),
         // The state pointer is carried as u64, so its accesses are not LLVM

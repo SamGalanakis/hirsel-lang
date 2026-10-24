@@ -46,6 +46,7 @@ impl Trace {
                 std::mem::take(&mut *unsafe { (*run).ordered_home_results.lock().unwrap() });
             super::host_terminal::home_results(scheduler, snapshots)?;
             super::host_terminal::external(scheduler, &stop)?;
+            super::terminal_waits::close(scheduler, &stop)?;
         }
         let Logical::Ordered(driver) = &scheduler.logical else {
             return Err("no ordered scheduler");
@@ -230,6 +231,9 @@ fn outcome(outcome: &CanonicalOutcome) -> Value {
         }
         O::Awaiting { members } => {
             json!({"kind":"awaiting", "members":members.iter().map(|(index,id)| json!({"index":index,"id":object(id)})).collect::<Vec<_>>()})
+        }
+        O::AwaitAbandoned { task, ordinal } => {
+            json!({"kind":"await_abandoned", "task":task, "ordinal":ordinal})
         }
         O::Selected {
             index,

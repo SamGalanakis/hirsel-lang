@@ -152,6 +152,7 @@ pub(crate) struct FnEmitter<'e, 'a, 'f> {
     globals: HashMap<DataId, GlobalValue>,
     /// Per block, whether it charges fuel (`hirsel_lir::fuel`); empty without `inputs.fuel`.
     fuel_points: Vec<bool>,
+    pub(crate) instruction_index: usize,
     pub(crate) ahead_state: Option<Value>,
     pub(crate) ahead_counter: Option<cranelift_frontend::Variable>,
 }
@@ -235,6 +236,7 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
             funcs: HashMap::new(),
             globals: HashMap::new(),
             fuel_points,
+            instruction_index: 0,
             ahead_state: None,
             ahead_counter: None,
         }
@@ -500,6 +502,26 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
 
     pub(crate) fn zero(&mut self, at: Value, size: u64, align: u32) {
         if size == 0 {
+            return;
+        }
+        // Alternate frames must not acquire an unbounded libc helper through
+        // aggregate lowering. Keep every bounded image store in the proved body.
+        if self.em.inputs.unit().alternate && size <= hirsel_lir::ahead::MAX_IMAGE_BYTES {
+            let mut offset = 0;
+            for (bytes, ty) in [
+                (8, types::I64),
+                (4, types::I32),
+                (2, types::I16),
+                (1, types::I8),
+            ] {
+                if size - offset >= bytes {
+                    let zero = self.b.ins().iconst(ty, 0);
+                    while size - offset >= bytes {
+                        self.b.ins().store(flags(), zero, at, offset as i32);
+                        offset += bytes;
+                    }
+                }
+            }
             return;
         }
         let config = self.em.module.target_config();
@@ -1181,7 +1203,12 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
         if self.fuel_points.get(b.index()).copied().unwrap_or(false) {
             self.charge_fuel()?;
         }
-        for inst in self.pool(unit.blocks[b.index()].instructions, &unit.instructions)? {
+        for (i, inst) in self
+            .pool(unit.blocks[b.index()].instructions, &unit.instructions)?
+            .iter()
+            .enumerate()
+        {
+            self.instruction_index = unit.blocks[b.index()].instructions.start as usize + i;
             self.profile_location(
                 hirsel_lir::profile::instruction_site(unit, b, inst),
                 inst.opcode(),
@@ -1626,6 +1653,28 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
     }
 
     fn terminator(&mut self, terminator: &'a Terminator) -> Emitted {
+        if self.ahead_state.is_some()
+            && self
+                .em
+                .inputs
+                .unit()
+                .ahead
+                .and_then(|p| p.host_spine(self.unit.header.instance))
+                .is_some()
+            && match terminator {
+                Terminator::Jump(_) | Terminator::Call { .. } => false,
+                Terminator::Branch {
+                    condition: value, ..
+                }
+                | Terminator::Switch { value, .. } => !hirsel_lir::ahead::scalar_image(
+                    self.em.inputs.unit().layouts,
+                    self.unit.types[self.unit.values[value.index()].ty.index()].layout,
+                ),
+                _ => true,
+            }
+        {
+            self.ahead_barrier()?;
+        }
         match *terminator {
             Terminator::Jump(edge) => self.jump(edge),
             Terminator::Branch { condition, yes, no } => {
@@ -1795,9 +1844,20 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
                 .ahead
                 .is_some_and(|p| p.bodies.contains_key(&id))
             {
-                return self.invalid("missing real alternate callee");
+                if self
+                    .em
+                    .inputs
+                    .unit()
+                    .ahead
+                    .and_then(|p| p.host_spine(self.unit.header.instance))
+                    .is_none()
+                {
+                    return self.invalid("missing real alternate callee");
+                }
+                symbol_name(&symbol.definition, symbol.instance.as_ref())
+            } else {
+                hirsel_lir::ahead::alternate_name(&symbol.definition, id)
             }
-            hirsel_lir::ahead::alternate_name(&symbol.definition, id)
         } else {
             symbol_name(&symbol.definition, symbol.instance.as_ref())
         };
@@ -1997,9 +2057,18 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
         if args.len() != signature.ir.params.len() {
             return self.invalid("a call whose arguments differ from its signature");
         }
-        if matches!(site.callee, Callee::Operation(_)) {
+        if matches!(site.callee, Callee::Operation(_))
+            || self
+                .em
+                .inputs
+                .unit()
+                .ahead
+                .and_then(|p| p.host_spine(unit.header.instance))
+                .is_some_and(|s| !s.scalar_calls.contains(&call))
+        {
             self.ahead_barrier()?;
         }
+        self.host_read_boundary(call, false)?;
         self.ahead_flush();
         let ahead_root = self.em.inputs.unit().ahead.and_then(|p| {
             p.spawns
@@ -2057,6 +2126,7 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
             let value = self.load(shape, temporary);
             self.scatter(destination, shape, value)?;
         }
+        self.host_read_boundary(call, true)?;
         let failure_block = self.failure_block(failure)?;
         let fail = if site.forward_caller {
             failure_block

@@ -17,7 +17,7 @@
 extern "C" {
 #endif
 
-#define HIRSEL_RT_V2_ABI_VERSION 59
+#define HIRSEL_RT_V2_ABI_VERSION 60
 /* TaskSpawn trailing flags: compiler proofs, ignored in ordered execution and replay. */
 #define HIRSEL_RT_V2_SPAWN_IMMEDIATE_AWAIT 1
 #define HIRSEL_RT_V2_SPAWN_OP_FREE 2
@@ -790,6 +790,29 @@ hirsel_rt_v2_ahead_physical *hirsel_rt_v2_ahead_state(hirsel_rt_v2_ctx *ctx);
 void hirsel_rt_v2_ahead_handoff(hirsel_rt_v2_ahead_physical *state, uint32_t reason);
 uint8_t hirsel_rt_v2_task_spawn_ahead(hirsel_rt_v2_ctx *ctx, uint64_t caller_site, uint64_t operation_site, void *destination, uint64_t *out, const uint64_t *scope, hirsel_rt_v2_task_code code, hirsel_rt_v2_header *environment, uint64_t flags, const hirsel_rt_v2_spawn_ahead_info *info);
 void hirsel_rt_v2_ahead_barrier(hirsel_rt_v2_ctx *ctx);
+/* Version 3 authorizes a selected-read continuation, never early spawn work. */
+typedef struct hirsel_rt_v2_host_read_recipe {
+    uint32_t buffer_descriptor, maximum, cleanup_slots, flags;
+} hirsel_rt_v2_host_read_recipe;
+typedef struct hirsel_rt_v2_host_root {
+    uint32_t version, flags;
+    uint64_t read_count;
+    const hirsel_rt_v2_host_read_recipe *const *reads;
+    uint8_t identity[32];
+} hirsel_rt_v2_host_root;
+typedef struct hirsel_rt_v2_spawn_ahead_info_v3 {
+    hirsel_rt_v2_spawn_ahead_info_v2 prefix;
+    const hirsel_rt_v2_host_root *host;
+} hirsel_rt_v2_spawn_ahead_info_v3;
+HIRSEL_RT_V2_ASSERT_SIZE(hirsel_rt_v2_host_read_recipe, 16);
+HIRSEL_RT_V2_ASSERT_SIZE(hirsel_rt_v2_host_root, 56);
+HIRSEL_RT_V2_ASSERT_SIZE(hirsel_rt_v2_spawn_ahead_info_v3, 40);
+_Static_assert(offsetof(hirsel_rt_v2_spawn_ahead_info_v3, host) == 32, "host offset");
+void hirsel_rt_v2_host_arm(hirsel_rt_v2_ctx *ctx, const hirsel_rt_v2_host_read_recipe *recipe, hirsel_rt_v2_header **buffer);
+void hirsel_rt_v2_host_enter(hirsel_rt_v2_ahead_physical *state, const hirsel_rt_v2_host_read_recipe *recipe);
+uint8_t hirsel_rt_v2_host_active(hirsel_rt_v2_ahead_physical *state);
+void hirsel_rt_v2_host_defer(hirsel_rt_v2_ahead_physical *state, uint32_t slot, hirsel_rt_v2_header *block, uint64_t fuel);
+
 
 /* A fuel point found the running task's chunk spent (its fuel word is negative): the runtime
    stores the next chunk, less the point the failed charge spent, in the word and returns, so

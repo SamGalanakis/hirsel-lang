@@ -7,6 +7,7 @@ fn certificate(live: *mut u64) -> Certificate {
     Certificate {
         entry: code,
         stack_bytes: 128,
+        host: std::ptr::null(),
         live,
         mask: 1,
         source: std::ptr::null_mut(),

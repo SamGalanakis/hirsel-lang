@@ -198,6 +198,8 @@ pub struct TaskCtx {
     pub(crate) invocation_tokens:
         *mut std::mem::MaybeUninit<hirsel_core_contract::depth::Activation>,
     pub(crate) invocation_site_slots: *mut std::mem::MaybeUninit<[u64; 2]>,
+    #[cfg(test)]
+    pub(crate) test_host_tail: bool,
 }
 
 const _: () = assert!(std::mem::offset_of!(TaskCtx, view) == 0);
@@ -435,6 +437,8 @@ impl TaskCtx {
             operation_site: 0,
             ahead: None,
             ahead_physical: std::ptr::null_mut(),
+            #[cfg(test)]
+            test_host_tail: false,
             native_host_result: None,
             replay_host: None,
             ordered_charge_trace: Default::default(),

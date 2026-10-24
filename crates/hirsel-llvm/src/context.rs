@@ -763,6 +763,23 @@ impl<'context> Module<'context> {
         };
     }
 
+    /// Preserve object-local function identities for final stack-size relocations.
+    /// LLVM private linkage can omit the symbol entirely; internal linkage retains
+    /// a local STT_FUNC without adding an export or authorizing a private call.
+    pub(crate) fn retain_local_function_symbols(&self) {
+        // SAFETY: this module owns each function throughout the walk. Linkage does
+        // not change the function list, and only object-local definitions change.
+        unsafe {
+            let mut function = LLVMGetFirstFunction(self.raw);
+            while !function.is_null() {
+                if LLVMGetLinkage(function) == llvm_sys::LLVMLinkage::LLVMPrivateLinkage {
+                    LLVMSetLinkage(function, llvm_sys::LLVMLinkage::LLVMInternalLinkage);
+                }
+                function = LLVMGetNextFunction(function);
+            }
+        }
+    }
+
     /// Retain a template's out-of-line implementation in its own object even when
     /// this module inlines every local call. Other programs may share this object.
     pub(crate) fn make_weak_odr(&self, function: Function<'_>) {

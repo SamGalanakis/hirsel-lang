@@ -137,7 +137,7 @@ pub use release::{
 pub use roots::ROOT_OVERFLOW;
 
 /// The interface version a caller must request in [`Config::abi_version`].
-pub const ABI_VERSION: u32 = 59;
+pub const ABI_VERSION: u32 = 60;
 /// Success status.
 pub const STATUS_OK: u8 = 0;
 /// A language failure. Substrate entries record it in the run context; a library
@@ -293,5 +293,7 @@ pub const DEPTH_HELPERS: &[u8] = include_bytes!("depth/native.rs");
 /// x86 SysV full depth-leaf call extent, including the return address.
 #[doc(hidden)]
 pub const DEPTH_LEAF_STACK_BYTES: u64 = 8;
+#[doc(hidden)]
+pub const AHEAD_HOST_HELPERS: &[u8] = include_bytes!("tasks/ordered/ahead/host_return.rs");
 #[doc(hidden)]
 pub const AHEAD_SWITCH: &[u8] = include_bytes!("fiber.rs");

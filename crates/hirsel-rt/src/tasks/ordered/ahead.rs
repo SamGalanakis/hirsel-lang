@@ -10,6 +10,7 @@ use crate::{TaskCtx, budget::stretch::Stretch};
 use std::cell::Cell;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+pub(crate) mod host_return;
 pub(crate) mod native;
 
 pub(crate) const MAX_RESERVATIONS: usize = 8;
@@ -276,7 +277,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_spawn_ahead(
     } else {
         let version = unsafe { std::ptr::addr_of!((*info).version).read() };
         let flags = unsafe { std::ptr::addr_of!((*info).flags).read() };
-        if !matches!(version, 1 | 2) || flags != 0 {
+        if !matches!(version, 1 | 2 | 3) || flags != 0 {
             unsafe {
                 crate::stop::raise(
                     ctx,
@@ -301,7 +302,13 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_spawn_ahead(
             (unsafe { (*info).entry }, None)
         } else {
             #[cfg(all(target_arch = "x86_64", not(feature = "tsan")))]
-            let certificate = unsafe { native::validate(ctx, environment, info.cast()) };
+            let certificate = unsafe {
+                if version == 3 {
+                    host_return::validate(ctx, environment, info.cast())
+                } else {
+                    native::validate(ctx, environment, info.cast())
+                }
+            };
             #[cfg(any(not(target_arch = "x86_64"), feature = "tsan"))]
             let certificate: Option<native::Certificate> = None;
             (certificate.as_ref().map(|c| c.entry), certificate)

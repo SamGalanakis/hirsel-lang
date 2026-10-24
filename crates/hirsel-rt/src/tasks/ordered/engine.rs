@@ -318,6 +318,7 @@ pub(crate) fn reserve_allocation(ctx: *mut TaskCtx, bytes: u64) -> Stopped<()> {
     if memory {
         let head = driver(ctx).head_ready(task);
         if head {
+            super::host::retire_return(ctx);
             let before = stretch(ctx);
             settle_head(ctx, &before)?;
             let mut allocation = Stretch::new(budgets);
@@ -398,6 +399,7 @@ pub(crate) fn fuel_refill(ctx: *mut TaskCtx) -> Stopped<()> {
         at_head(ctx)?;
     }
     if driver(ctx).head_ready(task) {
+        super::host::retire_return(ctx);
         let before = stretch(ctx);
         settle_head(ctx, &before)?;
     }
@@ -548,6 +550,7 @@ pub(super) fn at_head(ctx: *mut TaskCtx) -> Stopped<()> {
     loop {
         advance(ctx)?;
         if driver(ctx).head_ready(task) {
+            super::host::retire_return(ctx);
             let before = stretch(ctx);
             settle_head(ctx, &before)?;
             fuel_in(ctx);
@@ -804,6 +807,17 @@ pub(super) fn continue_at_head(ctx: *mut TaskCtx, progress: Progress) -> Stopped
     at_head(ctx)
 }
 
+/// The bounded read already finished at its canonical head position. Its
+/// selected immutable outcome permits private compute after the same poll.
+pub(super) fn continue_after_read(ctx: *mut TaskCtx, progress: Progress) -> Stopped<()> {
+    if progress == Progress::Poll {
+        poll(ctx)?;
+    }
+    advance(ctx)?;
+    fuel_in(ctx);
+    Ok(())
+}
+
 /// A park or holding publication precedes physical save. The generic idle
 /// callback finishes its poll and may only then select a logical continuation.
 pub(super) fn save_boundary(ctx: *mut TaskCtx, progress: Progress) -> Stopped<()> {
@@ -815,6 +829,16 @@ pub(super) fn save_boundary(ctx: *mut TaskCtx, progress: Progress) -> Stopped<()
     at_head(ctx)
 }
 
+/// A host wait still publishes the same saved frame and retirement poll. Its
+/// owner inspects the completed row before deciding whether at_head is needed.
+pub(super) fn save_host_boundary(ctx: *mut TaskCtx, progress: Progress) {
+    let task = current(ctx);
+    if progress == Progress::Poll {
+        driver(ctx).defer_poll_until_saved(task);
+    }
+    suspend(ctx, task, false);
+}
+
 /// The owning runtime entry keeps its carriers live while a pending command
 /// waits. The accepted command owns its input bytes, so no saved slot is read
 /// or written by a different committing task.
@@ -824,7 +848,13 @@ pub(super) fn submit(
 ) -> Stopped<Option<Returned>> {
     let task = {
         let (task, driver) = current_driver(ctx);
-        driver.enter(task, crate::pool::compute_index().unwrap_or(0));
+        if driver.host_returns.contains_key(&task) {
+            // No driver borrow crosses the canonical completed-read barrier.
+            at_head(ctx)?;
+            self::driver(ctx).enter(task, crate::pool::compute_index().unwrap_or(0));
+        } else {
+            driver.enter(task, crate::pool::compute_index().unwrap_or(0));
+        }
         task
     };
     let mut before = stretch(ctx);
@@ -2279,9 +2309,25 @@ pub(crate) fn ahead_refill(ctx: *mut TaskCtx) -> Stopped<bool> {
         return Ok(false);
     }
     if driver(ctx).head_ready(task) {
+        super::host::retire_return(ctx);
         let before = stretch(ctx);
         settle_head(ctx, &before)?;
     }
+    fuel_in(ctx);
+    Ok(true)
+}
+
+/// Idle-only admission of the actual post-read continuation. This neither
+/// observes cancellation nor adds a semantic operation, yield or poll.
+pub(crate) fn host_segment_barrier(ctx: *mut TaskCtx) -> Stopped<bool> {
+    advance(ctx)?;
+    let task = current(ctx);
+    if !driver(ctx).head_ready(task) {
+        return Ok(false);
+    }
+    super::host::retire_return(ctx);
+    let before = stretch(ctx);
+    settle_head(ctx, &before)?;
     fuel_in(ctx);
     Ok(true)
 }

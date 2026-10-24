@@ -885,6 +885,7 @@ pub fn emit_glue(inputs: &GlueInputs<'_>) -> Result<ObjectArtifact, CodegenError
                 &machine,
                 OptLevel::None,
                 hirsel_lir::emission::validate_stages(),
+                false,
             )?,
             manifested,
         )

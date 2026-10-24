@@ -110,3 +110,106 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         Ok(())
     }
 }
+
+impl<'m, 'a> FnEmitter<'m, 'a> {
+    pub(super) fn host_read_boundary(&mut self, call: CallId, enter: bool) -> Emitted {
+        let Some(state) = self.ahead_state else {
+            return Ok(());
+        };
+        let Some((buffer, name)) = self.inputs.ahead.and_then(|p| {
+            p.host_read(self.unit.header.instance, call).map(|r| {
+                (
+                    r.buffer,
+                    hirsel_lir::ahead::read_metadata_name(
+                        self.unit.header.instance,
+                        call,
+                        p.identity,
+                    ),
+                )
+            })
+        }) else {
+            return Ok(());
+        };
+        let recipe = self.glue_cell(&name, self.module.int_type(8));
+        let helper = self.runtime(if enter {
+            RuntimeEntry::HostEnter
+        } else {
+            RuntimeEntry::HostArm
+        })?;
+        if enter {
+            self.builder.call(helper, &[state, recipe]);
+            self.ahead_reload();
+        } else {
+            let place = self.slots[buffer.index()].ok_or_else(|| CodegenError::Invalid {
+                definition: self.definition().clone(),
+                what: "missing selected buffer slot".into(),
+            })?;
+            self.builder
+                .call(helper, &[self.context, recipe, place.ptr]);
+        }
+        Ok(())
+    }
+
+    /// Retain the selected inert buffer without a count mutation or runtime
+    /// allocator on the private stack. Its old fuel position is journaled on idle.
+    pub(super) fn host_instruction(&mut self, inst: &Inst) -> Emitted<bool> {
+        let Some(state) = self.ahead_state else {
+            return Ok(false);
+        };
+        let i = self.unit.blocks[self.at.0.index()].instructions.start as usize + self.at.1;
+        let Some(spine) = self
+            .inputs
+            .ahead
+            .and_then(|p| p.host_spine(self.unit.header.instance))
+        else {
+            return Ok(false);
+        };
+        if spine.barriers.contains(&i) {
+            self.ahead_barrier()?;
+        }
+        let Some(&slot) = spine.deferred_releases.get(&i) else {
+            return Ok(false);
+        };
+        let Inst::Release { value, .. } = *inst else {
+            return self.invalid("deferred cleanup is not a release");
+        };
+        let active = self.runtime(RuntimeEntry::HostActive)?;
+        let active = self.builder.call(active, &[state]);
+        let active = self.builder.icmp(
+            IntPredicate::Ne,
+            active,
+            self.module.const_zero(self.module.int_type(8)),
+        );
+        let held = self.module.append_block(self.function);
+        let ordinary = self.module.append_block(self.function);
+        let next = self.module.append_block(self.function);
+        self.builder.cond_br(active, held, ordinary);
+        self.builder.position(held);
+        let block = self.get(value)?;
+        let at = self.builder.offset(
+            self.context,
+            self.module.const_int(
+                self.module.int_type(64),
+                hirsel_lir::runtime_abi::CTX_FUEL_OFFSET.into(),
+            ),
+        );
+        let fuel = self.builder.load(self.module.int_type(64), at, 8);
+        let helper = self.runtime(RuntimeEntry::HostDefer)?;
+        self.builder.call(
+            helper,
+            &[
+                state,
+                self.module.const_int(self.module.int_type(32), slot.into()),
+                block,
+                fuel,
+            ],
+        );
+        self.builder.br(next);
+        self.builder.position(ordinary);
+        self.ahead_barrier()?;
+        self.instruction(inst)?;
+        self.builder.br(next);
+        self.builder.position(next);
+        Ok(true)
+    }
+}

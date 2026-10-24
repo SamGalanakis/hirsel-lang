@@ -19,7 +19,17 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 hirsel_lir::profile::instruction_site(unit, b, inst),
                 &format!("{:?}", inst.opcode()),
             )?;
-            if matches!(inst, Inst::Release { .. }) {
+            if self.host_instruction(inst)? {
+                continue;
+            }
+            if let Inst::Release { layout, .. } = inst
+                && !(self
+                    .inputs
+                    .ahead
+                    .and_then(|p| p.host_spine(unit.header.instance))
+                    .is_some()
+                    && hirsel_lir::ahead::scalar_image(self.inputs.layouts, *layout))
+            {
                 self.ahead_barrier()?;
             }
             self.instruction(inst)?;

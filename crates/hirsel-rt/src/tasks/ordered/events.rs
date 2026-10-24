@@ -15,6 +15,7 @@ pub(super) mod host_output;
 pub(crate) mod host_phases;
 mod host_requests;
 mod host_terminal;
+mod terminal_waits;
 pub(super) use host_requests::HostAuthority;
 mod host_values;
 mod jsonl;
@@ -217,6 +218,12 @@ pub(super) enum CanonicalOutcome {
     Awaiting {
         members: Vec<(u64, ObjectId)>,
     },
+    /// The selected global stop abandoned a proved saved await prefix.
+    /// No member result or completion rank was observed.
+    AwaitAbandoned {
+        task: Vec<u32>,
+        ordinal: u64,
+    },
     Selected {
         index: Option<u64>,
         member: Option<ObjectId>,
@@ -344,6 +351,9 @@ struct CancelAllEvidence {
 }
 
 struct AwaitAnyEvidence {
+    /// Generation-qualified native lookup keys, never canonical identities.
+    scope_word: u64,
+    set_word: u64,
     scope: ObjectId,
     set: ObjectId,
     members: Vec<(u64, ObjectId)>,
@@ -1867,13 +1877,20 @@ pub(crate) fn complete_host(
     // SAFETY: the host boundary has regained its scheduler role; no bridge
     // or stop-aware entry is permitted between the effect and its evidence.
     let s = unsafe { (*(*(*ctx).run_ptr()).tasks.get()).as_deref_mut().unwrap() };
+    let index = unsafe { (*ctx).task_id };
+    let task = super::super::handle(index, s.task(index).generation);
     let Logical::Ordered(driver) = &s.logical else {
         return;
     };
+    if let Some(completed) = driver.host_returns.get(&task) {
+        assert!(!close);
+        assert_eq!(&completed.result, result, "certified return cannot change");
+        return;
+    }
     if driver.events.is_none() {
         return;
     }
-    let task = unsafe { (*ctx).task_id };
+    let task = index;
     let path = s.task(task).path.clone();
     let Logical::Ordered(driver) = &mut s.logical else {
         unreachable!()
@@ -2540,6 +2557,8 @@ pub(super) fn prepare_await_any(ctx: *mut TaskCtx, scope_word: u64, set_word: u6
                 .map(|(index, word)| log.tasks.get(&word).cloned().map(|id| (index as u64, id)))
                 .collect::<Option<Vec<_>>>()?;
             Some(AwaitAnyEvidence {
+                scope_word,
+                set_word,
                 scope,
                 set,
                 members,
@@ -3375,6 +3394,9 @@ pub(super) fn record(
         native_outcome: operation.map(|(_, result)| (result.status, result.image.clone())),
     });
 }
+
+#[cfg(test)]
+mod terminal_tests;
 
 #[cfg(test)]
 mod tests {

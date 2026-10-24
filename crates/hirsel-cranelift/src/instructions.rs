@@ -17,9 +17,24 @@ use crate::module::{Emitted, PTR};
 
 impl FnEmitter<'_, '_, '_> {
     pub(crate) fn instruction(&mut self, inst: &Inst) -> Emitted {
-        if matches!(inst, Inst::Release { .. }) {
+        if self.host_instruction(inst)? {
+            return Ok(());
+        }
+        if let Inst::Release { layout, .. } = inst
+            && !(self
+                .em
+                .inputs
+                .unit()
+                .ahead
+                .and_then(|p| p.host_spine(self.unit.header.instance))
+                .is_some()
+                && hirsel_lir::ahead::scalar_image(self.em.inputs.unit().layouts, *layout))
+        {
             self.ahead_barrier()?;
         }
+        self.instruction_body(inst)
+    }
+    pub(crate) fn instruction_body(&mut self, inst: &Inst) -> Emitted {
         match *inst {
             Inst::Const { result, constant } => {
                 let value = self.constant(constant)?;

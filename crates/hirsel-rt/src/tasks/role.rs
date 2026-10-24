@@ -114,7 +114,7 @@ impl Role {
         self.release_with(task, || {});
     }
 
-    fn release_with(&self, task: usize, before: impl FnOnce()) {
+    fn release_with(&self, task: usize, before: impl FnOnce()) -> bool {
         let mut owner = self.owner.lock().unwrap_or_else(|e| e.into_inner());
         if *owner == Some(task) {
             before();
@@ -124,6 +124,9 @@ impl Role {
             } else {
                 self.available.notify_one();
             }
+            true
+        } else {
+            false
         }
     }
 }
@@ -267,6 +270,12 @@ pub(crate) unsafe fn enter(ctx: *mut TaskCtx) {
 /// # Safety
 /// `ctx` is live. No scheduler/object borrow survives this call.
 pub(crate) unsafe fn release(ctx: *mut TaskCtx) {
+    unsafe { release_owned(ctx) };
+}
+
+/// Return the actual released ownership under the same predicate lock. Idle
+/// task accounting may own the role without opening a semantic entry guard.
+unsafe fn release_owned(ctx: *mut TaskCtx) -> bool {
     // SAFETY: caller contract.
     let role = unsafe { &(*(*ctx).run_ptr()).role };
     if role.enabled.load(Ordering::Acquire) {
@@ -278,7 +287,9 @@ pub(crate) unsafe fn release(ctx: *mut TaskCtx) {
                     super::snapshot_shield(scheduler, ctx);
                 }
             }
-        });
+        })
+    } else {
+        false
     }
 }
 
@@ -333,6 +344,7 @@ impl Drop for Guard {
 pub(crate) struct Segment {
     ctx: *mut TaskCtx,
     depth: u32,
+    owned: bool,
 }
 
 impl Segment {
@@ -342,8 +354,8 @@ impl Segment {
         // SAFETY: caller contract.
         unsafe {
             let depth = std::mem::take(&mut (*ctx).role_depth);
-            release(ctx);
-            Self { ctx, depth }
+            let owned = release_owned(ctx);
+            Self { ctx, depth, owned }
         }
     }
 }
@@ -357,7 +369,7 @@ impl Drop for Segment {
                 0,
                 "user code left a runtime entry open"
             );
-            if self.depth != 0 {
+            if self.owned {
                 enter(self.ctx);
             }
             (*self.ctx).role_depth = self.depth;
@@ -547,6 +559,28 @@ mod tests {
             }
         });
         assert_eq!(unsafe { *(*run.shared()).role.owner.lock().unwrap() }, None);
+    }
+
+    #[test]
+    fn zero_depth_segment_restores_only_the_actual_idle_task_owner() {
+        for held in [false, true] {
+            let run = Run::new(true);
+            assert_eq!(unsafe { (*run.0).role_depth }, 0);
+            if held {
+                // Native idle accounting enters the role without opening a
+                // semantic runtime guard on the saved task's compiled stack.
+                unsafe { enter(run.0) };
+            }
+            {
+                let _segment = unsafe { Segment::new(run.0) };
+                assert_eq!(unsafe { *(*run.shared()).role.owner.lock().unwrap() }, None);
+                assert_eq!(unsafe { (*run.0).role_depth }, 0);
+            }
+            let restored = unsafe { *(*run.shared()).role.owner.lock().unwrap() };
+            unsafe { release(run.0) };
+            assert_eq!(restored, held.then_some(run.0.addr()));
+            assert_eq!(unsafe { (*run.0).role_depth }, 0);
+        }
     }
 
     #[test]
