@@ -108,3 +108,102 @@ impl LaunchSelection {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hirsel_engine::{DefinitionQueries, QueryEngine};
+    use std::sync::Arc;
+
+    fn fixture(
+        name: &str,
+        parameters: &str,
+    ) -> (
+        Arc<TypeInterner>,
+        hirsel_types::SignatureRef,
+        ProgramRevision,
+    ) {
+        let mut engine = QueryEngine::new(
+            hirsel_engine::default_environment(),
+            crate::compiler_adapters(),
+        );
+        let file = engine
+            .sources
+            .add(
+                "immutable-launch.hir",
+                format!("pub fn {name}({parameters})->Result[(),()]{{Ok(())}}"),
+            )
+            .unwrap();
+        let context = hirsel_engine::default_context();
+        assert!(
+            hirsel_engine::check_snapshot(&mut engine, file, &context)
+                .unwrap()
+                .diagnostics
+                .is_empty()
+        );
+        let mut path = hirsel_engine::entry_path(&context);
+        path.0.name = name.into();
+        let signature = engine.item_signature(&path).unwrap().value;
+        let revision = engine.semantic_program_revision(&path).unwrap();
+        (engine.types().clone(), signature, revision)
+    }
+
+    #[test]
+    fn immutable_launch_binding_denies_ungranted_roots_and_binds_explicit_grants_after_engine_drop()
+    {
+        hirsel_engine::with_compiler_stack(|| {
+            let (types, signature, revision) = fixture("main", "args:Args");
+            let launch = HostLaunch::empty();
+            let selected = LaunchSelection::read(launch).unwrap();
+            assert!(selected.entry().is_none());
+            assert!(!selected.requires_replayable(launch));
+            assert!(matches!(
+                selected.bind(launch, &types, &signature, &revision, CodeReach::Safe),
+                Err(ToolError::Launch(
+                    hirsel_run_schema::RunRefusal::NotGranted { .. }
+                ))
+            ));
+            let granted = HostLaunch::Live {
+                config: crate::LaunchConfig::Grants {
+                    input: std::ffi::OsStr::new("{\"args\":[]}"),
+                    arguments: None,
+                },
+                record: None,
+                revocations: None,
+            };
+            let selected = LaunchSelection::read(granted).unwrap();
+            let BoundHostRun::Live(bound) = selected
+                .bind(granted, &types, &signature, &revision, CodeReach::Safe)
+                .unwrap()
+            else {
+                panic!("grants must bind a live launch")
+            };
+            assert_eq!(bound.run().record().entry, revision.entry());
+            assert_eq!(bound.run().record().launch, LaunchKind::Main);
+        });
+    }
+
+    #[test]
+    fn immutable_callee_binding_selects_its_own_entry_and_preserves_call_kind() {
+        hirsel_engine::with_compiler_stack(|| {
+            let (types, signature, revision) = fixture("worker", "x:u8");
+            let run = hirsel_run_config::RunConfig::for_program(&revision, LaunchKind::Call)
+                .validated()
+                .unwrap();
+            let launch = HostLaunch::Callee {
+                run: &run,
+                record: None,
+            };
+            let selected = LaunchSelection::read(launch).unwrap();
+            assert_eq!(selected.entry().unwrap().to_string(), revision.entry());
+            let BoundHostRun::Live(bound) = selected
+                .bind(launch, &types, &signature, &revision, CodeReach::Safe)
+                .unwrap()
+            else {
+                panic!("a callee binds a live call")
+            };
+            assert_eq!(bound.run().record().entry, revision.entry());
+            assert_eq!(bound.run().record().launch, LaunchKind::Call);
+        });
+    }
+}
