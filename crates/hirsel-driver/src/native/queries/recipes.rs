@@ -1,6 +1,6 @@
 //! Source-instance recipes contain typed actuals and lexical owner keys, never
 //! cached Values or source bodies. Decode is reserved for an instance miss.
-use hirsel_engine::{NativeRecords, QueryEngine};
+use hirsel_engine::{NativeRecordSource, NativeRecords};
 use hirsel_layout::{instance::InstanceKey, layout::LayoutBuilder};
 use hirsel_rc::instance::{
     Actuals, DiscoveryContext, InstanceId, InstanceRole, Instances, Program, discover_instance,
@@ -73,14 +73,18 @@ impl SourceRecipe {
             .ok_or("empty source recipe")?
             .key(&self.definition)
     }
-    pub fn encode(&self, records: &NativeRecords, engine: &QueryEngine) -> Result<Vec<u8>, String> {
+    pub fn encode(
+        &self,
+        records: &NativeRecords,
+        engine: &impl NativeRecordSource,
+    ) -> Result<Vec<u8>, String> {
         records
             .encode(engine, self)
             .ok_or_else(|| "source recipe encoding failed".into())
     }
     pub fn decode(
         records: &NativeRecords,
-        engine: &QueryEngine,
+        engine: &impl NativeRecordSource,
         bytes: &[u8],
     ) -> Result<Self, String> {
         let recipe: Self = records
@@ -211,14 +215,18 @@ impl LibraryRecipe {
         InstanceKey::from_encoding(&self.definition, 0, self.encoding.clone())
             .map_err(|e| format!("library recipe key: {e:?}"))
     }
-    pub fn encode(&self, records: &NativeRecords, engine: &QueryEngine) -> Result<Vec<u8>, String> {
+    pub fn encode(
+        &self,
+        records: &NativeRecords,
+        engine: &impl NativeRecordSource,
+    ) -> Result<Vec<u8>, String> {
         records
             .encode(engine, self)
             .ok_or_else(|| "library recipe encoding failed".into())
     }
     pub fn decode(
         records: &NativeRecords,
-        engine: &QueryEngine,
+        engine: &impl NativeRecordSource,
         bytes: &[u8],
     ) -> Result<Self, String> {
         let recipe: Self = records
