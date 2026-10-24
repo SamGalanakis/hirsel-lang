@@ -683,3 +683,109 @@ fn ownership_reference_parent_finalizer_finishes_before_each_real_child_finalize
         );
     }
 }
+
+#[test]
+fn ownership_reference_defuse_retires_an_owned_resource_without_running_its_finalizer() {
+    for fail in [false, true] {
+        let mut builder = Builder::new();
+        let token = token(&mut builder);
+        builder.emit(InstructionKind::Defuse { place: token }, 5, CleanupId(0));
+        let value = builder.unit();
+        let main = if fail {
+            builder.block(
+                Terminator::Fail {
+                    rule: const { hirsel_diag::RuleId::of("FAIL-1") },
+                    cleanup: CleanupId(0),
+                },
+                9,
+            );
+            builder.definition("main")
+        } else {
+            builder.finish("main", value)
+        };
+        // This finalizer must remain suppressed by the actual Defuse.
+        let traced = observed(vec![main, finalizer(true)], &runtime_types());
+        assert_eq!(matches!(traced.execution.outcome, Outcome::Failed(_)), fail);
+        let analysis = traced.trace.unwrap().analyze([9; 32], 100).unwrap();
+        assert_eq!(
+            (analysis.created, analysis.dropped, analysis.live.len()),
+            (1, 1, 0)
+        );
+    }
+}
+
+#[test]
+fn ownership_reference_defused_owned_parent_still_releases_its_actual_child() {
+    for fail in [false, true] {
+        let mut builder = Builder::new();
+        let child = token(&mut builder);
+        let parent_kind = TypeKind::Named {
+            definition: DefId::intern(&path("Parent")),
+            arguments: vec![].into(),
+        };
+        let parent = builder.local(parent_kind.clone(), Storage::Local);
+        builder.assign(
+            parent,
+            Rvalue::Construct {
+                constructor: Constructor::Record(path("Parent")),
+                fields: vec![ConstructField {
+                    field: 0,
+                    value: take(child),
+                }],
+                destination: Destination::Inferred,
+            },
+            4,
+            CleanupId(0),
+        );
+        builder.emit(InstructionKind::Defuse { place: parent }, 5, CleanupId(0));
+        let mut parent_drop = Builder::new();
+        parent_drop.borrowed_parameter(parent_kind);
+        parent_drop.block(
+            Terminator::Fail {
+                rule: const { hirsel_diag::RuleId::of("FAIL-1") },
+                cleanup: CleanupId(0),
+            },
+            9,
+        );
+        let parent_drop = parent_drop.definition("Parent_drop");
+        let mut runtime = runtime_types();
+        runtime.nominals.push(Nominal {
+            definition: path("Parent"),
+            resource: true,
+            distinct: false,
+            finalizer: Some((path("Parent_drop"), BodyId(0))),
+            fields: 1,
+            representation: None,
+        });
+        let result = builder.unit();
+        let main = if fail {
+            builder.block(
+                Terminator::Fail {
+                    rule: const { hirsel_diag::RuleId::of("FAIL-1") },
+                    cleanup: CleanupId(0),
+                },
+                9,
+            );
+            builder.definition("main")
+        } else {
+            builder.finish("main", result)
+        };
+        let traced = observed(vec![main, parent_drop, finalizer(false)], &runtime);
+        assert_eq!(matches!(traced.execution.outcome, Outcome::Failed(_)), fail);
+        let trace = traced.trace.unwrap();
+        let analysis = trace.analyze([9; 32], 100).unwrap();
+        assert_eq!(
+            (analysis.created, analysis.dropped, analysis.live.len()),
+            (2, 2, 0)
+        );
+        let drops: Vec<_> = trace
+            .events
+            .iter()
+            .filter_map(|e| match &e.action {
+                Action::Drop { token, .. } => Some(token.sequence),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(drops, [1, 0]);
+    }
+}
