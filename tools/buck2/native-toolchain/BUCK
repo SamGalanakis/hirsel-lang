@@ -95,3 +95,7 @@ toolchain_proof(name = "native-bound-bootstrap-proof", tools = [":llvm", ":linke
 toolchain_proof(name = "native-selector-proof", tools = [":llvm", ":linker", ":kit", "root//:hirsel-rt-archives", ":runtime-auditor", ":glibc_floor", ":qemu", "root//:hirsel-driver-unittest-harness"], script = "native_selector_proof.py", interpreter = "python3")
 
 toolchain_proof(name = "native-selector-input-proof", tools = [":llvm", ":linker", ":kit", "root//:hirsel-rt-archives", ":runtime-auditor", ":glibc_floor", ":qemu", "root//:hirsel-driver-unittest-harness"], script = "native_selector_input_proof.py", interpreter = "python3")
+
+toolchain_proof(name = "scratch-linker-proof", tools = [":linker", "toolchains//:llvm", "root//:hirsel-driver-unittest-harness"], script = "scratch_linker_proof.py", interpreter = "python3")
+
+toolchain_proof(name = "scratch-transport-units", tools = [":llvm", "root//:hirsel-engine-unittest-harness", "root//:hirsel-driver-unittest-harness"], script = "scratch_transport_units.sh")
