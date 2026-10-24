@@ -164,3 +164,4 @@ mod scheduled_growth;
 mod scheduled_check;
 mod scheduled_run;
 mod native_discovery_cache_19;
+mod scheduled_native;

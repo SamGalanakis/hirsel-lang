@@ -23,32 +23,7 @@ impl QueryEngine {
         if !self.s1.is_empty() || !self.s1.failure_is_own() || !self.signature_stack.is_empty() {
             return None;
         }
-        fn semantic(
-            summary: &DefinitionSummary,
-            growth: &ParameterGrowth,
-        ) -> (DefinitionSummary, ParameterGrowth) {
-            let mut summary = summary.clone();
-            for call in &mut summary.calls {
-                call.site = Span::default();
-            }
-            let mut growth = growth.clone();
-            for edge in &mut growth.edges {
-                edge.3 = Span::default();
-            }
-            (summary, growth)
-        }
-        // Use the portable codec's canonical type graph positions. Diagnostic
-        // locations remain in the published record and its position witnesses;
-        // source text, reads and locations are outside the semantic output.
-        let value = (
-            semantic(summary, growth),
-            checked.map(|c| semantic(&c.summary, &c.growth)),
-        );
-        let bytes = super::persistent::canonical_bytes(self.types.clone(), &self.items, &value)?;
-        Some(ContentHash::of_parts(
-            "hirsel.summary.output.v1",
-            [bytes.as_slice()],
-        ))
+        summary_identity(self.types.clone(), summary, growth, checked)
     }
 
     /// Extend a completed compact summary only when a program-level storage
@@ -501,4 +476,40 @@ impl QueryEngine {
             })
             .collect()
     }
+}
+
+/// The canonical semantic summary identity shared by scalar and admitted
+/// publication. All diagnostic positions are excluded before encoding.
+pub(crate) fn summary_identity(
+    types: Arc<hirsel_types::TypeInterner>,
+    summary: &DefinitionSummary,
+    growth: &ParameterGrowth,
+    checked: Option<&CheckedSummary>,
+) -> Option<ContentHash> {
+    fn semantic(
+        summary: &DefinitionSummary,
+        growth: &ParameterGrowth,
+    ) -> (DefinitionSummary, ParameterGrowth) {
+        let mut summary = summary.clone();
+        for call in &mut summary.calls {
+            call.site = Span::default();
+        }
+        let mut growth = growth.clone();
+        for edge in &mut growth.edges {
+            edge.3 = Span::default();
+        }
+        (summary, growth)
+    }
+    // Use the portable codec's canonical type graph positions. Diagnostic
+    // locations remain in the published record and its position witnesses;
+    // source text, reads and locations are outside the semantic output.
+    let value = (
+        semantic(summary, growth),
+        checked.map(|c| semantic(&c.summary, &c.growth)),
+    );
+    let bytes = hirsel_product_codec::canonical_bytes(types, &value, |_| None)?;
+    Some(ContentHash::of_parts(
+        "hirsel.summary.output.v1",
+        [bytes.as_slice()],
+    ))
 }

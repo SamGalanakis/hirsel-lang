@@ -10,8 +10,12 @@ mod parallel;
 pub(crate) mod s1;
 mod scheduled_check;
 mod scheduled_lower;
+mod scheduled_native;
 mod scheduled_run;
 pub use scheduled_check::{FRONT_CHECK_KIND, FrontCheckOutput, FrontCheckPlan, FrontCheckQueries};
+pub use scheduled_native::{
+    FRONT_NATIVE_DEFINITION_KIND, FrontNativeDefinitionOutput, FrontNativeDefinitionQueries,
+};
 pub use scheduled_run::{FRONT_RUN_KIND, FrontRunOutput, FrontRunQueries};
 mod scheduled_growth;
 pub use parallel::{

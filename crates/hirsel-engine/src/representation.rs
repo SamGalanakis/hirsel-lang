@@ -97,34 +97,44 @@ impl QueryEngine {
                 message: "stale private representation".into(),
             }));
         }
-        // Encoded as Private so the CAP-5 ceiling binds the revision.
-        let mut private =
-            hirsel_types::encoding::owner_view(&public, record.representation.declaration.clone());
-        private.metadata.visibility = hirsel_syntax::Visibility::Private;
-        let shape =
-            hirsel_types::encoding::canonical_encoding(&self.types, &private, &record.dependencies)
-                .map_err(|e| {
-                    QueryError::Operational(hirsel_types::OperationalFailure {
-                        operation: "owner representation".into(),
-                        message: format!("{e:?}"),
-                    })
-                })?;
-        let representation_revision =
-            ContentHash::of_parts("hirsel.owner-representation.v1", [shape.as_slice()]);
-        let declaration = record.representation.declaration;
-        let finalizer = match &declaration.drop {
+        let finalizer = match &record.representation.declaration.drop {
             Some(path) => Some((path.clone(), self.lower_to_tir(path)?.value.entry)),
             None => None,
         };
-        Ok(RepresentationRecord {
-            definition: definition.clone(),
-            representation_revision,
-            generics: declaration.generics,
-            private_shape: declaration.representation.expect("owner shape"),
-            layout_promises: declaration.layout,
-            resource: declaration.resource,
-            finalizer,
-            unsafe_ffi_package: public.metadata.unsafe_ffi,
-        })
+        completed_owner_record(&self.types, definition, &public, record, finalizer)
     }
+}
+
+pub(crate) fn completed_owner_record(
+    types: &hirsel_types::TypeInterner,
+    definition: &DefPath,
+    public: &hirsel_types::SignatureRef,
+    record: OwnerRecord,
+    finalizer: Option<(DefPath, hirsel_tir::BodyId)>,
+) -> Result<RepresentationRecord, QueryError> {
+    // Encoded as Private so the CAP-5 ceiling binds the revision.
+    let mut private =
+        hirsel_types::encoding::owner_view(public, record.representation.declaration.clone());
+    private.metadata.visibility = hirsel_syntax::Visibility::Private;
+    let shape = hirsel_types::encoding::canonical_encoding(types, &private, &record.dependencies)
+        .map_err(|e| {
+        QueryError::Operational(hirsel_types::OperationalFailure {
+            operation: "owner representation".into(),
+            message: format!("{e:?}"),
+        })
+    })?;
+    let representation_revision =
+        ContentHash::of_parts("hirsel.owner-representation.v1", [shape.as_slice()]);
+    let declaration = record.representation.declaration;
+
+    Ok(RepresentationRecord {
+        definition: definition.clone(),
+        representation_revision,
+        generics: declaration.generics,
+        private_shape: declaration.representation.expect("owner shape"),
+        layout_promises: declaration.layout,
+        resource: declaration.resource,
+        finalizer,
+        unsafe_ffi_package: public.metadata.unsafe_ffi,
+    })
 }
