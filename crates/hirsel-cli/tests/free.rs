@@ -1111,6 +1111,11 @@ fn f1_failed_root_terminal_outcome_replays_exactly() {
 
 #[test]
 fn f1_blocked_terminal_outcome_replays_exactly() {
+    // Full F1 phases are exercised by the qualification configuration. The
+    // ordinary admission control checks the shipping legacy-tape path.
+    if !hirsel_rt::free_driver::admission_enabled() {
+        return;
+    }
     f1_corpus_matrix_with_exit(
         "blocked-root",
         "pub fn main(rt: Io) -> Result[(), GrantError] { let tasks = io.tasks(rt)?; let (tx, rx): (Sender[u32], Receiver[u32]) = channel.open(tasks); let mut sender = take tx; let mut receiver = take rx; let _ = channel.receive(tasks, mut receiver); let _ = channel.send(tasks, mut sender, 1u32); Ok(()) }",
@@ -1257,6 +1262,11 @@ fn f1_terminal_restoration_matrix(level: &str, dimensions: &[(&str, Option<usize
 
 #[test]
 fn f1_canceled_sleep_completion_is_consumed_before_terminal_restoration() {
+    // Full F1 phases are exercised by the qualification configuration. The
+    // ordinary admission control checks the shipping legacy-tape path.
+    if !hirsel_rt::free_driver::admission_enabled() {
+        return;
+    }
     f1_corpus_matrix_with_io(
         "canceled-sleep",
         r#"
@@ -1716,6 +1726,11 @@ pub fn main(rt: Io, args: Args) -> Result[(), E] {
 
 #[test]
 fn f1_tcp_listener_and_connect_addr_replay_without_sockets() {
+    // Full F1 phases are exercised by the qualification configuration. The
+    // ordinary admission control checks the shipping legacy-tape path.
+    if !hirsel_rt::free_driver::admission_enabled() {
+        return;
+    }
     let reservation = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
     let port = reservation.local_addr().unwrap().port();
     drop(reservation);
