@@ -434,6 +434,7 @@ impl RealIo {
                 files: BTreeMap::new(),
                 prefetched: None,
                 prefetched_output: None,
+                prefetched_path: None,
                 observed_output: None,
                 last_open: None,
                 partial: None,
@@ -1850,6 +1851,7 @@ struct Disk {
     files: BTreeMap<u64, Arc<File>>,
     prefetched: Option<concurrent::FileResult>,
     prefetched_output: Option<(Result<(), IoError>, usize)>,
+    prefetched_path: Option<PathResult>,
     observed_output: Option<u64>,
     last_open: Option<File>,
     partial: Option<(IoError, usize)>,
@@ -1897,7 +1899,150 @@ fn entry_metadata(meta: &std::fs::Metadata) -> Metadata {
         ),
     }
 }
+/// One path syscall's outcome, performed by a concurrent caller on a detached
+/// directory view before the locked dispatch consumes it in place of its own.
+#[derive(Debug)]
+pub(super) enum PathResult {
+    File(Result<File, IoError>),
+    Metadata(Result<Metadata, IoError>),
+    Bytes(Result<Vec<u8>, IoError>),
+    Unit(Result<(), IoError>),
+}
+
+/// An activated directory: its descriptor and tree prefix. Disk resolves
+/// every confined path through this view, locked or detached.
+pub(super) struct At<'a> {
+    pub(super) base: &'a File,
+    pub(super) active: &'a str,
+}
+
+impl At<'_> {
+    fn local<'p>(&self, path: &'p str) -> Result<&'p str, IoError> {
+        if self.active.is_empty() {
+            Ok(path)
+        } else if path == self.active {
+            Ok("")
+        } else {
+            path.strip_prefix(&format!("{}/", self.active))
+                .ok_or(IoError::Fault(1))
+        }
+    }
+    fn open(&self, path: &str, flags: i32, mode: u64) -> Result<File, IoError> {
+        open_beneath(self.base.as_raw_fd(), self.local(path)?, flags, mode)
+    }
+    fn parent(&self, path: &str) -> Result<(File, CString), IoError> {
+        let (parent, name) = path.rsplit_once('/').unwrap_or(("", path));
+        if name.is_empty() {
+            return Err(IoError::Fault(1));
+        }
+        Ok((
+            self.open(parent, libc::O_RDONLY | libc::O_DIRECTORY, 0)?,
+            CString::new(name).map_err(|_| IoError::Fault(1))?,
+        ))
+    }
+    fn open_file(&self, path: &str) -> Result<File, IoError> {
+        let fd = self.open(path, libc::O_RDONLY | libc::O_NONBLOCK, 0)?;
+        if !fd.metadata().map_err(error)?.is_file() {
+            return Err(IoError::IsDirectory);
+        }
+        Ok(fd)
+    }
+    fn open_append_file(&self, path: &str) -> Result<File, IoError> {
+        // Go os.OpenFile(O_APPEND|O_CREATE|O_WRONLY): retain confined pinned paths.
+        // Open and check before writing: special files never receive writes.
+        let fd = self.open(
+            path,
+            libc::O_WRONLY | libc::O_CREAT | libc::O_APPEND | libc::O_NONBLOCK,
+            0o600,
+        )?;
+        if !fd.metadata().map_err(error)?.is_file() {
+            return Err(IoError::IsDirectory);
+        }
+        Ok(fd)
+    }
+    fn create_file(&self, path: &str) -> Result<File, IoError> {
+        let fd = self.open_append_file(path)?;
+        fd.set_len(0).map_err(error)?;
+        Ok(fd)
+    }
+    fn read(&self, path: &str) -> Result<Vec<u8>, IoError> {
+        let mut fd = self.open_file(path)?;
+        let mut bytes = vec![];
+        fd.read_to_end(&mut bytes).map_err(error)?;
+        Ok(bytes)
+    }
+    fn metadata(&self, path: &str) -> Result<Metadata, IoError> {
+        let pin = if self.local(path)?.is_empty() {
+            self.base.try_clone().map_err(error)?
+        } else {
+            let (parent, name) = self.parent(path)?;
+            open_component(
+                parent.as_raw_fd(),
+                name.to_str().map_err(|_| IoError::Fault(1))?,
+                libc::O_PATH,
+                0,
+            )?
+        };
+        Ok(entry_metadata(&pin.metadata().map_err(error)?))
+    }
+    fn unlink(&self, path: &str, flags: i32) -> Result<(), IoError> {
+        let (dir, name) = self.parent(path)?;
+        // SAFETY: live directory fd and NUL-terminated local leaf; unlinkat never
+        // follows the leaf, and AT_REMOVEDIR refuses symlinks and nonempty dirs.
+        if unsafe { libc::unlinkat(dir.as_raw_fd(), name.as_ptr(), flags) } != 0 {
+            Err(error(std::io::Error::last_os_error()))
+        } else {
+            Ok(())
+        }
+    }
+    fn mkdir(&self, path: &str) -> Result<(), IoError> {
+        let (parent, name) = self.parent(path)?;
+        // SAFETY: live pinned directory and terminated leaf; mkdirat does not follow the leaf.
+        if unsafe { libc::mkdirat(parent.as_raw_fd(), name.as_ptr(), 0o777) } != 0 {
+            Err(error(std::io::Error::last_os_error()))
+        } else {
+            Ok(())
+        }
+    }
+    /// The syscall execute_storage would make for `request` at `path`.
+    pub(super) fn call(&self, request: &Request, path: &str) -> PathResult {
+        use Request as R;
+        match request {
+            R::Open { .. } => PathResult::File(self.open_file(path)),
+            R::OpenAppend { .. } => PathResult::File(self.open_append_file(path)),
+            R::Create { .. } => PathResult::File(self.create_file(path)),
+            R::Read { .. } | R::Size { .. } => PathResult::Bytes(self.read(path)),
+            R::Metadata { .. } => PathResult::Metadata(self.metadata(path)),
+            R::Mkdir { .. } => PathResult::Unit(self.mkdir(path)),
+            R::RemoveDir { .. } => PathResult::Unit(self.unlink(path, libc::AT_REMOVEDIR)),
+            R::Remove { .. } => PathResult::Unit(if self.local(path).is_ok_and(str::is_empty) {
+                Err(IoError::IsDirectory)
+            } else {
+                self.local(path).and_then(|_| self.unlink(path, 0))
+            }),
+            _ => unreachable!("not a detached path syscall"),
+        }
+    }
+}
+
 impl Disk {
+    fn at(&self) -> Result<At<'_>, IoError> {
+        Ok(At {
+            base: self.base()?,
+            active: &self.active,
+        })
+    }
+    /// Activate `id` and detach its view for an unlocked path syscall.
+    pub(super) fn detach(&mut self, id: u64, root: &str) -> Result<(File, String), IoError> {
+        self.activate(id, root);
+        Ok((
+            self.base()?.try_clone().map_err(error)?,
+            self.active.clone(),
+        ))
+    }
+    fn prefetched_path(&mut self) -> Option<PathResult> {
+        self.prefetched_path.take()
+    }
     fn base(&self) -> Result<&File, IoError> {
         if self.active_id == 0 {
             self.mounts.get(&self.active).map(|pin| pin.descriptor())
@@ -1917,17 +2062,10 @@ impl Disk {
         }
     }
     fn open(&self, path: &str, flags: i32, mode: u64) -> Result<File, IoError> {
-        open_beneath(self.base()?.as_raw_fd(), self.local(path)?, flags, mode)
+        self.at()?.open(path, flags, mode)
     }
     fn parent(&self, path: &str) -> Result<(File, CString), IoError> {
-        let (parent, name) = path.rsplit_once('/').unwrap_or(("", path));
-        if name.is_empty() {
-            return Err(IoError::Fault(1));
-        }
-        Ok((
-            self.open(parent, libc::O_RDONLY | libc::O_DIRECTORY, 0)?,
-            CString::new(name).map_err(|_| IoError::Fault(1))?,
-        ))
+        self.at()?.parent(path)
     }
 }
 impl Disk {
@@ -2099,31 +2237,29 @@ impl Storage for Disk {
         old.dev() == new.dev() && old.ino() == new.ino()
     }
     fn open_file(&mut self, path: &str, _id: u64) -> Result<(), IoError> {
-        let fd = self.open(path, libc::O_RDONLY | libc::O_NONBLOCK, 0)?;
-        if !fd.metadata().map_err(error)?.is_file() {
-            return Err(IoError::IsDirectory);
-        }
+        let fd = match self.prefetched_path() {
+            Some(PathResult::File(fd)) => fd,
+            None => self.at()?.open_file(path),
+            other => unreachable!("prefetched {other:?} for open"),
+        }?;
         self.last_open = Some(fd);
         Ok(())
     }
-    fn create_file(&mut self, path: &str, id: u64) -> Result<(), IoError> {
-        self.open_append_file(path, id)?;
-        let fd = self.last_open.take().expect("opened file");
-        fd.set_len(0).map_err(error)?;
+    fn create_file(&mut self, path: &str, _id: u64) -> Result<(), IoError> {
+        let fd = match self.prefetched_path() {
+            Some(PathResult::File(fd)) => fd,
+            None => self.at()?.create_file(path),
+            other => unreachable!("prefetched {other:?} for create"),
+        }?;
         self.last_open = Some(fd);
         Ok(())
     }
     fn open_append_file(&mut self, path: &str, _id: u64) -> Result<(), IoError> {
-        // Go os.OpenFile(O_APPEND|O_CREATE|O_WRONLY): retain confined pinned paths.
-        // Open and check before writing: special files never receive writes.
-        let fd = self.open(
-            path,
-            libc::O_WRONLY | libc::O_CREAT | libc::O_APPEND | libc::O_NONBLOCK,
-            0o600,
-        )?;
-        if !fd.metadata().map_err(error)?.is_file() {
-            return Err(IoError::IsDirectory);
-        }
+        let fd = match self.prefetched_path() {
+            Some(PathResult::File(fd)) => fd,
+            None => self.at()?.open_append_file(path),
+            other => unreachable!("prefetched {other:?} for append"),
+        }?;
         self.last_open = Some(fd);
         Ok(())
     }
@@ -2173,13 +2309,11 @@ impl Storage for Disk {
         Ok(written as u64)
     }
     fn read(&mut self, path: &str) -> Result<Vec<u8>, IoError> {
-        let mut fd = self.open(path, libc::O_RDONLY | libc::O_NONBLOCK, 0)?;
-        if !fd.metadata().map_err(error)?.is_file() {
-            return Err(IoError::IsDirectory);
+        match self.prefetched_path() {
+            Some(PathResult::Bytes(bytes)) => bytes,
+            None => self.at()?.read(path),
+            other => unreachable!("prefetched {other:?} for read"),
         }
-        let mut bytes = vec![];
-        fd.read_to_end(&mut bytes).map_err(error)?;
-        Ok(bytes)
     }
     fn write(
         &mut self,
@@ -2277,16 +2411,15 @@ impl Storage for Disk {
         }
     }
     fn remove(&mut self, path: &str) -> Result<(), IoError> {
+        let prefetched = self.prefetched_path();
         if self.local(path)?.is_empty() {
             return Err(IoError::IsDirectory);
         }
         self.prepared.remove(&(self.active_id, path.into()));
-        let (dir, name) = self.parent(path)?;
-        // SAFETY: live directory fd and NUL-terminated local leaf. unlink never follows links.
-        if unsafe { libc::unlinkat(dir.as_raw_fd(), name.as_ptr(), 0) } != 0 {
-            Err(error(std::io::Error::last_os_error()))
-        } else {
-            Ok(())
+        match prefetched {
+            Some(PathResult::Unit(result)) => result,
+            None => self.at()?.unlink(path, 0),
+            other => unreachable!("prefetched {other:?} for remove"),
         }
     }
     fn rename(&mut self, from: &str, to: &str) -> Result<(), IoError> {
@@ -2342,21 +2475,17 @@ impl Storage for Disk {
         }
     }
     fn mkdir(&mut self, path: &str) -> Result<(), IoError> {
-        let (parent, name) = self.parent(path)?;
-        // SAFETY: live pinned directory and terminated leaf; mkdirat does not follow the leaf.
-        if unsafe { libc::mkdirat(parent.as_raw_fd(), name.as_ptr(), 0o777) } != 0 {
-            Err(error(std::io::Error::last_os_error()))
-        } else {
-            Ok(())
+        match self.prefetched_path() {
+            Some(PathResult::Unit(result)) => result,
+            None => self.at()?.mkdir(path),
+            other => unreachable!("prefetched {other:?} for mkdir"),
         }
     }
     fn remove_dir(&mut self, path: &str) -> Result<(), IoError> {
-        let (parent, name) = self.parent(path)?;
-        // SAFETY: pinned confined directory; AT_REMOVEDIR refuses symlinks and nonempty dirs.
-        if unsafe { libc::unlinkat(parent.as_raw_fd(), name.as_ptr(), libc::AT_REMOVEDIR) } != 0 {
-            Err(error(std::io::Error::last_os_error()))
-        } else {
-            Ok(())
+        match self.prefetched_path() {
+            Some(PathResult::Unit(result)) => result,
+            None => self.at()?.unlink(path, libc::AT_REMOVEDIR),
+            other => unreachable!("prefetched {other:?} for remove_dir"),
         }
     }
     fn set_permissions(&mut self, path: &str, permissions: u32) -> Result<(), IoError> {
@@ -2535,18 +2664,11 @@ impl Storage for Disk {
     }
 
     fn metadata(&mut self, path: &str) -> Result<Metadata, IoError> {
-        let pin = if self.local(path)?.is_empty() {
-            self.base()?.try_clone().map_err(error)?
-        } else {
-            let (parent, name) = self.parent(path)?;
-            open_component(
-                parent.as_raw_fd(),
-                name.to_str().map_err(|_| IoError::Fault(1))?,
-                libc::O_PATH,
-                0,
-            )?
-        };
-        Ok(entry_metadata(&pin.metadata().map_err(error)?))
+        match self.prefetched_path() {
+            Some(PathResult::Metadata(metadata)) => metadata,
+            None => self.at()?.metadata(path),
+            other => unreachable!("prefetched {other:?} for metadata"),
+        }
     }
     fn read_dir(&mut self, path: &str) -> Result<Vec<DirEntry>, IoError> {
         let fd = self.open(path, libc::O_RDONLY | libc::O_DIRECTORY, 0)?;

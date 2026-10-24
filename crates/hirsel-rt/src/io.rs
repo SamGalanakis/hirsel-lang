@@ -1298,6 +1298,30 @@ impl State {
             _ => Err(AdapterError::InvalidHandle(id)),
         }
     }
+    /// The confined directory, root and path at which execute_storage performs
+    /// one of the path syscalls a concurrent caller may run without its lock.
+    /// None when execute_storage would refuse before reaching storage.
+    pub(crate) fn path_target(&self, request: &Request) -> Option<(u64, String, String)> {
+        use Request as R;
+        let (directory, path) = match request {
+            R::Open { directory, path }
+            | R::OpenAppend { directory, path }
+            | R::Create { directory, path }
+            | R::Size { directory, path }
+            | R::Metadata { directory, path }
+            | R::Mkdir { directory, path }
+            | R::RemoveDir { directory, path }
+            | R::Read { directory, path }
+            | R::Remove { directory, path } => (*directory, path),
+            _ => return None,
+        };
+        let root = self.directory(directory).ok()?;
+        let path = confined_relative(&root, path)?;
+        if path == root && matches!(request, R::Mkdir { .. } | R::RemoveDir { .. }) {
+            return None;
+        }
+        Some((directory, root, path))
+    }
     pub(crate) fn directory(&self, id: u64) -> Result<String, AdapterError> {
         match self.handles.rows.get(&id) {
             Some(Grant::Directory { root, .. }) => Ok(root.clone()),

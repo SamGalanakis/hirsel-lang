@@ -581,3 +581,81 @@ fn mapping_and_open_file_discover_the_same_storage() {
     );
     assert_eq!(io.identity(file), io.identity(mapped));
 }
+
+#[test]
+fn runtime50_path_syscalls_run_outside_the_core_lock() {
+    let (temp, mut io, directory) = adapter();
+    std::fs::write(temp.path().join("a"), b"held").unwrap();
+    std::fs::write(temp.path().join("b"), b"free").unwrap();
+    std::fs::write(temp.path().join("c"), b"gone").unwrap();
+    let (entered, arrived) = mpsc::channel();
+    let release = Arc::new(Barrier::new(2));
+    let gate = release.clone();
+    io.before_path = Some(Arc::new(move |request: &Request| {
+        if matches!(request, Request::Size { path, .. } if path == "a") {
+            entered.send(()).unwrap();
+            gate.wait();
+        }
+    }));
+    let io = Arc::new(io);
+    let held = {
+        let io = io.clone();
+        std::thread::spawn(move || {
+            io.call(Request::Size {
+                directory,
+                path: "a".into(),
+            })
+        })
+    };
+    arrived.recv_timeout(Duration::from_secs(5)).unwrap();
+    // An independent shared namespace member completes while the first
+    // path syscall is in flight: the core lock is not held across it.
+    let (opened, open_done) = mpsc::channel();
+    let opener = {
+        let io = io.clone();
+        std::thread::spawn(move || {
+            let result = io.call(Request::Read {
+                directory,
+                path: "b".into(),
+            });
+            opened.send(()).unwrap();
+            result
+        })
+    };
+    open_done.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_eq!(
+        opener.join().unwrap(),
+        Ok(Completion::Bytes(Ok(b"free".to_vec())))
+    );
+    // A namespace mutation still waits for the in-flight shared member.
+    let (removed, remove_done) = mpsc::channel();
+    let remover = {
+        let io = io.clone();
+        std::thread::spawn(move || {
+            let result = io.call(Request::Remove {
+                directory,
+                path: "c".into(),
+            });
+            removed.send(()).unwrap();
+            result
+        })
+    };
+    assert!(remove_done.recv_timeout(Duration::from_millis(20)).is_err());
+    assert!(temp.path().join("c").exists());
+    release.wait();
+    assert_eq!(held.join().unwrap(), Ok(Completion::Size(Ok(4))));
+    assert_eq!(remover.join().unwrap(), Ok(Completion::Unit(Ok(()))));
+    assert!(!temp.path().join("c").exists());
+    let tape = io.tape();
+    // Size and Read replay from their tagged inputs; Remove needs its member.
+    let tree = Tree::new(BTreeMap::from([("c".into(), b"gone".to_vec())])).unwrap();
+    let mut replay = SimIo::new(tree, tape.clone());
+    for event in tape {
+        let completion = match event.completion {
+            Completion::FileInput(input) => input.completion(&event.request).unwrap(),
+            completion => completion,
+        };
+        assert_eq!(replay.call(event.request), Ok(completion));
+    }
+    replay.finish().unwrap();
+}

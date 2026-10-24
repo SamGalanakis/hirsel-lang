@@ -18,6 +18,8 @@ pub struct ConcurrentIo {
     tls_pem: Mutex<std::collections::BTreeMap<u64, Vec<u8>>>,
     #[cfg(test)]
     before_file: Option<Arc<dyn Fn() + Send + Sync>>,
+    #[cfg(test)]
+    before_path: Option<Arc<dyn Fn(&Request) + Send + Sync>>,
 }
 
 #[derive(Debug)]
@@ -55,6 +57,8 @@ impl ConcurrentIo {
             tls_pem: Default::default(),
             #[cfg(test)]
             before_file: None,
+            #[cfg(test)]
+            before_path: None,
         }
     }
     /// Snapshot history for diagnostics; free-mode recording owns its creator-qualified tape.
@@ -140,6 +144,30 @@ impl ConcurrentIo {
             // syscall and publication; distinct files only share the namespace epoch.
             core.disk.prefetched = Some(result);
         }
+        // Path syscalls likewise run outside the core lock: the resource and
+        // namespace positions pin the directory grant and path through them.
+        if file.is_none()
+            && preflight.is_none()
+            && core.fault.is_none()
+            && !core.journal.durable()
+            && !core.state.is_fake_request(&request)
+            && let Some((directory, root, path)) = core.state.path_target(&request)
+            && let Ok((base, active)) = core.disk.detach(directory, &root)
+        {
+            drop(core);
+            #[cfg(test)]
+            if let Some(hook) = &self.before_path {
+                hook(&request);
+            }
+            let result = super::At {
+                base: &base,
+                active: &active,
+            }
+            .call(&request, &path);
+            core = self.core.lock().unwrap();
+            core.enter(token);
+            core.disk.prefetched_path = Some(result);
+        }
         if preflight.is_none()
             && core.fault.is_none()
             && !core.journal.durable()
@@ -170,7 +198,11 @@ impl ConcurrentIo {
         }
         let result = core.call(request.clone());
         *observed = core.disk.observed_output.take();
-        debug_assert!(core.disk.prefetched.is_none() && core.disk.prefetched_output.is_none());
+        debug_assert!(
+            core.disk.prefetched.is_none()
+                && core.disk.prefetched_output.is_none()
+                && core.disk.prefetched_path.is_none()
+        );
         let mut registry = self.registry.lock().unwrap();
         if let Request::NetSplit { stream, .. } = &request
             && let Ok(Completion::Halves(Ok((read, write)))) = &result
