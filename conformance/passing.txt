@@ -2659,6 +2659,7 @@ conformance/MEM/MEM-4-sealed-nested-failure-run.hir
 conformance/MEM/MEM-4-sealed-nested-scopes-run.hir
 conformance/MEM/MEM-4-sealed-occurrence-charge-run.hir
 conformance/MEM/MEM-4-sealed-out-of-space-cuts-run.hir
+conformance/MEM/MEM-4-sealed-reader-bounded-failure-run.hir
 conformance/MEM/MEM-4-sealed-retained-charge-run.hir
 conformance/MEM/MEM-4-sealed-scalar-zero-run.hir
 conformance/MEM/MEM-4-sealed-shape-array-run.hir

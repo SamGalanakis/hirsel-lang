@@ -1,0 +1,38 @@
+// rule: MEM-4
+// expect: run
+// A reader's independent copy and root loan drain when another arena fails.
+pub fn main(t: Test) -> Result[(), ()] {
+  let built: unique Bytes = unique b"abc"
+  let sentinel: Shared[Bytes] = shared.freeze(take built)
+  let owner = arena.with(
+    fn(a: Arena) -> Region[List[Shared[Bytes]]] {
+      let root: List[Shared[Bytes]] in a = [copy sentinel]
+      arena.seal(take a, take root)
+    }
+  )
+  let outcome = arena.bounded(
+    0u64,
+    fn(inner: Arena) -> u64 {
+      let mut owned = take owner
+      region.with(
+        mut owned,
+        fn(view: List[Shared[Bytes]]) -> u64 {
+          let independent = copy_to(heap, view)
+          let forced: List[u64] in inner = [9u64]
+          list.len(independent) + forced[0]
+        }
+      )
+    }
+  )
+  let exhausted = match outcome {
+    Ok(_) => false,
+    Error(_) => true,
+  }
+  failure.check(exhausted, Bounds())
+  let released = match shared.thaw(take sentinel) {
+    Ok(data) => data == b"abc",
+    Error(root) => false,
+  }
+  failure.check(released, Bounds())
+  Ok(())
+}
