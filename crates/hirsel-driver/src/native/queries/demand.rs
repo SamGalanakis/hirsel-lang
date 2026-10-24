@@ -656,6 +656,24 @@ impl DemandInstances {
             hirsel_rc::library::instantiate(&mut layouts, &mut instances, request)
                 .map_err(|e| format!("native library registration: {e:?}"))?;
         }
+        // Batch import discovers these prerequisites while building the adapter.
+        // A one-instance import must plan them before checking the caller too.
+        // Use original instance actuals, never the candidate's direct-call rows.
+        let primitives = instances
+            .ids()
+            .map(|other| {
+                hirsel_rc::library::keyed::primitive_request(
+                    &inputs.declarations().program,
+                    instances.view(other).key.definition(),
+                    instances.actuals[other.index()].arguments.clone(),
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("native adapter primitive plan: {e:?}"))?;
+        for request in primitives.into_iter().flatten() {
+            hirsel_rc::library::instantiate(&mut layouts, &mut instances, request)
+                .map_err(|e| format!("native adapter primitive registration: {e:?}"))?;
+        }
         hirsel_rc::import::bind_pretransfer_inventory(
             &mut operations,
             &inputs.declarations().program,
