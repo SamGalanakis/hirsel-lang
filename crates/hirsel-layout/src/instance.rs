@@ -166,6 +166,69 @@ impl InstanceKey {
     pub fn digest(&self) -> ContentHash {
         self.digest
     }
+    /// The original lexical key's convention and environment identity. These
+    /// are key data, not an ABI shape or a physical environment layout key:
+    /// direct nested functions and scoped captures keep their own identities.
+    pub fn identity_shape(
+        &self,
+    ) -> Result<(Option<CallableConvention>, Option<ContentHash>), InstanceKeyError> {
+        let mut current = self.encoding();
+        loop {
+            let mut atoms = InstanceAtoms(current);
+            match atoms.next()? {
+                b"hirsel.derived-instance.v1" => current = atoms.next()?,
+                b"hirsel.instance-key.v3" => {
+                    let mut parts = Vec::new();
+                    while !atoms.0.is_empty() {
+                        parts.push(atoms.next()?);
+                    }
+                    let environment = match parts.pop() {
+                        Some([0]) => None,
+                        Some(hash) if hash.len() == 32 && parts.pop() == Some(&[1][..]) => {
+                            Some(ContentHash(hash.try_into().unwrap()))
+                        }
+                        _ => return Err(InstanceKeyError::Encoding),
+                    };
+                    let convention = match parts.pop() {
+                        Some([0]) => None,
+                        Some(multiplicity @ (b"many" | b"once")) => {
+                            let mut parameters = Vec::new();
+                            loop {
+                                let passing = match parts.last().copied() {
+                                    Some(b"borrow") => Passing::Borrow,
+                                    Some(b"take") => Passing::Take,
+                                    Some(b"mut") => Passing::Mut,
+                                    _ => break,
+                                };
+                                parts.pop();
+                                parameters.push(passing);
+                            }
+                            let count = parts.pop().ok_or(InstanceKeyError::Encoding)?;
+                            if u64::from_le_bytes(
+                                count.try_into().map_err(|_| InstanceKeyError::Encoding)?,
+                            ) != parameters.len() as u64
+                                || parts.pop() != Some(&[1][..])
+                            {
+                                return Err(InstanceKeyError::Encoding);
+                            }
+                            parameters.reverse();
+                            Some(CallableConvention {
+                                parameters,
+                                multiplicity: if multiplicity == b"many" {
+                                    hirsel_lir::abi_types::CallMultiplicity::Many
+                                } else {
+                                    hirsel_lir::abi_types::CallMultiplicity::Once
+                                },
+                            })
+                        }
+                        _ => return Err(InstanceKeyError::Encoding),
+                    };
+                    return Ok((convention, environment));
+                }
+                _ => return Err(InstanceKeyError::Encoding),
+            }
+        }
+    }
     /// Whether this selected implementation retains the exact complete origin
     /// instance, including its type/size actuals and lexical body. This checks
     /// ordinary identity framing and grants no validation authority.
