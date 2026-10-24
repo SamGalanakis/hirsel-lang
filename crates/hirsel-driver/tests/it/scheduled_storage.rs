@@ -11,7 +11,7 @@ fn admitted_source_storage_root_matches_scalar_and_rejects_root_escape() {
                 false,
             ),
             (
-                "fn identity(x:List[u64])->List[u64]{x}\npub fn main(mut r:Region[List[u64]]){let escaped=region.with(mut r,identity)}\n",
+                "fn identity(root:List[u64])->unique List[u64]{unique root}\npub fn main(mut r:Region[List[u64]]){let escaped=region.with(mut r,identity)}\n",
                 true,
             ),
         ] {
@@ -19,7 +19,7 @@ fn admitted_source_storage_root_matches_scalar_and_rejects_root_escape() {
             let path = directory.path().join("main.hir");
             let manifest = directory.path().join("hirsel.json");
             std::fs::write(&path, source).unwrap();
-            std::fs::write(&manifest, r#"{"schema":1,"package":{"name":"storage-root","version":"1"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"main"}}"#).unwrap();
+            std::fs::write(&manifest, r#"{"schema":1,"package":{"name":"storage","version":"1"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"main"}}"#).unwrap();
             for jobs in [1, 2] {
                 let store = Arc::new(MemStore::default());
                 let mut program = COMPILER
@@ -161,7 +161,18 @@ fn admitted_source_storage_root_matches_scalar_and_rejects_root_escape() {
                         .any(|d| d.rule.as_str() == "MODE-1"),
                     reject
                 );
-                assert_eq!(graph.executions(), 1);
+                assert_eq!(
+                    graph.executions(),
+                    1,
+                    "source diagnostics={:?}; roots={:?}; front={:?}",
+                    output.checked.diagnostics,
+                    definitions,
+                    output
+                        .front
+                        .iter()
+                        .map(|(path, _)| path)
+                        .collect::<Vec<_>>()
+                );
                 assert!(recipes.executions() > 0, "actual source recipes demanded");
                 let again = runtime.request(&[graph.query()]);
                 let graph_product = runtime.wait(again).unwrap()[0];
