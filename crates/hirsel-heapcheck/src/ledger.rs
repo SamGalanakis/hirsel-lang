@@ -1162,3 +1162,5 @@ mod fork_tests {
         assert_eq!(restored.cells.get(&8), snapshot.cells.get(&8));
     }
 }
+
+mod sealed;
