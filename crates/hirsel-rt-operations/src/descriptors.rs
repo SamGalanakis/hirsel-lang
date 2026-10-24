@@ -662,7 +662,10 @@ pub const ENTRIES: &[Entry] = &[
     entry("hirsel_rt_v2_capacity", Local),
     // budget.rs
     entry("hirsel_rt_v2_fuel_refill", Local),
+    // Ahead execution is physical progress, not a semantic operation.
     entry("hirsel_rt_v2_ahead_barrier", Local),
+    entry("hirsel_rt_v2_ahead_state", Local),
+    entry("hirsel_rt_v2_ahead_handoff", Local),
     // codec.rs
     entry("hirsel_rt_v2_codec_encode", Local),
     // A failed decode drops what it built.

@@ -365,10 +365,7 @@ impl Collect {
         match prefix.first().map(String::as_str) {
             Some("crate") => bases.push(prefix[1..].to_vec()),
             Some("self") => bases.push([module, &prefix[1..]].concat()),
-            Some("super") => {
-                let parent = &module[..module.len().saturating_sub(1)];
-                bases.push([parent, &prefix[1..]].concat());
-            }
+            Some("super") => bases.push(expand(prefix, module)),
             Some(first) => {
                 bases.push([module, prefix].concat());
                 bases.push(prefix.to_vec());
@@ -410,7 +407,17 @@ fn expand(path: &[String], module: &[String]) -> Vec<String> {
     match path.first().map(String::as_str) {
         Some("crate") => path[1..].to_vec(),
         Some("self") => [module, &path[1..]].concat(),
-        Some("super") => [&module[..module.len().saturating_sub(1)], &path[1..]].concat(),
+        Some("super") => {
+            let parents = path
+                .iter()
+                .take_while(|part| part.as_str() == "super")
+                .count();
+            [
+                &module[..module.len().saturating_sub(parents)],
+                &path[parents..],
+            ]
+            .concat()
+        }
         _ => path.to_vec(),
     }
 }

@@ -277,9 +277,17 @@ const PHYSICAL_BUDGET_SERVICES: &[&str] = &[
     "tasks::ordered::engine::fuel_refill",
 ];
 
+// These save/adopt the same segment without publishing an operation. Their
+// role acquisition and forbidden semantic paths are checked independently.
+const PHYSICAL_AHEAD_SERVICES: &[&str] = &[
+    "tasks::ordered::ahead::barrier",
+    "tasks::ordered::ahead::refill",
+];
+
 fn budget_service_violations(graph: &graph::Graph) -> Vec<String> {
     PHYSICAL_BUDGET_SERVICES
         .iter()
+        .chain(PHYSICAL_AHEAD_SERVICES)
         .filter_map(|service| {
             graph
                 .reaches(service, |key| {
@@ -353,7 +361,11 @@ fn locality_violations(graph: &graph::Graph) -> Vec<String> {
                             )
                     })
             },
-            |key| entry.locality == Locality::Local && PHYSICAL_BUDGET_SERVICES.contains(&key),
+            |key| {
+                entry.locality == Locality::Local
+                    && (PHYSICAL_BUDGET_SERVICES.contains(&key)
+                        || PHYSICAL_AHEAD_SERVICES.contains(&key))
+            },
         ) {
             violations.push(format!(
                 "{symbol} ({:?}): {}",
@@ -508,4 +520,97 @@ fn physical_budget_boundaries_preserve_the_other_audits() {
         );
     }
     std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn physical_ahead_boundaries_preserve_the_other_audits() {
+    let scratch = tempfile::Builder::new()
+        .prefix("hirsel-descriptor-ahead-")
+        .tempdir()
+        .unwrap();
+    let root = scratch.path();
+    for service in ["barrier", "refill"] {
+        for (local, body, locality_red, semantic_red, run_red) in [
+            ("", "crate::tasks::scheduler();", false, false, false),
+            ("crate::tasks::scheduler();", "", true, false, false),
+            ("crate::Binding::get();", "", true, false, false),
+            (
+                "",
+                "crate::tasks::ordered::engine::submit();",
+                false,
+                true,
+                false,
+            ),
+            ("", "crate::Frontier::offer();", false, true, false),
+            ("", "crate::TaskCtx::run();", false, false, true),
+        ] {
+            std::fs::write(root.join("lib.rs"), format!(
+                "#[no_mangle] pub fn hirsel_rt_v2_alloc() {{ tasks::ordered::ahead::{service}(); {local} }}
+                 mod tasks {{ pub fn scheduler() {{}} pub mod ordered {{
+                   pub mod ahead {{ pub fn {service}() {{ {body} }} }}
+                   pub mod engine {{ pub fn submit() {{}} }}
+                 }} }}
+                 struct Binding; impl Binding {{ fn get() {{}} }}
+                 struct Frontier; impl Frontier {{ fn offer() {{}} }}
+                 struct TaskCtx; impl TaskCtx {{ fn run() {{}} }}"
+            )).unwrap();
+            let graph = graph::Graph::parse(root);
+            assert_eq!(
+                !locality_violations(&graph).is_empty(),
+                locality_red,
+                "{service}: {local}/{body}"
+            );
+            assert_eq!(
+                !budget_service_violations(&graph).is_empty(),
+                semantic_red,
+                "{service}: {local}/{body}"
+            );
+            assert_eq!(
+                graph
+                    .reaches("hirsel_rt_v2_alloc", |key| key == "TaskCtx::run")
+                    .is_some(),
+                run_red,
+                "{service}: {local}/{body}"
+            );
+        }
+    }
+}
+
+#[test]
+fn physical_ahead_services_acquire_the_role_without_creating_operations() {
+    let graph = source();
+    assert!(graph.directly_calls(PHYSICAL_AHEAD_SERVICES[0], "tasks::role::enter"));
+    assert!(graph.directly_calls(PHYSICAL_AHEAD_SERVICES[0], "pool::free::suspend_current"));
+    assert!(graph.directly_calls(PHYSICAL_AHEAD_SERVICES[1], PHYSICAL_AHEAD_SERVICES[0]));
+    let violations = budget_service_violations(graph);
+    assert!(
+        violations.is_empty(),
+        "physical service creates an operation: {violations:?}"
+    );
+}
+
+#[test]
+fn repeated_super_paths_resolve_direct_and_imported_role_calls() {
+    let scratch = tempfile::Builder::new()
+        .prefix("hirsel-descriptor-super-")
+        .tempdir()
+        .unwrap();
+    for path in ["super::super::role::enter", "crate::tasks::role::enter"] {
+        for imported in [false, true] {
+            let (import, call) = if imported {
+                (format!("use {path} as claim;"), "claim".to_owned())
+            } else {
+                (String::new(), path.to_owned())
+            };
+            std::fs::write(scratch.path().join("lib.rs"), format!(
+                "mod tasks {{ pub mod role {{ pub fn enter() {{}} }}
+                  pub mod ordered {{ pub mod ahead {{ {import} pub fn barrier() {{ {call}(); }} }} }} }}"
+            )).unwrap();
+            let graph = graph::Graph::parse(scratch.path());
+            assert!(
+                graph.directly_calls("tasks::ordered::ahead::barrier", "tasks::role::enter"),
+                "{path}, imported={imported}"
+            );
+        }
+    }
 }
