@@ -69,10 +69,14 @@ pub fn resume_preparations(
             base => base,
         }
     }
-    let eligible = |a: AddressId| match root(u, a) {
-        AddressBase::Slot(s) => plan.storage.iter().any(|f| f.slot == s),
-        AddressBase::Value(v) => resume.live.iter().any(|l| l.value == v),
-        AddressBase::Address(_) => false,
+    let carried = carried(u, resume.boundary.block).0;
+    let eligible = |a: AddressId| {
+        carried.contains(&a)
+            && match root(u, a) {
+                AddressBase::Slot(s) => plan.storage.iter().any(|f| f.slot == s),
+                AddressBase::Value(v) => resume.live.iter().any(|l| l.value == v),
+                AddressBase::Address(_) => false,
+            }
     };
     fn visit(
         u: &LirUnit<Ready>,
@@ -500,7 +504,6 @@ fn live_across(
     u: &LirUnit<Ready>,
     live: &crate::liveness::Liveness,
     block: BlockId,
-    call: CallId,
 ) -> Vec<ValueId> {
     let mut values = live.successor_needs(u, block);
     for d in crate::liveness::terminator_defs(u, &u.terminators[block.index()]) {
@@ -509,15 +512,134 @@ fn live_across(
     for v in crate::liveness::terminator_uses(u, &u.terminators[block.index()]) {
         values.insert(v);
     }
-    let site = &u.tables.calls[call.index()];
-    for a in site.arguments.get(&u.pools.call_arguments).unwrap_or(&[]) {
-        if let ArgumentValue::Address { address, .. } = a.value
-            && let AddressBase::Value(v) = u.addresses[address.index()].base
-        {
-            values.insert(v);
-        }
+    for v in carried(u, block).1 {
+        values.insert(v);
     }
     values.iter().collect()
+}
+
+/// Every block `b` can continue in: its terminator's edges and the cleanup
+/// of each failing instruction.
+pub(crate) fn successors_of(u: &LirUnit<Ready>, b: BlockId) -> Vec<BlockId> {
+    let mut out = Vec::new();
+    for inst in u.blocks[b.index()]
+        .instructions
+        .get(&u.instructions)
+        .unwrap_or(&[])
+    {
+        if let Some(f) = inst.failure() {
+            out.push(u.tables.edges[u.tables.failures[f.index()].cleanup.index()].target);
+        }
+    }
+    let term = &u.terminators[b.index()];
+    for e in term.normal_edges(&u.pools) {
+        out.push(u.tables.edges[e.index()].target);
+    }
+    for f in term.failure_edges(&u.tables) {
+        out.push(u.tables.edges[u.tables.failures[f.index()].cleanup.index()].target);
+    }
+    out
+}
+
+/// The address an instruction accesses, which its preparation must precede.
+fn accessed(inst: &Inst) -> Option<AddressId> {
+    match *inst {
+        Inst::Read { address, .. }
+        | Inst::Copy { address, .. }
+        | Inst::FlatCopy { address, .. }
+        | Inst::FlatView { address, .. }
+        | Inst::FlatLength { address, .. }
+        | Inst::FlatNext { address, .. }
+        | Inst::SeqReserve { address, .. }
+        | Inst::ArenaPush { address, .. }
+        | Inst::SeqSetLen { address, .. }
+        | Inst::SeqAppend { address, .. }
+        | Inst::FlatAppend { address, .. }
+        | Inst::FlatField { address, .. }
+        | Inst::FlatClose { address, .. }
+        | Inst::Store { address, .. }
+        | Inst::Replace { address, .. }
+        | Inst::BeginLoan { address, .. }
+        | Inst::Drop { address, .. }
+        | Inst::FinalizeBegin { address, .. }
+        | Inst::FinalizeEnd { address, .. } => Some(address),
+        _ => None,
+    }
+}
+
+/// The addresses the code resumed at boundary `block` (its call and what its
+/// normal edge reaches) accesses but does not prepare, bases included, and
+/// the values their preparations read: a resumed state retains those values
+/// and prepares those addresses again.
+pub(crate) fn carried(
+    u: &LirUnit<Ready>,
+    block: BlockId,
+) -> (BTreeSet<AddressId>, BTreeSet<ValueId>) {
+    let mut used = Vec::new();
+    let mut prepared = BTreeSet::new();
+    let mut call_uses = |term: &Terminator, used: &mut Vec<AddressId>| {
+        if let Terminator::Call { call, .. } = *term {
+            for a in u.tables.calls[call.index()]
+                .arguments
+                .get(&u.pools.call_arguments)
+                .unwrap_or(&[])
+            {
+                if let ArgumentValue::Address { address, .. } = a.value {
+                    used.push(address);
+                }
+            }
+        }
+    };
+    call_uses(&u.terminators[block.index()], &mut used);
+    let mut seen = BTreeSet::new();
+    // The boundary block's instructions ran before the save; only its call resumes.
+    let term = &u.terminators[block.index()];
+    let mut pending: Vec<BlockId> = term
+        .normal_edges(&u.pools)
+        .into_iter()
+        .map(|e| u.tables.edges[e.index()].target)
+        .chain(
+            term.failure_edges(&u.tables)
+                .into_iter()
+                .map(|f| u.tables.edges[u.tables.failures[f.index()].cleanup.index()].target),
+        )
+        .collect();
+    while let Some(b) = pending.pop() {
+        if !seen.insert(b) {
+            continue;
+        }
+        for inst in u.blocks[b.index()]
+            .instructions
+            .get(&u.instructions)
+            .unwrap_or(&[])
+        {
+            if let Inst::Address { address, .. } = *inst {
+                prepared.insert(address);
+                if let AddressBase::Address(base) = u.addresses[address.index()].base {
+                    used.push(base);
+                }
+            }
+            used.extend(accessed(inst));
+        }
+        call_uses(&u.terminators[b.index()], &mut used);
+        pending.extend(successors_of(u, b));
+    }
+    let mut addresses = BTreeSet::new();
+    let mut values = BTreeSet::new();
+    while let Some(a) = used.pop() {
+        if prepared.contains(&a) || !addresses.insert(a) {
+            continue;
+        }
+        let preparation = Inst::Address {
+            address: a,
+            failure: FailureId(0),
+        };
+        values.extend(crate::liveness::inst_uses(u, &preparation));
+        if let AddressBase::Address(base) = u.addresses[a.index()].base {
+            used.push(base);
+        }
+    }
+    (addresses, values)
 }
 
 /// Whether `to` is reachable from `from` along any edge.
@@ -623,7 +745,7 @@ fn states(
         else {
             unreachable!()
         };
-        let values = live_across(u, &live, site.block, site.call);
+        let values = live_across(u, &live, site.block);
         let layouts: Vec<_> = values
             .iter()
             .map(|v| u.types[u.values[v.index()].ty.index()].layout)

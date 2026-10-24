@@ -191,24 +191,7 @@ impl Live {
 }
 
 fn successors(u: &LirUnit<Ready>, b: BlockId) -> Vec<BlockId> {
-    let mut out = Vec::new();
-    for inst in u.blocks[b.index()]
-        .instructions
-        .get(&u.instructions)
-        .unwrap_or(&[])
-    {
-        if let Some(f) = inst.failure() {
-            out.push(u.tables.edges[u.tables.failures[f.index()].cleanup.index()].target);
-        }
-    }
-    let term = &u.terminators[b.index()];
-    for e in term.normal_edges(&u.pools) {
-        out.push(u.tables.edges[e.index()].target);
-    }
-    for f in term.failure_edges(&u.tables) {
-        out.push(u.tables.edges[u.tables.failures[f.index()].cleanup.index()].target);
-    }
-    out
+    super::successors_of(u, b)
 }
 
 /// Storage and loans live on reaching `at`: a fixpoint over block states.
@@ -364,6 +347,7 @@ fn check_state(
             values.insert(v);
         }
     }
+    values.extend(super::carried(u, b).1);
     let ty = |v: ValueId| &u.types[u.values[v.index()].ty.index()];
     // Owners: same set, each with its exact layout, representation and holding.
     let planned: Vec<_> = state.live.iter().map(|l| l.value).collect();
