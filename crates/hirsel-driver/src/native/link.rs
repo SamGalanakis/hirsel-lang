@@ -1223,9 +1223,45 @@ pub fn link_runnable(
     dir: &Path,
     requested: Option<&hirsel_run_config::ValidatedRun>,
 ) -> Result<Runnable, NativeError> {
+    link_runnable_inputs(program, entry, objects, toolchain, dir, requested, None)
+}
+
+/// The ordinary runner/standalone selection with the foreign closure already
+/// captured by the request. It never resolves original foreign paths again.
+pub(crate) fn link_runnable_frozen(
+    program: &ReadyProgram,
+    entry: &DefPath,
+    objects: &[hirsel_lir::stage::ObjectArtifact],
+    toolchain: &Toolchain,
+    dir: &Path,
+    requested: &hirsel_run_config::ValidatedRun,
+    foreign: &[PathBuf],
+) -> Result<Runnable, NativeError> {
+    link_runnable_inputs(
+        program,
+        entry,
+        objects,
+        toolchain,
+        dir,
+        Some(requested),
+        Some(foreign),
+    )
+}
+
+fn link_runnable_inputs(
+    program: &ReadyProgram,
+    entry: &DefPath,
+    objects: &[hirsel_lir::stage::ObjectArtifact],
+    toolchain: &Toolchain,
+    dir: &Path,
+    requested: Option<&hirsel_run_config::ValidatedRun>,
+    foreign: Option<&[PathBuf]>,
+) -> Result<Runnable, NativeError> {
     if toolchain.execution == super::runner::Execution::Executable {
-        return link_objects_with_run(program, entry, objects, toolchain, dir, requested)
-            .map(Runnable::Executable);
+        return link_objects_impl(
+            program, entry, objects, toolchain, dir, requested, false, foreign,
+        )
+        .map(Linked::runnable);
     }
     let _timing = hirsel_intern::timings::interval(hirsel_intern::timings::Interval::Link);
     let runner = super::runner::runner(toolchain, &program.target)?;
@@ -1239,7 +1275,7 @@ pub fn link_runnable(
         dir,
         Output::Image(&runner),
         &[main],
-        None,
+        foreign,
     )?;
     Ok(linked.runnable())
 }

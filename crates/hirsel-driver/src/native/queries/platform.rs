@@ -257,20 +257,42 @@ impl FrozenPlatform {
         entry: &hirsel_syntax::DefPath,
         debug_sources: bool,
     ) -> Result<ContentHash, String> {
+        self.linker_options_mode(backend, entry, debug_sources, false)
+    }
+    pub fn linker_options_for_run(
+        &self,
+        backend: Backend,
+        entry: &hirsel_syntax::DefPath,
+    ) -> Result<ContentHash, String> {
+        self.linker_options_mode(backend, entry, false, true)
+    }
+    fn linker_options_mode(
+        &self,
+        backend: Backend,
+        entry: &hirsel_syntax::DefPath,
+        debug_sources: bool,
+        requested_run: bool,
+    ) -> Result<ContentHash, String> {
+        let execution = match self.tools.execution {
+            crate::native::Execution::Executable => "executable",
+            crate::native::Execution::Runner => "runner",
+            crate::native::Execution::RunnerExec => "runner-exec",
+        };
         let bytes = serde_json::to_vec(&(
             self.manifest,
             backend.name(),
             entry,
             hirsel_lir::ABI_VERSION,
             hirsel_lir::RUNTIME_ABI_VERSION,
-            "standalone",
+            requested_run,
+            execution,
             // Current source/anchor contents are the root launch manifest's
             // explicit inputs; keep them out of this logical options address.
             debug_sources,
         ))
         .map_err(|e| e.to_string())?;
         Ok(ContentHash::of_parts(
-            "hirsel.native.frozen-platform-link.v1",
+            "hirsel.native.frozen-platform-link.v2",
             [bytes.as_slice()],
         ))
     }
@@ -295,7 +317,42 @@ impl FrozenPlatform {
             entry,
             directory,
             debug_sources,
+            requested_run: false,
         })
+    }
+    pub fn executor_for_run(
+        self: &Arc<Self>,
+        backend: Backend,
+        entry: hirsel_syntax::DefPath,
+        directory: PathBuf,
+    ) -> Arc<dyn NativeLinkExecutor> {
+        Arc::new(Executor {
+            platform: self.clone(),
+            backend,
+            entry,
+            directory,
+            debug_sources: false,
+            requested_run: true,
+        })
+    }
+    /// Restore the selected output and recheck its existing executable/image
+    /// protocol. Keep this platform alive through launch: it owns the frozen
+    /// linker/kit/runtime files used by its toolchain.
+    pub fn runnable(
+        &self,
+        product: &crate::native::object_queries::LinkedProduct,
+        destination: &Path,
+    ) -> Result<crate::native::Runnable, String> {
+        crate::native::object_queries::materialize_executable(
+            self.store.as_ref(),
+            product,
+            destination,
+        )?;
+        crate::native::runner::restore_runnable(&self.tools, &self.target, destination)
+            .map_err(|e| e.to_string())
+    }
+    pub fn toolchain(&self) -> &Toolchain {
+        &self.tools
     }
 }
 // Prior art: llvm-project 2b6e769dd3add8bbd8d8be60e59f8d7e5f30ec54,
@@ -448,16 +505,18 @@ struct Executor {
     entry: hirsel_syntax::DefPath,
     directory: PathBuf,
     debug_sources: bool,
+    requested_run: bool,
 }
 impl NativeLinkExecutor for Executor {
     fn link(&self, native: &mut RootProducts, input: LinkExecution<'_>) -> Result<Vec<u8>, String> {
         let platform = &self.platform;
         if input.key.target != platform.target.digest()
             || input.key.linker_options
-                != platform.linker_options_with_debug(
+                != platform.linker_options_mode(
                     self.backend,
                     &self.entry,
                     self.debug_sources,
+                    self.requested_run,
                 )?
             || input.inputs.runtime_archives != platform.runtime_archives()
             || input.inputs.foreign_inputs != platform.foreign
@@ -471,6 +530,14 @@ impl NativeLinkExecutor for Executor {
         } else {
             None
         };
+        let requested = native.requested_run(input.root)?;
+        if requested.is_some() != self.requested_run
+            || requested
+                .as_ref()
+                .is_some_and(|(entry, _)| entry != &self.entry)
+        {
+            return Err("Link launch differs from the selected root run".into());
+        }
         native.with_link_context(input.root, input.ready, |program| {
             crate::native::check_runtime_calls(program).map_err(|e| e.to_string())?;
             let registry = hirsel_lir::descriptor_registry::DescriptorRegistry::new(
@@ -488,15 +555,32 @@ impl NativeLinkExecutor for Executor {
                         .map_err(|e| e.to_string())?,
                 );
             }
-            let path = crate::native::link::link_standalone_frozen(
-                program,
-                &self.entry,
-                &objects,
-                &platform.tools,
-                &self.directory,
-                &platform.foreign_files,
-            )
-            .map_err(|e| e.to_string())?;
+            let path = if let Some((_, run)) = &requested {
+                match crate::native::link::link_runnable_frozen(
+                    program,
+                    &self.entry,
+                    &objects,
+                    &platform.tools,
+                    &self.directory,
+                    run,
+                    &platform.foreign_files,
+                )
+                .map_err(|e| e.to_string())?
+                {
+                    crate::native::Runnable::Executable(path) => path,
+                    crate::native::Runnable::Image(image) => image.path,
+                }
+            } else {
+                crate::native::link::link_standalone_frozen(
+                    program,
+                    &self.entry,
+                    &objects,
+                    &platform.tools,
+                    &self.directory,
+                    &platform.foreign_files,
+                )
+                .map_err(|e| e.to_string())?
+            };
             std::fs::read(path).map_err(|e| e.to_string())
         })
     }

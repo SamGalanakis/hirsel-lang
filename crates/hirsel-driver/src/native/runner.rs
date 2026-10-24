@@ -729,6 +729,72 @@ pub struct Image {
     pub cached: bool,
 }
 
+/// Re-admit a materialized Link output. The checked ELF reader finds the
+/// existing Hirsel runner note; an image must name this exact current runner
+/// and pass the same import contract as a newly linked image.
+pub(crate) fn restore_runnable(
+    toolchain: &Toolchain,
+    target: &TargetSpec,
+    path: &Path,
+) -> Result<super::Runnable, NativeError> {
+    use object::Object;
+    let bytes = std::fs::read(path).map_err(|e| failed(e.to_string()))?;
+    let error = |e: object::Error| failed(format!("materialized ELF: {e}"));
+    let header = Elf::parse(bytes.as_slice()).map_err(error)?;
+    let endian = header.endian().map_err(error)?;
+    let mut binding = None;
+    for segment in header
+        .program_headers(endian, bytes.as_slice())
+        .map_err(error)?
+    {
+        if let Some(mut notes) = segment.notes(endian, bytes.as_slice()).map_err(error)? {
+            while let Some(note) = notes.next().map_err(error)? {
+                if note.name_bytes() == hirsel_rt::runner::NOTE_OWNER
+                    && note.n_type(endian).0 == hirsel_rt::runner::NOTE_TYPE
+                {
+                    if binding.is_some() {
+                        return Err(failed("duplicate image runner binding"));
+                    }
+                    binding = Some(
+                        <[u8; 20]>::try_from(note.desc())
+                            .map_err(|_| failed("invalid image runner binding"))?,
+                    );
+                }
+            }
+        }
+    }
+    let Some(binding) = binding else {
+        return Ok(super::Runnable::Executable(path.to_path_buf()));
+    };
+    if header.e_type(endian) != elf::ET_DYN {
+        return Err(failed("runner image is not a shared object"));
+    }
+    let runner = runner(toolchain, target)?;
+    if binding != runner.build_id {
+        return Err(failed("image names a different runner"));
+    }
+    let kit = Kit::load(&toolchain.kit)?;
+    check_image(
+        &interface(&bytes)?,
+        &runner.exports,
+        &*provided(&kit, &target.triple)?,
+    )
+    .map_err(failed)?;
+    let object = object::File::parse(bytes.as_slice()).map_err(error)?;
+    let key = object
+        .build_id()
+        .map_err(error)?
+        .ok_or_else(|| failed("image has no build identity"))?
+        .try_into()
+        .map_err(|_| failed("image has an invalid build identity"))?;
+    Ok(super::Runnable::Image(Image {
+        path: path.to_path_buf(),
+        key,
+        runner,
+        cached: true,
+    }))
+}
+
 /// Link (or find) the image of `inputs` (launcher objects, then units, in shipped order) for
 /// `runner`. `Err` is a fallback reason when lld or the import contract refuses it.
 pub(crate) fn link_image(

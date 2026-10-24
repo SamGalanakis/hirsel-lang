@@ -69,7 +69,7 @@ fn one_native_runtime_produces_cold_instances_both_arena_strata_ready_roots_and_
 {
     with_compiler_stack(|| {
         for jobs in [1, 4] {
-            run(jobs, false, false);
+            run(jobs, false, false, false);
         }
     });
 }
@@ -77,7 +77,7 @@ fn one_native_runtime_produces_cold_instances_both_arena_strata_ready_roots_and_
 fn frozen_platform_links_standalone_after_original_tool_kit_runtime_and_foreign_paths_disappear() {
     with_compiler_stack(|| {
         for jobs in [1, 4] {
-            run(jobs, true, false);
+            run(jobs, true, false, false);
         }
     });
 }
@@ -85,7 +85,15 @@ fn frozen_platform_links_standalone_after_original_tool_kit_runtime_and_foreign_
 fn optimized_codegen_reads_transitive_recursive_templates_without_recursive_ready_dependencies() {
     with_compiler_stack(|| {
         for jobs in [1, 4] {
-            run(jobs, false, true);
+            run(jobs, false, true, false);
+        }
+    });
+}
+#[test]
+fn frozen_platform_restores_root_bound_runner_images_after_link_hits() {
+    with_compiler_stack(|| {
+        for jobs in [1, 4] {
+            run(jobs, true, false, true);
         }
     });
 }
@@ -115,7 +123,7 @@ impl native::queries::link_tasks::NativeLinkExecutor for CountedPlatform {
         self.inner.link(native, input)
     }
 }
-fn run(jobs: usize, freeze_platform: bool, optimized: bool) {
+fn run(jobs: usize, freeze_platform: bool, optimized: bool, requested_run: bool) {
     let directory = tempfile::tempdir().unwrap();
     let store = Arc::new(store::DirStore::new(directory.path().join("products")));
     let target = native::TargetSpec::x86_64_unknown_linux_gnu();
@@ -276,9 +284,23 @@ fn run(jobs: usize, freeze_platform: bool, optimized: bool) {
         if fresh {
             assert_eq!(source_queries.counts.body_demands, 0);
         }
-        let source = Arc::new(
-            NativeLinkSource::capture_for_entry(&mut engine, &declarations, &main).unwrap(),
-        );
+        let run_record = requested_run.then(|| {
+            let revision = engine.semantic_program_revision(&main).unwrap();
+            Arc::new(
+                hirsel_run_config::RunConfig::for_program(
+                    &revision,
+                    hirsel_run_schema::LaunchKind::Main,
+                )
+                .validated()
+                .unwrap(),
+            )
+        });
+        let source = Arc::new(if let Some(run) = &run_record {
+            NativeLinkSource::capture_for_run(&mut engine, &declarations, &main, run.clone())
+                .unwrap()
+        } else {
+            NativeLinkSource::capture_for_entry(&mut engine, &declarations, &main).unwrap()
+        });
         let mut originals = Vec::new();
         if !fresh {
             let body = engine.lower_to_tir(&main).unwrap().value;
@@ -346,9 +368,13 @@ fn run(jobs: usize, freeze_platform: bool, optimized: bool) {
                 }),
                 runtime_abi: ContentHash::of_bytes(&hirsel_lir::RUNTIME_ABI_VERSION.to_le_bytes()),
                 linker_options: if let Some(platform) = &frozen {
-                    platform
-                        .linker_options_with_debug(backend, &main, true)
-                        .unwrap()
+                    if requested_run {
+                        platform.linker_options_for_run(backend, &main).unwrap()
+                    } else {
+                        platform
+                            .linker_options_with_debug(backend, &main, true)
+                            .unwrap()
+                    }
                 } else {
                     ContentHash::of_parts(
                         "fixture selected backend",
@@ -363,14 +389,24 @@ fn run(jobs: usize, freeze_platform: bool, optimized: bool) {
                     .map_or_else(Vec::new, |platform| platform.foreign_inputs().to_vec()),
                 executor: if let Some(platform) = &frozen {
                     Arc::new(CountedPlatform {
-                        inner: platform.executor_debug(
-                            backend,
-                            main.clone(),
-                            directory
-                                .path()
-                                .join(format!("{literal}-{fresh}-{}", backend.name())),
-                            true,
-                        ),
+                        inner: if requested_run {
+                            platform.executor_for_run(
+                                backend,
+                                main.clone(),
+                                directory
+                                    .path()
+                                    .join(format!("{literal}-{fresh}-{}", backend.name())),
+                            )
+                        } else {
+                            platform.executor_debug(
+                                backend,
+                                main.clone(),
+                                directory
+                                    .path()
+                                    .join(format!("{literal}-{fresh}-{}", backend.name())),
+                                true,
+                            )
+                        },
                         calls: calls.clone(),
                     })
                 } else {
@@ -668,15 +704,26 @@ fn run(jobs: usize, freeze_platform: bool, optimized: bool) {
                 let key = native::object_queries::LinkKey {
                     roots: root.instances.clone(),
                     target: target.digest(),
-                    linker_options: frozen
-                        .as_ref()
-                        .unwrap()
-                        .linker_options_with_debug(
-                            backend,
-                            &hirsel_engine::entry_path(&default_context()),
-                            true,
-                        )
-                        .unwrap(),
+                    linker_options: if requested_run {
+                        frozen
+                            .as_ref()
+                            .unwrap()
+                            .linker_options_for_run(
+                                backend,
+                                &hirsel_engine::entry_path(&default_context()),
+                            )
+                            .unwrap()
+                    } else {
+                        frozen
+                            .as_ref()
+                            .unwrap()
+                            .linker_options_with_debug(
+                                backend,
+                                &hirsel_engine::entry_path(&default_context()),
+                                true,
+                            )
+                            .unwrap()
+                    },
                 };
                 if let Some(old) = old_link_addresses.insert(backend.name(), key.address()) {
                     assert_eq!(
@@ -699,7 +746,7 @@ fn run(jobs: usize, freeze_platform: bool, optimized: bool) {
             let executable = directory.join("program");
             native::object_queries::materialize_executable(store.as_ref(), &linked, &executable)
                 .unwrap();
-            if freeze_platform {
+            if freeze_platform && !requested_run {
                 use object::Object as _;
                 let bytes = std::fs::read(&executable).unwrap();
                 let elf = object::File::parse(bytes.as_slice()).unwrap();
@@ -713,7 +760,30 @@ fn run(jobs: usize, freeze_platform: bool, optimized: bool) {
                         .any(|part| part == b"cold-scheduled-link.hir")
                 );
             }
-            let run = native::launch(&executable, &target, &tools, &directory, true).unwrap();
+            let run = if requested_run {
+                let platform = frozen.as_ref().unwrap();
+                let runnable = platform.runnable(&linked, &executable).unwrap();
+                assert!(matches!(runnable, native::Runnable::Image(_)));
+                std::fs::write(
+                    directory.join("run.json"),
+                    run_record.as_ref().unwrap().launch_bytes(),
+                )
+                .unwrap();
+                native::launch_runnable(
+                    &runnable,
+                    &target,
+                    platform.toolchain(),
+                    &directory,
+                    true,
+                    native::Tape::Live {
+                        record: None,
+                        revocations: None,
+                    },
+                )
+                .unwrap()
+            } else {
+                native::launch(&executable, &target, &tools, &directory, true).unwrap()
+            };
             view.with_link_context(&root, &ready, |program| {
                 assert!(program.units.is_empty());
                 let callees = program
