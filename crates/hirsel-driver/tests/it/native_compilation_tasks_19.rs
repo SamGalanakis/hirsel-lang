@@ -540,6 +540,15 @@ fn run_case(jobs: usize, observation_only: bool, frozen_plan: bool, use_frozen_k
                 String::from_utf8_lossy(&store.get_content(error).unwrap())
             )
         })[0];
+        let from_compilation = observation_only.then(|| {
+            let before = trace.totals();
+            let metadata = compilation.observation(selected).unwrap();
+            let mut wrong = selected;
+            wrong.action = store::Action(ContentHash::of_bytes(b"wrong compilation action"));
+            assert!(compilation.observation(wrong).is_err());
+            assert_eq!(trace.totals(), before);
+            metadata
+        });
         let outputs = compilation.outputs(selected).unwrap();
         let backend_count = if observation_only { 1 } else { 2 };
         assert_eq!(outputs.len(), backend_count);
@@ -609,6 +618,10 @@ fn run_case(jobs: usize, observation_only: bool, frozen_plan: bool, use_frozen_k
         let bodies = native.snapshot.ready_materializations();
         let observation = observation_only.then(|| {
             let metadata = view.observation_metadata(&root).unwrap();
+            assert_eq!(
+                serde_json::to_value(&metadata).unwrap(),
+                serde_json::to_value(from_compilation.as_ref().unwrap()).unwrap()
+            );
             assert!(!metadata.sites.is_empty());
             assert_eq!(&metadata.anchors, source.source_anchors());
             let mut wrong = root.as_ref().clone();

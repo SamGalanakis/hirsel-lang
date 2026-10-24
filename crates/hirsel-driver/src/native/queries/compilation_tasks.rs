@@ -41,6 +41,7 @@ struct Dispatch {
     arena: ProductRef,
     native: Arc<NativeTasks>,
     roots: Arc<NativeRootTasks>,
+    link: Arc<LinkTasks>,
     factories: BTreeMap<u32, Arc<dyn QueryFactory>>,
     links: Vec<QueryId>,
 }
@@ -324,7 +325,7 @@ impl CompilationTasks {
             ),
             (
                 LINK_KIND,
-                Arc::new(ObjectTaskFactory::new(link)) as Arc<dyn QueryFactory>,
+                Arc::new(ObjectTaskFactory::new(link.clone())) as Arc<dyn QueryFactory>,
             ),
             (LINK_INPUT_KIND, leaf.clone()),
             (LINK_MANIFEST_KIND, leaf),
@@ -335,6 +336,7 @@ impl CompilationTasks {
                 arena,
                 native,
                 roots,
+                link,
                 factories,
                 links,
             })
@@ -364,6 +366,16 @@ impl CompilationTasks {
     pub fn roots(&self, compilation: ProductRef) -> Result<Arc<NativeRootTasks>, String> {
         Ok(self.selected(compilation)?.roots.clone())
     }
+    /// Body-free execution metadata of this exact completed compilation's
+    /// settled Link scope. No dependency query or current-association lookup
+    /// supplies a missing read, and Link hits expose the same admitted metadata.
+    pub fn observation(
+        &self,
+        compilation: ProductRef,
+    ) -> Result<crate::requests::NativeObservation, String> {
+        self.selected(compilation)?.link.observation()
+    }
+
     fn publish(&self, outputs: Vec<ProductRef>) -> Result<ProductRef, String> {
         let bytes = serde_json::to_vec(
             &outputs
