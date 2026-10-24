@@ -165,3 +165,4 @@ mod scheduled_check;
 mod scheduled_run;
 mod native_discovery_cache_19;
 mod native_declarations_19;
+mod native_recipes_19;
