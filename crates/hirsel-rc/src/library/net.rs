@@ -67,7 +67,7 @@ fn read_into(cx: &mut Cx<'_>, intrinsic: &str) -> R<LirUnit<Value>> {
     };
     let capacity = b.u64(k)?;
     let (net, loan) = b.borrow(n.address, false)?;
-    let mut exclusive = |b: &mut Body<'_, '_>, parameter: u32, address: AddressId| {
+    let exclusive = |b: &mut Body<'_, '_>, parameter: u32, address: AddressId| {
         let slot = b.root(address).expect("mut parameter place");
         let version = b.version(slot);
         b.set_reaching(slot, version);

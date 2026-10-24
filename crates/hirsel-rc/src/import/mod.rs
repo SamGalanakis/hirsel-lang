@@ -745,7 +745,6 @@ pub fn plan_instance(
     id: InstanceId,
     layouts: &mut dyn crate::library::builder::Layouts,
 ) -> Result<(Option<LoopPlan>, Vec<Declined>), NormalizeError> {
-    let view = instances.view(id);
     let actuals = &instances.actuals[id.index()];
     let types = &*program.types;
     let abi = &layouts.table().fn_abis[instances.abis[id.index()].0 as usize];

@@ -238,7 +238,7 @@ impl Importer<'_> {
             }
             x
         }
-        let mut union = |parent: &mut Vec<usize>, a: usize, b: usize| {
+        let union = |parent: &mut Vec<usize>, a: usize, b: usize| {
             let (a, b) = (find(parent, a), find(parent, b));
             parent[a] = b;
         };
