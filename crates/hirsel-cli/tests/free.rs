@@ -1226,16 +1226,36 @@ fn f1_corpus_matrix_cells(
     }
 }
 
+/// The child atomic capture corpus with its `u32` cells as `ty`, at one
+/// recording level: each level is its own case, inside the action's time.
+fn f1_atomic_at(name: &str, ty: &str, level: &'static [&'static str; 1]) {
+    let text = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../conformance/CLO/CLO-3-child-atomic-capture-run.hir"),
+    )
+    .unwrap();
+    f1_corpus_matrix_cells(
+        &format!("{name}-{}", level[0]),
+        &text.replace("u32", ty),
+        |_| serde_json::json!({"io":{"stdout":"stdout.bytes@1", "tasks":"tasks.free@1", "dirs":[]},"args":[]}),
+        (0, |_, _, _, _| {}),
+        b"",
+        || Box::new(|| {}),
+        Cells {
+            levels: level,
+            engines: &ENGINES,
+        },
+    );
+}
+
 #[test]
 fn f1_atomic_corpus_full_projection_width_and_permit_matrix() {
-    f1_corpus_matrix(
-        "atomic-capture",
-        &std::fs::read_to_string(
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../conformance/CLO/CLO-3-child-atomic-capture-run.hir"),
-        )
-        .unwrap(),
-    );
+    f1_atomic_at("atomic-capture", "u32", &["record"]);
+}
+
+#[test]
+fn f1_atomic_corpus_full_projection_width_and_permit_matrix_durable() {
+    f1_atomic_at("atomic-capture", "u32", &["durable"]);
 }
 #[test]
 fn f1_mutex_corpus_full_projection_width_and_permit_matrix() {
@@ -1454,15 +1474,33 @@ fn atomic_scalar_tape_bytes_match_interpreter_llvm_and_cranelift() {
 }
 
 #[test]
-fn f1_atomic_all_scalar_widths_full_projection_and_permit_matrix() {
-    let text = std::fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../conformance/CLO/CLO-3-child-atomic-capture-run.hir"),
-    )
-    .unwrap();
-    for ty in ["u8", "u64", "u128"] {
-        f1_corpus_matrix(&format!("atomic-{ty}"), &text.replace("u32", ty));
-    }
+fn f1_atomic_u8_full_projection_and_permit_matrix() {
+    f1_atomic_at("atomic-u8", "u8", &["record"]);
+}
+
+#[test]
+fn f1_atomic_u8_full_projection_and_permit_matrix_durable() {
+    f1_atomic_at("atomic-u8", "u8", &["durable"]);
+}
+
+#[test]
+fn f1_atomic_u64_full_projection_and_permit_matrix() {
+    f1_atomic_at("atomic-u64", "u64", &["record"]);
+}
+
+#[test]
+fn f1_atomic_u64_full_projection_and_permit_matrix_durable() {
+    f1_atomic_at("atomic-u64", "u64", &["durable"]);
+}
+
+#[test]
+fn f1_atomic_u128_full_projection_and_permit_matrix() {
+    f1_atomic_at("atomic-u128", "u128", &["record"]);
+}
+
+#[test]
+fn f1_atomic_u128_full_projection_and_permit_matrix_durable() {
+    f1_atomic_at("atomic-u128", "u128", &["durable"]);
 }
 
 #[test]
