@@ -19,8 +19,9 @@ pub use scheduled_native::{
 pub use scheduled_run::{FRONT_RUN_KIND, FrontRunOutput, FrontRunQueries};
 mod scheduled_growth;
 pub use parallel::{
-    FRONT_BODY_KIND, FrontBodyOutput, FrontBodyQueries, FrontCheckedOutput, ModeResult,
-    PublishedDefinition, PublishedResult,
+    FRONT_BODY_KIND, FRONT_STORAGE_KIND, FrontBodyOutput, FrontBodyQueries, FrontCheckedOutput,
+    FrontInputFootprint, FrontStorageOutput, FrontStorageQueries, ModeResult, PublishedDefinition,
+    PublishedResult,
 };
 pub use s1::{LoweringResult, S1LowerWork};
 pub use scheduled_growth::{FRONT_GROWTH_KIND, FrontGrowthOutput, FrontGrowthQueries};
