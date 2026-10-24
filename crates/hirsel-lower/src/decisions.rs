@@ -129,6 +129,18 @@ impl<'a> Decisions<'a> {
                 message: "invalid J formal frame result".into(),
             });
         }
-        Ok(*result)
+        // A written crossing requirement is the frame's result contract,
+        // just as I uses it for the return obligation. Publish that same
+        // promise on the executable row; V still proves each returned value.
+        let row = types.row(*result);
+        if row.sendability_requirement == hirsel_types::SendabilityRequirement::Sendable
+            && row.modes.sendability != hirsel_types::Sendability::Sendable
+        {
+            let mut row = row.clone();
+            row.modes.sendability = hirsel_types::Sendability::Sendable;
+            Ok(types.intern(row))
+        } else {
+            Ok(*result)
+        }
     }
 }

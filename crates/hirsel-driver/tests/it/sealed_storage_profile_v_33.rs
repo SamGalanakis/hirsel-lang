@@ -1554,3 +1554,182 @@ fn sealed_storage_task_scope_v_33_forged_callback_contract() {
     input.storage_profiles = validate(&input).profiles;
     map_unknown(validate(&input));
 }
+
+#[test]
+fn sealed_storage_task_33_scalar_spawn_await_control() {
+    export_and_import(
+        "fn cross(tasks:Tasks)->u64{let mut owner=arena.with(fn(a:Arena)->Region[unique List[u64]]{let root:unique List[u64]=unique [7u64];arena.seal(take a,take root)});region.with(mut owner,fn(view:unique List[u64])->u64{let n=view[0];task.scope(tasks,fn(s:Scope)->u64{let child=task.async(s,fn()->u64{n});task.await(s,take child)})})}\npub fn main(){}",
+    );
+}
+
+fn task_carrier_source() -> &'static str {
+    "fn clone_heap(xs:List[u64])->unique List[u64]{unique xs}\nfn read(xs:List[u64])->u64{let fresh:List[u64] in heap=[list.len(xs)];let copied=clone_heap(fresh);list.len(copied)}\nfn inspect(tasks:Tasks)->u64{let mut r=arena.with(fn(a:Arena)->Region[List[u64]]{let root:List[u64] in a=[7u64];arena.seal(take a,take root)});region.with(mut r,fn(root:List[u64])->u64{task.scope(tasks,fn(s:Scope)->u64{let child=task.async(s,fn()->sendable fn(List[u64])->u64{read});let reader=task.await(s,take child);reader(root)})})}\npub fn main(){}"
+}
+
+fn task_carrier_fixture_state() -> &'static Fixture {
+    static INPUT: OnceLock<Fixture> = OnceLock::new();
+    INPUT.get_or_init(|| {
+        with_compiler_stack(|| {
+            let source = task_carrier_source();
+            let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
+            let file = engine
+                .sources
+                .add("storage-task-carrier-v.hir", source.into())
+                .unwrap();
+            let output = check_progress(&mut engine, file, &default_context()).unwrap();
+            assert_eq!(output.completion, CheckCompletion::Complete);
+            assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+            let input = engine.export_native_input().unwrap();
+            Fixture {
+                input,
+                engine: Mutex::new(engine),
+            }
+        })
+    })
+}
+
+#[test]
+fn sealed_storage_task_carrier_v_33_callable_result_control() {
+    let fixture = task_carrier_fixture_state();
+    let validation = validate(&fixture.input);
+    assert!(validation.violations.is_empty(), "{validation:?}");
+    assert_eq!(validation.profiles, fixture.input.storage_profiles);
+    let mut engine = fixture.engine.lock().unwrap();
+    let validated = engine.import_native_input(fixture.input.clone()).unwrap();
+    assert!(!validated.storage_proof_reads().bodies.is_empty());
+}
+
+#[test]
+fn sealed_storage_task_carrier_v_33_allocation_with_fresh_claims() {
+    let mut input = task_carrier_fixture_state().input.clone();
+    let definition = input
+        .definitions
+        .iter_mut()
+        .find(|(path, _)| path.0.name == "read")
+        .unwrap()
+        .1;
+    let mut mutations = 0;
+    for body in &mut std::sync::Arc::make_mut(definition).bodies {
+        let Some(original) = body.places.iter().position(|place| {
+            place.projection.is_empty()
+                && body.locals[place.root.0 as usize].storage == hirsel_tir::Storage::Parameter
+                && matches!(
+                    input.types.row(place.ty).kind,
+                    hirsel_types::TypeKind::Builtin {
+                        kind: hirsel_types::BuiltinType::List,
+                        ..
+                    }
+                )
+        }) else {
+            continue;
+        };
+        for block in &mut body.blocks {
+            if let hirsel_tir::Terminator::Call {
+                callee: hirsel_tir::Callee::Definition { path, .. },
+                arguments,
+                ..
+            } = &mut block.terminator
+            {
+                if path.0.name == "clone_heap" {
+                    assert_eq!(arguments.len(), 1);
+                    arguments[0].value.place = hirsel_tir::PlaceId(original as u32);
+                    mutations += 1;
+                }
+            }
+        }
+    }
+    assert_eq!(mutations, 1);
+    input.storage_profiles = validate(&input).profiles;
+    let validation = validate(&input);
+    assert!(validation.violations.iter().any(|violation|matches!(violation,
+        StorageViolation::ExecutableRead(hirsel_type_analysis::storage::program::StorageReadViolation{
+            failure:hirsel_type_analysis::storage::program::StorageReadFailure::AllocatesFromRoot(_),origin:Some(origin),..
+        }) if origin.callable.definition.path().0.name=="clone_heap")),"{validation:?}");
+}
+
+#[test]
+fn sealed_storage_task_carrier_v_33_missing_helper_body_with_fresh_claims() {
+    let mut input = task_carrier_fixture_state().input.clone();
+    let before = input.definitions.len();
+    input
+        .definitions
+        .retain(|path, _| path.0.name != "clone_heap");
+    assert_eq!(before - input.definitions.len(), 1);
+    input.storage_profiles = validate(&input).profiles;
+    map_unknown(validate(&input));
+}
+
+fn forged_task_contract(operation: &str) {
+    let mut input = task_carrier_fixture_state().input.clone();
+    let signature = input
+        .signatures
+        .iter_mut()
+        .find(|(path, _)| path.is_core(operation))
+        .unwrap()
+        .1;
+    let hirsel_types::SignatureKind::Function(function) =
+        &mut std::sync::Arc::make_mut(signature).kind
+    else {
+        panic!("task function")
+    };
+    assert_eq!(
+        function.parameters[1].passing,
+        hirsel_syntax::PassingMode::Take
+    );
+    function.parameters[1].passing = hirsel_syntax::PassingMode::Borrow;
+    input.storage_profiles = validate(&input).profiles;
+    map_unknown(validate(&input));
+}
+#[test]
+fn sealed_storage_task_carrier_v_33_forged_spawn_contract() {
+    forged_task_contract("task.async");
+}
+#[test]
+fn sealed_storage_task_carrier_v_33_forged_await_contract() {
+    forged_task_contract("task.await");
+}
+
+#[test]
+fn sealed_storage_task_carrier_v_33_literal_result_control() {
+    let source=task_carrier_source().replace("fn()->sendable fn(List[u64])->u64{read}","fn()->sendable fn(List[u64])->u64{fn(xs:List[u64])->u64{let fresh:List[u64] in heap=[list.len(xs)];let copied=clone_heap(fresh);list.len(copied)}}");
+    export_and_import(&source);
+}
+
+#[test]
+fn sealed_storage_task_carrier_v_33_stale_result_evidence_refuses() {
+    let mut input = task_carrier_fixture_state().input.clone();
+    let definition = input
+        .definitions
+        .iter_mut()
+        .find(|(path, _)| path.0.name == "inspect")
+        .unwrap()
+        .1;
+    let definition = std::sync::Arc::make_mut(definition);
+    let mut mutations = 0;
+    for body in &mut definition.bodies {
+        let row = input.types.row(body.result);
+        if matches!(row.kind, hirsel_types::TypeKind::Function(_))
+            && row.sendability_requirement == hirsel_types::SendabilityRequirement::Sendable
+        {
+            assert_eq!(row.modes.sendability, hirsel_types::Sendability::Sendable);
+            let mut stale = row.clone();
+            stale.modes.sendability = hirsel_types::Sendability::NotSendable;
+            body.result = input.types.intern(stale);
+            mutations += 1;
+        }
+    }
+    assert_eq!(mutations, 1);
+    definition.types = hirsel_tir::definition_types(&input.types, definition);
+    let mut signatures = hirsel_validate::SignatureMap::new(input.types.clone());
+    signatures.extend_signatures(input.signatures.values().map(|s| s.as_ref().clone()));
+    let report = hirsel_validate::validate(definition, &input.types, &signatures, &mut vec![]);
+    assert!(
+        report.violations.iter().any(|v| matches!(
+            v.kind,
+            hirsel_validate::ViolationKind::TypeMismatch {
+                entity: "closure result"
+            }
+        )),
+        "{report:?}"
+    );
+}

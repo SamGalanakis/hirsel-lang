@@ -153,7 +153,7 @@ impl Producer<'_, '_> {
             _ => StoragePlacement::Unknown,
         }
     }
-    fn closure(&self, expression: ExprId, owner: NameSite) -> StorageValue {
+    fn closure(&self, expression: ExprId, graph: &cfg::Graph) -> StorageValue {
         if let Some(value) = self.named_callable(expression) {
             return value;
         }
@@ -164,7 +164,15 @@ impl Producer<'_, '_> {
         let captures = closure
             .captures
             .iter()
-            .map(|capture| {
+            .enumerate()
+            .map(|(ordinal, capture)| {
+                // A nested closure may recapture an outer frame's local. The
+                // original capture judgment names that binding's lexical owner;
+                // the constructor's current frame can have a different owner.
+                let owner = graph
+                    .capture_modes
+                    .get(expression, ordinal as u32)
+                    .map_or(graph.owner, |capture| capture.owner);
                 self.rows
                     .binding(self.checked, Some(owner), &capture.binding)
                     .map(|row| self.binding(row))
@@ -474,7 +482,7 @@ impl Producer<'_, '_> {
                 self.assign(*expression, value)
             }
             Op::Capture { expression, .. } => {
-                self.assign(*expression, self.closure(*expression, graph.owner))
+                self.assign(*expression, self.closure(*expression, graph))
             }
             Op::LocalFunction(statement) => {
                 let function = self
@@ -828,6 +836,77 @@ impl Producer<'_, '_> {
                         results: vec![],
                         complete: false,
                     }
+                }
+            }
+            CallTarget::Definition(path)
+                if path.is_core("task.async") || path.is_core("task.await") =>
+            {
+                let signature = self.signatures.read(
+                    DefId::intern(path),
+                    Arc::make_mut(&mut self.checked.resolution.reads),
+                )?;
+                let SignatureKind::Function(function) = &signature.kind else {
+                    return Ok(self.assign(expression, StorageValue::Unknown));
+                };
+                let reviewed = if path.is_core("task.async") {
+                    signature.definition.path() == path
+                        && function.generics.len() == 1
+                        && function.parameters.len() == 2
+                        && !function.incomplete
+                        && function.foreign.is_none()
+                        && function.error.is_none()
+                        && function.allocation == Allocation::MayAllocate
+                        && function.parameters[0].passing == PassingMode::Borrow
+                        && matches!(&self.types.row(function.parameters[0].ty).kind, TypeKind::Named {definition,arguments} if definition.path().is_core("Scope") && arguments.is_empty())
+                        && function.parameters[1].passing == PassingMode::Take
+                        && matches!(&function.generics[0],GenericParameter::Type {bounds,..} if bounds.as_slice() == [Bound::Sendable])
+                        && self.types.row(function.parameters[1].ty).modes.multiplicity
+                            == Multiplicity::Once
+                        && self
+                            .types
+                            .row(function.parameters[1].ty)
+                            .modes
+                            .relation
+                            .is_global()
+                        && matches!(&self.types.row(function.parameters[1].ty).kind,TypeKind::Function(callback) if callback.generics.is_empty() && callback.parameters.is_empty()
+                && matches!(self.types.row(callback.result).kind,TypeKind::Parameter(TypeParameterRef::Bound {depth:1,parameter:TypeParamId(0)})))
+                        && matches!(&self.types.row(function.result).kind, TypeKind::Builtin {kind:BuiltinType::Task,arguments} if matches!(arguments.as_slice(),[GenericArgument::Type(result)] if matches!(self.types.row(*result).kind,TypeKind::Parameter(TypeParameterRef::Bound {depth:0,parameter:TypeParamId(0)}))))
+                        && matches!(self.types.row(function.result).brand.alternatives.as_slice(),[Origin {root:OriginRoot::Parameter(ParameterRef::Bound {depth:0,parameter:ParamId(0)}),fields}] if fields.is_empty())
+                } else {
+                    signature.definition.path() == path
+                        && function.generics.len() == 1
+                        && function.parameters.len() == 2
+                        && !function.incomplete
+                        && function.foreign.is_none()
+                        && function.error.is_none()
+                        && function.allocation == Allocation::MayAllocate
+                        && function.parameters[0].passing == PassingMode::Borrow
+                        && matches!(&self.types.row(function.parameters[0].ty).kind, TypeKind::Named {definition,arguments} if definition.path().is_core("Scope") && arguments.is_empty())
+                        && function.parameters[1].passing == PassingMode::Take
+                        && matches!(&function.generics[0],GenericParameter::Type {bounds,..} if bounds.is_empty())
+                        && matches!(
+                            self.types.row(function.result).kind,
+                            TypeKind::Parameter(TypeParameterRef::Bound {
+                                depth: 0,
+                                parameter: TypeParamId(0)
+                            })
+                        )
+                        && matches!(&self.types.row(function.parameters[1].ty).kind,TypeKind::Builtin {kind:BuiltinType::Task,arguments} if arguments.as_slice() == [GenericArgument::Type(function.result)])
+                        && matches!(self.types.row(function.parameters[1].ty).brand.alternatives.as_slice(),[Origin {root:OriginRoot::Parameter(ParameterRef::Bound {depth:0,parameter:ParamId(0)}),fields}] if fields.is_empty())
+                };
+                if !reviewed {
+                    StorageCallee::Declared {
+                        allocations: vec![],
+                        results: vec![],
+                        complete: false,
+                    }
+                } else if path.is_core("task.async") {
+                    StorageCallee::ScopeCallback {
+                        callback: ParamId(1),
+                        result_path: vec![OwnedTypePart::Elements].into(),
+                    }
+                } else {
+                    StorageCallee::TaskAwait
                 }
             }
             CallTarget::Definition(path) if path.is_core("copy_to") => {

@@ -1611,6 +1611,18 @@ impl Program<'_> {
                             );
                             result
                         }
+                        StorageCallee::TaskAwait => {
+                            let value = arguments
+                                .get(&ParamId(1))
+                                .cloned()
+                                .unwrap_or_else(Value::unknown)
+                                .project(&vec![OwnedTypePart::Elements].into());
+                            Summary {
+                                unknown: value.payload.unknown,
+                                result: value,
+                                ..Summary::default()
+                            }
+                        }
                         StorageCallee::ScopeCallback {
                             callback,
                             result_path,

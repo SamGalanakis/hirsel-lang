@@ -118,6 +118,9 @@ pub enum StorageCallee {
         result_path: SharedPath<OwnedTypePart>,
         requires_code: bool,
     },
+    /// Move the actual child's stored result out of a reviewed Task carrier,
+    /// preserving code producers as well as storage dependencies.
+    TaskAwait,
     ReadRegion,
     /// Static code/root producer transport for the reviewed ownership transfer.
     SealArena,
