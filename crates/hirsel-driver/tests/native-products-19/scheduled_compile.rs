@@ -162,7 +162,33 @@ fn run(jobs: usize, freeze_platform: bool, optimized: bool) {
         )
         .unwrap();
         let foreign = source.join("foreign.a");
-        std::fs::write(&foreign, b"!<arch>\n").unwrap();
+        let foreign_member = source.join("foreign-member.o");
+        let member = hirsel_llvm::compile_ir(
+            &format!(
+                "target triple = \"{}\"\ndefine i64 @unused_foreign() {{ ret i64 7 }}",
+                target.triple
+            ),
+            &target,
+            native::OptLevel::None,
+        )
+        .unwrap();
+        std::fs::write(&foreign_member, member.bytes).unwrap();
+        let original_tree = tools.lld.parent().unwrap().parent().unwrap();
+        let status = std::process::Command::new(original_tree.join("bin/llvm-ar"))
+            .env_clear()
+            .env("LD_LIBRARY_PATH", original_tree.join("lib"))
+            .args(["qcTD"])
+            .arg(&foreign)
+            .arg(&foreign_member)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        // Thin expansion uses the same admitted archiver and its dynamic libs.
+        std::fs::copy(
+            original_tree.join("bin/llvm-ar"),
+            source.join("llvm/bin/llvm-ar"),
+        )
+        .unwrap();
         let mut selected = tools.clone();
         selected.lld = source.join("llvm/bin/ld.lld");
         selected.kit = source.join("kit");
