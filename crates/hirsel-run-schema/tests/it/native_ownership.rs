@@ -226,3 +226,69 @@ fn native_ownership_wire_roundtrip_preserves_binding_and_rejects_unknown_claims(
     claim["semantic_valid"] = true.into();
     assert!(serde_json::from_value::<Log>(claim).is_err());
 }
+
+#[test]
+fn native_ownership_empty_nested_units_preserve_parent_lifetimes_and_stack_checks() {
+    let (original, mut units) = fixture();
+    let expected = decode_leaf(&original, [49; 32], &units, 100).unwrap();
+    units.insert([8; 32], BTreeMap::new());
+    let mut nested = original.clone();
+    nested.rows.splice(
+        2..2,
+        [
+            Row::Enter {
+                task: 0,
+                frame: 2,
+                unit: [8; 32],
+            },
+            Row::Leave { task: 0, frame: 2 },
+        ],
+    );
+    nested.row_count += 2;
+    assert_eq!(
+        decode_leaf(&nested, [49; 32], &units, 100).unwrap(),
+        expected
+    );
+    let mut tracked = units.clone();
+    tracked.insert([8; 32], units[&[7; 32]].clone());
+    assert_eq!(
+        decode_leaf(&nested, [49; 32], &tracked, 100).unwrap_err(),
+        Error::InvalidFrame(2)
+    );
+    let mut unknown = units.clone();
+    unknown.remove(&[8; 32]);
+    assert_eq!(
+        decode_leaf(&nested, [49; 32], &unknown, 100).unwrap_err(),
+        Error::UnknownUnit([8; 32])
+    );
+    let mut parent_event = nested.clone();
+    parent_event.rows.insert(3, original.rows[2]);
+    parent_event.row_count += 1;
+    assert_eq!(
+        decode_leaf(&parent_event, [49; 32], &units, 100).unwrap_err(),
+        Error::InvalidFrame(1)
+    );
+    let mut wrong_leave = nested.clone();
+    wrong_leave.rows[3] = Row::Leave { task: 0, frame: 1 };
+    assert_eq!(
+        decode_leaf(&wrong_leave, [49; 32], &units, 100).unwrap_err(),
+        Error::InvalidFrame(1)
+    );
+    let mut reused = nested.clone();
+    reused.rows.splice(
+        4..4,
+        [
+            Row::Enter {
+                task: 0,
+                frame: 2,
+                unit: [8; 32],
+            },
+            Row::Leave { task: 0, frame: 2 },
+        ],
+    );
+    reused.row_count += 2;
+    assert_eq!(
+        decode_leaf(&reused, [49; 32], &units, 100).unwrap_err(),
+        Error::InvalidFrame(2)
+    );
+}

@@ -124,11 +124,15 @@ pub fn decode_leaf(
         }
         match row {
             Row::Enter { frame, unit, .. } => {
-                if frame == 0 || !frames.is_empty() || !entered.insert(frame) {
+                if frame == 0 || !entered.insert(frame) {
                     return Err(Error::InvalidFrame(frame));
                 }
-                if !units.contains_key(&unit) {
-                    return Err(Error::UnknownUnit(unit));
+                let metadata = units.get(&unit).ok_or(Error::UnknownUnit(unit))?;
+                // Descriptor finalizers can enter an emitted body even when
+                // Ready has no call instruction. Empty checked units carry no
+                // tracked input/output or ownership events across this frame.
+                if !frames.is_empty() && !metadata.is_empty() {
+                    return Err(Error::InvalidFrame(frame));
                 }
                 frames.push((frame, unit));
             }
