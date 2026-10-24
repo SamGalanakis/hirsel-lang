@@ -185,6 +185,33 @@ impl Clone for Catalog {
     }
 }
 impl Catalog {
+    pub(super) fn input_bytes(&self) -> Option<u64> {
+        let mut n = std::mem::size_of::<Self>() as u64;
+        for candidates in self.candidates.values() {
+            n = n.checked_add(
+                (candidates.capacity() * std::mem::size_of::<Candidate>()
+                    + 8 * std::mem::size_of::<usize>()) as u64,
+            )?;
+            for candidate in candidates {
+                let facts = &candidate.facts;
+                n = n.checked_add(
+                    (facts.comptime.capacity() * std::mem::size_of::<(u32, u32, u32)>()
+                        + facts.associations.capacity() * std::mem::size_of::<(u8, u32, u32)>()
+                        + facts.arms.capacity() * std::mem::size_of::<(String, u32, u32)>())
+                        as u64,
+                )?;
+                for (arm, _, _) in &facts.arms {
+                    n = n.checked_add(arm.capacity() as u64)?;
+                }
+            }
+        }
+        n.checked_add(
+            (self.files.len()
+                * (std::mem::size_of::<(FileId, FileContext)>() + 6 * std::mem::size_of::<usize>()))
+                as u64,
+        )
+    }
+
     pub(super) fn clear_facts(&self) {
         self.facts_cache.write().unwrap().clear();
     }

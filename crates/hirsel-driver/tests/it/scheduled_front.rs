@@ -876,3 +876,67 @@ fn frozen_checked_runtime_matches_declared_heap_facts_without_body_queries() {
         );
     });
 }
+
+#[test]
+fn admitted_front_actual_output_debit_refuses_insufficient_producer_allowance() {
+    with_compiler_stack(|| {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("main.hir");
+        std::fs::write(&path, "pub fn main()->u8{1u8}\n").unwrap();
+        let store = Arc::new(MemStore::default());
+        for extra in [1, 8 << 20] {
+            let mut program = COMPILER
+                .with_config(CompileConfig {
+                    store: store.clone(),
+                    ..Default::default()
+                })
+                .with_owned_engines()
+                .load_program(&path)
+                .unwrap();
+            let definitions = vec![program.entry.clone()];
+            let footprint = program.engine.front_input_footprint(&definitions).unwrap();
+            assert!(footprint.source_headers > 0);
+            let budget = ProcessBudget::new(1 << 30);
+            let weight = MemoryWeight {
+                retained: 64 << 10,
+                scratch: 8 << 20,
+                stack: 0,
+            };
+            let front = program
+                .engine
+                .front_body_queries(
+                    &definitions,
+                    weight,
+                    budget.reserve(footprint.front_inputs + extra).unwrap(),
+                    errors(),
+                )
+                .unwrap();
+            let mut runtime = AdmittedRuntime::new(
+                hirsel_intern::jobs::Jobs::ONE,
+                budget.reserve(512 << 20).unwrap(),
+                errors(),
+            )
+            .unwrap();
+            runtime.register(FRONT_BODY_KIND, front.factory()).unwrap();
+            let request = runtime.request(&[front.query(&program.entry).unwrap()]);
+            let result = runtime.wait(request);
+            if extra == 1 {
+                assert_eq!(result.unwrap_err(), errors().resource);
+                assert_eq!(
+                    front.recompute_count(&program.entry, QueryKind::Modes),
+                    1,
+                    "the real bounded producer ran; retention debit refused its publication"
+                );
+            } else {
+                let products = result.unwrap();
+                let output = front.outcome(products[0].record).unwrap();
+                assert!(output.outcome.result.is_ok());
+                assert_eq!(front.store_adoptions(), 1, "reuse remains real S0 adoption");
+                drop(output);
+            }
+            runtime.shutdown();
+            drop(front);
+            assert_eq!(budget.reserved(), 0);
+        }
+    });
+}

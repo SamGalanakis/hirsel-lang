@@ -10,7 +10,10 @@ use std::sync::{
     atomic::{AtomicU64, Ordering::Relaxed},
 };
 
+mod source;
 mod storage;
+pub use source::FrontInputFootprint;
+use source::SiblingArchives;
 pub use storage::{FRONT_STORAGE_KIND, FrontStorageOutput, FrontStorageQueries};
 pub const FRONT_BODY_KIND: u32 = 0x4600_0001;
 const FAILURE: Domain = Domain {
@@ -57,7 +60,12 @@ impl FrontOutcome {
     }
 }
 struct Input {
-    task: Task,
+    definition: DefPath,
+    syntax: Reference,
+    text: ContentHash,
+    implementation: ContentHash,
+    signature: Result<Arc<QueryOutput<SignatureRef>>, QueryError>,
+    signature_reads: Arc<Reads>,
     key: EntryKey,
     weight: MemoryWeight,
 }
@@ -77,6 +85,8 @@ pub struct FrontBodyQueries {
     environment: ContentHash,
     candidates: BTreeMap<DefPath, ContentHash>,
     records: Arc<persistent::TypeRecords>,
+    input_records: crate::NativeRecords,
+    anchors: Arc<crate::NativeRecordContext>,
     store: Arc<dyn ResultStore>,
     work: Mutex<BTreeMap<(DefPath, QueryKind), u64>>,
     table_keys: Mutex<BTreeMap<Key, Arc<crate::table_keys::TableKeyUse>>>,
@@ -85,6 +95,7 @@ pub struct FrontBodyQueries {
     verify_store: crate::store::VerifyStore,
     outcomes: Mutex<BTreeMap<Key, FrontOutcome>>,
     errors: RuntimeErrors,
+    retention: Mutex<u64>,
     // Own immutable snapshot and output metadata admission until every task and
     // external output reader releases this view.
     _allowance: MemoryReservation,
@@ -105,7 +116,64 @@ pub struct FrontCheckedOutput {
     pub reads: Arc<Reads>,
     _snapshot: Arc<FrontBodyQueries>,
 }
+const SOURCE_INPUT: Domain = Domain {
+    kind: 0x4600_0013,
+    schema: 1,
+};
 impl FrontBodyQueries {
+    fn syntax(&self, input: &Input) -> Option<Arc<ItemSyntax>> {
+        let bytes = self.store.get_content(input.syntax)?;
+        let (mut syntax, occurrence): (ItemSyntax, u32) =
+            self.input_records.decode(&*self.anchors, &bytes)?;
+        if syntax.item.definition != input.definition
+            || syntax.text_hash != input.implementation
+            || !syntax.structurally_valid(|span| self.citations.sources.slice(span).is_some())
+        {
+            return None;
+        }
+        syntax.occurrence = occurrence;
+        Some(Arc::new(syntax))
+    }
+
+    /// Potential task, result and counter slots. Body archives and completed
+    /// read/summary metadata consume the remaining allowance only on demand.
+    pub fn input_bytes(definitions: &[DefPath]) -> Option<u64> {
+        definitions
+            .iter()
+            .try_fold(std::mem::size_of::<Self>() as u64, |n, path| {
+                n.checked_add(bincode::serialized_size(path).ok()?.checked_mul(4)?)?
+                    .checked_add(
+                        (std::mem::size_of::<Input>()
+                            + std::mem::size_of::<FrontOutcome>()
+                            + 8 * std::mem::size_of::<crate::memo::MemoKey>()
+                            + 32 * std::mem::size_of::<usize>()) as u64,
+                    )
+            })
+    }
+    fn retain(
+        &self,
+        reference: Reference,
+        outcome: &ModeResult,
+        checked: &CheckedProduct,
+        table_keys: Option<&crate::table_keys::TableKeyUse>,
+    ) -> Option<()> {
+        let bytes = self.records.encode_record(
+            &(
+                &outcome.definition,
+                &outcome.reads,
+                &outcome.summary,
+                &outcome.diagnostic_phases,
+                checked,
+                table_keys,
+            ),
+            |anchor| self.citations.record_owner(anchor),
+        )?;
+        let charge = reference.len.checked_add(bytes.len() as u64)?;
+        let mut retention = self.retention.lock().unwrap_or_else(|e| e.into_inner());
+        *retention = retention.checked_sub(charge)?;
+        Some(())
+    }
+
     /// Actual phase invocations, including failed or discarded producers.
     fn completed_product(&self, query: QueryId) -> Option<Result<ProductRef, Reference>> {
         let outcomes = self.outcomes.lock().unwrap_or_else(|e| e.into_inner());
@@ -262,7 +330,7 @@ impl FrontBodyQueries {
 
     pub fn query(&self, definition: &DefPath) -> Option<QueryId> {
         self.inputs.iter().find_map(|(&address, input)| {
-            (input.task.definition == *definition).then_some(QueryId {
+            (input.definition == *definition).then_some(QueryId {
                 kind: FRONT_BODY_KIND,
                 address: hirsel_artifact_store::Address(address),
             })
@@ -289,7 +357,7 @@ impl FrontBodyQueries {
                     let restored = persistent::restore_frozen_mode(
                         &self.records,
                         &self.types,
-                        input.task.syntax.clone(),
+                        self.syntax(input)?,
                         &self.citations,
                         input.key.1,
                         &bytes,
@@ -361,7 +429,7 @@ impl QueryFactory for Factory {
             queries: self.0.clone(),
             query,
             weight: input.weight,
-            task: Some(input.task.clone()),
+
             terminal: None,
         }))
     }
@@ -370,7 +438,6 @@ struct BodyTask {
     queries: Arc<FrontBodyQueries>,
     query: QueryId,
     weight: MemoryWeight,
-    task: Option<Task>,
     terminal: Option<Result<ProductRef, Reference>>,
 }
 impl QueryTask for BodyTask {
@@ -378,7 +445,11 @@ impl QueryTask for BodyTask {
         self.query
     }
     fn weight(&self) -> MemoryWeight {
-        self.weight
+        MemoryWeight {
+            retained: (std::mem::size_of::<Self>() + std::mem::size_of::<ProductRef>()) as u64,
+            scratch: self.weight.scratch,
+            stack: self.weight.stack,
+        }
     }
     fn poll(&mut self, _: &mut dyn QueryContext) -> QueryPoll {
         if let Some(result) = self.terminal {
@@ -403,19 +474,25 @@ impl BodyTask {
         entry
             .variants
             .retain(|variant| variant.inputs == input.key.1 && variant.valid(&input.key));
-        let variant = entry.hit(|read| queries.observe(&input.task.definition, read))?;
-        if variant.output.len > self.weight.retained {
+        let variant = entry.hit(|read| queries.observe(&input.definition, read))?;
+        if variant.output.len > self.weight.scratch {
             return None;
         }
         let bytes = queries.store.get_content(variant.output)?;
         let restored = persistent::restore_frozen_mode(
             &queries.records,
             &queries.types,
-            input.task.syntax.clone(),
+            queries.syntax(input)?,
             &queries.citations,
             input.key.1,
             &bytes,
             Arc::new(variant.reads.clone()),
+        )?;
+        queries.retain(
+            variant.output,
+            &restored.outcome,
+            &restored.checked,
+            restored.table_keys.as_deref(),
         )?;
         if let Some(table_keys) = restored.table_keys {
             queries
@@ -426,7 +503,7 @@ impl BodyTask {
         }
         let (outcome, checked) = (restored.outcome, restored.checked);
         let failed = outcome.result.is_err();
-        let definition = DefId::intern(&input.task.definition);
+        let definition = DefId::intern(&input.definition);
         let mut memos = queries.memos.lock().unwrap_or_else(|e| e.into_inner());
         memos.insert(
             crate::memo::MemoKey::new(QueryKind::Modes, definition),
@@ -478,10 +555,10 @@ impl BodyTask {
             entry.variants.retain(|variant| {
                 variant.inputs == input.key.1
                     && variant.valid(&input.key)
-                    && variant.output.len <= self.weight.retained
+                    && variant.output.len <= self.weight.scratch
             });
             entry
-                .hit(|read| queries.observe(&input.task.definition, read))
+                .hit(|read| queries.observe(&input.definition, read))
                 .and_then(|variant| {
                     queries
                         .store
@@ -492,7 +569,17 @@ impl BodyTask {
             None
         };
         let worker = queries.worker();
-        let done = worker.run(self.task.take().ok_or(queries.errors.protocol)?);
+        let syntax = queries.syntax(input).ok_or(queries.errors.protocol)?;
+        let done = worker.run(Task {
+            index: 0,
+            definition: input.definition.clone(),
+            syntax,
+            signature: input.signature.clone(),
+            signature_reads: input.signature_reads.clone(),
+            text: input.text,
+            resolution: None,
+            checked: None,
+        });
         for kind in done.recomputed() {
             *queries
                 .work
@@ -561,34 +648,31 @@ impl BodyTask {
                         published.diagnostic_phases,
                         &*published.reads,
                     ),
-                    |anchor| persistent::anchor_owner(&queries.citations.items, anchor),
+                    |anchor| queries.citations.record_owner(anchor),
                 )
                 .ok_or(queries.errors.resource)?
         } else {
             completed.take_payload().ok_or(queries.errors.resource)?
         };
-        if bytes.len() as u64 > self.weight.retained {
+        if bytes.len() as u64 > self.weight.scratch {
             return Err(queries.errors.resource);
         }
         if let Some((reads, expected)) = expected {
             if failed || reads != *outcome.reads || expected.as_ref() != bytes.as_slice() {
                 let error = QueryError::Operational(hirsel_types::OperationalFailure {
                     operation: "verify-cache".into(),
-                    message: format!(
-                        "{}: Modes differs from its cached result",
-                        input.task.definition
-                    ),
+                    message: format!("{}: Modes differs from its cached result", input.definition),
                 });
                 let failure = queries
                     .records
                     .encode_record(
                         &(
-                            &input.task.definition,
+                            &input.definition,
                             &error,
                             QueryKind::Modes.phase_name(),
                             &*outcome.reads,
                         ),
-                        |anchor| persistent::anchor_owner(&queries.citations.items, anchor),
+                        |anchor| queries.citations.record_owner(anchor),
                     )
                     .ok_or(queries.errors.resource)?;
                 let record = queries
@@ -596,7 +680,7 @@ impl BodyTask {
                     .put_content(FAILURE, &failure)
                     .ok_or(queries.errors.resource)?;
                 let output = ModeResult {
-                    definition: input.task.definition.clone(),
+                    definition: input.definition.clone(),
                     result: Err(error),
                     phase: Some(QueryKind::Modes),
                     summary: None,
@@ -649,6 +733,19 @@ impl BodyTask {
             (variant.output, variant.action(&input.key))
         };
         queries
+            .retain(
+                record,
+                &outcome,
+                &checked,
+                queries
+                    .table_keys
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .get(&self.query.address.0)
+                    .map(Arc::as_ref),
+            )
+            .ok_or(queries.errors.resource)?;
+        queries
             .outcomes
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -689,14 +786,8 @@ impl QueryEngine {
                         .into(),
             })
         };
-        // The immutable view retains outcomes independently of hot-node eviction.
-        // Conservatively reserve each output bound here as well as its runtime
-        // poll weight, until representation-only readers can release bodies.
-        let required = weight
-            .retained
-            .checked_add(8192)
-            .and_then(|bytes| bytes.checked_mul(definitions.len() as u64));
-        if required.is_none_or(|bytes| bytes > allowance.bytes()) {
+        let mut required = FrontBodyQueries::input_bytes(definitions).ok_or_else(refusal)?;
+        if required > allowance.bytes() {
             return Err(refusal());
         }
         let store = self
@@ -704,6 +795,16 @@ impl QueryEngine {
             .clone()
             .filter(|s| s.enabled())
             .ok_or_else(refusal)?;
+        // Materialize only the selected ordinary Parse files before capturing
+        // their stable source/anchor archive inputs.
+        for definition in definitions {
+            self.materialize(definition)?;
+        }
+        let anchors = Arc::new(crate::NativeRecordContext::capture(self));
+        let input_records = crate::NativeRecords::new(self.types.clone(), store.clone());
+        let declarations = self.frozen_declarations();
+        let mut siblings = BTreeMap::new();
+        let mut archived = BTreeSet::new();
         let mut selected = Vec::new();
         for definition in definitions {
             if self
@@ -712,6 +813,7 @@ impl QueryEngine {
             {
                 return Err(refusal());
             }
+            self.materialize(definition)?;
             let syntax = self.snapshot(definition)?;
             if generation::generator(&syntax).is_some() {
                 return Err(refusal());
@@ -723,13 +825,60 @@ impl QueryEngine {
             // Immutable S0 variants provide body reuse. The construction
             // inventory itself must never pin a mutable engine's checked body
             // after a request settles, including the explicit zero hold policy.
-            let resolution = None;
-            let checked = None;
-            selected.push((definition.clone(), syntax, text, key, resolution, checked));
+            let bytes = input_records
+                .encode(&*anchors, &(&syntax, syntax.occurrence))
+                .ok_or_else(refusal)?;
+            let reference = SOURCE_INPUT.reference(&bytes).ok_or_else(refusal)?;
+            if archived.insert(reference.output.0) {
+                required = required
+                    .checked_add(bytes.len() as u64)
+                    .ok_or_else(refusal)?;
+            }
+            if required > allowance.bytes() {
+                return Err(refusal());
+            }
+            let syntax = store
+                .put_content(SOURCE_INPUT, &bytes)
+                .ok_or_else(refusal)?;
+            let original = self.snapshot(definition)?;
+            let file = self.sources.anchor(original.anchor).ok_or_else(refusal)?.0;
+            if let std::collections::btree_map::Entry::Vacant(slot) = siblings.entry(file) {
+                let mut refs = Vec::new();
+                for sibling in declarations.siblings(&original).iter() {
+                    let bytes = input_records
+                        .encode(&*anchors, &(sibling, sibling.occurrence))
+                        .ok_or_else(refusal)?;
+                    let reference = SOURCE_INPUT.reference(&bytes).ok_or_else(refusal)?;
+                    if archived.insert(reference.output.0) {
+                        required = required
+                            .checked_add(bytes.len() as u64)
+                            .ok_or_else(refusal)?;
+                    }
+                    required = required
+                        .checked_add(std::mem::size_of::<Reference>() as u64)
+                        .ok_or_else(refusal)?;
+                    if required > allowance.bytes() {
+                        return Err(refusal());
+                    }
+                    refs.push(
+                        store
+                            .put_content(SOURCE_INPUT, &bytes)
+                            .ok_or_else(refusal)?,
+                    );
+                }
+                slot.insert(refs);
+            }
+            selected.push((
+                definition.clone(),
+                syntax,
+                text,
+                self.snapshot(definition)?.text_hash,
+                key,
+            ));
         }
         let snapshot = self.signature_inputs();
         let mut inputs = BTreeMap::new();
-        for (definition, syntax, text, key, resolution, checked) in selected {
+        for (definition, syntax, text, implementation, key) in selected {
             let id = DefId::intern(&definition);
             let signature = match snapshot.signature(id) {
                 Some(Ok(signature)) => self
@@ -744,30 +893,35 @@ impl QueryEngine {
             inputs.insert(
                 key.0,
                 Input {
-                    task: Task {
-                        index: 0,
-                        signature,
-                        signature_reads: self
-                            .shared_memo_reads(&definition, QueryKind::Signature)
-                            .unwrap_or_else(|| Arc::new(Reads::empty())),
-                        definition,
-                        syntax,
-                        text,
-                        resolution,
-                        checked,
-                    },
+                    signature,
+                    signature_reads: self
+                        .shared_memo_reads(&definition, QueryKind::Signature)
+                        .unwrap_or_else(|| Arc::new(Reads::empty())),
+                    definition,
+                    syntax,
+                    text,
+                    implementation,
                     key,
                     weight,
                 },
             );
         }
-        let items = Arc::new(self.items.clone());
+        let arm_fixes = arm_fixes::capture(&self.sources, &self.items);
+        let items = Arc::new(BTreeMap::new());
+        let cited = self
+            .source_paths()
+            .into_iter()
+            .map(|path| {
+                let id = DefId::intern(&path);
+                (id, self.citation_source().cited_text(id))
+            })
+            .collect();
         let candidates = inputs
             .values()
             .map(|input| {
                 (
-                    input.task.definition.clone(),
-                    self.candidates_value(&input.task.definition),
+                    input.definition.clone(),
+                    self.candidates_value(&input.definition),
                 )
             })
             .collect();
@@ -776,12 +930,21 @@ impl QueryEngine {
             types: self.types.clone(),
             memo: self.memo.clone(),
             snapshot,
-            declarations: self.frozen_declarations(),
+            declarations: declarations.with_archived_siblings(Arc::new(SiblingArchives {
+                files: siblings,
+                sources: self.sources.clone(),
+                owners: anchors.clone(),
+                records: crate::NativeRecords::new(self.types.clone(), store.clone()),
+                store: store.clone(),
+            })),
             citations: OwnedSourceContext {
                 sources: self.sources.clone(),
                 items,
-                declarations: self.declarations.clone(),
+                declarations: self.declarations.observations(),
                 catalog: self.catalog.clone(),
+                owners: anchors.clone(),
+                cited,
+                arm_fixes,
             },
             resolver: self.adapters.resolver.clone(),
             checker: self.adapters.checker.clone(),
@@ -789,6 +952,8 @@ impl QueryEngine {
             environment: self.environment_value(),
             candidates,
             records: self.type_records().ok_or_else(refusal)?,
+            input_records,
+            anchors,
             store,
             outcomes: Mutex::new(BTreeMap::new()),
             work: Mutex::new(BTreeMap::new()),
@@ -797,6 +962,7 @@ impl QueryEngine {
             store_adoptions: AtomicU64::new(0),
             verify_store: self.verify_store,
             errors,
+            retention: Mutex::new(allowance.bytes() - required),
             _allowance: allowance,
         }))
     }

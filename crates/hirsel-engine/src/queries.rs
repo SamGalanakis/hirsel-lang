@@ -16,7 +16,8 @@ pub use scheduled_run::FrontRunOutput;
 mod scheduled_growth;
 pub use parallel::{
     FRONT_BODY_KIND, FRONT_STORAGE_KIND, FrontBodyOutput, FrontBodyQueries, FrontCheckedOutput,
-    FrontStorageOutput, FrontStorageQueries, ModeResult, PublishedDefinition, PublishedResult,
+    FrontInputFootprint, FrontStorageOutput, FrontStorageQueries, ModeResult, PublishedDefinition,
+    PublishedResult,
 };
 pub use s1::{LoweringResult, S1LowerWork};
 pub use scheduled_growth::{FRONT_GROWTH_KIND, FrontGrowthOutput, FrontGrowthQueries};

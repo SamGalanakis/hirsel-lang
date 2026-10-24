@@ -255,14 +255,14 @@ impl QueryEngine {
         for (address, input) in &front.inputs {
             inventory = inventory
                 .checked_add((std::mem::size_of::<(Key, DefPath)>() + 64) as u64)
-                .and_then(|n| n.checked_add(bincode::serialized_size(&input.task.definition).ok()?))
+                .and_then(|n| n.checked_add(bincode::serialized_size(&input.definition).ok()?))
                 .ok_or(QueryError::NotImplemented)?;
             if inventory > allowance.bytes() {
                 return Err(QueryError::NotImplemented);
             }
             let address =
                 ContentHash::of_parts("hirsel.front.storage.address.v1", [address.0.as_slice()]);
-            inputs.insert(address, input.task.definition.clone());
+            inputs.insert(address, input.definition.clone());
         }
         let store = front.store.clone();
         Ok(Arc::new(FrontStorageQueries {
