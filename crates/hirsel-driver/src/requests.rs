@@ -7,6 +7,7 @@ use hirsel_syntax::DefPath;
 use std::path::PathBuf;
 mod host_selector;
 mod inspection;
+mod native_routing;
 mod output;
 mod safe_check;
 mod selector;
