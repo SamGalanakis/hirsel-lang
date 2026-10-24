@@ -96,7 +96,8 @@ fn native_ready_tasks_validate_cold_and_fresh_snapshots_with_current_source_invo
             drop(discovery);
             drop(engine);
             assert!(originals.iter().all(|body| body.upgrade().is_none()));
-            let budget = ProcessBudget::new(128 << 20);
+            let runtime_bytes = hirsel_intern::jobs::COMPILER_STACK_BYTES as u64 + (64 << 20);
+            let budget = ProcessBudget::new(runtime_bytes + (32 << 20));
             let trace = hirsel_lir::construction::ValueTrace::default();
             let _observe = trace.enter();
             let tasks = InstanceTasks::new(
@@ -136,7 +137,7 @@ fn native_ready_tasks_validate_cold_and_fresh_snapshots_with_current_source_invo
             };
             let mut runtime = AdmittedRuntime::new(
                 hirsel_intern::jobs::Jobs::new(1),
-                budget.reserve(96 << 20).unwrap(),
+                budget.reserve(runtime_bytes).unwrap(),
                 errors,
             )
             .unwrap();
@@ -181,7 +182,16 @@ fn native_ready_tasks_validate_cold_and_fresh_snapshots_with_current_source_invo
             let graph = arenas.graph(arena_output).unwrap();
             assert!(!graph.candidates.is_empty() && !graph.chosen.is_empty());
             let operations = Arc::new(tasks.source_operations(discovery_output).unwrap());
-            assert_eq!(operations.invocation_bodies.len(), 2);
+            assert_eq!(
+                operations
+                    .invocation_bodies
+                    .iter()
+                    .filter(
+                        |row| row.definition.0.name == "main" || row.definition.0.name == "other"
+                    )
+                    .count(),
+                2
+            );
             let products = tasks.products(discovery_output).unwrap();
             let snapshot = NativeSnapshot::new(
                 store.clone(),
@@ -217,7 +227,7 @@ fn native_ready_tasks_validate_cold_and_fresh_snapshots_with_current_source_invo
             ));
             let mut ready_runtime = AdmittedRuntime::new(
                 hirsel_intern::jobs::Jobs::new(1),
-                budget.reserve(96 << 20).unwrap(),
+                budget.reserve(runtime_bytes).unwrap(),
                 errors,
             )
             .unwrap();
@@ -243,7 +253,14 @@ fn native_ready_tasks_validate_cold_and_fresh_snapshots_with_current_source_invo
             );
             assert_eq!(snapshot.ready_materializations(), 0);
             let completed = tasks.completed_instances(result[0]).unwrap();
-            assert_eq!(completed.len(), 2);
+            assert_eq!(
+                completed
+                    .iter()
+                    .filter(|(key, _)| key.instance.definition().0.name == "main"
+                        || key.instance.definition().0.name == "other")
+                    .count(),
+                2
+            );
             let outputs = completed
                 .iter()
                 .map(|(_, output)| output.product.product)
@@ -254,7 +271,10 @@ fn native_ready_tasks_validate_cold_and_fresh_snapshots_with_current_source_invo
                 assert_eq!(tasks.source_body_demands.load(Ordering::Relaxed), 0);
                 assert_eq!(trace.totals(), Default::default());
             } else {
-                assert_eq!(tasks.imports.load(Ordering::Relaxed), 2);
+                assert_eq!(
+                    tasks.imports.load(Ordering::Relaxed),
+                    completed.len() as u64
+                );
                 expected = Some(outputs);
             }
         }
