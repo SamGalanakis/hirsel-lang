@@ -169,3 +169,4 @@ mod scheduled_growth;
 mod scheduled_check;
 mod native_source_inputs_19;
 mod native_settled_declarations_19;
+mod native_instance_products_19;
