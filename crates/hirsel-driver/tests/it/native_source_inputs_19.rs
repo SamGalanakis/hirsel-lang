@@ -1,0 +1,97 @@
+use hirsel_driver::*;
+use hirsel_engine::*;
+use native::queries::{declarations::NativeDeclarations, source_inputs::*};
+use std::sync::Arc;
+
+#[test]
+fn immutable_native_inputs_bind_only_the_selected_front_output_without_eager_bodies() {
+    with_compiler_stack(|| {
+        let store: Arc<dyn store::ResultStore> = Arc::new(store::MemStore::default());
+        let mut engine = QueryEngine::new(default_environment(), compiler_adapters())
+            .with_result_store(store.clone());
+        let file = engine
+            .sources
+            .add(
+                "worker-source.hir",
+                "fn helper()->u64{9u64}\npub fn main()->u64{7u64}".into(),
+            )
+            .unwrap();
+        engine.parse_file(file, &default_context()).unwrap();
+        let main = entry_path(&default_context());
+        let mut helper = main.clone();
+        helper.0.name = "helper".into();
+        let context = engine
+            .native_original_context(&[main.clone(), helper.clone()])
+            .unwrap();
+        assert_eq!(engine.recompute_count(&main, QueryKind::Lower), 0);
+        let descriptor = engine.native_definition_product(&main).unwrap();
+        let (body, verified) = engine
+            .native_definition_body_with_output(&descriptor)
+            .unwrap();
+        let original = Arc::downgrade(&body);
+        let records = NativeRecords::new(engine.types().clone(), store.clone());
+        let bytes = records.encode(&engine, &body).unwrap();
+        let ordinary = store.put_content(NATIVE_ORIGINAL_BODY, &bytes).unwrap();
+        let selected = NativeOriginalProduct {
+            definition: main.clone(),
+            implementation_revision: descriptor.source.implementation_revision,
+            signature: descriptor.signature.fingerprint,
+            body: ordinary,
+            verified,
+        };
+        let mut discovery = NativeDiscoveryCache::new(engine.types().clone(), store.clone());
+        let declarations = NativeDeclarations::collect(&mut engine, &mut discovery, &[]).unwrap();
+        let empty = context
+            .reader(std::iter::empty::<NativeOriginalProduct>(), store.clone())
+            .unwrap();
+        let inputs = NativeInstanceInputs::from_products(declarations, empty).unwrap();
+        let mut unavailable = inputs.provider();
+        assert!(unavailable.source_output(&main).is_err());
+        assert!(unavailable.original_source(&main).is_err());
+        let mut wrong = selected.clone();
+        wrong.signature = Default::default();
+        assert!(
+            inputs
+                .provider_from_products(&context, [wrong], store.clone())
+                .is_err()
+        );
+        let mut pinned = inputs
+            .provider_from_products(&context, [selected.clone()], store.clone())
+            .unwrap();
+        assert_eq!(pinned.body_demands, 0);
+        assert_eq!(pinned.source_verifications, 0);
+        assert!(pinned.source_observation(&helper).is_err());
+        assert!(pinned.source_output(&main).unwrap().is_some());
+        assert!(
+            inputs.provider().source_output(&main).is_err(),
+            "worker binding cannot change the shared declaration snapshot"
+        );
+        let mut ordinary = selected;
+        ordinary.verified = None;
+        let mut ordinary = inputs
+            .provider_from_products(&context, [ordinary], store)
+            .unwrap();
+        assert!(ordinary.source_output(&main).unwrap().is_none());
+        assert!(!ordinary.query_policy().reuse);
+        drop(body);
+        drop(discovery);
+        drop(engine);
+        assert!(
+            original.upgrade().is_none(),
+            "immutable worker inputs retain no original Definition"
+        );
+        assert_eq!(
+            pinned.original_source(&main).unwrap().0.signature_hash,
+            descriptor.signature.fingerprint
+        );
+        assert_eq!(pinned.body_demands, 1);
+        assert_eq!(pinned.source_verifications, 0);
+        let original = ordinary.original_source(&main).unwrap();
+        assert!(
+            original.1.is_none(),
+            "ordinary transport cannot create a source witness"
+        );
+        assert_eq!(ordinary.body_demands, 1);
+        assert!(ordinary.source_verifications <= 1);
+    });
+}
