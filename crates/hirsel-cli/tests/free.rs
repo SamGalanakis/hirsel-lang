@@ -3700,6 +3700,22 @@ fn f1_runner_width_and_permit_matrix(
     f1_runner_matrix_in(&scratch, text, grants, live_output, replay_output);
 }
 
+/// As [`f1_runner_width_and_permit_matrix`] at one recording level: each
+/// level is its own case, inside the action's time.
+fn f1_runner_width_and_permit_matrix_at(
+    name: &str,
+    text: &str,
+    grants: &str,
+    output: (&[u8], &[u8]),
+    level: &'static str,
+) {
+    if !hirsel_rt::free_driver::admission_enabled() {
+        return;
+    }
+    let scratch = Scratch::new(&format!("{name}-{level}"));
+    f1_runner_matrix_levels(&scratch, text, grants, output.0, output.1, &[level]);
+}
+
 fn f1_runner_matrix_in(
     scratch: &Scratch,
     text: &str,
@@ -3707,12 +3723,24 @@ fn f1_runner_matrix_in(
     live_output: &[u8],
     replay_output: &[u8],
 ) {
+    let levels = ["record", "durable"];
+    f1_runner_matrix_levels(scratch, text, grants, live_output, replay_output, &levels);
+}
+
+fn f1_runner_matrix_levels(
+    scratch: &Scratch,
+    text: &str,
+    grants: &str,
+    live_output: &[u8],
+    replay_output: &[u8],
+    levels: &[&str],
+) {
     let name = scratch.0.display();
     let program = scratch.path("main.hir");
     std::fs::write(&program, text).unwrap();
     let report = scratch.path("projection");
     let mut grants: serde_json::Value = serde_json::from_str(grants).unwrap();
-    for level in ["record", "durable"] {
+    for &level in levels {
         let tape = scratch.path(level);
         grants["recording"] = level.into();
         let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
@@ -3765,12 +3793,23 @@ fn f1_runner_matrix_in(
 
 #[test]
 fn f1_runner_compute_full_projection_width_and_permit_matrix() {
-    f1_runner_width_and_permit_matrix(
+    f1_runner_width_and_permit_matrix_at(
         "f1-runner-compute-matrix",
         F1_RUNNER_COMPUTE_SOURCE,
         F1_RUNNER_COMPUTE_GRANTS,
-        b"runner outcomes\n",
-        b"runner outcomes\n",
+        (b"runner outcomes\n", b"runner outcomes\n"),
+        "record",
+    );
+}
+
+#[test]
+fn f1_runner_compute_full_projection_width_and_permit_matrix_durable() {
+    f1_runner_width_and_permit_matrix_at(
+        "f1-runner-compute-matrix",
+        F1_RUNNER_COMPUTE_SOURCE,
+        F1_RUNNER_COMPUTE_GRANTS,
+        (b"runner outcomes\n", b"runner outcomes\n"),
+        "durable",
     );
 }
 
