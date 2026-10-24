@@ -117,6 +117,19 @@ class LauncherFixture(unittest.TestCase):
 
 
 class LauncherSelection(LauncherFixture):
+    def launcher_with_quota(self, quota):
+        # Keep the real launcher's quota logic, with deterministic kernel files.
+        # A wide affinity mask does not imply a wide ancestor cpu.max quota.
+        (self.root / 'cgroup').write_text('0::/child\n')
+        (self.root / 'groups/child').mkdir(parents=True, exist_ok=True)
+        (self.root / 'groups/child/cpu.max').write_text('max 100000\n')
+        (self.root / 'groups/cpu.max').write_text(f'{quota} 100000\n')
+        launcher = self.root / 'launcher.sh'
+        launcher.write_text(LAUNCHER.read_text()
+                            .replace('/proc/self/cgroup', str(self.root / 'cgroup'))
+                            .replace('/sys/fs/cgroup', str(self.root / 'groups')))
+        return launcher
+
     def run_cases(self, *args, shard=''):
         self.observed.unlink(missing_ok=True)
         env = self.env.copy()
@@ -161,25 +174,28 @@ class LauncherSelection(LauncherFixture):
         self.env.update(HIRSEL_TEST_CPUS='8', HIRSEL_TEST_EXACT_CPUS='8',
                         RUST_TEST_THREADS='8', HIRSEL_JOBS='8')
         cpus = ','.join(map(str, sorted(os.sched_getaffinity(0))[:8]))
-        run = subprocess.run(['taskset', '-c', cpus, 'sh', str(LAUNCHER), 'harness'],
-                             cwd=self.root, env=self.env, capture_output=True, text=True)
-        # The tool test itself books one CPU on the ordinary pool; it must
-        # prove refusal under that quota, while a host with room proves eight.
-        if int(os.environ.get('HIRSEL_TEST_CPUS', '8')) < 8:
-            self.assertEqual(run.returncode, 2, run.stderr)
-            self.assertIn('exceeds inherited quota', run.stderr)
-            self.assertFalse(self.observed.exists())
-            return
-        self.assertEqual(run.returncode, 0, run.stderr)
-        result = json.loads(self.observed.read_text())
-        self.assertEqual((result['threads'], result['jobs']), ('8', '8'))
+        for quota in ('max', '400000', '100000'):
+            with self.subTest(quota=quota):
+                self.observed.unlink(missing_ok=True)
+                launcher = self.launcher_with_quota(quota)
+                run = subprocess.run(['taskset', '-c', cpus, 'sh', str(launcher), 'harness'],
+                                     cwd=self.root, env=self.env, capture_output=True, text=True)
+                if quota != 'max':
+                    self.assertEqual(run.returncode, 2, run.stderr)
+                    self.assertIn(f'exceeds inherited quota ({int(quota) // 100000})', run.stderr)
+                    self.assertFalse(self.observed.exists())
+                else:
+                    self.assertEqual(run.returncode, 0, run.stderr)
+                    result = json.loads(self.observed.read_text())
+                    self.assertEqual((result['threads'], result['jobs']), ('8', '8'))
 
     @unittest.skipUnless(len(os.sched_getaffinity(0)) >= 2, 'requires two inherited CPUs')
     def test_exact_two_cpu_request_preserves_the_inherited_mask(self):
         self.env.update(HIRSEL_TEST_CPUS='2', HIRSEL_TEST_EXACT_CPUS='2',
                         RUST_TEST_THREADS='2', HIRSEL_JOBS='2')
         cpus = ','.join(map(str, sorted(os.sched_getaffinity(0))[:2]))
-        run = subprocess.run(['taskset', '-c', cpus, 'sh', str(LAUNCHER), 'harness'],
+        launcher = self.launcher_with_quota('max')
+        run = subprocess.run(['taskset', '-c', cpus, 'sh', str(launcher), 'harness'],
                              cwd=self.root, env=self.env, capture_output=True, text=True)
         self.assertEqual(run.returncode, 0, run.stderr)
         result = json.loads(self.observed.read_text())
