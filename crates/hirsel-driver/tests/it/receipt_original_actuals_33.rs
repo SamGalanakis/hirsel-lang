@@ -11,6 +11,7 @@ use hirsel_engine::{
 };
 use hirsel_lir::sealed_payload_source::ClosedStorageProfile;
 use hirsel_rc::instance::{Actuals, key_of};
+use hirsel_rc::sealed_source::contract::registry::{Context, Registry};
 use hirsel_rc::sealed_source::contract::{self, Input, Port};
 use hirsel_rc::sealed_source::{SourceError, SourceInput};
 use hirsel_syntax::ContentHash;
@@ -273,6 +274,44 @@ fn port_context_declared_function_values_keep_distinct_actuals_and_reject_profil
         assert_ne!(
             a.3[&Port::Parameter(0)].content().unwrap(),
             b.3[&Port::Parameter(0)].content().unwrap()
+        );
+        let mut registry = Registry::default();
+        let mut contexts = BTreeMap::new();
+        for (&unique, (base, entry, source, ports)) in &selected {
+            let context = || Context {
+                base,
+                profile: &ports[&Port::Parameter(0)],
+                entry,
+                source,
+                ports,
+            };
+            let id = registry.register(context()).unwrap();
+            assert_eq!(id, registry.register(context()).unwrap());
+            registry
+                .resolve(id, BTreeMap::new(), BTreeMap::new())
+                .unwrap();
+            contexts.insert(unique, id);
+        }
+        assert_eq!(registry.len(), 2);
+        let requests = registry.solve().unwrap();
+        let ordinary = &requests[contexts[&false].index()];
+        let unique = &requests[contexts[&true].index()];
+        assert_eq!(ordinary.ordinary_key(), unique.ordinary_key());
+        assert_ne!(ordinary.context_key(), unique.context_key());
+        assert!(requests.iter().all(|r| r.aware_key().is_none()));
+        // The original typed function contracts select the complete contexts;
+        // an equal erased native base cannot flatten the unique context.
+        assert_eq!(
+            registry
+                .register(Context {
+                    base: &b.0,
+                    profile: &a.3[&Port::Parameter(0)],
+                    entry: &b.1,
+                    source: &b.2,
+                    ports: &b.3,
+                })
+                .unwrap_err(),
+            SourceError::Malformed("conflicting original data for receipt profile context")
         );
         let calls = BTreeMap::new();
         let closures = BTreeMap::new();
