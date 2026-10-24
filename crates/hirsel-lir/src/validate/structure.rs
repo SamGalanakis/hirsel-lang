@@ -619,7 +619,6 @@ impl<S: Stage> Checker<'_, '_, S> {
                 (ValueRepr::Arena, LayoutKind::Arena) => true,
                 (ValueRepr::Scalar(ScalarKind::U64), LayoutKind::Path) => true,
                 (ValueRepr::Token, LayoutKind::Header) => true,
-                (ValueRepr::PayloadReceipt, LayoutKind::PayloadReceipt { .. }) => true,
                 (ValueRepr::RegionMark | ValueRepr::InitMask { .. }, LayoutKind::Scalar(_)) => true,
                 (
                     ValueRepr::Aggregate | ValueRepr::Uncounted,
