@@ -308,13 +308,17 @@ impl Task {
     > {
         let queries = self.queries.clone();
         let Some(input) = queries.inputs.get(path) else {
-            return Poll::Ready(Err(queries.errors.protocol));
+            return Poll::Ready(Err(queries.failure_record(operational(format!(
+                "missing signature input for {path}"
+            )))));
         };
         let mut dependencies = input.dependencies.clone();
         let mut tir = None;
         if input.source {
             let Some(id) = queries.front.query(path) else {
-                return Poll::Ready(Err(queries.errors.protocol));
+                return Poll::Ready(Err(
+                    queries.failure_record(operational(format!("missing P input for {path}")))
+                ));
             };
             let product = match self.read(cx, id) {
                 Poll::Pending => return Poll::Pending,
@@ -322,7 +326,9 @@ impl Task {
                 Poll::Ready(Ok(product)) => product,
             };
             let Some(output) = queries.front.outcome(product.record) else {
-                return Poll::Ready(Err(queries.errors.protocol));
+                return Poll::Ready(Err(queries.failure_record(operational(format!(
+                    "missing settled P product for {path}"
+                )))));
             };
             let analyzed = match &output.outcome.result {
                 Ok(body) => body,
@@ -342,7 +348,8 @@ impl Task {
             extend_reads(&mut dependencies, &output.outcome.reads);
             if input.executable {
                 let Some(id) = queries.lower.query(path) else {
-                    return Poll::Ready(Err(queries.errors.protocol));
+                    return Poll::Ready(Err(queries
+                        .failure_record(operational(format!("missing Lower input for {path}")))));
                 };
                 let product = match self.read(cx, id) {
                     Poll::Pending => return Poll::Pending,
@@ -350,7 +357,9 @@ impl Task {
                     Poll::Ready(Ok(product)) => product,
                 };
                 let Some(output) = queries.lower.outcome(product) else {
-                    return Poll::Ready(Err(queries.errors.protocol));
+                    return Poll::Ready(Err(queries.failure_record(operational(format!(
+                        "missing settled Lower product for {path}"
+                    )))));
                 };
                 if has_errors(&output.output.diagnostics) {
                     return Poll::Ready(Err(
@@ -369,7 +378,9 @@ impl Task {
                 if matches!(&input.signature.kind, SignatureKind::Const {generics, ..} if generics.is_empty())
                 {
                     let Some(id) = queries.lower.evaluate_query(path) else {
-                        return Poll::Ready(Err(queries.errors.protocol));
+                        return Poll::Ready(Err(queries.failure_record(operational(format!(
+                            "missing Evaluate input for {path}"
+                        )))));
                     };
                     match self.read(cx, id) {
                         Poll::Pending => return Poll::Pending,
@@ -707,11 +718,7 @@ impl QueryEngine {
         }
         let source_paths = self.source_paths();
         let mut paths: BTreeSet<_> = source_paths.iter().cloned().collect();
-        paths.extend(
-            self.registry
-                .signatures()
-                .map(|s| s.definition.path().clone()),
-        );
+        paths.extend(self.native_builtin_signatures().into_keys());
         let mut inputs = BTreeMap::new();
         let mut views = Vec::new();
         let mut required = FrontRunQueries::input_bytes(&paths.iter().cloned().collect::<Vec<_>>())
