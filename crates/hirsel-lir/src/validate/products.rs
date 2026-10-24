@@ -385,7 +385,7 @@ impl NativeCache {
             }
             let (closure, body) = LayoutClosure::capture(&checked, inputs, additional_abis).ok()?;
             let binding = Binding::new(inputs.target, &[&closure]).ok()?;
-            let declarations = observed.finish(&binding.table, inputs.target)?;
+            let declarations = observed.finish(&binding.table, inputs.layouts, inputs.target)?;
             let body = self.put(domain, hirsel_codec::to_text(&body).as_bytes())?;
             let layouts = self.put(LAYOUTS, hirsel_codec::to_text(&closure).as_bytes())?;
             let environment = NativeEnvironment {
