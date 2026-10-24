@@ -95,14 +95,6 @@ fn units(
     }
 }
 
-/// The plans a backend's task bodies enter through: Cranelift emits the
-/// resumable alternates; LLVM bodies stay stackful.
-pub(super) fn routed(program: &ReadyProgram, backend: super::emit::Backend) -> ContinuationPlans {
-    match backend {
-        super::emit::Backend::Cranelift => plans(program),
-        super::emit::Backend::Llvm => ContinuationPlans::default(),
-    }
-}
 
 /// Every resumable plan's state alternates and dispatcher, in one object.
 pub(super) fn objects(
@@ -110,7 +102,7 @@ pub(super) fn objects(
     backend: super::emit::Backend,
     opt: hirsel_lir::emission::OptLevel,
 ) -> Result<Vec<hirsel_lir::stage::ObjectArtifact>, NativeError> {
-    let plans = routed(program, backend);
+    let plans = plans(program);
     if !plans.resumable() {
         return Ok(Vec::new());
     }
@@ -149,7 +141,8 @@ pub(super) fn objects(
             hirsel_cranelift::emit_resume_object(&units, &inputs, &plans)
                 .map_err(|e| NativeError::new(StageName::Emission, e.to_string()))?
         }
-        super::emit::Backend::Llvm => return Ok(Vec::new()),
+        super::emit::Backend::Llvm => hirsel_llvm::emit_resume_object(&units, &inputs, &plans)
+            .map_err(|e| NativeError::new(StageName::Emission, e.to_string()))?,
     };
     Ok(vec![object])
 }

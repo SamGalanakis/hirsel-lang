@@ -1,0 +1,393 @@
+//! Resumable continuation alternates (r6 S7), as `hirsel-cranelift`'s `resume`
+//! emits them: one alternate per resume state and a dispatcher, each with the
+//! body's signature plus a trailing frame pointer. Storage live at any boundary
+//! lives in the frame; each boundary materializes its state's live values and
+//! state number first, and state k reloads them and reissues its boundary call.
+//! Alternates keep sequence lengths in memory: no register state survives a
+//! suspension.
+use super::*;
+use hirsel_lir::continuation::{
+    ContinuationPlan, ContinuationPlans, NestedFrame, Representation, ResumeState, resume_name,
+};
+use hirsel_lir::runtime_abi::STATUS_SUSPENDED;
+
+pub(super) struct Resume<'a, 'm> {
+    pub(super) plan: &'a ContinuationPlan,
+    pub(super) state: u32,
+    pub(super) frame: Value<'m>,
+    /// The boundary call this alternate starts at: its protocol already ran.
+    pub(super) resuming: Option<CallId>,
+}
+
+/// The body's signature with the frame pointer appended.
+pub(super) fn resume_type<'m>(module: &'m Module<'m>, signature: &Signature<'m, '_>) -> Type<'m> {
+    let mut types = signature.types.clone();
+    types.push(module.ptr_type());
+    module.function_type(signature.returns, &types)
+}
+
+impl<'m, 'a> FnEmitter<'m, 'a> {
+    fn frame_place(&self, offset: u64, layout: LayoutId) -> Emitted<Place<'m>> {
+        let frame = self.resume.as_ref().expect("resume frame").frame;
+        let align = self.layout(layout)?.align;
+        Ok(Place {
+            columns: None,
+            ptr: self.builder.offset(frame, self.const_u64(offset)),
+            layout,
+            align: align.min(low_bit(offset)).min(16),
+            block: None,
+        })
+    }
+
+    /// Storage live at a boundary is frame-resident in every state.
+    pub(super) fn resume_storage(&mut self) -> Emitted {
+        let Some(plan) = self.resume.as_ref().map(|r| r.plan) else {
+            return Ok(());
+        };
+        for storage in &plan.storage {
+            match self.unit.slots[storage.slot.index()].kind {
+                SlotKind::Parameter(_) | SlotKind::Capture(_) => {}
+                _ => {
+                    let frame = self.resume.as_ref().unwrap().frame;
+                    let align = self.layout(storage.layout)?.align;
+                    self.slots[storage.slot.index()] = Some(Place {
+                        columns: None,
+                        ptr: self.prologue.offset(frame, self.const_u64(storage.offset)),
+                        layout: storage.layout,
+                        align: align.min(low_bit(storage.offset)).min(16),
+                        block: None,
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Store a state's live values and number before its boundary call.
+    fn materialize(&mut self, state: &ResumeState) -> Emitted {
+        for live in &state.live {
+            if self.versions.contains(&live.value) {
+                continue;
+            }
+            let shape = self.value_shape(live.value)?;
+            let value = self.get(live.value)?;
+            let place = self.frame_place(live.offset, live.layout)?;
+            self.store(shape, value, place);
+        }
+        let frame = self.resume.as_ref().unwrap().frame;
+        let number = self
+            .module
+            .const_int(self.module.int_type(32), u128::from(state.target.state));
+        self.builder.store(number, frame, 8);
+        Ok(())
+    }
+
+    /// Define a state's live values from the frame; bytes get fresh copies.
+    /// A value a skipped block's phi defined is redefined by its reload.
+    fn reload(&mut self, state: &ResumeState) -> Emitted {
+        for live in &state.live {
+            if self.versions.contains(&live.value) {
+                continue;
+            }
+            let shape = self.value_shape(live.value)?;
+            let place = self.frame_place(live.offset, live.layout)?;
+            let value = match shape {
+                Shape::Bytes { .. } => {
+                    let copy = self.stack(live.layout)?;
+                    let loaded = self.load(shape, place);
+                    self.store(shape, loaded, copy);
+                    self.load(shape, copy)
+                }
+                _ => self.load(shape, place),
+            };
+            self.values[live.value.index()] = Some(value);
+        }
+        Ok(())
+    }
+
+    fn return_suspended(&mut self) -> Emitted {
+        self.return_status(u128::from(STATUS_SUSPENDED), None)
+    }
+
+    /// The boundary protocol before `call`; for a resumable callee, its frame.
+    pub(super) fn resume_boundary(
+        &mut self,
+        call: CallId,
+    ) -> Emitted<Option<(Value<'m>, NestedFrame)>> {
+        let Some(resume) = self.resume.as_mut() else {
+            return Ok(None);
+        };
+        let plan = resume.plan;
+        let Some(state) = plan.states.iter().find(|s| s.boundary.call == call) else {
+            return Ok(None);
+        };
+        let resuming = resume.resuming == Some(call);
+        if resuming {
+            resume.resuming = None;
+        }
+        let frame = resume.frame;
+        if let Some(callee) = state.callee {
+            let nested = self.builder.offset(frame, self.const_u64(callee.offset));
+            if !resuming {
+                self.materialize(state)?;
+                self.builder
+                    .store(self.module.const_zero(self.module.int_type(32)), nested, 16);
+            }
+            return Ok(Some((nested, callee)));
+        }
+        if !resuming {
+            self.materialize(state)?;
+            let point = self.runtime(RuntimeEntry::ResumePoint)?;
+            let number = self
+                .module
+                .const_int(self.module.int_type(32), u128::from(state.target.state));
+            let decided = self.builder.call(point, &[self.context, frame, number]);
+            let suspended = self.builder.icmp(
+                IntPredicate::Ne,
+                decided,
+                self.module.const_zero(self.module.int_type(8)),
+            );
+            let (cold, proceed) = (
+                self.module.append_block(self.function),
+                self.module.append_block(self.function),
+            );
+            self.builder.cold_cond_br(suspended, cold, proceed);
+            self.builder.position(cold);
+            self.return_suspended()?;
+            self.builder.position(proceed);
+        }
+        Ok(None)
+    }
+
+    /// A resumable callee's dispatcher, called with its nested frame.
+    pub(super) fn resume_callee(
+        &mut self,
+        symbol: SymbolId,
+        callee: NestedFrame,
+        signature: &Signature<'m, '_>,
+    ) -> Emitted<Function<'m>> {
+        let Some(symbol) = self.unit.tables.symbols.get(symbol.index()) else {
+            return self.invalid("a callee outside the symbol table");
+        };
+        let name = resume_name(&symbol.definition, callee.body, None);
+        self.manifested
+            .imports
+            .entry(name.clone())
+            .or_insert_with(|| ObjectSymbol {
+                name: name.clone(),
+                kind: ObjectSymbolKind::Function,
+                definition: Some(symbol.definition.clone()),
+                abi: None,
+            });
+        self.module
+            .function(&name, resume_type(self.module, signature))
+            .map_err(|what| CodegenError::Invalid {
+                definition: self.definition().clone(),
+                what,
+            })
+    }
+
+    /// After a nested resumable call: a suspended callee suspends this frame,
+    /// whose state the boundary already recorded.
+    pub(super) fn resume_propagate(&mut self, status: Value<'m>) -> Emitted {
+        let suspended = self.builder.icmp(
+            IntPredicate::Eq,
+            status,
+            self.module
+                .const_int(self.module.int_type(8), u128::from(STATUS_SUSPENDED)),
+        );
+        let (cold, next) = (
+            self.module.append_block(self.function),
+            self.module.append_block(self.function),
+        );
+        self.builder.cold_cond_br(suspended, cold, next);
+        self.builder.position(cold);
+        self.return_suspended()?;
+        self.builder.position(next);
+        Ok(())
+    }
+
+    /// One state alternate: state 0 enters the body; state k reloads its
+    /// values and reissues its boundary call, emitting only what follows.
+    pub(super) fn emit_resume(mut self) -> Emitted {
+        let (plan, state) = {
+            let resume = self.resume.as_ref().unwrap();
+            (resume.plan, resume.state)
+        };
+        if !self.unit.parameters.is_empty() {
+            return self.unsupported("a resumable body with declared parameters");
+        }
+        self.find_versions()?;
+        for _ in &self.unit.blocks {
+            self.blocks.push(self.module.append_block(self.function));
+        }
+        self.create_phis()?;
+        self.allocate_slots()?;
+        self.bind_parameters()?;
+        let start = self.module.append_block(self.function);
+        self.builder.position(start);
+        let first = if state == 0 {
+            self.builder.br(self.blocks[self.unit.entry.index()]);
+            self.unit.entry
+        } else {
+            let Some(s) = plan.states.get(state as usize - 1) else {
+                return self.invalid("a resume state outside its plan");
+            };
+            self.reload(s)?;
+            self.resume.as_mut().unwrap().resuming = Some(s.boundary.call);
+            let unit = self.unit;
+            let block = s.boundary.block;
+            self.at = (block, 0);
+            self.terminator(&unit.terminators[block.index()])?;
+            block
+        };
+        let count = self.unit.blocks.len();
+        let adjacent: Vec<Vec<usize>> = (0..count)
+            .map(|b| self.successors(b))
+            .collect::<Emitted<_>>()?;
+        let order = hirsel_graph::reverse_postorder(&adjacent, first.index());
+        let mut emitted = vec![false; count];
+        for b in order {
+            if state != 0 && b == first.index() {
+                continue;
+            }
+            emitted[b] = true;
+            self.emit_block(BlockId(b as u32))?;
+        }
+        // Blocks before this state's boundary never run here.
+        for (b, done) in emitted.into_iter().enumerate() {
+            if !done {
+                self.builder.position(self.blocks[b]);
+                self.builder.unreachable();
+            }
+        }
+        self.builder.position(self.prologue_block);
+        self.builder.br(start);
+        Ok(())
+    }
+
+    /// A resumable task body's ordinary entry: the runtime runs its dispatcher
+    /// over an owned frame, saving that frame at each suspension.
+    pub(super) fn emit_resume_entry(self, plan: &ContinuationPlan) -> Emitted {
+        let arity = self.signature.types.len() as u32;
+        if arity != 4 || self.signature.value.is_some() || !self.signature.roots.is_empty() {
+            return self.invalid("a resumable task body off the task entry signature");
+        }
+        let header = &self.unit.header;
+        let name = resume_name(&header.definition, header.instance, None);
+        self.manifested
+            .imports
+            .entry(name.clone())
+            .or_insert_with(|| ObjectSymbol {
+                name: name.clone(),
+                kind: ObjectSymbolKind::Function,
+                definition: Some(header.definition.clone()),
+                abi: None,
+            });
+        let dispatcher = self
+            .module
+            .function(&name, resume_type(self.module, &self.signature))
+            .map_err(|what| CodegenError::Invalid {
+                definition: self.definition().clone(),
+                what,
+            })?;
+        let mut this = self;
+        let run = this.runtime(RuntimeEntry::ResumeRun)?;
+        this.builder.position(this.prologue_block);
+        let mut args: Vec<_> = (0..arity)
+            .map(|i| this.module.parameter(this.function, i))
+            .collect();
+        args.push(dispatcher.value);
+        args.push(
+            this.module
+                .const_int(this.module.int_type(32), u128::from(plan.cost.frame_bytes)),
+        );
+        let status = this.builder.call(run, &args);
+        let returned = this.module.const_zero(this.signature.returns);
+        this.builder.ret(
+            this.signature
+                .returned(&this.builder, returned, status, None),
+        );
+        Ok(())
+    }
+}
+
+/// Every resumable plan's state alternates and dispatcher, declared into
+/// `module`: the functions `lower` then emits, and each dispatcher's body.
+pub(super) fn declare<'m, 'a>(
+    module: &'m Module<'m>,
+    inputs: &'a EmitInputs<'a>,
+    units: &[&'a ValidatedUnit<Ready>],
+    plans: &'a ContinuationPlans,
+    manifested: &mut Manifested,
+) -> Result<Vec<(&'a LirUnit<Ready>, &'a ContinuationPlan, u32, Function<'m>)>, CodegenError> {
+    let mut states = Vec::new();
+    for unit in units {
+        let unit = unit.unit();
+        let header = &unit.header;
+        let Some(plan) = plans
+            .get(header.instance)
+            .filter(|p| p.representation == Representation::Resumable)
+        else {
+            continue;
+        };
+        let abi = fn_abi(inputs.layouts, header.abi, &header.definition)?;
+        let signature = Signature::of(module, inputs.layouts, abi, &header.definition)?;
+        let ty = resume_type(module, &signature);
+        let mut declared = Vec::new();
+        for state in std::iter::once(None).chain((0..=plan.states.len() as u32).map(Some)) {
+            let name = resume_name(&header.definition, header.instance, state);
+            if module.defines(&name) {
+                return Err(CodegenError::DuplicateSymbol { name });
+            }
+            let function = module.function(&name, ty).map_err(|what| CodegenError::Invalid {
+                definition: header.definition.clone(),
+                what,
+            })?;
+            module.add_attribute(function, AttributeSlot::Function, Attribute::NoUnwind);
+            manifested.exports.insert(
+                name.clone(),
+                ObjectSymbol {
+                    name,
+                    kind: ObjectSymbolKind::Function,
+                    definition: Some(header.definition.clone()),
+                    abi: None,
+                },
+            );
+            declared.push(function);
+        }
+        // The dispatcher enters the state its frame header names.
+        let dispatcher = declared[0];
+        let builder = Builder::new(module);
+        let entry = module.append_block(dispatcher);
+        builder.position(entry);
+        let arity = signature.types.len() as u32 + 1;
+        let params: Vec<_> = (0..arity).map(|i| module.parameter(dispatcher, i)).collect();
+        let frame = *params.last().unwrap();
+        let number = builder.load(module.int_type(32), frame, 8);
+        let invalid = module.append_block(dispatcher);
+        let mut cases = Vec::new();
+        for (k, &state) in declared[1..].iter().enumerate() {
+            let block = module.append_block(dispatcher);
+            builder.position(block);
+            let returned = builder.call(state, &params);
+            builder.ret(returned);
+            cases.push((module.const_int(module.int_type(32), k as u128), block));
+        }
+        builder.position(entry);
+        builder.switch(number, invalid, &cases);
+        builder.position(invalid);
+        let trap = module
+            .intrinsic("llvm.trap", &[])
+            .map_err(|what| CodegenError::Invalid {
+                definition: header.definition.clone(),
+                what,
+            })?;
+        builder.call(trap, &[]);
+        builder.unreachable();
+        for (k, &state) in declared[1..].iter().enumerate() {
+            states.push((unit, plan, k as u32, state));
+        }
+    }
+    Ok(states)
+}

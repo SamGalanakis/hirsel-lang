@@ -2764,6 +2764,9 @@ fn launch_impl(
     if fixture.migrate {
         command.env("HIRSEL_RT_MIGRATE", "1");
     }
+    if fixture.resume_save {
+        command.env("HIRSEL_RT_RESUME_SAVE", "1");
+    }
     if fixture.trace_roots {
         // At a count bound of 3 every root past two holders lives in the runtime's overflow
         // table, so the trace checks exact counts through entry to and exit from it.

@@ -194,7 +194,7 @@ pub(crate) fn emit_registered(
         .map(|(_, unit)| unit)
         .collect();
     let ahead = super::ahead::plan(program);
-    let plans = super::continuation::routed(program, backend);
+    let plans = super::continuation::plans(program);
     let inputs = EmitInputs {
         ahead: Some(&ahead),
         continuation: Some(&plans),

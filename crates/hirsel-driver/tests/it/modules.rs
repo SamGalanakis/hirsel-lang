@@ -177,3 +177,4 @@ mod runtime50_continuation;
 mod scheduled_stage;
 mod native_source_inputs_19;
 mod scheduled_dictionary;
+mod runtime50_resume;

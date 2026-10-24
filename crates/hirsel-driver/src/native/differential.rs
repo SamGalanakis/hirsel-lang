@@ -398,6 +398,9 @@ pub struct Fixture {
     /// `--migrate` (design §9 W1): native launches run on several compute workers and move
     /// every task to another worker at every suspension (`HIRSEL_RT_MIGRATE`).
     pub migrate: bool,
+    /// Native resumable task bodies save their compact frame at every boundary
+    /// (`HIRSEL_RT_RESUME_SAVE`, the published form); migration implies it.
+    pub resume_save: bool,
 }
 
 impl Default for Fixture {
@@ -421,6 +424,7 @@ impl Default for Fixture {
             callees: Default::default(),
             trace_roots: false,
             migrate: false,
+            resume_save: false,
         }
     }
 }

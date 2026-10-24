@@ -346,6 +346,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         if abi.shape == CallableShape::Foreign {
             return self.foreign_call(call, abi, normal);
         }
+        let nested = self.resume_boundary(call)?;
         let arguments = self.pool(site.arguments, &unit.pools.call_arguments)?;
         // The callee: a named function, or a code pointer and its environment.
         let (callee, environment, name): (Value<'m>, Option<Value<'m>>, Option<String>) = match site
@@ -679,6 +680,18 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         } else {
             function
         };
+        // A resumable callee continues in its own frame inside this one.
+        let function = match (nested, site.callee) {
+            (
+                Some((frame, callee)),
+                Callee::Direct(symbol) | Callee::Bound { code: symbol, .. },
+            ) => {
+                args.push(frame);
+                Some(self.resume_callee(symbol, callee, &signature)?)
+            }
+            (Some(_), _) => return self.invalid("a nested resumable call without a known callee"),
+            (None, _) => function,
+        };
         if matches!(site.callee, Callee::Operation(_))
             || self
                 .inputs
@@ -698,6 +711,9 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         signature.attribute_call(self.module, returned);
         // A rejected gate leaves mut roots and temporary scatters unpublished.
         let status = signature.status(&self.builder, returned);
+        if nested.is_some() {
+            self.resume_propagate(status)?;
+        }
         if let Some(rejected) = site.pretransfer_failure {
             let rejected = self.failure_block(rejected)?;
             let entered = self.module.append_block(self.function);
