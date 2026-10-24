@@ -29,6 +29,15 @@ pub enum CompileOperation {
         lowering: LoweringPolicy,
     },
     SafeCheck,
+    /// Explicit evidence collection; normal Check does not construct receipts.
+    CheckedProducts {
+        lowering: LoweringPolicy,
+        canonical: bool,
+    },
+    /// Observe work counters without demanding or recomputing these definitions.
+    RecomputeCounts {
+        queries: Vec<(DefPath, hirsel_engine::QueryKind)>,
+    },
     /// None selects the declared launch entry using the observed manifest.
     Tir {
         definition: Option<DefPath>,
