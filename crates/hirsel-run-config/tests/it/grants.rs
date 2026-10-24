@@ -115,7 +115,7 @@ pub(super) fn record(d: &mut Draw) -> RunConfig {
         };
         if d.coin() {
             io.process = Some(ProcessGrant {
-        timed: None,
+                timed: None,
                 provider: "process.spawn@1".into(),
                 rules: ["/bin/a", "/bin/b"]
                     .into_iter()
@@ -383,7 +383,7 @@ fn widen(r: &RunConfig, d: &mut Draw) -> Option<RunConfig> {
                     .push(rule(("wide.example", "1", "connect"))),
                 12 if io.process.is_none() => {
                     io.process = Some(ProcessGrant {
-        timed: None,
+                        timed: None,
                         provider: "process.spawn@1".into(),
                         rules: vec![],
                         runs: None,
