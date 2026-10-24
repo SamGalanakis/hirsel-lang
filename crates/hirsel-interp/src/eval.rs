@@ -55,6 +55,39 @@ pub fn run_with_runtime(
     operations: &mut impl Operations,
     runtime: &crate::aggregate::RuntimeTypes,
 ) -> Result<Execution, ExecutionError> {
+    use std::{
+        future::Future,
+        task::{Context, Poll, Waker},
+    };
+    let mut immediate = crate::provider::Immediate(provider);
+    let mut execution = std::pin::pin!(run_with_runtime_async(
+        &mut immediate,
+        sources,
+        configuration,
+        arguments,
+        limits,
+        operations,
+        runtime,
+    ));
+    match execution
+        .as_mut()
+        .poll(&mut Context::from_waker(Waker::noop()))
+    {
+        Poll::Ready(result) => result,
+        Poll::Pending => unreachable!("an immediate TIR provider suspended"),
+    }
+}
+/// Execute with saved compiler dependency continuations. Poll and drop this
+/// future on one worker: it retains the interpreter's Rc/RefCell ownership.
+pub async fn run_with_runtime_async(
+    provider: &mut (impl AsyncTirProvider + ?Sized),
+    sources: &SourceMap,
+    configuration: &RunConfiguration,
+    arguments: Vec<Value>,
+    limits: Limits,
+    operations: &mut impl Operations,
+    runtime: &crate::aggregate::RuntimeTypes,
+) -> Result<Execution, ExecutionError> {
     let checker = runtime.checked.clone().map(crate::checked::state);
     let root = crate::runs::Run::new(
         provider,
@@ -64,9 +97,10 @@ pub fn run_with_runtime(
         runtime,
         runtime.budgets,
         checker.as_ref(),
-    )?;
+    )
+    .await?;
     let (mut root, result) =
-        crate::runs::execute(provider, sources, limits, operations, runtime, root);
+        crate::runs::execute(provider, sources, limits, operations, runtime, root).await;
     let execution = &mut root.execution;
     let result = match (result, &checker) {
         (Err(Error::Blocked(waits)), _) => {
@@ -153,7 +187,7 @@ struct Resolved<'p, P: ?Sized> {
     /// Declarations with their own body: CT-5 instances never replace them.
     own_bodies: std::collections::BTreeSet<hirsel_syntax::DefPath>,
 }
-impl<'p, P: TirProvider + ?Sized> Resolved<'p, P> {
+impl<'p, P: AsyncTirProvider + ?Sized> Resolved<'p, P> {
     fn new(provider: &'p mut P) -> Self {
         Self {
             provider,
@@ -162,37 +196,37 @@ impl<'p, P: TirProvider + ?Sized> Resolved<'p, P> {
         }
     }
 }
-impl<P: TirProvider + ?Sized> TirProvider for Resolved<'_, P> {
-    fn definition(
+impl<P: AsyncTirProvider + ?Sized> AsyncTirProvider for Resolved<'_, P> {
+    async fn definition(
         &mut self,
         path: &hirsel_syntax::DefPath,
     ) -> Result<DefinitionRef, hirsel_types::QueryError> {
         if let Some(definition) = self.definitions.get(path) {
             return Ok(definition.clone());
         }
-        let definition = self.provider.definition(path)?;
+        let definition = self.provider.definition(path).await?;
         self.definitions.insert(path.clone(), definition.clone());
         Ok(definition)
     }
-    fn constant(
+    async fn constant(
         &mut self,
         path: &hirsel_syntax::DefPath,
     ) -> Result<MaterializedRef, hirsel_types::QueryError> {
-        self.provider.constant(path)
+        self.provider.constant(path).await
     }
-    fn constant_instance(
+    async fn constant_instance(
         &mut self,
         path: &hirsel_syntax::DefPath,
         arguments: &[u64],
     ) -> Result<MaterializedRef, hirsel_types::QueryError> {
-        self.provider.constant_instance(path, arguments)
+        self.provider.constant_instance(path, arguments).await
     }
-    fn constant_definitions(
+    async fn constant_definitions(
         &mut self,
     ) -> Result<Vec<hirsel_syntax::DefPath>, hirsel_types::QueryError> {
-        self.provider.constant_definitions()
+        self.provider.constant_definitions().await
     }
-    fn instance_body(
+    async fn instance_body(
         &mut self,
         path: &hirsel_syntax::DefPath,
         arguments: &[hirsel_types::GenericArgument],
@@ -200,7 +234,7 @@ impl<P: TirProvider + ?Sized> TirProvider for Resolved<'_, P> {
         if self.own_bodies.contains(path) {
             return Ok(None);
         }
-        let instance = self.provider.instance_body(path, arguments)?;
+        let instance = self.provider.instance_body(path, arguments).await?;
         if instance.is_none() {
             self.own_bodies.insert(path.clone());
         }
@@ -308,8 +342,8 @@ pub(crate) enum Step {
 }
 /// The holding table's size before its first pruning.
 const HOLDING_MARK: usize = 32;
-pub(crate) fn execute_frames(
-    provider: &mut (impl TirProvider + ?Sized),
+pub(crate) async fn execute_frames(
+    provider: &mut (impl AsyncTirProvider + ?Sized),
     sources: &SourceMap,
     configuration: &RunConfiguration,
     limits: Limits,
@@ -353,6 +387,7 @@ pub(crate) fn execute_frames(
                     (
                         provider
                             .definition(definition.path())
+                            .await
                             .map_err(Error::Query)?,
                         *body,
                         captures.clone(),
@@ -362,6 +397,7 @@ pub(crate) fn execute_frames(
                 Value::FunctionReference(reference) => {
                     let definition = provider
                         .definition(&reference.definition)
+                        .await
                         .map_err(Error::Query)?;
                     let body = definition.entry;
                     crate::type_arguments::bind(
@@ -846,6 +882,7 @@ pub(crate) fn execute_frames(
                             (
                                 provider
                                     .definition(definition.path())
+                                    .await
                                     .map_err(Error::Query)?,
                                 body,
                                 captures,
@@ -1008,6 +1045,7 @@ pub(crate) fn execute_frames(
                             }
                             let definition = provider
                                 .definition(&reference.definition)
+                                .await
                                 .map_err(Error::Query)?;
                             let body = definition.entry;
                             let mut sizes = Default::default();
@@ -1536,7 +1574,8 @@ pub(crate) fn execute_frames(
                                     definition: definition.path().clone(),
                                 },
                             );
-                            let definition = provider.definition(&path).map_err(Error::Query)?;
+                            let definition =
+                                provider.definition(&path).await.map_err(Error::Query)?;
                             let mut bindings = Default::default();
                             Frame::bind_sizes(
                                 &mut bindings,
@@ -2143,6 +2182,7 @@ pub(crate) fn execute_frames(
                     &mut constants,
                     &mut budgets,
                 )
+                .await
                 .map(|_| Action::Continue),
             }
         } else {
@@ -2379,6 +2419,7 @@ pub(crate) fn execute_frames(
                         closure_check = check;
                         let definition = provider
                             .definition(definition.path())
+                            .await
                             .map_err(Error::Query)?;
                         if !actuals.arguments.is_empty() {
                             crate::type_arguments::bind(
@@ -2403,25 +2444,25 @@ pub(crate) fn execute_frames(
                                 match call.target.get() {
                                     Some(target) => target.clone(),
                                     None => {
-                                        let target = std::rc::Rc::new(target(
-                                            frame,
-                                            provider,
-                                            runtime,
-                                            call.callee.clone(),
-                                            generics,
-                                        )?);
+                                        let target = std::rc::Rc::new(
+                                            target(
+                                                frame,
+                                                provider,
+                                                runtime,
+                                                call.callee.clone(),
+                                                generics,
+                                            )
+                                            .await?,
+                                        );
                                         let _ = call.target.set(target.clone());
                                         target
                                     }
                                 }
                             }
-                            path => std::rc::Rc::new(target(
-                                frame,
-                                provider,
-                                runtime,
-                                path.into_path(),
-                                generics,
-                            )?),
+                            path => std::rc::Rc::new(
+                                target(frame, provider, runtime, path.into_path(), generics)
+                                    .await?,
+                            ),
                         };
                         if forward_caller && let Some(tail) = &target.tail {
                             let released = frame.loop_owned.len();
@@ -2686,7 +2727,8 @@ pub(crate) fn execute_frames(
                         let entry = match target.entry.get() {
                             Some(entry) => entry,
                             None => {
-                                let definition = provider.definition(path).map_err(Error::Query)?;
+                                let definition =
+                                    provider.definition(path).await.map_err(Error::Query)?;
                                 let body = definition.entry;
                                 let scope = definition.bodies[body.0 as usize].parameter_scope;
                                 let mut sizes = Default::default();
@@ -3269,12 +3311,12 @@ enum Action {
         on_failure: CleanupId,
     },
 }
-fn rvalue(
+async fn rvalue(
     frame: &mut Frame,
     id: RvalueId,
     destination: PlaceId,
     runtime: &crate::aggregate::RuntimeTypes,
-    provider: &mut (impl TirProvider + ?Sized),
+    provider: &mut (impl AsyncTirProvider + ?Sized),
     constants: &mut crate::constants::Constants,
     budgets: &mut crate::bounded::Budgets,
 ) -> Result<(Value, Shadow), EvalError> {
@@ -3350,7 +3392,9 @@ fn rvalue(
                     hirsel_types::Size::Parameter(parameter) => frame.size(*parameter),
                 })
                 .collect::<Result<Vec<_>, Error>>()?;
-            let value = constants.read_instance(provider, definition, &arguments, runtime)?;
+            let value = constants
+                .read_instance(provider, definition, &arguments, runtime)
+                .await?;
             if frame.check.is_some() {
                 shadow = shadow.ownership(&value, false);
             }
@@ -4031,13 +4075,13 @@ fn checked_allocation(frame: &Frame, placement: &Destination) -> Result<Option<u
         )),
     }
 }
-fn execute_instruction(
+async fn execute_instruction(
     frame: &mut Frame,
     kind: &InstructionKind,
     runtime: &crate::aggregate::RuntimeTypes,
     site: Span,
     trace: &mut Vec<TraceEvent>,
-    provider: &mut (impl TirProvider + ?Sized),
+    provider: &mut (impl AsyncTirProvider + ?Sized),
     constants: &mut crate::constants::Constants,
     budgets: &mut crate::bounded::Budgets,
 ) -> Result<(), EvalError> {
@@ -4166,7 +4210,8 @@ fn execute_instruction(
                 provider,
                 constants,
                 budgets,
-            )?;
+            )
+            .await?;
             if let Value::Resource { definition, .. } | Value::ResourceVariant { definition, .. } =
                 &value
             {
@@ -4561,9 +4606,9 @@ impl CalleePath {
 }
 /// Resolve a direct callee for a call from `frame`: close its generic arguments,
 /// select its CT-5 instance and classify the call.
-fn target(
+async fn target(
     frame: &Frame,
-    provider: &mut (impl TirProvider + ?Sized),
+    provider: &mut (impl AsyncTirProvider + ?Sized),
     runtime: &crate::aggregate::RuntimeTypes,
     mut path: hirsel_syntax::DefPath,
     generics: Vec<hirsel_types::GenericArgument>,
@@ -4579,6 +4624,7 @@ fn target(
     // selected instance.
     if let Some(instance) = provider
         .instance_body(&path, &actuals.arguments)
+        .await
         .map_err(Error::Query)?
     {
         path = instance;
