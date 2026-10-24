@@ -421,3 +421,146 @@ fn detached_result(t: Test) {
         1,
     );
 }
+
+#[test]
+fn ownership_channels_fifo_includes_plain_messages_between_equal_resources() {
+    observed_task_source(
+        r#"
+resource type Token {}
+drop(x) {}
+@test
+fn fifo(t: Test) {
+  let tasks = test.tasks(t)
+  let (sender, receiver): (Sender[Option[Token]], Receiver[Option[Token]]) = channel.open(tasks)
+  let mut tx = take sender
+  let mut rx = take receiver
+  let _ = channel.send(tasks, mut tx, Some(Token()))
+  let _ = channel.send(tasks, mut tx, None())
+  let _ = channel.send(tasks, mut tx, Some(Token()))
+  let first = channel.receive(tasks, mut rx)
+  let plain = channel.receive(tasks, mut rx)
+  let second = channel.receive(tasks, mut rx)
+}
+"#,
+        2,
+    );
+}
+
+#[test]
+fn ownership_channels_resource_delivery_crosses_actual_task_paths() {
+    let trace = observed_task_source(
+        r#"
+resource type Token {}
+drop(x) {}
+@test
+fn delivery(t: Test) {
+  let tasks = test.tasks(t)
+  task.scope(tasks, fn(s: Scope) {
+    let (sender, receiver): (Sender[Token], Receiver[Token]) = channel.open(tasks)
+    let child = task.async(s, fn() {
+      let mut rx = take receiver
+      let received = channel.receive(tasks, mut rx)
+    })
+    let mut tx = take sender
+    let _ = channel.send(tasks, mut tx, Token())
+    let _ = task.await(s, take child)
+  })
+}
+"#,
+        1,
+    );
+    use hirsel_run_schema::ownership_trace::{Action, Storage};
+    assert!(trace.events.iter().any(|event| matches!(&event.action,
+        Action::Move {from, owner, ..} if from.task.is_none()
+        && matches!(&from.storage, Storage::Object {name, ..} if name == "channel")
+        && owner.task.as_ref().is_some_and(|task| task.0.len() == 1))));
+}
+
+#[test]
+fn ownership_channels_a_closed_send_returns_the_same_payload_for_cleanup() {
+    let trace = observed_task_source(
+        r#"
+resource type Token {}
+drop(x) {}
+fn discard[T](take value: T) {}
+@test
+fn closed_send(t: Test) {
+  let tasks = test.tasks(t)
+  let (sender, receiver): (Sender[Token], Receiver[Token]) = channel.open(tasks)
+  discard(take receiver)
+  let mut tx = take sender
+  let returned = channel.send(tasks, mut tx, Token())
+}
+"#,
+        1,
+    );
+    use hirsel_run_schema::ownership_trace::{Action, Storage};
+    assert!(!trace.events.iter().any(|event| matches!(&event.action,
+        Action::Move {owner, ..} if matches!(&owner.storage, Storage::Object {name, ..} if name == "channel"))));
+}
+
+#[test]
+fn ownership_channels_last_receiver_drops_queued_resources_in_actual_fifo_order() {
+    let trace = observed_task_source(
+        r#"
+resource type Token {}
+drop(x) {}
+fn discard[T](take value: T) {}
+@test
+fn queued_cleanup(t: Test) {
+  let tasks = test.tasks(t)
+  let (sender, receiver): (Sender[Token], Receiver[Token]) = channel.open(tasks)
+  let mut tx = take sender
+  let _ = channel.send(tasks, mut tx, Token())
+  let _ = channel.send(tasks, mut tx, Token())
+  discard(take receiver)
+}
+"#,
+        2,
+    );
+    use hirsel_run_schema::ownership_trace::Action;
+    let dropped: Vec<_> = trace
+        .events
+        .iter()
+        .filter_map(|event| match &event.action {
+            Action::Drop { token, .. } => Some(token.sequence),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(dropped, [0, 1]);
+}
+
+#[test]
+fn ownership_channels_canceled_receive_keeps_the_queued_payload_for_receiver_cleanup() {
+    observed_task_source(
+        r#"
+resource type Token {}
+drop(x) {}
+@test
+fn canceled_receive(t: Test) {
+  let tasks = test.tasks(t)
+  task.scope(tasks, fn(s: Scope) {
+    let (ready_tx, ready_rx): (Sender[u8], Receiver[u8]) = channel.open(tasks)
+    let (gate_tx, gate_rx): (Sender[u8], Receiver[u8]) = channel.open(tasks)
+    let (sender, receiver): (Sender[Token], Receiver[Token]) = channel.open(tasks)
+    let child = task.async(s, fn() {
+      let mut ready = take ready_tx
+      let _ = channel.send(tasks, mut ready, 7u8)
+      let mut gate = take gate_rx
+      let _ = channel.receive(tasks, mut gate)
+      let mut rx = take receiver
+      let canceled = channel.receive(tasks, mut rx)
+    })
+    let mut ready = take ready_rx
+    let _ = channel.receive(tasks, mut ready)
+    let mut tx = take sender
+    let _ = channel.send(tasks, mut tx, Token())
+    task.cancel(s, child)
+    let _ = task.await(s, take child)
+    let _ = gate_tx
+  })
+}
+"#,
+        1,
+    );
+}

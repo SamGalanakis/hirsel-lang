@@ -587,6 +587,7 @@ pub(crate) async fn execute_frames<O: crate::ownership_trace::Observer>(
                     .get_mut(key)
                     .ok_or_else(|| invalid("parked task left early"))?;
                 operations.enter_task(*id, stack.iter().any(|f| f.finalized.is_some()));
+                observer.sync(*id, stack, sources);
                 let frame: &mut Frame = stack.last_mut().unwrap();
                 let (token, anchor) = if let Some(drop) = &frame.drop_wait {
                     let OperationResult::Park { token, .. } = &drop.result else {
@@ -613,6 +614,7 @@ pub(crate) async fn execute_frames<O: crate::ownership_trace::Observer>(
                     },
                 )?;
                 if let Some(result) = result {
+                    observer.builtin_completed(*id, frame, &result);
                     let (id, mut stack, failures) = parked.remove(key).unwrap();
                     let frame = stack.last_mut().unwrap();
                     if let Some(drop) = &mut frame.drop_wait {
@@ -761,6 +763,8 @@ pub(crate) async fn execute_frames<O: crate::ownership_trace::Observer>(
                         sources,
                         &drop.anchor,
                         drop.caller.as_ref(),
+                        observer,
+                        task,
                     )?;
                 }
                 _ => return Err(invalid("invalid destructor completion")),
@@ -1570,6 +1574,13 @@ pub(crate) async fn execute_frames<O: crate::ownership_trace::Observer>(
                         };
                     }
                     if let Value::Handle { kind, id } = &value {
+                        if O::ENABLED {
+                            observer.before_handle_drop(
+                                frame,
+                                kind,
+                                operations.ownership_channel(*id),
+                            );
+                        }
                         effect(
                             &mut execution.trace,
                             anchor.clone(),
@@ -1606,6 +1617,8 @@ pub(crate) async fn execute_frames<O: crate::ownership_trace::Observer>(
                                 sources,
                                 &anchor,
                                 caller.as_ref(),
+                                observer,
+                                task,
                             )?;
                         }
                         continue;
@@ -2779,7 +2792,15 @@ pub(crate) async fn execute_frames<O: crate::ownership_trace::Observer>(
                             None
                         };
                         if let Some(mut result) = result {
-                            observer.builtin_entered(task, frame, &arguments, &result);
+                            if O::ENABLED {
+                                let channel = match arguments.get(1) {
+                                    Some(Value::Handle { id, .. }) => {
+                                        operations.ownership_channel(*id)
+                                    }
+                                    _ => None,
+                                };
+                                observer.builtin_entered(task, frame, &arguments, &result, channel);
+                            }
                             if frame.check.is_none()
                                 && !budgets.run.metered()
                                 && target
@@ -5029,7 +5050,7 @@ fn complete_immediate(
     Ok(true)
 }
 
-fn finish_handle_drop(
+fn finish_handle_drop<O: crate::ownership_trace::Observer>(
     frame: &mut Frame,
     operations: &mut (impl Operations + ?Sized),
     trace_mode: TraceMode,
@@ -5037,8 +5058,12 @@ fn finish_handle_drop(
     sources: &hirsel_span::SourceMap,
     anchor: &crate::observation::Anchor,
     caller: Option<&crate::frame::CallerSite>,
+    observer: &mut O,
+    task: u64,
 ) -> Result<(), Error> {
-    for value in operations.take_releases() {
+    let values = operations.take_releases();
+    observer.handle_released(task, frame, &values, anchor, sources);
+    for value in values {
         frame.work.push_front(crate::resources::Work::Release(
             value,
             anchor.clone(),

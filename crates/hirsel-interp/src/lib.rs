@@ -373,6 +373,8 @@ operation_boundary! {
     fn retained_bytes(&self) -> u64 { 0 }
     /// Canonical provider task path, requested only by opt-in ownership observation.
     fn ownership_task_path(&self, _id: u64) -> Option<Vec<u32>> { None }
+    /// Actual provider channel identity for a live endpoint, only queried by diagnostics.
+    fn ownership_channel(&self, _endpoint: u64) -> Option<u64> { None }
     /// A callee run whose provider stops it at its place's crash point itself, before one
     /// of its requests (`sim@1` on a host), instead of the execution counting suspensions.
     fn stops_itself(&self) -> bool { false }

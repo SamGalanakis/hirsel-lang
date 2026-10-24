@@ -11,6 +11,9 @@ use hirsel_tir::{InstructionKind, PlaceId, Rvalue, Terminator};
 use hirsel_types::UseKind;
 use std::collections::{BTreeMap, VecDeque};
 
+mod channels;
+use channels::Channels;
+
 struct FrameState {
     id: u64,
     finalizer: bool,
@@ -84,6 +87,7 @@ pub(super) struct Resources {
     results: BTreeMap<u64, ResultState>,
     awaits: BTreeMap<u64, AwaitState>,
     tracker: Tracker,
+    channels: Channels,
     frames: Vec<FrameState>,
     next_frame: u64,
     next_scratch: u64,
@@ -106,6 +110,7 @@ impl Resources {
             results: BTreeMap::new(),
             awaits: BTreeMap::new(),
             tracker: Tracker::new(event_limit),
+            channels: Channels::default(),
             frames: vec![],
             next_frame: 0,
             next_scratch: 0,
@@ -854,6 +859,7 @@ impl Observer for Resources {
         _frame: &Frame,
         arguments: &[Value],
         result: &crate::OperationResult,
+        channel: Option<u64>,
     ) {
         if self.error.is_some() {
             return;
@@ -862,6 +868,10 @@ impl Observer for Resources {
             self.unsupported("builtin entered without its actual source call");
             return;
         };
+        if call.definition.is_core("channel.send") || call.definition.is_core("channel.receive") {
+            self.channel_entered(call, arguments, result, channel);
+            return;
+        }
         if call.definition.is_core("task.await") {
             if let Some(Value::Handle { kind, id }) = arguments.get(1)
                 && kind == "Task"
@@ -975,11 +985,36 @@ impl Observer for Resources {
             },
         );
     }
+    fn builtin_completed(&mut self, _task: u64, _frame: &Frame, result: &crate::OperationResult) {
+        if let Some(state) = self.frames.last() {
+            self.channel_committed(state.id, result);
+        }
+    }
+    fn before_handle_drop(&mut self, _frame: &Frame, kind: &str, channel: Option<u64>) {
+        if kind == "Receiver"
+            && let (Some(state), Some(channel)) = (self.frames.last(), channel)
+        {
+            self.channels.drops.insert(state.id, channel);
+        }
+    }
+    fn handle_released(
+        &mut self,
+        _task: u64,
+        frame: &Frame,
+        values: &[Value],
+        anchor: &crate::observation::Anchor,
+        sources: &SourceMap,
+    ) {
+        self.channel_released(frame, values, anchor, sources);
+    }
     fn builtin_returned(&mut self, _task: u64, _frame: &Frame, value: &Value) {
         if self.error.is_some() {
             return;
         }
         let count = resources_in(value);
+        if self.channel_returned(value) {
+            return;
+        }
         let awaiting = self
             .frames
             .last()
