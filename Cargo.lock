@@ -964,6 +964,7 @@ name = "hirsel-pipeline-tests"
 version = "0.1.0"
 dependencies = [
  "hirsel-analysis-canary",
+ "hirsel-artifact-store",
  "hirsel-check-protocol",
  "hirsel-code-store",
  "hirsel-codec",

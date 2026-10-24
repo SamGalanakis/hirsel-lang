@@ -28,6 +28,51 @@ pub(super) struct StructuralRead {
     output: ContentHash,
 }
 hirsel_codec::snapshot_struct!(StructuralRead { source, output });
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct AdapterRead {
+    adapter: crate::ir::Symbol,
+    primitive: crate::ir::Symbol,
+    abi: ContentHash,
+}
+hirsel_codec::snapshot_struct!(AdapterRead {
+    adapter,
+    primitive,
+    abi
+});
+
+fn adapter_inventory(
+    declarations: &dyn OperationDeclarations,
+    target: &TargetSpec,
+) -> Option<Vec<AdapterRead>> {
+    let mut rows = declarations
+        .pretransfer_adapters()
+        .iter()
+        .map(|reference| {
+            if reference.adapter.kind != crate::ir::SymbolKind::Function
+                || reference.primitive.kind != crate::ir::SymbolKind::Function
+                || reference.adapter.instance.is_none()
+                || reference.primitive.instance.is_none()
+            {
+                return None;
+            }
+            let (abi, table) = declarations.pretransfer_abi(reference, target)?;
+            Some(AdapterRead {
+                adapter: reference.adapter.clone(),
+                primitive: reference.primitive.clone(),
+                abi: crate::LayoutKeys::new(&table).fn_abi(&abi),
+            })
+        })
+        .collect::<Option<Vec<_>>>()?;
+    rows.sort_by(|a, b| {
+        (&a.adapter.definition, a.adapter.instance)
+            .cmp(&(&b.adapter.definition, b.adapter.instance))
+    });
+    if rows.windows(2).any(|w| w[0].adapter == w[1].adapter) {
+        return None;
+    }
+    Some(rows)
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct Reads {
     invocation_required: Option<bool>,
@@ -35,13 +80,15 @@ pub(super) struct Reads {
     invocations: Vec<InvocationRead>,
     bodies: Vec<BodyRead>,
     structural: Vec<StructuralRead>,
+    pretransfer: Option<Vec<AdapterRead>>,
 }
 hirsel_codec::snapshot_struct!(Reads {
     invocation_required,
     structural_required,
     invocations,
     bodies,
-    structural
+    structural,
+    pretransfer
 });
 
 fn invocation_identity(rows: Option<&[crate::invocations::ReferenceInvocation]>) -> ContentHash {
@@ -66,13 +113,16 @@ fn structural_identity(plan: &crate::structural_access::AccessPlan) -> ContentHa
     ContentHash::of_parts("hirsel.native.structural-input.v1", [bytes.as_bytes()])
 }
 impl Reads {
-    pub(super) fn matches(&self, declarations: &dyn OperationDeclarations) -> bool {
-        // A target inventory also needs canonical ABI identities, not table-local
-        // ABI indices. Until that input exists, those outputs are not reusable.
-        declarations.pretransfer_adapters().is_empty()
-            && self
-                .invocation_required
-                .is_none_or(|v| v == declarations.requires_invocation_reference())
+    pub(super) fn matches(
+        &self,
+        declarations: &dyn OperationDeclarations,
+        target: &TargetSpec,
+    ) -> bool {
+        self.pretransfer.as_ref().is_none_or(|expected| {
+            adapter_inventory(declarations, target).as_ref() == Some(expected)
+        }) && self
+            .invocation_required
+            .is_none_or(|v| v == declarations.requires_invocation_reference())
             && self
                 .structural_required
                 .is_none_or(|v| v == declarations.requires_structural_reference())
@@ -108,6 +158,7 @@ struct Observations {
     bodies: BTreeMap<(DefPath, ContentHash), Option<u32>>,
     structural: BTreeMap<String, NativeType>,
     unsupported: bool,
+    pretransfer: bool,
 }
 pub(super) struct Observed<'a> {
     declarations: &'a (dyn OperationDeclarations + Sync),
@@ -139,7 +190,24 @@ impl<'a> Observed<'a> {
                 })
             })
             .collect::<Option<Vec<_>>>()?;
+        let pretransfer = if reads.pretransfer {
+            let inventory = adapter_inventory(self.declarations, target)?;
+            let keys = crate::LayoutKeys::new(table);
+            for reference in self.declarations.pretransfer_adapters() {
+                let current = table.fn_abis.get(reference.abi.0 as usize)?;
+                let expected = inventory
+                    .iter()
+                    .find(|row| row.adapter == reference.adapter)?;
+                if keys.fn_abi(current) != expected.abi {
+                    return None;
+                }
+            }
+            Some(inventory)
+        } else {
+            None
+        };
         Some(Reads {
+            pretransfer,
             invocation_required: reads.invocation_required,
             structural_required: reads.structural_required,
             invocations: reads
@@ -194,14 +262,18 @@ impl OperationDeclarations for Observed<'_> {
         self.declarations.seal_payloads(definition, instance)
     }
     fn pretransfer_adapters(&self) -> &[crate::pretransfer::AdapterReference] {
-        let result = self.declarations.pretransfer_adapters();
-        if !result.is_empty() {
-            self.reads
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .unsupported = true;
-        }
-        result
+        self.reads
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .pretransfer = true;
+        self.declarations.pretransfer_adapters()
+    }
+    fn pretransfer_abi(
+        &self,
+        reference: &crate::pretransfer::AdapterReference,
+        target: &TargetSpec,
+    ) -> Option<(FnAbi, LayoutTable)> {
+        self.declarations.pretransfer_abi(reference, target)
     }
     fn requires_structural_reference(&self) -> bool {
         let output = self.declarations.requires_structural_reference();
