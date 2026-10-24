@@ -422,3 +422,29 @@ pub mod local;
 pub mod products;
 pub mod ready;
 pub mod tasks;
+
+/// Ordinary descriptor publication, after the native query has obtained its
+/// own authority. It does not manufacture any native receipt or stage seal.
+pub(crate) fn publish_ready_record(
+    store: &dyn hirsel_engine::store::ResultStore,
+    address: hirsel_artifact_store::Address,
+    action: hirsel_artifact_store::Action,
+    value: &ReadyRecord,
+) -> Result<ProductRef, String> {
+    let bytes = serde_json::to_vec(value).map_err(|e| e.to_string())?;
+    let expected = READY_RECORD_DOMAIN
+        .reference(&bytes)
+        .ok_or("Ready descriptor exceeds record limit")?;
+    let record = store
+        .put_content(READY_RECORD_DOMAIN, &bytes)
+        .ok_or("Ready descriptor publication failed")?;
+    if record != expected {
+        return Err("Ready descriptor content identity differs".into());
+    }
+    store.associate_product(address, action, record);
+    Ok(ProductRef {
+        address,
+        action,
+        record,
+    })
+}

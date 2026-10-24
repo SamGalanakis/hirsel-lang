@@ -160,39 +160,7 @@ impl UnitFragment {
             .chain(&self.templates)
             .cloned()
             .collect();
-        let (mut layouts, mut abis) = (Vec::new(), Vec::new());
-        let (mut layout_index, mut abi_index) = (BTreeMap::new(), BTreeMap::new());
-        let (mut missing, mut missing_abi) = (None, None);
-        for summary in &mut summaries {
-            summary.for_each_id(
-                &mut |id| {
-                    if table.layout(*id).is_none() {
-                        missing.get_or_insert_with(|| format!("layout {}", id.0));
-                        return;
-                    }
-                    let next = layout_index.len() as u32;
-                    *id = LayoutId(*layout_index.entry(id.0).or_insert_with(|| {
-                        layouts.push(keys.key(*id));
-                        next
-                    }));
-                },
-                &mut |id| match keys.fn_abi_of(table, *id) {
-                    Some(key) => {
-                        let next = abi_index.len() as u32;
-                        *id = FnAbiId(*abi_index.entry(id.0).or_insert_with(|| {
-                            abis.push(key);
-                            next
-                        }));
-                    }
-                    None => {
-                        missing_abi.get_or_insert_with(|| format!("FnAbi {}", id.0));
-                    }
-                },
-            );
-        }
-        if let Some(missing) = missing.or(missing_abi) {
-            return Err(format!("the summary names {missing}, outside the table"));
-        }
+        let (layouts, abis) = erase_summaries(&mut summaries, table, keys)?;
         let wire = Wire {
             summaries: summaries.iter().map(WireSummary::from).collect(),
             layouts,
@@ -229,35 +197,7 @@ impl UnitFragment {
             .ok_or("a truncated fragment")?;
         let text = std::str::from_utf8(text).map_err(|e| e.to_string())?;
         let wire: Wire = hirsel_codec::from_text(text).map_err(|e| e.message)?;
-        let layouts = wire
-            .layouts
-            .iter()
-            .map(|k| layout(k).ok_or_else(|| format!("no layout has key {:?}", k.0)))
-            .collect::<Result<Vec<_>, _>>()?;
-        let abis = wire
-            .abis
-            .iter()
-            .map(|k| abi(k).ok_or_else(|| format!("no FnAbi has key {k:?}")))
-            .collect::<Result<Vec<_>, _>>()?;
-        let mut summaries = Vec::with_capacity(wire.summaries.len());
-        for summary in wire.summaries {
-            let mut summary = UnitSummary::from(summary);
-            let (mut missing, mut missing_abi) = (None, None);
-            summary.for_each_id(
-                &mut |id| match layouts.get(id.0 as usize) {
-                    Some(bound) => *id = *bound,
-                    None => missing = Some(format!("erased layout {}", id.0)),
-                },
-                &mut |id| match abis.get(id.0 as usize) {
-                    Some(bound) => *id = *bound,
-                    None => missing_abi = Some(format!("erased FnAbi {}", id.0)),
-                },
-            );
-            if let Some(missing) = missing.or(missing_abi) {
-                return Err(format!("{missing} has no binding"));
-            }
-            summaries.push(summary);
-        }
+        let summaries = bind_summaries(wire.summaries, &wire.layouts, &wire.abis, layout, abi)?;
         let mut summaries = summaries.into_iter();
         let summary = summaries
             .next()
@@ -394,3 +334,116 @@ impl Snapshot for crate::glue::CodecKey {
         ContentHash::read(r).map(Self)
     }
 }
+
+/// Reuse the fragment codec's exact content-named bindings for standalone
+/// immutable summaries. No object bytes or fabricated object metadata is needed.
+impl UnitSummary {
+    pub fn encode(&self, table: &LayoutTable, keys: &LayoutKeys) -> Result<Vec<u8>, String> {
+        let mut summaries = vec![self.clone()];
+        let (layouts, abis) = erase_summaries(&mut summaries, table, keys)?;
+        let wire = SummaryWire {
+            summary: WireSummary::from(&summaries[0]),
+            layouts,
+            abis,
+        };
+        Ok(hirsel_codec::to_text(&wire).into_bytes())
+    }
+    pub fn decode(
+        bytes: &[u8],
+        layout: &impl Fn(&LayoutKey) -> Option<LayoutId>,
+        abi: &impl Fn(&ContentHash) -> Option<FnAbiId>,
+    ) -> Result<Self, String> {
+        let text = std::str::from_utf8(bytes).map_err(|e| e.to_string())?;
+        let wire: SummaryWire = hirsel_codec::from_text(text).map_err(|e| e.message)?;
+        bind_summaries(vec![wire.summary], &wire.layouts, &wire.abis, layout, abi)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| "missing native unit summary".into())
+    }
+}
+fn erase_summaries(
+    summaries: &mut [UnitSummary],
+    table: &LayoutTable,
+    keys: &LayoutKeys,
+) -> Result<(Vec<LayoutKey>, Vec<ContentHash>), String> {
+    let (mut layouts, mut abis) = (Vec::new(), Vec::new());
+    let (mut layout_index, mut abi_index) = (BTreeMap::new(), BTreeMap::new());
+    let (mut missing, mut missing_abi) = (None, None);
+    for summary in summaries {
+        summary.for_each_id(
+            &mut |id| {
+                if table.layout(*id).is_none() {
+                    missing.get_or_insert_with(|| format!("layout {}", id.0));
+                    return;
+                }
+                let next = layout_index.len() as u32;
+                *id = LayoutId(*layout_index.entry(id.0).or_insert_with(|| {
+                    layouts.push(keys.key(*id));
+                    next
+                }));
+            },
+            &mut |id| match keys.fn_abi_of(table, *id) {
+                Some(key) => {
+                    let next = abi_index.len() as u32;
+                    *id = FnAbiId(*abi_index.entry(id.0).or_insert_with(|| {
+                        abis.push(key);
+                        next
+                    }));
+                }
+                None => {
+                    missing_abi.get_or_insert_with(|| format!("FnAbi {}", id.0));
+                }
+            },
+        );
+    }
+    if let Some(missing) = missing.or(missing_abi) {
+        return Err(format!("the summary names {missing}, outside the table"));
+    }
+    Ok((layouts, abis))
+}
+fn bind_summaries(
+    encoded: Vec<WireSummary>,
+    layout_keys: &[LayoutKey],
+    abi_keys: &[ContentHash],
+    layout: &impl Fn(&LayoutKey) -> Option<LayoutId>,
+    abi: &impl Fn(&ContentHash) -> Option<FnAbiId>,
+) -> Result<Vec<UnitSummary>, String> {
+    let layouts = layout_keys
+        .iter()
+        .map(|k| layout(k).ok_or_else(|| format!("no layout has key {:?}", k.0)))
+        .collect::<Result<Vec<_>, _>>()?;
+    let abis = abi_keys
+        .iter()
+        .map(|k| abi(k).ok_or_else(|| format!("no FnAbi has key {k:?}")))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut summaries = Vec::with_capacity(encoded.len());
+    for summary in encoded {
+        let mut summary = UnitSummary::from(summary);
+        let (mut missing, mut missing_abi) = (None, None);
+        summary.for_each_id(
+            &mut |id| match layouts.get(id.0 as usize) {
+                Some(bound) => *id = *bound,
+                None => missing = Some(format!("erased layout {}", id.0)),
+            },
+            &mut |id| match abis.get(id.0 as usize) {
+                Some(bound) => *id = *bound,
+                None => missing_abi = Some(format!("erased FnAbi {}", id.0)),
+            },
+        );
+        if let Some(missing) = missing.or(missing_abi) {
+            return Err(format!("{missing} has no binding"));
+        }
+        summaries.push(summary);
+    }
+    Ok(summaries)
+}
+struct SummaryWire {
+    summary: WireSummary,
+    layouts: Vec<LayoutKey>,
+    abis: Vec<ContentHash>,
+}
+snapshot_struct!(SummaryWire {
+    summary,
+    layouts,
+    abis
+});
