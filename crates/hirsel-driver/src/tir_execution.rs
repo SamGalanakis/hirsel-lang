@@ -205,7 +205,8 @@ impl hirsel_tir::TirProvider for LoadedProvider<'_> {
                 hirsel_types::OperationalFailure {
                     operation: "semantic closure".into(),
                     message: format!(
-                        "interpretation entered {path}, outside the selected semantic closure"
+                        "interpretation entered {path}, outside the semantic closure of {}",
+                        self.entry
                     ),
                 },
             ));
