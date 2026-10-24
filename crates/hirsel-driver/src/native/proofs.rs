@@ -150,7 +150,18 @@ impl Proofs {
             .proof_export_input(entry)
             .map_err(|e| error(format!("proof export: {e:?}")))?;
         let export = hirsel_proof_export::build(&input);
-        let assessment = sidecar::assess(&export, &evidence.records, &evidence.trusted)
+        Self::assess_export(&export, validated, evidence)
+    }
+
+    /// Assess the exact export supplied by an admitted source producer. The
+    /// ordinary sidecar checker and exact native-TIR equality remain authority.
+    pub fn assess_export(
+        export: &hirsel_proof_export::Export,
+        validated: &ValidatedNativeInput,
+        evidence: &Evidence,
+    ) -> Result<Self, super::NativeError> {
+        let error = |message: String| super::NativeError::new(StageName::Import, message);
+        let assessment = sidecar::assess(export, &evidence.records, &evidence.trusted)
             .map_err(|d| error(format!("proofs: two records share the key of {}", d.0)))?;
         let definitions = &validated.snapshot().definitions;
         let mut discharge = Discharge::default();
@@ -213,11 +224,17 @@ impl Proofs {
 
     /// One line per record and per accepted obligation, then the counts.
     pub fn report(&self, ready: &ReadyProgram) -> Vec<String> {
+        self.report_discharged(&ready.discharged)
+    }
+
+    /// Report against settled native discharge facts without a Ready body or
+    /// a mutable compiler controller at executable readiness.
+    pub fn report_discharged(&self, discharged: &Discharge) -> Vec<String> {
         let mut out = vec![];
         let (mut removed, mut kept) = (0, 0);
         for line in &self.lines {
             let outcome = match &line.licensed {
-                Ok(()) if !ready.discharged.0.contains_key(&line.definition) => {
+                Ok(()) if !discharged.0.contains_key(&line.definition) => {
                     Ok("removed (the definition has no native code)")
                 }
                 Ok(()) => Ok("removed"),

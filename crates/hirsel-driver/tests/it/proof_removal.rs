@@ -782,3 +782,45 @@ fn borrowed_variant_views_keep_their_parent_and_child_obligations_separate() {
         }
     });
 }
+
+/// Assessment and reporting retain no query controller, Ready program or
+/// privilege to substitute an export with a different source body.
+#[test]
+fn immutable_export_assessment_preserves_sidecar_decisions_after_controller_drop() {
+    with_compiler_stack(|| {
+        let entry = entry_path(&default_context());
+        let text = sidecar(BUMP, &[(ENSURES, "proved")], |_| {});
+        let evidence = Evidence {
+            records: parse_sidecar(&text).unwrap(),
+            trusted: vec![Checker::parse("prover@1").unwrap()],
+        };
+        let mut engine = engine(BUMP);
+        let input = engine.export_native_input().unwrap();
+        let validated = engine.import_native_input(input).unwrap();
+        let expected = Proofs::assess(&mut engine, &entry, &validated, &evidence).unwrap();
+        let export = hirsel_proof_export::build(&engine.proof_export_input(&entry).unwrap());
+        drop(engine);
+        let actual = Proofs::assess_export(&export, &validated, &evidence).unwrap();
+        assert_eq!(actual.discharge, expected.discharge);
+        assert!(!actual.discharge.is_empty());
+        let mut options = Options::new(TargetSpec::x86_64_unknown_linux_gnu());
+        options.discharge = actual.discharge.clone();
+        let ready = build(&validated, &options).unwrap();
+        assert_eq!(
+            actual.report_discharged(&ready.discharged),
+            expected.report(&ready)
+        );
+        let mut untrusted = evidence.clone();
+        untrusted.trusted.clear();
+        let kept = Proofs::assess_export(&export, &validated, &untrusted).unwrap();
+        assert!(kept.discharge.is_empty());
+        assert!(
+            kept.report_discharged(&Default::default())
+                .iter()
+                .any(|line| line.contains("kept"))
+        );
+        let mut duplicate = evidence.clone();
+        duplicate.records.push(duplicate.records[0].clone());
+        assert!(Proofs::assess_export(&export, &validated, &duplicate).is_err());
+    });
+}
