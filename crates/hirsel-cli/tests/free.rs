@@ -4762,13 +4762,22 @@ fn f1_terminal_root_and_consumption_width_and_permit_matrix_durable_cranelift() 
 }
 
 #[test]
-fn f1_bounded_directory_walk_replays_pages_and_late_error_without_tree() {
+fn f1_bounded_directory_walk_replays_pages_and_late_error_without_tree_record() {
+    f1_bounded_directory_walk_matrix(Cells::level(false));
+}
+
+#[test]
+fn f1_bounded_directory_walk_replays_pages_and_late_error_without_tree_durable() {
+    f1_bounded_directory_walk_matrix(Cells::level(true));
+}
+
+fn f1_bounded_directory_walk_matrix(cells: Cells) {
     if !hirsel_rt::free_driver::admission_enabled() {
         return;
     }
     // Follow cli/walk_stream.rs's empty-directory and invalid-name cases.
     // 129 root files cross the fixed 128-entry page boundary once.
-    f1_corpus_matrix_with_io(
+    f1_corpus_matrix_with_exit_cells(
         "bounded-walk",
         r#"pub type E = Grant(GrantError) | Files(FileError) | Output(OutputError)
 pub fn main(rt: Io) -> Result[(), E] {
@@ -4811,6 +4820,8 @@ pub fn main(rt: Io) -> Result[(), E] {
             .unwrap();
             serde_json::json!({"stdout":"stdout.bytes@1","tasks":"tasks.free@1","dirs":[{"path":"tree","host":tree,"access":"read"}]})
         },
+        0,
+        cells,
     );
 }
 
@@ -5596,16 +5607,21 @@ pub fn main(rt: Io) -> Result[(), E] {
 "#;
 
 #[test]
-fn f1_live_worker_shrink_recording_full_projection_matrix() {
-    f1_worker_shrink_matrix(false);
+fn f1_live_worker_shrink_recording_full_projection_matrix_record() {
+    f1_worker_shrink_matrix(false, Cells::level(false));
+}
+
+#[test]
+fn f1_live_worker_shrink_recording_full_projection_matrix_durable() {
+    f1_worker_shrink_matrix(false, Cells::level(true));
 }
 
 #[test]
 fn f1_started_saved_frames_migrate_before_shrink_full_projection_matrix() {
-    f1_worker_shrink_matrix(true);
+    f1_worker_shrink_matrix(true, Cells::ALL);
 }
 
-fn f1_worker_shrink_matrix(observe_migration: bool) {
+fn f1_worker_shrink_matrix(observe_migration: bool, cells: Cells) {
     if !hirsel_rt::free_driver::admission_enabled() {
         return;
     }
@@ -5617,7 +5633,7 @@ fn f1_worker_shrink_matrix(observe_migration: bool) {
     std::fs::create_dir(&host).unwrap();
     let socket = peer_scratch.path("control");
     let metrics = peer_scratch.path("metrics");
-    f1_corpus_matrix_with_witness(
+    f1_corpus_matrix_cells(
         if observe_migration {
             "started-frame-migration"
         } else {
@@ -5644,6 +5660,7 @@ fn f1_worker_shrink_matrix(observe_migration: bool) {
             let shrunk = host.join("shrunk");
             let _ = std::fs::remove_file(&ready);
             let _ = std::fs::remove_file(&shrunk);
+            let _ = std::fs::remove_file(&socket);
             if observe_migration {
                 let _ = std::fs::remove_file(&metrics);
             }
@@ -5652,15 +5669,29 @@ fn f1_worker_shrink_matrix(observe_migration: bool) {
             let stopping = Arc::new(AtomicBool::new(false));
             let stopped = stopping.clone();
             let peer = std::thread::spawn(move || {
+                // Admission binds the control socket after the native build,
+                // which only the child cap bounds. Startup is bounded from then.
+                while !socket.exists() {
+                    if stopped.load(Ordering::Acquire) {
+                        return;
+                    }
+                    std::thread::sleep(Duration::from_millis(1));
+                }
                 let deadline = Instant::now() + Duration::from_secs(20);
+                let mut last = serde_json::Value::Null;
                 loop {
                     if stopped.load(Ordering::Acquire) {
                         return;
                     }
-                    assert!(Instant::now() < deadline, "live shrink startup");
-                    if ready.exists() && socket.exists() {
+                    assert!(
+                        Instant::now() < deadline,
+                        "live shrink startup: ready {}, last snapshot {last}",
+                        ready.exists()
+                    );
+                    if ready.exists() {
                         let snapshot =
                             f1_placement_control(&socket, serde_json::json!({"metrics":true}));
+                        last = snapshot.clone();
                         if snapshot["width"]["effective"] == 8 && snapshot["width"]["pending"] == 0
                         {
                             eprintln!("Free live shrink observed initial {snapshot}");
@@ -5724,6 +5755,7 @@ fn f1_worker_shrink_matrix(observe_migration: bool) {
                 peer.join().unwrap();
             })
         },
+        cells,
     );
 }
 
