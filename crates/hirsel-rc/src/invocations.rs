@@ -103,6 +103,53 @@ pub fn source_instance(
     )
 }
 
+/// Bind V-owned compact original observations without restoring a Definition.
+/// The caller supplies the independent instance selection, exactly as for the
+/// miss factory; candidate LIR supplies neither the owner nor body ordinal.
+pub fn source_instance_from_output(
+    facts: &hirsel_validate::VerifiedInvocations,
+    source: &DefPath,
+    operations: &BTreeMap<DefPath, OperationId>,
+    selected: &Symbol,
+    body: BodyId,
+) -> Result<SourceInstance, &'static str> {
+    if facts.owner().path() != source {
+        return Err("invocation observations belong to another original source");
+    }
+    if body.0 >= facts.body_count() {
+        return Err("selected invocation body is outside original source");
+    }
+    if selected.kind != SymbolKind::Function {
+        return Err("selected invocation symbol is not a function");
+    }
+    let instance = selected
+        .instance
+        .ok_or("selected invocation symbol has no instance")?;
+    Ok(SourceInstance {
+        body: ReferenceBody {
+            definition: selected.definition.clone(),
+            instance,
+            body: body.0,
+        },
+        invocations: facts
+            .calls()
+            .iter()
+            .map(|call| ReferenceInvocation {
+                body: call.body,
+                block: call.block,
+                statement: call.statement,
+                restart: call.restart,
+                primitive: call
+                    .callee
+                    .as_ref()
+                    .and_then(|path| operations.get(path))
+                    .cloned(),
+                callee: call.callee.clone(),
+            })
+            .collect(),
+    })
+}
+
 /// Bind a materialized keyed adapter and its primitive from the original
 /// instance plans. ABI is the planner's ABI, never a candidate call's selector.
 pub fn keyed_adapter(

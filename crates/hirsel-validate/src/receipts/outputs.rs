@@ -6,11 +6,11 @@ use hirsel_syntax::DefId;
 const BODY: Domain = REPLAY_DOMAIN;
 const RECEIPT: Domain = Domain {
     kind: 0x5600_0006,
-    schema: 2,
+    schema: 3,
 };
 fn key(subject: ContentHash, policy: ContentHash) -> ContentHash {
     ContentHash::of_parts(
-        "hirsel.validate.definition-output.v2",
+        "hirsel.validate.definition-output.v3",
         [subject.0.as_slice(), policy.0.as_slice()],
     )
 }
@@ -321,7 +321,80 @@ struct Record {
     reference: Reference,
     reads: Vec<VRead>,
     metadata: Vec<u8>,
+    invocations: SourceInvocations,
 }
+/// A call observed by source V, before native instance lowering. These are
+/// read-only data; only an opaque source output associates them with authority.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct SourceInvocation {
+    pub body: u32,
+    pub block: u32,
+    pub statement: u32,
+    pub restart: bool,
+    pub callee: Option<DefPath>,
+}
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+struct SourceInvocations {
+    bodies: u32,
+    calls: Vec<SourceInvocation>,
+}
+impl SourceInvocations {
+    fn observe(
+        definition: &hirsel_tir::Definition,
+        types: &TypeInterner,
+        signatures: &dyn SignatureLookup,
+    ) -> Option<Self> {
+        let coverage = crate::invocation_coverage(types, definition, signatures).ok()?;
+        let calls = coverage
+            .into_iter()
+            .map(|(body, block, statement, restart)| {
+                let callee =
+                    match &definition.bodies[body as usize].blocks[block as usize].terminator {
+                        hirsel_tir::Terminator::Call {
+                            callee: hirsel_tir::Callee::Definition { path, .. },
+                            ..
+                        } => Some(path.clone()),
+                        _ => None,
+                    };
+                SourceInvocation {
+                    body,
+                    block,
+                    statement,
+                    restart,
+                    callee,
+                }
+            })
+            .collect();
+        Some(Self {
+            bodies: u32::try_from(definition.bodies.len()).ok()?,
+            calls,
+        })
+    }
+}
+
+/// Opaque original-source observations from V's own checked output. There is
+/// no public constructor or decoder; ordinary query metadata cannot mint it.
+#[derive(Clone, Debug)]
+pub struct VerifiedInvocations {
+    owner: DefId,
+    source: ContentHash,
+    facts: Arc<SourceInvocations>,
+}
+impl VerifiedInvocations {
+    pub fn owner(&self) -> DefId {
+        self.owner
+    }
+    pub fn source_identity(&self) -> ContentHash {
+        self.source
+    }
+    pub fn body_count(&self) -> u32 {
+        self.facts.bodies
+    }
+    pub fn calls(&self) -> &[SourceInvocation] {
+        &self.facts.calls
+    }
+}
+
 /// The reference names only bytes V wrote from its own checked source body.
 /// It cannot certify an unrelated producer record or native import/C/Ready IR.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -332,6 +405,7 @@ pub struct VerifiedDefinitionOutput {
     policy: ContentHash,
     reads: Arc<[VRead]>,
     metadata: Arc<[u8]>,
+    invocations: Arc<SourceInvocations>,
 }
 impl VerifiedDefinitionOutput {
     pub fn reference(&self) -> Reference {
@@ -346,6 +420,15 @@ impl VerifiedDefinitionOutput {
     /// this token from V; this hash grants no verification authority.
     pub fn observation_identity(&self) -> ContentHash {
         receipt_action(self.artifact, self.policy, &self.reads)
+    }
+    /// Original call identities and legal restarts observed by V, independent
+    /// of native units and producer-supplied query metadata.
+    pub fn invocations(&self) -> VerifiedInvocations {
+        VerifiedInvocations {
+            owner: self.owner,
+            source: self.observation_identity(),
+            facts: self.invocations.clone(),
+        }
     }
     /// Query metadata remains producer data; the query owner checks it.
     pub fn metadata(&self) -> &[u8] {
@@ -379,6 +462,7 @@ impl VerifierCache {
                 reference: output.reference,
                 reads: output.reads.to_vec(),
                 metadata: metadata.to_vec(),
+                invocations: (*output.invocations).clone(),
             },
         );
         Some(output)
@@ -427,6 +511,7 @@ impl VerifierCache {
             policy,
             reads: evidence.reads.clone().into(),
             metadata: metadata.into(),
+            invocations: Arc::new(SourceInvocations::observe(definition, &types, signatures)?),
         })
     }
     /// The query owner validates prior ordinary dependency outputs, depth,
@@ -461,6 +546,7 @@ impl VerifierCache {
             policy,
             reads: record.reads.into(),
             metadata: record.metadata.into(),
+            invocations: Arc::new(record.invocations),
         })
     }
     /// Materialize only a demanded body, rechecking identity after portable

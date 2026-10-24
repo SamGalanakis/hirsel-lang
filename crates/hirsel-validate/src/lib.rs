@@ -51,9 +51,9 @@ mod origin_types;
 mod proofs;
 mod receipts;
 pub use receipts::{
-    AcceptedArtifact, Artifact, ExecutionReceipt, ReplayEnvironment, VerifiedDefinition,
-    VerifiedDefinitionOutput, VerifierCache, validate_cached, validate_definition,
-    validate_with_receipt,
+    AcceptedArtifact, Artifact, ExecutionReceipt, ReplayEnvironment, SourceInvocation,
+    VerifiedDefinition, VerifiedDefinitionOutput, VerifiedInvocations, VerifierCache,
+    validate_cached, validate_definition, validate_with_receipt,
 };
 mod protocol;
 mod scope_locals;
