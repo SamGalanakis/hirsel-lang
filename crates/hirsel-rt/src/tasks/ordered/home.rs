@@ -105,8 +105,15 @@ pub(super) unsafe fn poll(run: *mut RunShared, retiring: bool, idle: bool) -> St
             };
             (hosts, driver.events.is_some())
         };
+        let canceled: Vec<u64> = candidates
+            .iter()
+            .filter(|row| row.4.is_some())
+            .map(|row| row.3)
+            .collect();
+        let batch = unsafe { crate::host_waits::process_batch_home(run, &canceled) }?;
         let mut ready = Vec::new();
         for (_, _, task, token, cause, available) in candidates {
+            let available = available || batch.contains(token);
             let (done, attempt) = if observing {
                 unsafe { crate::host_waits::poll_observed_home(run, token, cause, available) }?
             } else {

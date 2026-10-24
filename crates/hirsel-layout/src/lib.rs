@@ -8,5 +8,6 @@ pub mod instance;
 pub mod layout;
 pub mod logical_storage;
 pub mod operation;
+pub mod sealed;
 pub mod structural;
 pub mod structural_access;

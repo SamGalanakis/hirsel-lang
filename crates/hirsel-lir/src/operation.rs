@@ -146,6 +146,34 @@ pub trait OperationDeclarations {
     ) -> Option<Vec<crate::sealed_payload_source::SourcePayload>> {
         None
     }
+    /// Independently reconstruct the logical/physical association from type
+    /// declarations. This supplies no original-body or producer authority.
+    fn seal_descriptor(
+        &self,
+        _: &NativeType,
+        _: &crate::LayoutTable,
+        _: &crate::TargetSpec,
+    ) -> Result<crate::sealed::SealDescriptor, LayoutError> {
+        Err(LayoutError::Invalid(
+            "missing sealed storage declarations".into(),
+        ))
+    }
+
+    /// Source-specific closure alternatives need an independent selected body.
+    /// A declaration-only descriptor cannot stand in for unavailable evidence.
+    fn seal_descriptor_for_source(
+        &self,
+        _: &DefPath,
+        _: hirsel_syntax::ContentHash,
+        _: &NativeType,
+        _: &crate::LayoutTable,
+        _: &crate::TargetSpec,
+    ) -> Result<crate::sealed::SealDescriptor, LayoutError> {
+        Err(LayoutError::Invalid(
+            "missing selected sealed source declarations".into(),
+        ))
+    }
+
     fn pretransfer_adapters(&self) -> &[crate::pretransfer::AdapterReference] {
         &[]
     }

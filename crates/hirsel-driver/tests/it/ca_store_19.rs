@@ -80,6 +80,7 @@ struct Observed {
     inner: store::MemStore,
     reads: AtomicUsize,
     writes: AtomicUsize,
+    parse_writes: AtomicUsize,
     content_reads: AtomicUsize,
     content_writes: AtomicUsize,
     mode_reads: AtomicUsize,
@@ -157,6 +158,9 @@ impl store::ResultStore for Observed {
     }
     fn put(&self, key: &store::EntryKey, bytes: &[u8]) {
         self.writes.fetch_add(1, Ordering::Relaxed);
+        if key.2 == QueryKind::Parse {
+            self.parse_writes.fetch_add(1, Ordering::Relaxed);
+        }
         self.indexes.lock().unwrap().insert(key.0);
         store::ResultStore::put(&self.inner, key, bytes);
     }
@@ -413,8 +417,8 @@ fn front_store_retains_prior_actions_at_one_logical_address() {
             assert!(outputs.iter().all(|o| o.result.is_ok()));
             let count = store.indexes.lock().unwrap().len();
             assert_eq!(
-                count, 6,
-                "Signature, Modes and Summary are separate domains"
+                count, 7,
+                "93611be0 adds one parsed-source domain to the six per-definition addresses"
             );
             let changed = source.replace("{1u32}", "{2u32}");
             let (edited, outputs) = publish(store.clone(), &changed, jobs);
@@ -430,6 +434,7 @@ fn front_store_retains_prior_actions_at_one_logical_address() {
                 .unwrap();
             assert!(edited.recompute_count(&value.definition, QueryKind::Modes) > 0);
             store.writes.store(0, Ordering::Relaxed);
+            store.parse_writes.store(0, Ordering::Relaxed);
             let (reverted, outputs) = publish(store.clone(), source, jobs);
             assert!(outputs.iter().all(|o| o.result.is_ok()));
             assert_eq!(
@@ -439,8 +444,8 @@ fn front_store_retains_prior_actions_at_one_logical_address() {
             );
             assert_eq!(
                 store.writes.load(Ordering::Relaxed),
-                0,
-                "original action remains available"
+                store.parse_writes.load(Ordering::Relaxed),
+                "original semantic actions remain available; 93611be0 refreshes the single parsed-source slot"
             );
         }
     });

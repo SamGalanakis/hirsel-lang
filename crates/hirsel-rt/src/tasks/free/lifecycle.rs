@@ -76,8 +76,8 @@ unsafe fn exit_scope(
     let own_path = unsafe { (*s).task(me).path.clone() };
     let mut retired = Vec::with_capacity(children.len());
     unsafe {
-        (*s).vacant_tasks.reserve(children.len());
-        (*s).vacant_scopes.reserve(1);
+        (*s).reserve_retirements(children.len());
+        (*s).scope_slots.reserve(1);
         // Simulate reverse retirement's child promotion counts before the
         // section. Each actual parent precedes its descendants in spawn order.
         let mut counts: Vec<_> = (*s)
@@ -128,11 +128,10 @@ unsafe fn exit_scope(
             let chain = s.task(child).failure.take();
             retired.push((s.retire_task(child), chain));
         }
-        let row = s.scopes[scope as usize].take().expect("an exiting scope");
+        let row = s.take_scope(scope);
         if let Some(out) = out {
             out.write(u8::from(expired.unwrap_or(false)));
         }
-        s.vacant_scopes.push(scope);
         Ok(row)
     });
     drop(replay);
@@ -182,7 +181,7 @@ pub(crate) unsafe fn detach(ctx: *mut TaskCtx, scope: u64, word: u64) -> Stopped
         let retire = saved && state == State::Done && unsafe { (*s).task(child).failure.is_none() };
         if retire {
             unsafe {
-                (*s).vacant_tasks.reserve(1);
+                (*s).reserve_retirements(1);
                 let row = (*s).task(child);
                 if let Some((parent, _)) = row.parent {
                     let children = row.children.len();
@@ -282,7 +281,7 @@ pub(crate) unsafe fn join(
     unsafe {
         assert_eq!((*s).task(child).state, State::Done);
         assert!(readiness::saved(&*s, child));
-        (*s).vacant_tasks.reserve(1);
+        (*s).reserve_retirements(1);
         let row = (*s).task(child);
         if let Some((parent, _)) = row.parent {
             let children = row.children.len();
@@ -434,11 +433,7 @@ pub(crate) unsafe fn spawn(
         path.push(parent.spawned);
         parent.children.reserve(1);
         s.scope(scope).children.reserve(1);
-        let generation = s.fresh_generation();
-        let index = s.vacant_tasks.pop().unwrap_or_else(|| {
-            s.tasks.push(None);
-            (s.tasks.len() - 1) as u32
-        });
+        let (index, generation) = s.take_task_slot();
         (scope, current, generation, index, path, canceled)
     };
     let fast = super::spawn::allowed(ctx, flags);
@@ -579,14 +574,7 @@ fn prepare_scope(
     let s = scheduler(ctx) as *mut Scheduler;
     let (index, generation, current) = unsafe {
         let s = &mut *s;
-        let generation = s.fresh_generation();
-        let index = match s.vacant_scopes.pop() {
-            Some(index) => index,
-            None => {
-                s.scopes.push(None);
-                (s.scopes.len() - 1) as u32
-            }
-        };
+        let (index, generation) = s.take_scope_slot();
         let current = s.current;
         s.task(current).scopes.reserve(1);
         (index, generation, current)

@@ -1,0 +1,192 @@
+// Oracle data is independent of the parser. Adjacent Text segmentation remains
+// the parser's contract; every selected kind/field must have the exact origin.
+fn tag_of(payload: markdown.Kind) -> u8 uses {} {
+  match payload {
+    Document() => 0,
+    Paragraph() => 1,
+    Heading(_) => 2,
+    BlockQuote() => 3,
+    ListBlock(_, _, _) => 4,
+    Item(_) => 5,
+    CodeBlock(_, _) => 6,
+    HtmlBlock(_) => 7,
+    ThematicBreak() => 8,
+    Text(_) => 9,
+    SoftBreak() => 10,
+    HardBreak() => 11,
+    Code(_) => 12,
+    HtmlInline(_) => 13,
+    Emphasis() => 14,
+    Strong() => 15,
+    Link(_, _) => 16,
+    Image(_, _) => 17,
+    Strikethrough() => 18,
+    Table() => 19,
+    TableRow(_) => 20,
+    TableCell(_) => 21,
+    FootnoteDefinition(_) => 22,
+    FootnoteReference(_, _, _) => 23,
+    FootnoteBackrefs(_, _, _) => 24,
+  }
+}
+
+fn count_matches(view: markdown.NodeView, tag: u8, field: u8, expected: markdown.Origin) -> u64 uses {} {
+  let actual = match field {
+    1 => markdown.field_origin(view, Destination()),
+    2 => markdown.field_origin(view, Title()),
+    3 => markdown.field_origin(view, CodeInfo()),
+    4 => markdown.field_origin(view, TaskMarker()),
+    _ => markdown.origin(view),
+  }
+  let mut count = if tag_of(markdown.kind(view)) == tag && actual == expected {
+    1u64
+  } else {
+    0u64
+  }
+  for item in view {
+    count += count_matches(item, tag, field, expected)
+  }
+  count
+}
+
+fn expect(
+  d: markdown.ParsedDocument,
+  tag: u8,
+  field: u8,
+  expected: markdown.Origin,
+  count: u64
+) {
+  failure.check(
+    count_matches(markdown.root(d), tag, field, expected) == count,
+    TextInvariant()
+  )
+}
+
+fn bounded(source: String, options: markdown.Options) -> Result[
+  unique markdown.ParsedDocument,
+  markdown.ParseLimit
+] uses {} {
+  markdown.parse_located_bounded(
+    unique source,
+    options,
+    markdown.ParseBudget(
+      source_bytes: string.byte_len(source),
+      work_items: 131072,
+      nesting: 128
+    )
+  )
+}
+
+fn equivalent(
+  take d: unique markdown.ParsedDocument,
+  source: String,
+  options: markdown.Options
+) {
+  let expected = markdown.parse(unique source, options)
+  let actual = markdown.into_node(take d)
+  failure.check(actual == expected, TextInvariant())
+  failure.check(
+    markdown.render_html_with_options(actual, options) == markdown.render_html_with_options(
+      expected,
+      options
+    ),
+    TextInvariant()
+  )
+}
+
+fn text_extent(view: markdown.NodeView, a: u64, b: u64) -> Option[markdown.ByteRange] uses {} {
+  let mut extent: Option[markdown.ByteRange] = None()
+  if tag_of(markdown.kind(view)) == 9 {
+    if let Cover(range) = markdown.origin(view) {
+      if range.start >= a && range.end <= b {
+        extent = Some(range)
+      }
+    }
+  }
+  for item in view {
+    if let Some(range) = text_extent(item, a, b) {
+      extent = match extent {
+        None() => Some(range),
+        Some(old) => Some(
+          markdown.ByteRange(
+            start: if old.start < range.start {
+              old.start
+            } else {
+              range.start
+            },
+            end: if old.end > range.end {
+              old.end
+            } else {
+              range.end
+            }
+          )
+        ),
+      }
+    }
+  }
+  extent
+}
+
+fn payload_same(view: markdown.NodeView, field: u8, expected: String) -> bool uses {} {
+  match markdown.kind(view) {
+    Text(value) => value == expected,
+    Code(value) => value == expected,
+    CodeBlock(value, info) => if field == 3 {
+      info == expected
+    } else {
+      value == expected
+    },
+    Link(destination, title) => if field == 1 {
+      destination == expected
+    } else {
+      field == 2 && title == expected
+    },
+    Image(destination, title) => if field == 1 {
+      destination == expected
+    } else {
+      field == 2 && title == expected
+    },
+    _ => false,
+  }
+}
+
+fn count_decoded(
+  view: markdown.NodeView,
+  tag: u8,
+  field: u8,
+  extent: markdown.Origin,
+  expected: String
+) -> u64 uses {} {
+  let actual = match field {
+    1 => markdown.field_origin(view, Destination()),
+    2 => markdown.field_origin(view, Title()),
+    3 => markdown.field_origin(view, CodeInfo()),
+    _ => markdown.origin(view),
+  }
+  let mut count = if tag_of(markdown.kind(view)) == tag && actual == extent && payload_same(
+    view,
+    field,
+    expected
+  ) {
+    1u64
+  } else {
+    0u64
+  }
+  for child in view {
+    count += count_decoded(child, tag, field, extent, expected)
+  }
+  count
+}
+
+fn append_text_range(view: markdown.NodeView, a: u64, b: u64, mut out: List[u8]) {
+  if let Text(value) = markdown.kind(view) {
+    if let Cover(range) = markdown.origin(view) {
+      if range.start >= a && range.end <= b {
+        text.append(mut out, value)
+      }
+    }
+  }
+  for child in view {
+    append_text_range(child, a, b, mut out)
+  }
+}

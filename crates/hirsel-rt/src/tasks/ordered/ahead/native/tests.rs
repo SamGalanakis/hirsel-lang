@@ -14,7 +14,7 @@ fn certificate(live: *mut u64) -> Certificate {
     }
 }
 #[test]
-fn saved_custody_restores_only_the_mask_once_without_releasing_the_source() {
+pub(crate) fn saved_custody_restores_only_the_mask_once_without_releasing_the_source() {
     let mut image = [code as usize as u64, 0, 1, 0x1234567890abcdef];
     let mut native = Native::new(
         std::ptr::null_mut(),
@@ -31,7 +31,7 @@ fn saved_custody_restores_only_the_mask_once_without_releasing_the_source() {
     assert_eq!(image[2], 0, "custody restoration must not run twice");
 }
 #[test]
-fn promotion_adopts_the_actual_moved_mask_and_same_physical_record() {
+pub(crate) fn promotion_adopts_the_actual_moved_mask_and_same_physical_record() {
     let mut mask = 1;
     let mut native = Native::new(
         std::ptr::null_mut(),
@@ -101,7 +101,7 @@ fn promotion_keeps_live_logical_tokens_sites_and_both_allowances_on_the_same_tas
     }
 }
 #[test]
-fn stale_generation_cannot_restore_or_adopt_custody() {
+pub(crate) fn stale_generation_cannot_restore_or_adopt_custody() {
     let mut mask = 0;
     let mut native = Native::new(
         std::ptr::null_mut(),
@@ -322,7 +322,7 @@ fn inert_value_metadata_is_admitted_but_owner_and_opaque_scan_programs_are_refus
 }
 
 #[test]
-fn stopped_run_restores_saved_custody_before_reclaiming_its_heap() {
+pub(crate) fn stopped_run_restores_saved_custody_before_reclaiming_its_heap() {
     use std::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},

@@ -1961,9 +1961,11 @@ mod tests;
 /// A suspended Io call retains its typed snapshot; the evaluator retains owners
 /// and mutable loans until this operation completes or the run is abandoned.
 pub(super) struct NetworkWait {
-    name: String,
+    pub(super) name: String,
+    pub(super) task: u64,
+    ready: Option<OperationResult>,
     path: hirsel_syntax::DefPath,
-    arguments: Vec<Value>,
+    pub(super) arguments: Vec<Value>,
     generics: Vec<hirsel_types::GenericArgument>,
     types: std::sync::Arc<hirsel_types::TypeInterner>,
     result_type: hirsel_types::TypeId,
@@ -1978,6 +1980,7 @@ impl super::Library {
     ) -> Result<OperationResult, Error> {
         self.tasks.yield_now = true;
         let saved = (!context.configuration.inputs.is_empty()).then(|| self.simulation.clone());
+        self.simulation.process_path = self.tasks.path();
         let result = self
             .simulation
             .waiting_call(name, call, context, self.tasks.canceled());
@@ -1988,6 +1991,8 @@ impl super::Library {
                 self.network_waits.insert(
                     token,
                     NetworkWait {
+                        task: self.tasks.current,
+                        ready: None,
                         name: name.into(),
                         path: call.path.clone(),
                         arguments: call.arguments.to_vec(),
@@ -2010,11 +2015,58 @@ impl super::Library {
             Ok(result) => Ok(result),
         }
     }
+    pub(super) fn claim_process_waits(
+        &mut self,
+        context: &mut OperationContext<'_>,
+    ) -> Result<(), Error> {
+        let now = self.simulation.monotonic_now();
+        let tokens: Vec<u64> = self
+            .network_waits
+            .iter()
+            .filter_map(|(token, w)| {
+                (w.ready.is_none()
+                    && matches!(w.name.as_str(), "child.wait" | "proc.wait_group")
+                    && (self.tasks.canceled_task(w.task).is_some()
+                        || w.arguments
+                            .get(2)
+                            .and_then(|v| super::process::deadline(v).ok().flatten())
+                            .is_some_and(|(_, t)| t <= now)))
+                .then_some(*token)
+            })
+            .collect();
+        for token in tokens {
+            let w = &self.network_waits[&token];
+            let result = self.simulation.waiting_call(
+                &w.name,
+                &OperationCall {
+                    runtime: &crate::aggregate::RuntimeTypes::new(w.types.clone()),
+                    path: &w.path,
+                    arguments: &mut w.arguments.clone(),
+                    generics: &w.generics,
+                    types: &w.types,
+                    result_type: w.result_type,
+                    site: w.site,
+                },
+                context,
+                self.tasks.canceled_task(w.task),
+            )?;
+            self.network_waits.get_mut(&token).unwrap().ready = Some(result);
+        }
+        Ok(())
+    }
     pub(super) fn poll_network(
         &mut self,
         token: u64,
         context: &mut OperationContext<'_>,
     ) -> Result<Option<OperationResult>, Error> {
+        if let Some(result) = self
+            .network_waits
+            .get_mut(&token)
+            .and_then(|w| w.ready.take())
+        {
+            self.network_waits.remove(&token);
+            return Ok(Some(result));
+        }
         let wait = &self.network_waits[&token];
         // An Unanswered scripted connection has no readiness source. Polling
         // must not issue a new connect and consume the next scripted attempt.

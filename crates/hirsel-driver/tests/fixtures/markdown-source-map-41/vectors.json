@@ -1,0 +1,1818 @@
+{
+  "format": "markdown-source-map-design-v1",
+  "status": "proposed independent coordinate oracle, not runtime qualification",
+  "coordinate_units": "original UTF-8 bytes; half-open ranges; one-based line and byte columns; exclusive end",
+  "assumptions": [
+    "Sources are valid UTF-8 JSON strings, with NUL allowed.",
+    "Selections name expected grammar occurrences by source inspection, not by executing a parser.",
+    "Default options are all false unless explicitly overridden.",
+    "Only selected node/field origins are specified, not full ASTs.",
+    "Synthetic/unavailable cases have no primary range.",
+    "Upstream cmark comparisons use its inclusive end convention; deviations are explicit."
+  ],
+  "vectors": [
+    {
+      "id": "mdman-inline-html",
+      "source": "# Demo\n\nText <b>unsafe</b>.\n",
+      "options": {
+        "tables": true
+      },
+      "checks": [
+        {
+          "select": "HtmlInline opening b; old path /1/1",
+          "origin": "Cover",
+          "range": [
+            13,
+            16
+          ],
+          "source_slice": "<b>",
+          "start_point": [
+            3,
+            6
+          ],
+          "end_point": [
+            3,
+            9
+          ]
+        },
+        {
+          "select": "Heading",
+          "origin": "Cover",
+          "range": [
+            0,
+            6
+          ],
+          "source_slice": "# Demo",
+          "start_point": [
+            1,
+            1
+          ],
+          "end_point": [
+            1,
+            7
+          ]
+        },
+        {
+          "select": "Paragraph",
+          "origin": "Cover",
+          "range": [
+            8,
+            27
+          ],
+          "source_slice": "Text <b>unsafe</b>.",
+          "start_point": [
+            3,
+            1
+          ],
+          "end_point": [
+            3,
+            20
+          ]
+        }
+      ]
+    },
+    {
+      "id": "ordinary-inlines",
+      "source": "# Hi *there*.\n",
+      "options": {},
+      "checks": [
+        {
+          "select": "Heading",
+          "origin": "Cover",
+          "range": [
+            0,
+            13
+          ],
+          "source_slice": "# Hi *there*.",
+          "start_point": [
+            1,
+            1
+          ],
+          "end_point": [
+            1,
+            14
+          ]
+        },
+        {
+          "select": "Emphasis",
+          "origin": "Cover",
+          "range": [
+            5,
+            12
+          ],
+          "source_slice": "*there*",
+          "start_point": [
+            1,
+            6
+          ],
+          "end_point": [
+            1,
+            13
+          ]
+        },
+        {
+          "select": "Emphasis Text",
+          "origin": "Cover",
+          "range": [
+            6,
+            11
+          ],
+          "source_slice": "there",
+          "start_point": [
+            1,
+            7
+          ],
+          "end_point": [
+            1,
+            12
+          ]
+        }
+      ]
+    },
+    {
+      "id": "nested-list",
+      "source": "- outer\n  - inner\n",
+      "options": {},
+      "checks": [
+        {
+          "select": "outer List and Item",
+          "origin": "Cover",
+          "range": [
+            0,
+            17
+          ],
+          "source_slice": "- outer\n  - inner",
+          "start_point": [
+            1,
+            1
+          ],
+          "end_point": [
+            2,
+            10
+          ]
+        },
+        {
+          "select": "nested List and Item",
+          "origin": "Cover",
+          "range": [
+            10,
+            17
+          ],
+          "source_slice": "- inner",
+          "start_point": [
+            2,
+            3
+          ],
+          "end_point": [
+            2,
+            10
+          ]
+        },
+        {
+          "select": "nested Paragraph and Text",
+          "origin": "Cover",
+          "range": [
+            12,
+            17
+          ],
+          "source_slice": "inner",
+          "start_point": [
+            2,
+            5
+          ],
+          "end_point": [
+            2,
+            10
+          ]
+        }
+      ]
+    },
+    {
+      "id": "repeated-reference",
+      "source": "[x][r] [x][r]\n\n[r]: /dest \"T\"\n",
+      "options": {},
+      "checks": [
+        {
+          "select": "first Link",
+          "origin": "Cover",
+          "range": [
+            0,
+            6
+          ],
+          "source_slice": "[x][r]",
+          "start_point": [
+            1,
+            1
+          ],
+          "end_point": [
+            1,
+            7
+          ]
+        },
+        {
+          "select": "second Link",
+          "origin": "Cover",
+          "range": [
+            7,
+            13
+          ],
+          "source_slice": "[x][r]",
+          "start_point": [
+            1,
+            8
+          ],
+          "end_point": [
+            1,
+            14
+          ]
+        },
+        {
+          "select": "both Link Destination fields",
+          "origin": "Cover",
+          "range": [
+            20,
+            25
+          ],
+          "source_slice": "/dest",
+          "start_point": [
+            3,
+            6
+          ],
+          "end_point": [
+            3,
+            11
+          ]
+        },
+        {
+          "select": "both Link Title fields",
+          "origin": "Cover",
+          "range": [
+            27,
+            28
+          ],
+          "source_slice": "T",
+          "start_point": [
+            3,
+            13
+          ],
+          "end_point": [
+            3,
+            14
+          ]
+        }
+      ],
+      "note": "Distinct use ranges; one interned definition field record. Destination/title are not inside the use ranges."
+    },
+    {
+      "id": "duplicate-definition",
+      "source": "[r]\n\n[r]: /a\n[r]: /b\n",
+      "options": {},
+      "checks": [
+        {
+          "select": "Link",
+          "origin": "Cover",
+          "range": [
+            0,
+            3
+          ],
+          "source_slice": "[r]",
+          "start_point": [
+            1,
+            1
+          ],
+          "end_point": [
+            1,
+            4
+          ]
+        },
+        {
+          "select": "Link Destination first wins",
+          "origin": "Cover",
+          "range": [
+            10,
+            12
+          ],
+          "source_slice": "/a",
+          "start_point": [
+            3,
+            6
+          ],
+          "end_point": [
+            3,
+            8
+          ]
+        }
+      ]
+    },
+    {
+      "id": "definitions-before-content",
+      "source": "[r]: /x\nbody\n",
+      "options": {},
+      "checks": [
+        {
+          "select": "remaining Paragraph and Text",
+          "origin": "Cover",
+          "range": [
+            8,
+            12
+          ],
+          "source_slice": "body",
+          "start_point": [
+            2,
+            1
+          ],
+          "end_point": [
+            2,
+            5
+          ]
+        }
+      ]
+    },
+    {
+      "id": "entity-escape-unicode",
+      "source": "A &amp; \\* é\n",
+      "options": {},
+      "checks": [
+        {
+          "select": "entity Text",
+          "origin": "Cover",
+          "range": [
+            2,
+            7
+          ],
+          "source_slice": "&amp;",
+          "start_point": [
+            1,
+            3
+          ],
+          "end_point": [
+            1,
+            8
+          ],
+          "decoded": "&"
+        },
+        {
+          "select": "escape Text",
+          "origin": "Cover",
+          "range": [
+            8,
+            10
+          ],
+          "source_slice": "\\*",
+          "start_point": [
+            1,
+            9
+          ],
+          "end_point": [
+            1,
+            11
+          ],
+          "decoded": "*"
+        },
+        {
+          "select": "final Text",
+          "origin": "Cover",
+          "range": [
+            10,
+            13
+          ],
+          "source_slice": " é",
+          "start_point": [
+            1,
+            11
+          ],
+          "end_point": [
+            1,
+            14
+          ],
+          "decoded": " é"
+        }
+      ]
+    },
+    {
+      "id": "crlf-bare-cr-literal",
+      "source": "a\r\nb\rc\n",
+      "options": {},
+      "checks": [
+        {
+          "select": "Document",
+          "origin": "Cover",
+          "range": [
+            0,
+            7
+          ],
+          "source_slice": "a\r\nb\rc\n",
+          "start_point": [
+            1,
+            1
+          ],
+          "end_point": [
+            4,
+            1
+          ]
+        },
+        {
+          "select": "Paragraph",
+          "origin": "Cover",
+          "range": [
+            0,
+            6
+          ],
+          "source_slice": "a\r\nb\rc",
+          "start_point": [
+            1,
+            1
+          ],
+          "end_point": [
+            3,
+            2
+          ]
+        },
+        {
+          "select": "first SoftBreak",
+          "origin": "Cover",
+          "range": [
+            1,
+            3
+          ],
+          "source_slice": "\r\n",
+          "start_point": [
+            1,
+            2
+          ],
+          "end_point": [
+            2,
+            1
+          ]
+        },
+        {
+          "select": "second SoftBreak",
+          "origin": "Cover",
+          "range": [
+            4,
+            5
+          ],
+          "source_slice": "\r",
+          "start_point": [
+            2,
+            2
+          ],
+          "end_point": [
+            3,
+            1
+          ]
+        }
+      ],
+      "points": [
+        {
+          "offset": 2,
+          "point": [
+            1,
+            3
+          ]
+        }
+      ],
+      "path": "literal eligible"
+    },
+    {
+      "id": "hardbreaks",
+      "source": "a  \r\nb\\\rc\n",
+      "options": {},
+      "checks": [
+        {
+          "select": "spaces HardBreak",
+          "origin": "Cover",
+          "range": [
+            1,
+            5
+          ],
+          "source_slice": "  \r\n",
+          "start_point": [
+            1,
+            2
+          ],
+          "end_point": [
+            2,
+            1
+          ]
+        },
+        {
+          "select": "backslash HardBreak",
+          "origin": "Cover",
+          "range": [
+            6,
+            8
+          ],
+          "source_slice": "\\\r",
+          "start_point": [
+            2,
+            2
+          ],
+          "end_point": [
+            3,
+            1
+          ]
+        },
+        {
+          "select": "first Text after trim",
+          "origin": "Cover",
+          "range": [
+            0,
+            1
+          ],
+          "source_slice": "a",
+          "start_point": [
+            1,
+            1
+          ],
+          "end_point": [
+            1,
+            2
+          ]
+        }
+      ]
+    },
+    {
+      "id": "tab-list",
+      "source": "-\titem\n\tmore\n",
+      "options": {},
+      "checks": [
+        {
+          "select": "List and Item",
+          "origin": "Cover",
+          "range": [
+            0,
+            12
+          ],
+          "source_slice": "-\titem\n\tmore",
+          "start_point": [
+            1,
+            1
+          ],
+          "end_point": [
+            2,
+            6
+          ]
+        },
+        {
+          "select": "Paragraph",
+          "origin": "Cover",
+          "range": [
+            2,
+            12
+          ],
+          "source_slice": "item\n\tmore",
+          "start_point": [
+            1,
+            3
+          ],
+          "end_point": [
+            2,
+            6
+          ]
+        },
+        {
+          "select": "second Text",
+          "origin": "Cover",
+          "range": [
+            8,
+            12
+          ],
+          "source_slice": "more",
+          "start_point": [
+            2,
+            2
+          ],
+          "end_point": [
+            2,
+            6
+          ]
+        },
+        {
+          "select": "SoftBreak",
+          "origin": "Cover",
+          "range": [
+            6,
+            7
+          ],
+          "source_slice": "\n",
+          "start_point": [
+            1,
+            7
+          ],
+          "end_point": [
+            2,
+            1
+          ]
+        }
+      ],
+      "note": "Markdown tab stops are four; original diagnostic byte columns do not expand tabs."
+    },
+    {
+      "id": "partial-tab-quote",
+      "source": ">\tcode\n",
+      "options": {},
+      "checks": [
+        {
+          "select": "BlockQuote",
+          "origin": "Cover",
+          "range": [
+            0,
+            6
+          ],
+          "source_slice": ">\tcode",
+          "start_point": [
+            1,
+            1
+          ],
+          "end_point": [
+            1,
+            7
+          ]
+        },
+        {
+          "select": "Paragraph and Text",
+          "origin": "Cover",
+          "range": [
+            2,
+            6
+          ],
+          "source_slice": "code",
+          "start_point": [
+            1,
+            3
+          ],
+          "end_point": [
+            1,
+            7
+          ]
+        }
+      ],
+      "note": "Quote consumes one tab column after >; remaining indentation does not invent source bytes."
+    },
+    {
+      "id": "nul-literal",
+      "source": "a\u0000b\n",
+      "options": {},
+      "checks": [
+        {
+          "select": "Text",
+          "origin": "Cover",
+          "range": [
+            0,
+            3
+          ],
+          "source_slice": "a\u0000b",
+          "start_point": [
+            1,
+            1
+          ],
+          "end_point": [
+            1,
+            4
+          ],
+          "decoded": "a�b"
+        },
+        {
+          "select": "Document",
+          "origin": "Cover",
+          "range": [
+            0,
+            4
+          ],
+          "source_slice": "a\u0000b\n",
+          "start_point": [
+            1,
+            1
+          ],
+          "end_point": [
+            2,
+            1
+          ]
+        }
+      ],
+      "path": "literal eligible",
+      "mapping_atoms": [
+        {
+          "normalized_range": [
+            1,
+            4
+          ],
+          "original_range": [
+            1,
+            2
+          ],
+          "original_slice": "\u0000",
+          "normalized_slice": "�"
+        }
+      ]
+    },
+    {
+      "id": "unicode-emphasis",
+      "source": "é *羊*\n",
+      "options": {},
+      "checks": [
+        {
+          "select": "Emphasis",
+          "origin": "Cover",
+          "range": [
+            3,
+            8
+          ],
+          "source_slice": "*羊*",
+          "start_point": [
+            1,
+            4
+          ],
+          "end_point": [
+            1,
+            9
+          ]
+        },
+        {
+          "select": "Emphasis Text",
+          "origin": "Cover",
+          "range": [
+            4,
+            7
+          ],
+          "source_slice": "羊",
+          "start_point": [
+            1,
+            5
+          ],
+          "end_point": [
+            1,
+            8
+          ]
+        },
+        {
+          "select": "leading Text",
+          "origin": "Cover",
+          "range": [
+            0,
+            3
+          ],
+          "source_slice": "é ",
+          "start_point": [
+            1,
+            1
+          ],
+          "end_point": [
+            1,
+            4
+          ]
+        }
+      ],
+      "points": [
+        {
+          "offset": 1,
+          "point": [
+            1,
+            2
+          ]
+        }
+      ]
+    },
+    {
+      "id": "table-padded-empty",
+      "source": "| a | b |\n| - | - |\n| x |\n|   ||\n",
+      "options": {
+        "tables": true
+      },
+      "checks": [
+        {
+          "select": "Table",
+          "origin": "Cover",
+          "range": [
+            0,
+            32
+          ],
+          "source_slice": "| a | b |\n| - | - |\n| x |\n|   ||",
+          "start_point": [
+            1,
+            1
+          ],
+          "end_point": [
+            4,
+            7
+          ]
+        },
+        {
+          "select": "header first Cell and Text",
+          "origin": "Cover",
+          "range": [
+            2,
+            3
+          ],
+          "source_slice": "a",
+          "start_point": [
+            1,
+            3
+          ],
+          "end_point": [
+            1,
+            4
+          ]
+        },
+        {
+          "select": "first data Row",
+          "origin": "Cover",
+          "range": [
+            20,
+            25
+          ],
+          "source_slice": "| x |",
+          "start_point": [
+            3,
+            1
+          ],
+          "end_point": [
+            3,
+            6
+          ]
+        },
+        {
+          "select": "first data second Cell",
+          "origin": "Synthetic",
+          "reason": "MissingTableCell",
+          "related_range": [
+            20,
+            25
+          ]
+        },
+        {
+          "select": "second data whitespace-only Cell",
+          "origin": "Cover",
+          "range": [
+            30,
+            30
+          ],
+          "source_slice": "",
+          "start_point": [
+            4,
+            5
+          ],
+          "end_point": [
+            4,
+            5
+          ]
+        },
+        {
+          "select": "second data explicit empty Cell",
+          "origin": "Cover",
+          "range": [
+            31,
+            31
+          ],
+          "source_slice": "",
+          "start_point": [
+            4,
+            6
+          ],
+          "end_point": [
+            4,
+            6
+          ]
+        }
+      ]
+    },
+    {
+      "id": "table-escaped-pipe",
+      "source": "| a\\|b |\n| --- |\n",
+      "options": {
+        "tables": true
+      },
+      "checks": [
+        {
+          "select": "header Cell and Text",
+          "origin": "Cover",
+          "range": [
+            2,
+            6
+          ],
+          "source_slice": "a\\|b",
+          "start_point": [
+            1,
+            3
+          ],
+          "end_point": [
+            1,
+            7
+          ],
+          "decoded": "a|b"
+        },
+        {
+          "select": "Table with no data row",
+          "origin": "Cover",
+          "range": [
+            0,
+            16
+          ],
+          "source_slice": "| a\\|b |\n| --- |",
+          "start_point": [
+            1,
+            1
+          ],
+          "end_point": [
+            2,
+            8
+          ]
+        }
+      ]
+    },
+    {
+      "id": "task-item",
+      "source": "- [x] done\n",
+      "options": {
+        "task_lists": true
+      },
+      "checks": [
+        {
+          "select": "Item",
+          "origin": "Cover",
+          "range": [
+            0,
+            10
+          ],
+          "source_slice": "- [x] done",
+          "start_point": [
+            1,
+            1
+          ],
+          "end_point": [
+            1,
+            11
+          ]
+        },
+        {
+          "select": "Item TaskMarker field",
+          "origin": "Cover",
+          "range": [
+            2,
+            5
+          ],
+          "source_slice": "[x]",
+          "start_point": [
+            1,
+            3
+          ],
+          "end_point": [
+            1,
+            6
+          ]
+        },
+        {
+          "select": "Paragraph and Text",
+          "origin": "Cover",
+          "range": [
+            6,
+            10
+          ],
+          "source_slice": "done",
+          "start_point": [
+            1,
+            7
+          ],
+          "end_point": [
+            1,
+            11
+          ]
+        }
+      ]
+    },
+    {
+      "id": "strikethrough",
+      "source": "~~gone~~\n",
+      "options": {
+        "strikethrough": true
+      },
+      "checks": [
+        {
+          "select": "Strikethrough",
+          "origin": "Cover",
+          "range": [
+            0,
+            8
+          ],
+          "source_slice": "~~gone~~",
+          "start_point": [
+            1,
+            1
+          ],
+          "end_point": [
+            1,
+            9
+          ]
+        },
+        {
+          "select": "Text",
+          "origin": "Cover",
+          "range": [
+            2,
+            6
+          ],
+          "source_slice": "gone",
+          "start_point": [
+            1,
+            3
+          ],
+          "end_point": [
+            1,
+            7
+          ]
+        }
+      ]
+    },
+    {
+      "id": "autolink-after-entity",
+      "source": "a&#64;b.com\n",
+      "options": {
+        "autolinks": true
+      },
+      "checks": [
+        {
+          "select": "email Link and label Text",
+          "origin": "Cover",
+          "range": [
+            0,
+            11
+          ],
+          "source_slice": "a&#64;b.com",
+          "start_point": [
+            1,
+            1
+          ],
+          "end_point": [
+            1,
+            12
+          ],
+          "decoded": "a@b.com"
+        },
+        {
+          "select": "email Destination lexical field",
+          "origin": "Cover",
+          "range": [
+            0,
+            11
+          ],
+          "source_slice": "a&#64;b.com",
+          "start_point": [
+            1,
+            1
+          ],
+          "end_point": [
+            1,
+            12
+          ],
+          "decoded": "mailto:a@b.com"
+        },
+        {
+          "select": "empty prefix Text",
+          "origin": "Synthetic",
+          "reason": "EmptyAutolinkFragment",
+          "related_range": [
+            0,
+            11
+          ]
+        },
+        {
+          "select": "empty suffix Text",
+          "origin": "Synthetic",
+          "reason": "EmptyAutolinkFragment",
+          "related_range": [
+            0,
+            11
+          ]
+        }
+      ],
+      "note": "Private origin runs must survive decoded Text coalescing; no permanent decoded-character map exposed."
+    },
+    {
+      "id": "footnote-repeated",
+      "source": "a[^n] b[^n]\n\n[^n]: note\n",
+      "options": {
+        "footnotes": true
+      },
+      "checks": [
+        {
+          "select": "first FootnoteReference",
+          "origin": "Cover",
+          "range": [
+            1,
+            5
+          ],
+          "source_slice": "[^n]",
+          "start_point": [
+            1,
+            2
+          ],
+          "end_point": [
+            1,
+            6
+          ]
+        },
+        {
+          "select": "second FootnoteReference",
+          "origin": "Cover",
+          "range": [
+            7,
+            11
+          ],
+          "source_slice": "[^n]",
+          "start_point": [
+            1,
+            8
+          ],
+          "end_point": [
+            1,
+            12
+          ]
+        },
+        {
+          "select": "moved FootnoteDefinition",
+          "origin": "Cover",
+          "range": [
+            13,
+            23
+          ],
+          "source_slice": "[^n]: note",
+          "start_point": [
+            3,
+            1
+          ],
+          "end_point": [
+            3,
+            11
+          ]
+        },
+        {
+          "select": "inserted spacer Text",
+          "origin": "Synthetic",
+          "reason": "FootnoteSpacer",
+          "related_range": [
+            13,
+            23
+          ]
+        },
+        {
+          "select": "FootnoteBackrefs",
+          "origin": "Synthetic",
+          "reason": "FootnoteBackrefs",
+          "related_range": [
+            13,
+            23
+          ]
+        }
+      ]
+    },
+    {
+      "id": "literal-paragraph-thematic",
+      "source": "alpha\nbeta\n\n---\n",
+      "options": {},
+      "checks": [
+        {
+          "select": "Paragraph",
+          "origin": "Cover",
+          "range": [
+            0,
+            10
+          ],
+          "source_slice": "alpha\nbeta",
+          "start_point": [
+            1,
+            1
+          ],
+          "end_point": [
+            2,
+            5
+          ]
+        },
+        {
+          "select": "SoftBreak",
+          "origin": "Cover",
+          "range": [
+            5,
+            6
+          ],
+          "source_slice": "\n",
+          "start_point": [
+            1,
+            6
+          ],
+          "end_point": [
+            2,
+            1
+          ]
+        },
+        {
+          "select": "ThematicBreak",
+          "origin": "Cover",
+          "range": [
+            12,
+            15
+          ],
+          "source_slice": "---",
+          "start_point": [
+            4,
+            1
+          ],
+          "end_point": [
+            4,
+            4
+          ]
+        }
+      ],
+      "path": "literal eligible"
+    },
+    {
+      "id": "literal-setext",
+      "source": "alpha\n---\n",
+      "options": {},
+      "checks": [
+        {
+          "select": "Heading 2",
+          "origin": "Cover",
+          "range": [
+            0,
+            9
+          ],
+          "source_slice": "alpha\n---",
+          "start_point": [
+            1,
+            1
+          ],
+          "end_point": [
+            2,
+            4
+          ]
+        },
+        {
+          "select": "Text",
+          "origin": "Cover",
+          "range": [
+            0,
+            5
+          ],
+          "source_slice": "alpha",
+          "start_point": [
+            1,
+            1
+          ],
+          "end_point": [
+            1,
+            6
+          ]
+        }
+      ],
+      "path": "literal eligible"
+    },
+    {
+      "id": "inline-code-multiline",
+      "source": "` a\nb `\n",
+      "options": {},
+      "checks": [
+        {
+          "select": "Code",
+          "origin": "Cover",
+          "range": [
+            0,
+            7
+          ],
+          "source_slice": "` a\nb `",
+          "start_point": [
+            1,
+            1
+          ],
+          "end_point": [
+            2,
+            4
+          ],
+          "decoded": "a b"
+        }
+      ]
+    },
+    {
+      "id": "fenced-code-info",
+      "source": "``` x&amp;\ncode\n```\n",
+      "options": {},
+      "checks": [
+        {
+          "select": "CodeBlock",
+          "origin": "Cover",
+          "range": [
+            0,
+            19
+          ],
+          "source_slice": "``` x&amp;\ncode\n```",
+          "start_point": [
+            1,
+            1
+          ],
+          "end_point": [
+            3,
+            4
+          ],
+          "decoded": "code\n"
+        },
+        {
+          "select": "CodeInfo field",
+          "origin": "Cover",
+          "range": [
+            4,
+            10
+          ],
+          "source_slice": "x&amp;",
+          "start_point": [
+            1,
+            5
+          ],
+          "end_point": [
+            1,
+            11
+          ],
+          "decoded": "x&"
+        }
+      ]
+    },
+    {
+      "id": "raw-html-block",
+      "source": "<div>\nx\n</div>\n",
+      "options": {},
+      "checks": [
+        {
+          "select": "HtmlBlock",
+          "origin": "Cover",
+          "range": [
+            0,
+            14
+          ],
+          "source_slice": "<div>\nx\n</div>",
+          "start_point": [
+            1,
+            1
+          ],
+          "end_point": [
+            3,
+            7
+          ]
+        }
+      ]
+    },
+    {
+      "id": "empty-title",
+      "source": "[x](</a> \"\")\n",
+      "options": {},
+      "checks": [
+        {
+          "select": "Link",
+          "origin": "Cover",
+          "range": [
+            0,
+            12
+          ],
+          "source_slice": "[x](</a> \"\")",
+          "start_point": [
+            1,
+            1
+          ],
+          "end_point": [
+            1,
+            13
+          ]
+        },
+        {
+          "select": "Destination field",
+          "origin": "Cover",
+          "range": [
+            5,
+            7
+          ],
+          "source_slice": "/a",
+          "start_point": [
+            1,
+            6
+          ],
+          "end_point": [
+            1,
+            8
+          ]
+        },
+        {
+          "select": "explicit empty Title field",
+          "origin": "Cover",
+          "range": [
+            10,
+            10
+          ],
+          "source_slice": "",
+          "start_point": [
+            1,
+            11
+          ],
+          "end_point": [
+            1,
+            11
+          ]
+        },
+        {
+          "select": "TaskMarker field",
+          "origin": "Unavailable",
+          "reason": "NotApplicable"
+        }
+      ]
+    },
+    {
+      "id": "absent-title",
+      "source": "[x](/a)\n",
+      "options": {},
+      "checks": [
+        {
+          "select": "Link Title field",
+          "origin": "Unavailable",
+          "reason": "NotPresent"
+        }
+      ]
+    },
+    {
+      "id": "empty",
+      "source": "",
+      "options": {},
+      "checks": [
+        {
+          "select": "Document",
+          "origin": "Cover",
+          "range": [
+            0,
+            0
+          ],
+          "source_slice": "",
+          "start_point": [
+            1,
+            1
+          ],
+          "end_point": [
+            1,
+            1
+          ]
+        }
+      ],
+      "points": [
+        {
+          "offset": 1,
+          "point": null
+        }
+      ],
+      "path": "literal eligible"
+    },
+    {
+      "id": "no-final-newline",
+      "source": "hello",
+      "options": {},
+      "checks": [
+        {
+          "select": "Document Paragraph and Text",
+          "origin": "Cover",
+          "range": [
+            0,
+            5
+          ],
+          "source_slice": "hello",
+          "start_point": [
+            1,
+            1
+          ],
+          "end_point": [
+            1,
+            6
+          ]
+        }
+      ],
+      "path": "literal eligible",
+      "note": "No SoftBreak: appended LF in general parser scratch is not an original terminator."
+    },
+    {
+      "id": "post-parse-edit",
+      "source": "**old**\n",
+      "options": {},
+      "checks": [
+        {
+          "select": "before: Strong",
+          "origin": "Cover",
+          "range": [
+            0,
+            7
+          ],
+          "source_slice": "**old**",
+          "start_point": [
+            1,
+            1
+          ],
+          "end_point": [
+            1,
+            8
+          ]
+        },
+        {
+          "select": "after strip and replace child /0/0 with Text(\"new\"): diagnostic adapter",
+          "origin": "Unavailable",
+          "reason": "DetachedNode"
+        }
+      ],
+      "edit": "Consume into_node, then replace paragraph child 0; no location operation accepts the edited Node. Old view use must be rejected by ownership."
+    },
+    {
+      "id": "cmark-source-pos-port",
+      "source": "# Hi *there*.\n\nHello &ldquo; <http://www.google.com>\nthere `hi` -- [okay](www.google.com (ok)).\n\n> 1. Okay.\n>    Sure.\n>\n> 2. Yes, okay.\n>    ![ok](hi \"yes\")\n",
+      "options": {},
+      "checks": [
+        {
+          "select": "Document",
+          "origin": "Cover",
+          "range": [
+            0,
+            158
+          ],
+          "source_slice": "# Hi *there*.\n\nHello &ldquo; <http://www.google.com>\nthere `hi` -- [okay](www.google.com (ok)).\n\n> 1. Okay.\n>    Sure.\n>\n> 2. Yes, okay.\n>    ![ok](hi \"yes\")\n",
+          "start_point": [
+            1,
+            1
+          ],
+          "end_point": [
+            11,
+            1
+          ],
+          "upstream": "1:1-10:20",
+          "deviation": "root includes final terminator"
+        },
+        {
+          "select": "Heading",
+          "origin": "Cover",
+          "range": [
+            0,
+            13
+          ],
+          "source_slice": "# Hi *there*.",
+          "start_point": [
+            1,
+            1
+          ],
+          "end_point": [
+            1,
+            14
+          ],
+          "upstream": "1:1-1:13"
+        },
+        {
+          "select": "Emphasis",
+          "origin": "Cover",
+          "range": [
+            5,
+            12
+          ],
+          "source_slice": "*there*",
+          "start_point": [
+            1,
+            6
+          ],
+          "end_point": [
+            1,
+            13
+          ],
+          "upstream": "1:6-1:12"
+        },
+        {
+          "select": "comparison extent of upstream merged Text",
+          "origin": "Cover",
+          "range": [
+            15,
+            29
+          ],
+          "source_slice": "Hello &ldquo; ",
+          "start_point": [
+            3,
+            1
+          ],
+          "end_point": [
+            3,
+            15
+          ],
+          "upstream": "3:1-3:14",
+          "decoded": "Hello “ ",
+          "comparison_only": true
+        },
+        {
+          "select": "angle autolink",
+          "origin": "Cover",
+          "range": [
+            29,
+            52
+          ],
+          "source_slice": "<http://www.google.com>",
+          "start_point": [
+            3,
+            15
+          ],
+          "end_point": [
+            3,
+            38
+          ],
+          "upstream": "3:15-3:37"
+        },
+        {
+          "select": "first paragraph SoftBreak",
+          "origin": "Cover",
+          "range": [
+            52,
+            53
+          ],
+          "source_slice": "\n",
+          "start_point": [
+            3,
+            38
+          ],
+          "end_point": [
+            4,
+            1
+          ],
+          "upstream": null,
+          "deviation": "real terminator located"
+        },
+        {
+          "select": "inline Code",
+          "origin": "Cover",
+          "range": [
+            59,
+            63
+          ],
+          "source_slice": "`hi`",
+          "start_point": [
+            4,
+            7
+          ],
+          "end_point": [
+            4,
+            11
+          ],
+          "upstream": "4:8-4:9",
+          "deviation": "include backticks"
+        },
+        {
+          "select": "inline Link",
+          "origin": "Cover",
+          "range": [
+            67,
+            94
+          ],
+          "source_slice": "[okay](www.google.com (ok))",
+          "start_point": [
+            4,
+            15
+          ],
+          "end_point": [
+            4,
+            42
+          ],
+          "upstream": "4:15-4:41"
+        },
+        {
+          "select": "BlockQuote",
+          "origin": "Cover",
+          "range": [
+            97,
+            157
+          ],
+          "source_slice": "> 1. Okay.\n>    Sure.\n>\n> 2. Yes, okay.\n>    ![ok](hi \"yes\")",
+          "start_point": [
+            6,
+            1
+          ],
+          "end_point": [
+            10,
+            21
+          ],
+          "upstream": "6:1-10:20"
+        },
+        {
+          "select": "ordered List",
+          "origin": "Cover",
+          "range": [
+            99,
+            157
+          ],
+          "source_slice": "1. Okay.\n>    Sure.\n>\n> 2. Yes, okay.\n>    ![ok](hi \"yes\")",
+          "start_point": [
+            6,
+            3
+          ],
+          "end_point": [
+            10,
+            21
+          ],
+          "upstream": "6:3-10:20"
+        },
+        {
+          "select": "first Item",
+          "origin": "Cover",
+          "range": [
+            99,
+            118
+          ],
+          "source_slice": "1. Okay.\n>    Sure.",
+          "start_point": [
+            6,
+            3
+          ],
+          "end_point": [
+            7,
+            11
+          ],
+          "upstream": "6:3-8:1",
+          "deviation": "exclude trailing blank container separator line"
+        },
+        {
+          "select": "first Item Paragraph",
+          "origin": "Cover",
+          "range": [
+            102,
+            118
+          ],
+          "source_slice": "Okay.\n>    Sure.",
+          "start_point": [
+            6,
+            6
+          ],
+          "end_point": [
+            7,
+            11
+          ],
+          "upstream": "6:6-7:10"
+        },
+        {
+          "select": "second Item",
+          "origin": "Cover",
+          "range": [
+            123,
+            157
+          ],
+          "source_slice": "2. Yes, okay.\n>    ![ok](hi \"yes\")",
+          "start_point": [
+            9,
+            3
+          ],
+          "end_point": [
+            10,
+            21
+          ],
+          "upstream": "9:3-10:20"
+        },
+        {
+          "select": "Image",
+          "origin": "Cover",
+          "range": [
+            142,
+            157
+          ],
+          "source_slice": "![ok](hi \"yes\")",
+          "start_point": [
+            10,
+            6
+          ],
+          "end_point": [
+            10,
+            21
+          ],
+          "upstream": "10:6-10:20"
+        },
+        {
+          "select": "Image label Text",
+          "origin": "Cover",
+          "range": [
+            144,
+            146
+          ],
+          "source_slice": "ok",
+          "start_point": [
+            10,
+            8
+          ],
+          "end_point": [
+            10,
+            10
+          ],
+          "upstream": "10:8-10:9"
+        }
+      ],
+      "reference": {
+        "path": "/tmp/ref-cmark-gfm/api_test/main.c",
+        "commit": "27d942c8b0a62d192f616e5bf3578f4b6a89e180",
+        "lines": [
+          995,
+          1060
+        ],
+        "license": "BSD-2-Clause; see NOTICE.md"
+      },
+      "note": "Selected upstream positions copied exactly; half-open ranges follow DESIGN. No assertion that cmark Text grouping equals Hirsel."
+    }
+  ]
+}

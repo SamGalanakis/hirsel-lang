@@ -284,6 +284,9 @@ pub(crate) fn configure_replay(io: &mut SimIo, run: &ValidatedRun) -> Result<(),
     if let Some(grant) = run.process_grant() {
         io.set_process_grant(grant);
     }
+    if let Some(initial) = run.record().inputs.fixture_monotonic {
+        io.set_process_time(initial);
+    }
     if let Some(grant) = run.signals_grant() {
         io.set_signal_kinds(grant.bits());
     }
@@ -344,6 +347,7 @@ impl std::io::Read for HeldStdin {
 pub struct HostGrants {
     /// Admit cooperative providers even when the record grants no tasks (the interpreter).
     always_cooperative: bool,
+    snapshot: Option<(std::collections::BTreeMap<String, Vec<u8>>, Vec<u8>, u64)>,
     /// The readiness the run's providers park on, when its execution shares one (RUN-12).
     readiness: Option<Readiness>,
     revocations: Option<hirsel_run_config::Revocations>,
@@ -358,6 +362,7 @@ impl HostGrants {
     pub fn new(output: impl std::io::Write + 'static) -> Self {
         Self {
             always_cooperative: false,
+            snapshot: None,
             readiness: None,
             revocations: None,
             io: None,
@@ -392,6 +397,18 @@ impl HostGrants {
         self.revocations = Some(hirsel_run_config::Revocations::read_path(path)?);
         Ok(())
     }
+    /// Explicit snapshot admission for compiler-backed semantic fixture producers.
+    /// Mount rights still come from the bound run record; no host path is opened.
+    pub fn snapshot(
+        files: std::collections::BTreeMap<String, Vec<u8>>,
+        stdin: Vec<u8>,
+        initial: u64,
+    ) -> Self {
+        Self {
+            snapshot: Some((files, stdin, initial)),
+            ..Self::cooperative(std::io::sink()).with_stderr(std::io::sink())
+        }
+    }
     pub fn into_io(self) -> RealIo {
         self.io.expect("successful host admission")
     }
@@ -399,31 +416,77 @@ impl HostGrants {
 impl HostAuthority for HostGrants {
     fn authorize(&mut self, run: &hirsel_run_config::ValidatedRun) -> Result<(), RunRefusal> {
         let record = run.record();
+        if run
+            .process_grant()
+            .is_some_and(|grant| grant.timed.is_some())
+            && self.snapshot.is_none()
+        {
+            return Err(RunRefusal::Unsupported {
+                field: "timed process requires explicit snapshot clock admission".into(),
+            });
+        }
         // Cooperative providers share one readiness, which the RealIo polls and records.
-        let readiness = self.readiness.clone().or_else(|| {
-            (self.always_cooperative || record.io.as_ref().is_some_and(|io| io.tasks.is_some()))
-                .then(Readiness::default)
-        });
-        let mounts = record
-            .io
-            .as_ref()
-            .into_iter()
-            .flat_map(|io| &io.dirs)
-            .map(|mount| {
-                PinnedDirectory::open(std::path::Path::new(&mount.host))
-                    .map(|pin| (mount.path.clone(), mount.access, pin))
-                    .map_err(|error| RunRefusal::Unauthorized {
-                        field: format!("io.dirs.{} ({}): {error}", mount.path, mount.host),
-                    })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let mut io =
-            RealIo::from_pinned_mounts(mounts, self.output.take().expect("single admission"))?;
+        let snapshot = self.snapshot.take();
+        let is_snapshot = snapshot.is_some();
+        let (mut io, readiness) = if let Some((files, stdin, initial)) = snapshot {
+            if record
+                .inputs
+                .fixture_monotonic
+                .is_some_and(|bound| bound != initial)
+            {
+                return Err(RunRefusal::Unauthorized {
+                    field: "fixture monotonic binding".into(),
+                });
+            }
+            let mounts = record
+                .io
+                .iter()
+                .flat_map(|io| &io.dirs)
+                .map(|m| (m.path.clone(), m.access))
+                .collect();
+            let mut io = RealIo::fixture(
+                files,
+                mounts,
+                stdin,
+                self.output.take().expect("single admission"),
+            )?;
+            io.virtual_clock(initial);
+            io.set_file_read_script(Default::default());
+            if let Some(faults) = &record.inputs.fixture_file_faults {
+                io.set_file_fault_script(faults.clone())
+                    .map_err(|_| RunRefusal::Unsupported {
+                        field: "fixture file faults".into(),
+                    })?;
+            }
+            (io, None)
+        } else {
+            let readiness = self.readiness.clone().or_else(|| {
+                (self.always_cooperative || record.io.as_ref().is_some_and(|io| io.tasks.is_some()))
+                    .then(Readiness::default)
+            });
+            let mounts = record
+                .io
+                .as_ref()
+                .into_iter()
+                .flat_map(|io| &io.dirs)
+                .map(|mount| {
+                    PinnedDirectory::open(std::path::Path::new(&mount.host))
+                        .map(|pin| (mount.path.clone(), mount.access, pin))
+                        .map_err(|error| RunRefusal::Unauthorized {
+                            field: format!("io.dirs.{} ({}): {error}", mount.path, mount.host),
+                        })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let mut io =
+                RealIo::from_pinned_mounts(mounts, self.output.take().expect("single admission"))?;
+            (io, readiness)
+        };
         io.set_projections(run.io_projections());
-        if record
-            .io
-            .as_ref()
-            .is_some_and(|grants| grants.stdin.is_some())
+        if !is_snapshot
+            && record
+                .io
+                .as_ref()
+                .is_some_and(|grants| grants.stdin.is_some())
         {
             // One run at a time holds the process's standard input.
             let token =

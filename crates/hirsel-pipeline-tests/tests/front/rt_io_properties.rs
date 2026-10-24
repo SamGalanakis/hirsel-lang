@@ -1244,6 +1244,7 @@ fn precedence_process_matrix() {
     for kind in 0..8 {
         for conditions in 0..16 {
             let grant = ProcessGrant {
+                timed: None,
                 provider: "process.script@1".into(),
                 rules: vec![ProcessRule {
                     program: command.program.clone(),

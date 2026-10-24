@@ -2043,3 +2043,34 @@ fn merge_audit_37_native_report_boundaries() {
         }
     });
 }
+
+#[test]
+fn evidence_archives_keep_all_payloads_within_the_transport_limit() {
+    let scratch = tempfile::tempdir().unwrap();
+    let scripts = [
+        (
+            "merge.py",
+            include_str!("../support/merge_audit_37/archive.py"),
+        ),
+        (
+            "spectral.py",
+            include_str!("../support/spectral_audit_35/archive.py"),
+        ),
+    ];
+    let mut command = Command::new("python3");
+    command
+        .arg("-c")
+        .arg(include_str!("../support/archive_transport.py"));
+    for (name, source) in scripts {
+        let path = scratch.path().join(name);
+        fs::write(&path, source).unwrap();
+        command.arg(path);
+    }
+    let output = command.output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

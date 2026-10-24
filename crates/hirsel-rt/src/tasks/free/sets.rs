@@ -15,11 +15,7 @@ pub(crate) unsafe fn create(ctx: *mut TaskCtx, scope: u64, out: *mut u64) -> Sto
     super::record::begin(ctx);
     let s = scheduler(ctx) as *mut Scheduler;
     let scope = unsafe { (*s).scope_handle(scope) };
-    let generation = unsafe { (*s).fresh_generation() } & 0x3fff_ffff;
-    let index = unsafe { (*s).vacant_sets.pop() }.unwrap_or_else(|| unsafe {
-        (*s).sets.push(None);
-        ((*s).sets.len() - 1) as u32
-    });
+    let (index, generation) = unsafe { (*s).take_set_slot() };
     let row = TaskSet {
         generation,
         scope,
@@ -183,12 +179,8 @@ pub(crate) unsafe fn close(ctx: *mut TaskCtx, word: u64) -> Stopped<()> {
         row.generation,
         ((word & !(crate::channels::ENDPOINT | TASK_SET)) >> 32) as u32
     );
-    unsafe { (*s).vacant_sets.reserve(1) };
-    let row = super::record::publish(ctx, Phase::Done, |_| unsafe {
-        let row = (&mut (*s).sets)[index as usize].take().unwrap();
-        (*s).vacant_sets.push(index);
-        row
-    })?;
+    unsafe { (*s).set_slots.reserve(1) };
+    let row = super::record::publish(ctx, Phase::Done, |_| unsafe { (*s).take_set(index) })?;
     drop(row);
     Ok(())
 }
@@ -201,7 +193,7 @@ fn prepare_retirement(s: &mut Scheduler, retiring: &[u32]) {
     if retiring.is_empty() {
         return;
     }
-    s.vacant_tasks.reserve(retiring.len());
+    s.reserve_retirements(retiring.len());
     let mut parents: Vec<_> = s
         .tasks
         .iter()
@@ -253,12 +245,8 @@ pub(crate) unsafe fn release(
     let set = unsafe { (*s).set_handle(word, scope) };
     let members: Vec<_> = unsafe { (*s).set(set).members.iter().flatten().copied().collect() };
     if members.is_empty() {
-        unsafe { (*s).vacant_sets.reserve(1) };
-        let row = super::record::publish(ctx, Phase::Done, |_| unsafe {
-            let row = (&mut (*s).sets)[set as usize].take().unwrap();
-            (*s).vacant_sets.push(set);
-            row
-        })?;
+        unsafe { (*s).set_slots.reserve(1) };
+        let row = super::record::publish(ctx, Phase::Done, |_| unsafe { (*s).take_set(set) })?;
         drop(row);
         return unsafe { try_yield(&mut *ctx) };
     }
@@ -313,16 +301,14 @@ pub(crate) unsafe fn release(
     let mut retired = Vec::with_capacity(retiring.len());
     unsafe {
         prepare_retirement(&mut *s, &retiring);
-        (*s).vacant_sets.reserve(1);
+        (*s).set_slots.reserve(1);
     }
     let set_row = super::record::publish(ctx, Phase::Done, |_| unsafe {
         for &child in &retiring {
             (*s).scope(scope).children.retain(|&id| id != child);
             retired.push((*s).retire_task(child));
         }
-        let row = (&mut (*s).sets)[set as usize].take().unwrap();
-        (*s).vacant_sets.push(set);
-        row
+        (*s).take_set(set)
     })?;
     drop(set_row);
     drop(retired);

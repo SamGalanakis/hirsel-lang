@@ -315,6 +315,15 @@ impl<S: Streams> RealCore<S> {
     /// The admitted `io.process` grant. Absent, the root Proc runs nothing.
     pub fn set_process_grant(&mut self, grant: &hirsel_run_schema::ProcessGrant) {
         self.state.set_process_grant(grant);
+        if grant.timed.is_some() {
+            if let Some((r, _)) = &self.cooperative {
+                r.isolate_process_clock();
+            }
+            self.state.last_monotonic = self
+                .cooperative
+                .as_ref()
+                .and_then(|(r, _)| r.virtual_time());
+        }
     }
     /// The admitted RunConfig rule set of the root Net (`io.net.rules`). Absent, the
     /// root Net permits nothing.
@@ -324,6 +333,9 @@ impl<S: Streams> RealCore<S> {
     /// Cooperative admission: a request whose provider parks on `readiness` answers
     /// `AdapterError::Blocked`, and the tape records it and each ready poll (DET-1).
     pub fn set_cooperative(&mut self, readiness: crate::readiness::Readiness) {
+        if self.state.timed_process {
+            readiness.isolate_process_clock();
+        }
         self.disk.readiness = Some(readiness.clone());
         self.cooperative = Some((readiness, Default::default()));
     }
@@ -894,7 +906,32 @@ impl<S: Streams> Adapter for RealCore<S> {
     }
 
     fn preflight(&self, request: &Request) -> Result<Option<Completion>, AdapterError> {
-        self.state.preflight(request)
+        let checked = self.state.preflight(request)?;
+        if checked.is_some() {
+            return Ok(checked);
+        }
+        if self.state.timed_process {
+            if matches!(request, Request::Wall { .. }) {
+                return Err(AdapterError::Unsupported(
+                    "host wall clock in timed process clock domain".into(),
+                ));
+            }
+            if crate::net::is_net_request(request) && !self.state.scripted(request) {
+                return Err(AdapterError::Unsupported(
+                    "live network in timed process clock domain".into(),
+                ));
+            }
+            if (self.state.file_directory(request).is_some()
+                || matches!(request, Request::Directory { .. }))
+                && !self.state.is_fake_request(request)
+                && !matches!(request, Request::Close { .. })
+            {
+                return Err(AdapterError::Unsupported(
+                    "live file operation in timed process clock domain".into(),
+                ));
+            }
+        }
+        Ok(None)
     }
 
     fn tls(&mut self, engine: &'static dyn crate::net_tls::TlsEngine) {
@@ -942,6 +979,18 @@ impl<S: Streams> Adapter for RealCore<S> {
         self.journal.issuer(task);
     }
     fn call(&mut self, request: Request) -> Result<Completion, AdapterError> {
+        if self.state.timed_process {
+            let virtual_clock = self
+                .cooperative
+                .as_ref()
+                .and_then(|(r, _)| r.virtual_time());
+            if virtual_clock.is_none() {
+                return Err(AdapterError::Unsupported(
+                    "timed process requires an isolated virtual clock".into(),
+                ));
+            }
+        }
+        let _ = self.preflight(&request)?;
         // Close, split/join, TLS and new grants use this protocol. Invalidate
         // before any authority mutation, including failed or canceled operations.
         self.live_streams = [None; 2];
@@ -968,12 +1017,24 @@ impl<S: Streams> Adapter for RealCore<S> {
             })?;
             return Err(AdapterError::Blocked);
         }
-        let network =
-            crate::net::is_net_request(&request) || matches!(request, Request::Close { .. });
+        let network = crate::net::is_net_request(&request)
+            || matches!(request, Request::Close { .. })
+            || self.state.timed_process
+                && matches!(
+                    request,
+                    Request::ChildWrite { .. }
+                        | Request::ChildCloseStdin { .. }
+                        | Request::ChildKill { .. }
+                );
         let scripted =
             self.state.scripted(&request) || self.file_reads.blocked(&self.state, &request);
         if !parks {
             let result = self.perform(request);
+            if self.state.timed_process {
+                if let Some((r, _)) = &self.cooperative {
+                    r.provider_deadline(self.state.next_process_time());
+                }
+            }
             if network && let Some((readiness, _)) = &self.cooperative {
                 readiness.progressed();
             }
@@ -998,14 +1059,39 @@ impl<S: Streams> Adapter for RealCore<S> {
         } else {
             self.perform(request)
         };
+        if self.state.timed_process {
+            if let Request::SleepUntil { clock, deadline } = &retry
+                && !self.state.test_clocks.contains(clock)
+            {
+                if matches!(result, Err(AdapterError::Blocked)) {
+                    self.state.timed_sleeps.insert(self.current, *deadline);
+                } else {
+                    self.state.timed_sleeps.remove(&self.current);
+                }
+            }
+            if let Some((r, _)) = &self.cooperative {
+                r.provider_deadline(self.state.next_process_time());
+            }
+        }
         match result {
             Err(AdapterError::Blocked) => {
                 let (readiness, log) = self.cooperative.as_mut().unwrap();
                 let token = log.current();
                 if connect {
                     readiness.scripted_connect();
-                } else if scripted {
+                } else if scripted
+                    || self.state.timed_process
+                        && matches!(
+                            retry,
+                            Request::ChildRead { .. }
+                                | Request::ChildWait { .. }
+                                | Request::GroupWait { .. }
+                        )
+                {
                     readiness.scripted();
+                    if self.state.timed_process {
+                        self.state.timed_requests.insert(token, retry.clone());
+                    }
                 }
                 let committed = !readiness.cancellable(token);
                 // Re-issued while its task stays parked (a held request a journal barrier
@@ -1043,6 +1129,13 @@ impl<S: Streams> Adapter for RealCore<S> {
         }
     }
     fn finish(&mut self, token: u64) {
+        self.state.timed_requests.remove(&token);
+        self.state.timed_sleeps.remove(&token);
+        if self.state.timed_process {
+            if let Some((r, _)) = &self.cooperative {
+                r.provider_deadline(self.state.next_process_time());
+            }
+        }
         self.signal_waits.remove(&token);
         if let Some(clock) = &self.test_clock {
             clock.finish(token);
@@ -1092,55 +1185,67 @@ impl<S: Streams> Adapter for RealCore<S> {
     /// released (which wait on no host interest), each recorded as its wait's `ready` event,
     /// in token (so ordinal) order, before any of them is re-issued.
     fn ready(&mut self) -> Result<Ready, AdapterError> {
-        let released = self.journal.released().map_err(recording_failed)?;
-        let Some((readiness, log)) = &mut self.cooperative else {
-            return Ok(Ready::Tokens(
-                if std::mem::take(&mut self.signal_delivered) {
-                    self.signals_ready(Vec::new())
-                } else {
-                    Vec::new()
-                },
-            ));
-        };
-        // With no journal or retained history, no Ready events or wait-ordinal
-        // bookkeeping are constructed. The readiness tokens are sufficient.
-        let recording = self.retain_history || self.journal.records();
-        if recording {
-            log.point();
+        if self.state.timed_process {
+            if let Some(to) = self
+                .cooperative
+                .as_ref()
+                .and_then(|(r, _)| r.virtual_time())
+            {
+                let from = self.state.last_monotonic.unwrap_or(0);
+                if to > from {
+                    self.state.apply_process_time(from, to)?;
+                    self.record(Event {
+                        request: Request::ProcessTime { from, to },
+                        completion: Completion::Ready,
+                        fault: None,
+                    })?;
+                    if let Some((r, _)) = &self.cooperative {
+                        r.provider_deadline(self.state.next_process_time());
+                    }
+                }
+            }
         }
-        let mut tokens = readiness.ready()?;
-        if let Some(clock) = &self.test_clock {
-            tokens.extend(clock.ready()?);
+        self.ready_tokens(true)
+    }
+    fn isolated_clock(&self) -> bool {
+        self.state.timed_process
+    }
+    fn process_site(&mut self, child: u64, site: u64, operation_site: u64, path: &[u32]) {
+        if self.state.timed_process {
+            self.state
+                .process_sites
+                .insert(child, (site, operation_site, path.to_vec()));
         }
-        if !released.is_empty() || self.test_clock.is_some() {
-            tokens.extend(released);
-            tokens.sort_unstable();
-            tokens.dedup();
+    }
+    fn process_sources(&self) -> bool {
+        self.state.next_child_gate().is_some() || self.state.process_batch_pending
+    }
+    fn process_batch(&mut self, canceled: &[u64]) -> Result<Ready, AdapterError> {
+        if !self.state.process_batch_pending {
+            return Ok(Ready::Tokens(Vec::new()));
         }
-        let tokens = if self.signal_waits.is_empty() {
-            tokens
-        } else {
-            self.signals_ready(tokens)
-        };
-        if !recording {
-            return Ok(Ready::Tokens(tokens));
+        self.state.claim_children(canceled)?;
+        self.record(Event {
+            request: Request::ProcessSettle {
+                canceled: canceled.to_vec(),
+            },
+            completion: Completion::Ready,
+            fault: None,
+        })?;
+        if let Some((child, report)) = self
+            .state
+            .settle_children(self.state.last_monotonic.unwrap_or(0))
+        {
+            let before = self.state.stdout.len();
+            let error = self.state.process_failed(child, &report);
+            self.publish_test_report(before)?;
+            return Err(error);
         }
-        let Some((_, log)) = &mut self.cooperative else {
-            unreachable!()
-        };
-        let events: Vec<Event> = tokens
-            .iter()
-            .filter_map(|&token| log.ready(token))
-            .map(|(wait, points)| Event {
-                request: Request::Ready { wait, points },
-                completion: Completion::Ready,
-                fault: None,
-            })
-            .collect();
-        for event in events {
-            self.record(event)?;
+        if let Some((r, _)) = &self.cooperative {
+            r.provider_deadline(self.state.next_process_time());
+            r.progressed();
         }
-        Ok(Ready::Tokens(tokens))
+        self.ready_tokens(false)
     }
     fn ready_deadline(&self) -> Option<std::time::Instant> {
         // Durable barriers, signal delivery, test time and runner completions
@@ -1215,6 +1320,8 @@ impl<S: Streams> Adapter for RealCore<S> {
     }
     fn scripted_input(&self) -> bool {
         self.signals.as_ref().is_some_and(|s| s.scripted())
+            || self.state.next_child_gate().is_some()
+            || self.state.process_batch_pending
     }
     fn wake_on(&mut self, fd: std::os::fd::RawFd) -> bool {
         match &self.cooperative {
@@ -1227,6 +1334,88 @@ fn recording_failed(error: std::io::Error) -> AdapterError {
     AdapterError::RecordingFailed(error.to_string())
 }
 impl<S: Streams> RealCore<S> {
+    fn publish_test_report(&mut self, before: usize) -> Result<(), AdapterError> {
+        self.streams
+            .output(false)
+            .write_all(&self.state.stdout[before..])
+            .and_then(|()| self.streams.output(false).flush())
+            .map_err(|e| AdapterError::RecordingFailed(format!("test report: {e}")))?;
+        if !self.retain_history {
+            self.state.stdout.truncate(before);
+        }
+        Ok(())
+    }
+    fn ready_tokens(&mut self, point: bool) -> Result<Ready, AdapterError> {
+        let released = self.journal.released().map_err(recording_failed)?;
+        let Some((readiness, log)) = &mut self.cooperative else {
+            return Ok(Ready::Tokens(
+                if std::mem::take(&mut self.signal_delivered) {
+                    self.signals_ready(Vec::new())
+                } else {
+                    Vec::new()
+                },
+            ));
+        };
+        // With no journal or retained history, no Ready events or wait-ordinal
+        // bookkeeping are constructed. The readiness tokens are sufficient.
+        let recording = self.retain_history || self.journal.records();
+        if recording && point {
+            log.point();
+        }
+        let mut tokens = readiness.ready()?;
+        if self.state.timed_process {
+            tokens.retain(|token| {
+                let ready = self
+                    .state
+                    .timed_requests
+                    .get(token)
+                    .is_none_or(|request| self.state.process_ready(request));
+                if !ready {
+                    readiness.acknowledge_scripted(*token);
+                }
+                ready
+            });
+        }
+        if let Some(clock) = &self.test_clock {
+            tokens.extend(clock.ready()?);
+        }
+        if !released.is_empty() || self.test_clock.is_some() {
+            tokens.extend(released);
+            tokens.sort_unstable();
+            tokens.dedup();
+        }
+        let mut tokens = if self.signal_waits.is_empty() {
+            tokens
+        } else {
+            self.signals_ready(tokens)
+        };
+        if recording && !point {
+            // A due taking-wait timer may already have published its token in phase A.
+            // The same point's gate batch must not publish or record it a second time.
+            let log = &self.cooperative.as_ref().unwrap().1;
+            tokens.retain(|token| log.next_points(*token) != Some(0));
+        }
+        if !recording {
+            return Ok(Ready::Tokens(tokens));
+        }
+        let Some((_, log)) = &mut self.cooperative else {
+            unreachable!()
+        };
+        let events: Vec<Event> = tokens
+            .iter()
+            .filter_map(|&token| log.ready(token))
+            .map(|(wait, points)| Event {
+                request: Request::Ready { wait, points },
+                completion: Completion::Ready,
+                fault: None,
+            })
+            .collect();
+        for event in events {
+            self.record(event)?;
+        }
+        Ok(Ready::Tokens(tokens))
+    }
+
     /// A scheduling point's ready tokens with the parked signal waits decided by what is
     /// pending, not by the wake pipe: a wait is ready exactly when an arrival among its
     /// kinds is pending. The pipe is drained here, so an arrival no wait wants never keeps
@@ -1520,14 +1709,7 @@ impl<S: Streams> RealCore<S> {
         // A Test report (a failed check_case, a scripted client's unmet Expect) is
         // the only stdout a request other than Print appends.
         if !matches!(request, Request::Print { .. }) && self.state.stdout.len() > before {
-            self.streams
-                .output(false)
-                .write_all(&self.state.stdout[before..])
-                .and_then(|()| self.streams.output(false).flush())
-                .map_err(|e| AdapterError::RecordingFailed(format!("test report: {e}")))?;
-            if !self.retain_history {
-                self.state.stdout.truncate(before);
-            }
+            self.publish_test_report(before)?;
         }
         if matches!(request, Request::Print { .. } | Request::PrintStderr { .. }) {
             let stderr = matches!(request, Request::PrintStderr { .. });

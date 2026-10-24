@@ -4,16 +4,13 @@
 
 // cmark-gfm src/blocks.c:465-546: collect definitions, assign indices in
 // document order, resolve references, then append only used definitions.
-fn process_footnotes(mut budget: ParseState, mut nodes: List[Entry]) -> Result[
-  (),
-  ParseLimit
-] uses {} {
-  let count = core@1/list.len(nodes)
+fn process_footnotes(mut budget: ParseState, mut p: Parser) -> Result[(), ParseLimit] uses {} {
+  let count = core@1/list.len(p.nodes)
   let mut definitions: Map[String, u64] = core@1/map.empty()
   let mut id: u64 = 1
   while id < count {
-    if nodes[id].kind == 22 {
-      let label = normalize_label(nodes[id].value)
+    if p.nodes[id].kind == 22 {
+      let label = normalize_label(p.nodes[id].value)
       if core@1/map.get(definitions, label) == None() {
         admit(mut budget, 1)?
         core@1/map.insert(mut definitions, take label, id)
@@ -22,65 +19,77 @@ fn process_footnotes(mut budget: ParseState, mut nodes: List[Entry]) -> Result[
     id += 1
   }
   let mut used: List[u64] = []
-  id = nodes[0].first
+  id = p.nodes[0].first
   while id != 0 {
-    if nodes[id].kind == 23 {
-      let label = normalize_label(nodes[id].value)
+    if p.nodes[id].kind == 23 {
+      let label = normalize_label(p.nodes[id].value)
       if let Some(definition) = core@1/map.get(definitions, label) {
-        if nodes[definition].number == 0 {
+        if p.nodes[definition].number == 0 {
           admit(mut budget, 1)?
           core@1/list.push(mut used, definition)
-          nodes[definition].number = core@1/list.len(used)
+          p.nodes[definition].number = core@1/list.len(used)
         }
-        nodes[definition].fence += 1
-        nodes[id].value = unique nodes[definition].value
-        nodes[id].number = nodes[definition].number
-        nodes[id].fence = nodes[definition].fence
+        p.nodes[definition].fence += 1
+        p.nodes[id].value = unique p.nodes[definition].value
+        p.nodes[id].number = p.nodes[definition].number
+        p.nodes[id].fence = p.nodes[definition].fence
       } else {
-        let value = f"[^{nodes[id].value}]"
-        nodes[id].kind = 9
-        nodes[id].value = value
+        let value = f"[^{p.nodes[id].value}]"
+        p.nodes[id].kind = 9
+        p.nodes[id].value = value
       }
     }
-    if nodes[id].first != 0 {
-      id = nodes[id].first
+    if p.nodes[id].first != 0 {
+      id = p.nodes[id].first
     } else {
-      while id != 0 && nodes[id].next == 0 {
-        id = nodes[id].parent
+      while id != 0 && p.nodes[id].next == 0 {
+        id = p.nodes[id].parent
       }
       if id != 0 {
-        id = nodes[id].next
+        id = p.nodes[id].next
       }
     }
   }
   id = 1
   while id < count {
-    if nodes[id].kind == 22 {
-      unlink(mut nodes, id)
+    if p.nodes[id].kind == 22 {
+      unlink(mut p, id)
     }
     id += 1
   }
   for definition in used {
     // Reattach without unlinking an already detached node.
-    let last = nodes[0].last
-    nodes[definition].parent = 0
-    nodes[definition].prev = last
+    let last = p.nodes[0].last
+    p.nodes[definition].parent = 0
+    p.nodes[definition].prev = last
     if last == 0 {
-      nodes[0].first = definition
+      p.nodes[0].first = definition
     } else {
-      nodes[last].next = definition
+      p.nodes[last].next = definition
     }
-    nodes[0].last = definition
-    let mut paragraph = nodes[definition].last
-    if paragraph != 0 && nodes[paragraph].kind == 1 {
-      let _ = text_node(mut budget, mut nodes, paragraph, " ", 9)?
+    p.nodes[0].last = definition
+    let mut paragraph = p.nodes[definition].last
+    if paragraph != 0 && p.nodes[paragraph].kind == 1 {
+      let spacer = text_node(mut budget, mut p, paragraph, " ", 9)?
+      if budget.mode == 2 {
+        p.sources[spacer].row.primary = synthetic_span(
+          7,
+          p.sources[definition].row.primary
+        )
+      }
     } else {
       paragraph = definition
     }
-    let backref = new_child(mut budget, mut nodes, paragraph, 24)?
-    nodes[backref].value = unique nodes[definition].value
-    nodes[backref].number = nodes[definition].number
-    nodes[backref].fence = nodes[definition].fence
+    let backref = new_child(mut budget, mut p, paragraph, 24)?
+    if budget.mode == 2 {
+      p.sources[backref].row.primary = synthetic_span(
+        6,
+        p.sources[definition].row.primary
+      )
+    }
+    p.nodes[backref].value = unique p.nodes[definition].value
+    p.nodes[backref].number = p.nodes[definition].number
+    p.nodes[backref].fence = p.nodes[definition].fence
   }
   Ok(())
 }

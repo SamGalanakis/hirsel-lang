@@ -16,7 +16,7 @@ mod declarations;
 mod provider;
 mod sources;
 pub use sources::CitationSource;
-pub(crate) use sources::SourceContext;
+pub(crate) use sources::{OwnedSourceContext, SourceContext};
 mod views;
 pub(crate) use declarations::{DeclarationHead, logical};
 pub use declarations::{DeclarationIndex, Declarations, ModuleInputs};

@@ -310,6 +310,7 @@ fn native_process_run_and_pipeline_abi_replay_without_a_home_process_provider() 
                 let mut real = crate::io_real::RealIo::grant(&std::env::temp_dir()).unwrap();
                 real.discard_history();
                 real.set_process_grant(&hirsel_run_schema::ProcessGrant {
+                    timed: None,
                     provider: "process.host@1".into(),
                     rules: vec![hirsel_run_schema::ProcessRule {
                         program: "/bin/sh".into(),
@@ -411,6 +412,7 @@ fn native_process_abi_output_allocation_stop_follows_host_completion() {
         let mut real = crate::io_real::RealIo::grant(&std::env::temp_dir()).unwrap();
         real.discard_history();
         real.set_process_grant(&hirsel_run_schema::ProcessGrant {
+            timed: None,
             provider: "process.host@1".into(),
             rules: vec![hirsel_run_schema::ProcessRule {
                 program: "/bin/sh".into(),

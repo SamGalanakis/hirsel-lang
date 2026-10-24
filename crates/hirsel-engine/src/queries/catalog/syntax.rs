@@ -11,12 +11,23 @@ struct ParsedSource {
     source: ContentHash,
     bases: Vec<u32>,
     payload: Vec<u8>,
+    integrity: ContentHash,
 }
 fn options() -> impl Options {
     bincode::DefaultOptions::new()
         .with_fixint_encoding()
         .with_limit(hirsel_artifact_store::MAX_RECORD as u64)
         .reject_trailing_bytes()
+}
+fn integrity(bases: &[u32], payload: &[u8]) -> ContentHash {
+    let bases = bases
+        .iter()
+        .flat_map(|base| base.to_le_bytes())
+        .collect::<Vec<_>>();
+    ContentHash::of_parts(
+        "hirsel.parse-syntax.payload.v2",
+        [bases.as_slice(), payload],
+    )
 }
 fn bounds(text: &str, bases: &[u32], span: Span) -> Option<(usize, usize)> {
     let base = *bases.get(span.anchor.0.checked_sub(1)? as usize)?;
@@ -125,7 +136,8 @@ impl QueryEngine {
             .collect::<Option<Vec<_>>>()?;
         options()
             .serialize(&ParsedSource {
-                schema: 1,
+                schema: 2,
+                integrity: integrity(&bases, &payload),
                 context: context.clone(),
                 source: ContentHash::of_bytes(source.text().as_bytes()),
                 bases,
@@ -142,7 +154,8 @@ impl QueryEngine {
         let bytes = self.result_store.as_ref()?.get(&key)?;
         let record: ParsedSource = options().deserialize(&bytes).ok()?;
         let source = self.sources.file(file)?;
-        if record.schema != 1
+        if record.schema != 2
+            || record.integrity != integrity(&record.bases, &record.payload)
             || record.context != *context
             || record.source != ContentHash::of_bytes(source.text().as_bytes())
             || record
@@ -287,7 +300,30 @@ mod tests {
                 options().serialize(&output)
             })
             .unwrap();
+        // Coherent malicious producers still exercise structural validation.
+        record.integrity = integrity(&record.bases, &record.payload);
         store.put(&key, &options().serialize(&record).unwrap());
+    }
+    #[test]
+    fn parse_cache_refuses_every_single_byte_corruption() {
+        crate::with_compiler_stack(|| {
+            let store = Arc::new(MemStore::default());
+            let context = default_context();
+            let (cold, file, _) = indexed(&store, &context);
+            let key = cold.parse_syntax_key(file, &context).unwrap();
+            let bytes = store.get(&key).unwrap();
+            for at in 0..bytes.len() {
+                let mut damaged = bytes.to_vec();
+                damaged[at] ^= 1;
+                store.put(&key, &damaged);
+                assert!(
+                    cold.load_parse_syntax(file, &context).is_none(),
+                    "byte {at}"
+                );
+            }
+            store.put(&key, &bytes);
+            assert!(cold.load_parse_syntax(file, &context).is_some());
+        });
     }
     #[test]
     fn parse_cache_restores_real_library_syntax() {

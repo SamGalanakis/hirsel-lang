@@ -797,4 +797,6 @@ impl<P, R> Frontier<P, R> {
 }
 
 #[cfg(test)]
+pub(crate) mod runtime50_model;
+#[cfg(test)]
 mod tests;

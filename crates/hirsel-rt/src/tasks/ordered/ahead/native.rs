@@ -462,4 +462,4 @@ pub(crate) unsafe extern "C" fn start(_ctx: *mut u8, _native: *mut u8) -> ! {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

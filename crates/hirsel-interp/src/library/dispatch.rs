@@ -25,6 +25,7 @@ pub struct Library {
     pub(super) file_waits: std::collections::BTreeMap<u64, Vec<Value>>,
     /// Parked `watcher.next` calls: watcher, Dir and recorded input.
     pub(super) watch_waits: std::collections::BTreeMap<u64, (u64, u64, Vec<u8>)>,
+    pub(super) process_advance: Option<(u64, u64)>,
     pub(super) timers: super::timers::Timers,
     pub(super) signals: super::signals::Signals,
     pub(super) callbacks: std::collections::BTreeMap<u64, super::callbacks::Pending>,
@@ -105,6 +106,7 @@ impl Library {
             network_waits: Default::default(),
             file_waits: Default::default(),
             watch_waits: Default::default(),
+            process_advance: None,
             timers: Default::default(),
             signals: Default::default(),
             callbacks: Default::default(),
@@ -506,8 +508,13 @@ impl Library {
             }
             "test.clock" => {
                 self.simulation.id(arg(a, 0)?, "Test")?;
+                let clock = self
+                    .simulation
+                    .handle("MonotonicClock", Grant::Root("MonotonicClock".into()));
                 self.simulation
-                    .handle("MonotonicClock", Grant::Root("MonotonicClock".into()))
+                    .test_clocks
+                    .insert(self.simulation.id(&clock, "MonotonicClock")?);
+                clock
             }
             "test.seed" => {
                 self.simulation.id(arg(a, 0)?, "Test")?;
@@ -1305,6 +1312,12 @@ impl Library {
         self.tasks.cancellations
     }
     /// Stable spawn path for diagnostics of host-owned waits.
+    pub fn task_id(&self) -> u64 {
+        self.tasks.current
+    }
+    pub fn task_cancellation(&self, task: u64) -> Option<u32> {
+        self.tasks.canceled_task(task)
+    }
     pub fn task_path(&self) -> Vec<u32> {
         self.tasks.path()
     }
@@ -1611,7 +1624,50 @@ impl Operations for Library {
         point
     }
     fn expire_deadlines(&mut self, context: &mut OperationContext<'_>) -> Result<(), Error> {
-        self.expire_due(context)
+        if let Some((from, to)) = self.process_advance.take() {
+            self.simulation.record(
+                "Proc",
+                "process.script.timed@1.advance",
+                [from.to_le_bytes(), to.to_le_bytes()].concat(),
+                vec![],
+                context,
+            )?;
+        }
+        self.expire_due(context)?;
+        if self
+            .simulation
+            .config
+            .process
+            .as_ref()
+            .is_some_and(|g| g.timed.is_some())
+        {
+            self.claim_process_waits(context)?;
+            if let Some((child, report)) = self.simulation.settle_children(&[]) {
+                context.stdout.extend_from_slice(report.as_bytes());
+                let (anchor, spawn_path) = self
+                    .simulation
+                    .process_sites
+                    .get(&child)
+                    .cloned()
+                    .ok_or_else(|| invalid("timed child source missing"))?;
+                let failure = crate::Failure {
+                    rule: hirsel_diag::RuleId::new("LANG-9").unwrap(),
+                    line: context.sources.location(anchor.site).map_or(0, |p| p.line),
+                    site: anchor.site,
+                    kind: "scripted child unmet".into(),
+                };
+                return Err(Error::ProviderFailed(Box::new(
+                    crate::observation::FailureRecord {
+                        failure,
+                        anchor,
+                        operation: None,
+                        cause: None,
+                        spawn_path,
+                    },
+                )));
+            }
+        }
+        Ok(())
     }
     /// The outstanding event sources: the signal script's next arrival, then virtual time
     /// for pending timer waits.

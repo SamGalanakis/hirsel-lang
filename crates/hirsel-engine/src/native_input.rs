@@ -545,6 +545,7 @@ fn validate_storage_input(input: &NativeInput) -> hirsel_validate::storage::Stor
         &input.types,
         &definitions,
         &signatures,
+        &input.constants,
         &input.instance_bodies,
         &input.storage_profiles,
     )

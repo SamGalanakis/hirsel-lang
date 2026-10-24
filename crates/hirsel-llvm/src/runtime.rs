@@ -59,6 +59,9 @@ pub(crate) fn substrate(module: &Module<'_>, function: Function<'_>, entry: Runt
         R::Dup => (MemoryEffects::ReadWrite, false, &[0, 1]),
         // A root dup may key the block in the overflow table, so the block is not nocapture.
         R::RootDup => (MemoryEffects::ReadWrite, false, &[0]),
+        // Metadata custody can reclaim a receipt DAG. Keep conservative effects
+        // and do not promise termination or pointer capture properties.
+        R::ReceiptRetain | R::ReceiptRelease => (MemoryEffects::ReadWrite, false, &[]),
         // Failure bookkeeping can allocate/deallocate, hence memory(readwrite)
         // and no willreturn promise; the record's scalar contents are copied.
         R::FailureBegin | R::FailureClear | R::IsolateCatch => {

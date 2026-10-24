@@ -367,6 +367,42 @@ impl Producer<'_, '_> {
                 ..
             } => {
                 let expression_ty = self.ty(*expression);
+                if matches!(
+                    self.syntax.tree.expressions[expression.0 as usize].kind,
+                    ExprKind::Path(_)
+                ) {
+                    let path =
+                        self.checked
+                            .resolution
+                            .expressions
+                            .iter()
+                            .find_map(|(site, name)| match name {
+                                ResolvedName::Definition(path) if site == expression => {
+                                    Some(path.clone())
+                                }
+                                _ => None,
+                            });
+                    if let Some(path) = path {
+                        let definition = DefId::intern(&path);
+                        let signature = self.signatures.read(
+                            definition,
+                            Arc::make_mut(&mut self.checked.resolution.reads),
+                        )?;
+                        if let SignatureKind::Const { generics, .. } = &signature.kind {
+                            // Size-specialized constants need their selected value,
+                            // never the unspecialized declaration's initializer.
+                            let value = if generics.is_empty() {
+                                StorageValue::ConstantReference {
+                                    definition,
+                                    arguments: vec![],
+                                }
+                            } else {
+                                StorageValue::Unknown
+                            };
+                            return Ok(self.assign(*expression, value));
+                        }
+                    }
+                }
                 let value = if self.detaches(expression_ty) {
                     StorageValue::Fresh
                 } else {

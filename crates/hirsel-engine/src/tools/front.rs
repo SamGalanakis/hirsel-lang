@@ -273,6 +273,9 @@ impl QueryEngine {
         jobs: hirsel_intern::jobs::Jobs,
         diagnostics: &mut Vec<Diagnostic>,
     ) -> Result<(), QueryError> {
+        self.checked_scope
+            .lowered
+            .extend(definitions.iter().cloned());
         // Image writers still need closure-local scalar evidence. Fake phase
         // adapters keep the scalar contract without a complete frozen source.
         if self.adapters.phases.is_none() {
@@ -363,6 +366,7 @@ impl QueryEngine {
         &mut self,
         definition: &DefPath,
     ) -> Result<Vec<Diagnostic>, QueryError> {
+        self.checked_scope.lowered.insert(definition.clone());
         self.work.front_lower_visits += 1;
         let changes = self.invalidate_front_products();
         let id = DefId::intern(definition);

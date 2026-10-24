@@ -159,6 +159,141 @@ pub enum HostCall<'a> {
 }
 
 impl State {
+    pub(crate) fn process_ready(&self, request: &Request) -> bool {
+        let due = |deadline: &Option<Deadline>| {
+            deadline.is_some_and(|d| d.ticks <= self.last_monotonic.unwrap_or(0))
+        };
+        match request {
+            Request::ChildRead { child, stream, .. } => {
+                self.script_children
+                    .get(child)
+                    .is_some_and(|c| c.read_ready(*stream))
+                    || self
+                        .script_groups
+                        .get(child)
+                        .is_some_and(ScriptGroup::read_ready)
+            }
+            Request::ChildWait {
+                child, deadline, ..
+            } => {
+                due(deadline)
+                    || self
+                        .script_children
+                        .get(child)
+                        .is_some_and(|c| c.status().is_some())
+            }
+            Request::GroupWait {
+                group, deadline, ..
+            } => {
+                due(deadline)
+                    || self
+                        .script_groups
+                        .get(group)
+                        .is_some_and(ScriptGroup::ended)
+            }
+            _ => true,
+        }
+    }
+    pub(crate) fn next_process_time(&self) -> Option<u64> {
+        self.next_child_gate()
+            .into_iter()
+            .chain(self.timed_waits.values().filter_map(|d| *d))
+            .chain(self.timed_sleeps.values().copied())
+            .filter(|t| *t > self.last_monotonic.unwrap_or(0))
+            .min()
+    }
+    pub(crate) fn apply_process_time(&mut self, from: u64, to: u64) -> Result<(), AdapterError> {
+        if !self.timed_process
+            || self.process_batch_pending
+            || self.last_monotonic.unwrap_or(0) != from
+            || to <= from
+            || self.next_process_time() != Some(to)
+        {
+            return Err(AdapterError::InvalidCompletion);
+        }
+        self.last_monotonic = Some(to);
+        self.process_batch_pending = true;
+        Ok(())
+    }
+    pub(crate) fn next_child_gate(&self) -> Option<u64> {
+        self.script_children
+            .iter()
+            .filter(|(id, _)| !self.claimed_children.contains(id))
+            .filter_map(|(_, child)| child.next_at())
+            .chain(
+                self.script_groups
+                    .iter()
+                    .filter(|(id, _)| !self.claimed_children.contains(id))
+                    .filter_map(|(_, group)| group.next_at()),
+            )
+            .min()
+    }
+    pub(crate) fn settle_children(&mut self, now: u64) -> Option<(u64, String)> {
+        self.last_monotonic = Some(self.last_monotonic.unwrap_or(0).max(now));
+        let mut ids: Vec<u64> = self
+            .script_children
+            .keys()
+            .chain(self.script_groups.keys())
+            .copied()
+            .collect();
+        ids.sort_unstable();
+        for id in ids {
+            if self.claimed_children.contains(&id) {
+                continue;
+            }
+            if self
+                .timed_waits
+                .get(&id)
+                .is_some_and(|d| d.is_some_and(|t| t <= now))
+            {
+                continue;
+            }
+            let report = if let Some(child) = self.script_children.get_mut(&id) {
+                child.settle_at(now)
+            } else {
+                self.script_groups.get_mut(&id).unwrap().settle_at(now)
+            };
+            if let Some(report) = report {
+                return Some((id, report));
+            }
+        }
+        None
+    }
+    pub(crate) fn process_failed(&mut self, child: u64, report: &str) -> AdapterError {
+        self.stdout.extend_from_slice(report.as_bytes());
+        let (site, operation_site, path) =
+            self.process_sites.get(&child).cloned().unwrap_or_default();
+        AdapterError::ProcessFailed {
+            child,
+            site,
+            operation_site,
+            path,
+        }
+    }
+    pub(crate) fn claim_children(&mut self, canceled: &[u64]) -> Result<(), AdapterError> {
+        if !self.process_batch_pending {
+            return Err(AdapterError::InvalidCompletion);
+        }
+        if canceled.windows(2).any(|w| w[0] >= w[1])
+            || canceled
+                .iter()
+                .any(|id| !self.timed_waits.contains_key(id) && !self.claimed_children.contains(id))
+        {
+            return Err(AdapterError::InvalidCompletion);
+        }
+        self.claimed_children.extend(canceled.iter().copied());
+        let now = self.last_monotonic.unwrap_or(0);
+        self.claimed_children.extend(
+            self.timed_waits
+                .iter()
+                .filter(|(_, d)| d.is_some_and(|t| t <= now))
+                .map(|(id, _)| *id),
+        );
+        self.timed_waits
+            .retain(|id, _| !self.claimed_children.contains(id));
+        self.process_batch_pending = false;
+        Ok(())
+    }
     /// Whether `request` is the Process policy's: a process request, or the close of a Child.
     pub(crate) fn is_process(&self, request: &Request) -> bool {
         is_process_request(request)
@@ -169,13 +304,33 @@ impl State {
     /// scripted world. Scripted runs never widen the rules.
     pub(crate) fn set_process_grant(&mut self, grant: &hirsel_run_schema::ProcessGrant) {
         self.process_rules = grant.rules.clone();
+        self.timed_process = grant.timed.is_some();
         self.process_world = match &grant.runs {
             Some(runs) => {
                 self.process_scripts
                     .insert(0, runs.iter().cloned().map(Some).collect());
                 self.child_scripts.insert(
                     0,
-                    grant.children.iter().flatten().cloned().map(Some).collect(),
+                    grant.timed.as_ref().map_or_else(
+                        || {
+                            grant
+                                .children
+                                .iter()
+                                .flatten()
+                                .cloned()
+                                .map(Into::into)
+                                .map(Some)
+                                .collect()
+                        },
+                        |t| {
+                            t.children
+                                .iter()
+                                .cloned()
+                                .map(Into::into)
+                                .map(Some)
+                                .collect()
+                        },
+                    ),
                 );
                 ProcessWorld::Script(0)
             }
@@ -382,6 +537,22 @@ impl State {
                 }
                 if let Some(d) = deadline {
                     self.expect(d.clock, Grant::MonotonicClock)?;
+                    if (self
+                        .script_children
+                        .get(child)
+                        .is_some_and(ScriptChild::is_timed)
+                        || self
+                            .script_groups
+                            .get(child)
+                            .is_some_and(ScriptGroup::is_timed))
+                        && self.test_clocks.contains(&d.clock)
+                    {
+                        return Ok(Some(if matches!(request, Request::GroupWait { .. }) {
+                            Completion::GroupExit(Err(ProcessFailure::InvalidInput))
+                        } else {
+                            Completion::ChildExit(Err(ProcessFailure::InvalidInput))
+                        }));
+                    }
                 }
                 None
             }
@@ -405,6 +576,18 @@ impl State {
         request: &Request,
     ) -> Result<Completion, AdapterError> {
         if let Some(error) = self.process_error(request)? {
+            // A taking wait owns its child even when an effect-free check
+            // refuses the deadline. Close only the validated, actual owner;
+            // preserve an ordinary current-Expect report during cleanup.
+            if let Request::ChildWait { child, .. } | Request::GroupWait { group: child, .. } =
+                request
+            {
+                return match self.execute_process(host, &Request::Close { handle: *child })? {
+                    Completion::Unit(Ok(())) => Ok(error),
+                    failure @ Completion::Checked(false) => Ok(failure),
+                    _ => Err(AdapterError::InvalidCompletion),
+                };
+            }
             return Ok(error);
         }
         match request {
@@ -467,8 +650,10 @@ impl State {
                 });
                 self.process_scripts
                     .insert(id, runs.iter().cloned().map(Some).collect());
-                self.child_scripts
-                    .insert(id, children.iter().cloned().map(Some).collect());
+                self.child_scripts.insert(
+                    id,
+                    children.iter().cloned().map(Into::into).map(Some).collect(),
+                );
                 Ok(Completion::Handle(Ok(id)))
             }
             Request::ProcessRun {
@@ -517,7 +702,11 @@ impl State {
                             })
                         }) {
                             Some(entry) => {
-                                let script = ScriptChild::new(entry.take().unwrap());
+                                let script = ScriptChild::new_encoded(
+                                    entry.take().unwrap(),
+                                    self.last_monotonic.unwrap_or(0),
+                                    self.timed_process && id == 0,
+                                );
                                 self.script_children.insert(child, script);
                                 Ok(child)
                             }
@@ -568,9 +757,14 @@ impl State {
                             .child_scripts
                             .get_mut(&id)
                             .ok_or(AdapterError::InvalidCompletion)?;
-                        match hirsel_run_schema::take_children(children, stages) {
+                        match hirsel_run_schema::take_timed_children(children, stages) {
                             Ok(runs) => {
-                                let (script, report) = ScriptGroup::new(runs, *max_stderr);
+                                let (script, report) = ScriptGroup::new_encoded(
+                                    runs,
+                                    *max_stderr,
+                                    self.last_monotonic.unwrap_or(0),
+                                    self.timed_process && id == 0,
+                                );
                                 if let Some(report) = report {
                                     return Ok(self.child_failure(&report));
                                 }
@@ -737,7 +931,14 @@ impl State {
                             }
                         }
                         let status = self.script_child(*child)?.status();
-                        Ok(status.ok_or(AdapterError::InvalidCompletion)?)
+                        match status {
+                            Some(status) => Ok(status),
+                            None if self.timed_process => {
+                                self.timed_waits.insert(*child, deadline.map(|d| d.ticks));
+                                return Err(AdapterError::Blocked);
+                            }
+                            None => return Err(AdapterError::InvalidCompletion),
+                        }
                     }
                     ProcessWorld::Host => match host(HostCall::Wait {
                         child: *child,
@@ -786,6 +987,10 @@ impl State {
                         if let Some(report) = self.script_group(*group)?.close_stdin() {
                             self.end_child(*group);
                             return Ok(self.child_failure(&report));
+                        }
+                        if !self.script_group(*group)?.ended() && self.timed_process {
+                            self.timed_waits.insert(*group, deadline.map(|d| d.ticks));
+                            return Err(AdapterError::Blocked);
                         }
                         self.script_group(*group)?.output()
                     }
@@ -912,6 +1117,9 @@ impl State {
         }
     }
     fn end_child(&mut self, child: u64) {
+        self.process_sites.remove(&child);
+        self.claimed_children.remove(&child);
+        self.timed_waits.remove(&child);
         self.handles.rows.remove(&child);
         self.script_children.remove(&child);
         self.script_groups.remove(&child);
@@ -2203,4 +2411,795 @@ pub unsafe extern "C" fn hirsel_rt_v2_proc_wait_group(
         })
     };
     crate::STATUS_OK
+}
+
+unsafe fn remember_process_source(
+    ctx: *mut crate::TaskCtx,
+    child: u64,
+    site: u64,
+    operation_site: u64,
+) {
+    let path = unsafe { crate::tasks::issuer_path(ctx) };
+    let result = unsafe {
+        crate::pool::call_home(ctx, &mut || {
+            if !(*ctx).io_data().is_null() {
+                crate::io::Binding::get(ctx).adapter.process_site(
+                    child,
+                    site,
+                    operation_site,
+                    &path,
+                );
+            }
+        })
+    };
+    unsafe { crate::stop::check(ctx, result) };
+}
+/// Site-carrying additive alias for timed-provider failure attribution.
+/// # Safety
+/// Same borrowed operands and result storage as the corresponding stable export.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_proc_spawn_at_site(
+    ctx: *mut crate::TaskCtx,
+    caller_site: u64,
+    operation_site: u64,
+    _destination: *mut u8,
+    out: *mut ChildWordResult,
+    process: *const u64,
+    cmd: *const u8,
+) -> u8 {
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
+    let previous = unsafe { std::mem::replace(&mut (*ctx).operation_site, operation_site) };
+    let status = unsafe { hirsel_rt_v2_proc_spawn(ctx, _destination, out, process, cmd) };
+    if status == crate::STATUS_OK && unsafe { (*out).tag } == 0 {
+        unsafe { remember_process_source(ctx, (*out).value, caller_site, operation_site) };
+    }
+    unsafe { (*ctx).operation_site = previous };
+    status
+}
+
+/// Site-carrying additive alias for timed-provider failure attribution.
+/// # Safety
+/// Same borrowed operands and result storage as the corresponding stable export.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_proc_spawn_pipeline_at_site(
+    ctx: *mut crate::TaskCtx,
+    caller_site: u64,
+    operation_site: u64,
+    _destination: *mut u8,
+    out: *mut ChildWordResult,
+    process: *const u64,
+    stages: *mut crate::Header,
+    max_stderr: u64,
+) -> u8 {
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
+    let previous = unsafe { std::mem::replace(&mut (*ctx).operation_site, operation_site) };
+    let status = unsafe {
+        hirsel_rt_v2_proc_spawn_pipeline(ctx, _destination, out, process, stages, max_stderr)
+    };
+    if status == crate::STATUS_OK && unsafe { (*out).tag } == 0 {
+        unsafe { remember_process_source(ctx, (*out).value, caller_site, operation_site) };
+    }
+    unsafe { (*ctx).operation_site = previous };
+    status
+}
+
+/// Site-carrying additive alias for timed-provider failure attribution.
+/// # Safety
+/// Same borrowed operands and result storage as the corresponding stable export.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_child_write_at_site(
+    ctx: *mut crate::TaskCtx,
+    caller_site: u64,
+    operation_site: u64,
+    _destination: *mut u8,
+    out: *mut ChildPairResult,
+    p: *const u64,
+    c: *mut u64,
+    owner: *mut crate::Header,
+    start: u64,
+    length: u64,
+) -> u8 {
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
+    let previous = unsafe { std::mem::replace(&mut (*ctx).operation_site, operation_site) };
+    unsafe { remember_process_source(ctx, c.read(), caller_site, operation_site) };
+    let status =
+        unsafe { hirsel_rt_v2_child_write(ctx, _destination, out, p, c, owner, start, length) };
+    unsafe { (*ctx).operation_site = previous };
+    status
+}
+
+/// Site-carrying additive alias for timed-provider failure attribution.
+/// # Safety
+/// Same borrowed operands and result storage as the corresponding stable export.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_child_close_stdin_at_site(
+    ctx: *mut crate::TaskCtx,
+    caller_site: u64,
+    operation_site: u64,
+    p: *const u64,
+    c: *mut u64,
+) -> u8 {
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
+    let previous = unsafe { std::mem::replace(&mut (*ctx).operation_site, operation_site) };
+    unsafe { remember_process_source(ctx, c.read(), caller_site, operation_site) };
+    let status = unsafe { hirsel_rt_v2_child_close_stdin(ctx, p, c) };
+    unsafe { (*ctx).operation_site = previous };
+    status
+}
+
+/// Site-carrying additive alias for timed-provider failure attribution.
+/// # Safety
+/// Same borrowed operands and result storage as the corresponding stable export.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_child_wait_at_site(
+    ctx: *mut crate::TaskCtx,
+    caller_site: u64,
+    operation_site: u64,
+    _destination: *mut u8,
+    out: *mut ChildPairResult,
+    p: *const u64,
+    c: *mut u64,
+    deadline: *const u8,
+) -> u8 {
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
+    let previous = unsafe { std::mem::replace(&mut (*ctx).operation_site, operation_site) };
+    unsafe { remember_process_source(ctx, c.read(), caller_site, operation_site) };
+    let status = unsafe { hirsel_rt_v2_child_wait(ctx, _destination, out, p, c, deadline) };
+    unsafe { (*ctx).operation_site = previous };
+    status
+}
+
+/// Site-carrying additive alias for timed-provider failure attribution.
+/// # Safety
+/// Same borrowed operands and result storage as the corresponding stable export.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_proc_wait_group_at_site(
+    ctx: *mut crate::TaskCtx,
+    caller_site: u64,
+    operation_site: u64,
+    _destination: *mut u8,
+    out: *mut GroupResult,
+    p: *const u64,
+    g: *mut u64,
+    deadline: *const u8,
+) -> u8 {
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
+    let previous = unsafe { std::mem::replace(&mut (*ctx).operation_site, operation_site) };
+    unsafe { remember_process_source(ctx, g.read(), caller_site, operation_site) };
+    let status = unsafe { hirsel_rt_v2_proc_wait_group(ctx, _destination, out, p, g, deadline) };
+    unsafe { (*ctx).operation_site = previous };
+    status
+}
+
+#[cfg(test)]
+mod timed_provider_tests {
+    use super::*;
+    use crate::io::{Adapter, Event, Ready, Tree};
+    use crate::io_real::RealIo;
+    use crate::io_sim::SimIo;
+    fn grant(steps: &str) -> hirsel_run_schema::ProcessGrant {
+        let grant: hirsel_run_schema::ProcessGrant = serde_json::from_str(&format!(r#"{{"provider":"process.script.timed@1","clock":"run.monotonic","rules":[{{"program":"/bin/cat"}}],"runs":[],"children":[{{"program":"/bin/cat","args":[],"steps":{steps}}}]}}"#)).unwrap();
+        for child in &grant.timed.as_ref().unwrap().children {
+            child.validate().unwrap();
+        }
+        grant
+    }
+    fn live(grant: &hirsel_run_schema::ProcessGrant) -> RealIo {
+        let mut io = RealIo::fixture(
+            Default::default(),
+            Default::default(),
+            vec![],
+            std::io::sink(),
+        )
+        .unwrap();
+        io.virtual_clock(0);
+        io.set_process_grant(grant);
+        io
+    }
+    fn replay(grant: &hirsel_run_schema::ProcessGrant, tape: Vec<Event>) -> SimIo {
+        let mut io = SimIo::new(Tree::default(), tape);
+        io.clock_grants(true, false);
+        io.set_process_time(0);
+        io.set_process_grant(grant);
+        io
+    }
+    fn spawn(io: &mut dyn Adapter) -> (u64, u64) {
+        let Completion::Handle(Ok(process)) = io.call(Request::Process { io: 1 }).unwrap() else {
+            panic!()
+        };
+        let Completion::Spawned(Ok(child)) = io
+            .call(Request::ProcessSpawn {
+                process,
+                command: Command {
+                    program: "/bin/cat".into(),
+                    args: vec![],
+                    env: None,
+                    directory: None,
+                    own_group: false,
+                },
+            })
+            .unwrap()
+        else {
+            panic!()
+        };
+        (process, child)
+    }
+    #[test]
+    fn timed_no_reader_settles_and_drop_does_not_advance() {
+        let grant = grant(r#"[{"at":5},{"print":[120]},{"exit":{"exited":7}}]"#);
+        let mut io = live(&grant);
+        let (process, child) = spawn(&mut io);
+        assert!(io.process_sources());
+        assert!(io.wait().unwrap());
+        assert!(matches!(io.ready().unwrap(), Ready::Tokens(t) if t.is_empty()));
+        io.process_batch(&[]).unwrap();
+        assert_eq!(
+            io.call(Request::ChildRead {
+                process,
+                child,
+                stream: ChildStream::Stdout,
+                max: 10
+            }),
+            Ok(Completion::ChildBytes(Ok(b"x".to_vec())))
+        );
+        assert_eq!(
+            io.call(Request::ChildWait {
+                process,
+                child,
+                deadline: None
+            }),
+            Ok(Completion::ChildExit(Ok(ExitStatus::Exited(7))))
+        );
+        let tape = io.tape().to_vec();
+        let mut io = replay(&grant, tape);
+        let (process, child) = spawn(&mut io);
+        assert!(io.wait().unwrap());
+        io.ready().unwrap();
+        io.process_batch(&[]).unwrap();
+        assert_eq!(
+            io.call(Request::ChildRead {
+                process,
+                child,
+                stream: ChildStream::Stdout,
+                max: 10
+            }),
+            Ok(Completion::ChildBytes(Ok(b"x".to_vec())))
+        );
+        assert_eq!(
+            io.call(Request::ChildWait {
+                process,
+                child,
+                deadline: None
+            }),
+            Ok(Completion::ChildExit(Ok(ExitStatus::Exited(7))))
+        );
+        io.finish().unwrap();
+        let mut io = live(&grant);
+        let (_, child) = spawn(&mut io);
+        assert_eq!(
+            io.call(Request::Close { handle: child }),
+            Ok(Completion::Unit(Ok(())))
+        );
+        assert!(!io.process_sources());
+        assert!(!io.wait().unwrap());
+        assert!(
+            !io.tape()
+                .iter()
+                .any(|e| matches!(e.request, Request::ProcessTime { .. }))
+        );
+    }
+    #[test]
+    fn timed_cancel_and_timeout_claim_before_delayed_unmet_close() {
+        for canceled in [false, true] {
+            let grant = grant(r#"[{"at":5},{"expect":[97,98]}]"#);
+            let mut io = live(&grant);
+            let (process, child) = spawn(&mut io);
+            let Completion::ClockGrant(Ok(clock)) =
+                io.call(Request::MonotonicClock { io: 1 }).unwrap()
+            else {
+                panic!()
+            };
+            let request = Request::ChildWait {
+                process,
+                child,
+                deadline: Some(Deadline { clock, ticks: 5 }),
+            };
+            io.enter(17);
+            assert_eq!(io.call(request.clone()), Err(AdapterError::Blocked));
+            io.parked(17);
+            assert!(io.wait().unwrap());
+            io.ready().unwrap();
+            let claimed = if canceled { vec![child] } else { vec![] };
+            io.process_batch(&claimed).unwrap();
+            let result = if canceled {
+                crate::io_checks::cancel(&mut io, &request, 2)
+                    .unwrap()
+                    .unwrap()
+            } else {
+                io.call(request.clone()).unwrap()
+            };
+            assert_eq!(
+                result,
+                Completion::ChildExit(Err(if canceled {
+                    ProcessFailure::Canceled(2)
+                } else {
+                    ProcessFailure::TimedOut
+                }))
+            );
+            assert!(io.stdout().is_empty());
+            io.finish(17);
+            assert!(!io.process_sources());
+        }
+    }
+    #[test]
+    fn timed_delayed_failure_retains_input_source_and_is_terminal() {
+        let grant = grant(r#"[{"at":5},{"expect":[97,98]}]"#);
+        let mut io = live(&grant);
+        let (process, child) = spawn(&mut io);
+        io.process_site(child, 23, 24, &[1, 2]);
+        assert_eq!(
+            io.call(Request::ChildWrite {
+                process,
+                child,
+                bytes: b"a".to_vec()
+            }),
+            Ok(Completion::ChildUnit(Ok(())))
+        );
+        io.call(Request::ChildCloseStdin { process, child })
+            .unwrap();
+        assert!(io.wait().unwrap());
+        io.ready().unwrap();
+        assert_eq!(
+            io.process_batch(&[]),
+            Err(AdapterError::ProcessFailed {
+                child,
+                site: 23,
+                operation_site: 24,
+                path: vec![1, 2]
+            })
+        );
+        assert_eq!(io.stdout(), b"test failure: child /bin/cat expected b\"ab\" but the program closed its input after writing b\"a\"\n");
+        let report = io.stdout().to_vec();
+        io.call(Request::Close { handle: child }).unwrap();
+        assert_eq!(io.stdout(), report);
+    }
+    #[test]
+    fn timed_forged_at_behind_expect_and_time_regression_refuse() {
+        for (steps, from, to) in [
+            (r#"[{"expect":[120]},{"at":5}]"#, 0, 5),
+            (r#"[{"at":5}]"#, 0, 4),
+            (r#"[{"at":5}]"#, 1, 5),
+            (r#"[{"at":5}]"#, 0, 0),
+        ] {
+            let grant = grant(steps);
+            let mut io = live(&grant);
+            spawn(&mut io);
+            let mut tape = io.tape().to_vec();
+            tape.push(Event {
+                request: Request::ProcessTime { from, to },
+                completion: Completion::Ready,
+                fault: None,
+            });
+            let original = tape.clone();
+            let mut io = replay(&grant, tape);
+            spawn(&mut io);
+            assert!(matches!(io.ready(), Ok(Ready::Tokens(t)) if t.is_empty()));
+            assert_eq!(io.wait(), Err(AdapterError::InvalidCompletion));
+            assert_eq!(
+                original.last().unwrap().request,
+                Request::ProcessTime { from, to }
+            );
+        }
+    }
+    #[test]
+    fn timed_polling_neither_advances_nor_reawakens_an_empty_read() {
+        let grant = grant(r#"[{"at":5},{"print":[120]},{"exit":{"exited":0}}]"#);
+        let mut io = live(&grant);
+        let (process, child) = spawn(&mut io);
+        let Completion::ClockGrant(Ok(clock)) = io.call(Request::MonotonicClock { io: 1 }).unwrap()
+        else {
+            panic!()
+        };
+        let read = Request::ChildRead {
+            process,
+            child,
+            stream: ChildStream::Stdout,
+            max: 1,
+        };
+        io.enter(17);
+        assert_eq!(io.call(read.clone()), Err(AdapterError::Blocked));
+        io.parked(17);
+        for _ in 0..3 {
+            assert_eq!(
+                io.call(Request::Monotonic { clock }),
+                Ok(Completion::Monotonic(Ok(0)))
+            );
+            assert!(matches!(io.ready().unwrap(), Ready::Tokens(t) if t.is_empty()));
+        }
+        assert!(!io.tape().iter().any(|e| matches!(
+            e.request,
+            Request::Ready { .. } | Request::ProcessTime { .. }
+        )));
+        assert!(io.wait().unwrap());
+        io.ready().unwrap();
+        assert!(io.process_batch(&[]).unwrap().contains(17));
+        assert_eq!(io.call(read), Ok(Completion::ChildBytes(Ok(b"x".to_vec()))));
+        io.finish(17);
+    }
+    #[test]
+    fn timed_report_reaches_the_same_sink_as_synchronous_test_reports() {
+        #[derive(Clone)]
+        struct Sink(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+        impl std::io::Write for Sink {
+            fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(data);
+                Ok(data.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let grant = grant(r#"[{"at":5},{"expect":[97,98]}]"#);
+        let output = Sink(Default::default());
+        let mut io = RealIo::fixture(
+            Default::default(),
+            Default::default(),
+            vec![],
+            output.clone(),
+        )
+        .unwrap();
+        io.virtual_clock(0);
+        io.set_process_grant(&grant);
+        let (process, child) = spawn(&mut io);
+        io.call(Request::ChildWrite {
+            process,
+            child,
+            bytes: b"a".to_vec(),
+        })
+        .unwrap();
+        io.call(Request::ChildCloseStdin { process, child })
+            .unwrap();
+        assert!(io.wait().unwrap());
+        io.ready().unwrap();
+        assert!(matches!(
+            io.process_batch(&[]),
+            Err(AdapterError::ProcessFailed { .. })
+        ));
+        assert_eq!(output.0.lock().unwrap().as_slice(), io.stdout());
+        assert_eq!(io.stdout(), b"test failure: child /bin/cat expected b\"ab\" but the program closed its input after writing b\"a\"\n");
+    }
+
+    #[test]
+    fn timed_a02_foreign_clock_wait_consumes_and_removes_gate() {
+        let grant = grant(r#"[{"at":5},{"print":[120]},{"exit":{"exited":0}}]"#);
+        let mut io = live(&grant);
+        let (process, child) = spawn(&mut io);
+        let test = io.grant_test(0);
+        let Completion::Handle(Ok(clock)) = io.call(Request::TestClock { test }).unwrap() else {
+            panic!()
+        };
+        assert_eq!(
+            io.call(Request::ChildWait {
+                process,
+                child,
+                deadline: Some(Deadline { clock, ticks: 5 })
+            }),
+            Ok(Completion::ChildExit(Err(ProcessFailure::InvalidInput)))
+        );
+        assert!(
+            !io.process_sources(),
+            "a consuming refusal must release the child and gate"
+        );
+        assert!(!io.wait().unwrap());
+        assert!(
+            !io.tape()
+                .iter()
+                .any(|e| matches!(e.request, Request::ProcessTime { .. }))
+        );
+        let mut replay = replay(&grant, io.tape().to_vec());
+        let (process, child) = spawn(&mut replay);
+        let test = replay.grant_test(0);
+        let Completion::Handle(Ok(clock)) = replay.call(Request::TestClock { test }).unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(
+            replay.call(Request::ChildWait {
+                process,
+                child,
+                deadline: Some(Deadline { clock, ticks: 5 })
+            }),
+            Ok(Completion::ChildExit(Err(ProcessFailure::InvalidInput)))
+        );
+        assert!(!replay.process_sources());
+        replay.finish().unwrap();
+    }
+    #[test]
+    fn timed_r02_forged_bytes_eof_and_duplicate_batch_refuse() {
+        let grant = grant(r#"[{"at":5},{"print":[120]},{"exit":{"exited":0}}]"#);
+        let mut io = live(&grant);
+        let (process, child) = spawn(&mut io);
+        assert!(io.wait().unwrap());
+        io.ready().unwrap();
+        io.process_batch(&[]).unwrap();
+        let request = Request::ChildRead {
+            process,
+            child,
+            stream: ChildStream::Stdout,
+            max: 1,
+        };
+        assert_eq!(
+            io.call(request.clone()),
+            Ok(Completion::ChildBytes(Ok(b"x".to_vec())))
+        );
+        let original = io.tape().to_vec();
+        for completion in [
+            Completion::ChildBytes(Ok(vec![])),
+            Completion::ChildBytes(Ok(b"y".to_vec())),
+            Completion::ChildBytes(Err(ProcessFailure::Canceled(1))),
+        ] {
+            let mut tape = original.clone();
+            tape.last_mut().unwrap().completion = completion;
+            let mut io = replay(&grant, tape);
+            spawn(&mut io);
+            assert!(io.wait().unwrap());
+            io.ready().unwrap();
+            io.process_batch(&[]).unwrap();
+            assert_eq!(
+                io.call(request.clone()),
+                Err(AdapterError::ReplayMismatch(original.len() - 1))
+            );
+            assert!(io.finish().is_err());
+        }
+        let mut tape = original.clone();
+        let index = tape
+            .iter()
+            .position(|e| matches!(e.request, Request::ProcessSettle { .. }))
+            .unwrap();
+        tape.insert(index + 1, tape[index].clone());
+        let mut io = replay(&grant, tape);
+        spawn(&mut io);
+        assert!(io.wait().unwrap());
+        io.ready().unwrap();
+        io.process_batch(&[]).unwrap();
+        assert!(io.call(request).is_err());
+        assert!(io.finish().is_err());
+        // Cancellation is not a source of bytes. It must be validated before
+        // accepting any recorded input, including a tape with forged payload.
+        let mut io = live(&grant);
+        let (process, child) = spawn(&mut io);
+        let request = Request::ChildRead {
+            process,
+            child,
+            stream: ChildStream::Stdout,
+            max: 1,
+        };
+        let before = io.tape().len();
+        assert_eq!(
+            crate::io_checks::cancel(&mut io, &request, 1),
+            Ok(Some(Completion::ChildBytes(Err(ProcessFailure::Canceled(
+                1
+            )))))
+        );
+        assert_eq!(io.tape().len(), before);
+        assert!(io.process_sources());
+    }
+    #[test]
+    fn timed_a02_checks_precede_cancellation_and_wrong_owner_has_no_effect() {
+        let grant = grant(r#"[{"at":5},{"print":[120]},{"exit":{"exited":0}}]"#);
+        let mut io = live(&grant);
+        let (process, child) = spawn(&mut io);
+        let request = Request::ChildRead {
+            process,
+            child,
+            stream: ChildStream::Stdout,
+            max: 0,
+        };
+        assert_eq!(
+            crate::io_checks::cancel(&mut io, &request, 1),
+            Ok(Some(Completion::ChildBytes(Err(
+                ProcessFailure::InvalidInput
+            ))))
+        );
+        let Completion::Spawned(Ok(other)) = io
+            .call(Request::ProcessNarrow {
+                process,
+                rules: vec![ProcessRule {
+                    program: "/bin/cat".into(),
+                    env: vec![],
+                }],
+            })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let before = io.tape().len();
+        assert_eq!(
+            io.call(Request::ChildRead {
+                process: other,
+                child,
+                stream: ChildStream::Stdout,
+                max: 1
+            }),
+            Err(AdapterError::InvalidHandle(child))
+        );
+        assert_eq!(io.tape().len(), before);
+        assert!(io.process_sources());
+        assert!(
+            !io.tape()
+                .iter()
+                .any(|e| matches!(e.request, Request::ProcessTime { .. }))
+        );
+        io.call(Request::Close { handle: child }).unwrap();
+        assert!(!io.process_sources());
+    }
+    #[test]
+    fn timed_r03_consuming_wait_incomplete_record_and_corrupt_stream_refuse() {
+        let grant = grant(r#"[{"at":5},{"exit":{"exited":0}}]"#);
+        let mut io = live(&grant);
+        let (process, child) = spawn(&mut io);
+        io.enter(17);
+        assert_eq!(
+            io.call(Request::ChildWait {
+                process,
+                child,
+                deadline: None
+            }),
+            Err(AdapterError::Blocked)
+        );
+        io.parked(17);
+        let record = crate::launch::Recording {
+            arguments: vec![],
+            run_identity: [0; 32],
+            hash_seed: 0,
+            random_seed: 0,
+            test_seed: 0,
+            binding: None,
+            tree: Tree {
+                directories: std::collections::BTreeSet::from([String::new()]),
+                ..Default::default()
+            },
+            events: io.tape().to_vec(),
+        };
+        let text = crate::launch::render_recording(&record).unwrap();
+        assert_eq!(crate::launch::parse_recording(&text).unwrap(), record);
+        let mut binary = Vec::new();
+        {
+            let mut header = record.clone();
+            header.events.clear();
+            let mut writer = crate::tape_binary::Writer::new(&mut binary, &header).unwrap();
+            for event in &record.events {
+                writer.append(event).unwrap();
+            }
+            // A crash before the trailer preserves only an incomplete prefix.
+            // There is no terminal completion to resume from this owned wait.
+        }
+        assert!(!crate::tape_binary::parse_prefix(&binary).unwrap().1);
+        assert!(crate::tape_binary::parse(&binary).is_err());
+        let mut binary = Vec::new();
+        {
+            let mut header = record.clone();
+            header.events.clear();
+            let mut writer = crate::tape_binary::Writer::new(&mut binary, &header).unwrap();
+            for event in &record.events {
+                writer.append(event).unwrap();
+            }
+            writer.finish().unwrap();
+        }
+        assert_eq!(crate::tape_binary::parse(&binary).unwrap(), record);
+        let mut corrupt = binary.clone();
+        *corrupt.last_mut().unwrap() ^= 1;
+        assert!(crate::tape_binary::parse(&corrupt).is_err());
+        assert!(crate::tape_binary::parse(&binary[..binary.len() - 1]).is_err());
+
+        for bytes in [
+            text[..text.len() / 2].as_bytes().to_vec(),
+            b"HIRSEL-TAPE-unknown\n".to_vec(),
+            text.replace("process_spawn", "forged_spawn").into_bytes(),
+        ] {
+            assert!(crate::launch::parse_recording_bytes(&bytes).is_err());
+        }
+        let mut replay = replay(&grant, record.events);
+        spawn(&mut replay);
+        replay.enter(17);
+        assert_eq!(
+            replay.call(Request::ChildWait {
+                process,
+                child,
+                deadline: None
+            }),
+            Err(AdapterError::Blocked)
+        );
+        replay.parked(17);
+        assert!(
+            replay.wait().is_err(),
+            "crash prefix must not manufacture completion of an owned wait"
+        );
+        io.call(Request::Close { handle: child }).unwrap();
+        io.finish(17);
+        assert!(!io.process_sources());
+    }
+    #[test]
+    fn timed_b02_closed_empty_write_checks_before_cancel() {
+        let grant = grant(r#"[{"at":5},{"exit":{"exited":0}}]"#);
+        let mut io = live(&grant);
+        let (process, child) = spawn(&mut io);
+        io.call(Request::ChildKill {
+            process,
+            child,
+            signal: Signal::Kill,
+        })
+        .unwrap();
+        io.call(Request::ChildCloseStdin { process, child })
+            .unwrap();
+        let request = Request::ChildWrite {
+            process,
+            child,
+            bytes: vec![],
+        };
+        assert_eq!(
+            crate::io_checks::cancel(&mut io, &request, 1),
+            Ok(Some(Completion::ChildUnit(Err(
+                ProcessFailure::InvalidInput
+            ))))
+        );
+        assert!(!io.process_sources());
+        io.call(Request::Close { handle: child }).unwrap();
+    }
+    #[test]
+    fn timed_intermediate_pipeline_gate_does_not_keep_an_unready_token_runnable() {
+        let grant: hirsel_run_schema::ProcessGrant = serde_json::from_str(r#"{"provider":"process.script.timed@1","clock":"run.monotonic","rules":[{"program":"/fixture/a"},{"program":"/fixture/b"}],"runs":[],"children":[{"program":"/fixture/a","args":[],"steps":[{"at":3},{"print":[97]},{"exit":{"exited":0}}]},{"program":"/fixture/b","args":[],"steps":[{"at":5},{"expect":[97,98]},{"exit":{"exited":0}}]}]}"#).unwrap();
+        let mut io = live(&grant);
+        let Completion::Handle(Ok(process)) = io.call(Request::Process { io: 1 }).unwrap() else {
+            panic!()
+        };
+        let command = |program: &str| Command {
+            program: program.into(),
+            args: vec![],
+            env: None,
+            directory: None,
+            own_group: false,
+        };
+        let Completion::Spawned(Ok(child)) = io
+            .call(Request::ProcessSpawnPipeline {
+                process,
+                stages: vec![command("/fixture/a"), command("/fixture/b")],
+                max_stderr: 2,
+            })
+            .unwrap()
+        else {
+            panic!()
+        };
+        io.enter(17);
+        assert_eq!(
+            io.call(Request::ChildRead {
+                process,
+                child,
+                stream: ChildStream::Stdout,
+                max: 100
+            }),
+            Err(AdapterError::Blocked)
+        );
+        io.parked(17);
+        assert!(io.wait().unwrap());
+        io.ready().unwrap();
+        assert!(
+            matches!(io.process_batch(&[]).unwrap(), Ready::Tokens(tokens) if tokens.is_empty())
+        );
+        assert_eq!(io.readiness().unwrap().virtual_time(), Some(3));
+        assert!(
+            !io.has_ready().unwrap(),
+            "an intermediate gate with no downstream output cannot keep the read eligible"
+        );
+        assert!(io.wait().unwrap());
+        assert_eq!(io.readiness().unwrap().virtual_time(), Some(5));
+        io.ready().unwrap();
+        assert!(
+            matches!(io.process_batch(&[]), Err(AdapterError::ProcessFailed { child: failed, .. }) if failed == child)
+        );
+        assert_eq!(io.stdout(), b"test failure: child /fixture/b expected b\"ab\" but its input stage /fixture/a closed its output after writing b\"a\"\n");
+        io.call(Request::Close { handle: child }).unwrap();
+        io.finish(17);
+        assert!(!io.process_sources());
+    }
 }

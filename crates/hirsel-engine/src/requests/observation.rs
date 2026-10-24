@@ -38,6 +38,31 @@ pub struct InputObserver {
     current: Option<Current>,
 }
 impl InputObserver {
+    pub fn requires_discovery(&self) -> bool {
+        self.current
+            .as_ref()
+            .is_none_or(|current| !current.complete)
+    }
+
+    /// A loader/namespace notification requires a new complete observation.
+    /// Existing descriptors and live requests remain immutable and valid for
+    /// their own observed inputs; no semantic query is invalidated here.
+    pub fn rediscover(&mut self) {
+        if let Some(current) = &mut self.current {
+            current.complete = false;
+        }
+    }
+
+    pub fn is_source(&self, path: &std::path::Path) -> bool {
+        self.current.as_ref().is_some_and(|current| {
+            current.sources.contains(path)
+                || current
+                    .inputs
+                    .known_path(path)
+                    .is_some_and(|path| current.sources.contains(&path))
+        })
+    }
+
     pub fn current(&self) -> Option<&FrozenInputs> {
         self.current.as_ref().map(|current| &current.inputs)
     }

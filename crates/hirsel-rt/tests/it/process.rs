@@ -31,6 +31,7 @@ impl Drop for Disposable {
 
 fn grant(rules: &[(&str, &[&str])]) -> hirsel_run_schema::ProcessGrant {
     hirsel_run_schema::ProcessGrant {
+        timed: None,
         provider: "process.spawn@1".into(),
         rules: rules
             .iter()

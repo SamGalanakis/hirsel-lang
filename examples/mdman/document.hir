@@ -1,5 +1,5 @@
-// The shipped CommonMark parser owns syntax. Diagnostics name the source and
-// zero-based child path because std.markdown.Node exports no byte/line spans.
+// The parser owns syntax and original-byte coordinates. Validation borrows the
+// immutable source map, then conversion discards it before rendering workers.
 pub type Parsed {
   spec: manifest.Spec,
   tree: markdown.Node,
@@ -45,14 +45,6 @@ fn unsupported(kind: markdown.Kind) -> Option[String] uses {} {
   }
 }
 
-fn location(anchor: List[u64]) -> unique String uses {} {
-  let mut out: List[u8] = []
-  for index in anchor {
-    text.append(mut out, f"/{index}")
-  }
-  text.finish_valid(take out)
-}
-
 fn inspect(
   node: markdown.Node,
   name: String,
@@ -68,7 +60,15 @@ fn inspect(
   }
   count += 1
   if let Some(kind) = unsupported(node.kind) {
-    return Error(Unsupported(unique name, location(anchor), take kind))
+    return Error(
+      SourceUnsupported(
+        unique name,
+        Unavailable(DetachedNode()),
+        None(),
+        None(),
+        take kind
+      )
+    )
   }
   let mut index = 0u64
   for child in node.children {
@@ -86,6 +86,45 @@ pub fn validate(tree: markdown.Node, name: String) -> Result[(), manifest.Proble
   inspect(tree, name, mut anchor, 1, mut count)
 }
 
+fn inspect_located(
+  node: markdown.NodeView,
+  located: markdown.ParsedDocument,
+  name: String,
+  depth: u64,
+  mut count: u64
+) -> Result[(), manifest.Problem] uses {} {
+  if depth > DEPTH {
+    return Error(manifest.limit(name, "AST depth"))
+  }
+  if count == NODES {
+    return Error(manifest.limit(name, "AST nodes"))
+  }
+  count += 1
+  if let Some(label) = unsupported(markdown.kind(node)) {
+    let extent = markdown.origin(node)
+    let (start, end) = match extent {
+      Cover(range) => (
+        markdown.point(located, range.start),
+        markdown.point(located, range.end)
+      ),
+      _ => (None(), None()),
+    }
+    return Error(SourceUnsupported(unique name, extent, start, end, take label))
+  }
+  for item in node {
+    inspect_located(item, located, name, depth + 1, mut count)?
+  }
+  Ok(())
+}
+
+fn validate_located(located: markdown.ParsedDocument, name: String) -> Result[
+  (),
+  manifest.Problem
+] uses {} {
+  let mut count = 0u64
+  inspect_located(markdown.root(located), located, name, 1, mut count)
+}
+
 pub fn load(d: Dir, item: manifest.Input) -> batch.Work[
   unique Parsed,
   unique manifest.Problem
@@ -100,7 +139,7 @@ pub fn load(d: Dir, item: manifest.Input) -> batch.Work[
   let mut options = markdown.default_options()
   // Recognize tables so they are rejected, rather than rendered as paragraphs.
   options.tables = true
-  let tree = match markdown.parse_bounded_owned(
+  let tree = match markdown.parse_located_bounded(
     take source,
     options,
     markdown.ParseBudget(
@@ -119,8 +158,8 @@ pub fn load(d: Dir, item: manifest.Input) -> batch.Work[
       return Failed(unique manifest.limit(item.spec.input, label))
     },
   }
-  match validate(tree, item.spec.input) {
-    Ok(()) => Done(Parsed(spec: unique item.spec, tree: take tree)),
+  match validate_located(tree, item.spec.input) {
+    Ok(()) => Done(Parsed(spec: unique item.spec, tree: markdown.into_node(take tree))),
     Error(error) => Failed(unique error),
   }
 }

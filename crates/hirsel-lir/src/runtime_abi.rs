@@ -12,7 +12,7 @@
 use crate::layout_types::{ScalarKind, StorageKind};
 use hirsel_codec::snapshot_enum;
 
-pub const ABI_VERSION: u32 = 60;
+pub const ABI_VERSION: u32 = 62;
 /// TaskSpawn physical hint bits: ordered execution and replay ignore both.
 pub const SPAWN_IMMEDIATE_AWAIT: u64 = 1;
 pub const SPAWN_OP_FREE: u64 = 2;
@@ -192,7 +192,7 @@ pub const REGION_RECORD_BYTES: u64 = 64;
 /// Layout descriptor constants (`hirsel_rt_v2_layout`, `hirsel_rt_v2_step`);
 /// `rt_program` lowers layout drop programs to these steps.
 pub const LAYOUT_MAGIC: u32 = 0x484e_4c31;
-pub const LAYOUT_DESCRIPTOR_VERSION: u32 = 16;
+pub const LAYOUT_DESCRIPTOR_VERSION: u32 = 17;
 /// The finalizer belongs to an `unsafe ffi` package: its failure terminates (FAIL-3).
 pub const LAYOUT_UNSAFE_FFI: u32 = 1;
 /// The size is dynamic; the descriptor's size is the extent every value has.
@@ -259,6 +259,8 @@ pub const STEP_RELEASE_LAST: u32 = 10;
 pub const STEP_RELEASE_ROOT: u32 = 11;
 /// Retire a language finalizer after all of its fields, including on failure.
 pub const STEP_END_FINALIZE: u32 = 12;
+/// Consume one private semantic metadata holder, independently of language credits.
+pub const STEP_RELEASE_RECEIPT: u32 = 13;
 /// The finalizer is compiler implementation cleanup, adding no invocation itself.
 pub const LAYOUT_IMPLEMENTATION_FINALIZER: u32 = 4096;
 /// Step bits of the logical dead cursor; wide programs preserve forty mixed-radix
@@ -547,6 +549,8 @@ pub enum RuntimeEntry {
     HostEnter,
     HostActive,
     HostDefer,
+    ReceiptRetain,
+    ReceiptRelease,
 }
 
 /// One C declaration of `hirsel_rt_v2`.
@@ -618,7 +622,7 @@ const OPERATION_SITE: CParam = p("operation_site", U64);
 const REGION: CParam = p("region", ptr(CName::Region, 1));
 
 impl RuntimeEntry {
-    pub const ALL: [RuntimeEntry; 91] = [
+    pub const ALL: [RuntimeEntry; 93] = [
         Self::DepthEnter,
         Self::DepthEnterAtSite,
         Self::DepthLeave,
@@ -710,6 +714,8 @@ impl RuntimeEntry {
         Self::HostEnter,
         Self::HostActive,
         Self::HostDefer,
+        Self::ReceiptRetain,
+        Self::ReceiptRelease,
     ];
 
     pub const fn declaration(self) -> RuntimeDeclaration {
@@ -761,6 +767,16 @@ impl RuntimeEntry {
                         p("seed", U64),
                     ]
                 },
+            ),
+            Self::ReceiptRetain => (
+                "hirsel_rt_v2_receipt_retain",
+                VOID,
+                const { &[p("receipt", ptr(N::Void, 1))] },
+            ),
+            Self::ReceiptRelease => (
+                "hirsel_rt_v2_receipt_release",
+                VOID,
+                const { &[p("receipt", ptr(N::Void, 1))] },
             ),
             Self::AbiVersion => ("hirsel_rt_v2_abi_version", U32, const { &[] }),
             Self::CtxCreate => (
@@ -1436,4 +1452,6 @@ snapshot_enum!(RuntimeEntry {
     HostEnter,
     HostActive,
     HostDefer,
+    ReceiptRetain,
+    ReceiptRelease,
 });

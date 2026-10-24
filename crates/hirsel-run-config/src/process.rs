@@ -9,7 +9,11 @@ pub fn validate_process_grant(bytes: &[u8]) -> Result<ProcessGrant, RunRefusal> 
         serde_json::from_slice(bytes).map_err(|error| invalid("io.process", &error.to_string()))?;
     if !matches!(
         ProviderContract::parse(&grant.provider),
-        Some(ProviderContract::ProcessSpawn | ProviderContract::ProcessScript)
+        Some(
+            ProviderContract::ProcessSpawn
+                | ProviderContract::ProcessScript
+                | ProviderContract::ProcessScriptTimed
+        )
     ) {
         return Err(RunRefusal::Unsupported {
             field: "io.process.provider".into(),
@@ -20,7 +24,26 @@ pub fn validate_process_grant(bytes: &[u8]) -> Result<ProcessGrant, RunRefusal> 
 }
 
 pub(super) fn validate(grant: &mut ProcessGrant) -> Result<(), RunRefusal> {
-    let script = ProviderContract::parse(&grant.provider) == Some(ProviderContract::ProcessScript);
+    let timed =
+        ProviderContract::parse(&grant.provider) == Some(ProviderContract::ProcessScriptTimed);
+    let script =
+        timed || ProviderContract::parse(&grant.provider) == Some(ProviderContract::ProcessScript);
+    if timed != grant.timed.is_some() || timed && grant.children.is_some() {
+        return Err(invalid(
+            "io.process",
+            "invalid timed process representation",
+        ));
+    }
+    if let Some(timed) = &grant.timed {
+        if timed.clock != "run.monotonic" {
+            return Err(invalid("io.process.clock", "expected run.monotonic"));
+        }
+        for child in &timed.children {
+            child
+                .validate()
+                .map_err(|e| invalid("io.process.children", e))?;
+        }
+    }
     if grant.runs.is_some() != script {
         return Err(invalid(
             "io.process.runs",

@@ -105,6 +105,7 @@ fn native_process_issue_replays_inherited_sink_domains_without_an_adapter() {
                 real.set_send_output(output);
                 real.set_send_stderr(error);
                 real.set_process_grant(&hirsel_run_schema::ProcessGrant {
+                    timed: None,
                     provider: "process.host@1".into(),
                     rules: vec![ProcessRule {
                         program: "/bin/sh".into(),

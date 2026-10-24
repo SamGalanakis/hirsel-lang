@@ -1,8 +1,12 @@
 //! Scripted streaming children (docs/spec/core-library.md#processes, scripted runs): every
 //! provider plays `test.process` and process.script@1 children with [`ScriptChild`], and
 //! the connected stages of a spawned pipeline with [`ScriptGroup`].
+#[cfg(test)]
+use crate::ChildStep;
 use crate::net::byte_literal;
-use crate::process::{ChildRun, ChildStep, ExitStatus, GroupOutput, ProcessFailure};
+use crate::process::{
+    ChildRun, ExitStatus, GroupOutput, ProcessFailure, TimedChildRun, TimedChildStep,
+};
 use std::collections::VecDeque;
 
 /// Which output stream of a child a read takes.
@@ -42,7 +46,7 @@ impl Signal {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ScriptChild {
     program: String,
-    steps: Vec<ChildStep>,
+    steps: Vec<TimedChildStep>,
     step: usize,
     /// Available output, one chunk per step: a read never crosses into the next.
     stdout: VecDeque<Vec<u8>>,
@@ -54,6 +58,10 @@ pub struct ScriptChild {
     exit: Option<ExitStatus>,
     /// A contradicted `Expect` already failed the run: closing input reports nothing more.
     failed: bool,
+    now: u64,
+    timed: bool,
+    closed_by: Option<Option<String>>,
+    input_stage: Option<String>,
 }
 
 /// Who writes a scripted child's input: the program, or a group's previous stage.
@@ -72,9 +80,23 @@ pub enum ScriptRead {
 
 impl ScriptChild {
     pub fn new(child: ChildRun) -> Self {
+        Self::from_steps(
+            child.program,
+            child.steps.into_iter().map(Into::into).collect(),
+            0,
+            false,
+        )
+    }
+    pub fn new_timed(child: TimedChildRun, now: u64) -> Self {
+        Self::new_encoded(child, now, true)
+    }
+    pub fn new_encoded(child: TimedChildRun, now: u64, timed: bool) -> Self {
+        Self::from_steps(child.program, child.steps, now, timed)
+    }
+    fn from_steps(program: String, steps: Vec<TimedChildStep>, now: u64, timed: bool) -> Self {
         let mut script = Self {
-            program: child.program,
-            steps: child.steps,
+            program,
+            steps,
             step: 0,
             stdout: VecDeque::new(),
             stderr: VecDeque::new(),
@@ -82,6 +104,10 @@ impl ScriptChild {
             consumed: 0,
             exit: None,
             failed: false,
+            now,
+            timed,
+            closed_by: None,
+            input_stage: None,
         };
         script.progress(Writer::Program);
         script
@@ -89,15 +115,31 @@ impl ScriptChild {
     /// Play every step that needs no more input: the Test report of an `Expect` the
     /// bytes `writer` wrote contradict, if one does.
     fn progress(&mut self, writer: Writer<'_>) -> Option<String> {
+        if self.failed {
+            return None;
+        }
         while self.exit.is_none() {
             match self.steps.get(self.step) {
+                Some(TimedChildStep::At(t)) if *t > self.now => return None,
+                Some(TimedChildStep::At(_)) => {}
                 None => self.exit = Some(ExitStatus::Exited(0)),
-                Some(ChildStep::Print(b)) if !b.is_empty() => self.stdout.push_back(b.clone()),
-                Some(ChildStep::PrintErr(b)) if !b.is_empty() => self.stderr.push_back(b.clone()),
-                Some(ChildStep::Print(_) | ChildStep::PrintErr(_)) => {}
-                Some(ChildStep::Expect(expected)) => {
+                Some(TimedChildStep::Print(b)) if !b.is_empty() => self.stdout.push_back(b.clone()),
+                Some(TimedChildStep::PrintErr(b)) if !b.is_empty() => {
+                    self.stderr.push_back(b.clone())
+                }
+                Some(TimedChildStep::Print(_) | TimedChildStep::PrintErr(_)) => {}
+                Some(TimedChildStep::Expect(expected)) => {
                     let wrote = &self.written[self.consumed..];
                     if wrote.len() < expected.len() {
+                        if let Some(stage) = &self.closed_by {
+                            self.failed = true;
+                            return Some(unmet(
+                                &self.program,
+                                expected,
+                                wrote,
+                                stage.as_deref().map_or(Writer::Program, Writer::Stage),
+                            ));
+                        }
                         return None;
                     }
                     let wrote = &wrote[..expected.len()];
@@ -107,11 +149,29 @@ impl ScriptChild {
                     }
                     self.consumed += expected.len();
                 }
-                Some(ChildStep::Exit(status)) => self.exit = Some(*status),
+                Some(TimedChildStep::Exit(status)) => self.exit = Some(*status),
             }
             self.step += 1;
         }
         None
+    }
+    /// The only eligible gate is the currently reached one. Polling never settles it.
+    pub fn next_at(&self) -> Option<u64> {
+        if self.exit.is_some() || self.failed {
+            return None;
+        }
+        match self.steps.get(self.step) {
+            Some(TimedChildStep::At(t)) => Some(*t),
+            _ => None,
+        }
+    }
+    pub fn is_timed(&self) -> bool {
+        self.timed
+    }
+    pub fn settle_at(&mut self, now: u64) -> Option<String> {
+        self.now = self.now.max(now);
+        let stage = self.input_stage.clone();
+        self.progress(stage.as_deref().map_or(Writer::Program, Writer::Stage))
     }
     /// `child.write` of `data` to open input: accepted, or `InputClosed()` once the child
     /// ended. `Err` is the Test report of a contradicted `Expect` (LANG-9).
@@ -129,6 +189,10 @@ impl ScriptChild {
         if self.exit.is_some() {
             return Ok(Err(ProcessFailure::InputClosed));
         }
+        self.input_stage = match writer {
+            Writer::Program => None,
+            Writer::Stage(stage) => Some(stage.into()),
+        };
         self.written.extend_from_slice(data);
         match self.progress(writer) {
             Some(report) => Err(report),
@@ -136,12 +200,18 @@ impl ScriptChild {
         }
     }
     /// The program closed the child's input: the Test report when an `Expect` is unmet.
-    pub fn close_stdin(&self) -> Option<String> {
+    pub fn close_stdin(&mut self) -> Option<String> {
         self.close_input(Writer::Program)
     }
-    fn close_input(&self, writer: Writer<'_>) -> Option<String> {
+    fn close_input(&mut self, writer: Writer<'_>) -> Option<String> {
+        if self.timed {
+            self.closed_by.get_or_insert_with(|| match writer {
+                Writer::Program => None,
+                Writer::Stage(stage) => Some(stage.into()),
+            });
+        }
         match (self.exit, self.steps.get(self.step)) {
-            (None, Some(ChildStep::Expect(expected))) if !self.failed => Some(unmet(
+            (None, Some(TimedChildStep::Expect(expected))) if !self.failed => Some(unmet(
                 &self.program,
                 expected,
                 &self.written[self.consumed..],
@@ -151,6 +221,15 @@ impl ScriptChild {
         }
     }
     /// At most `max` (positive) bytes of the next chunk of `stream`.
+    /// Whether a read can complete, without polling or changing the machine.
+    pub fn read_ready(&self, stream: ChildStream) -> bool {
+        !match stream {
+            ChildStream::Stdout => &self.stdout,
+            ChildStream::Stderr => &self.stderr,
+        }
+        .is_empty()
+            || self.exit.is_some()
+    }
     pub fn read(&mut self, stream: ChildStream, max: u64) -> ScriptRead {
         let chunks = match stream {
             ChildStream::Stdout => &mut self.stdout,
@@ -233,9 +312,36 @@ impl ScriptGroup {
     /// The group of nonempty `stages`, and the Test report of an `Expect` that a stage's
     /// first output contradicts.
     pub fn new(stages: Vec<ChildRun>, max_stderr: u64) -> (Self, Option<String>) {
+        Self::from_children(
+            stages.into_iter().map(ScriptChild::new).collect(),
+            max_stderr,
+        )
+    }
+    pub fn new_timed(
+        stages: Vec<TimedChildRun>,
+        max_stderr: u64,
+        now: u64,
+    ) -> (Self, Option<String>) {
+        Self::new_encoded(stages, max_stderr, now, true)
+    }
+    pub fn new_encoded(
+        stages: Vec<TimedChildRun>,
+        max_stderr: u64,
+        now: u64,
+        timed: bool,
+    ) -> (Self, Option<String>) {
+        Self::from_children(
+            stages
+                .into_iter()
+                .map(|c| ScriptChild::new_encoded(c, now, timed))
+                .collect(),
+            max_stderr,
+        )
+    }
+    fn from_children(stages: Vec<ScriptChild>, max_stderr: u64) -> (Self, Option<String>) {
         let count = stages.len();
         let mut group = Self {
-            stages: stages.into_iter().map(ScriptChild::new).collect(),
+            stages,
             open: vec![true; count],
             stderr: vec![vec![]; count],
             max_stderr,
@@ -275,6 +381,27 @@ impl ScriptGroup {
         }
         None
     }
+    pub fn next_at(&self) -> Option<u64> {
+        self.stages.iter().filter_map(ScriptChild::next_at).min()
+    }
+    pub fn ended(&self) -> bool {
+        self.stages.iter().all(|stage| stage.status().is_some())
+    }
+    pub fn is_timed(&self) -> bool {
+        self.stages.iter().any(ScriptChild::is_timed)
+    }
+    pub fn settle_at(&mut self, now: u64) -> Option<String> {
+        // Stage order matters: feed bytes before propagating the upstream close.
+        for i in 0..self.stages.len() {
+            if let Some(report) = self.stages[i].settle_at(now) {
+                return self.report(report);
+            }
+            if let Some(report) = self.settle() {
+                return Some(report);
+            }
+        }
+        None
+    }
     fn report(&mut self, report: String) -> Option<String> {
         (!std::mem::replace(&mut self.failed, true)).then_some(report)
     }
@@ -304,6 +431,11 @@ impl ScriptGroup {
         self.settle()
     }
     /// At most `max` (positive) bytes of the next chunk of the last stage's output.
+    pub fn read_ready(&self) -> bool {
+        self.stages
+            .last()
+            .is_some_and(|s| s.read_ready(ChildStream::Stdout))
+    }
     pub fn read(&mut self, max: u64) -> ScriptRead {
         let last = self.stages.len() - 1;
         self.stages[last].read(ChildStream::Stdout, max)
@@ -404,3 +536,7 @@ mod tests {
         assert_eq!(ended.status(), Some(ExitStatus::Exited(0)));
     }
 }
+
+#[cfg(test)]
+#[path = "child_timed_tests.rs"]
+mod timed_tests;

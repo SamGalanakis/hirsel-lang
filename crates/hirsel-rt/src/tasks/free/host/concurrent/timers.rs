@@ -203,6 +203,7 @@ mod tests {
         let io = Service {
             adapter: clock.clone(),
             live: Default::default(),
+            jobs: Default::default(),
             driver: None,
             rows: Default::default(),
             pending: AtomicUsize::new(0),

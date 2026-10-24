@@ -8,9 +8,11 @@ use crate::tape_wire::Wire;
 use hirsel_free::claim::Claim;
 use hirsel_free::phase::Progress;
 use std::sync::Arc;
+mod blocking;
 pub(crate) mod concurrent;
 pub mod engine;
 pub(super) mod handles;
+pub(crate) mod jobs;
 pub(crate) mod live;
 pub(crate) mod native;
 pub(super) mod requests;
@@ -70,6 +72,7 @@ pub(crate) struct Pending {
     canceled: Option<u32>,
     created: Vec<Created>,
     request_observation: Option<Vec<u8>>,
+    job: Option<jobs::Owned>,
 }
 
 /// # Safety
@@ -123,6 +126,7 @@ pub(crate) unsafe fn prepare_with_keys(
             canceled: None,
             created: Vec::new(),
             request_observation,
+            job: None,
         }));
     }
     super::record::begin(ctx);
@@ -988,3 +992,7 @@ mod native_network_tests;
 
 #[cfg(test)]
 mod native_conversion_tests;
+
+#[cfg(test)]
+#[path = "host/modules.rs"]
+mod host_modules;

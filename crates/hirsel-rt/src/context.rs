@@ -394,6 +394,9 @@ impl Drop for RunShared {
 }
 
 impl RunShared {
+    pub(crate) fn root_context(&self) -> *mut TaskCtx {
+        self.root_ctx
+    }
     pub(crate) fn io_binding(&self) -> *mut std::ffi::c_void {
         self.io_data.load(std::sync::atomic::Ordering::Acquire)
     }
@@ -582,6 +585,7 @@ impl TaskCtx {
     /// worker, and it keeps the thread's foreign scope until it is switched in again.
     #[inline(never)]
     pub(crate) fn switch_out(&mut self) {
+        crate::tasks::role::unlent("a fiber switch");
         if self
             .run_ref()
             .ordered_mode

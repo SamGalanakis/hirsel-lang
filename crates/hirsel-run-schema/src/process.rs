@@ -11,25 +11,181 @@ pub struct ProcessRule {
     pub env: Vec<String>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+/// Process provider data. The timed provider has a separate child decoder; the
+/// public untimed ChildStep and its binary encoding remain unchanged.
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProcessGrant {
     pub provider: String,
     pub rules: Vec<ProcessRule>,
-    /// Required for process.script@1, forbidden for every other provider.
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        deserialize_with = "present"
-    )]
     pub runs: Option<Vec<ProcessRun>>,
-    /// Scripted streaming children: process.script@1 only, absent for none.
+    pub children: Option<Vec<ChildRun>>,
+    pub timed: Option<TimedProcessScript>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TimedProcessScript {
+    pub clock: String,
+    pub children: Vec<TimedChildRun>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProcessWire {
+    provider: String,
+    rules: Vec<ProcessRule>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
         deserialize_with = "present"
     )]
-    pub children: Option<Vec<ChildRun>>,
+    runs: Option<Vec<ProcessRun>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present"
+    )]
+    children: Option<Vec<ChildEncoding>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_clock"
+    )]
+    clock: Option<String>,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(untagged)]
+enum ChildEncoding {
+    Untimed(ChildRun),
+    Timed(TimedChildRun),
+}
+fn present_clock<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error> {
+    String::deserialize(deserializer).map(Some)
+}
+impl Serialize for ProcessGrant {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut wire = serializer.serialize_struct("ProcessGrant", 5)?;
+        wire.serialize_field("provider", &self.provider)?;
+        wire.serialize_field("rules", &self.rules)?;
+        if let Some(runs) = &self.runs {
+            wire.serialize_field("runs", runs)?;
+        }
+        if let Some(timed) = &self.timed {
+            wire.serialize_field("children", &timed.children)?;
+            wire.serialize_field("clock", &timed.clock)?;
+        } else if let Some(children) = &self.children {
+            wire.serialize_field("children", children)?;
+        }
+        wire.end()
+    }
+}
+impl<'de> Deserialize<'de> for ProcessGrant {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let wire = ProcessWire::deserialize(deserializer)?;
+        let (children, timed) = if wire.provider == "process.script.timed@1" {
+            let clock = wire
+                .clock
+                .ok_or_else(|| serde::de::Error::custom("timed process requires clock"))?;
+            let children = wire
+                .children
+                .unwrap_or_default()
+                .into_iter()
+                .map(|child| match child {
+                    ChildEncoding::Untimed(c) => c.into(),
+                    ChildEncoding::Timed(c) => c,
+                })
+                .collect();
+            (None, Some(TimedProcessScript { clock, children }))
+        } else {
+            if wire.clock.is_some() {
+                return Err(serde::de::Error::custom(
+                    "clock is only for process.script.timed@1",
+                ));
+            }
+            let children = wire
+                .children
+                .map(|children| {
+                    children
+                        .into_iter()
+                        .map(|c| match c {
+                            ChildEncoding::Untimed(c) => Ok(c),
+                            ChildEncoding::Timed(_) => {
+                                Err(serde::de::Error::custom("At is not an untimed ChildStep"))
+                            }
+                        })
+                        .collect::<Result<_, D::Error>>()
+                })
+                .transpose()?;
+            (children, None)
+        };
+        Ok(Self {
+            provider: wire.provider,
+            rules: wire.rules,
+            runs: wire.runs,
+            children,
+            timed,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TimedChildRun {
+    pub program: String,
+    pub args: Vec<String>,
+    pub steps: Vec<TimedChildStep>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum TimedChildStep {
+    Print(Vec<u8>),
+    PrintErr(Vec<u8>),
+    Expect(Vec<u8>),
+    Exit(ExitStatus),
+    At(u64),
+}
+impl From<ChildStep> for TimedChildStep {
+    fn from(step: ChildStep) -> Self {
+        match step {
+            ChildStep::Print(b) => Self::Print(b),
+            ChildStep::PrintErr(b) => Self::PrintErr(b),
+            ChildStep::Expect(b) => Self::Expect(b),
+            ChildStep::Exit(s) => Self::Exit(s),
+        }
+    }
+}
+impl From<ChildRun> for TimedChildRun {
+    fn from(child: ChildRun) -> Self {
+        Self {
+            program: child.program,
+            args: child.args,
+            steps: child.steps.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl TimedChildRun {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if !canonical_program(&self.program) {
+            return Err("expected a canonical absolute path");
+        }
+        let (mut last, mut exited) = (0, false);
+        for step in &self.steps {
+            if exited {
+                return Err("steps after Exit");
+            }
+            match step {
+                TimedChildStep::At(t) if *t < last => return Err("decreasing At"),
+                TimedChildStep::At(t) => last = *t,
+                TimedChildStep::Exit(_) => exited = true,
+                _ => {}
+            }
+        }
+        Ok(())
+    }
 }
 
 /// One scripted streaming child: the first unused entry whose program and args equal a
@@ -199,6 +355,25 @@ pub fn take_children(
     children: &mut [Option<ChildRun>],
     stages: &[Command],
 ) -> Result<Vec<ChildRun>, ProcessFailure> {
+    let mut taken: Vec<usize> = vec![];
+    for stage in stages {
+        let entry = children.iter().enumerate().position(|(i, c)| {
+            !taken.contains(&i)
+                && c.as_ref()
+                    .is_some_and(|c| c.program == stage.program && c.args == stage.args)
+        });
+        taken.push(entry.ok_or(ProcessFailure::NotFound)?);
+    }
+    Ok(taken
+        .into_iter()
+        .map(|i| children[i].take().unwrap())
+        .collect())
+}
+
+pub fn take_timed_children(
+    children: &mut [Option<TimedChildRun>],
+    stages: &[Command],
+) -> Result<Vec<TimedChildRun>, ProcessFailure> {
     let mut taken: Vec<usize> = vec![];
     for stage in stages {
         let entry = children.iter().enumerate().position(|(i, c)| {

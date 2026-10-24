@@ -6,8 +6,10 @@ use super::*;
 use hirsel_intern::jobs::{self, Jobs};
 use hirsel_types::SignatureRef;
 mod compact;
+mod scheduled;
 pub(crate) use compact::CompactCompleted;
 use compact::{FrontResult, WorkerCompleted};
+pub use scheduled::{FRONT_BODY_KIND, FrontBodyOutput, FrontBodyQueries};
 
 /// One input's outcome, including the phase that completed or stopped it.
 /// Results from `mode_definitions` always retain the caller's input order.
@@ -36,6 +38,7 @@ pub struct PublishedDefinition {
     pub diagnostics: Vec<Diagnostic>,
 }
 
+#[derive(Clone)]
 pub(crate) struct Task {
     pub(crate) index: usize,
     pub(crate) definition: DefPath,
@@ -1122,6 +1125,7 @@ impl QueryEngine {
 #[cfg(test)]
 mod frozen_task_tests {
     use super::*;
+    use crate::store::ResultStore;
 
     struct RejectAfterReads;
     impl CheckerPhase for RejectAfterReads {
@@ -1191,6 +1195,91 @@ mod frozen_task_tests {
         );
         engine.signatures.insert(id, Arc::new(entry));
         (engine, path)
+    }
+    fn runtime_errors() -> crate::runtime::RuntimeErrors {
+        let diagnostic = |text: &[u8]| {
+            crate::store::Domain {
+                kind: 0x4600_00ff,
+                schema: 1,
+            }
+            .reference(text)
+            .unwrap()
+        };
+        crate::runtime::RuntimeErrors {
+            resource: diagnostic(b"resource"),
+            cycle: diagnostic(b"cycle"),
+            cancelled: diagnostic(b"cancelled"),
+            protocol: diagnostic(b"protocol"),
+            panicked: diagnostic(b"panic"),
+        }
+    }
+    #[test]
+    fn admitted_front_body_failure_matches_scalar_reads_and_retains_snapshot_admission() {
+        use crate::runtime::{AdmittedRuntime, MemoryWeight, ProcessBudget, QueryRuntime};
+        crate::with_compiler_stack(|| {
+            let (mut engine, path) = fixture();
+            let store = Arc::new(crate::store::MemStore::default());
+            engine = engine.with_result_store(store.clone());
+            let budget = ProcessBudget::new(512 << 20);
+            let mut runtime = AdmittedRuntime::new(
+                Jobs::new(1),
+                budget.reserve(256 << 20).unwrap(),
+                runtime_errors(),
+            )
+            .unwrap();
+            let queries = engine
+                .front_body_queries(
+                    &[path.clone()],
+                    MemoryWeight {
+                        retained: 1 << 20,
+                        scratch: 1 << 20,
+                        stack: 0,
+                    },
+                    budget.reserve(2 << 20).unwrap(),
+                    runtime_errors(),
+                )
+                .unwrap();
+            let query = queries.query(&path).unwrap();
+            // Constructing a factory/task does no checking and no publication.
+            let factory = queries.factory();
+            let lazy = factory.create(query).unwrap();
+            assert!(queries.outcomes_for_test().is_empty());
+            drop(lazy);
+            runtime.register(FRONT_BODY_KIND, factory).unwrap();
+            let request = runtime.request(&[query, query]);
+            let error = runtime
+                .wait(request)
+                .expect_err("authored checker rejects after its reads");
+            let held = queries
+                .outcome(error)
+                .expect("failure metadata survives the task");
+            let actual = &held.outcome;
+            assert_eq!(actual.phase, Some(QueryKind::Check));
+            let Err(QueryError::Diagnostics(actual_diagnostics)) = &actual.result else {
+                panic!("lost language failure");
+            };
+            let Err(QueryError::Diagnostics(expected_diagnostics)) = engine.check_query(&path)
+            else {
+                panic!("scalar checker did not reject");
+            };
+            assert_eq!(*actual_diagnostics, expected_diagnostics);
+            assert_eq!(
+                &*actual.reads,
+                engine.checked[&DefId::intern(&path)].reads()
+            );
+            assert!(store.get_content(error).is_some());
+            assert_eq!(runtime.stats().claims, 1);
+            assert_eq!(runtime.stats().polls, 1);
+            runtime.shutdown();
+            drop(queries);
+            assert_eq!(
+                budget.reserved(),
+                2 << 20,
+                "held body metadata owns its snapshot reservation"
+            );
+            drop(held);
+            assert_eq!(budget.reserved(), 0);
+        });
     }
     #[test]
     fn frozen_task_receipts_equal_scalar_failure_with_cold_and_partial_hits() {

@@ -2,7 +2,7 @@
 //! or producer behavior participates in reconstruction. Declared profiles are
 //! checked only after the executable fixed point and read obligations settle.
 use crate::{Reader, SignatureLookup, VRead, typing, validate_structure};
-use hirsel_syntax::{ContentHash, DefId, NameSite, PassingMode, UnaryOp};
+use hirsel_syntax::{ContentHash, DefId, DefPath, NameSite, PassingMode, UnaryOp};
 use hirsel_tir as tir;
 use hirsel_type_analysis::storage::{StorageDomain, program};
 use hirsel_types::storage::graph::*;
@@ -35,6 +35,7 @@ pub enum StorageViolation {
 pub struct StorageReads {
     pub bodies: Vec<(DefId, ContentHash)>,
     pub profiles: Vec<(StorageCallable, Option<ContentHash>)>,
+    pub constants: Vec<(DefId, Option<ContentHash>)>,
     pub derived: Vec<(StorageCallable, ContentHash)>,
     pub declarations: Vec<VRead>,
     pub selections: Vec<(DefId, Option<GeneratedActualKey>, Option<DefId>, bool)>,
@@ -53,12 +54,20 @@ pub fn validate_program(
     types: &TypeInterner,
     definitions: &[tir::DefinitionRef],
     signatures: &dyn SignatureLookup,
+    constants: &BTreeMap<DefPath, tir::Materialized>,
     instances: &tir::InstanceBodies,
     declared: &[CallableStorageProfile],
 ) -> StorageValidation {
     let mut validation = StorageValidation::default();
     let reader = Reader::new(types, signatures);
-    reconstruct(types, definitions, &reader, instances, &mut validation);
+    reconstruct(
+        types,
+        definitions,
+        &reader,
+        constants,
+        instances,
+        &mut validation,
+    );
     reader.finish(&mut validation.reads.declarations);
     let mut claims = BTreeMap::new();
     for claim in declared {
@@ -103,6 +112,7 @@ fn reconstruct(
     types: &TypeInterner,
     definitions: &[tir::DefinitionRef],
     reader: &Reader<'_>,
+    constants: &BTreeMap<DefPath, tir::Materialized>,
     instances: &tir::InstanceBodies,
     validation: &mut StorageValidation,
 ) {
@@ -111,6 +121,27 @@ fn reconstruct(
     if !definitions.iter().any(|definition| definition.bodies.iter().any(|body| body.blocks.iter().any(|block| matches!(&block.terminator, tir::Terminator::Call { callee: tir::Callee::Definition { path, .. }, .. } if path.is_core("region.with"))))) {
         return;
     }
+    let observed: BTreeSet<_> = definitions
+        .iter()
+        .flat_map(|definition| definition.bodies.iter())
+        .flat_map(|body| &body.rvalues)
+        .filter_map(|value| match value {
+            tir::Rvalue::ReadConstant { definition, .. } => Some(DefId::intern(definition)),
+            _ => None,
+        })
+        .collect();
+    validation.reads.constants = observed
+        .into_iter()
+        .map(|definition| {
+            let value = constants.get(definition.path()).map(|value| {
+                ContentHash::of_parts(
+                    "hirsel.validate.storage-constant.v1",
+                    [format!("{value:?}").as_bytes()],
+                )
+            });
+            (definition, value)
+        })
+        .collect();
     let mut products = Vec::new();
     let selections = RefCell::new(Vec::new());
     for definition in definitions {
@@ -171,6 +202,7 @@ fn reconstruct(
                 body,
                 declarations: &declarations[index],
                 signatures: reader,
+                constants,
             };
             match producer.derive(callable_types.get(&(index as u32)).copied()) {
                 Ok(product) => products.push(product),
@@ -251,6 +283,7 @@ struct Producer<'a> {
     body: &'a tir::Body,
     declarations: &'a GenericDeclarations,
     signatures: &'a Reader<'a>,
+    constants: &'a BTreeMap<DefPath, tir::Materialized>,
 }
 impl Producer<'_> {
     fn callable(&self, body: &tir::Body) -> StorageCallable {
@@ -313,27 +346,71 @@ impl Producer<'_> {
             _ => StoragePlacement::Unknown,
         }
     }
+    // Executable constant graphs contain original code references. Their
+    // declared field types alone cannot identify any code or environment.
+    fn constant(&self, original: &tir::Materialized) -> StorageValue {
+        let mut code = Vec::new();
+        let mut complete = true;
+        let mut pending = vec![(&original.root, hirsel_types::SharedPath::new())];
+        while let Some((node, path)) = pending.pop() {
+            match &node.kind {
+                tir::ValueKind::Constant(_) => (),
+                tir::ValueKind::FunctionReference {
+                    definition,
+                    arguments,
+                } => {
+                    complete &= generated_actual_key(self.types, arguments).is_some();
+                    code.push(StorageConstantCode {
+                        parts: path,
+                        definition: DefId::intern(definition),
+                        arguments: arguments.clone(),
+                    });
+                }
+                tir::ValueKind::Construct {
+                    constructor,
+                    fields,
+                } => {
+                    for (ordinal, field) in fields.iter().enumerate().rev() {
+                        let part = match constructor {
+                            tir::Constructor::Variant { variant, .. } => {
+                                OwnedTypePart::VariantField {
+                                    variant: *variant,
+                                    field: ordinal as u32,
+                                }
+                            }
+                            tir::Constructor::Sequence
+                            | tir::Constructor::Map
+                            | tir::Constructor::Set => OwnedTypePart::Elements,
+                            tir::Constructor::SortedMap { .. } => {
+                                complete = false;
+                                continue;
+                            }
+                            _ => OwnedTypePart::Field(ordinal as u32),
+                        };
+                        let mut child = path.clone();
+                        child.push(part);
+                        pending.push((field, child));
+                    }
+                }
+            }
+        }
+        StorageValue::Constant { code, complete }
+    }
     fn rvalue(&self, value: &tir::Rvalue) -> StorageValue {
         match value {
             tir::Rvalue::Constant(_) | tir::Rvalue::Size(_) | tir::Rvalue::Shape(_) => {
                 StorageValue::Fresh
             }
-            tir::Rvalue::ReadConstant { definition, .. } => {
-                match self
-                    .signatures
-                    .get(DefId::intern(definition))
-                    .map(|signature| &signature.kind)
-                {
-                    Some(SignatureKind::Const { ty, .. })
-                        if self.types.get(*ty).is_some_and(|row| {
-                            row.modes.relation.is_global()
-                                && !matches!(row.kind, TypeKind::Function(_))
-                        }) =>
-                    {
-                        StorageValue::Fresh
-                    }
-                    _ => StorageValue::Unknown,
+            tir::Rvalue::ReadConstant {
+                definition,
+                arguments,
+            } => {
+                if !arguments.is_empty() {
+                    return StorageValue::Unknown;
                 }
+                self.constants
+                    .get(definition)
+                    .map_or(StorageValue::Unknown, |value| self.constant(value))
             }
             tir::Rvalue::FunctionReference {
                 definition,

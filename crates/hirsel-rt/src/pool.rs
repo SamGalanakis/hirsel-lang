@@ -1022,6 +1022,7 @@ unsafe fn resume(run: *mut RunShared, exec: &Exec, task: u32, permit: bool) {
 /// # Safety
 /// `call` came from a live [`call_home`].
 pub(crate) unsafe fn run_call(call: Call) {
+    crate::tasks::role::unlent("a home call");
     // SAFETY: the caller waits for `done`, so its closure and completion are live.
     unsafe {
         let claimed = call.claim.claim();
@@ -1531,6 +1532,7 @@ pub(crate) unsafe fn call_home(ctx: *mut TaskCtx, call: &mut dyn FnMut()) -> Sto
 
 /// As call_home, with an explicit run for a facade whose caller may be home.
 pub(crate) unsafe fn call_home_in(run: *mut RunShared, call: &mut dyn FnMut()) -> Stopped<()> {
+    crate::tasks::role::unlent("a home call");
     // SAFETY: the facade is owned by this live run.
     let run = unsafe { &*run };
     let caller = own_exec();
@@ -1604,6 +1606,16 @@ pub(crate) unsafe fn wake_home(run: *mut RunShared) {
     if let Some(execs) = unsafe { (*(*run).execs.get()).as_deref() } {
         wake(&execs.home);
     }
+}
+
+/// Wake home from a thread that may outlive the run (an owned host job). It
+/// retains only the home Exec, whose closed inbox ignores late posts.
+/// # Safety
+/// The run is live while this is called.
+pub(crate) unsafe fn home_wake(run: *mut RunShared) -> Option<Arc<dyn Fn() + Send + Sync>> {
+    let execs = unsafe { (*(*run).execs.get()).as_deref() }?;
+    let home = Arc::clone(&execs.home);
+    Some(Arc::new(move || wake(&home)))
 }
 
 /// A pool slot for an interval: an idle pool thread, a new one, or `None` when all

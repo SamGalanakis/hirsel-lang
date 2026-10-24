@@ -13,6 +13,7 @@ use hirsel_engine::{
 pub mod api_index;
 pub mod candidate;
 pub mod dependency_card;
+mod launch_binding;
 pub mod native;
 mod network;
 pub mod observation_view;
@@ -22,6 +23,7 @@ pub mod resident;
 pub mod serve;
 pub mod session;
 pub mod testing;
+mod tir_execution;
 mod trial;
 pub use pipeline::{BodyAdapter, FrontPhases, LowerAdapter, ModeAdapter};
 use std::{io::Write, path::Path};
@@ -468,49 +470,14 @@ pub(crate) fn bind_launch(
     program: &mut LoadedProgram,
     launch: HostLaunch<'_>,
 ) -> Result<BoundHostRun, ToolError> {
-    let refused =
-        |e: hirsel_run_schema::RunRefusal| ToolError::Runtime(format!("replay refused: {e}"));
-    // A callee run's tape replays its callee entry (RUN-10, RUN-11).
-    let replay = match launch {
-        HostLaunch::Replay(tape) => {
-            let (io, run) = hirsel_rt::host_launch::replay(tape).map_err(refused)?;
-            if run.record().launch == hirsel_run_schema::LaunchKind::Call {
-                program.entry = def_path(&run.record().entry).ok_or_else(|| {
-                    ToolError::Runtime("replay refused: the callee entry's path".into())
-                })?;
-            }
-            Some((io, run))
-        }
-        HostLaunch::Callee { run, .. } => {
-            program.entry = def_path(&run.record().entry)
-                .ok_or_else(|| ToolError::Runtime("launch: the callee entry's path".into()))?;
-            None
-        }
-        HostLaunch::Live { .. } => None,
-    };
-    if replay.is_some()
-        || matches!(
-            launch,
-            HostLaunch::Live {
-                record: Some(_),
-                ..
-            } | HostLaunch::Callee {
-                record: Some(_),
-                ..
-            }
-        )
-    {
+    let selection = launch_binding::LaunchSelection::read(launch)?;
+    if let Some(entry) = selection.entry() {
+        program.entry = entry.clone();
+    }
+    if selection.requires_replayable(launch) {
         program.refuse_unreplayable()?;
     }
     let signature = launch_signature(program)?;
-    let kind = match (&replay, launch) {
-        (Some((_, run)), _) if run.record().launch == hirsel_run_schema::LaunchKind::Call => {
-            hirsel_run_schema::LaunchKind::Call
-        }
-        (_, HostLaunch::Callee { .. }) => hirsel_run_schema::LaunchKind::Call,
-        _ => hirsel_engine::entry_launch_kind(program.engine.types(), &signature)
-            .map_err(ToolError::Launch)?,
-    };
     let revision = program
         .engine
         .semantic_program_revision(&program.entry)
@@ -519,47 +486,7 @@ pub(crate) fn bind_launch(
         None => hirsel_run_schema::CodeReach::Safe,
         Some(reach) => hirsel_run_schema::CodeReach::Escapes(reach.spelled()),
     };
-    match (launch, replay) {
-        (HostLaunch::Live { config, .. }, _) => {
-            let requested = config
-                .read(&revision, kind)
-                .map_err(|e| ToolError::Runtime(e.to_string()))?;
-            let bound = hirsel_engine::bind_run(
-                program.engine.types(),
-                &signature,
-                &revision,
-                kind,
-                Some(&requested),
-                code,
-            )
-            .map_err(ToolError::Launch)?;
-            Ok(BoundHostRun::Live(bound))
-        }
-        (HostLaunch::Callee { run, .. }, _) => {
-            let bound = hirsel_engine::bind_run(
-                program.engine.types(),
-                &signature,
-                &revision,
-                kind,
-                Some(run),
-                code,
-            )
-            .map_err(ToolError::Launch)?;
-            Ok(BoundHostRun::Live(bound))
-        }
-        (HostLaunch::Replay(_), Some((io, run))) => {
-            let roots = hirsel_engine::entry_roots(program.engine.types(), &signature, kind)
-                .map_err(refused)?;
-            let run = run
-                .bind(&hirsel_run_config::ProgramFacts::of(
-                    &revision, kind, roots, code,
-                ))
-                .map_err(refused)?
-                .into_run();
-            Ok(BoundHostRun::Replay { run, io })
-        }
-        (HostLaunch::Replay(_), None) => unreachable!("a replay reads its tape first"),
-    }
+    selection.bind(launch, program.engine.types(), &signature, &revision, code)
 }
 
 /// A definition's canonical spelling (`package@version/module/name`) as a path.
@@ -585,6 +512,15 @@ pub(crate) fn def_path(spelled: &str) -> Option<hirsel_syntax::DefPath> {
 pub(crate) fn bind_host_run(
     program: &mut LoadedProgram,
     launch: HostLaunch<'_>,
+    host: hirsel_rt::host_launch::HostGrants,
+) -> Result<HostRun, ToolError> {
+    let bound = bind_launch(program, launch)?;
+    admit_bound_host_run(bound, launch, host)
+}
+
+pub(crate) fn admit_bound_host_run(
+    bound: BoundHostRun,
+    launch: HostLaunch<'_>,
     mut host: hirsel_rt::host_launch::HostGrants,
 ) -> Result<HostRun, ToolError> {
     let (record, revocations) = match &launch {
@@ -596,7 +532,7 @@ pub(crate) fn bind_host_run(
         HostLaunch::Callee { record, .. } => (*record, None),
         HostLaunch::Replay(_) => (None, None),
     };
-    match bind_launch(program, launch)? {
+    match bound {
         BoundHostRun::Live(bound) => {
             if let Some(path) = revocations {
                 host.read_revocations(path)
@@ -701,8 +637,75 @@ pub fn replay_observations_checked(
             Some(&mut observed),
             None,
             true,
+            None,
         )
     })?;
+    replay_observation(observed, &outcome)
+}
+
+/// Record a reference or checked-H fixture through the native host tape protocol.
+/// The supplied run is bound to this program before the snapshot is admitted.
+pub fn record_fixture_observations(
+    path: &Path,
+    run: &Path,
+    fixture: &native::Fixture,
+    tape: &Path,
+    checked: bool,
+) -> Result<hirsel_interp::observation::Observable, ToolError> {
+    session::with_program(path, hirsel_engine::Verify::On, |program| {
+        record_loaded_fixture_observations(program, run, fixture, tape, checked)
+    })
+}
+
+/// Record a fresh fixture execution while reusing this program's checked query graph.
+/// Provider state, grants, admission and the recording are new for every call.
+pub fn record_loaded_fixture_observations(
+    program: &mut LoadedProgram,
+    run: &Path,
+    fixture: &native::Fixture,
+    tape: &Path,
+    checked: bool,
+) -> Result<hirsel_interp::observation::Observable, ToolError> {
+    let mut observed = None;
+    let host = hirsel_rt::host_launch::HostGrants::snapshot(
+        fixture.files.clone(),
+        fixture.stdin.clone(),
+        fixture.monotonic.unwrap_or(0),
+    );
+    let outcome = run_loaded_on_host_with_checks(
+        program,
+        HostLaunch::Live {
+            config: LaunchConfig::Record(run.as_os_str()),
+            record: Some(tape),
+            revocations: None,
+        },
+        fixture.steps,
+        Some(&mut observed),
+        None,
+        checked,
+        Some(host),
+    );
+    let (outcome, _) = outcome?;
+    replay_observation(observed, &outcome)
+}
+
+/// Replay a bound tape with fresh replay state, retaining immutable compiler queries.
+pub fn replay_loaded_observations(
+    program: &mut LoadedProgram,
+    tape: &Path,
+    max_steps: Option<u64>,
+    checked: bool,
+) -> Result<hirsel_interp::observation::Observable, ToolError> {
+    let mut observed = None;
+    let (outcome, _) = run_loaded_on_host_with_checks(
+        program,
+        HostLaunch::Replay(tape),
+        max_steps,
+        Some(&mut observed),
+        None,
+        checked,
+        None,
+    )?;
     replay_observation(observed, &outcome)
 }
 
@@ -739,7 +742,7 @@ pub(crate) fn run_loaded_on_host(
     observed: Option<&mut Option<hirsel_interp::observation::Observable>>,
     cancel: Option<network::ExternalCancel>,
 ) -> Result<(RunOutcome, Option<hirsel_run_schema::CalleeOutcome>), ToolError> {
-    run_loaded_on_host_with_checks(program, launch, max_steps, observed, cancel, false)
+    run_loaded_on_host_with_checks(program, launch, max_steps, observed, cancel, false, None)
 }
 
 fn run_loaded_on_host_with_checks(
@@ -749,10 +752,13 @@ fn run_loaded_on_host_with_checks(
     observed: Option<&mut Option<hirsel_interp::observation::Observable>>,
     cancel: Option<network::ExternalCancel>,
     checked: bool,
+    snapshot: Option<hirsel_rt::host_launch::HostGrants>,
 ) -> Result<(RunOutcome, Option<hirsel_run_schema::CalleeOutcome>), ToolError> {
     program.check_for_execution()?;
     program.refuse_foreign_interpretation()?;
-    let host = hirsel_rt::host_launch::HostGrants::cooperative(hirsel_rt::launch::RawStdout);
+    let host = snapshot.unwrap_or_else(|| {
+        hirsel_rt::host_launch::HostGrants::cooperative(hirsel_rt::launch::RawStdout)
+    });
     let tape = match launch {
         HostLaunch::Live { record, .. } | HostLaunch::Callee { record, .. } => {
             record.map(Path::to_path_buf)

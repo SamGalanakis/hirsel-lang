@@ -65,6 +65,47 @@ fn markdown.to_html_bounded(take source: String, options: Options, limit: u64) -
 fn markdown.render_html_to[S,E](document: Node, options: Options, limit: u64, mut sink: S, write: fn(mut S, u8) -> Result[(), E] uses {}) -> Result[u64, RenderError[E]] uses {}
 ```
 
+`parse_located_bounded(take source, options, budget)` returns
+`Result[unique ParsedDocument, ParseLimit]`. The opaque document owns one flat
+AST, scalar source rows and an original line index, without retaining source
+bytes. Its exported copyable/inert/nonallocating-drop bounds prove the hidden
+representation contains no resources, allowing Shared construction under the
+existing rules. `root(document) -> NodeView in document`, `kind(view) -> Kind in view`,
+`first_child(view)` and `next_sibling(view)` borrow that owner; traversal and
+origin/field lookup allocate no child paths. A lending `for child in view` loop
+uses a private cursor so each child borrow ends before advancing. `source_length(document)` returns
+the original byte length. `point(document, offset)` returns an optional
+`SourcePoint {line, byte_column}` in logarithmic time, accepting every byte offset
+through the original EOF, including interior UTF-8 bytes. Both coordinates are
+one-based byte counts. LF, CRLF and bare CR each end one line; terminator bytes
+belong to the preceding line and a trailing terminator creates a final empty line.
+
+`Origin` is `Cover(ByteRange {start,end})`,
+`Synthetic(SyntheticReason, Option[ByteRange])`, or
+`Unavailable(UnavailableReason)`. Cover ranges are original UTF-8 bytes,
+zero-based and half-open, with scalar-boundary endpoints. A synthetic related
+range is a causal highlight, never a lexical extent. Missing/detached origins
+never borrow an ancestor's range. `field_origin(view, SourceField)` accepts
+Destination, Title, CodeInfo and TaskMarker. Fields cover raw lexical payloads,
+excluding delimiters; absent and inapplicable fields are explicit. Reference
+fields identify the selected definition while primary ranges identify each use.
+`into_node(take document: unique ParsedDocument) -> unique Node` drains payloads
+once in O(N), drops all metadata and yields the same editable AST as ordinary
+parse. Views and their derived holders must leave scope before consumption.
+No lookup accepts an editable Node; callers can report Unavailable(DetachedNode).
+
+Located metadata uses the same cumulative work admission, with no refunds:
+one per original line-index record; one per stored temporary mapping/descriptor
+or split; one per stored field/definition record; six per general final node
+(traversal, remap, flat node, source row and two reserved strip records).
+The direct literal sink uses four per final node (flat node, source row and two
+reserved strip records). Parser-line and NUL-expansion admissions remain additional.
+The empty direct sink needs exactly five work items and nesting one. Source-byte
+refusal precedes metadata allocation. Located parsing may refuse WorkItems where
+ordinary parsing succeeds; no partial tree is returned and conversion needs no
+additional budget. Retained storage is O(nodes + lines), with constant-sized
+scalar rows; temporary mapping records are also admitted before storage.
+
 `Options` has seven booleans: `tables`, `strikethrough`, `autolinks`,
 `task_lists`, `footnotes`, `allow_unsafe` and `tagfilter`. All default to false;
 `gfm_options` enables the GFM extensions. Markdown

@@ -3,97 +3,11 @@ use hirsel_driver::{native::*, replay_observations, replay_observations_checked}
 use hirsel_engine::{RunConfiguration, SimulationConfig};
 use hirsel_run_schema::{Access, FileReadScript};
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
-use std::io::Read;
 use std::{
     collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
 };
-
-// Retain the actual compiler/std/runtime/linker closure before a consumer starts.
-// Buck artifacts are immutable: hard links preserve them beyond sandbox cleanup.
-fn tool_inputs(root: &Path) -> BTreeMap<PathBuf, String> {
-    fn visit(path: &Path, files: &mut Vec<PathBuf>) {
-        if path.is_dir() {
-            for entry in fs::read_dir(path).unwrap() {
-                visit(&entry.unwrap().path(), files);
-            }
-        } else if path.is_file() {
-            files.push(path.canonicalize().unwrap());
-        }
-    }
-    let mut files = vec![std::env::current_exe().unwrap()];
-    for name in [
-        "HIRSEL_PRODUCTS",
-        "HIRSEL_RUNTIME_ARCHIVES",
-        "LLVM_SYS_231_PREFIX",
-        "HIRSEL_LINK_KIT",
-        "HIRSEL_GLIBC_FLOOR",
-    ] {
-        if let Some(path) = std::env::var_os(name) {
-            visit(Path::new(&path), &mut files);
-        }
-    }
-    for path in [
-        "/usr/bin/python3",
-        "/usr/bin/prlimit",
-        "/usr/bin/env",
-        "/usr/bin/systemd-run",
-        "/usr/lib/x86_64-linux-gnu/libc.so.6",
-        "/lib64/ld-linux-x86-64.so.2",
-    ] {
-        visit(Path::new(path), &mut files);
-    }
-    let blobs = root.parent().unwrap().join("tool-blobs");
-    fs::create_dir_all(&blobs).unwrap();
-    let mut hashes = BTreeMap::new();
-    for path in files {
-        if hashes.contains_key(&path) {
-            continue;
-        }
-        let mut hash = Sha256::new();
-        let mut input = fs::File::open(&path).unwrap();
-        let mut buffer = [0; 65536];
-        loop {
-            let n = input.read(&mut buffer).unwrap();
-            if n == 0 {
-                break;
-            }
-            hash.update(&buffer[..n]);
-        }
-        let hash = format!("{:x}", hash.finalize());
-        let retained = blobs.join(&hash);
-        if !retained.exists() {
-            match fs::hard_link(&path, &retained) {
-                Ok(()) => (),
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => (),
-                Err(_) => {
-                    let temporary = tempfile::NamedTempFile::new_in(&blobs).unwrap();
-                    fs::copy(&path, temporary.path()).unwrap();
-                    if let Err(error) = temporary.persist_noclobber(&retained) {
-                        assert_eq!(error.error.kind(), std::io::ErrorKind::AlreadyExists);
-                    }
-                }
-            }
-        }
-        hashes.insert(path, hash);
-    }
-    fs::write(
-        root.join("actual-inputs.json"),
-        serde_json::to_vec_pretty(&hashes).unwrap(),
-    )
-    .unwrap();
-    let config: BTreeMap<_, _> = std::env::vars()
-        .filter(|(k, _)| k.starts_with("HIRSEL_") || k.starts_with("LLVM_"))
-        .collect();
-    fs::write(
-        root.join("actual-config.json"),
-        serde_json::to_vec_pretty(&config).unwrap(),
-    )
-    .unwrap();
-    hashes
-}
 
 fn cases() -> Vec<Value> {
     serde_json::from_str(include_str!("../support/discrete_simulation_33/cases.json")).unwrap()
@@ -152,7 +66,6 @@ fn package(root: &Path) -> PathBuf {
         .to_str()
         .unwrap()
         .into();
-    let _ = tool_inputs(root);
     let path = root.join("hirsel.json");
     fs::write(&path, serde_json::to_vec_pretty(&manifest).unwrap()).unwrap();
     path
@@ -356,6 +269,8 @@ fn discrete_simulation_33_reference_checked_workflows() {
 #[test]
 fn discrete_simulation_33_native_full_entry_replay() {
     hirsel_engine::with_compiler_stack(|| {
+        // Reuse compilation for this immutable package; each tape gets a fresh runtime.
+        hirsel_driver::session::enable_resident(1);
         let root = std::env::var_os("QUEUESIM_NATIVE_ROOT")
             .map(PathBuf::from)
             .unwrap_or_else(|| root("native-"));
@@ -366,7 +281,6 @@ fn discrete_simulation_33_native_full_entry_replay() {
         };
         let recovery = root.join(format!("consumer-{}", std::process::id()));
         fs::create_dir_all(&recovery).unwrap();
-        let _ = tool_inputs(&recovery);
         let receipts_path = root.join("receipts.json");
         let mut loaded = hirsel_driver::load_program(&path).unwrap();
         loaded
@@ -578,11 +492,13 @@ fn discrete_simulation_33_native_full_entry_replay() {
                             row["stderr"].as_str().unwrap().as_bytes()
                         );
                     }
+                    let mut interpreter_replays = 0;
                     for replay in [replay_observations, replay_observations_checked] {
-                        if original_steps(row) {
-                            let error = replay(&path, &tape, Some(1_000_000))
-                                .unwrap_err()
-                                .to_string();
+                        let replayed = replay(&path, &tape, Some(1_000_000));
+                        // Parser improvements can recover an original Steps witness.
+                        // Recovered observations must satisfy the full ordinary oracle.
+                        if original_steps(row) && replayed.is_err() {
+                            let error = replayed.unwrap_err().to_string();
                             assert!(
                                 error.contains("ToolingLimit")
                                     && error.contains("Steps")
@@ -591,11 +507,12 @@ fn discrete_simulation_33_native_full_entry_replay() {
                             );
                             receipts.push(json!({"case":row["id"],"interpreter_replay":"INCOMPLETE Steps1M","passed":false,"error":error}));
                         } else {
-                            let observed = replay(&path, &tape, Some(1_000_000)).unwrap();
+                            let observed = replayed.unwrap();
                             assert_eq!(Observation::of_reference(&observed), expected);
+                            interpreter_replays += 1;
                         }
                     }
-                    receipts.push(json!({"case":row["id"],"tape":tape,"record":true,"cross_backend_replays":2,"interpreter_replays":if original_steps(row) {0} else {2}}));
+                    receipts.push(json!({"case":row["id"],"tape":tape,"record":true,"cross_backend_replays":2,"interpreter_replays":interpreter_replays}));
                     fs::write(
                         &receipts_path,
                         serde_json::to_vec_pretty(&receipts).unwrap(),

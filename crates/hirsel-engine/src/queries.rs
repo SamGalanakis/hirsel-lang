@@ -8,7 +8,10 @@ mod frontier;
 pub use frontier::FrontChanges;
 mod parallel;
 pub(crate) mod s1;
-pub use parallel::{ModeResult, PublishedDefinition, PublishedResult};
+pub use parallel::{
+    FRONT_BODY_KIND, FrontBodyOutput, FrontBodyQueries, ModeResult, PublishedDefinition,
+    PublishedResult,
+};
 pub use s1::{LoweringResult, S1LowerWork};
 /// One S1 root's captured outcome. Phase, tooling limit and complete execution
 /// reads belong to this root, including when another root finished afterward.
@@ -131,6 +134,7 @@ pub(crate) type ParsedFile = (
 /// item moves its anchor, never its IDs, spans or cached results.
 pub struct QueryEngine {
     pub(crate) work: crate::WorkStats,
+    pub(crate) checked_scope: candidate_products::CheckedScope,
     pub(crate) store_identity: ContentHash,
     store_adoptions: u64,
     pub(crate) verify_store: crate::store::VerifyStore,
@@ -504,6 +508,7 @@ impl QueryEngine {
             store_adoptions: 0,
             store_identity: ContentHash::default(),
             verify_store: crate::store::VerifyStore::Off,
+            checked_scope: Default::default(),
             pending_store_checks: BTreeMap::new(),
             store_check_spool: std::sync::Weak::new(),
             result_store: None,

@@ -150,6 +150,13 @@ struct FileHeads {
     context: FileContext,
     source: ContentHash,
     heads: Vec<Head>,
+    integrity: ContentHash,
+}
+fn heads_integrity(heads: &[Head]) -> ContentHash {
+    ContentHash::of_parts(
+        "hirsel.parse-heads.payload.v5",
+        [&bincode::serialize(heads).expect("source heads encode")[..]],
+    )
 }
 #[derive(Clone)]
 struct Candidate {
@@ -166,6 +173,16 @@ pub(crate) struct Catalog {
     candidates: BTreeMap<DefPath, Vec<Candidate>>,
     facts_cache:
         std::sync::RwLock<BTreeMap<hirsel_syntax::LexicalOwner, (ContentHash, SourceFacts)>>,
+}
+impl Clone for Catalog {
+    fn clone(&self) -> Self {
+        Self {
+            files: self.files.clone(),
+            candidates: self.candidates.clone(),
+            // Facts are recomputable memoization, not source observations.
+            facts_cache: Default::default(),
+        }
+    }
 }
 impl Catalog {
     pub(super) fn clear_facts(&self) {
@@ -504,7 +521,8 @@ impl QueryEngine {
             .collect();
         heads.sort_by_key(|h| (h.base, h.definition.path().clone()));
         FileHeads {
-            schema: 4,
+            schema: 5,
+            integrity: heads_integrity(&heads),
             context: context.clone(),
             source: ContentHash::of_bytes(self.sources.file(file).unwrap().text().as_bytes()),
             heads,
@@ -514,7 +532,8 @@ impl QueryEngine {
         let Some(source) = self.sources.file(file) else {
             return false;
         };
-        record.schema == 4
+        record.schema == 5
+            && record.integrity == heads_integrity(&record.heads)
             && record.context == *context
             && record.source == ContentHash::of_bytes(source.text().as_bytes())
             && record
@@ -773,6 +792,45 @@ mod tests {
     use crate::store::ResultStore;
 
     #[test]
+    fn parse_heads_refuse_every_single_byte_corruption() {
+        crate::with_compiler_stack(|| {
+            use crate::store::ResultStore;
+            let store = Arc::new(crate::store::MemStore::default());
+            let mut engine = QueryEngine::new(
+                default_environment(),
+                PhaseAdapters {
+                    lexer: Some(Arc::new(crate::LexerAdapter)),
+                    parser: Some(Arc::new(crate::ParserAdapter)),
+                    ..Default::default()
+                },
+            )
+            .with_result_store(store.clone());
+            let context = default_context();
+            let file = engine
+                .sources
+                .add("heads.hir", "fn value() {}\n".into())
+                .unwrap();
+            engine.index_source(file, &context).unwrap();
+            let key = engine.catalog_key(file, &context).unwrap();
+            let bytes = store.get(&key).unwrap();
+            for at in 0..bytes.len() {
+                let mut damaged = bytes.to_vec();
+                damaged[at] ^= 1;
+                let record = bincode::DefaultOptions::new()
+                    .with_fixint_encoding()
+                    .with_limit(damaged.len() as u64)
+                    .reject_trailing_bytes()
+                    .deserialize::<FileHeads>(&damaged)
+                    .ok();
+                assert!(
+                    record.is_none_or(|record| !engine.valid_heads(file, &context, &record)),
+                    "byte {at}"
+                );
+            }
+            assert!(engine.valid_heads(file, &context, &engine.capture_heads(file, &context)));
+        });
+    }
+    #[test]
     fn malformed_parse_heads_refuse_before_namespace_or_syntax_adoption() {
         crate::with_compiler_stack(|| {
             let context = default_context();
@@ -789,7 +847,8 @@ mod tests {
                 let file = engine.sources.add("heads.hir", source.into()).unwrap();
                 let key = engine.catalog_key(file, &context).unwrap();
                 let mut record = FileHeads {
-                    schema: 4,
+                    schema: 5,
+                    integrity: ContentHash::default(),
                     context: context.clone(),
                     source: ContentHash::of_bytes(source.as_bytes()),
                     heads: vec![Head {
@@ -821,6 +880,7 @@ mod tests {
                         },
                     }],
                 };
+                record.integrity = heads_integrity(&record.heads);
                 assert!(engine.valid_heads(file, &context, &record));
                 match mutation {
                     0 => record.schema += 1,
@@ -843,6 +903,8 @@ mod tests {
                     }
                     _ => unreachable!(),
                 }
+                // Preserve coherent malicious-producer structural controls.
+                record.integrity = heads_integrity(&record.heads);
                 store.put(&key, &bincode::serialize(&record).unwrap());
                 assert!(
                     engine.index_source(file, &context).is_err(),

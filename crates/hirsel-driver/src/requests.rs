@@ -5,6 +5,13 @@ use crate::native::{Backend, BuildProfile, LaunchInputs, TargetSpec, Validation}
 use hirsel_engine::{LoweringPolicy, loader_inputs::FrozenInputs};
 use hirsel_syntax::DefPath;
 use std::path::PathBuf;
+mod output;
+mod selector;
+pub use output::{
+    CompileInspection, CompileOutput, CompileResult, CompilerReadiness, DefinitionWork,
+    NativeExecution, NativeObservation, RequestWork, TirExecution, TirProducts,
+};
+pub use selector::{CompilerRequests, RequestLimits};
 
 /// Already observed inputs, including missing files, manifests, aliases and
 /// directory membership. Selection must use these bytes verbatim; observing
@@ -18,10 +25,27 @@ pub struct CompileRequest {
 }
 #[derive(Clone)]
 pub enum CompileOperation {
+    /// Pure selected-graph metadata; this operation never demands a producer.
+    Inspect {
+        definitions: Vec<DefPath>,
+    },
+    /// Explicit canonical oracle exports from the same compiler graph.
+    Artifacts {
+        native: bool,
+    },
     Check {
         lowering: LoweringPolicy,
     },
     SafeCheck,
+    /// Explicit evidence collection; normal Check does not construct receipts.
+    CheckedProducts {
+        lowering: LoweringPolicy,
+        canonical: bool,
+    },
+    /// Observe work counters without demanding or recomputing these definitions.
+    RecomputeCounts {
+        queries: Vec<(DefPath, hirsel_engine::QueryKind)>,
+    },
     /// None selects the declared launch entry using the observed manifest.
     Tir {
         definition: Option<DefPath>,
@@ -34,9 +58,16 @@ pub enum CompileOperation {
 /// executable materialization follow their completed readiness descriptor.
 #[derive(Clone)]
 pub struct NativeRequest {
+    /// Selected launch definition; None uses the observed package entry.
+    pub definition: Option<DefPath>,
     pub backend: Backend,
     pub profile: BuildProfile,
     pub target: TargetSpec,
     pub validation: Validation,
     pub launch: LaunchInputs,
+    /// Build-time fuel instrumentation is part of native/emission identity.
+    pub fuel: bool,
+    /// Independently assessed source evidence; its selected discharge policy
+    /// participates in native actions, never a launch-time fallback.
+    pub evidence: Option<std::sync::Arc<crate::native::Evidence>>,
 }

@@ -7229,16 +7229,12 @@ mod tests {
         };
         for finalizing in [false, true] {
             for decoded in [false, true] {
-                let image = crate::Layout {
+                let base = crate::Layout {
                     magic: crate::LAYOUT_MAGIC,
                     version: crate::LAYOUT_VERSION,
                     size: 16,
                     align: 8,
-                    finalizer: if finalizing {
-                        Some(overwrite_close_value)
-                    } else {
-                        None
-                    },
+                    finalizer: None,
                     steps: std::ptr::null(),
                     step_count: 0,
                     field_count: 0,
@@ -7248,6 +7244,17 @@ mod tests {
                     scan: std::ptr::null(),
                     scan_words: 0,
                 };
+                let image = if finalizing {
+                    crate::tasks::ordered::drops::tests::finalized(
+                        crate::Layout {
+                            finalizer: Some(overwrite_close_value),
+                            ..base
+                        },
+                        &[],
+                    )
+                } else {
+                    &base
+                };
                 let wrapper = crate::Layout {
                     size: 8,
                     finalizer: None,
@@ -7255,9 +7262,9 @@ mod tests {
                     steps: &close,
                     step_count: 1,
                     field_count: 1,
-                    ..image
+                    ..base
                 };
-                let layouts = [&image as *const crate::Layout, &wrapper];
+                let layouts = [image as *const crate::Layout, &wrapper];
                 let mut reference = None;
                 for width in [1, 2, 4, 8] {
                     for reorder in [

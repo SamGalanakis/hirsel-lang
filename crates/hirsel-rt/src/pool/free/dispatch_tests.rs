@@ -1,6 +1,6 @@
 use super::*;
 
-struct Topology(Execs);
+pub(super) struct Topology(pub(super) Execs);
 // SAFETY: these tests share only ready queues, topology membership and atomics.
 // The fixture has no physical stacks/workers; home_idle remains None throughout.
 unsafe impl Sync for Topology {}
@@ -10,7 +10,7 @@ impl std::ops::Deref for Topology {
         &self.0
     }
 }
-fn topology(width: u16) -> Topology {
+pub(super) fn topology(width: u16) -> Topology {
     let home = Exec::new(Kind::Home, std::ptr::null_mut(), false);
     let (ready, locals) = hirsel_free::work::workers(u32::from(width), None);
     let dispatch = Dispatch {

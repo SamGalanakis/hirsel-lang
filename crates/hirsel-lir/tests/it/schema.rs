@@ -2032,7 +2032,7 @@ fn runtime_declarations_match_the_landed_c_header() {
                 .find("(hirsel_rt_v2_ctx")
                 .or_else(|| item.find("(hirsel_rt_v2_ahead_physical"))
                 .or_else(|| item.find("(void)"))
-                .or_else(|| item.find("(void *out"))
+                .or_else(|| item.find("(void *"))
                 .or_else(|| item.find("(const hirsel_rt_v2_config"))
                 .or_else(|| item.find("(hirsel_rt_v2_header"))
                 .or_else(|| item.find("(uint64_t "))
@@ -2243,6 +2243,7 @@ fn runtime_declarations_match_the_landed_c_header() {
         ("NONNULL", runtime_abi::STEP_NONNULL),
         ("LIVE_BIT", runtime_abi::STEP_LIVE_BIT),
         ("RELEASE_LAST", runtime_abi::STEP_RELEASE_LAST),
+        ("RELEASE_RECEIPT", runtime_abi::STEP_RELEASE_RECEIPT),
     ] {
         define(&format!("STEP_{name}"), &value.to_string());
     }

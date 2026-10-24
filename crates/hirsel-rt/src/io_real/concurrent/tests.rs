@@ -214,6 +214,7 @@ fn declared_auxiliary_domains_snapshot_real_ports_and_shared_inherited_sinks_wit
     real.set_send_output(crate::host::SendSink::shared(storage.clone()));
     real.set_send_stderr(crate::host::SendSink::shared(storage.clone()));
     real.set_process_grant(&hirsel_run_schema::ProcessGrant {
+        timed: None,
         provider: "process.spawn@1".into(),
         rules: vec![],
         runs: None,
@@ -295,6 +296,7 @@ fn proc_run_is_an_event_source_and_releases_namespace_while_waiting_at_one_and_e
         let temp = tempfile::tempdir().unwrap();
         let mut real = RealIo::grant(temp.path()).unwrap();
         real.set_process_grant(&hirsel_run_schema::ProcessGrant {
+            timed: None,
             provider: "process.spawn@1".into(),
             rules: vec![hirsel_run_schema::ProcessRule {
                 program: "/bin/sh".into(),
@@ -372,6 +374,7 @@ fn proc_run_is_an_event_source_and_releases_namespace_while_waiting_at_one_and_e
         let tape = io.tape();
         let mut replay = SimIo::new(Tree::new(BTreeMap::new()).unwrap(), tape.clone());
         replay.set_process_grant(&hirsel_run_schema::ProcessGrant {
+            timed: None,
             provider: "process.spawn@1".into(),
             rules: vec![hirsel_run_schema::ProcessRule {
                 program: "/bin/sh".into(),
