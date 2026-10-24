@@ -44,10 +44,11 @@ fn ordered_check_gates_lowering_and_preserves_file_failure_prefixes() {
                         scratch: 8 << 20,
                         stack: 0,
                     };
-                    let mut runtime = AdmittedRuntime::new(
+                    let mut runtime = AdmittedRuntime::with_query_capacity(
                         hirsel_intern::jobs::Jobs::new(jobs),
                         budget.reserve(512 << 20).unwrap(),
                         errors,
+                        definitions.len() * 3 + 2,
                     )
                     .unwrap();
                     let front = program

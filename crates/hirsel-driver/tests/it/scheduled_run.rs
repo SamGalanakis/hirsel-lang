@@ -43,10 +43,11 @@ fn admitted_run_root_matches_scalar_semantic_and_launch_facts() {
                 retained: 16 << 20,
                 ..front_weight
             };
-            let mut runtime = AdmittedRuntime::new(
+            let mut runtime = AdmittedRuntime::with_query_capacity(
                 hirsel_intern::jobs::Jobs::new(jobs),
                 budget.reserve(512 << 20).unwrap(),
                 errors,
+                definitions.len() * 4 + 2,
             )
             .unwrap();
             let front = program

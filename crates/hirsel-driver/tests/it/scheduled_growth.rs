@@ -48,10 +48,11 @@ fn admitted_source_growth_demands_unexecuted_required_roots() {
                     stack: 0,
                 };
                 let errors = crate::scheduled_front::errors();
-                let mut runtime = AdmittedRuntime::new(
+                let mut runtime = AdmittedRuntime::with_query_capacity(
                     hirsel_intern::jobs::Jobs::new(jobs),
                     budget.reserve(512 << 20).unwrap(),
                     errors,
+                    definitions.len() * 1 + 1,
                 )
                 .unwrap();
                 let front = program

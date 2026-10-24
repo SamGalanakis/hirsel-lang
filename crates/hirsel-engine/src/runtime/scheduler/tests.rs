@@ -1281,3 +1281,53 @@ fn local_continuation_frame_charge_retires_only_after_home_destruction() {
     drop(owner);
     assert_eq!(process.reserved(), 0);
 }
+
+#[test]
+fn explicit_query_inventory_uses_the_same_grant_beyond_the_default_partition() {
+    let bytes = STACK as u64 + 32 * ENTRY_BYTES;
+    let budget = ProcessBudget::new(bytes);
+    let reservation = budget.reserve(bytes).unwrap();
+    let mut rt =
+        AdmittedRuntime::with_metadata(Jobs::ONE, reservation, errors(), STACK, Some(3)).unwrap();
+    install(
+        &mut rt,
+        &[
+            (0, Spec::deps(&[1])),
+            (1, Spec::deps(&[2])),
+            (2, Spec::deps(&[])),
+        ],
+    );
+    let request = rt.request(&[query(0)]);
+    assert_eq!(rt.wait(request), Ok(vec![product(query(0))]));
+    assert_eq!(rt.stats().claims, 3);
+    assert_eq!(
+        rt.stats().bookkeeping_bytes,
+        AdmittedRuntime::query_capacity_bytes(3).unwrap()
+    );
+    assert!(rt.stats().peak_bytes <= bytes);
+    assert_eq!(budget.reserved(), bytes);
+    rt.shutdown();
+    assert_eq!(budget.reserved(), 0);
+}
+#[test]
+fn explicit_query_inventory_refuses_empty_overflow_and_insufficient_grants() {
+    let bytes = STACK as u64 + 32 * ENTRY_BYTES;
+    let budget = ProcessBudget::new(bytes);
+    for entries in [0, 33, usize::MAX] {
+        assert!(
+            AdmittedRuntime::with_metadata(
+                Jobs::ONE,
+                budget.reserve(bytes).unwrap(),
+                errors(),
+                STACK,
+                Some(entries)
+            )
+            .is_err()
+        );
+        assert_eq!(budget.reserved(), 0);
+    }
+    assert_eq!(
+        AdmittedRuntime::query_capacity_bytes(3),
+        Some(3 * ENTRY_BYTES)
+    );
+}

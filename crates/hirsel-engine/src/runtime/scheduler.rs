@@ -195,6 +195,28 @@ impl AdmittedRuntime {
     ) -> std::io::Result<Self> {
         Self::with_reservation(jobs, reservation, errors, COMPILER_STACK_BYTES)
     }
+    /// Reserve scheduler rows for the immutable query inventory within the
+    /// supplied runtime grant. Worker stacks and task working memory use its
+    /// remainder; this never obtains an additional process reservation.
+    pub fn with_query_capacity(
+        jobs: Jobs,
+        reservation: MemoryReservation,
+        errors: RuntimeErrors,
+        entries: usize,
+    ) -> std::io::Result<Self> {
+        Self::with_metadata(
+            jobs,
+            reservation,
+            errors,
+            COMPILER_STACK_BYTES,
+            Some(entries),
+        )
+    }
+    /// Conservative allocation bound shared by admission planning and the
+    /// constructor. Includes node indexes, four edges, roots and traversal.
+    pub fn query_capacity_bytes(entries: usize) -> Option<u64> {
+        u64::try_from(entries).ok()?.checked_mul(ENTRY_BYTES)
+    }
     #[cfg(test)]
     fn with_stack(
         jobs: Jobs,
@@ -215,6 +237,15 @@ impl AdmittedRuntime {
         errors: RuntimeErrors,
         stack: usize,
     ) -> std::io::Result<Self> {
+        Self::with_metadata(jobs, reservation, errors, stack, None)
+    }
+    fn with_metadata(
+        jobs: Jobs,
+        reservation: MemoryReservation,
+        errors: RuntimeErrors,
+        stack: usize,
+        entries: Option<usize>,
+    ) -> std::io::Result<Self> {
         let budget = reservation.bytes();
         if budget < stack as u64 {
             return Err(std::io::Error::other(
@@ -226,7 +257,13 @@ impl AdmittedRuntime {
         let count = jobs
             .get()
             .min((budget / (2 * stack as u64)).max(1) as usize);
-        let metadata = (budget - count as u64 * stack as u64) / 16;
+        let working = budget - count as u64 * stack as u64;
+        let metadata = match entries {
+            None => working / 16,
+            Some(entries) => Self::query_capacity_bytes(entries)
+                .filter(|bytes| entries != 0 && *bytes <= working)
+                .ok_or_else(|| std::io::Error::other("query inventory exceeds runtime grant"))?,
+        };
         let shared = Arc::new(Shared {
             state: Mutex::new(State {
                 factories: BTreeMap::new(),
