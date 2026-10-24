@@ -33,6 +33,7 @@ pub struct FrontGrowthQueries {
     failure: Mutex<Option<(Reference, QueryError)>>,
     weight: MemoryWeight,
     errors: RuntimeErrors,
+    output_budget: u64,
     _allowance: MemoryReservation,
 }
 #[derive(Clone)]
@@ -172,7 +173,7 @@ impl Task {
                 .extend(checked.summary.growth.edges.iter().cloned());
             if (self.edges.len() as u64)
                 .saturating_mul(std::mem::size_of::<crate::GrowthEdge>() as u64)
-                > self.queries.weight.retained
+                > self.queries.output_budget
             {
                 return Poll::Ready(Err(self.queries.errors.resource));
             }
@@ -206,7 +207,7 @@ impl Task {
                     .records
                     .encode(&*queries.items, &(&error, &reads))
                     .ok_or(queries.errors.resource)?;
-                if bytes.len() as u64 > queries.weight.retained {
+                if bytes.len() as u64 > queries.weight.scratch {
                     return Err(queries.errors.resource);
                 }
                 let reference = queries
@@ -238,7 +239,21 @@ impl Task {
             .records
             .encode(&*queries.items, &(&growth, &diagnostics, &reads))
             .ok_or(queries.errors.resource)?;
-        if bytes.len() as u64 > queries.weight.retained {
+        if bytes.len() as u64 > queries.weight.scratch {
+            return Err(queries.errors.resource);
+        }
+        let retained = (growth.edges.len() as u64)
+            .checked_mul(std::mem::size_of::<crate::GrowthEdge>() as u64)
+            .and_then(|n| {
+                n.checked_add(
+                    (reads.iter().count()
+                        * (std::mem::size_of::<(ReadKey, ContentHash)>()
+                            + 6 * std::mem::size_of::<usize>())) as u64,
+                )
+            })
+            .and_then(|n| n.checked_add(bytes.len() as u64))
+            .ok_or(queries.errors.resource)?;
+        if retained > queries.output_budget {
             return Err(queries.errors.resource);
         }
         let record = queries
@@ -281,10 +296,22 @@ impl QueryEngine {
     /// It performs no body checking, lowering or compile-time execution.
     pub fn front_source_roots(&mut self) -> Vec<DefPath> {
         let _ = self.signature_inputs();
-        self.source_growth
+        let mut roots: BTreeSet<_> = self
+            .source_growth
             .required()
             .map(|id| id.path().clone())
-            .collect()
+            .collect();
+        // A warm source catalog carries only the written declaration. Its fact
+        // helper is still a required body of the source check transaction.
+        for path in roots.clone() {
+            if self.source_facts(&path).is_some_and(|facts| facts.fact) {
+                let helper = hirsel_check_protocol::fact::fact_path(&path);
+                let _ = self.materialize(&path);
+                let _ = self.item_signature(&helper);
+                roots.insert(helper);
+            }
+        }
+        roots.into_iter().collect()
     }
     /// Capture the complete selected source-root set, including declarations
     /// never executed by the launch entry. A partial front view is refused.
@@ -308,6 +335,12 @@ impl QueryEngine {
         {
             return Err(refusal());
         }
+        let input_bytes =
+            FrontGrowthQueries::input_bytes(&definitions, weight).ok_or_else(refusal)?;
+        let output_budget = allowance
+            .bytes()
+            .checked_sub(input_bytes)
+            .ok_or_else(refusal)?;
         let roots = definitions
             .iter()
             .map(|path| {
@@ -348,6 +381,7 @@ impl QueryEngine {
             failure: Mutex::new(None),
             weight,
             errors,
+            output_budget,
             _allowance: allowance,
         }))
     }

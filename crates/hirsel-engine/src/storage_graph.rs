@@ -165,7 +165,6 @@ fn derive(
         }
     }
     let bodies: Vec<_> = bodies.into_values().collect();
-    let domains: Vec<_> = bodies.iter().map(StorageDomain::for_body).collect();
     let instances = engine.instance_bodies.clone();
     let select = |definition, arguments: &[hirsel_types::GenericArgument]| {
         instances
@@ -173,7 +172,21 @@ fn derive(
             .ok()
             .map(|selected| selected.unwrap_or(definition))
     };
-    let proof = program::analyze(&engine.types, &select, &bodies, &domains)
+    finish(&engine.types, &select, bodies)
+}
+
+/// Shared source proof solver and diagnostic selection over completed actual
+/// recipes. No query/controller is reachable through this final computation.
+pub(crate) fn finish(
+    types: &hirsel_types::TypeInterner,
+    select: &dyn Fn(
+        hirsel_syntax::DefId,
+        &[hirsel_types::GenericArgument],
+    ) -> Option<hirsel_syntax::DefId>,
+    bodies: Vec<hirsel_types::storage::graph::StorageBody>,
+) -> Result<(Vec<CallableStorageProfile>, Vec<Diagnostic>), QueryError> {
+    let domains: Vec<_> = bodies.iter().map(StorageDomain::for_body).collect();
+    let proof = program::analyze(types, select, &bodies, &domains)
         .map_err(|error| invalid(format!("malformed source storage product: {error:?}")))?;
     let indices: BTreeMap<_, _> = bodies.iter().map(|body| (body.callable, body)).collect();
     let mut diagnostics = Vec::new();
@@ -302,7 +315,7 @@ fn selected_definition(
 
 // Source consumes the declared constant's own evaluated field graph. V reads
 // only its executable snapshot's independently checked constant table.
-fn constant_value(
+pub(crate) fn constant_value(
     types: &hirsel_types::TypeInterner,
     value: &hirsel_tir::Materialized,
 ) -> StorageValue {
