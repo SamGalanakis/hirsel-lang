@@ -14,6 +14,9 @@
 # the first runs the whole selection.
 set -eu
 root="$(pwd)"
+# Keep SDK copies on the executor's original scratch filesystem, before the
+# recording tests select their ancestry-safe /dev/shm TMPDIR.
+native_inputs_tmp="${TMPDIR:-/tmp}"
 # A test runs the CLI in its own process: never on, or by starting, the
 # workspace's resident compiler (crates/hirsel-cli/src/serve.rs).
 export HIRSEL_DAEMON=off
@@ -64,7 +67,9 @@ fi
 # pattern); the launcher stays alive so its exit trap also runs on test failure.
 action_cache="$(mktemp -d "$scratch/action-XXXXXXXXXX")"
 action_cache="$(cd "$action_cache" && pwd)"
-trap 'rm -rf "$action_cache"' 0
+private_native_inputs=""
+native_input_materializer=""
+trap 'rm -rf "$action_cache"; [ -z "$private_native_inputs" ] || rm -rf "$private_native_inputs"' 0
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
@@ -75,6 +80,11 @@ mkdir -m 700 "$XDG_CACHE_HOME"
 LLVM_SYS_231_PREFIX="$(cd "$LLVM_SYS_231_PREFIX" && pwd)"
 export LLVM_SYS_231_PREFIX
 if [ -n "${HIRSEL_NATIVE_ENVIRONMENT:-}" ]; then
+  # The shared CAS inode's ctime may change when another action creates or
+  # removes a hard link. Detach every tool/shared-library file before strict
+  # native hashing; preserve private aliases and the existing input bytes.
+  native_input_materializer="$(realpath "${HIRSEL_PRIVATE_NATIVE_INPUTS:?missing native input materializer}")"
+  unset HIRSEL_PRIVATE_NATIVE_INPUTS
   # Each row of tools/buck2/native-toolchain/environment.tsv is a variable, the
   # toolchain whose tree HIRSEL_TOOLCHAIN_<TARGET> names, and a path inside it.
   trees=""
@@ -87,6 +97,18 @@ if [ -n "${HIRSEL_NATIVE_ENVIRONMENT:-}" ]; then
   done < "$HIRSEL_NATIVE_ENVIRONMENT"
   unset HIRSEL_NATIVE_ENVIRONMENT $trees
 fi
+# Listing and empty shards never execute native work, so do not copy an SDK.
+materialize_native_inputs() {
+  [ -n "$native_input_materializer" ] || return 0
+  for argument in "$@"; do
+    case "$argument" in --list | --help | -h) return 0 ;; esac
+  done
+  private_native_inputs="$(mktemp -d "$native_inputs_tmp/hirsel-native-inputs-XXXXXXXXXX")"
+  LLVM_SYS_231_PREFIX="$(python3 "$native_input_materializer" "$LLVM_SYS_231_PREFIX" "$private_native_inputs/llvm")"
+  export LLVM_SYS_231_PREFIX
+  export PATH="$LLVM_SYS_231_PREFIX/bin:$PATH"
+  export LD_LIBRARY_PATH="$LLVM_SYS_231_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+}
 export PATH="$LLVM_SYS_231_PREFIX/bin:${PATH:-/usr/bin:/bin}"
 export LD_LIBRARY_PATH="$LLVM_SYS_231_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 if [ -n "${HIRSEL_RUNTIME_ARCHIVES:-}" ]; then
@@ -261,7 +283,7 @@ for argument in "$@"; do
 done
 inventory=false
 if "$full_gate" && "$ignored" && [ -n "$test_binary" ]; then inventory=true; fi
-if [ -z "$shard" ] && ! "$inventory"; then "$harness" "$@"; exit $?; fi
+if [ -z "$shard" ] && ! "$inventory"; then materialize_native_inputs "$@"; "$harness" "$@"; exit $?; fi
 set -f # Rust case names and declared patterns are words, never shell globs.
 list_cases() (
   remaining=$#
@@ -355,4 +377,5 @@ while [ "$remaining" -gt 0 ]; do
       fi ;;
   esac
 done
+[ -z "$cases" ] || materialize_native_inputs "$@"
 "$harness" "$@"

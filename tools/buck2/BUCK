@@ -171,3 +171,5 @@ export_file(name = "workspace-metadata.json", mode = "reference", visibility = [
     "test_sizes.bzl",
     "exec_sizes.bzl",
 ]]
+
+export_file(name = "private_native_inputs.py", visibility = ["PUBLIC"])
