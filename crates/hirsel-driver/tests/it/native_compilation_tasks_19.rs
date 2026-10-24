@@ -89,7 +89,7 @@ impl ResultStore for DiagnosedStore {
 // The platform is explicit fixture input. Production frozen-tool/foreign
 // admission remains a separate owner; this tests native query composition.
 struct Platform {
-    store: Arc<DiagnosedStore>,
+    store: Arc<dyn ResultStore>,
     tools: native::Toolchain,
     target: native::TargetSpec,
     backend: native::Backend,
@@ -166,21 +166,36 @@ impl QueryTask for TraceTask {
 
 #[test]
 fn immutable_native_compilation_links_both_backends_and_reopens_body_free_hits_after_edits() {
-    with_compiler_stack(|| {
-        for jobs in [1, 4] {
-            run(jobs);
-        }
-    });
+    with_compiler_stack(|| run(4));
+}
+#[test]
+fn immutable_native_compilation_at_width_one() {
+    with_compiler_stack(|| run(1));
 }
 fn run(jobs: usize) {
     let directory = tempfile::tempdir().unwrap();
-    let store = Arc::new(DiagnosedStore(store::DirStore::new(
+    // The same admitted transport is selected before source or native work.
+    // Its 24 MiB comes from dispatch's former 96 MiB; total stays 768 MiB.
+    let budget = ProcessBudget::new(768 << 20);
+    let backend = Arc::new(DiagnosedStore(store::DirStore::new(
         directory.path().join("products"),
     )));
+    let store: Arc<dyn ResultStore> = Arc::new(store::RequestStore::new(
+        backend,
+        budget.reserve(24 << 20).unwrap(),
+    ));
     let target = native::TargetSpec::x86_64_unknown_linux_gnu();
-    let tools =
-        native::Toolchain::in_tree_diagnostic(&directory.path().join("runtime"), &[&target])
-            .unwrap();
+    let tools = native::Toolchain::in_tree_with_products(
+        &directory.path().join("runtime"),
+        &[&target],
+        &[native::RuntimeBuild {
+            diagnostic: true,
+            ..Default::default()
+        }],
+        None,
+        store.clone(),
+    )
+    .unwrap();
     let archive = native::object_queries::store_link_input(
         store.as_ref(),
         &std::fs::read(tools.archive(&target.triple).unwrap()).unwrap(),
@@ -283,7 +298,6 @@ fn run(jobs: usize) {
         let _guard = trace.enter();
         // Fixture allocation only. Host source/C admission supplies its own
         // complete budget and is not installed by these native components.
-        let budget = ProcessBudget::new(768 << 20);
         let weight = MemoryWeight {
             scratch: 32 << 20,
             retained: 1 << 20,
@@ -295,7 +309,7 @@ fn run(jobs: usize) {
             native::Options::new(target.clone()),
             policy,
             weight,
-            budget.reserve(32 << 20).unwrap(),
+            budget.reserve(24 << 20).unwrap(),
         )
         .unwrap();
         let arena = ArenaTasks::new(
@@ -303,7 +317,7 @@ fn run(jobs: usize) {
             store.clone(),
             0,
             weight,
-            budget.reserve(32 << 20).unwrap(),
+            budget.reserve(24 << 20).unwrap(),
         )
         .unwrap();
         let calls = Arc::new(AtomicU64::new(0));
@@ -349,7 +363,7 @@ fn run(jobs: usize) {
             emission,
             backends,
             weight,
-            budget.reserve(32 << 20).unwrap(),
+            budget.reserve(24 << 20).unwrap(),
         )
         .unwrap();
         let factory = CompilationFactory::new(compilation.clone());
