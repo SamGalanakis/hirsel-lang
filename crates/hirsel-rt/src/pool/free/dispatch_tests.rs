@@ -21,6 +21,8 @@ fn topology(width: u16) -> Topology {
             home: Arc::downgrade(&home),
         }),
         queued: AtomicUsize::new(0),
+        #[cfg(feature = "free-qualification")]
+        queued_stop_witness: None,
         searcher: AtomicUsize::new(0),
         after_search: Mutex::new(None),
     };
@@ -67,6 +69,8 @@ fn segment(execs: &Execs, task: u32) -> Saved {
             notification,
             owner: AtomicUsize::new(owner_word(Owner::Any)),
             saved: AtomicBool::new(true),
+            #[cfg(feature = "free-qualification")]
+            stop_before_start: false,
         }),
         lease: Lease::new(&execs.dispatch.get().unwrap().count),
     }

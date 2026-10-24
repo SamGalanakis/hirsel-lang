@@ -4766,3 +4766,116 @@ fn f1_worker_shrink_matrix(observe_migration: bool) {
         },
     );
 }
+
+#[test]
+fn f1_queued_never_started_divergent_child_full_projection_matrix() {
+    if !hirsel_rt::free_driver::admission_enabled() {
+        return;
+    }
+    let scratch = Scratch::new("queued-never-started");
+    let program = scratch.path("main.hir");
+    std::fs::write(
+        &program,
+        r#"pub fn main(rt: Io) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let out = io.stdout(rt)?
+  let gate: Atomic[u64] = atomic.create(tasks, 0u64)
+  task.scope(tasks, fn(scope: Scope) -> () {
+    let child = task.async(scope, fn() -> () {
+      let _ = out.print(out, "divergent child entered\n")
+      while true {}
+    })
+    let _ = atomic.load(tasks, gate)
+    task.await(scope, take child)
+  })
+  Ok(())
+}
+"#,
+    )
+    .unwrap();
+    let executable = scratch.path("program");
+    let mut build = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+    build.arg("build").arg(&program).arg("-o").arg(&executable);
+    let built = bounded_output(&mut build, &program, "queued divergent standalone build");
+    assert!(built.status.success(), "{built:?}");
+    for level in ["record", "durable"] {
+        let tape = scratch.path(level);
+        let report = scratch.path("projection");
+        let witness = scratch.path("queued-witness");
+        let _ = std::fs::remove_file(&witness);
+        let grants = serde_json::json!({"io":{"stdout":"stdout.bytes@1","tasks":"tasks.free@1","dirs":[]},"placement":{"cores":8},"recording":level});
+        let mut command = Command::new(&executable);
+        command
+            .arg("--hirsel-record")
+            .arg(&tape)
+            .args(["--hirsel-grants", &grants.to_string()])
+            .env("HIRSEL_RT_FREE_STOP_BEFORE_FIRST_CHILD", &witness)
+            .env(hirsel_rt::free_replay::Report::VAR, &report);
+        f1_permits(&mut command, 8);
+        let live = bounded_output(
+            &mut command,
+            &program,
+            &format!("queued divergent {level} actual8 live"),
+        );
+        assert_eq!(
+            live.status.code(),
+            Some(hirsel_run_schema::exit::ENVIRONMENTAL),
+            "{live:?}"
+        );
+        assert!(live.stdout.is_empty(), "{live:?}");
+        assert_eq!(
+            live.stderr, b"hirsel-rt: environmental failure: its place stopped the run\n",
+            "{live:?}"
+        );
+        let observed: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&witness).unwrap()).unwrap();
+        assert_eq!(
+            observed,
+            serde_json::json!({"first_child":true,"before_token_start":true,"requested":8,"effective":8})
+        );
+        eprintln!("Free queued child stopped before token start {level} {observed}");
+        let bytes = std::fs::read(&tape).unwrap();
+        let parsed = hirsel_free::tape::parse(&bytes).unwrap();
+        assert_eq!(parsed.cut[&vec![0]], hirsel_free::phase::Progress::START);
+        assert!(
+            parsed
+                .end
+                .as_ref()
+                .unwrap()
+                .outcome
+                .starts_with("native-stop-v2/")
+        );
+        let projection = std::fs::read_to_string(&report).unwrap();
+        for engine in ENGINES {
+            for width in ["1", "8"] {
+                for permits in [1, 8] {
+                    let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+                    command
+                        .arg("run")
+                        .args(engine)
+                        .arg(&program)
+                        .arg("--replay")
+                        .arg(&tape)
+                        .args(["--cores", width])
+                        .env(hirsel_rt::free_replay::Report::VAR, &report);
+                    f1_permits(&mut command, permits);
+                    let replay = bounded_output(
+                        &mut command,
+                        &program,
+                        &format!(
+                            "queued divergent {level} {engine:?} width{width} permits{permits}"
+                        ),
+                    );
+                    assert_eq!(replay.status.code(), live.status.code(), "{replay:?}");
+                    assert_eq!(replay.stdout, live.stdout, "{replay:?}");
+                    assert_eq!(
+                        replay.stderr,
+                        b"hirsel: environmental failure: its place stopped the run\n",
+                        "{replay:?}"
+                    );
+                    assert_eq!(std::fs::read_to_string(&report).unwrap(), projection);
+                }
+            }
+        }
+    }
+}

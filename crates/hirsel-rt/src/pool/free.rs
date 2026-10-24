@@ -23,6 +23,9 @@ pub(crate) struct Frame {
     notification: Notification<Image>,
     owner: AtomicUsize,
     saved: AtomicBool,
+    // This observer is absent from shipping archives and never reads a queued image.
+    #[cfg(feature = "free-qualification")]
+    stop_before_start: bool,
 }
 
 impl Frame {
@@ -96,6 +99,8 @@ pub(super) struct Dispatch {
     count: Arc<Count>,
     /// Reservations precede publication; claims consume one after removal.
     queued: AtomicUsize,
+    #[cfg(feature = "free-qualification")]
+    queued_stop_witness: Option<std::path::PathBuf>,
     /// At most one worker is being woken to search (Go wakep / Tokio Idle).
     searcher: AtomicUsize,
     #[cfg(test)]
@@ -143,6 +148,18 @@ pub(crate) unsafe fn enable(ctx: *mut TaskCtx) {
         .as_ref()
         .map(|m| m.ready_metrics());
     let (ready, locals) = hirsel_free::work::workers(MAX_WIDTH, metrics);
+    // As with HIRSEL_RT_STOP_AFTER_MS, only the qualification host requests
+    // this stop. Read the channel once at admission, outside scheduler paths.
+    #[cfg(feature = "free-qualification")]
+    let queued_stop_witness = unsafe { (*ctx).run_ref() }
+        .free_production
+        .then(|| std::env::var_os("HIRSEL_RT_FREE_STOP_BEFORE_FIRST_CHILD"))
+        .flatten()
+        .map(std::path::PathBuf::from);
+    #[cfg(feature = "free-qualification")]
+    if queued_stop_witness.is_some() {
+        unsafe { (*ctx).run_ref() }.control.host();
+    }
     assert!(
         execs
             .dispatch
@@ -150,6 +167,8 @@ pub(crate) unsafe fn enable(ctx: *mut TaskCtx) {
                 ready,
                 locals: Mutex::new(locals),
                 queued: AtomicUsize::new(0),
+                #[cfg(feature = "free-qualification")]
+                queued_stop_witness,
                 searcher: AtomicUsize::new(0),
                 #[cfg(test)]
                 after_search: Mutex::new(None),
@@ -240,6 +259,8 @@ pub(crate) unsafe fn schedule_saved(run: *mut RunShared, task: u32, owner: Owner
                 notification,
                 owner: AtomicUsize::new(owner_word(owner)),
                 saved: AtomicBool::new(true),
+                #[cfg(feature = "free-qualification")]
+                stop_before_start: task == 1 && dispatch.queued_stop_witness.is_some(),
             });
             *slot = Some(frame.clone());
             Some(Saved {
@@ -559,6 +580,33 @@ pub(super) unsafe fn resume(run: *mut RunShared, exec: &Exec, saved: Saved) {
             false,
             false,
         );
+        return;
+    }
+    #[cfg(feature = "free-qualification")]
+    if frame.stop_before_start {
+        // Immutable metadata was copied while preparing the first child under
+        // the role. The idle claimant owns its actual Queued token, but must
+        // neither start it nor inspect Image to observe this boundary.
+        let control = unsafe { &(*run).control };
+        let witness = serde_json::json!({
+            "first_child": true,
+            "before_token_start": true,
+            "requested": control.width.load(Ordering::Acquire),
+            "effective": control.live_width.load(Ordering::Acquire),
+        });
+        let path = unsafe { (*(*run).execs.get()).as_deref().unwrap() }
+            .dispatch
+            .get()
+            .unwrap()
+            .queued_stop_witness
+            .as_ref()
+            .unwrap();
+        std::fs::write(path, witness.to_string()).expect("queued stop witness");
+        control.request(crate::stop::Stop::Requested);
+        // Queued::drop invalidates future notifications without source entry.
+        drop(queued);
+        drop(lease);
+        wake(&execs.home);
         return;
     }
     let running = queued.start();
