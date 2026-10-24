@@ -864,6 +864,7 @@ dependencies = [
  "hirsel-heapcheck",
  "hirsel-layout",
  "hirsel-lir",
+ "hirsel-run-schema",
  "hirsel-syntax",
  "hirsel-tir",
  "hirsel-types",

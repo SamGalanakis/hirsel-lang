@@ -26,6 +26,7 @@ use std::collections::BTreeMap;
 
 mod check;
 pub use check::{check, check_transform};
+pub mod native;
 
 pub const VERSION: u32 = 1;
 

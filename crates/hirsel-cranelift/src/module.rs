@@ -299,11 +299,34 @@ pub(crate) fn emit(
     inputs: &EmitInputs<'_>,
     clif: bool,
     profile: hirsel_lir::debug::Profile<'_>,
+    ownership: bool,
 ) -> Emitted<(
     hirsel_lir::stage::ObjectArtifact,
     Option<String>,
     BTreeMap<String, u64>,
 )> {
+    let ownership_plans = if ownership {
+        if inputs.alternate || !inputs.available_externally.is_empty() {
+            return Err(CodegenError::Object {
+                message: "ownership tracing with alternate/template code is not implemented".into(),
+            });
+        }
+        Some(
+            units
+                .iter()
+                .map(|unit| {
+                    hirsel_lir::ownership_trace::native::LeafPlan::prepare(unit, inputs.layouts)
+                        .map(|plan| (unit.unit().header.instance, plan))
+                        .map_err(|what| CodegenError::Unsupported {
+                            definition: unit.unit().header.definition.clone(),
+                            what,
+                        })
+                })
+                .collect::<Result<BTreeMap<_, _>, _>>()?,
+        )
+    } else {
+        None
+    };
     let owned;
     let index = match inputs.index.filter(|index| index.matches(inputs.layouts)) {
         Some(index) => index,
@@ -399,6 +422,9 @@ pub(crate) fn emit(
         {
             let builder = FunctionBuilder::new(&mut context.func, &mut builder_context);
             let mut function = crate::function::FnEmitter::new(&mut emitter, unit, builder, sig);
+            function.ownership = ownership_plans
+                .as_ref()
+                .and_then(|plans| plans.get(&unit.header.instance));
             if inputs.measurement {
                 function.measured = profile.sources.and_then(|s| s.get(&unit.header.definition));
             }
@@ -438,7 +464,18 @@ pub(crate) fn emit(
     let file = ObjectFile::read(inputs.target, bytes)
         .map_err(|message| CodegenError::Object { message })?;
     artifact(file, manifested, inputs, crate::TOOLCHAIN)
-        .map(|artifact| {
+        .map(|mut artifact| {
+            if ownership {
+                artifact.reproducibility.options = hirsel_syntax::ContentHash::of_parts(
+                    "hirsel.native-ownership-leaf-options.v1",
+                    [
+                        artifact.reproducibility.options.0.as_slice(),
+                        hirsel_lir::ownership_trace::native::ABI_VERSION
+                            .to_le_bytes()
+                            .as_slice(),
+                    ],
+                );
+            }
             (
                 ObjectArtifact {
                     debug: debug_functions,

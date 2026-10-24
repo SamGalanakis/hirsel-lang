@@ -155,6 +155,8 @@ pub(crate) struct FnEmitter<'e, 'a, 'f> {
     pub(crate) instruction_index: usize,
     pub(crate) ahead_state: Option<Value>,
     pub(crate) ahead_counter: Option<cranelift_frontend::Variable>,
+    pub(crate) ownership: Option<&'a hirsel_lir::ownership_trace::native::LeafPlan>,
+    pub(crate) ownership_frame: Option<Value>,
 }
 
 /// Bytes of a `hirsel_rt_v2_region` record.
@@ -239,6 +241,8 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
             instruction_index: 0,
             ahead_state: None,
             ahead_counter: None,
+            ownership: None,
+            ownership_frame: None,
         }
     }
 
@@ -713,6 +717,7 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
     // The function.
 
     pub(crate) fn emit(mut self) -> Emitted {
+        self.ownership_init()?;
         self.ahead_init()?;
         self.find_versions()?;
         let order = self.reverse_postorder()?;
@@ -1221,7 +1226,9 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
                 hirsel_lir::profile::instruction_site(unit, b, inst),
                 inst.opcode(),
             )?;
+            self.ownership_events(b, i as u32, hirsel_lir::ownership_trace::Moment::Before)?;
             self.instruction(inst)?;
+            self.ownership_events(b, i as u32, hirsel_lir::ownership_trace::Moment::After)?;
         }
         let terminator = &unit.terminators[b.index()];
         self.profile_location(
@@ -1611,6 +1618,7 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
 
     /// Returns `status` and, with a register result, `value` (a zero word when absent).
     fn return_status(&mut self, status: i64, value: Option<V>) -> Emitted {
+        self.ownership_leave()?;
         self.ahead_point(false)?;
         self.ahead_flush();
         let status = self.b.ins().iconst(types::I8, status);

@@ -32,7 +32,9 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             {
                 self.ahead_barrier()?;
             }
+            self.ownership_events(b, i as u32, hirsel_lir::ownership_trace::Moment::Before)?;
             self.instruction(inst)?;
+            self.ownership_events(b, i as u32, hirsel_lir::ownership_trace::Moment::After)?;
         }
         let terminator = unit.terminators[b.index()].clone();
         self.profile_location(

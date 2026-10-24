@@ -28,6 +28,7 @@ mod function;
 mod instructions;
 mod module;
 mod object;
+mod ownership_trace;
 mod places;
 mod profile;
 mod program;
@@ -131,7 +132,7 @@ pub fn emit_object(
     units: &[&ValidatedUnit<Ready>],
     inputs: &EmitInputs<'_>,
 ) -> Result<ObjectArtifact, CodegenError> {
-    caught(|| module::emit(units, inputs, false, Default::default()))
+    caught(|| module::emit(units, inputs, false, Default::default(), false))
         .map(|(artifact, _, _)| artifact)
 }
 
@@ -143,7 +144,7 @@ pub fn emit_object_profile(
     inputs: &EmitInputs<'_>,
     profile: hirsel_lir::debug::Profile<'_>,
 ) -> Result<ObjectArtifact, CodegenError> {
-    caught(|| module::emit(units, inputs, false, profile)).map(|(artifact, _, _)| artifact)
+    caught(|| module::emit(units, inputs, false, profile, false)).map(|(artifact, _, _)| artifact)
 }
 
 /// The Cranelift IR of every function `emit_object` defines, before compilation, as text:
@@ -152,7 +153,26 @@ pub fn emit_clif(
     units: &[&ValidatedUnit<Ready>],
     inputs: &EmitInputs<'_>,
 ) -> Result<String, CodegenError> {
-    caught(|| module::emit(units, inputs, true, Default::default()))
+    caught(|| module::emit(units, inputs, true, Default::default(), false))
+        .map(|(_, clif, _)| clif.unwrap_or_default())
+}
+
+/// Emit diagnostic shadow hooks for the supported leaf ownership subset.
+/// Unsupported transfers are refused before any object is published.
+pub fn emit_object_ownership(
+    units: &[&ValidatedUnit<Ready>],
+    inputs: &EmitInputs<'_>,
+) -> Result<ObjectArtifact, CodegenError> {
+    caught(|| module::emit(units, inputs, false, Default::default(), true))
+        .map(|(artifact, _, _)| artifact)
+}
+
+/// Cranelift IR with explicit diagnostic ownership calls.
+pub fn emit_clif_ownership(
+    units: &[&ValidatedUnit<Ready>],
+    inputs: &EmitInputs<'_>,
+) -> Result<String, CodegenError> {
+    caught(|| module::emit(units, inputs, true, Default::default(), true))
         .map(|(_, clif, _)| clif.unwrap_or_default())
 }
 
@@ -196,7 +216,7 @@ pub fn emit_ahead_object(
         available_externally: &Default::default(),
         ..inputs.clone()
     };
-    caught(|| module::emit(units, &inputs, false, Default::default()))
+    caught(|| module::emit(units, &inputs, false, Default::default(), false))
         .map(|(object, _, frames)| (object, frames))
 }
 

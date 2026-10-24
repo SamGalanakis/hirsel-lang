@@ -58,6 +58,8 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             drop_status: None,
             ahead_state: None,
             ahead_counter: None,
+            ownership: None,
+            ownership_frame: None,
             fuel_points: if inputs.fuel || inputs.alternate {
                 hirsel_lir::fuel::fuel_points(unit)
             } else {

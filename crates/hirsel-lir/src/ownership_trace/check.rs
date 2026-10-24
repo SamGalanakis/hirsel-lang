@@ -279,7 +279,7 @@ fn binding<S: Stage>(unit: &LirUnit<S>, observation: &Observation) -> Result<boo
 // An observation has the same source as the operation it describes. A join
 // observation uses its recipient block's anchor. It never takes an arbitrary
 // source range merely because that range occurs somewhere in the unit.
-fn site<S: Stage>(unit: &LirUnit<S>, point: Point) -> Option<SiteRange> {
+pub(super) fn site<S: Stage>(unit: &LirUnit<S>, point: Point) -> Option<SiteRange> {
     let source = |id: SourceAnchorId| unit.tables.source_anchors.get(id.index()).map(|a| a.site);
     let cleanup = |id: CleanupAnchorId| unit.tables.cleanup_anchors.get(id.index()).map(|a| a.site);
     let block_site = |b: BlockId| source(unit.blocks.get(b.index())?.anchor);

@@ -24,7 +24,7 @@ use hirsel_syntax::DefPath;
 
 pub use c_entry::{c_call, c_definition};
 pub use emit::{check_target, compile_ir, emit_ir, emit_object, emit_optimized_ir};
-pub use emit::{emit_glue, emit_object_profile};
+pub use emit::{emit_glue, emit_ir_ownership, emit_object_ownership, emit_object_profile};
 pub use hirsel_lir::profile::{ProfileSource, ProfileSources};
 
 /// An LLVM release, `major.minor.patch`.

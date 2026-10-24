@@ -66,6 +66,7 @@ mod flow;
 mod foreign;
 mod instructions;
 mod ownership;
+mod ownership_trace;
 mod pair;
 mod places;
 mod program;
@@ -290,7 +291,25 @@ pub fn emit_object_profile(
     inputs: &EmitInputs<'_>,
     profile: Profile<'_>,
 ) -> Result<ObjectArtifact, CodegenError> {
-    let (bytes, manifested, plan) = lower(units, inputs, profile, |module, machine| {
+    emit_object_inner(units, inputs, profile, false)
+}
+
+/// Emit diagnostic shadow hooks for the supported leaf ownership subset.
+/// Unsupported transfers are refused before any object is published.
+pub fn emit_object_ownership(
+    units: &[&ValidatedUnit<Ready>],
+    inputs: &EmitInputs<'_>,
+) -> Result<ObjectArtifact, CodegenError> {
+    emit_object_inner(units, inputs, Profile::default(), true)
+}
+
+fn emit_object_inner(
+    units: &[&ValidatedUnit<Ready>],
+    inputs: &EmitInputs<'_>,
+    profile: Profile<'_>,
+    ownership: bool,
+) -> Result<ObjectArtifact, CodegenError> {
+    let (bytes, manifested, plan) = lower(units, inputs, profile, ownership, |module, machine| {
         optimize_and_emit(
             module,
             machine,
@@ -328,6 +347,17 @@ pub fn emit_object_profile(
             ],
         );
     }
+    if ownership {
+        artifact.reproducibility.options = ContentHash::of_parts(
+            "hirsel.native-ownership-leaf-options.v1",
+            [
+                artifact.reproducibility.options.0.as_slice(),
+                hirsel_lir::ownership_trace::native::ABI_VERSION
+                    .to_le_bytes()
+                    .as_slice(),
+            ],
+        );
+    }
     artifact.debug = debug;
     Ok(artifact)
 }
@@ -338,10 +368,16 @@ pub fn emit_optimized_ir(
     units: &[&ValidatedUnit<Ready>],
     inputs: &EmitInputs<'_>,
 ) -> Result<String, CodegenError> {
-    lower(units, inputs, Profile::default(), |module, machine| {
-        optimize(module, machine, inputs.opt, true)?;
-        Ok(module.text())
-    })
+    lower(
+        units,
+        inputs,
+        Profile::default(),
+        false,
+        |module, machine| {
+            optimize(module, machine, inputs.opt, true)?;
+            Ok(module.text())
+        },
+    )
     .map(|(text, ..)| text)
 }
 
@@ -350,7 +386,18 @@ pub fn emit_ir(
     units: &[&ValidatedUnit<Ready>],
     inputs: &EmitInputs<'_>,
 ) -> Result<String, CodegenError> {
-    lower(units, inputs, Profile::default(), |module, _| {
+    lower(units, inputs, Profile::default(), false, |module, _| {
+        Ok(module.text())
+    })
+    .map(|(text, ..)| text)
+}
+
+/// The verified preoptimization module with explicit ownership shadow hooks.
+pub fn emit_ir_ownership(
+    units: &[&ValidatedUnit<Ready>],
+    inputs: &EmitInputs<'_>,
+) -> Result<String, CodegenError> {
+    lower(units, inputs, Profile::default(), true, |module, _| {
         Ok(module.text())
     })
     .map(|(text, ..)| text)
@@ -361,9 +408,38 @@ fn lower<T>(
     units: &[&ValidatedUnit<Ready>],
     inputs: &EmitInputs<'_>,
     profile: Profile<'_>,
+    ownership: bool,
     finish: impl FnOnce(&Module<'_>, &TargetMachine) -> Result<T, CodegenError>,
 ) -> Result<(T, Manifested, Option<crate::debug::DebugPlan>), CodegenError> {
     check_loaded()?;
+    let ownership_plans = if ownership {
+        if inputs.alternate || !inputs.available_externally.is_empty() {
+            return Err(CodegenError::Unsupported {
+                definition: units
+                    .first()
+                    .map(|u| u.unit().header.definition.clone())
+                    .ok_or_else(|| CodegenError::Glue {
+                        what: "ownership emission has no units".into(),
+                    })?,
+                what: "ownership tracing with alternate/template code".into(),
+            });
+        }
+        Some(
+            units
+                .iter()
+                .map(|unit| {
+                    hirsel_lir::ownership_trace::native::LeafPlan::prepare(unit, inputs.layouts)
+                        .map(|plan| (unit.unit().header.instance, plan))
+                        .map_err(|what| CodegenError::Unsupported {
+                            definition: unit.unit().header.definition.clone(),
+                            what,
+                        })
+                })
+                .collect::<Result<BTreeMap<_, _>, _>>()?,
+        )
+    } else {
+        None
+    };
     let owned;
     let index = match inputs.index.filter(|index| index.matches(inputs.layouts)) {
         Some(index) => index,
@@ -585,6 +661,9 @@ fn lower<T>(
             let rooted = !signature.roots.is_empty();
             let mut emitter =
                 FnEmitter::new(&module, inputs, unit, function, signature, &mut manifested);
+            emitter.ownership = ownership_plans
+                .as_ref()
+                .and_then(|plans| plans.get(&unit.header.instance));
             if let Some(debug) = debug.as_ref() {
                 let site =
                     unit.tables.source_anchors[unit.blocks[unit.entry.index()].anchor.index()].site;
@@ -1024,6 +1103,8 @@ struct FnEmitter<'m, 'a> {
     fuel_points: Vec<bool>,
     ahead_state: Option<Value<'m>>,
     ahead_counter: Option<Value<'m>>,
+    ownership: Option<&'a hirsel_lir::ownership_trace::native::LeafPlan>,
+    ownership_frame: Option<Value<'m>>,
 }
 
 type Emitted<T = ()> = Result<T, CodegenError>;
