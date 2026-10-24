@@ -176,7 +176,7 @@ pub struct Variant {
     pub payload: Bytes,
 }
 
-fn payload_reads_hash(reads: &Reads) -> ContentHash {
+pub(crate) fn payload_reads_hash(reads: &Reads) -> ContentHash {
     // Reads' in-memory ordering is by interned identity. Persisted witnesses
     // sort the canonical key bytes, so another process/salt verifies the same
     // complete set without depending on its DefId assignment order.
