@@ -309,6 +309,17 @@ impl FrontBodyQueries {
             .copied()
             .unwrap_or(0)
     }
+    /// Actual settled checked summary, including after a later Modes failure.
+    pub fn checked_definition(self: &Arc<Self>, path: &DefPath) -> Option<FrontCheckedOutput> {
+        let query = self.query(path)?;
+        let reference = self
+            .outcomes
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&query.address.0)?
+            .reference;
+        self.checked(reference)
+    }
     pub fn checked(self: &Arc<Self>, reference: Reference) -> Option<FrontCheckedOutput> {
         let outcomes = self.outcomes.lock().unwrap_or_else(|e| e.into_inner());
         let (key, outcome) = outcomes
