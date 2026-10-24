@@ -14,8 +14,10 @@ use std::time::{Duration, Instant};
 
 /// The external tools and archives linking and launching use. Nothing here is
 /// discovered ambiently at link time: a missing tool is a `NativeError`.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Toolchain {
+    /// The same admitted result provider used by native, object and runtime tasks.
+    pub products: std::sync::Arc<dyn hirsel_engine::store::ResultStore>,
     /// The archive variant `link` links; measurement also selects emitted
     /// inline-edge hooks. `with_runtime` selects another built variant.
     pub runtime_build: RuntimeBuild,
@@ -62,6 +64,19 @@ pub struct Toolchain {
     pub cache: PathBuf,
     /// How a program linked for a launch runs: in a runner unless an executable is selected.
     pub execution: super::runner::Execution,
+}
+
+impl std::fmt::Debug for Toolchain {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Toolchain")
+            .field("products", &self.products.name())
+            .field("lld", &self.lld)
+            .field("kit", &self.kit)
+            .field("runtime", &self.runtime)
+            .field("runtime_build", &self.runtime_build)
+            .field("execution", &self.execution)
+            .finish_non_exhaustive()
+    }
 }
 
 /// A corpus program finishes in well under a second natively and in seconds
@@ -274,7 +289,7 @@ impl Toolchain {
         targets: &[&TargetSpec],
         runtime_builds: &[RuntimeBuild],
         inputs: Option<&super::RuntimeInputs>,
-        store: &dyn hirsel_engine::store::ResultStore,
+        store: std::sync::Arc<dyn hirsel_engine::store::ResultStore>,
     ) -> Result<Self, NativeError> {
         Self::in_tree_inputs(build_dir, targets, runtime_builds, inputs, Some(store))
     }
@@ -284,7 +299,7 @@ impl Toolchain {
         targets: &[&TargetSpec],
         runtime_builds: &[RuntimeBuild],
         inputs: Option<&super::RuntimeInputs>,
-        store: Option<&dyn hirsel_engine::store::ResultStore>,
+        store: Option<std::sync::Arc<dyn hirsel_engine::store::ResultStore>>,
     ) -> Result<Self, NativeError> {
         let _timing = hirsel_intern::timings::interval(hirsel_intern::timings::Interval::Link);
         let [runtime_build, ..] = *runtime_builds else {
@@ -310,24 +325,24 @@ impl Toolchain {
         // names their directory: `<dir>/<triple>/<features or default>/libhirsel_rt.a`.
         // Cargo is then never run, and a missing archive is an error.
         let prebuilt = std::env::var_os("HIRSEL_RUNTIME_ARCHIVES").map(PathBuf::from);
-        let transient;
-        let store = if let Some(store) = store {
-            store
-        } else {
-            let cap = std::env::var("HIRSEL_MEMORY_LIMIT")
-                .ok()
-                .and_then(|text| hirsel_guard::parse_limit(text.as_bytes()))
-                .unwrap_or(hirsel_guard::DEFAULT_LIMIT);
-            let bytes = (cap / 8).min(128 << 20);
-            let budget = hirsel_engine::runtime::ProcessBudget::new(bytes);
-            transient = hirsel_engine::store::RequestStore::new(
-                std::sync::Arc::new(hirsel_engine::store::NoneStore),
-                budget
-                    .reserve(bytes)
-                    .map_err(|e| NativeError::new(StageName::Link, e.to_string()))?,
-            );
-            &transient
+        let products = match store {
+            Some(store) => store,
+            None => {
+                let cap = std::env::var("HIRSEL_MEMORY_LIMIT")
+                    .ok()
+                    .and_then(|text| hirsel_guard::parse_limit(text.as_bytes()))
+                    .unwrap_or(hirsel_guard::DEFAULT_LIMIT);
+                let bytes = (cap / 8).min(128 << 20);
+                let budget = hirsel_engine::runtime::ProcessBudget::new(bytes);
+                std::sync::Arc::new(hirsel_engine::store::RequestStore::new(
+                    std::sync::Arc::new(hirsel_engine::store::NoneStore),
+                    budget
+                        .reserve(bytes)
+                        .map_err(|e| NativeError::new(StageName::Link, e.to_string()))?,
+                ))
+            }
         };
+        let store = products.as_ref();
         let mut runtime = BTreeMap::new();
         let mut runtime_debug = BTreeMap::new();
         let mut builtins = BTreeMap::new();
@@ -434,6 +449,7 @@ impl Toolchain {
             runtime_debug.insert(key, archive);
         }
         Ok(Self {
+            products,
             runtime_build,
             clang: prefix.join("bin/hirsel-clang"),
             aarch64_cc,
@@ -3347,6 +3363,7 @@ mod tests {
     #[test]
     fn floor_launches_run_through_the_release_loader_and_its_libraries_only() {
         let tools = Toolchain {
+            products: std::sync::Arc::new(hirsel_engine::store::NoneStore),
             runtime_build: RuntimeBuild::default(),
             clang: "/unused/clang".into(),
             aarch64_cc: None,
@@ -3405,6 +3422,7 @@ mod tests {
             .unwrap();
         let dir = dir_scratch.path().to_path_buf();
         let mut tools = Toolchain {
+            products: std::sync::Arc::new(hirsel_engine::store::NoneStore),
             runtime_build: RuntimeBuild::default(),
             clang: "/unused/clang".into(),
             aarch64_cc: Some("/unused/gcc".into()),

@@ -26,7 +26,9 @@
 use super::kit::{Kind, Kit, Link};
 use super::link::{Toolchain, checked};
 use super::stages::{NativeError, StageName};
+use hirsel_artifact_store::{Action, Address, Domain, Reference};
 use hirsel_lir::layout_types::TargetSpec;
+use hirsel_syntax::ContentHash;
 use object::read::elf::{Dyn, FileHeader, ProgramHeader, Rela, SectionHeader, Sym};
 use object::{LittleEndian, elf};
 use std::collections::{BTreeMap, BTreeSet};
@@ -498,10 +500,9 @@ fn audit(bytes: &[u8]) -> Result<Mode, NativeError> {
 }
 
 /// The runner for `target` and the toolchain's selected archive: built and checked once per
-/// build ID, then read from the cache. A `debug_info` toolchain's runner links the
-/// debug-bearing archive (a different build ID) and retains embedded DWARF.
+/// build ID, stored as an ordinary product. Current ELF export and startup
+/// checks run again before a restored runner is returned to its caller.
 pub fn runner(toolchain: &Toolchain, target: &TargetSpec) -> Result<Runner, NativeError> {
-    static RUNNERS: Mutex<BTreeMap<PathBuf, Runner>> = Mutex::new(BTreeMap::new());
     let stripped = toolchain.archive(&target.triple).ok_or_else(|| {
         failed(format!(
             "no {} runtime archive for {}",
@@ -525,125 +526,160 @@ pub fn runner(toolchain: &Toolchain, target: &TargetSpec) -> Result<Runner, Nati
         unwind: true,
         foreign: &[],
     };
-    let runners = toolchain.cache.join("runners");
-    // Old debug runners had stripped DWARF and a sidecar under the same build ID.
-    let runners = if toolchain.debug_info {
-        runners.join("embedded-debug-v1")
-    } else {
-        runners
-    };
-    // The ID depends only on content, so the output's path does not enter it.
-    let (_, id) = link.command(&toolchain.lld, &runners.join("probe"))?;
-    let directory = runners.join(hex(&id));
+    let (_, id) = link.command(&toolchain.lld, &toolchain.cache.join("probe"))?;
+    let action = product_action(toolchain, &kit, target, &id)?;
+    let directory = toolchain.cache.join("runners").join(hex(&action.0.0));
     let path = directory.join("hirsel-runner");
-    if let Some(runner) = RUNNERS.lock().unwrap().get(&path) {
-        return Ok(runner.clone());
-    }
-    let manifest = directory.join("runner.json");
-    let debug = toolchain.debug_info.then(|| path.clone());
-    let runner = match std::fs::read(&manifest)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
-    {
-        Some(recorded) if path.is_file() && debug.as_ref().is_none_or(|d| d.is_file()) => {
-            from_record(path.clone(), id, debug.clone(), &recorded)?
+    let inspect = |bytes: &[u8]| -> Result<Runner, NativeError> {
+        let linked = interface(bytes)?;
+        let mut checked_exports = BTreeMap::new();
+        for name in &exports {
+            let kind = linked
+                .exports
+                .get(name)
+                .ok_or_else(|| failed(format!("the runner does not export `{name}`")))?;
+            checked_exports.insert(name.clone(), *kind);
         }
-        _ => {
-            let io = |e: std::io::Error| failed(format!("{}: {e}", runners.display()));
-            std::fs::create_dir_all(&runners).map_err(io)?;
-            let scratch = runners.join(format!(
-                ".{}-{}-{:?}",
-                hex(&id),
-                std::process::id(),
-                std::thread::current().id()
-            ));
-            let _ = std::fs::remove_dir_all(&scratch);
-            std::fs::create_dir_all(&scratch).map_err(io)?;
-            let built = scratch.join("hirsel-runner");
-            let (mut command, _) = link.command(&toolchain.lld, &built)?;
-            checked(StageName::Link, &mut command)?;
-            let bytes = std::fs::read(&built).map_err(io)?;
-            let linked = interface(&bytes)?;
-            let mut checked_exports = BTreeMap::new();
-            for name in &exports {
-                let kind = linked.exports.get(name).ok_or_else(|| {
-                    failed(format!(
-                        "the runner {} does not export `{name}`",
-                        built.display()
-                    ))
-                })?;
-                checked_exports.insert(name.clone(), *kind);
-            }
-            let mode = audit(&bytes)?;
-            let record = serde_json::json!({
-                "build_id": hex(&id),
-                "mode": match &mode { Mode::Fork => "fork".to_string(), Mode::Exec(r) => format!("exec: {r}") },
-                "exports": checked_exports.iter().map(|(name, kind)| {
-                    serde_json::json!([name, match kind { SymbolKind::Function => "function", SymbolKind::Data => "data" }])
-                }).collect::<Vec<_>>(),
-            });
-            std::fs::write(
-                scratch.join("runner.json"),
-                serde_json::to_vec_pretty(&record).unwrap(),
-            )
-            .map_err(io)?;
-            // A concurrent build of the same ID published identical content first.
-            if std::fs::rename(&scratch, &directory).is_err() {
-                let _ = std::fs::remove_dir_all(&scratch);
-            }
-            Runner {
-                path: path.clone(),
-                build_id: id,
-                mode,
-                debug,
-                exports: Arc::new(checked_exports),
-            }
-        }
+        Ok(Runner {
+            path: path.clone(),
+            build_id: id,
+            mode: audit(bytes)?,
+            debug: toolchain.debug_info.then(|| path.clone()),
+            exports: Arc::new(checked_exports),
+        })
     };
-    RUNNERS.lock().unwrap().insert(path, runner.clone());
+    if let Some(reference) = lookup(toolchain, RUNNER_PRODUCT, action)
+        && let Ok(bytes) =
+            super::object_queries::link_input_bytes(toolchain.products.as_ref(), reference)
+        && let Ok(runner) = inspect(&bytes)
+    {
+        super::object_queries::materialize_link_input(
+            toolchain.products.as_ref(),
+            reference,
+            &path,
+            true,
+        )
+        .map_err(failed)?;
+        return Ok(runner);
+    }
+    // The linker writes only private request scratch; publication follows every
+    // ELF check. A crash cannot make a pathname or JSON receipt select a hit.
+    let scratch = super::executable::Scratch::new()?;
+    let built = scratch.0.join("hirsel-runner");
+    let (mut command, _) = link.command(&toolchain.lld, &built)?;
+    checked(StageName::Link, &mut command)?;
+    let bytes = std::fs::read(&built).map_err(|e| failed(e.to_string()))?;
+    let runner = inspect(&bytes)?;
+    let reference = publish(toolchain, RUNNER_PRODUCT, action, &bytes)?;
+    super::object_queries::materialize_link_input(
+        toolchain.products.as_ref(),
+        reference,
+        &path,
+        true,
+    )
+    .map_err(failed)?;
     Ok(runner)
 }
 
-fn from_record(
-    path: PathBuf,
-    build_id: [u8; 20],
-    debug: Option<PathBuf>,
-    record: &serde_json::Value,
-) -> Result<Runner, NativeError> {
-    let malformed = || {
-        failed(format!(
-            "a malformed runner record beside {}",
-            path.display()
-        ))
-    };
-    let mode = match record["mode"].as_str().ok_or_else(malformed)? {
-        "fork" => Mode::Fork,
-        other => Mode::Exec(
-            other
-                .strip_prefix("exec: ")
-                .ok_or_else(malformed)?
-                .to_string(),
-        ),
-    };
-    let mut exports = BTreeMap::new();
-    for entry in record["exports"].as_array().ok_or_else(malformed)? {
-        let (Some(name), Some(kind)) = (entry[0].as_str(), entry[1].as_str()) else {
-            return Err(malformed());
-        };
-        let kind = match kind {
-            "function" => SymbolKind::Function,
-            "data" => SymbolKind::Data,
-            _ => return Err(malformed()),
-        };
-        exports.insert(name.to_string(), kind);
+const RUNNER_PRODUCT: Domain = Domain {
+    kind: 0x4f00_0007,
+    schema: 1,
+};
+const IMAGE_PRODUCT: Domain = Domain {
+    kind: 0x4f00_0008,
+    schema: 1,
+};
+fn product_address(domain: Domain, action: Action) -> Address {
+    Address(ContentHash::of_parts(
+        "hirsel.native.linked-input-address.v1",
+        [domain.kind.to_le_bytes().as_slice(), action.0.0.as_slice()],
+    ))
+}
+fn product_action(
+    toolchain: &Toolchain,
+    kit: &Kit,
+    target: &TargetSpec,
+    id: &[u8; 20],
+) -> Result<Action, NativeError> {
+    let mut paths = kit.link_files(&target.triple)?;
+    paths.push(toolchain.lld.clone());
+    // The shipped dynamic linker runtime is also an implementation input.
+    let tree = toolchain
+        .lld
+        .parent()
+        .and_then(Path::parent)
+        .ok_or_else(|| failed("linker has no installed tree"))?;
+    for entry in std::fs::read_dir(tree.join("lib")).map_err(|e| failed(e.to_string()))? {
+        let path = entry.map_err(|e| failed(e.to_string()))?.path();
+        if path.is_file()
+            && path
+                .file_name()
+                .is_some_and(|name| name.to_string_lossy().contains(".so"))
+        {
+            paths.push(path);
+        }
     }
-    Ok(Runner {
-        path,
-        build_id,
-        mode,
-        debug,
-        exports: Arc::new(exports),
-    })
+    paths.sort();
+    let mut parts = vec![
+        crate::COMPILER_IDENTITY.to_vec(),
+        id.to_vec(),
+        vec![u8::from(toolchain.debug_info)],
+    ];
+    for path in paths {
+        parts.push(
+            super::file_digest::file(&path)
+                .map_err(|e| failed(e.to_string()))?
+                .content
+                .0
+                .to_vec(),
+        );
+    }
+    Ok(Action(ContentHash::of_parts(
+        "hirsel.native.linked-input-action.v1",
+        parts.iter().map(Vec::as_slice),
+    )))
+}
+fn lookup(toolchain: &Toolchain, domain: Domain, action: Action) -> Option<Reference> {
+    let association = toolchain
+        .products
+        .lookup_product(product_address(domain, action))?;
+    if association.action != action || association.reference.domain != domain {
+        return None;
+    }
+    let bytes = toolchain.products.get_content(association.reference)?;
+    if domain.reference(&bytes) != Some(association.reference) {
+        return None;
+    }
+    serde_json::from_slice(&bytes).ok()
+}
+fn publish(
+    toolchain: &Toolchain,
+    domain: Domain,
+    action: Action,
+    bytes: &[u8],
+) -> Result<Reference, NativeError> {
+    let reference = super::object_queries::store_link_input(toolchain.products.as_ref(), bytes)
+        .map_err(failed)?;
+    let record = serde_json::to_vec(&reference).map_err(|e| failed(e.to_string()))?;
+    let stored = toolchain
+        .products
+        .put_content(domain, &record)
+        .ok_or_else(|| failed("linked input publication failed"))?;
+    if domain.reference(&record) != Some(stored) {
+        return Err(failed("linked input identity differs"));
+    }
+    let address = product_address(domain, action);
+    toolchain
+        .products
+        .associate_product(address, action, stored);
+    if toolchain
+        .products
+        .lookup_product(address)
+        .is_none_or(|row| row.action != action || row.reference != stored)
+    {
+        return Err(failed("linked input association failed"));
+    }
+    Ok(reference)
 }
 
 /// A relocatable object holding only the note that names `runner` (`hirsel_rt::runner`).
@@ -720,12 +756,29 @@ pub(crate) fn link_image(
         unwind: false,
         foreign: &[],
     };
-    let images = toolchain.cache.join("images");
-    std::fs::create_dir_all(&images).map_err(io)?;
-    let (_, key) = link.command(&toolchain.lld, &images.join("probe"))?;
-    let path = images.join(format!("image-{}.so", hex(&key)));
-    if path.is_file() {
-        touch(&path);
+    let (_, key) = link.command(&toolchain.lld, &dir.join("probe"))?;
+    let action = product_action(toolchain, &kit, target, &key)?;
+    let path = dir.join(format!("image-{}.so", hex(&action.0.0)));
+    let validate = |bytes: &[u8]| -> Result<Result<(), String>, NativeError> {
+        let image = interface(bytes)?;
+        Ok(check_image(
+            &image,
+            &runner.exports,
+            &*provided(&kit, &target.triple)?,
+        ))
+    };
+    if let Some(reference) = lookup(toolchain, IMAGE_PRODUCT, action)
+        && let Ok(bytes) =
+            super::object_queries::link_input_bytes(toolchain.products.as_ref(), reference)
+        && matches!(validate(&bytes), Ok(Ok(())))
+    {
+        super::object_queries::materialize_link_input(
+            toolchain.products.as_ref(),
+            reference,
+            &path,
+            true,
+        )
+        .map_err(failed)?;
         return Ok(Ok(Image {
             path,
             key,
@@ -733,79 +786,31 @@ pub(crate) fn link_image(
             cached: true,
         }));
     }
-    let scratch = images.join(format!(
-        ".image-{}-{}-{:?}.so",
-        hex(&key),
-        std::process::id(),
-        std::thread::current().id()
-    ));
-    let (mut command, _) = link.command(&toolchain.lld, &scratch)?;
+    let scratch = super::executable::Scratch::new()?;
+    let output = scratch.0.join("image.so");
+    let (mut command, _) = link.command(&toolchain.lld, &output)?;
     if let Err(error) = checked(StageName::Link, &mut command) {
-        let _ = std::fs::remove_file(&scratch);
         return Ok(Err(format!("lld: {}", error.message)));
     }
-    let bytes = std::fs::read(&scratch).map_err(io)?;
-    let contract = interface(&bytes).and_then(|image| {
-        Ok(check_image(
-            &image,
-            &runner.exports,
-            &*provided(&kit, &target.triple)?,
-        ))
-    });
-    match contract {
-        Ok(Ok(())) => {}
-        Ok(Err(refusal)) => {
-            let _ = std::fs::remove_file(&scratch);
-            return Ok(Err(format!("image refused: {refusal}")));
-        }
-        Err(error) => {
-            let _ = std::fs::remove_file(&scratch);
-            return Err(error);
-        }
+    let bytes = std::fs::read(&output).map_err(io)?;
+    match validate(&bytes)? {
+        Ok(()) => {}
+        Err(refusal) => return Ok(Err(format!("image refused: {refusal}"))),
     }
-    std::fs::rename(&scratch, &path).map_err(io)?;
-    reclaim(&images);
+    let reference = publish(toolchain, IMAGE_PRODUCT, action, &bytes)?;
+    super::object_queries::materialize_link_input(
+        toolchain.products.as_ref(),
+        reference,
+        &path,
+        true,
+    )
+    .map_err(failed)?;
     Ok(Ok(Image {
         path,
         key,
         runner: runner.clone(),
         cached: false,
     }))
-}
-
-/// Mark `path` recently used.
-fn touch(path: &Path) {
-    if let Ok(file) = std::fs::File::options().append(true).open(path) {
-        let _ = file.set_modified(std::time::SystemTime::now());
-    }
-}
-
-/// The images the cache keeps; past this, the least recently used are removed.
-const CACHED_IMAGES: usize = 512;
-
-/// Remove the least recently used images past [`CACHED_IMAGES`] that no run holds
-/// ([`hold`]). A run's child maps its own copy, so removing a file never disturbs one.
-fn reclaim(images: &Path) {
-    let Ok(entries) = std::fs::read_dir(images) else {
-        return;
-    };
-    let mut cached: Vec<(std::time::SystemTime, PathBuf)> = entries
-        .flatten()
-        .filter(|e| e.file_name().to_string_lossy().starts_with("image-"))
-        .filter_map(|e| Some((e.metadata().ok()?.modified().ok()?, e.path())))
-        .collect();
-    if cached.len() <= CACHED_IMAGES {
-        return;
-    }
-    cached.sort();
-    let excess = cached.len() - CACHED_IMAGES;
-    for (_, path) in cached.into_iter().take(excess) {
-        if let Ok(file) = std::fs::File::open(&path)
-            && file.try_lock().is_ok()
-        {
-            let _ = std::fs::remove_file(&path);
-        }
-    }
 }
 
 /// A shared hold on `image` for one run, so reclamation leaves it in place.
