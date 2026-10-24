@@ -402,6 +402,19 @@ type ReadyRecord = (
     Vec<(ContentHash, Reference)>,
 );
 pub mod source_inputs;
+/// Select once for an admitted native request and share this same provider
+/// with native, object and runtime producers. Cache write failures retain only
+/// bounded transient transport; verifier capabilities come from the selected
+/// backend exactly. The admitted allowance outlives every external byte view.
+pub fn request_store(
+    engine: &hirsel_engine::QueryEngine,
+    allowance: hirsel_engine::runtime::MemoryReservation,
+) -> Arc<hirsel_engine::store::RequestStore> {
+    let backend = engine
+        .product_store()
+        .unwrap_or_else(|| Arc::new(hirsel_engine::store::NoneStore));
+    Arc::new(hirsel_engine::store::RequestStore::new(backend, allowance))
+}
 
 /// Resolve settled descriptor bytes only. This is not a proof capability: the
 /// admitted Ready producer owns independent validation before settling the read.
