@@ -609,3 +609,44 @@ fn source_body_33_inline_construction_is_not_an_extra_semantic_allocation() {
         source.check().unwrap();
     }
 }
+
+#[test]
+fn source_demand_33_uses_original_lower_snapshot_after_native_body_rewrite() {
+    use super::demand::{DemandBody, analyze};
+    let types = TypeInterner::new(None);
+    let scalar = types.intern(Type::with_kind(TypeKind::Primitive(Primitive::U64)));
+    let mut original = body(&[scalar], 0);
+    assign(&mut original, 0, Rvalue::Constant(Constant::Integer(7)));
+    let mut definition = witness_definition(original);
+    let key = witness_key(&types, &definition);
+    let captured = SourceInput::capture(witness_input(1), witness_input(2), definition.clone());
+    std::sync::Arc::make_mut(&mut definition).bodies[0].rvalues[0] =
+        Rvalue::Constant(Constant::Integer(9));
+    let retained = captured.demand_body(&key).unwrap();
+    assert_eq!(retained.rvalues[0], Rvalue::Constant(Constant::Integer(7)));
+    assert_ne!(retained, &definition.bodies[0]);
+    let demand = analyze(&[DemandBody {
+        body: retained,
+        calls: Default::default(),
+        closures: Default::default(),
+    }])
+    .unwrap();
+    assert_eq!(demand, vec![super::demand::Requirements::default()]);
+}
+
+#[test]
+fn source_demand_33_refuses_other_definition_or_body_before_expansion() {
+    let types = TypeInterner::new(None);
+    let scalar = types.intern(Type::with_kind(TypeKind::Primitive(Primitive::U64)));
+    let definition = witness_definition(body(&[scalar], 1));
+    let source = SourceInput::capture(witness_input(1), witness_input(2), definition.clone());
+    let other = hirsel_syntax::DefPath::core("other_source");
+    for (path, body, error) in [
+        (&other, 0, "source witness definition identity"),
+        (definition.path.path(), 1, "source witness body identity"),
+    ] {
+        let key =
+            hirsel_layout::instance::InstanceKey::new(path, body, &[], &types, None, None).unwrap();
+        assert_eq!(source.demand_body(&key), Err(SourceError::Malformed(error)));
+    }
+}
