@@ -118,6 +118,19 @@ pub(crate) struct Completed {
 }
 
 impl Completed {
+    pub(super) fn recomputed(&self) -> Vec<QueryKind> {
+        let mut work = Vec::new();
+        if matches!(self.resolution, Some(Product::Computed(_))) {
+            work.push(QueryKind::Resolve);
+        }
+        if matches!(self.checked, Some(Product::Computed(_))) {
+            work.push(QueryKind::Check);
+        }
+        if matches!(self.modes, Some(Product::Computed(_))) {
+            work.push(QueryKind::Modes);
+        }
+        work
+    }
     /// Modes carries the final successful output. `result` otherwise records
     /// the earlier phase that stopped the task before modes was produced.
     pub(crate) fn result(&self) -> Result<Arc<QueryOutput<AnalyzedBody>>, QueryError> {
