@@ -70,3 +70,5 @@ toolchain_proof(name = "source-metadata-proof", tools = [":llvm", ":kit", "root/
 toolchain_proof(name = "root-frozen-kit-proof", tools = [":llvm", ":linker", ":kit", "root//:hirsel-rt-archives", "root//:hirsel-driver-test-it-harness"], script = "root_frozen_kit_proof.py", interpreter = "python3")
 runtime_auditor(name = "runtime-auditor", llvm = ":llvm", builder = "build_runtime_auditor.py", source = "runtime_auditor.c", visibility = ["PUBLIC"])
 toolchain_proof(name = "runtime-auditor-proof", tools = [":llvm", ":runtime-auditor", ":glibc_floor", ":qemu"], script = "runtime_auditor_proof.py", interpreter = "python3")
+
+toolchain_proof(name = "runtime-store-proof", tools = [":llvm", ":runtime-auditor", ":glibc_floor", ":qemu", "root//:hirsel-driver-unittest-harness"], script = "runtime_store_proof.sh")
