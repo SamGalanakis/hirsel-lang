@@ -40,14 +40,13 @@ pub fn trial_tapes(
         .as_ref()
         .and_then(|binding| binding.instance)
         .ok_or_else(|| refused(format!("{} records no runner calls", tape.display())))?;
-    let mut program = COMPILER.load_program(candidate)?;
-    program.check_for_execution()?;
-    program.refuse_foreign_interpretation()?;
-    let main = program.entry.clone();
-    let revision = program
-        .engine
-        .semantic_program_revision(&main)
-        .map_err(|e| program.error(e))?;
+    let mut session = session::Session::open(candidate, hirsel_engine::Verify::On);
+    let initial = session.request(requests::CompileOperation::Tir { definition: None })?;
+    let requests::CompileResult::Tir(input) = &initial.result else {
+        return Err(refused("TIR request returned another operation".into()));
+    };
+    tir_execution::refuse_foreign_interpretation(input)?;
+    let revision = &input.revision;
     let place = hirsel_run_config::RunConfig::grants_template(
         grants,
         revision.digest(),
@@ -56,8 +55,7 @@ pub fn trial_tapes(
     )
     .map_err(|e| refused(e.to_string()))?;
     let runners = place.io.map(|io| io.runners).unwrap_or_default();
-    let facts =
-        hirsel_engine::callee_facts(&mut program.engine, &main).map_err(|e| program.error(e))?;
+    let facts = &input.callees;
     let mut trials = vec![];
     for (ordinal, (request, completion)) in calls(&recording.events, &instance)
         .map_err(refused)?
@@ -139,7 +137,15 @@ pub fn trial_tapes(
             run: &run,
             record: None,
         };
-        let (outcome, returned) = run_loaded_on_host(&mut program, launch, None, None, None)?;
+        let selection = launch_binding::LaunchSelection::read(launch)?;
+        let selected = session.request_applied(requests::CompileOperation::Tir {
+            definition: selection.entry().cloned(),
+        })?;
+        let requests::CompileResult::Tir(callee) = &selected.result else {
+            return Err(refused("callee request returned another operation".into()));
+        };
+        let (outcome, returned) =
+            tir_execution::run_tir_on_host(callee, launch, selection, None, None, None, false)?;
         let trial = match &returned {
             Some(returned) => shown_return(returned),
             None => format!("{outcome:?}"),

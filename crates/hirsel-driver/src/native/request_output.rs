@@ -3,7 +3,7 @@
 //! and observation decoder without reconstructing a native program.
 use super::{NativeError, StageName, executable::Scratch, link, object_queries};
 use crate::requests::NativeExecution;
-use crate::{BoundHostRun, HostLaunch, RunOutcome, ToolError, launch_binding::LaunchSelection};
+use crate::{BoundHostRun, HostLaunch, RunOutcome, ToolError};
 use std::{io::Write, path::Path};
 
 pub(crate) fn materialize_output(
@@ -21,32 +21,15 @@ pub(crate) fn materialize_output(
 pub(crate) fn run_output(
     input: &NativeExecution,
     launch: HostLaunch<'_>,
-    selection: LaunchSelection,
+    bound: BoundHostRun,
     output: super::tool::Output<'_>,
     trace_events: Option<&Path>,
 ) -> Result<Result<RunOutcome, NativeError>, ToolError> {
-    if selection.requires_replayable(launch) {
-        if let Some((user, extern_)) = input.foreign.unmodeled.first_key_value() {
-            return Err(ToolError::Runtime(format!(
-                "launch: {user} calls the extern {extern_} and is not a wrapper with a \
-                 deterministic model, so this run cannot be recorded or replayed (PROG-4)"
-            )));
-        }
-    }
     if matches!(launch, HostLaunch::Callee { .. }) {
         return Err(ToolError::Runtime(
             "launch: a runner host runs its callees interpreted".into(),
         ));
     }
-    // The executable admits the bound run exactly once, as the ordinary native
-    // launcher does. Binding source facts here never performs host admission.
-    let bound = selection.bind(
-        launch,
-        &input.types,
-        &input.signature,
-        &input.revision,
-        input.code.clone(),
-    )?;
     let (run, tape) = match (bound, launch) {
         (
             BoundHostRun::Live(bound),
@@ -84,14 +67,17 @@ pub(crate) fn run_output(
                 "the selected executable has no fuel checks",
             ));
         }
-        materialize_output(input, &input.executable)?;
+        let scratch = Scratch::new()?;
+        let executable = scratch.0.join("program");
+        materialize_output(input, &executable)?;
         for line in &input.report {
             writeln!(stderr, "hirsel: {line}")
                 .map_err(|e| NativeError::new(StageName::Launch, e.to_string()))?;
         }
-        let scratch = Scratch::new()?;
+        #[cfg(test)]
+        super::tool::before_request_link(&scratch.0);
         let launched = link::launch_live(
-            &link::Runnable::Executable(input.executable.clone()),
+            &link::Runnable::Executable(executable),
             &input.request.target,
             &input.toolchain,
             &scratch.0,

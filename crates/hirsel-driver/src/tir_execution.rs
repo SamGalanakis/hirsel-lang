@@ -6,6 +6,16 @@ use crate::requests::TirExecution;
 use crate::{HostLaunch, HostRun, RunOutcome, ToolError, call_schemas, network};
 use std::path::Path;
 
+pub(crate) fn refuse_foreign_interpretation(input: &TirExecution) -> Result<(), ToolError> {
+    if let Some(extern_) = input.foreign.externs.first() {
+        return Err(ToolError::Runtime(format!(
+            "launch: the reference interpreter does not call C, and {extern_} is an \
+             extern \"c\" function; build or run the program natively (PROG-4)"
+        )));
+    }
+    Ok(())
+}
+
 pub(crate) fn run_tir_on_host(
     input: &TirExecution,
     launch: HostLaunch<'_>,
@@ -15,12 +25,7 @@ pub(crate) fn run_tir_on_host(
     cancel: Option<network::ExternalCancel>,
     checked: bool,
 ) -> Result<(RunOutcome, Option<hirsel_run_schema::CalleeOutcome>), ToolError> {
-    if let Some(extern_) = input.foreign.externs.first() {
-        return Err(ToolError::Runtime(format!(
-            "launch: the reference interpreter does not call C, and {extern_} is an \
-             extern \"c\" function; build or run the program natively (PROG-4)"
-        )));
-    }
+    refuse_foreign_interpretation(input)?;
     if selection.requires_replayable(launch) {
         if let Some((user, extern_)) = input.foreign.unmodeled.first_key_value() {
             return Err(ToolError::Runtime(format!(
@@ -58,7 +63,7 @@ pub(crate) fn run_tir_on_host(
             (run, network::HostIo::Replay(io), instance)
         }
     };
-    // A callee run's replay entered its callee entry (`bind_launch`).
+    // A callee replay selected its entry before requesting immutable TIR.
     let signature = input.signature.clone();
     let call = run.record().call.clone();
     let tir_run = hirsel_tir::RunConfiguration {
