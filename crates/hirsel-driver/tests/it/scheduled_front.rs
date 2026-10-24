@@ -469,3 +469,136 @@ fn admitted_lower_reserves_outputs_only_for_demanded_definitions() {
         );
     });
 }
+
+#[test]
+fn admitted_front_store_hits_validate_signature_reads_before_materializing_bodies() {
+    with_compiler_stack(|| {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("main.hir");
+        let store = Arc::new(MemStore::default());
+        for (source, main_hit, spare_hit, verify_cache) in [
+            (
+                "fn spare()->u8{1u8}\npub fn main(){let _=spare()}\n",
+                false,
+                false,
+                false,
+            ),
+            (
+                "fn spare()->u8{1u8}\npub fn main(){let _=spare()}\n",
+                true,
+                true,
+                false,
+            ),
+            (
+                "fn spare()->u8{2u8}\npub fn main(){let _=spare()}\n",
+                true,
+                false,
+                false,
+            ),
+            (
+                "fn spare()->u16{2u16}\npub fn main(){let _=spare()}\n",
+                false,
+                false,
+                false,
+            ),
+            (
+                "fn spare()->u16{2u16}\npub fn main(){let _=spare()}\n",
+                false,
+                false,
+                true,
+            ),
+            (
+                "fn spare()->u16{2u16}\npub fn main(){let _=spare()}\n",
+                false,
+                true,
+                false,
+            ),
+        ] {
+            std::fs::write(&path, source).unwrap();
+            let mut program = COMPILER
+                .with_config(hirsel_engine::CompileConfig {
+                    store: store.clone(),
+                    verify_store: if verify_cache {
+                        hirsel_engine::store::VerifyStore::Recompute
+                    } else {
+                        hirsel_engine::store::VerifyStore::Off
+                    },
+                    ..Default::default()
+                })
+                .with_owned_engines()
+                .load_program(&path)
+                .unwrap();
+            let mut spare = program.entry.clone();
+            spare.0.name = "spare".into();
+            let definitions = vec![program.entry.clone(), spare.clone()];
+            let budget = ProcessBudget::new(1 << 30);
+            let mut runtime = AdmittedRuntime::new(
+                hirsel_intern::jobs::Jobs::new(1),
+                budget.reserve(512 << 20).unwrap(),
+                errors(),
+            )
+            .unwrap();
+            let weight = MemoryWeight {
+                retained: 1 << 20,
+                scratch: 8 << 20,
+                stack: 0,
+            };
+            let front = program
+                .engine
+                .front_body_queries(
+                    &definitions,
+                    weight,
+                    budget.reserve(8 << 20).unwrap(),
+                    errors(),
+                )
+                .unwrap();
+            runtime.register(FRONT_BODY_KIND, front.factory()).unwrap();
+            let request = runtime.request(
+                &definitions
+                    .iter()
+                    .map(|path| front.query(path).unwrap())
+                    .collect::<Vec<_>>(),
+            );
+            let products = runtime
+                .wait(request)
+                .unwrap_or_else(|error| panic!("{:?}", front.outcome(error).map(|o| o.outcome)));
+            for (definition, hit) in [(&program.entry, main_hit), (&spare, spare_hit)] {
+                for kind in [QueryKind::Resolve, QueryKind::Check, QueryKind::Modes] {
+                    assert_eq!(
+                        front.recompute_count(definition, kind),
+                        u64::from(!hit),
+                        "{definition} {kind:?}, verification={verify_cache}"
+                    );
+                }
+            }
+            assert_eq!(
+                front.store_adoptions(),
+                u64::from(main_hit) + u64::from(spare_hit)
+            );
+            for product in &products {
+                assert!(
+                    front
+                        .outcome(product.record)
+                        .unwrap()
+                        .outcome
+                        .result
+                        .is_ok()
+                );
+            }
+            runtime.shutdown();
+            if verify_cache {
+                let damaged = products[0].record.output.0;
+                let mut corrupted = 0;
+                for (key, bytes) in store.take() {
+                    if key.0 == damaged {
+                        store.put(&key, &bytes[..bytes.len() / 2]);
+                        corrupted += 1;
+                    } else {
+                        store.put(&key, &bytes);
+                    }
+                }
+                assert_eq!(corrupted, 1, "damage only the completed main body record");
+            }
+        }
+    });
+}
