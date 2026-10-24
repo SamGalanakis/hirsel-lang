@@ -1891,6 +1891,12 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
         let Some(site) = unit.tables.calls.get(call.index()) else {
             return self.invalid("a call outside the call table");
         };
+        if site.receipts.is_some() {
+            return Err(CodegenError::Invalid {
+                definition: self.definition().clone(),
+                what: "receipt call ownership transport is not implemented".into(),
+            });
+        }
         let abi = self.em.fn_abi(site.abi, self.definition())?;
         if abi.shape == CallableShape::Foreign {
             return self.foreign_call(call, abi, normal);

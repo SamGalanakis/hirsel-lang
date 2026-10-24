@@ -636,6 +636,7 @@ fn fixture_unit<S: Stage>(table: &LayoutTable) -> LirUnit<S> {
     ]
     .into_iter()
     .map(|callee| CallSite {
+        receipts: None,
         pretransfer_failure: None,
         forward_caller: true,
         operation_arguments: Vec::new(),

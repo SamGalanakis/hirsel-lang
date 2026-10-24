@@ -76,6 +76,7 @@ fn next(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     let normal = b.edge(after, &[]);
     let call = CallId(b.ed.unit.tables.calls.len() as u32);
     b.ed.unit.tables.calls.push(CallSite {
+        receipts: None,
         pretransfer_failure: None,
         forward_caller: true,
         callee: Callee::Indirect(callee),

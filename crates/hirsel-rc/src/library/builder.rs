@@ -1082,6 +1082,7 @@ impl<'c, 'a> Body<'c, 'a> {
         let arguments = PoolRange::push(&mut self.ed.unit.pools.call_arguments, arguments);
         let id = CallId(self.ed.unit.tables.calls.len() as u32);
         self.ed.unit.tables.calls.push(CallSite {
+            receipts: None,
             pretransfer_failure,
             forward_caller: !matches!(callee, Callee::Indirect(_) | Callee::Bound { .. }),
             operation_arguments,

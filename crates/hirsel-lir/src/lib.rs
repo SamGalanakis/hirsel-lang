@@ -32,6 +32,7 @@ pub mod objects;
 pub mod operation;
 pub mod persistent;
 pub mod profile;
+pub mod receipt_transport;
 pub mod rt_program;
 pub mod runtime_abi;
 pub mod sealed_payload_source;

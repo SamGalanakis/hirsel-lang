@@ -632,6 +632,24 @@ fn check_with_context<S: Stage>(
             })
             .collect();
     }
+    for call in &unit.tables.calls {
+        let contract = inputs
+            .layouts
+            .fn_abis
+            .get(call.abi.0 as usize)
+            .and_then(|abi| abi.receipts.as_ref());
+        let checked = match (&call.receipts, contract) {
+            (None, None) => Ok(()),
+            (Some(receipts), Some(contract)) => receipts.check_contract(contract),
+            _ => Err("receipt ABI transport: call and callee disagree on contract presence"),
+        };
+        if let Err(error) = checked {
+            return vec![Violation {
+                site: Site::UNIT,
+                kind: ViolationKind::Schema(error.into()),
+            }];
+        }
+    }
     let (_, abis) = crate::objects::references(unit);
     for id in abis {
         if let Some(abi) = inputs.layouts.fn_abis.get(id.0 as usize)

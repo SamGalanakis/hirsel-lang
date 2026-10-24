@@ -197,6 +197,7 @@ impl<S: Stage> UnitBuilder<S> {
                 }),
         );
         self.unit.tables.calls.push(CallSite {
+            receipts: None,
             pretransfer_failure: None,
             forward_caller: true,
             operation_arguments: Vec::new(),

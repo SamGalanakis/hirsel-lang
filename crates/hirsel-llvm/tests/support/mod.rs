@@ -929,6 +929,7 @@ impl<'t> Unit<'t> {
         );
         let result = fn_abi.result.as_ref().map(|r| self.plain(r.layout));
         self.builder.unit.tables.calls.push(CallSite {
+            receipts: None,
             pretransfer_failure: None,
             forward_caller: true,
             operation_arguments: Vec::new(),
@@ -958,6 +959,7 @@ impl<'t> Unit<'t> {
     pub fn diverging_call(&mut self, b: BlockId, callee: Callee, abi: &str, failure: FailureId) {
         let abi = self.table.abi(abi);
         self.builder.unit.tables.calls.push(CallSite {
+            receipts: None,
             pretransfer_failure: None,
             forward_caller: true,
             operation_arguments: Vec::new(),

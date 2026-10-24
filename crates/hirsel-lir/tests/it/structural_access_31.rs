@@ -302,6 +302,7 @@ fn keyed_call_prefix() -> hirsel_lir::ir::LirUnit<hirsel_lir::stage::Value> {
             declaration_digest: hirsel_syntax::ContentHash([0; 32]),
         });
     fixture.builder.unit.tables.calls.push(CallSite {
+        receipts: None,
         pretransfer_failure: None,
         forward_caller: false,
         callee: Callee::Operation(operation),

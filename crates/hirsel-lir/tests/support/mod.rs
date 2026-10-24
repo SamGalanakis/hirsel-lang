@@ -1424,6 +1424,7 @@ impl<S: Stage> Lir<S> {
         );
         let result = result.map(|layout| self.owned_or_plain(layout));
         self.builder.unit.tables.calls.push(CallSite {
+            receipts: None,
             pretransfer_failure: None,
             forward_caller: true,
             operation_arguments: Vec::new(),
@@ -1453,6 +1454,7 @@ impl<S: Stage> Lir<S> {
     pub fn diverging_call(&mut self, b: BlockId, abi: FnAbiId, failure: BlockId) {
         let callee = Callee::Direct(self.symbol(SymbolKind::Function));
         self.builder.unit.tables.calls.push(CallSite {
+            receipts: None,
             pretransfer_failure: None,
             forward_caller: true,
             operation_arguments: Vec::new(),

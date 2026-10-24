@@ -289,6 +289,7 @@ fn call(b: &mut Body<'_, '_>, direct: Direct, arguments: &[CallArgument]) -> R<O
     );
     let id = CallId(b.ed.unit.tables.calls.len() as u32);
     b.ed.unit.tables.calls.push(CallSite {
+        receipts: None,
         pretransfer_failure: None,
         forward_caller: false,
         operation_arguments: Vec::new(),

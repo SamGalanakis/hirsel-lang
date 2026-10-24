@@ -221,6 +221,7 @@ pub(super) fn invoke(
     let arguments = PoolRange::push(&mut b.ed.unit.pools.call_arguments, arguments);
     let call = CallId(b.ed.unit.tables.calls.len() as u32);
     b.ed.unit.tables.calls.push(CallSite {
+        receipts: None,
         pretransfer_failure: None,
         forward_caller: !matches!(callee.0, Callee::Indirect(_) | Callee::Bound { .. }),
         operation_arguments: callee.1,

@@ -329,6 +329,7 @@ impl Inline for Importer<'_> {
         let arguments = PoolRange::push(&mut self.out.pools.call_arguments, arguments);
         let call = CallId(self.out.tables.calls.len() as u32);
         self.out.tables.calls.push(CallSite {
+            receipts: None,
             pretransfer_failure: None,
             forward_caller: true,
             operation_arguments: Vec::new(),

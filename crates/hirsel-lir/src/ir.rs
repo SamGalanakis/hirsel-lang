@@ -11,6 +11,7 @@
 use crate::abi_types::FnAbiId;
 use crate::effect::Effects;
 use crate::layout_types::{LayoutId, ScalarKind};
+pub use crate::receipt_transport::{ReceiptArgument, ReceiptCall};
 use crate::stage::{Stage, StageKind};
 use hirsel_codec::{snapshot_enum, snapshot_struct};
 use hirsel_core_contract::OperationId;
@@ -1364,7 +1365,7 @@ pub struct CallArgument {
 
 /// A call: callee, ABI, arguments, result value and the callee's declared
 /// effects (never body-derived public promises).
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CallSite {
     /// Status 3 from a validated materialized keyed-primitive adapter. On this
     /// edge evaluated Take actuals remain in pending caller custody.
@@ -1379,6 +1380,30 @@ pub struct CallSite {
     pub destination: Option<DestinationClass>,
     pub declared: Effects,
     pub anchor: SourceAnchorId,
+    /// Receipt carriers appended after ordinary parameters. Absence preserves
+    /// the existing call encoding, identity and physical convention.
+    pub receipts: Option<ReceiptCall>,
+}
+
+// Preserve the pre-receipt Hash stream for ordinary calls. A present contract
+// has an explicit namespace, including a contract with no dynamic carriers.
+impl std::hash::Hash for CallSite {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.pretransfer_failure.hash(state);
+        self.forward_caller.hash(state);
+        self.callee.hash(state);
+        self.operation_arguments.hash(state);
+        self.abi.hash(state);
+        self.arguments.hash(state);
+        self.result.hash(state);
+        self.destination.hash(state);
+        self.declared.hash(state);
+        self.anchor.hash(state);
+        if let Some(receipts) = &self.receipts {
+            "hirsel.receipt-call.v1".hash(state);
+            receipts.hash(state);
+        }
+    }
 }
 
 /// Typed literal bits; floats keep their bit patterns.
@@ -2789,6 +2814,9 @@ impl<S: Stage> LirUnit<S> {
             }
             push(Ref::Abi(call.abi));
             push(Ref::CallArguments(call.arguments));
+            if let Some(receipts) = &call.receipts {
+                receipts.visit(&mut push);
+            }
             if let Some(result) = call.result {
                 push(Ref::Value(result));
             }
@@ -3240,7 +3268,7 @@ snapshot_struct!(CallSite {
     destination,
     declared,
     anchor
-});
+} trailing_optional receipts);
 snapshot_enum!(ConstantValue {
     Heap,
     Unit,

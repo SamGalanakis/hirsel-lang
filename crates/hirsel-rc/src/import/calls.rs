@@ -621,6 +621,7 @@ impl Importer<'_> {
         let arguments = PoolRange::push(&mut self.out.pools.call_arguments, args);
         let call = CallId(self.out.tables.calls.len() as u32);
         self.out.tables.calls.push(CallSite {
+            receipts: None,
             pretransfer_failure,
             forward_caller: match callee {
                 tir::Callee::Definition { .. } => true,

@@ -48,6 +48,12 @@ impl<S: Stage> Program<S> {
             }
         }
         for unit in &self.units {
+            if unit.tables.calls.iter().any(|call| call.receipts.is_some()) {
+                return fail(
+                    V::Malformed,
+                    "receipt call ownership transport is not implemented",
+                );
+            }
             crate::pretransfer::audit(unit, &self.layouts, &self.pretransfer_adapters)?;
             if !self.invocations.is_empty()
                 && (unit.header.origin == hirsel_lir::ir::UnitOrigin::Source

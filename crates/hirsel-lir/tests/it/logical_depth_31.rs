@@ -60,6 +60,7 @@ fn rejected_admission_does_not_need_retirement_but_success_does() {
 fn balanced_markers_before_the_actual_call_do_not_prove_invocation_scope() {
     let mut unit = admitted();
     unit.tables.calls.push(CallSite {
+        receipts: None,
         pretransfer_failure: None,
         forward_caller: false,
         operation_arguments: vec![],
@@ -179,6 +180,7 @@ fn generated_callback_requires_admission_even_when_both_markers_are_removed() {
     failure_row.rule = None;
     unit.tables.failures.push(failure_row);
     unit.tables.calls.push(CallSite {
+        receipts: None,
         pretransfer_failure: None,
         forward_caller: false,
         callee: Callee::Indirect(ValueId(0)),
