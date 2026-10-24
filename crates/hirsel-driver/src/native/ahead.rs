@@ -3,15 +3,19 @@ use hirsel_lir::ahead::AheadPlan;
 use hirsel_syntax::ContentHash;
 
 pub(super) fn helper_identity() -> ContentHash {
+    // This names the actual helper contract embedded in ahead metadata. The
+    // complete compiler identity belongs to object/cache producer binding, not
+    // to a link symbol: an unrelated, disabled diagnostic module must not alter
+    // otherwise identical native code. AheadPlan additionally binds every body,
+    // layout, target, fuel choice and capture recipe used by these helpers.
     ContentHash::of_parts(
-        "hirsel.ahead.helpers.v3",
+        "hirsel.ahead.helpers.v4",
         [
             hirsel_rt::AHEAD_HELPERS,
             hirsel_rt::AHEAD_HOST_HELPERS,
             hirsel_rt::AHEAD_SWITCH,
             hirsel_rt::DEPTH_HELPERS,
             hirsel_rt::DEPTH_LEAF_STACK_BYTES.to_le_bytes().as_slice(),
-            crate::COMPILER_IDENTITY.as_slice(),
         ],
     )
 }
