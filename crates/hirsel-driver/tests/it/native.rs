@@ -507,6 +507,28 @@ fn every_runtime_primitive_row_matches_its_export() {
         );
         assert!(used_exports.contains("hirsel_rt_v2_clock_sleep_until_at_site"));
         assert!(used_exports.insert(legacy_sleep.symbol.into()));
+        // Output calls now carry checked source codes; the original physical
+        // export remains an explicit compatibility contract as well.
+        let legacy_print = AbiExport {
+            caller_site: false,
+            symbol: "hirsel_rt_v2_out_print",
+            destination: true,
+            result: Some((12, 4)),
+            parameters: &[
+                Physical::Pointer,
+                Physical::Pointer,
+                Physical::I64,
+                Physical::I64,
+            ],
+        };
+        assert_eq!(
+            HIRSEL_ABI_EXPORTS
+                .iter()
+                .find(|export| export.symbol == legacy_print.symbol),
+            Some(&legacy_print)
+        );
+        assert!(used_exports.contains("hirsel_rt_v2_out_print_at_site"));
+        assert!(used_exports.insert(legacy_print.symbol.into()));
         assert_eq!(
             used_exports
                 .iter()

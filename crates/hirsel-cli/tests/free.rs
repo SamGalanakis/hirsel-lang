@@ -774,6 +774,27 @@ fn f1_corpus_matrix_with_live(
     grants: impl FnOnce(&Scratch) -> serde_json::Value,
     expected_exit: i32,
     stdin: &[u8],
+    live_peer: impl FnMut() -> Box<dyn FnOnce()>,
+) {
+    f1_corpus_matrix_with_witness(
+        name,
+        text,
+        grants,
+        (expected_exit, |_, _, _, _| {}),
+        stdin,
+        live_peer,
+    );
+}
+
+type LiveWitness = fn(&Output, &hirsel_free::tape::Tape, &Scratch, &str);
+
+/// Check the required live state before comparing its complete replay matrix.
+fn f1_corpus_matrix_with_witness(
+    name: &str,
+    text: &str,
+    grants: impl FnOnce(&Scratch) -> serde_json::Value,
+    expected: (i32, LiveWitness),
+    stdin: &[u8],
     mut live_peer: impl FnMut() -> Box<dyn FnOnce()>,
 ) {
     let scratch = Scratch::new(name);
@@ -806,7 +827,7 @@ fn f1_corpus_matrix_with_live(
         stop_peer();
         assert_eq!(
             live.status.code(),
-            Some(expected_exit),
+            Some(expected.0),
             "{name} {level} live: {live:?}"
         );
         assert_eq!(
@@ -816,6 +837,13 @@ fn f1_corpus_matrix_with_live(
             hirsel_rt::free_driver::admission_enabled()
         );
         let projection = if hirsel_rt::free_driver::admission_enabled() {
+            let bytes = std::fs::read(&tape).unwrap();
+            (expected.1)(
+                &live,
+                &hirsel_free::tape::parse(&bytes).unwrap(),
+                &scratch,
+                level,
+            );
             Some(std::fs::read_to_string(&report).unwrap())
         } else {
             None
@@ -3920,5 +3948,529 @@ fn f1_required_r7_aggregate_thaw_cross_engine_matrix() {
     f1_required_r7_root_matrix(
         "required-r7-aggregate",
         "DROP-2-root-aggregate-thaw-run.hir",
+    );
+}
+
+#[test]
+fn f1_required_process_wait_allows_other_task_file_progress_cross_engine_matrix() {
+    if !hirsel_rt::free_driver::admission_enabled() {
+        return;
+    }
+    use std::os::unix::fs::PermissionsExt;
+    let executable = Scratch::new("required-process-file");
+    let host = executable.path("data");
+    std::fs::create_dir(&host).unwrap();
+    let child = host.join("child");
+    // Follow the bounded process/file wait in tasks/free/host/process_tests.rs.
+    // The marker proves the process is in flight before Hirsel writes its trigger.
+    std::fs::write(&child, "#!/bin/sh\nprintf started > started\ni=0\nwhile [ ! -f trigger ]; do i=$((i + 1)); [ \"$i\" -lt 1000 ] || exit 42; /bin/sleep 0.001; done\n/bin/cat trigger\nprintf observed >&2\n").unwrap();
+    std::fs::set_permissions(&child, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let text = format!(
+        r#"pub type E = Grant(GrantError) | Files(FileError) | Output(OutputError)
+pub fn main(rt: Io) -> Result[(), E] {{
+  let tasks = io.tasks(rt) ? Grant
+  let out = io.stdout(rt) ? Grant
+  let p = io.process(rt) ? Grant
+  let clock = io.monotonic_clock(rt) ? Grant
+  let d = io.dir(rt, path.of("data")) ? Files
+  let _ = file.remove(d, path.of("started"))
+  let _ = file.remove(d, path.of("trigger"))
+  let ok = task.scope(tasks, fn(s: Scope) -> bool {{
+    let child = task.async(s, fn() -> bool {{
+      match proc.run(p, Command(program: path.of("{}"), args: [], dir: Some(d), env: None(), own_group: true), b"", 64u64, None()) {{
+        Ok(ran) => ran.status == Exited(0) && ran.stdout == b"ready from other task\n" && ran.stderr == b"observed",
+        Error(_) => false,
+      }}
+    }})
+    let mut ready = false
+    while !ready {{
+      ready = match file.read_bytes(d, path.of("started")) {{ Ok(v) => v == b"started", Error(_) => false }}
+      if !ready {{
+        match clock.monotonic(clock) {{
+          Ok(now) => {{
+            let at = match instant.checked_add(clock, now, 1000000u64) {{ Some(v) => v, None() => now }}
+            let _ = clock.sleep_until(clock, at)
+          }},
+          Error(_) => failure.check(false, Bounds()),
+        }}
+      }}
+    }}
+    let wrote = file.write_bytes(d, path.of("trigger"), b"ready from other task\n") == Ok(())
+    let child_ok = task.await(s, take child)
+    wrote && child_ok
+  }})
+  failure.check(ok, Bounds())
+  out.print(out, "process and file progressed\n") ? Output
+  Ok(())
+}}
+"#,
+        child.display()
+    );
+    f1_corpus_matrix_with_io(
+        "required-process-file",
+        &text,
+        |_| serde_json::json!({"stdout":"stdout.bytes@1","tasks":"tasks.free@1","monotonic_clock":"clock.monotonic.ns@1","process":{"provider":"process.spawn@1","rules":[{"program":child,"env":[]}]},"dirs":[{"path":"data","host":host,"access":"read_write"}]}),
+    );
+}
+
+fn f1_recorded_thaws(tape: &hirsel_free::tape::Tape) -> Vec<bool> {
+    tape.logs
+        .values()
+        .flat_map(|log| hirsel_free::record::decode(log).unwrap())
+        .filter_map(|record| match record {
+            hirsel_free::record::Record::Thaw { ok, .. } => Some(ok),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn f1_required_finite_release_records_unfinished_child_and_failed_thaw() {
+    if !hirsel_rt::free_driver::admission_enabled() {
+        return;
+    }
+    f1_corpus_matrix_with_witness(
+        "required-finite-release-witness",
+        source("finite_release"),
+        |_| serde_json::json!({"io":{"stdout":"stdout.bytes@1","tasks":"tasks.free@1","dirs":[]},"args":[],"budgets":{"provider":"budgets.limits@2","fuel":200000}}),
+        (
+            hirsel_run_schema::exit::BUDGET_EXCEEDED,
+            |live, tape, _, _| {
+                assert_eq!(live.stdout, b"shared\n", "{live:?}");
+                assert_eq!(f1_recorded_thaws(tape), [false]);
+                let child = tape.cut.get(&vec![0]).expect("admitted child store");
+                assert!(child.op > 0, "{child:?}");
+                assert_eq!(child.phase, hirsel_free::phase::Phase::Done);
+            },
+        ),
+        b"",
+        || Box::new(|| {}),
+    );
+}
+
+#[test]
+fn f1_required_nested_root_records_child_end_before_successful_thaw() {
+    if !hirsel_rt::free_driver::admission_enabled() {
+        return;
+    }
+    f1_corpus_matrix_with_witness(
+        "required-nested-root-witness",
+        source("nested_root"),
+        |_| serde_json::json!({"io":{"stdout":"stdout.bytes@1","tasks":"tasks.free@1","dirs":[]},"args":[]}),
+        (0, |live, tape, _, _| {
+            assert_eq!(live.stdout, b"thawed\n", "{live:?}");
+            assert_eq!(f1_recorded_thaws(tape), [true]);
+            let child = tape.cut.get(&vec![0]).expect("completed child");
+            assert!(child.op > 1, "{child:?}");
+            assert_eq!(child.phase, hirsel_free::phase::Phase::Done);
+        }),
+        b"",
+        || Box::new(|| {}),
+    );
+}
+
+/// S-13's two callbacks, using the same C ABI/manifest shape as
+/// hirsel-driver/tests/it/foreign_threads.rs.
+fn f1_serial_callback_fixture() -> Scratch {
+    let scratch = Scratch::new("required-serial-callbacks");
+    let package = scratch.path("serial");
+    std::fs::create_dir(&package).unwrap();
+    std::fs::write(
+        package.join("lib.c"),
+        r#"#include <stdint.h>
+#include <stdatomic.h>
+static _Atomic uint64_t active, overlap;
+uint64_t f1_serial_call(void *state, uint64_t (*callback)(void *, uint64_t), uint64_t tag) {
+  if (atomic_fetch_add_explicit(&active, 1, memory_order_relaxed))
+    atomic_fetch_add_explicit(&overlap, 1, memory_order_relaxed);
+  uint64_t result = callback(state, tag);
+  atomic_fetch_sub_explicit(&active, 1, memory_order_relaxed);
+  return result;
+}
+uint64_t f1_serial_overlap(void) { return atomic_load_explicit(&overlap, memory_order_relaxed); }
+"#,
+    )
+    .unwrap();
+    let target = hirsel_driver::native::TargetSpec::x86_64_unknown_linux_gnu();
+    let tools =
+        hirsel_driver::native::Toolchain::in_tree(&scratch.path("runtime"), &[&target]).unwrap();
+    let mut command = Command::new(&tools.clang);
+    command
+        .args(["-c", "-O1", "-fPIC"])
+        .arg(package.join("lib.c"))
+        .arg("-o")
+        .arg(package.join("lib.o"));
+    let compiled = bounded_output(&mut command, &scratch.path("main.hir"), "serial C fixture");
+    assert!(compiled.status.success(), "{compiled:?}");
+    std::fs::write(package.join("lib.hir"), r#"type State { tasks: Tasks }
+/// Calls callback(state, tag) once, during this call; retains neither pointer.
+extern "c" fn f1_serial_call(u: Unsafe, mut ctx: unique State, f: FnPtr[fn(mut state: unique State, item: u64) -> u64], tag: u64) -> u64
+/// Returns the overlap counter; retains nothing.
+extern "c" fn f1_serial_overlap(u: Unsafe) -> u64
+fn respond(mut state: State, tag: u64) -> u64 {
+  task.scope(state.tasks, fn(s: Scope) -> u64 {
+    let child = task.async(s, fn() -> u64 { tag })
+    task.await(s, take child)
+  })
+}
+pub fn call(u: Unsafe, tasks: Tasks, tag: u64) -> u64 {
+  let mut state = State(tasks: tasks)
+  f1_serial_call(u, mut state, respond, tag)
+}
+pub fn overlaps(u: Unsafe) -> u64 { f1_serial_overlap(u) }
+"#).unwrap();
+    std::fs::write(package.join("hirsel.json"), serde_json::json!({"schema":1,"package":{"name":"serial","version":"1"},"sources":[{"path":"lib.hir","module":[]}],"dependencies":[],"unsafe_ffi":{"link":["lib.o"],"headers_checked":false,"threads":"serial","wrappers":[{"module":[],"name":"call","kind":"effect","model":"deterministic"},{"module":[],"name":"overlaps","kind":"effect","model":"deterministic"}]}}).to_string()).unwrap();
+    std::fs::write(
+        scratch.path("main.hir"),
+        r#"pub type E = Grant(GrantError) | Output(OutputError)
+pub fn main(rt: Io, u: Unsafe) -> Result[(), E] {
+  let tasks = io.tasks(rt) ? Grant
+  let out = io.stdout(rt) ? Grant
+  let total = task.scope(tasks, fn(s: Scope) -> u64 {
+    let a = task.async(s, fn() -> u64 { serial.call(u, tasks, 1u64) })
+    let b = task.async(s, fn() -> u64 { serial.call(u, tasks, 2u64) })
+    let first = task.await(s, take a)
+    let second = task.await(s, take b)
+    first + second
+  })
+  failure.check(total == 3u64 && serial.overlaps(u) == 0u64, Bounds())
+  out.print(out, "serial callbacks\n") ? Output
+  Ok(())
+}
+"#,
+    )
+    .unwrap();
+    std::fs::write(scratch.path("hirsel.json"), serde_json::json!({"schema":1,"package":{"name":"serial_app","version":"1"},"entry":{"module":[],"name":"main"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[{"manifest":"serial/hirsel.json","package":{"name":"serial","version":"1"},"expose":[{"head":"serial","module":[]}]}]}).to_string()).unwrap();
+    scratch
+}
+
+#[test]
+fn f1_required_serial_callback_fixture_checks() {
+    let scratch = f1_serial_callback_fixture();
+    let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+    command.arg("check").arg(scratch.path("hirsel.json"));
+    let checked = bounded_output(
+        &mut command,
+        &scratch.path("main.hir"),
+        "serial callback source check",
+    );
+    assert!(checked.status.success(), "{checked:?}");
+}
+
+const F1_SERIAL_GRANTS: &str = r#"{"io":{"stdout":"stdout.bytes@1","tasks":"tasks.free@1","dirs":[]},"args":[],"unsafe":true}"#;
+
+#[test]
+fn f1_required_serial_callbacks_interpreter_refuses_extern() {
+    let scratch = f1_serial_callback_fixture();
+    let program = scratch.path("hirsel.json");
+    let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+    command
+        .arg("run")
+        .arg(&program)
+        .args(["--grants", F1_SERIAL_GRANTS]);
+    f1_permits(&mut command, 1);
+    let refused = bounded_output(
+        &mut command,
+        &scratch.path("main.hir"),
+        "PROG-4 interpreter extern refusal",
+    );
+    assert_eq!(
+        refused.status.code(),
+        Some(hirsel_run_schema::exit::REFUSED),
+        "{refused:?}"
+    );
+    assert!(refused.stdout.is_empty(), "{refused:?}");
+    assert!(
+        String::from_utf8_lossy(&refused.stderr).contains("f1_serial_call"),
+        "{refused:?}"
+    );
+}
+
+#[test]
+fn f1_required_serial_callbacks_native_width_and_permit_matrix() {
+    if !hirsel_rt::free_driver::admission_enabled() {
+        return;
+    }
+    let scratch = f1_serial_callback_fixture();
+    let program = scratch.path("hirsel.json");
+    let capture = scratch.path("main.hir");
+    let report = scratch.path("projection");
+    let mut grants: serde_json::Value = serde_json::from_str(F1_SERIAL_GRANTS).unwrap();
+    for level in ["record", "durable"] {
+        grants["recording"] = level.into();
+        let tape = scratch.path(level);
+        let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+        command
+            .args(["run", "--native"])
+            .arg(&program)
+            .args(["--grants", &grants.to_string(), "--cores", "8", "--record"])
+            .arg(&tape)
+            .env(hirsel_rt::free_replay::Report::VAR, &report);
+        f1_permits(&mut command, 8);
+        let live = bounded_output(
+            &mut command,
+            &capture,
+            &format!("serial {level} native width8 permits8"),
+        );
+        assert!(live.status.success(), "{live:?}");
+        assert_eq!(live.stdout, b"serial callbacks\n", "{live:?}");
+        assert!(live.stderr.is_empty(), "{live:?}");
+        let bytes = std::fs::read(&tape).unwrap();
+        assert!(bytes.starts_with(hirsel_free::tape::MAGIC));
+        assert!(hirsel_free::tape::parse(&bytes).unwrap().end.is_some());
+        let projection = std::fs::read_to_string(&report).unwrap();
+        assert!(projection.contains("Gate(\"package:"), "{projection}");
+        for engine in &ENGINES[1..] {
+            for width in ["1", "8"] {
+                for permits in [1, 8] {
+                    let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+                    command
+                        .arg("run")
+                        .args(*engine)
+                        .arg(&program)
+                        .arg("--replay")
+                        .arg(&tape)
+                        .args(["--cores", width])
+                        .env(hirsel_rt::free_replay::Report::VAR, &report);
+                    f1_permits(&mut command, permits);
+                    let replay = bounded_output(
+                        &mut command,
+                        &capture,
+                        &format!("serial {level} {engine:?} width{width} permits{permits}"),
+                    );
+                    assert_eq!(replay.status.code(), live.status.code(), "{replay:?}");
+                    assert_eq!(replay.stdout, live.stdout, "{replay:?}");
+                    assert_eq!(replay.stderr, live.stderr, "{replay:?}");
+                    assert_eq!(std::fs::read_to_string(&report).unwrap(), projection);
+                }
+            }
+        }
+    }
+}
+
+const F1_REQUIRED_MUTEX_CYCLE_WITNESS: &str = r#"fn discard[T](take x: T) -> () { () }
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let out = io.stdout(rt)?
+  let built: String = "s"
+  let root: Shared[String] = shared.freeze(take built)
+  let held = copy root
+  let signal_text: String = "locked"
+  let signal: Shared[String] = shared.freeze(take signal_text)
+  let in_mutex = copy signal
+  let roots: unique List[Shared[String]] = unique [take root, take in_mutex]
+  let mutex = mutex.create(tasks, take roots)
+  let good = task.scope(tasks, fn(scope: Scope) -> bool {
+    let a = task.async(scope, fn() -> u64 {
+      let mut signals: unique List[Shared[String]] = unique [take signal]
+      let mut started = false
+      while !started {
+        match list.pop(mut signals) {
+          Some(marker) => match shared.thaw(take marker) {
+            Ok(text) => { discard(take text); started = true },
+            Error(retry) => list.push(mut signals, take retry),
+          },
+          None() => failure.check(false, Bounds()),
+        }
+      }
+      discard(take held)
+      mutex.with(tasks, mutex, fn(mut rs: unique List[Shared[String]]) -> u64 uses {} { list.len(rs) })
+    })
+    let b = task.async(scope, fn() -> bool {
+      mutex.with(tasks, mutex, fn(mut rs: unique List[Shared[String]]) -> bool uses {} {
+        match list.pop(mut rs) { Some(marker) => discard(take marker), None() => failure.check(false, Bounds()) }
+        let mut done = false
+        while !done {
+          match list.pop(mut rs) {
+            Some(mine) => match shared.thaw(take mine) {
+              Ok(text) => { discard(take text); done = true },
+              Error(retained) => list.push(mut rs, take retained),
+            },
+            None() => failure.check(false, Bounds()),
+          }
+        }
+        done
+      })
+    })
+    let empty = task.await(scope, take a) == 0u64
+    let thawed = task.await(scope, take b)
+    empty && thawed
+  })
+  failure.check(good, Bounds())
+  let _ = out.print(out, "mutex cycle thawed\n")
+  Ok(())
+}
+"#;
+
+#[test]
+fn f1_required_mutex_cycle_witness_source_checks() {
+    let scratch = Scratch::new("required-mutex-witness-check");
+    let program = scratch.path("main.hir");
+    std::fs::write(&program, F1_REQUIRED_MUTEX_CYCLE_WITNESS).unwrap();
+    let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+    command.arg("check").arg(&program);
+    let checked = bounded_output(&mut command, &program, "mutex cycle witness source check");
+    assert!(checked.status.success(), "{checked:?}");
+}
+
+#[test]
+fn f1_required_mutex_cycle_records_release_on_wait_entry_before_thaw() {
+    if !hirsel_rt::free_driver::admission_enabled() {
+        return;
+    }
+    f1_corpus_matrix_with_witness(
+        "required-mutex-cycle-witness",
+        F1_REQUIRED_MUTEX_CYCLE_WITNESS,
+        |_| serde_json::json!({"io":{"stdout":"stdout.bytes@1","tasks":"tasks.free@1","dirs":[]},"args":[]}),
+        (0, |live, tape, _, _| {
+            assert_eq!(live.stdout, b"mutex cycle thawed\n", "{live:?}");
+            let thaws = f1_recorded_thaws(tape);
+            assert_eq!(thaws.last(), Some(&true), "{thaws:?}");
+            assert_eq!(thaws.iter().filter(|&&ok| ok).count(), 2, "{thaws:?}");
+            let a = hirsel_free::record::decode(&tape.logs[&vec![0]]).unwrap();
+            assert!(a.iter().any(|record| matches!(record, hirsel_free::record::Record::Gap { gap, .. } if *gap >= 2)), "{a:?}");
+        }),
+        b"",
+        || Box::new(|| {}),
+    );
+}
+
+const F1_REQUIRED_PARKED_RECEIVE_WITNESS: &str = r#"fn discard[T](take x: T) -> () { () }
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let out = io.stdout(rt)?
+  let built: String = "s"
+  let root: Shared[String] = shared.freeze(take built)
+  let held = copy root
+  let (sender, receiver): (Sender[u32], Receiver[u32]) = channel.open(tasks)
+  task.scope(tasks, fn(scope: Scope) {
+    let child = task.async(scope, fn() {
+      discard(take held)
+      let mut rx = take receiver
+      let _ = channel.receive(tasks, mut rx)
+    })
+    let mut roots: unique List[Shared[String]] = unique [take root]
+    let mut thawed = false
+    while !thawed {
+      match list.pop(mut roots) {
+        Some(mine) => match shared.thaw(take mine) {
+          Ok(text) => { discard(take text); thawed = true },
+          Error(retained) => list.push(mut roots, take retained),
+        },
+        None() => failure.check(false, Bounds()),
+      }
+    }
+    let _ = out.print(out, "parked receive thawed\n")
+    task.await(scope, take child)
+    discard(take sender)
+  })
+  Ok(())
+}
+"#;
+
+#[test]
+fn f1_required_parked_receive_records_live_durable_output_cut_and_replays_prefix() {
+    if !hirsel_rt::free_driver::admission_enabled() {
+        return;
+    }
+    f1_corpus_matrix_with_witness(
+        "required-parked-receive-witness",
+        F1_REQUIRED_PARKED_RECEIVE_WITNESS,
+        |_| serde_json::json!({"io":{"stdout":"stdout.bytes@1","tasks":"tasks.free@1","dirs":[]},"args":[]}),
+        (
+            hirsel_run_schema::exit::BLOCKED,
+            |live, tape, scratch, level| {
+                assert_eq!(live.stdout, b"parked receive thawed\n", "{live:?}");
+                let thaws = f1_recorded_thaws(tape);
+                assert_eq!(thaws.last(), Some(&true), "{thaws:?}");
+                assert_eq!(thaws.iter().filter(|&&ok| ok).count(), 1, "{thaws:?}");
+                assert_eq!(tape.cut[&vec![0]].phase, hirsel_free::phase::Phase::Entered);
+                if level != "durable" {
+                    return;
+                }
+                let bytes = std::fs::read(scratch.path(level)).unwrap();
+                let mut at = hirsel_free::tape::MAGIC.len();
+                let mut output_cut = None;
+                // Real flush frame offsets, never a synthetic reframing of the final cut.
+                while at + 8 <= bytes.len() {
+                    let len = u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap()) as usize;
+                    let end = at + 8 + len;
+                    assert!(end <= bytes.len());
+                    if bytes[at + 8] == 2 {
+                        // FLUSH
+                        let prefix = hirsel_free::tape::parse(&bytes[..end]).unwrap();
+                        if prefix
+                            .cut
+                            .get(&vec![0])
+                            .is_some_and(|p| p.phase == hirsel_free::phase::Phase::Entered)
+                            && prefix
+                                .cut
+                                .get(&vec![])
+                                .is_some_and(|p| p.phase == hirsel_free::phase::Phase::Entered)
+                            && f1_recorded_thaws(&prefix).last() == Some(&true)
+                        {
+                            output_cut = Some(end);
+                            break;
+                        }
+                    }
+                    at = end;
+                }
+                let end = output_cut.expect(
+                    "real durable output flush admits child's receive entry and successful thaw",
+                );
+                let prefix_path = scratch.path("parked-output-prefix");
+                std::fs::write(&prefix_path, &bytes[..end]).unwrap();
+                let program = scratch.path("main.hir");
+                let report = scratch.path("prefix-projection");
+                let mut reference = None;
+                for engine in ENGINES {
+                    for width in ["1", "8"] {
+                        for permits in [1, 8] {
+                            let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+                            command
+                                .arg("run")
+                                .args(engine)
+                                .arg(&program)
+                                .arg("--replay")
+                                .arg(&prefix_path)
+                                .args(["--cores", width])
+                                .env(hirsel_rt::free_replay::Report::VAR, &report);
+                            f1_permits(&mut command, permits);
+                            let replay = bounded_output(
+                                &mut command,
+                                &program,
+                                &format!(
+                                    "parked actual durable cut {engine:?} width{width} permits{permits}"
+                                ),
+                            );
+                            assert_eq!(
+                                replay.status.code(),
+                                Some(hirsel_run_schema::exit::BLOCKED),
+                                "{replay:?}"
+                            );
+                            assert!(
+                                replay.stdout.is_empty(),
+                                "prepared output cannot be invented: {replay:?}"
+                            );
+                            let projection = std::fs::read_to_string(&report).unwrap();
+                            assert!(projection.contains("truncated"), "{projection}");
+                            let observed = (
+                                replay.status.code(),
+                                replay.stdout,
+                                replay.stderr,
+                                projection,
+                            );
+                            if let Some(reference) = &reference {
+                                assert_eq!(&observed, reference);
+                            } else {
+                                reference = Some(observed);
+                            }
+                        }
+                    }
+                }
+            },
+        ),
+        b"",
+        || Box::new(|| {}),
     );
 }

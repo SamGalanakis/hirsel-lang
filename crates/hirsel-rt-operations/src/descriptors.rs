@@ -717,6 +717,7 @@ pub const ENTRIES: &[Entry] = &[
     ops("hirsel_rt_v2_capture_finish", HOST),
     ops("hirsel_rt_v2_signal_wait", HOST),
     ops("hirsel_rt_v2_out_print", HOST),
+    ops("hirsel_rt_v2_out_print_at_site", HOST),
     ops("hirsel_rt_v2_out_write", HOST),
     ops("hirsel_rt_v2_err_print", HOST),
     ops("hirsel_rt_v2_err_write", HOST),

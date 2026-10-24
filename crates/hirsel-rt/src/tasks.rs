@@ -3638,7 +3638,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_channel_send(
 pub unsafe extern "C" fn hirsel_rt_v2_channel_receive(
     ctx: *mut TaskCtx,
     caller_site: u64,
-    _operation_site: u64,
+    operation_site: u64,
     out: *mut u32,
     receiver: *mut u64,
     message: *mut u8,
@@ -3656,12 +3656,20 @@ pub unsafe extern "C" fn hirsel_rt_v2_channel_receive(
         };
     }
     if free::enabled(ctx) {
+        // A replay may stop at the receive entry before the ordinary wait stores
+        // caller_site. Retain the checked operation code in this task's context.
+        let replay = unsafe { (*ctx).run_ref().free_replay };
+        let previous = replay
+            .then(|| unsafe { std::mem::replace(&mut (*ctx).operation_site, operation_site) });
         unsafe {
             crate::stop::check(
                 ctx,
                 free::channel::receive(ctx, receiver.read(), message, out, caller_site),
             )
         };
+        if let Some(previous) = previous {
+            unsafe { (*ctx).operation_site = previous };
+        }
         return STATUS_OK;
     }
     let s = scheduler(ctx);

@@ -132,7 +132,11 @@ fn inventory_set_equality_and_digest_control() {
                 _ => Some("CAP-2"),
             }
         );
-        let symbol = format!("hirsel_rt_v2_{}", name.replace('.', "_"));
+        let symbol = if name == "out.print" {
+            "hirsel_rt_v2_out_print_at_site".into()
+        } else {
+            format!("hirsel_rt_v2_{}", name.replace('.', "_"))
+        };
         assert_eq!(
             row.dispositions.native,
             Disposition::RuntimePrimitive(symbol.clone())

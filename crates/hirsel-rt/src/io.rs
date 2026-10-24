@@ -2890,6 +2890,34 @@ impl UnitResult {
         }
     }
 }
+/// Site-carrying variant of the stable output export. The checked FnAbi supplies
+/// source codes so a truncated replay can attribute its prepared output wait.
+/// # Safety
+/// As `hirsel_rt_v2_out_print`; the source codes belong to this program.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_out_print_at_site(
+    ctx: *mut crate::TaskCtx,
+    _caller_site: u64,
+    operation_site: u64,
+    destination: *mut u8,
+    out: *mut UnitResult,
+    s: *const u64,
+    owner: *mut crate::Header,
+    start: u64,
+    len: u64,
+) -> u8 {
+    // Own the semantic entry before inspecting replay state or suspending.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
+    let replay = unsafe { (*ctx).run_ref().free_replay };
+    let previous =
+        replay.then(|| unsafe { std::mem::replace(&mut (*ctx).operation_site, operation_site) });
+    let status = unsafe { hirsel_rt_v2_out_print(ctx, destination, out, s, owner, start, len) };
+    if let Some(previous) = previous {
+        unsafe { (*ctx).operation_site = previous };
+    }
+    status
+}
+
 /// `out.print` at the Hirsel ABI v2 of `fn(s: Stdout, text: String) -> Result[(), OutputError]`
 /// (`HIRSEL_ABI_EXPORTS`): the context, the unused caller destination, the inline result,
 /// the borrowed `Stdout` handle by read-only address, then the String slice by value as

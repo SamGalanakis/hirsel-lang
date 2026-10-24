@@ -135,6 +135,7 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
         row.failure = Some(hirsel_core_contract::RuleCode("MEM-14".into()));
     }
     let symbol = match name.as_str() {
+        "out.print" => Some("hirsel_rt_v2_out_print_at_site".into()),
         "clock.sleep_until" => Some("hirsel_rt_v2_clock_sleep_until_at_site".into()),
         // Fixed declaration signatures: every entry has its exact physical ABI
         // in HIRSEL_ABI_EXPORTS; generic callbacks remain compiled bodies.
@@ -151,7 +152,6 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
         | "string.byte_offset"
         | "bytes.slice"
         | "path.text"
-        | "out.print"
         | "out.write"
         | "io.dir"
         | "dir.narrow"
@@ -2243,6 +2243,18 @@ pub const HIRSEL_ABI_EXPORTS: &[AbiExport] = &[
         destination: true,
         result: Some((16, 8)),
         parameters: &[Physical::Pointer],
+    },
+    AbiExport {
+        caller_site: true,
+        symbol: "hirsel_rt_v2_out_print_at_site",
+        destination: true,
+        result: Some((12, 4)),
+        parameters: &[
+            Physical::Pointer,
+            Physical::Pointer,
+            Physical::I64,
+            Physical::I64,
+        ],
     },
     AbiExport {
         caller_site: false,
