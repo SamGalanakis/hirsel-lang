@@ -6,6 +6,8 @@ use super::*;
 use object::read::elf::FileHeader as _;
 use std::{collections::BTreeMap, path::PathBuf, process::Command};
 
+pub mod discovery;
+
 const RUNTIME: Domain = Domain {
     kind: 0x4f00000d,
     schema: 2,
