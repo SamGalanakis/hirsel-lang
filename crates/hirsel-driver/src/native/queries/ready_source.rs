@@ -1,5 +1,4 @@
 //! Compact source discovery metadata for a demanded Ready miss.
-use super::*;
 use hirsel_rc::instance::{InstanceId, Instances};
 /// Compact callable facts captured with an instance's source discovery.
 /// These are ordinary descriptor data, bound to the accepted instance's

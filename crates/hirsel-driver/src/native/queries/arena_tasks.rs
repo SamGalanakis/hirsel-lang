@@ -103,7 +103,7 @@ impl ArenaTasks {
     }
     fn charge(&self, bytes: u64) -> Result<(), String> {
         self.charged
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |charged| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |charged| {
                 charged
                     .checked_add(bytes)
                     .filter(|total| *total <= self.allowance.bytes())
