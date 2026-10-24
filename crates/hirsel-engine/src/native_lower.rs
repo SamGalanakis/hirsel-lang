@@ -310,6 +310,11 @@ impl NativeOriginalBody {
     }
 }
 impl NativeOriginalReader {
+    /// The owning immutable signature/private-view snapshot, for binding
+    /// settled source metadata without decoding an original body.
+    pub fn signatures(&self) -> &Arc<SignatureSnapshot> {
+        &self.verified.signatures
+    }
     pub fn record_context(&self) -> Arc<NativeRecordContext> {
         self.verified.anchors.clone()
     }
