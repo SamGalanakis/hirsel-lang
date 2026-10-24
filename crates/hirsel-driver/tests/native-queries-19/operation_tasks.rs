@@ -182,6 +182,10 @@ fn run(jobs: usize) {
         });
         assert_eq!(selected[0], selected[1]);
         let graph = operations.graph(selected[0]).unwrap();
+        let mut wrong = instances.roots()[0].clone();
+        wrong.policy = ContentHash::of_bytes(b"different runtime operation policy");
+        assert_eq!(graph.get(&wrong), None);
+
         let request = runtime.request(&[instances.discovery_id()]);
         let discovery = runtime.wait(request).unwrap()[0];
         let completed = instances

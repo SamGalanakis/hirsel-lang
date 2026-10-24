@@ -22,6 +22,7 @@ fn actual_operation_components_cut_off_before_values_and_propagate_recursive_loc
         let options = native::Options::new(target.clone());
         let policy = ContentHash::of_bytes(b"operation component control");
         let mut previous = BTreeMap::new();
+        let mut previous_graph: Option<native::queries::operation::SettledOperations> = None;
         for (iteration, (literal, heap, fresh)) in [
             (7u64, false, false),
             (7, false, true),
@@ -95,6 +96,23 @@ fn actual_operation_components_cut_off_before_values_and_propagate_recursive_loc
                 before,
                 "operation settlement never opens a Value"
             );
+            assert!(settled.matches_inputs(&instances, &environment).unwrap());
+            if let Some(old) = &previous_graph {
+                assert_eq!(
+                    old.matches_inputs(&instances, &environment).unwrap(),
+                    fresh,
+                    "retained graph must match every actual admitted base input, even when facet outputs are equal"
+                );
+            }
+            for name in ["first", "second", "main"] {
+                let mut wrong = completed[name].0.clone();
+                wrong.policy = ContentHash::of_bytes(b"different operation policy");
+                assert_eq!(settled.get(&wrong), None);
+                wrong = completed[name].0.clone();
+                wrong.target_abi = ContentHash::of_bytes(b"different operation target");
+                assert_eq!(settled.get(&wrong), None);
+            }
+
             for name in ["first", "second", "main"] {
                 assert_eq!(
                     settled.get(&completed[name].0),
@@ -166,6 +184,7 @@ fn actual_operation_components_cut_off_before_values_and_propagate_recursive_loc
                 main.product
             );
             assert_eq!(trace.totals(), before);
+            previous_graph = Some(settled);
         }
     });
 }

@@ -32,13 +32,27 @@ pub struct OperationComponent {
 pub struct SettledOperations {
     pub components: Vec<OperationComponent>,
     values: BTreeMap<Function, bool>,
+    owners: BTreeMap<Function, InstanceAddress>,
+    inputs: ContentHash,
     pub(super) retained_allowance: Option<Arc<hirsel_engine::runtime::MemoryReservation>>,
 }
 impl SettledOperations {
     pub fn get(&self, owner: &InstanceAddress) -> Option<bool> {
-        self.values
-            .get(&(owner.instance.definition().clone(), owner.instance.digest()))
-            .copied()
+        let key = function(owner);
+        if self.owners.get(&key) != Some(owner) {
+            return None;
+        }
+        self.values.get(&key).copied()
+    }
+    /// Scope check for a retained graph before constructing a new callable
+    /// snapshot. All admitted base outputs matter: a caller's unchanged Value
+    /// alone cannot justify its old transitive operation-freedom result.
+    pub fn matches_inputs(
+        &self,
+        instances: &DemandInstances,
+        environment: &NativeEnvironment<'_>,
+    ) -> Result<bool, String> {
+        Ok(self.inputs == OperationQueryPlan::new(instances, environment)?.inputs)
     }
 }
 fn function(owner: &InstanceAddress) -> Function {
@@ -61,6 +75,7 @@ pub(super) struct OperationResult {
 /// clients use this planner and the same independently checked component query.
 pub(super) struct OperationQueryPlan {
     components: Vec<PlannedComponent>,
+    inputs: ContentHash,
 }
 impl OperationQueryPlan {
     pub fn new(
@@ -87,6 +102,25 @@ impl OperationQueryPlan {
         if indices.len() != rows.len() {
             return Err("duplicate operation-freedom owner".into());
         }
+        let input_bytes = serde_json::to_vec(
+            &rows
+                .iter()
+                .map(|(owner, output)| {
+                    (
+                        owner.instance.encoding(),
+                        owner.target_abi,
+                        owner.policy,
+                        output.product.product.address.0,
+                        output.product.product.record,
+                    )
+                })
+                .collect::<Vec<_>>(),
+        )
+        .map_err(|error| error.to_string())?;
+        let inputs = ContentHash::of_parts(
+            "hirsel.native.operation-input-scope.v1",
+            [input_bytes.as_slice()],
+        );
         let edges = rows
             .iter()
             .map(|(_, output)| {
@@ -171,6 +205,7 @@ impl OperationQueryPlan {
         }
         Ok(Self {
             components: planned,
+            inputs,
         })
     }
     pub fn ids(&self) -> Vec<hirsel_engine::runtime::QueryId> {
@@ -317,6 +352,8 @@ impl OperationQueryPlan {
         let mut result = SettledOperations {
             components: Vec::new(),
             values: BTreeMap::new(),
+            owners: BTreeMap::new(),
+            inputs: self.inputs,
             retained_allowance: None,
         };
         for (index, component) in self.components.iter().enumerate() {
@@ -325,6 +362,9 @@ impl OperationQueryPlan {
                 || output.summary.members != component.members
             {
                 return Err("operation component belongs to another graph".into());
+            }
+            for owner in &component.members {
+                result.owners.insert(function(owner), owner.clone());
             }
             result.components.push(output.summary.clone());
             result.values.extend(
