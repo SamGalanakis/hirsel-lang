@@ -1006,26 +1006,36 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
         self.create_params()?;
         self.allocate_slots()?;
         self.bind_parameters()?;
-        let start = if state == 0 {
-            let entry = self.blocks[self.unit.entry.index()];
-            self.b.ins().jump(entry, &[]);
-            self.unit.entry
-        } else {
-            let Some(s) = plan.states.get(state as usize - 1) else {
-                return self.invalid("a resume state outside its plan");
-            };
-            self.reload(s)?;
-            self.resume.as_mut().unwrap().resuming = Some(s.boundary.call);
-            let block = s.boundary.block;
-            let unit = self.unit;
-            self.terminator(&unit.terminators[block.index()])?;
-            block
+        let start = match state {
+            0 => self.unit.entry,
+            k => match plan.states.get(k as usize - 1) {
+                Some(s) => s.boundary.block,
+                None => return self.invalid("a resume state outside its plan"),
+            },
         };
         let count = self.unit.blocks.len();
         let adjacent: Vec<Vec<usize>> = (0..count)
             .map(|b| self.successors(b))
             .collect::<Emitted<_>>()?;
         let order = hirsel_graph::reverse_postorder(&adjacent, start.index());
+        if state == 0 {
+            let entry = self.blocks[self.unit.entry.index()];
+            self.b.ins().jump(entry, &[]);
+        } else {
+            let s = &plan.states[state as usize - 1];
+            let mut skipped = vec![true; count];
+            for &b in &order {
+                skipped[b] = b == start.index();
+            }
+            self.reload(s)?;
+            let unit = self.unit;
+            for (block, i) in hirsel_lir::continuation::resume_preparations(unit, plan, state, &skipped) {
+                let inst = &self.pool(unit.blocks[block.index()].instructions, &unit.instructions)?[i];
+                self.instruction(inst)?;
+            }
+            self.resume.as_mut().unwrap().resuming = Some(s.boundary.call);
+            self.terminator(&unit.terminators[start.index()])?;
+        }
         for b in order {
             if state != 0 && b == start.index() {
                 continue;

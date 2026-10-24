@@ -38,6 +38,69 @@ pub fn resume_name(definition: &DefPath, instance: ContentHash, state: Option<u3
     }
 }
 
+/// The address preparations state `state` (1-based) re-runs before reissuing
+/// its boundary: each `Inst::Address` in a block that state does not emit
+/// (`skipped`) whose root base is frame-resident storage or a reloaded live
+/// value, bases first. Their checks passed before the suspension and read
+/// only state the frame retains, so re-running them observes nothing.
+pub fn resume_preparations(
+    u: &LirUnit<Ready>,
+    plan: &ContinuationPlan,
+    state: u32,
+    skipped: &[bool],
+) -> Vec<(BlockId, usize)> {
+    let Some(resume) = state.checked_sub(1).and_then(|i| plan.states.get(i as usize)) else {
+        return Vec::new();
+    };
+    let mut at = BTreeMap::new();
+    for (b, block) in u.blocks.iter().enumerate() {
+        if !skipped.get(b).copied().unwrap_or(false) {
+            continue;
+        }
+        for (i, inst) in block.instructions.get(&u.instructions).unwrap_or(&[]).iter().enumerate() {
+            if let Inst::Address { address, .. } = *inst {
+                at.insert(address, (BlockId(b as u32), i));
+            }
+        }
+    }
+    fn root(u: &LirUnit<Ready>, a: AddressId) -> AddressBase {
+        match u.addresses[a.index()].base {
+            AddressBase::Address(b) => root(u, b),
+            base => base,
+        }
+    }
+    let eligible = |a: AddressId| match root(u, a) {
+        AddressBase::Slot(s) => plan.storage.iter().any(|f| f.slot == s),
+        AddressBase::Value(v) => resume.live.iter().any(|l| l.value == v),
+        AddressBase::Address(_) => false,
+    };
+    fn visit(
+        u: &LirUnit<Ready>,
+        a: AddressId,
+        at: &BTreeMap<AddressId, (BlockId, usize)>,
+        done: &mut BTreeSet<AddressId>,
+        out: &mut Vec<(BlockId, usize)>,
+    ) {
+        if !done.insert(a) {
+            return;
+        }
+        if let AddressBase::Address(b) = u.addresses[a.index()].base
+            && at.contains_key(&b)
+        {
+            visit(u, b, at, done, out);
+        }
+        out.push(at[&a]);
+    }
+    let mut done = BTreeSet::new();
+    let mut out = Vec::new();
+    for &a in at.keys() {
+        if eligible(a) {
+            visit(u, a, &at, &mut done, &mut out);
+        }
+    }
+    out
+}
+
 /// Fixed header of a resumable frame: the resume state and a reserved word.
 pub const FRAME_HEADER_BYTES: u64 = 8;
 /// Larger live images stay stackful: the frame must stay compact.
@@ -729,6 +792,13 @@ fn plan_unit(
         Ok((_, states)) if states.is_empty() => (Representation::Direct, Vec::new(), states),
         Ok((_, states)) if states.iter().any(|s| s.bytes > MAX_FRAME_BYTES) => (
             Representation::Stackful("oversize live image".into()),
+            Vec::new(),
+            Vec::new(),
+        ),
+        // Each re-entry passes a body's declared parameters again; until the
+        // alternates take them from the frame instead, such a body stays stackful.
+        Ok(_) if !u.parameters.is_empty() => (
+            Representation::Stackful("declared parameters".into()),
             Vec::new(),
             Vec::new(),
         ),
