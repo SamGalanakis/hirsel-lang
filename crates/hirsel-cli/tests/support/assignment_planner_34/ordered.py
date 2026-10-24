@@ -64,14 +64,14 @@ assert child.returncode==expected,(child.returncode,err)
 assert out==(b'assignplan: 4 manifests\n' if a.kind=='success' else b'')
 assert err==(b'' if a.kind=='success' else b'assignplan: version\n' if a.kind=='domain' else b'assignplan: canceled\n')
 if a.kind!='success':assert (data/'assignments.json').read_bytes()==b'preserve'
-assert sorted(x.name for x in data.iterdir())==['batch.json','assignments.json']
+assert sorted(x.name for x in data.iterdir())==['assignments.json','batch.json']
 if a.kind=='success':
  document=json.loads((data/'assignments.json').read_bytes());assert document['revision']==7 and len(document['results'])==4
  for c in document['results']:
   assert c['cardinality']==32 and len(c['pairs'])==32
   assert len(set(c['job_to_resource']))==32 and len(set(c['resource_to_job']))==32
-  for j,r in enumerate(c['job_to_resource']):
-   assert c['resource_to_job'][r]==j and dict(resource=r,job=j) in m['allowed']
+  for j,resource in enumerate(c['job_to_resource']):
+   assert c['resource_to_job'][resource]==j and dict(resource=resource,job=j) in m['allowed']
   assert c['unmatched']==[] and c['reached_jobs']==[] and c['reached_resources']==[]
   assert c['cover_jobs']==list(range(32)) and c['cover_resources']==[]
 assert not control.exists(),'control socket leaked'
