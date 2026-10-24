@@ -44,3 +44,4 @@ serde = { version = "1", features = ["derive", "rc"] }
 hirsel-run-schema = { path = "../hirsel-run-schema" }
 
 [dev-dependencies]
+tempfile = "3"
