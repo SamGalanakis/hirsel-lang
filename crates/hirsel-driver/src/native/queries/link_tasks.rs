@@ -6,7 +6,7 @@ use crate::native::object_queries::{
 };
 use hirsel_artifact_store::{Action, Address, Domain};
 use hirsel_engine::{runtime::*, store::ResultStore};
-use std::{collections::BTreeMap, task::Poll};
+use std::{collections::BTreeMap, sync::OnceLock, task::Poll};
 
 pub const LINK_INPUT_KIND: u32 = 0x4e00_0006;
 pub const LINK_MANIFEST_KIND: u32 = 0x4e00_0007;
@@ -103,6 +103,7 @@ pub struct LinkTasks {
     plans: BTreeMap<ContentHash, Arc<Plan>>,
     requests: BTreeMap<Id, Arc<Request>>,
     leaf_weight: MemoryWeight,
+    observation_scope: OnceLock<(ProductRef, Vec<ProductRef>)>,
 }
 impl LinkTasks {
     pub fn new(
@@ -242,8 +243,20 @@ impl LinkTasks {
             plans,
             requests,
             leaf_weight,
+            observation_scope: OnceLock::new(),
         }))
     }
+    /// Metadata from the exact root/Ready reads admitted at Link, including hits.
+    /// The caller must first establish completion of its compilation request.
+    pub(super) fn observation(&self) -> Result<crate::requests::NativeObservation, String> {
+        let (root_ref, reads) = self
+            .observation_scope
+            .get()
+            .ok_or("native Link has no completed admitted observation scope")?;
+        let (mut products, root) = self.root.products(*root_ref, reads)?;
+        products.observation_metadata(&root)
+    }
+
     fn store(&self) -> &dyn ResultStore {
         self.root.native.snapshot.store.as_ref()
     }
@@ -487,6 +500,15 @@ impl ObjectTaskSnapshot for LinkTasks {
                 .iter()
                 .map(|read| super::ready_product(self.store(), *read).map(Arc::new))
                 .collect::<Result<Vec<_>, _>>()?;
+            // This boundary is executed before ObjectQueries selects either a
+            // cached Link or a miss. Keep actual admitted refs, never reconstruct
+            // them later from a mutable current association.
+            let scope = (root_ref, reads.to_vec());
+            if let Err(other) = self.observation_scope.set(scope)
+                && self.observation_scope.get() != Some(&other)
+            {
+                return Err("native Link observation dependency scope changed".into());
+            }
             let snapshot = self.root.native.snapshot.store.clone();
             Ok(Box::new(ObjectQueries::new(
                 snapshot,
