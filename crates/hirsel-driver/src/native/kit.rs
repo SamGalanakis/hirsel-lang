@@ -117,6 +117,16 @@ impl Kit {
         })
     }
 
+    /// Replace the manifest-only identity with the normalized captured input
+    /// closure when planning with a frozen kit. Legacy kit lines keep their ID.
+    pub(crate) fn bind_input_identity(&mut self, identity: ContentHash) {
+        self.digest = identity
+            .0
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+    }
+
     /// Exact files the existing executable link line reads for one target.
     /// Ordering remains in the manifest; the snapshot itself is a file set.
     pub(crate) fn link_files(&self, triple: &str) -> Result<Vec<PathBuf>, NativeError> {
@@ -626,12 +636,31 @@ mod tests {
                 versions[1].reference(),
                 "manifest is unchanged; actual transitive bytes bind the hit identity"
             );
+            // The same bytes at another kit root must retain their build ID.
+            let relocated = root.path().join(format!("relocated-{}", target.triple));
+            std::fs::create_dir_all(relocated.join(&target.triple)).unwrap();
+            for name in ["manifest.json", "digest"] {
+                std::fs::copy(kit.join(name), relocated.join(name)).unwrap();
+            }
+            for entry in std::fs::read_dir(&files).unwrap() {
+                let entry = entry.unwrap();
+                std::fs::copy(
+                    entry.path(),
+                    relocated.join(&target.triple).join(entry.file_name()),
+                )
+                .unwrap();
+            }
+            versions.push(
+                FrozenLinkKit::snapshot(&store, &relocated, &target, linker, limits).unwrap(),
+            );
             let planned = root.path().join(format!("planned-{}", target.triple));
             std::fs::create_dir_all(&planned).unwrap();
             let runtime = planned.join("runtime.a");
             std::fs::write(&runtime, b"!<arch>\n").unwrap();
             std::fs::remove_dir_all(&kit).unwrap();
+            std::fs::remove_dir_all(&relocated).unwrap();
             let mut images = Vec::new();
+            let mut identities = Vec::new();
             for kit in versions {
                 let kit = FrozenLinkKit::from_reference(&store, kit.reference(), &target).unwrap();
                 let plan = plan_frozen_executable_inputs(
@@ -647,6 +676,7 @@ mod tests {
                     },
                 )
                 .unwrap();
+                identities.push(plan.build_id);
                 let captured = plan.capture(&store, linker, limits).unwrap();
                 let output = planned.join("program");
                 captured.link(&store, &output).unwrap();
@@ -655,6 +685,18 @@ mod tests {
             assert_ne!(
                 images[0], images[1],
                 "different frozen leaf code must reach each image"
+            );
+            assert_ne!(
+                identities[0], identities[1],
+                "transitive leaf bytes belong to the build ID"
+            );
+            assert_eq!(
+                identities[1], identities[2],
+                "kit relocation is not an emitted input"
+            );
+            assert!(
+                images[1] == images[2],
+                "relocated frozen kits must link identical bytes"
             );
         }
     }
