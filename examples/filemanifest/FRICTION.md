@@ -196,3 +196,13 @@ Streaming documentation and permanent cap/effect coverage landed in
 `dfb8bfab3ddac7f415d1a4939b9cc475388d7c95`: six new bounded partitions prove
 32 app observations across four engines; the existing 83-case app harness and
 two cursor controls also pass. The cap loop and provider remain unchanged.
+
+## Reusable overflow admission (2026-10-24)
+
+`stream.bound(stream.from_results(take paths), model.VISITED)` replaces only
+the manual visited counter and overflow check. It stays before path validation
+and matching, maps Source to `walk` and Limit to `visited_limit`, and consumes
+one demanded extra result even when that result is an error. Successful scans
+drain through EOF; early application errors do no hidden lookahead. The lazy
+compile/is_match composition, path checks, selected-record cap and separate
+metadata/open snapshot limitation remain as described above.

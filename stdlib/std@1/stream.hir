@@ -11,7 +11,7 @@ pub opaque type Flow[T, E]: () uses {} {
   inner: Iter[Result[T, E]],
 }
 
-type Source[S, T, E] {
+type SourceState[S, T, E] {
   state: S,
   step: @preserves_captures(cursor) fn(mut cursor: S) -> Result[Option[T], E],
   ended: bool,
@@ -34,6 +34,15 @@ type Filtered[T, E] {
   ended: bool,
 }
 
+/// A source failure before the item budget, or an extra result after it.
+pub type BoundError[E] = Source(E) | Limit
+
+type Bounded[T, E] {
+  inner: Iter[Result[T, E]],
+  remaining: u64,
+  ended: bool,
+}
+
 /// Own state and its preserving callback without pulling. Error or EOF ends it.
 @captures(state, step)
 pub fn from[S, T, E](
@@ -42,8 +51,8 @@ pub fn from[S, T, E](
 ) -> Flow[T, E] uses {state, step} {
   Flow(
     inner: core@1/iter.from(
-      take Source(state: take state, step: take step, ended: false),
-      fn(mut s: Source[S, T, E]) -> Option[Result[T, E]] {
+      take SourceState(state: take state, step: take step, ended: false),
+      fn(mut s: SourceState[S, T, E]) -> Option[Result[T, E]] {
         if s.ended {
           return None
         }
@@ -224,6 +233,55 @@ pub fn to_iter[T, E](take input: Flow[T, E]) -> Iter[Result[T, E]] uses {input} 
 pub fn take_n[T, E](take input: Flow[T, E], count: u64) -> Flow[T, E] uses {input} {
   let Flow(inner: inner) = take input
   Flow(inner: iter.take_n(take inner, count))
+}
+
+// Remaining-count structure: Rust core iter/adapters/take.rs:15-43,
+// f6c1107f8be13e48465e12c0fd26e6a39fe18e4f (MIT; repository LICENSE).
+// Unlike Take, probe once at the boundary and report overflow; source errors
+// and EOF fuse the cursor. Keep the source owned until ordinary destruction.
+/// Validate whole-stream cardinality when drained, with one-result lookahead.
+/// Construction and early destruction do not pull. Zero probes on first demand.
+/// Any extra result, including an error, is dropped and reported as Limit.
+/// Pull/drop language failures propagate normally, even during the probe.
+@captures(input)
+pub fn bound[T, E](take input: Flow[T, E], max_items: u64) -> Flow[T, BoundError[E]] uses {input} {
+  let Flow(inner: inner) = take input
+  Flow(
+    inner: core@1/iter.from(
+      take Bounded(inner: take inner, remaining: max_items, ended: false),
+      fn(mut s: Bounded[T, E]) -> Option[Result[T, BoundError[E]]] {
+        if s.ended {
+          return None
+        }
+        if s.remaining == 0 {
+          s.ended = true
+          return match core@1/iter.next(mut s.inner) {
+            None => None,
+            Some(extra) => {
+              let _ = take extra
+              Some(Error(Limit()))
+            },
+          }
+        }
+        match core@1/iter.next(mut s.inner) {
+          Some(item) => match take item {
+            Ok(value) => {
+              s.remaining -= 1
+              Some(Ok(take value))
+            },
+            Error(error) => {
+              s.ended = true
+              Some(Error(Source(take error)))
+            },
+          },
+          None => {
+            s.ended = true
+            None
+          },
+        }
+      }
+    )
+  )
 }
 
 /// Own and consume a CSV source; checks include rejected rows and every refill.

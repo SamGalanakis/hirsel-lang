@@ -1,0 +1,54 @@
+resource type Item {
+  output: Stdout,
+  fail: bool,
+}
+drop(item) {
+  let _ = out.print(item.output, "discard\n")
+  failure.check(!item.fail, Bounds())
+}
+
+type Cursor {
+  output: Stdout,
+  pull_fail: bool,
+  drop_fail: bool,
+  error: bool,
+}
+
+fn read(mut s: Cursor) -> Option[Result[Item, Item]] {
+  let _ = out.print(s.output, "pull\n")
+  failure.check(!s.pull_fail, Bounds())
+  let item = Item(output: s.output, fail: s.drop_fail)
+  if s.error {
+    Some(Error(take item))
+  } else {
+    Some(Ok(take item))
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let output = io.stdout(rt)?
+  let Ok(mode) = arg.text(args, 0) else {
+    return Ok(())
+  }
+  let mut flow = stream.bound(
+    stream.from_results(
+      iter.from(
+        Cursor(
+          output: output,
+          pull_fail: mode == "pull",
+          drop_fail: mode != "pull",
+          error: mode == "drop-error"
+        ),
+        read
+      )
+    ),
+    0
+  )
+  match stream.next(mut flow) {
+    Some(Error(Limit())) => {
+      let _ = out.print(output, "limit-caught\n")
+    },
+    _ => failure.check(false, Arithmetic()),
+  }
+  Ok(())
+}

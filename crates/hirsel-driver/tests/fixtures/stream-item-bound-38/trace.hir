@@ -1,0 +1,180 @@
+// Rust core Take, f6c1107f8be13e48465e12c0fd26e6a39fe18e4f (MIT):
+// library/core/src/iter/adapters/take.rs:15-43; coretests/tests/iter/adapters/take.rs:103-128.
+// Adaptation: terminal errors and one-result overflow probing replace truncation.
+resource type Item {
+  output: Stdout,
+  number: u64,
+}
+drop(item) {
+  emit(item.output, "drop", item.number)
+}
+
+resource type TraceCursor {
+  output: Stdout,
+  index: u64,
+  length: u64,
+  error_at: u64,
+  eof_at: u64,
+}
+drop(s) {
+  emit(s.output, "source-drop", s.index)
+}
+
+fn emit(output: Stdout, tag: String, number: u64) -> () {
+  let _ = out.print(output, tag)
+  let _ = out.print(output, ":")
+  let _ = out.print(output, u64.to_string(number))
+  let _ = out.print(output, "\n")
+}
+
+fn read(mut s: TraceCursor) -> Option[Result[Item, Item]] {
+  let index = s.index
+  s.index += 1
+  emit(s.output, "pull", index)
+  if index == s.eof_at || index >= s.length {
+    return None
+  }
+  let item = Item(output: s.output, number: index)
+  if index == s.error_at {
+    Some(Error(take item))
+  } else {
+    Some(Ok(take item))
+  }
+}
+
+fn source(output: Stdout, length: u64, error_at: u64, eof_at: u64) -> stream.Flow[
+  Item,
+  Item
+] {
+  stream.from_results(
+    iter.from(
+      TraceCursor(
+        output: output,
+        index: 0,
+        length: length,
+        error_at: error_at,
+        eof_at: eof_at
+      ),
+      read
+    )
+  )
+}
+
+fn release[T, E](take input: stream.Flow[T, E]) -> () uses {input} {}
+
+// Generic authority and move-only T/E must survive this extra public boundary.
+@captures(input)
+fn bounded[T, E](take input: stream.Flow[T, E], limit: u64) -> stream.Flow[
+  T,
+  stream.BoundError[E]
+] uses {input} {
+  stream.bound(take input, limit)
+}
+
+fn scenario(
+  output: Stdout,
+  id: String,
+  length: u64,
+  error_at: u64,
+  eof_at: u64,
+  limit: u64,
+  stop: u64,
+  truncate: bool
+) -> () {
+  let _ = out.print(output, id)
+  let _ = out.print(output, "\n")
+  let input = source(output, length, error_at, eof_at)
+  let mut flow = if truncate {
+    bounded(stream.take_n(take input, limit), 18446744073709551615u64)
+  } else {
+    bounded(take input, limit)
+  }
+  let _ = out.print(output, "constructed\n")
+  let mut index = 0u64
+  while index < stop {
+    match stream.next(mut flow) {
+      Some(value) => match take value {
+        Ok(item) => emit(output, "yield", item.number),
+        Error(Source(item)) => emit(output, "source-error", item.number),
+        Error(Limit()) => {
+          let _ = out.print(output, "limit\n")
+        },
+      },
+      None => {
+        let _ = out.print(output, "none\n")
+      },
+    }
+    index += 1
+  }
+  emit(output, "caller-stop", stop)
+  release(take flow)
+  let _ = out.print(output, "released\n")
+}
+
+fn even(item: Item) -> Result[bool, Item] {
+  emit(item.output, "filter", item.number)
+  Ok(item.number % 2 == 0)
+}
+
+fn even_bound(item: Item) -> Result[bool, stream.BoundError[Item]] {
+  emit(item.output, "filter", item.number)
+  Ok(item.number % 2 == 0)
+}
+
+fn compositions(output: Stdout) -> () {
+  let _ = out.print(output, "bound-before-filter\n")
+  let mut bounded_first = stream.try_filter(
+    bounded(source(output, 3, 99, 99), 1),
+    even_bound
+  )
+  let _ = stream.next(mut bounded_first)
+  let _ = stream.next(mut bounded_first)
+  let _ = stream.next(mut bounded_first)
+  release(take bounded_first)
+  let _ = out.print(output, "filter-before-bound\n")
+  let mut filtered_first = bounded(
+    stream.try_filter(source(output, 3, 99, 99), even),
+    1
+  )
+  let _ = stream.next(mut filtered_first)
+  let _ = stream.next(mut filtered_first)
+  let _ = stream.next(mut filtered_first)
+  release(take filtered_first)
+  let _ = out.print(output, "nested\n")
+  let mut nested = bounded(bounded(source(output, 3, 99, 99), 1), 1)
+  let _ = stream.next(mut nested)
+  failure.check(
+    match stream.next(mut nested) {
+      Some(Error(Limit())) => true,
+      _ => false,
+    },
+    Bounds()
+  )
+  let _ = stream.next(mut nested)
+  release(take nested)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let output = io.stdout(rt)?
+  scenario(output, "zero-empty", 0, 99, 99, 0, 3, false)
+  scenario(output, "zero-item", 1, 99, 99, 0, 3, false)
+  scenario(output, "zero-error", 1, 0, 99, 0, 3, false)
+  scenario(output, "one-exact", 1, 99, 99, 1, 4, false)
+  scenario(output, "one-over", 2, 99, 99, 1, 4, false)
+  scenario(output, "exact", 4, 99, 99, 4, 7, false)
+  scenario(output, "short", 4, 99, 99, 5, 7, false)
+  scenario(output, "max", 2, 99, 99, 18446744073709551615u64, 5, false)
+  scenario(output, "error-before", 4, 0, 99, 2, 4, false)
+  scenario(output, "error-at", 4, 1, 99, 2, 5, false)
+  scenario(output, "error-lookahead", 4, 2, 99, 2, 5, false)
+  scenario(output, "error-after", 4, 3, 99, 2, 5, false)
+  scenario(output, "nonfused", 4, 99, 1, 3, 5, false)
+  scenario(output, "nonfused-error", 4, 1, 99, 3, 5, false)
+  scenario(output, "drop-before-pull", 4, 99, 99, 0, 0, false)
+  scenario(output, "drop-at-bound", 4, 99, 99, 2, 2, false)
+  scenario(output, "drop-prefix", 4, 99, 99, 3, 1, false)
+  scenario(output, "take-zero", 4, 0, 99, 0, 3, true)
+  scenario(output, "take-prefix", 4, 2, 99, 2, 5, true)
+  compositions(output)
+  Ok(())
+}

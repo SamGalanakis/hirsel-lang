@@ -419,6 +419,14 @@ fn native(caps: bool, backend: &str) {
     for vector in vectors(caps) {
         let expected: Value = serde_json::from_str(vector.expected).unwrap();
         let bytes = fs::read(root.join(format!("evidence/{}.tape", vector.id))).unwrap();
+        eprintln!(
+            "FILEMANIFEST_STREAM_25_TAPE {} {backend} {}",
+            vector.id,
+            bytes
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        );
         let (record, binary) = hirsel_rt::tape_binary::replay(bytes).unwrap();
         let events = binary.map(|t| t.events().unwrap()).unwrap_or(record.events);
         let mut reads = vec![];

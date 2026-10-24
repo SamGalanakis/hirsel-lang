@@ -1,0 +1,24 @@
+fn fresh(mut n: u64) -> Option[Result[unique Bytes, ()]] {
+  n += 1
+  if n == 1 {
+    Some(Ok(unique b"x"))
+  } else {
+    None
+  }
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let mut n = 0u64
+  let received = fresh(mut n)
+  match take received {
+    Some(value) => match take value {
+      Ok(payload) => {
+        let owned: unique Bytes = take payload
+        failure.check(owned == b"x", Bounds())
+      },
+      Error(_) => failure.check(false, Bounds()),
+    },
+    None => failure.check(false, Bounds()),
+  }
+  Ok(())
+}

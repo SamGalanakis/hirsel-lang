@@ -3554,6 +3554,10 @@ fn stream.try_filter[T, E](take input: stream.Flow[T, E],
   take predicate: fn(T) -> Result[bool, E]) -> stream.Flow[T, E] uses {input, predicate}
 @captures(input)
 fn stream.take_n[T, E](take input: stream.Flow[T, E], count: u64) -> stream.Flow[T, E] uses {input}
+type stream.BoundError[E] = Source(E) | Limit
+@captures(input)
+fn stream.bound[T, E](take input: stream.Flow[T, E], max_items: u64)
+  -> stream.Flow[T, stream.BoundError[E]] uses {input}
 fn stream.try_fold[T, A, E](take input: stream.Flow[T, E], take initial: A,
   take step: fn(take A, take T) -> Result[A, E]) -> Result[A, E] uses {input, initial, step}
 fn stream.try_for_each[T, E](take input: stream.Flow[T, E],
@@ -3584,6 +3588,20 @@ success they consume through clean EOF (or the prefix limit). An ended flow
 retained by its caller still owns its source and callbacks until destruction;
 EOF alone is not prompt release. Ordinary finalizers determine cleanup order
 and discard close errors under DROP-3/4.
+
+`bound(input, max_items)` validates an item count only when consumed through
+terminal completion. Construction performs no pull. It transfers up to
+`max_items` successful items, reporting an earlier source error as `Source(E)`
+once. The next demanded pull probes once: EOF succeeds, while any extra result
+(success or error) is consumed and dropped, then reports `Limit` once. Later
+polls do no work. A zero bound probes on its first demand, unlike `take_n(0)`;
+`u64::MAX` uses a remaining count without overflow. Stopping or destroying the
+consumer early performs no hidden lookahead and proves no whole-stream bound.
+The probe can execute source effects (including directory reads); downstream
+callbacks never see the discarded result. Pull or destructor language failures
+still propagate normally and cannot be hidden by catching `Limit`. Terminal
+storage retains the upstream owner until ordinary destruction, as other Flow
+adapters do. This is not a byte, memory, traversal-work or time bound.
 
 Capture and advance-only contracts retain source/callback authority and locality
 through the opaque wrapper; a flow over a file or socket has the same held authority as its inner iterator.

@@ -1,0 +1,36 @@
+fn read(mut n: u64) -> Option[Result[unique Bytes, unique Bytes]] {
+  n += 1
+  if n == 1 {
+    Some(Ok(unique b"item"))
+  } else {
+    Some(Error(unique b"error"))
+  }
+}
+
+@captures(input)
+fn bounded[T, E](take input: stream.Flow[T, E]) -> stream.Flow[T, stream.BoundError[E]] uses {input} {
+  stream.bound(take input, 2)
+}
+
+fn require_unique(take value: unique Bytes, expected: Bytes) -> () {
+  failure.check(value == expected, Bounds())
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let input: Iter[Result[unique Bytes, unique Bytes]] = iter.from(0u64, read)
+  let source: stream.Flow[unique Bytes, unique Bytes] = stream.from_results(take input)
+  let mut flow = bounded(take source)
+  let first = stream.next(mut flow)
+  match take first {
+    Some(Ok(payload)) => require_unique(take payload, b"item"),
+    _ => failure.check(false, Bounds()),
+  }
+  let second = stream.next(mut flow)
+  match take second {
+    Some(Error(Source(payload))) => require_unique(take payload, b"error"),
+    _ => failure.check(false, Bounds()),
+  }
+  failure.check(stream.next(mut flow) == None, Bounds())
+  failure.check(stream.next(mut flow) == None, Bounds())
+  Ok(())
+}

@@ -90,16 +90,15 @@ fn scan(d: Dir, pattern: String) -> Result[unique Bytes, model.InvalidInput] {
   let Ok(paths) = file.walk(d) else {
     return Error(model.invalid("walk", ""))
   }
-  let mut visited = 0u64
+  let bounded = stream.bound(stream.from_results(take paths), model.VISITED)
   let mut entries: List[model.Entry] = []
   let mut total = 0u64
-  for step in take paths {
-    if visited == model.VISITED {
-      return Error(model.invalid("visited_limit", ""))
-    }
-    visited += 1
-    let Ok(relative) = step else {
-      return Error(model.invalid("walk", ""))
+  let bounded_paths = stream.to_iter(take bounded)
+  for step in take bounded_paths {
+    let relative = match take step {
+      Ok(value) => take value,
+      Error(Source(_)) => return Error(model.invalid("walk", "")),
+      Error(Limit()) => return Error(model.invalid("visited_limit", "")),
     }
     let name = path.text(relative)
     model.validate_path(name)?

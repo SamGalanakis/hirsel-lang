@@ -1,4 +1,6 @@
 
+CAP/CAP-2-stream-bound-38-authority-bad.hir
+CAP/CAP-2-stream-bound-38-authority-ok.hir
 CLO/CLO-2-carrier-uses-empty-bad.hir
 CLO/CLO-2-carrier-uses-unselected-bad.hir
 CLO/CLO-4-carrier-uses-callback-run.hir
@@ -22,6 +24,8 @@ MODE/MODE-1-replace-local-content-33-concrete-run.hir
 MODE/MODE-1-replace-local-content-33-mutation-bad.hir
 MODE/MODE-1-replace-local-content-33-projected-run.hir
 MODE/MODE-1-replace-local-content-33-retained-bad.hir
+MODE/MODE-6-stream-bound-38-scope-bad.hir
+MODE/MODE-6-stream-bound-38-scope-ok.hir
 OWN/OWN-2-csv-owned-table-37-bad.hir
 OWN/OWN-2-csv-owned-table-37-ok.hir
 SEM/SEM-3-regex-fixed-tags-37-run.hir

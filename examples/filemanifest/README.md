@@ -93,12 +93,13 @@ retain a copy of an overlong pattern.
 `file.walk` reads the root directory at construction and descendant directories
 on demand, yielding regular files and symlinks in global UTF-8 byte order.
 Directories, including empty ones, are traversal work and do not count toward the
-128 yielded-path cap. The app counts every result before matching. Exactly 128
+128 yielded-path cap. The app applies `stream.bound(stream.from_results(paths), 128)` before
+path validation or matching, then drains it on successful scans. Exactly 128
 paths succeeds; a 129th result returns `visited_limit` before validating, matching
 or hashing that result. This includes a descendant-read error as the 129th result;
 an earlier traversal error returns `walk`. Discovering the extra result can require
-directory reads, but no later subtree is read after it. `take_n(128)` would silently
-truncate and cannot implement this check. `glob.files` collects its matches, so the
+directory reads, but no later subtree is read after it. `stream.bound` supplies the terminal overflow check; `take_n(128)` still
+silently truncates and cannot implement it. `glob.files` collects its matches, so the
 app keeps the `glob.compile/is_match` and demand-pulled `file.walk` composition.
 
 The cursor retains one sorted page per active depth, O(depth × largest single

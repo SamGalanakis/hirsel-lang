@@ -947,8 +947,16 @@ impl Checker<'_> {
         value.usage == UseKind::Take
             && !state.shared[place.root.0 as usize]
             && state.must[place.root.0 as usize].has(MustFacts::OWNED)
-            && (place.projection.is_empty()
-                && state.must[place.root.0 as usize].has(MustFacts::FRESH_RECEIPT)
+            // Taking a part transfers its owned receipt, including declared
+            // unique descendants through unqualified wrappers. This does not
+            // make an unqualified part itself unique (operand_unique remains
+            // independent). Counted copies end FRESH_RECEIPT or mark the root shared; a
+            // Shared handle is an ownership boundary.
+            && !matches!(self.t.get(place.ty).unwrap().kind,
+                TypeKind::Builtin { kind: hirsel_types::BuiltinType::Shared, .. })
+            && !matches!(self.t.get(self.body.locals[place.root.0 as usize].ty).unwrap().kind,
+                TypeKind::Builtin { kind: hirsel_types::BuiltinType::Shared, .. })
+            && (state.must[place.root.0 as usize].has(MustFacts::FRESH_RECEIPT)
                 || self.operand_unique(state, value))
     }
     pub(super) fn rvalue_fresh_receipt(&self, state: &State, value: &Rvalue) -> bool {

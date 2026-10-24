@@ -1,0 +1,37 @@
+// rule: CAP-2
+// expect: reject CAP-2 at line 36
+// twin: CAP/CAP-2-stream-bound-38-authority-ok.hir
+// The success/error items are inert; authority comes solely from owned state.
+type Source {
+  dir: Dir,
+  file: File of .dir,
+}
+
+fn read(mut s: Source) -> Option[Result[Bytes, FileError]] uses {s} {
+  let mut buffer: List[u8] = []
+  let count = match file.read(s.dir, mut s.file, mut buffer, 1) {
+    Ok(n) => n,
+    Error(e) => return Some(Error(take e)),
+  }
+  if count == 0 {
+    None
+  } else {
+    Some(Ok(bytes.from_list(take buffer)))
+  }
+}
+
+@advance_only(input)
+fn advance(mut input: stream.Flow[Bytes, FileError]) -> Option[Result[Bytes, FileError]] uses {input} {
+  stream.next(mut input)
+}
+
+fn inert[T: inert](take value: T) -> () uses {} {}
+
+fn pipeline(dir: Dir, take file: File of dir) -> () uses {dir, file} {
+  let mut flow = stream.bound(
+    stream.from_results(iter.from(take Source(dir: dir, file: take file), read)),
+    1
+  )
+  let _ = stream.next(mut flow)
+  inert(take flow)
+}
