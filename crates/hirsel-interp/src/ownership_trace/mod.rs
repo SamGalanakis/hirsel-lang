@@ -7,6 +7,7 @@ use crate::{Execution, ExecutionError, Limits, Operations, Value};
 use hirsel_span::{SourceMap, Span};
 use hirsel_tir::{InstructionKind, PlaceId, RunConfiguration, Terminator, TirProvider};
 
+mod closure_support;
 mod reference;
 
 pub(crate) trait Observer {

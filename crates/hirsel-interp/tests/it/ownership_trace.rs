@@ -789,3 +789,5 @@ fn ownership_reference_defused_owned_parent_still_releases_its_actual_child() {
         assert_eq!(drops, [1, 0]);
     }
 }
+
+mod closures;

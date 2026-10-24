@@ -1,3 +1,4 @@
+use super::closure_support::{children, resources_in};
 use super::{Observer, TraceError};
 use crate::Value;
 use crate::frame::Frame;
@@ -19,6 +20,8 @@ struct FrameState {
 }
 struct CallState {
     definition: DefPath,
+    body: Option<hirsel_tir::BodyId>,
+    captures: Vec<(u32, Owner)>,
     arguments: Vec<(u32, UseKind, Owner)>,
     destination: Option<Owner>,
     context: Context,
@@ -202,7 +205,8 @@ impl Resources {
             | Value::Record { .. }
             | Value::Distinct { .. }
             | Value::Resource { .. }
-            | Value::Box(_) => Step::Field { field },
+            | Value::Box(_)
+            | Value::Closure { .. } => Step::Field { field },
             Value::Variant { variant, .. } | Value::ResourceVariant { variant, .. } => {
                 Step::VariantField {
                     variant: *variant,
@@ -218,13 +222,13 @@ impl Resources {
     fn supported_tree(value: &Value) -> bool {
         let mut work = vec![value];
         while let Some(value) = work.pop() {
-            if crate::checked::resources_in(value) == 0 {
+            if resources_in(value) == 0 {
                 continue;
             }
             if Self::field(value, 0).is_none() {
                 return false;
             }
-            work.extend(value.fields().into_iter().flatten().flatten());
+            children(value, |_, child| work.push(child));
         }
         true
     }
@@ -245,10 +249,10 @@ impl Resources {
     /// Each child's subtree is moved into its own cleanup custody; dropping a
     /// parent never fabricates drops for its children.
     fn release_fields(&mut self, value: &Value, owner: &Owner, context: &Context) {
-        let Some(fields) = value.fields() else { return };
-        for (index, child) in fields.iter().enumerate() {
-            let Some(child) = child else { continue };
-            if crate::checked::resources_in(child) == 0 {
+        let mut fields = vec![];
+        children(value, |index, child| fields.push((index, child)));
+        for (index, child) in fields {
+            if resources_in(child) == 0 {
                 continue;
             }
             let Some(step) = Self::field(value, index as u32) else {
@@ -325,12 +329,7 @@ impl Observer for Resources {
                 let context = Self::context(anchor.definition, anchor.body, anchor.site, sources);
                 let result = self.tracker.move_tree(&context, &from, &to);
                 self.checked(result);
-            } else if frame
-                .slots
-                .iter()
-                .flatten()
-                .any(|v| crate::checked::resources_in(v) > 0)
-            {
+            } else if frame.slots.iter().flatten().any(|v| resources_in(v) > 0) {
                 self.unsupported("externally supplied resource root");
                 return;
             }
@@ -360,7 +359,7 @@ impl Observer for Resources {
                                 self.unsupported("construction field is unavailable");
                                 return;
                             };
-                            let count = crate::checked::resources_in(value);
+                            let count = resources_in(value);
                             if count == 0 {
                                 continue;
                             }
@@ -380,12 +379,39 @@ impl Observer for Resources {
                             context,
                         })
                     }
+                    Some(Rvalue::Closure { captures, .. }) => {
+                        let mut incoming = vec![];
+                        for (index, operand) in captures.iter().enumerate() {
+                            let Ok(value) = frame.observe(operand.place) else {
+                                self.unsupported("closure capture is unavailable");
+                                return;
+                            };
+                            let count = resources_in(value);
+                            if count == 0 {
+                                continue;
+                            }
+                            if operand.usage != UseKind::Take || !Self::supported_tree(value) {
+                                self.unsupported("borrowed or copied resource capture");
+                                return;
+                            }
+                            let Some(owner) = self.place(frame, operand.place) else {
+                                self.unsupported("closure capture owner unavailable");
+                                return;
+                            };
+                            incoming.push((owner, index as u32, count));
+                        }
+                        self.pending = Some(Pending::Create {
+                            destination: *destination,
+                            fields: incoming,
+                            context,
+                        });
+                    }
                     Some(Rvalue::Use(operand)) => {
                         let Ok(value) = frame.observe(operand.place) else {
                             self.unsupported("unavailable resource operand");
                             return;
                         };
-                        if crate::checked::resources_in(value) == 0 {
+                        if resources_in(value) == 0 {
                             return;
                         }
                         if !Self::supported_tree(value) {
@@ -429,7 +455,7 @@ impl Observer for Resources {
             Some(InstructionKind::Replace { value, .. }) => {
                 if frame
                     .observe(value.place)
-                    .is_ok_and(|v| crate::checked::resources_in(v) > 0)
+                    .is_ok_and(|v| resources_in(v) > 0)
                 {
                     self.unsupported("resource replacement transport");
                 }
@@ -466,14 +492,69 @@ impl Observer for Resources {
                         self.forget_source = arguments
                             .first()
                             .and_then(|a| self.place(frame, a.value.place));
-                    } else if let hirsel_tir::Callee::Definition { path, .. } = callee {
+                    } else {
+                        let (definition, body, captures) = match callee {
+                            hirsel_tir::Callee::Definition { path, .. } => {
+                                (path.clone(), None, vec![])
+                            }
+                            hirsel_tir::Callee::Indirect { value: operand, .. } => {
+                                let Ok(Value::Closure {
+                                    definition,
+                                    body,
+                                    captures,
+                                    environment,
+                                    invoked,
+                                }) = frame.observe(operand.place)
+                                else {
+                                    self.unsupported("unsupported indirect callable");
+                                    return;
+                                };
+                                if captures.len() != environment.owned_captures.len()
+                                    || invoked.as_ref().is_some_and(|state| state.get().is_some())
+                                {
+                                    self.unsupported(
+                                        "closure environment is inconsistent or already invoked",
+                                    );
+                                    return;
+                                }
+                                let mut incoming = vec![];
+                                for (index, (value, owned)) in
+                                    captures.iter().zip(&environment.owned_captures).enumerate()
+                                {
+                                    let Some(value) = value else {
+                                        continue;
+                                    };
+                                    if resources_in(value) == 0 {
+                                        continue;
+                                    }
+                                    if !*owned
+                                        || invoked.is_none()
+                                        || operand.usage != UseKind::Take
+                                    {
+                                        self.unsupported(
+                                            "borrowed or reusable resource closure invocation",
+                                        );
+                                        return;
+                                    }
+                                    let Some(mut from) = self.place(frame, operand.place) else {
+                                        self.unsupported("invoked closure owner unavailable");
+                                        return;
+                                    };
+                                    from.path.push(Step::Field {
+                                        field: index as u32,
+                                    });
+                                    incoming.push((index as u32, from));
+                                }
+                                (definition.path().clone(), Some(*body), incoming)
+                            }
+                        };
                         let mut incoming = vec![];
                         for argument in arguments {
                             let Ok(value) = frame.observe(argument.value.place) else {
                                 self.unsupported("call argument is unavailable");
                                 return;
                             };
-                            if crate::checked::resources_in(value) == 0 {
+                            if resources_in(value) == 0 {
                                 continue;
                             }
                             if !Self::supported_tree(value) {
@@ -508,18 +589,18 @@ impl Observer for Resources {
                             None => None,
                         };
                         self.call = Some(CallState {
-                            definition: path.clone(),
+                            definition,
+                            body,
+                            captures,
                             arguments: incoming,
                             destination,
                             context,
                         });
-                    } else {
-                        self.unsupported("indirect call resource transport");
                     }
                 } else if let Terminator::Return { value, .. } = terminator
                     && frame
                         .observe(value.place)
-                        .is_ok_and(|v| crate::checked::resources_in(v) > 0)
+                        .is_ok_and(|v| resources_in(v) > 0)
                 {
                     let Some(owner) = self.place(frame, value.place) else {
                         self.unsupported("return owner unavailable");
@@ -543,7 +624,10 @@ impl Observer for Resources {
             self.unsupported("user call entered without its source call");
             return;
         };
-        if callee.definition.path.path() != &call.definition || callee.bounded.is_some() {
+        if callee.definition.path.path() != &call.definition
+            || call.body.is_some_and(|body| callee.body_id != body)
+            || callee.bounded.is_some()
+        {
             self.unsupported("call target or bounded transport changed");
             return;
         }
@@ -569,6 +653,22 @@ impl Observer for Resources {
                 state.aliases.insert(local.0, from);
             }
         }
+        for (capture, from) in call.captures {
+            let Some((local, _)) = callee
+                .body()
+                .locals
+                .iter()
+                .enumerate()
+                .filter(|(_, local)| local.storage == hirsel_tir::Storage::Capture)
+                .nth(capture as usize)
+            else {
+                self.unsupported("callee capture slot is unavailable");
+                return;
+            };
+            let to = Self::frame_slot(id, local as u32);
+            let result = self.tracker.move_tree(&call.context, &from, &to);
+            self.checked(result);
+        }
         self.frames.push(state);
     }
     fn builtin_entered(&mut self, _task: u64, _frame: &Frame) {
@@ -584,7 +684,7 @@ impl Observer for Resources {
         }
     }
     fn builtin_returned(&mut self, _task: u64, _frame: &Frame, value: &Value) {
-        if crate::checked::resources_in(value) != 0 {
+        if resources_in(value) != 0 {
             self.unsupported("builtin returned resources without an observed transport");
         }
     }
@@ -607,7 +707,7 @@ impl Observer for Resources {
                     self.unsupported("construction has no committed result");
                     return;
                 };
-                let count = crate::checked::resources_in(value);
+                let count = resources_in(value);
                 if count == 0 {
                     if !fields.is_empty() {
                         self.unsupported("construction discarded tracked resource fields");
@@ -684,7 +784,7 @@ impl Observer for Resources {
         site: Span,
         sources: &SourceMap,
     ) {
-        if self.error.is_some() || crate::checked::resources_in(value) == 0 {
+        if self.error.is_some() || resources_in(value) == 0 {
             return;
         }
         if !Self::supported_tree(value) {
@@ -747,7 +847,7 @@ impl Observer for Resources {
             {
                 caller.aliases.remove(slot);
             }
-            if crate::checked::resources_in(value) == 0 {
+            if resources_in(value) == 0 {
                 self.frames.pop();
                 return;
             }
@@ -776,7 +876,7 @@ impl Observer for Resources {
         site: Span,
         sources: &SourceMap,
     ) {
-        if self.error.is_some() || crate::checked::resources_in(value) == 0 {
+        if self.error.is_some() || resources_in(value) == 0 {
             return;
         }
         if !Self::supported_tree(value) {
