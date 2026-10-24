@@ -76,6 +76,12 @@ pub enum AdapterError {
     Blocked,
     /// The provider of this run cannot perform the admitted operation.
     Unsupported(String),
+    ProcessFailed {
+        child: u64,
+        site: u64,
+        operation_site: u64,
+        path: Vec<u32>,
+    },
     /// A scripted signal took its default action, which ends the run.
     Signaled(hirsel_run_schema::SignalKind),
     /// Replay reached the recorded point where the run's place stopped it.
@@ -83,6 +89,14 @@ pub enum AdapterError {
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Request {
+    /// New-provider-only virtual advance. Old requests keep their wire tags.
+    ProcessTime {
+        from: u64,
+        to: u64,
+    },
+    ProcessSettle {
+        canceled: Vec<u64>,
+    },
     Stdin {
         io: u64,
     },
@@ -1114,11 +1128,18 @@ pub(crate) struct State {
     pub(crate) split_streams: crate::id_map::IdMap<(crate::handles::Grant, u8)>,
     /// The admitted rules of the root Proc and the world serving it.
     pub process_rules: Vec<hirsel_run_schema::ProcessRule>,
+    pub timed_process: bool,
+    pub timed_waits: BTreeMap<u64, Option<u64>>,
+    pub timed_requests: BTreeMap<u64, Request>,
+    pub process_batch_pending: bool,
+    pub claimed_children: BTreeSet<u64>,
+    pub process_sites: BTreeMap<u64, (u64, u64, Vec<u32>)>,
+    pub timed_sleeps: BTreeMap<u64, u64>,
     pub process_world: crate::process::ProcessWorld,
     /// Unused entries of each scripted world, keyed by world.
     pub process_scripts: BTreeMap<u64, Vec<Option<hirsel_run_schema::ProcessRun>>>,
     /// Unused streaming-child entries of each scripted world, keyed by world.
-    pub child_scripts: BTreeMap<u64, Vec<Option<hirsel_run_schema::ChildRun>>>,
+    pub child_scripts: BTreeMap<u64, Vec<Option<hirsel_run_schema::TimedChildRun>>>,
     /// Spawned scripted children, keyed by Child handle.
     pub script_children: BTreeMap<u64, hirsel_run_schema::ScriptChild>,
     /// Spawned scripted pipelines, keyed by ChildGroup handle.
@@ -1159,6 +1180,13 @@ impl Default for State {
             tls: Default::default(),
             split_streams: Default::default(),
             process_rules: vec![],
+            timed_process: false,
+            timed_waits: BTreeMap::new(),
+            timed_requests: BTreeMap::new(),
+            process_batch_pending: false,
+            claimed_children: BTreeSet::new(),
+            process_sites: BTreeMap::new(),
+            timed_sleeps: BTreeMap::new(),
             process_world: crate::process::ProcessWorld::Host,
             process_scripts: BTreeMap::new(),
             child_scripts: BTreeMap::new(),
@@ -1314,7 +1342,11 @@ impl State {
         if matches!(request, Request::Directory { .. }) && self.fake_trees.contains_key(&0) {
             return Some(0);
         }
-        let directory = match request {
+        let directory = self.file_directory(request)?;
+        self.fake_directories.get(&directory).copied()
+    }
+    pub(crate) fn file_directory(&self, request: &Request) -> Option<u64> {
+        match request {
             Request::NarrowDir { directory, .. }
             | Request::ReadOnlyDir { directory }
             | Request::Open { directory, .. }
@@ -1340,24 +1372,23 @@ impl State {
             | Request::WriteAll { directory, .. }
             | Request::Commit { directory, .. }
             | Request::Sync { directory, .. }
-            | Request::PutNew { directory, .. } => *directory,
+            | Request::PutNew { directory, .. } => Some(*directory),
             Request::Map { directory, .. }
             | Request::MapView { directory, .. }
             | Request::MapCheck { directory, .. }
             | Request::Watch { directory, .. }
-            | Request::WatchNext { directory, .. } => *directory,
+            | Request::WatchNext { directory, .. } => Some(*directory),
             Request::Close { handle } => match self.handles.rows.get(handle) {
                 Some(
                     Grant::File { directory, .. }
                     | Grant::AtomicFile { directory, .. }
                     | Grant::Mapped { directory, .. }
                     | Grant::Watcher { directory, .. },
-                ) => *directory,
+                ) => Some(*directory),
                 _ => return None,
             },
             _ => return None,
-        };
-        self.fake_directories.get(&directory).copied()
+        }
     }
     pub fn execute(
         &mut self,
@@ -2607,6 +2638,18 @@ pub trait Adapter {
     /// A scheduling point with a parked request: the requests to re-issue now. A
     /// cooperative host answers the tokens whose interest is ready, in token order; the
     /// default (a scripted world) re-issues every parked request.
+    /// Finish the timed provider batch after scope expiry and before publishing readiness.
+    /// Canceled taking waits detach their child gates before any due script step.
+    fn isolated_clock(&self) -> bool {
+        false
+    }
+    fn process_site(&mut self, _child: u64, _site: u64, _operation_site: u64, _path: &[u32]) {}
+    fn process_sources(&self) -> bool {
+        false
+    }
+    fn process_batch(&mut self, _canceled: &[u64]) -> Result<Ready, AdapterError> {
+        Ok(Ready::Tokens(Vec::new()))
+    }
     fn ready(&mut self) -> Result<Ready, AdapterError> {
         Ok(Ready::Every)
     }

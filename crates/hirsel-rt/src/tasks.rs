@@ -1654,6 +1654,22 @@ unsafe fn poll_parked(ctx: *mut TaskCtx) -> Stopped<()> {
     for scope in unsafe { crate::host_waits::expired(ctx, &ready) }? {
         ordered::events::expire(scheduler(ctx), scope);
     }
+    let canceled: Vec<u64> = {
+        let s = scheduler(ctx);
+        s.tasks
+            .iter()
+            .enumerate()
+            .filter_map(|(task, row)| {
+                let row = row.as_ref()?;
+                let Wait::Host { token } = row.wait? else {
+                    return None;
+                };
+                s.canceled_task(task as u32, row.shield()).map(|_| token)
+            })
+            .collect()
+    };
+    let batch = unsafe { crate::host_waits::process_batch(ctx, &canceled) }?;
+    let ready = crate::host_waits::merge_ready(ready, batch);
     for task in unsafe { crate::host_waits::woken(ctx, &ready) } {
         scheduler(ctx).wake(task);
     }

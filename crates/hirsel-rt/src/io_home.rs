@@ -318,6 +318,18 @@ impl Adapter for HomeAdapter {
         self.with(|adapter| adapter.telemetry_context(_telemetry, _span))
     }
 
+    fn isolated_clock(&self) -> bool {
+        self.with(|adapter| adapter.isolated_clock())
+    }
+    fn process_site(&mut self, child: u64, site: u64, operation_site: u64, path: &[u32]) {
+        self.with(|adapter| adapter.process_site(child, site, operation_site, path))
+    }
+    fn process_sources(&self) -> bool {
+        self.with(|adapter| adapter.process_sources())
+    }
+    fn process_batch(&mut self, canceled: &[u64]) -> Result<Ready, AdapterError> {
+        self.with(|adapter| adapter.process_batch(canceled))
+    }
     fn ready(&mut self) -> Result<Ready, AdapterError> {
         self.with(|adapter| adapter.ready())
     }

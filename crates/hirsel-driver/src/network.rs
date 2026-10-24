@@ -378,6 +378,7 @@ pub(crate) struct HostLibrary {
     handles: BTreeMap<u64, u64>,
     next: u64,
     next_wait: u64,
+    process_sites: BTreeMap<u64, (hirsel_interp::observation::Anchor, Vec<u32>)>,
     waits: BTreeMap<u64, HostWait>,
     /// Armed scope deadlines (CONC-3), in entry order: token, scope and its timer request.
     armed: Vec<(u64, u64, R)>,
@@ -392,6 +393,7 @@ pub(crate) struct HostLibrary {
     next_continuation: u64,
 }
 struct HostWait {
+    task: u64,
     name: String,
     arguments: Vec<Value>,
 }
@@ -476,6 +478,7 @@ impl HostLibrary {
             pending_free_drop: None,
             free_ready: None,
             next_wait: 1 << 62,
+            process_sites: BTreeMap::new(),
             waits: BTreeMap::new(),
             armed: Vec::new(),
             ready: Ready::Tokens(Vec::new()),
@@ -542,6 +545,7 @@ impl HostLibrary {
         self.waits.insert(
             token,
             HostWait {
+                task: self.library.task_id(),
                 name: "watcher.next".into(),
                 arguments: a.to_vec(),
             },
@@ -983,6 +987,7 @@ impl HostLibrary {
             self.waits.insert(
                 token,
                 HostWait {
+                    task: self.library.task_id(),
                     name: name.into(),
                     arguments: a.to_vec(),
                 },
@@ -1058,6 +1063,7 @@ impl HostLibrary {
         self.waits.insert(
             token,
             HostWait {
+                task: self.library.task_id(),
                 name: "clock.sleep_until".into(),
                 arguments: a.to_vec(),
             },
@@ -1162,6 +1168,7 @@ impl HostLibrary {
         self.waits.insert(
             token,
             HostWait {
+                task: self.library.task_id(),
                 name: "signal.wait".into(),
                 arguments: a.to_vec(),
             },
@@ -1293,6 +1300,7 @@ impl HostLibrary {
         self.waits.insert(
             token,
             HostWait {
+                task: self.library.task_id(),
                 name: name.into(),
                 arguments: a.to_vec(),
             },
@@ -1359,6 +1367,7 @@ impl HostLibrary {
         self.waits.insert(
             token,
             HostWait {
+                task: self.library.task_id(),
                 name: name.into(),
                 arguments: a.to_vec(),
             },
@@ -1456,13 +1465,33 @@ impl HostLibrary {
             .library
             .cancellation()
             .filter(|_| token.is_none_or(|t| self.io.cancellable(t)));
+        if let R::ChildWrite { child, .. }
+        | R::ChildCloseStdin { child, .. }
+        | R::ChildWait { child, .. }
+        | R::GroupWait { group: child, .. } = &request
+        {
+            if let Some(anchor) = cx.anchor() {
+                self.process_sites
+                    .insert(*child, (anchor.clone(), self.library.task_path()));
+            }
+        }
+        let printed = self.io.stdout().len();
         let completion = self.host_cancelable(request, cancellation);
+        if matches!(completion, Ok(C::Checked(false))) {
+            cx.stdout.extend_from_slice(&self.io.stdout()[printed..]);
+        }
         if let Some(token) = token
             && !matches!(completion, Err(Error::Blocked(_)))
         {
             self.io.adapter().finish(token);
         }
         let completion = completion?;
+        if let C::Spawned(Ok(child)) = &completion {
+            if let Some(anchor) = cx.anchor() {
+                self.process_sites
+                    .insert(*child, (anchor.clone(), self.library.task_path()));
+            }
+        }
         // The wait consumes its Child on every outcome.
         if matches!(name, "child.wait" | "proc.wait_group")
             && let Value::Handle { id, .. } = a[1]
@@ -1796,6 +1825,7 @@ impl HostLibrary {
                 self.waits.insert(
                     token,
                     HostWait {
+                        task: self.library.task_id(),
                         name: "file.read".into(),
                         arguments: a.to_vec(),
                     },
@@ -1973,6 +2003,7 @@ impl HostLibrary {
                 self.waits.insert(
                     token,
                     HostWait {
+                        task: self.library.task_id(),
                         name: name.into(),
                         arguments: a.to_vec(),
                     },
@@ -2636,7 +2667,11 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
             }
             live
         });
-        self.ready = if self.waits.is_empty() && armed.is_empty() && !self.runner_waits() {
+        self.ready = if self.waits.is_empty()
+            && armed.is_empty()
+            && !self.runner_waits()
+            && !self.io.adapter().process_sources()
+        {
             Ready::Tokens(Vec::new())
         } else {
             self.io
@@ -2665,6 +2700,62 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
                 }
             }
         }
+        let mut canceled: Vec<u64> = self
+            .waits
+            .values()
+            .filter(|wait| self.library.task_cancellation(wait.task).is_some())
+            .filter_map(|wait| {
+                if !matches!(wait.name.as_str(), "child.wait" | "proc.wait_group") {
+                    return None;
+                }
+                let Value::Handle { id, .. } = wait.arguments.get(1)? else {
+                    return None;
+                };
+                self.handles.get(id).copied()
+            })
+            .collect();
+        canceled.sort_unstable();
+        canceled.dedup();
+        let printed = self.io.stdout().len();
+        let batch = match self.io.adapter().process_batch(&canceled) {
+            Err(hirsel_rt::io::AdapterError::ProcessFailed { child, .. }) => {
+                cx.stdout.extend_from_slice(&self.io.stdout()[printed..]);
+                let (anchor, spawn_path) = self
+                    .process_sites
+                    .get(&child)
+                    .cloned()
+                    .ok_or_else(invalid)?;
+                let failure = hirsel_interp::Failure {
+                    rule: hirsel_diag::RuleId::new("LANG-9").unwrap(),
+                    line: cx.sources.location(anchor.site).map_or(0, |p| p.line),
+                    site: anchor.site,
+                    kind: "scripted child unmet".into(),
+                };
+                return Err(Error::ProviderFailed(Box::new(
+                    hirsel_interp::observation::FailureRecord {
+                        failure,
+                        anchor,
+                        operation: None,
+                        cause: None,
+                        spawn_path,
+                    },
+                )));
+            }
+            Err(e) => return Err(Error::Unavailable(format!("host batch: {e:?}"))),
+            Ok(ready) => ready,
+        };
+        self.ready = match (
+            std::mem::replace(&mut self.ready, Ready::Tokens(Vec::new())),
+            batch,
+        ) {
+            (Ready::Every, _) | (_, Ready::Every) => Ready::Every,
+            (Ready::Tokens(mut a), Ready::Tokens(b)) => {
+                a.extend(b);
+                a.sort_unstable();
+                a.dedup();
+                Ready::Tokens(a)
+            }
+        };
         // Keep entry order for the next poll's ties.
         self.armed.sort_by_key(|(token, _, _)| *token);
         self.runner_children(cx)
@@ -3052,9 +3143,11 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
         ) && let Some(handle) = self.handles.remove(&id)
         {
             // Dropping a scripted child closes its input, which can leave an Expect unmet.
+            let printed = self.io.stdout().len();
             if self.host(R::Close { handle })? == C::Checked(false)
                 && matches!(kind, "Child" | "ChildGroup")
             {
+                cx.stdout.extend_from_slice(&self.io.stdout()[printed..]);
                 self.library.fail_drop("scripted child unmet");
             }
             return Ok(());

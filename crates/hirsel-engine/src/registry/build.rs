@@ -766,7 +766,18 @@ pub(crate) fn registry(types: &Arc<TypeInterner>) -> BTreeMap<DefId, SignatureRe
         let mut signature = b.signature(name, SignatureKind::Function(f), false);
         signature.metadata.track_caller = matches!(
             name,
-            "task.await_any" | "task.cancel_all" | "clock.sleep_until" | "out.print"
+            "task.await_any"
+                | "task.cancel_all"
+                | "clock.sleep_until"
+                | "out.print"
+                | "proc.spawn"
+                | "proc.spawn_pipeline"
+                | "child.write"
+                | "child.close_stdin"
+                | "child.wait"
+                | "proc.wait_group"
+                | "group.write"
+                | "group.close_stdin"
         );
         publish(types, signature, &mut out);
     }

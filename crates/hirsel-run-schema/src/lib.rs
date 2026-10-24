@@ -59,9 +59,10 @@ pub use child::{ChildStream, ScriptChild, ScriptGroup, ScriptRead, Signal};
 mod process;
 pub use process::{
     ChildRun, ChildStep, Command, ExitStatus, GroupOutput, PipelineOutcome, ProcessFailure,
-    ProcessGrant, ProcessOutcome, ProcessRule, ProcessRun, canonical_program, decode_child_runs,
-    decode_process_runs, encode_child_runs, encode_process_runs, script_pipeline, scriptable,
-    stages_error, take_children,
+    ProcessGrant, ProcessOutcome, ProcessRule, ProcessRun, TimedChildRun, TimedChildStep,
+    TimedProcessScript, canonical_program, decode_child_runs, decode_process_runs,
+    encode_child_runs, encode_process_runs, script_pipeline, scriptable, stages_error,
+    take_children, take_timed_children,
 };
 
 /// Versioned observable contracts, shared by live hosts and simulation/replay.
@@ -81,6 +82,7 @@ pub enum ProviderContract {
     NetScript,
     ProcessSpawn,
     ProcessScript,
+    ProcessScriptTimed,
     SignalsHost,
     SignalsScript,
     AdmitAny,
@@ -104,6 +106,7 @@ impl ProviderContract {
         Self::RunnerLocalThreads,
         Self::NetScript,
         Self::NetStream,
+        Self::ProcessScriptTimed,
         Self::ProcessScript,
         Self::ProcessSpawn,
         Self::RandomSplitMix64,
@@ -135,6 +138,7 @@ impl ProviderContract {
             Self::NetScript => "net.script@2",
             Self::ProcessSpawn => "process.spawn@1",
             Self::ProcessScript => "process.script@1",
+            Self::ProcessScriptTimed => "process.script.timed@1",
             Self::SignalsHost => "signals.host@1",
             Self::SignalsScript => "signals.script@1",
             Self::AdmitAny => "admit.any@1",
@@ -168,6 +172,9 @@ pub enum LaunchKind {
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Inputs {
+    /// Initial virtual clock bound only for the timed process fixture provider.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fixture_monotonic: Option<u64>,
     /// Test snapshot scripts bound into recording identity; never host injection.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fixture_file_faults: Option<FileFaults>,

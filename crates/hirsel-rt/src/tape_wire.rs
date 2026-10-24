@@ -281,7 +281,8 @@ wire_enum!(crate::io::AdapterError {
     6 => Blocked,
     7 => Unsupported(v0),
     8 => Signaled(v0),
-    9 => Stopped
+    9 => Stopped,
+    10 => ProcessFailed { child, site, operation_site, path }
 });
 
 wire_enum!(crate::io::IoError {
@@ -426,7 +427,9 @@ wire_enum!(crate::io::Request {
     112 => Ready{ wait, points },
     113 => Schedule{ count, choice },
     114 => OpenAppend{ directory, path },
-    116 => RunnerPoll{ key, cancel }
+    116 => RunnerPoll{ key, cancel },
+    117 => ProcessTime{ from, to },
+    118 => ProcessSettle{ canceled }
 } retired { 60 => "retired eager read_dir recording; re-record with streaming file.read_dir", 59 => "retired Request::Walk recording; re-record with streaming file.walk" });
 
 wire_enum!(crate::io::ClockError {
@@ -936,6 +939,12 @@ mod tests {
             Unsupported("provider".into()),
             Signaled(hirsel_run_schema::SignalKind::Terminate),
             Stopped,
+            ProcessFailed {
+                child: 9,
+                site: 10,
+                operation_site: 11,
+                path: vec![0, 1],
+            },
         ];
         for (tag, error) in errors.into_iter().enumerate() {
             let mut bytes = Vec::new();
@@ -945,7 +954,7 @@ mod tests {
             bytes.push(0);
             assert!(decode::<crate::io::AdapterError>(&bytes).is_err());
         }
-        assert!(decode::<crate::io::AdapterError>(&10u32.to_le_bytes()).is_err());
+        assert!(decode::<crate::io::AdapterError>(&11u32.to_le_bytes()).is_err());
         assert!(decode::<crate::io::AdapterError>(&[6, 0, 0]).is_err());
     }
 

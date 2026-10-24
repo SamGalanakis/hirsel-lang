@@ -214,6 +214,8 @@ pub enum Error {
     /// serializable check's failure). The run entry points report it as
     /// `Outcome::Failed`.
     Ended(Failure),
+    /// A provider event failed at its saved script/input source, without a new call.
+    ProviderFailed(Box<observation::FailureRecord>),
 }
 pub(crate) fn invalid(message: impl Into<String>) -> Error {
     Error::InvalidTir(message.into())

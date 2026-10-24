@@ -701,6 +701,40 @@ pub fn replay_observations_checked(
             Some(&mut observed),
             None,
             true,
+            None,
+        )
+    })?;
+    replay_observation(observed, &outcome)
+}
+
+/// Record a reference or checked-H fixture through the native host tape protocol.
+/// The supplied run is bound to this program before the snapshot is admitted.
+pub fn record_fixture_observations(
+    path: &Path,
+    run: &Path,
+    fixture: &native::Fixture,
+    tape: &Path,
+    checked: bool,
+) -> Result<hirsel_interp::observation::Observable, ToolError> {
+    let mut observed = None;
+    let (outcome, _) = session::with_program(path, hirsel_engine::Verify::On, |program| {
+        let host = hirsel_rt::host_launch::HostGrants::snapshot(
+            fixture.files.clone(),
+            fixture.stdin.clone(),
+            fixture.monotonic.unwrap_or(0),
+        );
+        run_loaded_on_host_with_checks(
+            program,
+            HostLaunch::Live {
+                config: LaunchConfig::Record(run.as_os_str()),
+                record: Some(tape),
+                revocations: None,
+            },
+            fixture.steps,
+            Some(&mut observed),
+            None,
+            checked,
+            Some(host),
         )
     })?;
     replay_observation(observed, &outcome)
@@ -739,7 +773,7 @@ pub(crate) fn run_loaded_on_host(
     observed: Option<&mut Option<hirsel_interp::observation::Observable>>,
     cancel: Option<network::ExternalCancel>,
 ) -> Result<(RunOutcome, Option<hirsel_run_schema::CalleeOutcome>), ToolError> {
-    run_loaded_on_host_with_checks(program, launch, max_steps, observed, cancel, false)
+    run_loaded_on_host_with_checks(program, launch, max_steps, observed, cancel, false, None)
 }
 
 fn run_loaded_on_host_with_checks(
@@ -749,10 +783,13 @@ fn run_loaded_on_host_with_checks(
     observed: Option<&mut Option<hirsel_interp::observation::Observable>>,
     cancel: Option<network::ExternalCancel>,
     checked: bool,
+    snapshot: Option<hirsel_rt::host_launch::HostGrants>,
 ) -> Result<(RunOutcome, Option<hirsel_run_schema::CalleeOutcome>), ToolError> {
     program.check_for_execution()?;
     program.refuse_foreign_interpretation()?;
-    let host = hirsel_rt::host_launch::HostGrants::cooperative(hirsel_rt::launch::RawStdout);
+    let host = snapshot.unwrap_or_else(|| {
+        hirsel_rt::host_launch::HostGrants::cooperative(hirsel_rt::launch::RawStdout)
+    });
     let tape = match launch {
         HostLaunch::Live { record, .. } | HostLaunch::Callee { record, .. } => {
             record.map(Path::to_path_buf)

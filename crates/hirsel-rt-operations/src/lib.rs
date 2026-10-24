@@ -141,6 +141,12 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
         row.failure = Some(hirsel_core_contract::RuleCode("MEM-14".into()));
     }
     let symbol = match name.as_str() {
+        "proc.spawn" => Some("hirsel_rt_v2_proc_spawn_at_site".into()),
+        "proc.spawn_pipeline" => Some("hirsel_rt_v2_proc_spawn_pipeline_at_site".into()),
+        "child.write" => Some("hirsel_rt_v2_child_write_at_site".into()),
+        "child.close_stdin" => Some("hirsel_rt_v2_child_close_stdin_at_site".into()),
+        "child.wait" => Some("hirsel_rt_v2_child_wait_at_site".into()),
+        "proc.wait_group" => Some("hirsel_rt_v2_proc_wait_group_at_site".into()),
         "out.print" => Some("hirsel_rt_v2_out_print_at_site".into()),
         "clock.sleep_until" => Some("hirsel_rt_v2_clock_sleep_until_at_site".into()),
         // Fixed declaration signatures: every entry has its exact physical ABI
@@ -235,16 +241,10 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
         | "io.process"
         | "proc.run"
         | "proc.pipeline"
-        | "proc.spawn"
         | "proc.narrow"
-        | "child.write"
-        | "child.close_stdin"
         | "child.read_stdout"
         | "child.read_stderr"
-        | "child.wait"
         | "child.kill"
-        | "proc.spawn_pipeline"
-        | "proc.wait_group"
         | "test.process"
         | "random.bytes"
         | "io.telemetry"
@@ -256,7 +256,9 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
         | "capture.measure"
         | "instant.checked_add" => Some(format!("hirsel_rt_v2_{}", name.replace('.', "_"))),
         // A ChildGroup's streams and kill are a Child's entries on its handle.
-        "group.write" | "group.close_stdin" | "group.read_stdout" | "group.kill" => Some(format!(
+        "group.write" => Some("hirsel_rt_v2_child_write_at_site".into()),
+        "group.close_stdin" => Some("hirsel_rt_v2_child_close_stdin_at_site".into()),
+        "group.read_stdout" | "group.kill" => Some(format!(
             "hirsel_rt_v2_child_{}",
             name.strip_prefix("group.").unwrap_or_default()
         )),
@@ -2372,6 +2374,54 @@ pub const HIRSEL_ABI_EXPORTS: &[AbiExport] = &[
             Physical::I64,
             Physical::I64,
         ],
+    },
+    AbiExport {
+        caller_site: true,
+        symbol: "hirsel_rt_v2_proc_spawn_at_site",
+        destination: true,
+        result: Some((16, 8)),
+        parameters: &[Physical::Pointer, Physical::Pointer],
+    },
+    AbiExport {
+        caller_site: true,
+        symbol: "hirsel_rt_v2_proc_spawn_pipeline_at_site",
+        destination: true,
+        result: Some((16, 8)),
+        parameters: &[Physical::Pointer, Physical::Pointer, Physical::I64],
+    },
+    AbiExport {
+        caller_site: true,
+        symbol: "hirsel_rt_v2_child_write_at_site",
+        destination: true,
+        result: Some((12, 4)),
+        parameters: &[
+            Physical::Pointer,
+            Physical::Pointer,
+            Physical::Pointer,
+            Physical::I64,
+            Physical::I64,
+        ],
+    },
+    AbiExport {
+        caller_site: true,
+        symbol: "hirsel_rt_v2_child_close_stdin_at_site",
+        destination: false,
+        result: None,
+        parameters: &[Physical::Pointer, Physical::Pointer],
+    },
+    AbiExport {
+        caller_site: true,
+        symbol: "hirsel_rt_v2_child_wait_at_site",
+        destination: true,
+        result: Some((12, 4)),
+        parameters: &[Physical::Pointer, Physical::Pointer, Physical::Pointer],
+    },
+    AbiExport {
+        caller_site: true,
+        symbol: "hirsel_rt_v2_proc_wait_group_at_site",
+        destination: true,
+        result: Some((24, 8)),
+        parameters: &[Physical::Pointer, Physical::Pointer, Physical::Pointer],
     },
 ];
 

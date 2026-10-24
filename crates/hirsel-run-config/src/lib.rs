@@ -467,6 +467,45 @@ impl RunConfig {
         }
         supported_providers(&record)?;
         let canonical = canonical_bytes(&record);
+        let timed = record
+            .io
+            .as_ref()
+            .and_then(|io| io.process.as_ref())
+            .is_some_and(|g| g.timed.is_some());
+        if timed
+            && (record.inputs.fixture_monotonic.is_none()
+                || record.io.as_ref().is_none_or(|io| {
+                    io.monotonic_clock.is_none()
+                        || io.wall_clock.is_some()
+                        || io
+                            .random
+                            .as_deref()
+                            .is_some_and(|p| p != ProviderContract::RandomSplitMix64.name())
+                        || io
+                            .runners
+                            .iter()
+                            .any(|r| r.provider != ProviderContract::RunnerSim.name())
+                        || io
+                            .net
+                            .as_ref()
+                            .is_some_and(|n| n.provider != "net.script@2")
+                        || io
+                            .signals
+                            .as_ref()
+                            .is_some_and(|s| s.provider == "signals.host@1")
+                }))
+        {
+            return Err(invalid(
+                "io.process.clock",
+                "timed process requires an isolated granted fixture clock",
+            ));
+        }
+        if !timed && record.inputs.fixture_monotonic.is_some() {
+            return Err(invalid(
+                "inputs.fixture_monotonic",
+                "only for timed process fixtures",
+            ));
+        }
         let identity = hash_parts(IDENTITY_DOMAIN, [&canonical[..]]);
         Ok(ValidatedRun {
             record,
@@ -1034,7 +1073,11 @@ fn supported_io(io: &IoGrants, field: &str) -> Result<(), RunRefusal> {
     if let Some(process) = &io.process
         && !matches!(
             ProviderContract::parse(&process.provider),
-            Some(ProviderContract::ProcessSpawn | ProviderContract::ProcessScript)
+            Some(
+                ProviderContract::ProcessSpawn
+                    | ProviderContract::ProcessScript
+                    | ProviderContract::ProcessScriptTimed
+            )
         )
     {
         return Err(unsupported(&at("process.provider")));

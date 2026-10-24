@@ -1275,6 +1275,11 @@ pub fn link_fixture_runnable(
         hirsel_run_config::RunConfig::for_program(revision, hirsel_run_schema::LaunchKind::Main);
     record.inputs = program.launch.clone();
     record.inputs.fault_seed = fixture.fault_seed;
+    record.inputs.fixture_monotonic = fixture
+        .process
+        .as_ref()
+        .filter(|g| g.timed.is_some())
+        .and(fixture.monotonic);
     record.inputs.fixture_file_faults =
         (!fixture.file_faults.is_empty()).then(|| fixture.file_faults.clone());
     record.args = Some(fixture.args.clone());
@@ -1314,6 +1319,7 @@ pub fn link_fixture_runnable(
                 .process
                 .clone()
                 .unwrap_or(hirsel_run_schema::ProcessGrant {
+                    timed: None,
                     provider: P::ProcessScript.name().into(),
                     rules: vec![],
                     runs: Some(vec![]),
@@ -2351,6 +2357,25 @@ pub fn launch_fixture(
             return Err(NativeError::new(
                 StageName::Launch,
                 "fixture Args and mounts must match link_fixture_runnable",
+            ));
+        }
+    }
+    if run.process_grant().is_some_and(|g| g.timed.is_some()) {
+        let initial = run.record().inputs.fixture_monotonic;
+        if (!matches!(tape, Tape::Replay(_)) || fixture.monotonic.is_some())
+            && fixture.monotonic != initial
+        {
+            return Err(NativeError::new(
+                StageName::Launch,
+                "timed fixture initial clock differs from binding",
+            ));
+        }
+        if (!matches!(tape, Tape::Replay(_)) || fixture.process.is_some())
+            && fixture.process.as_ref() != run.process_grant()
+        {
+            return Err(NativeError::new(
+                StageName::Launch,
+                "timed fixture process script differs from binding",
             ));
         }
     }

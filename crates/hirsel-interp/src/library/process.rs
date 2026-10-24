@@ -11,8 +11,8 @@ use crate::{Error, OperationCall, OperationContext, OperationResult, Value, inva
 use hirsel_run_schema::{
     ChildRun, ChildStep, ChildStream, Command, ExitStatus, GroupOutput, PipelineOutcome,
     ProcessFailure, ProcessGrant, ProcessOutcome, ProcessRule, ProcessRun, ProviderContract,
-    ScriptChild, ScriptGroup, ScriptRead, Signal, canonical_program, script_pipeline, scriptable,
-    take_children,
+    ScriptChild, ScriptGroup, ScriptRead, Signal, TimedChildRun, canonical_program,
+    script_pipeline, scriptable, take_timed_children,
 };
 use hirsel_types::{BuiltinType, Primitive};
 use std::collections::BTreeMap;
@@ -20,13 +20,25 @@ use std::collections::BTreeMap;
 /// The unused script entries of one scripted world, in order.
 pub(super) type World = Vec<Option<ProcessRun>>;
 /// The unused streaming-child entries of one scripted world, in order.
-pub(super) type Children = Vec<Option<ChildRun>>;
+pub(super) type Children = Vec<Option<TimedChildRun>>;
 
 pub(super) fn configured_world(
     grant: Option<&ProcessGrant>,
 ) -> Result<(BTreeMap<u64, World>, BTreeMap<u64, Children>), Error> {
     let children = grant
-        .and_then(|g| g.children.clone())
+        .map(|g| {
+            g.timed.as_ref().map_or_else(
+                || {
+                    g.children
+                        .clone()
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(Into::into)
+                        .collect()
+                },
+                |t| t.children.clone(),
+            )
+        })
         .unwrap_or_default()
         .into_iter()
         .map(Some)
@@ -38,7 +50,10 @@ pub(super) fn configured_world(
                 return Err(invalid("invalid simulation process rules"));
             }
             match (ProviderContract::parse(&grant.provider), &grant.runs) {
-                (Some(ProviderContract::ProcessScript), Some(runs)) => {
+                (
+                    Some(ProviderContract::ProcessScript | ProviderContract::ProcessScriptTimed),
+                    Some(runs),
+                ) => {
                     if runs
                         .iter()
                         .any(|run| !canonical_program(&run.program) || !scriptable(&run.outcome))
@@ -434,7 +449,7 @@ fn child_script(v: &Value) -> Result<ChildRun, Error> {
     })
 }
 /// `Option[Deadline]`: the clock handle's id and the Instant's ticks.
-fn deadline(v: &Value) -> Result<Option<(&Value, u64)>, Error> {
+pub(super) fn deadline(v: &Value) -> Result<Option<(&Value, u64)>, Error> {
     match variant_fields(v)? {
         (0, d) if d.is_empty() => Ok(None),
         (1, d) if d.len() == 1 => {
@@ -560,8 +575,10 @@ impl Simulation {
                 let world = self.next_id;
                 self.process_worlds
                     .insert(world, runs.into_iter().map(Some).collect());
-                self.process_children
-                    .insert(world, children.into_iter().map(Some).collect());
+                self.process_children.insert(
+                    world,
+                    children.into_iter().map(|c| Some(c.into())).collect(),
+                );
                 let value = self.handle("Proc", Grant::Proc { world, rules });
                 self.record("Test", name, encode_arguments(a), encode_value(&value), cx)?;
                 value
@@ -733,6 +750,7 @@ impl Simulation {
     }
     /// Drop a Child or ChildGroup: its input closes first, so an unmet Expect reports.
     pub(super) fn close_child(&mut self, child: u64) -> Option<String> {
+        self.process_sites.remove(&child);
         let open = matches!(
             self.grants.remove(&child),
             Some(Grant::Child {
@@ -743,7 +761,7 @@ impl Simulation {
         if let Some(mut group) = self.script_groups.remove(&child) {
             return if open { group.close_stdin() } else { None };
         }
-        let script = self.script_children.remove(&child)?;
+        let mut script = self.script_children.remove(&child)?;
         if open { script.close_stdin() } else { None }
     }
     /// `proc.spawn` and the streaming child operations of scripted worlds
@@ -787,6 +805,13 @@ impl Simulation {
                         )));
                     }
                     Ok(()) => {
+                        let now = self.monotonic_now();
+                        let timed = world == 0
+                            && self
+                                .config
+                                .process
+                                .as_ref()
+                                .is_some_and(|g| g.timed.is_some());
                         let children = self
                             .process_children
                             .get_mut(&world)
@@ -798,7 +823,8 @@ impl Simulation {
                         }) {
                             None => error(failure_value(ProcessFailure::NotFound)),
                             Some(entry) => {
-                                let script = ScriptChild::new(entry.take().unwrap());
+                                let script =
+                                    ScriptChild::new_encoded(entry.take().unwrap(), now, timed);
                                 let child = self.handle(
                                     "Child",
                                     Grant::Child {
@@ -807,8 +833,9 @@ impl Simulation {
                                         group: false,
                                     },
                                 );
-                                self.script_children
-                                    .insert(self.id(&child, "Child")?, script);
+                                let id = self.id(&child, "Child")?;
+                                self.remember_process_site(id, cx);
+                                self.script_children.insert(id, script);
                                 ok(child)
                             }
                         }
@@ -852,14 +879,22 @@ impl Simulation {
                         )));
                     }
                     Ok(()) => {
+                        let now = self.monotonic_now();
+                        let timed = world == 0
+                            && self
+                                .config
+                                .process
+                                .as_ref()
+                                .is_some_and(|g| g.timed.is_some());
                         let children = self
                             .process_children
                             .get_mut(&world)
                             .ok_or_else(|| invalid("missing process world"))?;
-                        match take_children(children, &stages) {
+                        match take_timed_children(children, &stages) {
                             Err(failure) => error(failure_value(failure)),
                             Ok(runs) => {
-                                let (script, first) = ScriptGroup::new(runs, max_stderr);
+                                let (script, first) =
+                                    ScriptGroup::new_encoded(runs, max_stderr, now, timed);
                                 report = first;
                                 let handle = self.handle(
                                     "ChildGroup",
@@ -869,8 +904,9 @@ impl Simulation {
                                         group: true,
                                     },
                                 );
-                                self.script_groups
-                                    .insert(self.id(&handle, "ChildGroup")?, script);
+                                let id = self.id(&handle, "ChildGroup")?;
+                                self.remember_process_site(id, cx);
+                                self.script_groups.insert(id, script);
                                 ok(handle)
                             }
                         }
@@ -887,7 +923,15 @@ impl Simulation {
                 ) {
                     return Err(invalid("expected MonotonicClock"));
                 }
+                if let Some((clock, _)) = deadline {
+                    self.id(clock, "MonotonicClock")?;
+                }
+                let wrong_domain = self.script_groups.get(&group).is_some_and(ScriptGroup::is_timed) && deadline.is_some_and(|(clock, _)| matches!(clock, Value::Handle { id, .. } if self.test_clocks.contains(id)));
                 match canceled {
+                    _ if wrong_domain => {
+                        report = self.close_child(group);
+                        error(failure_value(ProcessFailure::InvalidInput))
+                    }
                     // A canceled wait drops the ChildGroup it took.
                     Some(cause) => {
                         report = self.close_child(group);
@@ -901,7 +945,12 @@ impl Simulation {
                         error(failure_value(ProcessFailure::TimedOut))
                     }
                     None => {
+                        self.remember_process_site(group, cx);
                         report = self.script_group(group)?.close_stdin();
+                        if report.is_none() && !self.script_group(group)?.ended() {
+                            self.close_child_input(group);
+                            return Err(blocked(call, cx, name, group));
+                        }
                         let output = self.script_group(group)?.output();
                         self.grants.remove(&group);
                         self.script_groups.remove(&group);
@@ -923,6 +972,7 @@ impl Simulation {
                         } else if data.is_empty() {
                             ok(Value::Unit)
                         } else {
+                            self.remember_process_site(child, cx);
                             let written = if group {
                                 self.script_group(child)?.write(&data)
                             } else {
@@ -943,6 +993,7 @@ impl Simulation {
             "child.close_stdin" | "group.close_stdin" => {
                 let (child, open) = self.child_grant(arg(a, 0)?, arg(a, 1)?, kind)?;
                 if open {
+                    self.remember_process_site(child, cx);
                     self.close_child_input(child);
                     report = if group {
                         self.script_group(child)?.close_stdin()
@@ -1018,7 +1069,15 @@ impl Simulation {
                 ) {
                     return Err(invalid("expected MonotonicClock"));
                 }
+                if let Some((clock, _)) = deadline {
+                    self.id(clock, "MonotonicClock")?;
+                }
+                let wrong_domain = self.script_children.get(&child).is_some_and(ScriptChild::is_timed) && deadline.is_some_and(|(clock, _)| matches!(clock, Value::Handle { id, .. } if self.test_clocks.contains(id)));
                 match canceled {
+                    _ if wrong_domain => {
+                        report = self.close_child(child);
+                        error(failure_value(ProcessFailure::InvalidInput))
+                    }
                     // A canceled wait drops the Child it took.
                     Some(cause) => {
                         report = self.close_child(child);
@@ -1033,9 +1092,17 @@ impl Simulation {
                     }
                     None => {
                         if open {
+                            self.remember_process_site(child, cx);
                             report = self.script_child(child)?.close_stdin();
                         }
                         let status = self.script_child(child)?.status();
+                        if report.is_none()
+                            && status.is_none()
+                            && self.script_child(child)?.is_timed()
+                        {
+                            self.close_child_input(child);
+                            return Err(blocked(call, cx, name, child));
+                        }
                         self.grants.remove(&child);
                         self.script_children.remove(&child);
                         match (report.is_some(), status) {
@@ -1103,5 +1170,65 @@ pub fn status_value(status: ExitStatus) -> Value {
     match status {
         ExitStatus::Exited(code) => variant(0, vec![i32_value(code)]),
         ExitStatus::Signaled(signal) => variant(1, vec![i32_value(signal)]),
+    }
+}
+
+fn blocked(call: &OperationCall<'_>, cx: &OperationContext<'_>, name: &str, child: u64) -> Error {
+    Error::Blocked(vec![crate::BlockedWait {
+        spawn_path: vec![],
+        anchor: cx.anchor().cloned().unwrap_or(crate::observation::Anchor {
+            definition: call.path.clone().into(),
+            body: hirsel_tir::BodyId(0),
+            cleanup: None,
+            site: call.site,
+        }),
+        kind: name.into(),
+        targets: vec![child],
+    }])
+}
+impl Simulation {
+    fn remember_process_site(&mut self, child: u64, cx: &OperationContext<'_>) {
+        if self
+            .config
+            .process
+            .as_ref()
+            .is_some_and(|g| g.timed.is_some())
+        {
+            if let Some(anchor) = cx.anchor() {
+                self.process_sites
+                    .insert(child, (anchor.clone(), self.process_path.clone()));
+            }
+        }
+    }
+    pub(super) fn next_child_gate(&self) -> Option<u64> {
+        self.script_children
+            .values()
+            .filter_map(ScriptChild::next_at)
+            .chain(self.script_groups.values().filter_map(ScriptGroup::next_at))
+            .min()
+    }
+    pub(super) fn settle_children(&mut self, excluded: &[u64]) -> Option<(u64, String)> {
+        let now = self.monotonic_now();
+        let mut ids: Vec<u64> = self
+            .script_children
+            .keys()
+            .chain(self.script_groups.keys())
+            .copied()
+            .collect();
+        ids.sort_unstable();
+        for id in ids {
+            if excluded.contains(&id) {
+                continue;
+            }
+            let report = if let Some(child) = self.script_children.get_mut(&id) {
+                child.settle_at(now)
+            } else {
+                self.script_groups.get_mut(&id).unwrap().settle_at(now)
+            };
+            if let Some(report) = report {
+                return Some((id, report));
+            }
+        }
+        None
     }
 }

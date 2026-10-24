@@ -394,6 +394,9 @@ impl Drop for RunShared {
 }
 
 impl RunShared {
+    pub(crate) fn root_context(&self) -> *mut TaskCtx {
+        self.root_ctx
+    }
     pub(crate) fn io_binding(&self) -> *mut std::ffi::c_void {
         self.io_data.load(std::sync::atomic::Ordering::Acquire)
     }

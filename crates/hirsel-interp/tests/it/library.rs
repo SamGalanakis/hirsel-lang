@@ -1487,6 +1487,7 @@ fn process_replay_returns_recorded_completions_and_refuses_contradicting_ones() 
     use hirsel_run_schema::{ExitStatus, ProcessGrant, ProcessOutcome, ProcessRule, ProcessRun};
     let grant = |runs: Vec<ProcessRun>| SimulationConfig {
         process: Some(ProcessGrant {
+            timed: None,
             provider: "process.script@1".into(),
             rules: vec![ProcessRule {
                 program: "/usr/bin/git".into(),
@@ -2120,4 +2121,83 @@ fn read_dir_stream_keeps_direct_entries_sorted_across_pages_and_reports_refill_e
         h.value("file.read_dir", vec![dir, path("missing")]),
         Value::Variant { variant: 1, .. }
     ));
+}
+#[test]
+fn timed_a02_reference_foreign_domain_consumes_only_actual_child() {
+    use hirsel_run_schema::{
+        ExitStatus, ProcessGrant, ProcessRule, TimedChildRun, TimedChildStep as S,
+        TimedProcessScript,
+    };
+    let process = ProcessGrant {
+        provider: "process.script.timed@1".into(),
+        rules: vec![ProcessRule {
+            program: "/bin/cat".into(),
+            env: vec![],
+        }],
+        runs: Some(vec![]),
+        children: None,
+        timed: Some(TimedProcessScript {
+            clock: "run.monotonic".into(),
+            children: vec![TimedChildRun {
+                program: "/bin/cat".into(),
+                args: vec![],
+                steps: vec![
+                    S::At(5),
+                    S::Print(b"x".to_vec()),
+                    S::Exit(ExitStatus::Exited(0)),
+                ],
+            }],
+        }),
+    };
+    let mut config = SimulationConfig {
+        process: Some(process),
+        ..Default::default()
+    };
+    config.grants.insert("MonotonicClock".into());
+    let mut h = Harness::new(config);
+    let io = h.root("Io");
+    let p = unok(h.value("io.process", vec![io]));
+    let test = h.root("Test");
+    let clock = h.value("test.clock", vec![test]);
+    let command = Value::Record {
+        definition: (&hirsel_syntax::DefPath::core("Command")).into(),
+        fields: vec![
+            Some(path("/bin/cat")),
+            Some(collection::sequence(BuiltinType::List, [])),
+            Some(none()),
+            Some(none()),
+            Some(Value::Bool(false)),
+        ],
+    };
+    let child = unok(h.value("proc.spawn", vec![p.clone(), command]));
+    let at = Value::Handle {
+        kind: "Instant".into(),
+        id: 5,
+    };
+    let deadline = Value::Record {
+        definition: (&hirsel_syntax::DefPath::core("Deadline")).into(),
+        fields: vec![Some(clock), Some(at)],
+    };
+    assert_eq!(
+        h.value("child.wait", vec![p.clone(), child.clone(), some(deadline)]),
+        error(process::failure_value(
+            hirsel_run_schema::ProcessFailure::InvalidInput
+        ))
+    );
+    assert!(h.stdout.is_empty());
+    assert!(
+        h.try_call(
+            "child.kill",
+            vec![
+                p,
+                child,
+                Value::Variant {
+                    variant: 0,
+                    fields: vec![]
+                }
+            ],
+            TypeKind::Tuple(vec![].into())
+        )
+        .is_err()
+    );
 }

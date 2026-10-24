@@ -67,9 +67,6 @@ pub(crate) unsafe fn service(run: *mut RunShared) -> bool {
             .collect::<Vec<_>>();
         (scopes, waits, canceled, idle)
     };
-    if scopes.is_empty() && waits.is_empty() {
-        return false;
-    }
     // The home thread serializes this call with all worker home bridges.
     // Never retain the scheduler role while an adapter blocks or calls back.
     let result = unsafe { poll_home(run, idle, &canceled) };
@@ -104,8 +101,27 @@ pub(crate) unsafe fn service(run: *mut RunShared) -> bool {
             s.expire(index);
         }
     }
+    let canceled: Vec<u64> = waits
+        .iter()
+        .filter_map(|&(task, _, token)| {
+            let shield = s.task(task).shield();
+            s.canceled_task(task, shield).map(|_| token)
+        })
+        .collect();
+    drop(_guard);
+    let batch = unsafe { crate::host_waits::process_batch_home(run, &canceled) };
+    let _guard = unsafe { role::IdleGuard::home(run) };
+    let batch = match batch {
+        Ok(ready) => ready,
+        Err(stop) => {
+            unsafe { (*run).control.request_inside(stop) };
+            return true;
+        }
+    };
+    let s = unsafe { (*(*run).tasks.get()).as_deref_mut().unwrap() };
     let mut notified = Vec::new();
-    for host in hosts {
+    for mut host in hosts {
+        host.ready |= batch.contains(host.token);
         let valid = host.ready
             && waits.iter().any(|&(task, generation, token)| {
                 task == host.task && token == host.token && s.tasks.get(task as usize)

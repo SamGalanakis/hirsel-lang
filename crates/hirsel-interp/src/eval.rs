@@ -85,6 +85,11 @@ pub fn run_with_runtime(
             execution.outcome = Outcome::Environmental(cause);
             Ok(())
         }
+        (Err(Error::ProviderFailed(record)), _) => {
+            execution.outcome = Outcome::Failed(record.failure.clone());
+            execution.failures.push(*record);
+            Ok(())
+        }
         (Err(Error::Ended(failure)), _) => {
             execution.outcome = Outcome::Failed(failure);
             Ok(())
