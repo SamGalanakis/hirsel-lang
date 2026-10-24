@@ -24,7 +24,9 @@ use hirsel_types::{
 use std::collections::HashSet;
 
 /// Why an owner's instance requires the callee's instance.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[derive(
+    Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub enum InstanceKind {
     /// A written or checker-planned call, in any body of the owner.
     Call,
@@ -43,7 +45,7 @@ pub enum InstanceKind {
 /// of `callee`. Free `Body` references in the arguments name the owner's
 /// parameters; when `owner_binder` is set (a signature-owned root), so do
 /// `Bound` references at the owner's own depth.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct InstanceEdge {
     pub owner: DefPath,
     pub owner_binder: Option<SiteRef>,
@@ -107,7 +109,7 @@ impl InstanceEdge {
 }
 /// The instance requirements of a program, in collection order. The verdict
 /// depends only on the edge set, never on the order units contributed them.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct InstanceGraph {
     pub edges: Vec<InstanceEdge>,
 }
@@ -141,8 +143,15 @@ impl InstanceGraph {
     /// What executing the selected snapshot instantiates, read only from the
     /// snapshot's own definitions, owners, representations and values.
     pub fn native(input: &NativeInput) -> Result<Self, QueryError> {
+        let mut binder = |callee: &DefPath| {
+            Ok(input
+                .source_owners
+                .get(callee)
+                .map(|owner| owner.syntax.owner().site(NameSite::Item)))
+        };
         let mut collector = Collector {
-            input,
+            types: &input.types,
+            binder: &mut binder,
             edges: vec![],
             store_start: 0,
         };
@@ -161,20 +170,20 @@ impl InstanceGraph {
                 site,
                 kind: InstanceKind::Representation,
             };
-            collector.nominals(&edge, &[record.private_shape]);
+            collector.nominals(&edge, &[record.private_shape])?;
         }
         for (path, value) in &input.constants {
             let site = input
                 .source_owners
                 .get(path)
                 .map(|owner| owner.syntax.item.origin.span);
-            collector.materialized(path, site, value);
+            collector.materialized(path, site, value)?;
         }
         for (path, values) in &input.materialized {
             let owner = input.source_owners.get(path);
             for (expression, value) in values {
                 let site = owner.and_then(|owner| expression_site(owner, *expression));
-                collector.materialized(path, site, value);
+                collector.materialized(path, site, value)?;
             }
         }
         Ok(Self {
@@ -182,6 +191,69 @@ impl InstanceGraph {
         })
     }
 }
+/// Requirements of registry and generated constant values that have no
+/// ordinary source-definition product. Reuses the exact native collector.
+pub(crate) fn native_materialized(
+    types: &TypeInterner,
+    values: impl IntoIterator<Item = (DefPath, Materialized)>,
+    binder: &mut dyn FnMut(&DefPath) -> Result<Option<SiteRef>, QueryError>,
+) -> Result<InstanceGraph, QueryError> {
+    let mut collector = Collector {
+        types,
+        binder,
+        edges: vec![],
+        store_start: 0,
+    };
+    for (path, value) in values {
+        collector.materialized(&path, None, &value)?;
+    }
+    Ok(InstanceGraph {
+        edges: collector.edges,
+    })
+}
+
+/// Miss-only requirements of one native definition product. This reads only
+/// the supplied owner's body/value/representation and compact callee binders.
+/// It grants no source or native validation authority.
+pub(crate) fn native_definition(
+    types: &TypeInterner,
+    product: &crate::NativeDefinitionProduct,
+    definition: Option<&hirsel_tir::Definition>,
+    binder: &mut dyn FnMut(&DefPath) -> Result<Option<SiteRef>, QueryError>,
+) -> Result<InstanceGraph, QueryError> {
+    let path = &product.definition;
+    let mut collector = Collector {
+        types,
+        binder,
+        edges: vec![],
+        store_start: 0,
+    };
+    if let Some(definition) = definition {
+        collector.definition(path, definition)?;
+    }
+    if let Some(record) = &product.representation {
+        collector.store_start = collector.edges.len();
+        collector.nominals(
+            &Edge {
+                owner: path,
+                owner_binder: Some(product.source.syntax.owner().site(NameSite::Item)),
+                site: product.source.syntax.item.origin.span,
+                kind: InstanceKind::Representation,
+            },
+            &[record.private_shape],
+        )?;
+    }
+    if let Some(value) = &product.constant {
+        collector.materialized(path, Some(product.source.syntax.item.origin.span), value)?;
+    }
+    for (expression, value) in &product.materialized {
+        collector.materialized(path, expression_site(&product.source, *expression), value)?;
+    }
+    Ok(InstanceGraph {
+        edges: collector.edges,
+    })
+}
+
 fn expression_site(owner: &NativeSource, expression: ExprId) -> Option<Span> {
     let expressions = &owner.syntax.tree.expressions;
     expressions
@@ -195,22 +267,22 @@ struct Edge<'a> {
     kind: InstanceKind,
 }
 struct Collector<'a> {
-    input: &'a NativeInput,
+    types: &'a TypeInterner,
+    binder: &'a mut dyn FnMut(&DefPath) -> Result<Option<SiteRef>, QueryError>,
     edges: Vec<InstanceEdge>,
     /// First edge of the current owner; cleanup chains repeat drops.
     store_start: usize,
 }
 impl Collector<'_> {
     /// Generic bodies in the selected program; library operations are runtime code.
-    fn binder(&self, callee: &DefPath) -> Option<SiteRef> {
-        self.input
-            .source_owners
-            .get(callee)
-            .map(|owner| owner.syntax.owner().site(NameSite::Item))
-    }
-    fn push(&mut self, edge: &Edge<'_>, callee: &DefPath, arguments: &[GenericArgument]) {
-        let Some(binder) = self.binder(callee) else {
-            return;
+    fn push(
+        &mut self,
+        edge: &Edge<'_>,
+        callee: &DefPath,
+        arguments: &[GenericArgument],
+    ) -> Result<(), QueryError> {
+        let Some(binder) = (self.binder)(callee)? else {
+            return Ok(());
         };
         if self.edges[self.store_start..].iter().any(|known| {
             known.site == edge.site
@@ -218,7 +290,7 @@ impl Collector<'_> {
                 && known.callee == *callee
                 && known.arguments == arguments
         }) {
-            return;
+            return Ok(());
         }
         self.edges.push(InstanceEdge {
             owner: edge.owner.clone(),
@@ -229,12 +301,13 @@ impl Collector<'_> {
             binder,
             arguments: arguments.to_vec(),
         });
+        Ok(())
     }
     /// Every generic nominal structurally inside `roots`, including those in
     /// another nominal's arguments: a nominal instance may drop its arguments.
-    fn nominals(&mut self, edge: &Edge<'_>, roots: &[TypeId]) {
+    fn nominals(&mut self, edge: &Edge<'_>, roots: &[TypeId]) -> Result<(), QueryError> {
         let mut todo = roots.to_vec();
-        let types = self.input.types.clone();
+        let types = self.types;
         let mut seen = HashSet::new();
         while let Some(ty) = todo.pop() {
             if !seen.insert(ty) {
@@ -249,7 +322,7 @@ impl Collector<'_> {
                     arguments,
                 } => {
                     if !arguments.is_empty() {
-                        self.push(edge, definition.path(), arguments);
+                        self.push(edge, definition.path(), arguments)?;
                     }
                     todo.extend(type_arguments(arguments));
                 }
@@ -265,6 +338,7 @@ impl Collector<'_> {
                 _ => (),
             }
         }
+        Ok(())
     }
     fn definition(
         &mut self,
@@ -288,7 +362,7 @@ impl Collector<'_> {
                     match &instruction.kind {
                         InstructionKind::Drop { place: dropped, .. } => {
                             let (ty, site) = place(*dropped);
-                            self.nominals(&edge(site, InstanceKind::Drop), &[ty]);
+                            self.nominals(&edge(site, InstanceKind::Drop), &[ty])?;
                         }
                         InstructionKind::Assign { value, .. } => {
                             match &body.rvalues[value.0 as usize] {
@@ -298,12 +372,12 @@ impl Collector<'_> {
                                 } if !arguments.is_empty() => {
                                     let mut reference =
                                         edge(instruction.span, InstanceKind::Reference);
-                                    self.push(&reference, callee, arguments);
+                                    self.push(&reference, callee, arguments)?;
                                     reference.kind = InstanceKind::Drop;
                                     self.nominals(
                                         &reference,
                                         &type_arguments(arguments).collect::<Vec<_>>(),
-                                    );
+                                    )?;
                                 }
                                 Rvalue::Closure { captures, .. } => {
                                     let owned: Vec<_> = captures
@@ -314,7 +388,7 @@ impl Collector<'_> {
                                     self.nominals(
                                         &edge(instruction.span, InstanceKind::Drop),
                                         &owned,
-                                    );
+                                    )?;
                                 }
                                 _ => (),
                             }
@@ -329,9 +403,9 @@ impl Collector<'_> {
                             arguments,
                         } if !arguments.is_empty() => {
                             let mut call = edge(block.span, InstanceKind::Call);
-                            self.push(&call, callee, arguments);
+                            self.push(&call, callee, arguments)?;
                             call.kind = InstanceKind::Drop;
-                            self.nominals(&call, &type_arguments(arguments).collect::<Vec<_>>());
+                            self.nominals(&call, &type_arguments(arguments).collect::<Vec<_>>())?;
                         }
                         // A call with generic arguments through a value is a
                         // generic nested function called by name (spec #42:
@@ -347,15 +421,20 @@ impl Collector<'_> {
             for node in &body.cleanup_nodes {
                 if let CleanupAction::Drop { place: dropped, .. } = node.action {
                     let (ty, site) = place(dropped);
-                    self.nominals(&edge(site, InstanceKind::Drop), &[ty]);
+                    self.nominals(&edge(site, InstanceKind::Drop), &[ty])?;
                 }
             }
         }
         Ok(())
     }
-    fn materialized(&mut self, owner: &DefPath, site: Option<Span>, value: &Materialized) {
+    fn materialized(
+        &mut self,
+        owner: &DefPath,
+        site: Option<Span>,
+        value: &Materialized,
+    ) -> Result<(), QueryError> {
         let Some(site) = site else {
-            return;
+            return Ok(());
         };
         self.store_start = self.edges.len();
         let mut roots = vec![];
@@ -373,7 +452,7 @@ impl Collector<'_> {
                     site,
                     kind: InstanceKind::Reference,
                 };
-                self.push(&edge, definition, arguments);
+                self.push(&edge, definition, arguments)?;
                 roots.extend(type_arguments(arguments));
             }
             if let hirsel_tir::ValueKind::Construct { fields, .. } = &node.kind {
@@ -386,7 +465,7 @@ impl Collector<'_> {
             site,
             kind: InstanceKind::Materialized,
         };
-        self.nominals(&edge, &roots);
+        self.nominals(&edge, &roots)
     }
 }
 fn type_arguments(arguments: &[GenericArgument]) -> impl Iterator<Item = TypeId> + '_ {

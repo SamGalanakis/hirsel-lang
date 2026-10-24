@@ -2384,7 +2384,7 @@ impl QueryEngine {
         .write(&value.executed, payload)
     }
 
-    pub(super) fn source_verification_policy(&self) -> ContentHash {
+    pub(crate) fn source_verification_policy(&self) -> ContentHash {
         let private = ContentHash::of_parts(
             "hirsel.validate.private-evaluation.v1",
             [
