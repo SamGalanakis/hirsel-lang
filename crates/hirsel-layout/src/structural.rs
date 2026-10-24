@@ -12,6 +12,17 @@ pub fn derive(
     Ok(derive_typed(types, root, lookup)?.map(|derived| derived.graph))
 }
 
+/// Native value access may read validated owner-only representations alongside
+/// public declarations. This does not change the public structural view.
+pub fn derive_with_owners(
+    types: &TypeInterner,
+    root: TypeId,
+    lookup: &mut impl FnMut(DefId) -> Result<Option<SignatureRef>, QueryError>,
+    owners: &crate::layout::Owners,
+) -> Result<Option<ShapeGraph>, QueryError> {
+    Ok(derive_typed_impl(types, root, lookup, Some(owners))?.map(|derived| derived.graph))
+}
+
 /// Transient correspondence for this derivation's interner. Numeric TypeIds
 /// are never durable identities and must not be reused in another session.
 pub struct DerivedShape<'a> {
@@ -24,6 +35,15 @@ pub fn derive_typed<'a>(
     types: &'a TypeInterner,
     root: TypeId,
     lookup: &mut impl FnMut(DefId) -> Result<Option<SignatureRef>, QueryError>,
+) -> Result<Option<DerivedShape<'a>>, QueryError> {
+    derive_typed_impl(types, root, lookup, None)
+}
+
+fn derive_typed_impl<'a>(
+    types: &'a TypeInterner,
+    root: TypeId,
+    lookup: &mut impl FnMut(DefId) -> Result<Option<SignatureRef>, QueryError>,
+    owners: Option<&crate::layout::Owners>,
 ) -> Result<Option<DerivedShape<'a>>, QueryError> {
     let memo = TypeMemo::new();
     let mut graph = ShapeGraph {
@@ -110,7 +130,20 @@ pub fn derive_typed<'a>(
                 if definition.path().is_core("Path") {
                     Shape::Leaf
                 } else {
-                    let Some(representation) = declaration.representation else {
+                    let representation = declaration.representation.or_else(|| {
+                        let crate::layout::OwnerRepresentation::Defined(record) =
+                            owners?.nominals.get(definition)?
+                        else {
+                            return None;
+                        };
+                        // Both inputs are independent of the candidate graph.
+                        // A private record cannot stand in for another owner.
+                        (record.definition == *definition.path()
+                            && record.generics == declaration.generics
+                            && record.resource == declaration.resource)
+                            .then_some(record.private_shape)
+                    });
+                    let Some(representation) = representation else {
                         return Ok(None);
                     };
                     if !expansions.enter(ty, 0, types)? {
