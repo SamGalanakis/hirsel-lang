@@ -6,9 +6,10 @@ use hirsel_engine::{LoweringPolicy, loader_inputs::FrozenInputs};
 use hirsel_syntax::DefPath;
 use std::path::PathBuf;
 mod host_selector;
-mod source_graph;
+mod inspection;
 mod output;
 mod selector;
+mod source_graph;
 pub use output::{
     CompileInspection, CompileOutput, CompileResult, CompilerReadiness, DefinitionWork,
     NativeExecution, NativeObservation, RequestWork, TirExecution, TirProducts,

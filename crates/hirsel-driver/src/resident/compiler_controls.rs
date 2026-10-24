@@ -146,3 +146,79 @@ fn real_compiler_requests_refuse_a_zero_process_allowance() {
         assert!(host.request(&request).is_err());
     });
 }
+
+#[test]
+fn physical_inspection_counts_survive_revisions_eviction_and_detached_snapshot_owners() {
+    hirsel_engine::with_compiler_stack(|| {
+        let (_directory, entry, source) = fixture();
+        let original = request(&entry);
+        let budget = ProcessBudget::new(600 << 20);
+        let mut host = Host::new(selector(budget.clone()));
+        let mut held = None;
+        let mut previous = 0;
+        for revision in 0..4 {
+            let text: Arc<[u8]> = format!("pub fn main()->u8{{{}u8}}\n", revision + 1)
+                .into_bytes()
+                .into();
+            let mut selected = original.clone();
+            selected.inputs = original
+                .inputs
+                .replace_sources(&BTreeMap::from([(source.clone(), text)]), 1 << 20)
+                .unwrap();
+            let completed = host.request(&selected).unwrap().wait().unwrap();
+            assert!(checked(&completed).diagnostics.is_empty());
+            let definition = completed.entry.clone();
+            drop(completed);
+            selected.operation = CompileOperation::Inspect {
+                definitions: vec![definition.clone()],
+            };
+            let inspected = host.request(&selected).unwrap().wait().unwrap();
+            assert_eq!(
+                inspected.work.recomputations, 0,
+                "inspection must execute no compiler phase"
+            );
+            let CompileResult::Inspect(inspection) = &inspected.result else {
+                panic!("wrong inspection result")
+            };
+            let count = inspection.definitions[0]
+                .recomputations
+                .iter()
+                .find(|(kind, _)| *kind == hirsel_engine::QueryKind::Check)
+                .unwrap()
+                .1;
+            assert!(
+                count > previous,
+                "each changed body contributes its actual new Check work"
+            );
+            assert!(
+                inspection
+                    .memos
+                    .iter()
+                    .any(|(key, _)| key.kind == hirsel_engine::QueryKind::Check)
+            );
+            if revision == 0 {
+                held = Some(inspection.clone());
+            }
+            selected.operation = CompileOperation::RecomputeCounts {
+                queries: vec![(definition, hirsel_engine::QueryKind::Check)],
+            };
+            let repeated = host.request(&selected).unwrap().wait().unwrap();
+            assert_eq!(repeated.work.recomputations, 0);
+            let CompileResult::RecomputeCounts(counts) = &repeated.result else {
+                panic!("wrong counter result")
+            };
+            assert_eq!(
+                counts[0].2, count,
+                "metadata reads must not count a producer twice"
+            );
+            previous = count;
+        }
+        drop(host);
+        assert!(
+            budget.reserved() > 0,
+            "detached inspection retains its admitted read inventory"
+        );
+        drop(held);
+        assert_eq!(budget.reserved(), 0);
+    });
+}

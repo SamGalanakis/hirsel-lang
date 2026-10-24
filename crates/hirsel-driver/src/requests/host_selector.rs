@@ -251,11 +251,16 @@ impl GraphSelections {
         ToolError,
     > {
         self.live.retain(|graph| graph.strong_count() != 0);
-        let selected = self.live.iter().filter_map(Weak::upgrade).find(|graph| {
-            graph.path == request.path
-                && graph.inputs == request.inputs
-                && graph.products.accepts(&request.operation)
-        });
+        let selected = self
+            .live
+            .iter()
+            .rev()
+            .filter_map(Weak::upgrade)
+            .find(|graph| {
+                graph.path == request.path
+                    && graph.inputs == request.inputs
+                    && graph.products.accepts(&request.operation)
+            });
         let graph = match selected {
             Some(graph) => graph,
             None => {
