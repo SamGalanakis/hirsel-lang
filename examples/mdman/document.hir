@@ -5,9 +5,14 @@ pub type Parsed {
   tree: markdown.Node,
 }
 
+// Document root is depth one. Final-tree limits are independent of parser work.
 pub const DEPTH: u64 = 32
 
 pub const NODES: u64 = 8192
+
+pub const PARSER_WORK: u64 = 131072
+
+pub const PARSER_NESTING: u64 = 128
 
 fn unsupported(kind: markdown.Kind) -> Option[String] uses {} {
   match kind {
@@ -69,7 +74,7 @@ fn inspect(
   for child in node.children {
     list.push(mut anchor, index)
     inspect(child, name, mut anchor, depth + 1, mut count)?
-    list.truncate(mut anchor, depth)
+    list.truncate(mut anchor, depth - 1)
     index += 1
   }
   Ok(())
@@ -78,7 +83,7 @@ fn inspect(
 pub fn validate(tree: markdown.Node, name: String) -> Result[(), manifest.Problem] uses {} {
   let mut count = 0u64
   let mut anchor: List[u64] = []
-  inspect(tree, name, mut anchor, 0, mut count)
+  inspect(tree, name, mut anchor, 1, mut count)
 }
 
 pub fn load(d: Dir, item: manifest.Input) -> batch.Work[
@@ -95,7 +100,25 @@ pub fn load(d: Dir, item: manifest.Input) -> batch.Work[
   let mut options = markdown.default_options()
   // Recognize tables so they are rejected, rather than rendered as paragraphs.
   options.tables = true
-  let tree = unique markdown.parse(take source, options)
+  let tree = match markdown.parse_bounded(
+    take source,
+    options,
+    markdown.ParseBudget(
+      source_bytes: 16384,
+      work_items: PARSER_WORK,
+      nesting: PARSER_NESTING
+    )
+  ) {
+    Ok(tree) => unique tree,
+    Error(dimension) => {
+      let label = match dimension {
+        SourceBytes() => "parser source bytes",
+        WorkItems() => "parser work items",
+        Nesting() => "parser nesting",
+      }
+      return Failed(unique manifest.limit(item.spec.input, label))
+    },
+  }
   match validate(tree, item.spec.input) {
     Ok(()) => Done(Parsed(spec: unique item.spec, tree: take tree)),
     Error(error) => Failed(unique error),

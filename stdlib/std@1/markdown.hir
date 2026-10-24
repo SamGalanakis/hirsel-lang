@@ -36,6 +36,66 @@ pub type Node {
   children: List[Node],
 }
 
+/// Independent original-source, cumulative parser-record and nesting bounds.
+pub type ParseBudget {
+  source_bytes: u64,
+  work_items: u64,
+  nesting: u64,
+}
+
+/// Operational refusal; Markdown grammar itself remains total.
+pub type ParseLimit = SourceBytes | WorkItems | Nesting
+
+type ParseState {
+  bounded: bool,
+  work: u64,
+  nesting: u64,
+}
+
+fn admit(mut budget: ParseState, count: u64) -> Result[(), ParseLimit] uses {} {
+  if budget.bounded {
+    if count > budget.work {
+      return Error(WorkItems())
+    }
+    budget.work -= count
+  }
+  Ok(())
+}
+
+fn admit_nesting(budget: ParseState, count: u64) -> Result[(), ParseLimit] uses {} {
+  if budget.bounded && count > budget.nesting {
+    return Error(Nesting())
+  }
+  Ok(())
+}
+
+// Parent chains are iterative: no host recursion precedes admission.
+fn child_depth(budget: ParseState, nodes: List[Entry], parent: u64) -> Result[
+  (),
+  ParseLimit
+] uses {} {
+  let mut remaining = budget.nesting
+  if !budget.bounded {
+    return Ok(())
+  }
+  if remaining == 0 {
+    return Error(Nesting())
+  }
+  remaining -= 1
+  let mut id = parent
+  while true {
+    if remaining == 0 {
+      return Error(Nesting())
+    }
+    remaining -= 1
+    if id == 0 {
+      return Ok(())
+    }
+    id = nodes[id].parent
+  }
+  Ok(())
+}
+
 pub fn default_options() -> Options uses {} {
   Options(
     tables: false,
@@ -212,7 +272,12 @@ fn run(s: String, at: u64, c: u8) -> u64 uses {} {
   end - at
 }
 
-fn new_child(mut nodes: List[Entry], parent: u64, kind: u8) -> u64 uses {} {
+fn new_child(mut budget: ParseState, mut nodes: List[Entry], parent: u64, kind: u8) -> Result[
+  u64,
+  ParseLimit
+] uses {} {
+  child_depth(budget, nodes, parent)?
+  admit(mut budget, 1)?
   let id = core@1/list.len(nodes)
   let mut node = entry(kind)
   node.parent = parent
@@ -225,7 +290,7 @@ fn new_child(mut nodes: List[Entry], parent: u64, kind: u8) -> u64 uses {} {
     nodes[parent].first = id
   }
   nodes[parent].last = id
-  id
+  Ok(id)
 }
 
 fn unlink(mut nodes: List[Entry], id: u64) -> () uses {} {
@@ -336,11 +401,14 @@ fn can_contain(kind: u8, child: u8) -> bool uses {} {
   }
 }
 
-fn finish_at(id: u64, line: u64, mut p: Parser) -> () uses {} {
+fn finish_at(mut budget: ParseState, id: u64, line: u64, mut p: Parser) -> Result[
+  (),
+  ParseLimit
+] uses {} {
   if p.nodes[id].kind == 1 {
     // Keep definition-only paragraphs until lists have measured blank gaps,
     // as commonmark.js lib/blocks.js:277-299 does before document finalization.
-    let _ = remove_references(mut p, id)
+    let _ = remove_references(mut budget, mut p, id)?
   }
   p.nodes[id].open = false
   p.nodes[id].end_line = line
@@ -405,32 +473,34 @@ fn finish_at(id: u64, line: u64, mut p: Parser) -> () uses {} {
     }
   }
   p.tip = p.nodes[id].parent
+  Ok(())
 }
 
-fn close_unmatched(mut p: Parser) -> () uses {} {
+fn close_unmatched(mut budget: ParseState, mut p: Parser) -> Result[(), ParseLimit] uses {} {
   if !p.closed {
     while p.oldtip != p.matched {
       let parent = p.nodes[p.oldtip].parent
       let close_id = p.oldtip
       let close_line = p.line_number - 1
-      finish_at(close_id, close_line, mut p)
+      finish_at(mut budget, close_id, close_line, mut p)?
       p.oldtip = parent
     }
     p.closed = true
   }
+  Ok(())
 }
 
-fn add_block(mut p: Parser, kind: u8) -> u64 uses {} {
+fn add_block(mut budget: ParseState, mut p: Parser, kind: u8) -> Result[u64, ParseLimit] uses {} {
   while !can_contain(p.nodes[p.tip].kind, kind) {
     let close_id = p.tip
     let close_line = p.line_number - 1
-    finish_at(close_id, close_line, mut p)
+    finish_at(mut budget, close_id, close_line, mut p)?
   }
   let tip = p.tip
-  let id = new_child(mut p.nodes, tip, kind)
+  let id = new_child(mut budget, mut p.nodes, tip, kind)?
   p.nodes[id].start_line = p.line_number
   p.tip = id
-  id
+  Ok(id)
 }
 
 // HTML tag scanner implements commonmark.js common.js tag/attribute grammar.
@@ -651,10 +721,13 @@ fn list_marker(s: String, paragraph: bool) -> Option[(u64, u8, u64, bool)] uses 
   Some((n, byte(s, n - 1), start, ordered))
 }
 
-fn continue_block(mut p: Parser, id: u64) -> u8 uses {} {
+fn continue_block(mut budget: ParseState, mut p: Parser, id: u64) -> Result[
+  u8,
+  ParseLimit
+] uses {} {
   let kind = p.nodes[id].kind
   if kind == 0 || kind == 4 {
-    return 0
+    return Ok(0)
   }
   if kind == 3 {
     if p.indent < 4 && byte(p.line, p.nonspace) == 62 {
@@ -663,9 +736,9 @@ fn continue_block(mut p: Parser, id: u64) -> u8 uses {} {
       if space(byte(p.line, p.offset)) {
         advance(mut p, 1, true)
       }
-      return 0
+      return Ok(0)
     }
-    return 1
+    return Ok(1)
   }
   if kind == 22 {
     if p.indent >= 4 {
@@ -673,9 +746,9 @@ fn continue_block(mut p: Parser, id: u64) -> u8 uses {} {
     } else if p.blank {
       advance_nonspace(mut p)
     } else {
-      return 1
+      return Ok(1)
     }
-    return 0
+    return Ok(0)
   }
   if kind == 5 {
     let padding = p.nodes[id].indent + p.nodes[id].padding
@@ -684,9 +757,9 @@ fn continue_block(mut p: Parser, id: u64) -> u8 uses {} {
     } else if p.blank && p.nodes[id].first != 0 {
       advance_nonspace(mut p)
     } else {
-      return 1
+      return Ok(1)
     }
-    return 0
+    return Ok(0)
   }
   if kind == 19 {
     let s = piece(p.line, p.nonspace, size(p.line))
@@ -697,12 +770,12 @@ fn continue_block(mut p: Parser, id: u64) -> u8 uses {} {
       s,
       true
     ) != None()) {
-      return 1
+      return Ok(1)
     }
-    return 0
+    return Ok(0)
   }
   if kind == 2 || kind == 8 {
-    return 1
+    return Ok(1)
   }
   if kind == 6 {
     if p.nodes[id].fence != 0 {
@@ -712,8 +785,8 @@ fn continue_block(mut p: Parser, id: u64) -> u8 uses {} {
       ) == 0 {
         let close_id = id
         let close_line = p.line_number
-        finish_at(close_id, close_line, mut p)
-        return 2
+        finish_at(mut budget, close_id, close_line, mut p)?
+        return Ok(2)
       }
       let mut remaining = p.nodes[id].indent
       while remaining > 0 && space(byte(p.line, p.offset)) {
@@ -725,28 +798,35 @@ fn continue_block(mut p: Parser, id: u64) -> u8 uses {} {
     } else if p.blank {
       advance_nonspace(mut p)
     } else {
-      return 1
+      return Ok(1)
     }
-    return 0
+    return Ok(0)
   }
   if kind == 7 {
-    return if p.blank && p.nodes[id].html >= 6 {
-      1
-    } else {
-      0
-    }
+    return Ok(
+      if p.blank && p.nodes[id].html >= 6 {
+        1
+      } else {
+        0
+      }
+    )
   }
   if kind == 1 {
-    return if p.blank {
-      1
-    } else {
-      0
-    }
+    return Ok(
+      if p.blank {
+        1
+      } else {
+        0
+      }
+    )
   }
-  1
+  Ok(1)
 }
 
-fn start_block(mut p: Parser, container: u64) -> u8 uses {} {
+fn start_block(mut budget: ParseState, mut p: Parser, container: u64) -> Result[
+  u8,
+  ParseLimit
+] uses {} {
   let s = piece(p.line, p.nonspace, size(p.line))
   let c = byte(s, 0)
   if p.indent < 4 {
@@ -756,16 +836,16 @@ fn start_block(mut p: Parser, container: u64) -> u8 uses {} {
       if space(byte(p.line, p.offset)) {
         advance(mut p, 1, true)
       }
-      close_unmatched(mut p)
-      add_block(mut p, 3)
-      return 1
+      close_unmatched(mut budget, mut p)?
+      add_block(mut budget, mut p, 3)?
+      return Ok(1)
     }
     let hashes = run(s, 0, 35)
     if hashes >= 1 && hashes <= 6 && (byte(s, hashes) == 0 || space(byte(s, hashes))) {
       advance_nonspace(mut p)
       advance(mut p, hashes, false)
-      close_unmatched(mut p)
-      let id = add_block(mut p, 2)
+      close_unmatched(mut budget, mut p)?
+      let id = add_block(mut budget, mut p, 2)?
       p.nodes[id].number = hashes
       let raw = trim(piece(p.line, p.offset, size(p.line)))
       let mut end = size(raw)
@@ -779,19 +859,19 @@ fn start_block(mut p: Parser, container: u64) -> u8 uses {} {
       }
       p.nodes[id].value = unique value
       p.offset = size(p.line)
-      return 2
+      return Ok(2)
     }
     if c == 96 || c == 126 {
       let n = run(s, 0, c)
       if n >= 3 && (c != 96 || !string.contains(piece(s, n, size(s)), "`")) {
-        close_unmatched(mut p)
-        let id = add_block(mut p, 6)
+        close_unmatched(mut budget, mut p)?
+        let id = add_block(mut budget, mut p, 6)?
         p.nodes[id].fence = n
         p.nodes[id].marker = c
         p.nodes[id].indent = p.indent
         advance_nonspace(mut p)
         advance(mut p, n, false)
-        return 2
+        return Ok(2)
       }
     }
     let ht = html_block_type(
@@ -799,21 +879,21 @@ fn start_block(mut p: Parser, container: u64) -> u8 uses {} {
       p.nodes[container].kind == 1 || !p.closed && !p.blank && p.nodes[p.tip].kind == 1
     )
     if ht != 0 {
-      close_unmatched(mut p)
-      let id = add_block(mut p, 7)
+      close_unmatched(mut budget, mut p)?
+      let id = add_block(mut budget, mut p, 7)?
       p.nodes[id].html = ht
-      return 2
+      return Ok(2)
     }
-    if start_table(mut p, container) {
-      return 2
+    if start_table(mut budget, mut p, container)? {
+      return Ok(2)
     }
     if p.nodes[container].kind == 1 && (c == 61 || c == 45) {
       let n = run(s, 0, c)
       if n != 0 && size(trim(piece(s, n, size(s)))) == 0 {
         // Definitions at the start do not become heading content.
-        let remaining = remove_references(mut p, container)
+        let remaining = remove_references(mut budget, mut p, container)?
         if remaining {
-          close_unmatched(mut p)
+          close_unmatched(mut budget, mut p)?
           p.nodes[container].kind = 2
           p.nodes[container].number = if c == 61 {
             1
@@ -821,27 +901,27 @@ fn start_block(mut p: Parser, container: u64) -> u8 uses {} {
             2
           }
           p.offset = size(p.line)
-          return 2
+          return Ok(2)
         }
       }
     }
     if thematic(s) {
-      close_unmatched(mut p)
-      add_block(mut p, 8)
+      close_unmatched(mut budget, mut p)?
+      add_block(mut budget, mut p, 8)?
       p.offset = size(p.line)
-      return 2
+      return Ok(2)
     }
     // cmark-gfm src/blocks.c:1218-1235: definitions are containers.
     if p.options.footnotes && starts(s, 0, "[^") {
       let end = label_end(s, 0)
       if end > 3 && byte(s, end) == 58 {
         let label = piece(s, 2, end - 1)
-        close_unmatched(mut p)
-        let id = add_block(mut p, 22)
+        close_unmatched(mut budget, mut p)?
+        let id = add_block(mut budget, mut p, 22)?
         p.nodes[id].value = label
         advance_nonspace(mut p)
         advance(mut p, end + 1, false)
-        return 1
+        return Ok(1)
       }
     }
     if let Some((length, marker, start, ordered)) = list_marker(
@@ -870,30 +950,33 @@ fn start_block(mut p: Parser, container: u64) -> u8 uses {} {
           advance(mut p, 1, true)
         }
       }
-      close_unmatched(mut p)
+      close_unmatched(mut budget, mut p)?
       let mut list = p.tip
       if p.nodes[list].kind != 4 || p.nodes[list].marker != marker || p.nodes[list].flag != ordered {
-        list = add_block(mut p, 4)
+        list = add_block(mut budget, mut p, 4)?
         p.nodes[list].marker = marker
         p.nodes[list].flag = ordered
         p.nodes[list].number = start
       }
-      let id = add_block(mut p, 5)
+      let id = add_block(mut budget, mut p, 5)?
       p.nodes[id].indent = indent
       p.nodes[id].padding = padding
-      return 1
+      return Ok(1)
     }
   }
   if p.indent >= 4 && p.nodes[p.tip].kind != 1 && !p.blank {
     advance(mut p, 4, true)
-    close_unmatched(mut p)
-    add_block(mut p, 6)
-    return 2
+    close_unmatched(mut budget, mut p)?
+    add_block(mut budget, mut p, 6)?
+    return Ok(2)
   }
-  0
+  Ok(0)
 }
 
-fn incorporate(mut p: Parser, take line: String) -> () uses {} {
+fn incorporate(mut budget: ParseState, mut p: Parser, take line: String) -> Result[
+  (),
+  ParseLimit
+] uses {} {
   p.line = line
   p.line_number += 1
   p.oldtip = p.tip
@@ -904,9 +987,9 @@ fn incorporate(mut p: Parser, take line: String) -> () uses {} {
   while p.nodes[container].last != 0 && p.nodes[p.nodes[container].last].open {
     let child = p.nodes[container].last
     find_nonspace(mut p)
-    let status = continue_block(mut p, child)
+    let status = continue_block(mut budget, mut p, child)?
     if status == 2 {
-      return
+      return Ok(())
     }
     if status == 1 {
       break
@@ -918,7 +1001,7 @@ fn incorporate(mut p: Parser, take line: String) -> () uses {} {
   let mut leaf = p.nodes[container].kind == 6 || p.nodes[container].kind == 7 || p.nodes[container].kind == 19
   while !leaf {
     find_nonspace(mut p)
-    let res = start_block(mut p, container)
+    let res = start_block(mut budget, mut p, container)?
     if res == 0 {
       advance_nonspace(mut p)
       break
@@ -929,12 +1012,12 @@ fn incorporate(mut p: Parser, take line: String) -> () uses {} {
   if !p.closed && !p.blank && p.nodes[p.tip].kind == 1 {
     add_line(mut p)
   } else {
-    close_unmatched(mut p)
+    close_unmatched(mut budget, mut p)?
     let kind = p.nodes[container].kind
     if kind == 19 {
       if p.offset < size(p.line) {
         let row_source = piece(p.line, p.offset, size(p.line))
-        add_table_row(container, row_source, false, mut p)
+        add_table_row(mut budget, container, row_source, false, mut p)?
       }
     } else if kind == 1 || kind == 6 || kind == 7 {
       add_line(mut p)
@@ -944,14 +1027,15 @@ fn incorporate(mut p: Parser, take line: String) -> () uses {} {
       ) {
         let close_id = container
         let close_line = p.line_number
-        finish_at(close_id, close_line, mut p)
+        finish_at(mut budget, close_id, close_line, mut p)?
       }
     } else if p.offset < size(p.line) && !p.blank {
-      add_block(mut p, 1)
+      add_block(mut budget, mut p, 1)?
       advance_nonspace(mut p)
       add_line(mut p)
     }
   }
+  Ok(())
 }
 
 @noalloc
@@ -1250,17 +1334,20 @@ fn line_end(s: String, at: u64) -> Option[u64] uses {} {
   }
 }
 
-fn reference(s: String, mut refs: Map[String, Reference]) -> u64 uses {} {
+fn reference(mut budget: ParseState, s: String, mut refs: Map[String, Reference]) -> Result[
+  u64,
+  ParseLimit
+] uses {} {
   let n = label_end(s, 0)
   if n == 0 || byte(s, n) != 58 {
-    return 0
+    return Ok(0)
   }
   let label = normalize_label(piece(s, 1, n - 1))
   if label == "" {
-    return 0
+    return Ok(0)
   }
   let Some((dest, end)) = destination(s, skip_space(s, n + 1)) else {
-    return 0
+    return Ok(0)
   }
   let after_space = skip_space(s, end)
   let mut title = ""
@@ -1274,18 +1361,22 @@ fn reference(s: String, mut refs: Map[String, Reference]) -> u64 uses {} {
     }
   }
   let Some(final) = consumed else {
-    return 0
+    return Ok(0)
   }
   if core@1/map.get(refs, label) == None() {
+    admit(mut budget, 1)?
     core@1/map.insert(mut refs, take label, Reference(destination: dest, title: title))
   }
-  final
+  Ok(final)
 }
 
-fn remove_references(mut p: Parser, id: u64) -> bool uses {} {
+fn remove_references(mut budget: ParseState, mut p: Parser, id: u64) -> Result[
+  bool,
+  ParseLimit
+] uses {} {
   let mut value = unique p.nodes[id].value
   while byte(value, 0) == 91 {
-    let n = reference(value, mut p.refs)
+    let n = reference(mut budget, value, mut p.refs)?
     if n == 0 {
       break
     }
@@ -1293,7 +1384,7 @@ fn remove_references(mut p: Parser, id: u64) -> bool uses {} {
   }
   let remains = size(trim(value)) != 0
   p.nodes[id].value = unique value
-  remains
+  Ok(remains)
 }
 
 type Delimiter {
@@ -1324,10 +1415,16 @@ type InlineParser {
   brackets: unique List[Bracket],
 }
 
-fn text_node(mut nodes: List[Entry], parent: u64, value: String, kind: u8) -> u64 uses {} {
-  let id = new_child(mut nodes, parent, kind)
+fn text_node(
+  mut budget: ParseState,
+  mut nodes: List[Entry],
+  parent: u64,
+  value: String,
+  kind: u8
+) -> Result[u64, ParseLimit] uses {} {
+  let id = new_child(mut budget, mut nodes, parent, kind)?
   nodes[id].value = unique value
-  id
+  Ok(id)
 }
 
 fn remove_delimiter(mut ip: unique InlineParser, id: u64) -> () uses {} {
@@ -1343,9 +1440,14 @@ fn remove_delimiter(mut ip: unique InlineParser, id: u64) -> () uses {} {
   }
 }
 
-fn process_emphasis(mut nodes: List[Entry], mut ip: unique InlineParser, bottom: u64) -> () uses {} {
+fn process_emphasis(
+  mut budget: ParseState,
+  mut nodes: List[Entry],
+  mut ip: unique InlineParser,
+  bottom: u64
+) -> Result[(), ParseLimit] uses {} {
   if ip.top == 0 {
-    return
+    return Ok(())
   }
   let mut closer = ip.top
   while closer != 0 && ip.delimiters[closer].prev != bottom {
@@ -1355,6 +1457,7 @@ fn process_emphasis(mut nodes: List[Entry], mut ip: unique InlineParser, bottom:
   let mut bounds: List[u64] = []
   let mut k: u64 = 0
   while k < 18 {
+    admit(mut budget, 1)?
     core@1/list.push(mut bounds, bottom)
     k += 1
   }
@@ -1409,6 +1512,7 @@ fn process_emphasis(mut nodes: List[Entry], mut ip: unique InlineParser, bottom:
     nodes[right].value = right_text
     let parent = nodes[left].parent
     let emph = new_child(
+      mut budget,
       mut nodes,
       parent,
       if marker == 126 {
@@ -1418,7 +1522,7 @@ fn process_emphasis(mut nodes: List[Entry], mut ip: unique InlineParser, bottom:
       } else {
         15
       }
-    )
+    )?
     let mut current = nodes[left].next
     while current != right && current != 0 && current != emph {
       let next = nodes[current].next
@@ -1453,6 +1557,7 @@ fn process_emphasis(mut nodes: List[Entry], mut ip: unique InlineParser, bottom:
     let top = ip.top
     remove_delimiter(mut ip, top)
   }
+  Ok(())
 }
 
 fn adjacent_class(s: String, at: u64, previous: bool) -> (bool, bool) uses {} {
@@ -1482,7 +1587,12 @@ fn adjacent_class(s: String, at: u64, previous: bool) -> (bool, bool) uses {} {
   (false, false)
 }
 
-fn handle_delimiter(mut nodes: List[Entry], parent: u64, mut ip: unique InlineParser) -> () uses {} {
+fn handle_delimiter(
+  mut budget: ParseState,
+  mut nodes: List[Entry],
+  parent: u64,
+  mut ip: unique InlineParser
+) -> Result[(), ParseLimit] uses {} {
   let c = byte(ip.source, ip.at)
   let n = run(ip.source, ip.at, c)
   let (before_ws, before_punct) = adjacent_class(ip.source, ip.at, true)
@@ -1491,12 +1601,19 @@ fn handle_delimiter(mut nodes: List[Entry], parent: u64, mut ip: unique InlinePa
   let right = !before_ws && (!before_punct || after_ws || after_punct)
   let opens = left && (c != 95 || !right || before_punct)
   let closes = right && (c != 95 || !left || after_punct)
-  let id = text_node(mut nodes, parent, piece(ip.source, ip.at, ip.at + n), 9)
+  let id = text_node(
+    mut budget,
+    mut nodes,
+    parent,
+    piece(ip.source, ip.at, ip.at + n),
+    9
+  )?
   if (opens || closes) && (c != 126 || n <= 2) {
     let d = core@1/list.len(ip.delimiters)
     if ip.top != 0 {
       ip.delimiters[ip.top].next = d
     }
+    admit(mut budget, 1)?
     core@1/list.push(
       mut ip.delimiters,
       Delimiter(
@@ -1513,6 +1630,7 @@ fn handle_delimiter(mut nodes: List[Entry], parent: u64, mut ip: unique InlinePa
     ip.top = d
   }
   ip.at += n
+  Ok(())
 }
 
 fn email_address(s: String) -> bool uses {} {
@@ -1572,16 +1690,21 @@ fn uri_scheme(s: String) -> bool uses {} {
   true
 }
 
-fn close_bracket(mut p: Parser, parent: u64, mut ip: unique InlineParser) -> () uses {} {
+fn close_bracket(
+  mut budget: ParseState,
+  mut p: Parser,
+  parent: u64,
+  mut ip: unique InlineParser
+) -> Result[(), ParseLimit] uses {} {
   ip.at += 1
   let after = ip.at
   let Some(bracket) = core@1/list.pop(mut ip.brackets) else {
-    let _ = text_node(mut p.nodes, parent, "]", 9)
-    return
+    let _ = text_node(mut budget, mut p.nodes, parent, "]", 9)?
+    return Ok(())
   }
   if !bracket.active {
-    let _ = text_node(mut p.nodes, parent, "]", 9)
-    return
+    let _ = text_node(mut budget, mut p.nodes, parent, "]", 9)?
+    return Ok(())
   }
   let mut dest = ""
   let mut title = ""
@@ -1642,12 +1765,13 @@ fn close_bracket(mut p: Parser, parent: u64, mut ip: unique InlineParser) -> () 
       }
       p.nodes[bracket.node].kind = 23
       p.nodes[bracket.node].value = label
-      return
+      return Ok(())
     }
-    let _ = text_node(mut p.nodes, parent, "]", 9)
-    return
+    let _ = text_node(mut budget, mut p.nodes, parent, "]", 9)?
+    return Ok(())
   }
   let id = new_child(
+    mut budget,
     mut p.nodes,
     parent,
     if bracket.image {
@@ -1655,7 +1779,7 @@ fn close_bracket(mut p: Parser, parent: u64, mut ip: unique InlineParser) -> () 
     } else {
       16
     }
-  )
+  )?
   p.nodes[id].info = dest
   p.nodes[id].title = title
   let mut current = p.nodes[bracket.node].next
@@ -1664,7 +1788,7 @@ fn close_bracket(mut p: Parser, parent: u64, mut ip: unique InlineParser) -> () 
     move_child(mut p.nodes, current, id)
     current = next
   }
-  process_emphasis(mut p.nodes, mut ip, bracket.delimiter)
+  process_emphasis(mut budget, mut p.nodes, mut ip, bracket.delimiter)?
   unlink(mut p.nodes, bracket.node)
   if !bracket.image {
     let mut i: u64 = 0
@@ -1675,9 +1799,13 @@ fn close_bracket(mut p: Parser, parent: u64, mut ip: unique InlineParser) -> () 
       i += 1
     }
   }
+  Ok(())
 }
 
-fn parse_inlines(mut p: Parser, parent: u64) -> () uses {} {
+fn parse_inlines(mut budget: ParseState, mut p: Parser, parent: u64) -> Result[
+  (),
+  ParseLimit
+] uses {} {
   let source = trim(p.nodes[parent].value)
   let markers = if p.options.strikethrough {
     b"\n`\\*_[]!<&~"
@@ -1692,11 +1820,12 @@ fn parse_inlines(mut p: Parser, parent: u64) -> () uses {} {
   ) == size(source) {
     if size(source) != 0 {
       let literal = unique source
-      let _ = text_node(mut p.nodes, parent, literal, 9)
+      let _ = text_node(mut budget, mut p.nodes, parent, literal, 9)?
     }
     p.nodes[parent].value = ""
-    return
+    return Ok(())
   }
+  admit(mut budget, 1)?
   let sentinel = Delimiter(
     node: 0,
     marker: 0,
@@ -1719,14 +1848,15 @@ fn parse_inlines(mut p: Parser, parent: u64) -> () uses {} {
     let c = byte(ip.source, start)
     if p.options.autolinks && core@1/list.len(ip.brackets) == 0 {
       if let Some((dest, end)) = extended_autolink(ip.source, start) {
-        let link = new_child(mut p.nodes, parent, 16)
+        let link = new_child(mut budget, mut p.nodes, parent, 16)?
         p.nodes[link].info = dest
         let _ = text_node(
+          mut budget,
           mut p.nodes,
           link,
           unescape(piece(ip.source, start, end), false),
           9
-        )
+        )?
         ip.at = end
         continue
       }
@@ -1757,31 +1887,38 @@ fn parse_inlines(mut p: Parser, parent: u64) -> () uses {} {
         ) < size(value) {
           value = piece(value, 1, size(value) - 1)
         }
-        let _ = text_node(mut p.nodes, parent, value, 12)
+        let _ = text_node(mut budget, mut p.nodes, parent, value, 12)?
         ip.at = end + n
       } else {
-        let _ = text_node(mut p.nodes, parent, piece(ip.source, start, ip.at), 9)
+        let _ = text_node(
+          mut budget,
+          mut p.nodes,
+          parent,
+          piece(ip.source, start, ip.at),
+          9
+        )?
       }
       continue
     }
     if c == 92 {
       let next = byte(ip.source, start + 1)
       if next == 10 {
-        new_child(mut p.nodes, parent, 11)
+        new_child(mut budget, mut p.nodes, parent, 11)?
         ip.at = start + 2
         while space(byte(ip.source, ip.at)) {
           ip.at += 1
         }
       } else if punctuation(next) {
         let _ = text_node(
+          mut budget,
           mut p.nodes,
           parent,
           piece(ip.source, start + 1, start + 2),
           9
-        )
+        )?
         ip.at += 2
       } else {
-        let _ = text_node(mut p.nodes, parent, "\\", 9)
+        let _ = text_node(mut budget, mut p.nodes, parent, "\\", 9)?
         ip.at += 1
       }
       continue
@@ -1800,6 +1937,7 @@ fn parse_inlines(mut p: Parser, parent: u64) -> () uses {} {
         p.nodes[last].value = value_trimmed
       }
       new_child(
+        mut budget,
         mut p.nodes,
         parent,
         if hard {
@@ -1807,7 +1945,7 @@ fn parse_inlines(mut p: Parser, parent: u64) -> () uses {} {
         } else {
           10
         }
-      )
+      )?
       ip.at += 1
       while space(byte(ip.source, ip.at)) {
         ip.at += 1
@@ -1815,7 +1953,7 @@ fn parse_inlines(mut p: Parser, parent: u64) -> () uses {} {
       continue
     }
     if c == 42 || c == 95 || c == 126 && p.options.strikethrough {
-      handle_delimiter(mut p.nodes, parent, mut ip)
+      handle_delimiter(mut budget, mut p.nodes, parent, mut ip)?
       continue
     }
     if c == 91 || c == 33 && byte(ip.source, start + 1) == 91 {
@@ -1825,11 +1963,22 @@ fn parse_inlines(mut p: Parser, parent: u64) -> () uses {} {
       } else {
         1
       }
-      let id = text_node(mut p.nodes, parent, piece(ip.source, start, ip.at), 9)
+      let id = text_node(
+        mut budget,
+        mut p.nodes,
+        parent,
+        piece(ip.source, start, ip.at),
+        9
+      )?
       let len = core@1/list.len(ip.brackets)
       if len != 0 {
         ip.brackets[len - 1].bracket_after = true
       }
+      // Root plus the pending bracket stack.
+      if budget.bounded && len >= budget.nesting - 1 {
+        return Error(Nesting())
+      }
+      admit(mut budget, 1)?
       core@1/list.push(
         mut ip.brackets,
         Bracket(
@@ -1848,7 +1997,7 @@ fn parse_inlines(mut p: Parser, parent: u64) -> () uses {} {
       continue
     }
     if c == 93 {
-      close_bracket(mut p, parent, mut ip)
+      close_bracket(mut budget, mut p, parent, mut ip)?
       continue
     }
     if c == 60 {
@@ -1861,7 +2010,7 @@ fn parse_inlines(mut p: Parser, parent: u64) -> () uses {} {
         let email = email_address(content)
         if email || uri_scheme(content) {
           let value = unescape(content, false)
-          let id = new_child(mut p.nodes, parent, 16)
+          let id = new_child(mut budget, mut p.nodes, parent, 16)?
           p.nodes[id].info = normalize_uri(
             if email {
               string.concat("mailto:", value)
@@ -1869,21 +2018,27 @@ fn parse_inlines(mut p: Parser, parent: u64) -> () uses {} {
               value
             }
           )
-          let _ = text_node(mut p.nodes, id, value, 9)
+          let _ = text_node(mut budget, mut p.nodes, id, value, 9)?
           ip.at = end + 1
           continue
         }
       }
       let html_end = html_tag_end(ip.source, start)
       if html_end > start {
-        let _ = text_node(mut p.nodes, parent, piece(ip.source, start, html_end), 13)
+        let _ = text_node(
+          mut budget,
+          mut p.nodes,
+          parent,
+          piece(ip.source, start, html_end),
+          13
+        )?
         ip.at = html_end
         continue
       }
     }
     if c == 38 {
       if let Some((value, end)) = entity(ip.source, start) {
-        let _ = text_node(mut p.nodes, parent, value, 9)
+        let _ = text_node(mut budget, mut p.nodes, parent, value, 9)?
         ip.at = end
         continue
       }
@@ -1907,49 +2062,82 @@ fn parse_inlines(mut p: Parser, parent: u64) -> () uses {} {
         end += 1
       }
     }
-    let _ = text_node(mut p.nodes, parent, piece(ip.source, start, end), 9)
+    let _ = text_node(mut budget, mut p.nodes, parent, piece(ip.source, start, end), 9)?
     ip.at = end
   }
-  process_emphasis(mut p.nodes, mut ip, 0)
+  process_emphasis(mut budget, mut p.nodes, mut ip, 0)?
   p.nodes[parent].value = ""
+  Ok(())
 }
 
-fn build_node(nodes: List[Entry], id: u64) -> Node uses {} {
-  let n = unique nodes[id]
-  let kind: Kind = match n.kind {
-    0 => Document(),
-    1 => Paragraph(),
-    2 => Heading(n.number),
-    3 => BlockQuote(),
-    4 => ListBlock(n.flag, n.number, n.tight),
-    5 => Item(n.checked),
-    6 => CodeBlock(n.value, n.info),
-    7 => HtmlBlock(n.value),
-    8 => ThematicBreak(),
-    9 => Text(n.value),
-    10 => SoftBreak(),
-    11 => HardBreak(),
-    12 => Code(n.value),
-    13 => HtmlInline(n.value),
-    14 => Emphasis(),
-    15 => Strong(),
-    16 => Link(n.info, n.title),
-    17 => Image(n.info, n.title),
-    18 => Strikethrough(),
-    19 => Table(),
-    22 => FootnoteDefinition(n.value),
-    23 => FootnoteReference(n.value, n.number, n.fence),
-    24 => FootnoteBackrefs(n.value, n.number, n.fence),
-    20 => TableRow(n.flag),
-    _ => TableCell(n.html),
+type BuildFrame {
+  id: u64,
+  next: u64,
+  children: List[Node],
+}
+
+fn build_node(nodes: List[Entry], mut budget: ParseState) -> Result[Node, ParseLimit] uses {} {
+  admit_nesting(budget, 1)?
+  admit(mut budget, 1)?
+  let mut stack: unique List[BuildFrame] = [
+    BuildFrame(id: 0, next: nodes[0].first, children: [])
+  ]
+  while true {
+    let len = core@1/list.len(stack)
+    let child = stack[len - 1].next
+    if child != 0 {
+      if budget.bounded && len >= budget.nesting {
+        return Error(Nesting())
+      }
+      admit(mut budget, 1)?
+      stack[len - 1].next = nodes[child].next
+      core@1/list.push(
+        mut stack,
+        BuildFrame(id: child, next: nodes[child].first, children: [])
+      )
+    } else {
+      admit(mut budget, 1)?
+      let Some(frame) = core@1/list.pop(mut stack) else {
+        return Error(WorkItems())
+      }
+      let BuildFrame(id: id, next: _, children: children) = take frame
+      let n = nodes[id]
+      let kind: Kind = match n.kind {
+        0 => Document(),
+        1 => Paragraph(),
+        2 => Heading(n.number),
+        3 => BlockQuote(),
+        4 => ListBlock(n.flag, n.number, n.tight),
+        5 => Item(n.checked),
+        6 => CodeBlock(n.value, n.info),
+        7 => HtmlBlock(n.value),
+        8 => ThematicBreak(),
+        9 => Text(n.value),
+        10 => SoftBreak(),
+        11 => HardBreak(),
+        12 => Code(n.value),
+        13 => HtmlInline(n.value),
+        14 => Emphasis(),
+        15 => Strong(),
+        16 => Link(n.info, n.title),
+        17 => Image(n.info, n.title),
+        18 => Strikethrough(),
+        19 => Table(),
+        22 => FootnoteDefinition(n.value),
+        23 => FootnoteReference(n.value, n.number, n.fence),
+        24 => FootnoteBackrefs(n.value, n.number, n.fence),
+        20 => TableRow(n.flag),
+        _ => TableCell(n.html),
+      }
+      let owned_kind = unique kind
+      let node: unique Node = Node(kind: take owned_kind, children: take children)
+      if len == 1 {
+        return Ok(take node)
+      }
+      core@1/list.push(mut stack[len - 2].children, take node)
+    }
   }
-  let mut children: List[Node] = []
-  let mut child = n.first
-  while child != 0 {
-    core@1/list.push(mut children, build_node(nodes, child))
-    child = nodes[child].next
-  }
-  Node(kind: kind, children: take children)
+  Error(WorkItems())
 }
 
 // CommonMark preprocessing and line splitting share one byte scan. Delimiters
@@ -1964,7 +2152,10 @@ fn normalized_line(source: String, begin: u64, end: u64, take prefix: unique Lis
   }
 }
 
-fn normalized_lines(source: String) -> List[String] uses {} {
+fn normalized_lines(mut budget: ParseState, source: String) -> Result[
+  List[String],
+  ParseLimit
+] uses {} {
   let data = core@1/string.as_bytes(source)
   let len = core@1/bytes.len(data)
   let mut lines: List[String] = []
@@ -1973,13 +2164,14 @@ fn normalized_lines(source: String) -> List[String] uses {} {
     let mut begin = 0u64
     while begin < len {
       let end = core@1/bytes.find_any(data, b"\n", begin)
+      admit(mut budget, 1)?
       core@1/list.push(mut lines, piece(source, begin, end))
       if end == len {
-        return take lines
+        return Ok(take lines)
       }
       begin = end + 1
     }
-    return take lines
+    return Ok(take lines)
   }
   let mut prefix: List[u8] = []
   let mut begin = 0u64
@@ -1991,10 +2183,12 @@ fn normalized_lines(source: String) -> List[String] uses {} {
     }
     let c = data[end]
     if c == 0 {
+      admit(mut budget, 2)?
       text.append(mut prefix, piece(source, begin, end))
       text.append(mut prefix, "\u{fffd}")
       begin = end + 1
     } else {
+      admit(mut budget, 1)?
       core@1/list.push(mut lines, normalized_line(source, begin, end, take prefix))
       prefix = []
       begin = end + 1
@@ -2005,22 +2199,49 @@ fn normalized_lines(source: String) -> List[String] uses {} {
     at = begin
   }
   if begin < len || core@1/list.len(prefix) != 0 {
+    admit(mut budget, 1)?
     core@1/list.push(mut lines, normalized_line(source, begin, len, take prefix))
   }
-  take lines
+  Ok(take lines)
+}
+
+// Select before construction, including the old late indentation fallback.
+fn literal_eligible(source: String, options: Options) -> bool uses {} {
+  let data = core@1/string.as_bytes(source)
+  if options.autolinks || core@1/bytes.find_any(data, b"\\`*_[]!<&#>+~=:|0123456789", 0) != size(
+    source
+  ) {
+    return false
+  }
+  let mut begin = 0u64
+  while begin < size(source) {
+    let end = core@1/bytes.find_any(data, b"\r\n", begin)
+    if end > begin {
+      let first = byte(source, begin)
+      let last = byte(source, end - 1)
+      if first == 32 || first == 9 || last == 32 || last == 9 {
+        return false
+      }
+      if first == 45 && !(end - begin == 3 && byte(source, begin + 1) == 45 && byte(
+        source,
+        begin + 2
+      ) == 45) {
+        return false
+      }
+    }
+    if end == size(source) {
+      break
+    }
+    begin = end + 1
+  }
+  true
 }
 
 // Literal paragraphs and exact thematic/setext separators need no arena links.
 // All other syntax uses the general CommonMark passes below. The conservative
 // byte preflight also excludes reference definitions and every inline opener.
-fn literal_document(source: String, options: Options) -> Option[Node] uses {} {
-  let data = core@1/string.as_bytes(source)
-  if options.autolinks || core@1/bytes.find_any(data, b"\\`*_[]!<&#>+~=:|0123456789", 0) != core@1/bytes.len(
-    data
-  ) {
-    return None()
-  }
-  let lines = normalized_lines(source)
+fn literal_document(mut budget: ParseState, source: String) -> Result[Node, ParseLimit] uses {} {
+  let lines = normalized_lines(mut budget, source)?
   let mut nodes: List[Node] = []
   let mut paragraph: List[Node] = []
   for line in take lines {
@@ -2028,6 +2249,8 @@ fn literal_document(source: String, options: Options) -> Option[Node] uses {} {
     let len = core@1/bytes.len(bytes)
     if len == 0 || line == "---" {
       if core@1/list.len(paragraph) != 0 {
+        admit_nesting(budget, 2)?
+        admit(mut budget, 2)?
         core@1/list.push(
           mut nodes,
           Node(
@@ -2041,32 +2264,71 @@ fn literal_document(source: String, options: Options) -> Option[Node] uses {} {
         )
         paragraph = []
       } else if len != 0 {
+        admit_nesting(budget, 2)?
+        admit(mut budget, 2)?
         core@1/list.push(mut nodes, Node(kind: ThematicBreak(), children: []))
       }
     } else {
-      // Leading indentation, trailing spaces and other hyphen-led blocks need
-      // the general parser (including hard breaks and list interruption).
-      if bytes[0] == 32 || bytes[0] == 9 || bytes[0] == 45 || bytes[len - 1] == 32 || bytes[len - 1] == 9 {
-        return None()
-      }
       if core@1/list.len(paragraph) != 0 {
+        admit_nesting(budget, 3)?
+        admit(mut budget, 2)?
         core@1/list.push(mut paragraph, Node(kind: SoftBreak(), children: []))
       }
+      admit_nesting(budget, 3)?
+      admit(mut budget, 2)?
       core@1/list.push(mut paragraph, Node(kind: Text(unique line), children: []))
     }
   }
   if core@1/list.len(paragraph) != 0 {
+    admit_nesting(budget, 2)?
+    admit(mut budget, 2)?
     core@1/list.push(mut nodes, Node(kind: Paragraph(), children: take paragraph))
   }
-  Some(Node(kind: Document(), children: take nodes))
+  Ok(Node(kind: Document(), children: take nodes))
 }
 
 /// Parse every String, including incomplete Markdown. NUL becomes U+FFFD;
 /// CRLF and bare CR become LF, as required by CommonMark preprocessing.
 pub fn parse(take source: String, options: Options) -> Node uses {} {
-  if let Some(document) = literal_document(source, options) {
-    return take document
+  let mut budget = ParseState(bounded: false, work: 0, nesting: 0)
+  let parsed = parse_shared(take source, options, mut budget)
+  match take parsed {
+    Ok(node) => take node,
+    Error(_) => {
+      // Resource refusal is impossible with the unrestricted state.
+      core@1/failure.check(false, TextInvariant())
+      Node(kind: Document(), children: [])
+    },
   }
+}
+
+/// Refuse before exhausting an original-byte, work-record or nesting allowance.
+pub fn parse_bounded(take source: String, options: Options, budget: ParseBudget) -> Result[
+  Node,
+  ParseLimit
+] uses {} {
+  if size(source) > budget.source_bytes {
+    return Error(SourceBytes())
+  }
+  let mut state = ParseState(
+    bounded: true,
+    work: budget.work_items,
+    nesting: budget.nesting
+  )
+  parse_shared(take source, options, mut state)
+}
+
+fn parse_shared(take source: String, options: Options, mut budget: ParseState) -> Result[
+  Node,
+  ParseLimit
+] uses {} {
+  admit_nesting(budget, 1)?
+  // Root construction frame + output Node on the literal path.
+  if literal_eligible(source, options) {
+    admit(mut budget, 2)?
+    return literal_document(mut budget, source)
+  }
+  admit(mut budget, 1)?
   let mut p = Parser(
     nodes: [entry(0)],
     tip: 0,
@@ -2085,13 +2347,13 @@ pub fn parse(take source: String, options: Options) -> Node uses {} {
     refs: core@1/map.empty(),
     options: options
   )
-  for line in normalized_lines(source) {
-    incorporate(mut p, unique line)
+  for line in normalized_lines(mut budget, source)? {
+    incorporate(mut budget, mut p, unique line)?
   }
   while p.tip != 0 {
     let close_id = p.tip
     let close_line = p.line_number
-    finish_at(close_id, close_line, mut p)
+    finish_at(mut budget, close_id, close_line, mut p)?
   }
   let count = core@1/list.len(p.nodes)
   let mut empty_id: u64 = 1
@@ -2118,26 +2380,27 @@ pub fn parse(take source: String, options: Options) -> Node uses {} {
           p.nodes[id].value = rest
         }
       }
-      parse_inlines(mut p, id)
+      parse_inlines(mut budget, mut p, id)?
     }
     id += 1
   }
   if options.autolinks {
-    autolink_emails(mut p.nodes)
+    autolink_emails(mut budget, mut p.nodes)?
   }
   if options.footnotes {
-    process_footnotes(mut p.nodes)
+    process_footnotes(mut budget, mut p.nodes)?
   }
-  build_node(p.nodes, 0)
+  build_node(p.nodes, mut budget)
 }
 
-fn table_cells(s: String) -> List[String] uses {} {
+fn table_cells(mut budget: ParseState, s: String) -> Result[List[String], ParseLimit] uses {} {
   let source = trim(s)
   let mut out: List[String] = []
   // cmark-gfm extensions/table.c:213-219: a lone leading pipe has no cell.
   if source == "|" {
-    return take out
+    return Ok(take out)
   }
+  admit(mut budget, 1)?
   let mut cell: List[u8] = []
   let mut i: u64 = if byte(source, 0) == 124 {
     1
@@ -2150,24 +2413,28 @@ fn table_cells(s: String) -> List[String] uses {} {
       i += 2
     } else if byte(source, i) == 124 {
       core@1/list.push(mut out, trim(text.finish_valid(take cell)))
-      cell = []
       i += 1
       if i == size(source) {
-        return take out
+        return Ok(take out)
       }
+      admit(mut budget, 1)?
+      cell = []
     } else {
       core@1/list.push(mut cell, byte(source, i))
       i += 1
     }
   }
   core@1/list.push(mut out, trim(text.finish_valid(take cell)))
-  take out
+  Ok(take out)
 }
 
-fn table_alignments(s: String) -> Option[String] uses {} {
-  let cells = table_cells(s)
+fn table_alignments(mut budget: ParseState, s: String) -> Result[
+  Option[String],
+  ParseLimit
+] uses {} {
+  let cells = table_cells(mut budget, s)?
   if core@1/list.len(cells) == 0 {
-    return None()
+    return Ok(None())
   }
   let mut out: List[u8] = []
   for cell in cells {
@@ -2187,7 +2454,7 @@ fn table_alignments(s: String) -> Option[String] uses {} {
       i += 1
     }
     if i == begin {
-      return None()
+      return Ok(None())
     }
     if byte(cell, i) == 58 {
       i += 1
@@ -2196,8 +2463,9 @@ fn table_alignments(s: String) -> Option[String] uses {} {
       i += 1
     }
     if i != size(cell) {
-      return None()
+      return Ok(None())
     }
+    admit(mut budget, 1)?
     core@1/list.push(
       mut out,
       if left && right {
@@ -2211,17 +2479,23 @@ fn table_alignments(s: String) -> Option[String] uses {} {
       }
     )
   }
-  Some(text.finish_valid(take out))
+  Ok(Some(text.finish_valid(take out)))
 }
 
-fn add_table_row(table: u64, source: String, header: bool, mut p: Parser) -> () uses {} {
-  let cells = table_cells(source)
-  let row = new_child(mut p.nodes, table, 20)
+fn add_table_row(
+  mut budget: ParseState,
+  table: u64,
+  source: String,
+  header: bool,
+  mut p: Parser
+) -> Result[(), ParseLimit] uses {} {
+  let cells = table_cells(mut budget, source)?
+  let row = new_child(mut budget, mut p.nodes, table, 20)?
   p.nodes[row].flag = header
   let columns = size(p.nodes[table].info)
   let mut i: u64 = 0
   while i < columns {
-    let id = new_child(mut p.nodes, row, 21)
+    let id = new_child(mut budget, mut p.nodes, row, 21)?
     p.nodes[id].html = byte(p.nodes[table].info, i) - 48u8
     p.nodes[id].value = if i < core@1/list.len(cells) {
       unique cells[i]
@@ -2230,32 +2504,36 @@ fn add_table_row(table: u64, source: String, header: bool, mut p: Parser) -> () 
     }
     i += 1
   }
+  Ok(())
 }
 
-fn start_table(mut p: Parser, container: u64) -> bool uses {} {
+fn start_table(mut budget: ParseState, mut p: Parser, container: u64) -> Result[
+  bool,
+  ParseLimit
+] uses {} {
   if !p.options.tables || p.nodes[container].kind != 1 || p.indent >= 4 {
-    return false
+    return Ok(false)
   }
   let delimiter = piece(p.line, p.nonspace, size(p.line))
-  let Some(align) = table_alignments(delimiter) else {
-    return false
+  let Some(align) = table_alignments(mut budget, delimiter)? else {
+    return Ok(false)
   }
-  let lines = string.lines(unique p.nodes[container].value)
+  let lines = normalized_lines(mut budget, p.nodes[container].value)?
   let len = core@1/list.len(lines)
   if len == 0 {
-    return false
+    return Ok(false)
   }
   let header = unique lines[len - 1]
   // Setext headings precede tables; a single aligned column needs no pipe.
   // cmark-gfm extensions/ext_scanners.re:40-49 and src/blocks.c setext pass.
   let hyphens = run(delimiter, 0, 45)
   if hyphens > 0 && size(trim(piece(delimiter, hyphens, size(delimiter)))) == 0 {
-    return false
+    return Ok(false)
   }
-  if core@1/list.len(table_cells(header)) != size(align) {
-    return false
+  if core@1/list.len(table_cells(mut budget, header)?) != size(align) {
+    return Ok(false)
   }
-  close_unmatched(mut p)
+  close_unmatched(mut budget, mut p)?
   let mut table = container
   if len > 1 {
     let mut previous: List[u8] = []
@@ -2268,16 +2546,16 @@ fn start_table(mut p: Parser, container: u64) -> bool uses {} {
     p.nodes[container].value = text.finish_valid(take previous)
     let close_id = container
     let close_line = p.line_number - 2
-    finish_at(close_id, close_line, mut p)
-    table = add_block(mut p, 19)
+    finish_at(mut budget, close_id, close_line, mut p)?
+    table = add_block(mut budget, mut p, 19)?
   } else {
     p.nodes[container].kind = 19
     p.nodes[container].value = ""
   }
   p.nodes[table].info = align
-  add_table_row(table, header, true, mut p)
+  add_table_row(mut budget, table, header, true, mut p)?
   p.offset = size(p.line)
-  true
+  Ok(true)
 }
 
 // cmark-gfm extensions/autolink.c: domain check and trailing delimiter trim.
@@ -2416,10 +2694,15 @@ fn extended_email(s: String, at: u64) -> Option[(String, u64)] uses {} {
 }
 
 // cmark-gfm's autolink postprocess: consolidate text, then skip link subtrees.
-fn sibling_after(mut nodes: List[Entry], previous: u64, kind: u8) -> u64 uses {} {
+fn sibling_after(
+  mut budget: ParseState,
+  mut nodes: List[Entry],
+  previous: u64,
+  kind: u8
+) -> Result[u64, ParseLimit] uses {} {
   let parent = nodes[previous].parent
   let next = nodes[previous].next
-  let id = new_child(mut nodes, parent, kind)
+  let id = new_child(mut budget, mut nodes, parent, kind)?
   unlink(mut nodes, id)
   nodes[id].prev = previous
   nodes[id].next = next
@@ -2429,10 +2712,13 @@ fn sibling_after(mut nodes: List[Entry], previous: u64, kind: u8) -> u64 uses {}
   } else {
     nodes[parent].last = id
   }
-  id
+  Ok(id)
 }
 
-fn autolink_emails(mut nodes: List[Entry]) -> () uses {} {
+fn autolink_emails(mut budget: ParseState, mut nodes: List[Entry]) -> Result[
+  (),
+  ParseLimit
+] uses {} {
   let count = core@1/list.len(nodes)
   let mut id: u64 = 1
   while id < count {
@@ -2470,10 +2756,10 @@ fn autolink_emails(mut nodes: List[Entry]) -> () uses {} {
       if let Some((dest, end)) = extended_email(value, at) {
         let prefix = piece(value, begin, at)
         nodes[current].value = prefix
-        let link = sibling_after(mut nodes, current, 16)
+        let link = sibling_after(mut budget, mut nodes, current, 16)?
         nodes[link].info = dest
-        let _ = text_node(mut nodes, link, piece(value, at, end), 9)
-        let post = sibling_after(mut nodes, link, 9)
+        let _ = text_node(mut budget, mut nodes, link, piece(value, at, end), 9)?
+        let post = sibling_after(mut budget, mut nodes, link, 9)?
         nodes[post].value = piece(value, end, size(value))
         current = post
         begin = end
@@ -2484,4 +2770,5 @@ fn autolink_emails(mut nodes: List[Entry]) -> () uses {} {
     }
     id += 1
   }
+  Ok(())
 }

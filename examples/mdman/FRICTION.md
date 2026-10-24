@@ -5,7 +5,7 @@ That directory is archival, never a runtime dependency. Active minutes are appro
 
 | Attempt | Actual diagnostic or behavior / expected contract | Workaround and allocation cost | Minutes | Disposition / owner / witness |
 | --- | --- | --- | ---: | --- |
-| Enforce AST limits before `markdown.parse` | API is `parse(take String, Options) -> Node`; it allocates and recursively builds the tree before returning. No admission/sink callback exists. | Admit16KiB source first, then validate depth32/nodes8192. Internal parse allocation/depth is not bounded by these AST limits. No parser rewrite. | 4 | OPEN/INCOMPLETE; @agentlang-24; document.load, external matrix.md |
+| Enforce AST limits before `markdown.parse` | `parse_bounded` now admits original UTF-8 bytes, cumulative parser records and nesting before construction. | Keep16KiB source, add131072 parser work/128 nesting, then validate final depth32 (root one)/nodes8192; output caps and ownership copies remain. Counters are not RSS or final AST counts. | 4 | Addressed by markdown-parse-budget-39; original cap/tape acceptance receipts below remain historical, new refusals are reported separately |
 | Report source line spans | `Node {kind, children}` has no source coordinates. | Filename plus zero-based AST child path; short bounded path allocations. | 1 | Intended API limitation; document.inspect |
 | Reserved `where`, module-head `out`, shadowed `argument`, foreign record pattern, unblocked match assignment, sort callback without `@noalloc` | LANG-14/LANG-4/parser/MEM-5 rejections (check01–05). | Rename, owner helper and `replace` for foreign fields, block match arm, annotate pure comparator. No additional data copies. | 8 | Intended authoring contracts; draft01–05 and check logs |
 | Send parser result as unique | MODE-2: parser result signature has no deep-unique promise. | Bounded deep AST copy before transfer; coordinator copies AST at render admission and output at worker return. No ownership relaxation. | 2 | Intended contract; document.load/batch.render/check04 |
@@ -53,7 +53,7 @@ Native scripted fault/pending cells are printed as INCOMPLETE by the harness;
 they are excluded from selected/pass counts, not silently credited.
 
 The final support inventory contains47 source workflows. Original40 scripted
-per-ID provenance remains unavailable. Source/internal parser bounds,8 larger
+per-ID provenance remains unavailable. 8 larger
 host replay cells, lost original LLVM artifacts, production-native cancellation
 at widths1/2/4 and scripted event equality across widths remain INCOMPLETE.
 Live host metadata is compared only with its own tape; timestamps/task IDs/events
@@ -72,3 +72,10 @@ Other deviations: deterministic `.TH`, no wrapping option, HTML/table/unsupporte
 node rejection, control sanitation, bounded output, owner-safe traversal and
 all-validated-before-publication batching. Failed file publications are counted;
 no multi-file atomicity or crash durability is claimed.
+
+Parser admission (markdown-parse-budget-39) qualifies the historical results above:
+the original `depth32` source used a depth-zero document root and now refuses
+`AST depth` with root depth one at the unchanged32 cap. Its bytes and the original
+receipts remain unchanged; current expected refusal is explicit in the fixture.
+Parser work131072/nesting128 supplement final node/depth checks, and do not solve
+source coordinates, deep-unique ownership, or the archived replay limitations.

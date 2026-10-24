@@ -41,10 +41,11 @@ for n in [16384,16385]:
  r=page(f'source{n}','x'*n,'.PP\n'+'x'*n+'\n');r['steps']=10000000
  if n==16385:r.update(exit=2,stdout='in.md: resource limit source bytes\n',outputs={})
  cases.append(r)
-# Document depth=0, paragraph/text add two beneath the quote chain.
+# Historical fixture names use root depth zero; retain their source bytes.
+# Root depth one now makes the original depth32 fixture refuse at AST depth32.
 for depth in [32,33]:
  q=depth-2;r=page(f'depth{depth}','> '*q+'x\n','.RS\n'*q+'.PP\nx\n'+'.RE\n'*q);r['steps']=10000000
- if depth==33:r.update(exit=2,outputs={},stdout='in.md: resource limit AST depth\n')
+ r.update(exit=2,outputs={},stdout='in.md: resource limit AST depth\n')
  cases.append(r)
 for n in [8192,8193]:
  r=page(f'manifest{n}','','');r.update(args=['check','--manifest','pages.tsv'],files={'pages.tsv':'\n'*n},outputs={},stdout='checked 0 pages\n')

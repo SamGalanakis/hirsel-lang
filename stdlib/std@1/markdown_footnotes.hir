@@ -4,7 +4,10 @@
 
 // cmark-gfm src/blocks.c:465-546: collect definitions, assign indices in
 // document order, resolve references, then append only used definitions.
-fn process_footnotes(mut nodes: List[Entry]) -> () uses {} {
+fn process_footnotes(mut budget: ParseState, mut nodes: List[Entry]) -> Result[
+  (),
+  ParseLimit
+] uses {} {
   let count = core@1/list.len(nodes)
   let mut definitions: Map[String, u64] = core@1/map.empty()
   let mut id: u64 = 1
@@ -12,6 +15,7 @@ fn process_footnotes(mut nodes: List[Entry]) -> () uses {} {
     if nodes[id].kind == 22 {
       let label = normalize_label(nodes[id].value)
       if core@1/map.get(definitions, label) == None() {
+        admit(mut budget, 1)?
         core@1/map.insert(mut definitions, take label, id)
       }
     }
@@ -24,6 +28,7 @@ fn process_footnotes(mut nodes: List[Entry]) -> () uses {} {
       let label = normalize_label(nodes[id].value)
       if let Some(definition) = core@1/map.get(definitions, label) {
         if nodes[definition].number == 0 {
+          admit(mut budget, 1)?
           core@1/list.push(mut used, definition)
           nodes[definition].number = core@1/list.len(used)
         }
@@ -68,13 +73,14 @@ fn process_footnotes(mut nodes: List[Entry]) -> () uses {} {
     nodes[0].last = definition
     let mut paragraph = nodes[definition].last
     if paragraph != 0 && nodes[paragraph].kind == 1 {
-      let _ = text_node(mut nodes, paragraph, " ", 9)
+      let _ = text_node(mut budget, mut nodes, paragraph, " ", 9)?
     } else {
       paragraph = definition
     }
-    let backref = new_child(mut nodes, paragraph, 24)
+    let backref = new_child(mut budget, mut nodes, paragraph, 24)?
     nodes[backref].value = unique nodes[definition].value
     nodes[backref].number = nodes[definition].number
     nodes[backref].fence = nodes[definition].fence
   }
+  Ok(())
 }

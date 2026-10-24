@@ -528,3 +528,40 @@ fn man_render_30_host_refusal_controls() {
         );
     });
 }
+
+#[test]
+fn markdown_parse_budget_39_mdman_consumer() {
+    // Keep original archived vector bytes/caps intact. The original depth32
+    // fixture used a depth-zero root; it now visibly refuses at root-one 32.
+    let mut selected = cases()
+        .into_iter()
+        .filter(|r| {
+            [
+                "empty",
+                "unicode",
+                "table",
+                "html-inline",
+                "depth32",
+                "depth33",
+            ]
+            .iter()
+            .any(|id| r["id"] == *id)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(selected.len(), 6);
+    let mut refused = selected[0].clone();
+    refused["id"] = "parser-nesting-129".into();
+    refused["files"] = serde_json::json!({"in.md": format!("{}x", "> ".repeat(127))});
+    refused["exit"] = 2.into();
+    refused["stdout"] = "in.md: resource limit parser nesting\n".into();
+    refused["outputs"] = serde_json::json!({});
+    refused["steps"] = 1_000_000.into();
+    selected.push(refused);
+    let mut exact = selected[0].clone();
+    exact["id"] = "root-one-depth32".into();
+    exact["files"] = serde_json::json!({"in.md": format!("{}x\n", "> ".repeat(29))});
+    exact["outputs"] = serde_json::json!({"out.1": format!(".TH \"TEST\" \"1\" \"\" \"\" \"\"\n{}.PP\nx\n{}", ".RS\n".repeat(29), ".RE\n".repeat(29))});
+    exact["steps"] = 10_000_000.into();
+    selected.push(exact);
+    scripted(selected)
+}

@@ -1,0 +1,141 @@
+// commonmark.js blocks/inlines and cmark-gfm extension structures, BSD-2-Clause.
+// Work totals independently enumerated below, including discarded records.
+fn budget(bytes: u64, work: u64, nesting: u64) -> markdown.ParseBudget uses {} {
+  markdown.ParseBudget(source_bytes: bytes, work_items: work, nesting: nesting)
+}
+
+fn check(source: String, options: markdown.Options, work: u64, nesting: u64) {
+  let bytes = string.byte_len(source)
+  let old = markdown.parse(unique source, options)
+  let exact = markdown.parse_bounded(
+    unique source,
+    options,
+    budget(bytes, work, nesting)
+  )
+  failure.check(exact == Ok(copy old), TextInvariant())
+  failure.check(
+    markdown.parse_bounded(unique source, options, budget(bytes, work - 1, nesting)) == Error(
+      WorkItems()
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    markdown.parse_bounded(unique source, options, budget(bytes, work, nesting - 1)) == Error(
+      Nesting()
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    markdown.parse_bounded(unique source, options, budget(bytes, 0, nesting)) == Error(
+      WorkItems()
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    markdown.parse_bounded(unique source, options, budget(bytes, work, 0)) == Error(
+      Nesting()
+    ),
+    TextInvariant()
+  )
+  if bytes > 0 {
+    failure.check(
+      markdown.parse_bounded(unique source, options, budget(0, work, nesting)) == Error(
+        SourceBytes()
+      ),
+      TextInvariant()
+    )
+    failure.check(
+      markdown.parse_bounded(unique source, options, budget(bytes - 1, work, nesting)) == Error(
+        SourceBytes()
+      ),
+      TextInvariant()
+    )
+  }
+  let Ok(tree) = markdown.parse_bounded(
+    unique source,
+    options,
+    budget(18446744073709551615u64, 18446744073709551615u64, 18446744073709551615u64)
+  ) else {
+    failure.check(false, TextInvariant())
+    return
+  }
+  failure.check(tree == old, TextInvariant())
+  failure.check(
+    markdown.render_html_with_options(tree, options) == markdown.render_html_with_options(
+      old,
+      options
+    ),
+    TextInvariant()
+  )
+}
+
+pub fn main(args: Args) -> Result[(), ()] {
+  let which = match arg.text(args, 0) {
+    Ok(value) => value,
+    Error(_) => "all",
+  }
+  let options = markdown.default_options()
+  if which == "all" || which == "literal" {
+    // Literal: 2 per output Node (construction frame + Node), 1 per line.
+    check("", options, 2, 1)
+    check("x", options, 7, 3)
+    check("a\n\nb", options, 13, 3)
+    check("é🐑", options, 7, 3)
+    check("a\r\nb\rc", options, 17, 3)
+    // Two extra admitted replacement bytes per NUL.
+    check("\x00", options, 9, 3)
+  }
+  if which == "all" || which == "syntax" {
+    // General: arena + lines + delimiter sentinel/records + 18 emphasis slots
+    // + 2 per reachable output Node. *x*: 6 arena, 1 line, 3 delimiter,
+    // 18 slots, 8 construction = 36 (arena includes unlinked markers).
+    check("*x*", options, 36, 4)
+    // Seven arena/line admissions + twelve construction admissions.
+    check("> - x", options, 19, 6)
+    // Reference: 6 arena + 3 lines + reference + sentinel + bracket + 8 output.
+    check("[x]: /u\n\n[x]", options, 20, 4)
+  }
+  if which == "all" || which == "table" {
+    let gfm = markdown.gfm_options()
+    check("", gfm, 3, 1)
+    check("www.a.com", gfm, 14, 4)
+    let mut table_options = options
+    table_options.tables = true
+    // 12 arena, 4 lines (including header scan), 10 table records, 24 output.
+    check("a|b\n-|-\nc|d", table_options, 50, 5)
+  }
+  if which == "all" || which == "footnote" {
+    let mut footnote = options
+    footnote.footnotes = true
+    // 9 arena + 3 lines + sentinel + bracket + definition/use + 16 output.
+    check("[^a]: x\n\n[^a]", footnote, 32, 4)
+  }
+  if which == "all" || which == "malformed" {
+    // Incomplete and malformed markup retain total-grammar ASTs.
+    // A lone star is an empty list item: 3 arena + line + 6 output.
+    check("*", options, 10, 3)
+    check("*x", options, 33, 3)
+    check("[[[[", options, 24, 5)
+    check("[", options, 12, 3)
+    check("`", options, 11, 3)
+    check("**[", options, 34, 3)
+    // This used to start a literal tree before falling back on line two.
+    check("a\n b", options, 18, 3)
+  }
+  if which == "all" || which == "flat" {
+    // Controlled 1x/2x/4x families, exact monotonic record admission.
+    check("x\n\n", options, 8, 3)
+    check("x\n\nx\n\n", options, 14, 3)
+    check("x\n\nx\n\nx\n\nx\n\n", options, 26, 3)
+  }
+  if which == "all" || which == "emphasis" {
+    check("*x* *x*", options, 49, 4)
+    check("*x* *x* *x* *x*", options, 75, 4)
+  }
+  if which == "all" || which == "quotes" {
+    check("> x", options, 13, 4)
+    check("> > x", options, 16, 5)
+    check("> > > > x", options, 22, 7)
+  }
+  Ok(())
+}

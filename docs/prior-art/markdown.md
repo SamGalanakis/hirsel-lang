@@ -144,3 +144,38 @@ leaf follows Go `src/strings/strings.go:184-240,948-967` at
 an ASCII-only set. It reports offsets relative to the supplied extent and never
 retains its inputs. This is shared with the man renderer's ordinary-text scan;
 exceptional scalars retain the existing cmark man escaping rules.
+
+## Parse admission (markdown-parse-budget-39)
+
+The existing commonmark.js container (`lib/blocks.js:95-115`) and inline
+(`lib/inlines.js:1012-1026`) passes at `8988869` remain the parser. Resource
+admission is a Hirsel adaptation, not an upstream feature. The cumulative units
+and root-one nesting convention are specified in `docs/spec/std-library.md`.
+
+Admission inventory:
+
+- `new_child` covers block opens, inline text/autolinks, emphasis/link rewrites,
+  table rows/cells, email siblings, and footnote backrefs. Finalization and
+  unlinking retain their arena charges. Moves reuse entries.
+- `reference` admits map entries; `handle_delimiter` admits delimiter records;
+  `parse_inlines` admits its sentinel and bracket pushes; `process_emphasis`
+  admits its fixed 18 bounds. Failed syntax probes keep their honest charges.
+- `table_cells` admits each scratch cell, `table_alignments` each alignment;
+  the existing header-line scan admits its line records. Footnotes admit each
+  collected definition and used-definition record before insertion/push.
+- `normalized_lines` admits line records and NUL's two extra replacement bytes
+  before growth. Byte scratch (line assembly, escapes, entities, URI encoding,
+  labels and table cells) is derived from admitted source and record extents.
+- `build_node` uses an explicit admitted stack, moving completed children into
+  parents. Each frame and output Node is charged; nested host recursion is gone.
+  Parent-chain and extension traversals use arena links and constant cursor
+  storage. `literal_document` admits equivalent logical construction frames and
+  Nodes directly. Its old late fallback is decided by `literal_eligible` before
+  construction, with no speculative tree or normalization allocated twice.
+
+No renderer limits, language depth policy, V/H rules or runtime ABI change.
+Unrestricted parsing disables admission counters in these same passes.
+The exact tiny-case and 1x/2x/4x family totals are independently enumerated in
+`markdown-parse-budget-39.hir`; existing generated CommonMark/GFM expectations
+remain independent unchanged oracles. Original mdman `depth32` bytes now refuse
+under root-one32, explicitly qualifying the archived root-zero acceptance.

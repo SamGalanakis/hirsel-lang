@@ -50,6 +50,9 @@ optional task state and table alignment). Rendering reads only that tree.
 fn markdown.default_options() -> Options uses {}
 fn markdown.gfm_options() -> Options uses {}
 fn markdown.parse(take source: String, options: Options) -> Node uses {}
+type markdown.ParseBudget { source_bytes: u64, work_items: u64, nesting: u64 }
+type markdown.ParseLimit = SourceBytes | WorkItems | Nesting
+fn markdown.parse_bounded(take source: String, options: Options, budget: ParseBudget) -> Result[Node, ParseLimit] uses {}
 fn markdown.render_html(document: Node) -> String uses {}
 fn markdown.render_html_with_options(document: Node, options: Options) -> String uses {}
 fn markdown.to_html(take source: String, options: Options) -> String uses {}
@@ -78,6 +81,38 @@ examples. Each has an independently reference-rendered truncated-input twin
 with NUL and unterminated bracket/entity syntax, using the same extension
 options as its published example. `tools/generate-markdown.py`
 pins both upstream checkouts and regenerates entity data and vectors.
+
+### Bounded Markdown parsing
+
+`parse_bounded` returns an operational `ParseLimit`, never a grammar error,
+partial tree or fallback. `parse` keeps its total grammar and unrestricted API.
+`source_bytes` admits the original UTF-8 byte length before CR/NUL normalization.
+`work_items` is cumulative admission for arena entries, normalized line records,
+delimiter records (including the sentinel), bracket records, reference entries,
+table cell/alignment records, footnote definition/use records, traversal frames,
+and output Nodes. The emphasis pass's 18 lower-bound slots each cost one item.
+NUL replacement additionally admits two expansion bytes before buffer growth.
+Removed/unlinked records never refund work. Ordinary byte scratch has a constant
+source-derived bound (including tab, URI and entity expansion), plus the admitted
+records. Records may retain copied source-derived payloads, such as reference
+destinations; these bounds are not a linear byte quota. Counters are not allocator
+bytes, final AST counts, or an RSS guarantee.
+
+`nesting` bounds simultaneous container, bracket and AST construction frames,
+with the document root at depth one. Admission precedes allocation, push and
+nested descent; remaining counters use checked subtraction, never `limit + 1`.
+Zero work or nesting refuses even an empty document. Empty input needs two work
+items on the literal path (root construction frame and root Node), nesting one,
+and zero source bytes. The general path also admits the root arena entry.
+Literal eligibility is decided by a nonallocating preflight before construction,
+so no discarded speculative tree is charged or built. Both paths share source
+normalization admission. There is no unlimited numeric sentinel: `u64MAX` is an
+ordinary bounded allowance. Successful AST and rendered bytes match `parse`.
+
+mdman's original 16 KiB source, final AST depth 32 (root depth one), 8192 final
+nodes and output caps remain independent. It additionally admits parser work
+131072 and nesting 128 before constructing a tree; refusals identify the parser
+dimension through its existing typed limit diagnostic.
 
 ### Bounded Markdown output
 
