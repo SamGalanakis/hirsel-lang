@@ -34,6 +34,17 @@ pub struct RootLinkInputs<'a> {
     pub directory: &'a std::path::Path,
 }
 
+/// Selected inputs for body-free executable planning with a frozen linker.
+pub struct RootExecutableInputs<'a> {
+    pub entry: &'a hirsel_syntax::DefPath,
+    pub backend: crate::native::Backend,
+    pub objects: &'a [hirsel_lir::stage::ObjectArtifact],
+    pub directory: &'a std::path::Path,
+    pub requested: Option<&'a hirsel_run_config::ValidatedRun>,
+    pub standalone: bool,
+    pub platform: crate::native::ExecutableLinkInputs<'a>,
+}
+
 /// Task-local root view. Source metadata and completed native inputs are owned
 /// immutable snapshots; construction runs no instance/Ready/dependency query.
 pub struct RootProducts {
@@ -131,6 +142,35 @@ impl RootProducts {
             },
         )
     }
+    /// Assemble only the admitted root's portable metadata and glue, then emit
+    /// the existing launcher and shared kit invocation. The caller captures the
+    /// plan with its selected frozen linker before publishing an executable.
+    pub fn plan_executable(
+        &mut self,
+        root: &Arc<NativeRootProduct>,
+        products: &[Arc<ReadyProduct>],
+        inputs: RootExecutableInputs<'_>,
+    ) -> Result<crate::native::ExecutableLinkPlan, String> {
+        self.with_link_objects(
+            root,
+            products,
+            inputs.backend,
+            inputs.objects,
+            |program, objects| {
+                crate::native::plan_executable_link(
+                    program,
+                    inputs.entry,
+                    objects,
+                    inputs.directory,
+                    inputs.requested,
+                    inputs.standalone,
+                    inputs.platform,
+                )
+                .map_err(|error| error.to_string())
+            },
+        )
+    }
+
     fn link_with(
         &mut self,
         root: &Arc<NativeRootProduct>,
@@ -142,6 +182,23 @@ impl RootProducts {
             &[hirsel_lir::stage::ObjectArtifact],
         ) -> Result<std::path::PathBuf, String>,
     ) -> Result<Vec<u8>, String> {
+        self.with_link_objects(root, products, backend, objects, |program, objects| {
+            let path = link(program, objects)?;
+            std::fs::read(path).map_err(|e| e.to_string())
+        })
+    }
+
+    fn with_link_objects<R>(
+        &mut self,
+        root: &Arc<NativeRootProduct>,
+        products: &[Arc<ReadyProduct>],
+        backend: crate::native::Backend,
+        objects: &[hirsel_lir::stage::ObjectArtifact],
+        use_objects: impl FnOnce(
+            &crate::native::ReadyProgram,
+            &[hirsel_lir::stage::ObjectArtifact],
+        ) -> Result<R, String>,
+    ) -> Result<R, String> {
         self.with_link_context(root, products, |program| {
             crate::native::check_runtime_calls(program).map_err(|e| e.to_string())?;
             let registry = hirsel_lir::descriptor_registry::DescriptorRegistry::new(
@@ -152,8 +209,7 @@ impl RootProducts {
             objects.push(
                 crate::native::emit_glue(program, backend, &registry).map_err(|e| e.to_string())?,
             );
-            let path = link(program, &objects)?;
-            std::fs::read(path).map_err(|e| e.to_string())
+            use_objects(program, &objects)
         })
     }
 

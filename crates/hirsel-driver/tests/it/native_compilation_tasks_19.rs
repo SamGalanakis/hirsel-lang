@@ -11,7 +11,7 @@ use native::{
         instance_tasks::InstanceTasks,
         link_tasks::{LinkExecution, NativeLinkExecutor},
         products::EmissionOptions,
-        roots::{RootLinkInputs, RootProducts},
+        roots::{RootExecutableInputs, RootLinkInputs, RootProducts},
         source_inputs::NativeInstanceInputs,
     },
     root_source::{NativeLinkFacts, NativeLinkSource},
@@ -96,6 +96,7 @@ struct Platform {
     entry: hirsel_syntax::DefPath,
     directory: PathBuf,
     calls: Arc<AtomicU64>,
+    frozen: Option<native::object_queries::capture::FrozenLinker>,
 }
 impl NativeLinkExecutor for Platform {
     fn link(
@@ -114,6 +115,44 @@ impl NativeLinkExecutor for Platform {
             &archive,
             false,
         )?;
+        if let Some(linker) = self.frozen {
+            let plan = products.plan_executable(
+                input.root,
+                input.ready,
+                RootExecutableInputs {
+                    entry: &self.entry,
+                    backend: self.backend,
+                    objects: input.objects,
+                    directory: &self.directory,
+                    requested: None,
+                    standalone: false,
+                    platform: native::ExecutableLinkInputs {
+                        kit: &self.tools.kit,
+                        runtime: &archive,
+                        foreign: &[],
+                        loader: None,
+                    },
+                },
+            )?;
+            let captured = plan.capture(
+                self.store.as_ref(),
+                linker,
+                native::object_queries::capture::CaptureLimits {
+                    archive_bytes: 64 << 20,
+                    files: 256,
+                },
+            )?;
+            // Remove generated input files before replay. The captured tool and
+            // closed VFS, rather than any live Toolchain executable, do the link.
+            for file in std::fs::read_dir(&self.directory).map_err(|e| e.to_string())? {
+                std::fs::remove_file(file.map_err(|e| e.to_string())?.path())
+                    .map_err(|e| e.to_string())?;
+            }
+            let output = self.directory.join("program");
+            captured.link(self.store.as_ref(), &output)?;
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            return std::fs::read(output).map_err(|e| e.to_string());
+        }
         let mut tools = self.tools.clone();
         tools
             .runtime
@@ -177,12 +216,17 @@ fn immutable_native_compilation_at_width_one() {
 }
 #[test]
 fn immutable_root_observation_uses_only_admitted_portable_summaries() {
-    with_compiler_stack(|| run_case(1, true));
+    with_compiler_stack(|| run_case(1, true, false));
+}
+#[test]
+#[ignore = "requires root-plan-proof frozen linker package"]
+fn frozen_root_plans_run_both_backends_without_live_linker_inputs() {
+    with_compiler_stack(|| run_case(1, false, true));
 }
 fn run(jobs: usize) {
-    run_case(jobs, false);
+    run_case(jobs, false, false);
 }
-fn run_case(jobs: usize, observation_only: bool) {
+fn run_case(jobs: usize, observation_only: bool, frozen_plan: bool) {
     let directory = tempfile::tempdir().unwrap();
     // The same admitted transport is selected before source or native work.
     // Its 24 MiB comes from dispatch's former 96 MiB; total stays 768 MiB.
@@ -211,6 +255,16 @@ fn run_case(jobs: usize, observation_only: bool) {
         &std::fs::read(tools.archive(&target.triple).unwrap()).unwrap(),
     )
     .unwrap();
+    let frozen = frozen_plan.then(|| {
+        native::object_queries::capture::FrozenLinker::snapshot(
+            store.as_ref(),
+            &PathBuf::from(std::env::var_os("HIRSEL_CAPTURE_LINKER").unwrap()),
+        )
+        .unwrap()
+    });
+    let tool_identity = frozen
+        .map(|linker| format!("{:?}", linker.reference()))
+        .unwrap_or_default();
     let policy = ContentHash::of_bytes(b"immutable native compilation control");
     let mut previous: Option<(Vec<store::Reference>, store::Reference)> = None;
     let mut addresses = None;
@@ -348,7 +402,11 @@ fn run_case(jobs: usize, observation_only: bool) {
                 runtime_abi: ContentHash::of_bytes(&hirsel_lir::RUNTIME_ABI_VERSION.to_le_bytes()),
                 linker_options: ContentHash::of_parts(
                     "fixture selected platform",
-                    [backend.name().as_bytes(), COMPILER_IDENTITY.as_slice()],
+                    [
+                        backend.name().as_bytes(),
+                        COMPILER_IDENTITY.as_slice(),
+                        tool_identity.as_bytes(),
+                    ],
                 ),
                 runtime_archives: vec![archive],
                 foreign_inputs: vec![],
@@ -362,6 +420,7 @@ fn run_case(jobs: usize, observation_only: bool) {
                         .path()
                         .join(format!("{literal}-{fresh}-{}", backend.name())),
                     calls: calls.clone(),
+                    frozen,
                 }),
             })
             .collect();
