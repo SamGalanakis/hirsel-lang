@@ -226,3 +226,18 @@ fn physical_inspection_counts_survive_revisions_eviction_and_detached_snapshot_o
         assert_eq!(budget.reserved(), 0);
     });
 }
+
+#[test]
+fn production_host_policy_admits_a_small_real_check_with_its_existing_cap() {
+    hirsel_engine::with_compiler_stack(|| {
+        let (_directory, entry, _source) = fixture();
+        let request = request(&entry);
+        let mut host = Host::new(CompilerRequests::for_host(crate::COMPILER, config()));
+        let output = host.request(&request).unwrap().wait().unwrap();
+        assert!(checked(&output).diagnostics.is_empty());
+        assert_eq!(
+            checked(&output).completion,
+            hirsel_engine::CheckCompletion::Complete
+        );
+    });
+}
