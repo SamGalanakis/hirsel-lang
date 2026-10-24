@@ -77,12 +77,23 @@ mod tests {
                     b"bridge refusal",
                 )
                 .unwrap();
+            let diagnostic = |text: &[u8]| {
+                store
+                    .put_content(
+                        Domain {
+                            kind: 0x52000001,
+                            schema: 1,
+                        },
+                        text,
+                    )
+                    .unwrap()
+            };
             let errors = RuntimeErrors {
-                resource: failure,
-                cycle: failure,
-                cancelled: failure,
-                protocol: failure,
-                panicked: failure,
+                resource: diagnostic(b"resource"),
+                cycle: diagnostic(b"cycle"),
+                cancelled: diagnostic(b"cancelled"),
+                protocol: diagnostic(b"protocol"),
+                panicked: diagnostic(b"panicked"),
             };
             let budget = ProcessBudget::new(256 << 20);
             let weight = MemoryWeight {
@@ -132,8 +143,22 @@ mod tests {
                 .unwrap();
             let request = runtime.request(&[query]);
             runtime.completion().wait(request);
-            let std::task::Poll::Ready(Ok(completed)) = runtime.poll(request) else {
-                panic!("front Lower failed");
+            let completed = match runtime.poll(request) {
+                std::task::Poll::Ready(Ok(completed)) => completed,
+                std::task::Poll::Ready(Err(reference)) => panic!(
+                    "front Lower failed: lower={:?}, front={:?}, record={:?}, stats={:?}",
+                    lower.failure(reference),
+                    front
+                        .outcome(reference)
+                        .map(|output| output.outcome.result.err()),
+                    store
+                        .get_content(reference)
+                        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned()),
+                    runtime.stats(),
+                ),
+                std::task::Poll::Pending => {
+                    panic!("front Lower completion returned before settlement")
+                }
             };
             let selected = completed[0];
             let polls = runtime.stats().polls;
