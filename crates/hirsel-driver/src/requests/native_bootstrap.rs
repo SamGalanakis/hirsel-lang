@@ -86,9 +86,9 @@ impl NativeBootstrap {
         routing: Arc<NativeRouting>,
         store: Arc<dyn ResultStore>,
         mut plan: NativePlan,
-        admission: NativeAdmission,
+        mut admission: NativeAdmission,
         weight: MemoryWeight,
-        mut allowance: MemoryReservation,
+        allowance: MemoryReservation,
         errors: RuntimeErrors,
     ) -> Result<Arc<Self>, String> {
         if plan.options.objects.is_some() {
@@ -182,9 +182,13 @@ impl NativeBootstrap {
         if metadata > allowance.bytes() || weight.retained < std::mem::size_of::<Task>() as u64 {
             return Err("native bootstrap inventory exceeds admission".into());
         }
-        // Completed host outputs borrow only the unused part of this original
-        // reservation. The bootstrap's own inventory remains independently held.
-        let output_allowance = allowance.split(allowance.bytes() - metadata).unwrap();
+        // Reserve output copies from the existing native compilation partition;
+        // leave the bootstrap's own inventory charge whole. Constructors still
+        // enforce the remaining compilation bound without increasing any cap.
+        let output_allowance = admission
+            .compilation
+            .split(admission.compilation.bytes() / 8)
+            .unwrap();
         let query = QueryId {
             kind: KIND,
             address: Address(ContentHash::of_parts(

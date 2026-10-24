@@ -59,6 +59,17 @@ impl NativeBuildReadiness {
             .lock()
             .unwrap_or_else(|error| error.into_inner());
         if let Some(execution) = completed.as_ref() {
+            let artifact = object_queries::linked_product(self.store.as_ref(), execution.product)
+                .map_err(failed)?;
+            object_queries::materialize_executable(
+                self.store.as_ref(),
+                &artifact,
+                &execution.executable,
+            )
+            .map_err(failed)?;
+            self.platform
+                .validate_image(&execution.executable)
+                .map_err(failed)?;
             return Ok(execution.clone());
         }
         let [linked] = compilation.outputs(product).map_err(failed)? else {
@@ -110,6 +121,9 @@ impl NativeBuildReadiness {
             w.flat_vec(anchors);
         });
         request_metadata(&mut copied, &self.request);
+        // Readiness retains its own request copy in addition to the returned
+        // descriptor's copy. Both backing stores share this original charge.
+        request_metadata(&mut copied, &self.request);
         let allowance = self
             .bootstrap
             .reserve_output(copied.bytes())
@@ -148,7 +162,10 @@ impl NativeBuildReadiness {
     }
 }
 
-fn request_metadata(weight: &mut hirsel_engine::NativeMetadataWeight, request: &NativeRequest) {
+pub(super) fn request_metadata(
+    weight: &mut hirsel_engine::NativeMetadataWeight,
+    request: &NativeRequest,
+) {
     if let Some(path) = &request.definition {
         weight.path(path);
     }
