@@ -100,6 +100,12 @@ fn capacity(
     link_fixture_runnable(&ready, &loaded.entry, &objects, &tools, &dir, fixture).unwrap();
     let bound = hirsel_run_config::RunConfig::read_path(&dir.join("run.json")).unwrap();
     let mut record = bound.record().clone();
+    if host {
+        record.io = Some(hirsel_run_schema::IoGrants {
+            tasks: Some("tasks.cooperative@1".into()),
+            ..Default::default()
+        });
+    }
     record.placement = Some(
         hirsel_run_config::Placement::from_json(
             &serde_json::to_vec(&json!({
@@ -124,17 +130,14 @@ fn capacity(
     let launched = std::thread::scope(|scope| {
         let child = scope.spawn(|| {
             if host {
-                launch_runnable(
+                Ok(launch_host(
                     &runnable,
-                    &ready.target,
-                    &tools,
                     &dir,
-                    true,
                     Tape::Live {
                         record: Some(&tape),
                         revocations: None,
                     },
-                )
+                ))
             } else {
                 launch_fixture(
                     &runnable,
@@ -213,14 +216,7 @@ fn capacity(
         ..fixture.clone()
     };
     let replayed = if host {
-        launch_runnable(
-            &runnable,
-            &ready.target,
-            &tools,
-            &dir,
-            true,
-            Tape::Replay(&tape),
-        )
+        Ok(launch_host(&runnable, &dir, Tape::Replay(&tape)))
     } else {
         launch_fixture(
             &runnable,
@@ -269,6 +265,43 @@ fn capacity(
 
     assert!(capacity, "INCOMPLETE: exact admission capacity missing");
     eprintln!("WIDTH36_CAPACITY_PASS {:?} {width}", backend);
+}
+fn launch_host(runnable: &Runnable, dir: &Path, tape: Tape<'_>) -> Launched {
+    use std::os::unix::process::ExitStatusExt;
+    let Runnable::Executable(executable) = runnable else {
+        panic!("expected executable");
+    };
+    let record = dir.join("host-observation");
+    let mut command = Command::new(executable);
+    command
+        .env_clear()
+        .env("HIRSEL_RT_OBSERVATION", &record)
+        .env("HIRSEL_RT_DIAGNOSTIC", "1");
+    match tape {
+        Tape::Live {
+            record: Some(tape),
+            revocations: None,
+        } => {
+            command
+                .arg("--hirsel-record")
+                .arg(tape)
+                .arg("--hirsel-run")
+                .arg(dir.join("run.json"));
+        }
+        Tape::Replay(tape) => {
+            command.arg("--hirsel-replay").arg(tape);
+        }
+        _ => panic!("expected recorded host launch"),
+    }
+    let output = command.output().unwrap();
+    Launched {
+        audit_required: true,
+        exit: output.status.code(),
+        signal: output.status.signal(),
+        stdout: output.stdout,
+        stderr: output.stderr,
+        record: fs::read_to_string(record).unwrap(),
+    }
 }
 fn running(m: &Value, width: u64) -> bool {
     m["worker_phase"] == "running"

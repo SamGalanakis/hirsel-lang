@@ -978,6 +978,14 @@ pub struct RecordedRun {
     /// answers a call; its header line is absent otherwise, so other tapes keep their bytes.
     pub instance: Option<[u8; 16]>,
 }
+// Empty default fixture grants contain no scripted world. A configured peer or
+// listener is explicit scripted-provider input, separate from actual worker startup.
+fn scripted_world(run: &hirsel_run_config::ValidatedRun) -> bool {
+    run.net_grant().is_some_and(|net| {
+        net.provider == "net.script@2"
+            && (!net.listeners.is_empty() || net.peers.as_ref().is_some_and(|p| !p.is_empty()))
+    })
+}
 impl Recording {
     /// The bound run, checked against this header and its recorded admission without
     /// consulting a clock, revocation source or host provider.
@@ -1009,9 +1017,7 @@ impl Recording {
         }
         if let Some(placement) = &binding.placement {
             placement.validate()?;
-            if run
-                .net_grant()
-                .is_some_and(|net| net.provider == "net.script@2")
+            if scripted_world(&run)
                 && matches!(
                     placement.admission,
                     hirsel_run_config::CapacityAdmission::Physical { .. }
@@ -2589,9 +2595,7 @@ pub(crate) unsafe fn execute(
         let (launched, worker_phase) = run_control.worker_snapshot();
         let (grant, _, _) = crate::pool::compute_permits();
         let permitted = grant.saturating_sub(crate::pool::lost_compute_permits());
-        let scripted = placement_run
-            .and_then(|run| run.net_grant())
-            .is_some_and(|net| net.provider == "net.script@2");
+        let scripted = placement_run.is_some_and(scripted_world);
         let admission = if scripted || launched == 0 {
             CapacityAdmission::NotPhysical {
                 requested: request.cores.clone(),

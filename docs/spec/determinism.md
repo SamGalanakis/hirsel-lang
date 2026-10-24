@@ -1035,8 +1035,10 @@ the current topology, including starting, draining and finished states.
 `not_physical` records contain requested width, phase and a reason, with no effective
 width. `executor_not_observed` covers adapters such as the interpreter that did not
 observe native workers. `scripted_world` explicitly excludes scripted network
-fixtures from physical host qualification; their semantic and replay obligations
-remain. Their physical claims belong to corresponding host-mode backend/width/kind
+fixtures with configured network peers or listeners from physical host qualification;
+their semantic and replay obligations remain. An empty default network grant in a
+native fixture declares no scripted world: explicit placement still records that
+fixture's actual native workers. Their physical claims belong to corresponding host-mode backend/width/kind
 cells. Neither a requested width nor a semantic fixture pass earns capacity credit.
 
 Placement remains outside semantic run identity and is never replay placement

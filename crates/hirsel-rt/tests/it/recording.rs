@@ -546,7 +546,11 @@ fn bound_scripted_world_refuses_physical_capacity_even_with_consistent_arithmeti
             provider: "net.script@2".into(),
             rules: vec![],
             peers: Some(vec![]),
-            listeners: vec![],
+            listeners: vec![hirsel_run_schema::NetListener {
+                address: "/fixture/script.sock".into(),
+                port: 0,
+                clients: vec![],
+            }],
         }),
         ..Default::default()
     });
