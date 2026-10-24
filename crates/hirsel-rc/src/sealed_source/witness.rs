@@ -268,6 +268,14 @@ impl SourceDeclarations {
 }
 
 impl OperationDeclarations for SourceDeclarations {
+    fn pretransfer_abi(
+        &self,
+        reference: &hirsel_lir::pretransfer::AdapterReference,
+        target: &hirsel_lir::TargetSpec,
+    ) -> Option<(hirsel_lir::FnAbi, hirsel_lir::LayoutTable)> {
+        self.registry.pretransfer_abi(reference, target)
+    }
+
     fn seal_source_witness(
         &self,
         definition: &DefPath,
