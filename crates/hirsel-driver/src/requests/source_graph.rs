@@ -262,10 +262,27 @@ impl Plan {
         // Root continuations remain live while their P/Lower dependencies run.
         // A snapshot partition is not one task's executable memory allowance.
         let continuation_bound = working / (config.jobs.get() as u64 + 8);
+        let lower_inventory =
+            FrontLowerQueries::input_bytes(definitions).ok_or_else(uninstalled)?;
+        let lower_outputs = lower.checked_sub(lower_inventory).ok_or_else(|| {
+            ToolError::Runtime("compiler Lower inventory exceeds admission".into())
+        })?;
+        // One ordinary Lower and one Evaluate address are possible per input.
+        // Their cumulative producer allowance must fit even when Check demands
+        // every initializer before the execution root runs.
+        let per_output = lower_outputs / count.checked_mul(2).ok_or_else(uninstalled)?.max(1);
+        let output_metadata =
+            FrontLowerQueries::output_bytes(MemoryWeight::default()).ok_or_else(uninstalled)?;
+        let lower_retained = per_output
+            .checked_sub(output_metadata)
+            .map(|bytes| bytes / 2)
+            .ok_or_else(|| {
+                ToolError::Runtime("compiler Lower output allowance is exhausted".into())
+            })?;
         let retained = front
             .checked_div(count.max(1))
             .and_then(|bytes| bytes.checked_sub(8192))
-            .map(|bytes| bytes.min(continuation_bound))
+            .map(|bytes| bytes.min(continuation_bound).min(lower_retained))
             .filter(|bytes| *bytes != 0)
             .ok_or_else(|| {
                 ToolError::Runtime("compiler body inventory exceeds admission".into())
@@ -283,13 +300,6 @@ impl Plan {
             .ok_or_else(|| {
                 ToolError::Runtime("compiler root inventory exceeds admission".into())
             })?;
-        let lower_inventory =
-            FrontLowerQueries::input_bytes(definitions).ok_or_else(uninstalled)?;
-        if lower_inventory > lower {
-            return Err(ToolError::Runtime(
-                "compiler Lower inventory exceeds admission".into(),
-            ));
-        }
         let scratch = working / (config.jobs.get() as u64 + 1);
         Ok(Self {
             snapshots: SnapshotPlan {
