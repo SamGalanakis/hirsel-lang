@@ -16,15 +16,32 @@ use std::{collections::BTreeSet, sync::Arc};
 
 #[test]
 fn actual_native_products_emit_both_backends_and_observe_static_edits_without_value_rebuilds() {
-    with_compiler_stack(|| run_product_case(false));
+    with_compiler_stack(|| run_product_case(false, None));
 }
 
 #[test]
 fn aggregate_constant_slots_reach_both_emitters_and_linked_observations() {
-    with_compiler_stack(|| run_product_case(true));
+    with_compiler_stack(|| run_product_case(true, None));
 }
 
-fn run_product_case(aggregate: bool) {
+#[test]
+fn admitted_ready_and_codegen_tasks_share_real_native_products_at_widths_one_and_four() {
+    with_compiler_stack(|| {
+        for jobs in [1, 4] {
+            run_product_case(false, Some(jobs));
+        }
+    });
+}
+
+#[derive(Default)]
+struct TaskEvents(std::sync::Mutex<Vec<hirsel_engine::runtime::RuntimeEvent>>);
+impl hirsel_engine::runtime::RuntimeObserver for TaskEvents {
+    fn record(&self, event: hirsel_engine::runtime::RuntimeEvent) {
+        self.0.lock().unwrap().push(event);
+    }
+}
+
+fn run_product_case(aggregate: bool, scheduled_jobs: Option<usize>) {
     let directory = tempfile::tempdir().unwrap();
     let store = Arc::new(store::DirStore::new(directory.path().join("products")));
     let target = hirsel_lir::TargetSpec::x86_64_unknown_linux_gnu();
@@ -133,14 +150,18 @@ fn run_product_case(aggregate: bool) {
             Arc::new(operations),
         )
         .unwrap();
-        let mut products = DemandProducts::new(snapshot);
+        let mut products = DemandProducts::new(snapshot.clone());
         assert_eq!(
             trace.totals(),
             before_create,
             "provider creation must not execute dependencies"
         );
         let base = products.instance(&key).unwrap();
-        let ready = products.ready(&key).unwrap();
+        let ready_before = if scheduled_jobs.is_none() {
+            Some(products.ready(&key).unwrap())
+        } else {
+            None
+        };
         if fresh {
             assert_eq!(
                 (
@@ -155,7 +176,6 @@ fn run_product_case(aggregate: bool) {
                 hirsel_lir::construction::ValueCounts::default()
             );
         }
-        let before_emission = trace.totals();
         let codegen_key = |backend: &str| CodegenKey {
             owner: key.clone(),
             backend: backend.into(),
@@ -167,23 +187,138 @@ fn run_product_case(aggregate: bool) {
             profile_options: ContentHash::of_bytes(b"debug, opt none"),
             runtime_abi: ContentHash::of_bytes(&hirsel_lir::RUNTIME_ABI_VERSION.to_le_bytes()),
         };
-        let mut objects = ObjectQueries::new(
-            store.clone(),
-            products,
-            |_: &LinkKey,
-             _: &LinkInputs,
-             _: &[hirsel_lir::stage::ObjectArtifact]|
-             -> Result<Vec<u8>, String> {
-                Err("this codegen control links with the generated native C entry harness".into())
-            },
-        );
-        let llvm_fragment = objects.codegen(&codegen_key("llvm")).unwrap();
-        let cranelift_fragment = objects.codegen(&codegen_key("cranelift")).unwrap();
-        assert_eq!(
-            objects.native.ready_materializations,
-            if fresh { 0 } else { 2 },
-            "object hits must not materialize a Ready body"
-        );
+        let (llvm_fragment, cranelift_fragment, mut products) = if let Some(jobs) = scheduled_jobs {
+            use hirsel_engine::runtime::*;
+            use native::queries::tasks::{CodegenTasks, NativeTaskFactory, NativeTasks};
+            let weight = MemoryWeight {
+                scratch: 32 << 20,
+                retained: 32 << 10,
+                stack: 0,
+            };
+            let tasks = NativeTasks::new(snapshot.clone(), weight).unwrap();
+            let native_factory = Arc::new(NativeTaskFactory::new(tasks.clone()));
+            let before = trace.totals();
+            let mut lazy = native_factory.create(key.ready_query_id()).unwrap();
+            struct Pending;
+            impl QueryContext for Pending {
+                fn read(
+                    &mut self,
+                    _: QueryId,
+                ) -> std::task::Poll<Result<ProductRef, store::Reference>> {
+                    std::task::Poll::Pending
+                }
+            }
+            assert!(
+                matches!(lazy.poll(&mut Pending), QueryPoll::Waiting(ref keys) if !keys.is_empty())
+            );
+            assert_eq!(
+                tasks
+                    .ready_transformations
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                0
+            );
+            assert_eq!(snapshot.ready_materializations(), 0);
+            assert_eq!(
+                trace.totals(),
+                before,
+                "factory creation and pending poll must not execute native dependencies"
+            );
+            drop(lazy);
+            let keys = [codegen_key("llvm"), codegen_key("cranelift")];
+            let objects = CodegenTasks::new(tasks.clone(), keys.to_vec(), weight).unwrap();
+            let object_factory = Arc::new(native::object_queries::ObjectTaskFactory::new(objects));
+            let errors = RuntimeErrors {
+                resource: tasks.failure("resource"),
+                cycle: tasks.failure("cycle"),
+                cancelled: tasks.failure("cancelled"),
+                protocol: tasks.failure("protocol"),
+                panicked: tasks.failure("panic"),
+            };
+            let budget = ProcessBudget::new(768 << 20);
+            let mut runtime = AdmittedRuntime::new(
+                hirsel_intern::jobs::Jobs::new(jobs),
+                budget.reserve(768 << 20).unwrap(),
+                errors,
+            )
+            .unwrap();
+            for kind in [
+                native::queries::INSTANCE_KIND,
+                native::queries::ARENA_CANDIDATES_KIND,
+                native::queries::ARENA_CHOSEN_KIND,
+                native::queries::READY_KIND,
+            ] {
+                runtime.register(kind, native_factory.clone()).unwrap();
+            }
+            runtime
+                .register(native::object_queries::CODEGEN_KIND, object_factory)
+                .unwrap();
+            let events = Arc::new(TaskEvents::default());
+            runtime.observe(events.clone()).unwrap();
+            let request =
+                runtime.request(&keys.iter().map(CodegenKey::query_id).collect::<Vec<_>>());
+            let results = runtime.wait(request).unwrap_or_else(|error| {
+                use hirsel_engine::store::ResultStore;
+                panic!(
+                    "native task failure: {:?}",
+                    store
+                        .get_content(error)
+                        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+                )
+            });
+            assert_eq!(
+                tasks
+                    .ready_transformations
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                if fresh { 0 } else { 1 }
+            );
+            assert_eq!(
+                snapshot.ready_materializations(),
+                if fresh { 0 } else { 2 },
+                "object hits do not materialize Ready inside the runtime"
+            );
+            let events = events.0.lock().unwrap();
+            assert_eq!(events.iter().filter(|event| matches!(event, RuntimeEvent::Claim(id) if *id == key.ready_query_id())).count(), 1, "both backend tasks coalesce their actual Ready dependency");
+            assert!(events.iter().any(|event| matches!(event, RuntimeEvent::Read {query, dependency} if query.kind == native::object_queries::CODEGEN_KIND && dependency.kind == native::queries::READY_KIND)));
+            assert!(events.iter().any(|event| matches!(event, RuntimeEvent::Read {query, dependency} if query.kind == native::queries::READY_KIND && dependency.kind == native::queries::ARENA_CHOSEN_KIND)));
+            drop(events);
+            drop(runtime);
+            assert_eq!(budget.reserved(), 0);
+            let llvm =
+                native::object_queries::fragment_product(store.as_ref(), results[0]).unwrap();
+            let cranelift =
+                native::object_queries::fragment_product(store.as_ref(), results[1]).unwrap();
+            (Arc::new(llvm), Arc::new(cranelift), products)
+        } else {
+            let mut objects = ObjectQueries::new(
+                store.clone(),
+                products,
+                |_: &LinkKey,
+                 _: &LinkInputs,
+                 _: &[hirsel_lir::stage::ObjectArtifact]|
+                 -> Result<Vec<u8>, String> {
+                    Err(
+                        "this codegen control links with the generated native C entry harness"
+                            .into(),
+                    )
+                },
+            );
+            let llvm_fragment = objects.codegen(&codegen_key("llvm")).unwrap();
+            let cranelift_fragment = objects.codegen(&codegen_key("cranelift")).unwrap();
+            assert_eq!(
+                objects.native.ready_materializations,
+                if fresh { 0 } else { 2 },
+                "object hits must not materialize a Ready body"
+            );
+            (llvm_fragment, cranelift_fragment, objects.native)
+        };
+        let ready = ready_before.unwrap_or_else(|| products.ready(&key).unwrap());
+        if fresh {
+            assert_eq!(
+                trace.totals(),
+                hirsel_lir::construction::ValueCounts::default()
+            );
+        }
+        let before_emission = trace.totals();
         let fragments = [
             llvm_fragment.product.record,
             cranelift_fragment.product.record,
@@ -202,8 +337,7 @@ fn run_product_case(aggregate: bool) {
         previous_fragments = Some(fragments);
         let llvm = load_object(store.as_ref(), llvm_fragment.object).unwrap();
         let cranelift = load_object(store.as_ref(), cranelift_fragment.object).unwrap();
-        let (glue_llvm, glue_cranelift, call) = objects
-            .native
+        let (glue_llvm, glue_cranelift, call) = products
             .with_ready(&[ready.clone()], |units, inputs| {
                 assert_eq!(units.len(), 1);
                 assert_eq!(inputs.statics.len(), 1);

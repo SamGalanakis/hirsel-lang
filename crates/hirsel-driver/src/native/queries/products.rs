@@ -15,6 +15,7 @@ use hirsel_lir::{
     validate::{Inputs, NativeEnvironment},
 };
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Immutable codegen request inputs, explicitly bound by the emission context.
 /// Source paths and line-table bindings remain link inputs.
@@ -68,6 +69,7 @@ pub struct NativeSnapshot {
     pub(super) owners: BTreeMap<ContentHash, InstanceAddress>,
     pub(super) summaries: BTreeMap<ContentHash, Arc<ArenaSummary>>,
     native: Arc<hirsel_lir::validate::NativeCache>,
+    materializations: AtomicU64,
 }
 impl NativeSnapshot {
     pub fn new(
@@ -118,6 +120,7 @@ impl NativeSnapshot {
             operations,
             owners,
             summaries,
+            materializations: AtomicU64::new(0),
         }))
     }
 
@@ -129,6 +132,9 @@ impl NativeSnapshot {
             discharge: Some(&self.options.discharge),
         }
     }
+    pub fn ready_materializations(&self) -> u64 {
+        self.materializations.load(Ordering::Relaxed)
+    }
 }
 
 /// Task-local mutable counters and temporary transformations over one owned
@@ -137,6 +143,7 @@ pub struct DemandProducts {
     snapshot: Arc<NativeSnapshot>,
     pub local: LocalReadyQueries,
     pub ready_materializations: u64,
+    selected: BTreeMap<ContentHash, ProductRef>,
 }
 impl DemandProducts {
     pub fn new(snapshot: Arc<NativeSnapshot>) -> Self {
@@ -147,7 +154,72 @@ impl DemandProducts {
             ),
             snapshot,
             ready_materializations: 0,
+            selected: BTreeMap::new(),
         }
+    }
+}
+
+/// Read-only object-task access restricted to the Ready products actually
+/// returned by its admitted dependency reads. This view never computes Ready.
+pub(super) struct SettledProducts {
+    inner: DemandProducts,
+    ready: BTreeMap<ContentHash, Arc<ReadyProduct>>,
+}
+impl SettledProducts {
+    pub(super) fn new(snapshot: Arc<NativeSnapshot>, reads: &[ProductRef]) -> Result<Self, String> {
+        let mut inner = DemandProducts::new(snapshot.clone());
+        let mut ready = BTreeMap::new();
+        for read in reads {
+            let owner = snapshot
+                .owners
+                .get(&read.address.0)
+                .ok_or("unregistered settled Ready dependency")?;
+            let product = inner
+                .local
+                .queries
+                .lookup(owner, read.action, &snapshot.environment())
+                .ok_or("settled Ready dependency lost current C admission")?;
+            if product.product != *read || ready.insert(read.address.0, product).is_some() {
+                return Err("duplicate or changed settled Ready dependency".into());
+            }
+            inner.selected.insert(read.address.0, *read);
+        }
+        Ok(Self { inner, ready })
+    }
+}
+impl NativeProducts for SettledProducts {
+    fn instance(&mut self, _: &InstanceAddress) -> Result<Arc<InstanceProduct>, String> {
+        Err("instance is not an object task's direct dependency".into())
+    }
+    fn arena_summary(&mut self, _: &ComponentKey) -> Result<Arc<ArenaSummary>, String> {
+        Err("arena summary is not an object task's direct dependency".into())
+    }
+    fn ready(&mut self, key: &InstanceAddress) -> Result<Arc<ReadyProduct>, String> {
+        let product = self
+            .ready
+            .get(&key.address(READY_KIND).0)
+            .ok_or("unread Ready dependency")?;
+        let current = self
+            .inner
+            .local
+            .queries
+            .lookup(
+                key,
+                product.product.action,
+                &self.inner.snapshot.environment(),
+            )
+            .ok_or("object task lost Ready C admission")?;
+        if current.product != product.product {
+            return Err("object task Ready dependency changed".into());
+        }
+        Ok(current)
+    }
+    fn with_ready<R>(
+        &mut self,
+        products: &[Arc<ReadyProduct>],
+        use_units: impl FnOnce(&[&ValidatedUnit<Ready>], &EmitInputs<'_>) -> Result<R, String>,
+    ) -> Result<R, String> {
+        self.inner.with_ready(products, use_units)
     }
 }
 impl NativeProducts for DemandProducts {
@@ -180,7 +252,7 @@ impl NativeProducts for DemandProducts {
     }
 
     fn ready(&mut self, key: &InstanceAddress) -> Result<Arc<ReadyProduct>, String> {
-        self.local.ready(
+        let product = self.local.ready(
             &self.snapshot.instances,
             key,
             &self.snapshot.arena,
@@ -188,7 +260,10 @@ impl NativeProducts for DemandProducts {
             self.snapshot.context,
             self.snapshot.emission.debug,
             &self.snapshot.environment(),
-        )
+        )?;
+        self.selected
+            .insert(product.product.address.0, product.product);
+        Ok(product)
     }
 
     fn with_ready<R>(
@@ -213,8 +288,7 @@ impl NativeProducts for DemandProducts {
             if !selected.insert(product.product.address.0) {
                 return Err("duplicate Ready materialization owner".into());
             }
-            let current = self.ready(&owner)?;
-            if current.product != product.product {
+            if self.selected.get(&product.product.address.0) != Some(&product.product) {
                 return Err("Ready materialization output changed".into());
             }
             if !product.optimizer_reads.is_empty() {
@@ -252,6 +326,7 @@ impl NativeProducts for DemandProducts {
         for (_, body) in &captured {
             let raw = binding.materialize::<Ready>(body)?;
             self.ready_materializations += 1;
+            snapshot.materializations.fetch_add(1, Ordering::Relaxed);
             let unit = hirsel_lir::validate::validate(raw, &inputs)
                 .map_err(|e| format!("emission Ready refused: {:?}", e.violations))?;
             units.push(unit);

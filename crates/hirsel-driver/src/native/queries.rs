@@ -15,6 +15,7 @@ pub mod products;
 pub mod ready;
 pub mod recipes;
 pub mod source;
+pub mod tasks;
 
 pub const INSTANCE_KIND: u32 = 0x4e00_0001;
 pub const ARENA_CANDIDATES_KIND: u32 = 0x4e00_0002;

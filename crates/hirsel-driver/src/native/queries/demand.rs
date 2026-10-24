@@ -113,6 +113,22 @@ impl DemandInstances {
     pub fn counts(&self) -> &InstanceQueryCounts {
         &self.queries.counts
     }
+    /// Ordinary completed input metadata for immutable dispatch planning. A
+    /// task must still independently admit C before publishing a dependency.
+    pub(super) fn completed_inputs(
+        &self,
+    ) -> Result<Vec<(InstanceAddress, Arc<DiscoveredInstance>)>, String> {
+        self.completed
+            .iter()
+            .map(|(encoding, output)| {
+                let request = self
+                    .requests
+                    .get(encoding)
+                    .ok_or("completed native request is missing")?;
+                Ok((self.address(request.key.bind()?), output.clone()))
+            })
+            .collect()
+    }
     /// Read a completed instance from this request snapshot, retaining C's
     /// independent current environment admission. No recipe or Value decode.
     pub(super) fn admitted(

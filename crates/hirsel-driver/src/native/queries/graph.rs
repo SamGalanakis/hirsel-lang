@@ -19,6 +19,8 @@ pub struct SettledArenaGraph {
     /// Components in deterministic callee-first order in each stratum.
     pub candidates: Vec<Arc<ArenaSummary>>,
     pub chosen: Vec<Arc<ArenaSummary>>,
+    /// Exact component addresses, including topology, facet and stratum.
+    pub component_keys: Vec<ComponentKey>,
     chosen_by_owner: BTreeMap<Function, Arc<ArenaSummary>>,
 }
 
@@ -111,6 +113,7 @@ pub fn settle_arena_queries(
     let components = hirsel_graph::components(&graph);
     let mut candidates: Vec<Arc<ArenaSummary>> = Vec::new();
     let mut chosen = Vec::new();
+    let mut component_keys = Vec::new();
     for stratum in [ArenaStratum::Candidates, ArenaStratum::Chosen] {
         let mut settled: BTreeMap<Function, (InstanceAddress, Vec<u32>, ProductRef)> = external
             .iter()
@@ -166,6 +169,7 @@ pub fn settle_arena_queries(
             let own =
                 (stratum == ArenaStratum::Chosen).then(|| candidates[component_index].as_ref());
             let result = arena_query(store, &key, &members, own, &outgoing, counts)?;
+            component_keys.push(key);
             for (owner, xs) in &result.candidates {
                 settled.insert(function(owner), (owner.clone(), xs.clone(), result.product));
             }
@@ -187,6 +191,7 @@ pub fn settle_arena_queries(
     Ok(SettledArenaGraph {
         candidates,
         chosen,
+        component_keys,
         chosen_by_owner,
     })
 }
