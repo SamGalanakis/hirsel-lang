@@ -164,3 +164,4 @@ mod native_discovery_cache_19;
 mod native_declarations_19;
 mod ownership_trace;
 mod receipt_source_factory_33;
+mod scheduled_storage;

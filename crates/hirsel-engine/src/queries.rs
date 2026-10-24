@@ -8,6 +8,14 @@ mod frontier;
 pub use frontier::FrontChanges;
 mod parallel;
 pub(crate) mod s1;
+mod scheduled_check;
+mod scheduled_growth;
+mod scheduled_storage;
+pub use scheduled_check::{FRONT_CHECK_KIND, FrontCheckOutput, FrontCheckPlan, FrontCheckQueries};
+pub use scheduled_growth::{FRONT_GROWTH_KIND, FrontGrowthOutput, FrontGrowthQueries};
+pub use scheduled_storage::{
+    FRONT_STORAGE_GRAPH_KIND, FrontStorageGraphOutput, FrontStorageGraphQueries,
+};
 mod scheduled_lower;
 pub use parallel::{
     FRONT_BODY_KIND, FRONT_STORAGE_KIND, FrontBodyOutput, FrontBodyQueries, FrontCheckedOutput,
