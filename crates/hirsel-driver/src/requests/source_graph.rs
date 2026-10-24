@@ -347,6 +347,7 @@ pub(super) fn install(
     let (input_operations, input_bytes) = request.inputs.read_work();
     let initial = RequestWork {
         hold_bytes: config.hold_bytes,
+        store_adoptions: program.engine.store_adoptions(),
         front: program.engine.work_stats(),
         input_operations,
         input_bytes,
