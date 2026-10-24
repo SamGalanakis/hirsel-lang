@@ -310,6 +310,10 @@ impl FnEmitter<'_, '_, '_> {
             }
             Inst::Dup { value } => {
                 let block = self.get1(value)?;
+                if self.is_receipt_value(value)? {
+                    self.rt(RuntimeEntry::ReceiptRetain, &[block])?;
+                    return Ok(());
+                }
                 if self.is_root_value(value)? {
                     return self.root_dup_block(block);
                 }
@@ -585,6 +589,22 @@ impl FnEmitter<'_, '_, '_> {
             Inst::Recast { result, value } => {
                 let pointer = self.get(value)?;
                 self.define(result, pointer)
+            }
+            Inst::Release {
+                value,
+                layout,
+                live,
+                ..
+            } if self.is_receipt_value(value)? => {
+                if self.value_type(value)?.layout != layout || live != MaskRef::All {
+                    return self.invalid("a receipt release with another layout or partial mask");
+                }
+                let receipt = self.get1(value)?;
+                self.rt(RuntimeEntry::ReceiptRelease, &[receipt])?;
+                Ok(())
+            }
+            Inst::Reset { value, .. } if self.is_receipt_value(value)? => {
+                self.invalid("receipt metadata is never a reuse donor")
             }
             // Mutex roots may run user finalizers on the last release.
             Inst::Release {

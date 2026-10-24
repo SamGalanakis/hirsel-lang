@@ -7,6 +7,12 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         let place = self.gather(place)?;
         self.invalidate_uniqueness();
         let record = self.layout(place.layout)?;
+        if let LayoutKind::PayloadReceipt { .. } = record.kind {
+            let receipt = self.load(Shape::Scalar(ScalarKind::Pointer), place);
+            let retain = self.runtime(RuntimeEntry::ReceiptRetain)?;
+            self.builder.call(retain, &[receipt]);
+            return Ok(());
+        }
         if let LayoutKind::Block { .. } | LayoutKind::Box { .. } = record.kind {
             let block = self.load(Shape::Scalar(ScalarKind::Pointer), place);
             return self.dup_block(block);
@@ -16,6 +22,19 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             return self.root_dup_block(block);
         }
         self.dup_scan(place, &record.scan)
+    }
+
+    /// Metadata holders have their own count and never use a language block or root header.
+    pub(super) fn is_receipt_value(&self, value: ValueId) -> Emitted<bool> {
+        let ty = self.value_type(value)?;
+        let receipt = matches!(
+            self.layout(ty.layout)?.kind,
+            LayoutKind::PayloadReceipt { .. }
+        );
+        if receipt != (ty.repr == ValueRepr::PayloadReceipt) {
+            return self.invalid("a receipt layout and representation disagree");
+        }
+        Ok(receipt)
     }
 
     pub(super) fn dup_scan(&mut self, place: Place<'m>, scan: &'a [ScanStep]) -> Emitted {
@@ -211,3 +230,6 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         Ok(self.builder.load(i8_ty, status, 1))
     }
 }
+
+#[cfg(test)]
+mod receipt_tests;

@@ -333,6 +333,7 @@ pub fn scalar_shape(kind: &LayoutKind) -> Option<ScalarKind> {
         LayoutKind::Block { .. }
         | LayoutKind::Box { .. }
         | LayoutKind::Shared { .. }
+        | LayoutKind::PayloadReceipt { .. }
         | LayoutKind::SealedRegion { .. }
         | LayoutKind::Header
         | LayoutKind::Arena => Some(ScalarKind::Pointer),
