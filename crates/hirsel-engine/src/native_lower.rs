@@ -492,6 +492,7 @@ impl QueryEngine {
             );
         }
         Ok(NativeOriginalReader {
+            owner: None,
             verified: NativeLowerReader {
                 anchors: Arc::new(NativeRecordContext::capture(self)),
                 signatures: self.signature_snapshot(),
