@@ -200,3 +200,4 @@ fn runtime50_migrate_every_suspension_continuations() {
         }
     });
 }
+
