@@ -182,6 +182,21 @@ pub(crate) fn literal_snapshots(syntax: &ItemSyntax) -> Vec<Arc<ItemSyntax>> {
 
 /// `None` keeps CT-2's existing data materialization path. A dictionary is a
 /// transparent nominal record with at least one callable and otherwise data.
+/// The same declaration algorithm can suspend at data-field evaluation on
+/// an admitted worker. Named callable publication remains header-only.
+pub(crate) trait DeclarationSource {
+    fn signature(&mut self, path: &DefPath) -> Result<hirsel_types::SignatureRef, QueryError>;
+    async fn evaluate(&mut self, input: EvaluationInput<'_>) -> Result<Materialized, QueryError>;
+}
+struct SynchronousDeclaration<'a, S>(&'a mut S);
+impl<S: ComptimeValueSource> DeclarationSource for SynchronousDeclaration<'_, S> {
+    fn signature(&mut self, path: &DefPath) -> Result<hirsel_types::SignatureRef, QueryError> {
+        self.0.signature(path)
+    }
+    async fn evaluate(&mut self, input: EvaluationInput<'_>) -> Result<Materialized, QueryError> {
+        self.0.evaluate(input)
+    }
+}
 pub(crate) fn declaration(
     types: &hirsel_types::TypeInterner,
     memo: &hirsel_types::TypeMemo,
@@ -189,6 +204,29 @@ pub(crate) fn declaration(
     signature: &Signature,
     constants: &[(ExprId, Materialized)],
     source: &mut impl ComptimeValueSource,
+) -> Result<Option<Materialized>, QueryError> {
+    use std::{
+        future::Future,
+        task::{Context, Poll, Waker},
+    };
+    let mut source = SynchronousDeclaration(source);
+    let future = declaration_async(types, memo, analyzed, signature, constants, &mut source);
+    match std::pin::pin!(future)
+        .as_mut()
+        .poll(&mut Context::from_waker(Waker::noop()))
+    {
+        Poll::Ready(result) => result,
+        Poll::Pending => Err(QueryError::NotImplemented),
+    }
+}
+
+pub(crate) async fn declaration_async(
+    types: &hirsel_types::TypeInterner,
+    memo: &hirsel_types::TypeMemo,
+    analyzed: &AnalyzedBody,
+    signature: &Signature,
+    constants: &[(ExprId, Materialized)],
+    source: &mut impl DeclarationSource,
 ) -> Result<Option<Materialized>, QueryError> {
     let SignatureKind::Const { ty, .. } = signature.kind else {
         return Ok(None);
@@ -353,7 +391,8 @@ pub(crate) fn declaration(
                     ty: field.ty,
                     constants,
                     sizes: &[],
-                })?
+                })
+                .await?
                 .root
         };
         nodes.push(node);
