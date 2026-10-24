@@ -56,6 +56,18 @@ impl<T> Notification<T> {
     }
 }
 
+impl<T> Notification<T> {
+    /// See [`TaskState::idle`].
+    pub fn idle(&self) -> bool {
+        self.0.state.idle()
+    }
+
+    /// See [`TaskState::notified`].
+    pub fn notified(&self) -> bool {
+        self.0.state.notified()
+    }
+}
+
 impl<T> Queued<T> {
     /// Consume publication ownership before touching the image. The successful
     /// state transition acquires everything written by its previous worker.

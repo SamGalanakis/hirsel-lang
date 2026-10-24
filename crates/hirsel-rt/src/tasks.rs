@@ -1643,6 +1643,32 @@ pub(crate) unsafe fn record_dispatch(
     );
 }
 
+/// A role-free object wake (`pool::free::notify`) publishes a registered
+/// waiter without its logical unpark. Its dispatch ends that Retry wait here,
+/// under the role it takes to start the task, as the policy's unpark would;
+/// the waiter's loop checks its condition again.
+/// # Safety
+/// The caller holds the scheduler role and starts `task`.
+pub(crate) unsafe fn resumed(run: *mut crate::context::RunShared, task: u32) {
+    let s = unsafe { (*(*run).tasks.get()).as_deref_mut().unwrap() };
+    if !matches!(s.logical, Logical::Free(_)) {
+        return;
+    }
+    let Some(Some(row)) = s.tasks.get_mut(task as usize) else {
+        return;
+    };
+    if row.state != State::Parked || !matches!(row.wait, Some(Wait::Retry { .. })) {
+        return;
+    }
+    row.state = State::Ready;
+    row.wait = None;
+    row.retried = false;
+    // A polled row must still be parked: drop a pending poll of this wait.
+    if std::mem::take(&mut row.woken) {
+        s.woken.retain(|&woken| woken != task);
+    }
+}
+
 /// # Safety
 /// Admission only; no worker has started a task.
 pub(crate) unsafe fn install_cancel_metrics(ctx: *mut TaskCtx) {
@@ -1729,7 +1755,7 @@ pub(crate) unsafe fn after_save(run: *mut crate::context::RunShared, task: u32, 
     } {
         unsafe { crate::pool::wake_home(run) };
     }
-    unsafe { free::check_quiet(run) };
+    unsafe { free::check_quiet(run, Some(task)) };
 }
 
 /// Dispatch the running task's foreign interval to a blocking-pool thread (S-13): it waits
@@ -1979,7 +2005,15 @@ unsafe fn poll_parked(ctx: *mut TaskCtx) -> Stopped<()> {
         });
     }
     for &task in &woken {
-        role::with_role(ctx, |t| t.task(task).woken = false);
+        // A role-free object wake may have ended this wait at its dispatch.
+        let parked = role::with_role(ctx, |t| {
+            let row = t.task(task);
+            row.woken = false;
+            row.state == State::Parked
+        });
+        if !parked {
+            continue;
+        }
         // SAFETY: the context is live and `task` is parked.
         if unsafe { poll(ctx, task, &ready) }? {
             #[cfg(feature = "measurement")]

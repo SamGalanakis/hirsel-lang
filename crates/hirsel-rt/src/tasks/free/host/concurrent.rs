@@ -492,7 +492,7 @@ pub(crate) unsafe fn service(run: *mut RunShared) -> bool {
     if !matches!(sources, Ok(true)) {
         let _guard = unsafe { role::IdleGuard::home(run) };
         match sources {
-            Ok(false) => unsafe { super::super::check_quiet_without_sources(run) },
+            Ok(false) => unsafe { super::super::check_quiet_without_sources(run, None) },
             Err(stop) => {
                 unsafe { (*run).control.request_inside(stop) };
             }

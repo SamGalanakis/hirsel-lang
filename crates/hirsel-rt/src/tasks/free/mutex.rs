@@ -119,6 +119,15 @@ pub(crate) unsafe fn take(
         let replay = super::replay::object(ctx, (crate::free::MUTEX, word));
         let cell = scheduler(ctx).sync.mutex(word);
         super::objects::keep_mutex(ctx, word, &cell);
+        // A registering waiter's wake needs no role: its token captures the
+        // frame and the owner its park leaves it with.
+        let mut token = if entered {
+            None
+        } else {
+            let row = scheduler(ctx).task(me);
+            let owner = if row.pinned { Owner::Any } else { row.owner };
+            unsafe { crate::pool::free::token((*ctx).run_ptr(), me, owner) }
+        };
         unsafe { role::release(ctx) };
         let mut state = cell.lock();
         let mut result = Acquired::Pending;
@@ -134,6 +143,7 @@ pub(crate) unsafe fn take(
                     if result == Acquired::Payload {
                         unsafe { cell.take(state, payload) };
                     }
+                    state.take_token(me);
                     "take"
                 },
             )
@@ -146,6 +156,9 @@ pub(crate) unsafe fn take(
                 |_| {
                     result = state.permit.acquire(me, &mut queued);
                     assert_eq!(result, Acquired::Pending);
+                    if let Some(token) = token.take() {
+                        state.keep_token(me, token);
+                    }
                 },
             )
         } else {
@@ -191,6 +204,9 @@ pub(crate) unsafe fn put(ctx: *mut TaskCtx, word: u64, payload: *mut u8) -> Stop
         replay.as_ref(),
         |state| {
             next = unsafe { cell.put(state, payload) };
+            if let Some(next) = next {
+                state.take_token(next);
+            }
             "put"
         },
     );
@@ -230,6 +246,7 @@ pub(crate) unsafe fn kill(ctx: *mut TaskCtx, word: u64) -> Stopped<()> {
         replay.as_ref(),
         |state| {
             state.permit.kill_into(&mut waiters);
+            state.drop_tokens();
             s.sync.set_dead(word, chain);
             "kill"
         },

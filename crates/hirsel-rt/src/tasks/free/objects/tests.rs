@@ -353,6 +353,8 @@ struct Contended {
     put: AtomicBool,
     resumed_before_save: AtomicBool,
     saves: Mutex<Vec<u32>>,
+    /// Each waiter's role acquisitions on its own worker across its put.
+    put_roles: Mutex<Vec<u64>>,
 }
 
 unsafe extern "C" fn contended_child(ctx: *mut TaskCtx, env: *mut Header, _: u64, _: u64) -> u8 {
@@ -374,7 +376,13 @@ unsafe extern "C" fn contended_child(ctx: *mut TaskCtx, env: *mut Header, _: u64
     payload[1] += 1;
     // Count before the put: the holder's retake may resume at once.
     shared.finished.fetch_add(1, Ordering::AcqRel);
+    // A put that reserves the permit for its successor wakes it with a token:
+    // the successor's dispatch takes the role on another worker, this put none.
+    unsafe { crate::pool::free::renew(ctx) };
+    let before = role::thread_acquisitions();
     unsafe { hirsel_rt_v2_mutex_put(ctx, &handle, payload.as_mut_ptr().cast()) };
+    let roles = role::thread_acquisitions() - before;
+    shared.put_roles.lock().unwrap().push(roles);
     STATUS_OK
 }
 
@@ -393,6 +401,7 @@ unsafe fn contend(ctx: *mut TaskCtx, shared: &Contended, count: u32) -> Vec<(u32
     unsafe { hirsel_rt_v2_mutex_take(ctx, &mut status, &handle, payload.as_mut_ptr().cast()) };
     assert_eq!(status, 0);
     shared.order.lock().unwrap().clear();
+    shared.put_roles.lock().unwrap().clear();
     shared.registered.store(0, Ordering::Release);
     shared.finished.store(0, Ordering::Release);
     shared.first.store(u32::MAX, Ordering::Release);
@@ -430,6 +439,11 @@ unsafe fn contend(ctx: *mut TaskCtx, shared: &Contended, count: u32) -> Vec<(u32
         order.iter().map(|&(_, value)| value).collect::<Vec<_>>(),
         (value..value + u64::from(count)).collect::<Vec<_>>(),
         "exactly one owner observed each payload version"
+    );
+    assert_eq!(
+        *shared.put_roles.lock().unwrap(),
+        vec![0; count as usize],
+        "every waiter's put woke its reserved successor without the role"
     );
     order
 }
@@ -487,6 +501,7 @@ fn runtime50_object_custody_race_matrix() {
             put: AtomicBool::new(false),
             resumed_before_save: AtomicBool::new(false),
             saves: Mutex::default(),
+            put_roles: Mutex::default(),
         });
         let body = shared.clone();
         let mut run = crate::host::BodyRun::new(4, false);

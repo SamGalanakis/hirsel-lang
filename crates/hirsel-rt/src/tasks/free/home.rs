@@ -36,7 +36,10 @@ pub(crate) unsafe fn service(run: *mut RunShared) -> bool {
             && s.runnable.is_empty()
             && s.tasks.iter().flatten().all(|row| {
                 row.state != super::super::State::Ready
-                    && row.dispatch.as_ref().is_none_or(|frame| frame.is_saved())
+                    && row
+                        .dispatch
+                        .as_ref()
+                        .is_none_or(|frame| frame.is_saved() && frame.quiet(false))
             });
         let canceled = s.host_cancellations(1 << 63, 0);
         (canceled, idle)
@@ -94,9 +97,9 @@ pub(crate) unsafe fn service(run: *mut RunShared) -> bool {
     unsafe { readiness::poll_free(s) };
     unsafe { super::publish_ready(s, run) };
     if !sources {
-        unsafe { super::check_quiet_without_sources(run) };
+        unsafe { super::check_quiet_without_sources(run, None) };
     } else {
-        unsafe { super::check_quiet(run) };
+        unsafe { super::check_quiet(run, None) };
     }
     drop(_guard);
     unsafe {
@@ -209,7 +212,7 @@ pub(crate) unsafe fn service_child(run: *mut RunShared) -> crate::stop::Stopped<
     }
     unsafe { readiness::poll_free(s) };
     unsafe { super::publish_ready(s, run) };
-    unsafe { super::check_quiet(run) };
+    unsafe { super::check_quiet(run, None) };
     Ok(changed)
 }
 

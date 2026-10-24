@@ -33,6 +33,18 @@ pub(crate) struct Role {
     acquisitions: AtomicU64,
 }
 
+#[cfg(test)]
+thread_local! {
+    static THREAD_ACQUISITIONS: Cell<u64> = const { Cell::new(0) };
+}
+
+/// The calling thread's scheduler-role acquisitions, for tests that tell an
+/// operation's own role use from its wakee's dispatch on another worker.
+#[cfg(test)]
+pub(crate) fn thread_acquisitions() -> u64 {
+    THREAD_ACQUISITIONS.with(Cell::get)
+}
+
 impl Role {
     /// Admission only, before any worker can execute Hirsel code.
     pub(crate) fn enable(&self) {
@@ -46,6 +58,8 @@ impl Role {
 
     fn acquired(&self) {
         self.acquisitions.fetch_add(1, Ordering::Relaxed);
+        #[cfg(test)]
+        THREAD_ACQUISITIONS.with(|count| count.set(count.get() + 1));
     }
 
     fn acquire(&self, task: usize) {

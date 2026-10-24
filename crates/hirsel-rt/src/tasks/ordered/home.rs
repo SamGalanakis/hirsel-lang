@@ -73,7 +73,7 @@ pub(super) unsafe fn poll(run: *mut RunShared, retiring: bool, idle: bool) -> St
             let _guard = unsafe { role::IdleGuard::home(run) };
             let s = unsafe { (*(*run).tasks.get()).as_deref_mut().unwrap() };
             complete(s, run, retiring);
-            unsafe { super::super::free::check_quiet_without_sources(run) };
+            unsafe { super::super::free::check_quiet_without_sources(run, None) };
             return Ok(true);
         }
         let crate::host_waits::HomeReady { expired, hosts } =
@@ -172,7 +172,7 @@ pub(super) unsafe fn poll(run: *mut RunShared, retiring: bool, idle: bool) -> St
             }
             if !idle || !s.runnable.is_empty() {
                 complete(s, run, retiring);
-                unsafe { super::super::free::check_quiet(run) };
+                unsafe { super::super::free::check_quiet(run, None) };
                 return Ok(true);
             }
         }

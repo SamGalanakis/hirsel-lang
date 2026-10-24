@@ -256,7 +256,7 @@ pub(super) unsafe fn after_save(
 /// deadlines are external event sources and prevent this runtime-only verdict.
 /// # Safety
 /// The caller holds IdleGuard; no Scheduler borrow survives this call.
-pub(super) unsafe fn check_quiet(run: *mut crate::context::RunShared) {
+pub(super) unsafe fn check_quiet(run: *mut crate::context::RunShared, saver: Option<u32>) {
     if unsafe { crate::runners::native::pending(run) }
         || unsafe { (*run).host_waits.load(Ordering::Acquire) } != 0
         || unsafe {
@@ -265,13 +265,17 @@ pub(super) unsafe fn check_quiet(run: *mut crate::context::RunShared) {
     {
         return;
     }
-    unsafe { check_quiet_without_sources(run) };
+    unsafe { check_quiet_without_sources(run, saver) };
 }
 
 /// The home adapter proved no event source can wake this fully saved run.
 /// # Safety
 /// As for check_quiet; the caller additionally owns that source verdict.
-pub(super) unsafe fn check_quiet_without_sources(run: *mut crate::context::RunShared) {
+/// `saver` is the task whose save callback asks, if any.
+pub(super) unsafe fn check_quiet_without_sources(
+    run: *mut crate::context::RunShared,
+    saver: Option<u32>,
+) {
     let waits = {
         let run = unsafe { &*run };
         let Some(s) = (unsafe { (*run.tasks.get()).as_deref_mut() }) else {
@@ -283,9 +287,13 @@ pub(super) unsafe fn check_quiet_without_sources(run: *mut crate::context::RunSh
             Logical::Cooperative => false,
         };
         if !quiet_policy
-            || s.tasks.iter().flatten().any(|row| {
-                row.state == State::Ready
-                    || row.dispatch.as_ref().is_some_and(|frame| !frame.is_saved())
+            || s.tasks.iter().enumerate().any(|(task, row)| {
+                row.as_ref().is_some_and(|row| {
+                    row.state == State::Ready
+                        || row.dispatch.as_ref().is_some_and(|frame| {
+                            !frame.is_saved() || !frame.quiet(saver == Some(task as u32))
+                        })
+                })
             })
         {
             return;

@@ -58,6 +58,27 @@ pub(crate) struct MutexImage {
     image: Ring,
     pub(crate) permit: Permit,
     closed: bool,
+    /// The wake token of each registered waiter, until it acquires, is killed
+    /// or a put reserves the permit for it and takes its token.
+    tokens: Vec<(u32, crate::pool::free::Token)>,
+}
+
+impl MutexImage {
+    /// Keep `task`'s wake token while it waits in the permit's queue.
+    pub(crate) fn keep_token(&mut self, task: u32, token: crate::pool::free::Token) {
+        self.tokens.push((task, token));
+    }
+
+    /// The registered waiter `task`'s token, removed from this image.
+    pub(crate) fn take_token(&mut self, task: u32) -> Option<crate::pool::free::Token> {
+        let index = self.tokens.iter().position(|&(waiter, _)| waiter == task)?;
+        Some(self.tokens.swap_remove(index).1)
+    }
+
+    /// The permit's waiters were killed: none of them is woken by a put.
+    pub(crate) fn drop_tokens(&mut self) {
+        self.tokens.clear();
+    }
 }
 
 /// Owned storage moved out by a bounded close action. Metadata and an inert
@@ -188,6 +209,7 @@ impl Synchronizers {
                 image,
                 permit: Permit::new(),
                 closed: false,
+                tokens: Vec::new(),
             }),
         })
     }

@@ -220,15 +220,21 @@ pub(crate) unsafe fn mutex_put(
     super::record::begin(ctx);
     let mut state = cell.lock();
     let mut next = None;
+    let mut token = None;
     let publication = super::mutex::touched(ctx, Phase::Done, cell, &mut state, None, |state| {
         next = unsafe { cell.put(state, payload) };
+        token = next.and_then(|next| state.take_token(next));
         "put"
     });
     drop(state);
-    Some(publication.and_then(|()| match next {
-        None => unsafe { tail(ctx) },
-        Some(next) => {
-            // The permit is already reserved for next; only its wake needs R.
+    Some(publication.and_then(|()| match (next, token) {
+        (None, _) => unsafe { tail(ctx) },
+        // The permit is reserved for next before its wake, after the unlock.
+        (Some(_), Some(token)) => {
+            unsafe { crate::pool::free::notify((*ctx).run_ptr(), &token) };
+            unsafe { tail(ctx) }
+        }
+        (Some(next), None) => {
             let _role = unsafe { role::Guard::new(ctx) };
             super::mutex::notify(ctx, next);
             unsafe { super::try_yield(&mut *ctx) }

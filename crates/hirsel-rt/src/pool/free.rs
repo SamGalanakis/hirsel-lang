@@ -34,6 +34,17 @@ impl Frame {
         self.saved.load(Ordering::Acquire)
     }
 
+    /// Whether this frame lets the run be quiet: idle, or, for the task whose
+    /// save callback asks (`saving`), running with no remembered wake. A
+    /// role-free object wake queues a frame whose row is still parked.
+    pub(crate) fn quiet(&self, saving: bool) -> bool {
+        if saving {
+            !self.notification.notified()
+        } else {
+            self.notification.idle()
+        }
+    }
+
     /// The idle callback owns the scheduler role before exposing slots or
     /// completion. Otherwise a join could retire this row before its callback.
     pub(crate) fn mark_saved(&self) {
@@ -342,6 +353,61 @@ unsafe fn admit(run: *mut RunShared, execs: &Execs, task: u32, owner: Owner) -> 
                 chained: false,
             })
         }
+    }
+}
+
+/// A role-free wake for one registered object waiter (S2 `NotifyToken`).
+/// It holds the waiter's frame and the owner its park leaves it with, both
+/// captured under the role at registration. Its notification runs only the
+/// frame's own latch: a running waiter remembers it until its save, and a
+/// stale token can only coalesce or wake a frame that has completed.
+///
+/// The owner is the one admit() would read from the row at wake time: a
+/// parked row's owner never changes (only a running task pins or unpins,
+/// and its park leaves it unpinned), and a token is taken only for a task
+/// still parked in, or entering, the wait it registered for.
+pub(crate) struct Token {
+    frame: Arc<Frame>,
+    owner: usize,
+}
+
+/// The running task's wake token, or `None` without physical dispatch.
+/// # Safety
+/// The caller holds the run's scheduler role; `task` is its running task.
+pub(crate) unsafe fn token(run: *mut RunShared, task: u32, owner: Owner) -> Option<Token> {
+    if !enabled(unsafe { &*run }) {
+        return None;
+    }
+    // SAFETY: the role owns this task lookup.
+    let (slot, _) = unsafe { crate::tasks::dispatch_frame(run, task) };
+    slot.as_ref().map(|frame| Token {
+        frame: frame.clone(),
+        owner: owner_word(owner),
+    })
+}
+
+/// Wake the token's task without the scheduler role, as admit() and
+/// publish() do for a policy wake. Its dispatch leaves the logical wait under
+/// the role it takes to start the task (`tasks::resumed`); its frame's latch
+/// keeps the run from a quiet verdict meanwhile (`Frame::quiet`).
+/// # Safety
+/// The run's execs are initialized and its physical dispatch is enabled.
+pub(crate) unsafe fn notify(run: *mut RunShared, token: &Token) {
+    let execs = unsafe { (*(*run).execs.get()).as_deref().expect("physical dispatch") };
+    let dispatch = execs.dispatch.get().expect("physical dispatch enabled");
+    token.frame.owner.store(token.owner, Ordering::Release);
+    if let Some(queued) = token.frame.notification.notify() {
+        publish(
+            execs,
+            Saved {
+                queued,
+                frame: token.frame.clone(),
+                lease: Lease::new(&dispatch.count),
+                chained: false,
+            },
+            false,
+            false,
+        );
     }
 }
 
@@ -879,6 +945,7 @@ pub(super) unsafe fn resume(run: *mut RunShared, exec: &Exec, saved: Saved) {
             return;
         }
         crate::tasks::record_dispatch(run, task, compute_index());
+        crate::tasks::resumed(run, task);
         if !chained {
             exec.chain.set(Budget::default());
         }

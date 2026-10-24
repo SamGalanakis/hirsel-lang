@@ -117,6 +117,17 @@ impl TaskState {
         }
     }
 
+    /// No queue token, execution or remembered wake: only an idle saved or a
+    /// completed task. A quiet verdict needs every other task idle.
+    pub fn idle(&self) -> bool {
+        self.0.load(Ordering::Acquire) & (QUEUED | RUNNING | NOTIFIED) == 0
+    }
+
+    /// A wake is remembered on the running task: its save requeues it.
+    pub fn notified(&self) -> bool {
+        self.0.load(Ordering::Acquire) & NOTIFIED != 0
+    }
+
     /// The running task finished; subsequent notifications cannot resurrect it.
     pub fn complete(&self) {
         let previous = self.0.swap(COMPLETE, Ordering::AcqRel);
