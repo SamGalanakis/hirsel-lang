@@ -132,7 +132,7 @@ fn source_recipes_restore_generic_closures_and_finalizers_without_ancestor_value
                 "restoring lexical metadata constructs/decodes/clones/rebinds no Value"
             );
             assert_eq!(instances.view(id).key, key);
-            let imported = hirsel_rc::import::import_instance(
+            let mut imported = hirsel_rc::import::import_instance(
                 &declarations.program,
                 &mut instances,
                 id,
@@ -169,6 +169,11 @@ fn source_recipes_restore_generic_closures_and_finalizers_without_ancestor_value
                 manifest: &manifest,
                 discharge: None,
             };
+            hirsel_rc::import::prune_pretransfer(
+                std::slice::from_mut(&mut imported.unit),
+                &table,
+                &operations.pretransfer_adapters,
+            );
             hirsel_lir::validate::validate_value(imported.unit, &inputs).unwrap();
         }
     });
@@ -222,7 +227,7 @@ fn library_recipe_rebinds_its_environment_without_reconstructing_the_requiring_v
             body,
         )
         .unwrap();
-        let imported = hirsel_rc::import::import_instance(
+        let mut imported = hirsel_rc::import::import_instance(
             &declarations.program,
             &mut instances,
             id,
@@ -258,6 +263,11 @@ fn library_recipe_rebinds_its_environment_without_reconstructing_the_requiring_v
             manifest: &manifest,
             discharge: None,
         };
+        hirsel_rc::import::prune_pretransfer(
+            std::slice::from_mut(&mut imported.unit),
+            &table,
+            &operations.pretransfer_adapters,
+        );
         let parent = hirsel_lir::validate::validate_value(imported.unit, &inputs).unwrap();
         let (closure, _) = hirsel_lir::products::LayoutClosure::capture(
             &parent,
@@ -312,7 +322,7 @@ fn library_recipe_rebinds_its_environment_without_reconstructing_the_requiring_v
             trace.totals(),
             hirsel_lir::construction::ValueCounts::default()
         );
-        let imported = hirsel_rc::import::import_instance(
+        let mut imported = hirsel_rc::import::import_instance(
             &declarations.program,
             &mut instances,
             id,
@@ -362,6 +372,11 @@ fn library_recipe_rebinds_its_environment_without_reconstructing_the_requiring_v
             manifest: &manifest,
             discharge: None,
         };
+        hirsel_rc::import::prune_pretransfer(
+            std::slice::from_mut(&mut imported.unit),
+            &table,
+            &operations.pretransfer_adapters,
+        );
         hirsel_lir::validate::validate_value(imported.unit, &inputs).unwrap();
     });
 }
