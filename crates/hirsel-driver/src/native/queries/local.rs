@@ -17,8 +17,8 @@ use hirsel_lir::{
 use hirsel_rc::arena_credit::equations::Function;
 use std::collections::BTreeMap;
 
-type StaticRows = Vec<(Vec<ContentHash>, String)>;
-type FinalizerRows = Vec<(
+pub(super) type StaticRows = Vec<(Vec<ContentHash>, String)>;
+pub(super) type FinalizerRows = Vec<(
     ContentHash,
     hirsel_syntax::DefPath,
     ContentHash,

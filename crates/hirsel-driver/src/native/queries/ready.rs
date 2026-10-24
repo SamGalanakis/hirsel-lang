@@ -247,6 +247,32 @@ impl ReadyQueries {
             .map(|accepted| accepted.linkage())
     }
 
+    /// Read only the C-bound layout closure for program assembly. The Ready
+    /// body remains unopened; the summary reference is separately C-bound in
+    /// the same accepted metadata checked by lookup_inner.
+    pub(super) fn assembly_layouts(
+        &self,
+        key: &InstanceAddress,
+        product: &ReadyProduct,
+        environment: &NativeEnvironment<'_>,
+    ) -> Result<hirsel_lir::products::LayoutClosure, String> {
+        let current = self
+            .lookup_inner(key, product.product.action, environment)
+            .ok_or("Ready assembly lost current C admission")?;
+        if current.product != product.product {
+            return Err("Ready assembly descriptor differs".into());
+        }
+        let bytes = self
+            .store
+            .get_content(current.layout_closure)
+            .ok_or("missing Ready assembly layouts")?;
+        let closure: hirsel_lir::products::LayoutClosure =
+            hirsel_codec::from_text(std::str::from_utf8(&bytes).map_err(|e| e.to_string())?)
+                .map_err(|e| format!("Ready assembly layouts: {e:?}"))?;
+        closure.check(environment.target)?;
+        Ok(closure)
+    }
+
     /// Body access reserved for a selected emission miss. The supplied
     /// descriptor must still match this query's current C-owned association.
     pub(super) fn read(

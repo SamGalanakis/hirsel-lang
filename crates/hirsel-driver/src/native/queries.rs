@@ -15,6 +15,7 @@ pub mod products;
 pub mod ready;
 pub mod recipes;
 pub mod root_source;
+pub mod roots;
 pub mod source;
 pub mod tasks;
 

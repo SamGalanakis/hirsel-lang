@@ -62,9 +62,9 @@ pub struct NativeSnapshot {
     pub(super) instances: DemandInstances,
     pub(super) arena: SettledArenaGraph,
     pub(super) options: crate::native::Options,
-    emission: EmissionOptions,
-    context: Reference,
-    manifest: hirsel_core_contract::Manifest,
+    pub(super) emission: EmissionOptions,
+    pub(super) context: Reference,
+    pub(super) manifest: hirsel_core_contract::Manifest,
     operations: Arc<dyn hirsel_lir::operation::OperationDeclarations + Send + Sync>,
     pub(super) owners: BTreeMap<ContentHash, InstanceAddress>,
     pub(super) summaries: BTreeMap<ContentHash, Arc<ArenaSummary>>,
@@ -140,10 +140,10 @@ impl NativeSnapshot {
 /// Task-local mutable counters and temporary transformations over one owned
 /// immutable snapshot. Construction runs no query or dependency work.
 pub struct DemandProducts {
-    snapshot: Arc<NativeSnapshot>,
+    pub(super) snapshot: Arc<NativeSnapshot>,
     pub local: LocalReadyQueries,
     pub ready_materializations: u64,
-    selected: BTreeMap<ContentHash, ProductRef>,
+    pub(super) selected: BTreeMap<ContentHash, ProductRef>,
 }
 impl DemandProducts {
     pub fn new(snapshot: Arc<NativeSnapshot>) -> Self {
