@@ -257,10 +257,12 @@ impl Plan {
         files: usize,
         needs_run: bool,
         footprint: FrontInputFootprint,
+        inspection_bytes: u64,
     ) -> Result<Self, ToolError> {
         let source = u64::try_from(inputs.retained_bytes())
             .ok()
             .and_then(|bytes| bytes.checked_add(footprint.source_headers))
+            .and_then(|bytes| bytes.checked_add(inspection_bytes))
             .ok_or_else(uninstalled)?;
         let metadata = MemoryWeight::default();
         let lower_inventory =
@@ -412,6 +414,8 @@ pub(super) fn install(
         program.files.len(),
         needs_run,
         footprint,
+        GraphMeter::input_bytes(&definitions, program.engine.memo_snapshot().len())
+            .ok_or_else(uninstalled)?,
     )?;
     let GraphAdmission {
         runtime,

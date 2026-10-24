@@ -49,7 +49,6 @@ impl Counters {
 }
 struct State {
     memory: Option<MemoryReservation>,
-    used: u64,
     counts: BTreeMap<DefPath, Counters>,
     stats: MemoStats,
     complete: bool,
@@ -66,7 +65,6 @@ impl InspectionLedger {
             capacity,
             state: Mutex::new(State {
                 memory: None,
-                used: 0,
                 counts: BTreeMap::new(),
                 stats: MemoStats::default(),
                 complete: true,
@@ -93,19 +91,24 @@ impl InspectionLedger {
             return Err(unavailable());
         }
         let update = (|| {
+            let mut metadata = hirsel_engine::NativeMetadataWeight::default();
+            metadata.add(std::mem::size_of::<Self>());
+            let new_rows = delta
+                .keys()
+                .filter(|path| !state.counts.contains_key(*path))
+                .count();
+            metadata.tree::<DefPath, Counters>(state.counts.len().checked_add(new_rows)?);
+            for path in state.counts.keys().chain(
+                delta
+                    .keys()
+                    .filter(|path| !state.counts.contains_key(*path)),
+            ) {
+                metadata.path(path);
+            }
+            if metadata.bytes() > self.capacity {
+                return None;
+            }
             for (path, counts) in delta {
-                if !state.counts.contains_key(path) {
-                    // Like RequestStore's entry bound, include tree allocation,
-                    // nested path containers and the encoded path payload.
-                    let charge = (serde_json::to_vec(path).ok()?.len() as u64)
-                        .checked_mul(4)?
-                        .checked_add(2048)?;
-                    let next = state.used.checked_add(charge)?;
-                    if next > self.capacity {
-                        return None;
-                    }
-                    state.used = next;
-                }
                 state.counts.entry(path.clone()).or_default().add(*counts)?;
             }
             if let Some(stats) = stats {
@@ -180,6 +183,20 @@ pub(super) struct GraphMeter {
     _source: Arc<MemoryReservation>,
 }
 impl GraphMeter {
+    /// Current/S0 counters and flush temporaries have a fixed, known namespace.
+    /// Bound their actual tree/path layout under the existing source partition.
+    pub fn input_bytes(definitions: &[DefPath], memos: usize) -> Option<u64> {
+        let mut metadata = hirsel_engine::NativeMetadataWeight::default();
+        metadata.add(std::mem::size_of::<Self>());
+        for _ in 0..4 {
+            metadata.tree::<DefPath, Counters>(definitions.len());
+            for path in definitions {
+                metadata.path(path);
+            }
+        }
+        metadata.add(memos.checked_mul(std::mem::size_of::<(MemoKey, Arc<Reads>)>())?);
+        Some(metadata.bytes())
+    }
     pub fn new(
         ledger: Arc<InspectionLedger>,
         front: Arc<FrontBodyQueries>,
