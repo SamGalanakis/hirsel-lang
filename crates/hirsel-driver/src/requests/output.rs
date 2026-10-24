@@ -28,6 +28,8 @@ pub struct CompileOutput {
     pub result: CompileResult,
 }
 pub enum CompileResult {
+    /// Native pipeline failures retain their existing inner error category.
+    NativeError(crate::native::NativeError),
     Check(CheckOutput),
     SafeCheck {
         checked: CheckOutput,
