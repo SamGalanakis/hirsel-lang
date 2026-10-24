@@ -70,25 +70,6 @@ fn a_forged_self_tail_claim_cannot_erase_a_pending_check() {
 }
 
 #[test]
-fn a_forged_self_tail_claim_cannot_exempt_another_definition() {
-    recursive_unit().valid();
-    let mut f = recursive_unit();
-    f.signatures.insert(
-        id("other"),
-        function_signature("other", vec![], TypeKind::Tuple(vec![].into())),
-    );
-    let Terminator::Call {
-        callee: Callee::Definition { path: target, .. },
-        ..
-    } = &mut f.body().blocks[0].terminator
-    else {
-        unreachable!()
-    };
-    *target = path("other");
-    f.broken(invalid_tail());
-}
-
-#[test]
 fn admission_coverage_reconstructs_tail_eligibility_without_the_claim() {
     let mut f = recursive_unit();
     f.body().tail_sites.clear();

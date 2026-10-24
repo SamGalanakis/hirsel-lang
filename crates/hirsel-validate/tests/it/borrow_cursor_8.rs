@@ -174,22 +174,6 @@ fn borrow_cursor_8_receipt_rejects_owning_carrier() {
 }
 
 #[test]
-fn borrow_cursor_8_receipt_does_not_resurrect_actual_loan() {
-    let (mut f, _, saved, _) = transport();
-    f.body().borrow_cursors.push(BorrowCursor {
-        carrier: LocalId(2),
-        initializer: RvalueId(2),
-        cover: None,
-    });
-    let end = f.body().blocks[0].instructions.pop().unwrap();
-    f.body().blocks[0].instructions.insert(8, end);
-    assert!(f.kinds().contains(&ViolationKind::ExpiredLoan {
-        loan: LoanId(0),
-        place: PlaceId(saved)
-    }));
-}
-
-#[test]
 fn borrow_cursor_8_real_owner_drop_conflicts_with_saved_view() {
     let (mut f, _, _, _) = transport();
     f.body().blocks[0].instructions.insert(

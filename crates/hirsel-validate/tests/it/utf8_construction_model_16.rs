@@ -70,11 +70,6 @@ fn live_position() -> Fixture {
 }
 
 #[test]
-fn same_live_source_position_is_accepted() {
-    live_position().valid();
-}
-
-#[test]
 fn wrong_live_source_is_rejected_independently() {
     let mut f = live_position();
     f.valid();

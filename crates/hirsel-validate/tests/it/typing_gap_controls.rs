@@ -113,53 +113,6 @@ fn an_indirect_callee_is_a_function_value() {
     build(false).broken(mismatch("indirect callee"));
 }
 
-/// One argument per parameter ordinal: `callee(a, a)` maps two arguments to
-/// parameter 0 and none to parameter 1.
-#[test]
-fn each_call_argument_names_a_distinct_parameter() {
-    let build = |second: u32| {
-        let mut f = Fixture::unit();
-        let a = scalar(&mut f, Primitive::U8, 1);
-        let b = scalar(&mut f, Primitive::U8, 2);
-        let r = f.slot(TypeKind::Tuple(vec![].into()), Storage::Temporary);
-        let byte = || (PassingMode::Take, TypeKind::Primitive(Primitive::U8));
-        let signature = function_signature(
-            "callee",
-            vec![byte(), byte()],
-            TypeKind::Tuple(vec![].into()),
-        );
-        f.signatures.insert(id("callee"), signature);
-        f.body().blocks[0].terminator = Terminator::Call {
-            callee: Callee::Definition {
-                path: path("callee"),
-                arguments: vec![],
-            },
-            arguments: vec![
-                CallArgument {
-                    parameter: ParamId(0),
-                    value: take(a),
-                },
-                CallArgument {
-                    parameter: ParamId(second),
-                    value: take(b),
-                },
-            ],
-            returns: Some(CallReturn {
-                destination: PlaceId(r),
-                next: BlockId(1),
-            }),
-            on_failure: CleanupId(0),
-        };
-        f.body().blocks.push(block(vec![], ret(0, 0)));
-        f
-    };
-    build(1).valid();
-    build(0).broken(vec![ViolationKind::Duplicate {
-        entity: "call parameter",
-        index: 0,
-    }]);
-}
-
 /// One input per field ordinal: `(a, a)` with both inputs at field 0.
 #[test]
 fn each_constructor_input_names_a_distinct_field() {

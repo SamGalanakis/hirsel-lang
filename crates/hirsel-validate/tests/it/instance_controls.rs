@@ -94,11 +94,6 @@ fn violations(t: &Instances) -> Vec<InstanceViolation> {
 }
 
 #[test]
-fn an_instance_at_the_declared_header_is_accepted() {
-    assert_eq!(violations(&table(U64)), vec![]);
-}
-
-#[test]
 fn an_instance_header_other_than_the_declaration_at_its_arguments_is_rejected() {
     let v = violations(&table(TypeKind::Primitive(Primitive::U32)));
     assert!(

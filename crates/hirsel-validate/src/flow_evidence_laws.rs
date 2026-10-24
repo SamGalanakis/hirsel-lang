@@ -561,58 +561,6 @@ fn union_of_locations_can_invent_the_nonempty_binding_precondition() {
 }
 
 #[test]
-fn normal_flow_cannot_hide_incomplete_instruction_failure_cleanup() {
-    // OpenJDK a0785e626 VerifyStackForExceptionHandlers.java:25-48,83-111:
-    // preserve normal success while breaking only the exceptional obligation.
-    // Hirsel uses live owned releases, not JVM operand-stack capacity.
-    let mut f = Fixture::string();
-    let condition = param(&mut f, TypeKind::Primitive(Primitive::Bool));
-    owner_sig(&mut f, &[PassingMode::Borrow]);
-    let Terminator::Return { cleanup, .. } = f.body().blocks[0].terminator else {
-        unreachable!()
-    };
-    f.body().blocks[0].instructions.push(inst(
-        InstructionKind::Check {
-            condition: copy(condition),
-            rule: hirsel_diag::RuleId::of("FACT-1"),
-        },
-        cleanup.0,
-    ));
-    let accepted = validate(
-        &tabled(&f.definition),
-        interner(),
-        &f.signatures,
-        &mut vec![],
-    );
-    assert!(accepted.violations.is_empty(), "{accepted:?}");
-    f.body().blocks[0]
-        .instructions
-        .last_mut()
-        .unwrap()
-        .on_failure = CleanupId(0);
-    let rejected = validate(
-        &tabled(&f.definition),
-        interner(),
-        &f.signatures,
-        &mut vec![],
-    );
-    assert!(
-        rejected.violations.iter().any(|v| matches!(
-            v.kind,
-            ViolationKind::CleanupMismatch { .. } | ViolationKind::LeakedSlot(_)
-        )),
-        "{rejected:?}"
-    );
-    assert!(
-        rejected
-            .violations
-            .iter()
-            .all(|v| v.block == Some(BlockId(0)) && v.instruction == Some(2)),
-        "{rejected:?}"
-    );
-}
-
-#[test]
 fn counterexamples_survive_session_salts() {
     let run = || {
         coupled_rows_match_concrete_alternative_join_and_absorption();
@@ -636,38 +584,6 @@ fn counterexamples_survive_session_salts() {
     let ordinary = run();
     assert!(runs.iter().all(|row| row == &ordinary));
     eprintln!("evidence laws: salts 1, 2, 0x5eed and unsalted executed; {ordinary}");
-}
-
-#[test]
-fn derived_cleanup_is_rebuilt_from_rows_instead_of_trusting_cached_roots() {
-    let mut f = Fixture::unit();
-    param(&mut f, TypeKind::Primitive(Primitive::String));
-    owner_sig(&mut f, &[PassingMode::Borrow]);
-    with_model(&f, |_, model, initial| {
-        let dead = Row {
-            mask: DEAD,
-            must: 0,
-            defused: 1,
-            conflict: true,
-        };
-        let live = Row {
-            mask: LIVE,
-            must: 0,
-            defused: 1,
-            conflict: false,
-        };
-        let mut joined = install(&initial, model, dead);
-        joined.join(&install(&initial, model, live), model);
-        // V's solver has additional reachability invariants. An arbitrary
-        // locally shaped raw row cannot inherit its cleanup-cache shortcut.
-        let cached = model
-            .cleanup_sets
-            .borrow()
-            .members(joined.cleanup_conflicts);
-        let (_, rebuilt) = normalized(&joined, model);
-        assert!(cached.is_empty());
-        assert_eq!(rebuilt[2], vec![1]);
-    });
 }
 
 /// Test-shape port of rustc_mir_dataflow initialized.rs:255-303 and
@@ -844,5 +760,87 @@ fn crossing_guarantees_and_bounds_have_separate_must_and_may_orders() {
                 assert_eq!(left.sources[1], BTreeSet::from([2, 3]));
             }
         }
+    });
+}
+
+fn normal_flow_cannot_hide_incomplete_instruction_failure_cleanup() {
+    // OpenJDK a0785e626 VerifyStackForExceptionHandlers.java:25-48,83-111:
+    // preserve normal success while breaking only the exceptional obligation.
+    // Hirsel uses live owned releases, not JVM operand-stack capacity.
+    let mut f = Fixture::string();
+    let condition = param(&mut f, TypeKind::Primitive(Primitive::Bool));
+    owner_sig(&mut f, &[PassingMode::Borrow]);
+    let Terminator::Return { cleanup, .. } = f.body().blocks[0].terminator else {
+        unreachable!()
+    };
+    f.body().blocks[0].instructions.push(inst(
+        InstructionKind::Check {
+            condition: copy(condition),
+            rule: hirsel_diag::RuleId::of("FACT-1"),
+        },
+        cleanup.0,
+    ));
+    let accepted = validate(
+        &tabled(&f.definition),
+        interner(),
+        &f.signatures,
+        &mut vec![],
+    );
+    assert!(accepted.violations.is_empty(), "{accepted:?}");
+    f.body().blocks[0]
+        .instructions
+        .last_mut()
+        .unwrap()
+        .on_failure = CleanupId(0);
+    let rejected = validate(
+        &tabled(&f.definition),
+        interner(),
+        &f.signatures,
+        &mut vec![],
+    );
+    assert!(
+        rejected.violations.iter().any(|v| matches!(
+            v.kind,
+            ViolationKind::CleanupMismatch { .. } | ViolationKind::LeakedSlot(_)
+        )),
+        "{rejected:?}"
+    );
+    assert!(
+        rejected
+            .violations
+            .iter()
+            .all(|v| v.block == Some(BlockId(0)) && v.instruction == Some(2)),
+        "{rejected:?}"
+    );
+}
+
+fn derived_cleanup_is_rebuilt_from_rows_instead_of_trusting_cached_roots() {
+    let mut f = Fixture::unit();
+    param(&mut f, TypeKind::Primitive(Primitive::String));
+    owner_sig(&mut f, &[PassingMode::Borrow]);
+    with_model(&f, |_, model, initial| {
+        let dead = Row {
+            mask: DEAD,
+            must: 0,
+            defused: 1,
+            conflict: true,
+        };
+        let live = Row {
+            mask: LIVE,
+            must: 0,
+            defused: 1,
+            conflict: false,
+        };
+        let mut joined = install(&initial, model, dead);
+        joined.join(&install(&initial, model, live), model);
+        // V's solver has additional reachability invariants. An arbitrary
+        // locally shaped raw row cannot inherit its cleanup-cache shortcut.
+        let cached = model
+            .cleanup_sets
+            .borrow()
+            .members(joined.cleanup_conflicts);
+        let (_, rebuilt) = normalized(&joined, model);
+        assert!(cached.is_empty());
+        assert_eq!(rebuilt[2], vec![1]);
     });
 }

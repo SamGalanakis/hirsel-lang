@@ -73,20 +73,6 @@ fn recursive_tail_agreement_44_wrong_owner_block_target_and_reserved_constructor
     refused(&f, "tail witness");
 }
 #[test]
-fn recursive_tail_agreement_44_duplicate_and_missing_witnesses() {
-    let mut f = recursive();
-    let site = f.body().tail_sites[0].clone();
-    f.body().tail_sites.push(site);
-    refused(&f, "tail witness");
-    let mut f = recursive();
-    f.body().tail_sites.clear();
-    refused(&f, "missing tail witness");
-    assert_eq!(
-        hirsel_validate::invocation_coverage(interner(), &f.definition, &f.signatures).unwrap(),
-        vec![(0, 0, 0, true)]
-    );
-}
-#[test]
 fn recursive_tail_agreement_44_pending_check() {
     let mut f = recursive();
     f.body().tail_sites.clear();

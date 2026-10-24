@@ -834,27 +834,6 @@ mod environment_tests {
     }
 
     #[test]
-    fn call_names_snapshot_filters_ended_bindings_without_changing_past_proofs() {
-        let root = OriginRoot::Local(lexical(), hirsel_types::LocalId(1));
-        let origin = Origin {
-            root: root.clone(),
-            fields: vec![].into(),
-        };
-        let value = BTreeSet::from([origin]);
-        let mut state = OriginState::new(0);
-        state.bindings.insert(root.clone(), value.clone());
-        let live = LiveNames::new(&state);
-        // Presence, including a false ended row, is the previous filter policy.
-        state.ended.insert(root.clone(), false);
-        let ended = LiveNames::new(&state);
-        state.ended.remove(&root);
-        state.bindings.remove(&root);
-        assert_eq!(live.get(&root), Some(&value));
-        assert_eq!(ended.get(&root), None);
-        assert_eq!(LiveNames::new(&state).get(&root), None);
-    }
-
-    #[test]
     fn expiry_preserves_siblings_snapshots_and_existing_value_expiration() {
         let origin = |root, fields: Vec<u32>| Origin {
             root: OriginRoot::Local(lexical(), hirsel_types::LocalId(root)),

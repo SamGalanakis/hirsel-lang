@@ -6677,7 +6677,7 @@ impl Checker<'_> {
 #[cfg(test)]
 mod nominal_limit_tests {
     use super::*;
-    use crate::support::{Fixture, Table, id, interner, path, scoped, ty};
+    use crate::support::{Fixture, Table, id, interner, ty};
     use hirsel_syntax::ContentHash;
     use hirsel_types::*;
 

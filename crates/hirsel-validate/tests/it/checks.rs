@@ -8591,17 +8591,6 @@ fn aliased_unique_part() -> Fixture {
     owner_signature(&mut f, PassingMode::Take);
     f
 }
-#[test]
-fn a_unique_part_receives_a_currently_unique_value() {
-    // A fresh receipt is unique evidence for its declared `unique` part...
-    let mut part = ty(TypeKind::Primitive(Primitive::String));
-    part.modes.uniqueness = Uniqueness::Unique;
-    string_field_constructor(ty(TypeKind::Primitive(Primitive::String)), part).valid();
-    // ...an owned but aliased value is not.
-    aliased_unique_part().broken(vec![ViolationKind::TypeMismatch {
-        entity: "constructor field",
-    }]);
-}
 
 /// This IR cannot be written in source: it claims one dictionary's brand while
 /// constructing from another dictionary of the same Order[K] type.

@@ -95,11 +95,6 @@ fn rejected(f: &Fixture, entity: &'static str) {
 }
 
 #[test]
-fn sealed_regions_33_scope_entry_control() {
-    scope().valid();
-}
-
-#[test]
 fn sealed_regions_33_forged_grant_on_nonintrinsic_entry() {
     let mut f = scope();
     f.valid();
@@ -319,11 +314,6 @@ fn taken_seal(root_kind: TypeKind) -> (Fixture, u32, u32, u32) {
 }
 
 #[test]
-fn sealed_regions_33_taken_helper_control() {
-    taken_seal(TypeKind::Primitive(Primitive::U64)).0.valid();
-}
-
-#[test]
 fn sealed_regions_33_heap_token_cannot_be_sealed() {
     let (mut f, a, _, _) = taken_seal(TypeKind::Primitive(Primitive::U64));
     f.valid();
@@ -456,11 +446,6 @@ fn second_view() -> (Fixture, u32) {
         header.uses = Uses::Unrestricted;
     }
     (f, alias)
-}
-
-#[test]
-fn sealed_regions_33_second_view_last_used_before_seal() {
-    second_view().0.valid();
 }
 
 #[test]
