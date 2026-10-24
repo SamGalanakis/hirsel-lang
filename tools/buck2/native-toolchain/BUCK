@@ -79,3 +79,5 @@ toolchain_proof(name = "root-frozen-kit-proof", tools = [":llvm", ":linker", ":k
 toolchain_proof(name = "native-bootstrap-link-proof", tools = [":llvm", ":linker", ":kit", "root//:hirsel-rt-archives", "root//:hirsel-driver-unittest-harness"], script = "native_bootstrap_link_proof.py", interpreter = "python3")
 
 toolchain_proof(name = "runtime-store-proof", tools = [":llvm", ":runtime-auditor", ":glibc_floor", ":qemu", "root//:hirsel-driver-unittest-harness"], script = "runtime_store_proof.sh")
+
+toolchain_proof(name = "runtime-identity-proof", tools = [":llvm", ":runtime-auditor", ":glibc_floor", ":qemu", "root//:hirsel-driver-unittest-harness"], script = "runtime_identity_proof.sh")
