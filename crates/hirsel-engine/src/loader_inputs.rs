@@ -240,6 +240,57 @@ impl CaptureInputs {
     }
 }
 impl FrozenInputs {
+    /// Reobserve exactly this input footprint under the same bounded capture
+    /// rules. OS failures are observations; exhausting a bound is a refusal.
+    pub fn refresh(&self, limits: InputLimits) -> io::Result<Self> {
+        let capture = CaptureInputs::new(limits);
+        for operation in self.operations() {
+            if let Err(error) = capture.observe(operation.clone())
+                && error
+                    .get_ref()
+                    .is_some_and(|error| error.is::<InputLimit>())
+            {
+                return Err(error);
+            }
+        }
+        Ok(capture.freeze())
+    }
+
+    /// Compare immutable observations, including failed and namespace reads.
+    /// This performs no I/O and confers no semantic query validity.
+    pub fn changed_operations(&self, other: &Self) -> Vec<Operation> {
+        self.observations
+            .keys()
+            .chain(other.observations.keys())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .filter(|operation| {
+                self.observations.get(*operation) != other.observations.get(*operation)
+            })
+            .cloned()
+            .collect()
+    }
+
+    /// Exact file-read count and payload bytes captured by this snapshot.
+    pub fn read_work(&self) -> (u64, u64) {
+        self.observations
+            .iter()
+            .fold((0, 0), |(reads, bytes), (operation, value)| {
+                if matches!(operation, Operation::Read(_)) {
+                    (
+                        reads + 1,
+                        bytes
+                            + match &value.0 {
+                                Ok(Value::Bytes(bytes)) => bytes.len() as u64,
+                                _ => 0,
+                            },
+                    )
+                } else {
+                    (reads, bytes)
+                }
+            })
+    }
+
     /// Transport/watch metadata for this exact snapshot. The iterator includes
     /// failed reads, negative metadata, directories and canonicalization aliases.
     /// Callers must still use LoaderInputs for bytes; paths confer no validity.

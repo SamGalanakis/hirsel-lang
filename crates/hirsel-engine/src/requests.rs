@@ -4,6 +4,9 @@
 use crate::runtime::{ProductRef, QueryId, QueryRuntime};
 use std::sync::{Arc, Mutex};
 
+mod observation;
+pub use observation::{InputObservation, InputObserver, ObservationWork};
+
 /// Observe a complete input discovery before installing its query factories.
 /// Discovery must use only the supplied adapter, and must not publish roots or
 /// semantic transactions. An error is captured too: missing inputs and invalid

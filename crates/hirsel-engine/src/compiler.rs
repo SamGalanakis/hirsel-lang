@@ -197,6 +197,25 @@ impl Compiler {
     pub fn load_check_package(&self, path: &Path) -> Result<LoadedProgram, ToolError> {
         crate::package::load_program_source(self, path, None, crate::package::EntrySelection::Check)
     }
+    /// Discover or load a check package from the same immutable observations as
+    /// launch requests, accepting libraries without a launch entry.
+    pub fn load_check_package_inputs(
+        &self,
+        path: &Path,
+        inputs: &dyn crate::loader_inputs::LoaderInputs,
+        parse_sources: bool,
+    ) -> Result<LoadedProgram, ToolError> {
+        crate::package::load_program_inputs(
+            self,
+            path,
+            inputs,
+            crate::package::Loading {
+                replacement: None,
+                entry_selection: crate::package::EntrySelection::Check,
+                parse_sources,
+            },
+        )
+    }
     /// Load an explicit test package without requiring a launch entry. The root
     /// package's sources are checked in full; no function is selected as main.
     pub fn load_test_package(&self, manifest: &Path) -> Result<LoadedProgram, ToolError> {
