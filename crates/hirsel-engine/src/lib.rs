@@ -3,7 +3,6 @@
 #[cfg(test)]
 hirsel_guard::install!();
 
-pub mod runtime;
 mod work;
 pub use work::WorkStats;
 mod operations;
