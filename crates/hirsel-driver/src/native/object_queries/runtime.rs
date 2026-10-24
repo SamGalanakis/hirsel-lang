@@ -8,7 +8,7 @@ use std::{collections::BTreeMap, path::PathBuf, process::Command};
 
 const RUNTIME: Domain = Domain {
     kind: 0x4f00000d,
-    schema: 1,
+    schema: 2,
 };
 
 /// Caller-owned admission bounds. These are not production budget defaults.
@@ -20,7 +20,14 @@ pub struct RuntimeLimits {
 #[derive(Clone)]
 struct Alias {
     request: String,
+    library: u32,
     file: WireRef,
+}
+/// One loaded DSO identity and all requests which name that same instance.
+/// Distinct libraries may have identical bytes and still initialize separately.
+pub struct RuntimeLibrary {
+    pub aliases: Vec<String>,
+    pub file: Reference,
 }
 struct RuntimeRecord {
     target: ContentHash,
@@ -28,7 +35,11 @@ struct RuntimeRecord {
     auditor: WireRef,
     aliases: Vec<Alias>,
 }
-snapshot_struct!(Alias { request, file });
+snapshot_struct!(Alias {
+    request,
+    library,
+    file
+});
 snapshot_struct!(RuntimeRecord {
     target,
     loader,
@@ -41,6 +52,8 @@ snapshot_struct!(RuntimeRecord {
 #[derive(Clone, Copy)]
 pub struct FrozenRuntime(Reference);
 impl FrozenRuntime {
+    /// Convenience for aliases of one loaded library per distinct content.
+    /// Use from_libraries when separate loaded objects have equal bytes.
     pub fn from_settled(
         store: &dyn ResultStore,
         target: &super::super::TargetSpec,
@@ -49,32 +62,77 @@ impl FrozenRuntime {
         aliases: impl IntoIterator<Item = (String, Reference)>,
         limits: RuntimeLimits,
     ) -> Result<Self, String> {
+        let mut groups = BTreeMap::<ContentHash, RuntimeLibrary>::new();
+        let mut names = 0usize;
+        for (count, (name, file)) in aliases.into_iter().enumerate() {
+            names = names
+                .checked_add(name.len())
+                .ok_or("runtime alias size overflow")?;
+            if count >= limits.aliases || names > limits.name_bytes {
+                return Err("runtime aliases exceed admission".into());
+            }
+            let library = groups
+                .entry(file.output.0)
+                .or_insert_with(|| RuntimeLibrary {
+                    aliases: vec![],
+                    file,
+                });
+            if library.file != file {
+                return Err("conflicting runtime content reference".into());
+            }
+            library.aliases.push(name);
+        }
+        Self::from_libraries(store, target, loader, auditor, groups.into_values(), limits)
+    }
+    /// Preserve separately selected loader identities, including equal-byte
+    /// DSOs. Group identity is explicit; it is never inferred from a digest.
+    pub fn from_libraries(
+        store: &dyn ResultStore,
+        target: &super::super::TargetSpec,
+        loader: Reference,
+        auditor: Reference,
+        libraries: impl IntoIterator<Item = RuntimeLibrary>,
+        limits: RuntimeLimits,
+    ) -> Result<Self, String> {
         let mut bindings = BTreeMap::new();
         let mut names = 0usize;
-        for (request, file) in aliases {
-            names = names
-                .checked_add(request.len())
-                .ok_or("runtime alias size overflow")?;
-            if request.is_empty()
-                || request.contains('\0')
-                || names > limits.name_bytes
-                || bindings.len() >= limits.aliases
-                || bindings.insert(request, file).is_some()
-            {
-                return Err("runtime aliases exceed admission or repeat a request".into());
+        for (group, library) in libraries.into_iter().enumerate() {
+            let group = u32::try_from(group).map_err(|_| "runtime library index overflow")?;
+            if library.aliases.is_empty() {
+                return Err("runtime library has no logical alias".into());
+            }
+            for request in library.aliases {
+                names = names
+                    .checked_add(request.len())
+                    .ok_or("runtime alias size overflow")?;
+                if request.is_empty()
+                    || request.contains('\0')
+                    || names > limits.name_bytes
+                    || bindings.len() >= limits.aliases
+                    || bindings.insert(request, (group, library.file)).is_some()
+                {
+                    return Err("runtime aliases exceed admission or repeat a request".into());
+                }
             }
         }
+        let mut identities = BTreeMap::new();
+        let aliases = bindings
+            .into_iter()
+            .map(|(request, (group, file))| {
+                let next = identities.len() as u32;
+                let library = *identities.entry(group).or_insert(next);
+                Alias {
+                    request,
+                    library,
+                    file: file.into(),
+                }
+            })
+            .collect();
         let record = RuntimeRecord {
             target: target.digest(),
             loader: loader.into(),
             auditor: auditor.into(),
-            aliases: bindings
-                .into_iter()
-                .map(|(request, file)| Alias {
-                    request,
-                    file: file.into(),
-                })
-                .collect(),
+            aliases,
         };
         check(store, &record, target, limits)?;
         Ok(Self(put_record(store, RUNTIME, &record)?))
@@ -115,13 +173,13 @@ impl FrozenRuntime {
         let auditor = directory.path().join("auditor.so");
         materialize_link_input(store, record.loader.into(), &loader, true)?;
         materialize_link_input(store, record.auditor.into(), &auditor, false)?;
-        let mut files = BTreeMap::<ContentHash, (Reference, PathBuf)>::new();
+        let mut files = BTreeMap::<u32, (Reference, PathBuf)>::new();
         let mut map = vec![b'R'];
         for alias in record.aliases {
             let reference: Reference = alias.file.into();
             let index = files.len();
             let file = files
-                .entry(reference.output.0)
+                .entry(alias.library)
                 .or_insert_with(|| (reference, directory.path().join(format!("lib-{index}"))));
             if file.0 != reference {
                 return Err("conflicting runtime content reference".into());
@@ -167,6 +225,20 @@ fn check(
             .any(|pair| pair[0].request >= pair[1].request)
     {
         return Err("runtime target or alias selection differs".into());
+    }
+    let mut groups = BTreeMap::new();
+    for alias in &record.aliases {
+        let reference: Reference = alias.file.clone().into();
+        if let Some(previous) = groups.get(&alias.library) {
+            if *previous != reference {
+                return Err("one runtime library names different contents".into());
+            }
+        } else {
+            if alias.library as usize != groups.len() {
+                return Err("noncanonical runtime library identities".into());
+            }
+            groups.insert(alias.library, reference);
+        }
     }
     let mut names = 0usize;
     for alias in &record.aliases {

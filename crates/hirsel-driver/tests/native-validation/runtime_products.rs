@@ -218,3 +218,109 @@ fn actual_runtime_products_reopen_changed_leaf_versions_and_refuse_missing_closu
         assert!(runtime.validate(&missing, &target, limits).is_err());
     }
 }
+
+#[test]
+fn equal_bytes_keep_distinct_loaded_libraries_and_shared_aliases() {
+    let llvm = PathBuf::from(std::env::var_os("LLVM_SYS_231_PREFIX").unwrap());
+    let auditors = PathBuf::from(std::env::var_os("HIRSEL_AUDITOR_PACKAGE").unwrap());
+    let floor = PathBuf::from(std::env::var_os("HIRSEL_GLIBC_FLOOR").unwrap());
+    let target = super::super::super::TargetSpec::x86_64_unknown_linux_gnu();
+    let directory = tempfile::tempdir().unwrap();
+    let store = DirStore::new(directory.path().join("products"));
+    let original = directory.path().join("original");
+    std::fs::create_dir(&original).unwrap();
+    let object = assemble(
+        &llvm,
+        &original,
+        &target.triple,
+        "initializer",
+        ".text\n.Linit:\n mov $1,%rax\n mov $1,%rdi\n lea .Lmessage(%rip),%rsi\n mov $1,%rdx\n syscall\n ret\n.section .rodata\n.Lmessage: .byte 88\n.section .init_array,\"aw\",@init_array\n.quad .Linit\n",
+    );
+    let one = original.join("one.so");
+    let two = original.join("two.so");
+    run(Command::new(llvm.join("bin/ld.lld"))
+        .args(["-shared", "--threads=1", "-o"])
+        .arg(&one)
+        .arg(&object));
+    std::fs::copy(&one, &two).unwrap();
+    let object = assemble(
+        &llvm,
+        &original,
+        &target.triple,
+        "start",
+        ".globl _start\n_start:\n xor %edi,%edi\n mov $60,%eax\n syscall\n",
+    );
+    let image = directory.path().join("program");
+    run(Command::new(llvm.join("bin/ld.lld"))
+        .args(["--threads=1", "--no-as-needed", "-o"])
+        .arg(&image)
+        .arg(&object)
+        .arg(&one)
+        .arg(&two));
+    let loader_path = floor.join(&target.triple).join("ld-2.28.so");
+    let baseline = Command::new(&loader_path).arg(&image).output().unwrap();
+    assert!(baseline.status.success());
+    assert_eq!(
+        baseline.stdout, b"XX",
+        "distinct equal-byte DSOs initialize twice"
+    );
+    let loader = store_file(&store, &loader_path);
+    let auditor = store_file(&store, &auditors.join(format!("{}.so", target.triple)));
+    let file = store_file(&store, &one);
+    assert_eq!(file, store_file(&store, &two));
+    let a = one.to_str().unwrap().to_string();
+    let b = two.to_str().unwrap().to_string();
+    let limits = RuntimeLimits {
+        aliases: 2,
+        name_bytes: 4096,
+    };
+    let distinct = FrozenRuntime::from_libraries(
+        &store,
+        &target,
+        loader,
+        auditor,
+        [
+            RuntimeLibrary {
+                aliases: vec![a.clone()],
+                file,
+            },
+            RuntimeLibrary {
+                aliases: vec![b.clone()],
+                file,
+            },
+        ],
+        limits,
+    )
+    .unwrap();
+    std::fs::remove_file(&two).unwrap();
+    std::fs::hard_link(&one, &two).unwrap();
+    let baseline = Command::new(&loader_path).arg(&image).output().unwrap();
+    assert_eq!(
+        baseline.stdout, b"X",
+        "two original aliases share one initialization"
+    );
+    let shared = FrozenRuntime::from_libraries(
+        &store,
+        &target,
+        loader,
+        auditor,
+        [RuntimeLibrary {
+            aliases: vec![a, b],
+            file,
+        }],
+        limits,
+    )
+    .unwrap();
+    assert_ne!(shared.reference(), distinct.reference());
+    std::fs::remove_dir_all(original).unwrap();
+    for (runtime, expected) in [(distinct, b"XX".as_slice()), (shared, b"X".as_slice())] {
+        let files = runtime.materialize(&store, &target, limits).unwrap();
+        let output = files.command(None, &image).output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(output.stdout, expected);
+    }
+}
