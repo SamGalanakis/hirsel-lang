@@ -47,12 +47,10 @@ fn a_recorded_last_mutex_close_detaches_before_its_yielding_payload_finalizer() 
             let install = recording.clone();
             let own = recording.clone();
             let plain = super::tests::layout();
-            let image = crate::Layout {
+            let image = crate::tasks::free::finalized(crate::Layout {
                 finalizer: Some(destroy),
-                // Hand-written runtime test thunks carry no emitted scope marker.
-                flags: crate::release::LAYOUT_IMPLEMENTATION_FINALIZER,
                 ..plain
-            };
+            });
             let step = crate::Step {
                 kind: crate::STEP_CLOSE_HANDLE,
                 field: 0,
@@ -72,7 +70,7 @@ fn a_recorded_last_mutex_close_detaches_before_its_yielding_payload_finalizer() 
                 field_count: 1,
                 ..plain
             };
-            let layouts = [&raw const image, &raw const wrapper];
+            let layouts = [&raw const *image, &raw const wrapper];
             let mut run = crate::host::BodyRun::new(width, false);
             run.free = true;
             run.config.layouts = layouts.as_ptr();

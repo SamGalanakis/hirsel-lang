@@ -53,16 +53,17 @@ fn plain(size: u64) -> crate::Layout {
 }
 
 /// Descriptors 2 (a [tag, value] image), 3 (the mutex wrapper) and 4 (a
-/// one-pointer child environment).
-struct Layouts([crate::Layout; 3]);
+/// one-pointer child environment). Leaked: run tables keep the pointers, and
+/// a finalized image's scope end names its own descriptor.
+struct Layouts([&'static crate::Layout; 3]);
 
 impl Layouts {
-    fn new(image: crate::Layout, wrapper: crate::Layout) -> Box<Self> {
-        Box::new(Self([image, wrapper, plain(8)]))
+    fn new(image: &'static crate::Layout, wrapper: crate::Layout) -> Self {
+        Self([image, Box::leak(Box::new(wrapper)), Box::leak(Box::new(plain(8)))])
     }
 
     fn install(&self, run: &mut crate::host::BodyRun, pointers: &mut Vec<*const crate::Layout>) {
-        pointers.extend(self.0.iter().map(|layout| layout as *const _));
+        pointers.extend(self.0.iter().map(|&layout| layout as *const _));
         run.config.layouts = pointers.as_ptr();
         run.config.layout_count = 3;
     }
@@ -199,7 +200,7 @@ fn runtime50_immediate_objects_do_not_enter_role() {
     ) {
         return;
     }
-    let layouts = Layouts::new(plain(16), wrapper());
+    let layouts = Layouts::new(Box::leak(Box::new(plain(16))), wrapper());
     for recorded in [false, true] {
         let recording = recorded.then(|| record::Recording::new(b"runtime50 immediate", false));
         let install = recording.clone();
@@ -436,11 +437,10 @@ fn runtime50_object_custody_race_matrix() {
         layout: std::ptr::null(),
     };
     let layouts = Layouts::new(
-        crate::Layout {
+        super::super::finalized(crate::Layout {
             finalizer: Some(destroy),
-            flags: crate::release::LAYOUT_IMPLEMENTATION_FINALIZER,
             ..plain(16)
-        },
+        }),
         crate::Layout {
             steps: &close,
             step_count: 1,

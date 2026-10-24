@@ -129,7 +129,7 @@ unsafe extern "C" fn nested_destroy(ctx: *mut TaskCtx, value: *mut u8, _: u64, _
 
 #[test]
 fn nested_finalizer_replay_keeps_outer_images_stable_across_owner_growth_and_saves() {
-    let layout = crate::Layout {
+    let layout = crate::tasks::free::finalized(crate::Layout {
         magic: crate::LAYOUT_MAGIC,
         version: crate::LAYOUT_VERSION,
         size: 16,
@@ -138,14 +138,13 @@ fn nested_finalizer_replay_keeps_outer_images_stable_across_owner_growth_and_sav
         steps: std::ptr::null(),
         step_count: 0,
         field_count: 0,
-        // Hand-written runtime test thunks carry no emitted scope marker.
-        flags: crate::release::LAYOUT_IMPLEMENTATION_FINALIZER,
+        flags: 0,
         logical: 0,
         logical_count: std::ptr::null(),
         scan: std::ptr::null(),
         scan_words: 0,
-    };
-    let layouts = [&raw const layout];
+    });
+    let layouts = [&raw const *layout];
     for durable in [false, true] {
         let recording = record::Recording::new(b"nested finalizer replay", durable);
         let install = recording.clone();
@@ -248,17 +247,16 @@ fn yielding_object_finalizers_replay_only_the_admitted_cleanup_prefix() {
         scan: std::ptr::null(),
         scan_words: 0,
     };
-    let image = crate::Layout {
+    let image = crate::tasks::free::finalized(crate::Layout {
         finalizer: Some(destroy),
-        flags: crate::release::LAYOUT_IMPLEMENTATION_FINALIZER,
         ..plain
-    };
+    });
     let wrapper = crate::Layout {
         size: 8,
         flags: crate::LAYOUT_FROZEN | crate::LAYOUT_MUTEX_ROOT,
         ..plain
     };
-    let layouts = [&raw const image, &raw const wrapper];
+    let layouts = [&raw const *image, &raw const wrapper];
     for (durable, mutex) in [(false, false), (true, false), (false, true), (true, true)] {
         let recording = record::Recording::new(b"native finalizer replay", durable);
         let install = recording.clone();

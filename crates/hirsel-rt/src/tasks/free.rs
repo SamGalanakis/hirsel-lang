@@ -42,6 +42,32 @@ pub(crate) unsafe fn enable(ctx: *mut TaskCtx) {
         .store(true, std::sync::atomic::Ordering::Release);
 }
 
+/// A language-finalizer test descriptor whose drop program ends its own scope
+/// with the self-referencing root end the static scope proof requires, as
+/// `tests/support` builds them. Leaked: run tables keep the pointer.
+#[cfg(test)]
+pub(crate) fn finalized(base: crate::Layout) -> &'static crate::Layout {
+    let descriptor = Box::into_raw(Box::new(base));
+    let end = Box::leak(Box::new(crate::Step {
+        kind: crate::STEP_END_FINALIZE,
+        field: crate::WHOLE_VALUE,
+        variant: 1,
+        span: 0,
+        offset: 0,
+        stride: 0,
+        count: 0,
+        count_offset: 0,
+        layout: descriptor,
+    }));
+    // SAFETY: the fresh leaked descriptor has no other reference yet.
+    unsafe {
+        assert_eq!((*descriptor).step_count, 0, "a scalar test image");
+        (*descriptor).steps = end;
+        (*descriptor).step_count = 1;
+        &*descriptor
+    }
+}
+
 pub(crate) fn enabled(ctx: *mut TaskCtx) -> bool {
     matches!(scheduler(ctx).logical, Logical::Free(_))
 }

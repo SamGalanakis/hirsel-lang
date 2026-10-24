@@ -28,14 +28,12 @@ fn receiver_close_detaches_fifo_images_before_their_yielding_finalizers() {
     run.free = true;
     unsafe { run.use_physical_dispatch() };
     let plain = tests::layout();
-    // A hand-written runtime test thunk has no emitted finalizer scope marker.
-    let image = crate::Layout {
+    let image = crate::tasks::free::finalized(crate::Layout {
         size: 24,
         finalizer: Some(drop_message),
-        flags: crate::release::LAYOUT_IMPLEMENTATION_FINALIZER,
         ..tests::layout()
-    };
-    let layouts = [&raw const image, &raw const plain];
+    });
+    let layouts = [&raw const *image, &raw const plain];
     run.config.layouts = layouts.as_ptr();
     run.config.layout_count = 2;
     let outcome = run.run(
