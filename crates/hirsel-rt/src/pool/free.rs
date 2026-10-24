@@ -360,7 +360,8 @@ unsafe fn admit(run: *mut RunShared, execs: &Execs, task: u32, owner: Owner) -> 
 /// It holds the waiter's frame and the owner its park leaves it with, both
 /// captured under the role at registration. Its notification runs only the
 /// frame's own latch: a running waiter remembers it until its save, and a
-/// stale token can only coalesce or wake a frame that has completed.
+/// stale token can only coalesce, wake a frame that has completed, or wake
+/// one its dispatch returns unstarted (`tasks::resumed`).
 ///
 /// The owner is the one admit() would read from the row at wake time: a
 /// parked row's owner never changes (only a running task pins or unpins,
@@ -916,10 +917,11 @@ pub(super) unsafe fn resume(run: *mut RunShared, exec: &Exec, saved: Saved) {
     unsafe {
         crate::tasks::role::enter(ctx);
         debug_assert_eq!((*ctx).task_id, task);
-        if !crate::tasks::ordered::ahead::dispatch_ready(ctx) {
+        if !crate::tasks::ordered::ahead::dispatch_ready(ctx) || !crate::tasks::resumed(run, task) {
             // Promotion may precede the claim of the reservation's original
             // physical queue token. It must not claim an unselected logical
-            // row. No task code or context switch has run: return the exact
+            // row; nor may a stale object token start a row parked on another
+            // wait. No task code or context switch has run: return the exact
             // image to Saved, without a semantic save callback. The role
             // excludes selection until the token's save is published.
             let queued = running.save(false);
@@ -945,7 +947,6 @@ pub(super) unsafe fn resume(run: *mut RunShared, exec: &Exec, saved: Saved) {
             return;
         }
         crate::tasks::record_dispatch(run, task, compute_index());
-        crate::tasks::resumed(run, task);
         if !chained {
             exec.chain.set(Budget::default());
         }

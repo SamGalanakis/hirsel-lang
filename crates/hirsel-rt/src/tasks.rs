@@ -714,6 +714,11 @@ impl Scheduler {
     }
     /// A poll ended parked `task`'s wait: it leaves every registration and joins the queue.
     fn unpark(&mut self, task: u32) {
+        self.end_wait(task);
+        self.runnable.push_back(task);
+    }
+    /// Make parked `task` ready and unregister its wait, without queueing it.
+    fn end_wait(&mut self, task: u32) {
         self.host_waiters.remove(&task);
         if let Some(registration) = self.task(task).host_cancel.take() {
             self.unsubscribe_cancel(registration.key, registration.registration);
@@ -735,7 +740,6 @@ impl Scheduler {
             Some(Wait::Pool) => self.pool_waiters.retain(|&t| t != task),
             _ => {}
         }
-        self.runnable.push_back(task);
     }
     /// `serial` gate `gate`, created free at its first use.
     fn gate(&mut self, gate: u32) -> &mut ForeignGate {
@@ -1644,29 +1648,37 @@ pub(crate) unsafe fn record_dispatch(
 }
 
 /// A role-free object wake (`pool::free::notify`) publishes a registered
-/// waiter without its logical unpark. Its dispatch ends that Retry wait here,
+/// waiter without its logical unpark. Its dispatch ends that object wait here,
 /// under the role it takes to start the task, as the policy's unpark would;
-/// the waiter's loop checks its condition again.
+/// the waiter's loop checks its condition again. `false`: the task is parked
+/// on a wait no object wake ends, so a stale token woke it and the caller
+/// returns its frame unstarted.
 /// # Safety
-/// The caller holds the scheduler role and starts `task`.
-pub(crate) unsafe fn resumed(run: *mut crate::context::RunShared, task: u32) {
+/// The caller holds the scheduler role and is starting `task`.
+pub(crate) unsafe fn resumed(run: *mut crate::context::RunShared, task: u32) -> bool {
     let s = unsafe { (*(*run).tasks.get()).as_deref_mut().unwrap() };
     if !matches!(s.logical, Logical::Free(_)) {
-        return;
+        return true;
     }
     let Some(Some(row)) = s.tasks.get_mut(task as usize) else {
-        return;
+        return true;
     };
-    if row.state != State::Parked || !matches!(row.wait, Some(Wait::Retry { .. })) {
-        return;
+    if row.state != State::Parked {
+        return true;
     }
-    row.state = State::Ready;
-    row.wait = None;
+    if !matches!(
+        row.wait,
+        Some(Wait::Retry { .. } | Wait::ReceiveReady { .. })
+    ) {
+        return false;
+    }
     row.retried = false;
     // A polled row must still be parked: drop a pending poll of this wait.
     if std::mem::take(&mut row.woken) {
         s.woken.retain(|&woken| woken != task);
     }
+    s.end_wait(task);
+    true
 }
 
 /// # Safety

@@ -448,6 +448,149 @@ unsafe fn contend(ctx: *mut TaskCtx, shared: &Contended, count: u32) -> Vec<(u32
     order
 }
 
+/// Messages one sender sends to one receiver that parks before each.
+const WAKES: u64 = 3;
+
+struct Wake {
+    sender: u64,
+    receiver: u64,
+    received: Mutex<Vec<u64>>,
+    /// The sender's role acquisitions on its own worker across each send.
+    send_roles: Mutex<Vec<u64>>,
+}
+
+unsafe fn parked_tokens(ctx: *mut TaskCtx, word: u64) -> usize {
+    let endpoint = unsafe { (*ctx).free_ops.endpoints.get(word) }.expect("a resolved sender lease");
+    endpoint.cell.lock().tokens()
+}
+
+unsafe extern "C" fn waking_receiver(ctx: *mut TaskCtx, env: *mut Header, _: u64, _: u64) -> u8 {
+    // Each child borrows only its own endpoint word of the shared fixture.
+    let wake = unsafe { crate::alloc::payload(env).cast::<*mut Wake>().read() };
+    for _ in 0..WAKES {
+        let mut message = [0u64; 2];
+        let mut status = 99;
+        unsafe {
+            hirsel_rt_v2_channel_receive(
+                ctx,
+                0,
+                0,
+                &mut status,
+                &raw mut (*wake).receiver,
+                message.as_mut_ptr().cast(),
+            )
+        };
+        assert_eq!((status, message[0]), (crate::channels::DONE, 1));
+        unsafe { &(*wake).received }
+            .lock()
+            .unwrap()
+            .push(message[1]);
+    }
+    STATUS_OK
+}
+
+unsafe extern "C" fn waking_sender(ctx: *mut TaskCtx, env: *mut Header, _: u64, _: u64) -> u8 {
+    let wake = unsafe { crate::alloc::payload(env).cast::<*mut Wake>().read() };
+    for value in 0..WAKES {
+        if value > 0 {
+            // The receiver parked with its token: this send wakes it alone.
+            wait_until("the receiver parks with a token", || unsafe {
+                parked_tokens(ctx, (*wake).sender) == 1
+            });
+        }
+        unsafe { crate::pool::free::renew(ctx) };
+        let before = role::thread_acquisitions();
+        let mut message = [1u64, value];
+        let mut status = 99;
+        unsafe {
+            hirsel_rt_v2_channel_send(
+                ctx,
+                &mut status,
+                &raw mut (*wake).sender,
+                message.as_mut_ptr().cast(),
+            )
+        };
+        assert_eq!(status, crate::channels::DONE);
+        let roles = role::thread_acquisitions() - before;
+        unsafe { &(*wake).send_roles }.lock().unwrap().push(roles);
+    }
+    STATUS_OK
+}
+
+#[test]
+fn runtime50_channel_send_wakes_a_parked_receiver_without_role() {
+    if !isolated(
+        "runtime50_channel_send_wakes_a_parked_receiver_without_role",
+        "HIRSEL_RUNTIME50_CHANNEL_WAKE",
+    ) {
+        return;
+    }
+    let layouts = Layouts::new(Box::leak(Box::new(plain(16))), wrapper());
+    for recorded in [false, true] {
+        let recording = recorded.then(|| record::Recording::new(b"runtime50 channel wake", false));
+        let install = recording.clone();
+        let wake = Arc::new(Mutex::new(None::<(Vec<u64>, Vec<u64>)>));
+        let result = wake.clone();
+        let mut run = crate::host::BodyRun::new(4, false);
+        run.free = true;
+        let mut pointers = Vec::new();
+        layouts.install(&mut run, &mut pointers);
+        unsafe { run.use_physical_dispatch() };
+        let outcome = run.run(
+            move |ctx| unsafe {
+                super::super::enable(ctx);
+                if let Some(recording) = &install {
+                    recording.root(ctx);
+                }
+            },
+            move |ctx| unsafe {
+                let mut endpoints = [0; 2];
+                let none = [0u64; 2];
+                hirsel_rt_v2_channel_open(
+                    ctx,
+                    std::ptr::null_mut(),
+                    endpoints.as_mut_ptr(),
+                    &0,
+                    none.as_ptr().cast(),
+                    2,
+                );
+                let mut shared = Wake {
+                    sender: endpoints[0],
+                    receiver: endpoints[1],
+                    received: Mutex::default(),
+                    send_roles: Mutex::default(),
+                };
+                let mut scope = 0;
+                hirsel_rt_v2_task_scope_enter(ctx, std::ptr::null_mut(), &mut scope, &0);
+                let env = (&mut shared as *mut Wake).cast();
+                spawn(ctx, &scope, waking_receiver, env);
+                spawn(ctx, &scope, waking_sender, env);
+                hirsel_rt_v2_task_scope_exit(ctx, 0, 0, &scope, 0);
+                *result.lock().unwrap() = Some((
+                    shared.received.lock().unwrap().clone(),
+                    shared.send_roles.lock().unwrap().clone(),
+                ));
+                STATUS_OK
+            },
+        );
+        assert_eq!(outcome.ended, Ok(STATUS_OK), "recorded {recorded}");
+        assert_eq!(outcome.pending, 0);
+        let (received, roles) = wake.lock().unwrap().take().expect("the root finished");
+        assert_eq!(
+            received,
+            (0..WAKES).collect::<Vec<_>>(),
+            "recorded {recorded}"
+        );
+        // The first send resolves the sender's lease under the role.
+        assert_eq!(
+            roles[1..],
+            vec![0; WAKES as usize - 1],
+            "recorded {recorded}: each send woke its parked receiver without the role"
+        );
+        drop(recording);
+    }
+}
+
 static DESTROYED: AtomicU32 = AtomicU32::new(0);
 
 unsafe extern "C" fn destroy(_: *mut TaskCtx, value: *mut u8, _: u64, _: u64) -> u8 {

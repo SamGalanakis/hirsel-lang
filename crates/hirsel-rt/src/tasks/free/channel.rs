@@ -200,7 +200,18 @@ pub(crate) unsafe fn receive(
         let canceled_outcome = cause.map(|cause| format!("canceled {cause}"));
         let cell = unsafe { (*s).channels.payload(channel) };
         super::objects::keep_endpoint(ctx, receiver, channel, false, &cell);
+        // A parking receiver's wake needs no role: a send that makes a message
+        // visible takes the oldest token. Replay keeps its retry wait.
+        let me = unsafe { (*s).current };
+        let mut token = if replay.is_some() {
+            None
+        } else {
+            let row = unsafe { (*s).task(me) };
+            let owner = if row.pinned { Owner::Any } else { row.owner };
+            unsafe { crate::pool::free::token((*ctx).run_ptr(), me, owner) }
+        };
         let mut state = cell.lock();
+        state.drop_token(me);
         let mut result = None;
         let publication = if cause.is_some() || cell.ready(&state) {
             super::record::publish_with_replay(
@@ -254,6 +265,11 @@ pub(crate) unsafe fn receive(
         } else {
             Ok(Ok(()))
         };
+        if result.is_none()
+            && let Some(token) = token.take()
+        {
+            state.keep_token(me, token);
+        }
         drop(state);
         drop(cell);
         drop(canceled_outcome);
@@ -261,6 +277,11 @@ pub(crate) unsafe fn receive(
         drop(replay);
         publication??;
         if result.is_some() {
+            if cause.is_some() {
+                // A send may have woken this receiver alone: a canceled one
+                // takes no message, so the policy serves the next in park order.
+                scheduler(ctx).channels.touch(channel);
+            }
             return unsafe { try_yield(&mut *ctx) };
         }
         entered = true;

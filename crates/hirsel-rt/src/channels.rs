@@ -206,6 +206,9 @@ pub(crate) struct ChannelState {
     pending: BTreeSet<u64>,
     sent: u64,
     received: u64,
+    /// The wake token of each receiver parked on a not-ready receive, in park
+    /// order, until its next attempt or a send that makes a message visible.
+    tokens: std::collections::VecDeque<(u32, crate::pool::free::Token)>,
 }
 
 impl ChannelCell {
@@ -396,6 +399,7 @@ impl Channels {
                 pending: BTreeSet::new(),
                 sent: 0,
                 received: 0,
+                tokens: Default::default(),
             }),
             element,
             object: Default::default(),
@@ -748,6 +752,27 @@ impl Channels {
 }
 
 impl ChannelState {
+    /// Keep `task`'s wake token while it parks on this channel's receive.
+    pub(crate) fn keep_token(&mut self, task: u32, token: crate::pool::free::Token) {
+        self.tokens.push_back((task, token));
+    }
+
+    /// Drop `task`'s token: each receive attempt registers anew if it parks.
+    pub(crate) fn drop_token(&mut self, task: u32) {
+        self.tokens.retain(|&(waiter, _)| waiter != task);
+    }
+
+    /// Receivers parked here with a wake token, for tests.
+    #[cfg(test)]
+    pub(crate) fn tokens(&self) -> usize {
+        self.tokens.len()
+    }
+
+    /// The oldest parked receiver's token, for a send that made a message visible.
+    pub(crate) fn next_token(&mut self) -> Option<crate::pool::free::Token> {
+        self.tokens.pop_front().map(|(_, token)| token)
+    }
+
     /// Visible FIFO prefix; a younger published message cannot pass a pending
     /// older send, even if retirement is temporarily inside a holding call.
     fn visible(&self) -> usize {

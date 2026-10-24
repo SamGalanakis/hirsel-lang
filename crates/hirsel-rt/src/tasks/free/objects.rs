@@ -317,11 +317,19 @@ pub(crate) unsafe fn channel_send(
     // Send deliberately does not observe cancellation (CONC-3).
     let publication = super::channel::sent(ctx, cell, &mut state, message, out, None);
     // A receiver registers before its first poll takes this latch, so reading
-    // under the latch cannot miss one that will not see this message.
+    // under the latch cannot miss one that will not see this message. The
+    // oldest receiver that parked with a token is woken after the unlock.
+    let done = publication
+        .as_ref()
+        .is_ok_and(|&status| status == crate::channels::DONE);
+    let token = if done { state.next_token() } else { None };
     let parked = cell.parked();
     drop(state);
     Some(publication.and_then(|status| {
-        if status == crate::channels::DONE && parked {
+        if let Some(token) = token {
+            unsafe { crate::pool::free::notify((*ctx).run_ptr(), &token) };
+            unsafe { tail(ctx) }
+        } else if status == crate::channels::DONE && parked {
             let _role = unsafe { role::Guard::new(ctx) };
             scheduler(ctx).channels.touch(channel);
             unsafe { super::try_yield(&mut *ctx) }
