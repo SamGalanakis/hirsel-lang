@@ -87,6 +87,59 @@ impl NativeDeclarations {
     ) -> Result<Self, QueryError> {
         let roots = engine.native_source_roots(requested)?;
         let selected: BTreeSet<_> = roots.definitions.iter().cloned().collect();
+        let mut catalogue = Vec::new();
+        for path in &roots.definitions {
+            catalogue.push(cache.definition(engine, path, &selected)?);
+        }
+        let source_constants = catalogue
+            .iter()
+            .filter(|product| product.source.constant.is_some())
+            .map(|product| product.source.definition.clone())
+            .collect();
+        let statics = engine.native_static_inputs(&selected)?;
+        let extra = engine.native_static_requirements(&statics, &selected, &source_constants)?;
+        Self::from_settled(
+            &engine.signature_snapshot(),
+            roots,
+            catalogue,
+            statics,
+            extra,
+        )
+    }
+
+    /// Assemble only completed immutable source products. Source checking,
+    /// GEN-5, constants and Lower remain explicit front-query responsibilities.
+    /// This ordinary metadata constructor grants no V or native C authority.
+    pub fn from_settled(
+        signatures: &hirsel_engine::SignatureSnapshot,
+        roots: NativeSourceRoots,
+        products: impl IntoIterator<Item = hirsel_engine::NativeDiscoveryProduct>,
+        statics: hirsel_engine::NativeStaticInputs,
+        extra: InstanceGraph,
+    ) -> Result<Self, QueryError> {
+        if roots
+            .definitions
+            .windows(2)
+            .any(|paths| paths[0] >= paths[1])
+        {
+            return Err(invalid("noncanonical settled native root selection"));
+        }
+        let mut catalogue = BTreeMap::new();
+        for product in products {
+            if catalogue
+                .insert(product.source.definition.clone(), product)
+                .is_some()
+            {
+                return Err(invalid("duplicate settled native source declaration"));
+            }
+        }
+        if catalogue.len() != roots.definitions.len()
+            || catalogue.keys().ne(roots.definitions.iter())
+        {
+            return Err(invalid(
+                "settled native source catalogue differs from root selection",
+            ));
+        }
         let environment = &roots.environment;
         // Request environment only. Per-definition/private/body dependencies
         // belong to individual query actions, never a whole-program digest.
@@ -106,7 +159,7 @@ impl NativeDeclarations {
         };
         let mut program = Program {
             input,
-            types: engine.types().clone(),
+            types: signatures.types().clone(),
             memo: Arc::new(hirsel_types::TypeMemo::new()),
             definitions: BTreeMap::new(),
             signatures: roots.builtins.clone(),
@@ -138,9 +191,27 @@ impl NativeDeclarations {
         let mut discoveries = Vec::new();
         let mut source_anchors = BTreeMap::new();
         let mut graph = InstanceGraph::default();
-        let mut source_constants = BTreeSet::new();
         for path in &roots.definitions {
-            let product = cache.definition(engine, path, &selected)?;
+            let product = catalogue
+                .remove(path)
+                .ok_or_else(|| invalid(format!("missing settled native declaration {path}")))?;
+            let current = signatures
+                .signature(hirsel_syntax::DefId::intern(path))
+                .and_then(Result::ok)
+                .ok_or_else(|| invalid(format!("missing settled native signature {path}")))?;
+            if product.source.definition != *path
+                || product.source.signature.definition.path() != path
+                || product.source.source.syntax.item.definition != *path
+                || !Arc::ptr_eq(current, &product.source.signature)
+                || roots
+                    .sources
+                    .anchor(product.source.source.syntax.anchor)
+                    .is_none()
+            {
+                return Err(invalid(format!(
+                    "native declaration differs from its source snapshot: {path}"
+                )));
+            }
             if let Some(declaration) =
                 super::source::source_declaration(&product).map_err(invalid)?
             {
@@ -186,13 +257,10 @@ impl NativeDeclarations {
                 source.representation.as_ref(),
             );
             if let Some(value) = &source.constant {
-                source_constants.insert(path.clone());
                 program.constants.insert(path.clone(), value.clone());
             }
             sources.insert(path.clone(), source);
         }
-        let statics = engine.native_static_inputs(&selected)?;
-        let extra = engine.native_static_requirements(&statics, &selected, &source_constants)?;
         for edge in &extra.edges {
             context
                 .requirements
@@ -201,7 +269,7 @@ impl NativeDeclarations {
                 .push(crate::native::adapt::requirement(edge));
         }
         graph.edges.extend(extra.edges);
-        if let Some(site) = graph.growing_sites(engine.types()).first() {
+        if let Some(site) = graph.growing_sites(signatures.types()).first() {
             return Err(invalid(format!(
                 "instance expansion grows through an implicit instance at {site:?} (spec #87)"
             )));
