@@ -144,3 +144,58 @@ listed dependency-owned until available. The existing tasks suite uses ten
 seeded interleaved open-loop rounds and consumes full response bodies, including
 queueing from scheduled arrival, preventing coordinated omission. Do not replace
 it with a closed-loop client or compare saved sessions' wall times.
+
+`b1.py` runs the narrow Free F1 continuation: fork_join, mutex and
+independent_files at n=256/512/1024, eight workers, three interleaved rounds
+(seed 20261024). It requires the coordinator's temporary physical-core fence
+on CPUs 8–15, with siblings 24–31 idle. It never establishes the fence itself.
+Build release qualification archives with `-c hirsel.free_qualification=true`;
+build the separate observer archives with `-c hirsel.operation_latency=true`
+(Cargo feature `operation-latency`, default off). Link otherwise identical
+native programs against each archive set. Tokio remains the locked comparator.
+
+Pass `--root <checkout> --out <external-session> --inventory <json>`. Inventory
+contains `binaries.plain` with paths for fork_join, mutex, independent_files
+and tokio; `binaries.observer` contains the three native paths. Its `sha256`
+map may bind the binaries, workload inputs, harness and resolved perf ELF
+during the timing window. Build first, ask READY B8, freeze only while the
+campaign runs, then stop. No compiler/toolchain inventories or input seals are
+required. Outputs must remain outside the repository.
+Run inside the approved outer service, for example:
+
+```sh
+sudo -n systemd-run --wait --pipe --collect --slice=timing.slice \
+  -p AllowedCPUs=8-15 -p MemoryMax=2G -p MemorySwapMax=0 \
+  taskset -c 8-15 python3 bench/multicore/b1.py \
+  --root "$PWD" --out /path/to/session --inventory /path/to/inventory.json
+```
+
+Each child uses `tools/capped --inside --timeout 60` and RLIMIT_CPU=60,
+retaining that outer service's affinity and memory cap. Do not nest an ordinary
+user scope: the fence excludes user.slice from timing CPUs. The wall ratio is
+whole-process `perf duration_time`, with perf/time/prlimit startup outside the
+measured executable; counters inherit its full process tree. The observer-on
+runs are a separate overhead study, never subtracted from acceptance throughput.
+
+`HIRSEL_OPERATION_LATENCY=<new sidecar path>` enables collection only in the
+observer build. The ABI wrappers timestamp before the first role acquisition:
+mutex take through successful payload delivery (body excluded), file write
+through delivery return (including checks/queues/retries), and spawn through
+the matching consuming join return. Buffers are preallocated per worker and
+owned by the run so resumed calls may migrate. The bounded diagnostic supports
+16 worker buffers, 16384 entries per buffer and 8192 task identities; overflow
+is counted and invalidates the p99 sample. No sampling Random, scheduler event,
+program clock, recording input or replay input is introduced. Replay emits no
+original-execution sidecar. The disabled feature removes wrappers, module,
+clock calls, storage and registration at compile time.
+
+Sidecars retain all statuses, including incomplete/censored spans, which have
+no end timestamp. The harness checks the exact successful operation population
+(n spawn/join pairs or 8n acquisitions/writes), rejects drops or other outcomes
+in that population, and reports nearest-rank p99 and its tail count. Task-set
+insertion/join is not the spawn/join endpoint: its unmatched spawn spans remain
+explicitly censored in mutex/file diagnostics. Per-cell results use the median
+of three p99 observations, not process percentiles. This small tail and
+observer-on perturbation must accompany interpretation. Exact command, grants,
+executable hash, tape hash, resources and raw compressed sidecar bind each
+original execution in the external session.

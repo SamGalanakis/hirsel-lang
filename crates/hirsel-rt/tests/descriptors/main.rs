@@ -714,3 +714,24 @@ fn physical_classification_rejects_operation_and_ordinal_emission() {
         None
     );
 }
+
+#[test]
+fn conditional_exports_keep_their_descriptor_and_role_obligations() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(
+        root.path().join("lib.rs"),
+        r#"
+        #[cfg_attr(not(feature="operation-latency"), unsafe(no_mangle))]
+        pub fn hirsel_rt_v2_mutex_take() { Guard::new(); }
+        #[cfg_attr(feature="ordinary-attribute", inline)]
+        pub fn helper() {}
+        struct Guard; impl Guard { fn new() {} }
+    "#,
+    )
+    .unwrap();
+    let graph = graph::Graph::parse(root.path());
+    let entries: Vec<_> = graph.entries().collect();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].0, "hirsel_rt_v2_mutex_take");
+    assert!(graph.directly_calls(entries[0].1, "Guard::new"));
+}

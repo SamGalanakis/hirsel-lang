@@ -2552,6 +2552,12 @@ pub(crate) unsafe fn execute(
         control.finish(0);
         return Err(format!("Free host admission: {error:?}"));
     }
+    #[cfg(feature = "operation-latency")]
+    if production_free && replay.is_none() {
+        // Admission only, after replay selection and before any worker starts.
+        // Replay never allocates buffers, reads observer configuration or clocks.
+        unsafe { (*ctx).run().operation_latency = crate::operation_latency::Observer::from_env() };
+    }
     // The free-mode test channel decides one worker's interleavings: it runs on one.
     // An execution of several runs (RUN-10) switches between their roots on one thread: a run
     // with runners runs on one worker too.

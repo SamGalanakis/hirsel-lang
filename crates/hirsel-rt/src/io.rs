@@ -3734,7 +3734,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_file_seek(
 }
 /// # Safety
 /// Context bound, directory/file live, Bytes borrowed, out writable.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(feature = "operation-latency"), unsafe(no_mangle))]
 pub unsafe extern "C" fn hirsel_rt_v2_file_write(
     ctx: *mut crate::TaskCtx,
     _destination: *mut u8,

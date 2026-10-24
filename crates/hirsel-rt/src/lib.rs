@@ -52,6 +52,8 @@ pub mod net_abi;
 pub mod net_host;
 pub mod net_tls;
 mod observation_timing;
+#[cfg(feature = "operation-latency")]
+mod operation_latency;
 pub mod paths;
 pub mod pool;
 pub mod process;

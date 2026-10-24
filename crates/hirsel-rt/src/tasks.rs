@@ -2637,7 +2637,7 @@ unsafe fn exit_scope(
 /// # Safety
 /// `ctx` is live, `out` writable, `scope` names a live scope and `code`/`environment` are an
 /// owned once closure of `fn() -> ()`.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(feature = "operation-latency"), unsafe(no_mangle))]
 pub unsafe extern "C" fn hirsel_rt_v2_task_spawn(
     ctx: *mut TaskCtx,
     _caller_site: u64,
@@ -2833,7 +2833,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_finish(
 /// # Safety
 /// `ctx` is live, `scope` and `task` name a child of a live scope, and `slot` is a `None` image
 /// of `size` bytes in the running task's frame.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(feature = "operation-latency"), unsafe(no_mangle))]
 pub unsafe extern "C" fn hirsel_rt_v2_task_join(
     ctx: *mut TaskCtx,
     caller_site: u64,
@@ -3961,7 +3961,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_mutex_create(
 ///
 /// # Safety
 /// `ctx` is live, `out` writable, `m` borrows a counted Mutex wrapper and `payload` a writable `None` carrier.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(feature = "operation-latency"), unsafe(no_mangle))]
 pub unsafe extern "C" fn hirsel_rt_v2_mutex_take(
     ctx: *mut TaskCtx,
     out: *mut u32,

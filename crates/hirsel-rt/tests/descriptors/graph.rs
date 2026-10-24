@@ -71,12 +71,30 @@ fn cfg_test(attrs: &[syn::Attribute]) -> bool {
 }
 
 fn exported(attrs: &[syn::Attribute]) -> bool {
-    attrs.iter().any(|a| {
-        a.path().is_ident("no_mangle")
-            || (a.path().is_ident("unsafe")
-                && a.parse_args::<syn::Path>()
-                    .is_ok_and(|p| p.is_ident("no_mangle")))
-    })
+    fn no_mangle(meta: &syn::Meta) -> bool {
+        if meta.path().is_ident("no_mangle") {
+            return true;
+        }
+        let syn::Meta::List(list) = meta else {
+            return false;
+        };
+        if list.path.is_ident("unsafe") {
+            return list
+                .parse_args::<syn::Path>()
+                .is_ok_and(|p| p.is_ident("no_mangle"));
+        }
+        if list.path.is_ident("cfg_attr") {
+            // Conservative union of conditional no_mangle exports. Preserve
+            // descriptor and role checks for the default ABI bodies as well.
+            return list
+                .parse_args_with(
+                    syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
+                )
+                .is_ok_and(|args| args.iter().skip(1).any(no_mangle));
+        }
+        false
+    }
+    attrs.iter().any(|attr| no_mangle(&attr.meta))
 }
 
 fn type_name(ty: &syn::Type) -> Option<String> {

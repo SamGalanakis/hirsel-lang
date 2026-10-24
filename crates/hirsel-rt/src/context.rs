@@ -373,10 +373,18 @@ pub(crate) struct RunShared {
     pub(crate) free_native_io: std::sync::atomic::AtomicBool,
     /// Native telemetry context derives from admitted span creation, without host calls.
     pub(crate) free_native_spans: crate::tasks::free::host::native::Spans,
+    #[cfg(feature = "operation-latency")]
+    pub(crate) operation_latency: Option<crate::operation_latency::Observer>,
 }
 
 impl Drop for RunShared {
     fn drop(&mut self) {
+        #[cfg(feature = "operation-latency")]
+        if !self.free_replay {
+            if let Some(observer) = &self.operation_latency {
+                observer.write();
+            }
+        }
         // The detached reclaim path also drops the heaps wholesale without
         // TaskCtx::exit. Its last worker owns quiescent metadata at this point.
         if let Some(scheduler) = self.tasks.as_deref_mut() {
@@ -981,6 +989,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_ctx_create(
         free_io: Default::default(),
         free_native_io: Default::default(),
         free_native_spans: Default::default(),
+        #[cfg(feature = "operation-latency")]
+        operation_latency: None,
     }));
     // SAFETY: the run was just created; its root context owns it and the worker.
     let worker = unsafe { Worker::create(run) };

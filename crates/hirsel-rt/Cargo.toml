@@ -20,6 +20,8 @@ memcheck = []
 # ThreadSanitizer fiber annotations, for builds with `-Zsanitizer=thread`.
 tsan = []
 measurement = []
+# Original-execution operation sidecars; absent from shipping archives.
+operation-latency = []
 
 [dependencies]
 base64-simd = "=0.8.0"

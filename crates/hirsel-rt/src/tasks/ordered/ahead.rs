@@ -259,7 +259,7 @@ const _: () = {
 
 /// # Safety
 /// The ordinary TaskSpawn contract; non-null info is a live immutable record.
-#[unsafe(no_mangle)]
+#[cfg_attr(not(feature = "operation-latency"), unsafe(no_mangle))]
 pub unsafe extern "C" fn hirsel_rt_v2_task_spawn_ahead(
     ctx: *mut TaskCtx,
     caller_site: u64,
