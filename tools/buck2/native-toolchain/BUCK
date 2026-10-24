@@ -86,3 +86,6 @@ toolchain_proof(name = "root-observation-proof", tools = [":llvm", ":kit", "root
 
 
 toolchain_proof(name = "root-plan-proof", tools = [":llvm", ":linker", ":kit", "root//:hirsel-rt-archives", "root//:hirsel-driver-test-it-harness"], script = "root_plan_proof.py", interpreter = "python3")
+
+
+toolchain_proof(name = "root-frozen-kit-proof", tools = [":llvm", ":linker", ":kit", "root//:hirsel-rt-archives", "root//:hirsel-driver-test-it-harness"], script = "root_frozen_kit_proof.py", interpreter = "python3")
