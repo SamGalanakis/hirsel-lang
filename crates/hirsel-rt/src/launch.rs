@@ -2572,6 +2572,10 @@ pub(crate) unsafe fn execute(
         // Replay never allocates buffers, reads observer configuration or clocks.
         unsafe { (*ctx).run().operation_latency = crate::operation_latency::Observer::from_env() };
     }
+    #[cfg(feature = "ownership-trace")]
+    unsafe {
+        (*ctx).run().ownership_trace = crate::ownership_trace::Observer::from_env(program.digest);
+    }
     // The free-mode test channel decides one worker's interleavings: it runs on one.
     // An execution of several runs (RUN-10) switches between their roots on one thread: a run
     // with runners runs on one worker too.

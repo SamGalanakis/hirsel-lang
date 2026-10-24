@@ -22,6 +22,8 @@ tsan = []
 measurement = []
 # Original-execution operation sidecars; absent from shipping archives.
 operation-latency = []
+# Explicit ownership diagnostics; no hooks or storage in ordinary archives.
+ownership-trace = []
 
 [dependencies]
 base64-simd = "=0.8.0"

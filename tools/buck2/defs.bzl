@@ -150,11 +150,13 @@ def _compile_env(package_name, crate, version, build_script):
 CLIPPY_TWINS = read_root_config("hirsel", "clippy", "false") == "true"
 
 def _rust(rule, name, **attrs):
-    # Qualification changes only runtime admission. All implementation is
-    # compiled in either build; native archive variants receive the same bits.
+    # Runtime diagnostic features are explicit build selections. Ordinary
+    # archives omit ownership hooks and their private observer state.
     if attrs.get("crate") == "hirsel_rt":
         if read_root_config("hirsel", "operation_latency", "false") == "true":
             attrs["features"] = attrs.get("features", []) + ["operation-latency"]
+        if read_root_config("hirsel", "ownership_trace", "false") == "true" and "ownership-trace" not in attrs.get("features", []):
+            attrs["features"] = attrs.get("features", []) + ["ownership-trace"]
         if FREE_QUALIFICATION:
             attrs["features"] = attrs.get("features", []) + ["free-qualification"]
     rule(name = name, **attrs)
@@ -225,6 +227,8 @@ def hirsel_test(name, crate, crate_root, srcs, features, deps, manifest_dir, pac
     `skips` are exact case names every
     run skips except the full gate's (`-c hirsel.full=true`).
     """
+    if package_name == "hirsel-rt" and read_root_config("hirsel", "ownership_trace", "false") == "true":
+        features = features + ["ownership-trace"]
     harness = name + "-harness"
     bin_exe_dir = "{}/{}".format(BIN_EXE_DIR, harness)
     exes = [_env_set("CARGO_BIN_EXE_" + bin, _from_package(manifest_dir, "{}/{}".format(bin_exe_dir, bin))) for bin in sorted(bin_exes)]
@@ -731,6 +735,10 @@ def hirsel_runtime_archives(name, crate, crate_root, srcs, features, deps, featu
         ([f for i, f in enumerate(RUNTIME_FEATURES) if mask & (1 << i)], RUNTIME_TARGETS.keys())
         for mask in range(1 << len(RUNTIME_FEATURES))
     ] + [([feature], triples) for feature, triples in RUNTIME_SOLO_VARIANTS.items()]
+    # Diagnostic products are selected explicitly; default native builds never
+    # compile the ownership buffer or double their runtime archive matrix.
+    if read_root_config("hirsel", "ownership_trace", "false") == "true":
+        variants += [(chosen + ["ownership-trace"], triples) for chosen, triples in variants]
     for chosen, triples in variants:
         variant = "+".join(chosen) or "default"
         library = "{}-{}".format(name, variant.replace("+", "-"))

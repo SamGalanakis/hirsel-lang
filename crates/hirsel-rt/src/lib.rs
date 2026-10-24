@@ -55,6 +55,8 @@ pub mod net_tls;
 mod observation_timing;
 #[cfg(feature = "operation-latency")]
 mod operation_latency;
+#[cfg(feature = "ownership-trace")]
+pub mod ownership_trace;
 pub mod paths;
 pub mod pool;
 pub mod process;

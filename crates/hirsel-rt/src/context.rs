@@ -375,10 +375,16 @@ pub(crate) struct RunShared {
     pub(crate) free_native_spans: crate::tasks::free::host::native::Spans,
     #[cfg(feature = "operation-latency")]
     pub(crate) operation_latency: Option<crate::operation_latency::Observer>,
+    #[cfg(feature = "ownership-trace")]
+    pub(crate) ownership_trace: Option<crate::ownership_trace::Observer>,
 }
 
 impl Drop for RunShared {
     fn drop(&mut self) {
+        #[cfg(feature = "ownership-trace")]
+        if let Some(observer) = self.ownership_trace.take() {
+            observer.write();
+        }
         #[cfg(feature = "operation-latency")]
         if !self.free_replay {
             if let Some(observer) = &self.operation_latency {
@@ -995,6 +1001,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_ctx_create(
         free_native_spans: Default::default(),
         #[cfg(feature = "operation-latency")]
         operation_latency: None,
+        #[cfg(feature = "ownership-trace")]
+        ownership_trace: None,
     }));
     // SAFETY: the run was just created; its root context owns it and the worker.
     let worker = unsafe { Worker::create(run) };
