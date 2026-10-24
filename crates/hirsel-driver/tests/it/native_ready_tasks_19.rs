@@ -41,6 +41,25 @@ impl QueryContext for Pending {
 }
 #[test]
 fn native_ready_tasks_validate_cold_and_fresh_snapshots_with_current_source_invocations() {
+    ready_case("fn other()->u64{9u64}\npub fn main()->u64{7u64}", false);
+}
+#[test]
+fn native_ready_tasks_preserve_actual_materialized_adapter_inventory_on_cold_and_fresh_reads() {
+    ready_case(
+        r#"
+fn other(x:u64)->u64 { 10u64/x }
+pub fn main()->Result[(),()] {
+ let mut s:Set[String]=set.empty()
+ let insert:fn(mut Set[String],take String)->()=set.insert
+ let _=insert(mut s,"key")
+ let f=other
+ let _=f(2u64)
+ Ok(())
+}"#,
+        true,
+    );
+}
+fn ready_case(source: &str, adapter: bool) {
     with_compiler_stack(|| {
         let dir = tempfile::tempdir().unwrap();
         let store: Arc<dyn ResultStore> =
@@ -54,10 +73,7 @@ fn native_ready_tasks_validate_cold_and_fresh_snapshots_with_current_source_invo
                 .with_result_store(store.clone());
             let file = engine
                 .sources
-                .add(
-                    "settled-demand.hir",
-                    "fn other()->u64{9u64}\npub fn main()->u64{7u64}".into(),
-                )
+                .add("settled-demand.hir", source.into())
                 .unwrap();
             engine.parse_file(file, &default_context()).unwrap();
             if fresh {
@@ -192,6 +208,17 @@ fn native_ready_tasks_validate_cold_and_fresh_snapshots_with_current_source_invo
                     .count(),
                 2
             );
+            if adapter {
+                assert!(
+                    !operations.pretransfer_adapters.is_empty(),
+                    "completed source discovery must retain its real adapter inventory"
+                );
+                assert_eq!(
+                    operations.pretransfer_actuals.len(),
+                    operations.pretransfer_adapters.len(),
+                    "canonical ABI actuals must come from the independent source planner"
+                );
+            }
             let products = tasks.products(discovery_output).unwrap();
             let snapshot = NativeSnapshot::new(
                 store.clone(),
@@ -247,10 +274,12 @@ fn native_ready_tasks_validate_cold_and_fresh_snapshots_with_current_source_invo
                 )
             });
             assert_eq!(ready.len(), 1);
-            assert_eq!(
-                ready_tasks.ready_transformations.load(Ordering::Relaxed),
-                u64::from(!fresh)
-            );
+            let transformations = ready_tasks.ready_transformations.load(Ordering::Relaxed);
+            if adapter && !fresh {
+                assert!(transformations > 0);
+            } else {
+                assert_eq!(transformations, u64::from(!fresh));
+            }
             assert_eq!(snapshot.ready_materializations(), 0);
             let completed = tasks.completed_instances(result[0]).unwrap();
             assert_eq!(
