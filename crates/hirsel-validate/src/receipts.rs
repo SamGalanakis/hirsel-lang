@@ -8,7 +8,7 @@ use hirsel_span::Anchor;
 use hirsel_syntax::{ContentHash, DefPath, PackageId};
 use hirsel_tir::Definition;
 use hirsel_types::TypeInterner;
-pub use outputs::VerifiedDefinitionOutput;
+pub use outputs::{SourceInvocation, VerifiedDefinitionOutput, VerifiedInvocations};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
