@@ -185,7 +185,7 @@ class IgnoredTests(unittest.TestCase):
                 self.assertRegex(helper_body, rf'"--exact",\s+"{module}::{worker}",\s+"--ignored"')
                 self.assertIn('.output()', helper_body)
                 self.assertIn('output.status.success()', helper_body)
-                self.assertIn('"--cpu=60:61"', helper_body)
+                self.assertIn('"--cpu=60:60"', helper_body)
                 self.assertIn('.env("HIRSEL_MEMORY_LIMIT", "2G")', helper_body)
             self.assertTrue(any(FUNCTION.search(text, a.end())[1] == worker
                                 for a in ATTRIBUTE.finditer(text)))
