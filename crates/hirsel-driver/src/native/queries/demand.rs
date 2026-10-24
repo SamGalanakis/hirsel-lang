@@ -222,7 +222,11 @@ impl DemandInstances {
         let linkage = self
             .queries
             .linkage(key, output.product.product.action, environment)
-            .ok_or("native instance dependency lost current C admission")?;
+            .ok_or_else(|| format!(
+                "native instance dependency lost current C admission: {} body {} instance {:?}, library={}, action {:?}, record {:?}",
+                key.instance.definition(), key.instance.body(), key.instance.digest(),
+                output.templates.library, output.product.product.action, output.product.product.record,
+            ))?;
         Ok((output.clone(), linkage))
     }
     fn address(&self, key: InstanceKey) -> InstanceAddress {
