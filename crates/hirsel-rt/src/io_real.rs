@@ -2797,6 +2797,9 @@ pub(crate) mod borrowed_net_tests {
 
     pub(crate) struct Count;
     thread_local! { static CALLS: Cell<u64> = const { Cell::new(0) }; }
+    pub(crate) fn allocation_calls() -> u64 {
+        CALLS.with(Cell::get)
+    }
     unsafe impl GlobalAlloc for Count {
         unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
             let _ = CALLS.try_with(|n| n.set(n.get() + 1));

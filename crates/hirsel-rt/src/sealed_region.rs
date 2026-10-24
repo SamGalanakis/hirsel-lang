@@ -14,6 +14,7 @@ use std::alloc::{Layout, alloc, dealloc, handle_alloc_error};
 use std::ptr::{self, NonNull};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+pub mod receipt;
 mod transaction;
 pub use transaction::{
     Block, BlockId, Charge, Error as SealError, Patch, Placement, Plan, Root, prepare_commit,
