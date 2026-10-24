@@ -600,6 +600,7 @@ impl<S: Stage> Checker<'_, '_, S> {
                 continue;
             };
             let ok = match (ty.repr, &layout.kind) {
+                (ValueRepr::PayloadReceipt, LayoutKind::PayloadReceipt { .. }) => true,
                 (ValueRepr::Unit, LayoutKind::Unit) => true,
                 (ValueRepr::Scalar(a), LayoutKind::Scalar(b)) => a == *b,
                 (

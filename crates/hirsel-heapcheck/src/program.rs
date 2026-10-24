@@ -59,6 +59,18 @@ impl<S: Stage> Program<S> {
             }
         }
         for unit in &self.units {
+            if unit.tables.receipt_entry.is_some()
+                || unit.slots.iter().any(|slot| {
+                    matches!(
+                        slot.kind,
+                        hirsel_lir::ir::SlotKind::ReceiptParameter(_)
+                            | hirsel_lir::ir::SlotKind::ReceiptCapture(_)
+                            | hirsel_lir::ir::SlotKind::ReceiptResult
+                    )
+                })
+            {
+                return fail(V::Malformed, "receipt entry ownership is not implemented");
+            }
             if unit.tables.calls.iter().any(|call| call.receipts.is_some()) {
                 return fail(
                     V::Malformed,

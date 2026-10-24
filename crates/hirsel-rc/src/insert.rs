@@ -324,6 +324,7 @@ impl<'a> Lay<'a> {
 pub(crate) fn owns_type<S>(unit: &LirUnit<S>, lay: Lay<'_>, ty: LirTypeId) -> bool {
     let ty = &unit.types[ty.index()];
     match ty.repr {
+        ValueRepr::PayloadReceipt => true,
         ValueRepr::Block | ValueRepr::Token | ValueRepr::RegionMark => true,
         ValueRepr::Unit
         | ValueRepr::Scalar(_)
@@ -3889,6 +3890,9 @@ pub(crate) fn remap_values<S>(unit: &mut LirUnit<S>, map: &impl Fn(ValueId) -> V
             ArgumentValue::Address { version, .. } => *version = map(*version),
         }
     }
+    if let Some(entry) = &mut unit.tables.receipt_entry {
+        entry.remap_values(map);
+    }
     for call in &mut unit.tables.calls {
         if let Some(receipts) = &mut call.receipts {
             receipts.remap_values(map);
@@ -3919,6 +3923,9 @@ pub(crate) fn compact_values<S: Stage>(unit: &mut LirUnit<S>) {
     let mut mark = |v: ValueId| defined[v.index()] = true;
     for &v in unit.parameters.iter().chain(&unit.captures) {
         mark(v);
+    }
+    if let Some(entry) = &unit.tables.receipt_entry {
+        entry.versions().for_each(&mut mark);
     }
     for b in &unit.blocks {
         for &p in b.parameters.get(&unit.pools.values).unwrap_or(&[]) {

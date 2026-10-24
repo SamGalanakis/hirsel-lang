@@ -11,6 +11,7 @@
 use crate::abi_types::FnAbiId;
 use crate::effect::Effects;
 use crate::layout_types::{LayoutId, ScalarKind};
+pub use crate::receipt_entry::{ReceiptEntry, ReceiptEntrySlot};
 pub use crate::receipt_transport::{ReceiptArgument, ReceiptCall};
 use crate::stage::{Stage, StageKind};
 use hirsel_codec::{snapshot_enum, snapshot_struct};
@@ -170,6 +171,8 @@ pub enum ValueRepr {
     InitMask {
         fields: u32,
     },
+    /// Private immutable metadata handle, never a language Shared root.
+    PayloadReceipt,
 }
 
 /// A LIR value type: representation plus its physical layout.
@@ -208,6 +211,9 @@ pub enum SlotKind {
     LoopCarried(u32),
     /// The fresh slot receiving displaced content of a Replace.
     Displaced,
+    ReceiptParameter(u32),
+    ReceiptCapture(u32),
+    ReceiptResult,
 }
 
 impl SlotKind {
@@ -1551,7 +1557,7 @@ pub struct InitFlag {
 }
 
 /// Fixed-size side tables referenced by instructions and terminators.
-#[derive(Clone, Debug, Default, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct SideTables {
     pub calls: Vec<CallSite>,
     pub constructs: Vec<ConstructSite>,
@@ -1575,6 +1581,58 @@ pub struct SideTables {
     pub codecs: Vec<crate::codec::CodecPlan>,
     /// MEM-3 logical types and complete physical access, independently validated.
     pub structural: Vec<crate::structural_access::AccessPlan>,
+    /// None leaves ordinary side-table bytes and hashes unchanged.
+    pub receipt_entry: Option<ReceiptEntry>,
+}
+
+impl std::hash::Hash for SideTables {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        let Self {
+            calls,
+            constructs,
+            closures,
+            constants,
+            symbols,
+            operations,
+            loans,
+            failures,
+            edges,
+            masks,
+            regions,
+            arenas,
+            shared,
+            task_domains,
+            source_anchors,
+            cleanup_anchors,
+            init_flags,
+            codecs,
+            structural,
+            receipt_entry,
+        } = self;
+        calls.hash(state);
+        constructs.hash(state);
+        closures.hash(state);
+        constants.hash(state);
+        symbols.hash(state);
+        operations.hash(state);
+        loans.hash(state);
+        failures.hash(state);
+        edges.hash(state);
+        masks.hash(state);
+        regions.hash(state);
+        arenas.hash(state);
+        shared.hash(state);
+        task_domains.hash(state);
+        source_anchors.hash(state);
+        cleanup_anchors.hash(state);
+        init_flags.hash(state);
+        codecs.hash(state);
+        structural.hash(state);
+        if let Some(entry) = receipt_entry {
+            "hirsel.receipt-entry.v1".hash(state);
+            entry.hash(state);
+        }
+    }
 }
 
 impl SideTables {
@@ -2802,6 +2860,9 @@ impl<S: Stage> LirUnit<S> {
         self.terminators
             .iter()
             .for_each(|term| term.visit(&mut push));
+        if let Some(entry) = &t.receipt_entry {
+            entry.visit(&mut push);
+        }
         for call in &t.calls {
             match call.callee {
                 Callee::Direct(symbol) => push(Ref::Symbol(symbol)),
@@ -2949,6 +3010,7 @@ snapshot_enum!(ValueRepr {
     RegionMark,
     Arena,
     InitMask { fields },
+    PayloadReceipt,
 });
 snapshot_struct!(LirType { repr, layout });
 snapshot_enum!(Holding {
@@ -2965,6 +3027,9 @@ snapshot_enum!(SlotKind {
     ReturnSlot,
     LoopCarried(ordinal),
     Displaced,
+    ReceiptParameter(ordinal),
+    ReceiptCapture(ordinal),
+    ReceiptResult,
 });
 snapshot_struct!(SlotInfo { ty, kind, scope });
 snapshot_struct!(ScopeInfo { parent });
@@ -3336,7 +3401,7 @@ snapshot_struct!(SideTables {
     init_flags,
     codecs,
     structural
-});
+} trailing_optional receipt_entry);
 snapshot_struct!(Pools {
     values,
     addresses,

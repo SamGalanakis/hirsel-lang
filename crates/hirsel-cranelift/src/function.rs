@@ -922,6 +922,14 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
         let unit = self.unit;
         for (s, slot) in unit.slots.iter().enumerate() {
             match slot.kind {
+                SlotKind::ReceiptParameter(_)
+                | SlotKind::ReceiptCapture(_)
+                | SlotKind::ReceiptResult => {
+                    return Err(CodegenError::Unsupported {
+                        definition: self.definition().clone(),
+                        what: "receipt entry slot transport is not implemented".into(),
+                    });
+                }
                 SlotKind::Parameter(_) | SlotKind::Capture(_) => continue,
                 SlotKind::Local
                 | SlotKind::Temporary

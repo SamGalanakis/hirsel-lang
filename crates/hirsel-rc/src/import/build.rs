@@ -237,6 +237,7 @@ impl Importer<'_> {
     pub(super) fn owns(&self, ty: LirTypeId) -> bool {
         let t = &self.out.types[ty.index()];
         match t.repr {
+            ValueRepr::PayloadReceipt => true,
             ValueRepr::Block | ValueRepr::Token | ValueRepr::RegionMark => true,
             ValueRepr::Unit
             | ValueRepr::Scalar(_)

@@ -2201,6 +2201,10 @@ impl<'p, S: Stage> Machine<'p, S> {
             )
         };
         match repr {
+            ValueRepr::PayloadReceipt => fail(
+                V::Unsupported,
+                "private receipt H cells are not implemented",
+            ),
             ValueRepr::Unit => Ok((Val::Unit, None, false)),
             ValueRepr::Scalar(k) => {
                 if !e.all_init(0, size) {

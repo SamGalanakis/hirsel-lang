@@ -632,6 +632,34 @@ fn check_with_context<S: Stage>(
             })
             .collect();
     }
+    if let Some(entry) = &unit.tables.receipt_entry {
+        let checked = inputs
+            .layouts
+            .fn_abis
+            .get(unit.header.abi.0 as usize)
+            .ok_or("receipt entry lacks its ABI")
+            .and_then(|abi| entry.check(abi, unit, inputs.layouts));
+        let error = checked
+            .err()
+            .unwrap_or("receipt entry requires independent source and custody validation");
+        return vec![Violation {
+            site: Site::UNIT,
+            kind: ViolationKind::Schema(error.into()),
+        }];
+    }
+    if unit.slots.iter().any(|slot| {
+        matches!(
+            slot.kind,
+            crate::ir::SlotKind::ReceiptParameter(_)
+                | crate::ir::SlotKind::ReceiptCapture(_)
+                | crate::ir::SlotKind::ReceiptResult
+        )
+    }) {
+        return vec![Violation {
+            site: Site::UNIT,
+            kind: ViolationKind::Schema("receipt slots lack an entry contract".into()),
+        }];
+    }
     for call in &unit.tables.calls {
         if let Some(abi) = inputs.layouts.fn_abis.get(call.abi.0 as usize)
             && let Err(error) =
@@ -813,12 +841,13 @@ impl<S> Cx<'_, S> {
     pub fn value_layout(&self, value: ValueId) -> LayoutId {
         self.unit.types[self.unit.values[value.index()].ty.index()].layout
     }
-    /// Whether a value of this type carries a holder credit: block
-    /// references, tokens and region marks always; aggregates, callables and
-    /// handles when their layout releases something.
+    /// Whether this type has an ownership obligation. Private metadata holders
+    /// are separate from language block/Shared credits. Slots' plain versions
+    /// name their contents rather than acquiring another holder.
     pub fn owns_type(&self, ty: LirTypeId) -> bool {
         let ty = &self.unit.types[ty.index()];
         match ty.repr {
+            ValueRepr::PayloadReceipt => true,
             ValueRepr::Block | ValueRepr::Token | ValueRepr::RegionMark => true,
             ValueRepr::Unit
             | ValueRepr::Scalar(_)

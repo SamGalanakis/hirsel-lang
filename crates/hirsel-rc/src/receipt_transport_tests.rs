@@ -123,3 +123,47 @@ fn rc_value_remapping_preserves_metadata_pairing_selectors_and_contract_identity
     assert_eq!(receipt.contract, contract);
     assert_eq!(call.pretransfer_failure, Some(FailureId(5)));
 }
+
+#[test]
+fn compaction_keeps_entry_versions_without_minting_owning_values() {
+    let mut unit = unit();
+    unit.tables.calls.clear();
+    unit.pools.call_arguments.clear();
+    unit.values = (0..14)
+        .map(|_| ValueInfo {
+            ty: LirTypeId(0),
+            holding: Holding::Plain,
+        })
+        .collect();
+    unit.parameters = vec![ValueId(1)];
+    unit.captures = vec![ValueId(2)];
+    let contract = ContentHash::of_bytes(b"entry contract");
+    unit.tables.receipt_entry = Some(ReceiptEntry {
+        contract,
+        parameters: vec![ReceiptEntrySlot {
+            source: 0,
+            slot: SlotId(5),
+            version: ValueId(10),
+        }],
+        captures: vec![ReceiptEntrySlot {
+            source: 0,
+            slot: SlotId(6),
+            version: ValueId(12),
+        }],
+        result: Some(SlotId(7)),
+    });
+    crate::insert::compact_values(&mut unit);
+    assert_eq!(unit.values.len(), 4);
+    assert_eq!(unit.parameters, [ValueId(0)]);
+    assert_eq!(unit.captures, [ValueId(1)]);
+    let entry = unit.tables.receipt_entry.as_ref().unwrap();
+    assert_eq!(
+        entry.versions().collect::<Vec<_>>(),
+        [ValueId(2), ValueId(3)]
+    );
+    assert_eq!(entry.parameters[0].slot, SlotId(5));
+    assert_eq!(entry.captures[0].slot, SlotId(6));
+    assert_eq!(entry.result, Some(SlotId(7)));
+    assert_eq!(entry.contract, contract);
+    assert!(unit.values.iter().all(|v| v.holding == Holding::Plain));
+}
