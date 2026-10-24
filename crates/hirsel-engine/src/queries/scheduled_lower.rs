@@ -549,7 +549,7 @@ impl FrontLowerQueries {
             pending: None,
         };
         let mut preparation = ValuePreparation::new(&analyzed.value);
-        let constants = if kind == FRONT_LOWER_KIND
+        let mut constants = if kind == FRONT_LOWER_KIND
             && matches!(signature.kind, hirsel_types::SignatureKind::Const { .. })
         {
             let (_, constants) = source.constant_value(path).await?;
@@ -575,8 +575,19 @@ impl FrontLowerQueries {
             else {
                 return Err(QueryError::NotImplemented);
             };
-            let value = if let Some((_, value)) = constants.iter().find(|(id, _)| *id == expression)
-            {
+            let dictionary = crate::dictionaries::declaration_async(
+                self.snapshot.types(),
+                &self.memo,
+                &analyzed.value,
+                &signature,
+                &constants,
+                source,
+            )
+            .await?;
+            let is_dictionary = dictionary.is_some();
+            let value = if let Some(dictionary) = dictionary {
+                dictionary
+            } else if let Some((_, value)) = constants.iter().find(|(id, _)| *id == expression) {
                 value.clone()
             } else {
                 let ty = analyzed
@@ -601,6 +612,9 @@ impl FrontLowerQueries {
                 .await?
                 .result?
             };
+            if is_dictionary && !constants.iter().any(|(id, _)| *id == expression) {
+                constants.push((expression, value.clone()));
+            }
             return Ok(Value::Constant(value, constants));
         }
         self.count(path, |work| work.lowerings += 1);
@@ -856,6 +870,29 @@ impl s1::AsyncDependencySource for Source {
             result,
             reads: Reads::empty(),
         }
+    }
+}
+impl crate::dictionaries::DeclarationSource for Source {
+    fn signature(&mut self, path: &DefPath) -> Result<hirsel_types::SignatureRef, QueryError> {
+        Source::signature(self, path)
+    }
+    async fn evaluate(&mut self, input: EvaluationInput<'_>) -> Result<Materialized, QueryError> {
+        evaluate(
+            self.clone(),
+            Arc::new(QueryOutput {
+                value: input.analyzed.clone(),
+                diagnostics: vec![],
+                dependencies: vec![],
+            }),
+            input.staged.to_vec(),
+            Arc::new(input.signature.clone()),
+            input.expression,
+            input.child,
+            input.ty,
+            input.constants.to_vec(),
+        )
+        .await?
+        .result
     }
 }
 type Evaluation =
