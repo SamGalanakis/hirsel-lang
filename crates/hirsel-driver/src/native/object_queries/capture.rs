@@ -188,6 +188,29 @@ impl FrozenLinker {
 }
 
 impl CapturedLink {
+    pub(crate) fn inputs(
+        self,
+        store: &dyn ResultStore,
+    ) -> Result<Vec<(PathBuf, Reference)>, String> {
+        Ok(self
+            .record(store)?
+            .files
+            .into_iter()
+            .map(|file| (PathBuf::from(file.name), file.bytes.into()))
+            .collect())
+    }
+
+    /// Identity of the discovered file namespace, excluding the probe's
+    /// temporary working directory and argument spelling.
+    pub(crate) fn inputs_identity(self, store: &dyn ResultStore) -> Result<ContentHash, String> {
+        let files = self.record(store)?.files;
+        Ok(hirsel_codec::digest(
+            "hirsel.captured-link-inputs.v1",
+            "Inputs",
+            &files,
+        ))
+    }
+
     /// Exact bytes the selected linker read at an absolute input path. This
     /// associates selected platform inputs with the captured probe, not with
     /// another read of a mutable installation.
@@ -447,6 +470,64 @@ impl FrozenLinkKit {
         }
         Ok(kit)
     }
+    pub(crate) fn capture_selected(
+        self,
+        store: &dyn ResultStore,
+        linker: FrozenLinker,
+        selected: CapturedLink,
+        plan: &super::super::ExecutableLinkPlan,
+        objects: &[PathBuf],
+        limits: CaptureLimits,
+    ) -> Result<CapturedLink, String> {
+        let record: KitRecord = get_record(store, KIT, self.0)?;
+        let base = CapturedLink::from_reference(store, record.capture.into())?.record(store)?;
+        let selected = selected.record(store)?;
+        if Reference::from(base.tool) != linker.reference()
+            || Reference::from(selected.tool) != linker.reference()
+        {
+            return Err("selected platform names another frozen linker".into());
+        }
+        let mut fixed = BTreeMap::new();
+        for file in base.files.into_iter().chain(selected.files) {
+            let content: Reference = file.bytes.into();
+            if let Some(previous) = fixed.insert(file.name, content)
+                && previous != content
+            {
+                return Err("conflicting selected platform file names".into());
+            }
+        }
+        let files = fixed
+            .iter()
+            .map(|(name, content)| FileRecord {
+                name: name.clone(),
+                bytes: (*content).into(),
+            })
+            .collect::<Vec<_>>();
+        let arguments = plan
+            .arguments
+            .iter()
+            .map(|arg| {
+                arg.to_str()
+                    .map(str::to_owned)
+                    .ok_or_else(|| "non-UTF8 link argument".to_string())
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let captured = linker.capture_fixed(store, &plan.directory, &arguments, limits, &files)?;
+        for file in captured.record(store)?.files {
+            match fixed.get(&file.name) {
+                Some(expected) if *expected == Reference::from(file.bytes) => {}
+                None if objects.iter().any(|path| path == Path::new(&file.name)) => {}
+                _ => {
+                    return Err(format!(
+                        "final link read outside selected inputs: {}",
+                        file.name
+                    ));
+                }
+            }
+        }
+        Ok(captured)
+    }
+
     pub(crate) fn capture(
         self,
         store: &dyn ResultStore,

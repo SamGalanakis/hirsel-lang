@@ -210,8 +210,8 @@ def native_tool_inputs():
     """The unpacked toolchains a native test reads, as `HIRSEL_TOOLCHAIN_<TARGET>`: the
     launcher sets the variables of `native-toolchain/environment.tsv` from them."""
     return {
-        "HIRSEL_TOOLCHAIN_" + name.upper(): "root//tools/buck2/native-toolchain:" + name
-        for name in ["arm", "qemu", "valgrind", "kit", "glibc_floor"]
+        "HIRSEL_TOOLCHAIN_" + name.replace("-", "_").upper(): "root//tools/buck2/native-toolchain:" + name
+        for name in ["arm", "qemu", "valgrind", "kit", "glibc_floor", "linker", "runtime-auditor"]
     }
 
 def hirsel_test(name, crate, crate_root, srcs, features, deps, manifest_dir, package_name, version, edition, build_script = None, bin_exes = {}, data = [], runtime_archives = None, products = None, shards = 1, costs = None, opt_level = None, seeded = False, skips = []):

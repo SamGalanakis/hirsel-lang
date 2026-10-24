@@ -199,3 +199,5 @@ fn callee_metadata(
         request_schemas: Some(request_schemas),
     })
 }
+
+pub use link::{CapturedExecutableLinkInputs, plan_captured_executable_link};
