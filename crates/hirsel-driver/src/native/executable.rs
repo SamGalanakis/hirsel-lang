@@ -14,6 +14,15 @@ pub enum BuildProfile {
     ReleaseLto,
     Debug,
 }
+impl BuildProfile {
+    /// Immutable profile policy shared by selected native producers.
+    pub(crate) fn options(self, target: TargetSpec) -> super::Options {
+        let mut options = super::Options::new(target);
+        options.scoped_specialization = matches!(self, Self::Release | Self::ReleaseLto);
+        options
+    }
+}
+
 /// One build owns its directory from exclusive creation until drop.
 pub(crate) struct Scratch(pub(crate) PathBuf, bool);
 impl Scratch {
