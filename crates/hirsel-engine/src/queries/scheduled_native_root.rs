@@ -85,6 +85,14 @@ impl FrontNativeQueries {
     pub fn factory(self: &Arc<Self>) -> Arc<dyn QueryFactory> {
         Arc::new(Factory(self.clone()))
     }
+    /// Actual IDs from the Run view after native source-root selection.
+    pub fn run_query(&self, path: &DefPath) -> Option<QueryId> {
+        self.run.query(path)
+    }
+    /// Actual IDs from the selected source catalogue captured by this root.
+    pub fn definition_query(&self, path: &DefPath) -> Option<QueryId> {
+        self.definitions.query(path)
+    }
     pub fn run_factory(&self) -> Arc<dyn QueryFactory> {
         self.run.factory()
     }
