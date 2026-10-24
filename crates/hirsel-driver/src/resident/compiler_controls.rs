@@ -506,3 +506,28 @@ fn selected_private_layout_cache_matches_cold_and_preserves_unread_reader_work()
         }
     });
 }
+
+#[test]
+fn selected_run_bounds_lower_mailboxes_by_the_immutable_query_inventory() {
+    hirsel_engine::with_compiler_stack(|| {
+        let (_directory, entry, source) = fixture();
+        std::fs::write(
+            &source,
+            "fn a()->u8{1u8}\nfn b()->u8{2u8}\npub fn main()->Result[(),()]{Ok(())}\n",
+        )
+        .unwrap();
+        let mut selected = request(&entry);
+        selected.operation = CompileOperation::Tir { definition: None };
+        let budget = ProcessBudget::new(768 << 20);
+        let mut host = Host::new(run_selector(budget.clone()));
+        let output = host.request(&selected).unwrap().wait().unwrap();
+        let CompileResult::Tir(input) = &output.result else {
+            panic!("run returned another operation");
+        };
+        assert_eq!(input.entry, output.entry);
+        assert_eq!(input.definition.path.path(), &output.entry);
+        drop(output);
+        drop(host);
+        assert_eq!(budget.reserved(), 0);
+    });
+}
