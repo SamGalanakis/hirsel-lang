@@ -76,6 +76,13 @@ pub(crate) fn retained_lowering_output_bytes(
     weight.bytes
 }
 
+/// Owned diagnostic/error buffers, excluding the containing inline enum.
+pub(crate) fn retained_query_error_bytes(error: &hirsel_types::QueryError) -> u64 {
+    let mut weight = Weight::default();
+    weight.error(error);
+    weight.bytes
+}
+
 /// Exact worker staged-use closure. DefIds belong to the session; argument
 /// vector capacities are retained by the lower memo and charged in its hold.
 pub(crate) fn retained_staged_request_bytes(requests: &Vec<crate::comptime::Selection>) -> u64 {
