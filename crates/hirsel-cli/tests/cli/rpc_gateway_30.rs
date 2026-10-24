@@ -82,6 +82,12 @@ fn evidence(label: &str) -> PathBuf {
 fn cases() -> Vec<Value> {
     let mut rows: Vec<Value> =
         serde_json::from_str(include_str!("../support/rpc_gateway_30/cases.json")).unwrap();
+    rows.extend(
+        serde_json::from_str::<Vec<Value>>(include_str!(
+            "../support/rpc_gateway_30/controlled_cases.json"
+        ))
+        .unwrap(),
+    );
     if let Ok(filter) = std::env::var("RPC_GATEWAY_30_CASE") {
         rows.retain(|row| filter.split(',').any(|id| row["id"] == id));
     }
@@ -145,7 +151,10 @@ fn scripted(group: &str) {
                 .unwrap();
                 fs::write(
                     root.join(format!("{id}-{engine}.txt")),
-                    format!("{execution:#?}"),
+                    format!(
+                        "outcome={:?} step_usage={:?}",
+                        execution.outcome, execution.step_usage
+                    ),
                 )
                 .unwrap();
                 eprintln!(
@@ -224,6 +233,11 @@ fn native(group: &str, live: bool) {
     fs::write(
         root.join("capped"),
         include_str!("../../../../tools/capped"),
+    )
+    .unwrap();
+    fs::write(
+        root.join("admission.py"),
+        include_str!("../support/rpc_gateway_30/admission.py"),
     )
     .unwrap();
     let script = if live { "live.py" } else { "verify.py" };
@@ -733,4 +747,39 @@ fn rpc_gateway_30_disconnect_during_observed_backoff() {
             "RPC_GATEWAY_30_BACKOFF_PASS {backend} observed-timer disconnect joined no-second-connect all4replay"
         );
     }
+}
+
+#[test]
+fn rpc_gateway_30_controlled_admission_reference_checked() {
+    // Simulation's logical clock admits the complete input prefix before the
+    // unanswered operations advance time. Original live cases stay unchanged.
+    scripted("controlled-admission")
+}
+
+#[test]
+fn rpc_gateway_30_admission_oracle_vectors() {
+    let root = tempfile::tempdir().unwrap();
+    for (name, contents) in [
+        (
+            "admission.py",
+            include_str!("../support/rpc_gateway_30/admission.py"),
+        ),
+        (
+            "admission_vectors.json",
+            include_str!("../support/rpc_gateway_30/admission_vectors.json"),
+        ),
+        (
+            "test_admission.py",
+            include_str!("../support/rpc_gateway_30/test_admission.py"),
+        ),
+    ] {
+        fs::write(root.path().join(name), contents).unwrap();
+    }
+    let output = Command::new("python3")
+        .arg(root.path().join("test_admission.py"))
+        .arg("-v")
+        .output()
+        .unwrap();
+    eprintln!("{}", String::from_utf8_lossy(&output.stderr));
+    assert!(output.status.success(), "{output:?}");
 }
