@@ -2,7 +2,7 @@
 //! not prove original-source demand, SSA custody, slot pairing or entered-edge
 //! writeback. Executable C/H/backend support remains unavailable until those
 //! obligations are independently checked.
-use crate::ir::{AddressId, Ref, ValueId};
+use crate::ir::{AddressId, ArgumentValue, CallSite, Pools, Ref, ValueId};
 use crate::sealed_payload_source::{ReceiptContract, ReceiptMode};
 use hirsel_codec::{snapshot_enum, snapshot_struct};
 use hirsel_syntax::ContentHash;
@@ -65,6 +65,46 @@ pub struct ReceiptCall {
 }
 
 impl ReceiptCall {
+    /// Immutable input holders are uses. A Mut version is a writeback
+    /// definition, never a use of the previous slot snapshot.
+    pub fn inputs(&self) -> impl Iterator<Item = ValueId> + '_ {
+        self.arguments
+            .iter()
+            .filter_map(|argument| match *argument {
+                ReceiptArgument::Borrow { receipt, .. } | ReceiptArgument::Take { receipt, .. } => {
+                    Some(receipt)
+                }
+                ReceiptArgument::Mut { .. } => None,
+            })
+    }
+
+    pub fn writebacks(&self) -> impl Iterator<Item = (AddressId, ValueId)> + '_ {
+        self.arguments
+            .iter()
+            .filter_map(|argument| match *argument {
+                ReceiptArgument::Mut {
+                    address, version, ..
+                } => Some((address, version)),
+                _ => None,
+            })
+    }
+
+    /// Use the same SSA rewrite as the ordinary half. Contract/selector and
+    /// address identities remain unchanged when value names are replaced.
+    pub fn remap_values(&mut self, map: &impl Fn(ValueId) -> ValueId) {
+        for argument in &mut self.arguments {
+            match argument {
+                ReceiptArgument::Borrow { receipt, .. } | ReceiptArgument::Take { receipt, .. } => {
+                    *receipt = map(*receipt)
+                }
+                ReceiptArgument::Mut { version, .. } => *version = map(*version),
+            }
+        }
+        if let Some(result) = &mut self.result {
+            *result = map(*result);
+        }
+    }
+
     /// Compare complete local bindings. Original declaration authority and
     /// ordinary/receipt ownership pairing are separate executable obligations.
     pub fn check_contract(&self, contract: &ReceiptContract) -> Result<(), &'static str> {
@@ -121,3 +161,31 @@ snapshot_struct!(ReceiptCall {
     arguments,
     result
 });
+
+impl CallSite {
+    /// Results exist only on successful return. Unit ordinary results may
+    /// still carry an independently demanded metadata result.
+    pub fn normal_results(&self) -> impl Iterator<Item = ValueId> + '_ {
+        self.result
+            .iter()
+            .copied()
+            .chain(self.receipts.iter().filter_map(|r| r.result))
+    }
+
+    /// Both ordinary and metadata slot versions commit only after entry, on
+    /// normal and entered-failure outcomes. Rejected admission defines neither.
+    pub fn writebacks<'a>(
+        &'a self,
+        pools: &'a Pools,
+    ) -> impl Iterator<Item = (AddressId, ValueId)> + 'a {
+        self.arguments
+            .get(&pools.call_arguments)
+            .unwrap_or(&[])
+            .iter()
+            .filter_map(|argument| match argument.value {
+                ArgumentValue::Address { address, version } => Some((address, version)),
+                ArgumentValue::Value(_) => None,
+            })
+            .chain(self.receipts.iter().flat_map(ReceiptCall::writebacks))
+    }
+}

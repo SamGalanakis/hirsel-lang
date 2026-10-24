@@ -20,6 +20,8 @@ pub mod liveness;
 pub mod normalize;
 pub mod placement;
 pub mod ready;
+#[cfg(test)]
+mod receipt_transport_tests;
 pub mod reuse;
 pub mod reuse_stores;
 mod scoped_consumer_9;

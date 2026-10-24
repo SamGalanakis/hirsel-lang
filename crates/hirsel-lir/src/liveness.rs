@@ -267,16 +267,8 @@ pub fn terminator_defs<S: Stage>(unit: &LirUnit<S>, term: &Terminator) -> Vec<Va
         return Vec::new();
     };
     let site = &unit.tables.calls[call.index()];
-    let mut out: Vec<ValueId> = site.result.into_iter().collect();
-    for a in site
-        .arguments
-        .get(&unit.pools.call_arguments)
-        .unwrap_or(&[])
-    {
-        if let ArgumentValue::Address { version, .. } = a.value {
-            out.push(version);
-        }
-    }
+    let mut out: Vec<ValueId> = site.normal_results().collect();
+    out.extend(site.writebacks(&unit.pools).map(|(_, version)| version));
     out
 }
 
@@ -292,6 +284,7 @@ pub fn terminator_uses<S: Stage>(unit: &LirUnit<S>, term: &Terminator) -> Vec<Va
             if let Some(v) = site.callee.value() {
                 out.push(v);
             }
+            out.extend(site.receipts.iter().flat_map(|receipt| receipt.inputs()));
             for a in site
                 .arguments
                 .get(&unit.pools.call_arguments)
