@@ -3022,6 +3022,39 @@ pub fn observe_run(
     program: &ReadyProgram,
     sites: &Sites<'_>,
 ) -> Result<Observed, NativeError> {
+    observe_run_tables(
+        launched,
+        &failure_rules(program),
+        &site_codes(program),
+        sites,
+    )
+}
+
+/// Decode a completed immutable native request using only its compact linked
+/// failure tables and selected source anchors. This constructs no Value/Ready
+/// body and applies the same audit, exit, refusal and malformed-record checks.
+pub fn observe_request(
+    launched: &Launched,
+    metadata: &crate::requests::NativeObservation,
+    sources: &hirsel_span::SourceMap,
+) -> Result<Observed, NativeError> {
+    let sites = Sites::from_anchors(
+        sources,
+        metadata
+            .anchors
+            .iter()
+            .map(|(path, anchors)| (path, anchors.clone()))
+            .collect(),
+    );
+    observe_run_tables(launched, &metadata.failure_rules, &metadata.sites, &sites)
+}
+
+fn observe_run_tables(
+    launched: &Launched,
+    rules: &[String],
+    codes: &BTreeMap<u64, (DefPath, hirsel_lir::ir::SiteRange)>,
+    sites: &Sites<'_>,
+) -> Result<Observed, NativeError> {
     let bad = |what: String| {
         NativeError::new(
             StageName::Launch,
@@ -3061,8 +3094,6 @@ pub fn observe_run(
     if lines.next() != Some(version.as_str()) {
         return Err(bad("the process left no observation record".into()));
     }
-    let rules = failure_rules(program);
-    let codes = site_codes(program);
     let mut status = None;
     let mut result = None;
     let mut reported_code = None;
