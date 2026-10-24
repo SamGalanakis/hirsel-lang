@@ -829,75 +829,12 @@ fn actual_native_bootstrap_uses_selected_closed_runtime_on_link_and_reopen() {
             .unwrap();
             let calls = Arc::new(AtomicU64::new(0));
             let target = native::TargetSpec::x86_64_unknown_linux_gnu();
-            use crate::requests::native_link::{FrozenPlatform, LinkInputs};
-            use object_queries::capture::{CaptureLimits, FrozenLinkKit, FrozenLinker};
-            let limits = CaptureLimits {
-                archive_bytes: 64 << 20,
-                files: 256,
-            };
-            let selected_path = |key| std::path::PathBuf::from(std::env::var_os(key).expect(key));
-            let tool =
-                FrozenLinker::snapshot(store.as_ref(), &selected_path("HIRSEL_CAPTURE_LINKER"))
-                    .unwrap();
-            let kit = FrozenLinkKit::snapshot(
-                store.as_ref(),
-                &selected_path("HIRSEL_LINK_KIT"),
-                &target,
-                tool,
-                limits,
-            )
-            .unwrap();
-            let archive = selected_path("HIRSEL_RUNTIME_ARCHIVES")
-                .join(&target.triple)
-                .join("default/libhirsel_rt.a");
-            use object_queries::{
-                platform::{CapturedPlatform, PlatformCaptureInputs, RuntimeSelection},
-                runtime::RuntimeLimits,
-            };
-            let runtime_limits = RuntimeLimits {
-                aliases: 128,
-                name_bytes: 64 << 10,
-            };
-            let floor = selected_path("HIRSEL_GLIBC_FLOOR").join(&target.triple);
-            let auditor =
-                selected_path("HIRSEL_AUDITOR_PACKAGE").join(format!("{}.so", target.triple));
-            let captured = CapturedPlatform::capture(
-                store.as_ref(),
-                &target,
-                PlatformCaptureInputs {
-                    linker: tool,
-                    kit,
-                    runtime_archive: &archive,
-                    foreign: &[],
-                    runtime: RuntimeSelection {
-                        loader: &floor.join("ld-2.28.so"),
-                        auditor: &auditor,
-                        library_path: floor.as_os_str(),
-                        emulator: None,
-                        timeout: std::time::Duration::from_secs(20),
-                        events_bytes: 64 << 10,
-                        limits: runtime_limits,
-                    },
-                    limits,
+            use crate::requests::{
+                NativeRequest,
+                native_platform::{
+                    NativePlatformInputs, NativePlatformPolicy, NativePlatformSelection,
                 },
-            )
-            .unwrap();
-            let platform = FrozenPlatform::new(
-                store.clone(),
-                LinkInputs {
-                    platform: captured,
-                    emulator: None,
-                    timeout: std::time::Duration::from_secs(20),
-                    runtime_limits,
-                    limits,
-                },
-                entry.clone(),
-                backend,
-                target.clone(),
-                None,
-                budget.reserve(16 << 10).unwrap(),
-            )
-            .unwrap();
+            };
             let tools = native::Toolchain::in_tree_with_products(
                 &directory.path().join("runtime"),
                 &[&target],
@@ -906,13 +843,39 @@ fn actual_native_bootstrap_uses_selected_closed_runtime_on_link_and_reopen() {
                 store.clone(),
             )
             .unwrap();
-            let mut selected_backend = platform.backend(
-                ContentHash::of_bytes(&crate::COMPILER_IDENTITY),
-                target.digest(),
-                ContentHash::of_bytes(b"none"),
-                ContentHash::of_bytes(&hirsel_lir::RUNTIME_ABI_VERSION.to_le_bytes()),
-            );
-            selected_backend.executor = Arc::new(CountLink {
+            let policy = NativePlatformPolicy::capture().unwrap();
+            let request = NativeRequest {
+                definition: Some(entry.clone()),
+                backend,
+                profile: native::BuildProfile::Default,
+                target: target.clone(),
+                validation: native::Validation::EveryStage,
+                launch: native::LaunchInputs::default(),
+                run: None,
+                fuel: false,
+                evidence: None,
+            };
+            let NativePlatformSelection { mut plan, platform } = NativePlatformSelection::capture(
+                store.clone(),
+                NativePlatformInputs {
+                    request: &request,
+                    entry: &entry,
+                    tools: &tools,
+                    links: &[],
+                    policy: &policy,
+                },
+                object_queries::capture::CaptureLimits {
+                    archive_bytes: 64 << 20,
+                    files: 256,
+                },
+                object_queries::runtime::RuntimeLimits {
+                    aliases: 128,
+                    name_bytes: 64 << 10,
+                },
+                budget.reserve(16 << 10).unwrap(),
+            )
+            .unwrap();
+            plan.backends[0].executor = Arc::new(CountLink {
                 platform: platform.clone(),
                 calls: calls.clone(),
             });
@@ -922,17 +885,7 @@ fn actual_native_bootstrap_uses_selected_closed_runtime_on_link_and_reopen() {
                 paths,
                 routing.clone(),
                 store.clone(),
-                NativePlan {
-                    options: native::Options::new(target.clone()),
-                    policy: ContentHash::of_bytes(b"bootstrap control"),
-                    opt: hirsel_lir::emission::OptLevel::None,
-                    debug: false,
-                    verify_backend: true,
-                    measurement: false,
-                    fuel: false,
-                    requested_run: None,
-                    backends: vec![selected_backend],
-                },
+                plan,
                 NativeAdmission {
                     instances: budget.reserve(32 << 20).unwrap(),
                     arena: budget.reserve(32 << 20).unwrap(),

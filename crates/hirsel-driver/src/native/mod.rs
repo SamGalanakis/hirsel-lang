@@ -75,6 +75,7 @@ pub use link::{
     plan_executable_inputs, plan_executable_link, plan_frozen_executable_inputs,
     plan_frozen_executable_link, run_host,
 };
+pub(crate) use link::{runtime_archive, selected_foreign_inputs};
 pub use observe::{Failure, OBSERVATION_SCHEMA, Observation, Sites, site_codes};
 pub use pairwise::pairwise_matrix;
 pub use proofs::{Evidence, Proofs, parse as parse_sidecar};
