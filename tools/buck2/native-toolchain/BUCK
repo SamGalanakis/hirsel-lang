@@ -81,3 +81,5 @@ toolchain_proof(name = "native-compilation-proof", tools = [":llvm", ":kit", "ro
 
 toolchain_proof(name = "root-observation-proof", tools = [":llvm", ":kit", "root//:hirsel-rt-archives", "root//:hirsel-driver-test-it-harness"], script = "root_observation_proof.sh")
 
+
+toolchain_proof(name = "root-plan-proof", tools = [":llvm", ":linker", ":kit", "root//:hirsel-rt-archives", "root//:hirsel-driver-test-it-harness"], script = "root_plan_proof.py", interpreter = "python3")
