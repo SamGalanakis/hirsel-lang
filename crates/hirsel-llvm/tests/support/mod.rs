@@ -310,6 +310,7 @@ impl Schema {
                 invocations: BTreeMap::new(),
                 invocation_bodies: Vec::new(),
                 pretransfer_adapters: Vec::new(),
+                pretransfer_actuals: Vec::new(),
             },
         }
     }

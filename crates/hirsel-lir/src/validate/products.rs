@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 
 const RECEIPT: Domain = Domain {
     kind: 0x4300_0001,
-    schema: 4,
+    schema: 5,
 };
 const VALUE_BODY: Domain = Domain {
     kind: 0x4300_0002,
@@ -292,7 +292,9 @@ impl NativeCache {
             || record.operations.iter().any(|read| {
                 operation_identity(environment, &read.id, &read.arguments) != Some(read.output)
             })
-            || !record.declarations.matches(environment.operations)
+            || !record
+                .declarations
+                .matches(environment.operations, environment.target)
             || record.discharge != discharge_identity(environment.discharge, &record.definition)
             || record.source_witness
                 != environment
