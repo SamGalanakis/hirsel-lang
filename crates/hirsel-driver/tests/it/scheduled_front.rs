@@ -824,3 +824,55 @@ fn admitted_storage_recipe_waits_for_checked_body_and_matches_scalar_adapter() {
         }
     });
 }
+
+#[test]
+fn frozen_checked_runtime_matches_declared_heap_facts_without_body_queries() {
+    with_compiler_stack(|| {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("main.hir");
+        std::fs::write(&path, "pub fn main(){}\n").unwrap();
+        let mut program = COMPILER
+            .with_config(CompileConfig {
+                store: Arc::new(MemStore::default()),
+                hold_bytes: 0,
+                ..Default::default()
+            })
+            .with_owned_engines()
+            .load_program(&path)
+            .unwrap();
+        let snapshot = program.engine.signature_snapshot();
+        let before = program.engine.memo_snapshot();
+        let actual = snapshot
+            .checked_runtime(Some(&hirsel_syntax::DefPath::core(
+                hirsel_interp::library::FORGET_OPERATION,
+            )))
+            .unwrap();
+        assert_eq!(
+            program.engine.memo_snapshot(),
+            before,
+            "frozen H declarations perform no body query"
+        );
+        let expected = program
+            .engine
+            .checked_runtime_types()
+            .unwrap()
+            .checked
+            .unwrap();
+        assert_eq!(actual.noalloc, expected.noalloc);
+        assert_eq!(actual.noalloc_drop, expected.noalloc_drop);
+        assert_eq!(actual.flat, expected.flat);
+        assert_eq!(actual.arena_with, expected.arena_with);
+        assert_eq!(
+            actual
+                .operations
+                .iter()
+                .map(|(path, signature)| (path, signature.fingerprint))
+                .collect::<Vec<_>>(),
+            expected
+                .operations
+                .iter()
+                .map(|(path, signature)| (path, signature.fingerprint))
+                .collect::<Vec<_>>()
+        );
+    });
+}
