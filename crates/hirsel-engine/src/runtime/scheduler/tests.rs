@@ -1281,3 +1281,139 @@ fn local_continuation_frame_charge_retires_only_after_home_destruction() {
     drop(owner);
     assert_eq!(process.reserved(), 0);
 }
+
+struct FrameWaiting(mpsc::Sender<()>);
+impl RuntimeObserver for FrameWaiting {
+    fn record(&self, event: RuntimeEvent) {
+        if matches!(event,RuntimeEvent::Waiting(id) if id.kind==2) {
+            let _ = self.0.send(());
+        }
+    }
+}
+struct CancelFrameFactory {
+    owner: Arc<MemoryReservation>,
+    dropping: mpsc::Sender<(std::thread::ThreadId, std::thread::ThreadId)>,
+    release: Mutex<Option<mpsc::Receiver<()>>>,
+}
+struct CancelFrame {
+    id: QueryId,
+    allocation: std::rc::Rc<Vec<u8>>,
+    _owner: Arc<MemoryReservation>,
+    home: std::thread::ThreadId,
+    dropping: mpsc::Sender<(std::thread::ThreadId, std::thread::ThreadId)>,
+    release: mpsc::Receiver<()>,
+}
+impl LocalQueryFactory for CancelFrameFactory {
+    fn weight(&self, _: QueryId) -> Result<MemoryWeight, Reference> {
+        Ok(MemoryWeight {
+            scratch: 64 << 10,
+            retained: (1 << 20) + 16,
+            stack: 0,
+        })
+    }
+    fn create(&self, id: QueryId) -> Result<Box<dyn LocalQueryTask>, Reference> {
+        Ok(Box::new(CancelFrame {
+            id,
+            allocation: std::rc::Rc::new(Vec::new()),
+            _owner: self.owner.clone(),
+            home: std::thread::current().id(),
+            dropping: self.dropping.clone(),
+            release: self.release.lock().unwrap().take().unwrap(),
+        }))
+    }
+}
+impl LocalQueryTask for CancelFrame {
+    fn id(&self) -> QueryId {
+        self.id
+    }
+    fn weight(&self) -> MemoryWeight {
+        MemoryWeight {
+            scratch: 64 << 10,
+            retained: (1 << 20) + 16,
+            stack: 0,
+        }
+    }
+    fn continuation_bytes(&self) -> u64 {
+        1 << 20
+    }
+    fn poll(&mut self, cx: &mut dyn QueryContext) -> QueryPoll {
+        self.allocation = std::rc::Rc::new(vec![0; 1 << 20]);
+        match cx.read(query(1)) {
+            Poll::Pending => QueryPoll::Waiting(vec![query(1)]),
+            Poll::Ready(Err(error)) => QueryPoll::Failed(error),
+            Poll::Ready(Ok(_)) => QueryPoll::Complete(product(self.id)),
+        }
+    }
+}
+impl Drop for CancelFrame {
+    fn drop(&mut self) {
+        self.dropping
+            .send((self.home, std::thread::current().id()))
+            .unwrap();
+        self.release.recv().unwrap();
+    }
+}
+#[test]
+fn local_continuation_frame_cancellation_keeps_charge_until_home_drop_finishes() {
+    use std::time::Duration;
+    let process = ProcessBudget::new(9 << 20);
+    let owner = Arc::new(process.reserve(1 << 20).unwrap());
+    let (dropping, drop_started) = mpsc::channel();
+    let (release_drop, release) = mpsc::channel();
+    let factory = Arc::new(CancelFrameFactory {
+        owner: owner.clone(),
+        dropping,
+        release: Mutex::new(Some(release)),
+    });
+    let (entered, _entered) = mpsc::channel();
+    let (release_child, release) = mpsc::channel();
+    let child = Arc::new(BlockingFactory {
+        entered,
+        release: Mutex::new(Some(release)),
+    });
+    let mut rt = AdmittedRuntime::with_reservation(
+        Jobs::new(2),
+        process.reserve(8 << 20).unwrap(),
+        errors(),
+        STACK,
+    )
+    .unwrap();
+    rt.register(1, child.clone()).unwrap();
+    rt.register_local(2, factory.clone()).unwrap();
+    let (waiting, suspended) = mpsc::channel();
+    rt.observe(Arc::new(FrameWaiting(waiting))).unwrap();
+    let local = QueryId {
+        kind: 2,
+        ..query(0)
+    };
+    let request = rt.request(&[local]);
+    let waited = suspended.recv_timeout(Duration::from_secs(10));
+    rt.cancel(request);
+    let dropped = drop_started.recv_timeout(Duration::from_secs(10));
+    let during = rt.stats();
+    // Release the held destructors before any assertion can unwind the test.
+    let _ = release_drop.send(());
+    let _ = release_child.send(());
+    rt.shutdown();
+    assert!(
+        waited.is_ok(),
+        "local continuation suspended before cancellation"
+    );
+    let (home, actual) = dropped.expect("home destruction began");
+    assert_eq!(home, actual);
+    assert!(
+        during.charged_bytes - during.bookkeeping_bytes >= 2 * STACK as u64 + (1 << 20),
+        "frame remains charged while its owner is still being destroyed"
+    );
+    assert!(during.peak_bytes <= 8 << 20);
+    drop(rt);
+    assert_eq!(
+        process.reserved(),
+        1 << 20,
+        "separately retained output owner survives cancelled frame cleanup"
+    );
+    drop(factory);
+    drop(child);
+    drop(owner);
+    assert_eq!(process.reserved(), 0);
+}
