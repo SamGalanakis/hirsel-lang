@@ -123,3 +123,4 @@ pub mod declarations;
 pub mod source;
 
 pub mod recipes;
+pub mod instance;
