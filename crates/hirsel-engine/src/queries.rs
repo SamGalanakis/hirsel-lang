@@ -8,7 +8,10 @@ mod frontier;
 pub use frontier::FrontChanges;
 mod parallel;
 pub(crate) mod s1;
-pub use parallel::{ModeResult, PublishedDefinition, PublishedResult};
+pub use parallel::{
+    FRONT_BODY_KIND, FrontBodyOutput, FrontBodyQueries, ModeResult, PublishedDefinition,
+    PublishedResult,
+};
 pub use s1::{LoweringResult, S1LowerWork};
 /// One S1 root's captured outcome. Phase, tooling limit and complete execution
 /// reads belong to this root, including when another root finished afterward.
