@@ -154,7 +154,7 @@ impl Observation {
 /// Source positions of the snapshot's definitions: a failure site is a byte
 /// range relative to its selected existing source anchor.
 pub struct Sites<'a> {
-    input: &'a NativeInput,
+    sources: &'a hirsel_span::SourceMap,
     anchors: BTreeMap<&'a DefPath, Vec<hirsel_span::Anchor>>,
 }
 
@@ -173,7 +173,16 @@ impl<'a> Sites<'a> {
                 )
             })
             .collect();
-        Self { input, anchors }
+        Self::from_anchors(&input.sources, anchors)
+    }
+
+    /// Bind already selected source anchors without retaining a NativeInput or
+    /// any source Definition. Generated sources preserve their anchor order.
+    pub fn from_anchors(
+        sources: &'a hirsel_span::SourceMap,
+        anchors: BTreeMap<&'a DefPath, Vec<hirsel_span::Anchor>>,
+    ) -> Self {
+        Self { sources, anchors }
     }
 
     pub fn failure(
@@ -206,10 +215,9 @@ impl<'a> Sites<'a> {
     /// The file a definition's source stands in.
     fn file(&self, definition: &DefPath, source: u32) -> Option<&hirsel_span::SourceFile> {
         let (file, _) = self
-            .input
             .sources
             .anchor(*self.anchors.get(definition)?.get(source as usize)?)?;
-        self.input.sources.file(file)
+        self.sources.file(file)
     }
     pub fn failure_site(&self, failure: &Failure) -> Option<hirsel_run_schema::Site> {
         Some(hirsel_run_schema::Site {
@@ -262,7 +270,7 @@ impl<'a> Sites<'a> {
     pub fn position(&self, definition: &DefPath, site: SiteRange) -> Option<(u32, u32)> {
         let anchor = self.anchors.get(definition)?.get(site.source as usize)?;
         let span = Span::new(*anchor, site.start, site.end)?;
-        let location = self.input.sources.location(span)?;
+        let location = self.sources.location(span)?;
         Some((location.line, location.column))
     }
 }
