@@ -10,6 +10,8 @@ use hirsel_tir::{Body, BodyId, InstructionKind, PlaceId, Rvalue, Storage, Termin
 use hirsel_types::{Destination, GenericArgument, TypeId, TypeInterner};
 use std::collections::BTreeSet;
 
+pub mod demand;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SourceError {
     Malformed(&'static str),

@@ -7,7 +7,7 @@ use hirsel_types::{
     Uses,
 };
 
-fn body(types: &[TypeId], parameters: usize) -> Body {
+pub(super) fn body(types: &[TypeId], parameters: usize) -> Body {
     Body {
         arena_scope_grant: None,
         parameter_scope: hirsel_syntax::LexicalOwner::first(&hirsel_syntax::DefPath::core(
@@ -60,7 +60,7 @@ fn body(types: &[TypeId], parameters: usize) -> Body {
         scoped_parameters: vec![],
     }
 }
-fn assign(body: &mut Body, destination: u32, value: Rvalue) {
+pub(super) fn assign(body: &mut Body, destination: u32, value: Rvalue) {
     let id = RvalueId(body.rvalues.len() as u32);
     body.rvalues.push(value);
     body.blocks[0].instructions.push(Instruction {
@@ -72,7 +72,7 @@ fn assign(body: &mut Body, destination: u32, value: Rvalue) {
         on_failure: CleanupId(0),
     });
 }
-fn operand(place: u32) -> Operand {
+pub(super) fn operand(place: u32) -> Operand {
     Operand {
         place: PlaceId(place),
         usage: UseKind::Copy,
