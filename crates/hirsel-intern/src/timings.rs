@@ -270,11 +270,18 @@ pub enum Count {
     ImageDeclarationBytes,
     /// Keyed image entry decode attempts, successful or refused.
     ImageDecodeAttempts,
+    /// Physical ordinary-store events, split by source product kind.
+    StoreSignatureHits,
+    StoreSignatureMisses,
+    StoreSummaryHits,
+    StoreSummaryMisses,
+    StoreModeHits,
+    StoreModeMisses,
 }
 
 impl Count {
     /// Every count, in declaration order.
-    pub const ALL: [Count; 63] = [
+    pub const ALL: [Count; 69] = [
         Count::Definitions,
         Count::Units,
         Count::VRuns,
@@ -338,6 +345,12 @@ impl Count {
         Count::DeclarationSiteMaterializations,
         Count::ImageDeclarationBytes,
         Count::ImageDecodeAttempts,
+        Count::StoreSignatureHits,
+        Count::StoreSignatureMisses,
+        Count::StoreSummaryHits,
+        Count::StoreSummaryMisses,
+        Count::StoreModeHits,
+        Count::StoreModeMisses,
     ];
     /// The stable name `--timings` prints.
     pub fn name(self) -> &'static str {
@@ -361,6 +374,12 @@ impl Count {
             Count::VRuns => "V runs",
             Count::StoreHits => "store hits",
             Count::StoreMisses => "store misses",
+            Count::StoreSignatureHits => "store signature hits",
+            Count::StoreSignatureMisses => "store signature misses",
+            Count::StoreSummaryHits => "store summary hits",
+            Count::StoreSummaryMisses => "store summary misses",
+            Count::StoreModeHits => "store mode hits",
+            Count::StoreModeMisses => "store mode misses",
             Count::ObjectHits => "object hits",
             Count::ObjectMisses => "object misses",
             Count::NativeImports => "native imports",

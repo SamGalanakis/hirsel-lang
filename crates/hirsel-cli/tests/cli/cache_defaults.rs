@@ -448,15 +448,31 @@ fn check_root_and_dependency_cache(
     let warm = check(library, false);
     assert!(cold["definitions"].as_u64().unwrap() > 0, "{cold}");
     assert_eq!(cold["store hits"], 0, "{cold}");
-    // Generated definitions are replayed rather than persisted. Every other
-    // definition must be adopted, so hits plus replayed work cover the cold run.
+    let definitions = cold["definitions"].as_u64().unwrap();
+    if package == "std" {
+        assert_eq!(
+            definitions, 4240,
+            "the complete checked std source inventory"
+        );
+    }
+    // One Signature and Summary adoption cover every source definition. Later
+    // S1 body demands also adopt Modes; those are real additional physical
+    // store hits, rather than additional definitions or missing source work.
+    let mode_hits = if package == "std" { 698 } else { 0 };
     assert_eq!(
-        warm["definitions"].as_u64().unwrap() + warm["store hits"].as_u64().unwrap(),
-        cold["definitions"].as_u64().unwrap(),
-        "{warm} vs {cold}"
+        warm["definitions"], 0,
+        "all source bodies must be adopted: {warm}"
     );
+    assert_eq!(warm["store signature hits"], definitions, "{warm}");
+    assert_eq!(warm["store summary hits"], definitions, "{warm}");
+    assert_eq!(warm["store mode hits"], mode_hits, "{warm}");
+    assert_eq!(warm["store hits"], 2 * definitions + mode_hits, "{warm}");
     assert_eq!(warm["store misses"], 0, "{warm}");
-    assert_eq!(warm["store hits"], cold["store misses"], "{warm} vs {cold}");
+    for kind in ["signature", "summary", "mode"] {
+        assert_eq!(cold[format!("store {kind} misses")], definitions, "{cold}");
+        assert_eq!(warm[format!("store {kind} misses")], 0, "{warm}");
+    }
+    assert_eq!(cold["store misses"], 3 * definitions, "{cold}");
     // Verify before a dependency run can replace a root-written record.
     let verified = check(&client, true);
     assert_eq!(
@@ -466,7 +482,12 @@ fn check_root_and_dependency_cache(
     );
     // A recomputation alone is insufficient: a rejected cache variant also
     // recomputes, without comparing its payload. Only the new client may miss.
-    assert_eq!(verified["store misses"], 1, "{verified}");
+    // The one new client misses each of the three physical source products;
+    // every cached library product must still be compared, with no extra miss.
+    assert_eq!(verified["store misses"], 3, "{verified}");
+    for kind in ["signature", "summary", "mode"] {
+        assert_eq!(verified[format!("store {kind} misses")], 1, "{verified}");
+    }
     eprintln!(
         "{package}: {} cold definitions, {} warm hits, {} replayed definitions, {} importer definitions, {} importer misses",
         cold["definitions"],
