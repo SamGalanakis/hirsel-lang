@@ -6,9 +6,14 @@ use crate::operation::NativeType;
 use hirsel_codec::{snapshot_enum, snapshot_struct};
 
 mod profile;
+mod receipt;
 pub use profile::{
     ClosedCapture, ClosedEnvironment, ClosedStorageCase, ClosedStorageFunction,
     ClosedStorageProfile, ClosedStorageType, SourceStorageSelection,
+};
+pub use receipt::{
+    ReceiptCapture, ReceiptContract, ReceiptGrant, ReceiptMode, ReceiptParameter, ReceiptResult,
+    ReceiptType,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
